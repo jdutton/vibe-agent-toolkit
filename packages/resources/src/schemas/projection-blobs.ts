@@ -224,8 +224,26 @@ export const LEXICAL_FEATURE_COLUMNS = {
  * Both columns are **required**, which is what makes the table's rows uniformly
  * actionable: a candidate whose AST node carries no position is skipped and
  * counted (`referencesSkippedForMissingLine`), never admitted with a null span.
- * Line and offsets come from one `position` object, so they are present or
- * absent together and no new skip class exists.
+ *
+ * ⛔ This used to close with "Line and offsets come from one `position` object,
+ * so they are present or absent together and no new skip class exists." That is
+ * true of the **mdast** producer and was never true of the HTML one, so the
+ * conclusion drawn from it was wrong. `html-link-parser.ts › makeLink` composes
+ * the two from different sources — offsets from the attribute's span, `line`
+ * from `span?.startLine ?? element.sourceCodeLocation?.startLine` — so a line
+ * without offsets is a shape this table's producers really emit. It was
+ * measured on a namespaced `<a xlink:href>`, whose element carries a full
+ * location while a span lookup keyed on the bare local name misses: `{ line: 1
+ * }`, no offsets.
+ *
+ * So there IS a skip class beyond "no position at all", and it is already
+ * handled rather than newly introduced: `blob-references.ts › hasReferenceSpan`
+ * requires line and both offsets **independently** — deliberately, per its own
+ * docstring, because "asking a narrower one (`link.line === undefined`) would
+ * silently miss a link that carried a line and no offsets". The invariant this
+ * paragraph guards is therefore unchanged (no row is ever admitted with a null
+ * span), but it holds because the admission test checks all three columns, NOT
+ * because a producer cannot supply one without the others.
  *
  * They are offsets into the **decoded** content — UTF-16 code units, the same
  * units `estimateTokens` counts, the same units `String.prototype.slice` takes,

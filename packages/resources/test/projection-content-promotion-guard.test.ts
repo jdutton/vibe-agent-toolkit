@@ -52,7 +52,7 @@
  * unreadable path, multi-extent promotion, in-place rewrite ordering), and
  * `projection-blob-population.test.ts` pins the two-run reporting rule.
  */
-import { GitTracker } from '@vibe-agent-toolkit/utils';
+import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { populateBlobs } from '../src/projection/blob-population.js';
@@ -119,7 +119,7 @@ async function plantIgnoredTree(): Promise<GitTracker> {
  * @returns A builder holding the filesystem extent's realizations
  */
 async function baseStratum(tracker: GitTracker): Promise<ProjectionBuilder> {
-  const builder = new ProjectionBuilder(suite.tempDir, tracker, new RunContentCache());
+  const builder = new ProjectionBuilder({ root: suite.tempDir, gitTracker: tracker, contentCache: new RunContentCache() });
   const contribution = await new FilesystemExtentContributor().contribute(builder.base(), null);
   for (const row of contribution.realizations) {
     builder.addRealization(row);

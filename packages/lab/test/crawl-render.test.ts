@@ -31,7 +31,6 @@ import { type CrawlDump, mergeCrawlDumps } from '../src/facets/crawl/dump.js';
 import { renderCrawlReport } from '../src/facets/crawl/render.js';
 import {
   CRAWL_FACET,
-  CRAWL_FACET_VERSION,
   type CrawlBody,
   type CrawlCommandStats,
 } from '../src/facets/crawl/types.js';
@@ -64,7 +63,6 @@ const CRAWL_ARM_LINE = 'crawl 30.0ms';
  */
 function dumpOf(entries: CrawlDump['entries']): CrawlDump {
   return {
-    dumpVersion: 4,
     pid: 42,
     process: { wallMs: 1000, cpuUserMs: 800, cpuSystemMs: 100 },
     charges: { strata: ['base', 'closure', 'crawl', 'shared'], syntheticIds: [] },
@@ -120,7 +118,6 @@ function render(entries: CrawlDump['entries']): string {
   return renderCrawlReport(
     makeReport({
       facet: CRAWL_FACET,
-      facetVersion: CRAWL_FACET_VERSION,
       body,
     }) as ReportEnvelope<CrawlBody>,
   );

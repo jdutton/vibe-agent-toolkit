@@ -84,20 +84,33 @@
  * rather than reasoned. `test/projection-extent-narrowing.test.ts` builds
  * `SKILL.md → scripts/tool.mjs → docs/note.md` and withholds the non-markdown
  * row: the skill loses the script, which is a direct link target of its own
- * root, AND the leaf reachable no other way.
+ * root.
  *
- * 🪤 The transitive half rests on one precondition that fixture also pins. The
- * script's reference lexes as `markdown-link` — a JSDoc comment is markdown —
- * while its bare `readFileSync('docs/note.md')` token lexes as `bare-token`,
- * which the default `follow` set does not traverse. What is proven is that
- * non-markdown files carry *followed* references, not that every path a script
- * names is walked; widen `follow` and the fixture reds so the measurement is
- * retaken against the wider set.
+ * 🪤 **The proven property is narrow, and it is the WHOLE claim — not a caveat
+ * on a larger one.** What the fixture shows is that a markdown file links *to*
+ * non-markdown files, so those files are closure **members**. It does not show
+ * that they are closure **doors**: since parse routing became MIME-driven, a
+ * `.mjs` routes to no document parser at all, so it emits no `markdown-link`,
+ * `markdown-link-reference` or `markdown-definition` row for `follow` to
+ * traverse. It still gets a blob, a token estimate, `measureContent` and
+ * `findLexicalReferences` over raw source — every reference it carries lexes as
+ * `bare-token`, which the default `follow` set does not traverse. The fixture's
+ * leaf is on disk, is enumerated here, and is a member of nothing.
+ *
+ * This paragraph previously claimed the transitive half too — the leaf
+ * "reachable no other way" — and that half was an artefact of routing every
+ * non-`.html` file through remark: a JSDoc comment read as prose, so the script
+ * *looked* like a door. It is stated as a correction rather than deleted so the
+ * next reader does not re-derive the wider claim. Widening the default
+ * `follow` to `bare-token` would make it one again, and was declined — 21,687
+ * `bare-token` rows on this repo alone would turn every `import` specifier into
+ * a closure edge. If that ever changes, the fixture's dead-end arm reds and this
+ * paragraph is retaken against the wider set.
  *
  * It can be re-sourced.
  */
 
-import type { GitTracker } from '@vibe-agent-toolkit/utils';
+import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type {
   ResourceExtentRow,
@@ -331,6 +344,10 @@ export class FilesystemExtentContributor implements ExtentContributor {
         // by the git extent too, and the point is that the second realization
         // costs no read.
         ...(base.contentCache !== undefined && { contentCache: base.contentCache }),
+        // The run's single resolver, never one built here: it accumulates the
+        // config conflicts it finds, and a per-extent instance would report one
+        // authoring mistake once per extent that realizes the file.
+        ...(base.mimeResolver !== undefined && { mimeResolver: base.mimeResolver }),
         // The registering LANE's policy, never a literal chosen here: paths
         // carry this extent's whole argument, and which lanes additionally need
         // the bytes is a fact about the lanes. See the class docstring.

@@ -54,16 +54,18 @@ import {
 } from '@vibe-agent-toolkit/schema';
 import {
   findProjectRoot,
-  gitFindRoot,
-  type GitTracker,
   isAbsolutePath,
   isFilesystemAccessError,
-  isGitUrl,
   issueLocation,
-  parseGitUrl,
   resetProjectRootCaches,
   safePath,
 } from '@vibe-agent-toolkit/utils';
+import {
+  gitFindRoot,
+  type GitTracker,
+  isGitUrl,
+  parseGitUrl,
+} from '@vibe-agent-toolkit/utils/git';
 import { Command } from 'commander';
 import picomatch from 'picomatch';
 

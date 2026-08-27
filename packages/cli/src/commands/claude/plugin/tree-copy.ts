@@ -18,7 +18,8 @@ import { copyFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { AGENT_INSTRUCTION_FILE_PATTERNS, toAnyDepthGlobs } from '@vibe-agent-toolkit/agent-skills';
-import { crawlDirectory, isGlob, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isGlob, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
 import picomatch from 'picomatch';
 
 export interface TreeCopyOptions {

@@ -117,7 +117,7 @@ export async function mockDoctorEnvironment(
   });
 
   // Also mock getToolVersion from utils
-  const { getToolVersion } = await import('@vibe-agent-toolkit/utils');
+  const { getToolVersion } = await import('@vibe-agent-toolkit/utils/process');
   vi.mocked(getToolVersion).mockImplementation((toolName: string) => {
     if (toolName === 'node') return opts.nodeVersion;
     if (toolName === 'git') return opts.gitVersion;

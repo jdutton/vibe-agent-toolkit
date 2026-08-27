@@ -18,7 +18,7 @@
  */
 
 import type { TestConfig } from '@vibe-agent-toolkit/resources';
-import { updateYamlIn, type YamlScalarValue } from '@vibe-agent-toolkit/utils';
+import { updateYamlIn, type YamlScalarValue } from '@vibe-agent-toolkit/utils/yaml';
 
 /**
  * Upsert `skills.config.<skillName>.test` in `yamlText` with the supplied knobs.

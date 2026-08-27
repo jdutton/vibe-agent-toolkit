@@ -62,7 +62,7 @@ import { buildReportEnvelope } from '../../harness/report.js';
 import type { CacheMode, CaptureRequest } from '../../harness/types.js';
 
 import { type MergedDumps, readDumps, sameBuckets, type SiteRoots } from './dump.js';
-import { IO_FACET, IO_FACET_VERSION, type IoBody, type IoCommandStats } from './types.js';
+import { IO_FACET, type IoBody, type IoCommandStats } from './types.js';
 
 /**
  * The counter's activation variable.
@@ -326,7 +326,7 @@ export async function captureIo(options: CaptureIoOptions): Promise<ReportEnvelo
   }
   const loadAfter = readLoad();
 
-  return buildReportEnvelope(IO_FACET, IO_FACET_VERSION, options, {
+  return buildReportEnvelope(IO_FACET, options, {
     commands,
     load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus),
   });

@@ -1,7 +1,13 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import { writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, resetProjectRootCaches, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  mkdirSyncReal,
+  normalizedTmpdir,
+  resetProjectRootCaches,
+  safePath,
+} from '@vibe-agent-toolkit/utils';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { packageSkill } from '../../src/skill-packager.js';

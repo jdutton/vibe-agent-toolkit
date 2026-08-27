@@ -9,7 +9,8 @@ import * as fs from 'node:fs';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { fileURLToPath as urlFileURLToPath } from 'node:url';
 
-import { mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { expect } from 'vitest';
 import * as yaml from 'yaml';
 

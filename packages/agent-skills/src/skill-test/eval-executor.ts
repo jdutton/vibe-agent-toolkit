@@ -3,7 +3,7 @@ import {
   spawnHeadlessClaude,
   type ParsedTranscript,
   type SpawnResult,
-} from '@vibe-agent-toolkit/utils';
+} from '@vibe-agent-toolkit/utils/skill-test';
 
 import { assertExecutorPromptInvariants, buildExecutorPrompt } from './executor-prompt.js';
 import { InternalHarnessError } from './exit-codes.js';

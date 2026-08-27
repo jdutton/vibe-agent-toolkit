@@ -24,15 +24,6 @@ import type { CacheMode, LoadReadings } from '../../harness/types.js';
 /** Stable name of this facet, as it appears in the envelope header. */
 export const IO_FACET = 'io';
 
-/**
- * Version of this body schema.
- *
- * Bumped whenever the shape below changes. Two `io` reports at different body
- * versions are refused against each other, because differences across a schema
- * change belong to the schema rather than to the subject.
- */
-export const IO_FACET_VERSION = 2;
-
 /** One call site, with everything needed to judge whether its work was necessary. */
 export interface IoSite {
   /** The Node API called — `fs.readFile`, `child_process.spawnSync`. Not a syscall name. */

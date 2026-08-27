@@ -19,7 +19,6 @@ import type { ReportEnvelope } from '../src/envelope/envelope.js';
 import { comparePopulation } from '../src/facets/population/compare.js';
 import {
   POPULATION_FACET,
-  POPULATION_FACET_VERSION,
   type PopulationCommandStats,
   type PopulationEntry,
 } from '../src/facets/population/types.js';
@@ -58,7 +57,6 @@ function row(
 function report(command: PopulationCommandStats): ReportEnvelope<unknown> {
   return makeReport({
     facet: POPULATION_FACET,
-    facetVersion: POPULATION_FACET_VERSION,
     body: { commands: [command], load: CLEAN_LOAD },
   });
 }
@@ -157,17 +155,19 @@ describe('comparePopulation', () => {
     expect(comparison.refusal).toContain('REFUSED');
   });
 
-  it('refuses a body captured at a different facet version', () => {
+  it('refuses a body written to an older shape', () => {
+    // What a `facetVersion` integer used to sit in front of, done by the strict
+    // schema instead: a body missing a field this build requires is refused for
+    // the honest reason, and refused whether or not anyone remembered anything.
     const stale = makeReport({
       facet: POPULATION_FACET,
-      facetVersion: POPULATION_FACET_VERSION + 1,
-      body: { commands: [], load: CLEAN_LOAD },
+      body: { commands: [], load: { loadAvg1: 0.1, cpus: 8 } },
     });
 
     const comparison = comparePopulation(stale, report(row([A])));
 
     expect(comparison.ok).toBe(false);
     if (comparison.ok) return;
-    expect(comparison.refusal).toContain('body schema moved between these reports');
+    expect(comparison.refusal).toContain("is not a 'population' body");
   });
 });

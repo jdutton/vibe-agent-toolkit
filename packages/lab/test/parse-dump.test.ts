@@ -25,6 +25,14 @@
  *    beside its rows rather than among them, so no sum of the rows a reader is
  *    given can produce a remainder against the wrong bracket — and one kind's
  *    passes can never be charged to another's denominator.
+ * 6. **One process observed N times is not N processes.** vat's parse worker
+ *    threads share their parent's pid and each writes its own dump carrying the
+ *    WHOLE PROCESS's lifetime, so summing those lifetimes multiplies wall and
+ *    CPU by the thread count. Measured: 9 dumps, 1 pid, 104,111ms reported
+ *    against ~11,568ms of real wall clock — read as a 6.5x regression, which is
+ *    why the pool shipped disabled. What each thread measured for ITSELF still
+ *    sums, and the fixtures below distinguish the two halves rather than
+ *    treating "same pid" as a licence to drop rows.
  *
  * `documents === cache.misses` is deliberately **never** asserted, and no
  * fixture is built assuming it: several call sites reach a parser without
@@ -41,12 +49,14 @@ import {
   attributionOf,
   type MergedParseDumps,
   type MergedParseKind,
+  type TierPassStats,
   mergeParseDumps,
-  PARSE_DUMP_VERSION,
   PARSE_TIMING_DIR_ENV,
   type ParseDump,
   type ParseDumpKind,
   type ParseDumpPass,
+  type ParseDumpProcess,
+  type ParseThreadDump,
   parseTotalName,
   readParseDumps,
   sameParseWork,
@@ -106,22 +116,56 @@ function emptyHtmlGroup(): ParseDumpKind {
   return kindGroup(HTML, { count: 0, bytes: 0 }, 0, [{ pass: HTML_PARSE, calls: 0, elapsedMs: 0 }]);
 }
 
+/** What a process reports for itself unless the case varies it. */
+const DEFAULT_LIFETIME: ParseDumpProcess = { wallMs: 2000, cpuUserMs: 1500, cpuSystemMs: 300 };
+
 /**
- * Build a dump without repeating the defaults in every fixture.
+ * Build one thread's record without repeating the defaults in every fixture.
  *
- * @param pid - Which process wrote it
  * @param over - What the case varies
- * @returns A complete dump
+ * @returns A complete thread record
  */
-function dump(pid: number, over: Partial<ParseDump> = {}): ParseDump {
+function thread(over: Partial<ParseThreadDump> = {}): ParseThreadDump {
   return {
-    dumpVersion: PARSE_DUMP_VERSION,
-    pid,
-    process: { wallMs: 2000, cpuUserMs: 1500, cpuSystemMs: 300 },
+    // A main thread unless the case says otherwise: the default fixture is a
+    // single-threaded run, and a case about worker threads sets this explicitly
+    // rather than inheriting a thread id it did not choose.
+    threadId: 0,
     cache: { hits: 0, misses: 10 },
     kinds: [markdownGroup(), emptyHtmlGroup()],
+    tier: [],
     ...over,
   };
+}
+
+/**
+ * A single-threaded process: one main thread and nothing else.
+ *
+ * @param pid - Which process wrote it
+ * @param over - What the case varies, thread fields and `process` alike
+ * @returns A complete dump
+ */
+function dump(
+  pid: number,
+  over: Partial<ParseThreadDump> & { process?: ParseDumpProcess } = {},
+): ParseDump {
+  const { process: lifetime, ...threadOver } = over;
+  return { pid, process: lifetime ?? DEFAULT_LIFETIME, threads: [thread(threadOver)] };
+}
+
+/**
+ * A process running a parse pool: one main thread and N workers, in ONE dump.
+ *
+ * The shape that makes this facet's summing rules legible — the lifetime is the
+ * process's and appears once, while everything the threads measured for
+ * themselves is disjoint and adds.
+ *
+ * @param pid - Which process wrote it
+ * @param threads - Each thread's record, main thread first by convention
+ * @returns A complete dump
+ */
+function pooled(pid: number, ...threads: readonly Partial<ParseThreadDump>[]): ParseDump {
+  return { pid, process: DEFAULT_LIFETIME, threads: threads.map((one) => thread(one)) };
 }
 
 /**
@@ -342,18 +386,207 @@ describe('mergeParseDumps', () => {
     expect(markdown.total.elapsedMs).toBeGreaterThanOrEqual(markdown.passes[0]?.elapsedMs ?? 0);
   });
 
-  it('sums the process wall and CPU readings across processes', () => {
+  it('sums the process wall and CPU readings across DISTINCT processes', () => {
+    // Two dumps are two real processes and their lifetimes are disjoint, so they
+    // add. (Whether they SHOULD add when one CONTAINS the other is the open
+    // question `addLifetime` documents — it is not this assertion's subject.)
     const merged = twoProcesses();
     expect(merged.wallMs).toBe(4000);
     expect(merged.cpuUserMs).toBe(3000);
     expect(merged.cpuSystemMs).toBe(600);
+    expect(merged.processes).toBe(2);
+    expect(merged.mainThreads).toBe(2);
   });
 
-  it('reports zero processes for no dumps at all', () => {
+  it('reports zero processes and zero threads for no dumps at all', () => {
     const merged = mergeParseDumps([]);
     expect(merged.processes).toBe(0);
+    expect(merged.mainThreads).toBe(0);
+    expect(merged.workerThreads).toBe(0);
     expect(merged.totalMs).toBe(0);
     expect(merged.kinds).toEqual([]);
+  });
+});
+
+describe('mergeParseDumps — one process running a pool', () => {
+  /** The pid the whole pool shares, because a thread is not a process. */
+  const THREAD_PID = 7;
+
+  it('reads the process lifetime ONCE however many threads ran', () => {
+    // The lifetime is a property of the process, so a pool of three threads
+    // reports 2000ms of wall clock and not 6000. Summing per thread inflates it
+    // by exactly the pool's width, which reads as a regression of that factor —
+    // and `render.ts` divides CPU by it to decide whether the wall figures can
+    // be believed at all.
+    const merged = mergeParseDumps([pooled(THREAD_PID, {}, { threadId: 1 }, { threadId: 2 })]);
+
+    expect(merged.wallMs).toBe(2000);
+    expect(merged.cpuUserMs).toBe(1500);
+    expect(merged.cpuSystemMs).toBe(300);
+  });
+
+  it('publishes the worker thread count BESIDE the process count', () => {
+    // `processes: 1` alone says a single-threaded run, and every summed
+    // millisecond beside it would be read as a duration. The worker count is
+    // also the denominator for utilization, so it is published rather than left
+    // to be derived.
+    const merged = mergeParseDumps([pooled(THREAD_PID, {}, { threadId: 1 }, { threadId: 2 })]);
+
+    expect(merged.processes).toBe(1);
+    expect(merged.mainThreads).toBe(1);
+    expect(merged.workerThreads).toBe(2);
+  });
+
+  it('SUMS everything a thread measured for itself', () => {
+    // The half that must not move: a merge that read only the main thread would
+    // throw the workers' rows away. In the measured run the main thread held 128
+    // parses and 1,805 cache misses while eight workers held ~209 parses each
+    // and no misses — dropping them deletes 93% of the parses this facet exists
+    // to attribute.
+    const merged = mergeParseDumps([
+      pooled(
+        THREAD_PID,
+        { cache: { hits: 2, misses: 10 } },
+        { threadId: 1, cache: { hits: 2, misses: 10 } },
+        { threadId: 2, cache: { hits: 2, misses: 10 } },
+      ),
+    ]);
+    const markdown = kindOf(merged, MARKDOWN);
+
+    expect(merged.cacheHits).toBe(6);
+    expect(merged.cacheMisses).toBe(30);
+    expect(merged.documents).toBe(30);
+    expect(merged.bytes).toBe(3000);
+    expect(markdown.total.calls).toBe(30);
+    expect(markdown.total.elapsedMs).toBe(180);
+    expect(markdown.passes.map((pass) => pass.calls)).toEqual([30, 30]);
+    expect(markdown.passes.map((pass) => pass.elapsedMs)).toEqual([120, 30]);
+  });
+});
+
+describe('mergeParseDumps — the tier, and which thread paid for it', () => {
+  /** The pid a parent and its worker threads all share. */
+  const POOL_PID = 11;
+
+  /** The tier row a parent-side cache read is charged to. */
+  const CACHE_READ = 'cache-read-io';
+
+  /** The tier row a cache write is charged to. */
+  const CACHE_WRITE_ROW = 'cache-write';
+
+  /**
+   * One tier row out of a merge, failing loudly when it is absent.
+   *
+   * @param merged - The merged numbers
+   * @param pass - Which row to read
+   * @returns That row
+   */
+  const tierOf = (merged: MergedParseDumps, pass: string): TierPassStats => {
+    const found = merged.tier.find((one) => one.pass === pass);
+    if (found === undefined) throw new Error(`merge carries no '${pass}' tier row`);
+    return found;
+  };
+
+  /**
+   * A parent and two workers of ONE process, each charging tier work.
+   *
+   * The shape a pooled run produces. The numbers are chosen so no two are equal
+   * and no sum coincides with another: a merge that attributed a worker's cost
+   * to the main thread, or summed the wrong pair, cannot land on a right answer
+   * by arithmetic accident.
+   *
+   * @returns The merge of ONE process carrying a main thread and two workers
+   */
+  const pooledRun = (): MergedParseDumps =>
+    mergeParseDumps([
+      pooled(
+        POOL_PID,
+        {
+          threadId: 0,
+          tier: [
+            { pass: CACHE_READ, calls: 3, elapsedMs: 30 },
+            { pass: CACHE_WRITE_ROW, calls: 0, elapsedMs: 0 },
+          ],
+        },
+        {
+          threadId: 1,
+          tier: [
+            { pass: CACHE_READ, calls: 5, elapsedMs: 500 },
+            { pass: CACHE_WRITE_ROW, calls: 5, elapsedMs: 700 },
+          ],
+        },
+        {
+          threadId: 2,
+          tier: [
+            { pass: CACHE_READ, calls: 7, elapsedMs: 1100 },
+            { pass: CACHE_WRITE_ROW, calls: 7, elapsedMs: 1300 },
+          ],
+        },
+      ),
+    ]);
+
+  it('sums a tier pass across every thread that charged it', () => {
+    const merged = pooledRun();
+
+    expect(tierOf(merged, CACHE_READ).calls).toBe(15);
+    expect(tierOf(merged, CACHE_READ).elapsedMs).toBe(1630);
+    expect(tierOf(merged, CACHE_WRITE_ROW).calls).toBe(12);
+  });
+
+  it('charges the MAIN-thread share from the main thread alone', () => {
+    const merged = pooledRun();
+
+    // 30, not 1,630: the two workers' reads happened in parallel on threads the
+    // command was not waiting on serially. This is the whole reason `threadId`
+    // is in the dump — without it these two numbers are the same number, and a
+    // transport that moved 1,600ms off the parent would read as no change.
+    expect(tierOf(merged, CACHE_READ).mainElapsedMs).toBe(30);
+    expect(tierOf(merged, CACHE_READ).mainCalls).toBe(3);
+    // The parent wrote nothing; both writes were the workers'.
+    expect(tierOf(merged, CACHE_WRITE_ROW).mainElapsedMs).toBe(0);
+    expect(tierOf(merged, CACHE_WRITE_ROW).calls).toBeGreaterThan(0);
+  });
+
+  it('counts the main threads, so a share has a denominator', () => {
+    const merged = pooledRun();
+
+    // 1 process, 1 main thread, 2 workers — a pool of two. The process count
+    // alone cannot distinguish this from a command that never pooled anything.
+    expect(merged.processes).toBe(1);
+    expect(merged.mainThreads).toBe(1);
+    expect(merged.workerThreads).toBe(2);
+  });
+
+  it('counts every thread as a main thread when the run had no workers', () => {
+    // Two PROCESSES, each a main thread and nothing else. The contrast case for
+    // the one above — three thread records either way, completely different run.
+    const merged = mergeParseDumps([
+      dump(1, { threadId: 0, tier: [{ pass: CACHE_READ, calls: 2, elapsedMs: 20 }] }),
+      dump(2, { threadId: 0, tier: [{ pass: CACHE_READ, calls: 4, elapsedMs: 40 }] }),
+    ]);
+
+    expect(merged.mainThreads).toBe(2);
+    expect(merged.workerThreads).toBe(0);
+    // Every millisecond was paid on a main thread, because there were only main
+    // threads. `mainElapsedMs === elapsedMs` is the honest reading here, not a
+    // failure of the split.
+    expect(tierOf(merged, CACHE_READ).mainElapsedMs).toBe(60);
+    expect(tierOf(merged, CACHE_READ).elapsedMs).toBe(60);
+  });
+
+  it('keeps tier rows out of every parser kind', () => {
+    const merged = pooledRun();
+
+    // The placement guarantee, asserted rather than assumed: a tier row folded
+    // into `kinds` would be summed into "which parser dominates this tree",
+    // which is the denominator bug this facet was already bitten by one level
+    // up. Nothing in the merge should be able to put it there.
+    const tierNames = new Set(merged.tier.map((row) => row.pass));
+    for (const kind of merged.kinds) {
+      for (const pass of kind.passes) expect(tierNames.has(pass.pass)).toBe(false);
+      expect(tierNames.has(kind.total.pass)).toBe(false);
+    }
+    expect(merged.totalMs).toBe(kindOf(merged, MARKDOWN).total.elapsedMs);
   });
 });
 
@@ -369,7 +602,10 @@ describe('attributionOf — the states that all look like zero', () => {
   const classify = (documents: number, hits: number, misses: number): string =>
     attributionOf({
       processes: 1,
+      mainThreads: 1,
+      workerThreads: 0,
       kinds: [],
+      tier: [],
       documents,
       bytes: 0,
       cacheHits: hits,
@@ -424,7 +660,9 @@ describe('sameParseWork', () => {
    * @param over - What the case varies
    * @returns The merge
    */
-  const one = (over: Partial<ParseDump> = {}): MergedParseDumps => mergeParseDumps([dump(1, over)]);
+  const one = (
+    over: Partial<ParseThreadDump> & { process?: ParseDumpProcess } = {},
+  ): MergedParseDumps => mergeParseDumps([dump(1, over)]);
 
   /**
    * The default merge with ONE thing about its markdown group changed.
@@ -556,16 +794,22 @@ describe('readParseDumps', () => {
     );
   });
 
-  it('refuses a dump from another dump version', async () => {
+  it('refuses a dump from a build that still stamped a dumpVersion, and names the producer', async () => {
+    // The seam used to stamp `dumpVersion` and this reader used to compare it to
+    // an integer of its own. Both are gone: strictness refuses the stale field
+    // for the honest reason — this build does not model it — without anyone
+    // being obliged to remember a number. The refusal must still say what to
+    // re-capture with, because the commonest cause is an OLDER BUILD's dump
+    // rather than a corrupt file, which is exactly what an A/B hands you.
     await expectRefusal(
-      'other-version',
-      {
-        'parse-timing-1.json': JSON.stringify({
-          ...dump(1),
-          dumpVersion: PARSE_DUMP_VERSION + 1,
-        }),
-      },
+      'stale-version-field',
+      { 'parse-timing-1.json': JSON.stringify({ ...dump(1), dumpVersion: 2 }) },
       /dumpVersion/,
+    );
+    await expectRefusal(
+      'stale-version-field-producer',
+      { 'parse-timing-1.json': JSON.stringify({ ...dump(1), dumpVersion: 2 }) },
+      /timing seam/,
     );
   });
 

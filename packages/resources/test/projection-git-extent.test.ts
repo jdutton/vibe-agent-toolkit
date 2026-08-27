@@ -19,7 +19,14 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { crawlDirectory, GitTracker, mkdirSyncReal, NEVER_CRAWL_GLOBS, normalizedTmpdir, runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
+import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ExtentContribution } from '../src/projection/contributor.js';
@@ -220,7 +227,7 @@ describe('GitExtentContributor without a git oracle on the base', () => {
     // spawned its own `git ls-files` would pay a second subprocess and could
     // answer index-casing questions differently from the ResourceIdentityMap
     // that minted the ids in its own rows.
-    const builder = new ProjectionBuilder(root);
+    const builder = new ProjectionBuilder({ root });
 
     await expect(new GitExtentContributor().contribute(builder.base(), null))
       .rejects.toThrow(/no git oracle/iu);
@@ -234,7 +241,7 @@ describe('GitExtentContributor outside a repository', () => {
     // be a confident wrong answer.
     const bare = toForwardSlash(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-git-extent-nogit-')));
     try {
-      const builder = new ProjectionBuilder(bare, new GitTracker(bare));
+      const builder = new ProjectionBuilder({ root: bare, gitTracker: new GitTracker(bare) });
 
       await expect(new GitExtentContributor().contribute(builder.base(), null))
         .rejects.toThrow(/not a git repository|did not answer/iu);

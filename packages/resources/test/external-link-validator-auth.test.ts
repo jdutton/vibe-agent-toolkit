@@ -2,10 +2,11 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 
-import { normalizedTmpdir, safePath, type LinkAuthConfig, type Provider } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
+import type { LinkAuthConfig, Provider } from '../src/link-auth/resolve.js';
 
 import { capturingFetch, countingFetch } from './auth-fetch-mocks.js';
 

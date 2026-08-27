@@ -21,7 +21,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { capturePopulation } from '../src/facets/population/capture.js';
 import {
   POPULATION_FACET,
-  POPULATION_FACET_VERSION,
   PopulationBodySchema,
   type PopulationCommandStats,
 } from '../src/facets/population/types.js';
@@ -99,7 +98,6 @@ function captureRow(
 
   expectStamp(report, {
     facet: POPULATION_FACET,
-    facetVersion: POPULATION_FACET_VERSION,
     subject: request.subject,
     capturedAt: CAPTURED_AT,
   });

@@ -24,7 +24,7 @@ import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/u
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { packageSkill, packagingConfigToPackageOptions } from '../../src/skill-packager.js';
-import type { DeclaredEvalSuite } from '../../src/test-input.js';
+import { conventionalSuiteProbe, type DeclaredEvalSuite } from '../../src/test-input.js';
 import { activeErrorsOf, activeWarningsOf, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
 
 const ANSWER_KEY = 'the model must output exactly forty-two';
@@ -314,6 +314,7 @@ describe('a skill\'s bundle never carries another skill\'s eval suite (integrati
         { test: { evals: SUBJECT_EVALS } },
         { skillPath, outputPath },
         projectSkills(),
+        conventionalSuiteProbe(),
       ),
     );
 
@@ -346,7 +347,7 @@ describe('a skill\'s bundle never carries another skill\'s eval suite (integrati
 
     await packageSkill(
       skillPath,
-      packagingConfigToPackageOptions({ test: { evals: SUBJECT_EVALS } }, { skillPath, outputPath }, []),
+      packagingConfigToPackageOptions({ test: { evals: SUBJECT_EVALS } }, { skillPath, outputPath }, [], conventionalSuiteProbe()),
     );
 
     const leaked = outputFiles(outputPath).filter((f) => f.includes('example-evals'));

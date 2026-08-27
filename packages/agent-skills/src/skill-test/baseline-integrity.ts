@@ -3,7 +3,7 @@ import {
   parseStreamJsonTranscript,
   protectedEnvNames,
   type ParsedTranscript,
-} from '@vibe-agent-toolkit/utils';
+} from '@vibe-agent-toolkit/utils/skill-test';
 import { z } from 'zod';
 
 import { sanitizeGraderText } from './grader-text.js';

@@ -87,7 +87,7 @@
  * crawl.
  *
  * So the registry's own work is charged under `crawl` too
- * ({@link CRAWL_REGISTRY_ENUMERATE_ID}, {@link CRAWL_REGISTRY_ADD_RESOURCE_ID},
+ * ({@link CRAWL_REGISTRY_ENUMERATE_ID}, {@link CRAWL_REGISTRY_ADMIT_ID},
  * {@link CRAWL_REGISTRY_RESOLVE_LINKS_ID}), and the brackets live INSIDE
  * `ResourceRegistry` rather than at the six sites that construct one. Six copies
  * of the same bracket is six chances to disagree, and a seventh construction site
@@ -322,7 +322,7 @@ export const CRAWL_REGISTRY_ID_PREFIX = 'resource-registry:';
  * the `crawlDirectory` call, and nothing that follows it.
  *
  * Only the enumeration, so that this row and
- * {@link CRAWL_REGISTRY_ADD_RESOURCE_ID} are additive rather than nested:
+ * {@link CRAWL_REGISTRY_ADMIT_ID} are additive rather than nested:
  * `crawl()` is enumeration THEN admission, and bracketing the whole method would
  * have produced a row that contains the admission row.
  *
@@ -343,20 +343,38 @@ export const CRAWL_REGISTRY_ID_PREFIX = 'resource-registry:';
 export const CRAWL_REGISTRY_ENUMERATE_ID = 'resource-registry:enumerate';
 
 /**
- * Synthetic contributor id for one `ResourceRegistry.addResource` — the read, the
- * content key, the parse, the stat, the checksum and the four index writes for
- * one file.
+ * Synthetic contributor id for one `ResourceRegistry.addResources` (or one
+ * standalone `addResource`) — the reads, the content keys, the parses, the
+ * stats, the checksums and the index writes for every file in that call.
  *
- * The per-file grain is deliberate. It is the only grain every construction route
- * shares (`crawl` and a direct `addResources` both funnel through it), and it is
- * the one that makes the row's ms/call comparable to a projection contributor's:
- * this is what admitting a document costs the incumbent.
- *
- * Charged even when the admission FAILS — a duplicate-id drop and an unreadable
+ * Charged even when an admission FAILS — a duplicate-id drop and an unreadable
  * file both cost the read and the parse before they are refused, and a seam that
  * charged only successes would report a corpus of collisions as nearly free.
+ *
+ * ## 🚨 Why this is a per-CALL row, and why it was renamed to say so
+ *
+ * It used to be `resource-registry:add-resource`, bracketing ONE FILE, and that
+ * was correct for exactly as long as the lane was sequential. It is not any
+ * more: reads and parses now happen with a bounded fan-out
+ * (`driveInOrder` in `@vibe-agent-toolkit/resources`), and {@link recordRegistryPass}
+ * SUMS each bracket's elapsed time. Overlapping per-file brackets would
+ * therefore total up to `width ×` the wall clock they claim to measure — the
+ * same shape as the instrument artifact that once reported a 6.5× parse-pool
+ * regression that did not exist, where nine worker dumps were summed for one
+ * process.
+ *
+ * ⇒ **One bracket per admission call**, which is the grain
+ * {@link CRAWL_BLOB_POPULATE_ID} already uses on the projection arm, so the two
+ * arms of the comparison are now measured the same way rather than differently.
+ * `calls` reads as "how many times admission ran" and stays divisible.
+ *
+ * ⭐ **The id changed because the MEANING changed while the shape did not.** A
+ * stored dump taken before the split carries per-file milliseconds under the old
+ * name; comparing it against a per-call number would be silently wrong in
+ * exactly the way no schema catches. With a new name the old row is simply
+ * absent, which a reader cannot miss.
  */
-export const CRAWL_REGISTRY_ADD_RESOURCE_ID = 'resource-registry:add-resource';
+export const CRAWL_REGISTRY_ADMIT_ID = 'resource-registry:admit';
 
 /** Synthetic contributor id for one whole `ResourceRegistry.resolveLinks` call. */
 export const CRAWL_REGISTRY_RESOLVE_LINKS_ID = 'resource-registry:resolve-links';
@@ -366,7 +384,7 @@ export const CRAWL_REGISTRY_RESOLVE_LINKS_ID = 'resource-registry:resolve-links'
  * `populateBlobs`, which reads and parses every path the base contributors keyed
  * and derives the four blob-keyed tables from it.
  *
- * **This is the projection's analogue of {@link CRAWL_REGISTRY_ADD_RESOURCE_ID},
+ * **This is the projection's analogue of {@link CRAWL_REGISTRY_ADMIT_ID},
  * and it went uncharged while that one was charged.** The asymmetry is why the
  * bracket exists: the seam's whole purpose is "which of the two crawlers costs
  * more to do its own work", and an omission on ONE arm biases exactly that
@@ -469,8 +487,8 @@ const contributorStratum = new AsyncLocalStorage<CrawlDriverStratum>();
  * arm's total contains, which is a widening read as a movement; the second means
  * the arms agree and the work genuinely did not happen.
  *
- * {@link CRAWL_SEAM_DUMP_VERSION} was the previous answer and it is a poor one.
- * An integer says "different", never "different how", so the remedy for a real
+ * A hand-bumped dump version was the previous answer and it is a poor one. An
+ * integer says "different", never "different how", so the remedy for a real
  * widening and for a typo'd field is the same blunt refusal — and, worse, it only
  * fires if a human remembers to bump it. The `shared` stratum shipped without a
  * bump on an argument that was correct about rows and wrong about totals; nothing
@@ -490,7 +508,7 @@ export const CRAWL_CHARGEABLE_IDS: readonly string[] = [
   CRAWL_BLOB_POPULATE_ID,
   CRAWL_CLOSURE_CONTRIBUTE_ID,
   CRAWL_CLOSURE_RESOLVE_ID,
-  CRAWL_REGISTRY_ADD_RESOURCE_ID,
+  CRAWL_REGISTRY_ADMIT_ID,
   CRAWL_REGISTRY_ENUMERATE_ID,
   CRAWL_REGISTRY_RESOLVE_LINKS_ID,
   CRAWL_SHARED_GIT_TRACKER_ID,
@@ -530,9 +548,17 @@ export interface CrawlTimingEntry {
 /** See {@link TimingProcess}. Lifetime figures, never a crawl duration. */
 export type CrawlTimingProcess = TimingProcess;
 
-/** The on-disk dump shape. Versioned so a reader can refuse an unknown layout. */
+/**
+ * The on-disk dump shape.
+ *
+ * ⚠️ **There is no version field, and adding one back is a defect.** A reader
+ * refuses an unknown layout by validating against its own strict schema, which
+ * moves the instant a field here is added, renamed or retyped — where an integer
+ * moved only when a human remembered. See {@link CRAWL_CHARGEABLE_IDS} for the
+ * half of this that layout validation cannot do, and `lab`'s
+ * `harness/dumps.ts` for the reading side.
+ */
 export interface CrawlTimingDump {
-  dumpVersion: number;
   pid: number;
   /** See {@link CrawlTimingProcess}. Never summed across processes by any reader. */
   process: CrawlTimingProcess;
@@ -558,69 +584,6 @@ export interface CrawlTimingDump {
    */
   entries: CrawlTimingEntry[];
 }
-
-/**
- * Bumped whenever the dump's layout — **or the meaning of a row already in it** —
- * changes in a way a reader must notice.
- *
- * The meaning half is not pedantry. A reader that refuses an unknown layout but
- * accepts a silently redefined row is worse than one that refuses both: it
- * produces numbers, and nobody can state what they are of.
- *
- * 1 — first version.
- * 2 — the `crawl` stratum gained the incumbent's PREPARATION
- *     (`resource-registry:*`). No field changed. What changed is what a `crawl`
- *     total is a total OF: traversal alone at v1, the registry build plus the
- *     traversal at v2. Holding a v1 dump against a v2 one reads that widening as
- *     a several-hundred-fold regression in the walker — see this module's header.
- *
- * 3 — the `shared` stratum, and the projection's blob stage
- *     ({@link CRAWL_BLOB_POPULATE_ID}). No field changed here either, and that
- *     is exactly why the first attempt at this entry argued no bump was needed:
- *     `shared` holds work previously charged NOWHERE, so nothing moved out of an
- *     existing row, and a reader predating it buckets the rows in
- *     `unclassified`. That argument was **right about rows and wrong about the
- *     dump**, because the rule above says "the meaning of a row" and the values a
- *     reader actually publishes are DERIVED:
- *
- *     - a command TOTAL sums every additive row across every stratum, so it grew
- *       by the whole `git ls-files` spawn — 27% to 100% of the crawl budget
- *       depending on the corpus. An A/B across the boundary sees that as a real,
- *       and perfectly STABLE, regression: every pair says `changed` for the same
- *       reason, which reads as agreement rather than as the tool refusing.
- *     - `attribution` flips from `nothing-crawled` to `measured` for a command
- *       that reached no crawler at all, because one shared row is now present.
- *
- *     Both are precisely the v1 -> v2 failure — a widening read as a movement —
- *     so both get the same remedy. A reader that refuses the dump and says so is
- *     the loud failure; a reader that publishes a confident false delta is the
- *     quiet one, and the quiet one is what shipped between these two versions.
- * 4 — the dump gained {@link CrawlTimingDump.charges}, and this number stops
- *     being the mechanism. A layout change, so it costs one last bump; after it,
- *     a reader diffs what two builds can CHARGE instead of comparing an integer,
- *     and a widening announces itself without anyone remembering to bump
- *     anything. Read {@link CRAWL_CHARGEABLE_IDS} for why the integer could never
- *     have done that job — it says "different", never "different how", and the
- *     v3 entry above exists precisely because a human did not notice in time.
- *
- * ⚠️ Keep bumping this for LAYOUT changes; it is still the only thing that can
- * refuse a dump whose fields moved. What it is no longer responsible for is
- * meaning, which the dump now states for itself.
- */
-export const CRAWL_SEAM_DUMP_VERSION = 4;
-
-/**
- * Alias kept for this module's own readability at the write site.
- *
- * ⚠️ The exported spelling above exists so the READER can pin itself against the
- * writer. `@vibe-agent-toolkit/lab`'s `CRAWL_DUMP_VERSION` refuses any dump whose
- * version it does not recognise, and the two used to be unrelated literals in
- * two packages — drift was silent, and its symptom is not a subtly wrong number
- * but **every dump getting refused**, which a reader would sooner blame on their
- * own invocation than on a constant. Now the lab pins equality against this
- * export, so a bump here that is not mirrored there fails a test instead.
- */
-const DUMP_VERSION = CRAWL_SEAM_DUMP_VERSION;
 
 /** Basename stem of a dump file; the pid (and any collision counter) follow. */
 const DUMP_BASENAME = 'crawl-timing';
@@ -729,7 +692,6 @@ function compareEntries(left: EntryAccumulator, right: EntryAccumulator): number
  */
 function buildDump(): CrawlTimingDump {
   return {
-    dumpVersion: DUMP_VERSION,
     pid: process.pid,
     process: readTimingProcess(),
     charges: { strata: [...CRAWL_STRATA], syntheticIds: [...CRAWL_CHARGEABLE_IDS] },

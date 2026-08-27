@@ -8,6 +8,7 @@ import {
   BLOB_CONTENT_CHANGED,
   BLOB_NOT_TEXT,
   BLOB_UNREADABLE,
+  parserKindOf,
   populateBlobs,
   type BlobPopulationResult,
 } from '../src/projection/blob-population.js';
@@ -50,6 +51,50 @@ const DUAL_ROUTE_CONTENT = '# Heading\n\n<a href="./b.md">b</a>\n';
 
 /** A document with one heading and one outbound markdown link. */
 const DOC_A_CONTENT = '# A\n\n[b](./b.md)\n';
+
+/** A source file: `.ts` is typed `text/x-typescript`, which routes to no parser. */
+const UNPARSED_TS = 'tools/build.ts';
+
+/**
+ * The `none`-route fixture, carrying one of every shape the two routes disagree on.
+ *
+ * Line 1 opens with `#`, line 5 contains a markdown inline link: under the
+ * markdown route those are a heading and a `markdown-link` row, and under the
+ * `none` route they are neither. Lines 2–4 carry the three lexical forms, which
+ * must survive — the lexer reads RAW SOURCE and never needed an AST.
+ *
+ * ⚠️ The first line names the file. Blobs are content-addressed and
+ * path-independent, so a fixture whose bytes are shared with the markdown twin
+ * below would be ONE blob with one row set, and the whole suite would read as
+ * "extension gates extraction" while proving nothing.
+ */
+const UNPARSED_TS_CONTENT = [
+  '# build.ts — a comment in TypeScript, not an ATX heading',
+  '// see ./helper.mts for the rest',
+  '// bundle @packages/resources/README.md as well',
+  '// and ${HOME}/.claude/settings.json',
+  '// docs live at [b](./notes-b.md)',
+  'export const buildTarget = 1;',
+  '',
+].join('\n');
+
+/** The markdown control: the same shapes, different bytes, a parser behind them. */
+const PARSED_MD = 'tools/notes.md';
+
+/** Distinct bytes from {@link UNPARSED_TS_CONTENT} — see its warning. */
+const PARSED_MD_CONTENT = '# notes.md — the markdown twin\n\ndocs live at [b](./notes-b.md)\n';
+
+/** The directory {@link UNPARSED_TS} and {@link PARSED_MD} live in. */
+const TOOLS_DIR = 'tools';
+
+/** A syntactically valid digest — these tests are about the PREFIX, not the hash. */
+const ANY_DIGEST = 'a'.repeat(64);
+
+/** `syntacticForm` of a reference the markdown AST produced. Only a parser can emit one. */
+const MARKDOWN_LINK = 'markdown-link';
+
+/** `syntacticForm` of a path-shaped token the raw-source lexer found. No AST needed. */
+const BARE_TOKEN = 'bare-token';
 
 /**
  * A cache that never touches disk.
@@ -146,7 +191,7 @@ async function builderWithDeferredPath(
   files: readonly CorpusFile[],
   cache: RunContentCache,
 ): Promise<ProjectionBuilder> {
-  const builder = new ProjectionBuilder(suite.tempDir, undefined, cache);
+  const builder = new ProjectionBuilder({ root: suite.tempDir, contentCache: cache });
   for (const file of files) {
     const absolute = safePath.join(suite.tempDir, file.path);
     const resourceId = builder.identities.idFor(absolute);
@@ -186,6 +231,49 @@ function blobTablesOf(projection: Projection): string {
   ]);
 }
 
+/**
+ * Where a token sits in the source, as `[startOffset, endOffset)`.
+ *
+ * Derived from the fixture rather than written out, so an edit to the fixture
+ * cannot leave a hand-counted offset silently pointing at the wrong characters.
+ *
+ * @param content - The fixture source
+ * @param token - The exact token to locate
+ * @returns Its half-open offset range
+ */
+function offsetsOf(content: string, token: string): [number, number] {
+  const start = content.indexOf(token);
+  return [start, start + token.length];
+}
+
+/** What one derivation of the two-route fixture pair yields. */
+interface TwoRouteDerivation {
+  projection: Projection;
+  counts: BlobPopulationResult;
+  /** Key of the `.ts` blob — `none.<digest>`, no parser behind it. */
+  unparsedKey: string;
+  /** Key of the `.md` twin — `markdown.<digest>`, the differential control. */
+  parsedKey: string;
+}
+
+/**
+ * Derive {@link UNPARSED_TS} and {@link PARSED_MD} in one run and name both keys.
+ *
+ * One helper rather than a per-test preamble because every assertion in the
+ * `none`-route suite is a comparison between the two routes, and two copies of
+ * the setup are two chances for the pair to stop being the same run.
+ *
+ * @returns The projection, the stage's counters, and a key per route
+ */
+async function deriveBothRoutes(): Promise<TwoRouteDerivation> {
+  const builder = await baseBuilderFor();
+  const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
+  const projection = builder.build();
+  const keyFor = (path: string): string =>
+    projection.resourceRealizations.find((row) => row.path === path)?.contentKey ?? '';
+  return { projection, counts, unparsedKey: keyFor(UNPARSED_TS), parsedKey: keyFor(PARSED_MD) };
+}
+
 const SKILL_CORPUS: readonly CorpusFile[] = [
   { path: ROOT_DOC, content: '---\nname: foo\n---\n\n# Foo\n\nSee [b](./b.md) and the [runner](./run.mjs).\n' },
   { path: DOC_B, content: '# B\n\nNothing links out of here.\n' },
@@ -200,7 +288,7 @@ function closureDeclaration(): Record<string, JsonValue> {
   return {
     kind: SKILL_KIND,
     closureFrom: ROOT_DOC,
-    follow: ['markdown-link', 'bare-token'],
+    follow: [MARKDOWN_LINK, BARE_TOKEN],
     maxDepth: 'full',
   };
 }
@@ -269,7 +357,7 @@ describe('populateBlobs, through populate()', () => {
     const lexed = projection.blobReferences.filter((row) => row.blob === runnerKey);
     expect(lexed).toHaveLength(1);
     expect(lexed[0]?.rawRef).toBe('./helper.mjs');
-    expect(lexed[0]?.syntacticForm).toBe('bare-token');
+    expect(lexed[0]?.syntacticForm).toBe(BARE_TOKEN);
   });
 
   it('skips no heading and no reference for want of a source line', async () => {
@@ -391,12 +479,19 @@ describe('populateBlobs', () => {
     expect(conditions[0]?.message).not.toContain(suite.tempDir);
   });
 
-  it('parses a text file with no extension, so the refusal is about bytes and not names', async () => {
+  it('derives a text file with no extension, so the refusal is about bytes and not names', async () => {
     // The negative control for the test above, and it is what keeps the sniff
     // from being quietly replaced by an extension allowlist: a bundled script
     // is exactly the reference source the closure exists to read, and it has no
     // extension in common with markdown.
-    await writeCorpus([{ path: 'Makefile', content: '# Build\n\nsee [docs](./a.md)\n' }]);
+    //
+    // `Makefile` is not in `mime-type.ts`'s well-known basenames, so it routes to
+    // `none` and no parser reads it — and the reference below is still found,
+    // because the LEXER is what finds it and the lexer never needed an AST. The
+    // token is deliberately bare rather than `[docs](./a.md)`: a markdown link in
+    // an unparsed blob is lexed as one whitespace-delimited run, so it would
+    // arrive as `docs](./a.md` and prove something about tokenization instead.
+    await writeCorpus([{ path: 'Makefile', content: '# Build\n\nsee ./a.md for the target\n' }]);
     const builder = await baseBuilderFor();
 
     const counts = await populateBlobs(builder, { parseCache: NO_CACHE });
@@ -634,5 +729,143 @@ describe('afterClosurePromotion', () => {
     // and therefore no content key to hang a `blob_conditions` row on.
     expect(builder.build().realizationConditions.map((row) => row.code))
       .toEqual([REALIZATION_PROMOTION_UNREADABLE]);
+  });
+});
+
+describe('populateBlobs, over blobs no document parser routes to', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+  beforeEach(async () => {
+    await writeCorpus([
+      { path: UNPARSED_TS, content: UNPARSED_TS_CONTENT },
+      { path: PARSED_MD, content: PARSED_MD_CONTENT },
+    ], [TOOLS_DIR]);
+  });
+
+  it('gives it a blobs row with a real token estimate, rather than refusing it', async () => {
+    // The whole reason `none` is a third shape and not a fourth refusal. With no
+    // `blobs` row there is no `tokenEstimate`, `whatLoadsAt` reports
+    // `tokens: null`, and `chargeOf` answers `unknown-size` — a live accounting
+    // state that would appear the moment a CLAUDE.md imports a `.ts` file.
+    const { projection, unparsedKey } = await deriveBothRoutes();
+    const row = projection.blobs.find((blob) => blob.contentKey === unparsedKey);
+
+    expect(unparsedKey.startsWith('none.')).toBe(true);
+    expect(row).toBeDefined();
+    expect(row?.tokenEstimate).toBeGreaterThan(0);
+    // `measureContent` runs too, so the row is measured rather than merely present.
+    expect(row?.wordCount).toBeGreaterThan(0);
+    // Every code unit is prose, because no AST said where any fence is.
+    expect(row?.proseCodeUnits).toBe(UNPARSED_TS_CONTENT.length);
+    expect(row?.codeBlockCodeUnits).toBe(0);
+    // `bytes` is the RAW on-disk count and stays apart from the code-unit count:
+    // the fixture's two em-dashes are one code unit and three bytes each.
+    expect(row?.bytes).toBe(Buffer.byteLength(UNPARSED_TS_CONTENT, 'utf-8'));
+    expect(row?.bytes).toBeGreaterThan(UNPARSED_TS_CONTENT.length);
+  });
+
+  it('runs no document parser over it: no headings, no sections, no markdown links', async () => {
+    const { projection, unparsedKey } = await deriveBothRoutes();
+    const row = projection.blobs.find((blob) => blob.contentKey === unparsedKey);
+
+    // Line 1 of the fixture opens with `#` and line 5 holds `[b](./notes-b.md)`.
+    // A route that handed these bytes to remark would report 1 and 1.
+    expect(row?.headingCount).toBe(0);
+    expect(row?.sectionCount).toBe(0);
+    expect(row?.linkCount).toBe(0);
+    expect(projection.blobSections.filter((section) => section.blob === unparsedKey)).toEqual([]);
+    expect(projection.blobReferences
+      .filter((reference) => reference.blob === unparsedKey)
+      .map((reference) => reference.syntacticForm))
+      .not.toContain(MARKDOWN_LINK);
+  });
+
+  it('still runs the raw-source lexer, at the offsets the source has', async () => {
+    // 🔑 The constraint that decides correctness: route away from the PARSER,
+    // never from the LEXER. `findLexicalReferences` reads raw source and needs no
+    // AST, and it is what makes a skill's bundled scripts closure members at all —
+    // the exact `files:`-blindness family the projection exists to make queryable.
+    const { projection, unparsedKey } = await deriveBothRoutes();
+    const lexed = projection.blobReferences.filter((row) => row.blob === unparsedKey);
+
+    expect(lexed.map((row) => [row.syntacticForm, row.rawRef, row.line])).toEqual([
+      [BARE_TOKEN, './helper.mts', 2],
+      ['at-prefixed', '@packages/resources/README.md', 3],
+      ['env-anchored', '${HOME}/.claude/settings.json', 4],
+      // Line 5's `[b](./notes-b.md)`, and it is recorded rather than hidden: with
+      // no AST a markdown link is one whitespace-delimited run, so the lexer
+      // strips the leading `[` and the trailing `)` and stops at `d`. That is
+      // what a markdown link IS to a reader that has no parser — and it is
+      // emphatically not the `markdown-link` row the twin below gets.
+      [BARE_TOKEN, 'b](./notes-b.md', 5],
+    ]);
+
+    // Offsets index the SOURCE, so a rewriter can replace exactly the token.
+    const offsets = lexed.map((row) => [row.startOffset, row.endOffset]);
+    expect(offsets.slice(0, 3)).toEqual([
+      offsetsOf(UNPARSED_TS_CONTENT, './helper.mts'),
+      offsetsOf(UNPARSED_TS_CONTENT, '@packages/resources/README.md'),
+      offsetsOf(UNPARSED_TS_CONTENT, '${HOME}/.claude/settings.json'),
+    ]);
+    expect(lexed.map((row) => UNPARSED_TS_CONTENT.slice(row.startOffset, row.endOffset)))
+      .toEqual(lexed.map((row) => row.rawRef));
+
+    // Every lexical row reports `inFence: false` / `inCodeSpan: false`, because a
+    // blob with no AST has no fences to be inside. Honest rather than lossy — see
+    // `NO_CODE_CONTEXT` in blob-population.ts for the measurement.
+    expect(lexed.every((row) => !row.inFence && !row.inCodeSpan)).toBe(true);
+  });
+
+  it('parses the markdown twin, so the difference is the route and not the bytes', async () => {
+    // The differential control. Without it every assertion above is equally
+    // satisfied by a stage that derives nothing useful for anybody.
+    const { projection, parsedKey, unparsedKey } = await deriveBothRoutes();
+    const row = projection.blobs.find((blob) => blob.contentKey === parsedKey);
+
+    expect(parsedKey).not.toBe(unparsedKey);
+    expect(parsedKey.startsWith('markdown.')).toBe(true);
+    expect(row?.headingCount).toBe(1);
+    expect(row?.linkCount).toBe(1);
+    expect(projection.blobSections.filter((section) => section.blob === parsedKey))
+      .toHaveLength(1);
+    expect(projection.blobReferences
+      .filter((reference) => reference.blob === parsedKey)
+      .map((reference) => reference.syntacticForm))
+      .toEqual([MARKDOWN_LINK]);
+  });
+
+  it('counts it as derived and as unparsed, and records no condition against it', async () => {
+    const { projection, counts } = await deriveBothRoutes();
+
+    // Derived, not declined: `blobsWithoutParser` is a SUBSET of `blobsDerived`.
+    expect(counts.blobsDerived).toBe(2);
+    expect(counts.blobsWithoutParser).toBe(1);
+    // None of the refusal buckets, because nothing was refused.
+    expect(counts.blobsNotText).toBe(0);
+    expect(counts.blobsParseFailed).toBe(0);
+    expect(counts.blobsUnreadable).toBe(0);
+    // ⛔ And NO per-blob condition row. The `none.` key prefix already records,
+    // exactly and per blob, that no parser ran; a row per unparsed blob would be
+    // a five-column restatement of the primary key on most files in a repository.
+    expect(projection.blobConditions).toEqual([]);
+  });
+});
+
+describe('parserKindOf', () => {
+  it('reads all three kinds off a key, with no else-branch to fall into', () => {
+    // The defect this pins is invisible to `tsc`: `startsWith('html.') ? 'html' :
+    // 'markdown'` compiles perfectly and silently relabels every `none.` key as
+    // markdown, routing a blob with no parser straight back into the parse path.
+    expect(parserKindOf(`none.${ANY_DIGEST}`)).toBe('none');
+    expect(parserKindOf(`markdown.${ANY_DIGEST}`)).toBe('markdown');
+    expect(parserKindOf(`html.${ANY_DIGEST}`)).toBe('html');
+  });
+
+  it('throws on a key naming no kind, rather than guessing one', () => {
+    // Unreachable through the schema, which is exactly why the alternative is
+    // worse: a default would make an impossible key derive real-looking facts.
+    expect(() => parserKindOf(`brainfuck.${ANY_DIGEST}`)).toThrow(/brainfuck/u);
+    expect(() => parserKindOf(ANY_DIGEST)).toThrow();
   });
 });

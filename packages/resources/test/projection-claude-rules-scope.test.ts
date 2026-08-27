@@ -101,7 +101,7 @@ function buildBase(files: readonly FixtureFile[]): {
   base: ProjectionBase;
   idOf: (path: string) => string;
 } {
-  const builder = new ProjectionBuilder(ROOT);
+  const builder = new ProjectionBuilder({ root: ROOT });
   const ids = new Map<string, string>();
   for (const file of files) {
     ids.set(file.path, builder.identities.idFor(safePath.join(ROOT, file.path)));

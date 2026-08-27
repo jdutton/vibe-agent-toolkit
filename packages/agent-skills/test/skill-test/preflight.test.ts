@@ -1,4 +1,4 @@
-import { assembleClaudeArgs } from '@vibe-agent-toolkit/utils';
+import { assembleClaudeArgs } from '@vibe-agent-toolkit/utils/skill-test';
 import { describe, expect, it } from 'vitest';
 
 import { runPreflight, type PreflightInput } from '../../src/skill-test/preflight.js';

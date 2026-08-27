@@ -29,9 +29,11 @@
  * *different* identity.
  */
 
-import { safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import { type KeyedContent, parserKindForPath } from '../content-key.js';
+import type { KeyedContent, ParserKind } from '../content-key.js';
+import { parserKindForMimeType } from '../mime-type.js';
 import type {
   BlobConditionRow,
   BlobReferenceRow,
@@ -53,6 +55,7 @@ import type { ResolutionContextRow, ZoneProvenanceRow } from '../schemas/project
 import { readKeyedContent, type RunContentCache } from './content-cache.js';
 import { errorLabel } from './error-label.js';
 import { ResourceIdentityMap } from './identity.js';
+import type { CollectionMimeResolver } from './realizations.js';
 
 /**
  * Condition code for a second identity offered at an already-realized
@@ -77,6 +80,16 @@ export const REALIZATION_PATH_COLLISION = 'REALIZATION_PATH_COLLISION';
  * rather than an enum member.
  */
 export const REALIZATION_PROMOTION_UNREADABLE = 'REALIZATION_PROMOTION_UNREADABLE';
+
+/**
+ * The kind that means "hand this to no document parser".
+ *
+ * Spelled here because `content-key.ts` keeps its own copy private; the
+ * {@link ParserKind} annotation is the tie, so renaming the kind there stops
+ * this line compiling rather than leaving a stale literal behind. Replace with
+ * an import the moment that module exports one.
+ */
+const NO_PARSER_KIND: ParserKind = 'none';
 
 /** Composite-key separator — a NUL can never occur in a path or an id. */
 const KEY_SEPARATOR = '\u0000';
@@ -166,6 +179,18 @@ export interface ProjectionBase extends Projection {
    * exists to remove.
    */
   readonly contentCache?: RunContentCache | undefined;
+  /**
+   * The run's parse routing, or absent when nothing declared a type.
+   *
+   * Shared for the third time for the same reason as the two above, plus one
+   * that is correctness rather than cost: the resolver ACCUMULATES conflicts, so
+   * two extents realizing one mistyped file must consult the *same* instance or
+   * a three-extent population reports one authoring mistake three times.
+   *
+   * Absent means "type every path from `mime-type.ts`'s tables", which is what
+   * every project that declares no `mimeType` gets — i.e. nearly all of them.
+   */
+  readonly mimeResolver?: CollectionMimeResolver | undefined;
 }
 
 /** Derives a table's composite key from a row. */
@@ -335,22 +360,40 @@ export class ProjectionBuilder {
 
   #contentPromotionAttempts = 0;
 
+  readonly #mimeResolver: CollectionMimeResolver | undefined;
+
   /**
-   * @param root - Absolute corpus root
-   * @param gitTracker - Optional git oracle supplying index casing to identity minting
-   * @param contentCache - Optional per-run read-and-key memo, shared with every
-   *   contributor and with the blob-derivation stage. Omitted by a caller that
-   *   is assembling a builder by hand and wants each read to touch disk
+   * An options object rather than positionals: the run inputs a builder shares
+   * with every contributor are a growing set (root, git oracle, content cache,
+   * parse routing), three of the four are optional, and a fourth positional
+   * would make the call site a row of `undefined`s that nothing names. There is
+   * exactly ONE production call site — `merge.ts`'s `populate()` — so the shape
+   * costs nothing to change and is worth getting right before a fifth arrives.
+   *
+   * @param options - The run's root and its shared oracles
    */
-  constructor(
-    root: string,
-    gitTracker?: GitTracker | undefined,
-    contentCache?: RunContentCache | undefined,
-  ) {
-    this.#root = root;
-    this.#gitTracker = gitTracker;
-    this.#contentCache = contentCache;
-    this.identities = new ResourceIdentityMap(root, gitTracker);
+  constructor(options: {
+    /** Absolute corpus root. */
+    root: string;
+    /** Optional git oracle supplying index casing to identity minting. */
+    gitTracker?: GitTracker | undefined;
+    /**
+     * Optional per-run read-and-key memo, shared with every contributor and with
+     * the blob-derivation stage. Omitted by a caller assembling a builder by
+     * hand that wants each read to touch disk.
+     */
+    contentCache?: RunContentCache | undefined;
+    /**
+     * The run's collection-declared parse routing, or omitted to type every
+     * path from `mime-type.ts`'s tables alone.
+     */
+    mimeResolver?: CollectionMimeResolver | undefined;
+  }) {
+    this.#root = options.root;
+    this.#gitTracker = options.gitTracker;
+    this.#contentCache = options.contentCache;
+    this.#mimeResolver = options.mimeResolver;
+    this.identities = new ResourceIdentityMap(options.root, options.gitTracker);
   }
 
   /**
@@ -464,11 +507,13 @@ export class ProjectionBuilder {
    *   in the filesystem extent and a package extent is two rows, and promoting
    *   one while leaving the other `deferred` would make the answer depend on
    *   which extent a consumer happened to join through.
-   * - The read goes through the run's {@link RunContentCache} with
-   *   `parserKindForPath` choosing the kind — byte-for-byte the read
+   * - The read goes through the run's {@link RunContentCache} with the
+   *   realization's OWN `mime` column choosing the kind — byte-for-byte the read
    *   `collectRealization` would have made — so the bytes really are shared with
    *   the rest of the run rather than being a second traversal wearing the same
-   *   key.
+   *   key. Re-deriving the kind from the path instead is the one thing that
+   *   breaks that equivalence, because `mime` may have come from a collection's
+   *   declared `mimeType` rather than from the extension tables.
    * - A read that throws rewrites the rows to `unreadable` with a null key,
    *   records a {@link REALIZATION_PROMOTION_UNREADABLE} condition per rewritten
    *   row carrying the error's label, and still counts as an
@@ -494,7 +539,11 @@ export class ProjectionBuilder {
   async ensureContentKey(path: string): Promise<string | null> {
     const rows = this.#realizations.rows.filter((row) => row.path === path);
     const deferred = rows.filter((row) => row.contentState === 'deferred');
-    if (deferred.length === 0) {
+    // Destructured rather than length-tested so the row whose `mime` routes the
+    // read below is the same one the guard proved exists — no non-null assertion
+    // standing in for a check already made.
+    const [routing] = deferred;
+    if (routing === undefined) {
       // Already keyed, or definitively keyless. Either way there is nothing to
       // buy, and buying it again is the read this method exists to avoid.
       return rows.find((row) => row.contentState === 'keyed')?.contentKey ?? null;
@@ -512,7 +561,25 @@ export class ProjectionBuilder {
     try {
       keyed = await readKeyedContent(
         absolutePath,
-        parserKindForPath(absolutePath),
+        // The ROW's own type, never re-derived from the path. `mime` can come
+        // from a collection's declared `mimeType`, which overrides the
+        // extension tables — so `parserKindForPath` here would key a `.ts` file
+        // a collection typed `text/markdown` as `none.<digest>` while its own
+        // `mime` column said prose. Every downstream stage reads the kind back
+        // off that prefix, so the two contradicting each other is the
+        // well-formed-entry-with-the-wrong-contents class `content-key.ts`
+        // exists to rule out. `realizations.ts`'s `keyOrState` routes the
+        // eager path the same way; this is the deferred path's copy of that
+        // one decision.
+        //
+        // The FIRST deferred row types the read for all of them, which is sound
+        // because typing is a function of the path and the run's single
+        // `CollectionMimeResolver` — not of the extent. Two rows at one path
+        // cannot disagree unless a caller hands two extents two different
+        // resolvers, and that population is already broken one layer up: this
+        // method writes ONE key onto every row it promotes, so a per-row kind
+        // would have nothing to write.
+        parserKindForMimeType(routing.mime) ?? NO_PARSER_KIND,
         this.#contentCache,
       );
     } catch (error) {
@@ -679,6 +746,7 @@ export class ProjectionBuilder {
       // holding `undefined`, and the field is declared optional.
       ...(this.#gitTracker !== undefined && { gitTracker: this.#gitTracker }),
       ...(this.#contentCache !== undefined && { contentCache: this.#contentCache }),
+      ...(this.#mimeResolver !== undefined && { mimeResolver: this.#mimeResolver }),
       roots: this.#roots.rows,
       resources: this.#resources.rows,
       resourceRealizations: this.#realizations.rows,

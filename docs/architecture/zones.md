@@ -521,7 +521,7 @@ plugin API stops holding. New resolution logic is a built-in added upstream.
 
 This follows the principle already **shipped** in authenticated link resolution
 ([#113](https://github.com/jdutton/vibe-agent-toolkit/issues/113), closed): built-ins ship as
-**macros — generic config, not privileged code** (`packages/utils/src/link-auth/macros.yaml`). Its
+**macros — generic config, not privileged code** (`packages/resources/src/link-auth/macros.yaml`). Its
 per-provider "what does *not found* mean" rule (`link-auth/resolve.ts`) is the interpretation facet
 already in production. That macro vocabulary is auth-provider-specific today; generalising it into the
 lens/resolver vocabulary is expected work.

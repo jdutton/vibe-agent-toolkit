@@ -243,7 +243,7 @@ function populationProviderFor(
 			skillMdPaths,
 			// The observer this lane went without — see `populationWiring` for why
 			// the reporting half is written once rather than per lane.
-			...populationWiring(logger, gitTracker, cache),
+			...populationWiring(logger, gitTracker, cache, projectRoot),
 		});
 	};
 }

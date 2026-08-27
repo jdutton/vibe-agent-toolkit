@@ -29,13 +29,14 @@ import {
 import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
-import { formatDuration, handleCommandError } from '../../../utils/command-error.js';
+import { formatDuration, reportCommandError } from '../../../utils/command-error.js';
 import { loadConfig } from '../../../utils/config-loader.js';
 import { summarizeFindings, type FindingCountSummary } from '../../../utils/issue-rendering.js';
 import { resolveIssueSeverity } from '../../../utils/issue-severity.js';
 import { createLogger } from '../../../utils/logger.js';
 import { writeYamlOutput } from '../../../utils/output.js';
 import { relativizePathEntries } from '../../../utils/relativize-paths.js';
+import { finishCommand, type PhaseOutcome } from '../../phase-utils.js';
 
 interface MarketplaceValidateOptions {
   debug?: boolean;
@@ -422,10 +423,20 @@ export function buildMarketplaceValidateReport(
   };
 }
 
-async function marketplaceValidateCommand(
+/**
+ * Validate a marketplace and hand back its document and exit code, printing
+ * nothing on stdout.
+ *
+ * The phase entry point for `vat verify`, which runs this once per configured
+ * marketplace IN ITS OWN PROCESS. Progress and findings still go to stderr as
+ * they always did; only the decision of where the document lands moves to the
+ * caller — stdout for a command-line run, `phases[].report` for an orchestrated
+ * one.
+ */
+export async function runMarketplaceValidatePhase(
   targetPath: string | undefined,
   options: MarketplaceValidateOptions,
-): Promise<void> {
+): Promise<PhaseOutcome> {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
@@ -439,8 +450,8 @@ async function marketplaceValidateCommand(
     const bailed = marketplaceResult.status === 'error';
     const issueCounts = countBySeverity(issues);
 
-    writeYamlOutput(
-      buildMarketplaceValidateReport({
+    return {
+      document: buildMarketplaceValidateReport({
         status,
         root: marketplacePath,
         marketplace: marketplaceResult.metadata,
@@ -456,12 +467,22 @@ async function marketplaceValidateCommand(
         duration: formatDuration(Date.now() - startTime),
         verbose: options.verbose === true,
       }),
-    );
-
-    process.exit(status === 'error' ? 1 : 0);
+      exitCode: status === 'error' ? 1 : 0,
+    };
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'MarketplaceValidate');
+    return {
+      document: reportCommandError(error, logger, startTime, 'MarketplaceValidate'),
+      exitCode: 2,
+      failed: true,
+    };
   }
+}
+
+async function marketplaceValidateCommand(
+  targetPath: string | undefined,
+  options: MarketplaceValidateOptions,
+): Promise<void> {
+  finishCommand(await runMarketplaceValidatePhase(targetPath, options), writeYamlOutput);
 }
 
 export function createMarketplaceValidateCommand(): Command {

@@ -25,6 +25,40 @@
  * A member the map cannot attribute renders `viaPath: null, depth: null` and is
  * listed in `unattributedImports`. Never a fabricated parent.
  *
+ * ## Everything that does not vary with the queried path is derived ONCE
+ *
+ * ⚠️ Read the section above before reading this one: **nothing here is a stored
+ * table**. {@link ContextQueryIndex} is an in-memory index this module derives
+ * from a projection it already holds, and it computes exactly what the
+ * per-query code computed — the same `closureProvenance` walk, the same
+ * membership join, the same reference-shape read. What changes is the number of
+ * times: once per projection instead of once per query. Ruling B's position is
+ * about what the PROJECTION materialises, and this adds no row to it.
+ *
+ * The reason it matters is that the query is swept. `vat claude context --all`
+ * answers every realized path, and every one of those answers used to rebuild
+ * `pathOf`, `idOf`, `realizationOf`, the blob index, the reference-shape map and
+ * every import closure's provenance — none of which depend on the path being
+ * asked about. That made the per-answer cost proportional to the PROJECTION and
+ * the sweep quadratic: measured at 11.4 ms per answer on a 2,195-blob tree and
+ * 52 ms on an 8,768-blob one, a 4.6× rise for a 4.0× larger projection.
+ *
+ * What stays per-query is what genuinely varies: the ancestry chain
+ * ({@link claudeAncestry}), the rule selection ({@link selectRules}), which
+ * closures this query's admissions charge, and the condition grading — whose
+ * escalation depends on `walkedExtents` and therefore on the path.
+ *
+ * ### Why the memo is safe
+ *
+ * It is a `WeakMap` keyed on the projection's own object IDENTITY. A built
+ * `Projection` is a bag of readonly arrays nothing mutates in place — every
+ * variant in this repo's suites is built by spreading into a NEW object, which
+ * gets a new index by construction. The index is a pure function of those
+ * arrays, reads no ambient input (no clock, no environment, no filesystem — see
+ * the fixture claim above), never crosses a process boundary, and is dropped
+ * with the projection it hangs off. So there is nothing to invalidate and no
+ * version to stamp: identity IS the key.
+ *
  * ## Dedup is by `resourceId`, never by path and never over edges
  *
  * Two `CLAUDE.md` files importing one `README.md` load it once. The diamond is
@@ -40,9 +74,10 @@
  */
 
 import { ExtentDeclarationSchema } from '../schemas/project-config.js';
-import type { BlobReferenceRow } from '../schemas/projection-blobs.js';
+import type { BlobReferenceRow, BlobRow } from '../schemas/projection-blobs.js';
 import type {
   RealizationConditionRow,
+  ResourceExtentRow,
   ResourceRealizationRow,
 } from '../schemas/projection-resources.js';
 import type { ProjectionConditionSeverity } from '../schemas/projection-shared.js';
@@ -146,7 +181,8 @@ const UNRESOLVED_CODE = 'CLOSURE_REFERENCE_UNRESOLVED';
  * @returns The answer, or a distinguishable `unknown`
  */
 export function whatLoadsAt(projection: Projection, inputPath: string): LoadedContext {
-  const realization = projection.resourceRealizations.find((row) => row.path === inputPath);
+  const index = contextQueryIndexFor(projection);
+  const realization = index.realizationByPath.get(inputPath);
   if (inputPath !== '' && realization === undefined) {
     return { kind: 'unknown', input: inputPath, reason: 'path-not-realized' };
   }
@@ -161,18 +197,216 @@ export function whatLoadsAt(projection: Projection, inputPath: string): LoadedCo
   // relevant, and letting an import's own members seed further roots would walk
   // the whole tree's instruction graph rather than this directory's.
   const admittedIds = new Set(admissions.keys());
-  const imports = applyImportClosures(projection, admittedIds, admissions);
+  const imports = applyImportClosures(index, admittedIds, admissions);
 
   return {
     kind: 'answer',
     input: inputPath,
     directory,
     file,
-    rows: rowsFor(projection, admissions),
-    conditions: gradeConditions(projection, imports.walkedExtents),
+    rows: rowsFor(index, admissions),
+    conditions: gradeConditions(projection, index, imports.walkedExtents),
     overBudgetRules: overBudget,
     unattributedImports: imports.unattributed,
   };
+}
+
+/**
+ * One member of a precomputed import closure, carrying the admission it earns.
+ *
+ * The admission object is shared by every answer that charges this closure,
+ * which is sound because an {@link Admission} is deeply readonly and every
+ * answer builds its OWN list around it ({@link push} allocates a fresh array per
+ * query). Nothing an answer does can reach back into another's.
+ */
+interface ClosureMember {
+  readonly resourceId: string;
+  readonly path: string;
+  readonly admission: Admission;
+}
+
+/** One `claude-import` closure, walked once per projection rather than per query. */
+interface ImportClosure {
+  /** The closure's `resolution_contexts.contextId`. */
+  readonly extentId: string;
+  /**
+   * `resourceId` of the declared root, or undefined when nothing realizes it.
+   *
+   * Undefined is not an error here: a declaration naming an unrealized root
+   * already has its `CLOSURE_ROOT_ABSENT` condition, and this closure is simply
+   * one no query can ever admit.
+   */
+  readonly rootId: string | undefined;
+  readonly members: readonly ClosureMember[];
+}
+
+/** Every import fact the query reads, derived once — see the module docstring. */
+interface ImportIndex {
+  /** In `zone_provenance` order, which is the order closures are charged in. */
+  readonly closures: readonly ImportClosure[];
+  /**
+   * Context ids of EVERY claude-import extent, walked or not.
+   *
+   * Expressed as the whole set rather than as "the declined ones", because
+   * declined-ness is per-query and this is not: {@link gradeConditions} tests
+   * membership of this set against that query's `walkedExtents`.
+   */
+  readonly extentIds: ReadonlySet<string>;
+}
+
+/** The five realization-derived maps, all filled in ONE pass over the table. */
+interface RealizationIndex {
+  /** Path → its FIRST realization, replacing a linear `.find()` per query. */
+  readonly realizationByPath: ReadonlyMap<string, ResourceRealizationRow>;
+  /** `resourceId` → its FIRST realization — `rowsFor`'s `realizationOf`. */
+  readonly firstRealizationById: ReadonlyMap<string, ResourceRealizationRow>;
+  /** `resourceId` → path. ⚠️ LAST row wins, as `new Map(rows.map(…))` did. */
+  readonly pathById: ReadonlyMap<string, string>;
+  /** Path → `resourceId`. ⚠️ LAST row wins, for the same reason. */
+  readonly idByPath: ReadonlyMap<string, string>;
+  /** Path → `contentKey`, keyless rows omitted — `severityFor`'s `keyOf`. */
+  readonly contentKeyByPath: ReadonlyMap<string, string>;
+}
+
+/**
+ * Everything {@link whatLoadsAt} needs that does NOT vary with the queried path.
+ *
+ * @see The module docstring's *"Everything that does not vary with the queried
+ *   path is derived ONCE"*, which carries the reasoning this interface only
+ *   holds the shape of.
+ */
+interface ContextQueryIndex extends RealizationIndex {
+  readonly blobByContentKey: ReadonlyMap<string, BlobRow>;
+  /** Reference key → whether the token is path-shaped — `severityFor`'s `shapeOf`. */
+  readonly pathShapeByReference: ReadonlyMap<string, boolean>;
+  /**
+   * The import closures, walked on FIRST USE and never again.
+   *
+   * ⛔ A function rather than a field, and the laziness is behavioural, not an
+   * optimisation. A projection with no root must throw when a closure is needed
+   * and must still answer `unknown` for a path it never realized — which is what
+   * it did when the root was read inside the closure pass. Building eagerly
+   * would move that throw ahead of the `unknown` check and change the answer for
+   * an unrealized path in a rootless projection.
+   */
+  readonly importClosures: () => ImportIndex;
+}
+
+/**
+ * Per-projection memo of {@link ContextQueryIndex}, keyed on object identity.
+ *
+ * 🔑 No row-count guard and no version stamp, unlike `closure-extent.ts`'s memos
+ * — and the asymmetry is the difference between the two inputs. Those key on a
+ * `ProjectionBase`, whose arrays the merge driver appends to WHILE contributors
+ * read it, so the count is the premise that keeps the cache honest. This one
+ * keys on a built {@link Projection}, which is the driver's output and is never
+ * appended to; a caller wanting a different projection builds a different object
+ * and gets a different index. A count here would guard against nothing.
+ */
+const contextQueryIndexMemo = new WeakMap<Projection, ContextQueryIndex>();
+
+/**
+ * This projection's index, built at most once.
+ *
+ * @param projection - The populated projection
+ * @returns The memoized index
+ */
+function contextQueryIndexFor(projection: Projection): ContextQueryIndex {
+  const cached = contextQueryIndexMemo.get(projection);
+  if (cached !== undefined) return cached;
+  const built = buildContextQueryIndex(projection);
+  contextQueryIndexMemo.set(projection, built);
+  return built;
+}
+
+/**
+ * Derive the whole index from a projection.
+ *
+ * @param projection - The populated projection
+ * @returns The index, with its closure half still unbuilt
+ */
+function buildContextQueryIndex(projection: Projection): ContextQueryIndex {
+  const realizations = indexRealizations(projection.resourceRealizations);
+  let imports: ImportIndex | undefined;
+  return {
+    ...realizations,
+    blobByContentKey: new Map(projection.blobs.map((row) => [row.contentKey, row])),
+    pathShapeByReference: indexReferenceShapes(projection.blobReferences),
+    importClosures: () => (imports ??= buildImportIndex(projection, realizations)),
+  };
+}
+
+/**
+ * The five realization-keyed maps, in one pass.
+ *
+ * ⚠️ The tie-breaks are NOT uniform, and each is the one the per-query code had.
+ * `realizationByPath` and `firstRealizationById` keep the FIRST row, because
+ * they replace a `.find()` and a `has`-guarded insert respectively;
+ * `pathById`/`idByPath`/`contentKeyByPath` keep the LAST, because they replace
+ * `new Map(rows.map(…))`, which overwrites. The two disagree only where one path
+ * realizes two identities, which the `(extentId, path)` key makes rare and
+ * `REALIZATION_PATH_COLLISION` makes visible — so this preserves the existing
+ * behaviour rather than quietly picking one rule for all five.
+ *
+ * @param rows - `resource_realizations`, in projection order
+ * @returns The five maps
+ */
+function indexRealizations(rows: readonly ResourceRealizationRow[]): RealizationIndex {
+  const realizationByPath = new Map<string, ResourceRealizationRow>();
+  const firstRealizationById = new Map<string, ResourceRealizationRow>();
+  const pathById = new Map<string, string>();
+  const idByPath = new Map<string, string>();
+  const contentKeyByPath = new Map<string, string>();
+
+  for (const row of rows) {
+    if (!realizationByPath.has(row.path)) realizationByPath.set(row.path, row);
+    if (!firstRealizationById.has(row.resourceId)) firstRealizationById.set(row.resourceId, row);
+    pathById.set(row.resourceId, row.path);
+    idByPath.set(row.path, row.resourceId);
+    if (row.contentKey !== null) contentKeyByPath.set(row.path, row.contentKey);
+  }
+
+  return { realizationByPath, firstRealizationById, pathById, idByPath, contentKeyByPath };
+}
+
+/**
+ * Reference key → whether the token is PATH-SHAPED, for {@link severityFor}.
+ *
+ * A column read, never a second parse of the token — see {@link gradeConditions}.
+ *
+ * @param references - `blob_references`, in projection order
+ * @returns The shape map, last row winning as the per-query build did
+ */
+function indexReferenceShapes(
+  references: readonly BlobReferenceRow[],
+): ReadonlyMap<string, boolean> {
+  const shapes = new Map<string, boolean>();
+  for (const reference of references) {
+    shapes.set(referenceKey(reference), reference.hasExtension || reference.slashCount > 0);
+  }
+  return shapes;
+}
+
+/**
+ * `resource_extents` grouped by extent, preserving each extent's row ORDER.
+ *
+ * That order is the answer's: {@link membersOf} used to scan the whole table per
+ * closure and emit members in table order, so grouping has to keep it or the
+ * `rows` array's admission lists would reorder — invisible to a type checker and
+ * visible in every rendered report.
+ *
+ * @param memberships - `resource_extents`, in projection order
+ * @returns `extentId` → its membership rows, in table order
+ */
+function membershipsByExtent(
+  memberships: readonly ResourceExtentRow[],
+): ReadonlyMap<string, readonly ResourceExtentRow[]> {
+  const byExtent = new Map<string, ResourceExtentRow[]>();
+  for (const row of memberships) {
+    const rows = byExtent.get(row.extentId);
+    if (rows === undefined) byExtent.set(row.extentId, [row]); else rows.push(row);
+  }
+  return byExtent;
 }
 
 /**
@@ -225,7 +459,13 @@ function baseAdmissions(
 /**
  * Fold every relevant import closure's members into `admissions`.
  *
- * @param projection - The populated projection
+ * Only the closures this query ADMITTED are charged: an import extent rooted at
+ * a `CLAUDE.md` the query never reached is an extent for some other directory's
+ * session, and charging it here is exactly the tree-global over-report
+ * `rule-scope` exists to prevent. That filter is per-query; the closures
+ * themselves are not, and live in {@link ImportIndex}.
+ *
+ * @param index - The projection's index
  * @param admittedIds - Resource ids the ancestry and rule passes already admitted
  * @param admissions - The admission map, mutated in place
  * @returns The root-relative path of every import member `closureProvenance`
@@ -235,13 +475,14 @@ function baseAdmissions(
  *   the extents actually walked, which is what scopes {@link gradeConditions}
  */
 function applyImportClosures(
-  projection: Projection,
+  index: ContextQueryIndex,
   admittedIds: ReadonlySet<string>,
   admissions: Map<string, Admission[]>,
 ): { unattributed: string[]; walkedExtents: ReadonlySet<string> } {
   const unattributed = new Set<string>();
   const walkedExtents = new Set<string>();
-  for (const closure of importClosuresFor(projection, admittedIds)) {
+  for (const closure of index.importClosures().closures) {
+    if (closure.rootId === undefined || !admittedIds.has(closure.rootId)) continue;
     walkedExtents.add(closure.extentId);
     for (const membership of closure.members) {
       push(admissions, membership.resourceId, membership.admission);
@@ -254,31 +495,32 @@ function applyImportClosures(
 }
 
 /**
- * The import closures rooted at the resources this query already admitted.
- *
- * Only those: an import extent rooted at a `CLAUDE.md` the query never reached is
- * an extent for some other directory's session, and charging it here is exactly
- * the tree-global over-report `rule-scope` exists to prevent.
+ * Every `claude-import` closure in the projection, walked once.
  *
  * The declaration is read back off `zone_provenance.parameterSet` rather than
  * rebuilt, because that is what the population actually ran under: a rebuilt one
  * would silently disagree with a store-answered projection populated under a
  * different `referenceDialect`.
  *
+ * ⚠️ Every closure is walked here, including ones no query will admit, where the
+ * per-query code walked only the admitted ones. Over a sweep that is the whole
+ * saving — each closure is walked once instead of once per query that charges it
+ * — and for a single query it is bounded by the two `closure-extent.ts` memos:
+ * the whole-projection indexes `closureProvenance` needs are built once for the
+ * projection, so what each extra closure costs is its own traversal and nothing
+ * proportional to the tree. `projection-claude-context-query-index.test.ts` pins
+ * that with a forty-closure tree measured against a four-closure one.
+ *
  * @param projection - The populated projection
- * @param admittedIds - Resource ids the ancestry and rule passes already admitted
- * @returns One entry per relevant closure — its extent id, and each member's
- *   admission
+ * @param realizations - The realization maps, for the root lookup and the join
+ * @returns Every closure, in `zone_provenance` order, plus every import extent id
  * @throws When the projection carries no root. `merge.ts` is the only `addRoot`
  *   caller and adds exactly one, so this is an invariant rather than a reachable
  *   failure — and answering "zero import closures" instead would be a silent
  *   confident zero, indistinguishable from a tree that genuinely imports nothing.
  *   That is the one answer shape this query's `unknown` result exists to avoid
  */
-function importClosuresFor(
-  projection: Projection,
-  admittedIds: ReadonlySet<string>,
-): Array<{ extentId: string; members: Array<{ resourceId: string; path: string; admission: Admission }> }> {
+function buildImportIndex(projection: Projection, realizations: RealizationIndex): ImportIndex {
   const root = projection.roots[0]?.path;
   if (root === undefined) {
     throw new Error(
@@ -288,16 +530,14 @@ function importClosuresFor(
       + ' is imported" for a tree nobody looked at.',
     );
   }
-  const pathOf = new Map(projection.resourceRealizations.map((row) => [row.resourceId, row.path]));
-  const idOf = new Map(projection.resourceRealizations.map((row) => [row.path, row.resourceId]));
+  const byExtent = membershipsByExtent(projection.resourceExtents);
 
-  const closures = [];
+  const closures: ImportClosure[] = [];
+  const extentIds = new Set<string>();
   for (const provenanceRow of projection.zoneProvenance) {
     if (!provenanceRow.contributorId.startsWith(`${CLAUDE_IMPORT_CONTRIBUTOR_ID_PREFIX}:`)) continue;
+    extentIds.add(provenanceRow.contextId);
     const declaration = ExtentDeclarationSchema.parse(provenanceRow.parameterSet);
-    const rootId = idOf.get(declaration.closureFrom);
-    if (rootId === undefined || !admittedIds.has(rootId)) continue;
-
     const provenance = closureProvenance({
       root,
       resourceRealizations: projection.resourceRealizations,
@@ -306,10 +546,16 @@ function importClosuresFor(
     });
     closures.push({
       extentId: provenanceRow.contextId,
-      members: membersOf(projection, provenanceRow.contextId, declaration.closureFrom, provenance, pathOf),
+      rootId: realizations.idByPath.get(declaration.closureFrom),
+      members: membersOf(
+        byExtent.get(provenanceRow.contextId) ?? [],
+        declaration.closureFrom,
+        provenance,
+        realizations.pathById,
+      ),
     });
   }
-  return closures;
+  return { closures, extentIds };
 }
 
 /**
@@ -324,23 +570,22 @@ function importClosuresFor(
  * rule, and re-admitting it as an import of itself would be a second admission
  * for a hop that never happened.
  *
- * @param projection - The populated projection
- * @param extentId - The closure's `resolution_contexts.contextId`
+ * @param memberships - This extent's `resource_extents` rows, in table order —
+ *   already grouped by {@link membershipsByExtent}, where the per-query code
+ *   rescanned the whole table once per closure
  * @param rootPath - The closure's declared root
  * @param provenance - {@link closureProvenance}'s map for this closure
  * @param pathOf - `resourceId` → root-relative path
  * @returns Each member with its import admission
  */
 function membersOf(
-  projection: Projection,
-  extentId: string,
+  memberships: readonly ResourceExtentRow[],
   rootPath: string,
   provenance: ReadonlyMap<string, ImportProvenance>,
   pathOf: ReadonlyMap<string, string>,
-): Array<{ resourceId: string; path: string; admission: Admission }> {
-  const members = [];
-  for (const membership of projection.resourceExtents) {
-    if (membership.extentId !== extentId) continue;
+): ClosureMember[] {
+  const members: ClosureMember[] = [];
+  for (const membership of memberships) {
     const path = pathOf.get(membership.resourceId);
     if (path === undefined || path === rootPath) continue;
     const found = provenance.get(path);
@@ -361,27 +606,23 @@ function membersOf(
 /**
  * Turn the admission map into rows, one per identity.
  *
- * @param projection - The populated projection
+ * @param index - The projection's index
  * @param admissions - `resourceId` → every admission that reached it
  * @returns One row per identity, path-ordered
  */
 function rowsFor(
-  projection: Projection,
+  index: ContextQueryIndex,
   admissions: ReadonlyMap<string, readonly Admission[]>,
 ): LoadedRow[] {
-  const realizationOf = new Map<string, ResourceRealizationRow>();
-  for (const row of projection.resourceRealizations) {
-    if (!realizationOf.has(row.resourceId)) realizationOf.set(row.resourceId, row);
-  }
-  const blobByKey = new Map(projection.blobs.map((row) => [row.contentKey, row]));
-  const idOf = new Map(projection.resourceRealizations.map((row) => [row.path, row.resourceId]));
-  const classes = loadClasses(admissions, idOf);
+  const classes = loadClasses(admissions, index.idByPath);
 
   const rows: LoadedRow[] = [];
   for (const [resourceId, list] of admissions) {
-    const realization = realizationOf.get(resourceId);
+    const realization = index.firstRealizationById.get(resourceId);
     if (realization === undefined) continue;
-    const blob = realization.contentKey === null ? undefined : blobByKey.get(realization.contentKey);
+    const blob = realization.contentKey === null
+      ? undefined
+      : index.blobByContentKey.get(realization.contentKey);
     rows.push({
       resourceId,
       path: realization.path,
@@ -528,59 +769,37 @@ function importsFromAlwaysRoot(
  * are kept — the base enumeration's own rows (`REALIZATION_PATH_COLLISION`)
  * belong to every answer.
  *
- * @param projection - The populated projection
+ * The declined set is expressed as *import extent AND not walked* rather than
+ * materialised per query: the answer keeps every condition from every
+ * non-closure extent, and only an import extent can be "some other directory's
+ * session". {@link ImportIndex.extentIds} is the half that does not vary.
+ *
+ * @param projection - The populated projection, for `realization_conditions`
+ * @param index - The projection's index
  * @param walkedExtents - Context ids of the import closures this query charged
  * @returns Every in-scope condition, with its report severity
  */
 function gradeConditions(
   projection: Projection,
+  index: ContextQueryIndex,
   walkedExtents: ReadonlySet<string>,
 ): GradedCondition[] {
-  const declined = unwalkedImportExtents(projection, walkedExtents);
-  const shapeOf = new Map<string, boolean>();
-  for (const reference of projection.blobReferences) {
-    shapeOf.set(referenceKey(reference), reference.hasExtension || reference.slashCount > 0);
-  }
-  const keyOf = new Map(
-    projection.resourceRealizations
-      .filter((row) => row.contentKey !== null)
-      .map((row) => [row.path, row.contentKey as string]),
-  );
+  const importExtentIds = index.importClosures().extentIds;
 
   return projection.realizationConditions
-    .filter((row) => !declined.has(row.extentId))
+    .filter((row) => !importExtentIds.has(row.extentId) || walkedExtents.has(row.extentId))
     .map((row) => ({
       code: row.code,
-      severity: strongerSeverity(row.severity, severityFor(row, shapeOf, keyOf)),
+      severity: strongerSeverity(
+        row.severity,
+        severityFor(row, index.pathShapeByReference, index.contentKeyByPath),
+      ),
       path: row.path,
       sourcePath: row.sourcePath,
       sourceLine: row.sourceLine,
       sourceRef: row.sourceRef,
       message: row.message,
     }));
-}
-
-/**
- * The import extents this query did NOT walk — the conditions to drop.
- *
- * Expressed as the extents to EXCLUDE rather than the ones to include, because
- * the answer keeps every condition from every non-closure extent and only an
- * import extent can be "some other directory's session".
- *
- * @param projection - The populated projection
- * @param walkedExtents - Context ids of the import closures this query charged
- * @returns Context ids of every import extent this query declined
- */
-function unwalkedImportExtents(
-  projection: Projection,
-  walkedExtents: ReadonlySet<string>,
-): Set<string> {
-  const declined = new Set<string>();
-  for (const row of projection.zoneProvenance) {
-    if (!row.contributorId.startsWith(`${CLAUDE_IMPORT_CONTRIBUTOR_ID_PREFIX}:`)) continue;
-    if (!walkedExtents.has(row.contextId)) declined.add(row.contextId);
-  }
-  return declined;
 }
 
 /**

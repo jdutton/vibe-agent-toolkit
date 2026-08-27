@@ -36,14 +36,16 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import {
   createSymlink,
-  GitTracker,
   mkdirSyncReal,
   normalizedTmpdir,
-  runGitOrThrow,
   safePath,
   symlinkCapability,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import {
+  GitTracker,
+  runGitOrThrow,
+} from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../../src/projection/content-cache.js';
@@ -369,7 +371,7 @@ async function realizationsFrom(
 ): Promise<readonly ResourceRealizationRow[]> {
   const tracker = new GitTracker(root);
   await tracker.initialize({ includeUntracked: true });
-  const builder = new ProjectionBuilder(root, tracker, new RunContentCache());
+  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() });
 
   const contributor = new FilesystemExtentContributor((r) =>
     source === 'git' ? new GitCrawlSource(r) : new FilesystemCrawlSource(r),

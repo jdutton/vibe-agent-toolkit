@@ -17,13 +17,16 @@ const RES_ONE = 'res-one';
 const CONTRIBUTOR_ID = 'builtin:git';
 
 function newBuilder(): ProjectionBuilder {
-  return new ProjectionBuilder(ROOT);
+  return new ProjectionBuilder({ root: ROOT });
 }
 
 function realization(resourceId: string, path: string): ResourceRealizationRow {
   return {
     resourceId, extentId: EXTENT_ID, path,
     pathLower: path.toLowerCase(), basenameLower: 'a.md', dir: 'docs', depth: 2, ext: '.md',
+    // Every path this fixture realizes is `docs/a.md`, so markdown is the type
+    // `mimeTypeForPath` would answer with, not a placeholder.
+    mime: 'text/markdown',
     // An existing, non-directory path with a null key: `deferred` is the state
     // that describes it, and the only one the superRefine admits alongside a
     // null key for a path that genuinely has bytes.

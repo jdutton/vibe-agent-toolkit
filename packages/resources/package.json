@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/resources",
-  "version": "0.2.0-rc.3",
+  "version": "0.2.0-rc.4",
   "description": "Markdown resource parsing, validation, and link integrity checking",
   "type": "module",
   "main": "./dist/index.js",
@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./markdown-processor": {
+      "types": "./dist/markdown-processor.d.ts",
+      "default": "./dist/markdown-processor.js"
     },
     "./schemas/*": "./schemas/*"
   },
@@ -19,7 +23,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsx ../dev-tools/src/tsc-clean-build.ts && bun run generate:schemas",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts && bun run generate:schemas && tsx ../dev-tools/src/copy-yaml-assets.ts",
     "generate:schemas": "tsx ../dev-tools/src/generate-resources-json-schemas.ts",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
@@ -46,8 +50,10 @@
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
     "github-slugger": "^2.0.0",
+    "handlebars": "^4.7.8",
     "markdown-link-check": "^3.14.2",
     "mdast-util-to-string": "^4.0.0",
+    "micromark": "^4.0.2",
     "parse5": "^7.3.0",
     "picomatch": "^4.0.3",
     "remark-frontmatter": "^5.0.0",

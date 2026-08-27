@@ -2,7 +2,18 @@ import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { type ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import { __readCrawlTimingSnapshot, __setCrawlTimingForTest, CRAWL_PASS_INSIDE, CRAWL_REGISTRY_ADD_RESOURCE_ID, CRAWL_REGISTRY_ENUMERATE_ID, findProjectRoot, GitTracker, mkdirSyncReal, runGitOrThrow, safePath, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import {
+  __readCrawlTimingSnapshot,
+  __setCrawlTimingForTest,
+  CRAWL_PASS_INSIDE,
+  CRAWL_REGISTRY_ADMIT_ID,
+  CRAWL_REGISTRY_ENUMERATE_ID,
+  findProjectRoot,
+  mkdirSyncReal,
+  safePath,
+  setupAsyncTempDirSuite,
+} from '@vibe-agent-toolkit/utils';
+import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -312,9 +323,11 @@ describe('crawlSkillLinkRegistry crawl-timing', () => {
 			// Once per crawl, not once per file — the same accounting unit the
 			// class files under this id, which is why they share it.
 			expect(rowFor(CRAWL_REGISTRY_ENUMERATE_ID)).toBe(1);
-			// And the admission row still counts files, so the enumeration bracket
-			// did not swallow the phase after it.
-			expect(rowFor(CRAWL_REGISTRY_ADD_RESOURCE_ID)).toBe(registry.size());
+			// And admission files its own row, so the enumeration bracket did not
+			// swallow the phase after it. Also once per crawl: admission is charged
+			// per `addResources` CALL, because the lane fans out and summing
+			// overlapping per-file brackets would over-count the wall clock.
+			expect(rowFor(CRAWL_REGISTRY_ADMIT_ID)).toBe(1);
 			expect(registry.size()).toBeGreaterThan(1);
 		} finally {
 			__setCrawlTimingForTest(null);

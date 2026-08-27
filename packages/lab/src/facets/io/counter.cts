@@ -80,16 +80,6 @@ import type * as FsPromisesModule from 'node:fs/promises';
 import path = require('node:path');
 
 /**
- * Body-schema version of the dump file. The dump reader refuses others.
- *
- * `2` since `distinctArgs` became nullable — see {@link UNTRACKED_ARG_LABELS}.
- * A version-1 dump carries a `1` where this build writes `null`, and those two
- * say opposite things about the same site, so the reader must refuse it rather
- * than read it.
- */
-const DUMP_VERSION = 2;
-
-/**
  * Largest distinct-argument set kept per bucket.
  *
  * Beyond this the bucket sets `argsCapped` and `distinctArgs` becomes a FLOOR
@@ -674,10 +664,11 @@ function writeDump(state: CounterState, captured: CapturedFs): void {
   try {
     captured.mkdirSync(state.logDir, { recursive: true });
     const file = nextDumpPath(state.logDir, process.pid, captured.existsSync);
-    captured.writeFileSync(
-      file,
-      JSON.stringify({ dumpVersion: DUMP_VERSION, pid: process.pid, rows: toRows(state) }),
-    );
+    // No version field, and adding one back is a defect: `dump.ts`'s strict
+    // schema refuses anything that is not exactly this shape, and it moves the
+    // instant a row's fields move — where an integer moved only when a human
+    // remembered to move it.
+    captured.writeFileSync(file, JSON.stringify({ pid: process.pid, rows: toRows(state) }));
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     process.stderr.write(`[vat-lab io counter] failed to write dump: ${reason}\n`);
@@ -742,7 +733,6 @@ export = {
   __internals: {
     ARG_CAP,
     CHILD_PROCESS_METHODS,
-    DUMP_VERSION,
     FS_OPS_WITHOUT_ARG_IDENTITY,
     FS_CALLBACK_METHODS,
     FS_PROMISE_METHODS,

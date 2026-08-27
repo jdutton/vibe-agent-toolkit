@@ -9,7 +9,7 @@
  */
 
 import type { Coordinate } from '../src/envelope/coordinate.js';
-import { REPORT_FORMAT_VERSION, type ReportEnvelope } from '../src/envelope/envelope.js';
+import type { ReportEnvelope } from '../src/envelope/envelope.js';
 import type { LoadReadings } from '../src/harness/types.js';
 
 /**
@@ -50,9 +50,7 @@ export const COORDINATE: Coordinate = {
  */
 export function makeReport(over: Partial<ReportEnvelope<unknown>> = {}): ReportEnvelope<unknown> {
   return {
-    formatVersion: REPORT_FORMAT_VERSION,
     facet: 'perf',
-    facetVersion: 1,
     coordinate: COORDINATE,
     capturedAt: '2026-08-09T00:00:00.000Z',
     body: { commands: [] },
@@ -68,4 +66,38 @@ export function makeReport(over: Partial<ReportEnvelope<unknown>> = {}): ReportE
  */
 export function makeReportAt(over: Partial<Coordinate>): ReportEnvelope<unknown> {
   return makeReport({ coordinate: { ...COORDINATE, ...over } });
+}
+
+/**
+ * A report written to an OLDER body shape: one field dropped from every command
+ * row.
+ *
+ * 🚩 This is how each facet's comparator suite exercises the sharp case a
+ * `facetVersion` integer used to sit in front of — two PRE-CHANGE reports that
+ * agree with each other perfectly, so a gate comparing only the two sides to
+ * each other cannot see them. `harness/facet-compare.ts` validates each side
+ * against THIS BUILD's strict schema, which does see them, and does so without
+ * anyone having remembered to move a number.
+ *
+ * Shared rather than written per facet: the two suites that need it were
+ * byte-identical, and a per-facet copy is a per-facet chance for one of them to
+ * stop testing the case while still looking like it does.
+ *
+ * @param report - A well-formed report of any facet with a `commands` body
+ * @param field - The command-row field an older build would not have written
+ * @returns The same report with that field absent from every command
+ */
+export function reportMissingCommandField(
+  report: ReportEnvelope<{ readonly commands: readonly object[] }>,
+  field: string,
+): ReportEnvelope<unknown> {
+  return {
+    ...report,
+    body: {
+      ...report.body,
+      commands: report.body.commands.map((command) =>
+        Object.fromEntries(Object.entries(command).filter(([key]) => key !== field)),
+      ),
+    },
+  };
 }

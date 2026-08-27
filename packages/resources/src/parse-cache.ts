@@ -118,14 +118,22 @@
  */
 
 import { promises as fs, type Stats } from 'node:fs';
+import { threadId } from 'node:worker_threads';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { parseCacheDirectory } from './cache-namespace.js';
-import { CONTENT_KEY_PATTERN, type KeyedContent, type ParserKind, readContentWithKey } from './content-key.js';
+import { CONTENT_KEY_PATTERN, type KeyedContent, type ParsableContent, readContentWithKey } from './content-key.js';
 import { parseFrontmatterSource } from './frontmatter-source.js';
 import type { ParseResult } from './link-parser.js';
-import { recordParseCacheHit, recordParseCacheMiss } from './parse-timing.js';
+import type { DocumentParserKind } from './mime-type.js';
+import {
+  parseTimingStart,
+  recordParseCacheHit,
+  recordParseCacheMiss,
+  recordTierPass,
+  TierPass,
+} from './parse-timing.js';
 import { type ParseFacts, ParseFactsSchema } from './schemas/parse-facts.js';
 
 /**
@@ -153,8 +161,17 @@ const SHARD_LENGTH = 2;
 const SAFE_KEY = CONTENT_KEY_PATTERN;
 
 /**
- * Disambiguates concurrent temp files within one process. Combined with
- * `process.pid` this is collision-free without `Math.random()` or `Date.now()`,
+ * Disambiguates concurrent temp files within one ISOLATE.
+ *
+ * ⚠️ Per-isolate, not per-process, and the difference became load-bearing when
+ * {@link ParseCache.setByKey} started being called from parse workers. Each
+ * worker thread gets its own module instance and therefore its own counter at
+ * zero, while `process.pid` is shared across every thread — so pid + counter
+ * alone mints the SAME temp path in two threads that write their first entry
+ * concurrently. `threadId` is the third term that closes it, and it is `0` on
+ * the main thread so single-threaded names are unchanged in shape.
+ *
+ * Together the three are collision-free without `Math.random()` or `Date.now()`,
  * neither of which is actually a uniqueness guarantee.
  */
 let tempFileCounter = 0;
@@ -337,7 +354,17 @@ export class ParseCache {
   /** Whether reads and writes touch the filesystem at all. */
   readonly enabled: boolean;
 
-  private readonly cacheDir: string;
+  /**
+   * Root this instance files entries under.
+   *
+   * Public because a parse WORKER has to be told which store to write into.
+   * Each worker isolate builds its own `ParseCache`, and one built from the
+   * default directory while the parent used another would write entries the
+   * parent never finds — a silent fall back to re-parsing on the main thread,
+   * with every test still green and every result still correct. The pool
+   * forwards this through `workerData`.
+   */
+  readonly directory: string;
 
   /**
    * Counters behind {@link stats}, cumulative for this instance's life.
@@ -356,7 +383,7 @@ export class ParseCache {
     // without mutating the real `process.env`.
     const env = options.env ?? process.env;
     this.enabled = options.enabled ?? env['VAT_CACHE'] !== '0';
-    this.cacheDir = options.cacheDir ?? parseCacheDirectory();
+    this.directory = options.cacheDir ?? parseCacheDirectory();
   }
 
   /**
@@ -379,27 +406,71 @@ export class ParseCache {
    * @returns A freshly-minted parse result, or `null` on any kind of miss
    */
   async get(keyed: KeyedContent): Promise<ParseResult | null> {
-    if (!this.enabled || !SAFE_KEY.test(keyed.key)) return this.miss();
+    const found = await this.read(keyed);
+    if (found === null) return this.miss();
+    this.hitCount += 1;
+    return found;
+  }
+
+  /**
+   * Look up parse facts WITHOUT counting the lookup as a hit or a miss.
+   *
+   * The read {@link get} performs, minus the bookkeeping — and the split exists
+   * because of one caller that would otherwise corrupt the meaning of both
+   * counters. Under cache-as-transport a parse worker files the entry and the
+   * parent reads it straight back; that read finds the entry every time, so
+   * going through `get` would score a HIT for a document this run demonstrably
+   * had to parse. A cold run would then report roughly as many hits as misses,
+   * and `ParseDispatcher`'s activation policy — which reads `misses` precisely
+   * because "a hit costs no parse" — would be reasoning about a statistic that
+   * no longer means that.
+   *
+   * The TIER rows are charged here rather than in `get`, so a read-back still
+   * shows up as the parent-side cost it genuinely is. That is the whole number
+   * the transport experiment turns on: what the cache costs the parent per
+   * document, counted separately from what the cache SAVED.
+   *
+   * @param keyed - Content, key and byte length from one read
+   * @returns A freshly-minted parse result, or `null` when there is no usable entry
+   */
+  async read(keyed: KeyedContent): Promise<ParseResult | null> {
+    // Before the brackets, deliberately: a disabled cache and an unusable key
+    // touch no disk, so charging `cache-read-io` here would publish a
+    // per-document read cost for a run that never read anything.
+    if (!this.enabled || !SAFE_KEY.test(keyed.key)) return null;
 
     let raw: string;
+    const readStartedAt = parseTimingStart();
     try {
-       
+
       // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-raw-text-decode -- reading back this cache's own entry, written as UTF-8 by `set()`; a corpus document never lands here
       raw = await fs.readFile(this.entryPath(keyed.key), 'utf-8');
     } catch {
       // ENOENT (never written), EACCES (perms), EISDIR — all a miss.
-      return this.miss();
+      return null;
+    } finally {
+      // Charged on the miss path too: a failed open is what a COLD document
+      // costs the parent, and the arm-A number is worthless without it.
+      recordTierPass(TierPass.CacheReadIo, readStartedAt);
     }
 
-    const facts = readFacts(raw);
-    if (facts === null) return this.miss();
+    // A second bracket rather than one `cache-read`, because a hit and a miss
+    // cost completely different things: a miss pays only the failed open above,
+    // a hit pays that plus `JSON.parse`, schema validation and rehydrate. One
+    // averaged row would describe neither, and this decode is exactly the work
+    // "cache as transport" would make a cold run pay per document.
+    const decodeStartedAt = parseTimingStart();
+    try {
+      const facts = readFacts(raw);
+      if (facts === null) return null;
 
-    this.hitCount += 1;
-
-    // `readFacts` returns the product of a fresh `JSON.parse`, so this graph is
-    // not shared with any previous caller. See the standing constraint in the
-    // module docstring — do NOT memoize this object.
-    return rehydrate(facts, keyed);
+      // `readFacts` returns the product of a fresh `JSON.parse`, so this graph is
+      // not shared with any previous caller. See the standing constraint in the
+      // module docstring — do NOT memoize this object.
+      return rehydrate(facts, keyed);
+    } finally {
+      recordTierPass(TierPass.CacheReadDecode, decodeStartedAt);
+    }
   }
 
   /**
@@ -412,11 +483,54 @@ export class ParseCache {
    *
    * @param keyed - Content, key and byte length from one read
    * @param result - The parse result to file under that key
+   * @returns True when the entry was persisted; see {@link setByKey}
    */
-  async set(keyed: KeyedContent, result: ParseResult): Promise<void> {
-    if (!this.enabled || !SAFE_KEY.test(keyed.key)) return;
+  async set(keyed: KeyedContent, result: ParseResult): Promise<boolean> {
+    return this.setByKey(keyed.key, result);
+  }
 
-    const shardDir = this.shardDir(keyed.key);
+  /**
+   * Persist parse facts under a content key, without holding the bytes.
+   *
+   * The primitive {@link set} always was: an entry stores facts only, so the
+   * key is the only part of a `KeyedContent` a write has ever consulted.
+   * Exposed because a **parse worker** files entries and has no `KeyedContent`
+   * to offer — it received a decoded string and a key over the boundary, never
+   * a read. Making it fabricate the other fields to reach `set` would put
+   * invented decode provenance into a struct nothing reads, which is the same
+   * mistake `parse-pool.ts`'s `attachContent` docstring refuses.
+   *
+   * @param key - The content key to file under
+   * @param result - The parse result whose facts to store
+   * @returns True when the entry was persisted. A write failure is REPORTED
+   *   here as well as counted, never thrown — see below.
+   */
+  async setByKey(key: string, result: ParseResult): Promise<boolean> {
+    // Outside the bracket for the same reason `get`'s guards are — see there.
+    if (!this.enabled || !SAFE_KEY.test(key)) return false;
+
+    const startedAt = parseTimingStart();
+    try {
+      return await this.write(key, result);
+    } finally {
+      recordTierPass(TierPass.CacheWrite, startedAt);
+    }
+  }
+
+  /**
+   * The whole of a `set`, so {@link setByKey} is one bracket and one guard.
+   *
+   * Split out rather than wrapping the body inline because the write is the one
+   * cost on either side of the parse tier that a WORKER can pay in parallel:
+   * under cache-as-transport it moves off the parent entirely, and it has to be
+   * one measurable unit for that move to be readable in a dump.
+   *
+   * @param key - The content key to file under
+   * @param result - The parse result to store
+   * @returns True when the entry reached its final path
+   */
+  private async write(key: string, result: ParseResult): Promise<boolean> {
+    const shardDir = this.shardDir(key);
 
     // POSIX hardening: a predictable, world-readable cache root means another
     // local user on a shared box could pre-create `shardDir` before VAT ever
@@ -425,13 +539,13 @@ export class ParseCache {
     // silently written into. Meaningless on Windows — see the class docblock.
     if (process.platform !== 'win32' && !(await isSafeShardDir(shardDir))) {
       this.writeFailureCount += 1;
-      return;
+      return false;
     }
 
     tempFileCounter += 1;
     const tempPath = safePath.join(
       shardDir,
-      `${keyed.key}.${String(process.pid)}.${String(tempFileCounter)}.tmp`,
+      `${key}.${String(process.pid)}.${String(threadId)}.${String(tempFileCounter)}.tmp`,
     );
     const entry: StoredEntry = { facts: dehydrate(result) };
 
@@ -441,7 +555,7 @@ export class ParseCache {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is cacheDir + a charset-validated content key
       await fs.writeFile(tempPath, JSON.stringify(entry), 'utf-8');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- both paths are cacheDir + a charset-validated content key
-      await fs.rename(tempPath, this.entryPath(keyed.key));
+      await fs.rename(tempPath, this.entryPath(key));
     } catch {
       // Fail-soft: EACCES on the directory, ENOSPC on the disk, EROFS on a
       // read-only mount. The current run already holds the fresh result; only
@@ -449,7 +563,9 @@ export class ParseCache {
       // written but never renamed, so a failing write cannot accumulate litter.
       this.writeFailureCount += 1;
       await removeQuietly(tempPath);
+      return false;
     }
+    return true;
   }
 
   /**
@@ -459,7 +575,7 @@ export class ParseCache {
    * explicit operator request to reclaim the space.
    */
   async clear(): Promise<void> {
-    await removeQuietly(this.cacheDir, true);
+    await removeQuietly(this.directory, true);
   }
 
   /** Count a miss and return the value every miss path returns. */
@@ -469,7 +585,7 @@ export class ParseCache {
   }
 
   private shardDir(key: string): string {
-    return safePath.join(this.cacheDir, key.slice(-SHARD_LENGTH));
+    return safePath.join(this.directory, key.slice(-SHARD_LENGTH));
   }
 
   private entryPath(key: string): string {
@@ -499,7 +615,7 @@ export interface LoadedParser {
  * In-flight or settled loads, one per kind. Memoizing the PROMISE (not the
  * module) is what makes concurrent first callers share a single import.
  */
-const parserLoads = new Map<ParserKind, Promise<LoadedParser>>();
+const parserLoads = new Map<DocumentParserKind, Promise<LoadedParser>>();
 
 /**
  * The module specifier {@link importParser} loads for each kind, for the error
@@ -511,8 +627,23 @@ const parserLoads = new Map<ParserKind, Promise<LoadedParser>>();
  * them here is the cost of naming the module in the message; both entries are
  * exercised by the message tests, so a specifier changed on one side without the
  * other shows up as a message naming a module the loader never touched.
+ *
+ * ## Why this is keyed on `DocumentParserKind` and not on `ParserKind`
+ *
+ * `ParserKind` grew a third member, `none`, which names the ABSENCE of a parser
+ * (see content-key.ts). There is no module specifier for it — not `null`, not a
+ * placeholder — so widening this record would have forced an entry that is a
+ * lie, and every reader of that entry would then be handling a case that cannot
+ * happen. Narrowing the key instead pushes the impossibility one level up, into
+ * the types of {@link loadParser} and {@link parseKeyed}, where a caller holding
+ * a `none` blob gets a compile error at the call site rather than an invented
+ * answer far from it.
+ *
+ * The record therefore stays compile-exhaustive over exactly the kinds that HAVE
+ * a parser, which is the property that made it worth having: a fourth real
+ * parser cannot be added without a specifier for it.
  */
-const PARSER_MODULE_SPECIFIERS: Record<ParserKind, string> = {
+const PARSER_MODULE_SPECIFIERS: Record<DocumentParserKind, string> = {
   html: './html-link-parser.js',
   markdown: './link-parser.js',
 };
@@ -587,7 +718,7 @@ export class ParserUnavailableError extends Error {
    * @param specifier - The module specifier that could not be imported
    * @param loaderError - Whatever the module loader threw
    */
-  constructor(kind: ParserKind, specifier: string, loaderError: unknown) {
+  constructor(kind: DocumentParserKind, specifier: string, loaderError: unknown) {
     super(
       `Cannot load VAT's ${kind} parser module (${specifier}): ${describeLoaderError(loaderError)}. ` +
         'This is a broken VAT installation — the parser itself could not be read or evaluated. ' +
@@ -711,7 +842,7 @@ function describeLoaderError(error: unknown): string {
  *   loader's own error is carried on `loaderError`, never re-thrown bare — see
  *   {@link PARSER_UNAVAILABLE_CODE}.
  */
-export async function loadParser(kind: ParserKind): Promise<LoadedParser> {
+export async function loadParser(kind: DocumentParserKind): Promise<LoadedParser> {
   const pending = parserLoads.get(kind);
   if (pending !== undefined) return pending;
 
@@ -748,7 +879,7 @@ export async function loadParser(kind: ParserKind): Promise<LoadedParser> {
  * @returns The parser for that kind
  * @throws {ParserUnavailableError} If the module cannot be imported
  */
-async function importParser(kind: ParserKind): Promise<LoadedParser> {
+async function importParser(kind: DocumentParserKind): Promise<LoadedParser> {
   if (kind === 'html') {
     return importParserModule(kind, async () => ({
       parseContent: (await import('./html-link-parser.js')).parseHtmlContent,
@@ -785,7 +916,7 @@ async function importParser(kind: ParserKind): Promise<LoadedParser> {
  * @throws {ParserUnavailableError} If `importModule` throws
  */
 export async function importParserModule<T>(
-  kind: ParserKind,
+  kind: DocumentParserKind,
   importModule: () => Promise<T>,
 ): Promise<T> {
   try {
@@ -816,11 +947,23 @@ export async function importParserModule<T>(
  * an argument rather than re-deriving it. Running the discriminator twice is how
  * the parse route and the key's parse-route component drift apart.
  *
- * @param keyed - Content, key and byte length from ONE read
+ * ## Why the parameter is `ParsableContent` and not `KeyedContent`
+ *
+ * A `none` blob has no parser, so there is no honest answer this function could
+ * give for one. Both alternatives to a type are worse: a throw turns a routing
+ * fact into a runtime surprise, and an empty `ParseResult` fabricated here would
+ * be indistinguishable from "a document with no links" at every consumer that
+ * counts rows. Requiring the narrowed type moves the decision to the caller,
+ * which is the only place that knows whether a blob with no parser is expected —
+ * and makes forgetting to decide a compile error. `isParsableContent` in
+ * content-key.ts is the narrowing.
+ *
+ * @param keyed - Content, key and byte length from ONE read, of a kind that has
+ *   a parser
  * @param cache - The store to consult and file into
  * @returns Parse facts equal to what the parser would have produced
  */
-export async function parseKeyed(keyed: KeyedContent, cache: ParseCache): Promise<ParseResult> {
+export async function parseKeyed(keyed: ParsableContent, cache: ParseCache): Promise<ParseResult> {
   const hit = await cache.get(keyed);
   if (hit !== null) {
     // Feeds the sub-phase timing dump (`parse-timing.ts`), never this cache's
@@ -881,10 +1024,14 @@ export function defaultParseCache(): ParseCache {
  * `ResourceRegistry` uses this instead.
  *
  * ⚠ `parserKind` states which parser runs — it is **not** derived from the
- * extension, because at least one shipped caller deliberately parses `.html`
- * documents as markdown. Pass `parserKindForPath(filePath)` only if that is
- * genuinely the rule you want; otherwise pass the kind you actually parse with,
- * or the entry lands under a key another lane will read (see content-key.ts).
+ * path, because at least one shipped caller deliberately parses `.html`
+ * documents as markdown. Pass the kind you actually parse with, or the entry
+ * lands under a key another lane will read (see content-key.ts).
+ *
+ * It is a {@link DocumentParserKind}, so `parserKindForPath(filePath)` is not
+ * directly passable any more: that function can answer `none`, and this one has
+ * no parser to run for it. A caller routing by path decides what to do with a
+ * `none` blob first — see `parseKeyed`.
  *
  * One difference from `parseMarkdown`/`parseHtml`, deliberate: `sizeBytes` is
  * the length of the bytes this call read, not a separate `stat().size`. For a
@@ -901,7 +1048,7 @@ export function defaultParseCache(): ParseCache {
  */
 export async function parseFileCached(
   filePath: string,
-  parserKind: ParserKind,
+  parserKind: DocumentParserKind,
   cache: ParseCache = defaultParseCache(),
 ): Promise<ParseResult> {
   return parseKeyed(await readContentWithKey(filePath, parserKind), cache);

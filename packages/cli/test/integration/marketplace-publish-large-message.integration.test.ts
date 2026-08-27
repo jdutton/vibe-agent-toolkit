@@ -18,7 +18,8 @@
  * then read the message back) so it verifies the message survives intact on
  * every platform rather than merely that the call did not throw.
  */
-import { runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { publishToGitBranch } from '../../src/commands/claude/marketplace/git-publish.js';

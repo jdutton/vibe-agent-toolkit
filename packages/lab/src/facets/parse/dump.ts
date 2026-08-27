@@ -35,14 +35,28 @@
  * brackets itself, and the per-kind remainder keeps the arithmetic honest when
  * the shape moves.
  *
- * ## What merging across processes means
+ * ## One dump per PROCESS, carrying every thread of it
  *
- * A vat command spawns a child per phase, so several dumps per run is the normal
- * case rather than a warning sign. Counts and durations are summed, which makes
- * `elapsedMs` **time spent in that pass across the run** and emphatically not
- * wall time: if two phases ran concurrently their milliseconds still add. The
- * value of the number is its share of its group's total, which is summed the
- * same way and therefore stays a valid denominator.
+ * A dump is a process: its lifetime once, and a record per thread that
+ * accumulated anything. A pooled run is one file holding a main thread and up to
+ * eight parse workers; `processes: 1` is the expected reading for every command.
+ * A report showing more than one process is measuring something the harness
+ * normally skips — the shipped `vat` wrapper (`packages/cli/src/bin/vat.ts`)
+ * spawns `bin.js`, and the harness drives `dist/bin.js` directly to avoid it.
+ *
+ * The split is what the two kinds of number require. `process.uptime()` and
+ * `process.cpuUsage()` are the PROCESS's, so they are read once, by the thread
+ * that writes the file, and summing them across threads would multiply one
+ * lifetime by the pool's width. Everything a thread measured for itself — its
+ * documents, its bytes, its pass calls and elapsed time, its cache outcomes — is
+ * disjoint per thread and sums.
+ *
+ * ⚠️ That makes `elapsedMs` **time spent in that pass across the run** and
+ * emphatically not wall time: eight workers running concurrently still add their
+ * milliseconds, so a run that got FASTER by keeping more threads busy reports a
+ * LARGER total. Read it as a share of its group's total, which is summed the
+ * same way and therefore stays a valid denominator, and read
+ * {@link MergedParseDumps.workerThreads} before quoting any of it.
  *
  * ## What is NOT an invariant
  *
@@ -70,18 +84,6 @@ import { parsePassShape } from './types.js';
  * A literal, deliberately not imported — see this module's header.
  */
 export const PARSE_TIMING_DIR_ENV = 'VAT_PARSE_TIMING';
-
-/**
- * Version of the dump format written by the seam.
- *
- * A fixed contract between the seam and this reader. Bumped when the row shape
- * changes; a dump at any other version is refused, because reading it with this
- * build's assumptions would produce numbers whose meaning nobody can state.
- *
- * 2 — passes and documents grouped per parser kind, each group carrying its own
- * total, plus process wall/CPU time.
- */
-export const PARSE_DUMP_VERSION = 2;
 
 /**
  * What a kind's bracketing total is called.
@@ -128,14 +130,49 @@ export interface ParseDumpKind {
   readonly passes: readonly ParseDumpPass[];
 }
 
-/** One process's dump. */
-export interface ParseDump {
-  readonly dumpVersion: number;
-  readonly pid: number;
-  readonly process: ParseDumpProcess;
-  /** Parse-cache outcomes across every parser kind. */
+/** What ONE thread of a process accumulated. */
+export interface ParseThreadDump {
+  /**
+   * Which thread of the enclosing {@link ParseDump.pid} this is: `0` on the main
+   * thread, a positive integer in a parse worker.
+   *
+   * It is not needed for the parser kinds — a thread's documents and passes are
+   * its own and sum correctly however they are grouped — but it is load-bearing
+   * for the tier rows, where the whole question is whether a cost landed on the
+   * serial main thread or on a parallel worker.
+   */
+  readonly threadId: number;
+  /** Parse-cache outcomes across every parser kind, on this thread. */
   readonly cache: { readonly hits: number; readonly misses: number };
   readonly kinds: readonly ParseDumpKind[];
+  /**
+   * Work the parse TIER did around the parses — cache reads and writes, boundary
+   * crossings — never a parser pass and never inside a kind group.
+   */
+  readonly tier: readonly ParseDumpPass[];
+}
+
+/**
+ * One PROCESS's dump: its lifetime, and every thread of it.
+ *
+ * Thread structure is DATA here, never inferred from how many files landed on
+ * disk. A count of files can only say how many writers there were; it cannot say
+ * which of them was the parent, and it cannot stop a reader summing one
+ * process's lifetime once per thread — an error whose magnitude is exactly the
+ * pool's width and which reads as a performance regression that never happened.
+ */
+export interface ParseDump {
+  readonly pid: number;
+  readonly process: ParseDumpProcess;
+  /**
+   * Every thread of this process that accumulated anything, main thread first
+   * and always present.
+   *
+   * A worker appears only if it answered the pool's shutdown request; one wedged
+   * badly enough to be `terminate()`d is simply absent, which shows up as a
+   * thread count below the pool's width.
+   */
+  readonly threads: readonly ParseThreadDump[];
 }
 
 /** What a dump with no parser kinds at all is rejected with. */
@@ -203,14 +240,30 @@ const durationMs = z.number().nonnegative();
 /** One pass row, shared by a group's `passes` and its `total`. */
 const passRowSchema = z.object(parsePassShape).strict();
 
-/** Runtime schema for {@link ParseDump}. Strict: the seam is ours, so an unknown field is a bug. */
-export const ParseDumpSchema = z
+/** What a dump naming one tier pass twice is rejected with. */
+const DUPLICATE_TIER_MESSAGE =
+  'a dump must name each tier pass once; two rows for one pass would be summed into a number ' +
+  'whose meaning depends on which row the seam wrote first';
+
+/**
+ * Is each tier pass named once?
+ *
+ * @param dump - The dump being validated
+ * @returns True when every tier row's name is distinct
+ */
+function tierNamesAreUnique(dump: { readonly tier: readonly ParseDumpPass[] }): boolean {
+  return new Set(dump.tier.map((row) => row.pass)).size === dump.tier.length;
+}
+
+/** What a dump carrying no thread at all is rejected with. */
+const NO_THREADS_MESSAGE =
+  'a dump must carry at least the thread that wrote it — a process that reports a lifetime and ' +
+  'no threads has published a denominator with nothing to divide into it';
+
+/** Runtime schema for {@link ParseThreadDump}. */
+const threadDumpSchema = z
   .object({
-    dumpVersion: z.number().int().positive(),
-    pid: z.number().int().nonnegative(),
-    process: z
-      .object({ wallMs: durationMs, cpuUserMs: durationMs, cpuSystemMs: durationMs })
-      .strict(),
+    threadId: wholeCount,
     cache: z.object({ hits: wholeCount, misses: wholeCount }).strict(),
     kinds: z
       .array(
@@ -224,11 +277,28 @@ export const ParseDumpSchema = z
           .strict(),
       )
       .min(1, { message: NO_KINDS_MESSAGE }),
+    // No `.min(1)`, unlike `kinds`. A kind group is the denominator for a share,
+    // so a dump with none of them can state no share at all; a tier row is an
+    // absolute cost that stands alone, and a build whose tier does nothing has
+    // nothing to say rather than something to hide.
+    tier: z.array(passRowSchema),
   })
   .strict()
   .refine(totalsNameTheirKind, { message: MISLABELLED_TOTAL_MESSAGE })
   .refine(passNamesAreUnique, { message: DUPLICATE_PASS_MESSAGE })
-  .refine(kindNamesAreUnique, { message: DUPLICATE_KIND_MESSAGE });
+  .refine(kindNamesAreUnique, { message: DUPLICATE_KIND_MESSAGE })
+  .refine(tierNamesAreUnique, { message: DUPLICATE_TIER_MESSAGE });
+
+/** Runtime schema for {@link ParseDump}. Strict: the seam is ours, so an unknown field is a bug. */
+export const ParseDumpSchema = z
+  .object({
+    pid: z.number().int().nonnegative(),
+    process: z
+      .object({ wallMs: durationMs, cpuUserMs: durationMs, cpuSystemMs: durationMs })
+      .strict(),
+    threads: z.array(threadDumpSchema).min(1, { message: NO_THREADS_MESSAGE }),
+  })
+  .strict();
 
 /** One parser kind's merged numbers. */
 export interface MergedParseKind {
@@ -244,22 +314,78 @@ export interface MergedParseKind {
   readonly unattributedMs: number;
 }
 
+/**
+ * One tier pass, merged, split by which side of the boundary paid for it.
+ *
+ * ## Why a main-thread share and not just a total
+ *
+ * Every tier row is a cost, and the only question the parse tier's design turns
+ * on is WHERE a cost lands. The wire transport and the cache transport move the
+ * same three operations — serialize the facts, write the entry, read it back —
+ * between the parent and its workers in opposite directions, so the two arms can
+ * report near-identical totals while being completely different runs: one has
+ * the parent doing it all serially, the other has eight threads doing most of it
+ * at once. A merge that published only `elapsedMs` would show that as no change
+ * at all.
+ *
+ * `mainElapsedMs` is therefore the number to read first. It is the part charged
+ * to the one thread Amdahl's law is about.
+ */
+export interface TierPassStats {
+  /** The seam's own name — `cache-read-io`, `wire-dispatch`. Never pinned by this build. */
+  readonly pass: string;
+  /** How many times the bracket ran, across every thread. */
+  readonly calls: number;
+  /** Time inside the bracket, summed across every thread. Not wall time. */
+  readonly elapsedMs: number;
+  /** Of {@link TierPassStats.calls}, those charged on a MAIN thread (`threadId` 0). */
+  readonly mainCalls: number;
+  /**
+   * Of {@link TierPassStats.elapsedMs}, the share charged on a MAIN thread.
+   *
+   * Read this before the total. See the interface docstring.
+   */
+  readonly mainElapsedMs: number;
+}
+
 /** Every dump from one command run, merged. */
 export interface MergedParseDumps {
   /**
-   * Distinct PIDs that produced a dump. See this module's header on summing.
+   * Processes that wrote a dump, counted as FILES rather than as distinct pids.
    *
-   * ⚠️ REVIEW FINDING 2026-08-14 — this UNDER-COUNTS in exactly the case the
-   * writer was built for. `parse-timing.ts`'s `nextDumpPath` carries a collision
-   * counter precisely because "pids are reused across a long multi-phase run",
-   * and `parse-timing.test.ts` pins that one pid can file two dumps. Counting
-   * `pids.size` then reports those two as ONE process. The durations and counts
-   * still merge correctly; only this field lies. Counting dumps rather than pids
-   * is the obvious fix, but it changes a published field, so: Jeff's call.
+   * Pids are reused, so a pid set would fold two sequential processes into one —
+   * an undercount nothing downstream could detect. One file is one process by
+   * construction, so counting files is exact.
    */
   readonly processes: number;
+  /**
+   * Main threads that reported — one per process, and the denominator for every
+   * `mainElapsedMs`.
+   */
+  readonly mainThreads: number;
+  /**
+   * Parse worker threads that reported.
+   *
+   * The denominator for worker utilization (`worker-job` elapsed ÷ wall ÷ this),
+   * and the number to read before quoting any `elapsedMs` on this row, all of
+   * which are summed across these threads.
+   *
+   * ⚠️ Threads that REPORTED, not threads that ran: a worker only hands its
+   * counters over when the pool asks it to shut down, so one wedged past
+   * `GRACEFUL_EXIT_TIMEOUT_MS` is absent. A count below the pool's width is the
+   * tell, and it matters because this is a denominator.
+   */
+  readonly workerThreads: number;
   /** One entry per parser kind the dumps carried, in first-appearance order. */
   readonly kinds: readonly MergedParseKind[];
+  /**
+   * One entry per tier pass, in first-appearance order.
+   *
+   * Beside `kinds` and never folded into it: these are not parser passes, and a
+   * reader summing them into a kind's total would be computing a share of a
+   * denominator they do not belong to. See {@link TierPassStats}.
+   */
+  readonly tier: readonly TierPassStats[];
   /** Documents parsed across every kind. */
   readonly documents: number;
   readonly bytes: number;
@@ -287,11 +413,16 @@ export interface MergedParseDumps {
   readonly totalMs: number;
   /** Every kind's unattributed remainder, summed. */
   readonly unattributedMs: number;
-  /** Process lifetime wall clock, summed across processes. Not a parse duration. */
+  /**
+   * Process lifetime wall clock: ONE reading per pid, summed across pids.
+   *
+   * Not a parse duration, and not a sum over dump files — see this module's
+   * header and {@link addLifetime}.
+   */
   readonly wallMs: number;
-  /** User CPU, summed across processes. */
+  /** User CPU, one reading per pid, summed across pids. See {@link MergedParseDumps.wallMs}. */
   readonly cpuUserMs: number;
-  /** System CPU, summed across processes. */
+  /** System CPU, one reading per pid, summed across pids. See {@link MergedParseDumps.wallMs}. */
   readonly cpuSystemMs: number;
 }
 
@@ -311,6 +442,15 @@ interface PassBucket {
   elapsedMs: number;
 }
 
+/** Mutable accumulator behind one merged tier pass. */
+interface TierBucket {
+  readonly pass: string;
+  calls: number;
+  elapsedMs: number;
+  mainCalls: number;
+  mainElapsedMs: number;
+}
+
 /** Mutable accumulator behind one merged parser kind. */
 interface KindBucket {
   readonly kind: string;
@@ -321,14 +461,26 @@ interface KindBucket {
 }
 
 /**
- * Every process-level scalar a merge sums, in one bag.
+ * The process-level scalars a merge SUMS over every dump file, in one bag.
  *
- * The per-kind numbers are not here — they belong to their group. What is left
- * is what the process, rather than a parser, reports.
+ * The per-kind numbers are not here — they belong to their group. Neither are
+ * the lifetimes: those are the one thing on a dump that describes the process
+ * rather than the work, so N dumps from one pid repeat them instead of
+ * partitioning them. See {@link addLifetime}.
+ *
+ * The cache split stays here and stays summed. Each thread consults its own
+ * parse cache and counts its own outcomes, so those really are disjoint — in
+ * the run that exposed the lifetime defect the parent counted 1,805 misses and
+ * the eight workers counted none, and dropping any dump's contribution would
+ * have deleted most of the parses the facet exists to attribute.
  */
 interface DumpTotals {
   cacheHits: number;
   cacheMisses: number;
+}
+
+/** One process's lifetime, as the dumps that share its pid report it. */
+interface LifetimeBucket {
   wallMs: number;
   cpuUserMs: number;
   cpuSystemMs: number;
@@ -346,8 +498,6 @@ const PARSE_DUMP_KIND: DumpKind<ParseDump> = {
   noun: 'parse-timing dump',
   producer: 'timing seam',
   schema: ParseDumpSchema,
-  version: PARSE_DUMP_VERSION,
-  versionOf: (dump) => dump.dumpVersion,
   emptyDirectory: (directory) =>
     `no parse-timing dumps in '${directory}'. Nothing wrote one, so there is no measurement — ` +
     `the usual cause is a vat build with no timing seam in it (it is switched on by ` +
@@ -397,42 +547,74 @@ function addKindGroup(byKind: Map<string, KindBucket>, group: ParseDumpKind): vo
 }
 
 /**
- * Add one process's non-parser scalars to the running totals.
+ * Add one dump's tier rows into the running buckets.
  *
- * Durations are summed exactly as counts are — see this module's header.
+ * Charges the main-thread share from the thread's OWN `threadId` rather than
+ * from anything derived: a worker and its parent share a pid, so there is no
+ * other signal here that could tell them apart, and inferring one (say, "the
+ * record with the longest lifetime is the parent") would be a guess dressed as a
+ * measurement.
  *
- * ⚠️ REVIEW FINDING 2026-08-14 — `wallMs` SUMMING IS WRONG, and the consumer of
- * the sum is a trust signal. The justification that "wall clock adds because a
- * vat command spawns its phases one after another" holds for *parse*
- * milliseconds (disjoint work) but NOT for process *lifetimes*: the parent
- * orchestrator is alive for the whole run, so its lifetime CONTAINS every
- * child's, and summing double-counts real time. CPU genuinely does add (disjoint
- * threads), so the ratio `cpu / wallMs` that `render.ts` divides — against
- * `CPU_BOUND_FLOOR = 0.7` — is systematically DEFLATED, and the deflation grows
- * without bound in the number of phases.
+ * @param into - Every tier pass's bucket, mutated in place
+ * @param thread - One thread's counters
+ */
+function addTierRows(into: Map<string, TierBucket>, thread: ParseThreadDump): void {
+  const onMainThread = thread.threadId === 0;
+  for (const row of thread.tier) {
+    let bucket = into.get(row.pass);
+    if (bucket === undefined) {
+      bucket = { pass: row.pass, calls: 0, elapsedMs: 0, mainCalls: 0, mainElapsedMs: 0 };
+      into.set(row.pass, bucket);
+    }
+    bucket.calls += row.calls;
+    bucket.elapsedMs += row.elapsedMs;
+    if (onMainThread) {
+      bucket.mainCalls += row.calls;
+      bucket.mainElapsedMs += row.elapsedMs;
+    }
+  }
+}
+
+/**
+ * Add one thread's non-parser counts to the running totals.
  *
- * Measured on `vat validate` (VAT's own repo, 2 processes): parent wall 3064ms
- * with ZERO documents, child wall 2207ms, CPU 3822ms.
- *   reported 3822/5272 = 0.725   ·   true 3822/3064 = 1.247
- * A compute-bound run therefore sits 3.6% above a banner reading "THE PROCESS
- * SPENT MOST OF ITS LIFE NOT RUNNING"; ~189ms more of child wall trips it.
- *
- * NOT fixed here because the right denominator is a design call: `max` is right
- * only for a strictly-nested tree, parent-only needs a parent pid the dump does
- * not carry, and per-process ratios trade one number for N. `resources-validate`
- * is single-process, so no figure currently in the record is affected — this
- * bites `validate`/`verify`. `parse-dump.test.ts`'s two-process fixture gives
- * both processes equal, non-nested lifetimes, so it cannot tell sum from max.
+ * Counts only, and every one of them is a thread's own, so they sum. The process
+ * LIFETIMES are deliberately not here: they are read once per process by the
+ * thread that writes the dump, and summing them over threads would multiply one
+ * lifetime by the pool's width.
  *
  * @param totals - The bag being accumulated into, mutated in place
+ * @param thread - One thread's counters
+ */
+function addThreadTotals(totals: DumpTotals, thread: ParseThreadDump): void {
+  totals.cacheHits += thread.cache.hits;
+  totals.cacheMisses += thread.cache.misses;
+}
+
+/**
+ * Add one PROCESS's lifetime to the running total.
+ *
+ * A plain sum, and it is safe to be one because a process reports its lifetime
+ * exactly once: `parse-timing.ts` reads `uptime()`/`cpuUsage()` on the single
+ * thread that writes the file, so no arrangement of threads can present one
+ * lifetime twice. That mattered — `render.ts` divides `cpu / wallMs` against
+ * {@link CPU_BOUND_FLOOR}, so an inflated denominator deflates the trust signal
+ * a reader uses to decide whether to believe the wall figures at all.
+ *
+ * ⛔ **What summing does NOT handle is several PROCESSES.** An orchestrator
+ * alive for the whole run CONTAINS its children's lifetimes, so a sum
+ * double-counts real time. Every vat command reports `processes: 1`, so the case
+ * is vacant rather than solved, and it is left that way deliberately: `max` is
+ * right only for a strictly-nested tree, parent-only needs a parent pid no dump
+ * carries, and per-process ratios trade one number for N.
+ *
+ * @param into - The running lifetime, mutated in place
  * @param dump - One process's dump
  */
-function addDumpTotals(totals: DumpTotals, dump: ParseDump): void {
-  totals.cacheHits += dump.cache.hits;
-  totals.cacheMisses += dump.cache.misses;
-  totals.wallMs += dump.process.wallMs;
-  totals.cpuUserMs += dump.process.cpuUserMs;
-  totals.cpuSystemMs += dump.process.cpuSystemMs;
+function addLifetime(into: LifetimeBucket, dump: ParseDump): void {
+  into.wallMs += dump.process.wallMs;
+  into.cpuUserMs += dump.process.cpuUserMs;
+  into.cpuSystemMs += dump.process.cpuSystemMs;
 }
 
 /**
@@ -484,28 +666,33 @@ function acrossKinds(
  * @returns The merged numbers
  */
 export function mergeParseDumps(dumps: readonly ParseDump[]): MergedParseDumps {
-  const pids = new Set<number>();
+  const lifetime: LifetimeBucket = { wallMs: 0, cpuUserMs: 0, cpuSystemMs: 0 };
   const byKind = new Map<string, KindBucket>();
-  const totals: DumpTotals = {
-    cacheHits: 0,
-    cacheMisses: 0,
-    wallMs: 0,
-    cpuUserMs: 0,
-    cpuSystemMs: 0,
-  };
+  const byTierPass = new Map<string, TierBucket>();
+  const totals: DumpTotals = { cacheHits: 0, cacheMisses: 0 };
+  let mainThreads = 0;
+  let workerThreads = 0;
 
   for (const dump of dumps) {
-    pids.add(dump.pid);
-    addDumpTotals(totals, dump);
-    for (const group of dump.kinds) addKindGroup(byKind, group);
+    addLifetime(lifetime, dump);
+    for (const thread of dump.threads) {
+      if (thread.threadId === 0) mainThreads += 1;
+      else workerThreads += 1;
+      addThreadTotals(totals, thread);
+      addTierRows(byTierPass, thread);
+      for (const group of thread.kinds) addKindGroup(byKind, group);
+    }
   }
 
   const kinds = [...byKind.values()].map((bucket) => closeKind(bucket));
   const documents = acrossKinds(kinds, (kind) => kind.documents);
 
   return {
-    processes: pids.size,
+    processes: dumps.length,
+    mainThreads,
+    workerThreads,
     kinds,
+    tier: [...byTierPass.values()].map((bucket) => ({ ...bucket })),
     documents,
     bytes: acrossKinds(kinds, (kind) => kind.bytes),
     cacheHits: totals.cacheHits,
@@ -516,9 +703,7 @@ export function mergeParseDumps(dumps: readonly ParseDump[]): MergedParseDumps {
     totalCalls: acrossKinds(kinds, (kind) => kind.total.calls),
     totalMs: acrossKinds(kinds, (kind) => kind.total.elapsedMs),
     unattributedMs: acrossKinds(kinds, (kind) => kind.unattributedMs),
-    wallMs: totals.wallMs,
-    cpuUserMs: totals.cpuUserMs,
-    cpuSystemMs: totals.cpuSystemMs,
+    ...lifetime,
   };
 }
 
@@ -582,10 +767,19 @@ export function sameParseWork(a: MergedParseDumps, b: MergedParseDumps): boolean
   if (
     a.cacheHits !== b.cacheHits ||
     a.cacheMisses !== b.cacheMisses ||
-    a.kinds.length !== b.kinds.length
+    a.kinds.length !== b.kinds.length ||
+    a.tier.length !== b.tier.length
   ) {
     return false;
   }
+  // Tier CALL counts are as deterministic as a pass's — the same corpus reads
+  // the same entries and crosses the boundary the same number of times — so a
+  // repeat that dispatched a different number of documents is a repeat that did
+  // different work, even when every parser kind matches. `elapsedMs` is excluded
+  // here for the same reason it is above.
+  const tierCalls = new Map(b.tier.map((row) => [row.pass, row.calls] as const));
+  if (!a.tier.every((row) => tierCalls.get(row.pass) === row.calls)) return false;
+
   const byKind = new Map(b.kinds.map((kind) => [kind.kind, kind] as const));
   return a.kinds.every((kind) => sameKindWork(kind, byKind.get(kind.kind)));
 }

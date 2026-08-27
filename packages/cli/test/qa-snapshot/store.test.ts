@@ -19,7 +19,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { readSnapshot, snapshotPaths, writeSnapshot } from '../../src/qa-snapshot/store.js';
 import {
   MANIFEST_FILENAME,
-  SNAPSHOT_FORMAT_VERSION,
   type CommandManifestEntry,
   type LaneManifestEntry,
   type SnapshotManifest,
@@ -107,7 +106,6 @@ function commandEntry(): CommandManifestEntry {
  */
 function makeManifest(overrides: Partial<SnapshotManifest> = {}): SnapshotManifest {
   return {
-    formatVersion: SNAPSHOT_FORMAT_VERSION,
     vatVersion: '0.0.0-test',
     cacheNamespace: '0.1.42',
     capturedAtIso: '2026-01-01T00:00:00.000Z',
@@ -242,19 +240,50 @@ describe('qa-snapshot store', () => {
     expect(() => readSnapshot(dir)).toThrow(RESOURCES_ARTIFACT);
   });
 
-  it('refuses an unsupported formatVersion, naming what it found and what it expects', () => {
+  it('refuses a manifest from the build that still stamped a formatVersion', () => {
+    // The strict schema does this now, and does it without an integer anybody
+    // had to move. Before, `formatVersion` sat in front of a blind
+    // `parsed as SnapshotManifest` cast — so a manifest whose SHAPE was wrong
+    // sailed through as long as the number matched.
     const dir = snapshotDir();
     writeOneLaneSnapshot(dir);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifest inside a mkdtemp-backed snapshot directory created by this test
     writeFileSync(
       snapshotPaths(dir).manifest,
-      JSON.stringify({ ...makeManifest(), formatVersion: 99 }),
+      JSON.stringify({ ...makeManifest(), formatVersion: 2 }),
       'utf8',
     );
 
-    expect(() => readSnapshot(dir)).toThrow(/formatVersion 99/);
-    expect(() => readSnapshot(dir)).toThrow(
-      `reads formatVersion ${String(SNAPSHOT_FORMAT_VERSION)}`,
+    expect(() => readSnapshot(dir)).toThrow(/formatVersion/);
+    expect(() => readSnapshot(dir)).toThrow(/Not a manifest this build can read/);
+  });
+
+  it('refuses a manifest missing a field this build requires — the case the integer never caught', () => {
+    const dir = snapshotDir();
+    writeOneLaneSnapshot(dir);
+    const withoutPlatform = Object.fromEntries(
+      Object.entries(makeManifest()).filter(([key]) => key !== 'platform'),
     );
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifest inside a mkdtemp-backed snapshot directory created by this test
+    writeFileSync(snapshotPaths(dir).manifest, JSON.stringify(withoutPlatform), 'utf8');
+
+    expect(() => readSnapshot(dir)).toThrow(/platform/);
+  });
+
+  it('refuses a lane naming an enumeration route this build does not model', () => {
+    const dir = snapshotDir();
+    writeOneLaneSnapshot(dir);
+    const manifest = makeManifest({ lanes: [laneEntry('resources', RESOURCES_ARTIFACT)] });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifest inside a mkdtemp-backed snapshot directory created by this test
+    writeFileSync(
+      snapshotPaths(dir).manifest,
+      JSON.stringify({
+        ...manifest,
+        lanes: manifest.lanes.map((lane) => ({ ...lane, route: 'telepathy' })),
+      }),
+      'utf8',
+    );
+
+    expect(() => readSnapshot(dir)).toThrow(/route/);
   });
 });

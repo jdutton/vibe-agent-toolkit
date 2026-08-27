@@ -35,7 +35,6 @@ import type { CaptureRequest } from '../../harness/types.js';
 import { summarize } from './stats.js';
 import {
   PERF_FACET,
-  PERF_FACET_VERSION,
   type PerfBody,
   type PerfCommandStats,
 } from './types.js';
@@ -121,5 +120,5 @@ export function capturePerf(options: CapturePerfOptions): ReportEnvelope<PerfBod
   const loadAfter = readLoad();
   const load = judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus);
 
-  return buildReportEnvelope(PERF_FACET, PERF_FACET_VERSION, options, { commands, load });
+  return buildReportEnvelope(PERF_FACET, options, { commands, load });
 }

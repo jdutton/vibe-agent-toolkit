@@ -6,7 +6,7 @@
       "properties": {
         "contentKey": {
           "type": "string",
-          "pattern": "^(?:markdown|html)\\.[0-9a-f]{64}$",
+          "pattern": "^(?:markdown|html|none)\\.[0-9a-f]{64}$",
           "description": "Primary key — see content-key.ts"
         },
         "bytes": {

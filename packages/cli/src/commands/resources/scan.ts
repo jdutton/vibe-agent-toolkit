@@ -4,14 +4,13 @@
 
 import type { CrawlSourceKind } from '@vibe-agent-toolkit/resources';
 
+import { handleCommandError } from '../../utils/command-error.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeJsonOutput, writeYamlOutput } from '../../utils/output.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { relativizePathEntries } from '../../utils/relativize-paths.js';
 import { loadResourcesWithConfig, type ResourceCrawlLane } from '../../utils/resource-loader.js';
-
-import { handleCommandError } from './command-helpers.js';
 
 interface ScanOptions {
   debug?: boolean;

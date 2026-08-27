@@ -122,7 +122,8 @@
 import { copyFileSync, existsSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { mkdirSyncReal, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import { rimrafSync } from 'rimraf';
 
 /* eslint-disable security/detect-non-literal-fs-filename -- every path is derived from the package root this script was invoked in */

@@ -13,7 +13,7 @@
 
 import { expect } from 'vitest';
 
-import { REPORT_FORMAT_VERSION, type ReportEnvelope } from '../src/envelope/envelope.js';
+import { readEnvelope, type ReportEnvelope } from '../src/envelope/envelope.js';
 import type { ResolvedSubject } from '../src/harness/types.js';
 
 import { PROBE_VERSION } from './command-probe.js';
@@ -41,7 +41,6 @@ export function probeSubject(path: string, id: string, fingerprint: string): Res
 /** What a capture must have stamped on the report it produced. */
 export interface ExpectedStamp {
   readonly facet: string;
-  readonly facetVersion: number;
   readonly subject: ResolvedSubject;
   /** The caller owns the clock, so this exact string must come back. */
   readonly capturedAt: string;
@@ -58,9 +57,12 @@ export interface ExpectedStamp {
  * @param expected - See {@link ExpectedStamp}
  */
 export function expectStamp(report: ReportEnvelope<unknown>, expected: ExpectedStamp): void {
-  expect(report.formatVersion).toBe(REPORT_FORMAT_VERSION);
+  // The header this build would refuse is the header no capture may produce —
+  // asserted through the reader rather than field by field, so a facet that
+  // stamped something `readEnvelope` rejects fails here rather than at whatever
+  // later moment somebody tries to read its report back.
+  expect(readEnvelope(report).ok).toBe(true);
   expect(report.facet).toBe(expected.facet);
-  expect(report.facetVersion).toBe(expected.facetVersion);
   expect(report.coordinate).toEqual({
     subject: expected.subject.ref,
     subjectVersion: expected.subject.version,

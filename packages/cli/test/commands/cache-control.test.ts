@@ -27,6 +27,7 @@ import { applyCacheControl, registerCacheControl } from '../../src/commands/cach
 import { clearCacheDirectory, vatCacheRoot } from '../../src/commands/cache/clear.js';
 import { createCacheCommand } from '../../src/commands/cache/index.js';
 import { createResourcesCommand } from '../../src/commands/resources/index.js';
+import { renderCommandHelp } from '../help-text-helpers.js';
 
 /** The flag under test, spelled once so a rename cannot half-land. */
 const NO_CACHE_FLAG = '--no-cache';
@@ -280,12 +281,6 @@ describe('vatCacheRoot', () => {
 /**
  * The help for one command in the `cache` group, as a user would read it.
  *
- * 🪤 `helpInformation()` renders the built-in sections ONLY: Commander appends
- * an `addHelpText('after', …)` block in `outputHelp()`, and every sentence
- * describing what the caches ARE lives in that block. A test written against
- * `helpInformation()` sees an empty Description section and passes every "does
- * not say X" assertion vacuously.
- *
  * @param path - Subcommand name, or nothing for the group itself
  * @returns The rendered help
  */
@@ -294,10 +289,7 @@ function cacheHelpFor(path?: string): string {
   const target = path === undefined ? group : group.commands.find((command) => command.name() === path);
   if (target === undefined) throw new Error(`no vat cache subcommand named ${String(path)} to render`);
 
-  let captured = '';
-  target.configureOutput({ writeOut: (text: string) => { captured += text; } });
-  target.outputHelp();
-  return captured;
+  return renderCommandHelp(target);
 }
 
 describe('vat cache help text', () => {

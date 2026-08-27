@@ -20,7 +20,8 @@ import type { ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import { delimiter } from 'node:path';
 
-import { setupSyncTempDirSuite, safePath, spawnHardened } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { spawnHardened } from '@vibe-agent-toolkit/utils/process';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 
 /* eslint-disable security/detect-non-literal-fs-filename -- fixture paths under a temp dir */
@@ -65,8 +66,9 @@ function writeFixture(root: string): Fixture {
   );
 
   // Several modules so the emit takes long enough to sample, and so the barrel
-  // re-exports through a deeper module — the exact shape of the observed failures
-  // (`utils/dist/index.js` -> `./skill-test/spawn-claude.js`).
+  // re-exports through a deeper module — the shape every observed failure has
+  // had: an entry whose named export is defined a directory down, so a consumer
+  // resolves the entry successfully and only then fails to find the name.
   for (let index = 0; index < 12; index += 1) {
     fs.writeFileSync(
       safePath.join(srcDir, `module-${index}.ts`),

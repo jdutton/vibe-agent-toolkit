@@ -32,13 +32,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ReportEnvelope } from '../src/envelope/envelope.js';
 import { captureParse, type CaptureParseOptions } from '../src/facets/parse/capture.js';
 import {
-  PARSE_DUMP_VERSION,
   PARSE_TIMING_DIR_ENV,
   parseTotalName,
 } from '../src/facets/parse/dump.js';
 import {
   PARSE_FACET,
-  PARSE_FACET_VERSION,
   type ParseBody,
   ParseBodySchema,
   type ParseCommandStats,
@@ -69,6 +67,16 @@ const HITS_ENV = 'LAB_PARSE_HITS';
 
 /** Per-repeat dump-file counts, comma-separated; the last value repeats. */
 const DUMPS_ENV = 'LAB_PARSE_DUMPS';
+
+/**
+ * Set to `1` to make every dump of a repeat carry the SAME pid.
+ *
+ * The parse worker pool's shape: a `worker_threads` Worker shares its parent's
+ * pid, and each thread's copy of the seam writes its own dump carrying the whole
+ * PROCESS's lifetime. Off by default, so the cases that want two distinct
+ * processes still get them.
+ */
+const SAME_PID_ENV = 'LAB_PARSE_SAME_PID';
 
 /** What a row's attribution says when there is no reading at all. */
 const NOT_MEASURED = 'not-measured';
@@ -124,28 +132,40 @@ const SEAM_SOURCE = [
   `  const docs = nth(${JSON.stringify(DOCS_ENV)}, '4');`,
   `  const total = nth(${JSON.stringify(TOTAL_ENV)}, '100');`,
   `  const hits = nth(${JSON.stringify(HITS_ENV)}, '0');`,
-  `  const files = nth(${JSON.stringify(DUMPS_ENV)}, '1');`,
-  '  for (let index = 0; index < files; index++) {',
+  `  const records = nth(${JSON.stringify(DUMPS_ENV)}, '1');`,
+  // One process writes one file carrying every thread, so the two shapes this
+  // suite needs are different ARRANGEMENTS of the same records: N separate files
+  // of one main thread each is N processes, and one file of N threads is one
+  // process running a pool, of which index 0 is the main thread.
+  `  const pooled = process.env[${JSON.stringify(SAME_PID_ENV)}] === '1';`,
+  '  const thread = (threadId) => ({',
+  '    threadId,',
+  '    cache: { hits, misses: docs },',
+  '    tier: [],',
+  '    kinds: [',
+  '      {',
+  `        kind: ${JSON.stringify(MARKDOWN)},`,
+  '        documents: { count: docs, bytes: docs * 100 },',
+  `        total: { pass: ${JSON.stringify(parseTotalName(MARKDOWN))}, calls: docs, elapsedMs: total },`,
+  '        passes: [',
+  `          { pass: ${JSON.stringify(LEXER)}, calls: docs, elapsedMs: total / 2 },`,
+  "          { pass: 'ast-facts', calls: docs, elapsedMs: total / 4 },",
+  '        ],',
+  '      },',
+  '    ],',
+  '  });',
+  '  const lifetime = { wallMs: 1000, cpuUserMs: 800, cpuSystemMs: 100 };',
+  '  const write = (index, threads) =>',
   '    writeFileSync(',
   '      join(dir, `parse-timing-${process.pid}-${index}.json`),',
-  '      JSON.stringify({',
-  `        dumpVersion: ${String(PARSE_DUMP_VERSION)},`,
-  '        pid: process.pid + index,',
-  '        process: { wallMs: 1000, cpuUserMs: 800, cpuSystemMs: 100 },',
-  '        cache: { hits, misses: docs },',
-  '        kinds: [',
-  '          {',
-  `            kind: ${JSON.stringify(MARKDOWN)},`,
-  '            documents: { count: docs, bytes: docs * 100 },',
-  `            total: { pass: ${JSON.stringify(parseTotalName(MARKDOWN))}, calls: docs, elapsedMs: total },`,
-  '            passes: [',
-  `              { pass: ${JSON.stringify(LEXER)}, calls: docs, elapsedMs: total / 2 },`,
-  "              { pass: 'ast-facts', calls: docs, elapsedMs: total / 4 },",
-  '            ],',
-  '          },',
-  '        ],',
-  '      }),',
+  '      JSON.stringify({ pid: process.pid + index, process: lifetime, threads }),',
   '    );',
+  '  if (pooled) {',
+  '    const threads = [];',
+  '    for (let index = 0; index < records; index++) threads.push(thread(index));',
+  '    write(0, threads);',
+  '  } else {',
+  '    for (let index = 0; index < records; index++) write(index, [thread(0)]);',
   '  }',
   '}',
   '',
@@ -330,7 +350,33 @@ describe('captureParse — one dump directory per repeat', () => {
     );
 
     expect(row.processes).toBe(2);
+    expect(row.mainThreads).toBe(2);
     expect(row.totalMs).toBe(200);
+  });
+
+  it('reports one process running three threads as one lifetime', async () => {
+    const probe = setupProbe(PREFIX);
+
+    // The parse worker pool, end to end: one process, one main thread and two
+    // workers, one file. The lifetime is the PROCESS's (1000ms in this seam), so
+    // a row that charged it once per thread would publish 3000ms of wall clock
+    // for a process that lived 1000 — an inflation of exactly the pool's width,
+    // which reads as a regression of that factor.
+    const row = onlyRow(
+      await capture(probe, { runs: 1, env: { [DUMPS_ENV]: '3', [SAME_PID_ENV]: '1' } }),
+    );
+
+    expect(row.processes).toBe(1);
+    expect(row.mainThreads).toBe(1);
+    expect(row.workerThreads).toBe(2);
+    expect(row.wallMs).toBe(1000);
+    expect(row.cpuUserMs).toBe(800);
+    // And everything each thread measured for ITSELF still sums — three threads
+    // of four documents and 100ms are twelve documents and 300ms, not four
+    // and 100.
+    expect(row.documents).toBe(12);
+    expect(row.cacheMisses).toBe(12);
+    expect(row.totalMs).toBe(300);
   });
 
   it('instruments the measured run and not the cache clear', async () => {
@@ -442,7 +488,6 @@ describe('captureParse — the envelope', () => {
 
     expectStamp(report, {
       facet: PARSE_FACET,
-      facetVersion: PARSE_FACET_VERSION,
       subject: subjectAt(probe.cwd),
       capturedAt: CAPTURED_AT,
     });

@@ -97,10 +97,12 @@ export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
  * One `resourceRealizations` row, varying only the three fields a caller cares
  * about and pinning the rest.
  *
- * Extracted because two suites were spelling the same eighteen-column row out in
- * full — this module's fixed sample and `store.test.ts`'s per-context builder —
- * and eighteen columns restated twice is eighteen chances for the two to drift
- * into describing different rows while both look plausible.
+ * Extracted because two suites were spelling the same row out in full — this
+ * module's fixed sample and `store.test.ts`'s per-context builder — and every
+ * column restated twice is another chance for the two to drift into describing
+ * different rows while both look plausible. Deliberately not numbered: the
+ * column count moves (`mime` was added after this was written) and a stale count
+ * in a docstring is a claim a reader has to disprove.
  *
  * @param fields - The identity, the context, and the path this row realizes
  * @param fields.resourceId - The identity the row realizes
@@ -122,6 +124,9 @@ export function realizationRow(fields: {
     dir: 'docs',
     depth: 1,
     ext: '.md',
+    // Pinned alongside `ext`: these rows are markdown paths, so this is the type
+    // a real population would record rather than a filler.
+    mime: 'text/markdown',
     contentKey: FIRST_BLOB,
     contentState: 'keyed',
     mtime: new Date('2026-08-18T12:34:56.789Z'),

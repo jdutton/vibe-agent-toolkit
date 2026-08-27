@@ -11,7 +11,6 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { REPORT_FORMAT_VERSION } from '../src/envelope/envelope.js';
 import { readReport, reportFileName, writeReport } from '../src/store.js';
 
 import { COORDINATE, makeReport as report, makeReportAt as reportAt } from './report-fixtures.js';
@@ -154,10 +153,19 @@ describe('writeReport and readReport', () => {
     expect(written).toContain('nested');
   });
 
-  it('refuses to write a report claiming another envelope format', async () => {
-    await expect(
-      writeReport(tempDir, report({ formatVersion: REPORT_FORMAT_VERSION + 1 })),
-    ).rejects.toThrow(/formatVersion/);
+  it('refuses to write a report it could not read back', async () => {
+    // This used to compare a `formatVersion` integer, which could only catch a
+    // header somebody had LABELLED wrong. Running the reader's own schema
+    // catches a header that IS wrong — here, an instrument claiming cleanliness
+    // over a build with no checkout to have inspected — and it needs nobody to
+    // remember anything.
+    const impossible = report({
+      coordinate: {
+        ...COORDINATE,
+        instrument: { version: '0.1.42', commit: null, dirty: false },
+      },
+    });
+    await expect(writeReport(tempDir, impossible)).rejects.toThrow(/could not read back/);
   });
 
   it('refuses a missing file rather than throwing', async () => {

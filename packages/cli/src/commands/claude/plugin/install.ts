@@ -19,7 +19,8 @@ import { basename } from 'node:path';
 
 import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import { getClaudeUserPaths, installPlugin, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
-import { normalizedTmpdir, safeExecSync, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
 import * as tar from 'tar';

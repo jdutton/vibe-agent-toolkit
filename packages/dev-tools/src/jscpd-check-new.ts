@@ -7,7 +7,8 @@
 
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 
-import { CommandExecutionError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { CommandExecutionError } from '@vibe-agent-toolkit/utils/process';
 
 import { buildJscpdArgs, JSCPD_CONFIG, safeExecSync } from './common.js';
 

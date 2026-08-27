@@ -30,13 +30,24 @@
  * domain content owned beside the list it frames, so every other consumer of the
  * list reaches it too.
  *
- * ⛔ They belong to the ENVELOPE, never to an answer, and both renderings obey
- * that identically — see {@link ContextEnvelope} for why. Attaching them per
- * answer was not a formatting preference: on a `--all` sweep of this repository
- * (6,224 answers) `--format json` measured 76,877,016 bytes and measures
- * 6,581,468 with the block hoisted — 70.3 MB of ONE byte-identical paragraph,
- * repeated. That is the JSON spelling of the very burial
- * {@link renderEnvelopeText} refuses to do in text.
+ * ⛔ They belong to the ENVELOPE, never to an answer or a region, and every
+ * rendering obeys that identically — see {@link ContextEnvelope} for why.
+ * Attaching them per answer was not a formatting preference: on the whole-tree
+ * sweep `--all` used to be (6,224 answers on this repository) `--format json`
+ * measured 76,877,016 bytes and measures 6,581,468 with the block hoisted — 70.3
+ * MB of ONE byte-identical paragraph, repeated. That is the JSON spelling of the
+ * very burial {@link renderEnvelopeText} refuses to do in text, and it is why
+ * {@link ContextCostMapEnvelope} hoists the same block rather than growing one
+ * per region.
+ *
+ * ## `--all` is a MAP, not a sweep
+ *
+ * ⛔ `--all` emits no per-path documents in any format. It used to answer for
+ * every realized path — 10,438 documents and 205,918 lines on a large adopter
+ * monorepo, ~491 s — which is not a report anyone reads. It now emits the
+ * whole-tree cost map {@link buildContextCostMap} builds, which answers the
+ * question the flag exists for: where in this tree is it expensive to work.
+ * Naming paths is the drill-down, and is the only way to get a per-path answer.
  *
  * ⛔ Nothing here may read as "complete". Many of the stated limits are signed
  * `over-report`/`under-report` and apply whether or not `unknownTokenRows`,
@@ -52,6 +63,7 @@
 import {
   account,
   buildClaudeContextPopulation,
+  buildContextCostMap,
   CLAUDE_CONTEXT_BOUNDS_STATEMENT,
   CLAUDE_CONTEXT_LIMITS,
   CLAUDE_CONTEXT_MODELLED_BEHAVIOURS,
@@ -60,13 +72,16 @@ import {
   whatLoadsAt,
   type AccountedRow,
   type Admission,
+  type ContextCostMap,
   type ContextTotals,
+  type DirectoryCost,
   type DiscoverableContext,
   type DiscoverableRow,
   type GradedCondition,
   type LoadedContextAnswer,
   type ModelledBehaviour,
   type Projection,
+  type RegionCost,
   type StatedLimit,
 } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot } from '@vibe-agent-toolkit/utils';
@@ -85,6 +100,50 @@ const WRAP_COLUMNS = 96;
 
 /** How this command names itself in a refusal. */
 const COMMAND_NAME = 'vat claude context';
+
+/**
+ * How many rows each RANKED section of the `--all` cost map prints.
+ *
+ * ⛔ A cap exists because the previous shape of `--all` had none: it answered for
+ * every realized path, which on a large adopter monorepo was 10,438 documents and
+ * 205,918 lines — an output nobody, human or agent, can act on. The map collapses
+ * that to two ranked lists, and a ranked list is only useful if its head is
+ * readable in one screen. 20 is that head: enough that a real hot spot is
+ * somewhere in it, few enough that the whole report stays scannable.
+ *
+ * ⛔ It bounds the TEXT rendering ONLY. `--format json` carries the map whole —
+ * see {@link ContextCostMapEnvelope} — because a program asked for the map, not
+ * for a summary of it, and a silently-truncated array is a defect a consumer
+ * cannot see.
+ *
+ * ⛔ Whenever it fires, {@link omittedNotice} says how many rows were left out. A
+ * silent cap reads as "this is everything", which is the one thing this report
+ * must never say. Exported so a test pins the notice's arithmetic against the
+ * same number the renderer slices at, rather than against a literal that is free
+ * to disagree with it.
+ */
+export const COST_MAP_ROW_LIMIT = 20;
+
+/**
+ * What the two halves of the cost map mean, and which one is exact.
+ *
+ * Printed under the heading because the numbers are unreadable without it: a
+ * reader who takes the per-region figure for an average, or borrows a
+ * region-mate's on-demand figure, has read the report backwards. This paraphrases
+ * the contracts `RegionCost.alwaysTokens` and `DirectoryCost.onDemandTokens`
+ * state in `@vibe-agent-toolkit/resources` — it asserts nothing this module
+ * decided, and computes nothing.
+ */
+const COST_MAP_METHOD_STATEMENT =
+  'Directories are ranked by what it costs to work in them: the at-launch floor PLUS what fires'
+  + ' on demand there, because a cheap rule under a heavy instruction chain is still an expensive'
+  + ' place to work.'
+  + ' Every working location in a region loads the same files at launch, so the at-launch figure is'
+  + ' EXACT for the whole region rather than an average over it. On-demand cost is reported per'
+  + ' DIRECTORY instead, because a path-scoped rule is admitted where some file under that'
+  + " directory matches its globs and nowhere else — a region-mate's on-demand figure is never a"
+  + " substitute for a directory's own. Only a FILE query is exact for path-scoped rules: name a"
+  + ' path (vat claude context src/index.ts) to get one.';
 
 /** How the answer is rendered. `text` is for a person; the other two are for a program. */
 export type ContextOutputFormat = 'text' | 'yaml' | 'json';
@@ -116,9 +175,60 @@ export interface ClaudeContextOptions {
  * is pure duplication, byte-identical every time.
  */
 export interface ContextEnvelope {
+  /**
+   * Which of this command's two documents this is.
+   *
+   * ⛔ A SHAPE discriminator, not a version. `--all` emits
+   * {@link ContextCostMapEnvelope} and everything else emits this one; the two
+   * share only `root` and the limit block, so a consumer that guessed would read
+   * `answers` off a map and silently get `undefined`. It says nothing about a
+   * schema generation — under pre-1.0 the package version is the only contract,
+   * and this project prohibits emitting a second versioning scheme.
+   */
+  readonly kind: 'context-answers';
   readonly root: string;
   readonly answers: readonly (ContextAnswerDocument | ContextUnknownDocument)[];
   /** What these answers do not settle, in either direction. Stated once. */
+  readonly boundsStatement: string;
+  /** The signed over/under-report bounds on the method. Stated once. */
+  readonly limits: readonly StatedLimit[];
+  /** The vendor behaviours modelled, each cited. Stated once. */
+  readonly modelledBehaviours: readonly ModelledBehaviour[];
+}
+
+/**
+ * The envelope `--all` emits: the whole-tree cost map, not a pile of answers.
+ *
+ * ⛔ **A DIFFERENT document from {@link ContextEnvelope}, deliberately, and
+ * `kind` is what tells them apart.** `--all` used to answer for every realized
+ * path — 10,438 documents on a large adopter monorepo — which answered the
+ * question "what loads at each of ten thousand paths" nobody asked, in place of
+ * "where is it expensive to work here", which is what the flag is for. Naming
+ * paths explicitly is still the per-path answer, and is now the only way to get
+ * one.
+ *
+ * ⛔ The three limit fields ride HERE, exactly as they ride on
+ * {@link ContextEnvelope}, and for the same measured reason: attached per row
+ * they were 70.3 MB of one byte-identical paragraph on a single sweep. They bound
+ * the MEASUREMENT METHOD, so a region carrying its own copy would also read as
+ * though that region had caveats of its own.
+ *
+ * 🔑 `costMap` is nested rather than spread across the envelope so that "the
+ * limits are on the envelope and on nothing inside it" is a structural property a
+ * reader can check by eye, rather than an invariant maintained by hand at each
+ * new field.
+ */
+export interface ContextCostMapEnvelope {
+  /** Which of this command's two documents this is — see {@link ContextEnvelope.kind}. */
+  readonly kind: 'context-cost-map';
+  readonly root: string;
+  /**
+   * The map WHOLE — every region and every directory, never the text
+   * rendering's top {@link COST_MAP_ROW_LIMIT}. A program asked for the map, and
+   * a silently-shortened array is a truncation its consumer cannot detect.
+   */
+  readonly costMap: ContextCostMap;
+  /** What this map does not settle, in either direction. Stated once. */
   readonly boundsStatement: string;
   /** The signed over/under-report bounds on the method. Stated once. */
   readonly limits: readonly StatedLimit[];
@@ -196,7 +306,11 @@ export function createContextCommand(): Command {
         'json',
       ]).default('text'),
     )
-    .option('--all', 'Answer for every path the projection realized, instead of named paths')
+    .option(
+      '--all',
+      'Report the whole-tree cost map — launch cost per region, total cost per directory —'
+      + ' instead of answering for named paths',
+    )
     .option(
       '--discoverable',
       'Also report what the loaded files LINK TO in one hop and the harness does not load',
@@ -215,25 +329,37 @@ Description:
   Several paths may be named at once. The tree is enumerated ONCE and every
   path answered from that one population, so asking about ten paths together
   costs what asking about one costs — not ten times it. No paths means the
-  current directory; --all sweeps every path the projection realized.
+  current directory.
 
-  --discoverable adds a second, DISJOINT set: what the loaded files LINK to in
-  one hop and the harness does not load. A markdown link is voluntary — nothing
-  loads it — so its tokens are reported separately and never added to the
-  estimate. A target already in the loaded set is excluded, so the two sets
-  partition and can be read alone or added.
+  --all answers a different question: where in this tree is it expensive to
+  work. It reports launch cost once per REGION (every directory inheriting one
+  CLAUDE.md chain — exact for all of them, not an average) and, per DIRECTORY,
+  the TOTAL of that launch floor and what fires on demand there (a path-scoped
+  rule fires for some directories and not others, so the on-demand half is
+  never borrowed from a region-mate). Directories are ranked by that total. It
+  emits no per-path documents; name paths for those. --discoverable applies to
+  named paths only.
 
 Output:
+  - kind:    context-answers for named paths, context-cost-map for --all —
+             the two are different documents, so never guess which you hold
   - root:    the corpus root that was enumerated
-  - answers: one document per requested path, in the order requested — always
-             a list, even for a single path, so consumers never branch on count
-  - totals:  always/on-demand token estimates, plus counts of rows whose size
-             is unknown, skipped by the 4 MiB cliff, or pruned behind one
-  - rows:    one per resource, with every predicate that admitted it
-  - limits:  what these answers deliberately do not settle, in both directions.
-             On the ENVELOPE beside root, never on an answer — they bound the
-             method rather than any one path, so they are stated exactly once
-             however many paths were asked about
+  - answers: (context-answers) one document per requested path, in the order
+             requested — always a list, even for one path, so consumers never
+             branch on count; with totals, rows, and every admitting predicate
+  - costMap: (context-cost-map) regions worst-first by launch cost, directories
+             worst-first by total cost (launch + on demand), the tree-level
+             roll-up of rows nothing could be measured for, plus the counts of
+             locations evaluated, queried, and left out for want of an answer
+  - limits:  what this run deliberately does not settle, in both directions.
+             On the ENVELOPE beside root, never on an answer or a region — they
+             bound the method rather than any one path, so they are stated
+             exactly once however much was measured
+
+  Counts of rows whose size is unknown, skipped by the 4 MiB cliff, or pruned
+  behind one are reported beside every estimate and NEVER summed into it. The
+  text rendering prints the top ${COST_MAP_ROW_LIMIT} of each ranked list and says how many it
+  left out; --format json carries the map whole.
 
   A path the projection never realized answers kind: unknown — never zero.
   Diagnostics and blob-stage refusals go to stderr; stdout is the document.
@@ -252,7 +378,13 @@ Example:
 /**
  * Action handler for `vat claude context [path]`.
  *
- * @param pathArg - The path to answer for, or undefined for the current directory
+ * ⛔ The two branches produce DIFFERENT documents and there is no third mode: a
+ * `--per-path` escape hatch back to the old sweep is exactly the backward
+ * compatibility shim this project forbids pre-1.0, and naming paths explicitly
+ * already gives the per-path answer — now from a population the caller pays for
+ * once instead of ten thousand times.
+ *
+ * @param pathArgs - The paths to answer for; empty means the current directory
  * @param options - The command's flags
  */
 export async function claudeContextCommand(
@@ -270,15 +402,21 @@ export async function claudeContextCommand(
     // be told they mistyped. `--all` has no arguments to check.
     const requested = sweep ? [] : targetsWithin(root, pathArgs);
     const projection = await populateContext(root, logger);
-    const targets = sweep ? everyRealizedPath(projection) : requested;
     const format = options.format ?? 'text';
-    // ONE population, N queries. `whatLoadsAt` is a pure read of materialised
-    // tables, so the marginal cost of another path is a map lookup — which is
-    // the whole reason this command takes a list rather than being run twice.
-    const answers = targets.map(
-      (target) => documentFor(target, projection, root, options.discoverable === true),
-    );
-    emit(contextEnvelope(root, answers), renderEnvelopeText(answers), format);
+    if (sweep) {
+      // Every number in the map is decided in `@vibe-agent-toolkit/resources`.
+      // This branch calls one function and formats what it returns.
+      const map = buildContextCostMap(projection);
+      emit(costMapEnvelope(root, map), renderCostMapText(map), format);
+    } else {
+      // ONE population, N queries. `whatLoadsAt` is a pure read of materialised
+      // tables, so the marginal cost of another path is a map lookup — which is
+      // the whole reason this command takes a list rather than being run twice.
+      const answers = requested.map(
+        (target) => documentFor(target, projection, root, options.discoverable === true),
+      );
+      emit(contextEnvelope(root, answers), renderEnvelopeText(answers), format);
+    }
     // ⛔ Always 0. There is no threshold in this command and there is not going
     // to be one — a number that fails a build is a number people learn to stop
     // reading. The explicit exit matches every other leaf here and guarantees the
@@ -365,8 +503,36 @@ export function contextEnvelope(
   answers: readonly (ContextAnswerDocument | ContextUnknownDocument)[],
 ): ContextEnvelope {
   return {
+    kind: 'context-answers',
     root,
     answers,
+    boundsStatement: CLAUDE_CONTEXT_BOUNDS_STATEMENT,
+    limits: CLAUDE_CONTEXT_LIMITS,
+    modelledBehaviours: CLAUDE_CONTEXT_MODELLED_BEHAVIOURS,
+  };
+}
+
+/**
+ * Wrap the `--all` cost map in its envelope, with the limits attached ONCE.
+ *
+ * The mirror of {@link contextEnvelope}, and deliberately its own function rather
+ * than a generic over both: the two envelopes differ in more than one field, and
+ * a shared builder taking a payload would make `kind` a parameter — which is how
+ * a discriminator stops discriminating.
+ *
+ * ⛔ Exported so a test can pin, over a many-region map, that the limit block
+ * appears exactly ONCE in the serialized document. Presence passes on a copy per
+ * region, which is the 70.3 MB defect this command already shipped once.
+ *
+ * @param root - The corpus root that was enumerated
+ * @param costMap - The whole-tree cost map, carried entire
+ * @returns The envelope, ready to serialize
+ */
+export function costMapEnvelope(root: string, costMap: ContextCostMap): ContextCostMapEnvelope {
+  return {
+    kind: 'context-cost-map',
+    root,
+    costMap,
     boundsStatement: CLAUDE_CONTEXT_BOUNDS_STATEMENT,
     limits: CLAUDE_CONTEXT_LIMITS,
     modelledBehaviours: CLAUDE_CONTEXT_MODELLED_BEHAVIOURS,
@@ -388,41 +554,6 @@ export function contextEnvelope(
 function targetsWithin(root: string, pathArgs: readonly string[]): string[] {
   if (pathArgs.length === 0) return [targetPathWithin(root, undefined, COMMAND_NAME)];
   return pathArgs.map((pathArg) => targetPathWithin(root, pathArg, COMMAND_NAME));
-}
-
-/**
- * Every path the projection realized, sorted, for `--all`.
- *
- * Deduplicated because one identity may be realized at several paths and the
- * question this command answers is asked of a PATH — two realizations of one
- * identity are two legitimate questions, but the same path twice is not.
- *
- * ⚠️ Sorted by code point rather than left in table order: the table's order is
- * an artefact of population, so a caller diffing two sweeps would see spurious
- * churn. Sorting makes the sweep comparable across runs.
- *
- * @param projection - The populated projection
- * @returns Root-relative paths, deduplicated and sorted
- */
-function everyRealizedPath(projection: Projection): string[] {
-  return [...new Set(projection.resourceRealizations.map((row) => row.path))].sort(comparePaths);
-}
-
-/**
- * Order two paths by code point.
- *
- * ⛔ Not `localeCompare`: this ordering is consumed by machines diffing two
- * sweeps, and a locale-sensitive comparator makes the same corpus sort
- * differently on two developers' machines — a diff that reports churn nobody
- * caused.
- *
- * @param left - The first path
- * @param right - The second path
- * @returns Negative, zero or positive, per `Array#sort`
- */
-function comparePaths(left: string, right: string): number {
-  if (left < right) return -1;
-  return left > right ? 1 : 0;
 }
 
 /**
@@ -451,10 +582,10 @@ function documentFor(
  * ⛔ The limits are printed ONCE, after the last answer, rather than per answer.
  * They are properties of the MEASUREMENT METHOD, not of any one path, so
  * repeating them per path would read as though each answer carried its own
- * caveats — and on a `--all` sweep would bury the answers under thousands of
- * identical paragraphs. A sweep with no answered path prints no limits at all,
- * for the same reason {@link unknownDocumentFor} omits them: nothing was
- * measured, so there is no measurement to bound.
+ * caveats — and across a many-path run would bury the answers under identical
+ * paragraphs. A run with no answered path prints no limits at all, for the same
+ * reason {@link unknownDocumentFor} omits them: nothing was measured, so there is
+ * no measurement to bound.
  *
  * @param documents - The answers, in requested order
  * @returns The text rendering, newline-terminated
@@ -470,6 +601,313 @@ function renderEnvelopeText(
 }
 
 /**
+ * Render the `--all` cost map for a person: where in this tree it is expensive
+ * to work.
+ *
+ * Four sections, in the order a reader needs them — the region table (what each
+ * part of the tree costs at launch), the regions' own files (what they are paying
+ * for), the directories that cost the most to work in overall, and what the map
+ * looked at — then the limits, ONCE.
+ *
+ * ⛔ Every ranked section is capped at {@link COST_MAP_ROW_LIMIT} and every cap
+ * that fires announces itself. ⛔ Nothing here sums an unknown into a total or
+ * calls any figure complete: the counted-not-summed rows are printed beside each
+ * estimate, and the stated limits apply whether or not those counters are zero.
+ *
+ * ⛔ Exported so the properties above can be TESTED with inputs a real tree never
+ * produces — a null token count, more directories than the cap. On this repository
+ * every file has a measured blob, so an assertion driven by a real run compares
+ * `false === false` and would keep passing against a `?? 0`.
+ *
+ * @param map - The whole-tree cost map from `buildContextCostMap`
+ * @returns The text rendering, newline-terminated
+ */
+export function renderCostMapText(map: ContextCostMap): string {
+  const lines = [
+    'Context cost by region — what it costs to work in each part of this tree',
+    '',
+    ...wrapStatement(COST_MAP_METHOD_STATEMENT, '  '),
+    '',
+    ...regionTable(map.regions),
+    ...map.regions.slice(0, COST_MAP_ROW_LIMIT).flatMap(regionDetail),
+    ...directoryTable(map.directories),
+    ...coverageLines(map),
+  ];
+  return `${lines.join('\n')}\n${limitSection().join('\n')}\n`;
+}
+
+/**
+ * The ranked region table: what a session pays at launch in each part of the tree.
+ *
+ * @param regions - The regions, already worst-first by launch cost
+ * @returns The section's lines, blank-terminated
+ */
+function regionTable(regions: readonly RegionCost[]): string[] {
+  const shown = regions.slice(0, COST_MAP_ROW_LIMIT);
+  const lines = ['  at launch   locations   region'];
+  for (const region of shown) {
+    lines.push(
+      `  ${padCount(region.alwaysTokens, 9)}   ${padCount(region.locationCount, 9)}`
+      + `   ${displayPath(region.representative)}`,
+    );
+  }
+  lines.push(...omittedNotice(shown.length, regions.length, 'region', 'regions'), '');
+  return lines;
+}
+
+/**
+ * One region's launch-time bill, itemised.
+ *
+ * 🔑 The rows are rendered by {@link rowSection}, the same function the per-path
+ * answer uses, so a file reads identically in both reports and there is exactly
+ * one admission-describer. Its `loadClass` filter is a no-op here — `alwaysRows`
+ * is already that class — and passing it anyway keeps the call honest rather than
+ * relying on the caller's guarantee.
+ *
+ * @param region - The region to itemise
+ * @returns The section's lines, blank-terminated
+ */
+function regionDetail(region: RegionCost): string[] {
+  return [
+    `Region ${displayPath(region.representative)} — ${groupDigits(region.alwaysTokens)} tokens`
+    + ` at launch, ${countOf(region.locationCount, 'location', 'locations')}`,
+    ...quietCounterLines(region),
+    ...nestBlock(rowSection('Loaded at launch', region.alwaysRows, 'always')),
+    '',
+  ];
+}
+
+/**
+ * A region's three counters, printed only when one of them has something to say.
+ *
+ * ⛔ **This suppression is safe ONLY because the tree-level roll-up in
+ * {@link coverageLines} prints UNCONDITIONALLY, zeros included.** The honesty
+ * rule in this lane is that a reader must never be able to mistake "nothing here
+ * was unmeasurable" for "nobody counted", and after this suppression the roll-up
+ * is the single thing in the report carrying that. Silence a region's zeros only
+ * while a tree-level zero is still printed somewhere; drop the roll-up and this
+ * function has to go back to unconditional.
+ *
+ * ⛔ Deliberately NOT applied to {@link estimateLines}. A single-path answer has
+ * no roll-up to fall back on, so its counters are the only statement that the
+ * rows were counted at all and must keep printing whatever their values.
+ *
+ * The measured motivation: nine regions on this repository printed 27 lines of
+ * pure zeros, burying the launch bills the section exists to show.
+ *
+ * @param region - The region whose counters to print
+ * @returns The three lines, or none when all three are zero
+ */
+function quietCounterLines(region: RegionCost): string[] {
+  const anything = region.unknownTokenRows + region.skippedOversizeRows + region.prunedRows;
+  if (anything === 0) return [];
+  // Whole block or nothing: a reader comparing two regions must be comparing the
+  // same three lines, not one region's selected non-zeros.
+  return counterLines(region);
+}
+
+/**
+ * Indent a borrowed section one level, and drop the blank line it terminates with.
+ *
+ * {@link rowSection} is written for the per-path answer, where it sits at the top
+ * level and separates itself from what follows. Nested under a region heading it
+ * needs a level of indent, and its terminator would double the region's own — so
+ * this drops every blank rather than the last one specifically, which is exact
+ * because that section emits no interior blanks.
+ *
+ * @param lines - The borrowed section's lines
+ * @returns The same lines, indented, with blanks removed
+ */
+function nestBlock(lines: readonly string[]): string[] {
+  return lines.filter((line) => line !== '').map((line) => `  ${line}`);
+}
+
+/**
+ * The ranked directory table: where in this tree it is most expensive to work.
+ *
+ * ⛔ Ordered and headed by TOTAL cost — the launch floor plus the on-demand
+ * burden — which is the key `buildContextCostMap` sorts by. Ranking on a key the
+ * producer did not sort on would make the column descend non-monotonically and
+ * read as a bug; ranking on the on-demand half alone would answer "where does a
+ * rule fire", which is not the question the map is for.
+ *
+ * ⛔ Every one of the three figures is READ. The CLI does not add
+ * `alwaysTokens` to `onDemandTokens` here — that sum is `DirectoryCost.
+ * totalTokens`, computed where both halves are known to be charged-only totals.
+ * A second sum in this module would be a second, unowned model of what "cost"
+ * means, free to disagree with the ranking beside it. Both halves stay in the
+ * table because they are acted on differently: the floor by moving instructions,
+ * the burden by scoping rules.
+ *
+ * @param directories - The directories, already worst-first by total cost
+ * @returns The section's lines, blank-terminated, or none when there are none
+ */
+function directoryTable(directories: readonly DirectoryCost[]): string[] {
+  if (directories.length === 0) return [];
+  const shown = directories.slice(0, COST_MAP_ROW_LIMIT);
+  const lines = [
+    'Most expensive directories to work in — at launch PLUS what fires on demand there',
+    '      total   at launch   on demand   directory',
+  ];
+  for (const directory of shown) {
+    lines.push(
+      `  ${padCount(directory.totalTokens, 9)}   ${padCount(directory.alwaysTokens, 9)}`
+      + `   ${padCount(directory.onDemandTokens, 9)}   ${displayPath(directory.directory)}`
+      // ⛔ The unknown-row suffix appears only when there is one, for the same
+      // reason and under the same condition as {@link quietCounterLines}: the
+      // tree-level roll-up in {@link coverageLines} states unconditionally that
+      // these rows were counted, so twenty repetitions of "0 rows of unknown
+      // size" buy nothing and crowd out the paths the table is ranking. Remove
+      // the roll-up and this suffix has to become unconditional again.
+      + unknownRowSuffix(directory.unknownTokenRows),
+    );
+  }
+  lines.push(...omittedNotice(shown.length, directories.length, 'directory', 'directories'), '');
+  return lines;
+}
+
+/**
+ * The note that a directory's on-demand cost is an under-report, when it is.
+ *
+ * @param unknownTokenRows - On-demand rows at that directory whose size is unknown
+ * @returns The suffix, or nothing at all when every row was measured
+ */
+function unknownRowSuffix(unknownTokenRows: number): string {
+  if (unknownTokenRows === 0) return '';
+  return ` · ${countOf(unknownTokenRows, 'row', 'rows')} of unknown size, counted not summed`;
+}
+
+/**
+ * What the map looked at, including the locations it could not answer for.
+ *
+ * ⛔ `skippedUnknownLocations` is PRINTED, not folded away. A location left out
+ * because a query it needed answered `unknown` is a hole in the map, and a report
+ * that quietly dropped it would be indistinguishable from one where every
+ * location answered.
+ *
+ * ⛔ The tree-level roll-up prints UNCONDITIONALLY, all-zero included, and that
+ * is load-bearing: {@link quietCounterLines} suppresses the per-region zeros, so
+ * this is the only place left saying the rows were counted at all. A zero here is
+ * a measurement; an absent line would be indistinguishable from nobody looking.
+ *
+ * @param map - The cost map
+ * @returns The section's lines, blank-terminated
+ */
+function coverageLines(map: ContextCostMap): string[] {
+  return [
+    'What this map looked at',
+    `  working locations evaluated   ${groupDigits(map.evaluatedDirectories)}`,
+    `  queries issued                ${groupDigits(map.queriedDirectories)}`,
+    `  no answer of their own        ${countOf(map.skippedUnknownLocations, 'location', 'locations')}`
+    + ' (left out of the table above, never counted as zero)',
+    '  rows this map could not measure, over every region and directory above:',
+    ...counterLines(map.unmeasuredRows),
+    '',
+  ];
+}
+
+/**
+ * Say how many ranked rows were left unprinted, or say nothing when none were.
+ *
+ * ⛔ The COUNT is the point. "Some rows were omitted" leaves a reader unable to
+ * tell a table that dropped three rows from one that dropped three thousand, and
+ * a cap with no notice at all reads as "this is everything" — which is the claim
+ * this whole report is built not to make.
+ *
+ * @param shown - How many rows were printed
+ * @param total - How many there were
+ * @param singular - What one omitted row is, for the `total - shown === 1` case
+ * @param plural - What several of them are
+ * @returns The notice line, or none when nothing was truncated
+ */
+function omittedNotice(shown: number, total: number, singular: string, plural: string): string[] {
+  if (total <= shown) return [];
+  const omitted = total - shown;
+  const noun = omitted === 1 ? singular : plural;
+  return [
+    `  ... and ${groupDigits(omitted)} more ${noun} not shown —`
+    + ` this is the ${groupDigits(shown)} most expensive, not the whole tree`,
+  ];
+}
+
+/**
+ * The three row counters that keep an estimate from reading as settled.
+ *
+ * Shared by the per-path answer and by every region of the cost map, because it
+ * is one rule stated in one place: a row whose size is unknown, whose file the
+ * 4 MiB cliff skipped, or which sits behind such a file is COUNTED here and
+ * summed into nothing. Two copies of these three lines would be two places for a
+ * `?? 0` to appear in.
+ *
+ * @param counters - Anything carrying the three counts — `ContextTotals`, or a
+ *   region's own always-row counts
+ * @returns The three lines, unterminated
+ */
+function counterLines(counters: {
+  readonly unknownTokenRows: number;
+  readonly skippedOversizeRows: number;
+  readonly prunedRows: number;
+}): string[] {
+  return [
+    `  size unknown          ${countOf(counters.unknownTokenRows, 'row', 'rows')}`
+    + ' (counted, never summed as zero)',
+    `  skipped over 4 MiB    ${countOf(counters.skippedOversizeRows, 'row', 'rows')}`,
+    `  pruned behind a skip  ${countOf(counters.prunedRows, 'row', 'rows')}`,
+  ];
+}
+
+/**
+ * A count with its noun, digit-grouped and agreeing in number.
+ *
+ * The alternative — a bare `${n} ${plural}` — prints "1 locations" whenever a
+ * region has exactly one, which is the common case on a tree with many small
+ * packages and reads as a rendering bug the moment anyone sees it. Both forms are
+ * PARAMETERS rather than a suffixed `s`, because the nouns this report uses are
+ * not all regular ("directory" is the counter-example living two functions away).
+ *
+ * @param value - The count
+ * @param singular - The noun for exactly one
+ * @param plural - The noun for any other count, zero included
+ * @returns The count and its noun
+ */
+function countOf(value: number, singular: string, plural: string): string {
+  return `${groupDigits(value)} ${value === 1 ? singular : plural}`;
+}
+
+/**
+ * A count, digit-grouped and right-aligned to a column width.
+ *
+ * @param value - The count
+ * @param width - The column width; a longer number overflows rather than truncates
+ * @returns The padded text
+ */
+function padCount(value: number, width: number): string {
+  return groupDigits(value).padStart(width);
+}
+
+/**
+ * A non-negative integer with thousands separators.
+ *
+ * ⚠️ Written out by hand rather than through `toLocaleString` or `Intl`: those
+ * are ICU- and locale-dependent, so the same tree would render `38,412` on one
+ * machine and `38 412` on another, and this report is exactly the kind of output
+ * people diff between machines. Every number reaching it is a token estimate or a
+ * row count, so the negative case cannot arise and is not invented for.
+ *
+ * @param value - The count
+ * @returns The grouped digits
+ */
+function groupDigits(value: number): string {
+  const digits = String(value);
+  let grouped = '';
+  for (const [index, digit] of [...digits].entries()) {
+    if (index > 0 && (digits.length - index) % 3 === 0) grouped += ',';
+    grouped += digit;
+  }
+  return grouped;
+}
+
+/**
  * Populate the Claude-context lane for one tree.
  *
  * @param root - The absolute corpus root
@@ -481,7 +919,7 @@ function renderEnvelopeText(
 async function populateContext(root: string, logger: Logger): Promise<Projection> {
   return withPopulationCache({ root }, async (cache) => {
     const gitTracker = await gitTrackerForProjectRoot(root);
-    return buildClaudeContextPopulation({ root, ...populationWiring(logger, gitTracker, cache) });
+    return buildClaudeContextPopulation({ root, ...populationWiring(logger, gitTracker, cache, root) });
   });
 }
 
@@ -587,9 +1025,11 @@ function discoverySection(discoverable: DiscoverableContext | null): string[] {
   const { rows, totals } = discoverable;
   const lines = [
     'Discoverable in one hop — LINKED from the loaded files, NOT loaded',
-    `  ${totals.discoverableTokens} tokens if every link were followed once (a ceiling, never a charge)`,
-    `  ${totals.unknownTokenRows} size unknown · ${totals.unrealizedRows} not in this tree`
-    + ` · ${totals.outsideRootRows} outside the root`,
+    `  ${groupDigits(totals.discoverableTokens)} tokens if every link were followed once`
+    + ' (a ceiling, never a charge)',
+    `  ${groupDigits(totals.unknownTokenRows)} size unknown`
+    + ` · ${groupDigits(totals.unrealizedRows)} not in this tree`
+    + ` · ${groupDigits(totals.outsideRootRows)} outside the root`,
   ];
   for (const row of rows) {
     lines.push(`  ${displayPath(row.path)} — ${discoverableCost(row)}`);
@@ -616,7 +1056,7 @@ function discoverableCost(row: DiscoverableRow): string {
   if (row.reach === 'outside-root') return 'outside the corpus root, so its size is unknowable here';
   if (row.reach === 'unrealized') return 'not realized in this projection, so nothing is known of it';
   if (row.tokens === null) return 'size unknown: no measured blob, so it is counted, not summed';
-  return `${row.tokens} tokens if opened`;
+  return `${groupDigits(row.tokens)} tokens if opened`;
 }
 
 /**
@@ -642,11 +1082,12 @@ function headingLines(document: ContextAnswerDocument): string[] {
 function estimateLines(totals: ContextTotals): string[] {
   return [
     'Token estimate',
-    `  always-loaded         ${totals.alwaysTokens} tokens`,
-    `  on-demand             ${totals.onDemandTokens} tokens`,
-    `  size unknown          ${totals.unknownTokenRows} rows (counted, never summed as zero)`,
-    `  skipped over 4 MiB    ${totals.skippedOversizeRows} rows`,
-    `  pruned behind a skip  ${totals.prunedRows} rows`,
+    `  always-loaded         ${groupDigits(totals.alwaysTokens)} tokens`,
+    `  on-demand             ${groupDigits(totals.onDemandTokens)} tokens`,
+    // ⛔ UNCONDITIONAL here, unlike a region's — see {@link quietCounterLines}.
+    // A single-path answer has no tree-level roll-up to fall back on, so these
+    // three lines are its only statement that the rows were counted at all.
+    ...counterLines(totals),
     '',
   ];
 }
@@ -705,7 +1146,12 @@ export function chargeText(row: AccountedRow): string {
     return 'not reached: every import route into it passes through a skipped file';
   }
   if (row.tokens === null) return 'size unknown: no measured blob, so it is counted, not summed';
-  return `${row.tokens} tokens`;
+  // ⚠️ Grouped through the SAME helper the tables use. Two spellings of one
+  // quantity — `14,396` in a column and `8385` on the row ten lines below it —
+  // read as a bug in the measurement rather than as a formatting choice. This
+  // changes only how the number is written, never whether one is written: the
+  // null branch above is what keeps an unknown size out of the digits entirely.
+  return `${groupDigits(row.tokens)} tokens`;
 }
 
 /**

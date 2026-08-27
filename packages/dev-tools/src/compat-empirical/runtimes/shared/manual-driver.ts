@@ -10,12 +10,14 @@
 import { cpSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 
 import {
-  detectInvocationFromTranscript,
   mkdirSyncReal,
   normalizedTmpdir,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import {
+  detectInvocationFromTranscript,
+} from '@vibe-agent-toolkit/utils/skill-test';
 
 import { promptForManualOutcome } from '../../cli/prompt-user.js';
 import type { StagedSkill } from '../../corpus/fetch-sources.js';

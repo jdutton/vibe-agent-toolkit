@@ -87,7 +87,10 @@
  * first place; the two moves look alike and are not.
  */
 
-import { safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
+
+import type { CollectionConfig } from '../schemas/project-config.js';
 
 import { ContributorRegistry } from './contributor.js';
 import { AgenticConventionContributor } from './contributors/agentic-convention.js';
@@ -201,7 +204,7 @@ export interface ResourcePopulation {
  * | cold | 1,363 ms | ~7,615 ms | 6,839 ms |
  *
  * The warming buys the 176 admitted parses, which the walker arm pays in full at
- * `resource-registry:add-resource` for 1,299 ms. So the stage spent 6,839 ms to
+ * `resource-registry:admit` for 1,299 ms. So the stage spent 6,839 ms to
  * save 1,299 ms; the remainder is ~1,900 blobs parsed for nobody. Skipping it
  * moves those 176 parses back to `add-resource` and puts this lane at roughly
  * 1.5× the walk instead of 5.6×.
@@ -228,6 +231,7 @@ export async function buildResourcePopulation(options: {
   root: string;
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
+  collections?: Readonly<Record<string, CollectionConfig>> | undefined;
 }): Promise<ResourcePopulation> {
   const root = safePath.resolve(options.root);
 

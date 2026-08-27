@@ -20,19 +20,52 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   computeContentKey,
+  isParsableContent,
+  type KeyedContent,
+  type ParserKind,
   parserKindForPath,
   readContentWithKey,
 } from '../src/content-key.js';
 
 describe('parserKindForPath', () => {
   it.each([
+    // Extension → MIME → parser.
     ['/a/b/doc.md', 'markdown'],
     ['/a/b/doc.markdown', 'markdown'],
-    ['/a/b/README', 'markdown'],
+    ['/a/b/notes.txt', 'markdown'],
     ['/a/b/page.html', 'html'],
     ['/a/b/page.htm', 'html'],
     ['/a/b/page.HTML', 'html'],
     ['/a/b/page.HtM', 'html'],
+
+    // Extensionless WELL-KNOWNS keep the answer the extension-only routing gave
+    // them, by a different route: no extension → basename table → `text/plain` →
+    // markdown. Verified, not assumed — this pin predates the MIME rung and the
+    // fact that it survives it unchanged is the evidence that no repository lost
+    // its README to the new routing.
+    ['/a/b/README', 'markdown'],
+    ['/a/b/readme', 'markdown'],
+    ['/a/b/CHANGELOG', 'markdown'],
+
+    // ...and nothing else extensionless does. Under the old rule this was
+    // markdown because the else-branch caught everything.
+    ['/a/b/NOTES', 'none'],
+    ['/a/b/.gitignore', 'none'],
+
+    // The reason the third kind exists. Each of these was fed to remark before:
+    // 5,329 `.ts` and 713 `.json` files in one measured adopter tree, which is
+    // where 64.7% of all reference rows and 100% of dangling-reference warnings
+    // came from. A JSON-Schema `pattern` of `"^[a-z][a-z0-9-]*$"` is two
+    // adjacent bracket groups, i.e. a CommonMark reference link.
+    ['/a/b/module.ts', 'none'],
+    ['/a/b/schema.json', 'none'],
+    ['/a/b/script.py', 'none'],
+    ['/a/b/style.css', 'none'],
+    ['/a/b/bun.lock', 'none'],
+
+    // No name for it is still not a parser. `none` says "no document parser
+    // ran", never "we know this is prose".
+    ['/a/b/mystery.fraud-ingest-job', 'none'],
   ] as const)('routes %s to %s', (path, expected) => {
     expect(parserKindForPath(path)).toBe(expected);
   });
@@ -40,6 +73,35 @@ describe('parserKindForPath', () => {
   it('does not treat a directory named *.html as html by accident of a suffix elsewhere', () => {
     // Only the trailing extension decides. `x.html.md` is markdown.
     expect(parserKindForPath('/a/x.html.md')).toBe('markdown');
+  });
+
+  it('never answers null — every path gets a kind, because every blob gets a row', () => {
+    // The routing function stays NON-NULLABLE on purpose. A file nothing parses
+    // still earns a `blobs` row (without one there is no `tokenEstimate`,
+    // `whatLoadsAt` reports `tokens: null`, and the context-accounting lane
+    // reports 'unknown-size'), a row needs a content key, and a key needs a
+    // parser-kind prefix. So the absence of a parser has to be a VALUE.
+    for (const path of ['/a/b/x.ts', '/a/b/x.md', '/a/b/x.html', '/a/b/x', '/a/b/.env']) {
+      expect(parserKindForPath(path)).not.toBeNull();
+    }
+  });
+});
+
+describe('isParsableContent', () => {
+  const keyedOf = (parserKind: ParserKind): KeyedContent => ({
+    content: '',
+    decoding: { encoding: 'utf-8', encodingSource: 'assumed', replacementCharacters: 0 },
+    key: computeContentKey(new Uint8Array(), parserKind),
+    parserKind,
+    byteLength: 0,
+  });
+
+  it.each([
+    ['markdown', true],
+    ['html', true],
+    ['none', false],
+  ] as const)('reports %s as parsable=%s', (kind, expected) => {
+    expect(isParsableContent(keyedOf(kind))).toBe(expected);
   });
 });
 
@@ -68,18 +130,34 @@ describe('computeContentKey', () => {
     expect(a).toBe(b);
   });
 
-  it('separates the two parsers ON THE EMPTY FILE', () => {
+  it('separates ALL THREE kinds ON THE EMPTY FILE', () => {
     // This is the realizable case: git keys an empty file as e69de29… whatever
     // its extension, so a bytes-only key serves an HTML parse for a markdown
     // document and vice versa.
-    expect(computeContentKey(bytes(''), 'markdown')).not.toBe(computeContentKey(bytes(''), 'html'));
+    const keys = (['markdown', 'html', 'none'] as const).map((kind) => computeContentKey(bytes(''), kind));
+    expect(new Set(keys).size).toBe(3);
   });
 
-  it('separates the two parsers in the DIGEST, not merely in the prefix', () => {
-    const md = computeContentKey(bytes('<p>x</p>'), 'markdown');
-    const html = computeContentKey(bytes('<p>x</p>'), 'html');
+  it('separates the kinds in the DIGEST, not merely in the prefix', () => {
     const digestOf = (key: string): string => key.slice(key.lastIndexOf('.') + 1);
-    expect(digestOf(md)).not.toBe(digestOf(html));
+    const digests = (['markdown', 'html', 'none'] as const).map((kind) =>
+      digestOf(computeContentKey(bytes('<p>x</p>'), kind)),
+    );
+    expect(new Set(digests).size).toBe(3);
+  });
+
+  it('⭐ re-keys a file whose ROUTING changed, with no version constant to bump', () => {
+    // The reason `none` is mixed into the preimage rather than being a bare
+    // "skip" flag downstream. A `.ts` file used to route to markdown and now
+    // routes to `none`; its bytes did not change, so a key over bytes alone would
+    // serve the stale remark facts — 64.7% of the reference rows this change
+    // exists to delete — out of a cache that looks perfectly healthy. Because
+    // the kind is IN the digest, every such entry is unreachable the moment the
+    // routing moves, and no hand-maintained schema/cache version decides it.
+    // (Hand-maintained version constants are prohibited in this project; this is
+    // what replaces one.)
+    const source = bytes('const pattern = "^[a-z][a-z0-9-]*$";\n');
+    expect(computeContentKey(source, 'none')).not.toBe(computeContentKey(source, 'markdown'));
   });
 
   it('distinguishes line endings', () => {
@@ -138,7 +216,10 @@ describe('computeContentKey', () => {
 
   it('is domain-tagged so it can never be read as a git SHA-1', () => {
     const key = computeContentKey(bytes('x'), 'markdown');
-    expect(key).toMatch(/^(markdown|html)\.[0-9a-f]{64}$/);
+    // Hand-written on purpose, and deliberately NOT `CONTENT_KEY_PATTERN`: this
+    // assertion is the independent second opinion the exported pattern is
+    // checked against, and reusing it would make the check circular.
+    expect(key).toMatch(/^(markdown|html|none)\.[0-9a-f]{64}$/);
     // 64 hex chars, and never bare hex — a git blob SHA-1 is 40 bare hex chars,
     // so the two keyspaces cannot be mixed by accidental hex length.
     expect(key).not.toMatch(/^[0-9a-f]+$/);
@@ -164,6 +245,20 @@ describe('readContentWithKey', () => {
     expect(keyed.parserKind).toBe('markdown');
     expect(keyed.key).toBe(computeContentKey(bytes('# heading\n'), 'markdown'));
     expect(keyed.byteLength).toBe(10);
+  });
+
+  it('reads and keys a file NO parser will run over', async () => {
+    // `none` is not a refusal to read — it is a refusal to PARSE. The bytes are
+    // still read, still decoded and still keyed, because the blob row and its
+    // `tokenEstimate` depend on them; only the document parser is skipped.
+    const file = safePath.join(dir, 'module.ts');
+    writeFileSync(file, 'export const x = 1;\n', 'utf-8');
+    const keyed = await readContentWithKey(file, parserKindForPath(file));
+    expect(keyed.parserKind).toBe('none');
+    expect(keyed.key.startsWith('none.')).toBe(true);
+    expect(keyed.content).toBe('export const x = 1;\n');
+    expect(keyed.byteLength).toBe(20);
+    expect(isParsableContent(keyed)).toBe(false);
   });
 
   it('reports a byteLength that the decoded content cannot reproduce', async () => {

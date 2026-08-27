@@ -5,7 +5,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { ProjectionBuilder, REALIZATION_PROMOTION_UNREADABLE } from '../src/projection/projection.js';
-import { collectRealization, type ContentDemand } from '../src/projection/realizations.js';
+import {
+  collectRealization,
+  createCollectionMimeResolver,
+  type CollectionMimeResolver,
+  type ContentDemand,
+} from '../src/projection/realizations.js';
 
 import { setupSubdirTestSuite } from './test-helpers.js';
 
@@ -13,6 +18,13 @@ const DOC = 'notes.md';
 const OTHER_DOC = 'other.md';
 const MISSING = 'never-written.md';
 const DOC_CONTENT = '# Notes\n\n[b](./b.md)\n';
+
+/**
+ * A path whose extension routes to NO parser, so a collection-declared
+ * `text/markdown` on it disagrees with `parserKindForPath` — the only shape in
+ * which re-deriving the kind from the path is observable.
+ */
+const TYPED_SOURCE = 'typed-as-prose.ts';
 
 const EXTENT_A = 'ctx-filesystem';
 const EXTENT_B = 'ctx-package';
@@ -49,8 +61,9 @@ async function builderWith(
   path: string,
   extentIds: readonly string[],
   demand: ContentDemand = 'deferred',
+  mimeResolver?: CollectionMimeResolver,
 ): Promise<ProjectionBuilder> {
-  const builder = new ProjectionBuilder(suite.tempDir, undefined, cache);
+  const builder = new ProjectionBuilder({ root: suite.tempDir, contentCache: cache });
   for (const extentId of extentIds) {
     // Sequential: `collectRealization` reads through the shared cache, and the
     // miss/hit counts these tests assert on are the point.
@@ -59,6 +72,7 @@ async function builderWith(
       extentId,
       contentCache: cache,
       contentDemand: demand,
+      mimeResolver,
     });
     builder.addRealization(row);
   }
@@ -255,6 +269,38 @@ describe('ProjectionBuilder.ensureContentKey', () => {
     // extent claims.
     expect(await builder.ensureContentKey(OTHER_DOC)).toBeNull();
     expect(cache.stats.misses).toBe(0);
+  });
+
+  it('keys a promoted row under the row\'s OWN mime, not the one its extension implies', async () => {
+    // The defect this pins: `ensureContentKey` re-derived the parser kind with
+    // `parserKindForPath(absolutePath)`. A collection that declares
+    // `mimeType: text/markdown` for a `.ts` file puts `text/markdown` on the
+    // row, and the enumeration path (`keyOrState`) already honours it — but a
+    // row that DEFERRED reaches its key through here instead, and re-deriving
+    // from the path handed the bytes to no parser at all. The result was a row
+    // whose `mime` said prose and whose `contentKey` said `none.<digest>`: a
+    // well-formed entry with the wrong contents, which every downstream stage
+    // reads the kind back off.
+    await writeDoc(TYPED_SOURCE, DOC_CONTENT);
+    const cache = new RunContentCache();
+    const resolver = createCollectionMimeResolver({
+      prose: { include: ['**/*.ts'], mimeType: 'text/markdown' },
+    });
+    const builder = await builderWith(cache, TYPED_SOURCE, [EXTENT_A], 'deferred', resolver);
+
+    // Positive control, both halves. Without the first the fixture might be
+    // asserting about a `.md` file; without the second there is no deferral and
+    // `ensureContentKey` never reaches the read this test is about.
+    const before = builder.build().resourceRealizations.find((row) => row.path === TYPED_SOURCE);
+    expect(before?.mime).toBe('text/markdown');
+    expect(before?.contentState).toBe('deferred');
+
+    const key = await builder.ensureContentKey(TYPED_SOURCE);
+
+    expect(key).toMatch(MARKDOWN_KEY);
+    expect(rowsFor(builder, TYPED_SOURCE)).toEqual([
+      { extentId: EXTENT_A, state: 'keyed', key },
+    ]);
   });
 
   it('rewrites rows in place, leaving the table in its insertion order', async () => {

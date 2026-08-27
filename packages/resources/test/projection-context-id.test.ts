@@ -49,7 +49,7 @@ function makeRoot(): string {
 
 /** The package extents of one corpus root. */
 async function contribute(root: string): Promise<ExtentContribution> {
-  return new PackageExtentContributor().contribute(new ProjectionBuilder(root).base(), {});
+  return new PackageExtentContributor().contribute(new ProjectionBuilder({ root }).base(), {});
 }
 
 /** The context ids one contribution declared. */
@@ -138,7 +138,7 @@ describe('federated roots depending on the same package', () => {
   it('keeps both roots extents when they land in ONE federated projection', () => {
     // The failure this scheme exists to prevent, observed where it happens:
     // the keep-first `resolution_contexts` table.
-    const builder = new ProjectionBuilder(rootA);
+    const builder = new ProjectionBuilder({ root: rootA });
     const rows = [...contributionA.contexts, ...contributionB.contexts];
 
     const recorded = rows.map((row) => builder.addContext(row));

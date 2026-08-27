@@ -39,7 +39,6 @@ import type { ReportEnvelope } from '../src/envelope/envelope.js';
 import { comparePerf, type PerfCommandVerdict } from '../src/facets/perf/compare.js';
 import {
   PERF_FACET,
-  PERF_FACET_VERSION,
   type PerfBody,
   type PerfCommandStats,
 } from '../src/facets/perf/types.js';
@@ -92,12 +91,11 @@ function perfRow(over: Partial<PerfCommandStats> = {}): PerfCommandStats {
  * multi-axis refusal can never fire ahead of the rule under test.
  *
  * @param row - The single measured command
- * @returns A complete `perf` report at {@link PERF_FACET_VERSION}
+ * @returns A complete `perf` report
  */
 function perfReport(row: PerfCommandStats): ReportEnvelope<PerfBody> {
   return makeReport({
     facet: PERF_FACET,
-    facetVersion: PERF_FACET_VERSION,
     body: { commands: [row], load: QUIET_LOAD },
   }) as ReportEnvelope<PerfBody>;
 }

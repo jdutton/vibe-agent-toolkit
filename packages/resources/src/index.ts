@@ -47,6 +47,11 @@ export {
   // — a check that silently stops matching the day the message is reworded.
   DuplicateResourceIdError,
   generateIdFromPath,
+  // What a resource is when `parserKindForPath` answers `none`. Exported for
+  // the CLI's parse-fact snapshot, which routes by the same discriminator and
+  // must not re-implement the shape — see the function's own docstring for why
+  // this is the one export and not an invitation.
+  unparsedResourceFacts,
   type CrawlOptions,
   type DuplicateIdCollision,
   type UnreadableResource,
@@ -181,10 +186,22 @@ export {
 // Projection substrate — population, not schema. `resource_realizations` rows
 // for one path in one extent, plus the two path primitives every population
 // pass and every enumeration instrument shares.
+// Also the run's parse routing. `createCollectionMimeResolver` is exported for a
+// caller assembling a population by hand and for the tests that drive routing
+// directly — `populate()` builds one from `PopulateOptions.collections` for
+// every ordinary caller, and that ONE instance is what the conflict accumulator
+// depends on. `COLLECTION_MIME_CONFLICT` and its row builder go with it because
+// a consumer that wants to FAIL on a config error needs the code to match on.
 export {
+  collectionMimeConflictCondition,
   collectRealization,
+  createCollectionMimeResolver,
   realPathOrNull,
   relativize,
+  COLLECTION_MIME_CONFLICT,
+  NO_DECLARED_MIME_TYPES,
+  type CollectionMimeConflict,
+  type CollectionMimeResolver,
   type ContentDemand,
   type PathShape,
   type RealizationContext,
@@ -295,6 +312,11 @@ export type { ContentMeasures, LexicalReference } from './schemas/parse-facts.js
 // Export parser interface for advanced use cases
 export type { ParseResult } from './link-parser.js';
 export { classifyLink, isLocalFileLink } from './link-classify.js';
+// ⛔ `createMarkdownProcessor` is deliberately NOT re-exported here. It reaches
+// remark statically, and this barrel is loaded by commands that must never pay
+// for the parser — `module-load-budget.integration.test.ts` fails the moment it
+// does. Consumers that genuinely want the processor import the
+// `./markdown-processor` subpath, which is exported for exactly that reason.
 
 /**
  * Parse a markdown file from disk.
@@ -351,13 +373,23 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
 
 // Parse identity: which parser a path routes to, and the key a parse result is
 // filed under. Path-independent by construction — see content-key.ts.
+//
+// `ParserKind` has three members: `markdown`, `html`, and `none` for "no
+// document parser runs on this". `DocumentParserKind` (from mime-type.ts) is the
+// first two — the kinds a parser actually exists for — and it is what
+// `parseFileCached`, `loadParser` and `parseKeyed` accept. `isParsableContent`
+// is the narrowing between them, and is exported because there is no other way
+// for a caller holding a path-routed blob to reach the parse path.
 export {
   computeContentKey,
+  isParsableContent,
   parserKindForPath,
   readContentWithKey,
   type KeyedContent,
+  type ParsableContent,
   type ParserKind,
 } from './content-key.js';
+export type { DocumentParserKind } from './mime-type.js';
 
 // Parse cache: the disk-backed store `ResourceRegistry` files parse facts in,
 // and where it puts them. Exported for two callers only — an operator surface
@@ -526,6 +558,21 @@ export {
 // config can hand it directly to `fetchAuthenticated` via this bridge.
 export { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
 
+// linkAuth pure engine — public API only (issue #113).
+// Internal helpers (rewrite, build-headers, etc.) stay module-private.
+export {
+  type LinkAuthConfig,
+  type Provider,
+  type ProviderAuth,
+  type ProviderCheck,
+  resolveAuthenticatedUrl,
+  type ResolveOutcome,
+} from './link-auth/resolve.js';
+export type { ProviderMatch } from './link-auth/select-provider.js';
+export type { RewriteRule } from './link-auth/rewrite.js';
+export { defaultRunCommand, type TokenSource } from './link-auth/resolve-token.js';
+export { expandMacro, UnknownMacroError } from './link-auth/expand-macro.js';
+
 // The extent-contributor seam (zones §7.1/§7.4/§7.5): the interface every
 // extent contributor implements, the registry the merge driver partitions by
 // stratum, and the required extent digest that makes two populations
@@ -657,6 +704,29 @@ export {
   type BudgetSweep,
   type LocationBudget,
 } from './projection/claude-context-budget-sweep.js';
+
+// The same collapse WITHOUT a threshold: what it costs to work in each part of a
+// tree. `vat claude context --all` used to answer every realized path — 10,438
+// answers and 205,918 lines on one adopter tree, which is a report nobody can
+// read and an agent cannot afford. This reports the always-loaded floor once per
+// distinct instruction chain, and the on-demand burden per DIRECTORY, because
+// only the first of those two collapses.
+//
+// ⛔ `contextRegions` is exported and `sweepAlwaysLoadedBudgets`' internals still
+// are not, and the asymmetry is deliberate: the region model now has TWO callers
+// inside this package, so it is a real seam rather than one lane's private
+// helper. Its soundness is still guarded by the suite's differential oracle.
+export {
+  buildContextCostMap,
+  type ContextCostMap,
+  type DirectoryCost,
+  type RegionCost,
+  type UnmeasuredRowCounts,
+} from './projection/claude-context-cost-map.js';
+export {
+  contextRegions,
+  type ContextRegion,
+} from './projection/claude-context-regions.js';
 
 // The COMPLEMENT of the query: what the loaded set POINTS AT in one hop and the
 // harness does not load. Its own row shape on purpose — a voluntary markdown link

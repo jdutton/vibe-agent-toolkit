@@ -5,43 +5,45 @@
  * A facet (skill lint, resource integrity, performance, I/O accounting, compat
  * prediction) decides what goes in `body`. The envelope decides everything
  * needed to know whether two bodies may be held next to each other: the
- * coordinate they were measured at, and the two schema versions that say what
- * shape the body is in.
+ * coordinate they were measured at, and which facet the body belongs to.
  *
- * **Refusal, not coercion.** A report from an older format, a different facet,
- * or an older body schema is *refused* rather than best-efforted into
+ * **Refusal, not coercion.** A report from another header shape, a different
+ * facet, or another body shape is *refused* rather than best-efforted into
  * comparison. A comparator that silently tolerates a schema change reports
  * differences that are artifacts of the change rather than of the subject, and
  * those are the most expensive kind of wrong answer this package can give.
+ *
+ * ## ⚠️ There are no version fields here, and adding one back is a defect
+ *
+ * This header used to carry a `formatVersion` and a `facetVersion`, and neither
+ * ever decided anything the schemas do not decide already. {@link readEnvelope}
+ * validates against {@link ReportEnvelopeSchema}, which is strict all the way
+ * down through {@link CoordinateSchema} — so the very report the format bump was
+ * cut for (one predating `instrument.dirty`) is refused for the honest reason,
+ * that a required field is missing, without an integer in the loop. The body
+ * half is the same: `harness/facet-compare.ts` validates BOTH sides against the
+ * facet's own strict schema before a number is subtracted.
+ *
+ * The integers were strictly worse than the schemas at the one job they had,
+ * because nothing fails when a human forgets to bump one. The crawl seam shipped
+ * two meaning changes ahead of its bump and one of them published a confident
+ * false delta in the interval.
+ *
+ * What no schema can see is a field whose MEANING moved while its name and type
+ * stayed put — and no integer could see that either, it could only be told.
+ * The remedies are to invalidate explicitly (delete the stored reports) or to
+ * make the build DECLARE the thing that moved, as `CrawlTimingDump.charges`
+ * does. Not to reintroduce a number nobody is obliged to move.
  */
 
 import { z } from 'zod';
 
 import { type Coordinate, CoordinateSchema } from './coordinate.js';
 
-/**
- * Version of the envelope itself — the fields around `body`.
- *
- * Bumped only when the header changes shape. A bump invalidates every stored
- * report, which is the point: an envelope that cannot be read the same way is
- * not comparable to one that can.
- *
- * **2 — `instrument.dirty` arrived.** A v1 report cannot say whether the build
- * that measured it came from a dirty checkout, and the commonest reason to hold
- * an old report beside a new one is an A/B between two builds. Reading a v1
- * header as if the field were merely absent would silently restore the defect
- * the field fixes: the missing label would read as "clean".
- */
-export const REPORT_FORMAT_VERSION = 2;
-
 /** A measurement of one facet at one coordinate. */
 export interface ReportEnvelope<TBody = unknown> {
-  /** See {@link REPORT_FORMAT_VERSION}. */
-  readonly formatVersion: number;
   /** Which facet produced this — `io`, `perf`, `skill-lint`, and so on. */
   readonly facet: string;
-  /** Version of *this facet's* body schema, owned by the facet. */
-  readonly facetVersion: number;
   /** Where this was measured. See {@link Coordinate}. */
   readonly coordinate: Coordinate;
   /**
@@ -55,11 +57,17 @@ export interface ReportEnvelope<TBody = unknown> {
   readonly body: TBody;
 }
 
+/**
+ * Runtime schema for {@link ReportEnvelope}.
+ *
+ * **Strict, and load-bearing for it.** This is the whole of "may this report be
+ * read?" — see this module's header. A header carrying a field this build does
+ * not model (a `formatVersion` from a build that had one, say) is refused here,
+ * and so is one missing a field this build requires.
+ */
 export const ReportEnvelopeSchema = z
   .object({
-    formatVersion: z.number().int().positive(),
     facet: z.string().min(1),
-    facetVersion: z.number().int().positive(),
     coordinate: CoordinateSchema,
     capturedAt: z.string().min(1),
     body: z.unknown(),
@@ -86,8 +94,7 @@ export type EnvelopeResult<TBody> = EnvelopeAccepted<TBody> | EnvelopeRefusal;
  * Read an unknown value as a report envelope.
  *
  * The body is *not* validated here — only the header. Each facet owns its body
- * schema and validates it after checking that `facet` and `facetVersion` are
- * the ones it understands.
+ * schema and validates it after checking that `facet` is the one it understands.
  *
  * @param value - Parsed JSON or YAML from a stored report
  * @returns The envelope, or a refusal naming what was wrong
@@ -102,43 +109,34 @@ export function readEnvelope(value: unknown): EnvelopeResult<unknown> {
         .join('; ')}`,
     };
   }
-  if (parsed.data.formatVersion !== REPORT_FORMAT_VERSION) {
-    return {
-      ok: false,
-      refusal:
-        `REFUSED: report envelope formatVersion ${String(parsed.data.formatVersion)}, ` +
-        `this build reads ${String(REPORT_FORMAT_VERSION)}. Re-capture the report; a header ` +
-        'from another format cannot be read the same way, so any diff against it would be ' +
-        'a diff of the format rather than of the subject.',
-    };
-  }
   return { ok: true, envelope: parsed.data as ReportEnvelope<unknown> };
 }
 
 /**
- * May these two reports be compared as measurements of the same thing?
+ * Are these two reports measurements of the same facet?
  *
- * Answers only the schema half of the question — whether the bodies are the
- * same shape. The coordinate half is `decideComparison`, and a caller needs
- * both to hold.
+ * One of three gates a comparison must clear, and the only one the header alone
+ * can answer. The coordinate gate is `decideComparison`; the body-shape gate is
+ * `readBody` in `harness/facet-compare.ts`.
+ *
+ * ⚠️ **This deliberately does not compare the two bodies' shapes to each other.**
+ * It used to, via a `facetVersion` integer, and that was the weaker of the two
+ * checks available: two reports captured before a schema move agree with each
+ * other perfectly while every row in them means what the older build meant.
+ * Validating each side against THIS build's strict schema — which is what
+ * `readBody` does — refuses that pair, and refuses it without anyone having
+ * remembered to bump anything.
  *
  * @param a - The baseline report
  * @param b - The report being compared against it
- * @returns `null` when the two are comparable, or a refusal explaining why not
+ * @returns `null` when the two name one facet, or a refusal explaining why not
  */
-export function refuseIncomparableSchemas(
+export function refuseDifferentFacets(
   a: ReportEnvelope<unknown>,
   b: ReportEnvelope<unknown>,
 ): string | null {
   if (a.facet !== b.facet) {
     return `REFUSED: these reports measure different facets ('${a.facet}' and '${b.facet}'). There is no delta between two different measurements.`;
-  }
-  if (a.facetVersion !== b.facetVersion) {
-    return (
-      `REFUSED: facet '${a.facet}' body schema moved between these reports ` +
-      `(v${String(a.facetVersion)} and v${String(b.facetVersion)}). Re-capture the older side; ` +
-      'differences across a schema change belong to the schema, not to the subject.'
-    );
   }
   return null;
 }

@@ -37,10 +37,10 @@
  *
  * ## What merging across processes means
  *
- * A vat command spawns a child per phase, so several dumps per run is the normal
- * case. Calls and durations are summed, which makes `elapsedMs` **time spent in
- * that row across the run** and emphatically not wall time: if two phases ran
- * concurrently their milliseconds still add.
+ * A directory can hold more than one process's dump, so the reader merges rather
+ * than trusting the first file it finds. Calls and durations are summed, which
+ * makes `elapsedMs` **time spent in that row across the run** and emphatically
+ * not wall time: milliseconds spent concurrently still add.
  *
  * Process LIFETIMES are the one thing that is never summed — see
  * {@link MergedCrawlDumps.processes}.
@@ -84,49 +84,6 @@ import {
  * A literal, deliberately not imported — see this module's header.
  */
 export const CRAWL_TIMING_DIR_ENV = 'VAT_CRAWL_TIMING';
-
-/**
- * Version of the dump format written by the seam.
- *
- * A fixed contract between the seam and this reader. A dump at any other version
- * is refused, because reading it with this build's assumptions would produce
- * numbers whose meaning nobody can state.
- *
- * ⚠️ This constant is one half of a CROSS-PACKAGE pair: the writing half is
- * `DUMP_VERSION` in `@vibe-agent-toolkit/utils`' `crawl-timing.ts`. They are
- * two literals in two packages with no type relating them, so they can drift
- * silently — and the symptom is not a subtle wrong number, it is that **every
- * dump this build writes gets refused** and the facet reports nothing. That is a
- * failure mode a reader would blame on their own invocation. `crawl-timing.test.ts`
- * pins them equal for exactly that reason; do not delete that assertion.
- *
- * 1 — first version.
- * 2 — layout unchanged, MEANING changed: a `crawl` total is now the walker's
- *     traversal *plus* the registry build that feeds it. Before this, the
- *     projection arm was charged for its preparation (`base`) while the
- *     incumbent arm was charged for traversal only, so the two arms of the
- *     side-by-side this facet exists to render were not commensurable.
- * 3 — layout unchanged again, and again the MEANING moved — but in the values
- *     THIS module derives rather than in any row the seam wrote. The `shared`
- *     stratum and the projection's blob stage both charge work that was
- *     previously charged nowhere, so {@link MergedCrawlDumps.totalMs} grew (it
- *     sums additive rows across every stratum) and {@link crawlAttributionOf}
- *     can now say `measured` where it used to say `nothing-crawled`. A v2 dump
- *     held against a v3 one therefore reads a widening as a movement — the same
- *     failure v2 was cut for — and worse, it reads it CONSISTENTLY, so an `ab`
- *     calls the pairs stable and prints a confident delta instead of refusing.
- *     See `crawl-timing.ts`'s own entry for the numbers.
- * 4 — the dump gained {@link CrawlDump.charges}, and this constant stops being
- *     the mechanism that catches a widening. Versions 2 and 3 were both bumped
- *     for meaning rather than layout, and version 3 was bumped LATE, after the
- *     widening had already shipped — because an integer only moves when a human
- *     moves it. A build now declares what it can charge and {@link chargeCaveat}
- *     in `compare.ts` refuses two arms whose declarations differ, so the next
- *     bracket invalidates the comparisons it should without anyone remembering.
- *     This number goes back to guarding LAYOUT, which is all it was ever able to
- *     guard.
- */
-export const CRAWL_DUMP_VERSION = 4;
 
 /** One row as the seam wrote it. Carries no role — see {@link crawlRowRole}. */
 export type CrawlDumpEntry = CrawlSeamRow;
@@ -197,7 +154,7 @@ const CRAWL_DRIVERLESS_IDS: ReadonlyMap<string, DriverlessStratumIds> = new Map(
     {
       topLevel: new Set([
         'resource-registry:enumerate',
-        'resource-registry:add-resource',
+        'resource-registry:admit',
         'resource-registry:resolve-links',
         'walk-link-graph:walk',
       ]),
@@ -278,7 +235,6 @@ export interface CrawlDumpProcess {
 
 /** One process's dump. */
 export interface CrawlDump {
-  readonly dumpVersion: number;
   readonly pid: number;
   readonly process: CrawlDumpProcess;
   readonly charges: CrawlDumpCharges;
@@ -352,7 +308,6 @@ function entryKeysAreUnique(dump: { readonly entries: readonly CrawlDumpEntry[] 
  */
 export const CrawlDumpSchema = z
   .object({
-    dumpVersion: z.number().int().positive(),
     pid: crawlProcessShape.pid,
     process: z
       .object({
@@ -450,8 +405,6 @@ const CRAWL_DUMP_KIND: DumpKind<CrawlDump> = {
   noun: 'crawl-timing dump',
   producer: 'crawl-timing seam',
   schema: CrawlDumpSchema,
-  version: CRAWL_DUMP_VERSION,
-  versionOf: (dump) => dump.dumpVersion,
   emptyDirectory: (directory) =>
     `no crawl-timing dumps in '${directory}'. Nothing wrote one, so there is no measurement — ` +
     `the usual cause is a vat build with no crawl seam in it (it is switched on by ` +

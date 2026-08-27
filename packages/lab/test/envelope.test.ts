@@ -1,16 +1,21 @@
 /**
  * The envelope's whole job is to refuse. These tests pin *that it does* — a
- * reader that quietly accepts a report from another format or another body
+ * reader that quietly accepts a report from another header shape or another body
  * schema produces diffs that belong to the schema change rather than to the
  * subject, which is the most expensive wrong answer this package can give.
+ *
+ * ⚠️ There is no `formatVersion` and no `facetVersion` to test any more, and
+ * their absence is the point rather than a gap: `ReportEnvelopeSchema` is strict
+ * all the way down, so it refuses the very report the format bump was cut for
+ * (one predating `instrument.dirty`) and refuses it for the honest reason. See
+ * `envelope/envelope.ts`'s header.
  */
 
 import { describe, expect, it } from 'vitest';
 
 import {
   readEnvelope,
-  refuseIncomparableSchemas,
-  REPORT_FORMAT_VERSION,
+  refuseDifferentFacets,
   type ReportEnvelope,
 } from '../src/envelope/envelope.js';
 
@@ -51,12 +56,31 @@ describe('readEnvelope', () => {
     expect(result.envelope.body).toEqual({ commands: [] });
   });
 
-  it('refuses a report written by another envelope format', () => {
-    const result = readEnvelope(stored({ formatVersion: REPORT_FORMAT_VERSION + 1 }));
+  it('refuses a report from the build that still stamped a formatVersion', () => {
+    // Strictness does this, and does it without a number anybody had to move.
+    const result = readEnvelope(stored({ formatVersion: 2, facetVersion: 1 }));
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
     expect(result.refusal).toMatch(/^REFUSED:/);
-    expect(result.refusal).toContain(String(REPORT_FORMAT_VERSION + 1));
+    expect(result.refusal).toContain('formatVersion');
+  });
+
+  it('refuses the report the format bump was actually cut for — one with no instrument.dirty', () => {
+    // 🚩 `REPORT_FORMAT_VERSION` went 1 → 2 because a v1 report cannot say
+    // whether the build that measured it came from a dirty checkout, and reading
+    // the field as merely absent would restore the defect it was added to fix:
+    // the missing label reads as "clean". That report is refused HERE, by the
+    // schema, because `dirty` is required — which is the whole argument for the
+    // integer having been redundant rather than load-bearing.
+    const withoutDirty = Object.fromEntries(
+      Object.entries(COORDINATE.instrument).filter(([key]) => key !== 'dirty'),
+    );
+    const result = readEnvelope(
+      stored({ coordinate: { ...COORDINATE, instrument: withoutDirty } }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('unreachable');
+    expect(result.refusal).toContain('dirty');
   });
 
   it('refuses a value that is not an envelope at all', () => {
@@ -85,29 +109,29 @@ describe('readEnvelope', () => {
   });
 });
 
-describe('refuseIncomparableSchemas', () => {
-  it('permits two reports of the same facet at the same body version', () => {
-    expect(refuseIncomparableSchemas(envelope(), envelope())).toBeNull();
+describe('refuseDifferentFacets', () => {
+  it('permits two reports of the same facet', () => {
+    expect(refuseDifferentFacets(envelope(), envelope())).toBeNull();
   });
 
   it('permits reports whose only difference is the capture time', () => {
     // capturedAt moves on every run; comparing it would report a difference
     // between two identical measurements.
     const later = envelope({ capturedAt: '2026-12-25T12:00:00.000Z' });
-    expect(refuseIncomparableSchemas(envelope(), later)).toBeNull();
+    expect(refuseDifferentFacets(envelope(), later)).toBeNull();
   });
 
   it('refuses two different facets', () => {
-    const refusal = refuseIncomparableSchemas(envelope(), envelope({ facet: 'io' }));
+    const refusal = refuseDifferentFacets(envelope(), envelope({ facet: 'io' }));
     expect(refusal).toMatch(/^REFUSED:/);
     expect(refusal).toContain('perf');
     expect(refusal).toContain('io');
   });
 
-  it('refuses one facet across a body schema bump', () => {
-    const refusal = refuseIncomparableSchemas(envelope(), envelope({ facetVersion: 2 }));
-    expect(refusal).toMatch(/^REFUSED:/);
-    expect(refusal).toContain('v1');
-    expect(refusal).toContain('v2');
-  });
+  // ⚠️ There is deliberately no "refuses one facet across a body schema bump"
+  // case. This function never sees a body, and the two-sided check it used to
+  // make was the WEAKER half of the pair: a matched pair of pre-change reports
+  // agrees with itself perfectly. `harness/facet-compare.ts`'s `readBody`
+  // validates each side against this build's strict schema instead, and every
+  // facet's comparator suite exercises exactly that matched-pair case.
 });

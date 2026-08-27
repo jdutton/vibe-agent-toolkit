@@ -14,11 +14,13 @@
  * they largely are not, for the reasons documented on the guard test in
  * `test/package-exports.test.ts`. But the question that decides whether an entry
  * should exist is "how heavy is the only remaining door?" With `./project` gone,
- * the sole route to these functions was the `.` barrel, which reaches
- * `handlebars`, `yaml`, `picomatch`, `ignore` and `which`. A consumer that avoids
- * the barrel on graph-weight grounds — which is the entire premise of this
- * package's subpath layout — could no longer reach a capability whose own code
- * imports nothing but `node:fs` and `node:path`.
+ * the sole route to these functions was the `.` barrel, which at the time reached
+ * five third-party packages. A consumer that avoids the barrel on graph-weight
+ * grounds — which is the entire premise of this package's subpath layout — could
+ * no longer reach a capability whose own code imports nothing but `node:fs` and
+ * `node:path`. The barrel is dependency-free today, which generalizes the
+ * argument rather than retiring it: every domain that carries weight is its own
+ * entry, and reaching a pure one must not cost a neighbour's graph.
  *
  * The functions remain VAT-shaped and are documented as such in README.md: they
  * look for `vibe-agent-toolkit.config.yaml`, then `.git/`. If your notion of a

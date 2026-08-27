@@ -39,10 +39,24 @@ stays legible.
 **Where:** the module docstring of
 `packages/resources/src/projection/contributors/filesystem-extent.ts`, which documents
 `FilesystemExtentContributor`.
-**Status: fixed** — the fixture now exists. `packages/resources/test/projection-extent-narrowing.test.ts`
-builds `SKILL.md → scripts/tool.mjs → docs/note.md`, withholds the non-markdown row, and measures
-both losses; the header reads "that is measured now rather than reasoned". Narrowing and re-sourcing
-are both measured claims now.
+**Status: fixed, on a re-derived and NARROWER reason.**
+`packages/resources/test/projection-extent-narrowing.test.ts` builds
+`SKILL.md → scripts/tool.mjs → docs/note.md`, withholds the non-markdown row, and measures the loss.
+The claim survives because the script is a **direct** link target of its own root: a markdown file
+links to a non-markdown file, so narrowing to markdown loses a member outright. Measured member sets
+are 2 wide (`SKILL.md`, `scripts/tool.mjs`) and 1 narrowed (`SKILL.md`).
+
+⚠️ **The transitive half of the original reason is gone, and it was never re-derivable.** When the
+fixture was written, every non-`.html` file went to the remark parser, so the script's JSDoc
+reference lexed as an AST `markdown-link` and the leaf was a transitive member. Parse routing is now
+MIME-driven: a `.mjs` routes to no document parser, emits no `markdown-link` /
+`markdown-link-reference` / `markdown-definition` row, and its two references to the leaf both lex as
+`bare-token` — a form `packages/resources/src/schemas/project-config.ts › ExtentDeclarationSchema`'s
+default `follow` does not traverse. `docs/note.md` is now on disk, enumerated by the extent, and a
+member of nothing. **Bundled scripts are closure members; they are not closure doors.** The arm that
+pinned the old precondition was deleted rather than kept alive on a contrived population, and its
+subject is recorded in the suite header. What that leaves undeclared is filed below as
+[should a closure follow the paths a non-parsed file names?](#should-a-closure-follow-the-paths-a-non-parsed-file-names).
 
 ### Plugin-local discovery is described as tracked-only and as seeing untracked directories
 
@@ -163,6 +177,24 @@ matrix's content-read table shows `deferred` against `deferGitignored`. That one
 two answers is what keeps the question live rather than settling it: nothing declares whether the
 demand belongs to the lane that registers the contributor or to the consumer that reads the result,
 so a third consumer has no rule to follow.
+
+### Should a closure follow the paths a non-parsed file names?
+
+**Opened by the re-derivation of
+[the filesystem extent's narrowing claim](#the-filesystem-extents-narrowing-claim-was-reasoned-rather-than-measured).**
+A skill's `scripts/tool.mjs` names `docs/note.md` and nothing in VAT walks that edge, so a data file
+reachable only from a bundled script is in no skill's closure — it will not be packaged, and no
+membership check can see that it is missing. This was previously invisible: while every non-`.html`
+file went to the remark parser, a path named in a JSDoc comment happened to lex as `markdown-link`
+and was followed, so the gap existed only for paths written outside comments.
+
+The one mechanism available today is widening `packages/resources/src/schemas/project-config.ts ›
+ExtentDeclarationSchema`'s default `follow` to include `bare-token`, and that was **declined**:
+`bare-token` is 21,687 rows on this repo alone, so every `import` specifier and every path-shaped
+string would become a closure edge. What is undeclared is whether the gap should be closed some other
+way — a narrower lexical form, a per-collection opt-in, or a rule that a script declares its own data
+files — or accepted as the price of not following strings. Widening `follow` is its own change with
+its own measurement, never a side effect of parse routing.
 
 ### Should a command ever report a gitignored file rather than dropping it?
 

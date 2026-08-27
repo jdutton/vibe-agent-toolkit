@@ -38,11 +38,10 @@
 
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { REPORT_FORMAT_VERSION, type ReportEnvelope } from '../src/envelope/envelope.js';
+import { readEnvelope, type ReportEnvelope } from '../src/envelope/envelope.js';
 import { capturePerf, type CapturePerfOptions } from '../src/facets/perf/capture.js';
 import {
   PERF_FACET,
-  PERF_FACET_VERSION,
   type PerfBody,
   type PerfCommandStats,
   PerfBodySchema,
@@ -382,9 +381,9 @@ describe('capturePerf — the envelope', () => {
 
     const report = capture(probe, { runs: 1 });
 
-    expect(report.formatVersion).toBe(REPORT_FORMAT_VERSION);
+    // The header this build would refuse is the header no capture may produce.
+    expect(readEnvelope(report).ok).toBe(true);
     expect(report.facet).toBe(PERF_FACET);
-    expect(report.facetVersion).toBe(PERF_FACET_VERSION);
     expect(report.coordinate).toEqual({
       subject: subject.ref,
       subjectVersion: subject.version,

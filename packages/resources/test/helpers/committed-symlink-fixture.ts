@@ -38,11 +38,13 @@ import {
   createSymlink,
   mkdirSyncReal,
   normalizedTmpdir,
-  runGitOrThrow,
   safePath,
   symlinkCapability,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import {
+  runGitOrThrow,
+} from '@vibe-agent-toolkit/utils/git';
 
 /**
  * Git's mode for a symlink in `git ls-files -s`. Its blob holds the TARGET

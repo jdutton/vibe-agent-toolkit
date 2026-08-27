@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/dev-tools",
-  "version": "0.2.0-rc.3",
+  "version": "0.2.0-rc.4",
   "private": true,
   "type": "module",
   "description": "Development tools for the monorepo",
@@ -27,14 +27,17 @@
   "dependencies": {
     "@vibe-agent-toolkit/agent-skills": "workspace:*",
     "@vibe-agent-toolkit/claude-marketplace": "workspace:*",
+    "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "commander": "^12.1.0",
+    "markdown-it": "^14.1.0",
     "semver": "^7.7.3",
     "yaml": "^2.8.2",
     "zod": "^3.24.1",
     "zod-to-json-schema": "^3.23.5"
   },
   "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
     "@types/node": "^22.0.0",
     "@types/semver": "^7.5.0",
     "@types/which": "^3.0.4",

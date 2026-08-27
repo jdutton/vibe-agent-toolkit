@@ -56,7 +56,7 @@
  * these bytes" were the same residue bucket. The base already decided; this
  * stage reports its decision instead of re-deriving it.
  *
- * ## Every keyed blob is derived — including non-markdown
+ * ## Every keyed blob is derived — including the ones no parser reads
  *
  * There is no extension allowlist. `parserKindForPath` is VAT's single parser
  * discriminator and the base already ran it; its answer is recorded in the
@@ -64,27 +64,61 @@
  * re-deriving the routing (running the discriminator twice is exactly how the
  * parse route and the key's parse-route component drift apart).
  *
- * That means a `.mjs`, `.py` or `.txt` blob is routed to the markdown parser,
- * which is what the raw-source reference lexer wants: `reference-lexer.ts`
- * exists to find `@`-prefixed, variable-anchored and path-shaped tokens that
- * the markdown AST is structurally blind to, and those live in scripts far more
- * than in prose. Filtering non-markdown out here would decide, silently and
- * permanently, that a skill's bundled scripts can never be closure members —
- * which is the exact `files:`-blindness failure family the projection exists to
- * make queryable. Deciding a blob is uninteresting is a lens's job; this layer
- * records shape.
+ * Since `mime-type.ts` began typing paths, that prefix has THREE values, and the
+ * third — `none` — names the ABSENCE of a document parser. It is a third shape
+ * here, not a fourth refusal:
+ *
+ * ```text
+ *                      blobs row   estimateTokens   lexer   unified()
+ *  markdown / html        yes           yes         yes*      yes
+ *  none                   YES           YES         YES       no
+ *  refused (NOT_TEXT…)    no            no          no        no
+ *                                                   * markdown only; see blob-references.ts
+ * ```
+ *
+ * ### Why a `none` blob still earns a row
+ *
+ * Because a refusal's shape is "no `blobs` row at all" — {@link prepareBlob}
+ * answers with a {@link RefusedBlob} on every refusal path, and
+ * {@link emitPreparedBlob} then records only its condition — and copying that
+ * shape here would break accounting on the majority of files in a repository.
+ * With no row there is no `tokenEstimate`; `whatLoadsAt` then reports
+ * `tokens: null` and `chargeOf` answers `unknown-size`. That is a live state,
+ * reached the moment a CLAUDE.md imports a `.ts` file.
+ *
+ * ### Why it still runs the LEXER — the constraint that decides correctness
+ *
+ * **Route away from the PARSER, never from the lexer.** Measured on this
+ * repository: of 51,783 `blob_references`, 2,432 are AST rows and ~46,600 are
+ * `at-prefixed` (24,918), `bare-token` (21,687) and `env-anchored` (2,746) —
+ * every one of them produced by `findLexicalReferences` over RAW SOURCE, with no
+ * AST anywhere in the derivation. `reference-lexer.ts` exists precisely to find
+ * the tokens a markdown AST is structurally blind to, and those live in scripts
+ * far more than in prose.
+ *
+ * So dropping the lexer for `none` would decide, silently and permanently, that
+ * a skill's bundled scripts can never be closure members — the exact
+ * `files:`-blindness failure family the projection exists to make queryable.
+ * What the `none` route drops instead is `remark-parse`, which over a `.ts` file
+ * was never telling the truth anyway: 5,329 TypeScript and 713 JSON files parsed
+ * as CommonMark produced 64.7% of one adopter tree's reference rows and **100%**
+ * of its dangling-reference warnings. Deciding a blob is uninteresting is a
+ * lens's job; this layer records shape.
  */
 
 import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
 import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
-import type { KeyedContent, ParserKind } from '../content-key.js';
+import { isParsableContent, type KeyedContent, type ParsableContent, type ParserKind } from '../content-key.js';
+import { estimateTokens } from '../link-classify.js';
 import type { ParseResult } from '../link-parser.js';
-import { type ParseCache, defaultParseCache, isParserUnavailable, parseKeyed } from '../parse-cache.js';
+import { type ParseCache, defaultParseCache, isParserUnavailable } from '../parse-cache.js';
+import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from '../parse-dispatcher.js';
+import { type CodeContextRanges, findLexicalReferences } from '../reference-lexer.js';
 import type { BlobConditionRow } from '../schemas/projection-blobs.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 
-import { blobConditionsFor, blobRowFor } from './blob-facts.js';
+import { blobConditionsFor, blobRowFor, measureContent } from './blob-facts.js';
 import { blobReferencesFor } from './blob-references.js';
 import { blobSectionsFor, flattenHeadings } from './blob-sections.js';
 import { readKeyedContent } from './content-cache.js';
@@ -129,14 +163,11 @@ const BINARY_SNIFF_CHARS = 8000;
  *
  * ## Why this exists, with the measurement
  *
- * `parserKindForPath` routes `.html`/`.htm` to the HTML parser and **everything
- * else to markdown** — so the filesystem extent, which enumerates the whole tree
- * rather than a glob, hands `remark-parse` every zip, PDF and `.docx` under the
- * root. That was a deliberate choice and it is documented as one ("the markdown
- * parser is handed arbitrary bytes by design"), because narrowing the parse to
- * markdown would blind the closure to references emitted from a skill's bundled
- * scripts. What was never measured is what "arbitrary bytes" costs when they are
- * not text at all.
+ * `parserKindForPath` used to route `.html`/`.htm` to the HTML parser and
+ * **everything else to markdown** — so the filesystem extent, which enumerates
+ * the whole tree rather than a glob, handed `remark-parse` every zip, PDF and
+ * `.docx` under the root. What was never measured is what "arbitrary bytes"
+ * costs when they are not text at all.
  *
  * Measured: a project of one 13-byte markdown file plus one 8 MB zip takes
  * **4.83 s on the projection lane against 0.035 s on the walker — 138×** — and
@@ -145,6 +176,17 @@ const BINARY_SNIFF_CHARS = 8000;
  * PDFs and zips the command did not finish in five minutes, at 100% CPU.
  * `remark-parse` does not *fail* on binary input; it succeeds, slowly, building
  * an AST of garbage that every downstream stage then walks.
+ *
+ * ## Routing by MIME type did NOT retire this test
+ *
+ * A `.zip` now routes to `none`, so remark no longer sees it — and that removes
+ * none of the reason for sniffing. This test runs **ahead of the kind split** and
+ * refuses all three kinds, for two independent reasons. A `none`-routed binary
+ * would otherwise earn a `blobs` row carrying a token estimate computed over
+ * megabytes of mojibake, plus a full lexer scan of the same. And typing is by
+ * NAME (`mime-type.ts` is a pure path lookup), so a `.docx` renamed `.md` still
+ * routes to markdown and still hangs — which is exactly the case an extension
+ * table can never see, and the case below is about.
  *
  * ## Why a content sniff and not an extension list
  *
@@ -196,8 +238,41 @@ function looksBinary(content: string): boolean {
   return false;
 }
 
-/** The prefix a content key carries when its bytes route to the HTML parser. */
-const HTML_KEY_PREFIX = 'html.';
+/**
+ * Every parser kind, keyed by itself.
+ *
+ * The redundant-looking `markdown: 'markdown'` earns its place twice over. The
+ * KEY set is what `satisfies Record<ParserKind, ParserKind>` checks for
+ * exhaustiveness, so a fourth kind added in `content-key.ts` stops this file
+ * compiling instead of falling into an else-branch. The VALUES are already typed
+ * as the union, so {@link parserKindOf} can hand one back without casting a
+ * substring of a key into a type nobody checked.
+ *
+ * The shape exists because the else-branch shape has now shipped the same defect
+ * twice, one level apart. `parserKindForPath` was
+ * `endsWith('.html') ? html : markdown` and handed every `.ts` file in a
+ * repository to remark; {@link parserKindOf} was
+ * `startsWith('html.') ? 'html' : 'markdown'` and, the instant `none` existed,
+ * silently relabelled every `none.` key as markdown — with no type error
+ * anywhere, because both arms of that ternary are valid {@link ParserKind}s.
+ */
+const PARSER_KIND_BY_NAME = {
+  markdown: 'markdown',
+  html: 'html',
+  none: 'none',
+} as const satisfies Record<ParserKind, ParserKind>;
+
+/**
+ * `<kind>.` → the kind it names, derived from {@link PARSER_KIND_BY_NAME} rather
+ * than written out again, so a prefix table and a kind set cannot drift apart.
+ *
+ * The `.` is part of the lookup key on purpose: matching bare kind names would
+ * make a future `markdown-lite` collide with `markdown`, which is the same class
+ * of near-miss `startsWith` invited.
+ */
+const PARSER_KIND_BY_PREFIX = new Map<string, ParserKind>(
+  Object.values(PARSER_KIND_BY_NAME).map((kind) => [`${kind}.`, kind]),
+);
 
 /**
  * What one run of {@link populateBlobs} did, and what it declined to do.
@@ -236,6 +311,48 @@ export interface BlobPopulationResult {
    * auditable rather than a quiet speed-up. A corpus of pure text reports zero.
    */
   readonly blobsNotText: number;
+  /**
+   * Blobs derived with no document parser behind them — a `none.` key each.
+   *
+   * A **subset of {@link blobsDerived}**, never a peer of the four refusal
+   * buckets above: these blobs have a row, a real `tokenEstimate`, real content
+   * measures and their full complement of lexical `blob_references`. The only
+   * thing they lack is the one thing a `text/x-typescript` file was never going
+   * to yield honestly — an mdast.
+   *
+   * ## Why this is a COUNTER and not a `blob_conditions` row
+   *
+   * Because every column such a row could carry is a function of the key it
+   * would be filed under. `blob` *is* the `none.<digest>` key, whose prefix
+   * already says no parser ran; `code` and `severity` would be constants; `line`
+   * is null; and `message` could only restate the code. "Which blobs did not get
+   * a document parse" is answered exactly, per blob, by `contentKey LIKE
+   * 'none.%'` — and answered better than a row could, because the prefix is the
+   * same value that selected the route and is mixed into the digest
+   * (content-key.ts), so it cannot drift from the routing the way a
+   * separately-emitted row can.
+   *
+   * The "and WHY" half is the stronger argument. The interesting reason is the
+   * MIME type — `mime-type.ts` exists so that 6,000 `.ts` files and 40
+   * `.fraud-ingest-job` files do not read as "6,040 unparsed" — and a blob does
+   * not have one. A blob has no path; the same bytes are legitimately realized
+   * at `x.ts` and at `x.fraud-ingest-job`. A per-blob row asserting a type would
+   * be a claim this layer is in no position to make, which is the argument
+   * `mime-type.ts` itself opens with about `application/octet-stream`. Typing
+   * belongs to the realization, which has a path.
+   *
+   * Volume then makes the `warning`-versus-`info` question moot rather than
+   * close. Measured on this repository, 6,967 of 8,713 documents route to `none`
+   * — a ratio that moves with every file added and has never been near a
+   * minority. A `warning` on four documents in five is wallpaper within a day,
+   * and it trains readers to ignore the table the four genuine refusal codes
+   * depend on being read; an `info` row is the same five columns of restated key,
+   * merely quieter. `describeBlobRefusals` deliberately does not print this
+   * counter either, for the reason that module already gives about
+   * `realizationsContentDeferred`: a line that fires on every run over every
+   * repository is not a signal.
+   */
+  readonly blobsWithoutParser: number;
   /**
    * `contentState: 'none'` rows that name a directory.
    *
@@ -373,7 +490,14 @@ export interface BlobPopulationOptions {
    * Defaults to the process-wide instance.
    */
   parseCache?: ParseCache | undefined;
+  /**
+   * How, and whether, to move parsing off this thread.
+   *
+   * Defaults are what a command gets; see {@link ParsePoolPolicy}.
+   */
+  parsePool?: ParsePoolPolicy | undefined;
 }
+
 
 /** One blob to derive, and the path its bytes are read from. */
 interface BlobTarget {
@@ -397,6 +521,13 @@ interface BlobTarget {
  *
  * Running it twice against one builder changes nothing: a blob whose row is
  * already present is skipped outright, and every `add*` de-duplicates anyway.
+ *
+ * **Concurrency does not weaken any of that.** Reading and parsing happen with a
+ * bounded fan-out ({@link driveInOrder}) and may finish in any order; every
+ * `builder.*` call happens afterwards, in target order, from
+ * {@link emitPreparedBlob}. The row order is a function of the corpus and of
+ * nothing else — not of the fan-out width, not of which worker answered first,
+ * not of whether a pool ran at all.
  *
  * ## A failure is a row, never an abort
  *
@@ -423,24 +554,58 @@ export async function populateBlobs(
     if (row.contentKey === null) countUnkeyedRealization(row, counts);
   }
 
+  const pending = pendingTargets(base, counts);
+  const dispatcher = new ParseDispatcher(cache, options.parsePool ?? {});
+  try {
+    await driveInOrder(
+      pending,
+      dispatcher,
+      async (target) => prepareBlob(target, base, dispatcher),
+      (prepared) => emitPreparedBlob(builder, prepared, counts),
+      // The key's own prefix is the routing record — see `parserKindOf`, which
+      // is the single authority so this cannot drift from what `prepareBlob`
+      // decides, and which answers without touching the file.
+      (from) => tallyParsable(pending, from, (target) => parserKindOf(target.contentKey)),
+    );
+  } finally {
+    // ⚠️ In a `finally`, and it must stay there. `pool.shutdown()` is what closes
+    // each worker's port gracefully so its `exit` listeners run and its
+    // parse-timing dump reaches disk; a run that threw past this would leave live
+    // threads, and a process that exits with live threads runs none of their exit
+    // listeners. See `parse-pool.ts` — `terminate()` is not shutdown.
+    await dispatcher.shutdown();
+  }
+
+  return counts;
+}
+
+/**
+ * The targets this run must actually derive, charging the ones it need not.
+ *
+ * Split out of the loop so the loop below receives a plain list: the drive claims
+ * targets by INDEX and emits by index, and a `continue` in the middle of the
+ * enumeration would make "the target at position n" a different blob on the two
+ * sides.
+ *
+ * @param base - The projection built so far
+ * @param counts - The accumulator; charges {@link BlobPopulationResult.blobsAlreadyPresent}
+ * @returns The targets with no `blobs` row yet, in content-key order
+ */
+function pendingTargets(base: ProjectionBase, counts: MutableCounts): BlobTarget[] {
   const alreadyPresent = new Set(base.blobs.map((row) => row.contentKey));
+  const pending: BlobTarget[] = [];
 
   for (const target of blobTargets(base)) {
     if (alreadyPresent.has(target.contentKey)) {
       counts.blobsAlreadyPresent += 1;
       continue;
     }
-    // Sequential rather than fanned out with `Promise.all`: each iteration reads
-    // and parses a whole file, and one file handle per corpus blob in flight is
-    // how a large corpus meets EMFILE. `FilesystemExtentContributor` keys the
-    // same bytes under the same constraint for the same reason. (With a run
-    // cache present the read is usually a memo hit rather than a handle, but the
-    // parse still costs, and a builder with no cache is still reachable.)
-    await deriveBlob(builder, target, base, cache, counts);
+    pending.push(target);
   }
 
-  return counts;
+  return pending;
 }
+
 
 /** A zeroed accumulator — one place that knows every bucket. */
 function emptyCounts(): MutableCounts {
@@ -451,6 +616,7 @@ function emptyCounts(): MutableCounts {
     blobsContentChanged: 0,
     blobsParseFailed: 0,
     blobsNotText: 0,
+    blobsWithoutParser: 0,
     realizationsSkippedDirectory: 0,
     realizationsSkippedAbsent: 0,
     realizationsSkippedDanglingSymlink: 0,
@@ -578,46 +744,199 @@ function blobTargets(base: ProjectionBase): BlobTarget[] {
 }
 
 /**
- * Read, parse and record one blob.
+ * Which refusal counter a {@link RefusedBlob} charges.
  *
- * @param builder - The builder to add rows to
- * @param target - The blob and the path its bytes come from
- * @param base - The projection built so far, supplying the corpus root the
- *   target's path is relative to and the run's content cache
- * @param cache - The parse cache to consult
- * @param counts - The accumulator
+ * A key of {@link MutableCounts} rather than a private enum, so the bucket and
+ * the counter cannot drift: a renamed counter stops this compiling, whereas a
+ * `switch` mapping one to the other would happily keep charging the old one.
  */
-async function deriveBlob(
-  builder: ProjectionBuilder,
+type RefusalBucket = 'blobsUnreadable' | 'blobsContentChanged' | 'blobsNotText' | 'blobsParseFailed';
+
+/** A blob the stage declined, with the row and the bucket that say why. */
+interface RefusedBlob {
+  outcome: 'refused';
+  bucket: RefusalBucket;
+  row: BlobConditionRow;
+}
+
+/** A blob whose facts are ready to be written into the builder. */
+interface DerivedBlob {
+  outcome: 'derived';
+  target: BlobTarget;
+  keyed: KeyedContent;
+  parsed: ParseResult;
+  /** A `none.` key — charges {@link BlobPopulationResult.blobsWithoutParser}. */
+  withoutParser: boolean;
+}
+
+/**
+ * Everything {@link prepareBlob} can conclude, as a VALUE.
+ *
+ * The whole point of the type: preparation runs concurrently, so anything it
+ * decided has to be carried back to the sequential half rather than written
+ * where it was decided. A prepare that recorded its own condition row would put
+ * `blob_conditions` in completion order while `blobs` stayed in target order —
+ * two tables from one run disagreeing about what "first" means.
+ */
+type PreparedBlob = RefusedBlob | DerivedBlob;
+
+/**
+ * Read and parse one blob, deciding everything and recording nothing.
+ *
+ * ⛔ It must stay free of side effects on the builder and the counters. This is
+ * the half that runs concurrently — see {@link driveInOrder} — so a
+ * `builder.*` call here would order rows by which read finished first.
+ *
+ * @param target - The blob and the path its bytes come from
+ * @param base - Supplies the corpus root and the run's content cache
+ * @param dispatcher - Decides whether the parse runs here or on a worker
+ * @returns What this blob turned out to be, for the caller to emit in order
+ * @throws {ParserUnavailableError} If the parser module cannot be loaded — a
+ *   broken install fails the run rather than accusing the corpus
+ */
+async function prepareBlob(
   target: BlobTarget,
   base: ProjectionBase,
-  cache: ParseCache,
-  counts: MutableCounts,
-): Promise<void> {
-  const keyed = await readTarget(builder, target, base, counts);
-  if (keyed === null) return;
+  dispatcher: ParseDispatcher,
+): Promise<PreparedBlob> {
+  // Read back HERE rather than inside `readTarget`, which would put it inside
+  // that function's `try`: a key naming no kind is a producer bug, and reporting
+  // one as `BLOB_UNREADABLE` would blame the corpus for it.
+  const parserKind = parserKindOf(target.contentKey);
+  const keyed = await readTarget(target, parserKind, base);
+  if ('outcome' in keyed) return keyed;
 
   // Before the parse, never after: the whole cost this refuses IS the parse.
   // And after the DECODE, never before — see {@link looksBinary} for why a sniff
   // over raw bytes refuses every UTF-16 document, and for why the test is on the
-  // content rather than on the extension.
+  // content rather than on the extension. Ahead of the kind split below, because
+  // a `none`-routed binary is just as much a waste as a markdown-routed one.
   if (looksBinary(keyed.content)) {
-    counts.blobsNotText += 1;
-    builder.addBlobCondition(condition(
+    return refused('blobsNotText', condition(
       target.contentKey,
       BLOB_NOT_TEXT,
       `"${target.path}" contains a NUL within the first ${BINARY_SNIFF_CHARS} characters of its`
       + ' decoded content, so it is not text; no parser was run over it. This blob has no sections'
       + ' or references because it cannot have any, not because it was skipped silently',
     ));
+  }
+
+  // THE kind split. `isParsableContent` is a type guard rather than a
+  // `parserKind !== 'none'` comparison because narrowing a property does not
+  // narrow the object, and the parse path accepts only the narrowed type — so
+  // forgetting this branch is a compile error at the call site rather than a
+  // parser handed bytes nothing routed to it.
+  if (!isParsableContent(keyed)) {
+    return { outcome: 'derived', target, keyed, parsed: unparsedFacts(keyed), withoutParser: true };
+  }
+
+  const parsed = await parseTarget(target, keyed, dispatcher);
+  if ('outcome' in parsed) return parsed;
+  return { outcome: 'derived', target, keyed, parsed, withoutParser: false };
+}
+
+/**
+ * A refusal, paired with the counter it charges.
+ *
+ * @param bucket - Which counter emission should charge
+ * @param row - The condition row emission should add
+ * @returns The refusal, for {@link emitPreparedBlob} to record in order
+ */
+function refused(bucket: RefusalBucket, row: BlobConditionRow): RefusedBlob {
+  return { outcome: 'refused', bucket, row };
+}
+
+/**
+ * Write one prepared blob into the builder, and charge what it cost.
+ *
+ * THE sequential half. Every mutation this stage performs happens here, and it
+ * is called in target order, which is what makes the row order a function of the
+ * corpus rather than of the machine.
+ *
+ * The counters are charged here too, though every one of them is a pure sum:
+ * charging them in preparation would work today and would silently stop working
+ * the first time a counter cares about order.
+ *
+ * @param builder - The builder to add rows to
+ * @param prepared - What preparation concluded about one blob
+ * @param counts - The accumulator
+ */
+function emitPreparedBlob(
+  builder: ProjectionBuilder,
+  prepared: PreparedBlob,
+  counts: MutableCounts,
+): void {
+  if (prepared.outcome === 'refused') {
+    counts[prepared.bucket] += 1;
+    builder.addBlobCondition(prepared.row);
     return;
   }
 
-  const parsed = await parseTarget(builder, target, keyed, cache, counts);
-  if (parsed === null) return;
-
-  emitBlobRows(builder, target, keyed, parsed, counts);
+  if (prepared.withoutParser) counts.blobsWithoutParser += 1;
+  emitBlobRows(builder, prepared.target, prepared.keyed, prepared.parsed, counts);
   counts.blobsDerived += 1;
+}
+
+/**
+ * The code context a blob with no AST has: none.
+ *
+ * `findLexicalReferences` normally receives the ranges `collectCodeContextRanges`
+ * walked out of the tree, and a `none` blob has no tree. Empty ranges are honest
+ * rather than lossy here, and the measurement is what says so: the
+ * fence/code-span annotation covered 0.0–2.7% of source files, and on those it
+ * **inverted** — a backtick in a JSDoc comment read `inCodeSpan: true` while the
+ * executable code beneath it read `false`, because remark was reading TypeScript
+ * as CommonMark. An annotation that is wrong exactly where it applies is worth
+ * less than an absent one, and every consumer already handles `false`.
+ *
+ * `excluded` is empty for a second, independent reason: it suppresses tokens
+ * inside `link` / `image` / `yaml` / `html` NODES, so that a markdown link's
+ * destination is not counted twice. Nothing is being double-counted here,
+ * because no AST recorded it the first time.
+ *
+ * Shared rather than rebuilt per blob — the lexer only reads it — since being
+ * cheap is the point of this route.
+ */
+const NO_CODE_CONTEXT: CodeContextRanges = { fences: [], codeSpans: [], excluded: [] };
+
+/**
+ * The facts a blob with no document parser has: everything derivable from its
+ * bytes, and nothing derivable from a tree.
+ *
+ * Assembled here rather than fetched from a parser because there is no parser to
+ * fetch it from — that is what `none` *means*. The empty fields are empty
+ * because the document genuinely has no such facts, not because they were
+ * skipped: `links` and `headings` are AST products, and `anchors`,
+ * `parseErrors`, `unresolvedReferences` and the frontmatter trio are omitted
+ * exactly as `parseHtmlContent` omits the ones it cannot produce.
+ *
+ * ⚠️ Deliberately NOT routed through {@link ParseCache}. An entry buys the cost
+ * of the computation it replaces, and this one is `estimateTokens`, one lexer
+ * scan and one offset walk — over a cold population of 8,713 documents the whole
+ * `estimateTokens` pass measured 0.0006 s against `remark-parse`'s 66.0 s. Filing
+ * that behind a disk read, a JSON parse and a Zod validate would cost more than
+ * it saves, and would put a second, staler answer where the bytes already are.
+ *
+ * @param keyed - The confirmed read, of the kind no parser routes to
+ * @returns Parse facts describing exactly what the bytes say and nothing more
+ */
+function unparsedFacts(keyed: KeyedContent): ParseResult {
+  const lexicalReferences = findLexicalReferences(keyed.content, NO_CODE_CONTEXT);
+  return {
+    links: [],
+    headings: [],
+    // Omitted when empty, matching `parseMarkdownContent`: no own property of a
+    // `ParseResult` is ever valued `undefined`, and the cache's JSON round trip
+    // is exact under `toStrictEqual` only while that holds.
+    ...(lexicalReferences.length > 0 && { lexicalReferences }),
+    // No fence ranges, because no AST said where any are — so every code unit
+    // counts as prose. That is the only thing that can honestly be said, and it
+    // keeps `proseCodeUnits + codeBlockCodeUnits === content.length` true.
+    contentMeasures: measureContent(keyed.content, []),
+    content: keyed.content,
+    sizeBytes: keyed.byteLength,
+    estimatedTokenCount: estimateTokens(keyed.content),
+  };
 }
 
 /**
@@ -632,9 +951,10 @@ async function deriveBlob(
  * ## The read goes through the run's cache, so it is the base's read
  *
  * `content-cache.ts` holds what the base already read for this path, keyed on
- * `(path, parserKind)` — and `parserKindOf` reads the routing back off the
- * content key, which is the same answer `collectRealization` recorded it from.
- * So inside `populate()` this is a memo hit, not a third traversal of the file.
+ * `(path, parserKind)` — and the caller got `parserKind` from
+ * {@link parserKindOf}, which reads the routing back off the content key, the
+ * same answer `collectRealization` recorded it from. So inside `populate()` this
+ * is a memo hit, not a third traversal of the file.
  *
  * That makes both failure branches below **unreachable for a path this run
  * already read**: the cached bytes are by construction the bytes the key names,
@@ -649,45 +969,37 @@ async function deriveBlob(
  * bytes that key names — the identical position a row keyed at enumeration time
  * is in, reached one stage later.
  *
- * @param builder - The builder to record a condition on
  * @param target - The blob and its path
+ * @param parserKind - The routing read back off the key by {@link parserKindOf}.
+ *   It must be the kind the key names, or the read computes a different key and
+ *   every blob looks like it changed under the run.
  * @param base - Supplies the absolute corpus root and the run's content cache
- * @param counts - The accumulator
- * @returns The read, or null when a condition was recorded instead
+ * @returns The read, or the refusal to emit in its place
  */
 async function readTarget(
-  builder: ProjectionBuilder,
   target: BlobTarget,
+  parserKind: ParserKind,
   base: ProjectionBase,
-  counts: MutableCounts,
-): Promise<KeyedContent | null> {
+): Promise<KeyedContent | RefusedBlob> {
   let keyed: KeyedContent;
   try {
-    keyed = await readKeyedContent(
-      safePath.join(base.root, target.path),
-      parserKindOf(target.contentKey),
-      base.contentCache,
-    );
+    keyed = await readKeyedContent(safePath.join(base.root, target.path), parserKind, base.contentCache);
   } catch (error) {
-    counts.blobsUnreadable += 1;
-    builder.addBlobCondition(condition(
+    return refused('blobsUnreadable', condition(
       target.contentKey,
       BLOB_UNREADABLE,
       `The bytes for "${target.path}" could not be read during blob derivation (${errorLabel(error)});`
       + ' this blob has no rows because it could not be observed, not because it has nothing to say',
     ));
-    return null;
   }
 
   if (keyed.key !== target.contentKey) {
-    counts.blobsContentChanged += 1;
-    builder.addBlobCondition(condition(
+    return refused('blobsContentChanged', condition(
       target.contentKey,
       BLOB_CONTENT_CHANGED,
       `"${target.path}" now keys to ${keyed.key}, so its current bytes are not this blob's;`
       + ' deriving from them would file one blob\'s facts under another blob\'s key',
     ));
-    return null;
   }
 
   return keyed;
@@ -696,9 +1008,12 @@ async function readTarget(
 /**
  * Parse a blob, recording a condition instead of propagating a throw.
  *
- * Reachable rather than defensive: every keyed blob is derived, including the
- * non-markdown ones, so the markdown parser is handed arbitrary bytes by design.
- * One of them failing must not abort a whole population.
+ * Reachable rather than defensive, and MIME routing did not make it less so. A
+ * `.md` file may hold anything at all; `text/plain` — a `.txt`, an extensionless
+ * `README` — routes to the markdown parser deliberately (see
+ * `parserKindForMimeType`); and typing is by NAME, so a renamed archive that
+ * survives the binary sniff still reaches a parser. One document failing must
+ * not abort a whole population.
  *
  * ⚠️ A broken INSTALL must not be reported as a broken DOCUMENT. The parser
  * arrives by `import()` from inside `parseKeyed`, so a module that cannot be
@@ -717,37 +1032,38 @@ async function readTarget(
  * its docstring). The errno classes remain indistinguishable by inspection —
  * that is why nothing here inspects.
  *
- * @param builder - The builder to record a condition on
+ * The guard covers the pooled route too: a worker's `ParserUnavailableError`
+ * arrives as a plain `Error` — structured clone cannot carry a class — but it
+ * still wears the original `code`, which is the half `isParserUnavailable`
+ * matches on. That is why the code exists rather than only the class.
+ *
  * @param target - The blob and its path
- * @param keyed - The confirmed read
- * @param cache - The parse cache to consult
- * @param counts - The accumulator
- * @returns The parse, or null when a condition was recorded instead
+ * @param keyed - The confirmed read, narrowed to a kind that HAS a parser. The
+ *   narrowing is the caller's, and it is why no branch in here has to invent an
+ *   answer for a blob nothing parses.
+ * @param dispatcher - Decides whether the parse runs here or on a worker
+ * @returns The parse, or the refusal to emit in its place
  * @throws {ParserUnavailableError} If the parser module cannot be loaded — a
  *   broken install fails the run rather than accusing the corpus
  */
 async function parseTarget(
-  builder: ProjectionBuilder,
   target: BlobTarget,
-  keyed: KeyedContent,
-  cache: ParseCache,
-  counts: MutableCounts,
-): Promise<ParseResult | null> {
+  keyed: ParsableContent,
+  dispatcher: ParseDispatcher,
+): Promise<ParseResult | RefusedBlob> {
   try {
-    return await parseKeyed(keyed, cache);
+    return await dispatcher.parse(keyed);
   } catch (error) {
     // The install, not the document. See the ⚠️ block above for why this is a
     // type check and not a hoist, and `isParserUnavailable` for why matching one
     // constructed type is not the guessed blocklist that preceded it.
     if (isParserUnavailable(error)) throw error;
 
-    counts.blobsParseFailed += 1;
-    builder.addBlobCondition(condition(
+    return refused('blobsParseFailed', condition(
       target.contentKey,
       BLOB_PARSE_FAILED,
       `The ${keyed.parserKind} parser threw on the bytes at "${target.path}" (${errorLabel(error)})`,
     ));
-    return null;
   }
 }
 
@@ -811,11 +1127,27 @@ function emitBlobRows(
  * caller deliberately parses `.html` as markdown, so the two answers can
  * legitimately differ.
  *
+ * Exported for one reason: the mislabel this function shipped is invisible to
+ * `tsc` — every branch returns a valid {@link ParserKind} — so the only thing
+ * that can catch it is a test that asks all three prefixes directly.
+ *
  * @param contentKey - A `<parserKind>.<sha256>` key
  * @returns The parser kind the key names
+ * @throws {Error} If the key names no kind. Unreachable through
+ *   `ContentKeySchema`, which is exactly why guessing would be worse: a default
+ *   would derive a whole blob's worth of real-looking facts under a parser
+ *   nothing routed those bytes to, and nothing downstream could tell.
  */
-function parserKindOf(contentKey: string): ParserKind {
-  return contentKey.startsWith(HTML_KEY_PREFIX) ? 'html' : 'markdown';
+export function parserKindOf(contentKey: string): ParserKind {
+  const kind = PARSER_KIND_BY_PREFIX.get(contentKey.slice(0, contentKey.indexOf('.') + 1));
+  if (kind === undefined) {
+    throw new Error(
+      `Content key "${contentKey}" names no parser kind. Keys are minted only by `
+      + '`computeContentKey` and validated by `ContentKeySchema`, so this is a producer bug '
+      + 'rather than anything the corpus did.',
+    );
+  }
+  return kind;
 }
 
 /**

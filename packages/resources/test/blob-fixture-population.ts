@@ -58,7 +58,7 @@ export async function baseBuilderForRoot(
   order: RealizationOrder = IN_CRAWL_ORDER,
   contentCache?: RunContentCache,
 ): Promise<ProjectionBuilder> {
-  const builder = new ProjectionBuilder(rootDir, undefined, contentCache);
+  const builder = new ProjectionBuilder({ root: rootDir, contentCache });
   const contribution = await new FilesystemExtentContributor().contribute(builder.base(), null);
   for (const row of contribution.contexts) builder.addContext(row);
   for (const row of contribution.resources) builder.addResource(row);

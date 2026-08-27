@@ -35,13 +35,17 @@ import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 
 import {
-  crawlDirectorySync,
   fileContentHash,
-  gitFindRoot,
-  NEVER_CRAWL_GLOBS,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import {
+  crawlDirectorySync,
+  NEVER_CRAWL_GLOBS,
+} from '@vibe-agent-toolkit/utils/crawl';
+import {
+  gitFindRoot,
+} from '@vibe-agent-toolkit/utils/git';
 
 import type { SubjectRef, SubjectVersion } from '../envelope/coordinate.js';
 

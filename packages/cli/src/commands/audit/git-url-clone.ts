@@ -13,7 +13,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 
 import { cloneGitSource } from '@vibe-agent-toolkit/agent-skills';
-import { normalizedTmpdir, safePath, type ParsedGitUrl } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { type ParsedGitUrl } from '@vibe-agent-toolkit/utils/git';
 
 import type { Provenance } from './provenance.js';
 

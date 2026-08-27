@@ -67,7 +67,14 @@ import {
   type Projection,
   type ProjectionBase,
 } from '@vibe-agent-toolkit/resources';
-import { crawlDirectory, GitTracker, mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
+import { crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
+import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { crawlSkillLinkRegistry, INVENTORY_REFUSED_GITIGNORED, inventoryExtentContributorId, inventoryExtentDeclaration, InventorySkillExtentContributor } from '../../src/index.js';
@@ -286,7 +293,7 @@ function baseFrom(
   extentIds: ReadonlySet<string>,
   gitTracker: GitTracker | undefined,
 ): ProjectionBase {
-  const builder = new ProjectionBuilder(root, gitTracker);
+  const builder = new ProjectionBuilder({ root, gitTracker });
   builder.addRoot({ id: builder.identities.rootId, path: safePath.resolve(root) });
 
   for (const row of projection.resources) builder.addResource(row);

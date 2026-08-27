@@ -79,15 +79,17 @@
  * `process.wallMs` is the process's whole lifetime, not the parse's; it is a
  * denominator for the divergence, never a parse duration.
  *
- * ⚠️ REVIEW FINDING 2026-08-14 — that denominator is only meaningful PER
- * PROCESS, and the lab's reader currently SUMS it across the dumps of one run
- * (`packages/lab/src/facets/parse/dump.ts`, `addDumpTotals`). Under `vat
- * validate` the parent orchestrator is alive for the whole run and parses
- * nothing, so its lifetime contains every child's and the sum double-counts real
- * time while CPU adds correctly — deflating the ratio the reader trusts. Nothing
- * in this dump says which pid is the parent, which is why the fix is a design
- * call and not a one-liner. Single-process commands (`resources validate`) are
- * unaffected. See that module's annotation.
+ * ⚠️ That denominator is only meaningful PER PROCESS, which is why exactly one
+ * thread reads it and exactly one file carries it — see {@link ParseTimingDump}.
+ * A reader that summed one process's lifetime once per thread would divide CPU
+ * by a denominator too large by the pool's width, and the result reads as a
+ * performance regression of that factor.
+ *
+ * The question this seam does NOT answer is several PROCESSES of one run: an
+ * orchestrator's lifetime contains its children's, so summing those
+ * double-counts real time. `vat validate`, `vat verify` and `vat build` run
+ * their phases in-process, so there is one process to report and the case is
+ * vacant rather than solved.
  *
  * ## Why the gate is read at module load — and why that does not contradict
  * `parse-cache.ts`
@@ -114,6 +116,8 @@
  * what enables the seam. An empty-string value counts as absent.
  */
 
+import { isMainThread, threadId } from 'node:worker_threads';
+
 import {
   ensureTimingDirectory,
   normalizeTimingDirectory,
@@ -136,21 +140,30 @@ export const ParsePass = {
   EstimateTokens: 0,
   RemarkProcessor: 1,
   RemarkParse: 2,
-  AstFacts: 3,
-  UnresolvedReferences: 4,
-  CodeContextRanges: 5,
-  LexicalReferences: 6,
-  MeasureContent: 7,
+  /**
+   * A redundant micromark tokenize, charged only when the split probe is on.
+   *
+   * Sits beside {@link RemarkParse} rather than inside it: the two brackets
+   * overlap in meaning, not in time, and tree building is the SUBTRACTION of
+   * this row from that one. See `parse-tokenize-probe.ts` for why the tokenize
+   * is measured and the tree build derived, and why this row is normally 0.
+   */
+  MicromarkTokenize: 3,
+  AstFacts: 4,
+  UnresolvedReferences: 5,
+  CodeContextRanges: 6,
+  LexicalReferences: 7,
+  MeasureContent: 8,
   /** Brackets the whole markdown parse. Always last in its group. */
-  MarkdownTotal: 8,
+  MarkdownTotal: 9,
 
   // HTML — `parseHtmlContent` in html-link-parser.ts.
-  HtmlParse: 9,
-  HtmlElementWalk: 10,
-  HtmlEstimateTokens: 11,
-  HtmlMeasureContent: 12,
+  HtmlParse: 10,
+  HtmlElementWalk: 11,
+  HtmlEstimateTokens: 12,
+  HtmlMeasureContent: 13,
   /** Brackets the whole HTML parse. Always last in its group. */
-  HtmlTotal: 13,
+  HtmlTotal: 14,
 } as const;
 
 /**
@@ -167,6 +180,38 @@ export type ParsePassSlot = (typeof ParsePass)[keyof typeof ParsePass];
  *
  * Numeric for the same reason {@link ParsePass} is: the document counters are
  * `Float64Array`s and the recording call site is hot.
+ *
+ * ⚠️ **Not** `content-key.ts`'s `ParserKind`, which shares the name and is a
+ * different set. That one is a ROUTING answer and has a third member, `none`,
+ * naming the absence of a parser. This one enumerates *instrumented parsers*, so
+ * `none` has no slot here.
+ *
+ * 🚨 **The reason it has no slot is NOT that nothing runs.** That claim stood
+ * here and was false, because there are two `none` routes and it described only
+ * the cheap one:
+ *
+ * - `resource-registry.ts`'s `unparsedResourceFacts` runs `estimateTokens` and
+ *   nothing else. ✅ Effectively free, and nothing worth bracketing.
+ * - `projection/blob-population.ts`'s `unparsedFacts` runs **three real passes
+ *   over the full content** — `findLexicalReferences`, `measureContent` and
+ *   `estimateTokens` — on every non-prose file. ❌ That work is real, it is
+ *   unattributed, and it is the lane `claude context`, `claude budget` and cold
+ *   population all use.
+ *
+ * The gap is **bounded, not zero**: the same three passes measured 605 ms +
+ * 469 ms + 0.585 ms over 8,713 documents / 108.9 MB, so on an adopter tree whose
+ * `none` route now covers ~77 MB it is ~0.8 s against a 16 s cold run — under 5%,
+ * while `remark-parse` is 55%. Small enough that no parse-budget conclusion has
+ * turned on it so far; large enough that "nothing runs" must not be written here
+ * again.
+ *
+ * ⛔ Whether to add a third group is a **live decision, not an oversight**, and
+ * it is not free: a third group changes the dump's shape, so `lab`'s strict dump
+ * schema refuses every dump written before it and its strict body schema refuses
+ * every stored report — automatically, and with nobody to remember anything.
+ * `parse-timing.test.ts` pins the exclusion deliberately.
+ * Until it is taken, the renderer names its denominator as the parsed subset so
+ * the omission cannot read as a measurement of the whole tree.
  */
 export const ParserKind = {
   Markdown: 0,
@@ -176,8 +221,101 @@ export const ParserKind = {
 /** One of {@link ParserKind}'s slot indices. */
 export type ParserKindSlot = (typeof ParserKind)[keyof typeof ParserKind];
 
+/**
+ * Work the parse TIER does around a parse, as array indices.
+ *
+ * ## Why this is a top-level section and not a third `kinds[]` entry
+ *
+ * Reusing {@link ParseKindShape} would have been cheapest, and it is wrong.
+ * {@link PARSE_KIND_SHAPES} is documented as positionally aligned with
+ * {@link ParserKind} and `parse-timing.test.ts` pins that length — but the real
+ * objection is semantic: every consumer reads `kinds` as *parser* kinds, so a
+ * cache read or a `postMessage` folded in there would land inside "which parser
+ * dominates this tree". That is the denominator bug `ca99aedb` fixed one level
+ * up, reintroduced one level down. The codebase already paid to learn it.
+ *
+ * So tier work gets its own bracket, in its own accumulators, beside `kinds` and
+ * never inside it. `kinds` keeps meaning exactly "parser kinds", and the
+ * per-group "the total brackets its passes" invariant stays true because nothing
+ * was added to a group.
+ *
+ * ## Why there is no bracketing total here
+ *
+ * The parser groups have one because a parse is a single nested operation whose
+ * passes are its parts, so a remainder is meaningful. These rows are not parts
+ * of a shared whole — a cache read and a worker's reply serialization are
+ * unrelated operations on two different threads — so a "tier total" would be a
+ * denominator for a share nobody should compute. The rows stand alone and are
+ * read as absolute per-call costs.
+ *
+ * ## What each row is for
+ *
+ * The first three answer *what does the parent pay to use the cache*, split at
+ * the one seam that matters: a MISS pays only the failed `readFile`, a HIT pays
+ * that plus the decode. Averaging them into one `cache-read` would report a
+ * per-document cost that describes neither.
+ *
+ * The rest answer *what does the parent pay to use a worker*. `wire-dispatch` is
+ * the one `parse-pool.ts` has always named and never measured — "every document
+ * crosses the boundary as a structured clone of its full content string, charged
+ * to the PARENT thread, so it is serial". `wire-roundtrip` minus `worker-job` is
+ * an UPPER BOUND on transit (serialize + queue + deserialize + scheduling), and
+ * it is an upper bound rather than a measurement because a parent that is busy
+ * when the reply lands charges its own delay to this row.
+ *
+ * 🪤 **Structured-clone DESERIALIZATION cannot be bracketed here and no row
+ * claims to.** Node deserializes a message before it dispatches the `message`
+ * event, so by the time any listener can read the clock the work is done. That
+ * is why {@link TierPass.WireAttach} is scoped to `attachContent` alone and
+ * named for it: a row called `wire-receive` would read as the whole receive
+ * cost and silently under-report it. The consequence for an A/B is stated
+ * rather than hidden — the wire arm's measured parent cost is a LOWER bound, so
+ * "the wire arm looks cheaper" is not decidable from these rows alone, while
+ * "the cache arm is cheaper" would be.
+ */
+export const TierPass = {
+  /** The awaited `readFile` in `ParseCache.get` — charged on hit and miss alike. */
+  CacheReadIo: 0,
+  /** `JSON.parse` + schema validation + rehydrate. Charged on a HIT only. */
+  CacheReadDecode: 1,
+  /** The whole of `ParseCache.set`: stringify, `mkdir`, write, rename. */
+  CacheWrite: 2,
+  /** Parent-side `postMessage` of a parse request — the content clone. */
+  WireDispatch: 3,
+  /** Parent-side dispatch to reply-in-hand. See the upper-bound note above. */
+  WireRoundtrip: 4,
+  /** Parent-side `attachContent` ONLY. Deliberately not the deserialize. */
+  WireAttach: 5,
+  /** Worker-side: request received to reply posted. */
+  WorkerJob: 6,
+  /** Worker-side `postMessage` of the reply — the facts clone. */
+  WorkerReply: 7,
+} as const;
+
+/** One of {@link TierPass}'s slot indices. */
+export type TierPassSlot = (typeof TierPass)[keyof typeof TierPass];
+
+/**
+ * What each {@link TierPass} slot is called in the dump, positionally aligned.
+ *
+ * This array IS the dump's `tier` order — the contract a reader parses against.
+ * `parse-timing.test.ts` pins the length against {@link TierPass} and pins every
+ * name as disjoint from every parser pass name, so a tier row can never be
+ * summed into a parser kind's denominator by a reader matching on name.
+ */
+export const TIER_PASS_NAMES: readonly string[] = [
+  'cache-read-io',
+  'cache-read-decode',
+  'cache-write',
+  'wire-dispatch',
+  'wire-roundtrip',
+  'wire-attach',
+  'worker-job',
+  'worker-reply',
+];
+
 /** How many slots {@link ParsePass} declares. */
-const PASS_SLOT_COUNT = 14;
+const PASS_SLOT_COUNT = 15;
 
 /**
  * What one parser kind contributes to the dump.
@@ -205,6 +343,11 @@ export interface ParseKindShape {
  * This array IS the dump's `kinds` order and each entry's `passNames` IS that
  * group's `passes` order — the contract a reader parses against. Do not reorder
  * either without versioning the dump.
+ *
+ * One entry per {@link ParserKind} slot, and `parse-timing.test.ts` pins both the
+ * order and the LENGTH — an instrumented parser added to one and not the other
+ * would otherwise be timed and never reported, or reported and never timed, with
+ * every number in the dump still looking plausible.
  */
 export const PARSE_KIND_SHAPES: readonly ParseKindShape[] = [
   {
@@ -213,6 +356,7 @@ export const PARSE_KIND_SHAPES: readonly ParseKindShape[] = [
       'estimate-tokens',
       'remark-processor',
       'remark-parse',
+      'micromark-tokenize',
       'ast-facts',
       'unresolved-references',
       'code-context-ranges',
@@ -270,27 +414,90 @@ export interface ParseTimingKind {
  */
 export type ParseTimingProcess = TimingProcess;
 
-/** The on-disk dump shape. Versioned so a reader can refuse an unknown layout. */
-export interface ParseTimingDump {
-  dumpVersion: number;
-  pid: number;
-  /** See {@link ParseTimingProcess}. Lifetime figures, not parse durations. */
-  process: ParseTimingProcess;
-  /** Parse-cache outcomes across EVERY parser kind. */
+/**
+ * What ONE thread accumulated — every counter in this module that is a thread's
+ * own rather than the process's.
+ *
+ * ## Why a pid was never enough
+ *
+ * Worker threads share their parent's pid, so `pid` alone cannot distinguish
+ * eight worker threads from eight phase processes. That distinction is not
+ * cosmetic for the tier rows. Every one of them is a cost, and the only question
+ * that matters about a cost in this design is whether it lands on the SERIAL
+ * parent or on a parallel worker: the same `cache-write` milliseconds are a
+ * bottleneck in one place and nearly free in the other. A merge that summed both
+ * would report an identical figure for two arrangements the tier exists to
+ * choose between.
+ *
+ * ⭐ These counters travel to the main thread over the parse pool's own message
+ * channel and are written out by ONE writer — see {@link ParseTimingDump}.
+ */
+export interface ParseThreadTiming {
+  /** `0` on the main thread, a positive integer in a parse worker. */
+  threadId: number;
+  /** Parse-cache outcomes across EVERY parser kind, on this thread. */
   cache: { hits: number; misses: number };
   /** One group per instrumented parser kind, always all of them. */
   kinds: ParseTimingKind[];
+  /**
+   * Work the parse tier did AROUND the parses, in {@link TIER_PASS_NAMES} order.
+   *
+   * Beside `kinds` and never inside it — see {@link TierPass} for why that
+   * placement is the whole point, and for what each row does and does not
+   * measure. Always every row, even at zero.
+   */
+  tier: ParseTimingPass[];
 }
 
 /**
- * Bumped whenever the dump layout changes in a way a reader must notice.
+ * The on-disk dump shape: ONE file per PROCESS, carrying every thread of it.
  *
- * 2 — HTML became a first-class instrumented kind: `documents` and `passes` are
- * grouped per parser kind with a per-kind total (`markdown-total`, `html-total`,
- * replacing the bare `total` that silently meant markdown), and the dump gained
- * process wall/CPU time.
+ * ## Why the process writes once instead of every thread writing for itself
+ *
+ * Each worker thread has its own module instance of this file and its own
+ * accumulators. It hands them back as a {@link ParseThreadTiming} over the parse
+ * pool's existing message channel when it is asked to shut down; the main thread
+ * collects them and writes this file. One writer buys three things, and none of
+ * them is cosmetic:
+ *
+ * - **The counters do not depend on an exit listener having run.** A thread
+ *   closed with `terminate()` never runs its exit listeners, and a process
+ *   exiting with live threads does not run theirs either — so anything a thread
+ *   only writes at its own exit is conditional on a graceful close it does not
+ *   control.
+ * - **There is no filename to race for.** N writers in one process would need a
+ *   collision counter to avoid overwriting each other's file.
+ * - ⭐ **The thread structure is DATA, not an inference from a file count.**
+ *   `process.uptime()` and `process.cpuUsage()` are the PROCESS's, so N files
+ *   would each report the same whole-process lifetime; a reader summing them
+ *   multiplies one lifetime by the pool's width, and the result reads as a
+ *   performance regression of exactly that factor. Read once, by the one thread
+ *   that can meaningfully read it, there is no such sum to make.
+ *
+ * ⚠️ **There is no version field, and adding one back is a defect.** A reader
+ * refuses an unknown layout by validating against its own strict schema, which
+ * moves the instant a field here is added, renamed or retyped — where an integer
+ * moved only when a human remembered. `lab`'s `harness/dumps.ts` is the reading
+ * side; a dump this build cannot model is named and refused there.
  */
-const DUMP_VERSION = 2;
+export interface ParseTimingDump {
+  pid: number;
+  /** See {@link ParseTimingProcess}. Lifetime figures, not parse durations. */
+  process: ParseTimingProcess;
+  /**
+   * Every thread of this process that accumulated anything, main thread FIRST.
+   *
+   * Always carries the main thread, even when it parsed nothing: it is the
+   * denominator for every "what did the serial thread pay" question, and an
+   * absent group and a zero one must never have to be told apart.
+   *
+   * A worker is here only if it answered the shutdown request. One that was
+   * `terminate()`d without answering is absent, and absent VISIBLY: a reader
+   * comparing this count against the pool's width can see that a thread's work
+   * is unaccounted for.
+   */
+  threads: ParseThreadTiming[];
+}
 
 /** Basename stem of a dump file; the pid (and any collision counter) follow. */
 const DUMP_BASENAME = 'parse-timing';
@@ -301,11 +508,35 @@ const DUMP_NOUN = 'parse-timing';
 const passElapsedMs = new Float64Array(PASS_SLOT_COUNT);
 const passCalls = new Float64Array(PASS_SLOT_COUNT);
 
+/**
+ * Tier accumulators, in their OWN arrays rather than appended to the flat parser
+ * slot space.
+ *
+ * Separate arrays are what make it structurally impossible for a tier slot to
+ * leak into a kind group: {@link kindGroup} reads `passElapsedMs` by a slot it
+ * derives from {@link PARSE_KIND_SHAPES}, and there is no index it could compute
+ * that reaches these. Appending to the flat array would have kept the hot path
+ * identical and left that safety to arithmetic.
+ */
+const tierElapsedMs = new Float64Array(TIER_PASS_NAMES.length);
+const tierCalls = new Float64Array(TIER_PASS_NAMES.length);
+
 const documentCounts = new Float64Array(PARSE_KIND_SHAPES.length);
 const documentBytes = new Float64Array(PARSE_KIND_SHAPES.length);
 
 let cacheHits = 0;
 let cacheMisses = 0;
+
+/**
+ * Counters other threads of this process have handed over, in arrival order.
+ *
+ * Only ever non-empty on the main thread: a worker reports to the parent, never
+ * the other way round, and {@link recordThreadTiming} is what the parse pool
+ * calls when a shutting-down worker answers. Held rather than merged, because
+ * the whole point of the shape is that the reader can still see which thread
+ * paid for what — see {@link ParseThreadTiming}.
+ */
+const reportedThreads: ParseThreadTiming[] = [];
 
 /**
  * Where dumps go, or `null` when the seam is off.
@@ -349,20 +580,45 @@ function kindGroup(shape: ParseKindShape, index: number): ParseTimingKind {
 }
 
 /**
- * Build the dump from the current accumulator state.
+ * Build THIS thread's counters.
  *
  * Always emits every kind, and within each every pass, in declared order — so a
  * reader never has to distinguish an absent group or pass from a zero one.
  *
- * @returns A snapshot of every counter
+ * The one function that assembles a thread's record, whether the thread is the
+ * main one snapshotting itself or a worker answering a shutdown request. Two
+ * assembly sites for one published shape is a defect class this codebase has
+ * already paid for, so there is deliberately only one.
+ *
+ * @returns A snapshot of every counter this thread owns
+ */
+function buildThreadTiming(): ParseThreadTiming {
+  return {
+    threadId,
+    cache: { hits: cacheHits, misses: cacheMisses },
+    kinds: PARSE_KIND_SHAPES.map((shape, index) => kindGroup(shape, index)),
+    tier: TIER_PASS_NAMES.map((name, slot) => ({
+      pass: name,
+      calls: tierCalls[slot] ?? 0,
+      elapsedMs: tierElapsedMs[slot] ?? 0,
+    })),
+  };
+}
+
+/**
+ * Build the dump from this process's state: its lifetime, its own thread, and
+ * every worker thread that has reported in.
+ *
+ * The main thread's record is always FIRST, and always present even at zero —
+ * see {@link ParseTimingDump.threads}.
+ *
+ * @returns The whole process's dump
  */
 function buildDump(): ParseTimingDump {
   return {
-    dumpVersion: DUMP_VERSION,
     pid: process.pid,
     process: readTimingProcess(),
-    cache: { hits: cacheHits, misses: cacheMisses },
-    kinds: PARSE_KIND_SHAPES.map((shape, index) => kindGroup(shape, index)),
+    threads: [buildThreadTiming(), ...reportedThreads],
   };
 }
 
@@ -387,18 +643,27 @@ function writeDump(): string | null {
 function resetAccumulators(): void {
   passElapsedMs.fill(0);
   passCalls.fill(0);
+  tierElapsedMs.fill(0);
+  tierCalls.fill(0);
   documentCounts.fill(0);
   documentBytes.fill(0);
   cacheHits = 0;
   cacheMisses = 0;
+  reportedThreads.length = 0;
 }
 
 if (dumpDirectory !== null) {
   ensureTimingDirectory(DUMP_NOUN, dumpDirectory);
-  // Registered ONLY when enabled: a disabled seam must not even add a listener.
-  process.on('exit', () => {
-    writeDump();
-  });
+  // Registered ONLY when enabled, and ONLY on the main thread: this process
+  // writes exactly one dump, carrying every thread. A worker registering this
+  // listener would file a second, partial file reporting the same whole-process
+  // lifetime — see `ParseTimingDump`. Its counters travel over the pool's
+  // channel instead.
+  if (isMainThread) {
+    process.on('exit', () => {
+      writeDump();
+    });
+  }
 }
 
 /**
@@ -424,6 +689,23 @@ export function recordParsePass(pass: ParsePassSlot, startedAt: number): void {
 }
 
 /**
+ * Attribute elapsed time to a tier pass.
+ *
+ * Same gate and the same two `performance.now()` reads as {@link recordParsePass}
+ * — a separate function only because the slot spaces are separate arrays, which
+ * is what keeps tier work out of every parser kind group (see {@link TierPass}).
+ *
+ * @param pass - Which tier slot to charge
+ * @param startedAt - The value {@link parseTimingStart} returned
+ */
+export function recordTierPass(pass: TierPassSlot, startedAt: number): void {
+  if (!timingEnabled) return;
+  const elapsed = performance.now() - startedAt;
+  tierElapsedMs[pass] = (tierElapsedMs[pass] ?? 0) + elapsed;
+  tierCalls[pass] = (tierCalls[pass] ?? 0) + 1;
+}
+
+/**
  * Count one document a parser actually ran over.
  *
  * @param kind - Which parser ran
@@ -433,6 +715,36 @@ export function recordParsedDocument(kind: ParserKindSlot, bytes: number): void 
   if (!timingEnabled) return;
   documentCounts[kind] = (documentCounts[kind] ?? 0) + 1;
   documentBytes[kind] = (documentBytes[kind] ?? 0) + bytes;
+}
+
+/**
+ * This thread's counters, for handing to the thread that writes the dump.
+ *
+ * Called in a parse worker when the pool asks it to shut down — the moment its
+ * counters become final, because it has no job left. Handing them over at that
+ * moment is what makes them independent of whether this thread's exit listeners
+ * ever run, which a thread being `terminate()`d does not get to decide.
+ *
+ * @returns This thread's record, or `null` when the seam is off
+ */
+export function readThreadTiming(): ParseThreadTiming | null {
+  return timingEnabled ? buildThreadTiming() : null;
+}
+
+/**
+ * Take another thread's counters into this process's dump.
+ *
+ * A no-op when the seam is off here: this process writes no dump, so there is
+ * nowhere for the record to go and holding it would be a leak. Note that the
+ * two gates are independent — a worker reads `VAT_PARSE_TIMING` from the env it
+ * was constructed with, so a test can have an instrumented worker report to an
+ * uninstrumented parent, and the record is dropped rather than half-kept.
+ *
+ * @param thread - What {@link readThreadTiming} produced on the other thread
+ */
+export function recordThreadTiming(thread: ParseThreadTiming): void {
+  if (!timingEnabled) return;
+  reportedThreads.push(thread);
 }
 
 /** Count one parse-cache hit — a document the parser did NOT have to run over. */
@@ -467,12 +779,18 @@ export function __setParseTimingForTest(directory: string | null): void {
 }
 
 /**
- * TEST ONLY. Read the accumulators without writing anything.
+ * TEST ONLY. Read this thread's accumulators without writing anything.
  *
- * @returns The dump that would be written right now
+ * Scoped to the THREAD rather than the whole dump because the accumulators are
+ * what a unit test is asserting about: the process figures are a clock reading
+ * with nothing to assert, and the other threads' records are whatever
+ * {@link recordThreadTiming} was handed. A test that wants the assembled file
+ * asks {@link __writeParseTimingDumpForTest} for one and reads it back.
+ *
+ * @returns This thread's counters as they stand
  */
-export function __readParseTimingSnapshot(): ParseTimingDump {
-  return buildDump();
+export function __readParseTimingSnapshot(): ParseThreadTiming {
+  return buildThreadTiming();
 }
 
 /**

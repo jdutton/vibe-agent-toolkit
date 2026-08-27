@@ -102,7 +102,7 @@ function refusalRule(label: string, matchers: Record<string, JsonValue>): Record
 
 /** A base projection holding exactly these files and their reference candidates. */
 function buildBase(files: readonly FixtureFile[]): ProjectionBase {
-  const builder = new ProjectionBuilder(ROOT);
+  const builder = new ProjectionBuilder({ root: ROOT });
   for (const file of files) {
     addFile(builder, file, ROOT);
   }

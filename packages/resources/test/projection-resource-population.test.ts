@@ -3,7 +3,8 @@ import { mkdir, writeFile } from 'node:fs/promises';
 // `safePath`, which has no `dirname` because it never needed one.
 import { dirname } from 'node:path';
 
-import { compareCodeUnits, GitTracker, runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {

@@ -19,6 +19,26 @@ describe('whole-module subpath entries', () => {
   });
 
   /**
+   * `runGit` is reachable from exactly one published entry, and this is it.
+   *
+   * The chokepoint is what makes "git runs with a scrubbed environment" a
+   * property of the package rather than of each caller: `safeExecSync` and
+   * `safeExecResult` refuse the `git` binary and point here. A second route —
+   * `runGit` reappearing on the `.` barrel, or a caller reaching
+   * `git-run.js` some other way — would give the ambient environment a door,
+   * and nothing else in the suite would notice.
+   */
+  it('./git is the only published route to runGit', async () => {
+    const mod = await import('../src/git.js');
+    expect(typeof mod.runGit).toBe('function');
+    expect(typeof mod.runGitOrThrow).toBe('function');
+
+    const barrel: Record<string, unknown> = await import('../src/index.js');
+    expect('runGit' in barrel).toBe(false);
+    expect('runGitOrThrow' in barrel).toBe(false);
+  });
+
+  /**
    * ONE root finder, everywhere — not one per entry.
    *
    * `findGitRoot` was a body-for-body alias: `export function findGitRoot(startDir)
@@ -32,15 +52,19 @@ describe('whole-module subpath entries', () => {
    * Under the pre-1.0 policy (CLAUDE.md: "DO NOT maintain old APIs alongside new
    * ones", "DO remove old code completely"), the alias is deleted rather than
    * relocated. No production code in this repo ever called it.
+   *
+   * The barrel now offers NEITHER name — git is a domain and reaches consumers
+   * through `./git` alone — so the coin flip cannot be reinstated from that side
+   * either.
    */
-  it('./git ships exactly one root finder, and the barrel agrees', async () => {
+  it('./git ships exactly one root finder, and the barrel offers none', async () => {
     const mod = await import('../src/git.js');
     expect('findGitRoot' in mod).toBe(false);
     expect('gitFindRoot' in mod).toBe(true);
 
     const barrel: Record<string, unknown> = await import('../src/index.js');
     expect('findGitRoot' in barrel).toBe(false);
-    expect(typeof barrel['gitFindRoot']).toBe('function');
+    expect('gitFindRoot' in barrel).toBe(false);
   });
 
   it('./crawl exposes directory crawling and the crawl-exclusion globs', async () => {
@@ -102,14 +126,36 @@ describe('whole-module subpath entries', () => {
     expect(mod.ZodTypeNames).toBeDefined();
   });
 
-  it('./template exposes Handlebars rendering', async () => {
-    const mod = await import('../src/template-entry.js');
-    expect(typeof mod.renderTemplate).toBe('function');
-  });
-
   it('./yaml exposes the surgical YAML updater', async () => {
     const mod = await import('../src/yaml.js');
     expect(typeof mod.updateYamlIn).toBe('function');
+  });
+
+  it('./process exposes the spawn and exec primitives', async () => {
+    const mod = await import('../src/process.js');
+    expect(typeof mod.safeExecSync).toBe('function');
+    expect(typeof mod.safeExecResult).toBe('function');
+    expect(typeof mod.spawnHardened).toBe('function');
+    expect(typeof mod.makeStdioBlocking).toBe('function');
+  });
+
+  /**
+   * `./skill-test` carries no dependency of its own; it is a subpath because of
+   * what it REACHES — spawning a headless agent goes through `./process`, which
+   * costs `which` and `@vibe-validate/git`. Left on the `.` barrel it charged
+   * every path-helper importer for both, which is the entire reason the entry
+   * exists. `subpath-purity.test.ts` pins that reachability; this pins the
+   * surface, so a consumer moved onto the entry cannot silently lose half of it.
+   */
+  it('./skill-test exposes the headless-agent harness surface', async () => {
+    const mod = await import('../src/skill-test/index.js');
+    expect(typeof mod.spawnHeadlessClaude).toBe('function');
+    expect(typeof mod.assembleClaudeArgs).toBe('function');
+    expect(typeof mod.killAllActiveClaudeChildren).toBe('function');
+    expect(typeof mod.probeAuthStatus).toBe('function');
+    expect(typeof mod.resolveAuth).toBe('function');
+    expect(typeof mod.applyDeclaredEnv).toBe('function');
+    expect(typeof mod.parseStreamJsonTranscript).toBe('function');
   });
 
   it('./testing exposes the temp-dir suite helpers', async () => {
@@ -120,6 +166,17 @@ describe('whole-module subpath entries', () => {
     // The bounded teardown both suite helpers delegate to. A consumer wiring
     // its own `afterAll` needs it from the same subpath as the helpers.
     expect(typeof mod.removeScratchDir).toBe('function');
+    // 🪤 `detachGitEnv` is asserted HERE, not only in its own unit test, because
+    // it is reached across a package boundary through this subpath. When
+    // `testing.ts` became a definition site as well as a barrel, its
+    // `export *` was dropped and this export vanished — reddening a CLI suite
+    // 20 tests deep in another package rather than anything in `utils`.
+    expect(typeof mod.detachGitEnv).toBe('function');
+    // The literal-corpus primitives, which are defined in `testing.ts` itself
+    // rather than re-exported. Both halves of a mixed module need a pin, or
+    // whichever half is unasserted is the one a later edit deletes.
+    expect(typeof mod.createTempCorpus).toBe('function');
+    expect(typeof mod.replantableCorpus).toBe('function');
   });
 
   it('./asset exposes asset reference resolution', async () => {

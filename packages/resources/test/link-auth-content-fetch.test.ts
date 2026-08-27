@@ -1,14 +1,10 @@
 import { promises as fs } from 'node:fs';
 
-import {
-  type LinkAuthConfig,
-  type Provider,
-  normalizedTmpdir,
-  safePath,
-} from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ContentCache } from '../src/content-cache.js';
+import type { LinkAuthConfig, Provider } from '../src/link-auth/resolve.js';
 import {
   fetchAuthenticated,
   type ContentFetchResult,

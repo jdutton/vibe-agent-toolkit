@@ -142,6 +142,27 @@ export type ContentState = z.infer<typeof ContentStateSchema>;
  * proving ladder's visible-to-you/invisible-to-CI rung reads exactly this
  * column.
  *
+ * ## Why `mime` is here and could never be on `blobs`
+ *
+ * A blob is path-INDEPENDENT and content-addressed; a MIME type is derived from
+ * the path. The two cannot share a row. Measured on one adopter tree: a single
+ * 0-byte blob is realized at **18** distinct paths — 16 `.gitkeep` files and two
+ * `__init__.py` — so `blobs.mime` would be ambiguous by construction, not merely
+ * inconvenient. It sits beside `ext` because it answers the same question one
+ * rung better: `ext` is the raw evidence, `mime` is the conclusion, and the
+ * conclusion is what a consumer wants to group by.
+ *
+ * ⚠️ **`mime` can be CONFIG-dependent, and that reaches the content key.** A
+ * collection may declare a `mimeType` (see `CollectionConfigSchema`), which
+ * changes which parser a path routes to, and the parser kind is mixed into the
+ * content key's digest preimage. So editing `vibe-agent-toolkit.config.yaml` can
+ * change a file's `contentKey`, and every cached parse fact filed under the old
+ * key becomes unreachable the instant the declaration moves. That is sound and
+ * free — the digest IS the invalidation, and no hand-maintained version constant
+ * decides it — but it does mean `content-key.ts`'s "path-independent" framing is
+ * now a statement about the *key function*, not about the *routing decision* that
+ * feeds it.
+ *
  * ## `(extentId, path)` is unique
  *
  * The inverse of one-identity-many-paths also occurs in shipped code:
@@ -171,6 +192,8 @@ export const ResourceRealizationRowSchema = z.object({
   dir: z.string().describe('Root-relative directory containing this path'),
   depth: z.number().int().nonnegative().describe('Path segment count below the root'),
   ext: z.string().describe('Lowercased extension including the leading dot, or "" when none'),
+  mime: z.string().nullable()
+    .describe('What this file IS — from mime-type.ts\'s basename/extension tables, or from the mimeType a matching collection declared. Separate from what was PARSED, which the contentKey\'s prefix says: most typed files legitimately route to no parser, and a corpus that could not tell "we do not parse this" from "we do not know what this is" would be lying about its own coverage. Null means "no type recorded", which is deliberately NOT application/octet-stream — that is a claim of opaque bytes this projection is in no position to make from a path string, and it would make the count of unknowns (the one number that says where the tables need to grow) read as zero forever.'),
   contentKey: ContentKeySchema.nullable()
     .describe('Foreign key to blobs.contentKey for THIS realization\'s bytes, or null — read contentState for WHICH of the three null cases this is'),
   contentState: ContentStateSchema

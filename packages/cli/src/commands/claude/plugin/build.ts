@@ -11,14 +11,14 @@ import { cpSync, existsSync, readFileSync } from 'node:fs';
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 
-import { createProjectRegistry, getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
+import { conventionalSuiteProbe, createProjectRegistry, getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { countBySeverity, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { readSkillName } from '../../../commands/skills/skill-discovery.js';
-import { handleCommandError } from '../../../utils/command-error.js';
+import { reportCommandError } from '../../../utils/command-error.js';
 import { loadConfig } from '../../../utils/config-loader.js';
 import {
   collectPostBuildIssues,
@@ -32,6 +32,7 @@ import { createLogger } from '../../../utils/logger.js';
 import { writeYamlOutput } from '../../../utils/output.js';
 import { withResourcePopulationSource } from '../../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../../utils/skill-packaging-config.js';
+import { finishCommand, type PhaseOutcome } from '../../phase-utils.js';
 import { discoverSkillsFromConfig } from '../../skills/skill-discovery.js';
 import { loadClaudeProjectConfig } from '../claude-config.js';
 
@@ -285,6 +286,17 @@ export async function runClaudePluginBuild(
     : collectDeclaredEvalSuites(skillsConfig, await discoverSkillsFromConfig(skillsConfig, configDir));
   logger.debug(`Project declared eval suites: ${projectSkills.length}`);
 
+  // Once per run for the same reason, and it is the costlier half: resolving a skill's
+  // test-input dirs probes the filesystem for a conventional eval suite under the
+  // subject AND under every entry of `projectSkills`, so a probe rebuilt per skill is
+  // O(S) per skill and O(S²) per run. Measured in the lane that shares this helper
+  // (`vat resources validate`, 103-skill adopter): 10,815 `existsSync` calls over 103
+  // distinct paths, half of that command's entire filesystem traffic.
+  //
+  // Run-scoped, never module-scoped: the answer is a filesystem snapshot, and a cache
+  // outliving the run would keep answering for a tree that has since changed.
+  const suiteProbe = conventionalSuiteProbe();
+
   const results: MarketplaceBuildResult[] = [];
 
   const allPluginNames: string[] = [];
@@ -311,6 +323,7 @@ export async function runClaudePluginBuild(
       rootVersion,
       registry: sharedRegistry,
       projectSkills,
+      suiteProbe,
       logger,
       verbose,
     });
@@ -326,7 +339,15 @@ export async function runClaudePluginBuild(
   return results;
 }
 
-async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<void> {
+/**
+ * Build every configured plugin marketplace and hand back the document and exit
+ * code, printing the document nowhere.
+ *
+ * The phase entry point for `vat build`, whose `claude` phase is this command.
+ */
+export async function runClaudePluginBuildPhase(
+  options: PluginBuildCommandOptions,
+): Promise<PhaseOutcome> {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
@@ -334,12 +355,14 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
     const { configDir, claudeConfig } = await loadClaudeProjectConfig();
 
     if (!claudeConfig?.marketplaces || Object.keys(claudeConfig.marketplaces).length === 0) {
-      writeYamlOutput({
-        status: 'success',
-        message: 'No claude.marketplaces configured — nothing to build',
-        duration: `${Date.now() - startTime}ms`,
-      });
-      process.exit(0);
+      return {
+        document: {
+          status: 'success',
+          message: 'No claude.marketplaces configured — nothing to build',
+          duration: `${Date.now() - startTime}ms`,
+        },
+        exitCode: 0,
+      };
     }
 
     const results = await runClaudePluginBuild(configDir, {
@@ -367,7 +390,7 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
     // different lane. Fixing it means carrying `ValidationIssue[]` up through
     // `PluginBuildResult`/`MarketplaceBuildResult` beside the counts they already
     // carry, then publishing it on the plugin rows below.
-    writeYamlOutput({
+    const document = {
       status: 'success',
       // The build gate is two-valued and a warning does not fail it, so the
       // distribution has to travel next to the status rather than inside it.
@@ -413,12 +436,20 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
         })),
       })),
       duration: `${duration}ms`,
-    });
+    };
 
-    process.exit(0);
+    return { document, exitCode: 0 };
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'ClaudePluginBuild');
+    return {
+      document: reportCommandError(error, logger, startTime, 'ClaudePluginBuild'),
+      exitCode: 2,
+      failed: true,
+    };
   }
+}
+
+async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<void> {
+  finishCommand(await runClaudePluginBuildPhase(options), writeYamlOutput);
 }
 
 /**
@@ -468,13 +499,15 @@ interface BuildMarketplaceInput {
   registry: ResourceRegistry;
   /** THE project's declared eval suites, assembled once per run (same reason). */
   projectSkills: readonly DeclaredEvalSuite[];
+  /** The run's conventional-suite probe, created once beside `projectSkills`. */
+  suiteProbe: ConventionalSuiteProbe;
   logger: ReturnType<typeof createLogger>;
   /** Render every finding, not just the errors (stderr only). */
   verbose: boolean;
 }
 
 async function buildMarketplace(input: BuildMarketplaceInput): Promise<MarketplaceBuildResult> {
-  const { name, config, availableSkills, configDir, skillsConfig, rootVersion, registry, projectSkills, logger, verbose } = input;
+  const { name, config, availableSkills, configDir, skillsConfig, rootVersion, registry, projectSkills, suiteProbe, logger, verbose } = input;
   const plugins: PluginBuildResult[] = [];
   const externalPlugins: ExternalPluginBuildResult[] = [];
 
@@ -524,6 +557,7 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
       rootVersion,
       registry,
       projectSkills,
+      suiteProbe,
       logger,
       verbose,
     });
@@ -838,6 +872,14 @@ export async function packagePluginLocalSkills(input: {
    * time this rule shipped.
    */
   projectSkills: readonly DeclaredEvalSuite[];
+  /**
+   * The run's conventional-suite probe, created once beside `projectSkills`.
+   *
+   * Required for the same reason and threaded the same way: resolving test-input
+   * dirs probes the filesystem under the subject AND under every `projectSkills`
+   * entry, so a probe rebuilt inside this per-skill loop would be O(S²) for the run.
+   */
+  suiteProbe: ConventionalSuiteProbe;
   logger: ReturnType<typeof createLogger>;
 }): Promise<Array<{ skillDirPath: string; result: PackageSkillResult }>> {
   const packaged: Array<{ skillDirPath: string; result: PackageSkillResult }> = [];
@@ -914,6 +956,7 @@ export async function packagePluginLocalSkills(input: {
         packagingConfig,
         { skillPath, outputPath: skillOutputDir },
         input.projectSkills,
+        input.suiteProbe,
       ),
       registry: input.registry,
     });
@@ -1104,13 +1147,15 @@ interface BuildPluginInput {
   registry: ResourceRegistry;
   /** THE project's declared eval suites, assembled once per run (same reason). */
   projectSkills: readonly DeclaredEvalSuite[];
+  /** The run's conventional-suite probe, created once beside `projectSkills`. */
+  suiteProbe: ConventionalSuiteProbe;
   logger: ReturnType<typeof createLogger>;
   /** Render every finding, not just the errors (stderr only). */
   verbose: boolean;
 }
 
 async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> {
-  const { marketplaceName, pluginDef, marketplaceAvailable, configDir, skillsConfig, owner, rootVersion, registry, projectSkills, logger, verbose } =
+  const { marketplaceName, pluginDef, marketplaceAvailable, configDir, skillsConfig, owner, rootVersion, registry, projectSkills, suiteProbe, logger, verbose } =
     input;
   const pluginDir = getPluginOutputDir(configDir, marketplaceName, pluginDef.name);
   const pluginSourceDir = getPluginSourceDir(configDir, pluginDef);
@@ -1201,6 +1246,7 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
     skillsConfig,
     registry,
     projectSkills,
+    suiteProbe,
     logger,
   });
   const { withErrors: skillsWithErrors, issueCounts: localSkillCounts } =

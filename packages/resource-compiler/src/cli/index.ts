@@ -2,7 +2,7 @@
  * CLI entry point for resource compiler
  */
 
-import { describeStdioBlocking, makeStdioBlocking } from '@vibe-agent-toolkit/utils';
+import { describeStdioBlocking, makeStdioBlocking } from '@vibe-agent-toolkit/utils/process';
 import { Command } from 'commander';
 
 import { registerCompileCommand } from './compile-command.js';

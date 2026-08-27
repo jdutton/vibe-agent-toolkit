@@ -21,9 +21,11 @@ import { pathToFileURL } from 'node:url';
 import {
   mkdirSyncReal,
   normalizedTmpdir,
-  runGitOrThrow,
   safePath,
 } from '@vibe-agent-toolkit/utils';
+import {
+  runGitOrThrow,
+} from '@vibe-agent-toolkit/utils/git';
 import { afterEach, beforeEach } from 'vitest';
 
 import type { ResolveSkillSourceContext } from '../../src/skill-source/types.js';

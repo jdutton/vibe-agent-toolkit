@@ -85,18 +85,30 @@
  * git arm's walk of the ignored territory git declines to hold. Neither arm can
  * descend into a worktree copy, so it contributes nothing to enumerate.
  *
- * ## ⚠️ The blob stage is the dominant cost, and it cannot be scoped
+ * ## ⚠️ The blob stage is the dominant cost, and it cannot be scoped BY CALLER
  *
- * `readsBlobs` decides only whether the stage may be SKIPPED. The stage has no
- * extension allowlist, so this lane parses every keyed blob in the tree —
- * measured at 6,839 ms cold on an 8,548-file monorepo, most of it for files
- * nothing here reads. Making the contributors small does not help; that
- * reasoning was tried and is false. If this lane ever needs to be fast, the fix
- * is in `blob-population.ts`, not here.
+ * `readsBlobs` decides only whether the stage may be SKIPPED. This lane derives
+ * a blob for every keyed path in the tree, and nothing a contributor declares
+ * narrows that — measured at 6,839 ms cold on an 8,548-file monorepo, most of it
+ * for files nothing here reads. Making the contributors small does not help;
+ * that reasoning was tried and is false. If this lane ever needs to be faster,
+ * the fix is in `blob-population.ts`, not here.
+ *
+ * ⚠️ **What DID narrow is the parse, and it narrowed by TYPE rather than by
+ * caller.** Since `mime-type.ts` began typing paths, only `text/markdown`,
+ * `text/plain` and `text/html` reach a document parser; everything else keys
+ * `none.` and skips `unified()` while keeping its `blobs` row, its token
+ * estimate and its full complement of lexical references. That is where the
+ * bulk of the figure above went — 83.5% of remark time on the measured tree was
+ * being spent on files that are not prose — but it is a fact about the TYPE
+ * TABLE, not a scope this lane chose, and this lane still enumerates and keys
+ * exactly what it did before.
  */
 
-import { safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
+import type { CollectionConfig } from '../schemas/project-config.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { ContributorRegistry } from './contributor.js';
@@ -167,12 +179,31 @@ async function sharedEnumeration(root: string): Promise<CrawlSource> {
  *   here: with no tracker nothing is ignored, so {@link DECLINE_IGNORED}
  *   declines nothing and this pass discovers roots the real pass will too
  * @param source - The run's single enumeration, from {@link sharedEnumeration}
+ * @param collections - The project's collections, forwarded for the same reason
+ *   `gitTracker` is: the two passes ask one question of one tree.
+ *
+ *   ⚠️ **Inert today, and deliberately kept anyway — do not read it as
+ *   load-bearing.** An earlier version of this note claimed omitting it would
+ *   make the two passes EVICT EACH OTHER from the projection store. That cannot
+ *   happen: this pass is never handed a `cache` (the real pass gets one through
+ *   `populationOracles`, and there is no `cache` key below), so it neither reads
+ *   nor writes the store and has no key to collide with. Nor can a declared type
+ *   change what this pass ANSWERS — `claudeImportRootsFrom` consumes `path`,
+ *   `basenameLower` and `isDirectory`, never `mime`, and content parsing is
+ *   skipped outright.
+ *
+ *   It stays because the day this pass gains a store, or a consumer that reads
+ *   `mime`, the two passes must already agree — and because a divergence would
+ *   be SILENT (a store that never hits is indistinguishable from a cold one).
+ *   `projection-mime-routing-store-key.test.ts` pins that agreement as a
+ *   tripwire rather than as a live property.
  * @returns Root-relative paths of every `CLAUDE.md` / `.claude/rules` file
  */
 async function discoverImportRoots(
   root: string,
   gitTracker: GitTracker | undefined,
   source: CrawlSource,
+  collections: Readonly<Record<string, CollectionConfig>> | undefined,
 ): Promise<string[]> {
   const registry = new ContributorRegistry();
   // `'deferred'` — enumerated, deliberately not read. `claudeImportRootsFrom`
@@ -200,6 +231,9 @@ async function discoverImportRoots(
     // here instead of a silence.
     onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(gitTracker !== undefined && { gitTracker }),
+    // See the `@param collections` note: omitting these HERE while the real pass
+    // passes them gives the two passes different store keys over one tree.
+    ...(collections !== undefined && { collections }),
   });
 
   return claudeImportRootsFrom(discovery.resourceRealizations);
@@ -235,13 +269,14 @@ export async function buildClaudeContextPopulation(options: {
   root: string;
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
+  collections?: Readonly<Record<string, CollectionConfig>> | undefined;
   onBlobPopulation: (report: BlobPopulationReport) => void;
 }): Promise<Projection> {
   const root = safePath.resolve(options.root);
   // ONE crawl for both passes. Taken before root discovery rather than inside
   // it, so the single enumeration is visible at the level that owns both passes.
   const source = await sharedEnumeration(root);
-  const roots = await discoverImportRoots(root, options.gitTracker, source);
+  const roots = await discoverImportRoots(root, options.gitTracker, source, options.collections);
 
   const registry = new ContributorRegistry();
   const filesystem = new FilesystemExtentContributor(() => source);

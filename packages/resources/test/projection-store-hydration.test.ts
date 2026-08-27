@@ -202,6 +202,9 @@ function realization(
     dir: segments.slice(0, -1).join('/'),
     depth: segments.length - 1,
     ext: '.md',
+    // Every fixture path here is markdown — the hardcoded `ext` above says so —
+    // so this is what `mimeTypeForPath` would answer, not a filler value.
+    mime: 'text/markdown',
     ...content,
     mtime: new Date('2026-01-01T00:00:00.000Z'),
     exists: true,

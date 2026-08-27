@@ -76,10 +76,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   mkdirSyncReal,
   normalizedTmpdir,
-  runGitOrThrow,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import {
+  runGitOrThrow,
+} from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
@@ -113,9 +115,6 @@ const LSTAT = 'fs.lstatSync';
 
 /** The one gitignored subtree, so the bounded ignored-territory walk really runs. */
 const IGNORED_DIR = 'ignored';
-
-/** Dump-format version this file knows how to read. See the counter's `DUMP_VERSION`. */
-const EXPECTED_DUMP_VERSION = 2;
 
 /** Identity used for the fixture commits, so a developer's own git identity is never needed. */
 const COMMIT_CONFIG = [
@@ -160,8 +159,15 @@ const here = safePath.resolve(fileURLToPath(import.meta.url), '..');
 /** Built entry point of the package under measurement. */
 const RESOURCES_DIST = safePath.resolve(here, '../../dist/index.js');
 
-/** Built entry point of `@vibe-agent-toolkit/utils`, which supplies `GitTracker`. */
-const UTILS_DIST = safePath.resolve(here, '../../../utils/dist/index.js');
+/**
+ * Built `@vibe-agent-toolkit/utils/git` entry, which supplies `GitTracker`.
+ *
+ * 🪤 This path is a STRING, so nothing typechecks it and no import-rewriting
+ * sweep can see it. The driver below is generated source, and a wrong entry here
+ * surfaces only as the child exiting 1 with `does not provide an export named`.
+ * Point it at the entry that actually exports the symbol, not at the barrel.
+ */
+const UTILS_GIT_DIST = safePath.resolve(here, '../../../utils/dist/git.js');
 
 /**
  * The lab's I/O counter, as emitted.
@@ -226,7 +232,7 @@ function addFiles(from: number, count: number): void {
  */
 function driverSource(mode: DriverMode): string {
   const resources = pathToFileURL(RESOURCES_DIST).href;
-  const utils = pathToFileURL(UTILS_DIST).href;
+  const utils = pathToFileURL(UTILS_GIT_DIST).href;
   return [
     `import { GitCrawlSource, FilesystemExtentContributor, ProjectionBuilder, RunContentCache } from ${JSON.stringify(resources)};`,
     `import { GitTracker } from ${JSON.stringify(utils)};`,
@@ -240,7 +246,7 @@ function driverSource(mode: DriverMode): string {
     "} else if (mode === 'extent') {",
     '  const tracker = new GitTracker(root);',
     '  await tracker.initialize({ includeUntracked: true });',
-    '  const builder = new ProjectionBuilder(root, tracker, new RunContentCache());',
+    '  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() });',
     '  const contributor = new FilesystemExtentContributor((r) => new GitCrawlSource(r));',
     '  paths = (await contributor.contribute(builder.base(), null)).realizations.length;',
     '}',
@@ -271,14 +277,16 @@ function readDumps(directory: string, paths: number | null): Measurement {
     if (!name.startsWith('io-') || !name.endsWith('.json')) continue;
     dumps++;
     const dump: unknown = JSON.parse(readFileSync(safePath.resolve(directory, name), 'utf-8'));
-    const { dumpVersion, rows } = dump as {
-      dumpVersion: number;
-      rows: { cls: string; method: string; count: number }[];
-    };
-    if (dumpVersion !== EXPECTED_DUMP_VERSION) {
+    const { rows } = dump as { rows: { cls: string; method: string; count: number }[] };
+    // Refuse a dump this file cannot read, rather than counting zero rows and
+    // publishing the result as "vat touched nothing". The check is on the SHAPE,
+    // not on a version integer: the counter stamps none, because a number a
+    // human has to remember to bump only ever refuses what the shape refuses
+    // anyway, and stops refusing the moment somebody forgets.
+    if (!Array.isArray(rows)) {
       throw new Error(
-        `io counter dump is version ${String(dumpVersion)}, this test reads ${String(EXPECTED_DUMP_VERSION)}.`
-          + ' Refusing to read it: the numbers would be meaningless rather than merely wrong.',
+        `io counter dump '${name}' has no 'rows' array — this test cannot read it, and reading ` +
+          'zero rows would report that vat touched nothing.',
       );
     }
     for (const row of rows) {

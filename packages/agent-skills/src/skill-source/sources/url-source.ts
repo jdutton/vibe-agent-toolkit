@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 
-import { isGitUrl, normalizedTmpdir, parseGitUrl, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { isGitUrl, parseGitUrl } from '@vibe-agent-toolkit/utils/git';
 
 import { withCachedFetch } from '../fetch-cache.js';
 import { cloneGitSource } from '../git-clone.js';

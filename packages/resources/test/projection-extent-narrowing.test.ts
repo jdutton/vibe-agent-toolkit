@@ -4,22 +4,47 @@
  * `filesystem-extent.ts` ends its header with "this extent cannot be narrowed —
  * dropping non-markdown loses real members". That was reasoned and never
  * measured, and it is the sentence cited to justify keying non-markdown files,
- * so it is worth a corpus rather than an argument. Two facts made it doubtful:
- * no fixture linked *through* a script, and `ExtentDeclarationSchema.follow`
- * defaults to the three markdown forms only.
+ * so it is worth a corpus rather than an argument.
  *
  * ## The corpus, and why this shape
  *
- * `SKILL.md` → `scripts/tool.mjs` → `docs/note.md`: the leaf is reachable ONLY
- * through the non-markdown hop, so "narrowing loses nothing" and "narrowing
- * loses the leaf" are distinguishable outcomes rather than one silent one. A
+ * `SKILL.md` → `scripts/tool.mjs` → `docs/note.md`: the leaf is written so it is
+ * named ONLY by the non-markdown hop. That makes "the script is a door" and "the
+ * script is a dead end" distinguishable outcomes rather than one silent one — a
  * corpus whose leaf were also linked from `SKILL.md` could not tell them apart.
  *
- * The script's reference to the leaf is written the way a real script writes one
- * — inside a JSDoc comment, which is markdown — and the file also carries a bare
- * `readFileSync('docs/note.md')` path token. Both spellings are in the corpus on
- * purpose: they lex to *different* syntactic forms and only one of them is
- * followed, which is the precondition the verdict below rests on.
+ * The script names the leaf twice, the two ways a real script names a path: once
+ * in a JSDoc comment, once as a bare `readFileSync('docs/note.md')` token.
+ *
+ * ## ⚠️ What this suite USED to prove, and why that proof is gone
+ *
+ * Until parse routing became MIME-driven, every non-`.html` file was handed to
+ * the remark markdown parser, so the JSDoc reference in the `.mjs` lexed as an
+ * AST `markdown-link` — a form the default `follow` set traverses. The leaf was
+ * therefore a TRANSITIVE member, and an arm of this suite pinned that as the
+ * precondition of the verdict: *"follows the script hop because a JSDoc comment
+ * IS markdown"*.
+ *
+ * A `.mjs` now routes to no document parser (`content-key.ts`'s third
+ * `ParserKind`, the one naming the *absence* of a parser). It still gets a blob,
+ * a token estimate, `measureContent` and `findLexicalReferences` over its raw
+ * source — but no AST, so it emits no `markdown-link`, `markdown-link-reference`
+ * or `markdown-definition` row at all. Both of its references now lex as
+ * `bare-token`, which {@link ExtentDeclarationSchema}'s default `follow` does not
+ * traverse. **That arm's subject no longer exists and it has been deleted rather
+ * than kept alive on a contrived population** (renaming the script `.md` would
+ * re-create the old condition and prove nothing about the corpus VAT actually
+ * meets). Widening the default `follow` to `bare-token` was considered and
+ * declined: `bare-token` is 21,687 rows on this repo alone, so every `import`
+ * specifier and path-shaped string would become a closure edge.
+ *
+ * ## The re-derived verdict
+ *
+ * **Bundled scripts are still closure MEMBERS; they are no longer closure
+ * DOORS.** Narrowing the extent to markdown still loses a real member — the
+ * script is a direct link target of its own root — so the header's claim
+ * survives, but on the direct half only. `docs/note.md` is on disk, is
+ * enumerated by the filesystem extent, and is a member of nothing.
  *
  * ## Narrowing is SIMULATED, never performed
  *
@@ -58,8 +83,17 @@ const ROOT_DOC = 'SKILL.md';
 const SCRIPT = 'scripts/tool.mjs';
 const LEAF_DOC = 'docs/note.md';
 
+/** Every file the corpus writes — the population every membership claim is measured against. */
+const CORPUS_FILES = [ROOT_DOC, SCRIPT, LEAF_DOC].sort(compareCodeUnits);
+
 /** The rule that stands in for "the extent enumerated no non-markdown file". */
 const NARROWED = 'non-markdown-withheld';
+
+/** The default `follow` set, read from the schema rather than restated. */
+const DEFAULT_FOLLOW = ExtentDeclarationSchema.parse({
+  kind: SKILL_KIND,
+  closureFrom: ROOT_DOC,
+}).follow;
 
 beforeAll(suite.beforeAll);
 afterAll(suite.afterAll);
@@ -117,18 +151,113 @@ function membersOf(projection: Projection): readonly string[] {
     .sort(compareCodeUnits);
 }
 
+/**
+ * Every corpus FILE the run enumerated at all, in any extent.
+ *
+ * The guard that keeps every "is not a member" assertion below non-vacuous: a
+ * path absent from the closure because the fixture never wrote it would read
+ * exactly like a path absent because nothing links to it.
+ *
+ * @param projection - A populated projection
+ * @returns Root-relative paths of enumerated non-directory rows, deduplicated
+ */
+function enumeratedFilesOf(projection: Projection): readonly string[] {
+  return [
+    ...new Set(
+      projection.resourceRealizations
+        .filter((row) => !row.isDirectory)
+        .map((row) => row.path),
+    ),
+  ].sort(compareCodeUnits);
+}
+
+/**
+ * The parser kind that keyed a path's bytes, read off its content key's prefix.
+ *
+ * @param projection - A populated projection
+ * @param path - A root-relative corpus path
+ * @returns The `ParserKind` prefix of that path's content key
+ */
+function parserKindOf(projection: Projection, path: string): string {
+  const key = projection.resourceRealizations.find(
+    (row) => row.path === path && row.contentKey !== null,
+  )?.contentKey;
+  expect(key, `no keyed realization for ${path}`).toBeTypeOf('string');
+  return (key ?? '').slice(0, (key ?? '').indexOf('.'));
+}
+
+/**
+ * Every reference row emitted from one path's bytes.
+ *
+ * @param projection - A populated projection
+ * @param path - A root-relative corpus path
+ * @returns `[rawRef, syntacticForm]` pairs in row order
+ */
+function referencesFrom(projection: Projection, path: string): readonly (readonly [string, string])[] {
+  const keys = new Set(
+    projection.resourceRealizations
+      .filter((row) => row.path === path && row.contentKey !== null)
+      .map((row) => row.contentKey),
+  );
+  return projection.blobReferences
+    .filter((row) => keys.has(row.blob))
+    .map((row) => [row.rawRef, row.syntacticForm] as const);
+}
+
 describe('filesystem extent narrowing', () => {
-  it('reaches the leaf THROUGH the script, so the non-markdown row is load-bearing', async () => {
-    // The control. Without this the narrowed arm below proves nothing: a leaf
-    // that was never a member cannot be lost.
-    expect(membersOf(await populateCorpus(false)))
-      .toStrictEqual([ROOT_DOC, LEAF_DOC, SCRIPT].sort(compareCodeUnits));
+  it('admits the script as a DIRECT member: markdown links to a file no parser reads', async () => {
+    // The control. Without this the narrowed arm below proves nothing: a member
+    // that never existed cannot be lost. Membership does not depend on the
+    // TARGET being parseable — only on the referring blob's form being followed.
+    const projection = await populateCorpus(false);
+
+    expect(enumeratedFilesOf(projection)).toStrictEqual(CORPUS_FILES);
+    expect(membersOf(projection)).toStrictEqual([ROOT_DOC, SCRIPT].sort(compareCodeUnits));
+    expect(membersOf(projection)).toHaveLength(2);
+    expect(referencesFrom(projection, ROOT_DOC)).toStrictEqual([[SCRIPT, 'markdown-link']]);
+    expect(parserKindOf(projection, ROOT_DOC)).toBe('markdown');
   });
 
-  it('loses the script AND the leaf reachable only through it when non-markdown is withheld', async () => {
-    // The verdict: narrowing costs a DIRECT member (the script is a link target
-    // of the root) and a TRANSITIVE one (the leaf is reachable no other way).
-    expect(membersOf(await populateCorpus(true))).toStrictEqual([ROOT_DOC]);
+  it('is a dead end, not a door: the script names the leaf twice and reaches it never', async () => {
+    // 🪤 This arm REPLACES "follows the script hop because a JSDoc comment IS
+    // markdown". That arm's subject is gone: a `.mjs` routes to no document
+    // parser, so the JSDoc reference is no longer an AST `markdown-link`. What
+    // is measured here instead is the mechanism of the *re-derived* verdict —
+    // the script still carries references, and not one of them is in `follow`.
+    const projection = await populateCorpus(false);
+    const fromScript = referencesFrom(projection, SCRIPT);
+
+    // Non-vacuity, in order: the leaf is on disk and enumerated; the script DID
+    // emit references; only then does "none of them is followed" mean anything.
+    expect(enumeratedFilesOf(projection)).toContain(LEAF_DOC);
+    expect(parserKindOf(projection, SCRIPT)).toBe('none');
+    expect(fromScript).toStrictEqual([
+      [`note](../${LEAF_DOC}`, 'bare-token'],
+      [`readFileSync('${LEAF_DOC}`, 'bare-token'],
+    ]);
+    expect(fromScript).toHaveLength(2);
+    expect(fromScript.filter(([, form]) => DEFAULT_FOLLOW.includes(form))).toStrictEqual([]);
+    expect(DEFAULT_FOLLOW).toStrictEqual([
+      'markdown-link',
+      'markdown-link-reference',
+      'markdown-definition',
+    ]);
+
+    // The consequence, stated as membership rather than left as an inference.
+    expect(membersOf(projection)).not.toContain(LEAF_DOC);
+  });
+
+  it('loses the script — a direct link target of its own root — when non-markdown is withheld', async () => {
+    // The verdict. The loss is now DIRECT only: the leaf was never a member, so
+    // narrowing cannot cost it. Asserted as a difference against the control so
+    // the arm names exactly which member disappears and how many.
+    const wide = membersOf(await populateCorpus(false));
+    const narrow = membersOf(await populateCorpus(true));
+
+    expect(narrow).toStrictEqual([ROOT_DOC]);
+    expect(wide.filter((path) => !narrow.includes(path))).toStrictEqual([SCRIPT]);
+    expect(wide).toHaveLength(2);
+    expect(narrow).toHaveLength(1);
   });
 
   it('reports the withheld script as a refusal rather than dropping it in silence', async () => {
@@ -137,23 +266,5 @@ describe('filesystem extent narrowing', () => {
     );
 
     expect(refusals).toHaveLength(1);
-  });
-
-  it('follows the script hop because a JSDoc comment IS markdown — the precondition of the verdict', async () => {
-    // 🪤 The verdict above holds because the script's reference lexes as
-    // `markdown-link`, which the DEFAULT `follow` set contains. Its bare
-    // `readFileSync('docs/note.md')` token lexes as `bare-token` and is NOT
-    // followed. So the proven property is "non-markdown files carry followed
-    // references", not "every path a script names is traversed" — and if the
-    // default `follow` ever widens to `bare-token`, this assertion goes red and
-    // the claim above has to be re-measured against the wider set.
-    const forms = new Map(
-      (await populateCorpus(false)).blobReferences.map((row) => [row.rawRef, row.syntacticForm]),
-    );
-
-    expect(forms.get(`../${LEAF_DOC}`)).toBe('markdown-link');
-    expect(forms.get(`readFileSync('${LEAF_DOC}`)).toBe('bare-token');
-    expect(ExtentDeclarationSchema.parse({ kind: SKILL_KIND, closureFrom: ROOT_DOC }).follow)
-      .toStrictEqual(['markdown-link', 'markdown-link-reference', 'markdown-definition']);
   });
 });

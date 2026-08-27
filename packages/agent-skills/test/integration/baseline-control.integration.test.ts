@@ -27,7 +27,8 @@
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { delimiter } from 'node:path';
 
-import { mkdirSyncReal, safePath, toForwardSlash, type SpawnHeadlessOptions } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { type SpawnHeadlessOptions } from '@vibe-agent-toolkit/utils/skill-test';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { BaselineDeltaSchema, type BaselineDelta } from '../../src/skill-test/baseline-delta.js';

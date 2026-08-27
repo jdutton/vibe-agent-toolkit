@@ -215,6 +215,31 @@ export function collectMeasuredCommand(
   return [...(previous ?? []), spec];
 }
 
+/**
+ * A Commander parser for `--env-a` / `--env-b`, accumulating `KEY=VALUE` pairs.
+ *
+ * Splits on the FIRST `=` only, so a value may contain one. An empty value is
+ * accepted — `KEY=` is a real thing to want, since a seam that tests
+ * `env['X'] === '1'` reads it as off — but an empty KEY is not, because
+ * `process.env` cannot carry one and the child would silently see nothing.
+ *
+ * @param flag - Flag spelling, so the error names what the user typed
+ * @returns A parser Commander calls with the raw string and the value so far
+ */
+export function collectEnv(
+  flag: string,
+): (value: string, previous: Readonly<Record<string, string>> | undefined) => Record<string, string> {
+  return (value, previous) => {
+    const at = value.indexOf('=');
+    if (at <= 0) {
+      throw new InvalidArgumentError(
+        `${flag} expects KEY=VALUE with a non-empty KEY; got '${value}'.`,
+      );
+    }
+    return { ...previous, [value.slice(0, at)]: value.slice(at + 1) };
+  };
+}
+
 /** Options Commander collects for a facet's `run`. */
 interface RunOptions {
   readonly instrument: InstrumentSource;
@@ -290,6 +315,10 @@ interface AbOptions {
   readonly command?: readonly MeasuredCommandSpec[];
   readonly control: boolean;
   readonly noiseFloor?: number;
+  /** Extra environment for arm A's children only. */
+  readonly envA?: Readonly<Record<string, string>>;
+  /** Extra environment for arm B's children only. */
+  readonly envB?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -355,6 +384,17 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
       `Measure this command instead of the default set (repeatable). One of: ${MEASURABLE_COMMAND_NAMES.join(', ')}`,
       collectMeasuredCommand,
     )
+    .option(
+      '--env-a <KEY=VALUE>',
+      'Extra environment for arm A only (repeatable). Pass the same instrument to both arms ' +
+        'to measure one build in two configurations',
+      collectEnv('--env-a'),
+    )
+    .option(
+      '--env-b <KEY=VALUE>',
+      'Extra environment for arm B only (repeatable)',
+      collectEnv('--env-b'),
+    )
     .option('--out <dir>', 'Directory to write the reports into', '.vat-lab')
     .option(
       '--id <name>',
@@ -378,6 +418,8 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
         cache: options.cache,
         control: options.control,
         noiseFloor: options.noiseFloor ?? null,
+        ...(options.envA === undefined ? {} : { envA: options.envA }),
+        ...(options.envB === undefined ? {} : { envB: options.envB }),
         outDir: abRunDirectory(options.out, startedAt),
         now: () => new Date().toISOString(),
         capture: wiring.capture,
@@ -388,6 +430,28 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
       process.stdout.write(`${renderAb(result)}\n`);
       applyAbExitCode(result);
     });
+}
+
+/**
+ * Do two arms carry the same extra environment?
+ *
+ * Absent and empty are the same configuration, so `undefined` reads as `{}` —
+ * otherwise `--control` with no env at all would refuse itself.
+ *
+ * @param a - Arm A's extra environment, if any
+ * @param b - Arm B's extra environment, if any
+ * @returns True when both arms would run under identical settings
+ */
+function sameEnvironment(
+  a: Readonly<Record<string, string>> | undefined,
+  b: Readonly<Record<string, string>> | undefined,
+): boolean {
+  const left = Object.entries(a ?? {}).sort(([one], [other]) => one.localeCompare(other));
+  const right = Object.entries(b ?? {}).sort(([one], [other]) => one.localeCompare(other));
+  return (
+    left.length === right.length &&
+    left.every(([key, value], index) => right[index]?.[0] === key && right[index]?.[1] === value)
+  );
 }
 
 /**
@@ -408,6 +472,16 @@ async function resolveAbArms(
       refuse(
         'REFUSED: --control runs one instrument as both arms, so --instrument-b would be ' +
           'silently ignored. Drop one of the two flags.',
+      );
+      return null;
+    }
+    if (!sameEnvironment(options.envA, options.envB)) {
+      refuse(
+        'REFUSED: --control measures what this machine returns for a difference that does ' +
+          'not exist, so both arms must be configured identically. --env-a and --env-b ' +
+          'differ, which is a real difference — it would be published as the noise floor and ' +
+          'then used to judge every later run. Make them match, or drop --control and run it ' +
+          'as the A/B it is.',
       );
       return null;
     }

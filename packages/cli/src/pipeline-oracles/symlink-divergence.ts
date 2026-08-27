@@ -43,13 +43,17 @@ import { realpathSync } from 'node:fs';
 
 import { relativize } from '@vibe-agent-toolkit/resources';
 import {
-  crawlDirectory,
-  GitTracker,
-  gitFindRoot,
   isAbsolutePath,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import {
+  crawlDirectory,
+} from '@vibe-agent-toolkit/utils/crawl';
+import {
+  GitTracker,
+  gitFindRoot,
+} from '@vibe-agent-toolkit/utils/git';
 
 import type { LaneDefinition } from './lanes.js';
 import type { LaneId } from './types.js';

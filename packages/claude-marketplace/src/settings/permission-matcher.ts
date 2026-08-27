@@ -7,7 +7,7 @@
  *
  * Sources: decompiled from Claude Code binary v2.1.52 (nA0() function).
  *
- * @vendor-claim reviewed=2026-04-08 verify=Re-decompile a current Claude Code binary (or get vendor confirmation) and diff nA0() against the matcher below
+ * @vendor-claim reviewed=2026-04-08 verify=First run the matcher against the published behavior table at https://code.claude.com/docs/en/permissions — it falsifies cheaply and already found 7 divergences. Only a decompile of a current Claude Code binary can CONFIRM equivalence to nA0(); do that second, and only bump reviewed= for the decompile.
  *
  * Note the version discrepancy this pin creates: docs/skill-quality-and-compatibility.md
  * establishes plugin-loader semantics from Claude Code 2.1.126, while the matching
@@ -16,16 +16,38 @@
  * that our replica is self-consistent, never that it still matches the real one.
  * The `reviewed=` date above is the 2.1.52 read, not a re-confirmation against 2.1.126.
  *
- * KNOWN STALE, AND KNOWINGLY LEFT SO — do not re-investigate this from scratch. The
- * structural gate (`validateVendorClaimFreshness` in packages/dev-tools/src/validate-repo-structure.ts,
- * 90-day window, severity `warning`) has this annotation past due and prints a
- * STALE_VENDOR_CLAIM line on every `bun run validate`. It is a warning, so it blocks
- * nothing. Refreshing it costs exactly what `verify=` says: obtain and DECOMPILE a
- * current Claude Code binary, then diff its permission-matching function against the
- * matcher below. That is the whole cost — there is no cheaper substitute, no public
- * spec, and no test that can stand in for it. Bump `reviewed=` only after actually
- * doing the decompile; bumping the date alone converts a true "unwatched" signal into
- * a false "recently confirmed" one.
+ * KNOWN STALE, AND KNOWN WRONG IN SEVEN PLACES. The structural gate
+ * (`validateVendorClaimFreshness` in packages/dev-tools/src/validate-repo-structure.ts, 90-day
+ * window, severity `warning`) has this annotation past due. It is a warning, so it blocks nothing.
+ *
+ * ⚠️ This block used to say "do not re-investigate — there is no cheaper substitute, no public
+ * spec." That was true when written and is false now, and the instruction not to look is why the
+ * change went unnoticed for months. Treat a do-not-re-investigate note as an EXPIRING claim.
+ * `https://code.claude.com/docs/en/permissions` now publishes a worked rule-vs-command match table,
+ * names the gitignore spec, enumerates the command separators and the wrapper list, and pins
+ * behaviors to Claude Code versions. It cannot confirm equivalence to `nA0()` — only a decompile
+ * does that — but it falsifies at zero cost, and running this matcher against it produced seven
+ * divergences:
+ *
+ * 1. A trailing ` *` does not match the bare command: `Bash(ls *)` refuses `ls`. False negative.
+ * 2. No compound-command splitting. A rule must match each subcommand across `&&`, `||`, `;`, `|`,
+ *    `|&`, `&` and newlines; this matches the whole string, so `Bash(safe-cmd *)` reports
+ *    `safe-cmd && other-cmd` as permitted. False POSITIVE — the one with a direction.
+ *    ⚠️ `safe-cmd; rm -rf /` is refused by ACCIDENT (no space before `;`), not by this rule.
+ * 3. No wrapper stripping (`timeout`, `time`, `nice`, `nohup`, `stdbuf`, `command`, `builtin`,
+ *    `noglob`, bare `xargs`).
+ * 4. No leading env-assignment stripping (`NODE_ENV=test npm test`).
+ * 5. `xargs` is honored on the `:*` lane and not the ` *` lane, though the two forms are documented
+ *    as equivalent.
+ * 6. `PATH_TOOLS` is over-broad: Claude Code consults path rules for `Edit` and `Read` only, and
+ *    warns at startup for the rest (v2.1.210+).
+ * 7. MCP tool-name globs (`mcp__server__*`) are unsupported.
+ *
+ * Also reported and not re-measured here: allow-vs-deny depth asymmetry for single-segment relative
+ * patterns, and a leading `/` anchoring at the settings source rather than cwd.
+ *
+ * ⛔ Do NOT bump `reviewed=` for any of this — nothing was confirmed, only falsified, and the date
+ * is the only watcher this claim has. Fixing the seven is tracked in issue #207.
  */
 
 import { createRequire } from 'node:module';

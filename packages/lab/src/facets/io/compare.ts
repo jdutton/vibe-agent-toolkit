@@ -71,12 +71,11 @@ import {
   decideComparison,
   type DecideComparisonOptions,
 } from '../../envelope/coordinate.js';
-import { refuseIncomparableSchemas, type ReportEnvelope } from '../../envelope/envelope.js';
+import { refuseDifferentFacets, type ReportEnvelope } from '../../envelope/envelope.js';
 import { bothSides, pairByKey, type Pairing } from '../../harness/diff.js';
 
 import {
   IO_FACET,
-  IO_FACET_VERSION,
   type IoBody,
   IoBodySchema,
   type IoCommandStats,
@@ -255,22 +254,27 @@ function readIoBody(
   envelope: ReportEnvelope<unknown>,
   side: string,
 ): { body: IoBody } | { refusal: string } {
-  // Checked against THIS BUILD, not only between the two sides. The envelope's
-  // gate asks whether the reports agree with each other, and two reports
-  // captured before a schema move agree perfectly — while every row in them
-  // means what the older build meant. A pair of pre-nullable reports would put
-  // `distinctArgs: 1` on every spawn row and this build would render it as a
-  // redundancy ratio. Same rule the dump reader applies to `dumpVersion`.
-  if (envelope.facetVersion !== IO_FACET_VERSION) {
-    return {
-      refusal:
-        `REFUSED: the ${side} report is an '${IO_FACET}' body at facetVersion ` +
-        `${String(envelope.facetVersion)}, and this build reads ` +
-        `${String(IO_FACET_VERSION)}. Re-capture it; reading rows whose meaning has moved ` +
-        'would produce numbers nobody can state.',
-    };
-  }
-
+  // Validated against THIS BUILD's schema, not only between the two sides. The
+  // envelope's gate asks whether the reports name one facet, and two reports
+  // captured before a schema move agree with each other perfectly while every
+  // row in them means what the older build meant.
+  //
+  // ⚠️ **A KNOWN RESIDUAL, stated rather than papered over.** This catches every
+  // change that moves the body's SHAPE and none that moves only its MEANING —
+  // and `distinctArgs` becoming nullable was the latter. A pre-nullable report
+  // puts `1` on every spawn row where this build puts `null`, and nothing in
+  // `ioSiteShape` can tell those apart, because both are valid values of the
+  // same field. Every such report is already unreadable — the envelope around it
+  // lost two fields and is strict — so nothing live depends on this; what is
+  // owed is the NEXT one.
+  //
+  // ⛔ The remedy is NOT a version integer, which caught the nullable change only
+  // because a human remembered and would catch the next one only if another one
+  // did. It is to make the body DECLARE which methods take no distinct-argument
+  // reading (`FS_OPS_WITHOUT_ARG_IDENTITY` and the spawn methods are already
+  // that list), exactly as `CrawlTimingDump.charges` does for the crawl seam: a
+  // reader then diffs capabilities, an added exclusion announces itself, and a
+  // report predating the field is refused by this very schema.
   const parsed = IoBodySchema.safeParse(envelope.body);
   if (parsed.success) return { body: parsed.data as IoBody };
   const problems = parsed.error.issues
@@ -574,7 +578,7 @@ export function compareIo(
   after: ReportEnvelope<unknown>,
   options: CompareIoOptions = {},
 ): IoComparison {
-  const schemaRefusal = refuseIncomparableSchemas(before, after);
+  const schemaRefusal = refuseDifferentFacets(before, after);
   if (schemaRefusal !== null) return { ok: false, refusal: schemaRefusal };
 
   if (before.facet !== IO_FACET) {

@@ -31,7 +31,8 @@
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 
 
-import { safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import semver from 'semver';
 
 import { PROJECT_ROOT, log, processWorkspacePackages, type PackageProcessResult } from './common.js';

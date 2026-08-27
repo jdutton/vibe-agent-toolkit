@@ -50,6 +50,9 @@ beforeAll(async () => {
 /** The one command every fake capture reports on. */
 const COMMAND = 'vat audit';
 
+/** The banner an unstable row carries, asserted both ways across the suite. */
+const DISAGREE = 'PAIRS DISAGREE';
+
 /** The fake facet's body: one value per command, and nothing else. */
 interface FakeBody {
   readonly commands: readonly { readonly name: string; readonly failed: boolean; readonly value: number }[];
@@ -81,8 +84,17 @@ function arm(commit: string): ResolvedInstrument {
 const ARM_A = arm('a');
 const ARM_B = arm('b');
 
-/** What one scripted pair's comparison should return. */
-type PairScript = string | { readonly refusal: string };
+/**
+ * What one scripted pair's comparison should return.
+ *
+ * A bare string is the verdict kind. The object forms script a refusal, or a
+ * verdict arriving with the caveat its facet attached — the channel `ab` reports
+ * blind, without knowing what a `parse` caveat means versus an `io` one.
+ */
+type PairScript =
+  | string
+  | { readonly refusal: string }
+  | { readonly kind: string; readonly caveat: string };
 
 /** Everything a fixture varies about a run. */
 interface FixtureOptions {
@@ -95,6 +107,10 @@ interface FixtureOptions {
   readonly script: readonly PairScript[];
   readonly control?: boolean;
   readonly noiseFloor?: number;
+  /** Extra environment for arm A's children only. */
+  readonly envA?: Readonly<Record<string, string>>;
+  /** Extra environment for arm B's children only. */
+  readonly envB?: Readonly<Record<string, string>>;
 }
 
 /** A run's outcome plus the capture order it produced. */
@@ -102,6 +118,8 @@ interface FixtureRun {
   readonly result: AbResult;
   /** One entry per capture, naming the arm — the ordering evidence. */
   readonly order: readonly string[];
+  /** The `env` each capture was asked for, in capture order. */
+  readonly envs: readonly (Readonly<Record<string, string>> | undefined)[];
 }
 
 /**
@@ -112,8 +130,14 @@ interface FixtureRun {
  */
 function comparisonFor(script: PairScript | undefined): RefusalLike | ComparisonLike {
   if (script === undefined) return { ok: false, refusal: 'script exhausted' };
-  if (typeof script !== 'string') return { ok: false, refusal: script.refusal };
-  return { ok: true, commands: [{ name: COMMAND, verdict: { kind: script } }] };
+  if (typeof script === 'string') {
+    return { ok: true, commands: [{ name: COMMAND, verdict: { kind: script } }] };
+  }
+  if ('refusal' in script) return { ok: false, refusal: script.refusal };
+  return {
+    ok: true,
+    commands: [{ name: COMMAND, verdict: { kind: script.kind }, caveat: script.caveat }],
+  };
 }
 
 /**
@@ -126,9 +150,11 @@ function comparisonFor(script: PairScript | undefined): RefusalLike | Comparison
  */
 async function runFixture(options: FixtureOptions, label: string): Promise<FixtureRun> {
   const order: string[] = [];
+  const envs: (Readonly<Record<string, string>> | undefined)[] = [];
   let compared = 0;
 
   const capture = (request: CaptureRequest): Promise<ReportEnvelope<FakeBody>> => {
+    envs.push(request.env);
     const isA = request.instrument === ARM_A;
     // For a control run both arms are the same object, so the arm is decided by
     // how many captures have happened rather than by identity.
@@ -138,7 +164,7 @@ async function runFixture(options: FixtureOptions, label: string): Promise<Fixtu
     const value = values[Math.floor(order.length / 2)] ?? 0;
     order.push(name);
     return Promise.resolve(
-      buildReportEnvelope('fake', 1, request, {
+      buildReportEnvelope('fake', request, {
         commands: [{ name: COMMAND, failed: false, value }],
       }),
     );
@@ -155,6 +181,8 @@ async function runFixture(options: FixtureOptions, label: string): Promise<Fixtu
     control: options.control === true,
     noiseFloor: options.noiseFloor ?? null,
     outDir: safePath.join(tempDir, label),
+    ...(options.envA === undefined ? {} : { envA: options.envA }),
+    ...(options.envB === undefined ? {} : { envB: options.envB }),
     now: () => new Date().toISOString(),
     capture,
     compare: () => comparisonFor(options.script[compared++]),
@@ -162,7 +190,7 @@ async function runFixture(options: FixtureOptions, label: string): Promise<Fixtu
       report.body.commands.map((row) => ({ name: row.name, value: row.value, unit: 'ms' })),
   };
 
-  return { result: await runAb(spec), order };
+  return { result: await runAb(spec), order, envs };
 }
 
 /**
@@ -222,6 +250,65 @@ describe('runAb — the arms alternate', () => {
   });
 });
 
+describe('runAb — an arm can carry its own configuration', () => {
+  const POOL_ON = { VAT_PARSE_POOL: '1' };
+
+  it('hands each arm its OWN env, so one build can be measured in two configurations', async () => {
+    // The pool-on/pool-off A/B: one build, two settings. Without this the only
+    // axis `ab` can vary is which build runs, and a config change has to be
+    // measured by two un-interleaved captures — which gives up the alternation
+    // this verb exists to provide.
+    const { envs } = await runFixture(
+      {
+        pairs: 2,
+        aValues: [10, 10],
+        bValues: [20, 20],
+        script: ['changed', 'changed'],
+        envB: POOL_ON,
+      },
+      'env-per-arm',
+    );
+
+    // Capture order is A B A B, so B's env must land on captures 1 and 3 only.
+    expect(envs).toEqual([undefined, POOL_ON, undefined, POOL_ON]);
+  });
+
+  it('does not leak one arm’s env into the other when BOTH are set', async () => {
+    const { envs } = await runFixture(
+      {
+        pairs: 1,
+        aValues: [10],
+        bValues: [20],
+        script: ['changed'],
+        envA: { VAT_PARSE_POOL: '0' },
+        envB: POOL_ON,
+      },
+      'env-both-arms',
+    );
+
+    expect(envs).toEqual([{ VAT_PARSE_POOL: '0' }, POOL_ON]);
+  });
+
+  it('publishes each arm’s env on the result, so the report can disclose it', async () => {
+    // Load-bearing for honesty: with one build in both arms the two instrument
+    // labels are identical, so an effect with no disclosed config difference is
+    // a number a reader cannot attribute to anything.
+    const { result } = await runFixture(
+      {
+        pairs: 1,
+        aValues: [10],
+        bValues: [20],
+        script: ['changed'],
+        envB: POOL_ON,
+      },
+      'env-published',
+    );
+
+    expect(result.envA).toBeUndefined();
+    expect(result.envB).toEqual(POOL_ON);
+  });
+});
+
 describe('runAb — the estimator', () => {
   it('reports the min and the p25 of the per-pair values, never their median', async () => {
     // Arm A: 200, 100, 500 — min 100, p25 150, median 200. Three distinct
@@ -272,7 +359,7 @@ describe('runAb — pairs that disagree', () => {
     // Not a majority verdict, and not an average: an unstable row is not a
     // result at all, and the exit code says so.
     expect(abExitCondition(result)).toBe('unmeasurable');
-    expect(renderAb(result)).toContain('PAIRS DISAGREE');
+    expect(renderAb(result)).toContain(DISAGREE);
   });
 
   it('calls a row stable — and changed — only when every pair agreed', async () => {
@@ -288,7 +375,7 @@ describe('runAb — pairs that disagree', () => {
 
     expect(only(result).stable).toBe(true);
     expect(abExitCondition(result)).toBe('changed');
-    expect(renderAb(result)).not.toContain('PAIRS DISAGREE');
+    expect(renderAb(result)).not.toContain(DISAGREE);
   });
 
   it('never lets a refused pair read as agreement', async () => {
@@ -386,5 +473,131 @@ describe('renderAb', () => {
     expect(rendered).toContain('Instrument A: vat 0.2.0 (aaaaaaaa)');
     expect(rendered).toContain('Instrument B: vat 0.2.0 (bbbbbbbb)');
     expect(rendered).toContain(result.outDir);
+  });
+
+  it('discloses a config difference, which is the only visible axis when one build runs twice', async () => {
+    // Two identical instrument labels beside a large effect is an unattributable
+    // number. The env is the axis, so the report has to name it.
+    const { result } = await runFixture(
+      {
+        pairs: 1,
+        aValues: [100],
+        bValues: [60],
+        script: ['changed'],
+        envB: { VAT_PARSE_POOL: '1' },
+      },
+      'render-config',
+    );
+
+    const rendered = renderAb(result);
+    expect(rendered).toContain('Config A: (none)');
+    expect(rendered).toContain('Config B: VAT_PARSE_POOL=1');
+  });
+
+  it('says nothing about config when neither arm set any, rather than printing empty lines', async () => {
+    const { result } = await runFixture(
+      { pairs: 1, aValues: [10], bValues: [10], script: ['unchanged'] },
+      'render-no-config',
+    );
+
+    expect(renderAb(result)).not.toContain('Config A:');
+  });
+});
+
+describe('renderAb — the report may not assert more than it measured', () => {
+  /** A caveat in the shape `parse` attaches when the two arms ran different thread widths. */
+  const WIDTH_CAVEAT =
+    'the two sides ran a different number of parse worker THREADS (0 vs 4) — every millisecond ' +
+    'here is summed across them';
+
+  it('prints the caveat its facet attached, which until now only `compare` ever showed', async () => {
+    // The gap this closes: `parse`'s comparator carries `threadWidthCaveat` for
+    // exactly the pool-on/pool-off pair, and `ab` rendered the same data with no
+    // caveat at all — the older manual verb warning while the newer automated one
+    // stayed silent.
+    const { result } = await runFixture(
+      {
+        pairs: 2,
+        aValues: [100, 100],
+        bValues: [60, 60],
+        script: [
+          { kind: 'changed', caveat: WIDTH_CAVEAT },
+          { kind: 'changed', caveat: WIDTH_CAVEAT },
+        ],
+      },
+      'render-caveat',
+    );
+
+    expect(renderAb(result)).toContain(WIDTH_CAVEAT);
+  });
+
+  it('states a caveat once, not once per pair that repeated it', async () => {
+    const { result } = await runFixture(
+      {
+        pairs: 3,
+        aValues: [100, 100, 100],
+        bValues: [60, 60, 60],
+        script: [
+          { kind: 'changed', caveat: WIDTH_CAVEAT },
+          { kind: 'changed', caveat: WIDTH_CAVEAT },
+          { kind: 'changed', caveat: WIDTH_CAVEAT },
+        ],
+      },
+      'render-caveat-once',
+    );
+
+    const occurrences = renderAb(result).split(WIDTH_CAVEAT).length - 1;
+    expect(occurrences).toBe(1);
+  });
+
+  it('prints no caveat line at all when the facet attached none', async () => {
+    const { result } = await runFixture(
+      { pairs: 2, aValues: [10, 10], bValues: [10, 10], script: ['unchanged', 'unchanged'] },
+      'render-no-caveat',
+    );
+
+    expect(renderAb(result)).not.toContain('note:');
+  });
+
+  it('refuses to call an unstable row’s effect real, however the floor judges it', async () => {
+    // The 2026-08-14 review finding: this line was blind to `command.stable`, so
+    // a run whose pairs contradicted each other still printed a confident
+    // "exceeds the supplied noise floor" as the LAST thing a reader saw —
+    // directly under the banner saying the row is not a result.
+    const { result } = await runFixture(
+      {
+        pairs: 3,
+        aValues: [100, 100, 100],
+        bValues: [10, 10, 10],
+        script: ['changed', 'unchanged', 'changed'],
+        noiseFloor: 5,
+      },
+      'render-unstable-effect',
+    );
+
+    const rendered = renderAb(result);
+    expect(rendered).toContain(DISAGREE);
+    expect(rendered).toContain('NOT A RESULT');
+    // The magnitude survives — a reader still needs it — but the confident
+    // judgement on top of it does not.
+    expect(rendered).toContain('-90');
+    expect(rendered).not.toContain('exceeds the supplied noise floor');
+  });
+
+  it('still calls a stable row’s effect real, so the guard is not simply always-on', async () => {
+    const { result } = await runFixture(
+      {
+        pairs: 3,
+        aValues: [100, 100, 100],
+        bValues: [10, 10, 10],
+        script: ['changed', 'changed', 'changed'],
+        noiseFloor: 5,
+      },
+      'render-stable-effect',
+    );
+
+    const rendered = renderAb(result);
+    expect(rendered).toContain('exceeds the supplied noise floor');
+    expect(rendered).not.toContain('NOT A RESULT');
   });
 });

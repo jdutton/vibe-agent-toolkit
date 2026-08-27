@@ -32,7 +32,7 @@ import {
   parseCacheMode,
 } from '../src/bin/vat-lab.js';
 import type { PerfBody, PerfCommandStats } from '../src/facets/perf/types.js';
-import { PERF_FACET, PERF_FACET_VERSION } from '../src/facets/perf/types.js';
+import { PERF_FACET } from '../src/facets/perf/types.js';
 import { MEASURABLE_COMMAND_NAMES, MEASURABLE_COMMANDS } from '../src/harness/commands.js';
 import { writeReport } from '../src/store.js';
 
@@ -118,7 +118,7 @@ async function writePerfReport(label: string, commands: readonly PerfCommandStat
   const body: PerfBody = { commands, load: NOT_MEASURED };
   return writeReport(
     safePath.join(tempDir, label),
-    makeReport({ facet: PERF_FACET, facetVersion: PERF_FACET_VERSION, body }),
+    makeReport({ facet: PERF_FACET, body }),
   );
 }
 
@@ -205,6 +205,9 @@ const FACETS = ['perf', 'io', 'parse'] as const;
 
 /** The flag naming arm A, spelled once. */
 const ARM_A_FLAG = '--instrument-a';
+
+/** An instrument spec that cannot resolve — see {@link abArgv}. */
+const ABSENT_TREE = 'tree:/nowhere-a';
 
 /**
  * Argv up to (not including) an `ab` run's options.
@@ -297,7 +300,7 @@ describe('vat-lab <facet> ab — every facet gets the verb, not just the one tha
     await createProgram().parseAsync([
       ...abArgv(),
       ARM_A_FLAG,
-      'tree:/nowhere-a',
+      ABSENT_TREE,
       '--instrument-b',
       'tree:/nowhere-b',
       '--control',
@@ -307,9 +310,47 @@ describe('vat-lab <facet> ab — every facet gets the verb, not just the one tha
   });
 
   it('refuses an A/B with only one arm, pointing at --control', async () => {
-    await createProgram().parseAsync([...abArgv(), ARM_A_FLAG, 'tree:/nowhere-a']);
+    await createProgram().parseAsync([...abArgv(), ARM_A_FLAG, ABSENT_TREE]);
 
     expect(process.exitCode).toBe(EXIT_REFUSED);
+  });
+
+  it('refuses --control when the two arms carry DIFFERENT environments', async () => {
+    // --control guarantees one instrument by construction — the same resolved
+    // object is handed to both arms. Per-arm environment arrived later and that
+    // guarantee was never extended to it, so this run would measure a real pool
+    // effect and publish it as the machine's noise floor. Worse than one wrong
+    // number: that floor is then what every later run is judged against.
+    await createProgram().parseAsync([
+      ...abArgv(),
+      ARM_A_FLAG,
+      ABSENT_TREE,
+      '--control',
+      '--env-b',
+      'VAT_PARSE_POOL=1',
+    ]);
+
+    expect(process.exitCode).toBe(EXIT_REFUSED);
+  });
+
+  it('allows --control when both arms carry the SAME environment', async () => {
+    // Pinning a configuration on both arms is how a floor is measured in the
+    // regime the real A/B will run in, so it must stay available.
+    // Reaching resolution is the proof it passed the guard: these argv name an
+    // instrument that does not exist, and resolution THROWS where a refusal
+    // would merely have set an exit code (see `abArgv`).
+    await expect(
+      createProgram().parseAsync([
+        ...abArgv(),
+        ARM_A_FLAG,
+        ABSENT_TREE,
+        '--control',
+        '--env-a',
+        'VAT_PARSE_POOL_SIZE=3',
+        '--env-b',
+        'VAT_PARSE_POOL_SIZE=3',
+      ]),
+    ).rejects.toThrow();
   });
 });
 

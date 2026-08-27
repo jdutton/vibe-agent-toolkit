@@ -93,7 +93,7 @@ describe('pure subpath entries reach no Node builtin', () => {
   // body or a zip entry decode through the same function as bytes from disk. The
   // read-a-file half deliberately lives on `./fs` instead. If this row ever gains
   // a builtin, that split has been undone.
-  it.each(['zod.ts', 'yaml.ts', 'template-entry.ts', 'text.ts'])(
+  it.each(['zod.ts', 'yaml.ts', 'text.ts'])(
     '%s has an empty node: builtin set',
     (entry) => {
       expect(reachedFromEntry(entry).builtins).toEqual([]);
@@ -132,7 +132,6 @@ describe('every subpath entry reaches exactly the third-party packages the READM
     // lost its purpose rather than merely gained a dependency.
     { entry: 'project.ts', thirdParty: [] },
     { entry: 'yaml.ts', thirdParty: ['yaml'] },
-    { entry: 'template-entry.ts', thirdParty: ['handlebars'] },
     // `@vibe-validate/git` arrived on these four with `runGit`, which is now a
     // wrapper over that package's `executeGitCommand`. Note `which` LEAVING
     // `git.ts` and `crawl.ts` in the same change: those entries used to resolve
@@ -142,10 +141,18 @@ describe('every subpath entry reaches exactly the third-party packages the READM
     { entry: 'process.ts', thirdParty: [VV_GIT, 'which'] },
     { entry: 'git.ts', thirdParty: [VV_GIT, 'ignore'] },
     { entry: 'crawl.ts', thirdParty: [VV_GIT, 'picomatch'] },
-    {
-      entry: 'index.ts',
-      thirdParty: [VV_GIT, 'handlebars', 'ignore', 'picomatch', 'which', 'yaml'],
-    },
+    // Declares no dependency of its own — it inherits both by spawning through
+    // `./process`. That is why it is a subpath: reachability is the criterion,
+    // not the import a module happens to write.
+    { entry: 'skill-test/index.ts', thirdParty: [VV_GIT, 'which'] },
+    // ⛔ THE ROW THAT MUST STAY EMPTY. Every other row above says "this entry
+    // costs its consumer these packages"; this one says the entry with ~245
+    // in-repo importers plus published adopters costs them NOTHING. A package
+    // appearing here is not a test to update — it is a domain that has leaked
+    // back onto the barrel and needs its own entry, the way `./skill-test`
+    // did. An approved-list cannot express that, which is why this is `[]`
+    // asserted by equality rather than a set of blessed names.
+    { entry: 'index.ts', thirdParty: [] },
   ])('$entry reaches $thirdParty', ({ entry, thirdParty }) => {
     expect(reachedFromEntry(entry).thirdParty).toEqual(thirdParty);
   });

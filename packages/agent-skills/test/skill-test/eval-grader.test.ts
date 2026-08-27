@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
-import { normalizedTmpdir, safePath, type SpawnHeadlessOptions } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { type SpawnHeadlessOptions } from '@vibe-agent-toolkit/utils/skill-test';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { EvalFragmentError } from '../../src/skill-test/eval-fragment.js';

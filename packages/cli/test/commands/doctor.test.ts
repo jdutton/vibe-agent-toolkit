@@ -34,7 +34,7 @@ import {
 vi.mock('node:child_process', () => ({
   execSync: vi.fn(),
 }));
-vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
+vi.mock('@vibe-agent-toolkit/utils/process', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...(actual as Record<string, unknown>),

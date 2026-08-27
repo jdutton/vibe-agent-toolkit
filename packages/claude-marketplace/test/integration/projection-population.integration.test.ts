@@ -37,22 +37,56 @@
  * not the same test — see that predicate's docstring. Headings: measured **0**,
  * a real invariant, asserted as one.
  *
- * References: **not** 0 — 80 of them on 2026-08-13, 97 on 2026-08-23. Remark hands
- * `toResourceLink` a `link` node with `position === undefined` for a GFM
- * autolink literal in certain quoted / parenthesised contexts, and this corpus's
- * non-markdown blobs are full of them
- * (`"WebFetch(domain:www.anthropic.com)"` in a `.ts` file). Asserting zero would
- * be asserting a falsehood; asserting the current count would be a row-count
- * assertion by another name. So the assertion here is the property the substrate
- * actually depends on and which a count cannot express: **every dropped
- * reference is one that could not have been a closure edge** — none of them
- * resolves, from its own referring file, to a path any realization occupies.
- * That is checked by re-resolving each dropped href through `resolveLocalHref`,
- * the same resolver `ClosureExtentContributor` walks with, rather than by
- * approximating "external" with a scheme regex.
+ * References: **not** 0 — 80 on 2026-08-13, 97 on 2026-08-23, 102 on
+ * 2026-08-24. Remark hands `toResourceLink` a `link` node with
+ * `position === undefined` for a GFM autolink literal in certain quoted /
+ * parenthesised contexts.
  *
- * `projection-blob-population.test.ts` already pins the upstream behaviour with
- * a unit fixture; this is the corpus-scale companion, not a duplicate.
+ * ## ⚰️ What this file used to prove about those drops, and no longer can
+ *
+ * A test lived here called **`drops no reference that could have been a closure
+ * edge`**. It re-read every blob that had dropped a reference, re-resolved each
+ * dropped href through `resolveLocalHref` — the same resolver
+ * `ClosureExtentContributor` walks with, rather than approximating "external"
+ * with a scheme regex — and asserted that **none of them resolved, from its own
+ * referring file, to a path any realization occupies**. The substrate is allowed
+ * to lose a reference it cannot position; it is not allowed to lose one that
+ * would have been a closure edge, because that is a skill member that silently
+ * stops existing.
+ *
+ * That proof is gone because its **subject** is gone, not because the property
+ * stopped mattering. Measured over this corpus on 2026-08-24, all 102 dropped
+ * references were in `.ts` (84), `.json` (10), `.js` (7) and `.yaml` (1) files —
+ * **zero** in markdown or HTML. They existed only because `parserKindForPath`
+ * routed every non-`.html` path to the markdown parser, so remark ran over
+ * TypeScript sources full of `"WebFetch(domain:www.anthropic.com)"`. Once only
+ * markdown and HTML documents are parsed, the dropped-reference population over
+ * this corpus is 0 and the assertion degrades to `expect([]).toEqual([])` —
+ * green forever, unable to redden, and indistinguishable from a test that
+ * proves something. An honest deletion beats that.
+ *
+ * Nor could it be kept alive on a fixture: the mechanism is **not**
+ * format-specific (`projection-blob-population.test.ts`'s
+ * `'counts a positionless reference as skipped rather than defaulting it to
+ * line 1'` already pins the upstream remark behaviour, and its fixture is an
+ * `a.md`), so a hand-written markdown corpus here would be that unit test with
+ * a slower runner. The value of the deleted test was that its population was
+ * *found*, not authored. If a markdown document in this corpus ever acquires a
+ * glued `www.` autolink the population returns and the closure-edge question
+ * becomes answerable again — nothing here will notice, and the assertion to
+ * restore is in this file's history.
+ *
+ * ## What survives, and why it is not vacuous
+ *
+ * The other half of that test does survive, and it is armed by a different
+ * population: `blobs.linkCount` and the parser-derived `blob_references` rows
+ * are two independent measurements of one quantity, and their difference must
+ * equal the stage's own `referencesSkippedForMissingLine`. That check is armed
+ * by every AST link in the corpus (2,432 rows on 2026-08-24, of which 926 are
+ * from `.md`/`.html` blobs), not by the drops — a drop count of 0 leaves it
+ * fully live, which is exactly how it caught the `AST_SYNTACTIC_FORMS` staleness
+ * described on {@link droppedReferencesByBlob}. It is what {@link
+ * MIN_AST_REFERENCE_ROWS} exists to keep honest.
  */
 
 import {
@@ -67,21 +101,16 @@ import {
   FilesystemExtentContributor,
   GitExtentContributor,
   PackageExtentContributor,
-  defaultParseCache,
-  hasReferenceSpan,
-  parseKeyed,
   populate,
-  readContentWithKey,
   relativize,
-  resolveLocalHref,
   type BlobPopulationResult,
   type ExtentContributor,
   type JsonValue,
-  type ParseCache,
-  type ParserKind,
   type Projection,
 } from '@vibe-agent-toolkit/resources';
-import { GitTracker, NEVER_CRAWL_GLOBS, crawlDirectory, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { NEVER_CRAWL_GLOBS, crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
+import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -101,8 +130,24 @@ const ROOT = safePath.resolve(__dirname, '..', '..', '..', '..');
  */
 const PROBE_CEILING = 6;
 
-/** The prefix a content key carries when its bytes routed to the HTML parser. */
-const HTML_KEY_PREFIX = 'html.';
+/**
+ * Floor on the AST-derived `blob_references` rows the drop measurement runs over.
+ *
+ * **This is not the row-count assertion this file refuses to make** (see the
+ * header). A count assertion pins the corpus and fails on the next commit; this
+ * pins nothing about the corpus's size, only that the measurement below has a
+ * subject at all. It can only fail one way — by the population *collapsing* —
+ * and a collapse is a finding, not a rebase.
+ *
+ * It exists because `expect(total).toBe(referencesSkippedForMissingLine)` is
+ * `0 === 0` over an empty input, and this file has already lost one assertion
+ * (the closure-edge test, see header) to exactly that. Measured 2026-08-24:
+ * 2,432 AST rows over the whole corpus, of which **926** come from `.md`/`.html`
+ * blobs — the subset that survives if parsing is ever narrowed to markdown and
+ * HTML. 500 sits below both, so it clears today and clears that narrowing, but
+ * catches a parser that silently stops running.
+ */
+const MIN_AST_REFERENCE_ROWS = 500;
 
 /** What the escalating-cap probe learned about the closure stratum. */
 interface ConvergenceProbe {
@@ -261,14 +306,25 @@ async function probeConvergence(
  * (the counter is still `candidates - rows`, computed inside the stage) while
  * making them agree by construction rather than by coincidence.
  *
+ * `astRowTotal` is returned alongside because it is the population that *arms*
+ * the comparison: the difference is meaningful only while there are AST rows to
+ * take the difference of, and a caller cannot re-derive it without repeating
+ * the `AST_SYNTACTIC_FORMS` filter — which is the exact hand-re-derivation this
+ * docstring exists to warn about.
+ *
  * @param projection - The populated projection
- * @returns Content key → number of parser links dropped for want of a span
+ * @returns Per-blob dropped counts, and the AST rows the difference is taken against
  */
-function droppedReferencesByBlob(projection: Projection): Map<string, number> {
+function droppedReferencesByBlob(projection: Projection): {
+  dropped: Map<string, number>;
+  astRowTotal: number;
+} {
   const astRows = new Map<string, number>();
+  let astRowTotal = 0;
   for (const row of projection.blobReferences) {
     if (!AST_SYNTACTIC_FORMS.has(row.syntacticForm)) continue;
     astRows.set(row.blob, (astRows.get(row.blob) ?? 0) + 1);
+    astRowTotal++;
   }
 
   const dropped = new Map<string, number>();
@@ -276,103 +332,38 @@ function droppedReferencesByBlob(projection: Projection): Map<string, number> {
     const missing = blob.linkCount - (astRows.get(blob.contentKey) ?? 0);
     if (missing > 0) dropped.set(blob.contentKey, missing);
   }
-  return dropped;
-}
-
-/** One dropped reference, with everything needed to judge whether it was an edge. */
-interface DroppedReference {
-  /** Root-relative path of the file that holds it. */
-  from: string;
-  /** The href exactly as authored. */
-  href: string;
-  /** Root-relative path it resolves to, when it resolves to a realized path. */
-  resolvesTo: string | null;
+  return { dropped, astRowTotal };
 }
 
 /**
- * Re-parse the blobs that dropped a reference and resolve each dropped href.
+ * First realized path for each keyed blob, so a content key can be named.
  *
- * Only the affected blobs are re-read — the dropped hrefs are in no row, so
- * there is no cheaper way to see them, but there is no need to re-read the
- * other four thousand.
+ * "First" is arbitrary and deliberately so: a blob realized at three paths is
+ * one blob, and this map exists only for the printed diagnostic below, which
+ * needs *a* filename, not the authoritative one.
  *
  * @param projection - The populated projection
- * @param dropped - Content key → dropped count, from {@link droppedReferencesByBlob}
- * @returns One entry per dropped reference
+ * @returns Content key → one root-relative path realizing it
  */
-async function collectDroppedReferences(
-  projection: Projection,
-  dropped: ReadonlyMap<string, number>,
-): Promise<DroppedReference[]> {
+function realizedPathByContentKey(projection: Projection): Map<string, string> {
   const pathByKey = new Map<string, string>();
   for (const row of projection.resourceRealizations) {
     if (row.contentKey !== null && !pathByKey.has(row.contentKey)) {
       pathByKey.set(row.contentKey, row.path);
     }
   }
-  const realizedPaths = new Set(projection.resourceRealizations.map((row) => row.path));
-  const cache = defaultParseCache();
-  const out: DroppedReference[] = [];
-
-  for (const contentKey of dropped.keys()) {
-    const from = pathByKey.get(contentKey);
-    if (from === undefined) continue;
-    out.push(...await droppedInBlob(contentKey, from, realizedPaths, cache));
-  }
-
-  return out;
+  return pathByKey;
 }
 
 /**
- * Re-read one blob and report every link the row builder could not position.
+ * Lowercased final extension of a path, or `(none)`.
  *
- * The predicate is `hasReferenceSpan`, the producer's own — not a local
- * `line === undefined`. `astCandidates` rejects on the line **and** both
- * offsets, so a narrower question here would enumerate fewer references than
- * the count above claims were dropped, and the missing ones would be exactly
- * the shape (a line, no offsets) that hid the HTML under-report in the first
- * place: counted, never named, never resolved, never asserted on.
- *
- * @param contentKey - The blob's key, re-confirmed against the bytes read now
- * @param from - Root-relative path the bytes are read from
- * @param realizedPaths - Every path the projection realizes
- * @param cache - The content-addressed parse cache, already warm from population
- * @returns One entry per unpositionable link, empty when the bytes have changed
+ * @param path - Root-relative path
+ * @returns The extension including the dot
  */
-async function droppedInBlob(
-  contentKey: string,
-  from: string,
-  realizedPaths: ReadonlySet<string>,
-  cache: ParseCache,
-): Promise<DroppedReference[]> {
-  const kind: ParserKind = contentKey.startsWith(HTML_KEY_PREFIX) ? 'html' : 'markdown';
-  const keyed = await readContentWithKey(safePath.join(ROOT, from), kind);
-  if (keyed.key !== contentKey) return [];
-  const parsed = await parseKeyed(keyed, cache);
-
-  return parsed.links.flatMap<DroppedReference>((link) => hasReferenceSpan(link)
-    ? []
-    : [{ from, href: link.href, resolvesTo: resolveWithin(link.href, from, realizedPaths) }]);
-}
-
-/**
- * Resolve an href from its referring file and report it only when the target is
- * a path this projection realizes.
- *
- * The same two steps `ClosureExtentContributor.resolveReference` performs, in
- * the same order and through the same resolver — a scheme regex would be a
- * second opinion about what "local" means.
- *
- * @param href - The reference exactly as authored
- * @param from - Root-relative path of the referring file
- * @param realizedPaths - Every path the projection realizes
- * @returns The root-relative target, or null when nothing realizes it
- */
-function resolveWithin(href: string, from: string, realizedPaths: ReadonlySet<string>): string | null {
-  const resolution = resolveLocalHref(href, `${ROOT}/${from}`, ROOT);
-  if (resolution.kind !== 'resolved') return null;
-  const candidate = relativize(resolution.resolvedPath, ROOT);
-  return realizedPaths.has(candidate) ? candidate : null;
+function extensionOf(path: string): string {
+  const match = /\.[^./]+$/.exec(path);
+  return match === null ? '(none)' : match[0].toLowerCase();
 }
 
 /** Print the cardinalities this run exists to measure. Printed, never asserted. */
@@ -503,19 +494,33 @@ describe('whole-corpus population', () => {
     expect(disagreements).toEqual([]);
   });
 
-  it('drops no reference that could have been a closure edge', async () => {
-    const dropped = droppedReferencesByBlob(probe.projection);
+  it('agrees between blobs.linkCount and the parser-derived blob_references rows', () => {
+    const { dropped, astRowTotal } = droppedReferencesByBlob(probe.projection);
+
+    // ── Arm the assertion before making it. ───────────────────────────────────
+    // `expect(total).toBe(referencesSkippedForMissingLine)` is `0 === 0` over an
+    // empty projection, so the subject is asserted first and the property
+    // second. See {@link MIN_AST_REFERENCE_ROWS} for why a floor is not the
+    // row-count assertion this file refuses to make.
+    expect(astRowTotal).toBeGreaterThan(MIN_AST_REFERENCE_ROWS);
+    expect(probe.projection.blobs.length).toBeGreaterThan(0);
+
     const total = [...dropped.values()].reduce((sum, count) => sum + count, 0);
-    // The rows and the counter are two independent measurements of one quantity.
+    // The rows and the counter are two independent measurements of one quantity:
+    // `blobs.linkCount` is what the parser handed the stage, the AST-form rows
+    // are what survived `hasReferenceSpan`, and the stage counted the difference
+    // itself. A parser whose links stop reaching rows moves one side only.
     expect(total).toBe(blobCounts.referencesSkippedForMissingLine);
 
-    const references = await collectDroppedReferences(probe.projection, dropped);
-    console.log(`[skips] ${references.length} reference(s) dropped for want of a source span`);
-    console.log(`  distinct hrefs: ${JSON.stringify([
-      ...new Set(references.map((reference) => reference.href)),
-    ].slice(0, 10))}`);
-
-    const edges = references.filter((reference) => reference.resolvesTo !== null);
-    expect(edges).toEqual([]);
-  }, 300_000);
+    // Printed, never asserted — the header explains why the drop *count* is not
+    // an invariant. The extension breakdown is the fact that retired the
+    // closure-edge assertion: on 2026-08-24 every one of the 102 drops was in a
+    // `.ts`/`.json`/`.js`/`.yaml` file and none in markdown or HTML.
+    const pathByKey = realizedPathByContentKey(probe.projection);
+    console.log(`[skips] ${total} reference(s) dropped for want of a source span,`
+      + ` across ${dropped.size} blob(s), against ${astRowTotal} AST reference row(s)`);
+    console.log(`  dropped-blob extensions: ${JSON.stringify(tally(
+      [...dropped.keys()].map((contentKey) => extensionOf(pathByKey.get(contentKey) ?? '')),
+    ))}`);
+  });
 });

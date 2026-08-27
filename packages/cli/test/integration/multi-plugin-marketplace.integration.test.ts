@@ -17,7 +17,8 @@
  */
 import { cpSync, readFileSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {

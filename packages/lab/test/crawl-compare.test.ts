@@ -30,7 +30,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { compareCrawl } from '../src/facets/crawl/compare.js';
-import { CRAWL_FACET, CRAWL_FACET_VERSION } from '../src/facets/crawl/types.js';
+import { CRAWL_FACET } from '../src/facets/crawl/types.js';
 import type { CrawlCommandStats, CrawlDumpCharges } from '../src/facets/crawl/types.js';
 
 import { CLEAN_LOAD, makeReport } from './report-fixtures.js';
@@ -110,7 +110,7 @@ function row(charges: CrawlDumpCharges, totalMs: number): CrawlCommandStats {
  */
 function verdictOf(before: CrawlCommandStats, after: CrawlCommandStats) {
   const envelope = (command: CrawlCommandStats) =>
-    makeReport({ facet: CRAWL_FACET, facetVersion: CRAWL_FACET_VERSION, body: { commands: [command], load: CLEAN_LOAD } });
+    makeReport({ facet: CRAWL_FACET, body: { commands: [command], load: CLEAN_LOAD } });
   const result = compareCrawl(envelope(before), envelope(after), OPTIONS);
   if (!result.ok) throw new Error(`the comparison was refused: ${result.refusal}`);
   const command = result.commands[0];

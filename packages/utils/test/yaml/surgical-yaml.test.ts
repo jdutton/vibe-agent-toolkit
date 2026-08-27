@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { updateYamlIn, verifyConfinedYamlEdit } from '../../src/index.js';
+import { updateYamlIn, verifyConfinedYamlEdit } from '../../src/yaml.js';
 
 describe('updateYamlIn — surgical scalar replace', () => {
   it('preserves inline trailing comment AND its alignment whitespace verbatim', () => {

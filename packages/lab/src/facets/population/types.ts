@@ -44,17 +44,6 @@ import type { CacheMode, LoadReadings } from '../../harness/types.js';
 export const POPULATION_FACET = 'population';
 
 /**
- * Version of this body schema.
- *
- * Bumped whenever the shape below changes. Two `population` reports at different
- * body versions are refused against each other, because differences across a
- * schema change belong to the schema rather than to the subject.
- *
- * 1 — first version.
- */
-export const POPULATION_FACET_VERSION = 1;
-
-/**
  * What a row's file list actually describes.
  *
  * - **`measured`** — the command reported a population and it is below.

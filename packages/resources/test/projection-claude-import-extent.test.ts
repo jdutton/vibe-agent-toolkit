@@ -117,7 +117,7 @@ function addDirectory(builder: ProjectionBuilder, path: string): void {
  * tree. {@link addFile} keys by content, exactly as production does.
  */
 function buildBase(files: readonly FixtureFile[]): ProjectionBase {
-  const builder = new ProjectionBuilder(ROOT);
+  const builder = new ProjectionBuilder({ root: ROOT });
   for (const file of files) {
     if (file.kind === 'directory') {
       addDirectory(builder, file.path);

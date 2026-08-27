@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { normalizedTmpdir, parseGitUrl, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { parseGitUrl } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { cloneGitSource } from '../../src/skill-source/git-clone.js';

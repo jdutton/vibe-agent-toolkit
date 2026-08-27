@@ -14,7 +14,7 @@
  * So the definition lives here, once, and both axes import it.
  */
 
-import { runGit as runGitSafely } from '@vibe-agent-toolkit/utils';
+import { runGit as runGitSafely } from '@vibe-agent-toolkit/utils/git';
 
 /** One git plumbing invocation's outcome. */
 export interface GitOutcome {

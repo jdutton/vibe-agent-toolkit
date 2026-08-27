@@ -2,7 +2,8 @@
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 
-import { mkdirSyncReal, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { describe, expect, it } from 'vitest';
 
 import { treeCopyPlugin } from '../../src/commands/claude/plugin/tree-copy.js';

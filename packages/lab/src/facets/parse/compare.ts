@@ -36,6 +36,12 @@
  * a corpus that grew is exactly what a reader may be trying to see — but the
  * movement carries a caveat saying so, because a pass that got slower per run
  * may be unchanged per document.
+ *
+ * The same is true of two sides measured at different **thread widths**: the
+ * milliseconds are summed across every thread that reported, so an arm running N
+ * parse workers sums N threads' concurrent wall time into one figure. That pair
+ * is the pool-on/pool-off A/B this facet exists to serve, so it is compared and
+ * caveated rather than refused.
  */
 
 import type { Axis, DecideComparisonOptions } from '../../envelope/coordinate.js';
@@ -53,7 +59,6 @@ import {
 
 import {
   PARSE_FACET,
-  PARSE_FACET_VERSION,
   type ParseAttribution,
   ParseBodySchema,
   type ParseCommandStats,
@@ -62,7 +67,6 @@ import {
 /** This facet's body contract, as the shared comparison gates need it. */
 const PARSE_CONTRACT = {
   facet: PARSE_FACET,
-  version: PARSE_FACET_VERSION,
   schema: ParseBodySchema,
 } as const;
 
@@ -100,6 +104,16 @@ export interface ParseMovement {
   readonly unattributedMs: ParseMsDelta;
   /** Every pass, whether or not it moved — the shape of the parse is the point. */
   readonly passes: readonly ParsePassMovement[];
+  /**
+   * Every charged tier pass, as a total and as a main-thread share.
+   *
+   * Its own list rather than more entries in {@link ParseMovement.passes},
+   * because these rows are not parser passes and the verdict logic treats the
+   * two differently: a parser pass moving is a change to how vat parses, while a
+   * tier row moving is a change to where the cost of parsing is PAID. See
+   * {@link tierRows}.
+   */
+  readonly tier: readonly ParsePassMovement[];
   /** What qualifies these numbers, or `null` when nothing does. */
   readonly caveat: string | null;
 }
@@ -132,6 +146,12 @@ export interface ParseCommandDiff {
   readonly before: ParseCommandStats | null;
   /** The compared row, absent when the command was dropped. */
   readonly after: ParseCommandStats | null;
+  /**
+   * The same caveat the verdict's movement carries, where a reader that does not
+   * know this facet's verdict shape can still find it. See
+   * {@link CommandDiff.caveat}.
+   */
+  readonly caveat: string | null;
 }
 
 /** A refusal to compare at all. */
@@ -202,18 +222,102 @@ function passRows(row: ParseCommandStats): readonly LabelledRow[] {
 }
 
 /**
- * Say what qualifies a movement, or `null` when nothing does.
+ * Every tier pass, twice: once for what it cost, once for what it cost the MAIN
+ * thread.
+ *
+ * Both rows, deliberately, because a change to the parse tier routinely moves
+ * one without the other and the pair is the finding. Switching the transport
+ * moves the same serialization from the parent to eight workers: the total
+ * barely moves (it may even rise, since eight threads serializing at once take
+ * longer in aggregate) while the main-thread share collapses. A comparator that
+ * published only the total would call that "unchanged"; one that published only
+ * the main share would hide the aggregate cost being paid somewhere.
+ *
+ * Labels say which is which rather than leaving it to a convention, and both are
+ * prefixed `tier/` so no reader can confuse one with a parser pass — the pass
+ * namespaces are disjoint by construction, but the labels appear side by side in
+ * one list.
+ *
+ * Rows that never ran on either side are dropped. A tier the measured build does
+ * not have would otherwise contribute eight `0 -> 0` rows to every comparison.
+ *
+ * @param row - The command's statistics
+ * @returns Two labelled rows per charged tier pass
+ */
+function tierRows(row: ParseCommandStats): readonly LabelledRow[] {
+  return row.tier
+    .filter((pass) => pass.calls > 0)
+    .flatMap((pass) => [
+      { label: `tier/${pass.pass}`, calls: pass.calls, elapsedMs: pass.elapsedMs },
+      {
+        label: `tier/${pass.pass} on main`,
+        calls: pass.mainCalls,
+        elapsedMs: pass.mainElapsedMs,
+      },
+    ]);
+}
+
+/**
+ * Say what qualifies a movement on the corpus side, or `null`.
  *
  * @param documents - The document-count movement
  * @returns The caveat, or `null`
  */
-function movementCaveat(documents: ParseCountDelta): string | null {
+function corpusCaveat(documents: ParseCountDelta): string | null {
   if (documents.delta === 0) return null;
   return (
     `the two sides parsed different numbers of documents ` +
     `(${String(documents.before)} vs ${String(documents.after)}), so a pass that moved may have ` +
     'moved because the corpus did — read the per-document figures before the totals'
   );
+}
+
+/**
+ * Say when the two sides were measured at different THREAD widths, or `null`.
+ *
+ * Every millisecond on a row is summed across the threads that reported it. So
+ * an arm running N parse workers sums N threads' CONCURRENT wall time into the
+ * same figure while an arm running none sums one thread's — and the two totals
+ * are not a like-for-like duration, in the direction that makes the threaded arm
+ * look catastrophically slower.
+ *
+ * That is not hypothetical: the pool-on/pool-off A/B this facet was pointed at
+ * is exactly this pair, and reading its summed figures as durations is how the
+ * pool came to ship disabled. A caveat rather than a refusal, because the
+ * per-pass shape and the per-document figures are precisely what a reader wants
+ * from such a pair — it is the totals that need the warning.
+ *
+ * @param before - The baseline row
+ * @param after - The compared row
+ * @returns The caveat, or `null`
+ */
+function threadWidthCaveat(before: ParseCommandStats, after: ParseCommandStats): string | null {
+  if (before.workerThreads === after.workerThreads) return null;
+  return (
+    `the two sides ran a different number of parse worker THREADS ` +
+    `(${String(before.workerThreads)} vs ${String(after.workerThreads)}) — every millisecond ` +
+    'here is summed across them, so the wider side sums more concurrent threads into the same ' +
+    'figure and the totals are not a like-for-like duration'
+  );
+}
+
+/**
+ * Say what qualifies a movement, or `null` when nothing does.
+ *
+ * @param documents - The document-count movement
+ * @param before - The baseline row
+ * @param after - The compared row
+ * @returns Every caveat that applies, joined, or `null`
+ */
+function movementCaveat(
+  documents: ParseCountDelta,
+  before: ParseCommandStats,
+  after: ParseCommandStats,
+): string | null {
+  const caveats = [corpusCaveat(documents), threadWidthCaveat(before, after)].filter(
+    (caveat): caveat is string => caveat !== null,
+  );
+  return caveats.length === 0 ? null : caveats.join('; and ');
 }
 
 /**
@@ -237,7 +341,8 @@ function buildMovement(
     total: msDelta(before.totalMs, after.totalMs, options),
     unattributedMs: msDelta(before.unattributedMs, after.unattributedMs, options),
     passes: labelledMovements(passRows(before), passRows(after), options),
-    caveat: movementCaveat(documents),
+    tier: labelledMovements(tierRows(before), tierRows(after), options),
+    caveat: movementCaveat(documents, before, after),
   };
 }
 
@@ -343,5 +448,9 @@ export function compareParse(
     PARSE_CONTRACT,
     options,
     (left, right) => verdictFor(left, right, options),
+    // Hoisted out of the movement so a facet-agnostic consumer can read it. An
+    // `unmeasurable` verdict has no movement and nothing to qualify: its reason
+    // already says why there are no numbers.
+    (verdict) => ('movement' in verdict ? verdict.movement.caveat : null),
   );
 }

@@ -20,7 +20,7 @@ import {
   decideComparison,
   type DecideComparisonOptions,
 } from '../../envelope/coordinate.js';
-import { refuseIncomparableSchemas, type ReportEnvelope } from '../../envelope/envelope.js';
+import { refuseDifferentFacets, type ReportEnvelope } from '../../envelope/envelope.js';
 
 import { isSignificant, type SignificanceOptions, type SignificanceResult } from './stats.js';
 import { PERF_FACET, type PerfBody, PerfBodySchema, type PerfCommandStats } from './types.js';
@@ -224,7 +224,7 @@ export function comparePerf(
   after: ReportEnvelope<unknown>,
   options: ComparePerfOptions = {},
 ): PerfComparison {
-  const schemaRefusal = refuseIncomparableSchemas(before, after);
+  const schemaRefusal = refuseDifferentFacets(before, after);
   if (schemaRefusal !== null) return { ok: false, refusal: schemaRefusal };
 
   if (before.facet !== PERF_FACET) {

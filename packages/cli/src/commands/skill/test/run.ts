@@ -15,6 +15,7 @@ import {
   DuplicateStagedSkillError,
   isAcknowledged,
   mapErrorToExitCode,
+  conventionalSuiteProbe,
   packageSkill,
   packagingConfigToPackageOptions,
   runPreStageBuild,
@@ -904,6 +905,15 @@ async function runDeclaredSkillBuild(ref: BuildableReference): Promise<void> {
         ref.packagingConfig,
         { skillPath: ref.sourcePath, outputPath: ref.expectedDistDir },
         await resolveProjectDeclaredEvalSuites(ref.sourcePath),
+        // Per CALL, deliberately, and this is parity rather than a regression: the
+        // probe was built inside `resolveTestInputDirs` on every path before it was
+        // threaded, so this lane pays exactly what it paid before. It is also the
+        // wrong lane to optimize — `runDeclaredSkillBuild` runs per buildable ref for
+        // a test run's handful of skills, not over a whole project, and there is no
+        // run-scoped seam threaded this far down to hang one on. The lane that made
+        // the O(S²) matter (`vat resources validate`, measured at 10,815 probes over
+        // 103 paths) hoists its probe; see the comment there.
+        conventionalSuiteProbe(),
       ),
     );
     return;

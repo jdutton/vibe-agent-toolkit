@@ -24,6 +24,7 @@ import { sumSeverityCounts } from '../utils/issue-rendering.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 
+import { runClaudePluginBuildPhase } from './claude/plugin/build.js';
 import {
   aggregatePhaseIssueCounts,
   aggregatePhaseStatus,
@@ -40,6 +41,7 @@ import {
   type PhaseVocabulary,
 } from './phase-utils.js';
 import { rejectPositionalArguments } from './positional-args.js';
+import { runSkillsBuildPhase } from './skills/build.js';
 
 export interface BuildCommandOptions {
   only?: string;
@@ -97,9 +99,8 @@ Exit Codes:
   0 - All phases completed successfully (warnings do not fail a build)
   1 - Build error, or '--only' named a phase that is unrecognized or unconfigured
   2 - System error (this command's own, a usage error such as a positional
-      argument, or propagated from a phase that could not run: exited 2, was
-      killed by a signal, was never spawned, or wrote output that could not be
-      parsed)
+      argument, or propagated from a phase that could not run: it exited 2, or
+      reported 'system-error' for itself)
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -233,17 +234,15 @@ export function selectBuildPhases(
   verbose = false,
 ): PhaseSelection {
   const phases: Phase[] = [];
-  // Each phase is a separate spawned process, so a flag not forwarded here is a
-  // flag the composite command silently cannot express: `vat build` would always
-  // get the collapsed report with no way to ask for the full one.
-  const verboseArgs = verbose ? ['--verbose'] : [];
-
+  // A flag not forwarded here is a flag the composite command silently cannot
+  // express: `vat build` would always get the collapsed report with no way to
+  // ask for the full one.
   if (!only || only === 'skills') {
-    phases.push({ name: 'skills', args: ['skills', 'build', ...verboseArgs] });
+    phases.push({ name: 'skills', run: () => runSkillsBuildPhase(undefined, { verbose }) });
   }
 
   if ((!only || only === 'claude') && hasClaudeMarketplaces) {
-    phases.push({ name: 'claude', args: ['claude', 'plugin', 'build', ...verboseArgs] });
+    phases.push({ name: 'claude', run: () => runClaudePluginBuildPhase({ verbose }) });
   }
 
   return decidePhaseSelection(only, phases, BUILD_VOCABULARY);
@@ -267,7 +266,7 @@ async function buildTopLevelCommand(
   // Spec §7: `vat build` requires a projectRoot.
   requireProjectRoot(cwd, 'vat build');
 
-  const { logger, startTime, binPath } = createPhaseContext(options.debug);
+  const { logger, startTime } = createPhaseContext(options.debug);
 
   try {
     // Inside the try, deliberately: this used to throw from outside it, so an
@@ -289,7 +288,10 @@ async function buildTopLevelCommand(
 
     for (const phase of phases) {
       logger.info(`\n▶ Phase: ${phase.name}`);
-      const result = runPhase(binPath, phase);
+      // Awaited in the loop, deliberately, and here it is a DEPENDENCY rather
+      // than a presentation choice: `claude` packages what `skills` just wrote
+      // into dist/, so overlapping the two would read a half-built tree.
+      const result = await runPhase(phase);
       phaseResults.push(result);
 
       // Only a real failure stops the build. A `warning` phase must NOT abort:

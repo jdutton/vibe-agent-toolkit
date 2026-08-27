@@ -63,7 +63,7 @@ export {
   COMMAND_SPECS,
   MANIFEST_FILENAME,
   ORACLE_DIR,
-  SNAPSHOT_FORMAT_VERSION,
+  SnapshotManifestSchema,
   type ArtifactDelta,
   type ArtifactKind,
   type ArtifactStatus,

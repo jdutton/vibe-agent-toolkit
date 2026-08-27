@@ -84,7 +84,7 @@ vi.mock('../../src/utils/config-loader.js', () => ({
   loadConfig: (projectRoot: string): unknown => loadConfigMock(projectRoot),
 }));
 
-vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => ({
+vi.mock('@vibe-agent-toolkit/utils/git', async (importOriginal) => ({
   ...(await importOriginal<OriginalModule>()),
   GitTracker: class {
     async initialize(): Promise<void> {

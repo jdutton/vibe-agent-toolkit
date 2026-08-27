@@ -24,7 +24,6 @@ import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
-  IO_DUMP_VERSION,
   type IoDump,
   type IoDumpRow,
   type MergedDumps,
@@ -69,7 +68,7 @@ function row(over: Partial<IoDumpRow> = {}): IoDumpRow {
 
 /** Build a dump around some rows. */
 function dump(pid: number, rows: readonly IoDumpRow[]): IoDump {
-  return { dumpVersion: IO_DUMP_VERSION, pid, rows };
+  return { pid, rows };
 }
 
 /** Merge a set of dumps with the standard roots. */
@@ -359,11 +358,21 @@ describe('readDumps', () => {
     );
   });
 
-  it('refuses a dump from another dump version', async () => {
+  it('refuses a dump from a build that still stamped a dumpVersion, and names the producer', async () => {
+    // The counter used to stamp `dumpVersion` and this reader used to compare it
+    // to an integer of its own. Both are gone: strictness refuses the stale
+    // field for the honest reason — this build does not model it — without
+    // anyone being obliged to remember a number. The refusal must still say what
+    // to re-capture with, because the commonest cause is an OLDER BUILD's dump.
     await expectRefusal(
-      'other-version',
-      { 'io-1.json': JSON.stringify({ ...dump(1, [row()]), dumpVersion: IO_DUMP_VERSION + 1 }) },
+      'stale-version-field',
+      { 'io-1.json': JSON.stringify({ ...dump(1, [row()]), dumpVersion: 2 }) },
       /dumpVersion/,
+    );
+    await expectRefusal(
+      'stale-version-field-producer',
+      { 'io-1.json': JSON.stringify({ ...dump(1, [row()]), dumpVersion: 2 }) },
+      /counter/,
     );
   });
 

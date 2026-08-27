@@ -30,7 +30,8 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { CommandExecutionError, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { CommandExecutionError, safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import * as yaml from 'yaml';
 import { z } from 'zod';
 

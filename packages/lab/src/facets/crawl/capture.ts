@@ -44,7 +44,6 @@ import {
 } from './dump.js';
 import {
   CRAWL_FACET,
-  CRAWL_FACET_VERSION,
   type CrawlBody,
   type CrawlCommandStats,
 } from './types.js';
@@ -247,7 +246,7 @@ export async function captureCrawl(
   const commands = await captureCommandRows(options, DUMP_DIR_PREFIX, CRAWL_TIMING_DIR_ENV, rowFromDumps);
   const loadAfter = readLoad();
 
-  return buildReportEnvelope(CRAWL_FACET, CRAWL_FACET_VERSION, options, {
+  return buildReportEnvelope(CRAWL_FACET, options, {
     commands,
     load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus),
   });

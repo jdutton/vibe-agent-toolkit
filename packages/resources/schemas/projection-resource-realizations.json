@@ -40,11 +40,18 @@
           "type": "string",
           "description": "Lowercased extension including the leading dot, or \"\" when none"
         },
+        "mime": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What this file IS — from mime-type.ts's basename/extension tables, or from the mimeType a matching collection declared. Separate from what was PARSED, which the contentKey's prefix says: most typed files legitimately route to no parser, and a corpus that could not tell \"we do not parse this\" from \"we do not know what this is\" would be lying about its own coverage. Null means \"no type recorded\", which is deliberately NOT application/octet-stream — that is a claim of opaque bytes this projection is in no position to make from a path string, and it would make the count of unknowns (the one number that says where the tables need to grow) read as zero forever."
+        },
         "contentKey": {
           "anyOf": [
             {
               "type": "string",
-              "pattern": "^(?:markdown|html)\\.[0-9a-f]{64}$",
+              "pattern": "^(?:markdown|html|none)\\.[0-9a-f]{64}$",
               "description": "A parser-kind-qualified content key: \"<markdown|html>.<sha256>\""
             },
             {
@@ -104,6 +111,7 @@
         "dir",
         "depth",
         "ext",
+        "mime",
         "contentKey",
         "contentState",
         "mtime",

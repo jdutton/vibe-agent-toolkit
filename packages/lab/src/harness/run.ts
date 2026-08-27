@@ -48,7 +48,7 @@ import {
   isPathLike,
   resolveShellCommandToken,
   shouldUseShell,
-} from '@vibe-agent-toolkit/utils';
+} from '@vibe-agent-toolkit/utils/process';
 import which from 'which';
 
 import type { ResolvedInstrument, RunOptions, RunResult } from './types.js';

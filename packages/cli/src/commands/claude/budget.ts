@@ -359,7 +359,7 @@ async function sweepBudgets(
 ): Promise<BudgetSweep> {
   const projection = await withPopulationCache({ root }, async (cache) => {
     const gitTracker = await gitTrackerForProjectRoot(root);
-    return buildClaudeContextPopulation({ root, ...populationWiring(logger, gitTracker, cache) });
+    return buildClaudeContextPopulation({ root, ...populationWiring(logger, gitTracker, cache, root) });
   });
   return sweepAlwaysLoadedBudgets(projection, threshold);
 }

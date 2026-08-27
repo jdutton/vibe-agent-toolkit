@@ -238,7 +238,7 @@ directory is inert. Every distinction in the two right-hand columns collapses: t
 
 These two columns apply only where a projection runs; the incumbent walk has no `contentDemand` and
 no blob stage — it reads and parses each admitted resource directly, charged at
-`resource-registry:add-resource`.
+`resource-registry:admit`.
 
 | lane | `contentDemand` at enumeration | resulting `contentState` | blob stage (`contentParsing`) |
 |---|---|---|---|
@@ -262,8 +262,8 @@ behaviour's *output*, not the decision being made.
 four tables the stage fills — the resources lane's call site reads as "`vat resources validate` needs
 no file content". It does not follow and it is not true: the lane declines *this stage*, while
 validate still parses every admitted resource to find links — the parse simply moves to
-`resource-registry:add-resource`, and the authority on how many that is, is the registry's own
-`add-resource` accounting, never a number written here. A flag named for a table invites a conclusion
+`resource-registry:admit`, and the authority on how many that is, is the registry’s own
+admission accounting, never a number written here. A flag named for a table invites a conclusion
 about the command's content reads that the flag cannot support.
 
 **What the flag does not gate, stated so it is not guessed at.** It is not `contentDemand` and not
@@ -415,9 +415,17 @@ rather than silently shipped or silently dropped.
 Key eagerly where the bytes are already essentially free from the discovery step, and defer
 everywhere else; `gitignored` is merely how that rule is *evaluated*, because it is the only O(1)
 test available. The extent cannot be narrowed — dropping non-markdown loses real members, and that is
-measured rather than reasoned: withholding the non-markdown row costs a skill both a direct link
-target and the leaf reachable only through it. The demand itself is a per-registration parameter, not
-a property of this contributor.
+measured rather than reasoned: withholding the non-markdown row costs a skill a direct link target of
+its own root. The demand itself is a per-registration parameter, not a property of this contributor.
+
+⚠️ **The transitive half of that claim is gone, and the narrower one is the whole claim.** It used to
+read "…and the leaf reachable only through it", which held only because a markdown link inside a
+JSDoc comment was parsed as a `markdown-link` — remark reading a comment as prose was doing packaging
+work nobody designed. Since parse routing became MIME-driven, a non-prose file routes to no document
+parser, emits no AST link row, and every reference it carries lexes as `bare-token`, which the
+default `follow` set does not traverse. Non-markdown files are still closure **members**; they are no
+longer closure **doors**. A data file reachable *only* from a bundled script is now a member of
+nothing — tracked as an open question, not a settled design.
 
 `packages/resources/src/projection/contributors/filesystem-extent.ts ›
 FilesystemExtentContributor` — the module docstring carries the rule, `› DEFAULT_CONTENT_DEMAND`

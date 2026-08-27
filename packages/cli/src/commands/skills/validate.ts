@@ -13,7 +13,11 @@ import {
   type SkillValidationSharedContext,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
-import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import {
+  ResourceRegistry,
+  type ProjectConfig,
+  type ResourcePopulationSource,
+} from '@vibe-agent-toolkit/resources';
 import {
   allowUnusedIssues,
   calculateValidationStatus,
@@ -22,10 +26,11 @@ import {
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, gitFindRoot, GitTracker, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
 import * as yaml from 'yaml';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { reportCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import {
@@ -46,6 +51,7 @@ import {
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
+import { finishCommand, type PhaseOutcome } from '../phase-utils.js';
 
 import {
   filterSkillsByName,
@@ -66,7 +72,7 @@ export interface SkillsValidateCommandOptions {
 /**
  * Discovered skill with merged packaging config for validation
  */
-interface ValidatableSkill extends DiscoveredSkill {
+export interface ValidatableSkill extends DiscoveredSkill {
   packagingConfig: SkillPackagingConfig;
 }
 
@@ -226,14 +232,8 @@ export function buildValidateSummary(
 /**
  * Output YAML summary to stdout
  */
-function outputYamlSummary(
-  results: PackagingValidationResult[],
-  duration: number,
-  verbose: boolean,
-  runIssues: RunIssues,
-): void {
-  const output = buildValidateSummary(results, duration, verbose, runIssues);
-  console.log(yaml.stringify(output, { indent: 2, lineWidth: 0, aliasDuplicateObjects: false }));
+function writeYamlSummary(summary: ReturnType<typeof buildValidateSummary>): void {
+  console.log(yaml.stringify(summary, { indent: 2, lineWidth: 0, aliasDuplicateObjects: false }));
 }
 
 /**
@@ -380,15 +380,12 @@ export function formatValidationReportLines(
 /**
  * Output validation report to stdout (YAML) and stderr (human-readable)
  */
-function outputValidationReport(
+function reportValidationToStderr(
   results: PackagingValidationResult[],
-  duration: number,
   logger: ReturnType<typeof createLogger>,
   verbose: boolean,
   runIssues: RunIssues,
 ): void {
-  outputYamlSummary(results, duration, verbose, runIssues);
-
   // Collect all emitted codes across skills (both errors and warnings) to drive the footer
   const emittedCodes = new Set<string>();
   for (const r of results) {
@@ -461,9 +458,69 @@ function logSkillProgress(
  * returns an empty context and validators transparently fall back to their
  * legacy per-skill setup — correctness first, perf second.
  */
-async function buildSharedValidationContext(
+/**
+ * Options for {@link buildSkillsValidateRegistry}.
+ */
+export interface SkillsValidateRegistryOptions {
+  /**
+   * The project's configuration, or `undefined` for a project that has none.
+   *
+   * **Not optional in the sense of "nice to have".** A collection may declare a
+   * `mimeType` that overrides the extension tables and decides which parser runs
+   * over a file. `ResourceRegistry` routes through `resources.collections` when —
+   * and only when — it was handed a config; the projection lane behind
+   * `populationSource` reads those same declarations off the root. A registry
+   * built without the config therefore reaches a DIFFERENT verdict about whether
+   * a file is prose than the population that enumerated it, inside one command.
+   *
+   * Passed rather than re-read here so this lane cannot answer from a second,
+   * later parse of the same file.
+   */
+  config?: ProjectConfig | undefined;
+  /**
+   * Where the file list comes from — omit for the incumbent walk, supply one to
+   * source it from a projection instead. Enumeration only: `include` below is
+   * re-applied to whatever the source offers.
+   */
+  populationSource?: ResourcePopulationSource | undefined;
+}
+
+/**
+ * The markdown-only, link-resolved registry `vat skills validate` shares across
+ * every skill in one invocation.
+ *
+ * Exported and named because it had two implementations: this one, and a
+ * restatement inside `pipeline-oracles/lanes.ts` whose own comment recorded that
+ * it was "the one lane with no reusable builder to point at". A copy of a
+ * registry builder is a copy of its ARGUMENTS, and the argument that matters
+ * here is `config` — see {@link SkillsValidateRegistryOptions.config}.
+ *
+ * @param projectRoot - Root every skill in the batch resolves to
+ * @param options - The governing config, and optionally the projection-backed
+ *   enumeration to build from
+ * @returns A crawled registry whose links are already resolved
+ */
+export async function buildSkillsValidateRegistry(
+  projectRoot: string,
+  options: SkillsValidateRegistryOptions = {},
+): Promise<ResourceRegistry> {
+  const { config, populationSource } = options;
+  const registry = await ResourceRegistry.fromCrawl(
+    {
+      baseDir: projectRoot,
+      include: ['**/*.md'],
+      ...(populationSource !== undefined && { populationSource }),
+    },
+    config === undefined ? undefined : { config },
+  );
+  registry.resolveLinks();
+  return registry;
+}
+
+export async function buildSharedValidationContext(
   skills: ValidatableSkill[],
   projectSkills: readonly DeclaredEvalSuite[],
+  config: ProjectConfig | undefined,
   logger: ReturnType<typeof createLogger>,
 ): Promise<SkillValidationSharedContext> {
   // The allow-entry ledger is not an optimization like the two below — it is
@@ -538,14 +595,20 @@ async function buildSharedValidationContext(
               ? `Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`
               : `Enumerating via the incumbent walk (${RESOURCES_CRAWL_ENV} unset)`,
           );
-          return ResourceRegistry.fromCrawl({
-            baseDir: sharedRoot,
-            include: ['**/*.md'],
+          return buildSkillsValidateRegistry(sharedRoot, {
+            // The command's OWN config, not a second read of the same file. It
+            // governs `sharedRoot` by construction: this command exits early
+            // without a config at `cwd`, every skill is discovered relative to
+            // `cwd`, and `findProjectRoot` stops at the nearest config — so the
+            // root every skill agrees on IS the root this config was loaded
+            // from. Withholding it routes parsing by the extension tables while
+            // the projection behind `populationSource` routes by the declared
+            // `mimeType`, and the two then disagree about which files are prose.
+            config,
             ...(populationSource !== undefined && { populationSource }),
           });
         },
       );
-      registry.resolveLinks();
       context.registry = registry;
     }
   } else {
@@ -556,12 +619,18 @@ async function buildSharedValidationContext(
 }
 
 /**
- * Skills validate command implementation
+ * Validate every configured skill and hand back the document and exit code,
+ * printing the document nowhere.
+ *
+ * The phase entry point for `vat validate` and `vat verify`. The two early
+ * returns publish NO document — an unconfigured or empty run prints nothing on
+ * stdout and exits 0, exactly as the child process did, and
+ * `phaseResultFromOutcome` records that as `success` with no `report`.
  */
-export async function validateCommand(
+export async function runSkillsValidatePhase(
   pathArg: string | undefined,
   options: SkillsValidateCommandOptions
-): Promise<void> {
+): Promise<PhaseOutcome> {
   const { logger, cwd, startTime } = setupCommandContext(pathArg, options.debug);
 
   try {
@@ -576,7 +645,7 @@ export async function validateCommand(
 
     if (!config?.skills) {
       logger.info('No skills section in config yaml — nothing to validate');
-      process.exit(0);
+      return { document: undefined, exitCode: 0 };
     }
 
     // Discover skills from config yaml (relative to cwd where config lives)
@@ -584,7 +653,7 @@ export async function validateCommand(
 
     if (discovered.length === 0) {
       logger.info('ℹ️  No skills found matching config yaml skills.include patterns');
-      process.exit(0);
+      return { document: undefined, exitCode: 0 };
     }
 
     // Merge packaging config for each skill.
@@ -608,7 +677,7 @@ export async function validateCommand(
     // Every declared skill, not just `skillsToValidate`: `--skill x` narrows what is
     // REPORTED on, never what counts as some skill's declared test input.
     const projectSkills = collectDeclaredEvalSuites(config.skills, discovered);
-    const sharedContext = await buildSharedValidationContext(skillsToValidate, projectSkills, logger);
+    const sharedContext = await buildSharedValidationContext(skillsToValidate, projectSkills, config, logger);
 
     // Validate each skill
     const results: PackagingValidationResult[] = [];
@@ -642,15 +711,31 @@ export async function validateCommand(
       ? []
       : allowUnusedIssues(sharedContext.allowLedger);
 
-    // Output report and exit
     const duration = Date.now() - startTime;
     const verbose = options.verbose === true;
-    outputValidationReport(results, duration, logger, verbose, runIssues);
+    const document = buildValidateSummary(results, duration, verbose, runIssues);
+    reportValidationToStderr(results, logger, verbose, runIssues);
 
     const hasErrors = results.some(r => r.status === 'error')
       || runIssues.some(i => i.severity === 'error');
-    process.exit(hasErrors ? 1 : 0);
+    return { document, exitCode: hasErrors ? 1 : 0 };
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'SkillsValidate');
+    return {
+      document: reportCommandError(error, logger, startTime, 'SkillsValidate'),
+      exitCode: 2,
+      failed: true,
+    };
   }
+}
+
+/**
+ * Skills validate command implementation
+ */
+export async function validateCommand(
+  pathArg: string | undefined,
+  options: SkillsValidateCommandOptions
+): Promise<void> {
+  finishCommand(await runSkillsValidatePhase(pathArg, options), (document) => {
+    writeYamlSummary(document as ReturnType<typeof buildValidateSummary>);
+  });
 }

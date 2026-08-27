@@ -12,7 +12,8 @@ import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 
-import { safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import * as tar from 'tar';
 
 

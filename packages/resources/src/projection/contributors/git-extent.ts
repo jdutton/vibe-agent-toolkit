@@ -41,7 +41,7 @@
 import {
   crawlDirectory,
   NEVER_CRAWL_GLOBS,
-} from '@vibe-agent-toolkit/utils';
+} from '@vibe-agent-toolkit/utils/crawl';
 
 import type {
   ResourceExtentRow,
@@ -156,6 +156,10 @@ export class GitExtentContributor implements ExtentContributor {
           // Shared with every other contributor: a tracked file is realized here
           // and in the filesystem extent, and only one of those may read it.
           ...(base.contentCache !== undefined && { contentCache: base.contentCache }),
+          // Shared for the same reason and one more: the resolver accumulates
+          // conflicts, so this extent and the filesystem extent realizing the
+          // same mistyped file must report it ONCE between them.
+          ...(base.mimeResolver !== undefined && { mimeResolver: base.mimeResolver }),
         })),
     );
 

@@ -1,6 +1,6 @@
 {
   "name": "vibe-agent-toolkit",
-  "version": "0.2.0-rc.3",
+  "version": "0.2.0-rc.4",
   "type": "module",
   "private": true,
   "description": "Toolkit for testing and packaging portable AI agents across various LLMs, frameworks, and deployment targets",
@@ -94,7 +94,8 @@
     "vat": "node packages/cli/dist/bin/vat.js",
     "link-all": "tsx packages/dev-tools/src/link-all.ts",
     "unlink-all": "tsx packages/dev-tools/src/unlink-all.ts",
-    "clean:deps": "rimraf --glob node_modules 'packages/*/node_modules'"
+    "clean:deps": "rimraf --glob node_modules 'packages/*/node_modules'",
+    "bakeoff:parsers": "tsx packages/dev-tools/src/parser-bakeoff.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

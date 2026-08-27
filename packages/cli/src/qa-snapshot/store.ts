@@ -34,7 +34,7 @@ import {
   COMMAND_DIR,
   MANIFEST_FILENAME,
   ORACLE_DIR,
-  SNAPSHOT_FORMAT_VERSION,
+  SnapshotManifestSchema,
   type LoadedSnapshot,
   type SnapshotManifest,
 } from './types.js';
@@ -115,8 +115,8 @@ export function writeSnapshot(
  * @param dir - Snapshot directory to read
  * @returns The manifest plus artifact text, LF-normalized
  * @throws {Error} When the directory is not a snapshot, the manifest is
- *   unreadable or of an unsupported `formatVersion`, or a named artifact is
- *   missing from disk
+ *   unreadable or not this build's layout, or a named artifact is missing from
+ *   disk
  */
 export function readSnapshot(dir: string): LoadedSnapshot {
   const root = safePath.resolve(dir);
@@ -158,12 +158,15 @@ function assertWritableSnapshotDir(root: string, manifestPath: string): void {
 }
 
 /**
- * Read and version-check the manifest.
+ * Read and validate the manifest.
+ *
+ * The strict schema is the whole of "may this snapshot be read" — see
+ * {@link SnapshotManifestSchema} for why there is no version integer beside it.
  *
  * @param root - Absolute snapshot directory, for error messages
  * @param manifestPath - Absolute path to `manifest.json`
  * @returns The manifest
- * @throws {Error} When it is absent, unparseable, or of another format version
+ * @throws {Error} When it is absent, unparseable, or not this build's layout
  */
 function readManifest(root: string, manifestPath: string): SnapshotManifest {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed filename under the caller-supplied snapshot root
@@ -188,26 +191,18 @@ function readManifest(root: string, manifestPath: string): SnapshotManifest {
     throw new Error(`Unreadable snapshot manifest at ${manifestPath}: expected a JSON object.`);
   }
 
-  const found = (parsed as { formatVersion?: unknown }).formatVersion;
-  if (found !== SNAPSHOT_FORMAT_VERSION) {
+  const validated = SnapshotManifestSchema.safeParse(parsed);
+  if (!validated.success) {
+    const issues = validated.error.issues
+      .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ');
     throw new Error(
-      `Unsupported snapshot formatVersion ${describeVersion(found)} at ${root}; ` +
-        `this build reads formatVersion ${String(SNAPSHOT_FORMAT_VERSION)}.\n` +
-        `  Comparing across format versions is refused rather than guessed — the failure mode of guessing is a confidently wrong "nothing changed".`,
+      `Not a manifest this build can read, at ${manifestPath}:\n  ${issues}\n` +
+        `  Comparing across layouts is refused rather than guessed — the failure mode of guessing is a confidently wrong "nothing changed". Re-capture both sides with the same VAT build.`,
     );
   }
 
-  return parsed as SnapshotManifest;
-}
-
-/**
- * Render whatever a manifest carried in `formatVersion` for an error message.
- *
- * @param value - The parsed value, of any shape
- * @returns A short, printable description
- */
-function describeVersion(value: unknown): string {
-  return value === undefined ? '(absent)' : JSON.stringify(value);
+  return validated.data;
 }
 
 /**

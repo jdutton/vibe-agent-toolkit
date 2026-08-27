@@ -1,4 +1,4 @@
-import type { SpawnResult } from '@vibe-agent-toolkit/utils';
+import type { SpawnResult } from '@vibe-agent-toolkit/utils/skill-test';
 import { describe, expect, it } from 'vitest';
 
 import { runExecutorForEval, type RunExecutorInput } from '../../src/skill-test/eval-executor.js';

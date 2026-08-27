@@ -33,23 +33,39 @@ import { SUBJECT_TOKEN } from '../src/harness/repeat.js';
 /** vat's system-error code, which no command may ever declare completed. */
 const SYSTEM_ERROR_EXIT = 2;
 
-/**
- * What a bare run measures, in this order.
- *
- * Every one of them also takes the subject as an argument, which is why the
- * `{subject}` cases read this list too — today the defaults and the
- * subject-taking commands are the same three.
- */
+/** The `vat claude context --all` sweep, by registry name. */
+const CONTEXT_SWEEP = 'claude-context-all';
+
+/** The single-path control arm for that sweep, by registry name. */
+const CONTEXT_ONE = 'claude-context';
+
+/** What a bare run measures, in this order. */
 const DEFAULT_NAMES = ['resources-scan', 'resources-validate', 'audit'];
 
-/** The commands the registry adds, neither of which accepts a positional path. */
+/** The two commands spelled as a bare verb, because both reject a positional path. */
 const PATHLESS_NAMES = ['validate', 'verify'];
+
+/**
+ * Every command that takes its scope from the working directory.
+ *
+ * Wider than {@link PATHLESS_NAMES}: `claude-context-all` carries a `--all` flag
+ * as well as its verb, so it is not spelled as the bare verb, but it takes no
+ * subject positional either. A `{subject}` token in any of these would make
+ * every repeat a usage error.
+ */
+const CWD_SCOPED_NAMES = [...PATHLESS_NAMES, CONTEXT_SWEEP];
+
+/** Every command handed the subject as a positional argument. */
+const SUBJECT_NAMES = [...DEFAULT_NAMES, CONTEXT_ONE];
 
 /** Every command that reports findings by exit code, and so completes at 1. */
 const FINDINGS_NAMES = ['resources-validate', 'validate', 'verify'];
 
 /** Every command documented as exiting 0 whatever it finds. */
-const ALWAYS_ZERO_NAMES = ['resources-scan', 'audit'];
+const ALWAYS_ZERO_NAMES = ['resources-scan', 'audit', CONTEXT_SWEEP, CONTEXT_ONE];
+
+/** The paired arms that make `vat claude context`'s cost separable. */
+const CONTEXT_NAMES = [CONTEXT_SWEEP, CONTEXT_ONE];
 
 /**
  * The registry's spec for a name, or a failure naming the name.
@@ -97,11 +113,15 @@ describe('MEASURABLE_COMMANDS', () => {
     }
   });
 
-  it.each(PATHLESS_NAMES)('gives %s no subject argument — it rejects a positional path', (name) => {
+  it.each(PATHLESS_NAMES)('spells %s as the bare verb — it rejects a positional path', (name) => {
     expect(specNamed(name).args).toEqual([name]);
   });
 
-  it.each(DEFAULT_NAMES)('gives %s the subject to operate on', (name) => {
+  it.each(CWD_SCOPED_NAMES)('gives %s no subject token — it scopes from the cwd', (name) => {
+    expect(specNamed(name).args).not.toContain(SUBJECT_TOKEN);
+  });
+
+  it.each(SUBJECT_NAMES)('gives %s the subject to operate on', (name) => {
     expect(specNamed(name).args).toContain(SUBJECT_TOKEN);
   });
 
@@ -127,9 +147,35 @@ describe('DEFAULT_MEASURED_COMMANDS', () => {
     expect(DEFAULT_MEASURED_COMMANDS[1]).toBe(MEASURABLE_COMMANDS['resources-validate']);
   });
 
-  it('does not include the two commands the registry added', () => {
-    const names = new Set(DEFAULT_MEASURED_COMMANDS.map((spec) => spec.name));
+  it('admits nothing the registry adds beyond those three', () => {
+    // Derived rather than a second hand-written list, so a registry entry added
+    // tomorrow is checked by this the day it lands.
+    const members = new Set(DEFAULT_MEASURED_COMMANDS.map((spec) => spec.name));
+    const extras = MEASURABLE_COMMAND_NAMES.filter((name) => !DEFAULT_NAMES.includes(name));
 
-    expect(PATHLESS_NAMES.filter((name) => names.has(name))).toEqual([]);
+    expect(extras.filter((name) => members.has(name))).toEqual([]);
+  });
+});
+
+describe('the vat claude context arms', () => {
+  it('registers both, so the sweep and its single-path control are measurable', () => {
+    expect(Object.keys(MEASURABLE_COMMANDS)).toEqual(expect.arrayContaining(CONTEXT_NAMES));
+    expect(MEASURABLE_COMMAND_NAMES).toEqual(expect.arrayContaining(CONTEXT_NAMES));
+    for (const name of CONTEXT_NAMES) expect(specNamed(name).name).toBe(name);
+  });
+
+  it('sweeps with --all and nothing else — --all takes no subject positional', () => {
+    expect(specNamed(CONTEXT_SWEEP).args).toEqual(['claude', 'context', '--all']);
+  });
+
+  it('gives the control arm exactly one subject path', () => {
+    expect(specNamed(CONTEXT_ONE).args).toEqual(['claude', 'context', SUBJECT_TOKEN]);
+  });
+
+  it.each(CONTEXT_NAMES)('leaves %s on the default completed exit codes', (name) => {
+    // `vat claude context` is documented "0 - An answer was produced (there is
+    // no threshold and no gate)"; its `1` is invalid usage, which is a run that
+    // measured nothing. Accepting `1` here would time a usage error.
+    expect(completedExitCodesOf(specNamed(name))).toBe(DEFAULT_COMPLETED_EXIT_CODES);
   });
 });

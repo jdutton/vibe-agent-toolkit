@@ -24,7 +24,7 @@ import { walkLinkGraph, type ExcludeRule, type WalkableRegistry, type WalkLinkGr
 import { setupTempDir } from './test-helpers.js';
 
 // Mock isGitIgnored — default to false (not ignored), override in specific tests
-vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
+vi.mock('@vibe-agent-toolkit/utils/git', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
@@ -33,7 +33,7 @@ vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
 });
 
 // Import after mock setup so we get the mocked version
-const { isGitIgnored } = await import('@vibe-agent-toolkit/utils');
+const { isGitIgnored } = await import('@vibe-agent-toolkit/utils/git');
 
 // ============================================================================
 // Constants

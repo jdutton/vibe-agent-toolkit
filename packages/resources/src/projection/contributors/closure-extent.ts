@@ -330,7 +330,7 @@ export class ClosureExtentContributor implements ExtentContributor {
       base,
       declaration,
       extentId,
-      byPath: indexRealizationsByPath(base),
+      byPath: realizationsByPathFor(base),
       byBlob: referencesByBlobFor(base),
       refusalOf: refusalMatcher(declaration, base),
     });
@@ -489,6 +489,71 @@ export interface ImportProvenance {
 }
 
 /**
+ * The three columns {@link closureProvenance} hands the walk — just the two
+ * indexable tables plus the root `resolveReference` needs.
+ *
+ * ⛔ NOT cast to `IndexableBase` at the two index call sites: that widened
+ * signature accepts this object directly. The cast to `ProjectionBase` inside
+ * {@link closureProvenance} is sound only because `WalkContext.base` is consumed
+ * by `resolveReference` (for `base.root`) and by `memberResource` (for
+ * `base.identities`), and the provenance walk reaches the first and never the
+ * second — `closureProvenance` never calls `memberResource`.
+ */
+type ProvenanceBase = IndexableBase & { readonly root: string };
+
+/**
+ * Per-projection memo of the view above, keyed on the realizations array.
+ *
+ * ⚠️ It caches an OBJECT, not an index — and that indirection is the whole
+ * point. {@link realizationsByPathFor} and {@link referencesByBlobFor} are both
+ * keyed on base IDENTITY, so a fresh `{root, …}` literal per call defeated both
+ * of them: every `closureProvenance` call rebuilt two whole-projection indexes,
+ * and the §6 query calls it once per import closure. Handing out the same object
+ * for the same three inputs is what lets those two memos do their job.
+ *
+ * Keyed on `resourceRealizations` and GUARDED on the other two, because a caller
+ * pairing one realization table with a different reference table or a different
+ * root is asking about a different projection —
+ * [[a-population-source-is-bound-to-one-tree-and-must-not-be-offered-another]].
+ * The guard compares the received values rather than trusting the key.
+ */
+const provenanceBaseMemo = new WeakMap<readonly ResourceRealizationRow[], ProvenanceBase>();
+
+/**
+ * Does a memoized base answer for exactly the inputs this call was handed?
+ *
+ * The memo is keyed on the realizations array alone, so the OTHER two inputs are
+ * checked here rather than trusted — a caller pairing one tree's realizations
+ * with another's references or root would otherwise be served a base describing
+ * neither.
+ *
+ * @param base - The memoized view
+ * @param input - This call's inputs
+ * @returns True when the memoized view is this call's view
+ */
+function servesProvenanceInput(base: ProvenanceBase, input: ClosureProvenanceInput): boolean {
+  return base.root === input.root && base.blobReferences === input.blobReferences;
+}
+
+/**
+ * The stable base view for one `closureProvenance` input.
+ *
+ * @param input - The root, the two materialised tables, and the declaration
+ * @returns One object per `(root, realizations, references)` triple
+ */
+function provenanceBaseFor(input: ClosureProvenanceInput): ProvenanceBase {
+  const cached = provenanceBaseMemo.get(input.resourceRealizations);
+  if (cached !== undefined && servesProvenanceInput(cached, input)) return cached;
+  const base: ProvenanceBase = {
+    root: input.root,
+    resourceRealizations: input.resourceRealizations,
+    blobReferences: input.blobReferences,
+  };
+  provenanceBaseMemo.set(input.resourceRealizations, base);
+  return base;
+}
+
+/**
  * Re-derive one closure's parent/depth map without materialising an edge table.
  *
  * ⛔ This is NOT a second resolver. It runs {@link traverseClosure} — the same
@@ -521,18 +586,7 @@ export function closureProvenance(
     );
   }
 
-  // Just the two columns the two indexers below read, plus `root` for
-  // `resolveReference`. NOT cast to `IndexableBase` for those two calls — that
-  // widened signature accepts this object directly. The cast to `ProjectionBase`
-  // below is sound only because `WalkContext.base` is consumed by
-  // `resolveReference` (for `base.root`) and by `memberResource` (for
-  // `base.identities`), and this function's walk reaches the first and never
-  // the second — `closureProvenance` never calls `memberResource`.
-  const partialBase = {
-    root: input.root,
-    resourceRealizations: input.resourceRealizations,
-    blobReferences: input.blobReferences,
-  };
+  const partialBase = provenanceBaseFor(input);
 
   const walk: WalkContext = {
     base: partialBase as unknown as ProjectionBase,
@@ -541,7 +595,7 @@ export function closureProvenance(
     // extent. Named rather than faked with a plausible id, so a future reader
     // cannot mistake it for a real extent this map belongs to.
     extentId: PROVENANCE_ONLY_EXTENT_ID,
-    byPath: indexRealizationsByPath(partialBase),
+    byPath: realizationsByPathFor(partialBase),
     byBlob: referencesByBlobFor(partialBase),
     // Sound only under the guard above.
     refusalOf: () => undefined,
@@ -1411,6 +1465,78 @@ function rootAbsentCondition(extentId: string, rootPath: string): RealizationCon
 type IndexableBase = Pick<Projection, 'resourceRealizations' | 'blobReferences'>;
 
 /**
+ * One memo entry: an index, plus the row count that was its whole premise.
+ *
+ * The count is not a version number and must never become one — it is READ off
+ * the table the index was derived from, so nobody has to remember to bump it.
+ * See {@link referencesByBlobMemo} for why the premise is stated at all.
+ */
+interface MemoizedIndex<Index> {
+  readonly rowCount: number;
+  readonly index: Index;
+}
+
+/**
+ * Serve a per-base index from `memo`, rebuilding only when its table has grown.
+ *
+ * ONE copy of the check-rebuild-store idiom, shared by the two indexes below.
+ * They were the same eight lines twice, differing only in which table's length
+ * is the premise — and two copies of a cache guard is two places for the guard
+ * to be weakened independently.
+ *
+ * @param memo - The per-base memo to read and fill
+ * @param base - The base view the index is derived from and keyed on
+ * @param rowCount - Length of the table the index summarises, read fresh
+ * @param build - Builds the index when the memo cannot serve it
+ * @returns The memoized index, or a freshly built one
+ */
+function memoizedIndexFor<Index>(
+  memo: WeakMap<IndexableBase, MemoizedIndex<Index>>,
+  base: IndexableBase,
+  rowCount: number,
+  build: () => Index,
+): Index {
+  const cached = memo.get(base);
+  if (cached?.rowCount === rowCount) return cached.index;
+  const index = build();
+  memo.set(base, { rowCount, index });
+  return index;
+}
+
+/**
+ * Per-run memo of {@link indexRealizationsByPath}, on {@link referencesByBlobMemo}'s
+ * terms exactly.
+ *
+ * The premise here is WEAKER than the reference index's and the row-count guard
+ * is what makes that safe: a closure contributor DOES emit realization rows, so
+ * this table really does grow mid-stratum, and every such growth moves the count
+ * and rebuilds. What the memo buys is the case the count cannot move — the §6
+ * query, which holds a finished `Projection` and asks one closure after another
+ * about the same frozen table. Rebuilding there was one whole-table pass PER
+ * import closure, which is the per-item-cost-proportional-to-the-corpus shape
+ * this module already paid for once.
+ */
+const realizationsByPathMemo = new WeakMap<
+  IndexableBase,
+  MemoizedIndex<ReadonlyMap<string, readonly ResourceRealizationRow[]>>
+>();
+
+/**
+ * The base's realization index, built once per table state rather than per call.
+ *
+ * @param base - The projection built so far
+ * @returns Path → its realization rows
+ */
+function realizationsByPathFor(base: IndexableBase): ReadonlyMap<string, readonly ResourceRealizationRow[]> {
+  return memoizedIndexFor(
+    realizationsByPathMemo,
+    base,
+    base.resourceRealizations.length,
+    () => indexRealizationsByPath(base),
+  );
+}
+
+/**
  * Index the base's realizations by root-relative path, preserving base order.
  *
  * @param base - The projection built so far
@@ -1452,7 +1578,7 @@ function indexRealizationsByPath(base: IndexableBase): ReadonlyMap<string, reado
  */
 const referencesByBlobMemo = new WeakMap<
   IndexableBase,
-  { readonly rowCount: number; readonly index: ReadonlyMap<string, readonly BlobReferenceRow[]> }
+  MemoizedIndex<ReadonlyMap<string, readonly BlobReferenceRow[]>>
 >();
 
 /**
@@ -1462,13 +1588,12 @@ const referencesByBlobMemo = new WeakMap<
  * @returns `contentKey` → its reference rows, ordinal-ordered
  */
 function referencesByBlobFor(base: IndexableBase): ReadonlyMap<string, readonly BlobReferenceRow[]> {
-  const cached = referencesByBlobMemo.get(base);
-  if (cached?.rowCount === base.blobReferences.length) {
-    return cached.index;
-  }
-  const index = indexReferencesByBlob(base);
-  referencesByBlobMemo.set(base, { rowCount: base.blobReferences.length, index });
-  return index;
+  return memoizedIndexFor(
+    referencesByBlobMemo,
+    base,
+    base.blobReferences.length,
+    () => indexReferencesByBlob(base),
+  );
 }
 
 /**

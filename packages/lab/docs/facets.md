@@ -49,11 +49,18 @@ A facet owns:
 
 - **A stable `facet` name** — `io`, `perf`, `sweep`, `calibrate`. It goes in the envelope header and
   two reports with different names are refused against each other.
-- **A `facetVersion`** — the version of *its* body schema, which it bumps when the body's shape
-  changes. Two reports of one facet at different body versions are refused, because differences
-  across a schema change belong to the schema rather than to the subject.
-- **A body schema** — validated by the facet after it has confirmed the header names it. The envelope
-  reader deliberately does not validate bodies; it does not know their shapes.
+- **A body schema** — strict, and validated by the facet after it has confirmed the header names it.
+  The envelope reader deliberately does not validate bodies; it does not know their shapes.
+
+  ⛔ **There is no `facetVersion`, and adding one back is a defect.** A facet used to carry an
+  integer it was expected to bump whenever the body's shape moved. The strict schema decides the
+  same question better: it moves the instant a field is added, renamed or retyped, and it moves for
+  whoever made the edit rather than for whoever remembered. Both sides of a comparison are validated
+  against *this build's* schema — not merely against each other — so a matched pair of pre-change
+  reports, which agree with each other perfectly, is refused too. What no schema can see is a field
+  whose MEANING moved while its name and type stayed put; no integer could see that either, it could
+  only be told. The remedies there are to make the build DECLARE the thing that moved (as
+  `CrawlTimingDump.charges` does) or to invalidate explicitly by deleting the stored reports.
 - **A capture function** — given a resolved coordinate and a vat to run, produce a body.
 
 What a facet must **not** own: anything about how vat is obtained or invoked. That is the

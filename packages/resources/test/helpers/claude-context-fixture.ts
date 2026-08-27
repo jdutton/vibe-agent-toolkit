@@ -45,6 +45,7 @@ import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
 import { computeContentKey } from '../../src/content-key.js';
 import { parseMarkdownContent } from '../../src/link-parser.js';
+import { mimeTypeForPath } from '../../src/mime-type.js';
 import { blobRowFor } from '../../src/projection/blob-facts.js';
 import { blobReferencesFor } from '../../src/projection/blob-references.js';
 import type { ExtentContribution } from '../../src/projection/contributor.js';
@@ -185,6 +186,11 @@ function realizationRow(
     // eslint-disable-next-line local/no-hardcoded-path-split -- fixture paths are authored forward-slashed, as `relativize()` emits them
     depth: path.split('/').length,
     ext: isDirectory || dot <= 0 ? '' : basename.slice(dot).toLowerCase(),
+    // Typed by the SHIPPED resolver rather than a literal, so a fixture path
+    // gets whatever production would give it — `CLAUDE.md` is `text/markdown`
+    // here for the same reason it is there, and a path with no name in the
+    // table stays honestly `null` instead of being blanket-typed by hand.
+    mime: mimeTypeForPath(path),
     contentKey,
     contentState,
     mtime: null,
@@ -395,7 +401,7 @@ export interface ClosureFixture {
  * @returns Just the two tables `closureProvenance` reads
  */
 export function closureFixtureFrom(root: string, files: Record<string, string>): ClosureFixture {
-  const builder = new ProjectionBuilder(root);
+  const builder = new ProjectionBuilder({ root });
   for (const [path, markdown] of Object.entries(files)) {
     addFile(builder, { path, refs: [], markdown }, root);
   }
@@ -450,7 +456,7 @@ export async function claudeContextFixture(
   options: ClaudeContextFixtureOptions = {},
 ): Promise<Projection> {
   const root = ABSENT_ROOT;
-  const builder = new ProjectionBuilder(root);
+  const builder = new ProjectionBuilder({ root });
   builder.addRoot({ id: builder.identities.rootId, path: root });
 
   const deferred = new Set(options.deferred ?? []);

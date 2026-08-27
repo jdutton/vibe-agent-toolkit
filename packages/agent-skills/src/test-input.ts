@@ -38,6 +38,13 @@ import { DEFAULT_EVALS_SUBPATH } from './skill-test/eval-suite-isolation.js';
 import { materializeIssue } from './validators/rule-engine/index.js';
 
 /**
+ * Answers "does this skill root carry the conventional suite at
+ * `<skill-root>/evals/evals.json`?" — see {@link conventionalSuiteProbe} for the
+ * one that memoizes, and for why its lifetime is the RUN and not longer.
+ */
+export type ConventionalSuiteProbe = (skillDir: string) => boolean;
+
+/**
  * A probe for "does this skill carry the conventional suite at
  * `<skill-root>/evals/evals.json`?", answering each directory from the filesystem
  * at most once.
@@ -49,15 +56,30 @@ import { materializeIssue } from './validators/rule-engine/index.js';
  * Deduplicated because {@link resolveTestInputDirs} asks the question once for the
  * subject and once per entry in `projectSkills` — and a package that keeps its
  * skills in ONE directory (VAT's own `vat-development-agents` keeps thirteen there)
- * makes every one of those the same question about the same path. Measured on
- * `vat audit .`: 14 probes over 2 distinct paths.
+ * makes every one of those the same question about the same path.
  *
- * The memo is created per call and dies with it. It deliberately is NOT module-level:
- * this module's answer is a snapshot of the filesystem, and a cache outliving the call
+ * SCOPE: one RUN, not one call. Every lane here loops over the project's skills and
+ * hands each of them the same project-wide `projectSkills`, so a probe scoped to the
+ * CALL re-asks S questions per skill and S² per run about the same S paths — and the
+ * memo hides that inside one call while doing nothing across the loop. Measured with
+ * the lab on a 103-skill adopter, `vat resources validate`: 10,815 probes over 103
+ * distinct paths, ~105 repeats each, and exactly 50% of that command's 21,648 user
+ * filesystem calls. Run-scoped it is ~103, and the command's total ~10,900.
+ *
+ * It survived because VAT's own tree cannot show it: measured on `vat audit .`, 14
+ * probes over 2 DISTINCT paths — 2² = 4 is invisible next to the constant factor, and
+ * "14 probes" reads like a rounding error rather than a complexity class. Only a tree
+ * with a large S separates O(S) from O(S²) here.
+ *
+ * The memo is created per run and dies with it. It deliberately is NOT module-level,
+ * and widening it to the run does not weaken that: this module's answer is a snapshot
+ * of the filesystem, and a run is the longest window over which the lanes already
+ * assume one snapshot — they take `projectSkills` (the project's whole skill set and
+ * its configs) once per run and answer every skill from it. A cache outliving the run
  * would keep answering for a tree that has since changed — in a long-lived process,
  * and across every later test in the same worker.
  */
-function conventionalSuiteProbe(): (skillDir: string) => boolean {
+export function conventionalSuiteProbe(): ConventionalSuiteProbe {
   const answers = new Map<string, boolean>();
   return (skillDir: string): boolean => {
     const suitePath = safePath.resolve(skillDir, DEFAULT_EVALS_SUBPATH);
@@ -102,7 +124,7 @@ function isInside(candidate: string, dir: string): boolean {
 function declaredTestInputDirs(
   config: Pick<SkillPackagingConfig, 'test'>,
   skillDir: string,
-  hasConventionalSuite: (skillDir: string) => boolean,
+  hasConventionalSuite: ConventionalSuiteProbe,
 ): string[] {
   if (config.test === undefined && !hasConventionalSuite(skillDir)) return [];
   const subpath = config.test?.evals ?? DEFAULT_EVALS_SUBPATH;
@@ -159,13 +181,19 @@ export interface DeclaredEvalSuite {
  * declaration into a project-wide strip of a directory no single skill owns. The
  * declaring skill's own build is unchanged — the `config`/`skillDir` pair above is
  * still taken at face value — so this narrows nothing that worked before.
+ *
+ * `hasConventionalSuite` is the RUN's probe (see {@link conventionalSuiteProbe}),
+ * and it is REQUIRED for the same reason `projectSkills` is: a defaulted `probe?`
+ * would let every existing caller keep the per-call scope silently, which is the
+ * exact no-op this file already shipped once. A lane with no run to scope to calls
+ * `conventionalSuiteProbe()` at its own call site, where the narrowing is visible.
  */
 export function resolveTestInputDirs(
   config: Pick<SkillPackagingConfig, 'test'>,
   skillDir: string,
   projectSkills: readonly DeclaredEvalSuite[],
+  hasConventionalSuite: ConventionalSuiteProbe,
 ): string[] {
-  const hasConventionalSuite = conventionalSuiteProbe();
   const dirs = new Set(declaredTestInputDirs(config, skillDir, hasConventionalSuite));
   for (const skill of projectSkills) {
     for (const dir of declaredTestInputDirs(skill.config, skill.skillDir, hasConventionalSuite)) {
@@ -263,20 +291,24 @@ export function partitionTestInputFileEntries(
  * agree. The packager is the authority on what ships; this is how the read-only
  * lanes borrow its answer instead of guessing.
  *
- * `projectSkills` is forwarded to {@link resolveTestInputDirs}, so a `files:` entry
- * pointing at ANOTHER skill's declared suite is dropped here too. Required for the
- * same reason it is required there — see that function's note on the no-op default.
+ * `projectSkills` and `hasConventionalSuite` are forwarded to
+ * {@link resolveTestInputDirs}, so a `files:` entry pointing at ANOTHER skill's
+ * declared suite is dropped here too. Both are required for the same reason they are
+ * required there — see that function's note on the no-op default. This is the seam
+ * the measured quadratic ran through: `vat resources validate` calls this once per
+ * discovered skill, so the run's probe has to arrive from the caller's loop.
  */
 export function packagedFileEntries(
   config: Pick<SkillPackagingConfig, 'files' | 'test'>,
   skillDir: string,
   projectRoot: string,
   projectSkills: readonly DeclaredEvalSuite[],
+  hasConventionalSuite: ConventionalSuiteProbe,
 ): SkillFileEntry[] {
   return partitionTestInputFileEntries(
     config.files ?? [],
     projectRoot,
-    resolveTestInputDirs(config, skillDir, projectSkills),
+    resolveTestInputDirs(config, skillDir, projectSkills, hasConventionalSuite),
   ).kept;
 }
 

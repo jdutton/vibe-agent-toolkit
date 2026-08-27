@@ -23,9 +23,9 @@
 
 import { describe, expect, it } from 'vitest';
 
+import type { ReportEnvelope } from '../src/envelope/envelope.js';
 import { compareParse, type ParseComparisonResult } from '../src/facets/parse/compare.js';
 import {
-  PARSE_FACET_VERSION,
   type ParseCommandStats,
   type ParsePassStats,
 } from '../src/facets/parse/types.js';
@@ -42,7 +42,12 @@ import {
   TOTAL_MS,
   withMarkdown,
 } from './parse-fixtures.js';
-import { BUSY_LOAD, makeReport, makeReportAt } from './report-fixtures.js';
+import {
+  BUSY_LOAD,
+  makeReport,
+  makeReportAt,
+  reportMissingCommandField,
+} from './report-fixtures.js';
 
 /** The pass every "one thing moved" case moves. */
 const LEXER = 'remark-parse';
@@ -95,32 +100,31 @@ describe('compareParse — refusals come before any subtraction', () => {
     expect(result.refusal).toMatch(/different facets/);
   });
 
-  it('refuses reports whose body schema versions disagree with each other', () => {
-    const older = parseReport([parseCommand()], { facetVersion: PARSE_FACET_VERSION + 1 });
-    const result = compareParse(parseReport([parseCommand()]), older);
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('unreachable');
-    expect(result.refusal).toMatch(/body schema moved/);
-  });
+  it('refuses a matched PAIR of reports written to an older body shape', () => {
+    // 🚩 The sharp case, and the reason a `facetVersion` integer used to sit in
+    // front of this: two PRE-CHANGE reports agree with each other perfectly, and
+    // every row in them means what the older build meant. A gate that only
+    // compared the two sides to each other could not see it.
+    //
+    // Validating each side against THIS BUILD's strict schema does see it — a
+    // body with no `workerThreads` cannot say how many threads its lifetime
+    // scalars and its summed milliseconds were gathered over, so its `wallMs`
+    // means something this build cannot name. And it sees it without anyone
+    // having remembered to move a number.
+    const older = (): ReportEnvelope<unknown> =>
+      reportMissingCommandField(parseReport([parseCommand()]), 'workerThreads');
 
-  it('refuses a matched PAIR of reports whose version this build does not read', () => {
-    // The sharp case: two pre-change reports agree with each other perfectly,
-    // and every row in them means what the older build meant. The envelope's
-    // gate cannot see that; this one has to.
-    const version = PARSE_FACET_VERSION + 1;
-    const result = compareParse(
-      parseReport([parseCommand()], { facetVersion: version }),
-      parseReport([parseCommand()], { facetVersion: version }),
-    );
+    const result = compareParse(older(), older());
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
-    expect(result.refusal).toMatch(/this build reads/);
+    expect(result.refusal).toMatch(/is not a 'parse' body/);
+    expect(result.refusal).toMatch(/workerThreads/);
   });
 
   it('refuses a body that is not a parse body', () => {
     const result = compareParse(
       parseReport([parseCommand()]),
-      makeReport({ facet: 'parse', facetVersion: PARSE_FACET_VERSION, body: { commands: [] } }),
+      makeReport({ facet: 'parse', body: { commands: [] } }),
     );
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
@@ -135,7 +139,6 @@ describe('compareParse — refusals come before any subtraction', () => {
     const result = compareParse(parseReport([parseCommand()]), {
       ...elsewhere,
       facet: 'parse',
-      facetVersion: PARSE_FACET_VERSION,
       body: parseReport([parseCommand()]).body,
     });
     expect(result.ok).toBe(false);
@@ -346,6 +349,38 @@ describe('compareParse — what qualifies a comparison', () => {
     const verdict = onlyVerdict(compareOneParseCommand(parseCommand(), parseCommand()));
     if (verdict.kind !== 'unchanged') throw new Error('expected no change');
     expect(verdict.movement.caveat).toBeNull();
+  });
+
+  it('carries a caveat when one side ran more parse worker threads than the other', () => {
+    // The A/B this facet is pointed at: parse pool ON against parse pool OFF.
+    // Every millisecond on the row is summed across the threads that reported
+    // it, so the wider arm sums N threads' concurrent wall time into the same
+    // figure and the two totals are not a like-for-like duration. Not a refusal:
+    // the per-pass shape is exactly what a reader wants from such a pair.
+    const verdict = onlyVerdict(
+      compareOneParseCommand(parseCommand(), parseCommand({ workerThreads: 8, processes: 1 })),
+    );
+    if (verdict.kind !== 'changed' && verdict.kind !== 'unchanged') {
+      throw new Error(`expected a comparison, got ${verdict.kind}`);
+    }
+    expect(verdict.movement.caveat).toMatch(/parse worker THREADS/);
+    expect(verdict.movement.caveat).toMatch(/0 vs 8/);
+  });
+
+  it('hoists that caveat onto the command row, where a facet-agnostic reader can find it', () => {
+    // Buried in the verdict's movement, the caveat is reachable only by a reader
+    // that knows this facet's verdict shape — which is how `compare` warned
+    // about a summed total while `ab`, given the identical pair, said nothing.
+    const result = compareOneParseCommand(
+      parseCommand(),
+      parseCommand({ workerThreads: 8, processes: 1 }),
+    );
+    expect(result.commands[0]?.caveat).toMatch(/parse worker THREADS/);
+  });
+
+  it('leaves the row’s caveat null when nothing qualifies the numbers', () => {
+    const result = compareOneParseCommand(parseCommand(), parseCommand());
+    expect(result.commands[0]?.caveat).toBeNull();
   });
 
   it('surfaces contamination from EITHER side at the top level', () => {

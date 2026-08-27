@@ -1,7 +1,13 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { mkdtempSync, writeFileSync } from 'node:fs';
 
-import { GitTracker, mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
+import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../src/projection/content-cache.js';
@@ -38,7 +44,7 @@ function pathsOf(contribution: ExtentContribution): string[] {
 
 /** Run the contributor against a fresh base over the fixture root. */
 async function contribute(): Promise<ExtentContribution> {
-  const base = new ProjectionBuilder(root).base();
+  const base = new ProjectionBuilder({ root }).base();
   return new FilesystemExtentContributor().contribute(base, null);
 }
 
@@ -69,7 +75,7 @@ async function contributeWithParameters(parameters: JsonValue): Promise<ExtentCo
   runGitOrThrow(['init'], { cwd: root });
   const tracker = new GitTracker(root);
   await tracker.initialize();
-  const base = new ProjectionBuilder(root, tracker).base();
+  const base = new ProjectionBuilder({ root, gitTracker: tracker }).base();
   return new FilesystemExtentContributor().contribute(base, parameters);
 }
 
@@ -88,7 +94,7 @@ async function contributeUnder(demand?: ContentDemand): Promise<ExtentContributi
   runGitOrThrow(['init'], { cwd: root });
   const tracker = new GitTracker(root);
   await tracker.initialize();
-  const base = new ProjectionBuilder(root, tracker, new RunContentCache()).base();
+  const base = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() }).base();
   const contributor = demand === undefined
     ? new FilesystemExtentContributor()
     : new FilesystemExtentContributor(crawlSourceFor, demand);
@@ -209,7 +215,7 @@ describe('FilesystemExtentContributor declining the ignored half', () => {
     // Deliberately no `git init`: with no ignore oracle nothing is ignorable, so
     // the decline has nothing to act on and must not guess from `.gitignore`'s
     // mere presence.
-    const base = new ProjectionBuilder(root).base();
+    const base = new ProjectionBuilder({ root }).base();
     const contribution = await new FilesystemExtentContributor().contribute(base, DECLINE_IGNORED);
 
     expect(pathsOf(contribution)).toContain(BUILD_OUTPUT);
@@ -314,7 +320,7 @@ describe('FilesystemExtentContributor rows', () => {
     // The id, not just the column: `resolution_contexts` is keyed on
     // `contextId` alone, so a federated projection over two roots keeps these
     // extents apart only if the root is inside the id.
-    const builder = new ProjectionBuilder(root);
+    const builder = new ProjectionBuilder({ root });
     const contribution = await new FilesystemExtentContributor().contribute(builder.base(), null);
 
     expect(contribution.contexts[0]?.rootId).toBe(builder.identities.rootId);

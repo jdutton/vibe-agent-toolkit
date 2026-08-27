@@ -54,6 +54,13 @@ describe('packagePluginLocalSkills — shared registry', () => {
       registry,
       // No skills config above, so the project declares no eval suites at all.
       projectSkills: [],
+      // The run's conventional-suite probe. Required rather than defaulted, so it
+      // is stated here even though this test asserts nothing about it. A local stub
+      // rather than the real `conventionalSuiteProbe`: this file mocks the whole
+      // `@vibe-agent-toolkit/agent-skills` module, so importing a value from it
+      // would resolve to the mock. Answering `false` is right for the fixture —
+      // neither skill path exists on disk, so a real probe would say the same.
+      suiteProbe: () => false,
       logger: silentLogger,
     });
 

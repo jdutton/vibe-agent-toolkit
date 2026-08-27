@@ -13,15 +13,18 @@ import { createHash } from 'node:crypto';
 
 import {
   flattenHeadings,
+  isParsableContent,
   isParserUnavailable,
   parseHtml,
   parseMarkdown,
   parserKindForPath,
   readContentWithKey,
   relativize,
+  unparsedResourceFacts,
 } from '@vibe-agent-toolkit/resources';
 import type {
   HeadingNode,
+  KeyedContent,
   LexicalReference,
   ParserKind,
   ParseResult,
@@ -142,7 +145,7 @@ export async function captureParseFactSnapshot(
     // key already recorded. Skipping them would be the cache's assumption —
     // "same key implies same facts" — implemented inside the instrument that
     // exists to test it, leaving nothing to compare against.
-    const parsed = await parseOrNull(absolutePath, keyed.parserKind);
+    const parsed = await parseOrNull(absolutePath, keyed);
     if (parsed === null) {
       continue;
     }
@@ -207,10 +210,14 @@ export function diffParseFactRows(first: ParseFactRow, other: ParseFactRow): str
   return differing.toSorted((a, b) => a.localeCompare(b));
 }
 
-/** Read+key a path, or report null when it cannot be read. */
-async function readKeyedOrSkip(
-  absolutePath: string,
-): Promise<{ key: string; content: string; parserKind: ParserKind } | null> {
+/**
+ * Read+key a path, or report null when it cannot be read.
+ *
+ * Returns the whole `KeyedContent` rather than a narrowed struct because
+ * `parseOrNull` needs to NARROW it: `isParsableContent` is a type guard on the
+ * object, and a hand-picked subset of its fields cannot be narrowed by one.
+ */
+async function readKeyedOrSkip(absolutePath: string): Promise<KeyedContent | null> {
   try {
     return await readContentWithKey(absolutePath, parserKindForPath(absolutePath));
   } catch {
@@ -220,6 +227,21 @@ async function readKeyedOrSkip(
 
 /**
  * Parse via the same discriminator the registry uses.
+ *
+ * ## Why the `none` branch comes first
+ *
+ * `parserKindForPath` has THREE answers and only two of them name a parser.
+ * Branching on `parserKind === 'html'` left `none` in the else arm, so a `.ts`
+ * or `.json` was handed to `remark-parse` and the row was stamped
+ * `parserKind: 'none'` while carrying remark's `links` and `headings` — an
+ * artifact saying the file was not parsed while showing its parse. For a
+ * snapshot whose whole claim is "the same key yields the same facts", that is
+ * the worst shape available: it files a key with facts no lane that honours the
+ * discriminator can reproduce.
+ *
+ * `isParsableContent` is the same narrowing `admitResource` uses, and it is a
+ * type guard rather than a comparison so the remaining ternary is exhaustive
+ * over what is left — a fourth kind would not compile here.
  *
  * ## Why the one rethrow
  *
@@ -238,13 +260,24 @@ async function readKeyedOrSkip(
  * complete by construction, unlike the errno blocklist that preceded it.
  *
  * @param absolutePath - The document to parse
- * @param parserKind - Which parser the path routes to
+ * @param keyed - The bytes and the kind the path routed to, from ONE read
  * @returns The parse, or `null` when this document alone could not be parsed
  * @throws {ParserUnavailableError} If the parser module cannot be loaded
  */
-async function parseOrNull(absolutePath: string, parserKind: string): Promise<ParseResult | null> {
+async function parseOrNull(
+  absolutePath: string,
+  keyed: KeyedContent,
+): Promise<ParseResult | null> {
+  // No parser routes here, so there is nothing to load, nothing to throw, and
+  // nothing to re-read: the facts come from the bytes this function was already
+  // handed. Shared with the registry rather than restated — see
+  // `unparsedResourceFacts`.
+  if (!isParsableContent(keyed)) return unparsedResourceFacts(keyed);
+
   try {
-    return parserKind === 'html' ? await parseHtml(absolutePath) : await parseMarkdown(absolutePath);
+    return keyed.parserKind === 'html'
+      ? await parseHtml(absolutePath)
+      : await parseMarkdown(absolutePath);
   } catch (error) {
     if (isParserUnavailable(error)) throw error;
     return null;

@@ -55,11 +55,13 @@ import {
   populate,
   populationOracles,
   type BlobPopulationReport,
+  type CollectionConfig,
   type JsonValue,
   type PopulationCache,
   type Projection,
 } from '@vibe-agent-toolkit/resources';
-import { compareCodeUnits, safePath, toForwardSlash, type GitTracker } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import {
   InventorySkillExtentContributor,
@@ -237,6 +239,7 @@ export async function buildInventoryPopulation(options: {
   skillMdPaths: readonly string[];
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
+  collections?: Readonly<Record<string, CollectionConfig>> | undefined;
   onBlobPopulation: (report: BlobPopulationReport) => void;
 }): Promise<InventoryPopulation> {
   const root = safePath.resolve(options.root);

@@ -12,12 +12,31 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { CRAWL_REGISTRY_ADD_RESOURCE_ID, CRAWL_REGISTRY_ENUMERATE_ID, CRAWL_REGISTRY_RESOLVE_LINKS_ID, crawlDirectory, type CrawlOptions as UtilsCrawlOptions, crawlPathFilter, crawlTimingStart, FsLookupCache, type GitTracker, issueLocation, recordRegistryPass, resolveAssetReference, safePath, toForwardSlash, toNfc, withOuterBracket } from '@vibe-agent-toolkit/utils';
+import {
+  CRAWL_REGISTRY_ADMIT_ID,
+  CRAWL_REGISTRY_ENUMERATE_ID,
+  CRAWL_REGISTRY_RESOLVE_LINKS_ID,
+  crawlTimingStart,
+  FsLookupCache,
+  issueLocation,
+  recordRegistryPass,
+  resolveAssetReference,
+  safePath,
+  toForwardSlash,
+  toNfc,
+  withOuterBracket,
+} from '@vibe-agent-toolkit/utils';
+import {
+  crawlDirectory,
+  type CrawlOptions as UtilsCrawlOptions,
+  crawlPathFilter,
+} from '@vibe-agent-toolkit/utils/crawl';
+import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
 import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
-import { parserKindForPath, readContentWithKey } from './content-key.js';
+import { isParsableContent, type KeyedContent, NO_PARSER_KIND, type ParserKind, readContentWithKey } from './content-key.js';
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import {
   validateFrontmatterLinks,
@@ -29,8 +48,17 @@ import {
   type CompiledFrontmatterSchema,
 } from './frontmatter-validator.js';
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
+import { estimateTokens } from './link-classify.js';
+import type { ParseResult } from './link-parser.js';
 import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
-import { ParseCache, type ParseCacheStats, parseKeyed, vatCacheRoot } from './parse-cache.js';
+import { parserKindForMimeType } from './mime-type.js';
+import { ParseCache, type ParseCacheStats, vatCacheRoot } from './parse-cache.js';
+import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from './parse-dispatcher.js';
+import {
+  createCollectionMimeResolver,
+  relativize,
+  type CollectionMimeResolver,
+} from './projection/realizations.js';
 // Type-only, and that is what keeps it acyclic: the projection's population
 // builder is a CALLER of the registry's world, not a dependency of it, so the
 // import is erased before any module graph exists at runtime.
@@ -121,6 +149,28 @@ export interface UnreadableResource {
   /** `ENOENT`, `EACCES`, … when the platform supplied one. */
   code?: string;
 }
+
+/**
+ * Everything a preparation can conclude about one file, **as a VALUE**.
+ *
+ * The whole point of the type: preparation runs concurrently, so anything it
+ * decided has to be carried back to the sequential half rather than acted on
+ * where it was decided. A preparation that recorded its own finding would put
+ * `unreadableResources` in completion order while the returned resources stayed
+ * in input order — two outputs of one call disagreeing about what "first" means.
+ *
+ * ⛔ `failed` exists for the same reason and is the subtler half. It is a value
+ * rather than a throw because only this lane can say which failures are findings
+ * and which are defects: a read failure is a finding to be recorded and carried
+ * on from, and nothing outside `prepareAdmission` can tell the two apart. The
+ * run still fails on a genuine defect — from
+ * {@link ResourceRegistry.emitPreparedResource}, on the first offender in input
+ * order.
+ */
+type PreparedResource =
+  | { outcome: 'admitted'; resource: ResourceMetadata }
+  | { outcome: 'unreadable'; filePath: string; reason: string; code?: string; error: Error }
+  | { outcome: 'failed'; error: unknown };
 
 export class DuplicateResourceIdError extends Error {
   readonly id: string;
@@ -246,6 +296,22 @@ export interface ResourceRegistryOptions {
    * private directory, or to disable it (`new ParseCache({ enabled: false })`).
    */
   parseCache?: ParseCache;
+  /**
+   * How, and whether, to move this registry's parsing off the main thread.
+   *
+   * Defaults are what a command gets — OFF, unless `VAT_PARSE_POOL=1` — and the
+   * meaning of every field is {@link ParsePoolPolicy}'s, shared verbatim with
+   * the projection lane so the two cannot reach different verdicts about a
+   * switch that has already been measured once.
+   *
+   * ⚠️ **A policy is per `addResources` call, not per registry.** The dispatcher
+   * is built and shut down inside each call, because a pool that outlived one
+   * would have to be closed by an explicit lifecycle method this class does not
+   * have, and every existing caller would leak its workers. `crawl()` makes
+   * exactly one `addResources` call, so a crawling command builds exactly one
+   * pool — the same lifetime `populateBlobs` has.
+   */
+  parsePool?: ParsePoolPolicy;
 }
 
 /**
@@ -358,6 +424,51 @@ function collectionSchemaCacheKey(resolvedSchemaPath: string, mode: ValidationMo
 }
 
 /**
+ * What a resource is when nothing parses it.
+ *
+ * `parserKindForPath` answers `none` for every type that is neither prose nor
+ * markup, and `parseKeyed` refuses that kind in its SIGNATURE — so this is not a
+ * fallback the registry may forget, it is the other half of a decision the
+ * compiler insists on. The alternative was the status quo ante, where a `.ts`
+ * file went to `remark-parse` and came back with reference-style "links" made of
+ * adjacent bracket groups: 5,329 TypeScript and 713 JSON files produced 100% of
+ * one adopter tree's dangling-reference warnings that way.
+ *
+ * Empty because there is nothing to report, not because reporting was skipped:
+ * `links` and `headings` are AST products and there is no AST, while `anchors`,
+ * `parseErrors`, `unresolvedReferences` and the frontmatter trio are omitted
+ * exactly as `parseHtmlContent` omits whatever it cannot produce. What survives
+ * is the one fact that is a function of the bytes alone and that consumers
+ * genuinely use for a non-prose file: its token estimate.
+ *
+ * ⚠️ NOT the same function as `unparsedFacts` in `projection/blob-population.ts`,
+ * and deliberately so. That one additionally runs the raw-source lexer and
+ * `measureContent`, because the projection has columns for both and its whole
+ * purpose is making a bundled script's references queryable. `ResourceMetadata`
+ * has nowhere to put either, so computing them here would buy a lexer scan per
+ * resource and then drop the result.
+ *
+ * ⛔ Exported for ONE reason: the CLI's parse-fact snapshot needs the same
+ * answer, and a third copy of this shape in the CLI would be both the
+ * parallel-implementation anti-pattern and business logic in a layer that must
+ * stay dumb. Two copies already exist and the split between them is a measured
+ * difference in what their consumers can store — a third would be a duplicate,
+ * not a distinction. Do not add callers casually.
+ *
+ * @param keyed - The bytes, their key and their byte length, from ONE read
+ * @returns Parse facts describing exactly what the bytes say and nothing more
+ */
+export function unparsedResourceFacts(keyed: KeyedContent): ParseResult {
+  return {
+    links: [],
+    headings: [],
+    content: keyed.content,
+    sizeBytes: keyed.byteLength,
+    estimatedTokenCount: estimateTokens(keyed.content),
+  };
+}
+
+/**
  * Read a schema file and compile it for the given mode, capturing any failure
  * as a value so it can be cached and replayed per resource.
  */
@@ -439,6 +550,44 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * before every `new ResourceRegistry()`.
    */
   private parseCacheInstance?: ParseCache;
+
+  /**
+   * This registry's parse routing, built once from its own config.
+   *
+   * ## Why the registry gets its OWN instance rather than sharing the run's
+   *
+   * A registry is constructed with a config and lives as long as its caller; a
+   * `populate()` run builds a resolver whose lifetime is that one run. There is
+   * no scope that contains both, and threading the projection's instance in
+   * would tie a registry's correctness to whether a population happened to be
+   * in flight.
+   *
+   * That is not the "parallel resolver" CLAUDE.md bans — this is the SAME
+   * `createCollectionMimeResolver`, called twice, not a second implementation of
+   * the rule. What differs per instance is only the conflict accumulator, and
+   * that is correct: the projection lane reports conflicts as
+   * `realization_conditions` rows, while `ResourceMetadata` has nowhere to put
+   * one. This lane resolves the conflict the same way (the built-in table's
+   * answer) and stays silent about it, which is the same posture it already
+   * takes for `measureContent` and the raw-source lexer.
+   *
+   * ⚠️ Without this the two lanes DIVERGE the moment anyone declares a
+   * `mimeType`: the projection would parse a `.ts` typed `text/markdown` and the
+   * registry would leave it unparsed. Not a mis-filing — the kind is in the
+   * digest preimage, so the two would compute different KEYS and neither could
+   * serve the other's facts — but two answers to "is this file prose" is one too
+   * many.
+   */
+  private mimeResolverInstance?: CollectionMimeResolver;
+
+  /**
+   * This registry's parse-pool policy — see {@link ResourceRegistryOptions.parsePool}.
+   *
+   * Held rather than passed, because `crawl()` reaches `addResources` and a
+   * per-call parameter would make the policy a property of the deepest caller
+   * instead of a property of the registry.
+   */
+  private readonly parsePoolPolicy: ParsePoolPolicy = {};
 
   /**
    * Resources indexed by file path — **keyed in Unicode NFC (`toNfc`), not by
@@ -549,6 +698,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     }
     if (options?.parseCache !== undefined) {
       this.parseCacheInstance = options.parseCache;
+    }
+    if (options?.parsePool !== undefined) {
+      this.parsePoolPolicy = options.parsePool;
     }
   }
 
@@ -702,23 +854,138 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   async addResource(filePath: string): Promise<ResourceMetadata> {
     const startedAt = crawlTimingStart();
+    // Its own dispatcher, which can never activate: one document cannot clear
+    // the miss threshold, so `shutdown()` closes nothing and the width stays 1.
+    // Built anyway rather than special-cased, so this route and `addResources`
+    // reach the parser through exactly one code path.
+    const dispatcher = new ParseDispatcher(this.parseCache(), this.parsePoolPolicy);
     try {
-      return await this.admitResource(filePath);
+      const prepared = await this.prepareAdmission(filePath, dispatcher);
+      // ⛔ Deliberately NOT routed through `emitPreparedResource`. This entry
+      // point has no finding list to route into — it throws, as it always has —
+      // and sending a read failure through emission would additionally record a
+      // `RESOURCE_UNREADABLE` finding that a direct `addResource` caller never
+      // used to get. `unreadable` carries the original error precisely so this
+      // route can re-raise it unchanged.
+      if (prepared.outcome !== 'admitted') throw prepared.error;
+      return this.indexAdmitted(prepared.resource);
     } finally {
-      recordRegistryPass(CRAWL_REGISTRY_ADD_RESOURCE_ID, startedAt);
+      await dispatcher.shutdown();
+      recordRegistryPass(CRAWL_REGISTRY_ADMIT_ID, startedAt);
     }
   }
 
   /**
-   * Read, parse, key and index one file — {@link addResource} minus its timing
-   * bracket.
+   * Read, parse, key and measure one file, **deciding everything and recording
+   * nothing.**
    *
-   * @param filePath - Path to the markdown file (will be normalized to absolute)
-   * @returns The parsed resource metadata
-   * @throws Error if file cannot be read or parsed
-   * @private
+   * ⛔ It must stay free of side effects on this registry's indexes and finding
+   * lists. This is the half that runs concurrently — see {@link driveInOrder} —
+   * so an `indexResource` call here would order the 1:many indexes by which read
+   * finished first, and a `duplicateIdCollisions.push` here would adjudicate
+   * against a `resourcesById` that has not been filled in yet.
+   *
+   * ⛔ **And it must not reject.** `driveInOrder` would catch the rejection and
+   * re-raise it in target order, so the run's fate would still be deterministic
+   * — but it would be a *failed run*, and most of what can go wrong here is a
+   * FINDING: an unreadable file is recorded and crawled past. Only this function
+   * knows which is which, so every outcome — including a genuine defect — is
+   * carried back as a value for {@link emitPreparedResource} to act on.
+   *
+   * @param filePath - Path to the file (will be normalized to absolute)
+   * @param dispatcher - Decides whether the parse runs here or on a worker
+   * @returns What this file turned out to be, for the caller to emit in order
    */
-  private async admitResource(filePath: string): Promise<ResourceMetadata> {
+  private async prepareAdmission(
+    filePath: string,
+    dispatcher: ParseDispatcher,
+  ): Promise<PreparedResource> {
+    try {
+      return { outcome: 'admitted', resource: await this.readAndKey(filePath, dispatcher) };
+    } catch (error) {
+      if (isReadFailure(error)) {
+        // A file the crawl handed us that we cannot read. Recorded, not thrown:
+        // previously this terminated `vat resources scan|validate` and `vat
+        // audit` with a raw ENOENT stack trace, which a committed dangling
+        // `*.md` symlink reaches on `crawlDirectory`'s git route (that route
+        // returns mode-120000 entries and does no symlink filtering).
+        //
+        // ⛔ Recorded rather than skipped, deliberately. Swallowing the read
+        // would trade a loud crash for a silent population change — the file
+        // would vanish from every downstream count with nothing said. It
+        // becomes a RESOURCE_UNREADABLE issue in validate().
+        return {
+          outcome: 'unreadable',
+          filePath,
+          reason: error.message,
+          error,
+          ...(typeof (error as { code?: unknown }).code === 'string' && {
+            code: (error as { code: string }).code,
+          }),
+        };
+      }
+      // Not a read failure: a genuine defect in parsing, which must not be
+      // demoted to a finding. Carried, not thrown — see the docblock.
+      return { outcome: 'failed', error };
+    }
+  }
+
+  /**
+   * Which document parser, if any, this path routes to.
+   *
+   * @param absolutePath - The resolved path to route
+   * @returns The parser kind, or `none` when nothing parses this type
+   */
+  private parserKindFor(absolutePath: string): ParserKind {
+    // Routed through the run's resolver, never `parserKindForPath` directly: a
+    // collection may declare a `mimeType` that overrides the extension tables,
+    // and this lane must reach the same verdict the projection lane does or the
+    // two disagree about whether a file is prose. `mimeFor` falls back to the
+    // built-in table for every path no declaration matches, which is every path
+    // in a project that declares none.
+    //
+    // ⚠️ ONE authority, deliberately: the read's parser selection and the
+    // sizing tally in {@link addResources} must be the same answer. Parser
+    // selection is part of a document's parse identity (content-key.ts), so a
+    // second resolver here is how the parse route and the key's parse-route
+    // component drift apart.
+    this.mimeResolverInstance ??= createCollectionMimeResolver(
+      this.config?.resources?.collections,
+    );
+    const declaredMime = this.mimeResolverInstance.mimeFor(
+      absolutePath,
+      this.baseDir === undefined ? absolutePath : relativize(absolutePath, this.baseDir),
+    );
+    return parserKindForMimeType(declaredMime) ?? NO_PARSER_KIND;
+  }
+
+  /**
+   * This registry's parse cache, built on first use.
+   *
+   * Lazy for the reason {@link parseCacheInstance} records: `ParseCache` reads
+   * `VAT_CACHE` once per construction, so building it eagerly would bind that
+   * decision to registry-construction time.
+   *
+   * @returns The cache every parse on this lane consults
+   */
+  private parseCache(): ParseCache {
+    this.parseCacheInstance ??= new ParseCache();
+    return this.parseCacheInstance;
+  }
+
+  /**
+   * Read, parse, key and measure one file. The body of a preparation, minus its
+   * classification of what went wrong.
+   *
+   * @param filePath - Path to the file (will be normalized to absolute)
+   * @param dispatcher - Decides whether the parse runs here or on a worker
+   * @returns The resource this file describes — **not yet indexed**
+   * @throws Whatever the read or the parse threw
+   */
+  private async readAndKey(
+    filePath: string,
+    dispatcher: ParseDispatcher,
+  ): Promise<ResourceMetadata> {
     // Normalize path to absolute
     const absolutePath = safePath.resolve(filePath);
 
@@ -729,24 +996,32 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // parser selection is part of a document's parse identity (content-key.ts),
     // and running the discriminator twice is how the parse route and the key's
     // parse-route component drift apart.
-    const keyed = await readContentWithKey(absolutePath, parserKindForPath(absolutePath));
+    //
+    // See {@link parserKindFor} for why the routing goes through the run's
+    // resolver rather than `parserKindForPath`.
+    const keyed = await readContentWithKey(absolutePath, this.parserKindFor(absolutePath));
 
     // Parse from the bytes already in hand — or from a cache entry filed under
     // the key those bytes just produced. See `parseKeyed` for the interception.
-    this.parseCacheInstance ??= new ParseCache();
-    const parseResult = await parseKeyed(keyed, this.parseCacheInstance);
+    //
+    // …unless nothing parses this at all. `parserKindForPath` answers `none` for
+    // every type that is neither prose nor markup, and `parseKeyed` refuses that
+    // kind by TYPE rather than by throwing, so the branch cannot be forgotten.
+    // See {@link unparsedResourceFacts} for what a resource is without a parse.
+    const parseResult = isParsableContent(keyed)
+      ? await dispatcher.parse(keyed)
+      : unparsedResourceFacts(keyed);
 
     // Generate ID using priority chain: frontmatter field → relative path → filename stem
     const id = this.generateId(absolutePath, parseResult.frontmatter);
 
-    // Check for duplicate ID (allow re-adding same file path). Deliberately
-    // ahead of the stat below, so a file that loses an id collision costs no
-    // syscall beyond the read it already paid for.
-    const existingById = this.resourcesById.get(id);
-    if (existingById && existingById.filePath !== absolutePath) {
-      throw new DuplicateResourceIdError(id, absolutePath, existingById.filePath);
-    }
-
+    // ⚠️ The duplicate-id check USED TO BE HERE, ahead of the stat, so a file
+    // that lost a collision cost no syscall beyond the read. It cannot stay:
+    // preparation runs concurrently, so `resourcesById` is not yet filled in
+    // with the files ahead of this one and the answer would depend on which read
+    // finished first. It moved to `emitPreparedResource`, and the price is ONE
+    // extra `stat` on a path that has already paid a whole read and a parse.
+    //
     // THE stat — one call serving both `modifiedAt` and `sizeBytes`.
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path, same trust level as the read above
     const stats = await fs.stat(absolutePath);
@@ -788,20 +1063,92 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       ...(collections !== undefined && collections.length > 0 && { collections }),
     };
 
-    // Index the resource
-    this.indexResource(resource);
-
     return resource;
   }
 
   /**
-   * Add multiple resources to the registry sequentially.
+   * Write one prepared file into the registry, and record what it turned out to
+   * be.
    *
-   * Sequential execution ensures deterministic duplicate ID detection.
+   * **THE sequential half.** Every mutation this class performs during a crawl
+   * happens here, and it is called in `filePaths` order, which is what makes the
+   * output a function of the corpus rather than of the machine. Three separate
+   * guarantees rest on that, and only the first one is loud when it breaks:
+   *
+   * 1. **First-added wins** on a duplicate id. `resourcesById` is only correct
+   *    to consult once every file ahead of this one has been emitted.
+   * 2. The two finding lists stay in **attempt order**, which their own
+   *    docblocks promise and which reaches a user as issue order.
+   * 3. `resourcesByName` and `resourcesByChecksum` are **1:many arrays**, and
+   *    `getResourcesByChecksum` / `getDuplicates` read their insertion order
+   *    back. Nothing throws when these scramble — the answers simply become
+   *    machine-dependent, which is the worst way for this to fail.
+   *
+   * @param prepared - What preparation concluded about one file
+   * @returns The admitted resource, or `undefined` when a finding was recorded
+   *   instead
+   * @throws Whatever preparation carried back as a genuine defect, and
+   *   {@link DuplicateResourceIdError} for a losing id
+   */
+  private emitPreparedResource(prepared: PreparedResource): ResourceMetadata | undefined {
+    if (prepared.outcome === 'failed') throw prepared.error;
+    if (prepared.outcome === 'unreadable') {
+      this.unreadableResources.push({
+        filePath: prepared.filePath,
+        reason: prepared.reason,
+        ...(prepared.code !== undefined && { code: prepared.code }),
+      });
+      return undefined;
+    }
+    return this.indexAdmitted(prepared.resource);
+  }
+
+  /**
+   * Adjudicate one prepared resource's id and index it.
+   *
+   * ⛔ **Only correct to call once every file ahead of this one has been
+   * emitted** — `resourcesById` is what "first-added wins" is decided against,
+   * and it is not yet filled in while preparations are still in flight.
+   *
+   * @param resource - The candidate preparation produced
+   * @returns The same resource, now indexed
+   * @throws {DuplicateResourceIdError} If another path already holds this id
+   */
+  private indexAdmitted(resource: ResourceMetadata): ResourceMetadata {
+    // Re-adding the SAME path is not a collision — it is a refresh, and it was
+    // never one on the sequential path either.
+    const existingById = this.resourcesById.get(resource.id);
+    if (existingById && existingById.filePath !== resource.filePath) {
+      throw new DuplicateResourceIdError(resource.id, resource.filePath, existingById.filePath);
+    }
+
+    this.indexResource(resource);
+    return resource;
+  }
+
+  /**
+   * Add multiple resources to the registry: read and parse with a bounded
+   * fan-out, then register in input order.
+   *
+   * ## Why this is no longer a sequential loop
+   *
+   * It was one, and its docstring justified that with *"Sequential execution
+   * ensures deterministic duplicate ID detection"*. That constraint is real and
+   * it is unchanged — what changed is where it is discharged. Reading and
+   * parsing happen concurrently in {@link prepareAdmission}, which decides
+   * everything and mutates nothing; every mutation happens in
+   * {@link emitPreparedResource}, in `filePaths` order. So duplicate detection
+   * is still strictly ordered while the parse — 70% of this command's wall clock
+   * on a real adopter — is not.
+   *
+   * ⭐ **At width 1, which is what ships today, this is the old loop exactly**:
+   * one file prepared, one file emitted, before the next is touched.
    *
    * @param filePaths - Array of file paths to add
-   * @returns Array of parsed resource metadata
-   * @throws Error if any resource produces a duplicate ID
+   * @returns Array of parsed resource metadata, in `filePaths` order
+   * @throws Error if any file fails for a reason that is not a read failure or
+   *   a duplicate id — raised for the FIRST such file in `filePaths` order, not
+   *   for whichever preparation happened to finish first
    *
    * @example
    * ```typescript
@@ -819,45 +1166,47 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // parses that never happen (measured: 963 scripts loaded on a warm scan,
     // against 779 with the parser absent). The demotion is guarded by TYPE
     // instead: `isReadFailure` allow-lists errnos, and a failed parser load
-    // arrives as `ParserUnavailableError` whose code is not one, so it falls
-    // through to the `throw` below with no predicate call needed here.
+    // arrives as `ParserUnavailableError` whose code is not one, so it is
+    // carried back as `failed` and re-thrown.
+    const startedAt = crawlTimingStart();
     const results: ResourceMetadata[] = [];
-    for (const fp of filePaths) {
-      try {
-        results.push(await this.addResource(fp));
-      } catch (error) {
-        if (error instanceof DuplicateResourceIdError) {
-          this.duplicateIdCollisions.push({
-            id: error.id,
-            existingPath: error.existingPath,
-            conflictingPath: error.conflictingPath,
-          });
-          // First-added wins; skip conflicting file and continue crawling.
-        } else if (isReadFailure(error)) {
-          // A file the crawl handed us that we cannot read. Recorded, not
-          // thrown: previously this terminated `vat resources scan|validate`
-          // and `vat audit` with a raw ENOENT stack trace, which a committed
-          // dangling `*.md` symlink reaches on `crawlDirectory`'s git route
-          // (that route returns mode-120000 entries and does no symlink
-          // filtering).
-          //
-          // ⛔ Recorded rather than skipped, deliberately. Swallowing the read
-          // would trade a loud crash for a silent population change — the file
-          // would vanish from every downstream count with nothing said. It
-          // becomes a RESOURCE_UNREADABLE issue in validate().
-          this.unreadableResources.push({
-            filePath: fp,
-            reason: error.message,
-            ...(typeof (error as { code?: unknown }).code === 'string' && {
-              code: (error as { code: string }).code,
-            }),
-          });
-        } else {
-          // Not a read failure and not a collision: a genuine defect in parsing
-          // or indexing, which must not be demoted to a finding.
-          throw error;
-        }
-      }
+    const dispatcher = new ParseDispatcher(this.parseCache(), this.parsePoolPolicy);
+    try {
+      await driveInOrder(
+        filePaths,
+        dispatcher,
+        async (filePath) => this.prepareAdmission(filePath, dispatcher),
+        (prepared) => {
+          try {
+            const admitted = this.emitPreparedResource(prepared);
+            if (admitted !== undefined) results.push(admitted);
+          } catch (error) {
+            if (!(error instanceof DuplicateResourceIdError)) throw error;
+            this.duplicateIdCollisions.push({
+              id: error.id,
+              existingPath: error.existingPath,
+              conflictingPath: error.conflictingPath,
+            });
+            // First-added wins; skip conflicting file and continue crawling.
+          }
+        },
+        // ⭐ No I/O. The routing is a function of the path and this registry's
+        // collection declarations, both already in memory, so this answers
+        // without a `stat` and without a read.
+        (from) =>
+          tallyParsable(filePaths, from, (filePath) =>
+            this.parserKindFor(safePath.resolve(filePath)),
+          ),
+      );
+    } finally {
+      // ⚠️ In a `finally`, and it must stay there. `pool.shutdown()` is what
+      // closes each worker's port gracefully so its `exit` listeners run and its
+      // parse-timing dump reaches disk; a run that threw past this would leave
+      // live threads, and a process that exits with live threads runs none of
+      // their exit listeners. See `parse-pool.ts` — `terminate()` is not
+      // shutdown.
+      await dispatcher.shutdown();
+      recordRegistryPass(CRAWL_REGISTRY_ADMIT_ID, startedAt);
     }
     return results;
   }

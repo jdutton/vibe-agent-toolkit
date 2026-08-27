@@ -22,7 +22,11 @@
  * conclusion.
  *
  * - **The fixture corpus** is that copy, unmodified. It exercises markdown
- *   following, a non-markdown asset, and two broken links.
+ *   following, a non-markdown asset, and two broken links. Since routing moved
+ *   to MIME types it also spans two parser lanes: three markdown documents and
+ *   two files (`.mjs`, `.json`) that route to NO document parser. Those two are
+ *   still members — a bundled script is something markdown links TO — and they
+ *   are the reason `addBlobReferences` states its population as a partition.
  * - **The cascade corpus** is that copy with the walker's own discriminators
  *   linked into it: a navigation file, an agent-instruction file, a sibling
  *   skill's SKILL.md, a directory, and a chain deep enough to put an asset one
@@ -94,8 +98,77 @@ const CONFIG_ASSET_REL = 'templates/config.json';
 /** The packager's own default when `linkFollowDepth` is absent (skill-packager.ts:580). */
 const DEFAULT_DEPTH = 2;
 
-/** Every markdown blob's content key begins here — see `computeContentKey`. */
+/**
+ * Every markdown blob's content key begins here — see `computeContentKey`.
+ *
+ * The prefix IS the parser kind: `computeContentKey` mixes it into the digest
+ * preimage and spells it in the key, so a key naming a different parser is a
+ * different document even for identical bytes. That is why `addBlobReferences`
+ * filters on it rather than on "has a blob row" — handing an `html.`-keyed blob
+ * to `parseMarkdown` and filing the result under that same key is precisely the
+ * one-lane-served-the-other's-facts mis-filing `content-key.ts` warns about.
+ */
 const MARKDOWN_KEY_PREFIX = 'markdown.';
+
+/**
+ * The kind that names the ABSENCE of a document parser — `content-key.ts`'s
+ * third {@link MARKDOWN_KEY_PREFIX} sibling.
+ *
+ * Distinguished from "not markdown" on purpose. A `none.` blob has no AST to
+ * lose, so leaving it out of this file's hand-rolled edge population costs
+ * nothing; an `html.` blob HAS one, and excluding that would be a real
+ * narrowing. {@link addBlobReferences} therefore checks which of the two an
+ * un-admitted file is, rather than lumping them together.
+ */
+const NONE_KEY_PREFIX = 'none.';
+
+/**
+ * The corpus files that route to NO document parser — `mime-type.ts` types
+ * `.mjs` as `text/javascript` and `.json` as `application/json`, and neither
+ * means prose or markup.
+ *
+ * Named as a list rather than derived, because deriving it from the same prefix
+ * filter that produces the admitted set would make the partition assertion in
+ * {@link addBlobReferences} a tautology that holds for any corpus — including one
+ * where every file had silently stopped being parsed.
+ *
+ * ⚠️ These two are still closure MEMBERS. That is the ruling MIME routing
+ * implements: a bundled script or data file remains a thing markdown can link
+ * TO, and stops only being a DOOR its own outbound references are followed
+ * through. `skills/shared/helper.mjs` appears in every member-set equality
+ * below, and it is those equalities — not this list — that hold the ruling to
+ * account. Identical in both corpora: the cascade adds only markdown.
+ */
+const UNPARSED_RELS = [HELPER_REL, CONFIG_ASSET_REL];
+
+/**
+ * How many blobs `addBlobReferences` must admit on the SMALLER of the two
+ * corpora — the committed fixture's three MARKDOWN files (`docs/guide.md`,
+ * `skills/tool-a/SKILL.md`, `skills/tool-b/SKILL.md`). The cascade corpus adds
+ * `CLAUDE.md`, `docs/README.md` and `docs/chain.md`, for six.
+ *
+ * ## Why three and not five
+ *
+ * It was five while `parserKindForPath` routed everything that is not
+ * `.html`/`.htm` to remark, which made `templates/config.json` and
+ * `skills/shared/helper.mjs` markdown-keyed by accident rather than by intent.
+ * Routing by MIME type moved both to {@link NONE_KEY_PREFIX}, and this guard is
+ * what reported it — deliberately, having been added one step earlier so the
+ * change could not narrow this file's population in silence.
+ *
+ * Re-pinned rather than merely re-counted, and the measurement is the reason:
+ * on both corpora, under all five configs exercised below, the closure's
+ * membership is BYTE-IDENTICAL with and without those two files in the
+ * population. Both are leaves — measured, and re-checked on every run by the
+ * zero-edge assertion in {@link addBlobReferences} — so removing them removes no
+ * edge from the base and no member from any answer.
+ *
+ * A floor, not an equality, because both corpora run through the same helper.
+ * The exact per-corpus check is the partition in `addBlobReferences`; this
+ * number is the second, cruder guard that fires if the crawl stops keying
+ * anything at all.
+ */
+const FIXTURE_BLOB_COUNT = 3;
 
 /** A config declaring nothing: the defaults path, and the packager's own. */
 const DEFAULT_CONFIG: SkillPackagingConfig = {};
@@ -189,18 +262,87 @@ function difference(left: readonly string[], right: readonly string[]): string[]
  * keyed and file its reference candidates under that same content key. Skipping
  * this step is the vacuous-pass trap — a closure over an edge-less base returns
  * only its root, and an assertion comparing that to an empty walk would agree.
+ *
+ * ## Why this helper asserts its own input
+ *
+ * The filter has to be the content key's parser prefix (see
+ * {@link MARKDOWN_KEY_PREFIX} — "has a blob row" would feed an HTML-keyed blob to
+ * `parseMarkdown`), and a prefix filter is exactly the shape that NARROWS in
+ * silence: a parser-kind change drops files from this population, the base loses
+ * those edges, and the exact member-set equalities downstream keep PASSING while
+ * covering strictly less — the one failure mode a green suite cannot report.
+ *
+ * That is not hypothetical. It happened: `parserKindForPath` stopped routing
+ * everything-but-`.html` to remark and began routing by MIME type, and
+ * `templates/config.json` and `skills/shared/helper.mjs` moved to
+ * {@link NONE_KEY_PREFIX}. The first version of this file lost both without a
+ * single test going red.
+ *
+ * ## The four assertions, and the distinct failure each one catches
+ *
+ * The population is therefore PARTITIONED and both halves are stated, because
+ * only naming the un-admitted half keeps this from being a tautology — an
+ * `admitted === filter(admitted)` equality holds even when the filter has eaten
+ * the corpus.
+ *
+ * 1. **Floor** — the crawl stopped keying anything at all.
+ * 2. **The un-admitted half is exactly {@link UNPARSED_RELS}** — a file changed
+ *    lanes in either direction, and the diff names it.
+ * 3. **The two halves cover every realization with bytes** — a file left the
+ *    population for some reason that is neither (unreadable, a new kind).
+ * 4. **Every un-admitted file is `none.`-keyed AND carries no reference
+ *    candidate in any form** — this is what makes excluding them
+ *    answer-preserving rather than merely quiet, and it is checked rather than
+ *    asserted in prose. Reading a file to count its edges is not the mis-filing
+ *    {@link MARKDOWN_KEY_PREFIX} warns about; nothing here is FILED under a key
+ *    the parser did not produce. The day a bundled script grows a markdown link,
+ *    this reddens and says so, instead of that edge vanishing from the base.
  */
 async function addBlobReferences(
   builder: ProjectionBuilder,
   root: string,
   realizations: readonly ResourceRealizationRow[],
 ): Promise<void> {
-  for (const realization of realizations) {
-    const { contentKey } = realization;
-    if (contentKey?.startsWith(MARKDOWN_KEY_PREFIX) !== true) continue;
+  const withBytes = realizations.filter((row) => row.exists && !row.isDirectory);
+  // `flatMap` rather than `filter`: it carries the key out NON-NULL, so the loop
+  // below cannot reach for a `?? ''` fallback that would file a whole file's
+  // references under an empty key and leave the base quietly edge-less.
+  const admitted = withBytes.flatMap((row) =>
+    row.contentKey?.startsWith(MARKDOWN_KEY_PREFIX) === true
+      ? [{ contentKey: row.contentKey, path: row.path }]
+      : [],
+  );
+  const unparsed = withBytes.filter((row) => row.contentKey?.startsWith(MARKDOWN_KEY_PREFIX) !== true);
+
+  // (1) Non-vacuity: a helper that admitted nothing would leave an edge-less
+  // base, and every membership assertion downstream would still agree with itself.
+  expect(admitted.length).toBeGreaterThanOrEqual(FIXTURE_BLOB_COUNT);
+  // (2) The un-admitted half, NAMED. Both corpora share the same two.
+  expect(sortedPaths(unparsed.map((row) => row.path)))
+    .toEqual(sortedPaths(UNPARSED_RELS));
+  // (3) Non-narrowing: the two halves together must be the WHOLE keyed
+  // population, path for path. Stated as sorted paths rather than as a count so
+  // the failure diff says which file stopped being reached at all.
+  expect(sortedPaths([...admitted.map((row) => row.path), ...unparsed.map((row) => row.path)]))
+    .toEqual(sortedPaths(withBytes.map((row) => row.path)));
+  // (4a) `none.`, not merely "not markdown" — an `html.` blob has an AST, and
+  // dropping one would be a narrowing this partition must not silently absorb.
+  expect(sortedPaths(
+    unparsed.filter((row) => row.contentKey?.startsWith(NONE_KEY_PREFIX) !== true).map((row) => row.path),
+  )).toEqual([]);
+
+  for (const row of unparsed) {
+    // (4b) …and each is a LEAF, so excluding it removes no edge from the base.
+    // Read, counted, discarded — never added to the builder.
+    const parsed = await parseMarkdown(safePath.join(root, row.path));
+    expect({ path: row.path, links: parsed.links, lexical: parsed.lexicalReferences ?? [] })
+      .toEqual({ path: row.path, links: [], lexical: [] });
+  }
+
+  for (const { contentKey, path } of admitted) {
     // Sequential: `parseMarkdown` reads the file, and fanning a whole corpus out
     // at once puts one handle per markdown file in flight for no shorter test.
-    const parsed = await parseMarkdown(safePath.join(root, realization.path));
+    const parsed = await parseMarkdown(safePath.join(root, path));
     for (const row of blobReferencesFor(contentKey, parsed)) {
       builder.addBlobReference(row);
     }
@@ -216,7 +358,7 @@ async function addBlobReferences(
  * restate `merge.ts`'s `mergeContribution` without changing any answer here.
  */
 async function populatedBase(root: string): Promise<ProjectionBase> {
-  const builder = new ProjectionBuilder(root);
+  const builder = new ProjectionBuilder({ root });
   builder.addRoot({ id: builder.identities.rootId, path: safePath.resolve(root) });
 
   const contribution = await new FilesystemExtentContributor().contribute(builder.base(), null);

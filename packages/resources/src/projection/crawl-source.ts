@@ -69,16 +69,20 @@
 import { existsSync, statSync } from 'node:fs';
 
 import {
-  crawlDirectory,
-  crawlPathFilter,
-  gitFindRoot,
-  gitLsOthers,
-  gitTreeSnapshot,
-  NEVER_CRAWL_GLOBS,
   readTextContentSync,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import {
+  crawlDirectory,
+  crawlPathFilter,
+  NEVER_CRAWL_GLOBS,
+} from '@vibe-agent-toolkit/utils/crawl';
+import {
+  gitFindRoot,
+  gitLsOthers,
+  gitTreeSnapshot,
+} from '@vibe-agent-toolkit/utils/git';
 
 import type { PathShape } from './realizations.js';
 

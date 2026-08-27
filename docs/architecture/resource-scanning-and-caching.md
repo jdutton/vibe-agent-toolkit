@@ -546,8 +546,8 @@ Inside the scope the whole exemption set is **one `exemptFiles` entry** — the 
 | `resources/content-cache.ts` | 2 | its own writer, five lines up |
 | `resources/external-link-cache.ts` | 2 | its own `save()` |
 | `resources/cache-namespace.ts` | 2 | VAT's own published manifest |
-| `utils/link-auth/expand-macro.ts` | 2 | `macros.yaml`, an asset this package authors and publishes |
-| `utils/link-auth/resolve-token.ts` | 3 | stdout of the credential helper spawned above |
+| `resources/link-auth/expand-macro.ts` | 2 | `macros.yaml`, an asset this package authors and publishes |
+| `resources/link-auth/resolve-token.ts` | 3 | stdout of the credential helper spawned above |
 
 What the migration bought inside `utils`, beyond consistency: a `.gitignore` written by PowerShell's
 `>` is UTF-16LE, and the old read handed `ignore` a string of NUL-interleaved garbage — every pattern

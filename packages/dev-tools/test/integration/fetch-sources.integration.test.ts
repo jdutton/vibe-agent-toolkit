@@ -13,7 +13,8 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { normalizedTmpdir, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { fetchSource } from '../../src/compat-empirical/corpus/fetch-sources.js';

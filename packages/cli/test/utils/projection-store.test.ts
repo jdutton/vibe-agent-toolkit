@@ -35,14 +35,16 @@
 import { rmSync, writeFileSync } from 'node:fs';
 
 import type { PopulationCache } from '@vibe-agent-toolkit/resources';
-// All three come from the module this file MOCKS, and all three survive it: the
-// factory below spreads the real module and replaces exactly one export.
-// `gitTreeSnapshot` therefore arrives here as the counting wrapper, which is
-// deliberate — it is still the real implementation underneath.
-import { gitTreeSnapshot, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+// `./` is NOT the mocked module id — `./git` is. These two are the real
+// implementations and always were.
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+// `gitTreeSnapshot` comes from the module this file MOCKS and survives it: the
+// factory below spreads the real module and replaces exactly one export, so it
+// arrives here as the counting wrapper over the real implementation.
+import { gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 // Type-only, purely so the mock factory can spread the real module without an
 // inline `typeof import()` annotation, which this repo's lint forbids.
-import type * as UtilsModule from '@vibe-agent-toolkit/utils';
+import type * as UtilsGitModule from '@vibe-agent-toolkit/utils/git';
 // `./testing` is a DIFFERENT module id, so the mock above does not reach it —
 // which is what we want: `detachGitEnv` is the thing that makes the git
 // fixtures trustworthy, and a mocked version of it would quietly stop doing so.
@@ -147,8 +149,8 @@ vi.mock('@vibe-agent-toolkit/projection-sqlite', () => ({
  * seam is intact.
  */
 const git = vi.hoisted(() => ({ calls: { count: 0 } }));
-vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
-  const actual = await importOriginal<typeof UtilsModule>();
+vi.mock('@vibe-agent-toolkit/utils/git', async (importOriginal) => {
+  const actual = await importOriginal<typeof UtilsGitModule>();
   return {
     ...actual,
     gitTreeSnapshot: (options: { cwd: string }) => {

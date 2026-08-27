@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/utils",
-  "version": "0.2.0-rc.3",
+  "version": "0.2.0-rc.4",
   "type": "module",
   "description": "Core utility functions shared across the vibe-agent-toolkit packages",
   "sideEffects": [
@@ -54,9 +54,9 @@
       "types": "./dist/zod.d.ts",
       "import": "./dist/zod.js"
     },
-    "./template": {
-      "types": "./dist/template-entry.d.ts",
-      "import": "./dist/template-entry.js"
+    "./skill-test": {
+      "types": "./dist/skill-test/index.d.ts",
+      "import": "./dist/skill-test/index.js"
     },
     "./yaml": {
       "types": "./dist/yaml.d.ts",
@@ -90,17 +90,15 @@
     "README.md"
   ],
   "scripts": {
-    "build": "rimraf --glob dist \"*.tsbuildinfo\" && tsc && tsx ../dev-tools/src/copy-yaml-assets.ts",
+    "build": "rimraf --glob dist \"*.tsbuildinfo\" && tsc",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:system": "vitest run --config vitest.system.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist *.tsbuildinfo"
   },
   "dependencies": {
     "@vibe-validate/git": "0.20.1",
-    "handlebars": "^4.7.8",
     "ignore": "^7.0.5",
     "picomatch": "^4.0.3",
     "which": "^5.0.0",

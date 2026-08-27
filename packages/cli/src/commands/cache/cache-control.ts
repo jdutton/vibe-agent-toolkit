@@ -30,16 +30,25 @@ export interface CacheControlOptions {
  *
  * ## Why this sets an environment variable instead of plumbing a flag
  *
- * `vat validate`, `vat verify` and `vat build` enumerate nothing in their own
- * process: each `spawnSync`s the vat binary once per phase, and the child is
- * what parses the corpus. A flag parsed in the parent therefore never reaches
- * the process whose caching it is supposed to control, whereas `process.env` is
- * inherited by every child for free. `bin.ts` already leans on exactly that for
- * `VAT_CONTEXT` / `VAT_CONTEXT_PATH`.
+ * ⚠️ The ORIGINAL reason has expired, and saying so is the point of this note.
+ * It was that `vat validate` / `vat verify` / `vat build` enumerated nothing in
+ * their own process — each `spawnSync`ed the vat binary once per phase, so a
+ * flag parsed in the parent never reached the process doing the parsing, while
+ * `process.env` crossed the boundary for free. Phases run in this process now,
+ * so that argument no longer holds.
+ *
+ * What still holds is narrower but sufficient: the flag has to reach code that
+ * no CLI option is threaded through. `ParseCache` is constructed deep inside
+ * `@vibe-agent-toolkit/resources`, by callers several layers below any command,
+ * and `bin.ts` leans on the same mechanism for `VAT_CONTEXT` /
+ * `VAT_CONTEXT_PATH`. Plumbing a `noCache` parameter down every one of those
+ * call chains is the alternative, and it is a real one — this is now a choice
+ * rather than a necessity, so treat it as revisitable rather than as settled.
  *
  * `VAT_CACHE=0` is read by `ParseCache` (packages/resources/src/parse-cache.ts)
  * per construction, never at module load, so setting it from a `preAction` hook
- * — after Commander has parsed, before any command body runs — is observed.
+ * — after Commander has parsed, before any command body runs — is observed by
+ * every phase, all of which now start after that hook has run.
  *
  * ## The collision with `vat resources validate --no-cache`
  *
@@ -60,7 +69,7 @@ export interface CacheControlOptions {
  * @param program - The root program to register the flag and hook on
  */
 export function registerCacheControl(program: Command): void {
-  program.option('--no-cache', "Disable VAT's disk caches for this run (also applies to spawned phases)");
+  program.option('--no-cache', "Disable VAT's disk caches for this run (every phase included)");
 
   program.hook('preAction', (_thisCommand, actionCommand) => {
     applyCacheControl(program.opts<CacheControlOptions>(), actionCommand);

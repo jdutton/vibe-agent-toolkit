@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseHtmlDocument, walkElements } from '../src/html-link-parser.js';
+import { findAttr, parseHtmlDocument, walkElements } from '../src/html-link-parser.js';
 import { rewriteHtmlLinks, type UnappliedRewrite } from '../src/html-transform.js';
 
 const swap = (from: string, to: string) => (href: string) => (href === from ? to : href);
@@ -13,7 +13,7 @@ function readAttr(html: string, tag: string, attr: string): string | undefined {
   const { document } = parseHtmlDocument(html);
   for (const el of walkElements(document)) {
     if (el.tagName !== tag) continue;
-    const found = el.attrs.find((a) => a.name === attr);
+    const found = findAttr(el, attr);
     if (found) return found.value;
   }
   return undefined;
@@ -96,6 +96,54 @@ describe('rewriteHtmlLinks', () => {
     const unapplied: UnappliedRewrite[] = [];
     rewriteHtmlLinks(VALUELESS_HREF, (h) => h, (info) => unapplied.push(info));
     expect(unapplied).toHaveLength(0);
+  });
+
+  /**
+   * parse5 splits a namespaced attribute into `{ prefix: 'xlink', name: 'href' }`
+   * but keys `sourceCodeLocation.attrs` under the **undivided source spelling**
+   * `xlink:href` (measured, all three shapes below). So a finder on `attr.name`
+   * MATCHES while a location lookup on the same bare `'href'` MISSES — the
+   * rewriter then took its `no-source-location` branch and the href rewrite was
+   * dropped silently, on a page that parses cleanly.
+   *
+   * Asserted on the FULL rewritten source, never on "it didn't throw": the
+   * defect never threw. Only "the new value is actually in the output" can tell
+   * the fix from the bug.
+   */
+  it('rewrites a namespaced href in SVG, MathML, and the uppercase spelling', () => {
+    // Table rather than one `it` per row: near-identical single-assertion
+    // blocks trip the copy-paste detector (see 'handles attribute-shape edge
+    // cases' above). Each row differs in the axis under test — foreign-content
+    // namespace and source casing — and shares nothing else.
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      [
+        '<svg><a xlink:href="./icon.md"><text>i</text></a></svg>',
+        '<svg><a xlink:href="./icon.html"><text>i</text></a></svg>',
+      ],
+      ['<math><a xlink:href="./icon.md">m</a></math>', '<math><a xlink:href="./icon.html">m</a></math>'],
+      // Casing of the SOURCE is preserved: parse5 folds only the location key.
+      [
+        '<svg><a XLINK:HREF="./icon.md"><text>u</text></a></svg>',
+        '<svg><a XLINK:HREF="./icon.html"><text>u</text></a></svg>',
+      ],
+    ];
+
+    for (const [source, expected] of cases) {
+      expect(rewriteHtmlLinks(source, swap('./icon.md', './icon.html'))).toBe(expected);
+    }
+  });
+
+  it('reports nothing unapplied for a namespaced href it can locate', () => {
+    // The complement of the assertion above: a regression that reintroduced the
+    // bare-literal key would show up here as a `no-source-location` report,
+    // naming the mechanism rather than just an unequal string.
+    const unapplied: UnappliedRewrite[] = [];
+    const source = '<svg><a xlink:href="./ns.md">n</a></svg>';
+
+    expect(rewriteHtmlLinks(source, swap('./ns.md', './ns.html'), (info) => unapplied.push(info))).toBe(
+      '<svg><a xlink:href="./ns.html">n</a></svg>',
+    );
+    expect(unapplied).toEqual([]);
   });
 
   it('round-trips: the rewritten value decodes back to the exact target (no double-escape)', () => {

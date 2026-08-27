@@ -9,17 +9,25 @@
  * rather than trusting either.
  *
  * The divergences between these lanes are the point, not an accident to be
- * smoothed over here. `resources` is the only config-aware lane with the full
- * markdown+HTML include set; `skills-build` is config-aware but markdown-only;
- * `audit` is deliberately config-less and memoized per root; `inventory` is the
- * only one that asks git for untracked files.
+ * smoothed over here. `resources` is the only lane with the full markdown+HTML
+ * include set that also applies the project's `include`/`exclude`; `audit` is
+ * memoized per root; `inventory` is the only one that asks git for untracked
+ * files.
+ *
+ * What is NO LONGER a divergence, and must not become one again: **whether a
+ * lane sees the project's config.** All five do. A collection's declared
+ * `mimeType` decides which parser runs, so a config-less lane reaches a
+ * different verdict about whether a file is prose than the projection that
+ * enumerated it — inside one command. `test/collection-mime-lane-agreement.test.ts`
+ * holds every lane to the projection's verdict.
  */
 
 import { crawlAndResolveRegistry, createProjectRegistry } from '@vibe-agent-toolkit/agent-skills';
 import { crawlSkillLinkRegistry } from '@vibe-agent-toolkit/claude-marketplace';
-import { DEFAULT_RESOURCE_INCLUDE, ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import type { CrawlOptions } from '@vibe-agent-toolkit/utils';
+import { DEFAULT_RESOURCE_INCLUDE, type ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import type { CrawlOptions } from '@vibe-agent-toolkit/utils/crawl';
 
+import { buildSkillsValidateRegistry } from '../commands/skills/validate.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { createLogger } from '../utils/logger.js';
 import { loadResourcesWithConfig } from '../utils/resource-loader.js';
@@ -85,7 +93,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
   },
   {
     id: 'audit',
-    description: '`vat audit` and post-build validation — config-less, memoized per root',
+    description: '`vat audit` and post-build validation — config-aware per root, memoized per root',
     crawlOptions: (projectRoot) => ({
       baseDir: projectRoot,
       include: [...MARKDOWN_AND_HTML],
@@ -121,7 +129,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
   },
   {
     id: 'skills-validate',
-    description: '`vat skills validate` — batch-scoped shared registry, markdown-only, config-less',
+    description: '`vat skills validate` — batch-scoped shared registry, markdown-only, config-aware',
     crawlOptions: (projectRoot) => ({
       baseDir: projectRoot,
       include: [...MARKDOWN_ONLY],
@@ -129,17 +137,16 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       absolute: true,
       filesOnly: true,
     }),
-    build: async (projectRoot) => {
-      // Restated from commands/skills/validate.ts, which builds this inline
-      // rather than through a named export. That is itself worth recording: it
-      // is the one lane with no reusable builder to point at.
-      const registry = await ResourceRegistry.fromCrawl({
-        baseDir: projectRoot,
-        include: [...MARKDOWN_ONLY],
-      });
-      registry.resolveLinks();
-      return registry;
-    },
+    // The REAL builder, like every other lane. It used to be restated inline
+    // here because `commands/skills/validate.ts` built its registry inline too,
+    // and this file recorded that as "the one lane with no reusable builder to
+    // point at". The restatement then quietly outlived its subject: the command
+    // learned to route parsing through the project's declared collection
+    // `mimeType`s and this copy did not, so the oracle described a lane nobody
+    // runs. Naming the builder is what makes that class of drift impossible.
+    build: async (projectRoot) => buildSkillsValidateRegistry(projectRoot, {
+      config: loadConfig(projectRoot),
+    }),
   },
 ]);
 

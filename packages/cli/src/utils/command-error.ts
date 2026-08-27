@@ -55,8 +55,54 @@ export function errorDiagnostics(error: unknown): string {
   return `Non-Error value thrown: ${inspect(error, { depth: 3 })}`;
 }
 
+/** The document a command publishes when an unexpected failure stops it. */
+export interface CommandErrorDocument {
+  status: 'error';
+  error: string;
+  duration: string;
+}
+
 /**
- * Handle command error with standard formatting and exit
+ * Report an unexpected failure on stderr and return the document that describes
+ * it, WITHOUT deciding how the caller ends.
+ *
+ * Split out of {@link handleCommandError} because the same failure now has two
+ * endings and must not grow two policies. A command run from the command line
+ * writes this document to stdout and exits 2; the same command run as a phase of
+ * `vat validate` / `vat verify` / `vat build` runs in the orchestrator's own
+ * process, where exiting would kill the whole run and skip every later phase —
+ * so it hands the document back and the orchestrator nests it under that phase's
+ * `report`, exactly as it used to nest the child's captured stdout.
+ *
+ * The stderr half is identical in both lanes: progress and diagnostics have
+ * always streamed live, and that is unchanged by there no longer being a child.
+ *
+ * @param error - The value that was thrown
+ * @param logger - Logger instance for error output
+ * @param startTime - Command start time (from Date.now())
+ * @param commandName - Name of the command (for the error message)
+ */
+export function reportCommandError(
+  error: unknown,
+  logger: Logger,
+  startTime: number,
+  commandName: string
+): CommandErrorDocument {
+  const duration = Date.now() - startTime;
+  const message = error instanceof Error ? error.message : 'Unknown error';
+
+  logger.error(`${commandName} failed: ${message}`);
+  logger.debug(errorDiagnostics(error));
+
+  return { status: 'error', error: message, duration: formatDuration(duration) };
+}
+
+/**
+ * Handle command error with standard formatting and exit.
+ *
+ * The command-line ending for {@link reportCommandError}. Exit 2 is the
+ * UNEXPECTED failure, per the exit-code contract every command's help documents.
+ *
  * @param error - The error that occurred
  * @param logger - Logger instance for error output
  * @param startTime - Command start time (from Date.now())
@@ -68,16 +114,7 @@ export function handleCommandError(
   startTime: number,
   commandName: string
 ): never {
-  const duration = Date.now() - startTime;
-  logger.error(`${commandName} failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-  logger.debug(errorDiagnostics(error));
-
-  writeYamlOutput({
-    status: 'error',
-    error: error instanceof Error ? error.message : 'Unknown error',
-    duration: formatDuration(duration),
-  });
-
+  writeYamlOutput(reportCommandError(error, logger, startTime, commandName));
   process.exit(2);
 }
 

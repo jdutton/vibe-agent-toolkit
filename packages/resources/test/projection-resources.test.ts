@@ -71,6 +71,7 @@ describe('ResourceRealizationRowSchema', () => {
     dir: 'docs',
     depth: 1,
     ext: '.md',
+    mime: 'text/markdown',
     contentKey: VALID_KEY,
     contentState: 'keyed',
     mtime: new Date('2026-01-01T00:00:00Z'),

@@ -1,7 +1,17 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { findProjectRoot, mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
-import type * as UtilsModule from '@vibe-agent-toolkit/utils';
+import {
+  findProjectRoot,
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+} from '@vibe-agent-toolkit/utils';
+// The two namespace types are type-only, purely so each mock factory can spread
+// its real module without an inline `typeof import()` annotation, which this
+// repo's lint forbids.
+import type * as UtilsCrawlModule from '@vibe-agent-toolkit/utils/crawl';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import type * as UtilsGitModule from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -50,7 +60,8 @@ const CRAWL_FAILURE_MESSAGE = vi.hoisted(() => 'simulated corpus crawl failure')
  *
  * `walkLinkGraph`'s `readGitignored` calls `isGitIgnored` — one subprocess per
  * distinct link target — whenever it holds no `GitTracker`. Only consumers that
- * import the `@vibe-agent-toolkit/utils` PACKAGE are intercepted here.
+ * import the `@vibe-agent-toolkit/utils/git` MODULE ID are intercepted here; a
+ * mock is keyed on the specifier, not on the package.
  *
  * ⚠️ **Read what that does and does not buy you, because the obvious reading is
  * wrong.** `GitTracker` reaches `isGitIgnored` through a relative intra-package
@@ -69,18 +80,30 @@ const CRAWL_FAILURE_MESSAGE = vi.hoisted(() => 'simulated corpus crawl failure')
  */
 const gitIgnoreQueries = vi.hoisted(() => [] as string[]);
 
-vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
-  const actual = await importOriginal<typeof UtilsModule>();
+// TWO mocks, because the two intercepted functions live on two module ids.
+// `safePath` is deliberately taken from the unmocked `.` barrel above rather
+// than off either factory's `actual`: it is the real implementation on every
+// route, and reaching for it through a mocked module is what breaks when a
+// symbol later moves again.
+vi.mock('@vibe-agent-toolkit/utils/crawl', async (importOriginal) => {
+  const actual = await importOriginal<typeof UtilsCrawlModule>();
   return {
     ...actual,
     crawlDirectory: async (options: Parameters<typeof actual.crawlDirectory>[0]) => {
       crawlBaseDirs.push(options.baseDir);
-      const base = actual.safePath.resolve(options.baseDir);
-      if (failingCrawlRoots.some((dir) => actual.safePath.resolve(dir) === base)) {
+      const base = safePath.resolve(options.baseDir);
+      if (failingCrawlRoots.some((dir) => safePath.resolve(dir) === base)) {
         throw new Error(CRAWL_FAILURE_MESSAGE);
       }
       return actual.crawlDirectory(options);
     },
+  };
+});
+
+vi.mock('@vibe-agent-toolkit/utils/git', async (importOriginal) => {
+  const actual = await importOriginal<typeof UtilsGitModule>();
+  return {
+    ...actual,
     isGitIgnored: (filePath: string, cwd?: string) => {
       gitIgnoreQueries.push(filePath);
       return cwd === undefined ? actual.isGitIgnored(filePath) : actual.isGitIgnored(filePath, cwd);

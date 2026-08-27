@@ -22,6 +22,14 @@ import {
  * A bare '/repo' literal would compare against 'D:/repo' there and fail.
  */
 const PROJECT_ROOT = toForwardSlash(safePath.resolve('/repo'));
+/**
+ * The run's conventional-suite probe, stubbed to "no suite anywhere on disk" so this
+ * file stays pure path math — the real probe is the module's one filesystem touch and
+ * is covered by the integration test. Stubbing it is also what keeps these fixtures
+ * honest: `/repo` does not exist, and a real probe would answer `false` for it by
+ * accident rather than by declaration.
+ */
+const NO_SUITE_ON_DISK = (): boolean => false;
 const SKILL_DIR = `${PROJECT_ROOT}/skills/demo`;
 const OUTPUT = `${PROJECT_ROOT}/dist/skills/demo`;
 /** The default suite dir `resolveTestInputDirs` derives from SKILL_DIR. */
@@ -60,27 +68,27 @@ const PROJECT_SKILLS = [
 
 describe('resolveTestInputDirs', () => {
   it('resolves the default suite dir for a skill that declares test: with no evals path', () => {
-    expect(resolveTestInputDirs({ test: {} }, SKILL_DIR, [])).toEqual([DEFAULT_EVALS_DIR]);
+    expect(resolveTestInputDirs({ test: {} }, SKILL_DIR, [], NO_SUITE_ON_DISK)).toEqual([DEFAULT_EVALS_DIR]);
   });
 
   it('resolves a custom, skill-relative evals path to its containing dir', () => {
     // VAT's own layout: several skills share one source dir, each with its own suite.
-    expect(resolveTestInputDirs({ test: { evals: 'evals/demo/evals.json' } }, SKILL_DIR, []))
+    expect(resolveTestInputDirs({ test: { evals: 'evals/demo/evals.json' } }, SKILL_DIR, [], NO_SUITE_ON_DISK))
       .toEqual([`${SKILL_DIR}/evals/demo`]);
   });
 
   it('resolves a suite kept OUTSIDE the skill dir (a layout that never leaked in the first place)', () => {
-    expect(resolveTestInputDirs({ test: { evals: '../../evals/demo/evals.json' } }, SKILL_DIR, []))
+    expect(resolveTestInputDirs({ test: { evals: '../../evals/demo/evals.json' } }, SKILL_DIR, [], NO_SUITE_ON_DISK))
       .toEqual([`${PROJECT_ROOT}/evals/demo`]);
   });
 
   it('returns nothing when the skill declares no test: block', () => {
     // No declaration, no rule. VAT does not guess that a dir named evals/ is test input.
-    expect(resolveTestInputDirs({}, SKILL_DIR, [])).toEqual([]);
+    expect(resolveTestInputDirs({}, SKILL_DIR, [], NO_SUITE_ON_DISK)).toEqual([]);
   });
 
   it('returns nothing for a suite at the skill root — the "dir" would be the skill itself', () => {
-    expect(resolveTestInputDirs({ test: { evals: 'evals.json' } }, SKILL_DIR, [])).toEqual([]);
+    expect(resolveTestInputDirs({ test: { evals: 'evals.json' } }, SKILL_DIR, [], NO_SUITE_ON_DISK)).toEqual([]);
   });
 });
 
@@ -89,19 +97,19 @@ describe('resolveTestInputDirs — CROSS-skill declarations', () => {
     // The bug this covers: a SKILL.md links a doc that cites ANOTHER skill's eval
     // suite as a worked example. Keyed to the packaged skill alone, the walker
     // followed that citation and bundled the other skill's suite with no receipt.
-    expect(resolveTestInputDirs({ test: {} }, SKILL_DIR, PROJECT_SKILLS)).toEqual([
+    expect(resolveTestInputDirs({ test: {} }, SKILL_DIR, PROJECT_SKILLS, NO_SUITE_ON_DISK)).toEqual([
       DEFAULT_EVALS_DIR,
       OTHER_EVALS_DIR,
     ]);
   });
 
   it('reports the packaged skill\'s own suite exactly once when it also appears in the project list', () => {
-    const dirs = resolveTestInputDirs({ test: {} }, SKILL_DIR, PROJECT_SKILLS);
+    const dirs = resolveTestInputDirs({ test: {} }, SKILL_DIR, PROJECT_SKILLS, NO_SUITE_ON_DISK);
     expect(dirs.filter((d) => d === DEFAULT_EVALS_DIR)).toHaveLength(1);
   });
 
   it('still resolves the packaged skill\'s own suite when the project list is empty', () => {
-    expect(resolveTestInputDirs({ test: {} }, SKILL_DIR, [])).toEqual([DEFAULT_EVALS_DIR]);
+    expect(resolveTestInputDirs({ test: {} }, SKILL_DIR, [], NO_SUITE_ON_DISK)).toEqual([DEFAULT_EVALS_DIR]);
   });
 
   it('does NOT export another skill\'s suite dir when that dir sits outside the declaring skill', () => {
@@ -111,19 +119,19 @@ describe('resolveTestInputDirs — CROSS-skill declarations', () => {
     // widen a known bug into a project-wide one.
     const dirs = resolveTestInputDirs({ test: {} }, SKILL_DIR, [
       { skillDir: OTHER_SKILL_DIR, config: { test: { evals: '../../shared/evals.json' } } },
-    ]);
+    ], NO_SUITE_ON_DISK);
 
     expect(dirs).toEqual([DEFAULT_EVALS_DIR]);
   });
 
   it('still strips a shared suite dir from the build of the skill that DECLARED it', () => {
     expect(
-      resolveTestInputDirs({ test: { evals: '../../shared/evals.json' } }, OTHER_SKILL_DIR, PROJECT_SKILLS),
+      resolveTestInputDirs({ test: { evals: '../../shared/evals.json' } }, OTHER_SKILL_DIR, PROJECT_SKILLS, NO_SUITE_ON_DISK),
     ).toContain(`${PROJECT_ROOT}/shared`);
   });
 
   it('matches the declared suite dir precisely, never an ancestor that merely contains one', () => {
-    const dirs = resolveTestInputDirs({ test: {} }, SKILL_DIR, PROJECT_SKILLS);
+    const dirs = resolveTestInputDirs({ test: {} }, SKILL_DIR, PROJECT_SKILLS, NO_SUITE_ON_DISK);
     // `skills/` contains both suites but is not itself declared test input.
     expect(dirs).not.toContain(`${PROJECT_ROOT}/skills`);
 
@@ -152,13 +160,14 @@ describe('resolveTestInputDirs — CROSS-skill declarations', () => {
       SKILL_DIR,
       PROJECT_ROOT,
       PROJECT_SKILLS,
+      NO_SUITE_ON_DISK,
     );
 
     expect(kept.map((e) => e.dest)).toEqual([KEPT_DEST]);
   });
 
   it('emits a PACKAGED_TEST_INPUT receipt for a link into ANOTHER skill\'s suite', () => {
-    const dirs = resolveTestInputDirs({ test: {} }, SKILL_DIR, PROJECT_SKILLS);
+    const dirs = resolveTestInputDirs({ test: {} }, SKILL_DIR, PROJECT_SKILLS, NO_SUITE_ON_DISK);
     const issues = testInputLinkIssues(
       [{ path: `${OTHER_EVALS_DIR}/evals.json`, linkHref: '../csv-summarizer/evals/evals.json' }],
       dirs,
@@ -171,7 +180,7 @@ describe('resolveTestInputDirs — CROSS-skill declarations', () => {
   });
 
   it('excludes and backstops another skill\'s suite the same way it does its own', () => {
-    const dirs = resolveTestInputDirs({ test: {} }, SKILL_DIR, PROJECT_SKILLS);
+    const dirs = resolveTestInputDirs({ test: {} }, SKILL_DIR, PROJECT_SKILLS, NO_SUITE_ON_DISK);
 
     expect(testInputExcludeRules(dirs, PROJECT_ROOT)).toEqual([
       {
@@ -263,6 +272,7 @@ describe('packagedFileEntries', () => {
       SKILL_DIR,
       PROJECT_ROOT,
       [],
+      NO_SUITE_ON_DISK,
     );
 
     expect(kept.map((e) => e.dest)).toEqual([KEPT_DEST]);
@@ -270,11 +280,11 @@ describe('packagedFileEntries', () => {
 
   it('keeps every entry when the skill declares no test: block', () => {
     const files = [{ source: SUITE_SOURCE, dest: 'evals-copy.json' }];
-    expect(packagedFileEntries({ files }, SKILL_DIR, PROJECT_ROOT, [])).toEqual(files);
+    expect(packagedFileEntries({ files }, SKILL_DIR, PROJECT_ROOT, [], NO_SUITE_ON_DISK)).toEqual(files);
   });
 
   it('returns [] for a skill with no files: config at all', () => {
-    expect(packagedFileEntries({}, SKILL_DIR, PROJECT_ROOT, [])).toEqual([]);
+    expect(packagedFileEntries({}, SKILL_DIR, PROJECT_ROOT, [], NO_SUITE_ON_DISK)).toEqual([]);
   });
 });
 

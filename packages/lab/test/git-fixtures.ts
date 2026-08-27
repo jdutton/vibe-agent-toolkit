@@ -22,7 +22,8 @@
 import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { mkdirSyncReal, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 
 /** Pinned so an assertion does not depend on the host's `init.defaultBranch`. */
 export const FIXTURE_BRANCH = 'lab-fixture';

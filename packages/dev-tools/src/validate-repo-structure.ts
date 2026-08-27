@@ -7,7 +7,9 @@
  *
  * CRITICAL - Security & Confidentiality:
  * - No credential/secret files (.env, credentials.json, certificate files, etc.)
- * - No proprietary adopter names in any tracked file (see contraband-scan.ts)
+ * - No proprietary adopter names in any file this commit could publish — tracked, plus
+ *   untracked-not-ignored, because a new file is untracked when the gate runs
+ *   (see contraband-scan.ts)
  *
  * HIGH PRIORITY - File Location Sprawl:
  * - No nested package.json files (only root and packages directories)
@@ -39,7 +41,8 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { runGitOrThrow, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 
 import {
   loadTokens,
@@ -520,12 +523,45 @@ async function validateTestFileNaming(): Promise<void> {
 }
 
 /**
- * Fail on any proprietary adopter name that has entered a git-tracked file.
+ * Every file this commit could publish: tracked, plus untracked-not-ignored.
  *
- * The population is `git ls-files` — every tracked text file, defined independently of
- * the tokens being searched for — so this asserts ABSENCE rather than classifying files.
- * See {@link file://./contraband-scan.ts} for why that distinction matters, why the token
- * list is stored hashed, and how to add an entry.
+ * 🪤 **Tracked-only is the wrong population for a gate that runs BEFORE a commit.**
+ * `git ls-files` answers *"what have we already published?"*. This gate asks *"what are we
+ * about to publish?"*, and the difference is every brand-new file. This repo validates
+ * ONCE on a batched working tree and commits at the end, so a new file is untracked at the
+ * exact moment the gate runs — invisible to it, then contraband the instant it lands. That
+ * is not hypothetical: `e561c45c` shipped an adopter name in a file added by that same
+ * commit, past a gate that had reported PASSED seconds earlier.
+ *
+ * ⚠️ Ignored files stay out. They are not publishable, and the token list itself is
+ * conventionally a gitignored file in the repo root — sweeping ignored paths would report
+ * the list of secrets as a leak of them.
+ *
+ * Contrast {@link forEachTrackedTextFile}, whose tracked-only population is correct: those
+ * rules describe what a clean clone shows a contributor, which untracked files do not
+ * affect.
+ *
+ * @param repoRoot - The repository to enumerate
+ * @returns Repo-relative paths, deduplicated, binaries removed
+ */
+export function contrabandPopulation(repoRoot: string): readonly string[] {
+  // `trim: false` — NUL-delimited, and a path beginning with a space sorts
+  // first, so a trim would rename it out of a confidentiality population.
+  const listing = (...args: string[]): string[] =>
+    String(runGitOrThrow(['ls-files', '-z', ...args], { cwd: repoRoot, trim: false })).split('\0');
+
+  return [...new Set([...listing(), ...listing('--others', '--exclude-standard')])]
+    .filter((p) => p.length > 0)
+    .filter((p) => !BINARY_EXTENSION.test(p));
+}
+
+/**
+ * Fail on any proprietary adopter name that could reach a public artifact.
+ *
+ * The population is {@link contrabandPopulation} — every publishable text file, defined
+ * independently of the tokens being searched for — so this asserts ABSENCE rather than
+ * classifying files. See {@link file://./contraband-scan.ts} for why that distinction
+ * matters, why the token list is stored hashed, and how to add an entry.
  *
  * Severity is `error`, not `warning`: unlike the other rules here, a violation that
  * reaches `main` is unfixable — it lands in public git history, GitHub release bodies,
@@ -544,15 +580,7 @@ async function validateNoContrabandTokens(): Promise<void> {
   }
   console.log(`   contraband scan: ${tokens.length} token(s) from ${tokensPath ?? 'an unnamed source'}`);
 
-  // `trim: false` — NUL-delimited, and this population is a confidentiality
-  // gate: a path dropped from it is a file the scan never reads.
-  const lsFiles = String(runGitOrThrow(['ls-files', '-z'], { cwd: REPO_ROOT, trim: false }));
-  const tracked = lsFiles
-    .split('\0')
-    .filter((p: string) => p.length > 0)
-    .filter((p: string) => !BINARY_EXTENSION.test(p));
-
-  for (const relPath of tracked) {
+  for (const relPath of contrabandPopulation(REPO_ROOT)) {
     let text: string;
     try {
       text = await readFile(safePath.join(REPO_ROOT, relPath), 'utf8');

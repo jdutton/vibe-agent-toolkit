@@ -25,9 +25,9 @@ import { spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 
 import { vatCacheNamespace } from '@vibe-agent-toolkit/resources';
-import { runGit, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { runGit } from '@vibe-agent-toolkit/utils/git';
 
-import { resolveBinPath } from '../commands/phase-utils.js';
 import {
   captureEnumerationSnapshot,
   captureParseFactSnapshot,
@@ -46,7 +46,6 @@ import {
   COMMAND_DIR,
   COMMAND_SPECS,
   ORACLE_DIR,
-  SNAPSHOT_FORMAT_VERSION,
   type CommandManifestEntry,
   type CommandSpec,
   type LaneManifestEntry,
@@ -54,12 +53,30 @@ import {
 } from './types.js';
 
 /**
+ * Resolve the absolute path to the vat binary under capture.
+ *
+ * `bin.js` directly, never the `vat.js` wrapper: the wrapper re-derives
+ * dev/local/global context from the cwd and would spawn the ADOPTER project's
+ * installed vat rather than the build being measured.
+ *
+ * This lived in `phase-utils.ts` while the orchestrators spawned a child per
+ * phase and shared the resolution with it. They no longer spawn anything, so it
+ * moved to its one remaining caller — a snapshot capture runs the command UNDER
+ * TEST as a real process on purpose, which is a different thing from a phase and
+ * is why it survives the collapse.
+ *
+ * This file lives in qa-snapshot/, one level below the compiled bin.
+ */
+function resolveBinPath(): string {
+  return safePath.resolve(safePath.join(import.meta.dirname, '../bin.js'));
+}
+
+/**
  * Cap on a captured child stream.
  *
- * Matches `phase-utils.ts`, and for the same reason: `vat audit` alone emits
- * ~1.8 MB of YAML on a large corpus, and `spawnSync`'s 1 MB default would set
- * ENOBUFS and hand back a TRUNCATED stream — a silently shortened artifact that
- * compares as a large deletion.
+ * `vat audit` alone emits ~1.8 MB of YAML on a large corpus, and `spawnSync`'s
+ * 1 MB default would set ENOBUFS and hand back a TRUNCATED stream — a silently
+ * shortened artifact that compares as a large deletion.
  */
 const MAX_COMMAND_OUTPUT_BYTES = 256 * 1024 * 1024;
 
@@ -129,7 +146,6 @@ export async function captureSnapshot(request: CaptureRequest): Promise<CaptureR
   const commands = captureCommandHalf(request, binPath, corpusRoot, context);
 
   const manifest: SnapshotManifest = {
-    formatVersion: SNAPSHOT_FORMAT_VERSION,
     vatVersion: version,
     cacheNamespace: vatCacheNamespace(),
     capturedAtIso: new Date().toISOString(),

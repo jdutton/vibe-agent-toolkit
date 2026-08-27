@@ -7,7 +7,7 @@
  * Walks `<cwd>/src` (the calling package's source tree), copies every
  * `.yaml` / `.yml` to the same relative path under `<cwd>/dist`. Needed for
  * packages that ship YAML data assets (e.g. the linkAuth macros in
- * `@vibe-agent-toolkit/utils`) — `tsc` only emits `.js` / `.d.ts`.
+ * `@vibe-agent-toolkit/resources`) — `tsc` only emits `.js` / `.d.ts`.
  *
  * No CLI flags — convention over configuration; the calling package's cwd
  * is the package root by definition when invoked from its npm script.

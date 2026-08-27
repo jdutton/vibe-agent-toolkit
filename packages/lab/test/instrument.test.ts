@@ -30,10 +30,12 @@ import {
   normalizedTmpdir,
   removeScratchDir,
   resolveFromImportMeta,
-  runGitOrThrow,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import {
+  runGitOrThrow,
+} from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { resolveInstrument } from '../src/harness/instrument.js';

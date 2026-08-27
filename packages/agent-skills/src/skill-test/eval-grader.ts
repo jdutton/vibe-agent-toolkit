@@ -1,6 +1,10 @@
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 
-import { mkdirSyncReal, parseStreamJsonTranscript, safePath, spawnHeadlessClaude } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  parseStreamJsonTranscript,
+  spawnHeadlessClaude,
+} from '@vibe-agent-toolkit/utils/skill-test';
 
 import { EvalFragmentError, parseEvalFragment, type EvalFragment } from './eval-fragment.js';
 import type { ToolExpectations } from './eval-inputs.js';

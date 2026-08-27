@@ -118,7 +118,7 @@ function fixture<Name extends ProjectionTableName>(
     base: asRecord(base),
     alt: asRecord(alt),
     rowsAfterPair(overrides: RowRecord): number {
-      const builder = new ProjectionBuilder(ROOT);
+      const builder = new ProjectionBuilder({ root: ROOT });
       add(builder, base);
       add(builder, { ...base, ...overrides } as ProjectionRow<Name>);
       return builder.build()[name].length;
@@ -158,6 +158,7 @@ const FIXTURES: readonly TableFixture[] = [
       dir: 'lib',
       depth: 2,
       ext: '.md',
+      mime: 'text/markdown',
       contentKey: null,
       contentState: 'deferred',
       mtime: null,
@@ -176,6 +177,10 @@ const FIXTURES: readonly TableFixture[] = [
       dir: 'src',
       depth: 3,
       ext: '.txt',
+      // Both `mime` values are what `mimeTypeForPath` really answers for these
+      // two paths, and they differ — the fixture-power guard above requires
+      // every column to vary, so a shared value would quietly disarm it.
+      mime: 'text/plain',
       // `contentKey`/`contentState` and `isSymlink`/`symlinkResolves` are the two
       // pairs the row schema's superRefine ties together, so each moves as a pair.
       // Neither pair is a key column, so no assertion below perturbs one alone.

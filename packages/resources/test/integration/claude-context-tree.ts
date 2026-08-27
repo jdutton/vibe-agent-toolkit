@@ -25,7 +25,8 @@
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
-import { GitTracker, normalizedTmpdir, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll } from 'vitest';
 
 import { buildClaudeContextPopulation } from '../../src/projection/claude-context-population.js';

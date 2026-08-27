@@ -11,10 +11,10 @@
  * process sees) and the `VAT_LINKAUTH_ALLOW_COMMAND=0` opt-out via real
  * `process.env` interaction.
  */
+import { isToolAvailable } from '@vibe-agent-toolkit/utils/process';
 import { describe, it, expect } from 'vitest';
 
 import { resolveToken } from '../../src/link-auth/resolve-token.js';
-import { isToolAvailable } from '../../src/safe-exec.js';
 
 describe('System Test: linkAuth token command dispatch', () => {
   it('dispatches to real git binary and returns trimmed stdout (cross-platform smoke)', () => {

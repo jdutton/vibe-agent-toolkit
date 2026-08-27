@@ -5,9 +5,20 @@
  * SAW. A lane it never saw produces no output at all, so a green run is not
  * evidence that the population is right. These tests pin the recognisers directly.
  */
+import { mkdtempSync, writeFileSync } from 'node:fs';
+
+import {
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
+import {
+  runGitOrThrow,
+} from '@vibe-agent-toolkit/utils/git';
 import { describe, expect, it } from 'vitest';
 
-import { classifySeverityCountsLane } from '../src/validate-repo-structure.js';
+import { classifySeverityCountsLane, contrabandPopulation } from '../src/validate-repo-structure.js';
 
 /** A lane whose status is a string literal from the vocabulary, with findings beside it. */
 const LITERAL_STATUS_LANE = `
@@ -173,5 +184,79 @@ describe('classifySeverityCountsLane — named status types', () => {
       isLane: true,
       publishesCounts: false,
     });
+  });
+});
+
+/** Encoding for every fixture file this suite writes. */
+const UTF8 = 'utf8';
+
+/** Committed before the gate runs — the population `git ls-files` already saw. */
+const TRACKED_FILE = 'tracked.ts';
+/** Written but never committable: the shape the token list itself has. */
+const IGNORED_FILE = 'ignored.ts';
+/** Written, not staged — the state every new file is in when the gate runs. */
+const NEW_FILE = 'nested/brand-new.ts';
+
+/**
+ * A throwaway repo holding one file in each staging state that matters.
+ *
+ * @returns The repo root
+ */
+function repoWithStagingStates(): string {
+  const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'contraband-pop-'));
+  const git = (...args: string[]): void => {
+    runGitOrThrow(args, { cwd: root });
+  };
+  const write = (relPath: string, body: string): void => {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is derived from this suite's own mkdtemp scratch dir
+    writeFileSync(safePath.join(root, relPath), body, UTF8);
+  };
+
+  git('init', '-q');
+  git('config', 'user.email', 'test@example.invalid');
+  git('config', 'user.name', 'Test');
+
+  write('.gitignore', `${IGNORED_FILE}\n`);
+  write(TRACKED_FILE, '// tracked\n');
+  git('add', '.gitignore', TRACKED_FILE);
+  git('commit', '-qm', 'initial');
+
+  // The state the gate was blind to: a NEW file, written but not yet staged.
+  // This repo validates ONCE and commits at the end, so every new file is in
+  // exactly this state at the moment the gate runs.
+  mkdirSyncReal(safePath.join(root, 'nested'), { recursive: true });
+  write(NEW_FILE, '// new\n');
+  write(IGNORED_FILE, '// ignored\n');
+  return root;
+}
+
+/**
+ * The population, with separators normalised so Windows compares equal.
+ *
+ * @returns Every path the gate would read
+ */
+function population(): readonly string[] {
+  return contrabandPopulation(repoWithStagingStates()).map((p) => toForwardSlash(p));
+}
+
+describe('contrabandPopulation — what the confidentiality gate is allowed to miss', () => {
+  it('includes a brand-new untracked file, because that is what the commit will publish', () => {
+    expect(population()).toContain(NEW_FILE);
+  });
+
+  it('still includes tracked files', () => {
+    expect(population()).toContain(TRACKED_FILE);
+  });
+
+  it('excludes ignored files, which no commit will publish', () => {
+    // Not pedantry: the token list itself may be a gitignored file in the repo
+    // root, so a population that swept ignored files would report the list of
+    // secrets as a leak of them.
+    expect(population()).not.toContain(IGNORED_FILE);
+  });
+
+  it('lists each path once, however many git listings named it', () => {
+    const paths = population();
+    expect(new Set(paths).size).toBe(paths.length);
   });
 });

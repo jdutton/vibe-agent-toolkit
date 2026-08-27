@@ -42,7 +42,8 @@ import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safeExecSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 /** The `packages/cli` directory — the package whose tarball is under test. */

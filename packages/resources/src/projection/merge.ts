@@ -59,8 +59,20 @@
  * loop ends on the first pass in which none of them moved.
  */
 
-import { CRAWL_BLOB_POPULATE_ID, CRAWL_STORE_READ_ID, CRAWL_STORE_WRITE_ID, crawlTimingStart, recordContributorInvocation, recordCrawlPass, safePath, withContributorStratum, type GitTracker } from '@vibe-agent-toolkit/utils';
+import {
+  CRAWL_BLOB_POPULATE_ID,
+  CRAWL_STORE_READ_ID,
+  CRAWL_STORE_WRITE_ID,
+  crawlTimingStart,
+  recordContributorInvocation,
+  recordCrawlPass,
+  safePath,
+  withContributorStratum,
+} from '@vibe-agent-toolkit/utils';
+import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
+import type { CollectionConfig } from '../schemas/project-config.js';
+import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { populateBlobs, type BlobPopulationResult } from './blob-population.js';
@@ -70,6 +82,11 @@ import { crawlSourceSelector } from './crawl-source.js';
 import { canonicalJson, extentDigest } from './digest.js';
 import { rootIdFor } from './identity.js';
 import { ProjectionBuilder, type Projection } from './projection.js';
+import {
+  collectionMimeConflictCondition,
+  createCollectionMimeResolver,
+  type CollectionMimeResolver,
+} from './realizations.js';
 import {
   assembleProjection,
   blobFactsCover,
@@ -333,6 +350,24 @@ export interface PopulateOptions {
    * default. See {@link PopulationCache}.
    */
   cache?: PopulationCache | undefined;
+  /**
+   * The project's `resources.collections`, so a declared `mimeType` can route
+   * the file it matches to a parser.
+   *
+   * Omitted, every path is typed by `mime-type.ts`'s tables alone — which is
+   * what every caller outside a configured project wants and what every caller
+   * that has not opted in continues to get.
+   *
+   * The raw config, not a resolver: {@link populate} builds the run's
+   * {@link CollectionMimeResolver} from it exactly once, beside the run's
+   * content cache and for the same reason. The resolver ACCUMULATES conflicts,
+   * so its lifetime has to be the population's — two extents handed two
+   * resolvers would report one authoring mistake twice, and
+   * {@link ProjectionBuilder.ensureContentKey} explicitly relies on there being
+   * exactly one ("two rows at one path cannot disagree unless a caller hands two
+   * extents two different resolvers").
+   */
+  collections?: Readonly<Record<string, CollectionConfig>> | undefined;
 }
 
 /**
@@ -352,10 +387,12 @@ export interface PopulateOptions {
 export function populationOracles(options: {
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
-}): Pick<PopulateOptions, 'gitTracker' | 'cache'> {
+  collections?: Readonly<Record<string, CollectionConfig>> | undefined;
+}): Pick<PopulateOptions, 'gitTracker' | 'cache' | 'collections'> {
   return {
     ...(options.gitTracker !== undefined && { gitTracker: options.gitTracker }),
     ...(options.cache !== undefined && { cache: options.cache }),
+    ...(options.collections !== undefined && { collections: options.collections }),
   };
 }
 
@@ -499,10 +536,18 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
   // request's soundness is a property of the registry, not of the cache's luck.
   const parseContent = contentParsingFor(options);
 
+  // BEFORE the cache is asked, because the cache KEY depends on it: two runs
+  // routing differently ask different questions of the same tree, and serving
+  // one the other's answer is the false hit `storeKeyFor` folds `parseRouting`
+  // in to prevent. Built here and nowhere else so its lifetime is this run's —
+  // it accumulates conflicts, and a second instance would report one authoring
+  // mistake twice.
+  const routing = createCollectionMimeResolver(options.collections);
+
   // Same `rootIdFor` the identity map mints `roots.id` with — see
   // {@link PopulationCache} on why the caller does not supply it.
   const rootId = rootIdFor(root);
-  const cached = await readCachedProjection(options, rootId, parseContent);
+  const cached = await readCachedProjection(options, rootId, parseContent, routing);
   if (cached !== undefined) {
     return cached;
   }
@@ -511,7 +556,12 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
   // A module-level cache would leak bytes across two populations in one process
   // — including two populations of a tree that changed in between, which would
   // describe the wrong corpus with complete confidence.
-  const builder = new ProjectionBuilder(root, options.gitTracker, new RunContentCache());
+  const builder = new ProjectionBuilder({
+    root,
+    gitTracker: options.gitTracker,
+    contentCache: new RunContentCache(),
+    mimeResolver: routing,
+  });
 
   // The `roots` row no contributor can produce: `ExtentContribution` has no
   // `roots` table, yet every `resolution_contexts.rootId` is a foreign key into
@@ -591,9 +641,58 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
     options.onBlobPopulation({ ...blobPopulation, ...promoted });
   }
 
+  // AFTER every contributor, and the reason is the CLOSURE stratum's extra
+  // realization ROWS, not extra conflicts. ⚠️ It is not that "a closure
+  // contributor can realize a path the base did not" — `walkClosure` copies the
+  // base row (`closure-extent.ts:437-447`, whose own comment says it "does not
+  // re-observe the path") and returns `unrealized` for anything the base missed,
+  // so it never calls `mimeFor` and can contribute ZERO new conflicts. What it
+  // does add is a new `(extentId, path)` realization for an already-conflicted
+  // path — and running earlier would leave those closure rows carrying a `mime`
+  // with no condition explaining it, which is exactly the per-realizing-extent
+  // rule the fan-out below argues for.
+  // Before `build()`, because a frozen projection takes no more rows.
+  recordMimeConflicts(builder, routing);
+
   const projection = builder.build();
-  await writeCachedProjection(options, rootId, parseContent, projection);
+  await writeCachedProjection(options, rootId, parseContent, projection, routing);
   return projection;
+}
+
+/**
+ * Turn the run's collection-MIME conflicts into `realization_conditions` rows.
+ *
+ * ## One row per REALIZING EXTENT, not one per path
+ *
+ * A condition is keyed on `(extentId, path)` like the realization it is about —
+ * the rule {@link ProjectionBuilder.ensureContentKey} states for its own
+ * unreadable case. A single row for the path would leave every other extent's
+ * realization of that file carrying a type nothing explains.
+ *
+ * A conflicted path that NO extent realized emits nothing, and that is correct
+ * rather than a silence: `mimeFor` is only ever called while realizing, so a
+ * conflict cannot exist without at least one realization behind it. The
+ * `resourceId` is read off the realization rather than re-derived, because the
+ * identity is the extent's answer and not this function's to mint.
+ *
+ * @param builder - The builder to add conditions to
+ * @param routing - The run's routing, holding every conflict it recorded
+ */
+function recordMimeConflicts(builder: ProjectionBuilder, routing: CollectionMimeResolver): void {
+  if (routing.conflicts.length === 0) return;
+
+  const realizationsByPath = new Map<string, ResourceRealizationRow[]>();
+  for (const row of builder.base().resourceRealizations) {
+    const rows = realizationsByPath.get(row.path) ?? [];
+    rows.push(row);
+    realizationsByPath.set(row.path, rows);
+  }
+
+  for (const conflict of routing.conflicts) {
+    for (const row of realizationsByPath.get(conflict.path) ?? []) {
+      builder.addCondition(collectionMimeConflictCondition(conflict, row.extentId, row.resourceId));
+    }
+  }
 }
 
 /**
@@ -632,20 +731,48 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
  * ## The rule to apply when a third one appears
  *
  * Ask of every populate option: *would two runs differing only in this produce
- * different rows?* Every yes belongs here. If the list grows past these two,
- * stop extending it and let each contributor declare its own ambient
- * fingerprint instead — the list below is the set someone remembered to model,
- * which is exactly the property that failed the first time.
+ * different rows?* Every yes belongs here.
+ *
+ * ## 🔑 The third entry is DERIVED, which is why the list did not have to stop
+ *
+ * This paragraph used to say: if the list grows past two, stop extending it and
+ * let each contributor declare its own ambient fingerprint instead — because
+ * *"the list below is the set someone remembered to model, which is exactly the
+ * property that failed the first time."* That warning is about **hand-maintained
+ * enumeration**, and it still stands for anything spelled out here as a literal.
+ *
+ * `parseRouting` is not that. Its value is
+ * {@link CollectionMimeResolver.fingerprint}, computed from the routing rules
+ * themselves at the moment the routing is built — so it cannot fall behind them.
+ * A new parser kind, a new declaration field, or a whole new routing rule
+ * changes the fingerprint by being part of what is digested, with **no edit
+ * here**. The entry is a pointer at a self-describing input rather than
+ * somebody's recollection of one.
+ *
+ * That is the shape a fourth entry should take too. A fourth *literal* is still
+ * the thing to refuse; a fourth input that can describe itself is not.
+ *
+ * Without it, declared types would be a textbook false hit: they appear in no
+ * parameter set, so two runs over an unchanged tree that route differently share
+ * a key and the second is served the first's `mime` columns, content keys and
+ * blob rows, at exit 0.
  *
  * @param options - The run's options, for its ambient inputs
  * @param rootId - This run's corpus root id
  * @param cache - The caller's store and tree hash
+ * @param routing - The run's parse routing, for its rule fingerprint
  * @returns The key to read and write under
  */
-function storeKeyFor(options: PopulateOptions, rootId: string, cache: PopulationCache): ExtentKey {
+function storeKeyFor(
+  options: PopulateOptions,
+  rootId: string,
+  cache: PopulationCache,
+  routing: CollectionMimeResolver,
+): ExtentKey {
   const ambient = canonicalJson({
     gitTracker: options.gitTracker !== undefined,
     extentSource: crawlSourceSelector() ?? null,
+    parseRouting: routing.fingerprint,
   });
   return { rootId, treeHash: `${cache.treeHash} ${ambient}` };
 }
@@ -682,19 +809,21 @@ function requestedContributors(options: PopulateOptions): readonly RequestedCont
  * @param options - The run's options, including its cache if it has one
  * @param rootId - This run's corpus root id
  * @param parseContent - Whether this run reads and parses content at all
+ * @param routing - The run's parse routing, whose fingerprint is part of the key
  * @returns The hydrated projection, or `undefined` on any kind of miss
  */
 async function readCachedProjection(
   options: PopulateOptions,
   rootId: string,
   parseContent: boolean,
+  routing: CollectionMimeResolver,
 ): Promise<Projection | undefined> {
   const cache = options.cache;
   if (cache === undefined) return undefined;
 
   const startedAt = crawlTimingStart();
   try {
-    const stored = await cache.store.readExtent(storeKeyFor(options, rootId, cache));
+    const stored = await cache.store.readExtent(storeKeyFor(options, rootId, cache, routing));
     if (stored === undefined) return undefined;
 
     const contexts = selectRequestedContexts(stored, requestedContributors(options));
@@ -741,12 +870,14 @@ async function readCachedProjection(
  * @param rootId - This run's corpus root id
  * @param parseContent - Whether this run read and parsed content
  * @param projection - What the run produced
+ * @param routing - The run's parse routing, whose fingerprint is part of the key
  */
 async function writeCachedProjection(
   options: PopulateOptions,
   rootId: string,
   parseContent: boolean,
   projection: Projection,
+  routing: CollectionMimeResolver,
 ): Promise<void> {
   const cache = options.cache;
   if (cache === undefined) return;
@@ -754,7 +885,7 @@ async function writeCachedProjection(
   const startedAt = crawlTimingStart();
   const { blobs, extent } = splitProjectionByScope(projection);
   if (parseContent) await cache.store.writeBlobFacts(blobs);
-  await cache.store.writeExtent(storeKeyFor(options, rootId, cache), extent);
+  await cache.store.writeExtent(storeKeyFor(options, rootId, cache, routing), extent);
   recordCrawlPass(CRAWL_STORE_WRITE_ID, 'base', BASE_STRATUM_PASS, startedAt);
 }
 
@@ -798,7 +929,7 @@ function contentParsingFor(options: PopulateOptions): boolean {
  * Its own function so the crawl-timing bracket cannot be separated from the call
  * it brackets by a later edit — the stage reads and parses every path the base
  * contributors keyed, which is the projection's analogue of the incumbent's
- * `resource-registry:add-resource`, and that one IS charged. Leaving it out
+ * `resource-registry:admit`, and that one IS charged. Leaving it out
  * biased the one comparison the seam exists to support, and only on one side;
  * see `CRAWL_BLOB_POPULATE_ID`.
  *

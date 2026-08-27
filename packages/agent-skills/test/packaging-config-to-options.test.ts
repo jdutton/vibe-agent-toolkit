@@ -4,12 +4,13 @@ import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { packagingConfigToPackageOptions } from '../src/skill-packager.js';
+import { conventionalSuiteProbe } from '../src/test-input.js';
 
 describe('packagingConfigToPackageOptions', () => {
   const anchors = { skillPath: '/repo/skills/x/SKILL.md', outputPath: '/repo/dist/skills/x' };
 
   it('sets the deterministic base options', () => {
-    const out = packagingConfigToPackageOptions({}, anchors, []);
+    const out = packagingConfigToPackageOptions({}, anchors, [], conventionalSuiteProbe());
     expect(out).toMatchObject({
       outputPath: '/repo/dist/skills/x',
       formats: ['directory'],
@@ -23,6 +24,7 @@ describe('packagingConfigToPackageOptions', () => {
       { linkFollowDepth: 'full', files: [{ source: 'a', dest: 'b' }] } as never,
       anchors,
       [],
+      conventionalSuiteProbe(),
     );
     expect(out.linkFollowDepth).toBe('full');
     expect(out.files).toEqual([{ source: 'a', dest: 'b' }]);
@@ -41,13 +43,13 @@ describe('packagingConfigToPackageOptions', () => {
    * default and would pass against a conversion that forwards nothing.
    */
   it('forwards excludeNavigationFiles: false rather than falling back to the default', () => {
-    const out = packagingConfigToPackageOptions({ excludeNavigationFiles: false }, anchors, []);
+    const out = packagingConfigToPackageOptions({ excludeNavigationFiles: false }, anchors, [], conventionalSuiteProbe());
 
     expect(out.excludeNavigationFiles).toBe(false);
   });
 
   it('omits excludeNavigationFiles when the config does not set it', () => {
-    const out = packagingConfigToPackageOptions({}, anchors, []);
+    const out = packagingConfigToPackageOptions({}, anchors, [], conventionalSuiteProbe());
 
     expect('excludeNavigationFiles' in out).toBe(false);
   });
@@ -81,13 +83,13 @@ describe('packagingConfigToPackageOptions — project-wide test input', () => {
   ];
 
   it('carries EVERY declared suite dir into the packager, not only the subject\'s', () => {
-    const out = packagingConfigToPackageOptions(SUBJECT_CONFIG, anchors, PROJECT_SKILLS);
+    const out = packagingConfigToPackageOptions(SUBJECT_CONFIG, anchors, PROJECT_SKILLS, conventionalSuiteProbe());
 
     expect(out.testInputDirs).toEqual([`${SUBJECT_DIR}/evals`, `${OTHER_DIR}/evals`]);
   });
 
   it('still carries the subject\'s own suite when the project declares nothing else', () => {
-    const out = packagingConfigToPackageOptions(SUBJECT_CONFIG, anchors, []);
+    const out = packagingConfigToPackageOptions(SUBJECT_CONFIG, anchors, [], conventionalSuiteProbe());
 
     expect(out.testInputDirs).toEqual([`${SUBJECT_DIR}/evals`]);
   });
@@ -95,7 +97,7 @@ describe('packagingConfigToPackageOptions — project-wide test input', () => {
   it('omits testInputDirs entirely when no skill in the project declares a suite', () => {
     const out = packagingConfigToPackageOptions({}, anchors, [
       { skillDir: OTHER_DIR, config: {} },
-    ]);
+    ], conventionalSuiteProbe());
 
     expect('testInputDirs' in out).toBe(false);
   });

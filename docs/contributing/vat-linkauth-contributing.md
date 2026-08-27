@@ -13,14 +13,14 @@ The linkAuth pipeline has three layers:
 ```
 Adopter YAML config
       ↓
-  Engine (packages/utils/src/link-auth/)
+  Engine (packages/resources/src/link-auth/)
       ↓  builds LinkAuthConfig, resolves providers, runs rewrites
   Validator (packages/resources/src/link-auth-validator.ts)
       ↓  calls engine, classifies results as LINK_AUTH_* codes
   vat resources validate
 ```
 
-### Engine vocabulary (packages/utils/src/link-auth/)
+### Engine vocabulary (packages/resources/src/link-auth/)
 
 | File | Responsibility |
 |---|---|
@@ -56,13 +56,13 @@ provider's `check` block.
 ## Adding a new built-in provider macro
 
 A macro is a shorthand that expands to a full inline provider. The two shipped macros
-(`github`, `sharepoint`) live in `packages/utils/src/link-auth/macros.yaml` — as YAML
+(`github`, `sharepoint`) live in `packages/resources/src/link-auth/macros.yaml` — as YAML
 entries, not TypeScript. The macro loader (`expand-macro.ts`) reads the file once at
 module init and applies adopter deep-merge overrides at runtime.
 
 To add a new macro `myprovider`:
 
-1. **Add the entry** to `packages/utils/src/link-auth/macros.yaml`:
+1. **Add the entry** to `packages/resources/src/link-auth/macros.yaml`:
    ```yaml
    myprovider:
      match:
@@ -87,7 +87,7 @@ To add a new macro `myprovider`:
    required.
 
 2. **Write unit tests** for the expansion in
-   `packages/utils/test/link-auth/expand-macro.test.ts`. Cover: base expansion,
+   `packages/resources/test/link-auth/expand-macro.test.ts`. Cover: base expansion,
    at least one adopter override, and — if applicable — the "no zero-config
    token source" case (see the `sharepoint` tests for the pattern).
 
@@ -146,10 +146,10 @@ not configure `command:` sources in the first place.
 ### Unit tests
 
 Every new source type, macro, rewrite rule, or token-resolution behaviour needs a unit
-test in `packages/utils/test/link-auth/`. Use injected `deps` — never depend on ambient
+test in `packages/resources/test/link-auth/`. Use injected `deps` — never depend on ambient
 `process.env` state or real network calls.
 
-Test the **transform allowlist** (`packages/utils/src/link-auth/transforms.ts` — the
+Test the **transform allowlist** (`packages/resources/src/link-auth/transforms.ts` — the
 map of names to transform functions, callable inside `${…}` templates) for any new
 allowed transform. The allowlist protects against arbitrary function invocation via
 config; a bypassed transform is a security issue.
@@ -166,7 +166,7 @@ adding new cases.
 
 ### System tests
 
-`packages/utils/test/system/link-auth-token-dispatch.system.test.ts` — exercises real
+`packages/resources/test/system/link-auth-token-dispatch.system.test.ts` — exercises real
 binaries (`git`, `gh`) through `resolveToken` with no injected deps. This is the
 cross-platform canary: on Windows, binaries are `.cmd` shims and dispatch goes through
 `shouldUseShell` in `safe-exec.ts`. Keep this test in sync when you change how

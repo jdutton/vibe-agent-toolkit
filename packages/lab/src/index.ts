@@ -32,8 +32,7 @@ export {
   type EnvelopeRefusal,
   type EnvelopeResult,
   readEnvelope,
-  refuseIncomparableSchemas,
-  REPORT_FORMAT_VERSION,
+  refuseDifferentFacets,
   type ReportEnvelope,
   ReportEnvelopeSchema,
 } from './envelope/envelope.js';
@@ -54,7 +53,6 @@ export {
   type CrawlRowMovementKind,
 } from './facets/crawl/compare.js';
 export {
-  CRAWL_DUMP_VERSION,
   CRAWL_INCUMBENT_STRATUM,
   CRAWL_SHARED_STRATUM,
   CRAWL_TIMING_DIR_ENV,
@@ -77,7 +75,6 @@ export {
 export { renderCrawlComparison, renderCrawlReport } from './facets/crawl/render.js';
 export {
   CRAWL_FACET,
-  CRAWL_FACET_VERSION,
   CRAWL_ROW_ROLES,
   type CrawlAttribution,
   type CrawlBody,
@@ -116,7 +113,6 @@ export {
 } from './facets/io/render.js';
 export {
   type DumpsAccepted,
-  IO_DUMP_VERSION,
   type IoClass,
   type IoDump,
   type IoDumpRow,
@@ -131,7 +127,6 @@ export {
 } from './facets/io/dump.js';
 export {
   IO_FACET,
-  IO_FACET_VERSION,
   type IoBody,
   IoBodySchema,
   type IoCommandStats,
@@ -159,7 +154,6 @@ export {
   type MergedParseDumpsResult,
   type MergedParseKind,
   mergeParseDumps,
-  PARSE_DUMP_VERSION,
   PARSE_TIMING_DIR_ENV,
   type ParseDump,
   type ParseDumpKind,
@@ -174,7 +168,6 @@ export {
 export { renderParseComparison, renderParseReport } from './facets/parse/render.js';
 export {
   PARSE_FACET,
-  PARSE_FACET_VERSION,
   type ParseAttribution,
   type ParseBody,
   ParseBodySchema,
@@ -206,7 +199,6 @@ export {
 } from './facets/perf/stats.js';
 export {
   PERF_FACET,
-  PERF_FACET_VERSION,
   type PerfBody,
   PerfBodySchema,
   type PerfCommandStats,
@@ -235,7 +227,6 @@ export {
 } from './facets/population/render.js';
 export {
   POPULATION_FACET,
-  POPULATION_FACET_VERSION,
   type PopulationAttribution,
   type PopulationBody,
   PopulationBodySchema,

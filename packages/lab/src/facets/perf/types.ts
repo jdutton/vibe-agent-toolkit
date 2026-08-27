@@ -21,19 +21,23 @@ import type { CacheMode, LoadReadings } from '../../harness/types.js';
 export const PERF_FACET = 'perf';
 
 /**
- * Version of this body schema.
+ * ⚠️ **This facet is where a MEANING-only change actually bit, so read this
+ * before editing {@link PerfCommandStats.exitCode}.**
  *
- * Bumped whenever the shape below changes. Two `perf` reports at different body
- * versions are refused against each other, because differences across a schema
- * change belong to the schema rather than to the subject.
+ * A successful row once always published `0`; it now publishes the accepted code
+ * the repeats actually produced, so an old row saying `0` and a new one saying
+ * `0` are not the same claim — the old one could not have said `1`. The shape
+ * did not move, so no schema and no derived digest can see it, and the integer
+ * that used to sit here could not see it either: it had to be *told*, by a human
+ * who remembered.
  *
- * **2 — `exitCode` changed meaning.** In v1 a successful row always published
- * `0`; it now publishes the accepted code the repeats actually produced, so a
- * v1 row saying `0` and a v2 row saying `0` are not the same claim (the v1 one
- * could not have said `1`). The refusal above is the point of the bump: a v1
- * baseline held beside a v2 candidate must not be compared silently.
+ * Every report that predates this note is already refused, because the envelope
+ * around it lost two fields and is strict. For the NEXT such change the remedies
+ * are, in order: make the build **declare** the thing that moved so a reader
+ * diffs capabilities (as `CrawlTimingDump.charges` does), or **invalidate
+ * explicitly** — delete the stored reports. ⛔ Not a version integer; see
+ * `envelope/envelope.ts`'s header for why one is prohibited here.
  */
-export const PERF_FACET_VERSION = 2;
 
 /** The measured result for one command. */
 export interface PerfCommandStats {

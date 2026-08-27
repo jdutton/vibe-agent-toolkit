@@ -37,6 +37,8 @@ import { fileURLToPath } from 'node:url';
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { IoDumpSchema } from '../src/facets/io/dump.js';
+
 /* eslint-disable security/detect-non-literal-fs-filename -- every path here is derived from a controlled mkdtemp scratch dir */
 
 /** One aggregated row of a dump, as the dump reader consumes it. */
@@ -52,7 +54,6 @@ interface DumpRow {
 
 /** The whole dump file. */
 interface Dump {
-  dumpVersion: number;
   pid: number;
   rows: DumpRow[];
 }
@@ -70,7 +71,6 @@ interface CounterState {
 
 /** What the counter exposes for testing. It activates only on the env var. */
 interface CounterInternals {
-  readonly DUMP_VERSION: number;
   readonly ARG_CAP: number;
   readonly WRAPPED_TAG: symbol;
   readonly LOG_DIR_ENV: string;
@@ -845,7 +845,13 @@ describe('end to end: injected into a real node process', () => {
     expect(report.fsIsPatched).toBe(true);
 
     const dump = readDump(logDir, pid);
-    expect(dump.dumpVersion).toBe(internals.DUMP_VERSION);
+    // The cross-module contract, asserted against a GENUINE artifact rather than
+    // against a drawing of one: what the injected counter writes is what
+    // `dump.ts` reads. Two hand-maintained `dumpVersion` integers used to be
+    // compared here instead — a proxy that could pass while both were wrong
+    // together, and that only ever caught a change somebody remembered to
+    // announce. This fails the moment either side's field set moves.
+    expect(IoDumpSchema.safeParse(dump).success).toBe(true);
 
     // 5 reads at one site, of 3 distinct files: necessary work, not an N+1.
     const syncRows = userRows(dump, FS_READ_FILE_SYNC);

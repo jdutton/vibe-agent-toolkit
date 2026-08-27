@@ -2,19 +2,58 @@
  * Shared utilities for top-level phase orchestration commands (vat build, vat verify, vat validate).
  */
 
-import { spawnSync } from 'node:child_process';
-
 import { type SeverityCounts } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
 import { type Command, Option } from 'commander';
-import * as YAML from 'yaml';
 
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 
+/**
+ * What one phase produced: the document it publishes, and the exit code it
+ * claims for itself.
+ *
+ * This pair is the whole of what an orchestrator needs from a phase: an exit
+ * code, and the document the phase publishes. Naming it as a value is what lets
+ * a phase run in the orchestrator's own process — stderr streams directly either
+ * way, so nothing else has to cross.
+ *
+ * `document` is the object the phase PRINTS, not the internal summary it is
+ * built from. The distinction is load-bearing: `vat skills build` renders its
+ * summary in two pieces and publishes `skillsWithErrors` as a COUNT while the
+ * summary object holds an ARRAY under that name.
+ *
+ * ⚠️ This field is `unknown`, so nothing typechecks it. Handing back the summary
+ * object instead of the printed document changes the emitted contract silently.
+ */
+export interface PhaseOutcome {
+  document: unknown;
+  exitCode: number;
+  /**
+   * The phase failed UNEXPECTEDLY, so `document` is the shared error envelope
+   * (`{status, error, duration}`) rather than the command's own report.
+   *
+   * The orchestrated lane does not need this — it folds any document under
+   * `phases[].report` the same way. The command-line lane does: each command
+   * renders its own report with its own renderer (streamed YAML, `--format
+   * json`, a hand-built header), and none of those renderers understand an
+   * envelope. Handing one to them silently changes both the channel and the
+   * shape of the failure document every `vat … | jq` consumer depends on.
+   */
+  failed?: boolean;
+}
+
+/**
+ * One orchestrated phase: a name, and the work to run for it.
+ *
+ * `run` is a bound closure rather than an argv array because the phase executes
+ * in this process. An argv array would mean re-entering Commander to
+ * parse arguments this process has already parsed — a second, weaker copy of the
+ * orchestrator's own options, and the exact seam through which `vat validate`'s
+ * `--verbose` could be forwarded to one phase and dropped by another.
+ */
 export interface Phase {
   name: string;
-  args: string[];
+  run: () => Promise<PhaseOutcome>;
 }
 
 /**
@@ -73,16 +112,18 @@ export function rejectRetiredOnly(only: string | undefined, command: string, sec
  * Outcome of one orchestrated phase.
  *
  * `system-error` is a value of its own because **a phase that could not RUN is
- * not a phase that found problems.** Collapsing it into `error` (which is what
- * `result.status === 0 ? 'passed' : 'failed'` did) made the documented exit
- * code 2 unreachable from every orchestrator, so a CI script could not tell an
- * invalid config or a killed child from a broken link.
+ * not a phase that found problems.**
  *
- * `warning` reaches a subprocess phase through the child's own reported
- * `status`, NOT through its exit code — `vat skills validate` exits 0 while
- * reporting `status: warning`, so an exit-code-only mapping answered `success`
- * on the very tree where the child said otherwise. In-process phases (e.g.
- * verify's consistency check) emit it directly.
+ * ⚠️ Any two-valued mapping — `status === 0 ? 'passed' : 'failed'` and its
+ * relatives — collapses it into `error` and makes the documented exit code 2
+ * unreachable from every orchestrator, leaving a CI script unable to tell an
+ * invalid config from a broken link.
+ *
+ * `warning` reaches a phase through its own reported `status`, NOT through its
+ * exit code — `vat skills validate` exits 0 while reporting `status: warning`,
+ * so an exit-code-only mapping answered `success` on the very tree where the
+ * phase said otherwise. Phases that hold their own findings (e.g. verify's
+ * consistency check) emit it directly.
  */
 export type PhaseStatus = 'success' | 'warning' | 'error' | 'system-error';
 
@@ -92,73 +133,51 @@ export const SYSTEM_ERROR: PhaseStatus = 'system-error';
 export interface PhaseResult {
   name: string;
   status: PhaseStatus;
-  /** Child exit code, when the child ran and exited on its own. */
+  /** The exit code the phase claimed for itself. */
   exitCode?: number;
-  /** POSIX signal that killed the child, when one did (then `exitCode` is absent). */
-  signal?: string;
-  /** Why the phase could not run at all (the spawn itself failed). */
+  /** Why the phase could not run at all (it threw past its own error handling). */
   error?: string;
   /**
-   * Per-severity distribution for in-process phases that hold their own
-   * findings. Absent for subprocess phases: the child owns its own findings,
-   * and inventing counts here would be a second, weaker answer — the child's
-   * are carried verbatim in {@link PhaseResult.report} instead.
+   * Per-severity distribution for phases that hold their own findings and
+   * publish no document of their own. Absent for phases that DO publish one:
+   * those own their findings, and inventing counts here would be a second,
+   * weaker answer — theirs are carried verbatim in {@link PhaseResult.report}.
    */
   issueCounts?: SeverityCounts;
   /**
-   * The child's own YAML document, parsed and folded in.
+   * The phase's own document, folded in under its name.
    *
-   * The child used to write this straight onto the parent's stdout (`stdio:
-   * 'inherit'`), which concatenated N documents with no `---` between them: two
-   * phases produced one map carrying `status:` and `durationSecs:` twice, and
-   * `YAML.parse()` threw "Map keys must be unique". Nesting each child's
-   * document under its own phase makes the parent's stdout one parseable
-   * document again and loses nothing.
+   * Nested under the phase's own entry so the orchestrator's stdout stays ONE
+   * parseable document.
+   *
+   * ⚠️ Phase documents written onto a shared stdout concatenate with no `---`
+   * between them: two phases each carrying `status:` and `durationSecs:` become
+   * a single map with duplicate keys, and `YAML.parse()` throws "Map keys must
+   * be unique".
    */
   report?: unknown;
-}
-
-/** The subset of a `spawnSync` return that decides a phase's outcome. */
-export interface PhaseSpawnOutcome {
-  status: number | null;
-  signal: NodeJS.Signals | null;
-  error?: Error | undefined;
-  /** The child's captured stdout, when it was piped rather than inherited. */
-  stdout?: string | null | undefined;
-}
-
-/**
- * Resolve the absolute path to the vat binary.
- * This file lives in commands/, one level above bin/.
- */
-export function resolveBinPath(): string {
-  // Use bin.js directly (not the vat.js wrapper) so phase subprocesses always
-  // run the same binary that is currently executing, regardless of cwd or
-  // context detection (which would pick up the adopter project's local install).
-  return safePath.resolve(safePath.join(import.meta.dirname, '../bin.js'));
 }
 
 export interface PhaseContext {
   logger: ReturnType<typeof createLogger>;
   startTime: number;
-  binPath: string;
 }
 
 /**
  * Create the shared phase command context: logger, startTime, and bin path.
  *
- * It used to THROW when the phase list came out empty — and it was called
- * before the command's try block, so an unroutable `--only` reached the user as
- * a raw Node stack trace with zero bytes of stdout and an exit 1 that looked
- * like "validation errors". `--only` routing is decided by
- * {@link decidePhaseSelection} and reported by {@link applyPhaseSelection} now,
- * which emit the command's normal structured document.
+ * Total by design: it builds the context and decides nothing.
+ *
+ * ⚠️ This runs BEFORE the command's try block, so anything that throws here
+ * reaches the user as a raw Node stack trace with zero bytes of stdout and an
+ * exit 1 indistinguishable from "validation errors". Phase routing therefore
+ * belongs to {@link decidePhaseSelection} and {@link applyPhaseSelection}, which
+ * emit the command's normal structured document.
  */
 export function createPhaseContext(debugFlag: boolean | undefined): PhaseContext {
   return {
     logger: createLogger(debugFlag ? { debug: true } : {}),
     startTime: Date.now(),
-    binPath: resolveBinPath(),
   };
 }
 
@@ -195,30 +214,26 @@ export interface PhaseVocabulary {
  * Decide what an orchestrator should do with its `--only` value and the phase
  * list its config produced.
  *
- * Shared by all three orchestrators because they used to disagree: `vat verify`
- * built its phase list without consulting the config at all, so `vat verify
- * --only skills` in a project with no `skills:` block exited 0 while `vat
- * validate --only skills` on the same project exited 1 — opposite verdicts on
- * the same question. (`vat verify` has since retired `--only` entirely and now
- * always passes `only: undefined`; `vat validate` and `vat build` still route
- * their own `--only` through here.)
+ * THE single decision site for all three orchestrators, so they cannot answer
+ * the same question differently. An orchestrator that builds its phase list
+ * without consulting the config exits 0 on `--only skills` in a project with no
+ * `skills:` block while another exits 1 — opposite verdicts on one question.
+ * `vat verify` has retired `--only` and always passes `only: undefined`;
+ * `vat validate` and `vat build` route their own `--only` through here.
  *
- * There used to be a third option, `emptyIsValid`, which existed solely so
- * `vat verify --only consistency` could run with an empty SUBPROCESS list
- * (consistency runs in-process). It was checked BEFORE `unreadableConfig`, so
- * `vat verify --only consistency` against an unparseable config answered the
- * confidently-wrong "no skills: block" instead of reporting the config error.
- * `--only` is gone from verify, `emptyIsValid` went with it, and that ordering
- * hazard cannot recur: nothing short-circuits ahead of the config-error arm.
+ * ⚠️ **Nothing may short-circuit ahead of the config-error arm.** A check
+ * evaluated before `unreadableConfig` answers a confident "not configured" for a
+ * tree whose config could not be parsed — which is the one answer this function
+ * must never give, because it is indistinguishable from a correct one.
  *
  * @param unreadableConfig - The config-load error, when the config exists but
  *   could not be parsed. A broken config is NOT "the phase is unconfigured":
  *   we do not know what it declares, so we must not answer with a confident
  *   "not configured". Only `vat verify` passes it, and only defensively — its
- *   phase builder pushes every subprocess phase when the config is unreadable
- *   (so the CHILD reports the real error), which makes the list non-empty and
- *   this arm unreachable by construction today. It is kept because the arm that
- *   would otherwise catch an empty list is the "not configured" lie.
+ *   phase builder pushes every configured phase when the config is unreadable
+ *   (so the phase itself reports the real error), which makes the list non-empty
+ *   and this arm unreachable by construction today. It is kept because the arm
+ *   that would otherwise catch an empty list is the "not configured" lie.
  */
 export function decidePhaseSelection(
   only: string | undefined,
@@ -259,9 +274,9 @@ export function decidePhaseSelection(
  * Act on a {@link PhaseSelection}: return the phases to run, or emit the
  * command's normal structured document and exit.
  *
- * Both terminal arms go through `writeYamlOutput` deliberately. A `--only`
- * failure used to be an uncaught throw, so the one output a scripted caller
- * parses — the YAML document on stdout — was never written at all.
+ * Both terminal arms go through `writeYamlOutput` deliberately: the YAML
+ * document on stdout is the one output a scripted caller parses, so a routing
+ * failure has to publish one rather than throw past it.
  */
 export function applyPhaseSelection(
   selection: PhaseSelection,
@@ -301,63 +316,17 @@ export function worseOf(a: PhaseStatus, b: PhaseStatus): PhaseStatus {
   return PHASE_STATUS_ORDER.indexOf(b) > PHASE_STATUS_ORDER.indexOf(a) ? b : a;
 }
 
-/** Every value a child may legitimately report as its own `status`. */
+/** Every value a phase may legitimately report as its own `status`. */
 const REPORTABLE_STATUSES = new Set<string>(PHASE_STATUS_ORDER);
 
-/** Outcome of reading the child's stdout: a document, nothing, or a failure. */
-interface ChildReport {
-  report?: unknown;
-  parseError?: string;
-}
-
-/**
- * Parse the child's captured stdout into its reported document.
- *
- * Takes the LAST non-empty document in the stream: every orchestrated child
- * writes its summary last, and a child that happens to emit more than one
- * document must not make the summary unreadable.
- *
- * Empty stdout is NOT a failure — `vat skills validate` legitimately exits 0
- * printing nothing when there is no `skills:` block. Stdout that exists but
- * cannot be parsed IS a failure: the child crashed mid-answer, and the phase
- * must degrade to `system-error` rather than throw an unhandled exception out
- * of the orchestrator.
- */
-function parseChildReport(name: string, stdout: string | null | undefined): ChildReport {
-  if (stdout === undefined || stdout === null || stdout.trim() === '') {
-    return {};
-  }
-
-  let documents;
-  try {
-    documents = YAML.parseAllDocuments(stdout);
-  } catch (error) {
-    return { parseError: unparseableMessage(name, error) };
-  }
-
-  const last = documents.findLast((doc) => doc.contents !== null);
-  if (last === undefined) {
-    return {};
-  }
-  if (last.errors.length > 0) {
-    return { parseError: unparseableMessage(name, last.errors[0]) };
-  }
-  return { report: last.toJS() };
-}
-
-function unparseableMessage(name: string, cause: unknown): string {
-  const detail = cause instanceof Error ? cause.message : String(cause);
-  return `Phase '${name}' wrote unparseable output on stdout: ${detail}`;
-}
-
-/** The status an exit code alone implies, before the child's report is read. */
+/** The status an exit code alone implies, before the phase's report is read. */
 function statusFromExitCode(status: number): PhaseStatus {
   if (status === 0) return 'success';
   if (status === 1) return 'error';
   return SYSTEM_ERROR;
 }
 
-/** The status the child claimed for itself, when it claimed a recognized one. */
+/** The status the phase claimed for itself, when it claimed a recognized one. */
 function statusFromReport(report: unknown): PhaseStatus | undefined {
   if (typeof report !== 'object' || report === null) return undefined;
   const claimed = (report as { status?: unknown }).status;
@@ -367,51 +336,30 @@ function statusFromReport(report: unknown): PhaseStatus | undefined {
 }
 
 /**
- * Map a spawn outcome to a phase outcome. The pure core of {@link runPhase}.
+ * Map what a phase produced to its outcome. The pure core of {@link runPhase}.
  *
- * Every branch that is NOT "the child ran and told us what it found" is a
- * system error, because the orchestrator learned nothing about the artifact:
+ * | exit code             | phase status   | why                                     |
+ * |-----------------------|----------------|-----------------------------------------|
+ * | 0                     | `success`      | ran, found nothing actionable           |
+ * | 1                     | `error`        | ran, found validation errors            |
+ * | 2 (or any other)      | `system-error` | the phase itself reported a system error |
  *
- * | spawn outcome            | phase status   | why                                        |
- * |--------------------------|----------------|--------------------------------------------|
- * | `error` set              | `system-error` | the child never ran                        |
- * | killed by a signal       | `system-error` | the child was cut off mid-answer           |
- * | no exit code, no signal  | `system-error` | there is no answer to read                 |
- * | stdout not parseable     | `system-error` | the child's answer cannot be read          |
- * | exit 0                   | `success`      | ran, found nothing actionable              |
- * | exit 1                   | `error`        | ran, found validation errors               |
- * | exit 2 (or any other)    | `system-error` | the child itself reported a system error    |
+ * The exit code is then reconciled with the phase's OWN reported `status`,
+ * worst-wins. An exit code has three values and cannot express `warning`:
+ * `vat skills validate` exits 0 while reporting `status: warning`, so its exit
+ * code alone reads as `success` — including on the tree VAT's CI dogfoods on
+ * VAT itself.
  *
- * The exit code is then reconciled with the child's OWN reported `status`,
- * worst-wins. An exit code has three values and cannot express `warning`, so
- * `vat skills validate` — which exits 0 while reporting `status: warning` —
- * was being recorded as `success` by every orchestrator, including the one
- * VAT's CI dogfoods on VAT itself.
+ * The table has no row for a signal kill, a missing status code, or a document
+ * that fails to parse, and that is the design rather than an omission. A phase
+ * runs in this process: there is no serialization step in which to lose a
+ * document, and no signal that could take a phase without taking the
+ * orchestrator with it.
  */
-export function phaseResultFromSpawn(name: string, outcome: PhaseSpawnOutcome): PhaseResult {
-  if (outcome.error !== undefined) {
-    return { name, status: SYSTEM_ERROR, error: `Failed to spawn phase: ${outcome.error.message}` };
-  }
-  if (outcome.signal !== null) {
-    return {
-      name,
-      status: SYSTEM_ERROR,
-      signal: outcome.signal,
-      error: `Phase '${name}' was killed by signal ${outcome.signal}`,
-    };
-  }
-  if (outcome.status === null) {
-    return { name, status: SYSTEM_ERROR, error: `Phase '${name}' exited without a status code` };
-  }
-
-  const exitCode = outcome.status;
-  const { report, parseError } = parseChildReport(name, outcome.stdout);
-  if (parseError !== undefined) {
-    return { name, status: SYSTEM_ERROR, exitCode, error: parseError };
-  }
-
+export function phaseResultFromOutcome(name: string, outcome: PhaseOutcome): PhaseResult {
+  const { exitCode, document } = outcome;
   const exitStatus = statusFromExitCode(exitCode);
-  const reported = statusFromReport(report);
+  const reported = statusFromReport(document);
   const status = reported === undefined ? exitStatus : worseOf(exitStatus, reported);
 
   return {
@@ -421,39 +369,64 @@ export function phaseResultFromSpawn(name: string, outcome: PhaseSpawnOutcome): 
     ...(exitStatus === SYSTEM_ERROR
       ? { error: `Phase '${name}' exited with system-error code ${exitCode}` }
       : {}),
-    ...(report === undefined ? {} : { report }),
+    ...(document === undefined ? {} : { report: document }),
   };
 }
 
 /**
- * Cap on a captured child document, well above the ~2.3 MB a large real project
- * produces. spawnSync's 1 MB default would set ENOBUFS and hand back a
- * TRUNCATED (and therefore unparseable) document; exceeding this cap surfaces
- * as a loud `system-error`, never as a silently shortened report.
+ * End a command-line run from a phase outcome: publish the document, then exit.
+ *
+ * THE single place the two lanes diverge, so they cannot diverge anywhere else.
+ * A phase hands back the same `{ document, exitCode }` either way; this decides
+ * what a *command* does with it, while an orchestrator folds it into
+ * `phases[].report` instead.
+ *
+ * Three cases, and the middle one is the one to get right:
+ *   - an unexpected failure publishes the shared envelope through
+ *     `writeYamlOutput`, matching `handleCommandError`;
+ *   - a command's own report goes through the command's own `render`;
+ *   - no document at all (an unconfigured run, a dry run) publishes nothing.
+ *
+ * @param outcome - What the phase produced
+ * @param render - How this command publishes its OWN report shape
  */
-const MAX_PHASE_STDOUT_BYTES = 256 * 1024 * 1024;
+export function finishCommand(outcome: PhaseOutcome, render: (document: unknown) => void): never {
+  if (outcome.failed === true) {
+    writeYamlOutput(outcome.document);
+  } else if (outcome.document !== undefined) {
+    render(outcome.document);
+  }
+  return process.exit(outcome.exitCode);
+}
 
 /**
- * Run a single phase by spawning the vat binary with the phase args.
+ * Run a single phase in THIS process and fold its outcome into a result.
  *
- * stdout is CAPTURED, not inherited: the child's YAML document belongs in this
- * phase's `report`, and letting it stream onto the parent's stdout is what made
- * `vat validate`'s output a run of documents with no `---` between them.
- * stderr stays inherited — progress output is on stderr by design and must keep
- * streaming live rather than arriving in one lump at the end.
+ * In THIS process, because everything an orchestrator reads back from a phase is
+ * the {@link PhaseOutcome} pair. A process per phase buys neither half of it and
+ * charges, on every phase, a full Node startup and the whole module graph again
+ * (~730 ms of remark per isolate), a parse cache whose miss counters restart
+ * from zero, and a worker pool built and torn down before the next phase begins.
+ * Phases run sequentially, so none of that cost is ever overlapped with work.
+ *
+ * The `catch` is a BACKSTOP, not the error path. Every phase function reports
+ * its own failures through `reportCommandError` and returns them as a document.
+ *
+ * ⚠️ This arm exists for a throw that escaped that handling. Sharing the
+ * orchestrator's process is what makes it load-bearing: an escaped throw aborts
+ * the orchestrator itself and silently skips every later phase.
  */
-export function runPhase(binPath: string, phase: Phase): PhaseResult {
-  const result = spawnSync(process.execPath, [binPath, ...phase.args], {
-    stdio: ['inherit', 'pipe', 'inherit'],
-    encoding: 'utf8',
-    maxBuffer: MAX_PHASE_STDOUT_BYTES,
-  });
-  return phaseResultFromSpawn(phase.name, {
-    status: result.status,
-    signal: result.signal,
-    error: result.error,
-    stdout: result.stdout,
-  });
+export async function runPhase(phase: Phase): Promise<PhaseResult> {
+  try {
+    return phaseResultFromOutcome(phase.name, await phase.run());
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      name: phase.name,
+      status: SYSTEM_ERROR,
+      error: `Phase '${phase.name}' threw past its own error handling: ${detail}`,
+    };
+  }
 }
 
 /**
@@ -471,16 +444,16 @@ export function aggregatePhaseStatus(results: readonly PhaseResult[]): PhaseStat
 /**
  * One phase's per-severity distribution, wherever that phase keeps it.
  *
- * An in-process phase holds its own findings and publishes {@link
- * PhaseResult.issueCounts}. A subprocess phase deliberately does not — the child
- * owns its findings, and its document rides verbatim in {@link
- * PhaseResult.report}. Reading only the former is why an orchestrator's header
- * could report `{0, 0, 0}` over children that had just reported 12 warnings.
+ * A phase that holds its own findings publishes {@link PhaseResult.issueCounts}.
+ * A phase that publishes its own document deliberately does not — it owns its
+ * findings, and its document rides verbatim in {@link PhaseResult.report}.
+ *
+ * ⚠️ Both places must be read. Reading only `issueCounts` makes an
+ * orchestrator's header report `{0, 0, 0}` over phases that just reported 12
+ * warnings.
  *
  * Absent or malformed counts read as zero rather than throwing: a phase that
- * published no distribution contributes nothing to the total, which is the same
- * answer as before this function existed — just no longer the answer for phases
- * that DID publish one.
+ * publishes no distribution contributes nothing to the total.
  */
 export function phaseIssueCounts(result: PhaseResult): SeverityCounts {
   if (result.issueCounts) return result.issueCounts;
@@ -498,10 +471,10 @@ export function phaseIssueCounts(result: PhaseResult): SeverityCounts {
  * Sum every phase's distribution, so an orchestrator's header total reconciles
  * against the phases printed beneath it.
  *
- * The companion to {@link aggregatePhaseStatus}: status has always been
- * worst-wins ACROSS phases, and a header whose `status` can see the children
- * while its `issueCounts` cannot is the same contradiction in one document —
- * `status: warning` beside `warnings: 0`.
+ * The companion to {@link aggregatePhaseStatus}: status is worst-wins ACROSS
+ * phases, so a header whose `status` can see the phases while its `issueCounts`
+ * cannot publishes a contradiction in one document — `status: warning` beside
+ * `warnings: 0`.
  */
 export function aggregatePhaseIssueCounts(results: readonly PhaseResult[]): SeverityCounts {
   const total: SeverityCounts = { errors: 0, warnings: 0, info: 0 };

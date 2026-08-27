@@ -14,7 +14,7 @@
 
 import { spawnSync } from 'node:child_process';
 
-import { parseGitUrl } from '@vibe-agent-toolkit/utils';
+import { parseGitUrl } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { cloneGitSource } from '../../src/skill-source/git-clone.js';

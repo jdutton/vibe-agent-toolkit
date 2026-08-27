@@ -19,14 +19,11 @@ import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import GithubSlugger from 'github-slugger';
 import type { Definition, Heading, Html, Link, LinkReference, Root, Yaml } from 'mdast';
 import { toString as mdastToString } from 'mdast-util-to-string';
-import remarkFrontmatter from 'remark-frontmatter';
-import remarkGfm from 'remark-gfm';
-import remarkParse from 'remark-parse';
-import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
 
 import { parseFrontmatterSource } from './frontmatter-source.js';
 import { classifyLink, estimateTokens } from './link-classify.js';
+import { createMarkdownProcessor } from './markdown-processor.js';
 import {
   ParsePass,
   ParserKind,
@@ -34,6 +31,7 @@ import {
   recordParsedDocument,
   recordParsePass,
 } from './parse-timing.js';
+import { probeTokenize } from './parse-tokenize-probe.js';
 import { measureContent } from './projection/blob-facts.js';
 import { collectCodeContextRanges, findLexicalReferences } from './reference-lexer.js';
 import type { ContentMeasures, LexicalReference } from './schemas/parse-facts.js';
@@ -207,15 +205,18 @@ export function parseMarkdownContent(content: string, sizeBytes: number): ParseR
   // Parse markdown with unified/remark. The processor is rebuilt per document,
   // so it is timed separately from the parse it feeds.
   passStartedAt = parseTimingStart();
-  const processor = unified()
-    .use(remarkParse)
-    .use(remarkGfm)
-    .use(remarkFrontmatter);
+  const processor = createMarkdownProcessor();
   recordParsePass(ParsePass.RemarkProcessor, passStartedAt);
 
+  // The split probe brackets a SECOND, redundant tokenize so `remark-parse` can
+  // be divided into tokenizing and tree building. Both calls are no-ops unless
+  // `VAT_PARSE_TIMING_SPLIT` names one of them; see `parse-tokenize-probe.ts`
+  // for why the order is the gate's value and what each order bounds.
+  probeTokenize(content, 'before');
   passStartedAt = parseTimingStart();
   const tree = processor.parse(content) as Root;
   recordParsePass(ParsePass.RemarkParse, passStartedAt);
+  probeTokenize(content, 'after');
 
   // Links, headings, raw-HTML anchors and frontmatter, from ONE tree walk
   passStartedAt = parseTimingStart();

@@ -12,9 +12,19 @@ updates:
     open-pull-requests-limit: 5
     groups:
       npm-dependencies:
-        # Batch every dependency bump (prod + dev) into a single weekly PR.
+        # Batch prod + dev bumps into a single weekly PR — but MINOR AND PATCH
+        # ONLY. A group with no `update-types` also swallows majors, and the
+        # result is one PR nobody can review or land: #201 arrived as 38 updates
+        # carrying ~19 major migrations (typescript 5→7, eslint 9→10, zod 3→4,
+        # commander 11→15, vitest 3→4, unicorn 62→73, …) and died at the first
+        # build step. Closing such a PR fixes nothing — it regenerates the next
+        # Monday. Majors are excluded here so Dependabot raises each as its own
+        # PR, which is the only size at which they can be migrated and reviewed.
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
     commit-message:
       prefix: "chore(deps)"
       prefix-development: "chore(deps-dev)"
@@ -26,6 +36,13 @@ updates:
       interval: "weekly"
       day: "monday"
     groups:
+      # Deliberately NOT split by `update-types`, unlike npm above. An action
+      # major changes a workflow step, not the source tree, and the validate
+      # matrix exercises every one of them end-to-end before the PR is
+      # mergeable — #156 batched four action majors (checkout 6→7, setup-node
+      # 6→7, setup-go 5→7, codecov-action 5→7) and passed on both runners.
+      # The npm split exists because a library major breaks the build; this
+      # asymmetry is the point, not an oversight.
       github-actions:
         patterns:
           - "*"

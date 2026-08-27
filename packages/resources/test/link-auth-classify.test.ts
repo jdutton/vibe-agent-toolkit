@@ -1,6 +1,6 @@
-import type { ProviderCheck } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import type { ProviderCheck } from '../src/link-auth/resolve.js';
 import { classifyAuthenticatedResponse } from '../src/link-auth-classify.js';
 
 const DEAD: ProviderCheck = {

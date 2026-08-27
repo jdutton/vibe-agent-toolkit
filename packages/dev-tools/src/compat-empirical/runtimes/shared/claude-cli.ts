@@ -10,7 +10,8 @@
 import { type ChildProcessByStdio } from 'node:child_process';
 import { type Readable } from 'node:stream';
 
-import { safePath, spawnHardened } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { spawnHardened } from '@vibe-agent-toolkit/utils/process';
 
 import { promptUser } from '../../cli/prompt-user.js';
 

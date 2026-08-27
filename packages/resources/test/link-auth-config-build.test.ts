@@ -1,6 +1,6 @@
-import { resolveAuthenticatedUrl } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { resolveAuthenticatedUrl } from '../src/link-auth/resolve.js';
 import { buildLinkAuthEngineConfig } from '../src/link-auth-config-build.js';
 import type { LinkAuthProjectConfig } from '../src/schemas/link-auth.js';
 

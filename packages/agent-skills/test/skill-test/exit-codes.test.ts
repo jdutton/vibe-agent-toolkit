@@ -1,4 +1,4 @@
-import { AuthPreflightError } from '@vibe-agent-toolkit/utils';
+import { AuthPreflightError } from '@vibe-agent-toolkit/utils/skill-test';
 import { describe, expect, it } from 'vitest';
 
 import { BuildHookError } from '../../src/skill-test/build-hook.js';

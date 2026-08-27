@@ -259,7 +259,7 @@ describe('the shape of the table', () => {
  * ## ⚠️ Why this drives `contribute` at its seam instead of through `populate`
  *
  * The identity collapse is real **in this fixture** and is measured below with
- * the shipped `ResourceIdentityMap`: `new ProjectionBuilder(root)` is handed no
+ * the shipped `ResourceIdentityMap`: `new ProjectionBuilder({ root })` is handed no
  * `GitTracker`, so `canonicalPathFor` never takes its git branch, falls through
  * to `realPathOrSelf`, and a symlink and its target really do mint one id. That
  * is the NON-GIT branch, not the general rule — see *"🪤 A symlink and its target
@@ -287,7 +287,7 @@ describe('the shape of the table', () => {
  */
 describe.skipIf(SYMLINK_CAP === null)('identity collapse — one identity, two loading classes', () => {
   it('reduces the classes with strongest-wins, not with the first realization seen', async () => {
-    const builder = new ProjectionBuilder(root);
+    const builder = new ProjectionBuilder({ root });
     const base = builder.base();
     const absolute = (relativePath: string): string => safePath.join(root, relativePath);
 

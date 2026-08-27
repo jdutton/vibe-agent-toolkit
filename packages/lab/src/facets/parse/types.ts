@@ -38,11 +38,13 @@
  *
  * ## What the numbers are, and are not
  *
- * `elapsedMs` is summed across every process that wrote a dump. A vat command
- * spawns a child per phase, so this is the time spent in that pass across the
- * whole run — **not** wall time, and not comparable to a `perf` median. Its
- * value is the *share*: which pass owns its kind's parse budget, which kind owns
- * the command's, and how much of either nothing owns.
+ * `elapsedMs` is summed across every dump — which today means every worker
+ * THREAD of a pooled run, since no vat command spawns a child process per phase
+ * any more. So it is the time spent in that pass across the whole run — **not**
+ * wall time, and not comparable to a `perf` median. 🪤 Eight workers kept busier than before
+ * make this number go UP while the command gets faster; read `wallMs` for that
+ * question. Its value here is the *share*: which pass owns its kind's parse
+ * budget, which kind owns the command's, and how much of either nothing owns.
  *
  * Every pass figure is WALL time, which is the right instrument at that
  * granularity — a `process.cpuUsage()` around every pass over 1,400+ documents
@@ -60,18 +62,6 @@ import type { CacheMode, LoadReadings } from '../../harness/types.js';
 
 /** Stable name of this facet, as it appears in the envelope header. */
 export const PARSE_FACET = 'parse';
-
-/**
- * Version of this body schema.
- *
- * Bumped whenever the shape below changes. Two `parse` reports at different body
- * versions are refused against each other, because differences across a schema
- * change belong to the schema rather than to the subject.
- *
- * 2 — passes and documents grouped per parser kind (each with its own total and
- * remainder), the uncached remainder, and process wall/CPU time.
- */
-export const PARSE_FACET_VERSION = 2;
 
 /**
  * What a row's numbers actually describe.
@@ -120,6 +110,20 @@ export interface ParsePassStats {
    * all.
    */
   readonly elapsedMs: number;
+}
+
+/**
+ * One tier pass as the report carries it: what it cost, and how much of that
+ * landed on a main thread.
+ *
+ * See {@link ParseCommandStats.tier}. The main-thread share is the whole reason
+ * this is not just a {@link ParsePassStats}.
+ */
+export interface TierRowStats extends ParsePassStats {
+  /** Of {@link ParsePassStats.calls}, those charged on a main thread. */
+  readonly mainCalls: number;
+  /** Of {@link ParsePassStats.elapsedMs}, the share charged on a main thread. */
+  readonly mainElapsedMs: number;
 }
 
 /**
@@ -186,10 +190,18 @@ export interface ParseCommandStats {
   /** See {@link ParseAttribution}. Read this before reading anything below it. */
   readonly attribution: ParseAttribution;
   /**
-   * How many distinct PIDs wrote a dump for the reported repeat.
+   * How many PROCESSES wrote a dump for the reported repeat.
    *
-   * A vat command spawns a child per phase, so more than one is normal and is
-   * why `elapsedMs` is a sum rather than a duration.
+   * **Expected to be 1 for every command**, phase-orchestrating ones included:
+   * `vat validate`, `vat verify` and `vat build` run their phases in-process. A
+   * reading above 1 means the measurement caught a process layer the harness
+   * normally skips — the shipped `vat` wrapper spawns `bin.js`, and the harness
+   * drives `dist/bin.js` directly to avoid it — and is worth explaining before
+   * it is quoted.
+   *
+   * ⭐ This is NOT the reason `elapsedMs` is a sum rather than a duration.
+   * THREADS are — see {@link ParseCommandStats.workerThreads} — and a run that
+   * got faster by keeping more of them busy reports a LARGER sum.
    */
   readonly processes: number;
   /**
@@ -202,6 +214,41 @@ export interface ParseCommandStats {
    * as the shape of the whole.
    */
   readonly kinds: readonly ParseKindStats[];
+  /**
+   * What the parse TIER cost around the parses — cache reads and writes,
+   * boundary crossings — with each row split by which thread paid.
+   *
+   * Never a member of {@link ParseCommandStats.kinds} and never summed into
+   * {@link ParseCommandStats.totalMs}: these are not parser passes, and folding
+   * them in would put dispatch time inside "which parser dominates this tree" —
+   * a denominator bug this facet has already been bitten by one level up.
+   *
+   * ⭐ Read `mainElapsedMs` before `elapsedMs`. The parse tier's open design
+   * questions are all about WHERE a cost lands, not how large it is in
+   * aggregate: two transports can spend the same total while one of them spends
+   * it on the single thread that cannot be parallelized.
+   */
+  readonly tier: readonly TierRowStats[];
+  /**
+   * Main threads that reported — one per process.
+   *
+   * The denominator for every `mainElapsedMs` above.
+   */
+  readonly mainThreads: number;
+  /**
+   * Parse worker threads that reported.
+   *
+   * The field that says a run was threaded at all, and the denominator for
+   * worker utilization: `worker-job` elapsed ÷ (wall × this). Every `elapsedMs`
+   * on this row is summed across `mainThreads + workerThreads` threads, which is
+   * why it is a sum and not a duration — mistaking the two is what once produced
+   * a 6.5× parse-pool regression that never existed.
+   *
+   * ⚠️ Threads that REPORTED, not threads that ran: a worker `terminate()`d
+   * before it answered the pool's shutdown is not here, and a count below the
+   * pool's width is the tell.
+   */
+  readonly workerThreads: number;
   /** Documents that reached a parser, across every kind. */
   readonly documents: number;
   /** Their total size in bytes, so `ms/byte` is available as well as `ms/document`. */
@@ -269,7 +316,8 @@ export interface ParseCommandStats {
    */
   readonly totalMsSamples: readonly number[];
   /**
-   * Process lifetime wall clock, summed across every process that dumped.
+   * Process lifetime wall clock: ONE reading per process, summed across
+   * processes.
    *
    * **Not a parse duration and not comparable to `totalMs`** — it covers each
    * process from start to exit, most of which is not parsing. It exists as the
@@ -277,11 +325,18 @@ export interface ParseCommandStats {
    * `cpuUserMs + cpuSystemMs` well under this is what tells a reader the process
    * spent its life waiting and the per-pass figures carry that waiting inside
    * them.
+   *
+   * **Emphatically not a sum over `dumps`.** Every dump a process's threads
+   * write repeats that one process's lifetime, so summing dump files multiplied
+   * this by the thread count — 9x on a measured pool run, which is how a 29%
+   * improvement was published as a 6.5x regression. Summed across DISTINCT
+   * processes it still double-counts a parent that contains its children; see
+   * `dump.ts`'s `addLifetime` for what that costs and why it is unfixed.
    */
   readonly wallMs: number;
-  /** User CPU across every process that dumped. See {@link ParseCommandStats.wallMs}. */
+  /** User CPU, one reading per process, summed. See {@link ParseCommandStats.wallMs}. */
   readonly cpuUserMs: number;
-  /** System CPU across every process that dumped. See {@link ParseCommandStats.wallMs}. */
+  /** System CPU, one reading per process, summed. See {@link ParseCommandStats.wallMs}. */
   readonly cpuSystemMs: number;
   /**
    * True when this command produced no usable measurement — a failed repeat, or
@@ -340,6 +395,19 @@ export const ParseBodySchema = z
             'not-measured',
           ]),
           processes: z.number().int().nonnegative(),
+          mainThreads: z.number().int().nonnegative(),
+          workerThreads: z.number().int().nonnegative(),
+          tier: z.array(
+            z
+              .object({
+                ...parsePassShape,
+                mainCalls: z.number().int().nonnegative(),
+                // Never `.int()`, for the same reason `elapsedMs` is not: this
+                // is a share of an unrounded `performance.now()` sum.
+                mainElapsedMs: z.number().nonnegative(),
+              })
+              .strict(),
+          ),
           kinds: z.array(
             z
               .object({

@@ -1,12 +1,14 @@
 import { existsSync, readdirSync } from 'node:fs';
 
 import {
+  safePath,
+} from '@vibe-agent-toolkit/utils';
+import {
   nonInteractiveGitOverrides,
   runGit as runGitSafely,
-  safePath,
   type GitRunResult,
   type ParsedGitUrl,
-} from '@vibe-agent-toolkit/utils';
+} from '@vibe-agent-toolkit/utils/git';
 
 /** Hard wall-clock cap on any single git invocation (clone or rev-parse). */
 const GIT_TIMEOUT_MS = 60_000;

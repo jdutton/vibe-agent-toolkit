@@ -107,6 +107,27 @@ describe('renderParseReport — which parser kind owns the cost', () => {
     expect(text).toMatch(/html: 1204\.5ms \(97\.5% of all parse time\)/);
   });
 
+  it('claims only the documents it PARSED, never the corpus', () => {
+    // The same overclaim this block exists to prevent, one level up in the
+    // denominator. `row.documents` sums the INSTRUMENTED kinds, so it is the
+    // parsed subset and not the tree — and since parse routing began sending
+    // every non-prose file to no parser at all, those two numbers diverge
+    // wildly. Measured on a code-heavy adopter: 1,805 of 8,768 blobs reached a
+    // parser, so markdown was 99.8% of parse time and 20% of the corpus while
+    // this line called it dominant "of this corpus".
+    //
+    // The facet cannot see the corpus — it reads dumps, and a file no parser
+    // ran over writes nothing. So the fix is to say what the denominator IS
+    // rather than to invent a total the instrument does not have.
+    const text = render({ kinds: HTML_DOMINANT_KINDS });
+
+    expect(text).toMatch(/HTML DOMINATES the documents PARSED/);
+    expect(text).toMatch(/not the shape of what was parsed/);
+    expect(text).toMatch(/Files routed to no parser are not in this denominator/);
+    expect(text).not.toMatch(/DOMINATES this corpus/);
+    expect(text).not.toMatch(/the shape of this tree/);
+  });
+
   it('charges each pass against its OWN kind, never the command total', () => {
     // Dividing an HTML pass by the command's whole budget would shrink it into
     // invisibility on a markdown-dominant tree while still printing a confident
@@ -223,12 +244,74 @@ describe('renderParseReport — the breakdown', () => {
   });
 });
 
+describe('renderParseReport — the parse tier', () => {
+  /** A pooled run: most of the cache work on workers, a little on the parent. */
+  const POOLED_TIER = [
+    { pass: 'cache-read-io', calls: 100, elapsedMs: 400, mainCalls: 100, mainElapsedMs: 400 },
+    { pass: 'cache-write', calls: 90, elapsedMs: 900, mainCalls: 0, mainElapsedMs: 0 },
+    { pass: 'wire-dispatch', calls: 0, elapsedMs: 0, mainCalls: 0, mainElapsedMs: 0 },
+  ];
+
+  it('prints each charged row with the share that landed on a main thread', () => {
+    const text = render({ tier: POOLED_TIER, processes: 1, mainThreads: 1, workerThreads: 8 });
+
+    expect(text).toContain('parse tier');
+    expect(text).toContain('cache-read-io');
+    // The whole point of the row: a reader must see that every millisecond of
+    // this one was paid on the serial thread, and none of `cache-write` was.
+    expect(text).toMatch(/cache-read-io:.*on a main thread \(100/);
+    expect(text).toMatch(/cache-write:.*on a main thread \(0/);
+  });
+
+  it('names the thread population, so the shares have a denominator', () => {
+    const text = render({ tier: POOLED_TIER, processes: 1, mainThreads: 1, workerThreads: 8 });
+
+    expect(text).toContain('1 main thread and 8 parse worker threads');
+  });
+
+  it('omits a row nothing ever charged, rather than printing a reassuring zero', () => {
+    const text = render({ tier: POOLED_TIER, processes: 1, mainThreads: 1, workerThreads: 8 });
+
+    // `wire-dispatch` has zero calls: the transport did not cross a boundary.
+    // Printing `0.0ms` for it would read as "dispatch is free" rather than "no
+    // dispatch happened", which is the same lie a zeroed parser kind tells.
+    expect(text).not.toContain('wire-dispatch');
+  });
+
+  it('prints no tier block at all when the build charged nothing', () => {
+    // A vat with no tier seam, or a run that never reached one. The section has
+    // to vanish rather than appear as a table of zeroes — an absent instrument
+    // must not render as a measurement of zero cost.
+    const text = render();
+
+    expect(text).not.toContain('parse tier');
+  });
+});
+
 describe('renderParseReport — wall against CPU', () => {
   it('prints the process lifetime and labels it as NOT the parse', () => {
     const text = render();
     expect(text).toMatch(/process lifetime: 4,?200\.0ms wall/);
     expect(text).toContain('4000.0ms CPU');
     expect(text).toMatch(/the whole process, NOT the parse/);
+  });
+
+  it('labels the lifetime as ONE reading per process', () => {
+    // Every other duration on the row is summed across threads. Without this
+    // label a reader has no way to tell which of the two kinds of number they
+    // are looking at, and reads a sum over nine concurrent threads as a
+    // duration.
+    const text = render({
+      processes: 1,
+      mainThreads: 1,
+      workerThreads: 8,
+      wallMs: 11_568,
+      cpuUserMs: 30_000,
+      cpuSystemMs: 3841,
+    });
+
+    expect(text).toMatch(/across 1 process/);
+    expect(text).toMatch(/one reading per process/);
   });
 
   it('says in a sentence when wall greatly exceeds CPU', () => {

@@ -81,6 +81,22 @@ export interface ComparisonLike {
   readonly commands: readonly {
     readonly name: string;
     readonly verdict: { readonly kind: string };
+    /**
+     * What qualifies this command's numbers, in the facet's own words.
+     *
+     * Carried as opaque prose because nothing here may know what a `parse`
+     * caveat means versus an `io` one — the same reason {@link FacetEstimate}
+     * carries its unit rather than having this module infer it.
+     *
+     * Optional so a facet with nothing to qualify says nothing, but its absence
+     * is the failure mode worth naming: `parse` computes a thread-width caveat
+     * for exactly the pool-on/pool-off pair this verb is pointed at, and while
+     * this channel did not exist the manual `compare` warned about a summed
+     * total while the automated `ab` reported the same data silently. A caveat
+     * that reaches one verb and not the other is a coherence gap, not a
+     * rendering preference.
+     */
+    readonly caveat?: string | null;
   }[];
 }
 
@@ -154,6 +170,21 @@ export interface AbSpec<TBody, TComparison extends ComparisonLike>
    */
   readonly armA: ResolvedInstrument;
   readonly armB: ResolvedInstrument;
+  /**
+   * Extra environment for one arm's children only, merged over `process.env` by
+   * the runner.
+   *
+   * The second axis this verb can vary. Without it the only difference an A/B
+   * can express is WHICH BUILD ran, so a setting — `VAT_PARSE_POOL`, a transport
+   * choice, a pool width — has to be measured as two un-interleaved captures,
+   * giving up the alternation that controls for machine drift.
+   *
+   * ⚠️ An arm's env applies to every child of that arm, the cache clear
+   * included. A setting that changes what the cache clear does would therefore
+   * change the two arms' starting states as well as their runs.
+   */
+  readonly envA?: Readonly<Record<string, string>>;
+  readonly envB?: Readonly<Record<string, string>>;
   readonly commands: readonly MeasuredCommandSpec[];
   /** How many A-then-B cycles to run. */
   readonly pairs: number;
@@ -205,6 +236,16 @@ export interface AbCommandResult {
    * other, and there is no result to report.
    */
   readonly stable: boolean;
+  /**
+   * Every distinct caveat the facet attached across the pairs, in first-seen
+   * order.
+   *
+   * Deduplicated because a caveat that holds for the run repeats identically on
+   * every pair, and printing it once per pair buries it. Kept as a list rather
+   * than a single string because the pairs are separate comparisons and one may
+   * qualify its numbers in a way another did not.
+   */
+  readonly caveats: readonly string[];
   readonly a: AbArmSummary | null;
   readonly b: AbArmSummary | null;
   /** `b.min - a.min`, or `null` when either arm produced no reading. */
@@ -225,6 +266,16 @@ export interface AbResult {
   readonly commands: readonly AbCommandResult[];
   readonly instrumentA: InstrumentVersion;
   readonly instrumentB: InstrumentVersion;
+  /**
+   * Each arm's extra environment, when it had one.
+   *
+   * Published so {@link renderAb} can disclose it. When one build is measured in
+   * two configurations the two instrument labels are IDENTICAL, so the config is
+   * the only visible axis and an effect printed without it is a number the
+   * reader cannot attribute to anything.
+   */
+  readonly envA?: Readonly<Record<string, string>>;
+  readonly envB?: Readonly<Record<string, string>>;
   /** The header lines of the last capture, so the run names its coordinate. */
   readonly subjectLines: readonly string[];
 }
@@ -233,6 +284,8 @@ export interface AbResult {
 interface PairOutcome {
   readonly refusal: string | null;
   readonly verdicts: ReadonlyMap<string, string>;
+  /** Whatever each command's facet qualified its numbers with, this pair. */
+  readonly caveats: ReadonlyMap<string, string>;
   readonly a: ReadonlyMap<string, FacetEstimate>;
   readonly b: ReadonlyMap<string, FacetEstimate>;
   readonly coordinateLines: readonly string[];
@@ -269,12 +322,16 @@ async function captureArm<TBody, TComparison extends ComparisonLike>(
   pair: number,
   arm: 'a' | 'b',
 ): Promise<ReportEnvelope<TBody>> {
+  // Keyed on the arm rather than on the instrument: a control run passes the
+  // SAME instrument object as both arms, so identity cannot tell them apart.
+  const env = arm === 'a' ? spec.envA : spec.envB;
   const report = await spec.capture({
     instrument,
     subject: spec.subject,
     commands: spec.commands,
     runs: spec.runs,
     cache: spec.cache,
+    ...(env === undefined ? {} : { env }),
     capturedAt: spec.now(),
   });
   await writeReport(safePath.join(spec.outDir, `pair-${String(pair)}`, arm), report);
@@ -302,10 +359,18 @@ async function runPair<TBody, TComparison extends ComparisonLike>(
   const verdicts = comparison.ok
     ? new Map(comparison.commands.map((command) => [command.name, command.verdict.kind]))
     : new Map<string, string>();
+  const caveats = comparison.ok
+    ? new Map(
+        comparison.commands
+          .filter((command) => command.caveat !== undefined && command.caveat !== null)
+          .map((command) => [command.name, command.caveat as string]),
+      )
+    : new Map<string, string>();
 
   return {
     refusal: comparison.ok ? null : `pair ${String(pair)}: ${comparison.refusal}`,
     verdicts,
+    caveats,
     a: byName(spec.estimate(a)),
     b: byName(spec.estimate(b)),
     coordinateLines: coordinateLines(a.coordinate),
@@ -408,6 +473,13 @@ function foldCommands<TBody, TComparison extends ComparisonLike>(
       name,
       verdicts,
       stable: new Set(verdicts).size <= 1,
+      caveats: [
+        ...new Set(
+          outcomes
+            .map((outcome) => outcome.caveats.get(name))
+            .filter((caveat): caveat is string => caveat !== undefined),
+        ),
+      ],
       a,
       b,
       effect,
@@ -445,6 +517,8 @@ export async function runAb<TBody, TComparison extends ComparisonLike>(
     commands: foldCommands(spec, outcomes),
     instrumentA: spec.armA.version,
     instrumentB: spec.armB.version,
+    ...(spec.envA === undefined ? {} : { envA: spec.envA }),
+    ...(spec.envB === undefined ? {} : { envB: spec.envB }),
     subjectLines: outcomes.at(-1)?.coordinateLines.slice(0, 1) ?? [],
   };
 }
@@ -486,6 +560,45 @@ const VALUE_PRECISION = 3;
  */
 function num(value: number): string {
   return value.toLocaleString('en-US', { maximumFractionDigits: VALUE_PRECISION });
+}
+
+/**
+ * One arm's extra environment, rendered for the report.
+ *
+ * `(none)` rather than an empty string, so an arm that set nothing is stated
+ * rather than left to be inferred from a blank.
+ *
+ * @param env - That arm's env, or `undefined`
+ * @returns A single value, `KEY=value` joined by spaces
+ */
+function configLabel(env: Readonly<Record<string, string>> | undefined): string {
+  const entries = Object.entries(env ?? {});
+  if (entries.length === 0) return '(none)';
+  return entries
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}=${value}`)
+    .join(' ');
+}
+
+/**
+ * Disclose each arm's configuration, when either arm has one.
+ *
+ * ⭐ Load-bearing rather than decorative. Measuring one build in two
+ * configurations makes both instrument labels IDENTICAL, so the env is the only
+ * axis that differs — and an effect printed beside two identical labels with no
+ * config named is a number the reader cannot attribute to anything. Printed for
+ * BOTH arms as soon as either has one, because "A set nothing" is exactly the
+ * half a reader needs to see the difference.
+ *
+ * Silent when neither arm set anything: a plain build-vs-build A/B has no config
+ * axis, and two `(none)` lines would only invite the reader to look for one.
+ *
+ * @param result - A completed A/B
+ * @returns Two lines, or none
+ */
+function configLines(result: AbResult): readonly string[] {
+  if (result.envA === undefined && result.envB === undefined) return [];
+  return [`Config A: ${configLabel(result.envA)}`, `Config B: ${configLabel(result.envB)}`];
 }
 
 /**
@@ -545,23 +658,18 @@ function armLine(label: string, summary: AbArmSummary | null): string {
 /**
  * How one command's effect reads against the floor.
  *
- * ⚠️ REVIEW FINDING 2026-08-14 — this line is BLIND TO `command.stable`, and it
- * is the last line a reader sees. A run whose pairs contradicted each other
- * still prints a confident "exceeds the supplied noise floor of N", directly
- * under the banner saying the row is not a result. That is what happened: the
- * branch-vs-main A/B exited 3 with PAIRS DISAGREE and its effect line became the
- * quoted headline anyway: an honest refusal and a confident number in one
- * report, with the number last.
+ * 🪤 **An unstable row gets its magnitude and no judgement.** This is the last
+ * line a reader sees, so a confident "exceeds the supplied noise floor of N"
+ * printed directly under the PAIRS DISAGREE banner is the number that gets
+ * quoted — an honest refusal and a confident claim in one report, with the claim
+ * last. The magnitude stays because a reader still needs to know the scale of
+ * what disagreed; only the verdict on it is withheld.
  *
- * Untested in both directions: every noise-floor test passes a STABLE script,
- * and the instability test supplies no floor and asserts nothing about this
- * line, so no fixture can tell "always print it" from "suppress when unstable".
- *
- * Also reachable with a measurable-looking zero: a non-`measured` parse row has
- * `failed: false` and `totalMs: 0`, which `rowEstimates` publishes — `compare`
- * refuses those rows but `estimate` does not, so the two halves of one facet
- * disagree about whether a zero is a measurement. `estimator.ts` throws on an
- * empty sample set for precisely this reason, one layer down.
+ * ⚠️ Still reachable with a measurable-looking zero: a non-`measured` parse row
+ * has `failed: false` and `totalMs: 0`, which `rowEstimates` publishes —
+ * `compare` refuses those rows but `estimate` does not, so the two halves of one
+ * facet disagree about whether a zero is a measurement. `estimator.ts` throws on
+ * an empty sample set for precisely this reason, one layer down.
  *
  * @param command - The folded row
  * @param noiseFloor - The floor this run was given, or `null`
@@ -571,6 +679,12 @@ function effectLine(command: AbCommandResult, noiseFloor: number | null): string
   if (command.effect === null) return '    effect: NONE — an arm produced no reading.';
   const unit = command.b?.unit ?? command.a?.unit ?? '';
   const head = `    effect (B - A): ${num(command.effect)}${unit}`;
+  if (!command.stable) {
+    return (
+      `${head} — NOT A RESULT: the pairs disagreed, so there is no verdict to put on this ` +
+      'number. It is the scale of what disagreed, not an effect.'
+    );
+  }
   switch (command.noise) {
     case 'control': {
       return `${head} — the noise floor itself; nothing changed between these arms.`;
@@ -597,11 +711,12 @@ export function renderAb(result: AbResult): string {
   const design =
     `A/B — ${String(result.pairs)} pairs, arms ALTERNATED (A B A B …), ` +
     `${String(result.runs)} runs per capture, ${result.cache} cache` +
-    (result.control ? ', CONTROL (both arms are the same instrument)' : '');
+    (result.control ? ', CONTROL (both arms identical — same instrument, same configuration)' : '');
 
   const blocks = result.commands.flatMap((command) => [
     `  ${command.name}`,
     ...verdictLines(command),
+    ...command.caveats.map((caveat) => `    note: ${caveat}.`),
     armLine('A', command.a),
     armLine('B', command.b),
     effectLine(command, result.noiseFloor),
@@ -613,6 +728,7 @@ export function renderAb(result: AbResult): string {
     `Instrument A: ${instrumentLabel(result.instrumentA)}`,
     `Instrument B: ${instrumentLabel(result.instrumentB)}`,
     ...instrumentTrustNotes(result.instrumentA, result.instrumentB),
+    ...configLines(result),
     'Estimator: MIN across pairs, with p25 beside it. Never a median — one cold repeat poisons it.',
     noiseFloorLine(result),
     ...result.refusals.map((refusal) => `⚠ ${refusal}`),

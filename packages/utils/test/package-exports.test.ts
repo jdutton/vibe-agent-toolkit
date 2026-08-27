@@ -8,7 +8,7 @@ import { safePath } from '../src/path.js';
 /**
  * A value in the `exports` map: either a bare target, or conditions.
  *
- * The twelve compiled entries use `{types, import}` (ESM, emitted by `tsc`).
+ * The fourteen compiled entries use `{types, import}` (ESM, emitted by `tsc`).
  * `./eslint` uses `{types, default}` — it is hand-written CommonJS, and `default`
  * rather than `import` is what lets both `require()` and `import` reach it.
  */
@@ -44,7 +44,6 @@ describe('utils package manifest', () => {
     ['./git', 'git'],
     ['./glob', 'glob'],
     ['./zod', 'zod'],
-    ['./template', 'template-entry'],
     ['./yaml', 'yaml'],
     ['./testing', 'testing'],
     ['./asset', 'asset'],
@@ -87,9 +86,9 @@ describe('utils package manifest', () => {
    * ESLint is a peer, and an OPTIONAL one.
    *
    * Optional because an ESLint plugin is data rather than code that runs: the rule
-   * modules export plain objects and never `require('eslint')`, so all twelve
-   * other code entries resolve fine with no ESLint anywhere in the tree. (Twelve,
-   * not thirteen: the map has 14 keys, and `./package.json` is a data file rather
+   * modules export plain objects and never `require('eslint')`, so all fourteen
+   * other code entries resolve fine with no ESLint anywhere in the tree. (Fourteen,
+   * not fifteen: the map has 16 keys, and `./package.json` is a data file rather
    * than an entry point.) Without
    * `peerDependenciesMeta`, every consumer taking this package for `safePath.join()`
    * would get an unmet-peer warning for a package it will never load.
@@ -129,12 +128,18 @@ describe('utils package manifest', () => {
    *
    * That was the wrong question. What decides whether an ENTRY should exist is how
    * heavy the only remaining door is. With `./project` gone the sole route to these
-   * functions was the `.` barrel, which reaches `handlebars`, `yaml`, `picomatch`,
-   * `ignore` and `which` — so a consumer avoiding the barrel on graph-weight
-   * grounds (the entire premise of this layout) could not reach a capability whose
-   * own code imports nothing but `node:fs` and `node:path`. The functions are still
-   * VAT-shaped, and README.md says so; the entry exists so that reaching them does
-   * not cost five third-party packages.
+   * functions was the `.` barrel, which then reached five third-party packages —
+   * so a consumer avoiding the barrel on graph-weight grounds (the entire premise
+   * of this layout) could not reach a capability whose own code imports nothing but
+   * `node:fs` and `node:path`. The functions are still VAT-shaped, and README.md
+   * says so; the entry exists so that reaching them does not cost that graph.
+   *
+   * The barrel now reaches NO third-party package (`subpath-purity.test.ts` pins
+   * that by equality), which does not retire the argument — it generalizes it.
+   * Every domain that carries weight is an entry here, and the reason `./project`
+   * came back is the reason `./crawl`, `./git`, `./process`, `./skill-test` and
+   * `./yaml` exist: a capability's cost should be what it needs, not what its
+   * neighbours need.
    */
   it('exports exactly the recorded key set', () => {
     expect(Object.keys(manifest.exports).sort((a, b) => a.localeCompare(b))).toEqual([
@@ -149,7 +154,7 @@ describe('utils package manifest', () => {
       './path',
       './process',
       './project',
-      './template',
+      './skill-test',
       './testing',
       './text',
       './yaml',

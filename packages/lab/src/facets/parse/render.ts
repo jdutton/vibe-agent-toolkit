@@ -36,6 +36,11 @@
  *   them.** The process-level CPU reading is what makes that visible, and the
  *   report says it in a sentence when the divergence is large rather than
  *   printing two numbers and leaving the reader to divide them.
+ * - **Threads and processes are printed as separate numbers.** The thread width
+ *   decides how every other figure reads: the milliseconds are summed across
+ *   threads, while the lifetime is one reading per process. A reader shown only
+ *   `1 process` reads a nine-thread run as a single-threaded one and takes a sum
+ *   over nine concurrent threads for a duration.
  */
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
@@ -62,6 +67,7 @@ import type {
   ParseCommandStats,
   ParseKindStats,
   ParsePassStats,
+  TierRowStats,
 } from './types.js';
 
 /**
@@ -102,8 +108,8 @@ const DOMINANCE_FLOOR = 0.8;
  * somewhere on its own.
  */
 const TIMING_LEGEND =
-  'Timed: inside vat, per parse pass, summed across every process that dumped. Not wall ' +
-  'time — a command spawns a child per phase and their milliseconds add.';
+  'Timed: inside vat, per parse pass, summed across every thread that reported. Not wall ' +
+  'time — parse workers run concurrently and their milliseconds add.';
 
 /** Said at the top of a comparison when either capture was contaminated. */
 const CONTAMINATION_NOTE =
@@ -196,13 +202,23 @@ function routesLine(row: ParseCommandStats): string {
 }
 
 /**
- * Which parser kind this tree's parse cost actually belongs to.
+ * Which parser kind the cost of the PARSED documents actually belongs to.
  *
  * **The line this facet exists for.** A breakdown covering 3% of a tree's parse
  * time is not the shape of that tree, and eight neatly-formatted rows are the
  * most convincing possible way to say otherwise. So the dominant kind is named
  * before any breakdown is shown, and a mixed corpus is named as mixed rather
  * than left to the reader's eye.
+ *
+ * ⚠️ **The denominator is the parsed subset, never the corpus, and the line says
+ * so.** `row.documents` sums the *instrumented* kinds, and a file no parser ran
+ * over writes nothing to a dump — so the facet cannot see it and must not imply
+ * it did. That gap used to be a rounding error and is not one any more: since
+ * parse routing began sending every non-prose file to `ParserKind = 'none'`,
+ * a code-heavy adopter tree put **1,805 of 8,768 blobs** through a parser, so
+ * this line called markdown dominant "of this corpus" while markdown was 20% of
+ * it. Naming the subset is the honest fix; inventing a corpus total the
+ * instrument does not have would be a second overclaim on top of the first.
  *
  * @param row - The command's statistics
  * @returns One line, or none when there is only one kind carrying any time
@@ -223,11 +239,22 @@ function dominanceLines(row: ParseCommandStats): readonly string[] {
     ];
   }
   return [
-    `      ${leader.kind.toUpperCase()} DOMINATES this corpus — ${split} of parse time ` +
-      `(${tally(leader.documents)} of ${tally(row.documents)} documents). Read the ` +
+    `      ${leader.kind.toUpperCase()} DOMINATES the documents PARSED — ${split} of parse time ` +
+      `(${tally(leader.documents)} of ${tally(row.documents)} parsed). Read the ` +
       `${leader.kind} breakdown first; the others describe the remainder of the cost, not ` +
-      'the shape of this tree.',
+      'the shape of what was parsed. Files routed to no parser are not in this denominator.',
   ];
+}
+
+/**
+ * A count with its unit, singular when there is one of it.
+ *
+ * @param value - How many
+ * @param singular - The unit's singular form; the plural adds an `s`
+ * @returns `1 process`, `8 parse worker threads`
+ */
+function counted(value: number, singular: string): string {
+  return `${tally(value)} ${singular}${value === 1 ? '' : 's'}`;
 }
 
 /**
@@ -239,6 +266,10 @@ function dominanceLines(row: ParseCommandStats): readonly string[] {
  * reader divide two numbers to discover that is exactly the inference this facet
  * exists to remove.
  *
+ * The lifetime here is one reading per PROCESS, and it says so, because every
+ * other duration on the row is a sum over THREADS. The thread width itself is
+ * printed with the tier block, where the main-thread share it denominates is.
+ *
  * @param row - The command's statistics
  * @returns One line, or two when the machine was not running the process
  */
@@ -246,9 +277,9 @@ function processLines(row: ParseCommandStats): readonly string[] {
   const cpu = row.cpuUserMs + row.cpuSystemMs;
   const head =
     `      process lifetime: ${ms(row.wallMs)} wall, ${ms(cpu)} CPU ` +
-    `(${ms(row.cpuUserMs)} user + ${ms(row.cpuSystemMs)} system) summed over ` +
-    `${tally(row.processes)} processes — the whole process, NOT the parse; ` +
-    `CPU is ${share(cpu, row.wallMs)} of wall`;
+    `(${ms(row.cpuUserMs)} user + ${ms(row.cpuSystemMs)} system), one reading per process ` +
+    `across ${counted(row.processes, 'process')} ` +
+    `— the whole process, NOT the parse; CPU is ${share(cpu, row.wallMs)} of wall`;
   if (row.wallMs === 0 || cpu / row.wallMs >= CPU_BOUND_FLOOR) return [head];
   return [
     head,
@@ -321,6 +352,55 @@ function kindLines(kind: ParseKindStats, row: ParseCommandStats): readonly strin
 }
 
 /**
+ * One tier pass, with the main-thread share stated rather than left to division.
+ *
+ * The share is of the row's OWN total, never of the command's parse budget:
+ * these are not parser passes and `totalMs` is not their denominator. What the
+ * line answers is the only question the tier design turns on — of this cost, how
+ * much landed on the one thread that cannot be parallelized.
+ *
+ * @param row - The tier row
+ * @returns A single line
+ */
+function tierLine(row: TierRowStats): string {
+  const perCall = row.calls === 0 ? 0 : row.elapsedMs / row.calls;
+  return (
+    `        ${row.pass}: ${ms(row.elapsedMs)} in ${tally(row.calls)} calls ` +
+    `(${ms(perCall)}/call) — ${ms(row.mainElapsedMs)} of it on a main thread ` +
+    `(${share(row.mainElapsedMs, row.elapsedMs)})`
+  );
+}
+
+/**
+ * The tier block: what the machinery AROUND the parses cost, and where.
+ *
+ * Printed under its own heading and after every parser kind, so no reader can
+ * mistake a row here for a pass of a parser. The heading names the population it
+ * was summed over — main threads and parse worker threads — because every
+ * main-thread share below is meaningless without it: `0 of 0 on a main thread`
+ * and `0 of 40ms on a main thread` are the same two characters and completely
+ * different findings.
+ *
+ * @param row - The command's statistics
+ * @returns The block, or nothing at all when the tier did no work
+ */
+function tierLines(row: ParseCommandStats): readonly string[] {
+  const charged = row.tier.filter((pass) => pass.calls > 0);
+  if (charged.length === 0) {
+    // Every row at zero. Printing eight `0.0ms` lines would read as "the tier is
+    // free", which is the same lie a zeroed parser kind tells one level up — and
+    // here it usually means the measured build has no tier seam at all.
+    return [];
+  }
+  return [
+    `      parse tier (not a parser — the machinery around it), from ` +
+      `${counted(row.mainThreads, 'main thread')} and ` +
+      `${counted(row.workerThreads, 'parse worker thread')}:`,
+    ...charged.map((pass) => tierLine(pass)),
+  ];
+}
+
+/**
  * State whether the repeats did the same work.
  *
  * @param row - The command's statistics
@@ -347,7 +427,7 @@ function summaryLine(row: ParseCommandStats): string {
   return (
     `  ${row.name} (${row.cache}, ${tally(row.runs)} runs): ${ms(row.totalMs)} in ` +
     `${tally(row.totalCalls)} parses of ${tally(row.documents)} documents ` +
-    `(${tally(row.bytes)} bytes) across ${tally(row.processes)} processes; ` +
+    `(${tally(row.bytes)} bytes) across ${counted(row.processes, 'process')}; ` +
     `repeat totals ${samples}`
   );
 }
@@ -373,6 +453,7 @@ function commandLines(row: ParseCommandStats): readonly string[] {
     routesLine(row),
     ...processLines(row),
     ...row.kinds.flatMap((kind) => kindLines(kind, row)),
+    ...tierLines(row),
   ];
 }
 
@@ -449,6 +530,11 @@ function diffLines(diff: ParseComparisonResult['commands'][number]): readonly st
     // caveat qualifies both, so it is outside that choice.
     (changed) => [
       ...(changed ? movementOf().passes.map((pass) => passMovementLine(pass)) : []),
+      // Tier rows print whenever there ARE any, changed or not — unlike the
+      // parser passes above. A comparison whose parser passes all sat within
+      // noise is exactly the shape a transport change takes, and suppressing the
+      // tier rows there would hide the only thing that moved.
+      ...movementOf().tier.map((pass) => passMovementLine(pass)),
       ...caveatLines(movementOf()),
     ],
   );

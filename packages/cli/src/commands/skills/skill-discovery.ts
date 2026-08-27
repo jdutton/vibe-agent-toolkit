@@ -10,7 +10,8 @@ import { basename } from 'node:path';
 
 import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
-import { crawlDirectory, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
 import picomatch from 'picomatch';
 
 import type { DiscoveredSkill } from './command-helpers.js';

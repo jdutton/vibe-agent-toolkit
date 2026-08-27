@@ -359,7 +359,25 @@ describe('module load budget (integration)', () => {
     // (a moved `src/`, a broken glob) would otherwise report a clean tree, and
     // a needle that matches nothing would too.
     expect(callers.length).toBeGreaterThan(0);
-    expect(callers).toEqual(['packages/resources/src/parse-cache.ts']);
+    expect(callers).toEqual([
+      'packages/resources/src/parse-cache.ts',
+      // The parse pool's WORKER, and it is admitted on a reason rather than
+      // waved through — the guard keeps its teeth for the parent process.
+      //
+      // What this rule protects is a WARM run paying ~730ms to load a parser for
+      // a parse that never happens. A worker thread cannot do that, because it
+      // does not exist on a warm run: the pool is lazy, no thread is created
+      // until a parse is actually dispatched, and dispatch is gated on parse
+      // cache MISSES. So this load is by construction on a path where a document
+      // is already being parsed — the one case where loading a parser is the
+      // point rather than the waste.
+      //
+      // It is also in a DIFFERENT THREAD, so even were it eager it could not add
+      // to the parent's startup. The property the parent must keep is unchanged
+      // and still pinned by the entry above: in-process, only the parse cache
+      // asks, and only past its hit-path return.
+      'packages/resources/src/parse-worker.ts',
+    ]);
   });
 
   it('the always-on cache-control registration stays off the heavy path', () => {

@@ -1,7 +1,12 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- fragment paths are derived from our own temp grader dirs */
 import { writeFileSync } from 'node:fs';
 
-import { safePath, type SpawnHeadlessOptions, type spawnHeadlessClaude, type SpawnResult } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import {
+  type SpawnHeadlessOptions,
+  type spawnHeadlessClaude,
+  type SpawnResult,
+} from '@vibe-agent-toolkit/utils/skill-test';
 import { expect, vi } from 'vitest';
 
 import { InternalHarnessError } from '../../src/skill-test/exit-codes.js';

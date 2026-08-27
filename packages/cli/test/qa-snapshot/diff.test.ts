@@ -21,7 +21,6 @@ import {
 } from '../../src/qa-snapshot/diff.js';
 import { renderCompareSummary } from '../../src/qa-snapshot/render.js';
 import {
-  SNAPSHOT_FORMAT_VERSION,
   type ArtifactDelta,
   type CompareReport,
   type LoadedSnapshot,
@@ -43,7 +42,6 @@ const CONTENT_KEY = 'markdown.deadbeef12345678';
 /** Only what a test actually varies; everything else gets a fixed default. */
 interface SnapshotOverrides {
   dir?: string;
-  formatVersion?: number;
   cacheNamespace?: string;
   platform?: string;
   corpusRoot?: string;
@@ -59,7 +57,6 @@ interface SnapshotOverrides {
  */
 function loadedSnapshot(overrides: SnapshotOverrides = {}): LoadedSnapshot {
   const manifest: SnapshotManifest = {
-    formatVersion: overrides.formatVersion ?? SNAPSHOT_FORMAT_VERSION,
     vatVersion: '0.1.42',
     cacheNamespace: overrides.cacheNamespace ?? '0.1.42',
     capturedAtIso: '2026-08-08T00:00:00.000Z',
@@ -256,19 +253,16 @@ describe('compareSnapshots constraints', () => {
     expect(report.constraints.some((note) => note.startsWith('MASKED:'))).toBe(false);
   });
 
-  it('refuses across format versions, returning no deltas and a stated reason', () => {
-    const report = comparePair(
-      { [LANE_ARTIFACT]: oracleText(2, []) },
-      { [LANE_ARTIFACT]: oracleText(9, []) },
-      { formatVersion: 1 },
-      { formatVersion: 2 },
-    );
+  // ⚠️ There is no "refuses across format versions" case here any more, and the
+  // guarantee did not move — it got EARLIER and stronger. `readSnapshot` now
+  // validates each manifest against the strict `SnapshotManifestSchema` and
+  // throws, so two incompatible layouts never reach `compareSnapshots` at all;
+  // `store.test.ts` pins that. The integer this replaced sat in front of a blind
+  // cast, so a manifest whose shape was wrong compared happily as long as the
+  // number matched — and it only ever fired when a human remembered to move it.
+  // An artifact present on one side only was never a layout question: see the
+  // ADDED/REMOVED cases below.
 
-    expect(report.deltas).toEqual([]);
-    expect(report.changedCount).toBe(0);
-    expect(report.constraints).toHaveLength(1);
-    expect(report.constraints[0]).toContain('REFUSED');
-  });
 
   it('states that a different corpus root may make the snapshots incomparable', () => {
     const report = comparePair(

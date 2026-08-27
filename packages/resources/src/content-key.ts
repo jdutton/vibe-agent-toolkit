@@ -8,15 +8,51 @@
  * (one parse serves every lane, and a historical blob that is not on disk is
  * still keyable).
  *
+ * ⚠️ **"Path-independent" describes the KEY, not the routing that selects the
+ * kind.** The second half of the pair is chosen by typing the path, and a
+ * project's `resources.collections` may declare a `mimeType` that overrides the
+ * built-in tables — so the kind, and therefore the key, is a function of
+ * `vibe-agent-toolkit.config.yaml` as well as of the path. Two consequences a
+ * caller must not be surprised by: editing that config invalidates parse-cache
+ * entries for every file whose declared type moved (sound, and free, because the
+ * kind is in the preimage), and a caller that types a path itself must route
+ * through the run's `CollectionMimeResolver` rather than calling
+ * {@link parserKindForPath} directly, or the two will disagree about the same
+ * file. What stays true unconditionally is the property the key exists for:
+ * given the same bytes AND the same kind, the key is the same everywhere.
+ *
+ * ## Three kinds, and why "no parser" is one of them
+ *
+ * {@link ParserKind} is `markdown | html | none`. The third names the **absence
+ * of a document parser**: nothing is handed to remark or parse5, and the only
+ * facts a `none` blob carries are the ones derivable from its bytes.
+ *
+ * It is a VALUE rather than a `null`, and {@link parserKindForPath} stays
+ * non-nullable, because a file nothing parses still earns a `blobs` row —
+ * without one there is no `tokenEstimate`, `whatLoadsAt` reports `tokens: null`,
+ * and the context-accounting lane reports `unknown-size`. A row needs a content
+ * key; a key needs a parser-kind prefix; so the absence of a parser has to be
+ * spellable.
+ *
  * ## Why the parser kind is IN the digest, not just in a prefix
  *
- * VAT selects its parser from the path extension
- * ({@link parserKindForPath}), so identical bytes at `x.md` and `x.html`
- * legitimately produce different parse results. That is realizable on the
- * **empty file**, which git keys as `e69de29…` in both cases. A key that
- * carried the parser kind only as a display prefix would still let a caller
- * that compares digests conflate the two. So the parser kind is mixed into the
- * hash preimage, and the prefix is a human-readable convenience.
+ * VAT selects its parser by TYPING the path — `mime-type.ts` answers *what this
+ * is*, {@link parserKindForPath} turns that into *what runs over it* — so
+ * identical bytes at `x.md` and `x.html` legitimately produce different parse
+ * results. That is realizable on the **empty file**, which git keys as
+ * `e69de29…` in both cases. A key that carried the parser kind only as a display
+ * prefix would still let a caller that compares digests conflate the two. So the
+ * parser kind is mixed into the hash preimage, and the prefix is a
+ * human-readable convenience.
+ *
+ * That mixing is also what makes a **routing change** self-invalidating. When
+ * `.ts` stopped routing to markdown and started routing to `none`, its bytes did
+ * not change: a key over bytes alone would keep serving the stale remark facts
+ * out of a cache that looks perfectly healthy. Because the kind is in the
+ * preimage, every affected entry became unreachable the instant the routing
+ * moved — and no hand-maintained schema or cache version decided it. That is
+ * deliberate: a number someone must remember to bump is not a contract, and this
+ * project prohibits them. The digest *is* the invalidation.
  *
  * ## Why there is no git rung here
  *
@@ -94,11 +130,56 @@ import { readFile } from 'node:fs/promises';
 
 import { decodeTextContent, type TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
+import { type DocumentParserKind, mimeTypeForPath, parserKindForMimeType } from './mime-type.js';
+
+/**
+ * The kind that means "no document parser runs on this".
+ *
+ * Exported because `parserKindForMimeType` returns `null` for a type no parser
+ * handles, and every caller that routes from a MIME type has to spell the
+ * fallback. Spelling it as a literal at those call sites is how the two halves
+ * of one decision drift: this constant and the `PARSER_KINDS` entry below are
+ * the same value by construction.
+ */
+export const NO_PARSER_KIND = 'none';
+
+/**
+ * Every parser kind, as values — and the ONE place they are enumerated.
+ *
+ * {@link ParserKind} and {@link CONTENT_KEY_PATTERN} are both derived from this
+ * array, in that direction on purpose. Written the other way round — a
+ * hand-written union plus a hand-written alternation — the two drift, and the
+ * drift is silent in the direction that matters: a kind the type admits but the
+ * pattern rejects produces keys the parse cache's on-disk safety check and the
+ * projection's `ContentKeySchema` both throw away, so an entire class of
+ * document becomes uncacheable and unstorable with nothing failing.
+ *
+ * The values are bare identifier words, which is why they can be spliced into a
+ * regex below without escaping. Keep them that way.
+ */
+const PARSER_KINDS = ['markdown', 'html', NO_PARSER_KIND] as const;
+
 /**
  * Which parser a document is routed to. This is part of a document's identity,
  * not an incidental property of it — see the module docstring.
+ *
+ * `none` is the absence of a parser, not a parser. It is a member because a blob
+ * nothing parses still needs a key, and a key needs a kind.
  */
-export type ParserKind = 'markdown' | 'html';
+export type ParserKind = (typeof PARSER_KINDS)[number];
+
+/**
+ * Every kind that routes to a real parser — {@link PARSER_KINDS} without `none`.
+ *
+ * Derived rather than written out, in that direction for the same reason
+ * {@link ParserKind} is: a caller that has to enumerate the document kinds — the
+ * parse pool's sizing weights one cost per kind — would otherwise carry a second
+ * list, and a kind added to `PARSER_KINDS` alone would be silently unweighted
+ * there while every type still checked.
+ */
+export const DOCUMENT_PARSER_KINDS: readonly DocumentParserKind[] = PARSER_KINDS.filter(
+  (kind): kind is DocumentParserKind => kind !== NO_PARSER_KIND,
+);
 
 /** Domain separator, so this keyspace can never be confused with a git SHA-1. */
 const KEY_DOMAIN = 'vat-content-key';
@@ -109,22 +190,46 @@ const KEY_DOMAIN = 'vat-content-key';
  * well-formed key (the parse cache's on-disk safety check, the projection
  * schema's `ContentKeySchema`) shares one definition instead of two regexes
  * that can silently drift apart.
+ *
+ * Built from {@link PARSER_KINDS} rather than spelling the alternation out, so
+ * "two regexes that can drift" does not quietly become "a regex and a union that
+ * can drift" the first time a kind is added.
  */
-export const CONTENT_KEY_PATTERN = /^(?:markdown|html)\.[0-9a-f]{64}$/;
+export const CONTENT_KEY_PATTERN =
+  // eslint-disable-next-line security/detect-non-literal-regexp -- built from PARSER_KINDS, a module-private `as const` array of bare identifier words; no input reaches it
+  new RegExp(String.raw`^(?:${PARSER_KINDS.join('|')})\.[0-9a-f]{64}$`);
 
 /**
  * Decide which parser a path routes to.
  *
  * THE discriminator. `ResourceRegistry.addResource` calls this rather than
- * repeating the extension test, so the parser-selection rule and the
- * parser-selection component of the content key can never drift apart.
+ * repeating the test, so the parser-selection rule and the parser-selection
+ * component of the content key can never drift apart.
+ *
+ * ## Why this goes through a MIME type
+ *
+ * Because it used to be `endsWith('.html') ? html : markdown`, and that
+ * else-branch handed every `.ts`, `.json`, `.lock` and `.snap` file in a
+ * repository to remark. Measured on one adopter tree: 5,329 TypeScript files and
+ * 713 JSON files parsed as CommonMark, producing 64.7% of all reference rows and
+ * **100%** of dangling-reference warnings — a JSON-Schema `pattern` like
+ * `"^[a-z][a-z0-9-]*$"` is two adjacent bracket groups, which is a reference
+ * link. Routing now asks `mime-type.ts` what the file IS first, and only a type
+ * that means prose or markup reaches a parser.
+ *
+ * Non-nullable, and `none` is the else-branch: see the module docstring for why
+ * a blob nothing parses still needs a kind. The assignment of
+ * `parserKindForMimeType`'s answer into a {@link ParserKind} is also the only
+ * check binding the two modules' kind sets — a kind added over in `mime-type.ts`
+ * and not to {@link PARSER_KINDS} fails to compile HERE, which is what keeps
+ * {@link CONTENT_KEY_PATTERN} from going stale.
  *
  * @param filePath - Path the document was read from (need not exist)
- * @returns The parser kind VAT will hand this document to
+ * @returns The parser kind VAT will hand this document to, or `none` when
+ *   nothing parses it
  */
 export function parserKindForPath(filePath: string): ParserKind {
-  const lower = filePath.toLowerCase();
-  return lower.endsWith('.html') || lower.endsWith('.htm') ? 'html' : 'markdown';
+  return parserKindForMimeType(mimeTypeForPath(filePath)) ?? NO_PARSER_KIND;
 }
 
 /**
@@ -153,8 +258,17 @@ export function computeContentKey(bytes: Uint8Array, parserKind: ParserKind): st
   return `${parserKind}.${digest}`;
 }
 
-/** A document's bytes and the key they were hashed under, from one read. */
-export interface KeyedContent {
+/**
+ * A document's bytes and the key they were hashed under, from one read.
+ *
+ * Generic in the kind so {@link readContentWithKey} can hand back *the kind it
+ * was asked for* rather than the whole union. That is what lets
+ * {@link ParsableContent} be a type rather than a runtime assertion: a caller
+ * that read with a literal `'markdown'` needs no narrowing to reach the parse
+ * path, and a caller that read with {@link parserKindForPath}'s answer cannot
+ * reach it without one.
+ */
+export interface KeyedContent<K extends ParserKind = ParserKind> {
   /**
    * The decoded content, exactly as it must be handed to the parser.
    *
@@ -182,7 +296,7 @@ export interface KeyedContent {
   /** The key computed over the RAW BYTES this content was decoded from. */
   key: string;
   /** The parser this content routes to. */
-  parserKind: ParserKind;
+  parserKind: K;
   /**
    * Length of the raw bytes.
    *
@@ -194,6 +308,32 @@ export interface KeyedContent {
    * than recompute it from the decoded string.
    */
   byteLength: number;
+}
+
+/**
+ * Content that routes to a real document parser — i.e. not `none`.
+ *
+ * The type `parseKeyed` takes, so "hand these bytes to a parser" is unreachable
+ * for a blob that has no parser. Expressing it in the type rather than as a
+ * runtime branch inside `parseKeyed` is the whole point: the alternative is a
+ * throw, or an empty `ParseResult` invented on the caller's behalf, at a place
+ * that has no idea what the caller wanted. A producer that silently emits
+ * nothing is a bug nursery; a compile error at the call site is not.
+ */
+export type ParsableContent = KeyedContent<DocumentParserKind>;
+
+/**
+ * Whether a parser runs over this content at all.
+ *
+ * A type guard rather than a bare `kind !== 'none'` comparison because narrowing
+ * a property does not narrow the object: only a predicate turns a
+ * {@link KeyedContent} into a {@link ParsableContent} the parse path will accept.
+ *
+ * @param keyed - Content of any kind
+ * @returns `true` when a document parser is defined for its kind
+ */
+export function isParsableContent(keyed: KeyedContent): keyed is ParsableContent {
+  return keyed.parserKind !== NO_PARSER_KIND;
 }
 
 /**
@@ -226,10 +366,10 @@ export interface KeyedContent {
  * @throws Whatever `readFile` throws — callers decide whether a read failure is
  *   fatal or a miss
  */
-export async function readContentWithKey(
+export async function readContentWithKey<K extends ParserKind>(
   filePath: string,
-  parserKind: ParserKind,
-): Promise<KeyedContent> {
+  parserKind: K,
+): Promise<KeyedContent<K>> {
   // Read as bytes and decode here, rather than letting readFile decode: the key
   // must be over what was on disk, the decode is lossy, and `readFile(path,
   // 'utf-8')` offers no BOM or encoding handling at all.

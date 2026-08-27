@@ -14,7 +14,7 @@
  * override that in a browser is ignored.
  */
 
-import { parseHtmlDocument, walkElements } from './html-link-parser.js';
+import { findAttr, parseHtmlDocument, sourceSpelling, walkElements } from './html-link-parser.js';
 import type { RewriteHref } from './rewriter-helpers.js';
 
 /** Tag name → the single link-bearing attribute we rewrite. */
@@ -87,6 +87,12 @@ function encodeValue(newValue: string, quote: string): string {
 /** A wanted link rewrite that could not be spliced back into the source. */
 export interface UnappliedRewrite {
   tagName: string;
+  /**
+   * The attribute's **source spelling** (`sourceSpelling`), so a namespaced
+   * attribute is reported as the author wrote it — `xlink:href`, not the bare
+   * `href` the tag→attribute table looked it up by. Identical to that table's
+   * literal for every un-prefixed attribute, which is every HTML-namespace one.
+   */
   attr: string;
   /** The original attribute value the rewrite targeted. */
   from: string;
@@ -125,7 +131,7 @@ export function rewriteHtmlLinks(
     if (attrName === undefined) {
       continue;
     }
-    const attr = element.attrs.find((a) => a.name === attrName);
+    const attr = findAttr(element, attrName);
     if (attr === undefined) {
       continue;
     }
@@ -134,14 +140,20 @@ export function rewriteHtmlLinks(
     if (newValue === attr.value) {
       continue;
     }
-    const location = element.sourceCodeLocation?.attrs?.[attrName];
+    // ⛔ Keyed on the MATCHED attribute's source spelling, never on `attrName`.
+    // `findAttr` matches a namespaced `xlink:href` on its bare local name, but
+    // parse5 files the span under `'xlink:href'` — so the hardcoded literal
+    // missed, this took the `no-source-location` branch, and the rewrite was
+    // dropped from a page that parsed cleanly. See `sourceSpelling`.
+    const spelling = sourceSpelling(attr);
+    const location = element.sourceCodeLocation?.attrs?.[spelling];
     if (location === undefined) {
-      onUnapplied?.({ tagName: element.tagName, attr: attrName, from: attr.value, to: newValue, reason: 'no-source-location' });
+      onUnapplied?.({ tagName: element.tagName, attr: spelling, from: attr.value, to: newValue, reason: 'no-source-location' });
       continue;
     }
     const span = valueSpan(source.slice(location.startOffset, location.endOffset), location.startOffset);
     if (span === undefined) {
-      onUnapplied?.({ tagName: element.tagName, attr: attrName, from: attr.value, to: newValue, reason: 'unparseable-attribute' });
+      onUnapplied?.({ tagName: element.tagName, attr: spelling, from: attr.value, to: newValue, reason: 'unparseable-attribute' });
       continue;
     }
     edits.push({ ...span, newValue });

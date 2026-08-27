@@ -44,7 +44,6 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { CLAUDE_MD_TAG } from '../src/projection/agentic-tags.js';
 import { account } from '../src/projection/claude-context-accounting.js';
 import {
   sweepAlwaysLoadedBudgets,
@@ -56,6 +55,7 @@ import { whatLoadsAt } from '../src/projection/claude-context-query.js';
 import type { Projection } from '../src/projection/projection.js';
 
 import { claudeContextFixture } from './helpers/claude-context-fixture.js';
+import { claudeMdIdsOf } from './helpers/claude-md-ids.js';
 
 /** A threshold well above every fixture total, so nothing is over budget by accident. */
 const ROOMY = 1_000_000;
@@ -159,15 +159,6 @@ const CASED_TREE: Record<string, string> = {
   'Docs/a.md': 'a\n',
   'apps/b.md': 'b\n',
 };
-
-/** The `claude-md`-tagged identities, derived exactly as the shipped command derives them. */
-function claudeMdIdsOf(projection: Projection): ReadonlySet<string> {
-  return new Set(
-    projection.resourceTags
-      .filter((tag) => tag.tag === CLAUDE_MD_TAG)
-      .map((tag) => tag.resourceId),
-  );
-}
 
 /**
  * The INDEPENDENT budget for one location — one query per location, no collapse,

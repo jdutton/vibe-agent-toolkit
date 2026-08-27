@@ -6,7 +6,7 @@
       "properties": {
         "blob": {
           "type": "string",
-          "pattern": "^(?:markdown|html)\\.[0-9a-f]{64}$",
+          "pattern": "^(?:markdown|html|none)\\.[0-9a-f]{64}$",
           "description": "Foreign key to blobs.contentKey"
         },
         "code": {

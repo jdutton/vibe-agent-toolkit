@@ -11,6 +11,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 
 import {
+  conventionalSuiteProbe,
   packageSkills,
   packagingConfigToPackageOptions,
   skillNameToFsPath,
@@ -36,7 +37,7 @@ import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { reportCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import {
   collectPostBuildIssues,
@@ -54,6 +55,7 @@ import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { withResourcePopulationSource } from '../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
+import { finishCommand, type PhaseOutcome } from '../phase-utils.js';
 
 import {
   filterSkillsByName,
@@ -719,53 +721,85 @@ export function buildYamlSummary(
 }
 
 /**
- * Output build results
+ * THE document this command publishes — the shape a consumer actually reads.
+ *
+ * NOT the same object as {@link buildYamlSummary}, and the difference is the
+ * whole reason this function exists. The summary carries `skillsWithErrors` as
+ * an ARRAY of names; the published document carries `skillsWithErrors` as a
+ * COUNT (in the header, beside the other tallies) and the names separately under
+ * `skillsWithErrorNames`. That projection used to live inside the renderer, so
+ * the only way to obtain the real document was to serialize it and parse it back
+ * — which is exactly what the parent process did, and exactly what stopped being
+ * true when phases stopped being child processes. Returning the summary instead
+ * would have flipped `skillsWithErrors` from a number to an array in `vat
+ * build`'s output, silently and with nothing to typecheck it against.
  */
-function outputBuildYaml(run: SkillBuildRun, duration: number): void {
+function buildBuildDocument(run: SkillBuildRun, duration: number): Record<string, unknown> {
   const summary = buildYamlSummary(run, duration);
   const {
     status, skillsBuilt, skillsFailed, skillsFailedValidation, issueCounts, runIssueCounts,
     skills, skillsStaged, failedSkills, validationFailedSkills, outputCommitted,
     duration: durationText,
   } = summary;
-  // In the header, beside the other counts: these are the numbers the exit code
-  // actually follows, so a reader who stops at the header is not misled by it.
-  // `outputCommitted` rides up here too — a reader who sees exit 1 needs to know
-  // whether their dist/skills still exists before they do anything else.
-  writeYamlHeader({
+
+  return {
     status,
     skillsBuilt,
     skillsFailed,
     skillsFailedValidation,
     skillsWithErrors: summary.skillsWithErrors.length,
     outputCommitted,
+    issueCounts,
+    runIssueCounts,
+    // Published in the BODY, not the header: `writeYamlHeader` writes raw
+    // `key: value` lines, and this text is multi-line by design (what is on
+    // disk, and the `mv` that recovers it). Emitting it there would produce a
+    // document that does not parse — the one failure mode a report about a
+    // failed build must not add. `status: error` and `outputCommitted` are
+    // already in the header, so a reader who stops there is not misled.
+    ...(summary.promotionError === undefined ? {} : { promotionError: summary.promotionError }),
+    skills,
+    // Always published, even empty, for the same reason `failedSkills` is: an
+    // absent key reads as "this run had no such concept", and a consumer that
+    // has to distinguish absent from empty will get it wrong.
+    skillsStaged,
+    failedSkills,
+    validationFailedSkills,
+    skillsWithErrorNames: summary.skillsWithErrors,
+    runIssues: summary.runIssues,
+    duration: durationText,
+  };
+}
+
+/**
+ * Render {@link buildBuildDocument}'s document to stdout.
+ *
+ * Streamed in two pieces — a raw scalar header, then the body — rather than as
+ * one `yaml.stringify`, so the header lands before a body that can run to
+ * megabytes on a large project. The key ORDER here is the document's order; the
+ * split is presentation only and adds nothing the document does not carry.
+ */
+function outputBuildYaml(document: Record<string, unknown>): void {
+  const {
+    status, skillsBuilt, skillsFailed, skillsFailedValidation, skillsWithErrors, outputCommitted,
+    duration: durationText, ...body
+  } = document;
+  // In the header, beside the other counts: these are the numbers the exit code
+  // actually follows, so a reader who stops at the header is not misled by it.
+  // `outputCommitted` rides up here too — a reader who sees exit 1 needs to know
+  // whether their dist/skills still exists before they do anything else.
+  writeYamlHeader({
+    status: status as string,
+    skillsBuilt: skillsBuilt as number,
+    skillsFailed: skillsFailed as number,
+    skillsFailedValidation: skillsFailedValidation as number,
+    skillsWithErrors: skillsWithErrors as number,
+    outputCommitted: outputCommitted as boolean,
   });
   process.stdout.write(
-    yaml.stringify(
-      {
-        issueCounts,
-        runIssueCounts,
-        // Published in the BODY, not the header: `writeYamlHeader` writes raw
-        // `key: value` lines, and this text is multi-line by design (what is on
-        // disk, and the `mv` that recovers it). Emitting it there would produce a
-        // document that does not parse — the one failure mode a report about a
-        // failed build must not add. `status: error` and `outputCommitted` are
-        // already in the header, so a reader who stops there is not misled.
-        ...(summary.promotionError === undefined ? {} : { promotionError: summary.promotionError }),
-        skills,
-        // Always published, even empty, for the same reason `failedSkills` is: an
-        // absent key reads as "this run had no such concept", and a consumer that
-        // has to distinguish absent from empty will get it wrong.
-        skillsStaged,
-        failedSkills,
-        validationFailedSkills,
-        skillsWithErrorNames: summary.skillsWithErrors,
-        runIssues: summary.runIssues,
-      },
-      { indent: 2, lineWidth: 0, aliasDuplicateObjects: false },
-    ),
+    yaml.stringify(body, { indent: 2, lineWidth: 0, aliasDuplicateObjects: false }),
   );
-  process.stdout.write(`duration: ${durationText}\n`);
+  process.stdout.write(`duration: ${durationText as string}\n`);
 }
 
 /** How the human stream names the output tree. One spelling, one place. */
@@ -1311,6 +1345,18 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
   // `populationSource` is `undefined` when the walk stays selected, and every
   // consumer below treats that as "keep the incumbent" — the default path is
   // structurally unchanged.
+  // Run-scoped for the same reason `projectSkills` is, and it is the more expensive
+  // half: resolving a skill's test-input dirs probes the filesystem for a conventional
+  // eval suite under the subject AND under every entry of `projectSkills`, so a probe
+  // rebuilt per skill costs O(S) per skill and O(S²) per run. Measured on a 103-skill
+  // adopter, in the sibling `vat resources validate` lane that shares this helper:
+  // 10,815 `existsSync` calls over 103 distinct paths, half of that command's entire
+  // filesystem traffic. This lane has the same shape.
+  //
+  // NOT module-scoped: the answer is a filesystem snapshot, so a cache outliving the
+  // run would keep answering for a tree that has since changed.
+  const suiteProbe = conventionalSuiteProbe();
+
   const outcomes = await withResourcePopulationSource({ root: cwd }, async (populationSource) => {
     for (const spec of specs) {
       const { skill, packagingConfig } = spec;
@@ -1352,6 +1398,7 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
           outputPath: safePath.join(staging.root, skillNameToFsPath(skill.name)),
         },
         projectSkills,
+        suiteProbe,
       ),
     }));
 
@@ -1475,10 +1522,18 @@ function logRunFailures(run: SkillBuildRun, logger: ReturnType<typeof createLogg
   }
 }
 
-async function buildCommand(
+/**
+ * Build every configured skill and hand back the document and exit code,
+ * printing the document nowhere.
+ *
+ * The phase entry point for `vat build`, whose `skills` phase is this command.
+ * The three early returns publish no document — an unconfigured run and a dry
+ * run both print their own thing and stop, exactly as the child process did.
+ */
+export async function runSkillsBuildPhase(
   pathArg: string | undefined,
   options: SkillsBuildCommandOptions
-): Promise<void> {
+): Promise<PhaseOutcome> {
   const { logger, cwd, startTime } = setupCommandContext(pathArg, options.debug);
 
   try {
@@ -1493,7 +1548,7 @@ async function buildCommand(
 
     if (!config?.skills) {
       logger.info('No skills configuration found — nothing to build');
-      process.exit(0);
+      return { document: undefined, exitCode: 0 };
     }
 
     const skillsConfig = config.skills;
@@ -1522,7 +1577,7 @@ async function buildCommand(
     if (options.dryRun) {
       const duration = Date.now() - startTime;
       performDryRun(skillsToBuild, duration, logger);
-      process.exit(0);
+      return { document: undefined, exitCode: 0 };
     }
 
     const buildSpecs: BuildSkillSpec[] = skillsToBuild.map((skill) => ({
@@ -1547,8 +1602,7 @@ async function buildCommand(
     });
     const duration = Date.now() - startTime;
 
-    // Output YAML results
-    outputBuildYaml(run, duration);
+    const document = buildBuildDocument(run, duration);
     for (const line of formatRunIssueLines(run.runIssues)) {
       logger.info(line);
     }
@@ -1557,25 +1611,38 @@ async function buildCommand(
     // A promotion failure is a SYSTEM error (2), not a validation one (1): the
     // build's verdict on the skills is not what went wrong, and a CI script has
     // to be able to tell "your skills are broken" from "the filesystem refused
-    // and dist/skills is in a state someone must look at". Reported AFTER the
-    // document is written, which is the whole reason it rides on the run rather
-    // than being thrown from inside it.
+    // and dist/skills is in a state someone must look at". The document is
+    // returned WITH the failing code rather than suppressed, which is the whole
+    // reason the error rides on the run rather than being thrown from inside it.
     if (run.promotionError !== undefined) {
       logger.error(`\n${run.promotionError}`);
-      process.exit(2);
+      return { document, exitCode: 2 };
     }
 
     // Gated on the SAME fact that decided whether the swap happened, not on a
     // second copy of the predicate: the exit code and `outputCommitted` can then
     // never disagree about whether this run succeeded.
     if (!run.outputCommitted) {
-      process.exit(1);
+      return { document, exitCode: 1 };
     }
 
     logger.info(`\nBuilt ${run.results.length} skill(s) successfully`);
 
-    process.exit(0);
+    return { document, exitCode: 0 };
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'SkillsBuild');
+    return {
+      document: reportCommandError(error, logger, startTime, 'SkillsBuild'),
+      exitCode: 2,
+      failed: true,
+    };
   }
+}
+
+async function buildCommand(
+  pathArg: string | undefined,
+  options: SkillsBuildCommandOptions
+): Promise<void> {
+  finishCommand(await runSkillsBuildPhase(pathArg, options), (document) => {
+    outputBuildYaml(document as Record<string, unknown>);
+  });
 }

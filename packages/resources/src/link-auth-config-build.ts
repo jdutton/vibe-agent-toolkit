@@ -20,12 +20,8 @@
  * and §4 (engine vocabulary).
  */
 
-import {
-  expandMacro,
-  type LinkAuthConfig,
-  type Provider,
-} from '@vibe-agent-toolkit/utils';
-
+import { expandMacro } from './link-auth/expand-macro.js';
+import type { LinkAuthConfig, Provider } from './link-auth/resolve.js';
 import { InlineProviderSchema, type LinkAuthProjectConfig } from './schemas/link-auth.js';
 
 /**

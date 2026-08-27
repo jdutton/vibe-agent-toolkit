@@ -3,16 +3,25 @@
  * Core shared utilities with no dependencies on other packages
  *
  * Utilities are added as needed by other packages, not speculatively.
+ *
+ * **A module that brings a third-party dependency belongs on a subpath, not
+ * here.** This entry has ~245 in-repo importers plus published adopters, and
+ * every one of them pays for the whole graph reachable from it — a bundler that
+ * cannot tree-shake a dependency (a CJS package, or one reached through
+ * `new URL(..., import.meta.url)`) inlines it into every consumer that touched
+ * a path helper. The domains that carry weight each have their own entry:
+ * `./crawl`, `./git`, `./process`, `./skill-test`, `./template`, `./yaml`.
+ * `./skill-test` is there for a *transitive* reason rather than a direct one —
+ * it declares no dependency itself, but spawning a headless agent goes through
+ * `./process`, which reaches `which` and (because `safeExecSync` refuses `git`
+ * and delegates) `@vibe-validate/git`. Reachability is the criterion, not the
+ * import a module happens to write.
+ *
+ * The rule is enforced, not merely stated: `test/subpath-purity.test.ts` asserts
+ * this entry's reachable third-party set by equality, so a dependency arriving
+ * here — directly or transitively, through any module below — turns that row red
+ * and has to be an argued edit rather than an unnoticed one.
  */
-
-// Safe command execution (cross-platform, no shell injection)
-export * from './safe-exec.js';
-
-// Windows shell-invocation helpers (.cmd/.bat/.ps1 handling), shared by every spawn wrapper
-export * from './windows-shell.js';
-
-// Hardened async spawn (streaming stdio + correct Windows .cmd/.bat launching)
-export * from './spawn-hardened.js';
 
 // Cross-platform path utilities
 export * from './path-utils.js';
@@ -26,9 +35,6 @@ export * from './path-utils.js';
 // of the repo is a migration ledger in `eslint.config.js`, not a covered claim.
 export * from './text-content.js';
 export * from './text-file.js';
-
-// Blocking stdio for published bins (process.exit must not truncate output)
-export * from './stdio-blocking.js';
 
 // Asset reference resolution (paths + npm bare specifiers)
 export * from './asset-reference.js';
@@ -86,32 +92,9 @@ export type {
   SiblingNamesTable,
 } from './fs-utils.js';
 
-// Directory crawling with glob patterns
-export * from './file-crawler.js';
-
-// Git ignore checking
-export * from './gitignore-checker.js';
-
-// The one way to run git: scrubbed by default, `ambient: true` to opt out.
-// safeExecSync/safeExecResult refuse `git` and point here. The scrub itself,
-// and dirty-corrected tree snapshots, come from `@vibe-validate/git`.
-export * from './git-run.js';
-
-// Git URL parsing (parse/detect git URLs, GitHub shorthand, SSH forms)
-export * from './git-url.js';
-
-// Git utilities (using git commands directly)
-export * from './git-utils.js';
-
-// Dirty-corrected tree snapshots: paths, on-disk blob OIDs and modes in one call
-export * from './git-snapshot.js';
-
 // Project root discovery (canonical: config → git → null).
 // CLI-boundary use only — see docs/concepts/roots-and-config.md.
 export * from './project-utils.js';
-
-// Git tracking cache (for efficient git-ignore checking)
-export * from './git-tracker.js';
 
 // Test helpers for isolated test output directories
 export * from './test-helpers.js';
@@ -119,38 +102,14 @@ export * from './test-helpers.js';
 // Zod type introspection (version-agnostic)
 export * from './zod-introspection.js';
 
-// Handlebars template rendering (cached, no HTML escaping)
-export * from './template.js';
-
 // Skill target resolution (cross-platform flat skill install paths)
 export * from './skill-targets.js';
-
-// linkAuth pure engine — public API only (issue #113).
-// Internal helpers (rewrite, build-headers, etc.) stay module-private.
-export {
-  type LinkAuthConfig,
-  type Provider,
-  type ProviderAuth,
-  type ProviderCheck,
-  resolveAuthenticatedUrl,
-  type ResolveOutcome,
-} from './link-auth/resolve.js';
-export type { ProviderMatch } from './link-auth/select-provider.js';
-export type { RewriteRule } from './link-auth/rewrite.js';
-export { defaultRunCommand, type TokenSource } from './link-auth/resolve-token.js';
-export { expandMacro, UnknownMacroError } from './link-auth/expand-macro.js';
-
-// Skill testing utilities (environment management for headless agent runs)
-export * from './skill-test/index.js';
 
 // Glob pattern helpers (isGlob, staticGlobBase, globMagicRemainder)
 export * from './glob/glob-pattern.js';
 
 // Filesystem hashing (sha256 of raw file bytes)
 export * from './fs/file-hash.js';
-
-// Byte-surgical YAML value updater (replace/insert without reflowing the doc)
-export * from './yaml/surgical-yaml.js';
 
 export { parseWholeNumberAtLeast } from './numeric-args.js';
 
@@ -176,15 +135,10 @@ export {
   CRAWL_CLOSURE_CONTRIBUTE_ID,
   CRAWL_CLOSURE_RESOLVE_ID,
   CRAWL_PASS_INSIDE,
-  CRAWL_REGISTRY_ADD_RESOURCE_ID,
+  CRAWL_REGISTRY_ADMIT_ID,
   CRAWL_REGISTRY_ENUMERATE_ID,
   CRAWL_REGISTRY_ID_PREFIX,
   CRAWL_REGISTRY_RESOLVE_LINKS_ID,
-  // Exported so the READER can pin itself against the WRITER. `@vibe-agent-toolkit/lab`
-  // hard-refuses a dump whose version it does not recognise, and the two constants
-  // used to be unrelated literals in two packages — drift was silent, and its symptom
-  // is every dump being refused rather than a subtly wrong number.
-  CRAWL_SEAM_DUMP_VERSION,
   CRAWL_SHARED_GIT_TRACKER_ID,
   CRAWL_STORE_READ_ID,
   CRAWL_STORE_WRITE_ID,

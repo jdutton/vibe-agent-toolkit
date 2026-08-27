@@ -14,7 +14,9 @@ import {
   relativize,
   type ResourceRegistry,
 } from '@vibe-agent-toolkit/resources';
-import { crawlDirectory, gitFindRoot, GitTracker, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
+import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import {
   markAliases,

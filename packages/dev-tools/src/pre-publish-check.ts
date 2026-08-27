@@ -34,7 +34,8 @@
 
 import { readdirSync, existsSync, readFileSync } from 'node:fs';
 
-import { runGit, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import { PROJECT_ROOT, log, safeExecSync } from './common.js';
 import { validatePackageList } from './validate-package-list.js';

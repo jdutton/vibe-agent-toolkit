@@ -6,7 +6,8 @@
  */
 
 
-import { describeStdioBlocking, makeStdioBlocking, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { describeStdioBlocking, makeStdioBlocking } from '@vibe-agent-toolkit/utils/process';
 import { Command } from 'commander';
 
 import { COMMAND_LOADERS } from './command-loaders.js';

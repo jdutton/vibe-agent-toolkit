@@ -33,16 +33,14 @@
  * — and prints diff text only when asked for one artifact by name.
  */
 
-import type { EnumerationRoute, LaneId } from '../pipeline-oracles/types.js';
+import { z } from 'zod';
 
-/**
- * On-disk layout version for a snapshot directory.
- *
- * Bumped when the artifact set or the manifest shape changes. A comparison
- * across two different format versions is refused rather than attempted: the
- * failure mode of guessing is a confidently wrong "nothing changed".
- */
-export const SNAPSHOT_FORMAT_VERSION = 2;
+import {
+  ENUMERATION_ROUTES,
+  type EnumerationRoute,
+  LANE_IDS,
+  type LaneId,
+} from '../pipeline-oracles/types.js';
 
 /** Manifest filename inside a snapshot directory. */
 export const MANIFEST_FILENAME = 'manifest.json';
@@ -139,7 +137,6 @@ export interface CommandManifestEntry {
  * "less than you wanted".
  */
 export interface SnapshotManifest {
-  formatVersion: number;
   /** `packages/cli/package.json`'s version — which VAT produced this. */
   vatVersion: string;
   /**
@@ -177,6 +174,72 @@ export interface SnapshotManifest {
    */
   warnings: string[];
 }
+
+/**
+ * Runtime schema for {@link SnapshotManifest}, and the whole of "may this
+ * snapshot be read?".
+ *
+ * **Strict, and load-bearing for it.** A manifest written by a build whose
+ * layout differs — a field added, renamed, retyped, or a `formatVersion` from
+ * the build that used to carry one — is refused at load, and a comparison that
+ * never loads cannot invent a confidently wrong "nothing changed". Before this
+ * the manifest was blind-cast (`parsed as SnapshotManifest`) behind a
+ * hand-bumped integer, which validated nothing and only fired when a human
+ * remembered to move it.
+ *
+ * ⛔ **Do not add a version field back.** See the repo's NO VERSIONS rule: the
+ * schema decides whether the layout is readable, the manifest's own `lanes` and
+ * `commands` decide which artifacts a build captured (`pairArtifacts` diffs
+ * them, and `presenceConstraints` states what appeared on one side only), and
+ * the integer decided neither.
+ */
+export const SnapshotManifestSchema = z
+  .object({
+    vatVersion: z.string().min(1),
+    cacheNamespace: z.string().min(1),
+    capturedAtIso: z.string().min(1),
+    corpusRoot: z.string().min(1),
+    corpusLabel: z.string().min(1),
+    platform: z.string().min(1),
+    nodeVersion: z.string().min(1),
+    corpusGitHead: z.string().min(1).nullable(),
+    corpusGitDirty: z.boolean().nullable(),
+    lanes: z.array(
+      z
+        .object({
+          laneId: z.enum(LANE_IDS),
+          artifact: z.string().min(1),
+          route: z.enum(ENUMERATION_ROUTES),
+          orderPortable: z.boolean(),
+          enumeratedCount: z.number().int().nonnegative(),
+          admittedCount: z.number().int().nonnegative(),
+          collisionCount: z.number().int().nonnegative(),
+          restatementDriftCount: z.number().int().nonnegative(),
+          buildError: z.string().nullable(),
+        })
+        .strict(),
+    ),
+    commands: z.array(
+      z
+        .object({
+          name: z.string().min(1),
+          args: z.array(z.string()),
+          exitCode: z.number().int().nullable(),
+          signal: z.string().min(1).nullable(),
+          wallMs: z.number().nonnegative(),
+          stdoutArtifact: z.string().min(1),
+          stderrArtifact: z.string().min(1),
+          stdoutBytes: z.number().int().nonnegative(),
+          stderrBytes: z.number().int().nonnegative(),
+        })
+        .strict(),
+    ),
+    parseFactArtifact: z.string().min(1).nullable(),
+    parseFactBlobCount: z.number().int().nonnegative().nullable(),
+    parseFactKeyDisagreementCount: z.number().int().nonnegative().nullable(),
+    warnings: z.array(z.string()),
+  })
+  .strict();
 
 /** A snapshot directory, loaded: manifest plus every artifact's text. */
 export interface LoadedSnapshot {

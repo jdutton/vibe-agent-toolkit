@@ -16,7 +16,13 @@
 import * as fs from 'node:fs';
 
 import { ValidationIssueSchema, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { GitTracker, isAbsoluteAnyPlatform, mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  isAbsoluteAnyPlatform,
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+} from '@vibe-agent-toolkit/utils';
+import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { validateSkillForPackaging } from '../../src/validators/packaging-validator.js';

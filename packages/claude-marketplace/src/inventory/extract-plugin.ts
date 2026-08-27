@@ -356,16 +356,18 @@ async function discoverSkills(
 	//
 	// So the failure is loud on stderr and the extraction continues, which is the
 	// same posture `projection-store.ts` takes when it cannot key a tree.
+	//
+	// ⚠️ What the warning BLAMES is load-bearing — see
+	// {@link describePopulationFailure}. Two unrelated failures arrive on this one
+	// channel, and a message that names the wrong one sends the reader to the wrong
+	// file.
 	let population: InventoryPopulation | undefined;
 	if (sharedPopulation !== undefined && skillMdPaths.length > 0) {
 		try {
 			population = await sharedPopulation(skillMdPaths);
 		} catch (error) {
 			population = undefined;
-			console.warn(
-				`[vat] Warning: the projection membership lane failed for ${absolute}, so this`
-				+ ` plugin's skills fell back to the link walk and nothing was cached: ${String(error)}`,
-			);
+			console.warn(describePopulationFailure(absolute, error));
 		}
 	}
 
@@ -380,6 +382,61 @@ async function discoverSkills(
 	}
 
 	return skillInventories;
+}
+
+/**
+ * The stderr line for a membership lane that did not run, naming the failure that
+ * actually happened.
+ *
+ * Two unrelated failures reach the one catch above, and until this function
+ * existed both were reported as the first:
+ *
+ * - **The lane itself** — the crawl, the blob stage, or the opted-in projection
+ *   store. That is OUR machinery failing on the subject, and the reader's next
+ *   move is a vat bug report or `VAT_INVENTORY_CRAWL=walker`.
+ * - **The governing config** — the population is typed by the collections
+ *   declared in the nearest `vibe-agent-toolkit.config.yaml`, so a config that
+ *   will not parse throws before any crawl starts. Nothing about the projection
+ *   lane is broken, and the reader's next move is to fix (or delete) that YAML.
+ *
+ * The second is not hypothetical for someone else's tree: root discovery is
+ * config-anchored, so inventorying a THIRD PARTY's plugin can land on a config
+ * this vat cannot read — a newer schema, or simply a broken one. A read-only
+ * inventory must not die on it (it does not — the caller degrades to the link
+ * walk), but it must not blame our own lane for it either.
+ *
+ * ## Why the error is matched by NAME
+ *
+ * `ConfigLoadError` is declared in the CLI (`cli/src/utils/config-loader.ts`),
+ * which depends on this package — an `instanceof` here would invert the
+ * dependency. The class sets `name` explicitly for exactly this kind of
+ * cross-boundary read, and the pairing is pinned end to end by
+ * `cli/test/integration/config-broken-behavior.integration.test.ts`, which
+ * asserts the config-attributed wording from a real `vat inventory` run. Rename
+ * the class without renaming it here and that test goes red, rather than the
+ * misattribution quietly coming back.
+ *
+ * @param absolute - The plugin whose skills lost the projection lane
+ * @param error - Whatever the population source threw
+ * @returns The full `console.warn` line, cause named
+ */
+function describePopulationFailure(absolute: string, error: unknown): string {
+	// Identical in both branches so the two messages can never drift about what
+	// the DEGRADATION was; only the cause differs.
+	const consequence = `so this plugin's skills fell back to the link walk and nothing was cached`;
+	if (error instanceof Error && error.name === 'ConfigLoadError') {
+		const root = (error as { projectRoot?: unknown }).projectRoot;
+		const at = typeof root === 'string' ? root : absolute;
+		return (
+			`[vat] Warning: the vibe-agent-toolkit.config.yaml governing ${at} could not be`
+			+ ` loaded, ${consequence}. That config belongs to the tree being inventoried, not`
+			+ ` to vat — this command reads it only to type the projection: ${String(error)}`
+		);
+	}
+	return (
+		`[vat] Warning: the projection membership lane failed for ${absolute}, ${consequence}:`
+		+ ` ${String(error)}`
+	);
 }
 
 /**

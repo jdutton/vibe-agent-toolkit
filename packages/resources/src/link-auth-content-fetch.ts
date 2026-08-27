@@ -44,9 +44,8 @@
  * most once across the iteration.
  */
 
-import { resolveAuthenticatedUrl, type LinkAuthConfig } from '@vibe-agent-toolkit/utils';
-
 import { type ContentCache } from './content-cache.js';
+import { resolveAuthenticatedUrl, type LinkAuthConfig } from './link-auth/resolve.js';
 import { type LinkAuthDeps } from './link-auth-deps-memo.js';
 import { authTransport, type AuthTransportOptions } from './link-auth-transport.js';
 import { type ContentMetadata } from './schemas/content-cache.js';

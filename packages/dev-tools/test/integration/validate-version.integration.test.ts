@@ -4,7 +4,8 @@
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { mkdirSyncReal, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { createTestTempDir, cleanupTestTempDir, createMockPackageJson } from '../test-helpers.js';

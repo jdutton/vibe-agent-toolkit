@@ -7,7 +7,8 @@
 
 import { cpSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 
-import { normalizedTmpdir, runGit, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import type { Logger } from '../../../utils/logger.js';
 import { redactUrlCredentials } from '../../../utils/url-redact.js';

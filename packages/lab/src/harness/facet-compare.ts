@@ -22,7 +22,7 @@ import {
   decideComparison,
   type DecideComparisonOptions,
 } from '../envelope/coordinate.js';
-import { refuseIncomparableSchemas, type ReportEnvelope } from '../envelope/envelope.js';
+import { refuseDifferentFacets, type ReportEnvelope } from '../envelope/envelope.js';
 
 import { bothSides, pairByKey, type Pairing } from './diff.js';
 import { describeIssues } from './dumps.js';
@@ -58,8 +58,13 @@ export interface BodyParser<TBody> {
 export interface FacetContract<TBody> {
   /** The facet name in the envelope header. */
   readonly facet: string;
-  /** The body version THIS build reads. */
-  readonly version: number;
+  /**
+   * The body shape THIS build reads, and the whole of that judgement.
+   *
+   * ⚠️ **Must be `.strict()`, and there must be no version integer beside it.**
+   * See `envelope/envelope.ts`'s header: an integer here refused strictly less
+   * than the schema does, and only when a human remembered to move it.
+   */
   readonly schema: BodyParser<TBody>;
 }
 
@@ -85,10 +90,12 @@ export type ComparisonOpening<TBody> = ComparisonOpened<TBody> | ComparisonRefus
 /**
  * Read an envelope's body as one facet's body.
  *
- * The build's OWN version is checked as well as the two sides against each
- * other, and that second check is the one that is easy to forget: two reports
- * captured before a schema move agree with each other perfectly while every row
- * in them means what the older build meant.
+ * **Each side is validated against THIS BUILD's schema, not merely against the
+ * other side**, and that is the check that is easy to lose: two reports captured
+ * before a schema move agree with each other perfectly while every row in them
+ * means what the older build meant. Validating both against the current strict
+ * schema refuses that pair — and refuses it because a field genuinely moved,
+ * rather than because someone remembered to bump an integer.
  *
  * @param envelope - A report whose header already names this facet
  * @param side - Which side of the comparison this is, for the message
@@ -100,16 +107,6 @@ function readBody<TBody>(
   side: string,
   contract: FacetContract<TBody>,
 ): { body: TBody } | { refusal: string } {
-  if (envelope.facetVersion !== contract.version) {
-    return {
-      refusal:
-        `REFUSED: the ${side} report is a '${contract.facet}' body at facetVersion ` +
-        `${String(envelope.facetVersion)}, and this build reads ` +
-        `${String(contract.version)}. Re-capture it; reading rows whose meaning has moved ` +
-        'would produce numbers nobody can state.',
-    };
-  }
-
   const parsed = contract.schema.safeParse(envelope.body);
   if (parsed.success) return { body: parsed.data as TBody };
   return {
@@ -123,9 +120,9 @@ function readBody<TBody>(
 /**
  * Run every gate a comparison must clear before any number is subtracted.
  *
- * In order: the envelope schemas must agree, the reports must be this facet's,
- * at most one axis may have moved, and both bodies must validate against this
- * build's schema.
+ * In order: the two reports must name one facet, it must be this facet, at most
+ * one axis may have moved, and both bodies must validate against this build's
+ * schema.
  *
  * @param before - The baseline report
  * @param after - The report being compared against it
@@ -139,8 +136,8 @@ export function openComparison<TBody>(
   contract: FacetContract<TBody>,
   options: DecideComparisonOptions,
 ): ComparisonOpening<TBody> {
-  const schemaRefusal = refuseIncomparableSchemas(before, after);
-  if (schemaRefusal !== null) return { ok: false, refusal: schemaRefusal };
+  const facetRefusal = refuseDifferentFacets(before, after);
+  if (facetRefusal !== null) return { ok: false, refusal: facetRefusal };
 
   if (before.facet !== contract.facet) {
     return {
@@ -176,6 +173,16 @@ export interface CommandDiff<TRow, TVerdict> {
   readonly before: TRow | null;
   /** The compared row, absent when the command was dropped. */
   readonly after: TRow | null;
+  /**
+   * What qualifies this row's numbers, hoisted where every consumer can reach it.
+   *
+   * A facet's caveat lives inside its own verdict shape, where only that facet's
+   * renderer can find it — which is how `parse`'s thread-width caveat came to
+   * warn a `compare` reader and not an `ab` reader looking at the same pair.
+   * Surfacing it on the row makes it readable without knowing the verdict's
+   * shape, which is the only way a facet-agnostic consumer can print it.
+   */
+  readonly caveat: string | null;
 }
 
 /**
@@ -188,20 +195,24 @@ export interface CommandDiff<TRow, TVerdict> {
  *
  * @param pair - The command as it appears on each side
  * @param verdictFor - The facet's verdict, called only when both sides exist
+ * @param caveatOf - What qualifies the facet's verdict; omitted when nothing can
  * @returns The row
  */
 export function diffPairedCommand<TRow, TVerdict>(
   pair: Pairing<TRow>,
   verdictFor: (before: TRow, after: TRow) => TVerdict,
+  caveatOf?: (verdict: TVerdict) => string | null,
 ): CommandDiff<TRow, TVerdict | OneSidedVerdict> {
   const { key, before, after } = pair;
   if (before === null || after === null) {
     // A pairing key came from one of the two sides, so exactly one of these is
-    // null here; which one it is names the verdict.
+    // null here; which one it is names the verdict. There is nothing to qualify:
+    // no second row was subtracted from.
     const kind = before === null ? 'added' : 'removed';
-    return { name: key, verdict: { kind }, before, after };
+    return { name: key, verdict: { kind }, before, after, caveat: null };
   }
-  return { name: key, verdict: verdictFor(before, after), before, after };
+  const verdict = verdictFor(before, after);
+  return { name: key, verdict, before, after, caveat: caveatOf?.(verdict) ?? null };
 }
 
 /** The least a facet's body has to look like for the shared comparator to walk it. */
@@ -233,6 +244,7 @@ export interface CommandsCompared<TRow, TVerdict> {
  * @param contract - See {@link FacetContract}
  * @param options - Axis options
  * @param verdictFor - The facet's verdict for one pair of rows
+ * @param caveatOf - What qualifies that verdict; omitted when nothing can
  * @returns The comparison, or the first refusal
  */
 export function compareCommandRows<TRow extends { readonly name: string }, TVerdict>(
@@ -241,6 +253,7 @@ export function compareCommandRows<TRow extends { readonly name: string }, TVerd
   contract: FacetContract<CommandBody<TRow>>,
   options: DecideComparisonOptions,
   verdictFor: (before: TRow, after: TRow) => TVerdict,
+  caveatOf?: (verdict: TVerdict) => string | null,
 ): CommandsCompared<TRow, TVerdict> | ComparisonRefusal {
   const opened = openComparison<CommandBody<TRow>>(before, after, contract, options);
   if (!opened.ok) return { ok: false, refusal: opened.refusal };
@@ -250,7 +263,7 @@ export function compareCommandRows<TRow extends { readonly name: string }, TVerd
     ok: true,
     axis: opened.axis,
     commands: pairByKey(opened.before.commands, opened.after.commands, named).map((pair) =>
-      diffPairedCommand(pair, verdictFor),
+      diffPairedCommand(pair, verdictFor, caveatOf),
     ),
     contaminated: opened.before.load.contaminated || opened.after.load.contaminated,
   };

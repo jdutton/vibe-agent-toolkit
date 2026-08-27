@@ -44,7 +44,6 @@ import {
 } from './dump.js';
 import {
   PARSE_FACET,
-  PARSE_FACET_VERSION,
   type ParseBody,
   type ParseCommandStats,
 } from './types.js';
@@ -89,7 +88,10 @@ function failedRow(base: RowBase, runs: number, failure: string): ParseCommandSt
     stable: null,
     attribution: 'not-measured',
     processes: 0,
+    mainThreads: 0,
+    workerThreads: 0,
     kinds: [],
+    tier: [],
     documents: 0,
     bytes: 0,
     cacheHits: 0,
@@ -201,6 +203,9 @@ async function rowFromDumps(
     stable: read.merges.length < 2 ? null : read.allSame,
     attribution: attributionOf(reported),
     processes: reported.processes,
+    mainThreads: reported.mainThreads,
+    workerThreads: reported.workerThreads,
+    tier: reported.tier,
     kinds: reported.kinds.map((kind) => ({
       kind: kind.kind,
       documents: kind.documents,
@@ -244,7 +249,7 @@ export async function captureParse(
   const commands = await captureCommandRows(options, DUMP_DIR_PREFIX, PARSE_TIMING_DIR_ENV, rowFromDumps);
   const loadAfter = readLoad();
 
-  return buildReportEnvelope(PARSE_FACET, PARSE_FACET_VERSION, options, {
+  return buildReportEnvelope(PARSE_FACET, options, {
     commands,
     load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus),
   });

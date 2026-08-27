@@ -24,7 +24,13 @@
 
 import { writeFileSync } from 'node:fs';
 
-import { createSymlink, mkdirSyncReal, runGit, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import {
+  createSymlink,
+  mkdirSyncReal,
+  safePath,
+  symlinkCapability,
+} from '@vibe-agent-toolkit/utils';
+import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 /** A regular file in the corpus: forward-slashed relative path → contents. */
 export type CorpusFiles = Readonly<Record<string, string>>;

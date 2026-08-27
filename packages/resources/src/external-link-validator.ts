@@ -1,15 +1,15 @@
 import { userInfo } from 'node:os';
 
 import type { IssueCode } from '@vibe-agent-toolkit/schema';
-import {
-  resolveAuthenticatedUrl,
-  safePath,
-  type LinkAuthConfig,
-  type ResolveOutcome,
-} from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import markdownLinkCheck from 'markdown-link-check';
 
 import { ExternalLinkCache } from './external-link-cache.js';
+import {
+  resolveAuthenticatedUrl,
+  type LinkAuthConfig,
+  type ResolveOutcome,
+} from './link-auth/resolve.js';
 import { classifyAuthenticatedResponse } from './link-auth-classify.js';
 import { type LinkAuthDeps, wrapLinkAuthDepsWithMemo } from './link-auth-deps-memo.js';
 import { authTransport } from './link-auth-transport.js';

@@ -240,7 +240,8 @@ import {
   type ProjectionBase,
   type RealizationConditionRow,
 } from '@vibe-agent-toolkit/resources';
-import { GitTracker, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { discoverSkillsFromConfig } from '../../src/commands/skills/skill-discovery.js';
@@ -880,7 +881,7 @@ function baseFrom(
   projection: Projection,
   extentIds: ReadonlySet<string>,
 ): ProjectionBase {
-  const builder = new ProjectionBuilder(root);
+  const builder = new ProjectionBuilder({ root });
   builder.addRoot({ id: builder.identities.rootId, path: safePath.resolve(root) });
 
   for (const row of projection.resources) builder.addResource(row);

@@ -18,9 +18,9 @@
  *    something pins the spelling — and it matters more since the seam moved into
  *    `utils`, which the lab depends on at runtime, putting the tempting import
  *    within reach of every file in the facet.
- * 2. **Merging across PIDs.** One vat invocation spawns a child per phase, so a
- *    reader that took the first file it found would report one phase's timings
- *    and look perfectly healthy doing it. The fixtures give the two PIDs
+ * 2. **Merging across PIDs.** A directory can hold more than one process's dump,
+ *    so a reader that took the first file it found would report one process's
+ *    timings and look perfectly healthy doing it. The fixtures give the two PIDs
  *    *different* numbers, so a first-file reader, a last-file reader and a
  *    merging reader all produce visibly different answers.
  * 3. **An empty directory is a refusal; an empty `entries` array is a reading.**
@@ -46,7 +46,6 @@ import {
   __setCrawlTimingForTest,
   __writeCrawlTimingDumpForTest,
   CRAWL_PASS_INSIDE,
-  CRAWL_SEAM_DUMP_VERSION,
   crawlTimingStart,
   normalizedTmpdir,
   recordCrawlPass,
@@ -55,7 +54,6 @@ import {
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
-  CRAWL_DUMP_VERSION,
   CRAWL_INCUMBENT_STRATUM,
   CRAWL_SHARED_STRATUM,
   CRAWL_TIMING_DIR_ENV,
@@ -117,7 +115,6 @@ function entry(
  */
 function dump(pid: number, wallMs: number, entries: readonly CrawlDumpEntry[]): CrawlDump {
   return {
-    dumpVersion: CRAWL_DUMP_VERSION,
     pid,
     process: { wallMs, cpuUserMs: wallMs / 2, cpuSystemMs: wallMs / 4 },
     charges: FIXTURE_CHARGES,
@@ -161,23 +158,18 @@ describe('crawl dump contract', () => {
     expect(CRAWL_TIMING_DIR_ENV).toBe('VAT_CRAWL_TIMING');
   });
 
-  it('pins this reader to the version the seam actually writes', () => {
-    // The env var above is deliberately NOT imported from the writer, because an
-    // A/B arm may be a seamless build. The VERSION is the opposite case, and the
-    // difference is worth stating: the reader hard-refuses any version it does
-    // not recognise, so when these two drift the symptom is not a subtly wrong
-    // number — it is EVERY dump this build writes being rejected, which reads to
-    // the operator as a broken invocation rather than a stale constant. Two
-    // unrelated literals in two packages could drift silently and nothing would
-    // fail until someone tried to measure. So this one is pinned against the
-    // writer itself.
-    //
-    // ⚠️ This asserts the two are EQUAL, not that either equals a literal. A
-    // literal on both sides would still pass while both were wrong together, and
-    // would additionally have to be edited in two places on every bump — which
-    // is precisely the drift this exists to prevent.
-    expect(CRAWL_DUMP_VERSION).toBe(CRAWL_SEAM_DUMP_VERSION);
-  });
+  // 🪤 There was a third pin here, asserting this reader's `CRAWL_DUMP_VERSION`
+  // equalled the writer's `CRAWL_SEAM_DUMP_VERSION`. Both constants are gone.
+  // The pin was a PROXY for the real cross-package guarantee — that a dump the
+  // seam writes is one this reader accepts — and that guarantee is tested
+  // directly, against a genuine artifact, by 'accepts a dump the real seam
+  // wrote, not a drawing of one' below. The proxy could pass while both numbers
+  // were wrong together, and it could only ever catch a layout change somebody
+  // remembered to announce; the seam shipped two MEANING changes ahead of it and
+  // one of them published a confident false delta in the interval. The env var
+  // above stays pinned as a literal for the opposite reason: an A/B arm may be a
+  // build with no seam, so the lab must compile against a vat that has never
+  // heard of it.
 
   it('accepts a dump with no rows at all', () => {
     // The reading that says "the command reached no crawler". Refusing it would
@@ -428,9 +420,14 @@ describe('readCrawlDumps', () => {
     expect(read.refusal).toContain('crawled nothing');
   });
 
-  it('refuses a dump from another version of the seam', async () => {
-    const directory = await writeDumpDir(root, 'wrong-version', {
-      'crawl-timing-1.json': JSON.stringify({ ...CHILD, dumpVersion: CRAWL_DUMP_VERSION + 1 }),
+  it('refuses a dump from a build that still stamped a dumpVersion, and names the producer', async () => {
+    // The seam used to stamp `dumpVersion` and this reader used to compare it to
+    // an integer of its own; both are gone. Strictness refuses the stale field
+    // for the honest reason — this build does not model it — and the refusal
+    // still names what to re-capture with, because the commonest cause is an
+    // OLDER BUILD's dump rather than a corrupt file.
+    const directory = await writeDumpDir(root, 'stale-version-field', {
+      'crawl-timing-1.json': JSON.stringify({ ...CHILD, dumpVersion: 4 }),
     });
 
     const read = await readCrawlDumps(directory);

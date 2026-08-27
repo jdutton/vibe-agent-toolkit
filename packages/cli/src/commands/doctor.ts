@@ -12,10 +12,12 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import {
   findConfigFile,
-  getToolVersion,
   resolveAssetReference,
   safePath,
 } from '@vibe-agent-toolkit/utils';
+import {
+  getToolVersion,
+} from '@vibe-agent-toolkit/utils/process';
 import type { Command } from 'commander';
 import * as semver from 'semver';
 
@@ -401,7 +403,7 @@ export function checkConfigValid(): DoctorCheckResult {
  */
 const defaultVersionChecker: VersionChecker = {
   async fetchLatestVersion(): Promise<string> {
-    const { safeExecSync } = await import('@vibe-agent-toolkit/utils');
+    const { safeExecSync } = await import('@vibe-agent-toolkit/utils/process');
     const version = safeExecSync('npm', ['view', 'vibe-agent-toolkit', 'version'], {
       encoding: 'utf8',
       stdio: 'pipe',

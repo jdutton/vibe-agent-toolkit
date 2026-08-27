@@ -4,15 +4,29 @@
  *
  * ## The measurement that shapes this
  *
- * Measured on VAT's own tree, 2026-08-23: `vat claude context .` — population
- * plus ONE query — costs **2.9 s**, and `vat claude context` over all
- * directories costs **12.5 s**, so a `whatLoadsAt` query is ~**11.7 ms**. A
- * sweep that queried every directory would spend ~9.6 s of pure repetition to
- * compute **9** distinct answers, turning the ~1.8 s `vat claude budget` costs
- * into ~13 s. That is the cost this module exists to not pay. (The figure was
- * first argued against `vat resources validate`, which ran this sweep behind a
- * default-on check until 2026-08-23; the check is now its own command and the
- * repetition it would pay is unchanged.)
+ * ⚠️ **The original argument's premise is GONE, and the conclusion survived it.**
+ * Measured on VAT's own tree 2026-08-23: a `whatLoadsAt` query cost ~**11.7 ms**,
+ * so querying all 589 directories would have spent ~9.6 s of pure repetition to
+ * compute **9** distinct answers. That 11.7 ms was itself a defect — the query
+ * rebuilt the whole projection's indexes on every call, making per-query cost
+ * proportional to the TREE rather than to the answer. Fixed 2026-08-24
+ * (`claude-context-query.ts`), and re-measured on the same tree a query is now
+ * ~**0.24 ms**: a 47× drop.
+ *
+ * So the saving this module was built for is now ~**0.14 s**, not ~9.6 s.
+ *
+ * ⛔ It does NOT follow that the collapse now saves output. {@link BudgetSweep}
+ * still reports one {@link LocationBudget} per working location — all 589 of
+ * them — because the question "is THIS directory over budget" is asked of a
+ * directory. The collapse has only ever saved QUERIES.
+ *
+ * It is kept for three reasons, none of which is the original 9.6 s: it is
+ * strictly less work than the naive sweep however cheap a query becomes; the
+ * model is now SHARED with `claude-context-cost-map.ts`, whose output genuinely
+ * is one row per region, so deleting it here would fork a model two lanes read;
+ * and the differential oracle that guards it is the reason either lane is
+ * allowed to trust a representative's answer at all. Nobody should re-derive a
+ * performance claim from this paragraph.
  *
  * ⚠️ **The directory count moved, the collapse did not.** Re-measured on the
  * same tree after the context population began declining the gitignored half:
@@ -71,20 +85,32 @@
  * a person or an agent works, and reporting a context budget for build output is
  * noise that teaches people to stop reading the check.
  *
- * ⛔ The filter in {@link workingLocations} is nonetheless kept, unconditionally
- * and with no opt-out, for the reason `buildResourcePopulation` keeps the same
- * line: it is the one place this lane's admitted set is STATED rather than
- * inferred from a parameter two files away, and it is the backstop if the
- * decline predicate and `collectRealization`'s `gitignored` column ever drift.
- * It used to be an `includeIgnored` option; that option became a switch that
- * could not change any answer, which is worse than no switch at all.
+ * ⛔ That filter is nonetheless kept, unconditionally and with no opt-out, for
+ * the reason `buildResourcePopulation` keeps the same line: it is the one place
+ * this lane's admitted set is STATED rather than inferred from a parameter two
+ * files away, and it is the backstop if the decline predicate and
+ * `collectRealization`'s `gitignored` column ever drift. It used to be an
+ * `includeIgnored` option; that option became a switch that could not change any
+ * answer, which is worse than no switch at all.
+ *
+ * ## The collapse itself lives in `claude-context-regions.ts`
+ *
+ * ⚠️ It used to live HERE, privately, and `vat claude context --all`'s cost map
+ * needed the same grouping. Two copies of a model whose whole value is that it
+ * agrees with `whatLoadsAt` is the drift this module's own docstring warns
+ * about, one level up. So the location walk, the representative walk and the
+ * `claude-md` vocabulary are now ONE implementation that both callers read, and
+ * what remains here is the part that is genuinely this lane's: applying a
+ * THRESHOLD, which the cost map deliberately has no notion of.
+ *
+ * The differential oracle named above still guards it, and now guards it for
+ * both callers.
  */
 
-import { CLAUDE_MD_TAG } from './agentic-tags.js';
 import { account } from './claude-context-accounting.js';
-import { ancestorDirectories } from './claude-context-ancestry.js';
 import { alwaysLoadedBudget, type AlwaysLoadedBudget } from './claude-context-budget.js';
 import { whatLoadsAt } from './claude-context-query.js';
+import { claudeMdIdentities, comparePaths, contextRegions } from './claude-context-regions.js';
 import type { Projection } from './projection.js';
 
 /** One working location's budget, and the query that produced it. */
@@ -147,27 +173,37 @@ export function sweepAlwaysLoadedBudgets(
   threshold: number,
 ): BudgetSweep {
   const claudeMdIds = claudeMdIdentities(projection);
-  const instructedDirs = instructedDirectories(projection, claudeMdIds);
-  const locations = workingLocations(projection);
+  const regions = contextRegions(projection);
 
   const state: SweepState = { projection, threshold, claudeMdIds, answers: new Map(), queries: 0 };
   const results: LocationBudget[] = [];
+  let evaluated = 0;
   let skipped = 0;
 
-  for (const directory of locations) {
-    const representative = representativeFor(directory, instructedDirs);
-    const budget = budgetOnce(state, representative);
+  // Region-major, then sorted back to directory order below. Iterating the
+  // collapse directly is what makes "one query per distinct chain" structural
+  // rather than a property of a memo: there is no longer a per-directory call
+  // site for a future edit to reintroduce.
+  for (const region of regions) {
+    evaluated += region.locations.length;
+    const budget = budgetOnce(state, region.representative);
     if (budget === null) {
-      skipped += 1;
+      skipped += region.locations.length;
       continue;
     }
-    results.push({ directory, representative, budget });
+    for (const directory of region.locations) {
+      results.push({ directory, representative: region.representative, budget });
+    }
   }
 
   return {
-    locations: results,
+    // ⛔ Sorted HERE rather than inherited from the iteration order. The field is
+    // documented as directory-ordered and consumers diff it across runs; region
+    // order is representative-major, which interleaves directories from
+    // different regions and would report churn nobody caused.
+    locations: results.toSorted((left, right) => comparePaths(left.directory, right.directory)),
     queriedDirectories: state.queries,
-    evaluatedDirectories: locations.length,
+    evaluatedDirectories: evaluated,
     skippedUnknownLocations: skipped,
   };
 }
@@ -191,98 +227,6 @@ interface SweepState {
   readonly answers: Map<string, AlwaysLoadedBudget | null>;
   /** `whatLoadsAt` calls issued so far — see {@link BudgetSweep.queriedDirectories}. */
   queries: number;
-}
-
-/**
- * The `claude-md`-tagged identities.
- *
- * ⛔ Read off `resource_tags` rather than re-derived from basenames. The whole
- * point of the tag is that the 4 MiB cliff, root discovery and this sweep read
- * ONE vocabulary — the shipped `classifyPath`'s — and a second basename rule here
- * would be free to disagree with it the moment either changed.
- *
- * @param projection - The populated projection
- * @returns Every `resourceId` carrying {@link CLAUDE_MD_TAG}
- */
-function claudeMdIdentities(projection: Projection): ReadonlySet<string> {
-  return new Set(
-    projection.resourceTags
-      .filter((tag) => tag.tag === CLAUDE_MD_TAG)
-      .map((tag) => tag.resourceId),
-  );
-}
-
-/**
- * Every directory holding at least one `claude-md` file — the candidate
- * representatives.
- *
- * ⚠️ Derived from ALL realizations, deliberately WITHOUT the `gitignored` filter
- * {@link workingLocations} applies. Which locations are REPORTED is a separate
- * question from what the harness loads, and filtering here would give the
- * directories beneath an instructed-but-ignored `CLAUDE.md` their grandparent's
- * numbers. Nothing the context population produces is `gitignored` today, so the
- * two sets agree — the asymmetry is kept because it is the correct one, not
- * because it currently matters.
- *
- * @param projection - The populated projection
- * @param claudeMdIds - The `claude-md`-tagged identities
- * @returns The directories, as `resource_realizations.dir` spells them
- */
-function instructedDirectories(
-  projection: Projection,
-  claudeMdIds: ReadonlySet<string>,
-): ReadonlySet<string> {
-  const dirs = new Set<string>();
-  for (const row of projection.resourceRealizations) {
-    if (!row.isDirectory && claudeMdIds.has(row.resourceId)) dirs.add(row.dir);
-  }
-  return dirs;
-}
-
-/**
- * The distinct working locations, sorted by code point.
- *
- * A location is any directory something is realized IN, plus the corpus root,
- * which is a working location whether or not anything sits directly in it.
- *
- * @param projection - The populated projection
- * @returns Root-relative directories, `''` first
- */
-function workingLocations(projection: Projection): readonly string[] {
-  const dirs = new Set<string>(['']);
-  for (const row of projection.resourceRealizations) {
-    // Unconditional, and with no opt-out — see the module docstring. The context
-    // population declines the ignored half, so this can only fire if that
-    // decline and this column ever drift.
-    if (row.gitignored) continue;
-    dirs.add(row.dir);
-  }
-  return [...dirs].sort(comparePaths);
-}
-
-/**
- * The nearest ancestor of `directory` — itself included — that carries a
- * `claude-md` file, or the corpus root when none does.
- *
- * ⛔ Walks the SEGMENT chain `ancestorDirectories` builds rather than testing
- * string prefixes, and that is the defect this function exists to not have:
- * `'packages/cli-x'.startsWith('packages/cli')` is true, so a prefix test hands
- * a sibling package its neighbour's budget. Reusing the query's own primitive
- * also keeps the two models reading one definition of "ancestor".
- *
- * @param directory - The working location
- * @param instructedDirs - Directories holding a `claude-md` file
- * @returns The representative directory; `''` when nothing above is instructed
- */
-function representativeFor(directory: string, instructedDirs: ReadonlySet<string>): string {
-  const chain = ancestorDirectories(directory);
-  // Deepest-first: the NEAREST instructed ancestor wins, and the walk terminates
-  // at index 0, which `ancestorDirectories` guarantees is `''`.
-  for (let index = chain.length - 1; index >= 0; index -= 1) {
-    const candidate = chain[index];
-    if (candidate !== undefined && instructedDirs.has(candidate)) return candidate;
-  }
-  return '';
 }
 
 /**
@@ -311,21 +255,4 @@ function budgetOnce(state: SweepState, representative: string): AlwaysLoadedBudg
         );
   state.answers.set(representative, budget);
   return budget;
-}
-
-/**
- * Order two root-relative paths by UTF-16 code point.
- *
- * ⚠️ Deliberately NOT `String.localeCompare`, matching every other ordering in
- * this lane (`claude-context-ancestry.ts`, `claude-import-extent.ts`): ICU
- * collation is locale-dependent, and a sweep is exactly the kind of output that
- * gets diffed between two machines.
- *
- * @param left - One root-relative directory
- * @param right - The other
- * @returns Negative, zero or positive, per the `Array#sort` contract
- */
-function comparePaths(left: string, right: string): number {
-  if (left === right) return 0;
-  return left < right ? -1 : 1;
 }

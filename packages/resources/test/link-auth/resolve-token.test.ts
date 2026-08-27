@@ -1,3 +1,5 @@
+import { safeExecResult } from '@vibe-agent-toolkit/utils/process';
+import type * as UtilsProcess from '@vibe-agent-toolkit/utils/process';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -6,13 +8,14 @@ import {
   scrubGitEnv,
   type TokenResolutionDeps,
 } from '../../src/link-auth/resolve-token.js';
-import { safeExecResult } from '../../src/safe-exec.js';
 
 // Mock safeExecResult so we can unit-test defaultRunCommand without spawning.
 // Existing tests below inject their own `runCommand` via makeDeps, so they never
 // reach the mocked module — this mock only affects the `defaultRunCommand`
-// describe block at the bottom.
-vi.mock('../../src/safe-exec.js', () => ({
+// describe block at the bottom. `importOriginal` keeps the rest of the process
+// subpath real, so any other consumer in this module graph is untouched.
+vi.mock('@vibe-agent-toolkit/utils/process', async (importOriginal) => ({
+  ...(await importOriginal<typeof UtilsProcess>()),
   safeExecResult: vi.fn(),
 }));
 

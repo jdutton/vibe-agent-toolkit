@@ -9,10 +9,12 @@
  * keys throw `TemplateMissingVarError`. Unknown transform names propagate
  * `UnknownTransformError` from the transforms allowlist.
  *
- * This is NOT the project's general-purpose Handlebars renderer
- * (`utils/template.ts`) — that one is `{{...}}` and consumed widely. linkAuth
- * needs different syntax and a closed transform set; the two coexist by
- * namespace (`link-auth/template.ts`).
+ * This is NOT the package's general-purpose Handlebars renderer
+ * (`../handlebars-template.ts`, exported as `renderHandlebarsTemplate`) — that
+ * one is `{{...}}` and compiles arbitrary expressions. linkAuth needs different
+ * syntax and a closed transform set, so a rule reaching the Handlebars renderer
+ * by mistake would gain an expression language it is designed not to have. The
+ * two carry different function names for that reason, not only different paths.
  */
 
 import { applyTransform } from './transforms.js';

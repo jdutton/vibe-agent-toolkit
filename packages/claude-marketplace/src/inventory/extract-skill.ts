@@ -6,17 +6,21 @@ import {
 	walkLinkGraph,
 	type WalkableRegistry,
 } from '@vibe-agent-toolkit/agent-skills';
-import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import { loadConfig, ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import {
-	compareCodeUnits,
-	CRAWL_REGISTRY_ENUMERATE_ID,
-	crawlDirectory,
-	crawlTimingStart,
-	findProjectRoot,
-	type GitTracker,
-	recordRegistryPass,
-	safePath,
+  compareCodeUnits,
+  CRAWL_REGISTRY_ENUMERATE_ID,
+  crawlTimingStart,
+  findProjectRoot,
+  recordRegistryPass,
+  safePath,
 } from '@vibe-agent-toolkit/utils';
+import {
+  crawlDirectory,
+} from '@vibe-agent-toolkit/utils/crawl';
+import {
+  type GitTracker,
+} from '@vibe-agent-toolkit/utils/git';
 
 import { type InventoryPopulation } from './inventory-population.js';
 import { ClaudeSkillInventory } from './types.js';
@@ -234,6 +238,33 @@ async function parseFrontmatterFields(
  * function states: this route is reachable from a projection contributor in
  * principle, and a call site that names an arm it cannot know is how one arm's
  * work lands on the other's total.
+ *
+ * ## Why the config is READ here rather than threaded in
+ *
+ * A collection may declare a `mimeType` that overrides `mime-type.ts`'s
+ * extension tables, and `ResourceRegistry` honours it only when handed a config.
+ * `vat inventory`'s other arm — the projection in `inventory-population.ts` —
+ * reads those declarations off the root, so a config-less registry here made the
+ * walker arm and the projection arm disagree about whether a linked file is
+ * prose, and therefore about which files it links to at all.
+ *
+ * This function takes a root and nothing else because its root is discovered
+ * PER SKILL (`findProjectRoot` from each SKILL.md's directory) and one run
+ * routinely spans many — the same reason `GitTrackerSource` above is a function
+ * of the root rather than a value. There is no caller-held config that governs
+ * them all, so the declarations are read where the root is known, exactly as
+ * `crawlAndResolveRegistry` and `createProjectRegistry` do.
+ *
+ * A config that exists and will not parse falls back to no declarations rather
+ * than failing the crawl. `vat inventory`'s subject is frequently a THIRD
+ * PARTY's plugin, and its pinned behaviour is to tolerate a broken config,
+ * blame the CONFIG rather than its own lane, and still deliver a complete
+ * inventory from the link walk — see
+ * `cli/test/integration/config-broken-behavior.integration.test.ts`. Letting the
+ * load throw here would surface instead as `link walk failed: …` filed against
+ * the SKILL's own path, which is precisely the misattribution that row exists to
+ * prevent. Nothing is hidden by the fallback: a config that will not parse gives
+ * the projection arm no declarations either, so the two arms still agree.
  */
 export async function crawlSkillLinkRegistry(projectRoot: string): Promise<ResourceRegistry> {
 	const enumerationStartedAt = crawlTimingStart();
@@ -245,7 +276,11 @@ export async function crawlSkillLinkRegistry(projectRoot: string): Promise<Resou
 		includeUntracked: true,
 	});
 	recordRegistryPass(CRAWL_REGISTRY_ENUMERATE_ID, enumerationStartedAt);
-	const registry = new ResourceRegistry({ baseDir: projectRoot });
+	const config = await loadConfig(projectRoot).catch(() => undefined);
+	const registry = new ResourceRegistry({
+		baseDir: projectRoot,
+		...(config !== undefined && { config }),
+	});
 	await registry.addResources(files);
 	registry.resolveLinks();
 	return registry;

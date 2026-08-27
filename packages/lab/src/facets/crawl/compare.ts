@@ -45,7 +45,6 @@ import {
 import { crawlEntryKey } from './dump.js';
 import {
   CRAWL_FACET,
-  CRAWL_FACET_VERSION,
   type CrawlAttribution,
   CrawlBodySchema,
   type CrawlCommandStats,
@@ -55,7 +54,6 @@ import {
 /** This facet's body contract, as the shared comparison gates need it. */
 const CRAWL_CONTRACT = {
   facet: CRAWL_FACET,
-  version: CRAWL_FACET_VERSION,
   schema: CrawlBodySchema,
 } as const;
 

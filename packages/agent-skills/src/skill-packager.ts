@@ -53,8 +53,10 @@ import {
   resolveAssetReference,
   toForwardSlash,
   safePath,
-  type GitTracker,
 } from '@vibe-agent-toolkit/utils';
+import {
+  type GitTracker,
+} from '@vibe-agent-toolkit/utils/git';
 
 import { CLAUDE_WEB_REFERENCES_SUBDIR, getTargetSubdir } from './content-type-routing.js';
 import {
@@ -72,6 +74,7 @@ import {
   checkPackagedTestInput,
   partitionTestInputFileEntries,
   resolveTestInputDirs,
+  type ConventionalSuiteProbe,
   type DeclaredEvalSuite,
   testInputExcludeRules,
   testInputFileEntryIssues,
@@ -320,11 +323,20 @@ export interface PackageSkillOptions {
  * repo has been bitten by). It is required rather than defaulted because the test-input
  * rule is project-wide: omitting it silently packages another skill's eval answer key.
  * A lane with genuinely no project to enumerate passes `[]` explicitly.
+ *
+ * `hasConventionalSuite` is the RUN's conventional-suite probe, and travels with
+ * `projectSkills` for the same reason and on the same schedule: this conversion runs
+ * once per skill and asks the filesystem about every root in `projectSkills`, so a
+ * per-call probe makes a build of S skills cost S² probes over S paths. Required, not
+ * defaulted — a `probe?` would let every existing caller keep the quadratic silently,
+ * which is precisely how the `projectSkills` rule above once shipped as a no-op. A
+ * lane packaging a single skill calls `conventionalSuiteProbe()` at its own call site.
  */
 export function packagingConfigToPackageOptions(
   config: SkillPackagingConfig,
   anchors: { skillPath: string; outputPath: string },
   projectSkills: readonly DeclaredEvalSuite[],
+  hasConventionalSuite: ConventionalSuiteProbe,
 ): PackageSkillOptions {
   return {
     outputPath: anchors.outputPath,
@@ -354,7 +366,9 @@ export function packagingConfigToPackageOptions(
     // excluded as well. Keyed to this skill alone, that sibling's answer key was
     // ordinary content and shipped.
     ...(() => {
-      const testInputDirs = resolveTestInputDirs(config, dirname(anchors.skillPath), projectSkills);
+      const testInputDirs = resolveTestInputDirs(
+        config, dirname(anchors.skillPath), projectSkills, hasConventionalSuite,
+      );
       return testInputDirs.length > 0 ? { testInputDirs } : {};
     })(),
   };

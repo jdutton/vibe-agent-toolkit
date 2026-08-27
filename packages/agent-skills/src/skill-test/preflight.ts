@@ -7,7 +7,7 @@ import {
   type AuthMode,
   type AuthStatusProbe,
   type ResolvedAuth,
-} from '@vibe-agent-toolkit/utils';
+} from '@vibe-agent-toolkit/utils/skill-test';
 
 export interface PreflightCheck {
   name: string;

@@ -6,8 +6,11 @@
  * - `id` / `name` attributes as fragment anchors
  * - well-formedness diagnostics from parse5's `onParseError`
  *
- * Uses parse5 (WHATWG-conformant). The parse5 document + element walker are
- * exported so the link rewriter (html-transform.ts) shares one parser path.
+ * Uses parse5 (WHATWG-conformant). The parse5 document, element walker and
+ * attribute helpers ({@link findAttr} / {@link sourceSpelling}) are exported so
+ * the link rewriter (html-transform.ts) shares one parser path — including one
+ * answer to "what key is this attribute's span filed under", which the two
+ * modules previously answered differently and only one of them correctly.
  *
  * Non-goal: `<base href>` is not honored — relative links are resolved against
  * the file's own directory, not a document base.
@@ -64,8 +67,18 @@ export function parseHtmlDocument(source: string): HtmlDocument {
  *
  * Deliberate gap: a `<template>` element's content lives in its separate
  * `content` fragment (not `childNodes`), so links inside `<template>` are not
- * walked, and foreign-content (SVG/MathML) subtrees are not special-cased.
- * Both are rare in the content link graph we rewrite.
+ * walked. That is rare in the content link graph we rewrite.
+ *
+ * ⛔ This used to add "and foreign-content (SVG/MathML) subtrees are not
+ * special-cased", grouped with `<template>` as a second gap. That reads as "we
+ * do not see them", which is false: foreign content lives in ordinary
+ * `childNodes` and every element in it is yielded here. What is not
+ * special-cased is namespace-aware *matching* — an SVG or MathML `<a>` has
+ * `tagName === 'a'` exactly like an HTML one, so it is picked up by both
+ * consumers, and its `xlink:href` is read and located via
+ * {@link sourceSpelling}. The real remaining gap is narrower and worth naming:
+ * SVG's own image element is `<image>`, not `<img>`, so `<image xlink:href>` is
+ * matched by no tag→attribute table in either consumer.
  */
 export function* walkElements(node: P5Node): Generator<P5Element> {
   if ('tagName' in node) {
@@ -83,9 +96,23 @@ function getAttr(element: P5Element, name: string): string | undefined {
 }
 
 /** One parse5 attribute token, as it appears on `element.attrs`. */
-type P5Attribute = P5Element['attrs'][number];
+export type P5Attribute = P5Element['attrs'][number];
 
-function findAttr(element: P5Element, name: string): P5Attribute | undefined {
+/**
+ * The attribute token named `name`, or `undefined` when the element has none.
+ *
+ * Exported alongside {@link sourceSpelling} because the two are a **pair**, and
+ * splitting them is the defect: this finder matches on `attr.name`, which for a
+ * namespaced attribute is the bare local name, so every caller that then looks
+ * the attribute's position up must spell it back with `sourceSpelling`. Both
+ * this module and `html-transform.ts` need the pair; a second private copy of
+ * the finder in the rewriter is how it came to be fixed here and not there.
+ *
+ * @param element - The element whose attributes to search
+ * @param name - The attribute's **local** name, lowercased as parse5 stores it
+ * @returns The matching attribute token, or `undefined`
+ */
+export function findAttr(element: P5Element, name: string): P5Attribute | undefined {
   return element.attrs.find((a) => a.name === name);
 }
 
@@ -95,17 +122,30 @@ function findAttr(element: P5Element, name: string): P5Attribute | undefined {
  *
  * ⛔ Not the same string as `attr.name`, and the difference is not cosmetic.
  * parse5 splits a namespaced attribute into a `prefix` and a `name`, so an SVG
- * `<a xlink:href="doc.md">` arrives as `{ prefix: 'xlink', name: 'href' }` —
- * `attrs.find(a => a.name === 'href')` matches it, and then a location lookup
- * keyed on `'href'` misses, because parse5 recorded the span under
- * `'xlink:href'`. The link was therefore emitted span-less and dropped
- * downstream: the same silent zero the whole-attribute span fix removes for
- * ordinary `href`, surviving in the one shape nothing tested.
+ * or MathML `<a xlink:href="doc.md">` arrives as `{ prefix: 'xlink', name:
+ * 'href' }` — {@link findAttr} matches it on `'href'`, and then a location
+ * lookup keyed on that same `'href'` misses, because parse5 recorded the span
+ * under `'xlink:href'` (measured, for `<svg>`, `<math>`, and the uppercase
+ * `XLINK:HREF` alike: parse5 folds the location key to lowercase while leaving
+ * the source text's casing intact).
+ *
+ * Both consumers of a span lost something different to it, and neither threw:
+ *
+ * - **This parser** emitted the link span-less, so `blob-references.ts ›
+ *   astCandidates` dropped it — the same silent zero the whole-attribute span
+ *   fix removes for ordinary `href`, surviving in the one shape nothing tested.
+ * - **`html-transform.ts › rewriteHtmlLinks`** could not locate the value to
+ *   splice, so it took its `no-source-location` branch and the href rewrite was
+ *   silently dropped from an otherwise byte-perfect page.
+ *
+ * That second lane is why this lives here as an export rather than as a private
+ * helper: it was fixed in this file and copied nowhere, so the rewriter kept
+ * the bug for as long as the two modules each spelled attributes their own way.
  *
  * @param attr - The attribute token to spell
  * @returns `prefix:name` when the attribute is namespaced, `name` otherwise
  */
-function sourceSpelling(attr: P5Attribute): string {
+export function sourceSpelling(attr: P5Attribute): string {
   return attr.prefix === undefined || attr.prefix === '' ? attr.name : `${attr.prefix}:${attr.name}`;
 }
 
@@ -202,8 +242,27 @@ function elementText(element: P5Element): string {
  * `null`: a mutation written straight off the old wording was a silent no-op,
  * because `?.` short-circuits on both alike and no assertion told them apart.
  *
- * Where a location IS absent it is absent for line and offsets **together**,
- * so no branch here has to invent half a position.
+ * Where the ELEMENT's location is absent it is absent for line and offsets
+ * **together**, so that branch never has to invent half a position.
+ *
+ * ⛔ That sentence used to be stated unqualified — "where a location IS absent
+ * it is absent for line and offsets together, so no branch here has to invent
+ * half a position" — and it was FALSE, because it conflates two independent
+ * absences. The element's location and the *attribute's* span go missing for
+ * different reasons, and the line below draws from both: `span?.startLine ??
+ * element.sourceCodeLocation?.startLine`. A namespaced `xlink:href` is exactly
+ * the shape where the element has a full location and the attribute span lookup
+ * misses, and the result was measured, not reasoned: `{ line: 1 }` with **no
+ * offsets** — half a position, invented by the very fallback the sentence said
+ * could not fire. `blob-references.ts › hasReferenceSpan` then rejected the row.
+ *
+ * The fix is {@link sourceSpelling}, not parse5: nothing about the parser
+ * guarantees the two absences coincide, and a future lookup keyed on anything
+ * other than the source spelling reopens the same half-position outcome. The
+ * unqualified claim also travelled — `schemas/projection-blobs.ts` asserted of
+ * `blob_references` that "line and offsets come from one `position` object, so
+ * they are present or absent together and no new skip class exists", which is
+ * true of the mdast producer and was never true of this one.
  *
  * ⚠️ That branch is now DEFENSIVE ONLY, and this is stated rather than left
  * for a reader to discover: the only elements parse5 leaves un-located are

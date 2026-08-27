@@ -1,7 +1,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { crawlDirectory, gitFindRoot, GitTracker, NEVER_CRAWL_GLOBS, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
+import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { detectFormat } from '../detectors/format-detector.js';
 import { createPatternFilter } from '../filters/pattern-filter.js';

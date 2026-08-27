@@ -16,7 +16,9 @@ bun add @vibe-agent-toolkit/utils
 
 Every area has its own subpath. Import the one you need.
 
-The package sets `"sideEffects": false`, so a modern bundler will tree-shake unused code out of the `.` barrel — importing `safePath` from `.` and from `./path` produce near-identical bundles. **Subpaths are not primarily a size optimization.** What they control is what your build has to *resolve* and what your module graph *reaches*: the `.` barrel reaches `yaml`, `handlebars`, and `node:fs` no matter what you destructure from it, so it cannot be bundled for a browser target and requires every dependency to be installed. A narrow entry reaches only what it needs.
+The package sets `"sideEffects": false`, so a modern bundler will tree-shake unused code out of the `.` barrel — importing `safePath` from `.` and from `./path` produce near-identical bundles. **Subpaths are not primarily a size optimization.** What they control is what your build has to *resolve* and what your module graph *reaches*. A narrow entry reaches only what it needs.
+
+**The `.` barrel reaches no third-party package at all.** Every domain that carries a dependency — directly or transitively — is a subpath: `./crawl`, `./git`, `./process`, `./skill-test`, `./yaml`. That is asserted by equality in `test/subpath-purity.test.ts`, so the barrel cannot silently regain one. It still reaches `node:fs` and friends, so it is Node-only; what it does not do is make a consumer of `safePath` install a template engine.
 
 The last two columns are the ones that matter when choosing. **"Resolves with zero deps installed?"** is the sharper of the two: it separates an entry that is merely *heavy* from one that is *unbuildable* in an environment where the package's third-party dependencies are absent or unresolvable.
 
@@ -26,29 +28,35 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 | `./text` | `decodeTextContent` — the one bytes-to-text seam: BOM-announced UTF-8/UTF-16LE/UTF-16BE/UTF-32LE/UTF-32BE, BOM stripped, UTF-8 assumed otherwise; reports the encoding, whether it was a BOM fact or an assumption, and how many U+FFFD the decode substituted | **none** | — | **yes** |
 | `./zod` | `ZodTypeNames`, `getZodTypeName`, `isZodType`, `unwrapZodType`, `isZodOptional`, `isZodNullable` | **none** | — | **yes** |
 | `./glob` | `isGlob`, static base extraction, magic remainder | `path` only | — | **yes** |
-| `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `fillSiblingNames`, `classifyFilenameCaseFrom`, `FsLookupCache`, `readTextContent`, `readTextContentSync` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
+| `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `fillSiblingNames`, `classifyFilenameCaseFrom`, `FsLookupCache`, `readTextContent`, `readTextContentSync` | `fs`, `fs/promises`, `os`, `path`, `url`, `util` | — | **yes** |
 | `./testing` | `getTestOutputDir`, `getTestOutputBase`, `setupAsyncTempDirSuite`, `setupSyncTempDirSuite`, `removeScratchDir`, `symlinkCapability`, `createSymlink`, `createSymlinkAsync` | `crypto`, `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./asset` | `resolveAssetReference` — paths and npm bare specifiers | `fs`, `module`, `os`, `path`, `url` | — | **yes** |
 | `./yaml` | `updateYamlIn`, `verifyConfinedYamlEdit` — byte-surgical YAML edits | **none** | `yaml` | no — needs `yaml` |
-| `./template` | `renderTemplate` — cached Handlebars | **none** | `handlebars` | no — needs `handlebars` |
-| `./process` | `safeExecSync`, `safeExecResult`, `safeExecFromString`, `isToolAvailable`, `getToolVersion`, `hasShellSyntax`, `CommandExecutionError`, `spawnHardened`, `shouldUseShell`, `windowsShellQuote`, `buildWindowsShellLine`, `resolveShellCommandToken`, `isPathLike`, `makeStdioBlocking`, `describeStdioBlocking` | `child_process`, `path` | `which` | no — needs `which` |
-| `./git` | `gitFindRoot`, `gitLsFiles`, `isGitIgnored`, `loadGitignoreRules`, `GitTracker`, `parseGitUrl`, `isGitUrl`, `nonInteractiveGitOverrides` | `child_process`, `fs`, `os`, `path`, `url` | `ignore`, `which` | no — needs `which`, `ignore` |
-| `./crawl` | `crawlDirectory`, `crawlDirectorySync`, `NEVER_CRAWL_GLOBS`, `BUILD_OUTPUT_GLOBS` | `child_process`, `fs`, `os`, `path`, `url` | `picomatch`, `which` | no — needs `picomatch`, `which` |
-| `./project` | `findProjectRoot`, `findConfigFile`, `findNodeWorkspaceRoot`, `resetProjectRootCaches` | `fs`, `path` | — | **yes** |
+| `./process` | `safeExecSync`, `safeExecResult`, `safeExecFromString`, `isToolAvailable`, `getToolVersion`, `hasShellSyntax`, `CommandExecutionError`, `spawnHardened`, `shouldUseShell`, `windowsShellQuote`, `buildWindowsShellLine`, `resolveShellCommandToken`, `isPathLike`, `makeStdioBlocking`, `describeStdioBlocking` | `child_process`, `path` | `@vibe-validate/git`, `which` | no — needs both |
+| `./git` | `runGit`, `runGitOrThrow`, `gitFindRoot`, `gitLsFiles`, `gitLsOthers`, `isGitIgnored`, `loadGitignoreRules`, `GitTracker`, `gitTreeSnapshot`, `peekGitTreeSnapshot`, `withGitSnapshotCache`, `parseGitUrl`, `isGitUrl`, `nonInteractiveGitOverrides` | `async_hooks`, `fs`, `fs/promises`, `os`, `path`, `url` | `@vibe-validate/git`, `ignore` | no — needs both |
+| `./crawl` | `crawlDirectory`, `crawlDirectorySync`, `crawlPathFilter`, `NEVER_CRAWL_GLOBS`, `BUILD_OUTPUT_GLOBS` | `fs`, `os`, `path`, `url` | `@vibe-validate/git`, `picomatch` | no — needs both |
+| `./skill-test` | `spawnHeadlessClaude`, `assembleClaudeArgs`, `killAllActiveClaudeChildren`, `resolveAuth`, `probeAuthStatus`, `AuthPreflightError`, `applyDeclaredEnv`, `buildForwardedEnv`, `formatForwardedEnvLine`, `isProtectedName`, `protectedEnvNames`, `parseStreamJsonTranscript`, `detectInvocationFromTranscript` | `child_process`, `path`, `stream` | `@vibe-validate/git`, `which` | no — needs both |
+| `./project` | `findProjectRoot`, `findConfigFile`, `findNodeWorkspaceRoot`, `resetProjectRootCaches` | `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./eslint` | the 22 ESLint rules that enforce everything above — see [ESLint rules](#eslint-rules--vibe-agent-toolkitutilseslint) | **none** | — | **yes** |
-| `.` | every runtime entry above (not `./eslint`) | all of the above, plus `stream` | `handlebars`, `ignore`, `picomatch`, `which`, `yaml` | no — needs all of them |
+| `.` | the dependency-free entries above — path, text, fs, asset, project, testing, zod, glob, plus the crawl-timing seam | `async_hooks`, `crypto`, `fs`, `fs/promises`, `module`, `os`, `path`, `url`, `util` | — | **yes** |
 | `./package.json` | the manifest itself, for version reporting and resolution assertions | — | — | **yes** |
 
 Note `./zod` reaches nothing at all: it detects Zod types by duck-typing `_def.typeName` rather than importing Zod, which is exactly why it works across Zod v3 and v4.
 
-`./crawl` is the only *subpath* that reaches `picomatch` (the `.` barrel also reaches it, via linkAuth's host-pattern matching), and it is deliberately *not* folded into `./glob` — `./glob` is guarded as portable (`node:path`, no third-party), and directory crawling would break both halves of that guarantee.
+`./crawl` is the only entry that reaches `picomatch`, and it is deliberately *not* folded into `./glob` — `./glob` is guarded as portable (`node:path`, no third-party), and directory crawling would break both halves of that guarantee.
+
+`./skill-test` declares no dependency of its own; it is a separate entry because of what it *reaches*. Spawning a headless agent goes through `./process`, which costs `which` and — because `safeExecSync` refuses the `git` binary and delegates — `@vibe-validate/git`. Reachability is the criterion, not the import a module happens to write.
+
+`./git` is the only published route to `runGit`. `safeExecSync` and `safeExecResult` on `./process` refuse `git` outright and point here, so a caller that wants git gets the scrubbed environment by construction rather than by remembering to ask.
 
 ```typescript
 // Reaches node:path and nothing else
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils/path';
+
+// Reaches `which` and @vibe-validate/git — a real install cost, so it is its own entry
 import { safeExecSync, spawnHardened } from '@vibe-agent-toolkit/utils/process';
 
-// Reaches yaml, handlebars, and node:fs regardless of what you destructure
+// Reaches node builtins only — no third-party package, whatever you destructure
 import { safePath } from '@vibe-agent-toolkit/utils';
 ```
 
@@ -62,8 +70,8 @@ This package targets **Node >= 22** and is not published for browsers. Most entr
 
 A guard test in `test/subpath-purity.test.ts` walks each entry's transitive source graph and enforces **both** of the table's last two columns:
 
-- **Third-party reach** — the "Resolves with zero deps installed?" column. Every entry's expected third-party set is asserted exactly, so every **yes** row above is a tested claim rather than a documented intention, and adding a dependency to any entry is a deliberate, reviewed edit.
-- **Builtin reach** — five entries are held to a stricter contract still: `./zod`, `./yaml`, `./template` reach **no Node builtin at all**, and `./path`, `./glob` reach **`node:path` and nothing else** — the one builtin every bundler shims.
+- **Third-party reach** — the "Resolves with zero deps installed?" column. Every entry's expected third-party set is asserted exactly, so every **yes** row above is a tested claim rather than a documented intention, and adding a dependency to any entry is a deliberate, reviewed edit. The `.` row asserts `[]`, which is the load-bearing one: a dependency arriving on the barrel — through any module it exports, at any depth — reddens that assertion, and the fix is a new subpath rather than a longer expected list.
+- **Builtin reach** — five entries are held to a stricter contract still: `./zod`, `./yaml`, `./text` reach **no Node builtin at all**, and `./path`, `./glob` reach **`node:path` and nothing else** — the one builtin every bundler shims.
 
 That is an enforced invariant, not a browser-support commitment: there are no browser export conditions and no browser test lane. The guard exists so the property can't regress silently — it fails loudly if it cannot resolve a module, so it can't pass vacuously; `test/fixtures/dangling-import/` exercises that failure so the guarantee is demonstrated, not just claimed. If you add a new entry, add it to that test or nothing protects it.
 
@@ -197,7 +205,7 @@ These are CLI-boundary functions: inner libraries should take a root as a parame
 
 **These four are VAT-shaped — read this before reaching for them.** `findProjectRoot()` looks for `vibe-agent-toolkit.config.yaml` and then `.git/`; if your repo's notion of "root" is a `pnpm-workspace.yaml`, a `turbo.json`, or a lockfile, that ladder is not your ladder — and for a *published* package, keying anything on `.git/` is a bug, since it will not be there at install time. `findNodeWorkspaceRoot()` is narrower still: it needs a `package.json` carrying a `"workspaces"` key, which pnpm and Bun workspaces do not have. `findConfigFile()` hardcodes VAT's config filename. If you want a git root, take `gitFindRoot()` from [`./git`](#git--vibe-agent-toolkitutilsgit); if you want your own marker, a six-line walk-up is more honest than a helper whose ladder you have to work around.
 
-They are nonetheless on their own [`./project`](#import-narrowly) entry rather than the barrel alone. The entry was briefly withdrawn on the grounds that the functions fit few repos — which is true, and is what the paragraph above says — but that answered the wrong question. What decides whether an *entry* exists is how heavy the only remaining door is: barrel-only, these four cost `handlebars`, `yaml`, `picomatch`, `ignore` and `which` to reach, while their own code imports nothing but `node:fs` and `node:path`. Publishing the entry is not a claim that the ladder fits you — only that finding out shouldn't cost five dependencies.
+They are nonetheless on their own [`./project`](#import-narrowly) entry rather than the barrel alone. The entry was briefly withdrawn on the grounds that the functions fit few repos — which is true, and is what the paragraph above says — but that answered the wrong question. What decides whether an *entry* exists is how heavy the only remaining door is, and barrel-only these four once cost five third-party packages to reach while their own code imports nothing but `node:fs` and `node:path`. Publishing the entry is not a claim that the ladder fits you — only that finding out shouldn't cost a dependency graph. The barrel is dependency-free now, which is that same rule applied everywhere rather than a reason to fold `./project` back in.
 
 ### Directory crawling — `@vibe-agent-toolkit/utils/crawl`
 

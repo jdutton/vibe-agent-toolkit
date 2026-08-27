@@ -26,7 +26,7 @@ let macrosCache: Record<string, Record<string, unknown>> | undefined;
  *
  * Why lazy: vitest tests elsewhere in the repo mock `node:fs` (replacing
  * `readFileSync` with `vi.fn()` that returns `undefined`). If we eagerly read
- * at module load, any unrelated test that imports `@vibe-agent-toolkit/utils`
+ * at module load, any unrelated test that imports `@vibe-agent-toolkit/resources`
  * and mocks fs crashes inside `parseYaml(undefined)` — module-init code runs
  * unconditionally, before the mock-setup intent reaches our file.
  *

@@ -102,6 +102,13 @@ const localRulesConfig = {
   'local/no-file-url-string-concat': 'error',
   'local/prefer-startswith-over-regex': 'error',
   'local/require-justified-skip': 'error',
+  // Repo-wide, not scoped to the CLI: the hazard is that a phase entry point
+  // grows a `process.exit()` and silently truncates an orchestrated run, and the
+  // whole point of keying on the `…Phase` name is that a NEW phase — wherever
+  // someone puts it — is covered the moment it is named like one. Scoping this
+  // to the directory today's phases happen to live in would reintroduce the
+  // stale list the naming convention exists to replace.
+  'local/no-process-exit-in-phase': 'error',
   // `exemptFiles` IS load-bearing now, and was not when this rule landed.
   // The rule covered only test files then, so `packages/utils/src/test-helpers.ts`
   // — which holds the one sanctioned `symlinkSync`/`fs.symlink` pair — was

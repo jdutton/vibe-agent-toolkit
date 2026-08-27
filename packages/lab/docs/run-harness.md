@@ -109,8 +109,10 @@ It is also the only way a second facet can have defaults at all without importin
 the [facet contract](facets.md) forbids.
 
 The default is a default, not a definition. `MEASURABLE_COMMANDS` in the same file is the named
-registry — the three defaults plus `inventory`, `validate`, `verify` and `resources-population` —
-and `vat-lab <facet> run --command <name>` selects from it. The flag is repeatable
+registry — the three defaults plus `inventory`, `validate`, `verify`, `resources-population`,
+`claude-context-all` and `claude-context` — and `vat-lab <facet> run --command <name>` selects from
+it. Adding an entry to the registry changes what a caller *can* ask for and nothing about what a
+bare run measures. The flag is repeatable
 (`--command validate --command verify`), an unknown name is a usage error listing every valid one,
 and a run with no `--command` measures exactly the default set. A caller driving the library
 directly still passes whatever specs it likes.
@@ -128,6 +130,15 @@ every stored `perf` and `io` report was taken over. Overriding the default never
 `validate` and `verify` take no `{subject}` argument: both **reject** a positional path and take
 their scope from the config at the working directory, which the harness has already set to the
 subject. `verify` reads the built `dist/` tree, so a subject measured with it must have been built.
+`claude-context-all` is subject-less for the same reason — `--all` sweeps every path the projection
+realized and takes no positional.
+
+`claude-context-all` and `claude-context` are a **pair**, and the pair is the point. The sweep was
+measured at 561 seconds on a large adopter tree, and its per-answer cost scales with the size of the
+projection rather than with the query — so the sweep alone cannot say whether a change moved the
+population cost or the per-answer cost. `claude-context` answers one path out of the same
+enumeration: a fix that halves the sweep while leaving the control unmoved shaved per-answer work,
+and one that moves both shaved the crawl.
 
 ## Comparing two builds: `ab`, not twelve invocations
 

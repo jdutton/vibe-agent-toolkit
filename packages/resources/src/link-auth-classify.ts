@@ -14,7 +14,7 @@
  * the per-provider table can speak to.
  */
 
-import type { ProviderCheck } from '@vibe-agent-toolkit/utils';
+import type { ProviderCheck } from './link-auth/resolve.js';
 
 export type LinkAuthOutcome =
   | { readonly outcome: 'alive'; readonly code: null }

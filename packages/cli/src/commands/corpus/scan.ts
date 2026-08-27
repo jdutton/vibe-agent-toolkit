@@ -11,7 +11,8 @@ import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { runGit, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';

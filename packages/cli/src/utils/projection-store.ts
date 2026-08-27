@@ -46,7 +46,7 @@
  */
 
 import type { PopulationCache } from '@vibe-agent-toolkit/resources';
-import { gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils';
+import { gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
 import { isModuleMissing, reportMissingBackend, type OptionalBackend } from './optional-backend.js';
 
@@ -60,11 +60,13 @@ import { isModuleMissing, reportMissingBackend, type OptionalBackend } from './o
  * would put the A and B arms inside the subject's own tree, where a measurement
  * edits the thing it measures.
  *
- * 🔑 It is read from the environment and therefore **inherited by every phase
- * child**. `runPhase` passes no `env` to `spawnSync`, so `vat validate`'s
- * children see the same selection their parent did.
+ * 🔑 It is read from the environment, and **every phase now runs in the process
+ * that read it** — phases used to be child processes inheriting it across a
+ * `spawnSync`, which reached the same place by a longer route. `vat validate`'s
+ * phases see the same selection their orchestrator did, and can no longer fail
+ * to.
  *
- * 🔑 **That inheritance now has a within-verb instance.** `vat build`'s two
+ * 🔑 **That sharing has a within-verb instance.** `vat build`'s two
  * phases — `skills build` and `claude plugin build` — both reach the lane
  * through `withResourcePopulationSource` (see `resource-loader.ts`), and both
  * root their population at the same directory, so phase 2 reads the extent

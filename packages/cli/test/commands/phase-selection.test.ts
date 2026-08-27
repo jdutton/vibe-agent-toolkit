@@ -32,7 +32,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { selectBuildPhases } from '../../src/commands/build.js';
 import {
@@ -49,6 +49,54 @@ import {
   toPublishedIssue,
 } from '../../src/commands/verify.js';
 import { captureProcessExit, type CapturedExit } from '../test-doubles.js';
+
+/**
+ * The three phase entry points a selection can bind, stubbed.
+ *
+ * A phase used to carry an argv array, so "did this phase get `--verbose`" was
+ * answerable by reading `phase.args`. It carries a bound closure now, so the
+ * only honest way to ask is to RUN it and see what the entry point was called
+ * with — which is also the thing that actually matters. A test that inspected a
+ * serialized argv could pass while the option never reached the function.
+ */
+vi.mock('../../src/commands/resources/validate.js', () => ({
+  runResourcesValidatePhase: vi.fn(() => Promise.resolve({ document: undefined, exitCode: 0 })),
+}));
+vi.mock('../../src/commands/skills/validate.js', () => ({
+  runSkillsValidatePhase: vi.fn(() => Promise.resolve({ document: undefined, exitCode: 0 })),
+}));
+vi.mock('../../src/commands/claude/marketplace/validate.js', () => ({
+  runMarketplaceValidatePhase: vi.fn(() => Promise.resolve({ document: undefined, exitCode: 0 })),
+}));
+vi.mock('../../src/commands/skills/build.js', () => ({
+  runSkillsBuildPhase: vi.fn(() => Promise.resolve({ document: undefined, exitCode: 0 })),
+}));
+vi.mock('../../src/commands/claude/plugin/build.js', () => ({
+  runClaudePluginBuildPhase: vi.fn(() => Promise.resolve({ document: undefined, exitCode: 0 })),
+}));
+
+const { runResourcesValidatePhase } = await import('../../src/commands/resources/validate.js');
+const { runSkillsValidatePhase } = await import('../../src/commands/skills/validate.js');
+const { runMarketplaceValidatePhase } = await import(
+  '../../src/commands/claude/marketplace/validate.js'
+);
+const { runSkillsBuildPhase } = await import('../../src/commands/skills/build.js');
+const { runClaudePluginBuildPhase } = await import('../../src/commands/claude/plugin/build.js');
+
+/** Every stubbed phase entry point, so a run's calls can be cleared as one. */
+const PHASE_STUBS = [
+  runResourcesValidatePhase,
+  runSkillsValidatePhase,
+  runMarketplaceValidatePhase,
+  runSkillsBuildPhase,
+  runClaudePluginBuildPhase,
+];
+
+/** Run every phase in a selection, so the stubs record how each was invoked. */
+async function invokeAll(selection: PhaseSelection): Promise<void> {
+  for (const stub of PHASE_STUBS) vi.mocked(stub).mockClear();
+  for (const phase of runPhases(selection)) await phase.run();
+}
 
 /** Narrow to the `run` arm, failing loudly (not silently passing) otherwise. */
 function runPhases(selection: PhaseSelection): Phase[] {
@@ -133,39 +181,51 @@ describe('selectVerifyPhases', () => {
     ]);
   });
 
-  it('passes no --verbose to any child by default', () => {
-    expect(runPhases(selectVerifyPhases(CONFIG_MARKETPLACE)).map((p) => p.args)).toEqual([
-      ['skills', 'validate'],
-      ['claude', 'marketplace', 'validate', 'dist/.claude/plugins/marketplaces/test-tools'],
-    ]);
+  it('passes verbose: false to every phase by default', async () => {
+    await invokeAll(selectVerifyPhases(CONFIG_MARKETPLACE));
+
+    expect(runSkillsValidatePhase).toHaveBeenCalledWith(undefined, { verbose: false });
+    expect(runMarketplaceValidatePhase).toHaveBeenCalledWith(
+      'dist/.claude/plugins/marketplaces/test-tools',
+      { verbose: false },
+    );
   });
 
-  it('forwards --verbose to every subprocess phase', () => {
-    // The children own their own summarization: `vat verify` nests each child's
-    // document verbatim, so the only way it can ask for the detailed form is to
-    // relay the flag. A phase left off this list silently keeps its compact
-    // default while the operator believes they asked the whole run for detail.
-    const phases = runPhases(selectVerifyPhases(CONFIG_MARKETPLACE, undefined, true));
+  it('forwards verbose to every phase', async () => {
+    // The phases own their own summarization: `vat verify` nests each document
+    // verbatim, so the only way it can ask for the detailed form is to relay the
+    // request. A phase left off silently keeps its compact default while the
+    // operator believes they asked the whole run for detail.
+    await invokeAll(selectVerifyPhases(CONFIG_MARKETPLACE, undefined, true));
 
-    expect(phases.map((p) => p.args)).toEqual([
-      ['skills', 'validate', '--verbose'],
-      [
-        'claude',
-        'marketplace',
-        'validate',
-        'dist/.claude/plugins/marketplaces/test-tools',
-        '--verbose',
-      ],
-    ]);
-    for (const phase of phases) {
-      expect(phase.args).toContain('--verbose');
-    }
+    expect(runSkillsValidatePhase).toHaveBeenCalledWith(undefined, { verbose: true });
+    expect(runMarketplaceValidatePhase).toHaveBeenCalledWith(
+      'dist/.claude/plugins/marketplaces/test-tools',
+      { verbose: true },
+    );
   });
 
-  it('forwards --verbose to the resources phase too', () => {
-    expect(runPhases(selectVerifyPhases(CONFIG_BOTH, undefined, true)).map((p) => p.args)).toEqual([
-      ['resources', 'validate', '--verbose'],
-      ['skills', 'validate', '--verbose'],
+  it('forwards verbose to the resources phase too', async () => {
+    await invokeAll(selectVerifyPhases(CONFIG_BOTH, undefined, true));
+
+    expect(runResourcesValidatePhase).toHaveBeenCalledWith(undefined, { verbose: true });
+    expect(runSkillsValidatePhase).toHaveBeenCalledWith(undefined, { verbose: true });
+  });
+
+  it('binds each marketplace phase to its OWN path, not the last one in the loop', async () => {
+    // The classic closure-in-a-loop defect, and it is newly reachable: the
+    // marketplace phase list is built by iterating the adopter's config, and a
+    // path captured by reference rather than per iteration would point every
+    // phase at whichever marketplace happened to be last.
+    const twoMarketplaces = {
+      claude: { marketplaces: { alpha: {}, beta: {} } },
+    } as unknown as ProjectConfig;
+
+    await invokeAll(selectVerifyPhases(twoMarketplaces));
+
+    expect(vi.mocked(runMarketplaceValidatePhase).mock.calls.map((c) => c[0])).toEqual([
+      'dist/.claude/plugins/marketplaces/alpha',
+      'dist/.claude/plugins/marketplaces/beta',
     ]);
   });
 });
@@ -197,7 +257,7 @@ describe('formatVerifyAnnouncement', () => {
     formatVerifyAnnouncement(phaseNames(selectVerifyPhases(config)), config);
 
   it('names the in-process phases a run also executes', () => {
-    // The announcement used to list the SUBPROCESS phases only, so a run
+    // The announcement used to list the DELEGATED phases only, so a run
     // printed 'resources → skills' and then ran two more phases, one of which
     // (consistency) contributed its own entry to the emitted document.
     expect(announce(CONFIG_BOTH)).toBe(
@@ -226,8 +286,8 @@ describe('formatVerifyAnnouncement', () => {
   });
 
   it('names no in-process phase when the config could not be read', () => {
-    // An unreadable config still runs the subprocess phases so the CHILD reports
-    // the real error. The in-process phases cannot even look:
+    // An unreadable config still runs the delegated phases so THE PHASE reports
+    // the real error. Verify's own phases cannot even look:
     // `checkFilesConfigDests` re-reads the same broken file and yields nothing.
     expect(formatVerifyAnnouncement(['resources', 'skills'], undefined)).toBe(
       '🔍 vat verify (phases: resources → skills)',
@@ -261,17 +321,16 @@ describe('checkFilesConfigDests', () => {
 });
 
 describe('selectBuildPhases', () => {
-  it('forwards --verbose to every spawned phase, or to none', () => {
-    // Each phase is its own process: a flag not in `args` cannot reach it, so
-    // `vat build --verbose` would silently produce the collapsed report.
-    expect(selectBuildPhases(undefined, true, true).phases.map((p) => p.args)).toEqual([
-      ['skills', 'build', '--verbose'],
-      ['claude', 'plugin', 'build', '--verbose'],
-    ]);
-    expect(selectBuildPhases(undefined, true, false).phases.map((p) => p.args)).toEqual([
-      ['skills', 'build'],
-      ['claude', 'plugin', 'build'],
-    ]);
+  it('forwards verbose to every phase, or to none', async () => {
+    // A request not relayed to a phase cannot reach it, so `vat build
+    // --verbose` would silently produce the collapsed report.
+    await invokeAll(selectBuildPhases(undefined, true, true));
+    expect(runSkillsBuildPhase).toHaveBeenCalledWith(undefined, { verbose: true });
+    expect(runClaudePluginBuildPhase).toHaveBeenCalledWith({ verbose: true });
+
+    await invokeAll(selectBuildPhases(undefined, true, false));
+    expect(runSkillsBuildPhase).toHaveBeenCalledWith(undefined, { verbose: false });
+    expect(runClaudePluginBuildPhase).toHaveBeenCalledWith({ verbose: false });
   });
 
   it('builds skills, and claude only when marketplaces are configured', () => {

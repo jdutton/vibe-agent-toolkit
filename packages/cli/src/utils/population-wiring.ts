@@ -22,23 +22,29 @@
  * report to quietly become a no-op.
  */
 
-import { describeBlobRefusals, type BlobPopulationReport, type PopulationCache }
-  from '@vibe-agent-toolkit/resources';
-import type { GitTracker } from '@vibe-agent-toolkit/utils';
+import {
+  describeBlobRefusals,
+  type BlobPopulationReport,
+  type CollectionConfig,
+  type PopulationCache,
+} from '@vibe-agent-toolkit/resources';
+import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
+import { loadConfigCached } from './config-loader.js';
 import type { Logger } from './logger.js';
 
 /**
  * The population arguments {@link populationWiring} supplies.
  *
- * Spread into a builder's options object, so the two oracles are optional in the
- * `exactOptionalPropertyTypes` sense — omitted entirely when they are absent,
- * never present-and-undefined.
+ * Spread into a builder's options object, so the three optional inputs are
+ * optional in the `exactOptionalPropertyTypes` sense — omitted entirely when
+ * they are absent, never present-and-undefined.
  */
 export interface PopulationWiring {
   onBlobPopulation: (report: BlobPopulationReport) => void;
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
+  collections?: Readonly<Record<string, CollectionConfig>> | undefined;
 }
 
 /**
@@ -58,12 +64,15 @@ export interface PopulationWiring {
  *   was supplied, so its absence decides whether a consumer can TELL which
  *   members were ignored
  * @param cache - The run's projection store, or undefined to re-derive
+ * @param root - The project root, from which the run's declared `mimeType`
+ *   routing is READ rather than passed. See {@link collectionsOption}
  * @returns The options to spread into the population builder's argument
  */
 export function populationWiring(
   logger: Logger,
   gitTracker: GitTracker | undefined,
   cache: PopulationCache | undefined,
+  root: string,
 ): PopulationWiring {
   return {
     onBlobPopulation: (report) => {
@@ -72,5 +81,48 @@ export function populationWiring(
     },
     ...(gitTracker !== undefined && { gitTracker }),
     ...(cache !== undefined && { cache }),
+    ...collectionsOption(root),
   };
+}
+
+/**
+ * The project's collection declarations at `root`, or undefined for a project
+ * that declares none.
+ *
+ * ## Why this is READ here and not passed in
+ *
+ * A declared `mimeType` changes which parser runs, which changes the content
+ * key, which is folded into the projection store's key through the routing's
+ * fingerprint. So two lanes of ONE command that disagree about whether to supply
+ * the declarations do not merely disagree about parsing — they **evict each
+ * other's stored extents over an unchanged tree, run after run.**
+ *
+ * Taking a `root` and reading the config here rather than accepting a
+ * `collections` argument is what makes that disagreement unrepresentable: there
+ * is one answer per root and every lane that goes through this helper gets it.
+ * An optional argument would have been a thing three call sites could each
+ * forget, and forgetting is silent — a cache that never hits looks exactly like
+ * a cache that is merely cold.
+ *
+ * `loadConfigCached` is keyed on the root, so the repeat calls across a
+ * command's lanes cost one parse between them. A broken config throws here, as
+ * it does everywhere else — a population silently typed by the built-in tables
+ * because the config would not parse is the conflation
+ * {@link loadConfigCached} exists to refuse.
+ *
+ * Returned as a SPREADABLE rather than a value: `exactOptionalPropertyTypes`
+ * makes an absent key and one holding `undefined` different arguments, and the
+ * population builders declare `collections` optional. Every caller spreads this,
+ * so no call site writes its own `!== undefined &&` and none can get the two
+ * states the wrong way round.
+ *
+ * @param root - The project root whose config declares the collections
+ * @returns `{ collections }`, or `{}` when there is no config or no
+ *   `resources.collections` in it
+ */
+export function collectionsOption(
+  root: string,
+): { collections?: Readonly<Record<string, CollectionConfig>> } {
+  const collections = loadConfigCached(root)?.resources?.collections;
+  return collections === undefined ? {} : { collections };
 }

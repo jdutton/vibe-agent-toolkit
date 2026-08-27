@@ -300,11 +300,17 @@ export function headlineChanges(before: string, after: string, kind: ArtifactKin
 /**
  * Compare two loaded snapshots. Pure — no fs, no process, no clock.
  *
- * Refuses outright on a `formatVersion` mismatch: the failure mode of guessing
- * across layouts is a confidently wrong "nothing changed". Everything else it
- * cannot do — a different corpus, a cross-platform walk-route comparison, a
- * half captured on one side only — is stated in `constraints`, and the
- * comparison continues.
+ * **Nothing is refused here on layout grounds, and that is not a loosening.**
+ * A manifest whose layout this build cannot read never gets this far — `store.ts`
+ * refuses it at load against `SnapshotManifestSchema`, which is strictly more
+ * discriminating than the `formatVersion` integer that used to be compared here
+ * and needs nobody to remember to move it. An artifact captured on one side only
+ * is not a layout difference: `pairArtifacts` pairs what each manifest names and
+ * `presenceConstraints` says which side it was missing from.
+ *
+ * Everything this comparison cannot do — a different corpus, a cross-platform
+ * walk-route comparison, a half captured on one side only — is stated in
+ * `constraints`, and the comparison continues.
  *
  * `capturedAtIso` and each command's `wallMs` are never compared as content.
  *
@@ -314,17 +320,6 @@ export function headlineChanges(before: string, after: string, kind: ArtifactKin
  */
 export function compareSnapshots(before: LoadedSnapshot, after: LoadedSnapshot): CompareReport {
   const provenanceNotes = collectProvenanceNotes(before.manifest, after.manifest);
-
-  if (before.manifest.formatVersion !== after.manifest.formatVersion) {
-    return {
-      beforeDir: before.dir,
-      afterDir: after.dir,
-      deltas: [],
-      changedCount: 0,
-      constraints: [refusalConstraint(before.manifest, after.manifest)],
-      provenanceNotes,
-    };
-  }
 
   const constraints: string[] = [];
   constraints.push(
@@ -344,22 +339,6 @@ export function compareSnapshots(before: LoadedSnapshot, after: LoadedSnapshot):
     constraints,
     provenanceNotes,
   };
-}
-
-/**
- * The single constraint emitted when a comparison is refused outright.
- *
- * @param before - Earlier manifest
- * @param after - Later manifest
- * @returns The refusal text
- */
-function refusalConstraint(before: SnapshotManifest, after: SnapshotManifest): string {
-  return (
-    `REFUSED: snapshot formatVersion differs (${String(before.formatVersion)} → ${String(after.formatVersion)}). ` +
-    'The artifact set and manifest shape are not the same between these two directories, so NO comparison was ' +
-    'attempted — guessing across layouts produces a confidently wrong "nothing changed". Re-capture both sides ' +
-    'with the same VAT build.'
-  );
 }
 
 /**

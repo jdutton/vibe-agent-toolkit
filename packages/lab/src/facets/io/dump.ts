@@ -32,18 +32,6 @@ import { type DumpKind, type DumpsRefusal, readDumpFiles } from '../../harness/d
 import { CAPPED_WITHOUT_READING_MESSAGE, cappedNeedsAReading, ioSiteShape } from './types.js';
 import type { IoSite } from './types.js';
 
-/**
- * Version of the dump format written by the counter.
- *
- * A fixed contract between the injected counter and this reader. Bumped when
- * the row shape changes; a dump at any other version is refused, because
- * reading it with this build's assumptions would produce numbers whose meaning
- * nobody can state. `2` since `distinctArgs` became nullable: a version-1 dump
- * writes `1` for a spawn site where this build writes `null`, and those two say
- * opposite things about the same row.
- */
-export const IO_DUMP_VERSION = 2;
-
 /** The `node_modules` boundary, matched on its LAST occurrence. See {@link normalizeSite}. */
 const NODE_MODULES_SEGMENT = '/node_modules/';
 
@@ -103,7 +91,6 @@ export interface IoDumpRow {
 
 /** One process's dump. */
 export interface IoDump {
-  readonly dumpVersion: number;
   readonly pid: number;
   readonly rows: readonly IoDumpRow[];
 }
@@ -132,7 +119,6 @@ const IoDumpRowSchema = z
 /** Runtime schema for {@link IoDump}. Strict: the counter is ours, so an unknown field is a bug. */
 export const IoDumpSchema = z
   .object({
-    dumpVersion: z.number().int().positive(),
     pid: z.number().int().nonnegative(),
     rows: z.array(IoDumpRowSchema),
   })
@@ -394,7 +380,7 @@ export function mergeDumps(dumps: readonly IoDump[], roots: SiteRoots): MergedDu
  *
  * Everything here is this facet's own: how one dump is spelled, what wrote it,
  * and what an empty directory would be lying about. The plumbing around it —
- * read every file, refuse a malformed or wrong-version one, refuse an empty
+ * read every file, refuse one this build does not model, refuse an empty
  * directory — lives in `harness/dumps.ts`, because the `parse` facet needs the
  * identical guarantees over a completely different payload.
  */
@@ -402,8 +388,6 @@ const IO_DUMP_KIND: DumpKind<IoDump> = {
   noun: 'I/O dump',
   producer: 'counter',
   schema: IoDumpSchema,
-  version: IO_DUMP_VERSION,
-  versionOf: (dump) => dump.dumpVersion,
   emptyDirectory: (directory) =>
     `no I/O dumps in '${directory}'. The counter never wrote one, so there is no measurement — ` +
     'reporting zero calls here would say vat touched nothing.',

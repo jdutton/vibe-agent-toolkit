@@ -21,7 +21,7 @@
  * `safeExecSync`-backed, `shell: false`).
  */
 
-import { safeExecResult } from '../safe-exec.js';
+import { safeExecResult } from '@vibe-agent-toolkit/utils/process';
 
 export type TokenSource = { readonly env: string } | { readonly command: string | readonly string[] };
 

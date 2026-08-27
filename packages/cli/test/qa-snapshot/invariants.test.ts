@@ -21,7 +21,6 @@ import {
   type InvariantReport,
 } from '../../src/qa-snapshot/invariants.js';
 import {
-  SNAPSHOT_FORMAT_VERSION,
   type LaneManifestEntry,
   type SnapshotManifest,
 } from '../../src/qa-snapshot/types.js';
@@ -79,7 +78,6 @@ function manifestOf(
   keyDisagreements: number | null = 0,
 ): SnapshotManifest {
   return {
-    formatVersion: SNAPSHOT_FORMAT_VERSION,
     vatVersion: '0.1.42',
     cacheNamespace: '0.1.42',
     capturedAtIso: '2026-08-09T00:00:00.000Z',

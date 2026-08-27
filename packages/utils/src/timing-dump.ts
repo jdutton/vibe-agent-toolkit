@@ -18,9 +18,14 @@
  * 2. A dump failure is written to **stderr and never thrown**. These run from
  *    an `exit` listener, where a throw changes the process's exit behaviour, and
  *    they must never touch stdout, which carries vat's report.
- * 3. A pid can file more than one dump. `vat validate` spawns the vat binary
- *    once per phase and pids are reused, so `<stem>-<pid>.json` genuinely
- *    collides; the name gains a counter rather than overwriting.
+ * 3. A pid can file more than one dump, and the name is CLAIMED rather than
+ *    checked. `vat validate` spawns the vat binary once per phase and pids are
+ *    reused, so `<stem>-<pid>.json` genuinely collides; worse, worker threads
+ *    SHARE their parent's pid, so a thread pool's whole cohort competes for one
+ *    `<stem>-<pid>` sequence at the same instant. The name gains a counter
+ *    rather than overwriting, and the counter is settled by
+ *    {@link EXCLUSIVE_CREATE} so the OS — not a check-then-write gap — decides
+ *    who won it.
  * 4. The process's own wall and CPU time is read ONCE, at dump time. It is a
  *    lifetime figure for the process and never a duration of the measured work;
  *    its value is the RATIO, which tells a reader whether the wall-timed
@@ -43,7 +48,7 @@
  * itself is its accumulator shape, its dump body and the noun it is called by.
  */
 
-import { existsSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 
 import { safePath } from './path-core.js';
 import { mkdirSyncReal } from './path-utils.js';
@@ -74,10 +79,41 @@ const MS_PER_SECOND = 1000;
 
 /**
  * Ceiling on the pid-collision search. A directory holding this many dumps for
- * one pid is a runaway, not a collision; overwriting the last slot is a better
- * outcome than spinning.
+ * one pid is a runaway, not a collision, and giving up on a reported line is a
+ * better outcome than spinning.
+ *
+ * Exhausting it does NOT fall back to overwriting the last slot. That was the
+ * old behaviour, and it destroyed a dump for the same reason the check-then-
+ * write gap did — silently, and precisely when the directory was busiest.
  */
-const MAX_DUMP_COLLISIONS = 1000;
+export const MAX_DUMP_COLLISIONS = 1000;
+
+/**
+ * The `writeFileSync` flag that makes claiming a name atomic.
+ *
+ * `wx` is create-exclusive: the OS fails the call with `EEXIST` when the path
+ * already exists, so exactly one caller wins each name no matter how many are
+ * racing for it. Asking `existsSync` first and writing second is two operations
+ * with a gap in between, and threads sharing a pid land in that gap routinely —
+ * a measured 8-worker parse pool lost 6 of 9 dumps to it, reporting 44 of 172
+ * documents as if that were the whole run.
+ */
+const EXCLUSIVE_CREATE = 'wx';
+
+/** How the failure line names the ceiling case, so it reads unlike an OS error. */
+const CEILING_DETAIL = `every name up to the ${String(MAX_DUMP_COLLISIONS)}-collision ceiling was already claimed`;
+
+/**
+ * What one attempt to claim and fill a dump name came to.
+ *
+ * `exhausted` and `failed` are deliberately separate: "every name was taken" is
+ * a runaway dump directory, "the disk refused the write" is a broken one, and an
+ * operator handed one line for both cannot tell which they have.
+ */
+type TimingDumpClaim =
+  | { readonly outcome: 'written'; readonly path: string }
+  | { readonly outcome: 'exhausted'; readonly path: string }
+  | { readonly outcome: 'failed'; readonly path: string; readonly error: unknown };
 
 /**
  * Reduce a raw env value to a directory or `null`.
@@ -146,37 +182,74 @@ export function readTimingProcess(): TimingProcess {
 }
 
 /**
- * Pick a dump path that does not already exist.
+ * The nth candidate name in one pid's dump sequence.
+ *
+ * @param directory - Directory dumps are written to
+ * @param stem - Basename and pid, already joined
+ * @param collision - 0 for the unsuffixed name, then the collision counter
+ * @returns The candidate path
+ */
+function timingDumpCandidate(directory: string, stem: string, collision: number): string {
+  const suffix = collision === 0 ? '' : `-${String(collision)}`;
+  return safePath.join(directory, `${stem}${suffix}.json`);
+}
+
+/**
+ * Whether a caught write failure means somebody else already holds the name.
+ *
+ * @param error - Whatever `writeFileSync` threw
+ * @returns `true` only for `EEXIST`, which is a lost race and not a fault
+ */
+function isNameAlreadyTaken(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'EEXIST';
+}
+
+/**
+ * Claim a name by creating it, and fill it in the same operation.
+ *
+ * Choosing the name and writing it CANNOT be two steps: whatever separates them
+ * is a window in which another writer takes the name that was just declared
+ * free, and the loser's dump disappears with no error raised anywhere. So each
+ * candidate is written create-exclusively ({@link EXCLUSIVE_CREATE}) and an
+ * `EEXIST` — the OS saying somebody else got there — advances to the next
+ * counter rather than overwriting.
  *
  * @param directory - Directory dumps are written to
  * @param basename - Basename stem; the pid and any collision counter follow
- * @returns An unused path, or the last candidate tried
+ * @param contents - The already-serialized dump body
+ * @returns Which name was claimed, or why none could be
  */
-function nextTimingDumpPath(directory: string, basename: string): string {
+function claimTimingDump(directory: string, basename: string, contents: string): TimingDumpClaim {
   const stem = `${basename}-${String(process.pid)}`;
-  let candidate = safePath.join(directory, `${stem}.json`);
-  for (
-    let collision = 1;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- operator-supplied diagnostic directory from a VAT_*_TIMING variable
-    collision <= MAX_DUMP_COLLISIONS && existsSync(candidate);
-    collision += 1
-  ) {
-    candidate = safePath.join(directory, `${stem}-${String(collision)}.json`);
+  for (let collision = 0; collision <= MAX_DUMP_COLLISIONS; collision += 1) {
+    const candidate = timingDumpCandidate(directory, stem, collision);
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- operator-supplied diagnostic directory from a VAT_*_TIMING variable
+      writeFileSync(candidate, contents, { encoding: 'utf-8', flag: EXCLUSIVE_CREATE });
+      return { outcome: 'written', path: candidate };
+    } catch (error) {
+      if (!isNameAlreadyTaken(error)) return { outcome: 'failed', path: candidate, error };
+    }
   }
-  return candidate;
+  return {
+    outcome: 'exhausted',
+    path: timingDumpCandidate(directory, stem, MAX_DUMP_COLLISIONS),
+  };
 }
 
 /**
  * Write one seam's dump, if the seam is on.
  *
  * The body is built lazily, inside this call, so a disabled seam never pays to
- * snapshot accumulators nobody will read.
+ * snapshot accumulators nobody will read — and a `build` that throws is reported
+ * like any other failure, because this runs from an `exit` listener where a
+ * throw would change the process's exit behaviour.
  *
  * @param noun - What the seam is called, for any failure line
  * @param directory - Where to write, or `null` when the seam is off
  * @param basename - Basename stem for the file
  * @param build - Produces the dump body
- * @returns The path written, or `null` when the seam is off or the write failed
+ * @returns The path written, or `null` when the seam is off or nothing was written
  */
 export function writeTimingDump(
   noun: string,
@@ -186,13 +259,21 @@ export function writeTimingDump(
 ): string | null {
   if (directory === null) return null;
 
-  const target = nextTimingDumpPath(directory, basename);
+  let claim: TimingDumpClaim;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- operator-supplied diagnostic directory from a VAT_*_TIMING variable
-    writeFileSync(target, `${JSON.stringify(build(), null, 2)}\n`, 'utf-8');
+    claim = claimTimingDump(directory, basename, `${JSON.stringify(build(), null, 2)}\n`);
   } catch (error) {
-    reportTimingDumpFailure(noun, target, error);
+    // Only `build()` and its serialization can reach here; every filesystem
+    // failure is already an outcome rather than a throw.
+    reportTimingDumpFailure(noun, directory, error);
     return null;
   }
-  return target;
+
+  if (claim.outcome === 'written') return claim.path;
+  reportTimingDumpFailure(
+    noun,
+    claim.path,
+    claim.outcome === 'exhausted' ? CEILING_DETAIL : claim.error,
+  );
+  return null;
 }

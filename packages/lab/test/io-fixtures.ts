@@ -16,7 +16,6 @@ import type { ReportEnvelope } from '../src/envelope/envelope.js';
 import { compareIo, type IoComparisonResult } from '../src/facets/io/compare.js';
 import {
   IO_FACET,
-  IO_FACET_VERSION,
   type IoBody,
   type IoCommandStats,
   type IoSite,
@@ -99,7 +98,6 @@ export function ioReport(
 ): ReportEnvelope<IoBody> {
   return makeReport({
     facet: IO_FACET,
-    facetVersion: IO_FACET_VERSION,
     body: ioBody(commands),
     ...over,
   }) as ReportEnvelope<IoBody>;

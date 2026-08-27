@@ -78,7 +78,8 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
-import { runGit, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { runGit } from '@vibe-agent-toolkit/utils/git';
 import { z } from 'zod';
 
 import { hasUncommittedChanges } from './git-state.js';
@@ -93,9 +94,11 @@ import type { InstrumentSource, ResolvedInstrument } from './types.js';
  * runs every measured command with `cwd` set to the subject, so measuring
  * through it would spawn whatever vat the *subject* has installed while the
  * report went on naming the build under test. The vat CLI made this same call
- * for the same reason: see `resolveBinPath()` in
- * `packages/cli/src/commands/phase-utils.ts`, which spawns `bin.js` directly so
- * a phase subprocess cannot be diverted to an adopter's local install.
+ * for the same reason while it still spawned a child per phase; that spawn is
+ * gone, and the surviving instance of the choice is `resolveBinPath()` in
+ * `packages/cli/src/qa-snapshot/capture.ts`, which runs the command UNDER TEST
+ * as a real process and resolves `bin.js` directly so it cannot be diverted to
+ * an adopter's local install.
  */
 const TREE_BIN_RELATIVE = 'packages/cli/dist/bin.js';
 

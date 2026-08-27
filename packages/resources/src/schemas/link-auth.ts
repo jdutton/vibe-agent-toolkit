@@ -17,9 +17,9 @@
  *     field present, with declared-field types still enforced (passthrough
  *     only relaxes unknown-key handling, not type checking on known fields).
  *
- * Mirrors the runtime types in `@vibe-agent-toolkit/utils`'s `link-auth/`
- * module. Keep these aligned: a config that parses here must satisfy the
- * `Provider` / `LinkAuthConfig` interfaces over there.
+ * Mirrors the runtime types in this package's `link-auth/` module. Keep these
+ * aligned: a config that parses here must satisfy the `Provider` /
+ * `LinkAuthConfig` interfaces over there.
  *
  * Per design issue #113 §4 (vocabulary) and §5 (macros), and the repo
  * CLAUDE.md Postel's Law rule for adopter-facing configs.
@@ -162,11 +162,22 @@ export const LinkAuthConfigSchema = z
 
 /**
  * Adopter-facing config shape — what an `vibe-agent-toolkit.config.yaml`
- * parses to. Distinct from `@vibe-agent-toolkit/utils`'s `LinkAuthConfig`
- * (the engine shape, with fully-expanded providers only). The bridge
- * function `buildLinkAuthEngineConfig` converts between the two.
+ * parses to. Distinct from the engine's `LinkAuthConfig` in `link-auth/
+ * resolve.ts` (fully-expanded providers only). The bridge function
+ * `buildLinkAuthEngineConfig` converts between the two.
  */
 export type LinkAuthProjectConfig = z.infer<typeof LinkAuthConfigSchema>;
 export type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
+
+/**
+ * ⚠️ `RewriteRule` and `TokenSource` are each declared TWICE in this package: here as the
+ * adopter-facing config shape, and in `link-auth/rewrite.ts` / `link-auth/resolve-token.ts` as the
+ * engine shape. Both live in `resources`, so the two names now collide within one package.
+ *
+ * Nothing breaks today only because `index.ts` exports the engine pair and does NOT re-export this
+ * module. Adding `export * from './schemas/link-auth.js'` to that barrel is a duplicate-export
+ * error for both names — rename one side first, the way `LinkAuthProjectConfig` above is already
+ * renamed away from the engine's `LinkAuthConfig`.
+ */
 export type RewriteRule = z.infer<typeof RewriteRuleSchema>;
 export type TokenSource = z.infer<typeof TokenSourceSchema>;

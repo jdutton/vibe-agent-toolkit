@@ -10,7 +10,8 @@ import { readFileSync, existsSync } from 'node:fs';
 
 import { getPluginSourceDir } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig, SkillPackagingConfig } from '@vibe-agent-toolkit/resources';
-import { runGit, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import type { DiscoveredSkill } from './skills/command-helpers.js';
 

@@ -116,11 +116,14 @@ Six measured facts shape it, and each one is a way the number can be a confident
   a composed identity instead (command + argv + cwd) was rejected: the counter would be *guessing*
   at what identifies a spawn — cwd is optional, `shell` and `env` change what a command means — and
   a subtly wrong identity is a subtly wrong redundancy claim, which is the failure being fixed.
-  Costs: the dump format is at `dumpVersion: 2` and the body at `facetVersion: 2`, so **every report
-  captured before this change must be re-captured**. Two refusals enforce that — the envelope's
-  existing gate when the two sides disagree on the version, and a new one in the `io` comparator when
-  a side disagrees with the *build reading it*. The second is what stops a pair of pre-change reports,
-  which agree with each other perfectly, from being read with the new meaning.
+  Costs: **every report captured before this change must be re-captured**. The refusal that enforces
+  it is the strict schema on each side, run against the *build reading it* rather than only against
+  the other side — which is what stops a pair of pre-change reports, agreeing with each other
+  perfectly, from being read with the new meaning. ⛔ The `dumpVersion` and `facetVersion` integers
+  that used to enforce it are gone; see [facets.md](facets.md) and `envelope/envelope.ts` for why
+  they were the weaker mechanism, and `readIoBody` in `io/compare.ts` for the one residual this
+  particular change leaves — `distinctArgs` becoming nullable moved MEANING and not shape, so no
+  schema can see it and the remedy is a declaration rather than a number.
 
 It counts **Node `fs` and `child_process` calls, not kernel syscalls** — dtrace is blocked by SIP for
 system binaries on macOS and `strace` is Linux-only, so the Node boundary is the portable place to

@@ -38,14 +38,14 @@
  * parse-failure case below is that negative control.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-
 import type * as ResourcesModule from '@vibe-agent-toolkit/resources';
 import { ParserUnavailableError } from '@vibe-agent-toolkit/resources';
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { captureParseFactSnapshot } from '../../src/pipeline-oracles/parse-fact-snapshot.js';
+
+import { setupCorpusFixture } from './helpers/corpus-fixture.js';
 
 /**
  * What the next `parseMarkdown` / `parseHtml` call throws, or nothing.
@@ -99,21 +99,16 @@ const CORPUS = {
   'page.html': '<html><body><h1>Page</h1><a href="./good-a.md">a</a></body></html>\n',
 };
 
-let corpusRoot: string;
+const fixture = setupCorpusFixture('vat-parse-fact-load-', CORPUS);
 
+// Registered AFTER the fixture's own hook, and vitest runs `beforeEach` in
+// registration order — irrelevant today because these two touch nothing in
+// common, and stated so that a future arming step which needs the corpus on
+// disk knows it is already there.
 beforeEach(() => {
   failures.load = undefined;
   failures.htmlLoad = undefined;
   failures.markdownFor = undefined;
-  corpusRoot = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-parse-fact-load-'));
-  for (const [name, content] of Object.entries(CORPUS)) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a fixture name from CORPUS, under this test's own mkdtemp root
-    writeFileSync(safePath.join(corpusRoot, name), content, 'utf8');
-  }
-});
-
-afterEach(() => {
-  rmSync(corpusRoot, { recursive: true, force: true });
 });
 
 /**
@@ -126,10 +121,14 @@ afterEach(() => {
  * fixture's idea of the type. The `EACCES` underneath is precisely the error an
  * inspection-based guard could never tell apart from an unreadable document.
  *
+ * ⚠️ `DocumentParserKind`, not `ParserKind`. Only the two kinds a parser MODULE
+ * exists for can fail to load one; `none` names the absence of a parser, so it
+ * has no module and cannot reach this error at all.
+ *
  * @param kind - Which parser module failed to load
  * @returns A fresh error per test, so identity assertions are meaningful
  */
-function parserLoadFailure(kind: ResourcesModule.ParserKind = 'markdown'): Error {
+function parserLoadFailure(kind: ResourcesModule.DocumentParserKind = 'markdown'): Error {
   return new ParserUnavailableError(
     kind,
     kind === 'html' ? './html-link-parser.js' : './link-parser.js',
@@ -143,8 +142,27 @@ function parserLoadFailure(kind: ResourcesModule.ParserKind = 'markdown'): Error
  * @returns The snapshot for all three fixture documents
  */
 async function capture(): Promise<Awaited<ReturnType<typeof captureParseFactSnapshot>>> {
-  const absolutePaths = Object.keys(CORPUS).map((name) => safePath.join(corpusRoot, name));
-  return captureParseFactSnapshot(absolutePaths, { corpusRoot, corpus: 'parser-load-fixture' });
+  return captureParseFactSnapshot(fixture.absolutePaths(), {
+    corpusRoot: fixture.root(),
+    corpus: 'parser-load-fixture',
+  });
+}
+
+/**
+ * Capture the ONE `.html` fixture document, alone.
+ *
+ * Alone is the whole point: a corpus of one `.html` file never calls the
+ * markdown wrapper, so this is the only shape that can reach the html branch of
+ * `parseOrNull` — which is what makes the guard provably not markdown-shaped.
+ *
+ * @returns The snapshot for `page.html` and nothing else
+ */
+async function captureHtmlOnly(): Promise<Awaited<ReturnType<typeof captureParseFactSnapshot>>> {
+  const corpusRoot = fixture.root();
+  return captureParseFactSnapshot([safePath.join(corpusRoot, 'page.html')], {
+    corpusRoot,
+    corpus: 'html-only-fixture',
+  });
 }
 
 describe('a parser-load failure during parse-fact capture', () => {
@@ -170,22 +188,14 @@ describe('a parser-load failure during parse-fact capture', () => {
     const thrown = parserLoadFailure('html');
     failures.htmlLoad = thrown;
 
-    await expect(
-      captureParseFactSnapshot([safePath.join(corpusRoot, 'page.html')], {
-        corpusRoot,
-        corpus: 'html-only-fixture',
-      }),
-    ).rejects.toBe(thrown);
+    await expect(captureHtmlOnly()).rejects.toBe(thrown);
   });
 
   it('captures an `.html`-only corpus when the load succeeds', async () => {
     // The positive control for the case above: without it, a `rejects` that held
     // because the one-file corpus produced no rows for some unrelated reason
     // would look identical.
-    const snapshot = await captureParseFactSnapshot([safePath.join(corpusRoot, 'page.html')], {
-      corpusRoot,
-      corpus: 'html-only-fixture',
-    });
+    const snapshot = await captureHtmlOnly();
 
     expect(snapshot.rows).toHaveLength(1);
     expect(snapshot.rows[0]?.parserKind).toBe('html');

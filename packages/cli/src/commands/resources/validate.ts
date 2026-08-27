@@ -5,7 +5,7 @@
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { packagedFileEntries } from '@vibe-agent-toolkit/agent-skills';
+import { conventionalSuiteProbe, packagedFileEntries } from '@vibe-agent-toolkit/agent-skills';
 import {
   DeferredArtifacts,
   type CollectionStats,
@@ -21,10 +21,11 @@ import {
   type SeverityCounts,
   type ValidationIssueCode,
 } from '@vibe-agent-toolkit/schema';
-import type { GitTracker } from '@vibe-agent-toolkit/utils';
 import { resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
+import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import * as yaml from 'yaml';
 
+import { reportCommandError } from '../../utils/command-error.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { summarizeFindings, type FindingCountSummary } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
@@ -32,9 +33,8 @@ import { writeTestFormatError } from '../../utils/output.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
+import { finishCommand, type PhaseOutcome } from '../phase-utils.js';
 import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
-
-import { handleCommandError } from './command-helpers.js';
 
 /**
  * Collection statistics with error tracking.
@@ -317,41 +317,41 @@ export function buildIssuesOutputData(
   };
 }
 
+/** The success half of {@link SuccessContext}, as the document publishes it. */
+type SuccessContext = Pick<
+  ValidationContext,
+  'stats' | 'validationMetadata' | 'collectionStats' | 'duration'
+>;
+
 /**
- * Output validation success results.
+ * The document for a run that emitted nothing.
  *
  * Reached only when NOTHING was emitted, so the literal `success` is not a second
  * derivation of the verdict — it is what the shared collapse returns for an empty
  * issue set. Any run that emitted anything, at any severity, goes through
  * {@link buildIssuesOutputData} instead.
  */
-function outputSuccess(
-  outputFormat: OutputFormat,
-  context: Pick<ValidationContext, 'stats' | 'validationMetadata' | 'collectionStats' | 'duration'>
-): void {
-  if (outputFormat === 'text') {
-    // Text format: simple success message
-    console.log('✓ All validations passed');
-    console.log(`Files scanned: ${context.stats.totalResources}`);
-    console.log(`Links checked: ${context.stats.totalLinks}`);
-    if (context.collectionStats) {
-      console.log(`Collections: ${context.collectionStats.totalCollections}`);
-      console.log(`Resources in collections: ${context.collectionStats.resourcesInCollections}`);
-    }
-    console.log(`Duration: ${context.duration}ms`);
-  } else {
-    // Structured format (yaml/json)
-    const outputData: ValidationOutputData = {
-      status: 'success',
-      filesScanned: context.stats.totalResources,
-      linksChecked: context.stats.totalLinks,
-      durationSecs: formatDurationSecs(context.duration),
-      ...context.validationMetadata,
-      ...(context.collectionStats ? { collections: context.collectionStats.collections } : {}),
-    };
+function buildSuccessOutputData(context: SuccessContext): ValidationOutputData {
+  return {
+    status: 'success',
+    filesScanned: context.stats.totalResources,
+    linksChecked: context.stats.totalLinks,
+    durationSecs: formatDurationSecs(context.duration),
+    ...context.validationMetadata,
+    ...(context.collectionStats ? { collections: context.collectionStats.collections } : {}),
+  };
+}
 
-    writeStructuredOutput(outputData, outputFormat);
+/** The human-readable success block, for `--format text` only. */
+function printTextSuccess(context: SuccessContext): void {
+  console.log('✓ All validations passed');
+  console.log(`Files scanned: ${context.stats.totalResources}`);
+  console.log(`Links checked: ${context.stats.totalLinks}`);
+  if (context.collectionStats) {
+    console.log(`Collections: ${context.collectionStats.totalCollections}`);
+    console.log(`Resources in collections: ${context.collectionStats.resourcesInCollections}`);
   }
+  console.log(`Duration: ${context.duration}ms`);
 }
 
 /**
@@ -573,6 +573,19 @@ export async function computeDeferredArtifacts(
   // it inside the map would walk the project's entire skills config per skill.
   const projectSkills = collectDeclaredEvalSuites(config.skills, discovered);
 
+  // Assembled ONCE for the same reason, and it is the more expensive of the two.
+  // `packagedFileEntries` probes the filesystem for a conventional eval suite under
+  // the subject AND under every entry of `projectSkills`, so a probe built inside
+  // the map costs O(S) per skill and O(S²) per run. Measured on a 103-skill adopter
+  // before this hoist: 10,815 `existsSync` calls over 103 distinct paths — ~105× each,
+  // and EXACTLY HALF of every filesystem call `vat resources validate` made.
+  //
+  // Run-scoped rather than module-scoped, deliberately: the probe's answer is a
+  // snapshot of the filesystem, so a cache outliving the run would keep answering
+  // for a tree that has since changed. One run already answers every skill from one
+  // `projectSkills` snapshot, so holding it for the run's width is consistent.
+  const suiteProbe = conventionalSuiteProbe();
+
   const skillFiles: DeferredSkillFiles[] = discovered.map((skill) => {
     const merged = mergeSkillPackagingConfig(
       defaults as Record<string, unknown> | undefined,
@@ -583,7 +596,7 @@ export async function computeDeferredArtifacts(
       // Only what the packager will really copy — an entry pointing into ANY
       // skill's declared test input (its own or a sibling's) is dropped at build
       // time, so its dest cannot defer a link here without contradicting the build.
-      files: packagedFileEntries(merged, skillDir, projectRoot, projectSkills),
+      files: packagedFileEntries(merged, skillDir, projectRoot, projectSkills, suiteProbe),
       skillDir,
     };
   });
@@ -591,10 +604,19 @@ export async function computeDeferredArtifacts(
   return DeferredArtifacts.from(skillFiles, projectRoot);
 }
 
-export async function validateCommand(
+/**
+ * Validate resources and hand back the document and exit code, printing the
+ * document nowhere.
+ *
+ * The phase entry point for `vat validate` and `vat verify`. Everything that was
+ * already streaming to stderr — progress, git-tracker stats, `--format text`
+ * findings — still streams from here, because stderr was inherited by the child
+ * process this replaces and so was free either way.
+ */
+export async function runResourcesValidatePhase(
   pathArg: string | undefined,
   options: ValidateOptions
-): Promise<void> {
+): Promise<PhaseOutcome> {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
@@ -681,16 +703,42 @@ export async function validateCommand(
       duration,
     };
 
-    emitResult(issueData, context, registry, options.format ?? 'yaml', options.verbose === true);
+    const document = buildValidationDocument(
+      issueData,
+      context,
+      registry,
+      options.verbose === true,
+    );
+    if ((options.format ?? 'yaml') === 'text') {
+      emitTextResult(issueData, context);
+    }
     logGitTrackerStats(gitTracker, logger);
     // The library's severity-based `hasErrors` is the WHOLE decision: every
     // finding this command reports came from `registry.validate()`, which
     // already allow-filtered and severity-resolved them. Nothing is reported
     // here that the library never saw, so there is no second clause to OR in.
-    process.exit(hasErrors ? 1 : 0);
+    return { document, exitCode: hasErrors ? 1 : 0 };
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'Validation');
+    return {
+      document: reportCommandError(error, logger, startTime, 'Validation'),
+      exitCode: 2,
+      failed: true,
+    };
   }
+}
+
+export async function validateCommand(
+  pathArg: string | undefined,
+  options: ValidateOptions
+): Promise<void> {
+  const format = options.format ?? 'yaml';
+  finishCommand(await runResourcesValidatePhase(pathArg, options), (document) => {
+    // `--format text` already rendered itself inside the run and publishes no
+    // document, so there is nothing left to write for it.
+    if (format !== 'text') {
+      writeStructuredOutput(document as ValidationOutputData, format);
+    }
+  });
 }
 
 /**
@@ -716,33 +764,47 @@ function narrowCollectionStats(
 }
 
 /**
- * Emit the result to stdout. Surfaces all issues when any fired; otherwise emits
- * a clean success. Does NOT decide the exit code — the caller owns that.
+ * THE document this command publishes, for either outcome.
  *
- * `--format text` is unaffected by `verbose`: it is already one
- * `file:line:col:` line per issue, which is what `--verbose` restores in the
- * structured formats.
+ * Built as a value and rendered separately, because the same document now has
+ * two destinations: stdout for a command-line run, and `phases[].report` when
+ * `vat validate` or `vat verify` runs this as one of its phases in their own
+ * process. Deriving it twice — once to print, once to hand back — is how the two
+ * lanes come to disagree about what this command reported.
  */
-function emitResult(
+function buildValidationDocument(
   issueData: ErrorData[],
   context: ValidationContext,
   registry: RegistryLookup,
-  outputFormat: OutputFormat,
   verbose: boolean
-): void {
+): ValidationOutputData {
+  return issueData.length === 0
+    ? buildSuccessOutputData(context)
+    : buildIssuesOutputData(issueData, context, registry, verbose);
+}
+
+/**
+ * Render the `--format text` output, which publishes NO document.
+ *
+ * Kept inside the run rather than in the command wrapper because it renders the
+ * run's internal state — the flattened issue rows and the stats context — not
+ * the published document. It is the one output format with nothing for an
+ * orchestrator to fold, and no orchestrator asks for it.
+ *
+ * Unaffected by `verbose`: it is already one `file:line:col:` line per issue,
+ * which is what `--verbose` restores in the structured formats.
+ */
+function emitTextResult(issueData: ErrorData[], context: ValidationContext): void {
   if (issueData.length === 0) {
-    outputSuccess(outputFormat, context);
+    printTextSuccess(context);
     return;
   }
-  if (outputFormat === 'text') {
-    // Text format: one `file:line:col: severity: message` line per issue, to
-    // stderr. The severity is what tells a reader which lines are fatal — the
-    // text renderer prints no verdict word of its own, so it cannot contradict
-    // the `status` the structured renderer reports.
-    for (const issue of issueData) {
-      writeTestFormatError(issue.file, issue.line, issue.column, issue.severity, issue.message);
-    }
-    return;
+
+  // One `file:line:col: severity: message` line per issue, to stderr. The
+  // severity is what tells a reader which lines are fatal — the text renderer
+  // prints no verdict word of its own, so it cannot contradict the `status` the
+  // structured renderer reports.
+  for (const issue of issueData) {
+    writeTestFormatError(issue.file, issue.line, issue.column, issue.severity, issue.message);
   }
-  writeStructuredOutput(buildIssuesOutputData(issueData, context, registry, verbose), outputFormat);
 }

@@ -78,14 +78,56 @@ export type CollectionValidation = z.infer<typeof CollectionValidationSchema>;
 /**
  * Configuration for a named collection of resources.
  *
- * Collections define include/exclude patterns and validation rules.
- * A file can belong to multiple collections.
+ * Collections define include/exclude patterns, validation rules, and — through
+ * {@link CollectionConfigSchema.shape.mimeType} — what the files they match
+ * ARE. A file can belong to multiple collections.
+ *
+ * ## The conflict rule, and why it is cheap
+ *
+ * Only a collection that **declares** a `mimeType` participates at all. One that
+ * matches a file and declares nothing contributes nothing and can never
+ * conflict, which is what keeps the rule from turning every overlapping
+ * collection pair into a decision. Of the collections that do declare: one
+ * distinct value (however many collections carry it) types the file; two or more
+ * distinct values are a **config error**, collected per file and reported at the
+ * end of the run rather than thrown on the first — a config authoring mistake
+ * should read like a linter finding that names every offending file, not kill a
+ * 9,000-file run on file 400 and hide the other six.
+ *
+ * Parsing one file with two parsers was considered and rejected: a blob has one
+ * content key and one set of derived facts, so "both" is not a representable
+ * answer.
  */
 export const CollectionConfigSchema = z.object({
   include: z.array(z.string()).min(1)
     .describe('Include patterns (paths or globs like docs/**/*.md)'),
   exclude: z.array(z.string()).optional()
     .describe('Exclude patterns (globs)'),
+  // ⚠️ Deliberately unconstrained beyond "a non-empty string" — the vocabulary
+  // is the AUTHOR'S, pinned by `project-config-flag.test.ts`. A corpus may
+  // legitimately name its own type (`application/x-fraud-ingest`) to record what
+  // its files are while running no document parser over them.
+  //
+  // 🚨 The cost of that openness, recorded because it is real and unfixed: a
+  // TYPO is indistinguishable from a deliberate private type. `text/markdow`
+  // validates, routes to no parser, and silently leaves unparsed exactly the
+  // files the declaration was written to parse. Rejecting unknown types would
+  // catch it but would also break the private-vocabulary case above, and no
+  // structural test separates the two — `text/markdow` and
+  // `application/x-fraud-ingest` are both "a string no table names". Recorded
+  // here rather than papered over; deciding it needs a product call about
+  // whether the vocabulary stays open, not a cleverer predicate.
+  //
+  // 🪤 Second sharp edge, pre-existing but NEWLY load-bearing: `include` is
+  // matched against the file's ABSOLUTE path with a `**/` prefix, so a bare
+  // `include: ['docs']` matches any file under any ANCESTOR named `docs` too.
+  // Measured: a project at `/Users/j/docs/myproj` has `['docs']` match every
+  // file in the whole tree, not just its own `docs/`. That was only a scoping
+  // surprise before; now it decides which parser runs and lands in the content
+  // key, so the same tree under a differently-named parent derives different
+  // blob rows. Anchor the pattern (`docs/**`) when declaring a `mimeType`.
+  mimeType: z.string().min(1).optional()
+    .describe('MIME type every file this collection matches IS, overriding mime-type.ts\'s basename/extension tables — e.g. "text/markdown" for a corpus of prose files with an unhelpful extension. OPTIONAL, and omitting it is not the same as declaring a default: a collection that matches a file but declares nothing contributes nothing and can never conflict with another collection. Two collections that match one file and declare DIFFERENT values are a config error, reported per file and collected across the run. ⚠️ Declaring this makes the file\'s content key CONFIG-dependent: the parser kind is mixed into the key\'s digest preimage, so editing this value invalidates that file\'s cached parse facts automatically — which is the intended behaviour and needs no version constant.'),
   validation: CollectionValidationSchema.optional()
     .describe('Validation configuration for this collection'),
 }).describe('Configuration for a named collection of resources');

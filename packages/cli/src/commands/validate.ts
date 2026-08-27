@@ -40,7 +40,6 @@ import {
   decidePhaseSelection,
   exitCodeForPhases,
   rejectRetiredOnly,
-  resolveBinPath,
   runPhase,
   type Phase,
   type PhaseResult,
@@ -48,6 +47,8 @@ import {
   type PhaseVocabulary,
 } from './phase-utils.js';
 import { rejectPositionalArguments } from './positional-args.js';
+import { runResourcesValidatePhase } from './resources/validate.js';
+import { runSkillsValidatePhase } from './skills/validate.js';
 
 /** Surfaces `vat validate` knows how to run, in stable execution order. */
 const VALID_SURFACES = ['resources', 'skills'] as const;
@@ -115,8 +116,8 @@ Description:
 Output:
   ONE YAML document → stdout
     per surface: status (success | warning | error | system-error) plus the
-    child's exitCode, signal, or spawn error — a surface that could not run is
-    never reported as a surface that failed validation. The validator's own
+    validator's exitCode — a surface that could not run is never reported as a
+    surface that failed validation. The validator's own
     report is captured and nested under 'report', so the whole run stays a
     single parseable document ('vat validate | jq' works). A surface's status
     comes from the validator's REPORTED status, not from its exit code — an
@@ -127,9 +128,8 @@ Exit Codes:
   0 - All configured validators passed (or nothing configured to validate)
   1 - Validation errors found, or the retired '--only' flag was passed
   2 - System error (this command's own, or propagated from a validator that
-      could not run: exited 2, was killed by a signal, was never spawned, or
-      wrote output that could not be parsed), or a usage error such as passing
-      a path
+      could not run: it exited 2, or reported 'system-error' for itself), or a
+      usage error such as passing a path
 
 Arguments:
   None. Scope comes from vibe-agent-toolkit.config.yaml, never from the command
@@ -169,18 +169,25 @@ export function selectValidateSurfaces(
   verbose = false,
 ): PhaseSelection {
   // Forwarded to every surface, exactly as `vat verify` forwards its own. Both
-  // child validators already accept `-v, --verbose`; only this command lacked
-  // the flag, which made the collapsed warning/info detail unreachable HERE
-  // while the same findings were one `vat skills validate` away.
-  const detail = verbose ? ['--verbose'] : [];
+  // validators already accept `-v, --verbose`; only this command lacked the
+  // flag, which made the collapsed warning/info detail unreachable HERE while
+  // the same findings were one `vat skills validate` away. It is now passed as
+  // the option it is, rather than re-serialized into an argv a second Commander
+  // would have to parse back.
   const phases: Phase[] = [];
 
   if (config?.resources) {
-    phases.push({ name: 'resources', args: ['resources', 'validate', ...detail] });
+    phases.push({
+      name: 'resources',
+      run: () => runResourcesValidatePhase(undefined, { verbose }),
+    });
   }
 
   if (config?.skills) {
-    phases.push({ name: 'skills', args: ['skills', 'validate', ...detail] });
+    phases.push({
+      name: 'skills',
+      run: () => runSkillsValidatePhase(undefined, { verbose }),
+    });
   }
 
   return decidePhaseSelection(undefined, phases, VALIDATE_VOCABULARY);
@@ -221,15 +228,17 @@ async function validateTopLevelCommand(
 
     logger.info(`✅ vat validate (surfaces: ${phases.map((p) => p.name).join(' → ')})`);
 
-    const binPath = resolveBinPath();
     const phaseResults: PhaseResult[] = [];
     for (const phase of phases) {
       logger.info(`\n▶ Surface: ${phase.name}`);
-      phaseResults.push(runPhase(binPath, phase));
+      // Awaited in the loop, deliberately: surfaces are announced in a fixed
+      // order and their stderr streams live, so overlapping them would
+      // interleave two running reports into one unreadable channel.
+      phaseResults.push(await runPhase(phase));
     }
 
-    // A surface whose validator could not RUN (exit 2, killed, never spawned)
-    // is not a surface that failed validation: it exits 2, so a CI gate can
+    // A surface whose validator could not RUN (exit 2, or a self-reported
+    // system error) is not one that failed validation: it exits 2, so a CI gate can
     // tell a broken config from a broken link.
     // `issueCounts` beside `status` because a status alone cannot express a
     // three-valued distribution, and this document published none at all: a

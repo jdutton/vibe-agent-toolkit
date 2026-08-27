@@ -54,6 +54,7 @@ const rules = {
   'no-self-package-import': require('./rules/no-self-package-import.cjs'),
   'require-justified-skip': require('./rules/require-justified-skip.cjs'),
   'no-bare-symlink-in-tests': require('./rules/no-bare-symlink-in-tests.cjs'),
+  'no-process-exit-in-phase': require('./rules/no-process-exit-in-phase.cjs'),
 };
 
 /**
@@ -136,6 +137,14 @@ const RECOMMENDED_EXCLUDE = new Set([
   // ride in `recommended`; that is a public-API change and has not been made.
   // VAT enables the whole rule explicitly, scoped to its own conventions.
   'no-bare-symlink-in-tests',
+  // Excluded because it keys on a NAMING CONVENTION that is VAT's, not a
+  // portable fact — the same reason `no-unsafe-root-join` is excluded above. The
+  // hazard it guards is real and general (an in-process orchestrator whose step
+  // calls `process.exit()` silently skips every later step), but the marker is
+  // the `…Phase` suffix, and an adopter with an unrelated `computeRenderPhase()`
+  // that legitimately exits would get a finding they cannot act on. It ships in
+  // `rules` and VAT enables it explicitly, scoped to its own orchestrators.
+  'no-process-exit-in-phase',
 ]);
 
 /**

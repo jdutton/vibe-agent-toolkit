@@ -19,18 +19,22 @@ import { fileURLToPath } from 'node:url';
 
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
 import {
-  getToolVersion,
-  killAllActiveClaudeChildren,
   mkdirSyncReal,
   normalizedTmpdir,
-  probeAuthStatus,
   resolveAssetReference,
-  safeExecResult,
   safePath,
-  type spawnHeadlessClaude,
   toForwardSlash,
-  type ResolvedAuth,
 } from '@vibe-agent-toolkit/utils';
+import {
+  getToolVersion,
+  safeExecResult,
+} from '@vibe-agent-toolkit/utils/process';
+import {
+  killAllActiveClaudeChildren,
+  probeAuthStatus,
+  type spawnHeadlessClaude,
+  type ResolvedAuth,
+} from '@vibe-agent-toolkit/utils/skill-test';
 
 import { resolveSkillSource } from '../skill-source/resolve-skill-source.js';
 import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from '../skill-source/types.js';

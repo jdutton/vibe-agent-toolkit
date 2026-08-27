@@ -38,7 +38,6 @@ import {
 
 import {
   POPULATION_FACET,
-  POPULATION_FACET_VERSION,
   type PopulationAttribution,
   PopulationBodySchema,
   type PopulationCommandStats,
@@ -162,7 +161,6 @@ function verdictFor(
 /** This facet's body contract, as the shared comparison gates need it. */
 const POPULATION_CONTRACT = {
   facet: POPULATION_FACET,
-  version: POPULATION_FACET_VERSION,
   schema: PopulationBodySchema,
 } as const;
 

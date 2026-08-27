@@ -44,10 +44,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ReportEnvelope } from '../src/envelope/envelope.js';
 import { captureIo, type CaptureIoOptions } from '../src/facets/io/capture.js';
-import { IO_DUMP_VERSION } from '../src/facets/io/dump.js';
 import {
   IO_FACET,
-  IO_FACET_VERSION,
   type IoBody,
   IoBodySchema,
   type IoCommandStats,
@@ -148,7 +146,6 @@ const COUNTER_SOURCE = [
   '    writeFileSync(',
   '      join(dir, `io-${process.pid}-${index}.json`),',
   '      JSON.stringify({',
-  `        dumpVersion: ${String(IO_DUMP_VERSION)},`,
   '        pid: process.pid + index,',
   '        rows: [',
   `          { cls: 'user', method: ${JSON.stringify(METHOD)}, site, count, distinctArgs: 1, argsCapped: false },`,
@@ -652,7 +649,6 @@ describe('captureIo — the envelope', () => {
 
     expectStamp(report, {
       facet: IO_FACET,
-      facetVersion: IO_FACET_VERSION,
       subject,
       capturedAt: CAPTURED_AT,
     });

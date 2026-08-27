@@ -736,7 +736,11 @@ describe('ParseCache fail-soft writes', () => {
 
     const cache = suite.makeCache();
 
-    await expect(cache.set(keyed, freshParse(keyed))).resolves.toBeUndefined();
+    // `false`, not a throw and not a silent `undefined`: fail-soft still means
+    // the caller is never interrupted, but it no longer means the caller cannot
+    // find out. A parse worker filing entries on the parent's behalf has to
+    // know, or it answers "cached" for an entry that is not there.
+    await expect(cache.set(keyed, freshParse(keyed))).resolves.toBe(false);
     expect(await cache.get(keyed)).toBeNull();
   });
 
@@ -799,7 +803,9 @@ describe('ParseCache enable toggle', () => {
     const cacheDir = safePath.join(suite.dir(), 'never-created');
     const cache = suite.makeCache({ cacheDir, enabled: false });
 
-    await expect(cache.set(keyed, freshParse(keyed))).resolves.toBeUndefined();
+    // A disabled cache stored nothing, and says so — see the fail-soft case
+    // above for why `false` rather than `undefined`.
+    await expect(cache.set(keyed, freshParse(keyed))).resolves.toBe(false);
 
     expect(await cache.get(keyed)).toBeNull();
     expect(await exists(cacheDir)).toBe(false);

@@ -94,13 +94,15 @@ import { detectPackagedAgentInstructionFiles, materializeIssue } from '@vibe-age
 import { getClaudeUserPaths, type GitTrackerSource } from '@vibe-agent-toolkit/claude-marketplace';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
-  gitFindRoot,
-  GitTracker,
   issueLocation,
   normalizePath,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import {
+  gitFindRoot,
+  GitTracker,
+} from '@vibe-agent-toolkit/utils/git';
 
 /** Cache of (gitRoot → initialized GitTracker) to avoid re-spawning ls-files. */
 const gitTrackerCache: Map<string, GitTracker> = new Map();

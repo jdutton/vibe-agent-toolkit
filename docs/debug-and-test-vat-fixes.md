@@ -134,7 +134,7 @@ what changed. Do not commit until this passes.
 | Config not loading | Run `VAT_DEBUG=1 vat <command>` — shows which config file is found |
 | Fix works locally but adopter still wrong | `bun run build` not run after the change, or adopter uses old installed version |
 | Path wrong on Windows | Use `toForwardSlash()` from `@vibe-agent-toolkit/utils` for path comparisons |
-| Test passes, CI fails | Different Node version; check matrix (Node 22/24 × Ubuntu/Windows) |
+| Test passes, CI fails | Different Node version; check matrix (Node 24 × Ubuntu/Windows) |
 
 ## See Also
 

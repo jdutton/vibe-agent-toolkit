@@ -23,11 +23,13 @@ import {  dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  describeStdioBlocking,
   findNodeWorkspaceRoot,
-  makeStdioBlocking,
   safePath,
 } from '@vibe-agent-toolkit/utils';
+import {
+  describeStdioBlocking,
+  makeStdioBlocking,
+} from '@vibe-agent-toolkit/utils/process';
 
 // Before ANY output. This file — not bin.ts — is what package.json maps `vat` to,
 // so it is the CLI entry point in every installed copy, and `makeStdioBlocking`

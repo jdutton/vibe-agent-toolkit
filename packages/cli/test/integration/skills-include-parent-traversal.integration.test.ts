@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
-import { normalizedTmpdir, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { discoverSkillsFromConfig } from '../../src/commands/skills/skill-discovery.js';

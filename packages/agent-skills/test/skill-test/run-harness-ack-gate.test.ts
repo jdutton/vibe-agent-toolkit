@@ -14,7 +14,7 @@
  * be a gate breach.
  */
 
-import { spawnHeadlessClaude } from '@vibe-agent-toolkit/utils';
+import { spawnHeadlessClaude } from '@vibe-agent-toolkit/utils/skill-test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SkillTestExitCode } from '../../src/skill-test/exit-codes.js';
@@ -35,7 +35,7 @@ vi.mock('../../src/skill-test/staging.js', async (importOriginal) => {
 });
 
 // Replace the default executor/grader spawn with a spy: reaching it is a gate breach.
-vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
+vi.mock('@vibe-agent-toolkit/utils/skill-test', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, spawnHeadlessClaude: vi.fn() };
 });

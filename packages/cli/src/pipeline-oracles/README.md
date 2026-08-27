@@ -323,12 +323,17 @@ the line counts are the authoritative signal.
 
 ### What it refuses to do
 
-- **A `formatVersion` mismatch is refused, not attempted.** `compareSnapshots`
-  returns empty `deltas` and a single `REFUSED:` constraint. The artifact sets
-  are not the same shape, and a comparison of nothing renders as "nothing
-  changed" — which would let a reader conclude a refactor moved nothing when in
-  fact nothing was compared. A caller that ignores `constraints` re-opens exactly
-  that hole.
+- **A manifest this build cannot read is refused at LOAD, not compared.**
+  `readSnapshot` validates against the strict `SnapshotManifestSchema` and
+  throws, so `compareSnapshots` never sees two incompatible layouts. A
+  comparison of nothing renders as "nothing changed" — which would let a reader
+  conclude a refactor moved nothing when in fact nothing was compared — and
+  refusing at the door is what stops that. ⛔ This used to be a hand-bumped
+  `formatVersion` integer sitting in front of a blind cast; it validated nothing
+  and only fired when a human remembered to move it.
+- **An artifact captured on one side only is stated, not silently dropped.**
+  `presenceConstraints` emits `ADDED:` / `REMOVED:`. A caller that ignores
+  `constraints` re-opens exactly the hole above.
 - **Walk-route lanes never claim portable ordering.** They are rendered sorted
   and the manifest records `orderPortable: false`.
 
@@ -376,7 +381,7 @@ already established. They are reviewed expected output, not a claim that the
 output is correct: a drift failure is a prompt to read the diff.
 
 Because these are ordinary integration tests, they run in the existing
-Node 22/24 × Ubuntu/Windows CI matrix without any separate runner.
+Node 24 × Ubuntu/Windows CI matrix without any separate runner.
 
 ## What this instrument can and cannot see
 

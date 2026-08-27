@@ -33,7 +33,6 @@ import {
 } from './document.js';
 import {
   POPULATION_FACET,
-  POPULATION_FACET_VERSION,
   type PopulationBody,
   type PopulationCommandStats,
 } from './types.js';
@@ -208,7 +207,7 @@ export function capturePopulation(
   const commands = options.commands.map((spec) => rowFor(measureSpec(options, spec)));
   const loadAfter = readLoad();
 
-  return buildReportEnvelope(POPULATION_FACET, POPULATION_FACET_VERSION, options, {
+  return buildReportEnvelope(POPULATION_FACET, options, {
     commands,
     load: judgeLoad(loadBefore.loadAvg1, loadAfter.loadAvg1, loadAfter.cpus),
   });

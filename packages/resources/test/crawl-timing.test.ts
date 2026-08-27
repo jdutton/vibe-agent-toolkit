@@ -35,7 +35,7 @@ import {
   CRAWL_CLOSURE_CONTRIBUTE_ID,
   CRAWL_CLOSURE_RESOLVE_ID,
   CRAWL_PASS_INSIDE,
-  CRAWL_REGISTRY_ADD_RESOURCE_ID,
+  CRAWL_REGISTRY_ADMIT_ID,
   CRAWL_REGISTRY_ENUMERATE_ID,
   CRAWL_REGISTRY_ID_PREFIX,
   CRAWL_REGISTRY_RESOLVE_LINKS_ID,
@@ -349,15 +349,15 @@ describe('crawl timing seam', () => {
       registry.resolveLinks();
       const snapshot = __readCrawlTimingSnapshot();
 
-      // The counts are derived from the fixture, not restated as literals: a
-      // bracket in the wrong place (once per crawl instead of once per file, say)
-      // produces a number that still looks plausible, and only a count tied to the
-      // corpus can tell the two apart.
+      // ⚠️ Admission is charged ONCE PER CALL, not once per file, and the whole
+      // corpus is admitted by the single `addResources` call inside `crawl()`.
+      // It used to be per file, and that had to change when the lane stopped
+      // being sequential: `recordRegistryPass` sums elapsed time, so overlapping
+      // per-file brackets would total up to `width ×` the wall clock they claim
+      // to measure. See `CRAWL_REGISTRY_ADMIT_ID`.
       expect(registry.size()).toBe(CORPUS.length);
       expect(entryOf(snapshot, CRAWL_REGISTRY_ENUMERATE_ID, CRAWL_PASS_INSIDE).calls).toBe(1);
-      expect(entryOf(snapshot, CRAWL_REGISTRY_ADD_RESOURCE_ID, CRAWL_PASS_INSIDE).calls).toBe(
-        CORPUS.length,
-      );
+      expect(entryOf(snapshot, CRAWL_REGISTRY_ADMIT_ID, CRAWL_PASS_INSIDE).calls).toBe(1);
       expect(entryOf(snapshot, CRAWL_REGISTRY_RESOLVE_LINKS_ID, CRAWL_PASS_INSIDE).calls).toBe(1);
 
       // All three in the WALKER's stratum. A preparation row filed anywhere else
@@ -380,9 +380,7 @@ describe('crawl timing seam', () => {
       );
       const snapshot = __readCrawlTimingSnapshot();
 
-      expect(entryOf(snapshot, CRAWL_REGISTRY_ADD_RESOURCE_ID, CRAWL_PASS_INSIDE).calls).toBe(
-        CORPUS.length,
-      );
+      expect(entryOf(snapshot, CRAWL_REGISTRY_ADMIT_ID, CRAWL_PASS_INSIDE).calls).toBe(1);
       // …and no enumeration row, because that caller's own `crawlDirectory` call
       // is outside the registry and therefore outside this seam. Pinned rather
       // than left implicit: it is a REAL uncharged phase on one of the six
@@ -423,7 +421,7 @@ describe('crawl timing seam', () => {
       const snapshot = __readCrawlTimingSnapshot();
 
       // `populateBlobs` reads and parses every path the base contributors keyed.
-      // It is the projection's analogue of `resource-registry:add-resource`, which
+      // It is the projection's analogue of `resource-registry:admit`, which
       // IS charged — so leaving it uncharged biased the crawler-against-crawler
       // comparison on ONE side, unlike the `git ls-files` omission, which at least
       // cancelled. Pinned here because the row has no other guard: `closure` is 0%
@@ -475,12 +473,14 @@ describe('crawl timing seam', () => {
       expect(path).not.toBeNull();
 
       const dump = await readDump(path ?? '');
-      // Pinned as a literal, on purpose: this is a wire contract with a reader in
-      // another package that refuses any other value
-      // (`lab/src/facets/crawl/dump.ts`'s `CRAWL_DUMP_VERSION`). A bump that does
-      // not move both numbers makes every dump unreadable, so it should cost a
-      // failing test rather than a silent one.
-      expect(dump.dumpVersion).toBe(4);
+      // ⚠️ This is a wire contract with a reader in ANOTHER PACKAGE
+      // (`lab/src/facets/crawl/dump.ts`'s `CrawlDumpSchema`), and the key set is
+      // the whole of it. Two hand-maintained `dumpVersion` integers used to be
+      // pinned equal here instead; they could only catch a layout change someone
+      // remembered to announce, and the seam shipped two meaning changes ahead
+      // of one of them. The reader is strict, so a field added, renamed or
+      // retyped here makes every dump unreadable there — which is why the shape
+      // itself is what gets pinned.
       expect(dump.pid).toBe(process.pid);
       expect(keysOf(dump)).toEqual(keysOf(__readCrawlTimingSnapshot()));
       expect(entryOf(dump, CLOSURE_DRIVER_ID, 2).calls).toBe(1);
@@ -508,7 +508,10 @@ describe('crawl timing seam', () => {
       // seam. Folding the first into the second would report a real finding as an
       // instrument failure.
       expect(dump.entries).toEqual([]);
-      expect(dump.dumpVersion).toBe(4);
+      // And it still declares what this build COULD have charged, which is the
+      // half that keeps "the instrument cannot see that work" distinguishable
+      // from "that work did not happen".
+      expect(dump.charges.syntheticIds.length).toBeGreaterThan(0);
     });
 
     it('does not overwrite a dump already filed under this pid', async () => {

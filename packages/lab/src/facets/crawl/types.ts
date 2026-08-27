@@ -17,8 +17,8 @@
  * documents and a `parse` row carries permanently-empty entries — precisely the
  * "costume with four permanently-zero rows in it" that vat's own parse seam
  * refused when it declined to force markdown and HTML into one pass list. It
- * would also have had to bump `PARSE_FACET_VERSION`, which refuses every parse
- * report captured to date against every one captured after.
+ * would also have moved `ParseBodySchema`, which refuses every parse report
+ * captured to date against every one captured after.
  *
  * ## What the numbers are for
  *
@@ -102,21 +102,6 @@ export const crawlChargesShape = {
 
 /** Stable name of this facet, as it appears in the envelope header. */
 export const CRAWL_FACET = 'crawl';
-
-/**
- * Version of this body schema.
- *
- * Bumped whenever the shape below changes. Two `crawl` reports at different body
- * versions are refused against each other, because differences across a schema
- * change belong to the schema rather than to the subject.
- *
- * 1 — first version.
- * 2 — rows carry a {@link CrawlRowRole}, and {@link CrawlStratumStats} and the
- *     command totals count only the additive ones. A v1 report's `elapsedMs`
- *     summed nested brackets into the same figure, so holding one against a v2
- *     report reads the correction as a speed-up in whichever arm nests deepest.
- */
-export const CRAWL_FACET_VERSION = 2;
 
 /**
  * What a row's numbers actually describe.

@@ -53,13 +53,15 @@ import {
   fillRealpaths,
   fillSiblingNames,
   FsLookupCache,
-  isGitIgnored,
-  type GitTracker,
   issueLocation,
   type RealpathTable,
   type SiblingNamesTable,
   toNfc,
 } from '@vibe-agent-toolkit/utils';
+import {
+  isGitIgnored,
+  type GitTracker,
+} from '@vibe-agent-toolkit/utils/git';
 
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import type { ResourceLink } from './types.js';

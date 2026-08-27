@@ -18,7 +18,6 @@ import {
 } from '../src/facets/population/render.js';
 import {
   POPULATION_FACET,
-  POPULATION_FACET_VERSION,
   type PopulationBody,
   type PopulationCommandStats,
 } from '../src/facets/population/types.js';
@@ -57,9 +56,7 @@ function row(over: Partial<PopulationCommandStats> = {}): PopulationCommandStats
 /** A report envelope carrying the given rows. */
 function report(...commands: PopulationCommandStats[]): ReportEnvelope<PopulationBody> {
   return {
-    formatVersion: 1,
     facet: POPULATION_FACET,
-    facetVersion: POPULATION_FACET_VERSION,
     coordinate: COORDINATE,
     capturedAt: '2026-08-17T00:00:00.000Z',
     body: { commands, load: CLEAN_LOAD },

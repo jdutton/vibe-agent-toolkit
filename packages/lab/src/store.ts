@@ -17,7 +17,6 @@ import type { Coordinate } from './envelope/coordinate.js';
 import {
   type EnvelopeResult,
   readEnvelope,
-  REPORT_FORMAT_VERSION,
   type ReportEnvelope,
 } from './envelope/envelope.js';
 
@@ -166,10 +165,15 @@ export async function writeReport(
   directory: string,
   envelope: ReportEnvelope<unknown>,
 ): Promise<string> {
-  if (envelope.formatVersion !== REPORT_FORMAT_VERSION) {
+  // Refuse to store a report this build could not read back. This used to
+  // compare a `formatVersion` integer, which could only catch a header some
+  // human had labelled wrong; running the reader's own schema catches a header
+  // that IS wrong — a missing coordinate, an instrument claiming cleanliness
+  // over a build with no checkout — and it needs nobody to remember anything.
+  const readable = readEnvelope(envelope);
+  if (!readable.ok) {
     throw new Error(
-      `Refusing to write a report claiming formatVersion ${String(envelope.formatVersion)}; ` +
-        `this build writes ${String(REPORT_FORMAT_VERSION)}.`,
+      `Refusing to write a report this build could not read back — ${readable.refusal}`,
     );
   }
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- report directory chosen by the operator running the lab

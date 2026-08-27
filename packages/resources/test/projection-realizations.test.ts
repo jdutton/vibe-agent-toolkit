@@ -1,18 +1,32 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { mkdtempSync, writeFileSync } from 'node:fs';
 
-import { createSymlink, GitTracker, mkdirSyncReal, normalizedTmpdir, runGitOrThrow, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  createSymlink,
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+  symlinkCapability,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
+import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../src/projection/content-cache.js';
 import {
+  COLLECTION_MIME_CONFLICT,
+  collectionMimeConflictCondition,
   collectRealization,
+  createCollectionMimeResolver,
   realPathOrNull,
   relativize,
+  type CollectionMimeResolver,
   type RealizationContext,
 } from '../src/projection/realizations.js';
+import { PROJECTION_TABLES } from '../src/projection/table-registry.js';
+import type { CollectionConfig } from '../src/schemas/project-config.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
-import { ResourceRealizationRowSchema } from '../src/schemas/projection-resources.js';
+import { RealizationConditionRowSchema, ResourceRealizationRowSchema } from '../src/schemas/projection-resources.js';
 
 // Hoisted: sonarjs/no-duplicate-string blocks a literal used 3+ times.
 const EXTENT_ID = 'ctx-filesystem';
@@ -30,7 +44,7 @@ let root: string;
 /** The parts of a {@link RealizationContext} a case may vary. */
 type RealizationOptions = Partial<Pick<
   RealizationContext,
-  'contentCache' | 'contentDemand' | 'gitTracker' | 'observedShape'
+  'contentCache' | 'contentDemand' | 'gitTracker' | 'mimeResolver' | 'observedShape'
 >>;
 
 /** Realize a fixture path, varying only the policy inputs a case cares about. */
@@ -346,6 +360,228 @@ describe('collectRealization content demand', () => {
 
     expect(row.exists).toBe(false);
     expect(row.contentState).toBe('none');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The `mime` column, and the collections that can override it
+// ---------------------------------------------------------------------------
+
+const TEXT_MARKDOWN = 'text/markdown';
+const TEXT_TYPESCRIPT = 'text/x-typescript';
+const TEXT_CSHARP = 'text/x-csharp';
+const SOURCE_FILE = 'src/module.ts';
+const OTHER_SOURCE_FILE = 'src/other.ts';
+const SOURCE_GLOB = '**/*.ts';
+/** TypeScript nothing would mistake for prose. */
+const TS_SOURCE = 'export {};\n';
+/** Markdown living at a `.ts` path — the case a collection declaration is for. */
+const PROSE_SOURCE = '# actually prose\n';
+const PROSE_COLLECTION = 'prose';
+const CODE_COLLECTION = 'code';
+const UNTYPED_COLLECTION = 'untyped';
+
+/** Write a fixture file, creating any directory it needs. */
+function writeFixture(relativePath: string, content = 'x\n'): void {
+  const lastSlash = relativePath.lastIndexOf('/');
+  if (lastSlash !== -1) {
+    mkdirSyncReal(safePath.join(root, relativePath.slice(0, lastSlash)), { recursive: true });
+  }
+  writeFileSync(safePath.join(root, relativePath), content);
+}
+
+/** Realize a fixture path through a resolver built over `collections`. */
+async function realizeUnder(
+  relativePath: string,
+  collections: Record<string, CollectionConfig>,
+): Promise<{ row: ResourceRealizationRow; resolver: CollectionMimeResolver }> {
+  const resolver = createCollectionMimeResolver(collections);
+  const row = await realize(relativePath, { mimeResolver: resolver });
+  return { row, resolver };
+}
+
+describe('the mime column', () => {
+  it('types a markdown file from its extension', async () => {
+    expect((await nestedRow()).mime).toBe(TEXT_MARKDOWN);
+  });
+
+  it('types a file nothing parses — what a file IS is not what runs over it', async () => {
+    writeFixture(SOURCE_FILE, TS_SOURCE);
+
+    const row = await realize(SOURCE_FILE);
+
+    expect(row.mime).toBe(TEXT_TYPESCRIPT);
+    // The type is recorded; the parser is still none. Both facts, separately.
+    expect(row.contentKey).toMatch(/^none\.[\da-f]{64}$/u);
+  });
+
+  it('types an extensionless well-known from its basename', async () => {
+    writeFixture('README', '# hi\n');
+
+    expect((await realize('README')).mime).toBe('text/plain');
+  });
+
+  it('records null for an extension no table names, never application/octet-stream', async () => {
+    // The distinction the column exists for: "no type recorded" must stay
+    // distinguishable from a known-binary type, so an unknown cannot read as
+    // deliberately classified.
+    writeFixture('feed.fraud-ingest-job');
+
+    expect((await realize('feed.fraud-ingest-job')).mime).toBeNull();
+  });
+
+  it('records null for a directory, which has no type to have', async () => {
+    expect((await realize(DOCS_DIR)).mime).toBeNull();
+  });
+
+  it('sits beside ext in the registry column order', () => {
+    // The projection export pins `Object.keys(row)` against this list, so the
+    // column's POSITION is part of the contract, not only its presence.
+    const columns = PROJECTION_TABLES.resourceRealizations.columns;
+
+    expect(columns[columns.indexOf('ext') + 1]).toBe('mime');
+  });
+
+  it('produces a row the shipped schema accepts', async () => {
+    const row = await nestedRow();
+
+    expect(() => ResourceRealizationRowSchema.parse(row)).not.toThrow();
+  });
+});
+
+describe('collection-declared mime', () => {
+  it('routes a .ts file to the markdown parser when a collection says it is markdown', async () => {
+    writeFixture(SOURCE_FILE, PROSE_SOURCE);
+
+    const { row } = await realizeUnder(SOURCE_FILE, {
+      [PROSE_COLLECTION]: { include: [SOURCE_GLOB], mimeType: TEXT_MARKDOWN },
+    });
+
+    expect(row.mime).toBe(TEXT_MARKDOWN);
+    // The declaration reaches the parser, not just the column: the key's prefix
+    // is what every downstream stage reads the parser kind back off.
+    expect(row.contentKey).toMatch(/^markdown\.[\da-f]{64}$/u);
+  });
+
+  it('falls through to the extension table when no matching collection declares one', async () => {
+    writeFixture(SOURCE_FILE, TS_SOURCE);
+
+    const { row, resolver } = await realizeUnder(SOURCE_FILE, {
+      [PROSE_COLLECTION]: { include: ['docs/**/*.md'], mimeType: TEXT_MARKDOWN },
+    });
+
+    expect(row.mime).toBe(TEXT_TYPESCRIPT);
+    expect(resolver.conflicts).toStrictEqual([]);
+  });
+
+  it('takes the one declared value when a second matching collection declares nothing', async () => {
+    // The owner's cheapness rule: a collection that matches but declares no
+    // mimeType contributes nothing and can NEVER conflict.
+    writeFixture(SOURCE_FILE, PROSE_SOURCE);
+
+    const { row, resolver } = await realizeUnder(SOURCE_FILE, {
+      [PROSE_COLLECTION]: { include: [SOURCE_GLOB], mimeType: TEXT_MARKDOWN },
+      [UNTYPED_COLLECTION]: { include: [SOURCE_GLOB] },
+    });
+
+    expect(row.mime).toBe(TEXT_MARKDOWN);
+    expect(resolver.conflicts).toStrictEqual([]);
+  });
+
+  it('takes the value when many matching collections all declare the SAME one', async () => {
+    writeFixture(SOURCE_FILE, PROSE_SOURCE);
+
+    const { row, resolver } = await realizeUnder(SOURCE_FILE, {
+      [PROSE_COLLECTION]: { include: [SOURCE_GLOB], mimeType: TEXT_MARKDOWN },
+      [CODE_COLLECTION]: { include: ['src/**/*.ts'], mimeType: TEXT_MARKDOWN },
+    });
+
+    expect(row.mime).toBe(TEXT_MARKDOWN);
+    expect(resolver.conflicts).toStrictEqual([]);
+  });
+});
+
+describe('collection mime conflicts', () => {
+  /** Two collections that type every `.ts` file differently. */
+  const disagreeing: Record<string, CollectionConfig> = {
+    [PROSE_COLLECTION]: { include: [SOURCE_GLOB], mimeType: TEXT_MARKDOWN },
+    [CODE_COLLECTION]: { include: [SOURCE_GLOB], mimeType: TEXT_CSHARP },
+  };
+
+  it('reports one conflict naming both collections and both types', async () => {
+    writeFixture(SOURCE_FILE, TS_SOURCE);
+
+    const { resolver } = await realizeUnder(SOURCE_FILE, disagreeing);
+
+    expect(resolver.conflicts).toHaveLength(1);
+    expect(resolver.conflicts[0]).toStrictEqual({
+      path: SOURCE_FILE,
+      collections: [PROSE_COLLECTION, CODE_COLLECTION],
+      mimeTypes: [TEXT_MARKDOWN, TEXT_CSHARP],
+    });
+  });
+
+  it('gives the conflicted file the built-in table\'s answer so the report completes', async () => {
+    writeFixture(SOURCE_FILE, TS_SOURCE);
+
+    const { row } = await realizeUnder(SOURCE_FILE, disagreeing);
+
+    expect(row.mime).toBe(TEXT_TYPESCRIPT);
+    expect(row.contentState).toBe('keyed');
+  });
+
+  it('collects BOTH conflicting files rather than throwing on the first', async () => {
+    // The collect-don't-throw property. A config authoring error must read like
+    // a linter finding — every offending file named — not kill the run on the
+    // first one and hide the rest.
+    writeFixture(SOURCE_FILE, TS_SOURCE);
+    writeFixture(OTHER_SOURCE_FILE, TS_SOURCE);
+    const resolver = createCollectionMimeResolver(disagreeing);
+
+    const first = await realize(SOURCE_FILE, { mimeResolver: resolver });
+    const second = await realize(OTHER_SOURCE_FILE, { mimeResolver: resolver });
+
+    expect(first.mime).toBe(TEXT_TYPESCRIPT);
+    expect(second.mime).toBe(TEXT_TYPESCRIPT);
+    expect(resolver.conflicts.map((conflict) => conflict.path))
+      .toStrictEqual([SOURCE_FILE, OTHER_SOURCE_FILE]);
+  });
+
+  it('reports one conflict per PATH, however many extents realize it', async () => {
+    // A resolver outlives one extent, and the same file realized in three of
+    // them is one config error, not three.
+    writeFixture(SOURCE_FILE, TS_SOURCE);
+    const resolver = createCollectionMimeResolver(disagreeing);
+
+    await realize(SOURCE_FILE, { mimeResolver: resolver });
+    await realize(SOURCE_FILE, { mimeResolver: resolver });
+
+    expect(resolver.conflicts).toHaveLength(1);
+  });
+
+  it('surfaces a conflict as a realization_conditions row the schema accepts', async () => {
+    writeFixture(SOURCE_FILE, TS_SOURCE);
+    const { resolver } = await realizeUnder(SOURCE_FILE, disagreeing);
+
+    // Mapped rather than indexed, so the length assertion is what establishes
+    // there is a row at all — an index plus a non-null assertion would report a
+    // TypeError instead of the count that actually went wrong.
+    const conditions = resolver.conflicts
+      .map((conflict) => collectionMimeConflictCondition(conflict, EXTENT_ID, RESOURCE_ID));
+    expect(conditions).toHaveLength(1);
+
+    const condition = conditions[0];
+    expect(() => RealizationConditionRowSchema.parse(condition)).not.toThrow();
+    expect(condition?.code).toBe(COLLECTION_MIME_CONFLICT);
+    expect(condition?.severity).toBe('error');
+    expect(condition?.path).toBe(SOURCE_FILE);
+    // Named, so an author can open the config and fix it without re-running.
+    for (const fragment of [PROSE_COLLECTION, CODE_COLLECTION, TEXT_MARKDOWN, TEXT_CSHARP, SOURCE_FILE]) {
+      expect(condition?.message).toContain(fragment);
+    }
+    // No reference provoked it, and the row says so by name.
+    expect(condition?.sourcePath).toBeNull();
+    expect(condition?.matchedPayload).toBeNull();
   });
 });
 

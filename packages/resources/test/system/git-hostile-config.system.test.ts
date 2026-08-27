@@ -82,7 +82,6 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import {
   createSymlink,
-  GitTracker,
   mkdirSyncReal,
   normalizedTmpdir,
   resetProjectRootCaches,
@@ -90,6 +89,9 @@ import {
   symlinkCapability,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import {
+  GitTracker,
+} from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { computeContentKey, readContentWithKey } from '../../src/content-key.js';
@@ -416,7 +418,7 @@ async function runArm(root: string, useGitSource: boolean): Promise<Arm> {
   const tracker = new GitTracker(root);
   await tracker.initialize({ includeUntracked: true });
   const cache = new RunContentCache();
-  const builder = new ProjectionBuilder(root, tracker, cache);
+  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: cache });
   const contribution = await new FilesystemExtentContributor().contribute(builder.base(), null);
   for (const row of contribution.contexts) builder.addContext(row);
   for (const row of contribution.resources) builder.addResource(row);
@@ -1072,7 +1074,7 @@ describe.skipIf(!HOST_GATES.symlinks.met)(gatedTitle('committed symlinks', HOST_
     resetProjectRootCaches();
     const tracker = new GitTracker(fixture.repo);
     await tracker.initialize({ includeUntracked: true });
-    const builder = new ProjectionBuilder(fixture.repo, tracker, new RunContentCache());
+    const builder = new ProjectionBuilder({ root: fixture.repo, gitTracker: tracker, contentCache: new RunContentCache() });
     gitExtentRows = (await new GitExtentContributor().contribute(builder.base(), null)).realizations;
   });
 

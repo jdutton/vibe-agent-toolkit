@@ -26,12 +26,16 @@
 import { writeFileSync } from 'node:fs';
 
 import {
-  detectInvocationFromTranscript,
-  isToolAvailable,
-  parseStreamJsonTranscript,
   safePath,
-  safeExecResult,
 } from '@vibe-agent-toolkit/utils';
+import {
+  isToolAvailable,
+  safeExecResult,
+} from '@vibe-agent-toolkit/utils/process';
+import {
+  detectInvocationFromTranscript,
+  parseStreamJsonTranscript,
+} from '@vibe-agent-toolkit/utils/skill-test';
 
 import type { StagedSkill } from '../corpus/fetch-sources.js';
 import type {

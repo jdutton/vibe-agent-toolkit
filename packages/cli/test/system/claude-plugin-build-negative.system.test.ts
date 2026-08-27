@@ -1,7 +1,8 @@
 /* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
 import { existsSync } from 'node:fs';
 
-import { mkdirSyncReal, runGitOrThrow, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {

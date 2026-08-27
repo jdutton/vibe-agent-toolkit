@@ -16,9 +16,10 @@
  *    measured — the instrument was not injected, or this build of vat has no
  *    seam at all. "Zero calls" and "zero milliseconds" are both perfectly
  *    plausible-looking lies that a reader has no way to catch.
- * 3. **A malformed or wrong-version dump is refused, never coerced.** A
- *    producer that wrote something this build does not model has measured
- *    something this build cannot read.
+ * 3. **A dump this build does not model is refused, never coerced.** A producer
+ *    that wrote a shape this build cannot read has measured something this build
+ *    cannot state. The facet's strict schema is the whole of that judgement —
+ *    see {@link DumpKind.schema} for why there is no version integer beside it.
  * 4. **A fresh directory per repeat, removed however the repeat ends.** Nothing
  *    downstream can tell a leftover dump from an earlier repeat apart from a
  *    descendant process of this one — both are files with distinct PIDs — so a
@@ -104,16 +105,26 @@ export interface DumpKind<TDump> {
   readonly noun: string;
   /** What wrote the dump, named in the version refusal so the remedy is concrete. */
   readonly producer: string;
-  readonly schema: DumpParser<TDump>;
-  /** The dump version this build reads. Anything else is refused. */
-  readonly version: number;
   /**
-   * Read the version a parsed dump claims.
+   * The shape this build reads, and the ONLY thing that decides whether a dump
+   * may be read.
    *
-   * A function rather than a field name so a facet cannot spell the field one
-   * way in its schema and another way here.
+   * ⚠️ **It must be `.strict()`, and there must be no version field beside it.**
+   * A hand-bumped `dumpVersion` used to sit here, and it could only ever refuse
+   * what this schema refuses anyway — a layout the reader does not model — while
+   * costing a human obligation nothing enforced. Worse, it silently *stopped*
+   * refusing whenever someone forgot: the crawl seam shipped two meaning changes
+   * before anyone bumped it. A strict schema moves the instant a field is added,
+   * renamed or retyped, and it moves for whoever made the edit rather than for
+   * whoever remembered.
+   *
+   * What a schema cannot see is a field whose MEANING moved while its name and
+   * type stayed put. Nothing mechanical can, an integer least of all. The remedy
+   * there is to invalidate explicitly — delete the stored dumps and reports —
+   * or, better, to make the build DECLARE the thing that moved, as
+   * `CrawlTimingDump.charges` does.
    */
-  readonly versionOf: (dump: TDump) => number;
+  readonly schema: DumpParser<TDump>;
   /**
    * What an empty directory means, in this facet's own terms.
    *
@@ -161,16 +172,14 @@ async function readOneDump<TDump>(
 
   const parsed = kind.schema.safeParse(value);
   if (!parsed.success) {
+    // The producer is named because the commonest cause is not a corrupt file:
+    // it is a dump written by a DIFFERENT build of the seam, which is exactly
+    // what an A/B against an older baseline hands you. "Re-capture with a
+    // matching <producer>" is the remedy; the issue list says what moved.
     return refuseDumps(
-      `${kind.noun} '${filePath}' is not the shape this build writes — ${describeIssues(parsed.error)}`,
-    );
-  }
-  const claimed = kind.versionOf(parsed.data);
-  if (claimed !== kind.version) {
-    return refuseDumps(
-      `${kind.noun} '${filePath}' claims dumpVersion ${String(claimed)}, ` +
-        `this build reads ${String(kind.version)}. Re-capture with a matching ${kind.producer}; ` +
-        'reading rows whose meaning has moved would produce numbers nobody can state.',
+      `${kind.noun} '${filePath}' is not the shape this build reads — ` +
+        `${describeIssues(parsed.error)}. Re-capture with a matching ${kind.producer}; ` +
+        'reading rows whose layout has moved would produce numbers nobody can state.',
     );
   }
   return { ok: true, dump: parsed.data };

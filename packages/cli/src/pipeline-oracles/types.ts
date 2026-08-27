@@ -10,31 +10,51 @@
  * there are five, and they disagree about what the corpus is. Each is named
  * here by the lane that owns it, so a snapshot can say *whose* population
  * changed rather than only *that* output changed.
+ *
+ * An array with {@link LaneId} derived from it, rather than a bare union, so
+ * that a validator can enumerate the lanes at runtime without a second list to
+ * keep in step — see `qa-snapshot/types.ts`'s `SnapshotManifestSchema`.
+ *
+ * - `resources` — `vat resources scan` / `vat resources validate`. Config-aware,
+ *   and the only lane whose include set the config can widen.
+ * - `audit` — `vat audit` and post-build validation, memoized per root.
+ *   ⚠️ No longer "deliberately config-less": it reads the config at its own root
+ *   so its registry types files the same way the projection lane does. A lane
+ *   that declined to would disagree with the population it is handed the moment
+ *   a collection declares a `mimeType`.
+ * - `skills-build` — `vat skills build`, via `createProjectRegistry`;
+ *   config-aware but markdown-only.
+ * - `inventory` — `vat inventory`, the only lane that asks git for untracked
+ *   files. Config-aware for the reason `audit` is.
+ * - `skills-validate` — `vat skills validate`, a batch-scoped shared registry,
+ *   markdown-only, config-aware for the reason `audit` is.
  */
-export type LaneId =
-  /** `vat resources scan` / `vat resources validate` — the only config-aware lane. */
-  | 'resources'
-  /** `vat audit` and post-build validation — memoized per root, deliberately config-less. */
-  | 'audit'
-  /** `vat skills build` — via `createProjectRegistry`; config-aware but markdown-only. */
-  | 'skills-build'
-  /** `vat inventory` — the only lane that asks git for untracked files. */
-  | 'inventory'
-  /** `vat skills validate` — a batch-scoped shared registry, markdown-only, config-less. */
-  | 'skills-validate';
+export const LANE_IDS = [
+  'resources',
+  'audit',
+  'skills-build',
+  'inventory',
+  'skills-validate',
+] as const;
 
-/** Which of `crawlDirectory`'s two mutually exclusive routes answered the crawl. */
-export type EnumerationRoute =
-  /** `git ls-files` answered. Output is git-sorted, hence portable across hosts. */
-  | 'git-ls-files'
-  /**
-   * A recursive `readdirSync` walk answered, because there was no git root (or
-   * git failed). Output is in **filesystem order**, which differs between ext4,
-   * APFS and NTFS — so an ordered golden captured on one host does not hold on
-   * another. Snapshots taken on this route are order-stable within a host and
-   * only set-comparable across hosts.
-   */
-  | 'walk';
+/** One of {@link LANE_IDS}. */
+export type LaneId = (typeof LANE_IDS)[number];
+
+/**
+ * Which of `crawlDirectory`'s two mutually exclusive routes answered the crawl.
+ *
+ * - `git-ls-files` — git answered. Output is git-sorted, hence portable across
+ *   hosts.
+ * - `walk` — a recursive `readdirSync` walk answered, because there was no git
+ *   root (or git failed). Output is in **filesystem order**, which differs
+ *   between ext4, APFS and NTFS — so an ordered golden captured on one host does
+ *   not hold on another. Snapshots taken on this route are order-stable within a
+ *   host and only set-comparable across hosts.
+ */
+export const ENUMERATION_ROUTES = ['git-ls-files', 'walk'] as const;
+
+/** One of {@link ENUMERATION_ROUTES}. */
+export type EnumerationRoute = (typeof ENUMERATION_ROUTES)[number];
 
 /**
  * One enumerated path and the cheap attributes later stages must not go compute

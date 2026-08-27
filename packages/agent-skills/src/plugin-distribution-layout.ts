@@ -12,7 +12,9 @@ import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
-import { crawlDirectorySync, gitFindRoot, isGitIgnored, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { crawlDirectorySync } from '@vibe-agent-toolkit/utils/crawl';
+import { gitFindRoot, isGitIgnored } from '@vibe-agent-toolkit/utils/git';
 
 /**
  * Absolute path to the built plugin output directory.

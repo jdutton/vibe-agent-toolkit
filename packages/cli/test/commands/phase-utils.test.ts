@@ -2,19 +2,19 @@
  * Unit tests for phase orchestration outcomes (`vat build`/`verify`/`validate`).
  *
  * The defect these pin: `runPhase` used to answer `result.status === 0 ?
- * 'passed' : 'failed'`, which collapsed FOUR distinguishable outcomes into one
- * reassuring value. A child that exited 2 (its own system error), a child killed
- * by a signal, and a spawn that never happened were all reported as an ordinary
- * validation failure — making the exit code 2 that every orchestrator's help
- * text documents unreachable, and a CI script unable to tell "the config is
- * broken" from "a link is broken".
+ * 'passed' : 'failed'`, which collapsed distinguishable outcomes into one
+ * reassuring value. A phase that reported its own system error was recorded as
+ * an ordinary validation failure — making the exit code 2 that every
+ * orchestrator's help text documents unreachable, and a CI script unable to tell
+ * "the config is broken" from "a link is broken".
  *
- * `runPhase` takes `binPath` as a parameter, so these tests spawn a stub "bin"
- * with a known exit disposition: a real process, a real exit code, observed.
+ * Phases used to be child processes and these tests used to spawn a stub "bin"
+ * per case. They no longer are, so a phase is now just a function returning
+ * `{ document, exitCode }` — which is both what the orchestrator reads and what
+ * a test can state directly, with no process, no serialization and no stub.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as YAML from 'yaml';
 
 import {
@@ -22,12 +22,12 @@ import {
   aggregatePhaseStatus,
   applyPhaseSelection,
   exitCodeForPhases,
-  phaseResultFromSpawn,
+  phaseResultFromOutcome,
   runPhase,
+  type PhaseOutcome,
   type PhaseResult,
 } from '../../src/commands/phase-utils.js';
 import { createLogger } from '../../src/utils/logger.js';
-import { createTempDirTracker, writeTestFile } from '../system/test-common.js';
 
 /** The outcome value for "the phase could not tell us what it found". */
 const SYSTEM_ERROR = 'system-error';
@@ -37,9 +37,15 @@ function phase(name: string, status: PhaseResult['status']): PhaseResult {
   return { name, status };
 }
 
-describe('phaseResultFromSpawn', () => {
+/** A phase whose run resolves to the given outcome. */
+const phaseReturning = (name: string, outcome: PhaseOutcome) => ({
+  name,
+  run: () => Promise.resolve(outcome),
+});
+
+describe('phaseResultFromOutcome', () => {
   it('maps exit 0 to success', () => {
-    expect(phaseResultFromSpawn('resources', { status: 0, signal: null })).toEqual({
+    expect(phaseResultFromOutcome('resources', { document: undefined, exitCode: 0 })).toEqual({
       name: 'resources',
       status: 'success',
       exitCode: 0,
@@ -47,14 +53,14 @@ describe('phaseResultFromSpawn', () => {
   });
 
   it('maps exit 1 to a validation error', () => {
-    const result = phaseResultFromSpawn('resources', { status: 1, signal: null });
+    const result = phaseResultFromOutcome('resources', { document: undefined, exitCode: 1 });
 
     expect(result.status).toBe('error');
     expect(result.exitCode).toBe(1);
   });
 
   it('maps exit 2 to system-error, not to a validation error', () => {
-    const result = phaseResultFromSpawn('resources', { status: 2, signal: null });
+    const result = phaseResultFromOutcome('resources', { document: undefined, exitCode: 2 });
 
     expect(result.status).toBe(SYSTEM_ERROR);
     expect(result.exitCode).toBe(2);
@@ -62,30 +68,9 @@ describe('phaseResultFromSpawn', () => {
   });
 
   it('maps any other non-zero exit code to system-error', () => {
-    expect(phaseResultFromSpawn('skills', { status: 7, signal: null }).status).toBe(SYSTEM_ERROR);
-  });
-
-  it('maps a signal-killed child to system-error and names the signal', () => {
-    const result = phaseResultFromSpawn('skills', { status: null, signal: 'SIGKILL' });
-
-    expect(result.status).toBe(SYSTEM_ERROR);
-    expect(result.signal).toBe('SIGKILL');
-    expect(result.exitCode).toBeUndefined();
-  });
-
-  it('maps a spawn that never ran to system-error', () => {
-    const result = phaseResultFromSpawn('skills', {
-      status: null,
-      signal: null,
-      error: new Error('spawn ENOENT'),
-    });
-
-    expect(result.status).toBe(SYSTEM_ERROR);
-    expect(result.error).toContain('Failed to spawn phase');
-  });
-
-  it('maps no-exit-code-and-no-signal to system-error rather than success', () => {
-    expect(phaseResultFromSpawn('skills', { status: null, signal: null }).status).toBe(SYSTEM_ERROR);
+    expect(
+      phaseResultFromOutcome('skills', { document: undefined, exitCode: 7 }).status,
+    ).toBe(SYSTEM_ERROR);
   });
 });
 
@@ -174,75 +159,83 @@ describe('exitCodeForPhases', () => {
   });
 });
 
-const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-phase-utils-');
-
-afterEach(() => cleanupTempDirs());
-
-/** Write a stub "vat bin" with the given body, and return its path. */
-function stubBin(body: string): string {
-  const binPath = safePath.join(createTempDir(), 'stub-bin.js');
-  writeTestFile(binPath, body);
-  return binPath;
-}
-
-describe('runPhase (real subprocess)', () => {
-  it('observes a real exit code 2 as a system error, and turns it into process exit 2', () => {
-    const binPath = stubBin('process.exit(2);\n');
-
-    const result = runPhase(binPath, { name: 'resources', args: ['resources', 'validate'] });
+describe('runPhase', () => {
+  it('turns a phase that reports exit 2 into process exit 2', async () => {
+    const result = await runPhase(
+      phaseReturning('resources', { document: undefined, exitCode: 2 }),
+    );
 
     expect(result.status).toBe(SYSTEM_ERROR);
     expect(result.exitCode).toBe(2);
-    // The whole point: the documented exit code 2 is now reachable from an
+    // The whole point: the documented exit code 2 is reachable from an
     // orchestrator. Before the fix this was 1, indistinguishable from a
     // broken link.
     expect(exitCodeForPhases([result])).toBe(2);
   });
 
-  it('observes a real exit code 1 as a validation error, and turns it into process exit 1', () => {
-    const binPath = stubBin('process.exit(1);\n');
-
-    const result = runPhase(binPath, { name: 'resources', args: ['resources', 'validate'] });
+  it('turns a phase that reports exit 1 into process exit 1', async () => {
+    const result = await runPhase(
+      phaseReturning('resources', { document: undefined, exitCode: 1 }),
+    );
 
     expect(result.status).toBe('error');
-    expect(result.exitCode).toBe(1);
     expect(exitCodeForPhases([result])).toBe(1);
   });
 
-  // POSIX-only by nature, not by convenience. Windows has no signal delivery:
-  // `process.kill(pid, 'SIGKILL')` there calls TerminateProcess, so the child
-  // reports an ordinary exit code and `spawnSync().signal` is null. The
-  // killed-by-a-signal branch this test exercises is therefore unreachable on
-  // Windows — the classifier is right, the scenario cannot be produced.
-  it.skipIf(process.platform === 'win32')('observes a real signal kill as a system error', () => {
-    const binPath = stubBin('process.kill(process.pid, "SIGKILL");\nsetTimeout(() => {}, 5000);\n');
-
-    const result = runPhase(binPath, { name: 'skills', args: ['skills', 'validate'] });
-
-    expect(result.status).toBe(SYSTEM_ERROR);
-    expect(result.signal).toBe('SIGKILL');
-    expect(exitCodeForPhases([result])).toBe(2);
-  });
-
-  it('observes a clean exit 0 as success', () => {
-    const binPath = stubBin('process.exit(0);\n');
-
-    const result = runPhase(binPath, { name: 'skills', args: ['skills', 'validate'] });
+  it('observes a clean exit 0 as success', async () => {
+    const result = await runPhase(phaseReturning('skills', { document: undefined, exitCode: 0 }));
 
     expect(result.status).toBe('success');
     expect(exitCodeForPhases([result])).toBe(0);
   });
+
+  /**
+   * The backstop, and the reason this whole conversion needed one.
+   *
+   * A phase reports its own failures through `reportCommandError` and returns
+   * them. A throw that escapes THAT is a bug — and in a child process it was a
+   * survivable one, because the blast radius was the child. In this process an
+   * uncaught throw would abort the orchestrator's loop, silently skipping every
+   * later phase and every aggregation, and the run would end having done half
+   * the work with nothing in the document to say so.
+   */
+  it('contains a phase that throws past its own error handling, rather than aborting the run', async () => {
+    const exploding = {
+      name: 'skills',
+      run: () => Promise.reject(new Error('registry blew up')),
+    };
+
+    const result = await runPhase(exploding);
+
+    expect(result.status).toBe(SYSTEM_ERROR);
+    expect(result.error).toContain('registry blew up');
+    expect(exitCodeForPhases([result])).toBe(2);
+  });
+
+  it('keeps running later phases after one throws', async () => {
+    const phases = [
+      { name: 'a', run: () => Promise.reject(new Error('boom')) },
+      phaseReturning('b', { document: { status: 'success' }, exitCode: 0 }),
+    ];
+
+    const results: PhaseResult[] = [];
+    for (const p of phases) results.push(await runPhase(p));
+
+    expect(results.map((r) => r.name)).toEqual(['a', 'b']);
+    expect(results[1]?.status).toBe('success');
+    expect(aggregatePhaseStatus(results)).toBe(SYSTEM_ERROR);
+  });
 });
 
 /**
- * The child's report is DATA the parent owns, not a stream the parent forwards.
+ * A phase's report is DATA the orchestrator owns, not a stream it forwards.
  *
- * Two defects live here, and one change fixes both:
+ * Two defects live here, and one change fixed both:
  *
  *  1. `vat verify` was structurally blind to warnings. `vat skills validate`
  *     exits 0 while reporting `status: warning`, and the phase status was
  *     derived from the exit code — so the orchestrator answered `success` on
- *     the very tree where the child said `warning`. VAT's own CI dogfoods
+ *     the very tree where the phase said `warning`. VAT's own CI dogfoods
  *     `vat verify`, so this blinded the project to its own warnings.
  *
  *  2. `vat validate`'s stdout was malformed YAML. With `stdio: 'inherit'` each
@@ -251,63 +244,63 @@ describe('runPhase (real subprocess)', () => {
  *     `durationSecs:` twice over and `YAML.parse()` threw "Map keys must be
  *     unique". `vat validate | jq` had never worked.
  *
- * Capturing the child's stdout and folding the parsed document into the phase
- * result makes the parent's stdout a single document again AND gives the phase
- * status a source of truth richer than an exit code.
+ * Folding each phase's document into its own result keeps the orchestrator's
+ * stdout a single document AND gives the phase status a source of truth richer
+ * than an exit code. The document now arrives as a VALUE rather than as parsed
+ * stdout, which is why the truncation and unparseable-output cases below are
+ * gone: there is no serialization step left in which to lose one.
  */
-describe('runPhase (child report capture)', () => {
-  const run = (binPath: string, name = 'skills'): PhaseResult =>
-    runPhase(binPath, { name, args: [name, 'validate'] });
-
-  it('derives warning from the child\'s reported status, not from its exit code', () => {
+describe('runPhase (report folding)', () => {
+  it('derives warning from the phase\'s reported status, not from its exit code', async () => {
     // Exactly what `vat skills validate` does: warnings are non-blocking, so it
-    // exits 0 — the exit code cannot express "warning" and never could.
-    const binPath = stubBin(
-      'process.stdout.write("status: warning\\nissueCounts:\\n  errors: 0\\n  warnings: 3\\n  info: 0\\n");\nprocess.exit(0);\n',
-    );
+    // reports exit 0 — the exit code cannot express "warning" and never could.
+    const document = { status: 'warning', issueCounts: { errors: 0, warnings: 3, info: 0 } };
 
-    const result = run(binPath);
+    const result = await runPhase(phaseReturning('skills', { document, exitCode: 0 }));
 
     expect(result.status).toBe('warning');
-    expect(result.report).toEqual({
-      status: 'warning',
-      issueCounts: { errors: 0, warnings: 3, info: 0 },
-    });
+    expect(result.report).toEqual(document);
     // A warning still does not fail the run — it is published, not fatal.
     expect(exitCodeForPhases([result])).toBe(0);
   });
 
-  it('keeps success for a child that reports success at exit 0', () => {
-    const binPath = stubBin('process.stdout.write("status: success\\n");\nprocess.exit(0);\n');
+  it('takes the worse of the exit code and the reported status, in both directions', async () => {
+    // A phase that says `success` but reports exit 1 has contradicted itself;
+    // the orchestrator must not believe the reassuring half.
+    const optimistic = await runPhase(
+      phaseReturning('skills', { document: { status: 'success' }, exitCode: 1 }),
+    );
+    expect(optimistic.status).toBe('error');
 
-    const result = run(binPath);
-
-    expect(result.status).toBe('success');
-    expect(result.report).toEqual({ status: 'success' });
-  });
-
-  it('takes the worse of the exit code and the reported status, in both directions', () => {
-    // A child that says `success` on stdout but exits 1 has contradicted
-    // itself; the orchestrator must not believe the reassuring half.
-    const optimistic = stubBin('process.stdout.write("status: success\\n");\nprocess.exit(1);\n');
-    expect(run(optimistic).status).toBe('error');
-
-    // And the other way round: a child reporting `system-error` while exiting 1
+    // And the other way round: a phase reporting `system-error` while exiting 1
     // could not determine the answer, which must not be filed as "we determined
     // it is bad" — the exit code alone cannot make that distinction.
-    const pessimistic = stubBin('process.stdout.write("status: system-error\\n");\nprocess.exit(1);\n');
-    expect(run(pessimistic).status).toBe(SYSTEM_ERROR);
+    const pessimistic = await runPhase(
+      phaseReturning('skills', { document: { status: 'system-error' }, exitCode: 1 }),
+    );
+    expect(pessimistic.status).toBe(SYSTEM_ERROR);
   });
 
-  it('composes into ONE parseable parent document that keeps each child report separate', () => {
-    // The concatenation defect in miniature: both children emit a `status` and a
+  it('composes into ONE parseable document that keeps each phase report separate', async () => {
+    // The concatenation defect in miniature: both phases emit a `status` and a
     // `durationSecs`. Streamed onto one stdout with no separator they collapse
     // into a single map with duplicate keys and YAML.parse() throws. Folded into
     // `phases[].report` they coexist, and both values remain readable.
-    const resources = stubBin('process.stdout.write("status: success\\ndurationSecs: 1.5\\n");\n');
-    const skills = stubBin('process.stdout.write("status: warning\\ndurationSecs: 2.5\\n");\n');
+    const phases = [
+      await runPhase(
+        phaseReturning('resources', {
+          document: { status: 'success', durationSecs: 1.5 },
+          exitCode: 0,
+        }),
+      ),
+      await runPhase(
+        phaseReturning('skills', {
+          document: { status: 'warning', durationSecs: 2.5 },
+          exitCode: 0,
+        }),
+      ),
+    ];
 
-    const phases = [run(resources, 'resources'), run(skills, 'skills')];
     const stdout = `---\n${YAML.stringify({
       status: aggregatePhaseStatus(phases),
       phases,
@@ -324,37 +317,10 @@ describe('runPhase (child report capture)', () => {
     expect(parsed.phases[1]?.report).toEqual({ status: 'warning', durationSecs: 2.5 });
   });
 
-  it('captures a multi-megabyte child document without truncating it', () => {
-    // The crucible's `vat skills validate` report is ~2.3 MB — well past
-    // spawnSync's 1 MB default maxBuffer, which would set ENOBUFS and silently
-    // hand back a truncated (and therefore unparseable) document.
-    const payloadSize = 2_500_000;
-    const binPath = stubBin(
-      `process.stdout.write("status: success\\nblob: " + "x".repeat(${payloadSize}) + "\\n");\n`,
-    );
-
-    const result = run(binPath);
-
-    expect(result.status).toBe('success');
-    expect((result.report as { blob: string } | undefined)?.blob).toHaveLength(payloadSize);
-  });
-
-  it('degrades a child whose stdout is not YAML to a system error instead of throwing', () => {
-    const binPath = stubBin('process.stdout.write("[unclosed\\n");\nprocess.exit(0);\n');
-
-    const result = run(binPath);
-
-    expect(result.status).toBe(SYSTEM_ERROR);
-    expect(result.error).toContain('unparseable');
-    expect(exitCodeForPhases([result])).toBe(2);
-  });
-
-  it('falls back to the exit code when the child prints no document at all', () => {
-    // `vat skills validate` exits 0 with an empty stdout when there is no
-    // skills: block. Silence is not a crash — do not invent a system error.
-    const binPath = stubBin('process.exit(0);\n');
-
-    const result = run(binPath);
+  it('falls back to the exit code when the phase publishes no document at all', async () => {
+    // `vat skills validate` returns no document when there is no skills: block.
+    // Silence is not a crash — do not invent a system error.
+    const result = await runPhase(phaseReturning('skills', { document: undefined, exitCode: 0 }));
 
     expect(result.status).toBe('success');
     expect(result.report).toBeUndefined();
@@ -415,7 +381,7 @@ describe('applyPhaseSelection', () => {
   });
 
   it('returns the phases untouched and writes nothing when there is work to do', () => {
-    const phases = [{ name: 'skills', args: ['skills', 'validate'] }];
+    const phases = [phaseReturning('skills', { document: undefined, exitCode: 0 })];
 
     const chunks: string[] = [];
     const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {

@@ -155,6 +155,33 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     args: Object.freeze(['verify']),
     completedExitCodes: FINDINGS_COMPLETED_EXIT_CODES,
   }),
+  'claude-context-all': Object.freeze({
+    name: 'claude-context-all',
+    // No subject argument: `--all` sweeps every path the projection realized and
+    // takes no positional, so like `validate` and `verify` its scope comes from
+    // the cwd, which the harness has already set to the subject.
+    //
+    // Here because the sweep was measured at 561 seconds on a large adopter
+    // tree and nothing in this instrument could see it, which made every claim
+    // about a fix unfalsifiable. Its per-answer cost scales with the size of the
+    // projection rather than with the query, so this arm alone cannot say
+    // whether a change moved the population cost or the per-answer cost —
+    // `claude-context` is the other half of that reading.
+    args: Object.freeze(['claude', 'context', '--all']),
+    // Documented as "0 - An answer was produced (there is no threshold and no
+    // gate)". Its `1` is invalid usage — a run that measured nothing — so this
+    // takes the default codes and must never accept findings-style completion.
+  }),
+  'claude-context': Object.freeze({
+    name: 'claude-context',
+    // The single-path control arm for the sweep above. One path answered out of
+    // the same enumeration the sweep pays for, so the pair separates what the
+    // population costs from what each answer costs: a fix that halves the sweep
+    // while leaving this one unmoved shaved per-answer work, and one that moves
+    // both shaved the crawl. Neither arm can distinguish those alone.
+    args: Object.freeze(['claude', 'context', '{subject}']),
+    // Same exit-code contract as the sweep — see the entry above.
+  }),
 }) satisfies Readonly<Record<string, MeasuredCommandSpec>>;
 
 /** Every name {@link MEASURABLE_COMMANDS} answers to, for help text and errors. */

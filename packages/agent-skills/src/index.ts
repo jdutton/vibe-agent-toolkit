@@ -214,10 +214,12 @@ export * from './skill-test/index.js';
 export { checkBrokenPackagedLinks } from './post-build-checks.js';
 export {
   checkPackagedTestInput,
+  conventionalSuiteProbe,
   packagedFileEntries,
   resolveTestInputDirs,
   testInputExcludeRules,
   type CheckPackagedTestInputInput,
+  type ConventionalSuiteProbe,
   type DeclaredEvalSuite,
 } from './test-input.js';
 

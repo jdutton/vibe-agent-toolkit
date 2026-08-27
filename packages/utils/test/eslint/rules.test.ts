@@ -17,6 +17,12 @@ import {
   ruleTester,
 } from './rule-test-harness.js';
 
+/** The plugin entry point, relative to `eslint/rules/` — see `loadLocalRuleModule`. */
+const PLUGIN_ENTRY = '../index.cjs';
+
+/** Named once: it is a suite name, a `ruleTester.run` id, and an excluded-rule row. */
+const NO_SELF_PACKAGE_IMPORT = 'no-self-package-import';
+
 const NO_URL_PATHNAME_FOR_FS_CASES: RuleCases = {
   valid: [
     { code: "import { fileURLToPath } from 'node:url'; const p = fileURLToPath(new URL('../x', import.meta.url));" },
@@ -28,6 +34,54 @@ const NO_URL_PATHNAME_FOR_FS_CASES: RuleCases = {
     { code: 'const p = new URL(rel, import.meta.url).pathname;', errors: [{ messageId: 'useFileURLToPath' }] },
     { code: "const p = new URL('../fixtures/x.yaml', import.meta.url).pathname;", errors: [{ messageId: 'useFileURLToPath' }] },
     { code: 'const p = new URL(`../fixtures/${name}.yaml`, import.meta.url).pathname;', errors: [{ messageId: 'useFileURLToPath' }] },
+  ],
+};
+
+/**
+ * The `…Phase` suffix is the whole marker, so the cases that matter most are the
+ * VALID ones: a rule that fired on the command wrappers too would be unusable,
+ * and a rule blind to an arrow const would be inert against half the ways a
+ * phase can be written.
+ */
+const NO_PROCESS_EXIT_IN_PHASE_CASES: RuleCases = {
+  valid: [
+    // The command wrapper: deciding how the process ends is exactly its job.
+    { code: 'async function validateCommand() { const r = await run(); process.exit(r.exitCode); }' },
+    // A phase that returns rather than exits.
+    { code: 'async function runSkillsBuildPhase() { return { document: undefined, exitCode: 2 }; }' },
+    // `Phase` in the middle of a name is not the suffix.
+    { code: 'function phaseNames() { process.exit(1); }' },
+    { code: 'function runPhaseSelection() { process.exit(1); }' },
+    // A bare `exit()` that is not `process.exit`.
+    { code: 'function runXPhase() { exit(1); }' },
+    { code: 'function runXPhase() { server.exit(1); }' },
+  ],
+  invalid: [
+    {
+      code: 'async function runResourcesValidatePhase() { process.exit(1); }',
+      errors: [{ messageId: 'exitInPhase' }],
+    },
+    // Nested inside a branch, which is how every real one of these was written.
+    {
+      code: 'async function runSkillsBuildPhase() { if (bad) { process.exit(2); } return ok; }',
+      errors: [{ messageId: 'exitInPhase' }],
+    },
+    // An arrow const — the shape a name-keyed rule most easily goes blind to.
+    {
+      code: 'const runMarketplaceValidatePhase = () => { process.exit(0); };',
+      errors: [{ messageId: 'exitInPhase' }],
+    },
+    // A function expression assigned to a phase-named const.
+    {
+      code: 'const runSkillsValidatePhase = function () { process.exit(0); };',
+      errors: [{ messageId: 'exitInPhase' }],
+    },
+    // Buried in an inner callback: still lexically inside the phase, still ends
+    // the whole run when it fires.
+    {
+      code: 'async function runXPhase() { items.forEach(() => { process.exit(1); }); }',
+      errors: [{ messageId: 'exitInPhase' }],
+    },
   ],
 };
 
@@ -1054,6 +1108,7 @@ const SUITES: readonly RuleSuite[] = [
   { name: 'require-justified-skip', cases: REQUIRE_JUSTIFIED_SKIP_CASES },
   { name: 'no-unix-shell-commands', cases: NO_UNIX_SHELL_COMMANDS_CASES },
   { name: 'no-bare-symlink-in-tests', cases: NO_BARE_SYMLINK_CASES },
+  { name: 'no-process-exit-in-phase', cases: NO_PROCESS_EXIT_IN_PHASE_CASES },
   { name: PATH_FACTORY_RULE, cases: pathFunctionRuleCases('join') },
   { name: RULE.resolve, cases: pathFunctionRuleCases('resolve') },
   { name: RULE.relative, cases: pathFunctionRuleCases('relative') },
@@ -1262,7 +1317,7 @@ const SAFE_MODULE_RULE_TRIGGERS: Record<string, string> = {
 describe('every {{safeModule}} placeholder is backed by the option that fills it', () => {
   const plugin = loadLocalRuleModule<{
     rules: Record<string, Rule.RuleModule>;
-  }>('../index.cjs');
+  }>(PLUGIN_ENTRY);
 
   const rulesUsingPlaceholder = Object.entries(plugin.rules).filter(([, rule]) =>
     Object.values(rule.meta?.messages ?? {}).some((message) => message.includes('{{safeModule}}')),
@@ -1350,7 +1405,7 @@ function multiSiteSource(importLine: string, call: string): string {
 }
 
 describe('autofix leaves no dangling reference', () => {
-  const plugin = loadLocalRuleModule<{ rules: Record<string, Rule.RuleModule> }>('../index.cjs');
+  const plugin = loadLocalRuleModule<{ rules: Record<string, Rule.RuleModule> }>(PLUGIN_ENTRY);
   const languageOptions = { ecmaVersion: 2024, sourceType: 'module' } as const;
 
   /** Bindings, not strings: `no-undef` answers the question `tsc` would. */
@@ -2288,7 +2343,7 @@ describe('reportDeadUnsafeImports only ever removes a listed module', () => {
  * `@vibe-agent-toolkit/rag-lancedb` as a self-import of `@vibe-agent-toolkit/rag`
  * — the same unanchored-prefix bug the exempt-path matchers were written to kill.
  */
-describe('no-self-package-import', () => {
+describe(NO_SELF_PACKAGE_IMPORT, () => {
   const rule = loadLocalRule('no-self-package-import.cjs');
   const AGENT_RUNTIME = [{ packageName: '@vibe-agent-toolkit/agent-runtime' }];
 
@@ -2301,7 +2356,7 @@ describe('no-self-package-import', () => {
       cases.map((testCase) => ({ ...testCase, languageOptions: { parser: tsParser } }));
 
     expect(() => {
-      ruleTester.run('no-self-package-import', rule, {
+      ruleTester.run(NO_SELF_PACKAGE_IMPORT, rule, {
         valid: withTs([
           {
             name: 'the relative import that replaced the defect',
@@ -2370,5 +2425,52 @@ describe('no-self-package-import', () => {
         ]),
       });
     }).not.toThrow();
+  });
+});
+
+/**
+ * The `recommended` config is a PUBLIC surface, and its composition is
+ * documented in prose in `index.d.cts`.
+ *
+ * Prose drifts silently: that comment read "18 of the 22 rules, four are
+ * excluded" while the registry actually held 24 rules and the exclude set held
+ * six. Every number in it was wrong and nothing failed. These assertions are the
+ * smallest thing that turns the next such drift into a red test rather than a
+ * stale sentence — and they fail on ADDING a rule too, which is the point: a new
+ * rule is exactly when someone has to decide whether it belongs in the safety
+ * core, and the failing assertion is what forces that decision to be made.
+ */
+describe('configs.recommended composition', () => {
+  const plugin = loadLocalRuleModule<{
+    rules: Record<string, unknown>;
+    configs: { recommended: { rules: Record<string, 'error' | 'warn' | 'off'> } };
+  }>(PLUGIN_ENTRY);
+
+  const severities = Object.values(plugin.configs.recommended.rules);
+
+  it('matches the counts index.d.cts documents', () => {
+    expect(Object.keys(plugin.rules)).toHaveLength(25);
+    expect(Object.keys(plugin.configs.recommended.rules)).toHaveLength(18);
+    expect(severities.filter((s) => s === 'error')).toHaveLength(15);
+    expect(severities.filter((s) => s === 'warn')).toHaveLength(3);
+  });
+
+  it('excludes exactly the seven rules index.d.cts names, and no others', () => {
+    // Rule ids are `@scope/rule-name`; take everything after the LAST slash.
+    // Not a path — `no-hardcoded-path-split` is about file paths, and this is a
+    // namespace separator ESLint defines, so the slice is written to say so.
+    const bare = (id: string): string => id.slice(id.lastIndexOf('/') + 1);
+    const recommended = new Set(Object.keys(plugin.configs.recommended.rules).map(bare));
+    const excluded = Object.keys(plugin.rules).filter((name) => !recommended.has(name));
+
+    expect([...excluded].sort((a, b) => a.localeCompare(b))).toEqual([
+      'no-bare-symlink-in-tests',
+      'no-process-exit-in-phase',
+      'no-raw-text-decode',
+      NO_SELF_PACKAGE_IMPORT,
+      'no-test-scoped-functions',
+      'no-unsafe-root-join',
+      'require-justified-skip',
+    ]);
   });
 });

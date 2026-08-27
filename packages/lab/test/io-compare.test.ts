@@ -25,10 +25,10 @@
 
 import { describe, expect, it } from 'vitest';
 
+import type { ReportEnvelope } from '../src/envelope/envelope.js';
 import { compareIo, type IoCommandVerdict } from '../src/facets/io/compare.js';
 import {
   IO_FACET,
-  IO_FACET_VERSION,
   type IoCommandStats,
   type IoSite,
 } from '../src/facets/io/types.js';
@@ -40,7 +40,7 @@ import {
   ioReport,
   ioSite,
 } from './io-fixtures.js';
-import { BUSY_LOAD, COORDINATE, makeReport } from './report-fixtures.js';
+import { BUSY_LOAD, COORDINATE, makeReport, reportMissingCommandField } from './report-fixtures.js';
 
 /** A second subject, so axis A can be moved. */
 const OTHER_SUBJECT = { id: 'other-project', source: '/srv/other-project' };
@@ -90,15 +90,6 @@ describe('compareIo — the schema gate', () => {
     expect(refusalOf(result)).toContain('different facets');
   });
 
-  it('refuses two io reports whose body schema versions differ', () => {
-    const older = ioReport([ioCommand()], { facetVersion: IO_FACET_VERSION + 1 });
-
-    const result = compareIo(ioReport([ioCommand()]), older);
-
-    expect(result.ok).toBe(false);
-    expect(refusalOf(result)).toContain('body schema moved');
-  });
-
   it('refuses reports of a matching but wrong facet', () => {
     // Both sides say `perf`, so the shared schema gate is satisfied and only
     // compareIo's own check can catch that it holds the wrong kind of report.
@@ -109,7 +100,7 @@ describe('compareIo — the schema gate', () => {
   });
 
   it('names the baseline when its body does not match the io schema', () => {
-    const broken = makeReport({ facet: IO_FACET, facetVersion: IO_FACET_VERSION, body: {} });
+    const broken = makeReport({ facet: IO_FACET, body: {} });
 
     expect(refusalOf(compareIo(broken, ioReport([ioCommand()])))).toContain('baseline');
   });
@@ -117,7 +108,7 @@ describe('compareIo — the schema gate', () => {
   it('names the compared side when ITS body does not match the io schema', () => {
     // The mirror of the case above: a refusal that always said "baseline" would
     // pass that test while telling every reader the wrong file to re-capture.
-    const broken = makeReport({ facet: IO_FACET, facetVersion: IO_FACET_VERSION, body: {} });
+    const broken = makeReport({ facet: IO_FACET, body: {} });
 
     expect(refusalOf(compareIo(ioReport([ioCommand()]), broken))).toContain('compared');
   });
@@ -350,20 +341,27 @@ function spawnSite(over: Partial<IoSite> = {}): IoSite {
 }
 
 describe('compareIo — a body this build does not read', () => {
-  it('refuses two reports that AGREE on a facet version this build has moved past', () => {
-    // The version gate in the envelope is two-sided: it asks whether the two
-    // reports agree with each other, not whether they agree with the build
-    // reading them. Two reports captured before `distinctArgs` became nullable
-    // agree perfectly — and every spawn row in them says `distinctArgs: 1`,
-    // which this build would render as a redundancy ratio. Same rule the dump
-    // reader already applies to `dumpVersion`.
-    const stale = { facetVersion: IO_FACET_VERSION - 1 };
-    const result = compareIo(ioReport([ioCommand()], stale), ioReport([ioCommand()], stale));
+  it('refuses a matched PAIR of reports written to an older body shape', () => {
+    // 🚩 The sharp case, and what a `facetVersion` integer used to sit in front
+    // of: two PRE-CHANGE reports agree with each other perfectly, so a gate that
+    // only compared the sides to each other could not see them. Validating each
+    // side against THIS BUILD's strict schema does, without anyone having
+    // remembered to move a number.
+    //
+    // ⚠️ This exercises a SHAPE move (a dropped row field), which is what the
+    // schema can see. It deliberately does not claim to cover the MEANING move
+    // the integer was originally bumped for — `distinctArgs` becoming nullable
+    // leaves the shape identical. See `readIoBody` in `io/compare.ts` for why
+    // nothing live depends on that today and what is owed instead of a version.
+    const older = (): ReportEnvelope<unknown> =>
+      reportMissingCommandField(ioReport([ioCommand()]), 'userCalls');
+
+    const result = compareIo(older(), older());
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('unreachable');
     expect(result.refusal).toMatch(/^REFUSED:/);
-    expect(result.refusal).toContain('facetVersion');
+    expect(result.refusal).toContain('userCalls');
   });
 });
 
@@ -529,7 +527,6 @@ describe('compareIo — contamination', () => {
   it('flags the comparison when either side was captured on a busy machine', () => {
     const busy = makeReport({
       facet: IO_FACET,
-      facetVersion: IO_FACET_VERSION,
       body: ioBody([ioCommand()], BUSY_LOAD),
     });
 

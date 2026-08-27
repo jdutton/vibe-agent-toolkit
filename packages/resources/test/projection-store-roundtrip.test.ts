@@ -48,7 +48,10 @@ import {
   CRAWL_STORE_READ_ID,
   CRAWL_STORE_WRITE_ID,
   safePath,
- GitTracker } from '@vibe-agent-toolkit/utils';
+} from '@vibe-agent-toolkit/utils';
+import {
+  GitTracker,
+} from '@vibe-agent-toolkit/utils/git';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ContributorRegistry } from '../src/projection/contributor.js';

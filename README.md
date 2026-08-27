@@ -91,7 +91,7 @@ See [Audit Documentation](packages/cli/docs/audit.md) for complete reference.
 - 📊 **Code Coverage** - 80% minimum threshold with Codecov integration
 - 🎯 **vibe-validate** - Git-aware validation orchestration
 - 🔧 **Cross-Platform** - Tested on Windows, macOS, and Linux
-- 🤖 **CI/CD** - GitHub Actions with Node 22/24 matrix testing
+- 🤖 **CI/CD** - GitHub Actions with Node 24 on Ubuntu and Windows
 
 ## Quick Start
 
@@ -407,7 +407,7 @@ Validation runs:
 GitHub Actions workflows run on every push/PR:
 
 ### Validation Pipeline
-- **Matrix Testing**: Node 22/24 × Ubuntu/Windows
+- **Matrix Testing**: Node 24 × Ubuntu/Windows
 - **Full Validation**: All checks must pass
 - **Parallel Execution**: Faster feedback
 - See `.github/workflows/validate.yml`

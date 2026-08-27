@@ -16,7 +16,6 @@ import type { ReportEnvelope } from '../src/envelope/envelope.js';
 import { compareParse, type ParseComparisonResult } from '../src/facets/parse/compare.js';
 import {
   PARSE_FACET,
-  PARSE_FACET_VERSION,
   type ParseBody,
   type ParseCommandStats,
   type ParseKindStats,
@@ -199,8 +198,21 @@ export function parseCommand(over: Partial<ParseCommandStats> = {}): ParseComman
     runs: 3,
     stable: true,
     attribution: 'measured',
+    // Two processes, one main thread each and no pool — the single-threaded
+    // shape. A case about worker threads overrides `workerThreads` alone, which
+    // is what makes "one process, eight workers" a variation of this fixture
+    // rather than a second fixture.
     processes: 2,
+    mainThreads: 2,
+    // No pool ran, so every tier cost was paid on the thread that was doing the
+    // parsing anyway.
+    workerThreads: 0,
     kinds,
+    // Empty by default. The tier is a real but OPTIONAL part of a row — a build
+    // with no pool charges only the cache rows, and a build with no tier seam at
+    // all charges none — so the default fixture must not assert one, or every
+    // test that does not care would be pinning numbers it never reasoned about.
+    tier: [],
     ...totals,
     cacheHits: 0,
     cacheMisses: totals.documents,
@@ -247,8 +259,8 @@ export function parseBody(
 /**
  * A `parse` envelope wrapping the given rows.
  *
- * Built through `makeReport` so the coordinate and the format version stay in
- * one place; only the facet header and the body are overridden here.
+ * Built through `makeReport` so the coordinate stays in one place; only the
+ * facet header and the body are overridden here.
  *
  * @param commands - The measured commands
  * @param over - Envelope fields the case varies
@@ -260,7 +272,6 @@ export function parseReport(
 ): ReportEnvelope<ParseBody> {
   return makeReport({
     facet: PARSE_FACET,
-    facetVersion: PARSE_FACET_VERSION,
     body: parseBody(commands),
     ...over,
   }) as ReportEnvelope<ParseBody>;

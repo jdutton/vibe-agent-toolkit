@@ -34,10 +34,12 @@ import {
   compareCodeUnits,
   normalizedTmpdir,
   resetProjectRootCaches,
-  runGitOrThrow,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import {
+  runGitOrThrow,
+} from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';

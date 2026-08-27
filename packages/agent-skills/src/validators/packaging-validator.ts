@@ -17,7 +17,7 @@ import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
-import { DeferredArtifacts, parseFileCached, ResourceRegistry, type ResourcePopulationSource, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
+import { DeferredArtifacts, loadConfig, parseFileCached, ResourceRegistry, type ResourcePopulationSource, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
 import {
   CODE_REGISTRY,
   runSingleUnitValidation,
@@ -28,15 +28,24 @@ import {
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, issueLocation, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
+import {
+  findProjectRoot,
+  issueLocation,
+  normalizedTmpdir,
+  toForwardSlash,
+  safePath,
+} from '@vibe-agent-toolkit/utils';
+import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { collectPreBuildGlobFindings, preBuildGlobFindingsToIssues } from '../files-config.js';
 import {
+  conventionalSuiteProbe,
   partitionTestInputFileEntries,
   resolveTestInputDirs,
   testInputExcludeRules,
   testInputLinkIssues,
+  type ConventionalSuiteProbe,
   type DeclaredEvalSuite,
 } from '../test-input.js';
 import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../walk-link-graph.js';
@@ -287,6 +296,44 @@ export interface CrawlRegistryOptions {
  *
  * Exported so external callers (e.g. the inventory layer) can build a registry
  * once and pass it down rather than re-crawling per skill.
+ *
+ * ## Why the config is READ here rather than threaded in
+ *
+ * A collection may declare a `mimeType` that overrides `mime-type.ts`'s
+ * extension tables and so decides which parser runs; `ResourceRegistry` honours
+ * those declarations only when it was handed a config, and the projection lane
+ * behind `populationSource` reads them off the root. A config-less registry
+ * therefore disagrees with the population that enumerated it about whether a
+ * file is prose, inside a single command.
+ *
+ * Threading was considered and does not fit this function. Its callers discover
+ * `projectRoot` **per skill** (`findProjectRoot` from each SKILL.md's directory,
+ * and one `vat audit --user` run reached at least 72 distinct roots), so no
+ * caller holds one config that governs them all. Worse, the memo below is keyed
+ * on the root ALONE: an optional config argument would let two callers of one
+ * root disagree and silently share whichever registry was built first.
+ *
+ * Reading it here is what `createProjectRegistry` in `skill-packager.ts` already
+ * does, with the same `loadConfig`, for the same stated reason — "a registry
+ * built without config silently belongs to no collection, so a lane that built
+ * its own config-less registry rewrote frontmatter differently from the lane
+ * that used this one". One read per root per process, behind the memo, against a
+ * crawl that parses every document under it.
+ *
+ * ## A broken config falls back here, and is reported by the caller
+ *
+ * Unlike `createProjectRegistry`, this must NOT throw on a config that exists
+ * and will not parse. Its principal caller is `vat audit`, whose pinned
+ * behaviour is "tolerates, falls back to config-free validation" — a bulk linter
+ * over trees VAT does not own must not be aborted by someone else's YAML
+ * (`cli/test/integration/config-broken-behavior.integration.test.ts` is the map).
+ *
+ * The fallback is not the silent conflation that rule normally forbids, because
+ * nothing is being hidden: `vat audit` reads the same config at its own layer,
+ * catches `ConfigLoadError` there, and reports it. What this does is decline to
+ * abort a scan from four frames down. A config that will not parse also gives
+ * the projection lane no declarations, so the two lanes still AGREE — which is
+ * the property this function exists to hold.
  */
 export async function crawlAndResolveRegistry(
   projectRoot: string,
@@ -302,17 +349,21 @@ export async function crawlAndResolveRegistry(
   // The PROMISE is cached, not the resolved value, so two overlapping requests
   // for one root can never start two crawls.
   const pending = (async (): Promise<ResourceRegistry> => {
-    const registry = await ResourceRegistry.fromCrawl({
-      baseDir: projectRoot,
-      include: ['**/*.md', '**/*.html', '**/*.htm'],
-      // Enumeration only. `ResourceRegistry.crawl` re-applies the include set
-      // above — and the crawl's default exclude — to whatever the source
-      // offers, through the same compiled matcher the walk itself uses, so a
-      // source that enumerates a whole tree still yields exactly this crawl's
-      // markdown and HTML. Handing this builder a projection is a cost change,
-      // not a scope change.
-      ...(populationSource !== undefined && { populationSource }),
-    });
+    const config = await loadConfig(projectRoot).catch(() => undefined);
+    const registry = await ResourceRegistry.fromCrawl(
+      {
+        baseDir: projectRoot,
+        include: ['**/*.md', '**/*.html', '**/*.htm'],
+        // Enumeration only. `ResourceRegistry.crawl` re-applies the include set
+        // above — and the crawl's default exclude — to whatever the source
+        // offers, through the same compiled matcher the walk itself uses, so a
+        // source that enumerates a whole tree still yields exactly this crawl's
+        // markdown and HTML. Handing this builder a projection is a cost change,
+        // not a scope change.
+        ...(populationSource !== undefined && { populationSource }),
+      },
+      config === undefined ? undefined : { config },
+    );
     registry.resolveLinks();
     return registry;
   })();
@@ -537,6 +588,24 @@ export interface SkillValidationSharedContext {
    * false for anything that loops over discovered skills.
    */
   projectSkills?: readonly DeclaredEvalSuite[];
+  /**
+   * The RUN's conventional-suite probe — the memo behind "does `<skill-root>/evals/
+   * evals.json` exist?" for every root in {@link projectSkills}.
+   *
+   * Scoped to the run for the same reason `projectSkills` is assembled once: the two
+   * are the same question asked of the same S paths, and this lane asks it for the
+   * SUBJECT and for every entry in `projectSkills`. A probe created per call answers
+   * S questions per skill and S² per run — measured at 10,815 filesystem probes over
+   * 103 distinct paths on a 103-skill adopter, half of that command's entire fs
+   * traffic. Supply the SAME probe for every skill in the run.
+   *
+   * Omitting it is a positive claim that THIS call is the whole run — true for the
+   * single-skill callers (`vat skill review`, `vat audit`, whose shared context is
+   * built per skill), where the per-call and run-level answers coincide. False for
+   * anything that loops, which is why the fallback below is written at the call site
+   * rather than defaulted inside `resolveTestInputDirs`.
+   */
+  suiteProbe?: ConventionalSuiteProbe;
 }
 
 /**
@@ -634,13 +703,26 @@ export async function validateSkillForPackaging(
   // config — which narrows this lane to the subject's own suite and nothing else.
   const projectSkills = shared?.projectSkills ?? [];
   // ONE resolution per skill, shared by both consumers below (the `files:` filter and
-  // the walker's exclude rules). It is the expensive input on this path: it probes the
-  // filesystem for a conventional suite under the subject AND under every entry in
-  // `projectSkills`, so it costs O(S) per skill and O(S^2) per run. Resolving it once
-  // per consumer doubled that quadratic term for no new information — the two call
-  // sites took identical arguments. Measured projection, 58-skill adopter declaring no
-  // `test:` block: 6,844 probes, of which 3,422 re-asked a question already answered.
-  const testInputDirs = resolveTestInputDirs(packagingConfig ?? {}, dirname(skillPath), projectSkills);
+  // the walker's exclude rules), and ONE conventional-suite probe per RUN behind it.
+  //
+  // Two multipliers on the same filesystem question, both now closed. Resolving it
+  // once per CONSUMER doubled the term for no new information (the two call sites took
+  // identical arguments) — 6,844 probes on a 58-skill adopter declaring no `test:`
+  // block, of which 3,422 re-asked a question already answered. That fix removed the
+  // second call site and left the QUADRATIC standing: the resolution still probes the
+  // subject AND every entry in `projectSkills`, so a lane looping over S skills asked
+  // S^2 questions about S paths. Measured with the lab on a 103-skill adopter,
+  // `vat resources validate`: 10,815 probes over 103 distinct paths (~105 repeats
+  // each) — exactly 50% of that command's 21,648 user filesystem calls. With the run's
+  // probe threaded here it is ~103 probes and ~10,900 calls on the same tree.
+  //
+  // A caller that omits `suiteProbe` is claiming this call IS the run (see the field's
+  // docstring); the narrowing is written here, at the call site, so it cannot happen by
+  // omission inside `resolveTestInputDirs`.
+  const suiteProbe = shared?.suiteProbe ?? conventionalSuiteProbe();
+  const testInputDirs = resolveTestInputDirs(
+    packagingConfig ?? {}, dirname(skillPath), projectSkills, suiteProbe,
+  );
   const packagedFiles = partitionTestInputFileEntries(
     packagingConfig?.files ?? [], projectRoot, testInputDirs,
   ).kept;

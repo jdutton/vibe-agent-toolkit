@@ -20,7 +20,8 @@
  * just `command` sources).
  */
 
-import { defaultRunCommand, type resolveAuthenticatedUrl } from '@vibe-agent-toolkit/utils';
+import { defaultRunCommand } from './link-auth/resolve-token.js';
+import type { resolveAuthenticatedUrl } from './link-auth/resolve.js';
 
 /**
  * Re-exposed deps type — the third argument to `resolveAuthenticatedUrl`.

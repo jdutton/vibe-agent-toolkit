@@ -9,9 +9,10 @@
  *   5. packaged-content  (in-process; built bundles carry nothing that must not ship)
  *   6. consistency check  (in-process; skill distribution integrity — package.json, plugin assignment)
  *
- * 1–3 are subprocess phases chosen by {@link selectVerifyPhases}; 4–6 run here and
- * are chosen by `selectInProcessVerifyPhases`. Both sets are config-gated, and both
- * are announced on startup.
+ * 1–3 delegate to a whole `vat` command and nest that command's own report under
+ * `report`; they are chosen by {@link selectVerifyPhases}. 4–6 exist only here and
+ * are chosen by `selectInProcessVerifyPhases`. Every phase runs in this process.
+ * Both sets are config-gated, and both are announced on startup.
  */
 
 import { existsSync } from 'node:fs';
@@ -42,6 +43,7 @@ import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 
+import { runMarketplaceValidatePhase } from './claude/marketplace/validate.js';
 import {
   runConsistencyChecks,
   type ConsistencyIssue,
@@ -62,8 +64,10 @@ import {
   type PhaseVocabulary,
 } from './phase-utils.js';
 import { rejectPositionalArguments } from './positional-args.js';
+import { runResourcesValidatePhase } from './resources/validate.js';
 import type { DiscoveredSkill } from './skills/command-helpers.js';
 import { discoverSkillsFromConfig } from './skills/skill-discovery.js';
+import { runSkillsValidatePhase } from './skills/validate.js';
 
 export interface VerifyCommandOptions {
   /** Retired; declared only so {@link rejectRetiredOnly} can explain the removal. */
@@ -105,12 +109,12 @@ Description:
   about as long as its slowest two phases, so a CI gate cannot lose coverage
   by naming a phase whose config key was renamed out from under it.
 
-  Phases (subprocess):
+  Phases (delegated to a whole vat command):
     resources    → link integrity, collection frontmatter schemas (when 'resources:' configured)
     skills       → SKILL.md frontmatter and packaging validation (when 'skills:' configured)
     marketplace  → strict marketplace validation (when 'claude.marketplaces:' configured)
 
-  Phases (in-process, run after the above, when 'skills:' is configured):
+  Phases (verify's own, run after the above, when 'skills:' is configured):
     files-config-dests → every 'files:' dest exists in the built output. Appears
                          in the document only when a dest is missing.
     packaged-content   → built skill bundles carry no repo-internal agent-instruction
@@ -128,27 +132,27 @@ Description:
 
 Output:
   ONE YAML document → stdout
-    per phase: status (success | warning | error | system-error). A subprocess
+    per phase: status (success | warning | error | system-error). A delegated
     phase's own report is captured and nested under 'report', so the whole run
     is a single parseable document (a phase's stdout is never streamed
-    through). A phase's status comes from the child's REPORTED status, not
-    from its exit code — an exit code cannot express 'warning'. In-process
-    phases also publish issueCounts {errors, warnings, info}; 'consistency' and
+    through). A phase's status comes from its own REPORTED status, not from its
+    exit code — an exit code cannot express 'warning'. Verify's own phases also
+    publish issueCounts {errors, warnings, info}; 'consistency' and
     'packaged-content' carry their findings into the document too, while
     'files-config-dests' publishes counts only and lists the missing dests on
     stderr.
   Progress and validation errors → stderr (streamed live)
 
-  By default each subprocess phase reports a per-asset summary plus the assets
-  that have findings. '--verbose' is forwarded to every subprocess phase, which
+  By default each delegated phase reports a per-asset summary plus the assets
+  that have findings. '--verbose' is forwarded to every delegated phase, which
   then also lists the assets it inspected and found nothing to report.
 
 Exit Codes:
   0 - All phases passed (a warning does not fail the run — read status/issueCounts)
   1 - Validation errors found
   2 - System error (this command's own, or propagated from a phase that could
-      not run: exited 2, was killed by a signal, was never spawned, or wrote
-      output that could not be parsed), or a usage error such as passing a path
+      not run: it exited 2, or reported 'system-error' for itself), or a usage
+      error such as passing a path
 
 Arguments:
   None. Scope comes from vibe-agent-toolkit.config.yaml, never from the command
@@ -234,9 +238,9 @@ function tryAddCheckEntry(
  *   - Pool skills: `dist/skills/<fsName>/`
  *   - Tree-copy skills: `dist/.claude/plugins/.../skills/<name>/`
  *
- * Returns `[]` (never throws) for an unreadable config: `vat verify`'s subprocess
- * phases report the real config error, and an in-process phase must not race them
- * with a second, worse diagnosis.
+ * Returns `[]` (never throws) for an unreadable config: `vat verify`'s delegated
+ * phases report the real config error, and one of verify's own phases must not
+ * race them with a second, worse diagnosis.
  *
  * The pool arm enumerates the skills the run DISCOVERED, unioned with the keys of
  * `skills.config`. It used to be the config keys alone, which made both in-process
@@ -521,10 +525,10 @@ const VERIFY_VOCABULARY: PhaseVocabulary = {
  * `vat build`).
  *
  * @param configError - The config-load failure, when the config could not be
- *   read. Every subprocess phase still runs so the CHILD reports the real
- *   config error (exit 2) instead of this command guessing.
- * @param verbose - Forwarded to each subprocess phase as `--verbose`. The
- *   children own their own summarization; this command only relays the request.
+ *   read. Every delegated phase still runs so THE PHASE reports the real config
+ *   error (exit 2) instead of this command guessing.
+ * @param verbose - Forwarded to each delegated phase. Each phase owns its own
+ *   summarization; this command only relays the request.
  */
 export function selectVerifyPhases(
   config: ProjectConfig | undefined,
@@ -533,26 +537,30 @@ export function selectVerifyPhases(
 ): PhaseSelection {
   const phases: Phase[] = [];
   const unreadable = configError !== undefined;
-  const detail = verbose === true ? ['--verbose'] : [];
+  const detail = verbose === true;
 
   if (unreadable || config?.resources) {
-    phases.push({ name: 'resources', args: ['resources', 'validate', ...detail] });
+    phases.push({
+      name: 'resources',
+      run: () => runResourcesValidatePhase(undefined, { verbose: detail }),
+    });
   }
 
   if (unreadable || config?.skills) {
-    phases.push({ name: 'skills', args: ['skills', 'validate', ...detail] });
+    phases.push({
+      name: 'skills',
+      run: () => runSkillsValidatePhase(undefined, { verbose: detail }),
+    });
   }
 
   for (const name of Object.keys(config?.claude?.marketplaces ?? {})) {
+    // Bound per marketplace, so each phase closes over its OWN name. This is a
+    // loop over the adopter's config, which is why verify's phase count is
+    // `2 + n` and never the constant four its help text once implied.
+    const marketplacePath = `dist/.claude/plugins/marketplaces/${name}`;
     phases.push({
       name: `marketplace:${name}`,
-      args: [
-        'claude',
-        'marketplace',
-        'validate',
-        `dist/.claude/plugins/marketplaces/${name}`,
-        ...detail,
-      ],
+      run: () => runMarketplaceValidatePhase(marketplacePath, { verbose: detail }),
     });
   }
 
@@ -564,7 +572,7 @@ export function selectVerifyPhases(
 /** The in-process phase that crawls built skill bundles for what must not ship. */
 const PACKAGED_CONTENT = 'packaged-content';
 
-/** Phases that run in this process, after the subprocess phases, in execution order. */
+/** Phases that exist only in this command, run after the delegated ones, in execution order. */
 type InProcessPhaseName = typeof FILES_CONFIG_DESTS | typeof PACKAGED_CONTENT | 'consistency';
 
 /**
@@ -573,7 +581,7 @@ type InProcessPhaseName = typeof FILES_CONFIG_DESTS | typeof PACKAGED_CONTENT | 
  * The SINGLE source for that question: {@link verifyTopLevelCommand} gates
  * execution on this list and {@link formatVerifyAnnouncement} announces the same
  * list, so the printed phase list cannot drift from the phases that run. It used
- * to be announced from the subprocess phases alone while these two were gated by
+ * to be announced from the delegated phases alone while these two were gated by
  * hand-written conditions further down, so a run printed '(phases: skills)' and
  * then also ran `consistency`, which put a second entry in the emitted document.
  * A status that under-reports what it did is the same defect class as
@@ -608,10 +616,10 @@ function selectInProcessVerifyPhases(config: ProjectConfig | undefined): InProce
  * in order. A phase that would consult nothing is not named.
  */
 export function formatVerifyAnnouncement(
-  subprocessPhaseNames: readonly string[],
+  delegatedPhaseNames: readonly string[],
   config: ProjectConfig | undefined,
 ): string {
-  const all = [...subprocessPhaseNames, ...selectInProcessVerifyPhases(config)];
+  const all = [...delegatedPhaseNames, ...selectInProcessVerifyPhases(config)];
   return `🔍 vat verify (phases: ${all.join(' → ')})`;
 }
 
@@ -661,9 +669,9 @@ export function toPublishedIssue(issue: ValidationIssue): PublishedIssue {
 /**
  * A phase result that carries its own findings into the archived YAML.
  *
- * Extends {@link PhaseResult} rather than widening it: only in-process phases
- * hold findings — a subprocess phase's findings belong to (and are printed by)
- * the child.
+ * Extends {@link PhaseResult} rather than widening it: only verify's own phases
+ * hold findings — a delegated phase's findings belong to (and are printed by)
+ * the command it delegates to, inside the report nested under `report`.
  */
 interface FindingsPhaseResult extends PhaseResult {
   issueCounts: SeverityCounts;
@@ -756,7 +764,7 @@ async function verifyTopLevelCommand(
   // Spec §7: `vat verify` requires a projectRoot.
   const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
 
-  const { logger, startTime, binPath } = createPhaseContext(options.debug);
+  const { logger, startTime } = createPhaseContext(options.debug);
 
   try {
     // Inside the try, deliberately: phase selection used to throw from out here
@@ -777,7 +785,10 @@ async function verifyTopLevelCommand(
     const phaseResults: PhaseResult[] = [];
     for (const phase of phases) {
       logger.info(`\n▶ Phase: ${phase.name}`);
-      phaseResults.push(runPhase(binPath, phase));
+      // Awaited in the loop, deliberately: phases are announced in a fixed order
+      // and their stderr streams live, so overlapping them would interleave two
+      // running reports into one unreadable channel.
+      phaseResults.push(await runPhase(phase));
     }
 
     // ONE discovery for the whole in-process half of the run. Every phase below

@@ -27,7 +27,67 @@ While this project is in v0.1.x (pre-1.0):
 
 ## Project-Specific Technical Principles
 
-🚫 **Hand-maintained version constants are PROHIBITED** — no `const CACHE_VERSION = 1`, no `SCHEMA_VERSION`, no `*_REVISION` deciding whether stored data is still valid: a number someone must remember to bump is not a contract, so derive it (a digest of the schema's own shape, as `parseFactsShapeSource()` does) or invalidate explicitly. This extends to version *labels* we emit in our own output — VAT ships no `schema:`/`vat.*/v1alpha` discriminator for a consumer to read; under pre-1.0 the package version is the only contract.
+### 🚫🚫 NO VERSIONS. The npm package version is the ONLY version this project has.
+
+**Hand-maintained version constants are PROHIBITED.** No `const CACHE_VERSION = 1`, no
+`SCHEMA_VERSION`, no `DUMP_VERSION`, no `*_FACET_VERSION`, no `*_REVISION` — nothing that is a
+number a human must remember to bump in order for stored data to be judged valid.
+
+**⛔ ABSOLUTELY PROHIBITED. There is no exception and no case in which one is correct.** Not
+temporarily, not internally, not because the alternative is harder. The npm package version is the
+only version this project has. If you think you have found the exception, you have not — you have
+found a shape that should be derived or deleted (see below).
+
+**Any PR that introduces one MUST call it out in its description under a heading that says so**, so
+it is caught and removed before merge. A version constant that arrives un-announced in a diff is a
+defect regardless of how good the rest of the change is.
+
+**Why this is a hard rule and not a preference.** A version integer is tech debt with no guard on
+it. The number and the shape it claims to describe drift apart silently, because nothing fails when
+you forget to bump — the failure surfaces later as a reader confidently mis-parsing data it should
+have refused, or refusing data it should have read. It buys nothing that deriving does not buy
+automatically, and it costs a permanent human obligation that is discharged from memory.
+
+**Do this instead:**
+
+- **Derive it from the shape itself** — a digest of the schema's own declaration, as
+  `parseFactsShapeSource()` does for the parse cache and `parseTimingShapeSource()` does for the
+  timing dumps. Adding, renaming or reordering a field moves the digest with zero human action;
+  rewording prose does not move it.
+- **Or invalidate explicitly** — delete the stored data when it stops being valid.
+- **Or ask a different question.** Most "version" checks conflate *"can I parse this?"* (a schema
+  validation already answers that) with *"did these two things come from the same shape?"* (a
+  carried digest answers that, and neither side has to know the right value). Separate the two and
+  the version usually disappears.
+
+This extends to version **labels** in our own output — VAT ships no `schema:` / `vat.*/v1alpha`
+discriminator for a consumer to read. Under pre-1.0 the package version is the only contract.
+
+✅ **The offender list is EMPTY, and keeping it that way is the job.** All 15 known constants were
+expelled — the 13 this file used to name plus two in test files that the inventory had missed. Every
+one of them turned out to be answering a question a `.strict()` Zod schema already answers, and
+answering it worse: an integer only refuses when a human remembered to move it, and the crawl seam
+shipped two meaning changes ahead of its bump before anyone noticed. If a new one shows up in a diff,
+delete it — do not start a list.
+
+🔑 **What replaced them, so nobody reinvents the integer.** Three questions were conflated:
+
+| The real question | What answers it now |
+|---|---|
+| *Can I read this stored artifact?* | The reader's own **strict schema**. It moves when the shape moves, for whoever made the edit. |
+| *Did these two artifacts come from the same shape?* | Both sides validated against **this build's** schema — stronger than comparing them to each other, which a matched pair of pre-change artifacts passes. |
+| *Can this build see the work at all?* | The artifact **declares its own capabilities** — `CrawlTimingDump.charges` is the worked example, and the shape a MEANING-only change should take. |
+
+⚠️ **The one thing no schema catches** is a field whose meaning moves while its name and type stay
+put. No version integer caught that either — it had to be *told*. When it happens, make the build
+declare what moved (row 3 above) or invalidate explicitly by deleting the stored artifacts. There is
+a live instance documented at `readIoBody` in `lab/src/facets/io/compare.ts`; read it before
+proposing anything.
+
+✅ **Not offenders**, so leave them: `ANTHROPIC_VERSION` (an external API header value),
+`SUPPORTED_PYTHON_VERSIONS` (a real list), regexes that *parse* versions, and `const VERSION = '…'`
+in test fixtures. The ban is on a number **deciding whether stored data is still valid** — not on
+the word.
 
 ### Skill Distribution Architecture
 
@@ -117,7 +177,7 @@ This is a TypeScript monorepo using:
 - **Testing**: Vitest
 - **Linting**: ESLint with strict rules (sonarjs, unicorn, security plugins)
 - **Validation**: vibe-validate for git-aware validation orchestration
-- **CI/CD**: GitHub Actions with Node 22/24 on Ubuntu/Windows
+- **CI/CD**: GitHub Actions with Node 24 on Ubuntu/Windows
 
 ## Monorepo Architecture
 
@@ -452,7 +512,7 @@ this scope requires written consent from [Organization Name].
 ## CI/CD
 
 GitHub Actions runs on every push/PR:
-- Matrix: Node 22/24 × Ubuntu/Windows
+- Matrix: Node 24 × Ubuntu/Windows
 - Validation via vibe-validate
 - All checks must pass before merge
 

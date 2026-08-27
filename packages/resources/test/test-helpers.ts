@@ -8,13 +8,21 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { GitTracker, mkdirSyncReal, normalizedTmpdir, removeScratchDir, resetProjectRootCaches, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  mkdirSyncReal,
+  normalizedTmpdir,
+  removeScratchDir,
+  resetProjectRootCaches,
+  safePath,
+} from '@vibe-agent-toolkit/utils';
+import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, beforeEach, expect, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
 import { parseMarkdown } from '../src/link-parser.js';
 import type { FragmentIndex, ValidateLinkOptions as LinkValidatorOptions } from '../src/link-validator.js';
 import { validateLink } from '../src/link-validator.js';
+import { mimeTypeForPath } from '../src/mime-type.js';
 import type { ExtentContribution, ExtentContributor } from '../src/projection/contributor.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
@@ -681,7 +689,7 @@ export async function buildExtentContribution(
 ): Promise<{ contribution: ExtentContribution; rootId: string }> {
   const tracker = new GitTracker(root);
   await tracker.initialize({ includeUntracked: true });
-  const builder = new ProjectionBuilder(root, tracker);
+  const builder = new ProjectionBuilder({ root, gitTracker: tracker });
 
   return {
     contribution: await contributor.contribute(builder.base(), null),
@@ -779,6 +787,13 @@ export function useCorpusSuite(
  * overridable, because a suite exercising a `flags` refusal matcher has to plant
  * a `gitignored` or non-existent row deliberately.
  *
+ * `mime` comes from the SHIPPED `mimeTypeForPath` rather than a hardcoded value,
+ * and unconditionally — production types a path by its text alone, directory or
+ * not, so a fixture that planted `null` for a directory named `weird/CLAUDE.md`
+ * would quietly disagree with the row a real population produces. Deriving it
+ * here rather than at each call site is the same argument the path columns
+ * above are extracted for: nothing that no suite is testing should be restated.
+ *
  * @param row - The identity, extent, path and content key this realization has,
  *   plus any boolean column the caller needs to differ from the default. A null
  *   `contentKey` selects the `deferred` content state — enumerated, deliberately
@@ -808,6 +823,7 @@ export function projectionRealizationRow(row: {
     // eslint-disable-next-line local/no-hardcoded-path-split -- fixture paths are authored forward-slashed, as `relativize()` emits them
     depth: row.path.split('/').length,
     ext: dot <= 0 ? '' : basename.slice(dot).toLowerCase(),
+    mime: mimeTypeForPath(row.path),
     contentKey: row.contentKey,
     contentState: row.contentKey === null ? 'deferred' : 'keyed',
     mtime: null,
@@ -817,4 +833,29 @@ export function projectionRealizationRow(row: {
     isSymlink: row.isSymlink ?? false,
     symlinkResolves: null,
   };
+}
+
+/**
+ * Node's own count of live worker threads owned by this thread.
+ *
+ * Shared because two suites assert on it — `parse-pool.test.ts` for the pool's
+ * laziness, `projection-blob-population-pool.test.ts` for the blob stage's
+ * activation gate — and they must read the SAME oracle. Two copies would be two
+ * places for one platform assumption to be weakened separately, and this repo's
+ * duplication gate rejects the second copy anyway.
+ *
+ * Deliberately Node's view of the thread table rather than bookkeeping a module
+ * keeps about itself: a spawn counter a module increments proves only that the
+ * module agrees with itself.
+ *
+ * If a platform ever stops populating `workers`, this answers 0 forever — which
+ * would make every "spawns nothing" assertion vacuous. Both suites therefore
+ * pair such an assertion with a positive one on the same oracle, so blindness
+ * surfaces as a red rather than as a green that means nothing.
+ *
+ * @returns How many worker threads this thread currently owns
+ */
+export function workerThreadCount(): number {
+  const report = process.report?.getReport() as { workers?: unknown[] } | undefined;
+  return Array.isArray(report?.workers) ? report.workers.length : 0;
 }

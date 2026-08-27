@@ -21,7 +21,7 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { cleanupTestTempDir, createTestTempDir, writeTestFile } from '../../../cli/test/system/test-common.js';
-import { resolveTestInputDirs } from '../../src/test-input.js';
+import { conventionalSuiteProbe, resolveTestInputDirs } from '../../src/test-input.js';
 
 let tempDir: string;
 
@@ -60,7 +60,7 @@ describe('implicit eval-suite convention (integration)', () => {
 
     // The leak this closes: without a `test:` block this returned [], so nothing
     // excluded the suite and its answer key shipped.
-    expect(resolveTestInputDirs({}, skillDir, [])).toEqual([safePath.join(skillDir, 'evals')]);
+    expect(resolveTestInputDirs({}, skillDir, [], conventionalSuiteProbe())).toEqual([safePath.join(skillDir, 'evals')]);
   });
 
   it('never infers from a directory NAME — a root evals/ with no suite file is ordinary content', () => {
@@ -68,7 +68,7 @@ describe('implicit eval-suite convention (integration)', () => {
     const skillDir = makeSkillDir({ rootEvalsNoSuite: true });
 
     // Keying on the name would silently drop this author's docs from their bundle.
-    expect(resolveTestInputDirs({}, skillDir, [])).toEqual([]);
+    expect(resolveTestInputDirs({}, skillDir, [], conventionalSuiteProbe())).toEqual([]);
   });
 
   it('names exactly <skill-root>/evals — a nested docs/evals/ is untouched', () => {
@@ -76,7 +76,7 @@ describe('implicit eval-suite convention (integration)', () => {
     const skillDir = makeSkillDir({ suite: true, nestedEvals: true });
 
     // Only the root suite dir is test input; the nested one is never mentioned.
-    expect(resolveTestInputDirs({}, skillDir, [])).toEqual([safePath.join(skillDir, 'evals')]);
+    expect(resolveTestInputDirs({}, skillDir, [], conventionalSuiteProbe())).toEqual([safePath.join(skillDir, 'evals')]);
   });
 
   it('is pure auto-detect: no test: block and no suite is a clean no-op, not an error', () => {
@@ -86,8 +86,8 @@ describe('implicit eval-suite convention (integration)', () => {
     // The convention must never make evals REQUIRED. The overwhelming majority of
     // skills have no suite at all; they must package exactly as before, with no
     // error, no warning, and nothing excluded.
-    expect(() => resolveTestInputDirs({}, skillDir, [])).not.toThrow();
-    expect(resolveTestInputDirs({}, skillDir, [])).toEqual([]);
+    expect(() => resolveTestInputDirs({}, skillDir, [], conventionalSuiteProbe())).not.toThrow();
+    expect(resolveTestInputDirs({}, skillDir, [], conventionalSuiteProbe())).toEqual([]);
   });
 
   it('lets an explicit test: block win over the convention', () => {
@@ -95,7 +95,7 @@ describe('implicit eval-suite convention (integration)', () => {
     const skillDir = makeSkillDir({ suite: true });
 
     // An explicit declaration is still the instruction, suite file present or not.
-    expect(resolveTestInputDirs({ test: { evals: 'suites/demo/evals.json' } }, skillDir, []))
+    expect(resolveTestInputDirs({ test: { evals: 'suites/demo/evals.json' } }, skillDir, [], conventionalSuiteProbe()))
       .toEqual([safePath.join(skillDir, 'suites', 'demo')]);
   });
 });
@@ -155,7 +155,7 @@ describe('conventional-suite probing (integration)', () => {
     });
 
     // The suite did not exist when the call began, so the call must not report it.
-    expect(resolveTestInputDirs({}, skillDir, projectSkills)).toEqual([]);
+    expect(resolveTestInputDirs({}, skillDir, projectSkills, conventionalSuiteProbe())).toEqual([]);
   });
 
   it('still answers per DIRECTORY — a different skill dir gets its own probe', () => {
@@ -169,18 +169,36 @@ describe('conventional-suite probing (integration)', () => {
     expect(resolveTestInputDirs({}, bare, [
       { skillDir: bare, config: {} },
       { skillDir: withSuite, config: {} },
-    ])).toEqual([safePath.join(withSuite, 'evals')]);
+    ], conventionalSuiteProbe())).toEqual([safePath.join(withSuite, 'evals')]);
   });
 
-  it('re-probes on a LATER call — the answer dies with the call', () => {
+  it('re-probes for a LATER RUN — the answer dies with the probe', () => {
     tempDir = createTestTempDir('vat-implicit-suite-scope-');
     const skillDir = makeSkillDir({});
 
-    expect(resolveTestInputDirs({}, skillDir, [])).toEqual([]);
+    expect(resolveTestInputDirs({}, skillDir, [], conventionalSuiteProbe())).toEqual([]);
 
     // A module-level cache would still be answering `false` here — in a
     // long-lived process, and across every later test in the same worker.
     addConventionalSuite(skillDir);
-    expect(resolveTestInputDirs({}, skillDir, [])).toEqual([safePath.join(skillDir, 'evals')]);
+    expect(resolveTestInputDirs({}, skillDir, [], conventionalSuiteProbe())).toEqual([safePath.join(skillDir, 'evals')]);
+  });
+
+  it('holds its answer for the WHOLE run — that is the scope, and its known cost', () => {
+    tempDir = createTestTempDir('vat-implicit-suite-runscope-');
+    const skillDir = makeSkillDir({});
+
+    // ONE probe, as a lane looping over its discovered skills creates it.
+    const suiteProbe = conventionalSuiteProbe();
+    expect(resolveTestInputDirs({}, skillDir, [], suiteProbe)).toEqual([]);
+
+    // The tree changes UNDER the run. The probe keeps the answer it took, and that
+    // is deliberate: a run already reads the project's skills and configs once and
+    // answers every skill from that one snapshot, so widening the memo from the call
+    // to the run adds no window the lanes did not already have — while removing the
+    // S² re-probing that made a 103-skill `vat resources validate` spend half its
+    // filesystem calls re-asking 103 questions it had already answered.
+    addConventionalSuite(skillDir);
+    expect(resolveTestInputDirs({}, skillDir, [], suiteProbe)).toEqual([]);
   });
 });

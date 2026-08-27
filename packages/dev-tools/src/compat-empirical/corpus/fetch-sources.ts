@@ -15,7 +15,14 @@
 import { cpSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { isAbsolutePath, mkdirSyncReal, normalizedTmpdir, runGit, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  isAbsolutePath,
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
+import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import type { CorpusEntry, SkillSource } from '../types.js';
 

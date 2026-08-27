@@ -7,7 +7,8 @@
 import { promises as fs } from 'node:fs';
 
 
-import { GitTracker, setupAsyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { beforeEach, describe, expect, it, beforeAll, afterAll } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';

@@ -11,9 +11,10 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safePath, safeExecResult } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { safeExecResult } from '@vibe-agent-toolkit/utils/process';
 
-export { safeExecSync, safeExecResult } from '@vibe-agent-toolkit/utils';
+export { safeExecSync, safeExecResult } from '@vibe-agent-toolkit/utils/process';
 
 
 /**

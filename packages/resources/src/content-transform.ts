@@ -22,8 +22,9 @@
 
 import path from 'node:path';
 
-import { renderTemplate, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 
+import { renderHandlebarsTemplate } from './handlebars-template.js';
 import type { LinkType, ResourceLink, ResourceMetadata } from './schemas/resource-metadata.js';
 import { matchesGlobPattern, splitHrefAnchor } from './utils.js';
 
@@ -570,7 +571,7 @@ export function transformContent(
     // formatting the author wrote (backticks, bold, italics) so templates
     // targeting bundled links can render the link with original styling.
     const templateContext = buildTemplateContext(link, hrefWithoutFragment, fragment, resource, context, sourceFilePath, rawText);
-    return renderTemplate(template, templateContext);
+    return renderHandlebarsTemplate(template, templateContext);
   });
 
   // === Pass 2: Reference-style definitions [ref]: url ===

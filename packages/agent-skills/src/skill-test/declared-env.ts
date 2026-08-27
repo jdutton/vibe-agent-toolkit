@@ -12,7 +12,8 @@
  * the result onto the plugin-root env.
  */
 
-import { applyDeclaredEnv, formatForwardedEnvLine, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { applyDeclaredEnv, formatForwardedEnvLine } from '@vibe-agent-toolkit/utils/skill-test';
 
 import { withPluginRootEnv } from './plugin-env.js';
 

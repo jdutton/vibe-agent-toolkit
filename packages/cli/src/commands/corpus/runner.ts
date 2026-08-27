@@ -18,7 +18,8 @@ import { fileURLToPath } from 'node:url';
 
 import { scan } from '@vibe-agent-toolkit/discovery';
 import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { isGitUrl, parseGitUrl, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { isGitUrl, parseGitUrl } from '@vibe-agent-toolkit/utils/git';
 import * as yaml from 'yaml';
 
 import { createLogger } from '../../utils/logger.js';
