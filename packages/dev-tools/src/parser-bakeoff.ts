@@ -113,12 +113,25 @@ const VAT_BIN = safePath.join(PROJECT_ROOT, 'packages/cli/dist/bin/vat.js');
 const DEFAULT_ROUNDS = 3;
 
 /**
- * `markdown-it`'s default preset, which already carries GFM tables and
- * strikethrough, plus `linkify` for the autolink literals `remark-gfm`
- * contributes. The closest configuration to VAT's remark chain that
- * `markdown-it` has.
+ * `markdown-it`, configured once for this repository.
+ *
+ * The default preset already carries GFM tables and strikethrough; `linkify`
+ * adds the autolink literals `remark-gfm` contributes. The closest configuration
+ * to VAT's remark chain that `markdown-it` has.
+ *
+ * ⚠️ Exported so the conformance implementation (`markdown-it-parser.ts`) builds
+ * the SAME parser this bake-off times. Two differently-configured instances
+ * would make the speed verdict and the fidelity verdict statements about two
+ * different parsers, and nothing would say so.
+ *
+ * @returns A fresh instance; the bake-off shares one, a conformance run may not
  */
-const markdownIt = new MarkdownIt({ linkify: true });
+export function createMarkdownItProcessor(): MarkdownIt {
+  return new MarkdownIt({ linkify: true });
+}
+
+/** The single instance this bake-off times, so allocation is not in the sample. */
+const markdownIt = createMarkdownItProcessor();
 
 /**
  * Read one CLI flag's value as a number.

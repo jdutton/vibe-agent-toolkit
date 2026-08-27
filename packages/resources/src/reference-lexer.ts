@@ -38,9 +38,7 @@
  * Nothing else is dropped. Meaning is a lens's job.
  */
 
-import type { Root } from 'mdast';
-import { visit } from 'unist-util-visit';
-
+import type { SourceSpan } from './parse-capabilities.js';
 import { forEachScannableLine } from './scan-lines.js';
 import type { LexicalReference } from './schemas/parse-facts.js';
 import type { VariableExpansionSyntax } from './schemas/projection-blobs.js';
@@ -66,43 +64,34 @@ export interface CodeContextRanges {
 // cache persists these rows and therefore has to validate them on read, and a
 // shape with two definitions is a shape the validator can fall behind.
 
-/** Node kinds {@link collectCodeContextRanges} reacts to, as one filtered walk. */
-const CONTEXT_NODE_TYPES = [
-  'code',
-  'inlineCode',
-  'html',
-  'yaml',
-  'link',
-  'image',
-  'linkReference',
-  'definition',
-] as const;
-
 /**
- * Walk the AST **once** for all three range sets.
+ * Sort one document's spans into the three range sets.
  *
- * Deliberately not a call to `collectMaskedRanges` from
- * `unresolved-references.ts`: that function lumps `code`, `inlineCode`, `html`
- * and `yaml` into one undifferentiated mask, and the whole point here is that
- * the first two must stay *distinguishable from each other* and must not
- * suppress anything.
+ * A pure filter over `spans-and-kinds` output rather than a tree walk, which is
+ * what lets any implementation of that capability feed the lexer — and what
+ * keeps the two range consumers from traversing a tree each. The partition is
+ * total: `code-block` and `code-span` annotate a token, and every other kind
+ * suppresses one.
+ *
+ * Deliberately not merged with `maskFactsFrom` in `unresolved-references.ts`:
+ * that one lumps code blocks, code spans, raw HTML and frontmatter into a
+ * single undifferentiated mask, and the whole point here is that the first two
+ * must stay *distinguishable from each other* and must not suppress anything.
+ *
+ * @param spans - Every construct's extent, from the spans-and-kinds capability
+ * @returns Fences, inline code spans, and the regions no reference may come from
  */
-export function collectCodeContextRanges(tree: Root): CodeContextRanges {
+export function codeContextRangesFrom(spans: readonly SourceSpan[]): CodeContextRanges {
   const fences: OffsetRange[] = [];
   const codeSpans: OffsetRange[] = [];
   const excluded: OffsetRange[] = [];
 
-  visit(tree, [...CONTEXT_NODE_TYPES], (node) => {
-    const start = node.position?.start.offset;
-    const end = node.position?.end.offset;
-    if (start === undefined || end === undefined) return;
-    // Not a `switch`: only two of the eight visited types are named here, and
-    // `@typescript-eslint/switch-exhaustiveness-check` requires a switch over a
-    // union to name every member even when a `default` covers the remainder.
-    if (node.type === 'code') fences.push([start, end]);
-    else if (node.type === 'inlineCode') codeSpans.push([start, end]);
-    else excluded.push([start, end]);
-  });
+  for (const span of spans) {
+    const range: OffsetRange = [span.startOffset, span.endOffset];
+    if (span.kind === 'code-block') fences.push(range);
+    else if (span.kind === 'code-span') codeSpans.push(range);
+    else excluded.push(range);
+  }
 
   return { fences, codeSpans, excluded };
 }

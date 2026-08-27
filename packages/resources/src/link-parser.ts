@@ -1,29 +1,36 @@
 /**
- * Markdown link parser and shared resource-parsing types.
+ * The markdown composer — one `ParseResult` from one parser's capabilities plus
+ * VAT's own derivations.
  *
- * Parses markdown files to extract:
- * - Links (regular, reference-style, autolinks)
- * - Headings (with GitHub-style slugs and nested tree structure)
- * - File size and token estimates
+ * What a parser supplies and what VAT derives are two different lists, and
+ * keeping them apart is the point of `parse-capabilities.ts`:
  *
- * Uses unified/remark for robust markdown parsing with GFM support.
+ * | From the parser | Derived here, from raw source and spans |
+ * |---|---|
+ * | `links`, `anchors`, `frontmatterSource` (spans-and-kinds) | `estimatedTokenCount` |
+ * | flat headings (structure) | `unresolvedReferences`, `lexicalReferences` |
+ * | | `contentMeasures`, `frontmatter`, `frontmatterError` |
+ * | | heading slugs and the heading tree |
  *
  * Also defines the format-neutral `ParseResult` contract shared with the HTML
- * parser (`html-link-parser.ts`). The `HtmlParseError` shape is Zod-sourced
- * from `schemas/resource-metadata.ts` (single source of truth).
+ * parser (`html-link-parser.ts`). The `HtmlParseError` shape is Zod-sourced from
+ * `schemas/resource-metadata.ts` (single source of truth).
  */
 
 import { stat } from 'node:fs/promises';
 
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import GithubSlugger from 'github-slugger';
-import type { Definition, Heading, Html, Link, LinkReference, Root, Yaml } from 'mdast';
-import { toString as mdastToString } from 'mdast-util-to-string';
-import { visit } from 'unist-util-visit';
 
 import { parseFrontmatterSource } from './frontmatter-source.js';
-import { classifyLink, estimateTokens } from './link-classify.js';
-import { createMarkdownProcessor } from './markdown-processor.js';
+import { estimateTokens } from './link-classify.js';
+import {
+  type FlatHeading,
+  type MarkdownParser,
+  MissingCapabilityError,
+  type SpanFacts,
+  type StructureFacts,
+} from './parse-capabilities.js';
 import {
   ParsePass,
   ParserKind,
@@ -31,9 +38,9 @@ import {
   recordParsedDocument,
   recordParsePass,
 } from './parse-timing.js';
-import { probeTokenize } from './parse-tokenize-probe.js';
 import { measureContent } from './projection/blob-facts.js';
-import { collectCodeContextRanges, findLexicalReferences } from './reference-lexer.js';
+import { codeContextRangesFrom, findLexicalReferences } from './reference-lexer.js';
+import { remarkParser } from './remark-parser.js';
 import type { ContentMeasures, LexicalReference } from './schemas/parse-facts.js';
 import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { HeadingNode, ResourceLink, UnresolvedReference } from './types.js';
@@ -48,8 +55,7 @@ export interface ParseResult {
   frontmatter?: Record<string, unknown>;
   frontmatterError?: string;
   /**
-   * The frontmatter block's YAML **source**, delimiters excluded, exactly as
-   * the mdast `yaml` node carried it.
+   * The frontmatter block's YAML **source**, delimiters excluded.
    *
    * Absent (key omitted) when the document has no frontmatter block at all;
    * present-and-empty (`''`) for a block whose body is empty — so "empty block"
@@ -110,12 +116,12 @@ export interface ParseResult {
    * `BlobRow`'s `wordCount` / `proseCodeUnits` / `codeBlockCodeUnits`.
    *
    * Computed at parse time rather than at population time because
-   * `codeBlockCodeUnits` needs the AST's `code` node offsets, which exist only
-   * while the tree is live. Both parsers currently always supply it, so the
-   * absent state is defensive rather than reachable; the key stays optional to
-   * match {@link anchors} and {@link lexicalReferences}, and because a
-   * `ParseResult` assembled by hand (tests, a future producer) legitimately has
-   * nothing to say here.
+   * `codeBlockCodeUnits` needs the code-block spans, which only a parse
+   * reports. Both parsers currently always supply it, so the absent state is
+   * defensive rather than reachable; the key stays optional to match
+   * {@link anchors} and {@link lexicalReferences}, and because a `ParseResult`
+   * assembled by hand (tests, a future producer) legitimately has nothing to
+   * say here.
    */
   contentMeasures?: ContentMeasures;
 }
@@ -157,10 +163,10 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
  * Parse markdown **source** — the content-addressable half of
  * {@link parseMarkdown}.
  *
- * This is a pure function of its two arguments: no filesystem access, no path,
- * no ambient state. That is what makes it cacheable by content, and it is what
- * a history replay needs — a historical blob read out of git is not on disk
- * under any path, so anything that insists on a `filePath` cannot parse it.
+ * This is a pure function of its arguments: no filesystem access, no path, no
+ * ambient state. That is what makes it cacheable by content, and it is what a
+ * history replay needs — a historical blob read out of git is not on disk under
+ * any path, so anything that insists on a `filePath` cannot parse it.
  * {@link parseMarkdown} is now just "read the bytes, then call this".
  *
  * ## Why `sizeBytes` is a parameter and NOT derived from `content`
@@ -182,7 +188,11 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
  *
  * @param content - Decoded markdown source
  * @param sizeBytes - Byte size the caller attributes to this content
+ * @param parser - Which implementation supplies the two read-side capabilities.
+ *   The default is the only one VAT ships; the conformance suite is what passes
+ *   anything else, and it is the reason this is a parameter at all.
  * @returns Parsed markdown data including links, headings, size, and token estimate
+ * @throws MissingCapabilityError if `parser` does not serve both read capabilities
  *
  * @example
  * ```typescript
@@ -190,7 +200,11 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
  * console.log(`Found ${result.links.length} links`);
  * ```
  */
-export function parseMarkdownContent(content: string, sizeBytes: number): ParseResult {
+export function parseMarkdownContent(
+  content: string,
+  sizeBytes: number,
+  parser: MarkdownParser = remarkParser,
+): ParseResult {
   // Every `passStartedAt` / `recordParsePass` pair is the sub-phase timing seam
   // (`parse-timing.ts`), off unless `VAT_PARSE_TIMING` names a dump directory.
   // `totalStartedAt` brackets the whole body, so a reader can compute
@@ -202,61 +216,52 @@ export function parseMarkdownContent(content: string, sizeBytes: number): ParseR
   const estimatedTokenCount = estimateTokens(content);
   recordParsePass(ParsePass.EstimateTokens, passStartedAt);
 
-  // Parse markdown with unified/remark. The processor is rebuilt per document,
-  // so it is timed separately from the parse it feeds.
-  passStartedAt = parseTimingStart();
-  const processor = createMarkdownProcessor();
-  recordParsePass(ParsePass.RemarkProcessor, passStartedAt);
-
-  // The split probe brackets a SECOND, redundant tokenize so `remark-parse` can
-  // be divided into tokenizing and tree building. Both calls are no-ops unless
-  // `VAT_PARSE_TIMING_SPLIT` names one of them; see `parse-tokenize-probe.ts`
-  // for why the order is the gate's value and what each order bounds.
-  probeTokenize(content, 'before');
-  passStartedAt = parseTimingStart();
-  const tree = processor.parse(content) as Root;
-  recordParsePass(ParsePass.RemarkParse, passStartedAt);
-  probeTokenize(content, 'after');
-
-  // Links, headings, raw-HTML anchors and frontmatter, from ONE tree walk
-  passStartedAt = parseTimingStart();
-  const { links, headings, anchors, frontmatter, frontmatterError, frontmatterSource } =
-    collectAstFacts(tree);
-  recordParsePass(ParsePass.AstFacts, passStartedAt);
+  // The parser's own passes — processor construction, tokenize/tree build and
+  // the fact walk — are bracketed inside the implementation, so an arm's cost
+  // stays attributable to the arm rather than to this composer.
+  const session = parser.open(content);
+  const { links, anchors, spans, frontmatterSource } = requireSpans(parser, session);
+  const { headings } = requireStructure(parser, session);
 
   // Detect dangling reference-style links (full/collapsed forms with no
   // matching definition) — see findUnresolvedReferences for why this is a
-  // raw-source scan rather than an AST visit.
+  // raw-source scan rather than a structural one.
   passStartedAt = parseTimingStart();
-  const unresolvedReferences = findUnresolvedReferences(content, tree);
+  const unresolvedReferences = findUnresolvedReferences(content, spans);
   recordParsePass(ParsePass.UnresolvedReferences, passStartedAt);
 
-  // ONE walk for every consumer of code context. `findLexicalReferences` used
-  // to call `collectCodeContextRanges` itself; adding a second call here for
-  // the measures would have walked the tree twice on the cold path CI always
-  // pays — the very cost `collectAstFacts` exists to avoid.
+  // Spans, sorted once for every consumer of code context. Both the lexer and
+  // the measures want this partition, and computing it twice would sort the
+  // same list twice on the cold path CI always pays.
   passStartedAt = parseTimingStart();
-  const ranges = collectCodeContextRanges(tree);
+  const ranges = codeContextRangesFrom(spans);
   recordParsePass(ParsePass.CodeContextRanges, passStartedAt);
 
-  // Reference candidates remark parses as plain text — `@`-prefixed tokens,
-  // variable-anchored paths, path-shaped bare tokens. Also a raw-source scan,
-  // and for the same structural reason.
+  // Reference candidates the parser reports as plain text — `@`-prefixed
+  // tokens, variable-anchored paths, path-shaped bare tokens. A raw-source
+  // scan, and for the same structural reason.
   passStartedAt = parseTimingStart();
   const lexicalReferences = findLexicalReferences(content, ranges);
   recordParsePass(ParsePass.LexicalReferences, passStartedAt);
 
-  // Fenced AND indented code blocks are both `code` nodes, so both count as
-  // code here — which is the useful reading: neither is prose.
+  // Fenced AND indented code blocks are both `code-block` spans, so both count
+  // as code here — which is the useful reading: neither is prose.
   passStartedAt = parseTimingStart();
   const contentMeasures = measureContent(content, ranges.fences);
   recordParsePass(ParsePass.MeasureContent, passStartedAt);
+
+  // The parse decision is `parseFrontmatterSource`'s, not this function's, so a
+  // cache rebuilding a hit reaches the identical logic.
+  const { frontmatter, frontmatterError } =
+    frontmatterSource === undefined
+      ? {}
+      : parseFrontmatterSource(frontmatterSource);
 
   // With exactOptionalPropertyTypes: true, we must conditionally include the property
   // rather than assigning undefined to it
   const result: ParseResult = {
     links,
-    headings,
+    headings: toHeadingTree(headings),
     unresolvedReferences,
     ...(lexicalReferences.length > 0 && { lexicalReferences }),
     ...(anchors.length > 0 && { anchors }),
@@ -276,396 +281,56 @@ export function parseMarkdownContent(content: string, sizeBytes: number): ParseR
 }
 
 /**
- * Everything a single walk of the markdown AST yields.
+ * The session's spans-and-kinds facts, or a legible failure naming the parser.
  *
- * `anchors` is always an array here (possibly empty); `parseMarkdownContent`
- * is what decides to omit the key entirely when a document declares none, so
- * the "absent, not empty" distinction lives at exactly one place.
+ * @throws MissingCapabilityError when the session does not serve the capability
  */
-interface MarkdownAstFacts {
-  links: ResourceLink[];
-  headings: HeadingNode[];
-  anchors: string[];
-  frontmatter?: Record<string, unknown>;
-  frontmatterError?: string;
-  frontmatterSource?: string;
-}
-
-/**
- * Mutable state threaded through the single AST walk.
- *
- * The three link buckets exist because `links` is ordered **by node kind, not
- * by document position** — all `link`s, then all `linkReference`s, then all
- * `definition`s — a contract the parse-fact goldens pin by ordinal. A single
- * walk sees the three kinds interleaved, so it buckets them and concatenates
- * in kind order afterwards. Within a bucket, walk order IS document order.
- */
-interface AstWalkState {
-  /**
-   * `[ref]: url` targets. Complete only once the walk finishes.
-   *
-   * FIXED (was a known defect): a duplicated `[ref]: url` label used to keep
-   * the LAST definition, but CommonMark resolves a reference to the FIRST
-   * one. For
-   *
-   *     A [ref][dup].
-   *     [dup]: ./first.md
-   *     [dup]: ./last.md
-   *
-   * every renderer links `[ref][dup]` to `./first.md`, so a LAST-wins map
-   * made VAT check a target the reader never visits. Fixed by making this
-   * write first-write-wins: `case 'definition'` only calls
-   * `definitions.set(id, url)` when `!definitions.has(id)`, so the first
-   * occurrence of a label sticks and later re-declarations of the same label
-   * are ignored for resolution purposes (each still gets its own
-   * `definitionLinks` entry — see below). Kept as documentation of the
-   * CommonMark first-wins contract this map must uphold: a future refactor
-   * that reintroduces an unconditional `.set()` here would silently regress
-   * to last-wins.
-   */
-  definitions: Map<string, string>;
-  /** `[text](href)` and autolinks. */
-  inlineLinks: ResourceLink[];
-  /** Deferred: resolving these needs the *completed* `definitions` map. */
-  linkReferenceNodes: LinkReference[];
-  /** `[ref]: url` definitions, as links in their own right. */
-  definitionLinks: ResourceLink[];
-  flatHeadings: HeadingNode[];
-  /** Stateful: dedupes slugs in document order, exactly as GitHub does. */
-  slugger: GithubSlugger;
-  anchors: Set<string>;
-  frontmatter?: Record<string, unknown>;
-  frontmatterError?: string;
-  frontmatterSource?: string;
-}
-
-/**
- * Node kinds {@link collectAstFacts} reacts to.
- *
- * Passed to `visit` as its test so the walk is still ONE traversal while the
- * visitor's parameter narrows to exactly these kinds — which is what lets
- * {@link collectNode}'s switch be exhaustive (and therefore lets the compiler
- * enforce that adding a kind here adds a case there).
- */
-const COLLECTED_NODE_TYPES = [
-  'link',
-  'linkReference',
-  'definition',
-  'heading',
-  'html',
-  'yaml',
-] as const;
-
-/**
- * Walk the markdown AST **once** and extract every fact `parseMarkdown` needs.
- *
- * Replaces seven separate `visit()` passes (definitions, links, link
- * references, definitions again, raw HTML, headings, frontmatter) with a
- * single traversal dispatching on `node.type`. Each pass was a full tree walk,
- * so the tree was walked seven times per document to produce facts that are
- * all available from one; parsing dominates every resource-reading command in
- * the toolkit, and this is the cold path CI always pays.
- *
- * Output is byte-identical to the seven-pass version by construction: a
- * filtered `visit` yields nodes of its type in the same relative order an
- * unfiltered one does, so bucketing by kind and concatenating reproduces the
- * previous ordering exactly (see {@link AstWalkState}).
- *
- * @param tree - Markdown AST from unified/remark
- * @returns Links, heading tree, raw-HTML anchors and frontmatter
- */
-function collectAstFacts(tree: Root): MarkdownAstFacts {
-  const state: AstWalkState = {
-    definitions: new Map<string, string>(),
-    inlineLinks: [],
-    linkReferenceNodes: [],
-    definitionLinks: [],
-    flatHeadings: [],
-    slugger: new GithubSlugger(),
-    anchors: new Set<string>(),
-  };
-
-  visit(tree, [...COLLECTED_NODE_TYPES], (node) => {
-    collectNode(state, node);
-  });
-
-  return {
-    links: [...state.inlineLinks, ...resolveLinkReferences(state), ...state.definitionLinks],
-    headings: buildHeadingTree(state.flatHeadings),
-    anchors: [...state.anchors],
-    ...(state.frontmatter !== undefined && { frontmatter: state.frontmatter }),
-    ...(state.frontmatterError !== undefined && { frontmatterError: state.frontmatterError }),
-    ...(state.frontmatterSource !== undefined && { frontmatterSource: state.frontmatterSource }),
-  };
-}
-
-/**
- * Record whatever one AST node contributes. Node kinds with nothing to
- * contribute (paragraphs, text, lists, tables, …) fall through untouched.
- */
-function collectNode(
-  state: AstWalkState,
-  node: Definition | Heading | Html | Link | LinkReference | Yaml,
-): void {
-  switch (node.type) {
-    case 'link': {
-      state.inlineLinks.push(toResourceLink(node, extractLinkText(node), node.url, 'link'));
-      break;
-    }
-    case 'linkReference': {
-      state.linkReferenceNodes.push(node);
-      break;
-    }
-    case 'definition': {
-      if (!state.definitions.has(node.identifier)) {
-        state.definitions.set(node.identifier, node.url);
-      }
-      state.definitionLinks.push(toResourceLink(node, node.identifier, node.url, 'definition'));
-      break;
-    }
-    case 'heading': {
-      state.flatHeadings.push(toFlatHeading(state.slugger, node));
-      break;
-    }
-    case 'html': {
-      collectHtmlAnchors(state.anchors, node);
-      break;
-    }
-    case 'yaml': {
-      collectFrontmatter(state, node);
-      break;
-    }
+function requireSpans(parser: MarkdownParser, session: { spansAndKinds?: () => SpanFacts }): SpanFacts {
+  if (session.spansAndKinds === undefined) {
+    throw new MissingCapabilityError(parser.name, 'spans-and-kinds');
   }
+  return session.spansAndKinds();
 }
 
 /**
- * Build a `ResourceLink` from any of the three link-bearing node kinds.
+ * The session's structure facts, or a legible failure naming the parser.
  *
- * `text` and `href` are passed in because each kind derives them differently
- * (a `definition`'s text is its identifier and a `linkReference`'s href comes
- * from the definitions map, not the node), while position and classification
- * are shared.
- *
- * `line` is spread conditionally so the key is ABSENT rather than
- * undefined-valued when a node carries no position. See
- * {@link cleanupEmptyChildren} for why that distinction is load-bearing.
- *
- * ⛔ This guard used to be documented as **"defensive and currently
- * unreachable … a measured sweep of 265 tracked markdown documents found zero
- * position-less nodes, so no test can turn it red"**. Every clause of that is
- * false, and the correction matters more than the code does: a guard believed
- * inert is a guard the next reader deletes.
- *
- * It is REACHABLE, it FIRES, and it is measured firing — by this very package,
- * three modules away. `blob-population.ts`'s `referencesSkippedForMissingLine`
- * docstring records **77 position-less reference candidates over this
- * repository's 4,425 blobs**, with the cause and a minimal repro. Two
- * docstrings in one package disagreed, and the one asserting zero was the one
- * that had not looked.
- *
- * The producer is `mdast-util-gfm-autolink-literal`. A GFM autolink literal the
- * tokenizer does not see is reconstructed afterwards by its `findAndReplace`
- * post-pass, which builds the `link` node with no `position` at all.
- *
- * ⚠️ It takes BOTH conditions, and the pair was measured rather than assumed:
- * the literal must be the **protocol-less `www.` form**, AND it must not stand
- * on its own text run. A glued `https://` literal keeps its position, and so
- * does a glued email — the tokenizer handles both inline, so `findAndReplace`
- * never has to rebuild them:
- *
- * ```text
- * 'See www.anthropic.com for more.'          → line 1   (tokenized)
- * 'See domain:www.anthropic.com for more.'   → NO `line` key   ← the only shape
- * 'See domain:https://anthropic.com for…'    → line 1
- * 'Mail domain:me@anthropic.com please.'     → line 1
- * ```
- *
- * The one shape that reproduces is not contrived — it is how a
- * `WebFetch(domain:…)` permission string reads wherever a document quotes one,
- * and this repo's own `.claude/settings.json` is such a document.
- *
- * Pinned in `link-parser.test.ts` under *own-property discipline*, together
- * with the positioned control that makes the pair a test of the GUARD rather
- * than of the parser.
- *
- * ⚠️ Every literal this reaches is an http/www/email target, so none of them is
- * a closure edge and nothing routable is lost today. That is a MEASURED
- * property of GFM autolink literals, not a guarantee this function makes: a
- * position-less node from some future producer could name a local file, and
- * the row would then be absent rather than reported. The counter is what makes
- * that visible; do not stop counting on the strength of the current sample.
- *
- * The conditional spread itself stays for its original reason: it makes "no own
- * key of a `ParseResult` is ever valued `undefined`" true by construction
- * rather than true by luck.
+ * @throws MissingCapabilityError when the session does not serve the capability
  */
-function toResourceLink(
-  node: Definition | Link | LinkReference,
-  text: string,
-  href: string,
-  nodeType: NonNullable<ResourceLink['nodeType']>,
-): ResourceLink {
-  return {
-    text,
-    href,
-    type: classifyLink(href),
-    ...(node.position !== undefined && { line: node.position.start.line }),
-    // The whole node's span — `[text](href)`, not the href alone. mdast gives a
-    // position for the construct and none for the href within it, and the wider
-    // span is the one a rewriter wants anyway: shortening a path usually means
-    // reconsidering the text beside it, and a caller that only wants the href
-    // has the raw source and the span to find it in.
-    //
-    // Spread on `start.offset` rather than on `position`, because the two are
-    // independently optional in mdast's own types: a node can carry a position
-    // whose offsets are absent, and reading `line` while silently defaulting an
-    // offset to 0 would put a rewrite at the top of the document.
-    ...(node.position?.start.offset !== undefined && node.position.end.offset !== undefined && {
-      startOffset: node.position.start.offset,
-      endOffset: node.position.end.offset,
-    }),
-    nodeType,
-  };
-}
-
-/**
- * Resolve the deferred `linkReference` nodes against the completed definitions
- * map, in document order.
- *
- * Invariant: every `linkReference` node reaching this point already has a
- * matching `definition` — CommonMark resolves link references at PARSE time,
- * so micromark only ever emits a `linkReference` node when a definition
- * matched. A reference with no matching definition never becomes a node at
- * all; it degrades to literal bracketed text in the AST (and in the rendered
- * document), which is exactly why an AST-based checker is structurally blind
- * to it. That dangling case is detected separately, by
- * `findUnresolvedReferences`'s raw-source scan (see `parseMarkdownContent` and
- * `unresolved-references.ts`), which reports it as
- * `LINK_UNRESOLVED_REFERENCE`.
- *
- * The `undefined` branch below is therefore NOT the dangling-reference case —
- * it is unreachable unless micromark's own parse-time contract breaks. It
- * degrades (skips the node) rather than throwing because `parseMarkdown` runs
- * over third-party markdown on the `vat audit` / `vat skills validate` paths:
- * a parser quirk must not abort a whole audit run (repo CLAUDE.md, "be liberal
- * in what you accept" for data we do not control).
- */
-function resolveLinkReferences(state: AstWalkState): ResourceLink[] {
-  const links: ResourceLink[] = [];
-  for (const node of state.linkReferenceNodes) {
-    const resolvedUrl = state.definitions.get(node.identifier);
-    if (resolvedUrl === undefined) continue;
-    links.push(toResourceLink(node, extractLinkText(node), resolvedUrl, 'linkReference'));
+function requireStructure(parser: MarkdownParser, session: { structure?: () => StructureFacts }): StructureFacts {
+  if (session.structure === undefined) {
+    throw new MissingCapabilityError(parser.name, 'structure');
   }
-  return links;
+  return session.structure();
 }
 
 /**
- * Extract text content from a link node.
+ * Slug and nest a flat heading list — the two GitHub conventions VAT owns.
  *
- * Delegates to `mdast-util-to-string` (the canonical mdast text-extraction
- * implementation) rather than a hand-rolled walker — it recurses through
- * container inline nodes (`strong`, `emphasis`, `delete`, nested links) the
- * same way the previous walker did.
+ * Kept out of the `structure` capability deliberately: `github-slugger`'s
+ * `-1`/`-2` suffixing and the parent/child nesting are conventions of the
+ * *renderer*, not facts about the markdown dialect, so asking an implementation
+ * for them would be asking it to reproduce something it has no reason to know.
  *
- * `includeImageAlt: false` is passed explicitly: the library's default is
- * `true` (fold image/imageReference `alt` text into the result), but the
- * hand-rolled walker it replaced silently dropped image alt text. This
- * option pins the behavior to match — swapping the implementation must not
- * silently change extracted text (and, for headings, anchor slugs — see
- * {@link extractHeadingText}).
+ * ⚠️ The slugger is stateful and MUST see headings in document order — that is
+ * how it reproduces GitHub's duplicate suffixing.
  *
- * @param node - Link or LinkReference node
- * @returns Text content of the link
+ * @param flatHeadings - Headings in document order, from the structure capability
+ * @returns Top-level headings with children nested beneath them
  */
-function extractLinkText(node: Link | LinkReference): string {
-  return mdastToString(node, { includeImageAlt: false });
+function toHeadingTree(flatHeadings: FlatHeading[]): HeadingNode[] {
+  const slugger = new GithubSlugger();
+  return buildHeadingTree(
+    flatHeadings.map((heading) => ({
+      level: heading.level,
+      text: heading.text,
+      slug: slugger.slug(heading.text),
+      // Absent beats undefined-valued: it is what makes a fresh `ParseResult`
+      // equal to its own JSON round trip, which a JSON-backed cache needs.
+      ...(heading.line !== undefined && { line: heading.line }),
+    })),
+  );
 }
-
-
-/** `id="…"` / `name="…"` attribute, single- or double-quoted. */
-const HTML_ANCHOR_ATTRIBUTE = /\b(?:id|name)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
-
-/**
- * Collect explicit fragment targets declared as raw HTML inside markdown.
- *
- * An author can write `<a id="short"></a>` above a long heading and link to
- * `#short`; GitHub renders that id into the DOM and the fragment resolves.
- * Indexing heading slugs alone therefore reports a working link as broken.
- *
- * Only mdast `html` nodes reach here, which is what keeps this honest: a
- * fenced block is a `code` node, an indented block is a `code` node, and a
- * backticked span is `inlineCode`, so an `<a id="…">` being *documented*
- * rather than *declared* is never indexed. That is the whole reason this
- * reads the AST instead of scanning raw source.
- *
- * Values are lowercased because markdown fragments are matched case-folded
- * (the heading-slug policy — see `fragmentIndexEntry`). That is marginally
- * more permissive than a browser, which compares ids exactly; erring toward
- * resolving is deliberate, since the cost of the other direction is a false
- * `LINK_BROKEN_ANCHOR` on a link that works.
- *
- * @param anchors - Accumulator; insertion order becomes the emitted order
- * @param node - A raw-HTML node encountered during the walk
- */
-function collectHtmlAnchors(anchors: Set<string>, node: Html): void {
-  for (const match of node.value.matchAll(HTML_ANCHOR_ATTRIBUTE)) {
-    const value = (match[1] ?? match[2] ?? '').trim();
-    if (value !== '') {
-      anchors.add(value.toLowerCase());
-    }
-  }
-}
-
-/**
- * Flatten one heading node, assigning its GitHub slug.
- *
- * `slugger` is stateful and MUST be fed headings in document order — that is
- * how it reproduces GitHub's `-1`/`-2` suffixing for repeated heading text.
- *
- * `line` is spread conditionally for the same reason, and with the same
- * caveat, as in {@link toResourceLink}: absent beats undefined-valued, and the
- * guard is defensive — remark always sets `position`, so it is unreachable in
- * practice and no test can falsify it.
- */
-function toFlatHeading(slugger: GithubSlugger, node: Heading): HeadingNode {
-  const text = extractHeadingText(node);
-  return {
-    level: node.depth,
-    text,
-    slug: slugger.slug(text),
-    ...(node.position !== undefined && { line: node.position.start.line }),
-  };
-}
-
-/**
- * Extract text content from a heading node.
- *
- * Uses `mdast-util-to-string` (see {@link extractLinkText}) so that styled
- * headings — e.g. `### **CRITICAL: ...**` — produce the same text (and
- * therefore the same GitHub slug) as their plain-text equivalents. Without
- * recursing into container inline nodes, bold/italic headings would yield
- * empty text and bogus slugs, causing false LINK_BROKEN_ANCHOR errors for
- * links targeting them.
- *
- * `includeImageAlt: false` (see {@link extractLinkText}) preserves the prior
- * hand-rolled walker's behavior of dropping image alt text from heading
- * text — and therefore from the slug fed to `github-slugger`. Whether GitHub
- * (or other renderers) actually includes image alt text when computing a
- * heading's anchor is NOT verified here; this is a deliberate
- * behavior-preservation choice, not a claim about renderer behavior. If a
- * renderer is later confirmed to include alt text in anchors, switching
- * `includeImageAlt` to `true` is a separate, deliberate change with its own
- * anchor-validation consequences (it would change slugs for every heading
- * containing an image) — do not flip it based on assumption alone.
- *
- * @param node - Heading node
- * @returns Text content of the heading
- */
-function extractHeadingText(node: Heading): string {
-  return mdastToString(node, { includeImageAlt: false });
-}
-
 
 /**
  * Build a nested heading tree from a flat list of headings.
@@ -775,37 +440,5 @@ function cleanupEmptyChildren(headings: HeadingNode[]): void {
     } else if (heading.children && heading.children.length > 0) {
       cleanupEmptyChildren(heading.children);
     }
-  }
-}
-
-
-/**
- * Record one frontmatter block on the walk state.
- *
- * `remark-frontmatter` emits a `yaml` node per frontmatter block, and it
- * recognises frontmatter **only at the start of the document** — a later `---`
- * fence is a thematic break, not a second block — so at most one such node is
- * reachable here (verified by probe). Nothing in this function relies on that:
- * each of the three fields independently keeps the last node that contributed
- * to it, so a block that fails to parse leaves a previously parsed object in
- * place, and vice versa. `frontmatterSource` follows the same rule and is set
- * for **every** node, including an empty one — the source is what was there,
- * regardless of what YAML made of it.
- *
- * The parse decision itself is {@link parseFrontmatterSource}'s, not this
- * function's, so a cache rebuilding a hit reaches the identical logic.
- *
- * @param state - Walk state to record the result on
- * @param node - A `yaml` frontmatter node encountered during the walk
- */
-function collectFrontmatter(state: AstWalkState, node: Yaml): void {
-  state.frontmatterSource = node.value;
-
-  const { frontmatter, frontmatterError } = parseFrontmatterSource(node.value);
-  if (frontmatter !== undefined) {
-    state.frontmatter = frontmatter;
-  }
-  if (frontmatterError !== undefined) {
-    state.frontmatterError = frontmatterError;
   }
 }

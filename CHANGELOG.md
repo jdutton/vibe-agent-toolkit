@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- **VAT's markdown parser is now three named capabilities behind an interface, and the two range
+  consumers no longer take an mdast tree.** `@vibe-agent-toolkit/resources` exports
+  `codeContextRangesFrom(spans)` where it exported `collectCodeContextRanges(tree)`, and
+  `findUnresolvedReferences(content, spans)` replaces `findUnresolvedReferences(content, tree)`.
+  Both now take the flat `SourceSpan[]` a parse reports rather than a `Root`, so neither is bound to
+  remark.
+
+  **Migration:** get spans from the capability instead of parsing to a tree —
+  `openRemarkSession(content).spansAndKinds().spans`. The `mdast` types disappear from both call
+  sites.
+
+  **What the three capabilities are** (`parse-capabilities.ts`, all newly exported from the barrel
+  as types plus one error class, so nothing heavy joins its module graph):
+
+  | Capability | Yields | Owes `ParseFacts` |
+  |---|---|---|
+  | `spans-and-kinds` | `links`, `anchors`, `frontmatterSource`, a flat `SourceSpan[]` | those three fields |
+  | `structure` | flat, **unslugged** headings | `headings`, after the composer slugs and nests them |
+  | `faithful-edit` | nothing — it is a claim that the reported offsets can be spliced at | nothing |
+
+  `parseMarkdownContent(content, sizeBytes, parser?)` takes the implementation as a third
+  parameter; the default is remark, which remains the only one VAT ships.
+
+  **Behaviour is unchanged and that was the constraint, not the hope** — 2,739 `resources` unit
+  tests pass untouched. Internally the three separate walks of the same tree (`collectAstFacts`,
+  `collectCodeContextRanges`, the dangling-reference mask) became one, and the latter two became
+  pure filters. ⛔ No performance claim is made for that: tokenizing is 74–76% of `remark-parse` and
+  every capability needs it, so the split buys **swappability, not speed**.
+
 - **The `@vibe-agent-toolkit/utils` `.` barrel no longer reaches any third-party package.**
   Forty-nine runtime exports moved off it onto the subpaths that own them. Nothing in this group
   left the package and nothing was renamed — the modules are where they always were, and four of
@@ -189,6 +218,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `availableParallelism() - 1` rule meet, so nothing here separates the width from the platform.
 
 ### Added
+
+- **A conformance suite over `ParseFacts`, and a second parser to run through it.**
+  `@vibe-agent-toolkit/resources/parse-conformance` (a new subpath, kept off the barrel because it
+  reaches the parser) diffs two implementations field by field and reports three kinds of finding —
+  `missing-capability` (it cannot answer), `span-fidelity` (its offsets cannot be spliced at) and
+  `facts-differ` (it answered, differently) — because those call for different responses. Without a
+  whole-corpus facts diff you cannot tell *faster* from *differently wrong*, and differently-wrong
+  ships silently.
+
+  ⛔ **There is no `CONFORMANCE_VERSION` and there must never be one.** A report carries
+  `parseFactsShapeSource()`, so it declares the fact shape it was taken against and moves when the
+  schema moves, with nobody remembering to bump anything.
+
+  `markdown-it` enters as a **test-only implementation** in `dev-tools`, built from the same
+  `createMarkdownItProcessor()` the bake-off times so the fidelity verdict and the 10.62× speed
+  verdict are about one parser. It is not a proposal to switch: a single-implementation interface is
+  a claim nobody has tested, and this is what falsifies it. 🔑 The measured result — it places
+  **one** span in a document holding seven span-bearing constructs, because only block tokens carry
+  a position — and seven `ParseFacts` fields diverge, including frontmatter parsed as a setext
+  heading. 🪤 Also recorded: the suite's span checks found *nothing*, because every span
+  `markdown-it` emits begins a line; the unit mismatch surfaced as a one-code-unit
+  `contentMeasures` drift instead. The fact diff is the instrument that discriminates.
 
 - **`docs/architecture/parsers-and-load-boundaries.md`** — the intended architecture for VAT's parse
   layer and for what any package barrel is allowed to load. Two halves of one idea: VAT needs three

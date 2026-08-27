@@ -14,6 +14,10 @@
       "types": "./dist/markdown-processor.d.ts",
       "default": "./dist/markdown-processor.js"
     },
+    "./parse-conformance": {
+      "types": "./dist/parse-conformance.d.ts",
+      "default": "./dist/parse-conformance.js"
+    },
     "./schemas/*": "./schemas/*"
   },
   "files": [
