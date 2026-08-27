@@ -166,8 +166,8 @@ when you only wanted spans"* saves 24–26% × 64% = **15.4–16.6% of cold wall
 ceiling** — and less on Windows. That is the identical dead end that killed driving micromark
 directly.
 
-The measured `markdown-it` ratio — 13.7–13.8× on parse, 9.0–9.3× on the whole composer (§3) — is a
-**different tokenizer**, not a skipped tree.
+The `markdown-it` ratio (§3) is a **different tokenizer**, not a skipped tree — which is why it is
+not a counter-example to the ceiling above, and equally why it is not a reason to swap.
 
 > The split does not make VAT fast. It makes VAT **swappable**, and swappable is what puts a faster
 > tokenizer within reach. They compose in that order and only that order.
@@ -280,31 +280,30 @@ what VAT's own derivations conclude — and the last thing it changes is what a 
 
 ### The speed number, at the stage that decides
 
-`parser-bakeoff.ts` takes two stages. Both on this repository, 188 documents / 2.72 MB, minimum of
-six passes across two processes per arm, **both stages measured in the same session** — see the
-warning below for why that qualifier is load-bearing:
+⛔ **No number is quoted here, deliberately.** `markdown-it` is roughly an order of magnitude faster
+than `remark-parse` on this repository, and **it does not matter** — it fails `spans-and-kinds`,
+which every `resources` consumer depends on, so this is the speed of something VAT will never ship.
+A precise figure in a durable document is a figure someone greps later and re-opens a settled
+question with. Run `bun run bakeoff:parsers . --stage parse|facts` if you need one; it prints its own
+corpus and pass count.
 
-| Stage | What it includes | remark / markdown-it |
-|---|---|---|
-| `parse` | the parser's own output — mdast tree vs token array | **13.7–13.8×** |
-| `facts` | the whole composer: capability adapter and VAT's derivations | **9.0–9.3×** |
+Two things about the *shape* of the measurement do generalise, and they are the reason the flag
+exists at all:
 
-**The capability adapter is real and it is asymmetric.** It costs remark 8–11% of its parse time and
-`markdown-it` **64–67%** of its, because mdast tree walking is the expensive half of remark's total
-and a flat token walk is cheap — so the work of turning a parse into `ParseFacts` lands almost
-entirely on the cheaper arm. Quoting a parse-stage ratio therefore overstates what a swap buys by
-**about a third**.
+- **The capability adapter is real and asymmetric.** Turning a parse into `ParseFacts` costs remark
+  under a sixth of its parse time and `markdown-it` roughly two thirds of its, because mdast tree
+  walking is the expensive half of remark's total and a flat token walk is cheap. **A parse-stage
+  ratio is not what a swap buys** — always re-run with `--stage facts` before quoting one.
+- 🔑 **That gap widened as fidelity was fixed.** The adapter's share of `markdown-it`'s time was
+  markedly lower while it was getting four things wrong — the fence in a container, the CRLF
+  terminator, the frontmatter source, the heading flattener. Anchoring a span at its opener and
+  reading frontmatter from source are per-construct scans the earlier adapter simply did not do. **A
+  rival's speed advantage is measured against the fidelity it is actually delivering, and the
+  cheapest way to look fast is to answer a slightly different question.**
 
-🔑 That gap widened as fidelity was fixed, and the causation is the point. The adapter's share of
-`markdown-it`'s time was 42% when it was getting four things wrong — the fence in a container, the
-CRLF terminator, the frontmatter source, the heading flattener. Anchoring a span at its opener and
-reading the frontmatter out of the source are per-construct scans the earlier adapter simply did not
-do. **A rival's speed advantage is measured against the fidelity it is actually delivering, and the
-cheapest way to look fast is to answer a slightly different question.**
-
-⚠️ Compare stages only within one session. The parse-stage ratio measured 12.6× in an earlier
-session and 13.7–13.8× here with **no change to the parser or its configuration** — a ~9% swing that
-is entirely the host. The stage-to-stage *difference* is the finding; neither absolute number is.
+⚠️ And compare stages only within one session: the parse-stage ratio moved ~9% between two sessions
+with **no change to the parser or its configuration**. The stage-to-stage *difference* is the
+finding; no absolute number is.
 
 ⛔ Neither number is a reason to swap. §1 is: the offsets are the contract, and this rival does not
 have them.

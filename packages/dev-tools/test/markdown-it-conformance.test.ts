@@ -4,11 +4,15 @@
  * ## What a failure here means
  *
  * ⛔ Not "markdown-it is broken", and ⛔ not "VAT should switch". This file pins
- * the *shape* of the disagreement so that it is evidence rather than opinion:
- * `markdown-it` is several times faster on VAT's corpus, and the only thing
- * that decides whether that number is reachable is which facts it can and
- * cannot supply. The suite answers that; this test records the answer and goes
- * red if it moves.
+ * the *shape* of the disagreement so that it is evidence rather than opinion.
+ * `markdown-it` is substantially faster on VAT's corpus and that decides
+ * nothing: the only question is which facts it can and cannot supply, and it
+ * cannot supply the ones every `resources` consumer depends on. The suite
+ * answers that; this test records the answer and goes red if it moves.
+ *
+ * ⛔ No speed figure appears here or anywhere durable. A number in a comment is a
+ * number someone greps later and re-opens a settled question with —
+ * `bun run bakeoff:parsers` prints a fresh one whenever it is genuinely wanted.
  *
  * ## 🚩 Most of these assertions guard the ADAPTER, not the parser
  *
