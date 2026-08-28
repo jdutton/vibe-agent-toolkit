@@ -9,710 +9,186 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
-- **The `@vibe-agent-toolkit/utils` `.` barrel no longer reaches any third-party package.**
-  Forty-nine runtime exports moved off it onto the subpaths that own them. Nothing in this group
-  left the package and nothing was renamed — the modules are where they always were, and four of
-  the five entries already existed with zero consumers. (`renderTemplate` left the package
-  outright; it has its own entry below.)
-
-  | Moved to | Symbols |
-  |---|---|
-  | `@vibe-agent-toolkit/utils/crawl` | `crawlDirectory`, `crawlDirectorySync`, `crawlPathFilter`, `NEVER_CRAWL_GLOBS`, `BUILD_OUTPUT_GLOBS` |
-  | `@vibe-agent-toolkit/utils/git` | `runGit`, `runGitOrThrow`, `gitFindRoot`, `gitLsFiles`, `gitLsOthers`, `isGitIgnored`, `loadGitignoreRules`, `GitTracker`, `gitTreeSnapshot`, `peekGitTreeSnapshot`, `withGitSnapshotCache`, `parseGitUrl`, `isGitUrl`, `nonInteractiveGitOverrides` |
-  | `@vibe-agent-toolkit/utils/process` | `safeExecSync`, `safeExecResult`, `safeExecFromString`, `isToolAvailable`, `getToolVersion`, `hasShellSyntax`, `CommandExecutionError`, `spawnHardened`, `shouldUseShell`, `windowsShellQuote`, `buildWindowsShellLine`, `resolveShellCommandToken`, `isPathLike`, `makeStdioBlocking`, `describeStdioBlocking` |
-  | `@vibe-agent-toolkit/utils/skill-test` **(new entry)** | `spawnHeadlessClaude`, `assembleClaudeArgs`, `killAllActiveClaudeChildren`, `resolveAuth`, `probeAuthStatus`, `AuthPreflightError`, `applyDeclaredEnv`, `buildForwardedEnv`, `formatForwardedEnvLine`, `isProtectedName`, `protectedEnvNames`, `parseStreamJsonTranscript`, `detectInvocationFromTranscript` |
-  | `@vibe-agent-toolkit/utils/yaml` | `updateYamlIn`, `verifyConfinedYamlEdit` |
-
-  **Migration: change the specifier, not the name.** `runGit`, `runGitOrThrow` and
-  `peekGitTreeSnapshot` had no subpath route before and now export from `./git`, which is also the
-  only published route to `runGit` — `safeExecSync`/`safeExecResult` refuse the `git` binary and
-  point there, so a caller gets the scrubbed environment by construction.
-
-  **Why, and why it is not a preference.** The barrel has ~245 in-repo importers plus published
-  adopters, and each paid for the whole graph reachable from it: importing `safePath` required
-  `handlebars`, `yaml`, `picomatch`, `ignore`, `which` and `@vibe-validate/git` to be installable.
-  A bundler that cannot tree-shake one of those — a CJS package, or an asset reached through
-  `new URL(..., import.meta.url)` — inlines it into every consumer. The rule is now enforced rather
-  than stated: `subpath-purity.test.ts` asserts the barrel's third-party set is `[]` by equality, so
-  a dependency arriving at any depth reddens it and the fix is a new entry, not a longer allowed
-  list. That is strictly stronger than an approved-list, which any addition satisfies.
-
-  `./skill-test` is the new entry and the least obvious one. It declares no dependency of its own —
-  it is a subpath because of what it *reaches*: spawning a headless agent goes through `./process`,
-  which costs `which` and `@vibe-validate/git`. Reachability is the criterion, not the import a
-  module happens to write.
-
-  **Adopter impact worth naming.** A consumer that re-exports the barrel wholesale
-  (`export * from '@vibe-agent-toolkit/utils'`) and reaches `safeExecSync` or `crawlDirectorySync`
-  through it will lose those names. The fix is two re-export lines from `./process` and `./crawl` —
-  the same pattern such a module already uses for the subpaths it wraps. Wrapping subpaths rather
-  than the barrel is the supported shape; wrapping the barrel was always how the narrowing got lost.
-
-  This completes the trim the `linkAuth` move below started: that change closed the `macros.yaml`
-  bundle defect but left the barrel's dependency *set* intact, because `yaml`, `picomatch` and
-  `which` each kept another route. Those routes are what moved here.
-
-- **`@vibe-agent-toolkit/utils/template` is removed. `renderTemplate` moved into
-  `@vibe-agent-toolkit/resources` as the internal `renderHandlebarsTemplate`, and `handlebars` is no
-  longer a dependency of `utils`.** The subpath quarantined a 239KB template engine so that importing a path
-  helper never paid for it — but the engine had exactly one caller anywhere, `content-transform.ts`
-  inside `resources`, and a quarantine wing with one occupant is just a wall in the wrong place.
-  Moving the function to its caller takes `handlebars` out of the `utils` dependency list entirely
-  (six packages to five), which is a stronger result than any subpath: a dependency an adopter
-  cannot reach still has to resolve at install time, and this one no longer has to.
-
-  The rename is not cosmetic. `resources` already contained a `renderTemplate` — the linkAuth
-  rewrite renderer, a `${...}` substituter with a closed transform whitelist, deliberately unable
-  to evaluate an expression. Two functions with one name in one package, one of which compiles
-  arbitrary Handlebars, is a security-relevant confusion waiting on an autocomplete. The Handlebars
-  one carries the engine in its name; the linkAuth one keeps `renderTemplate` and stays unexported.
-
-  **It is deliberately not re-exported.** `resources` renders the `template` strings an adopter
-  supplies to `transformContent`; no caller outside VAT ever needed to invoke the renderer itself,
-  and re-publishing it would put a wrapper over `Handlebars.compile(t, { noEscape: true })` back on
-  a public surface for nobody. **Migration:** an adopter that was importing
-  `@vibe-agent-toolkit/utils/template` depends on `handlebars` directly — the function it loses is
-  a cached compile with HTML escaping off, and owning those two lines is better than importing a
-  toolkit for them.
-
-- **The `linkAuth` engine moved from `@vibe-agent-toolkit/utils` to `@vibe-agent-toolkit/resources`,
-  where the rest of the domain already lived.** Half of linkAuth — the config bridge, the content
-  fetch, the classifier, the transport, the Zod schema — was already in `resources`; only the pure
-  engine primitives were stranded in `utils`, and the `utils` barrel dragged them into every
-  consumer via a wildcard re-export. That is how a dangling `./macros.yaml` reference reached
-  adopter bundles: the barrel pulled in a module that reads a YAML asset at runtime, whether or not
-  the adopter had ever configured a provider.
-
-  `resolveAuthenticatedUrl`, `expandMacro`, `UnknownMacroError`, `defaultRunCommand`, and the types
-  `LinkAuthConfig`, `Provider`, `ProviderAuth`, `ProviderCheck`, `ResolveOutcome`, `ProviderMatch`,
-  `RewriteRule` and `TokenSource` are now exported from `@vibe-agent-toolkit/resources` and no
-  longer from `@vibe-agent-toolkit/utils`. Migration: change the package in the import. Nothing was
-  renamed, and no shim is left behind (pre-1.0).
-
-  `macros.yaml` moved with it, so `copy-yaml-assets` now runs in the `resources` build rather than
-  the `utils` build — `utils` ships no YAML asset at all. The engine's one cross-package dependency,
-  `safeExecResult`, is imported from the `@vibe-agent-toolkit/utils/process` subpath rather than the
-  bare barrel, which is the direction the whole move serves. `utils` keeps `yaml`, `picomatch` and
-  `which` as dependencies: each has other routes (`yaml/surgical-yaml.ts`, `file-crawler.ts`,
-  `safe-exec.ts` / `spawn-hardened.ts`), and `subpath-purity.test.ts` confirms the barrel's
-  third-party reach is unchanged.
-
-### Fixed
-
-- **The settings audit crashed on a valid Claude Code settings file that used a permission mode
-  newer than this build.** `permissions.defaultMode` was a closed `z.enum` of six values, and
-  `settings-reader.ts` throws rather than degrades on a validation failure — so a settings file
-  containing `"defaultMode": "plan"` or `"defaultMode": "auto"`, both of which Claude Code itself
-  accepts, took out the entire settings audit with `Invalid settings file`. Reproduced end-to-end
-  before the fix and confirmed gone after.
-
-  `defaultMode` is now `z.string()`. It is deliberately **not** a longer list of known modes with a
-  warning for the rest: that is the same promise in a softer voice, it goes stale the same way, and
-  nothing fails when someone forgets to extend it. Claude Code owns this vocabulary and extends it;
-  reading someone else's file is the liberal half of Postel's Law, per
-  `.claude/rules/schema-strictness.md`. A non-string is still rejected — that is a malformed file
-  rather than a mode we have not met. Downstream consumers already typed the value as a plain
-  string, so nothing else changed.
-
-- **Four lab and dev-tools checks were reporting a confidence they had not earned**, and they land
-  together because each is the same defect in different clothes.
-
-  A facet's caveat reached the manual verb and not the automated one: `parse` computed a
-  thread-width caveat for exactly the pool-on/pool-off pair `ab` is pointed at, but stored it inside
-  a parse-shaped verdict only `parse compare` knew how to read. `ab`, handed identical data, said
-  nothing. The channel now runs through the shared harness — `CommandDiff` carries an opaque
-  `caveat` that `ab` prints without knowing what a `parse` caveat means versus an `io` one, so every
-  facet gains it and opts in when it has something to qualify.
-
-  `renderAb`'s effect line was blind to `command.stable`, so an unstable row printed
-  `⚠ PAIRS DISAGREE` and then, as the last line a reader sees, a confident "exceeds the supplied
-  noise floor" — an honest refusal and a confident claim in one report, with the claim last. An
-  unstable row now keeps its magnitude and loses the verdict on it.
-
-  The adopter-name gate could not see a new file's first commit: its population was `git ls-files`,
-  which answers "what have we published?" while the gate asks "what are we about to publish?". This
-  repo validates once on a batched tree and commits at the end, so every new file is untracked at
-  the moment the gate runs. It now scans tracked plus untracked-not-ignored, and ignored files stay
-  out deliberately — the token list is conventionally a gitignored file, and sweeping ignored paths
-  would report the list of secrets as a leak of them.
-
-- **`vat validate`, `vat verify` and `vat build` no longer document a process boundary they do not
-  have.** Phases run in this process; the help text still described them as subprocesses, and that
-  was not a wording problem. `vat validate --help` promised a per-surface `signal` and `spawn error`
-  beside `exitCode` — `PhaseResult` carries neither, so a CI gate written against those fields was
-  reading fields the document never had. All three commands also listed exit-2 causes that the
-  in-process seam retired rather than handles: a phase can no longer be killed by a signal without
-  taking the orchestrator with it, exit without a status code, or write a document that fails to
-  parse. Exit 2 now says what it means — the phase exited 2, or reported `system-error` for itself.
-
-  `vat verify` gains vocabulary for the distinction that IS real, since "in-process" no longer
-  separates anything: phases 1–3 are **delegated** to a whole `vat` command and nest that command's
-  own report under `report`; 4–6 are **verify's own** and publish `issueCounts` directly.
-
-  Guarded by `phase-boundary-vocabulary.test.ts`, which renders each command's help the way a user
-  reads it and refuses the vocabulary of a boundary that is gone. It asserts the phase names are
-  still present too — a help block that got emptied would satisfy every "does not say" assertion.
-
-### Changed
-
-- **The parse pool is sized from parsable BYTES, not from a document count**, and its default width
-  caps at **4** instead of 8.
-
-  A document was never a unit of parse work, and two measurements say so. `remark-parse` costs
-  roughly **24x per byte** what `parse5` costs, so an HTML corpus is nearly free and a markdown one
-  is not — at width 3 the pool HALVES a 30 MB markdown adopter's cold wall clock and COSTS 5.5% on a
-  145-document HTML-heavy tree. And size varies as widely as kind: 300 stub READMEs and 300 manuals
-  are the same count and two orders of magnitude apart. `DOCUMENTS_PER_WORKER = 128` charged all of
-  them the same.
-
-  The replacement prices what is left in serial parse milliseconds — markdown at a measured
-  370 ms/MB, HTML at 42 — and buys a worker per ~1,000 ms of it, that being one worker's share of the
-  723 ms fixed cost at the two-worker break-even the model puts at P ≈ 1,983 ms.
-
-  **Neither crawl lane can supply those bytes, and that is a finding rather than a detail.**
-  `crawlDirectory` returns paths, `readdir` gives dirents without sizes, and the projection's
-  `resource_realizations` table has no size column; the registry learns a file's size from the
-  `stat` inside its own admission, long after the target has been claimed. Asking the filesystem
-  would mean an O(remaining) `stat` storm on the main thread at exactly the moment the run is trying
-  to get faster — 1,777 of them on the measured adopter, to answer one question once. So the
-  remainder is priced from the sample the run has already read: every document's kind and byte length
-  is recorded as it passes through the dispatcher, and by the time the miss threshold is reached that
-  is a mean worth projecting onto a count the lanes CAN supply for free. The estimate is also
-  discounted by the run's own cache hit rate, so a warm run that clears the threshold honestly and
-  has almost nothing left to parse no longer buys threads for work the cache is about to answer.
-
-  The width cap moves to 4 because that is where the measured curve knees: against a 261 ms noise
-  floor, 3 -> 4 buys a real 528 ms (2.0x the floor) and 4 -> 8 buys 83 ms (0.3x it, indistinguishable).
-  Width 1 is a **loss** of 723 ms — the pool's whole fixed cost, bought and unused.
-
-  ⚠️ Every figure above was taken on a 10-core Mac. On a 4-core box the cap and the
-  `availableParallelism() - 1` rule meet, so nothing here separates the width from the platform.
-
-### Added
-
-- **`docs/architecture/parsers-and-load-boundaries.md`** — the intended architecture for VAT's parse
-  layer and for what any package barrel is allowed to load. Two halves of one idea: VAT needs three
-  parse *capabilities* (spans-and-kinds, structure, faithful edit) rather than one parser, and
-  nothing heavy — parser, store, or runtime, `node:sqlite` included — may sit in a barrel's static
-  module graph.
-
-  It records what was already true and never named: the parse cache forced a parser-independent fact
-  contract into existence (`ParseFactsSchema`), so a warm run rebuilds a full `ParseResult` without
-  loading the **markdown** parser. It also states the distinction that keeps being lost — **a lazy
-  import defers evaluation, never installation** — and the measured cold cost of every barrel that
-  currently violates the rule, so nobody mistakes the smallest boundary for the largest.
-
-  ⛔ It kills the performance argument for the capability split: tokenizing is 74–76% of
-  `remark-parse` and all three capabilities need it, so skipping tree building caps at a 1.18×–1.20×
-  ceiling. The split buys swappability, not speed.
-
-- **`remark-parse` can be divided into tokenizing and tree building**, via `VAT_PARSE_TIMING_SPLIT`
-  (`before` or `after`), off by default. `remark-parse` is the largest row the parse-timing seam
-  reports — 83% of attributed parse time on a large adopter — and it was opaque, while two very
-  different follow-ons depended on which half of it was expensive.
-
-  There is no way to observe the tokenize inside `processor.parse` without replacing it, so the
-  probe runs micromark a SECOND time over the same content and charges one measured row,
-  `micromark-tokenize`. Tree building is that row subtracted from `remark-parse` — a subtraction a
-  reader performs, never a row this seam publishes, because `mdast-util-from-markdown` does not
-  export `compiler`. The gate names an ORDER rather than taking a boolean: the redundant run is
-  biased by whichever tokenize goes second, so running it BEFORE makes the derived tree-build figure
-  a lower bound and AFTER makes it an upper one. Both readings bracket the answer.
-
-  The answer, on a clean box with both orders agreeing within 1.0pp: **tokenizing is ~74% of
-  `remark-parse`, tree building ~26%.**
-
-- **`bun run bakeoff:parsers` times a rival markdown parser against VAT's own**, on the corpus VAT
-  actually parses rather than on a synthetic document. The plugin chain moves to one definition,
-  `createMarkdownProcessor` in `packages/resources/src/markdown-processor.ts`, imported by all three
-  call sites that need it — the parser, the split probe, and the bake-off. A rival benchmarked
-  against a processor missing a plugin is a rival that was handed less work to do, and the resulting
-  ratio is wrong in the direction that flatters the challenger.
-
-  ⛔ `createMarkdownProcessor` is deliberately NOT re-exported from the package barrel: it reaches
-  remark statically, and the barrel is loaded by commands that must never pay for a parser.
-  Consumers that want it import the `./markdown-processor` subpath.
-
-- **The preparation look-ahead is reachable from the environment**, as `VAT_PARSE_LOOK_AHEAD`, with
-  `ParsePoolPolicy.lookAhead` beating it. `PREPARATION_LOOK_AHEAD = 4` bounds how far document
-  preparation may run ahead of in-order emission, as a multiple of the pool width — too small and a
-  slow document at the head starves the workers, too large and one slow document buffers the whole
-  corpus's parse facts in memory. Its own docstring called the value provisional and the A/B that
-  would settle it "the next step", but a module constant is precisely what an experiment arm cannot
-  vary, so the sweep could never be run. It is now the default rather than the value, and
-  `driveInOrder` reads the distance off the window instead of off the constant.
-
-- **The parse pool's `size` and `missThreshold` are reachable from the environment**, as
-  `VAT_PARSE_POOL_SIZE` and `VAT_PARSE_POOL_MIN_MISSES`. `ParsePoolPolicy` documents its knobs as
-  things to be MEASURED rather than guessed at, but two of the four could only be set
-  programmatically — so the lab, which measures by spawning the binary and controlling its
-  environment, could not vary them at all.
-
-  `size` matters most: sized from the local core count, a 10-core machine runs 4 workers and a
-  4-core machine runs 3, so a cross-machine comparison confounds pool width with platform and
-  neither reading can be attributed. Pinning the width is what makes two machines comparable.
-
-  An explicit policy value beats the environment for both, so a caller that has already decided
-  cannot be overridden by an ambient variable it never saw. A value that is not a positive whole
-  number is ignored rather than coerced — a pool of `NaN` workers is unusable rather than small, and
-  a `NaN` threshold compares false against every count so the pool would never activate, both
-  failing far from the typo that caused them.
-
-- **`vat-lab <facet> ab` can vary CONFIGURATION as well as build**, via repeatable `--env-a
-  <KEY=VALUE>` / `--env-b <KEY=VALUE>`. Passing the same instrument to both arms measures one build
-  in two settings — `VAT_PARSE_POOL=1` against the default, a pool width, a transport choice — with
-  the interleaving, min estimator and per-pair verdicts the verb already provides. Previously the
-  only axis an A/B could express was which build ran, so a setting had to be measured as two
-  un-interleaved captures, giving up the alternation that controls for machine drift.
-
-  The report DISCLOSES each arm's config (`Config A:` / `Config B:`) whenever either arm sets one.
-  That is load-bearing rather than cosmetic: measuring one build twice makes both instrument labels
-  identical, so the config is the only visible axis and an effect printed without it is a number the
-  reader cannot attribute to anything.
-
-### Fixed
-
-- **`vat-lab <facet> ab --control` now refuses two arms carrying different environments.** A control
-  run guarantees one instrument by construction — the same resolved object is handed to both arms —
-  but per-arm environment was added afterwards and that guarantee was never extended to cover it.
-  `--control --env-b VAT_PARSE_POOL=1` therefore measured a real configuration effect and published
-  it as the machine's noise floor. That is worse than a single wrong number, because the floor is
-  what every later run is judged against, so one bad control silently reclassifies real effects as
-  indistinguishable from noise thereafter. Identical environments on both arms remain allowed, since
-  pinning a configuration is how a floor gets measured in the regime the real A/B will run in. The
-  rendered design line stops under-claiming too: it now reads "same instrument, same configuration".
-
-### Changed
-
-- **The parse-timing seam writes ONE dump per process, carrying every thread.** A parse worker used
-  to write its own file from its own `process.on('exit')` listener; it now hands its counters back
-  over the pool's existing message channel when asked to shut down, and the main thread writes the
-  only file.
-
-  The dump gains a `threads[]` array and loses its top-level `threadId`, `cache`, `kinds` and
-  `tier`, which move inside it. `process.uptime()` and `process.cpuUsage()` are the PROCESS's, so
-  one writer means one lifetime reading where N files meant N copies of it — a reader summing those
-  inflated wall and CPU by exactly the pool's width, which reads as a performance regression of that
-  factor. Thread structure is now a field rather than something inferred from a file count.
-
-  Two smaller consequences: a worker's numbers are safe as soon as it *answers* the shutdown rather
-  than when it exits, so a thread taken by `terminate()` after the graceful-close timeout no longer
-  loses everything it measured; and there is no longer a filename for N threads of one process to
-  race for.
-
-  `vat-lab`'s `parse` facet reads the new shape. Its published `dumps` and `mainThreadDumps` are
-  replaced by `processes`, `mainThreads` and `workerThreads` — so worker utilization
-  (`worker-job` elapsed ÷ wall ÷ workers) no longer needs a subtraction — and stored `parse` reports
-  written before this change are refused by the body schema rather than misread.
-
-- **`vat validate`, `vat verify` and `vat build` no longer spawn a child process per phase.** Their
-  phases run in the orchestrator's own process.
-
-  Measured on a 103-skill adopter monorepo, `vat validate` cold with the parse pool off, five
-  interleaved A/B pairs against a measured 182 ms noise floor: **17,024.7 ms → 16,032.9 ms on the
-  min estimator (−5.8%)**, mean −6.8%, with the in-process build faster in all five pairs. The
-  `parse` facet corroborates the structural claim directly — `processes` 3 → 1 over an identical
-  1,799 documents, for 4.2% and 15.2% less CPU across two pairs.
-
-  Nobody had chosen the child process. It arrived incidentally in the marketplace-distribution
-  feature commit with no rationale in any commit, ADR or docstring, and it bought exactly two things
-  the orchestrator ever read: a per-phase exit code, and a per-phase captured stdout document. Both
-  are now returned as values — a phase hands back `{ document, exitCode }` instead of printing and
-  exiting — so nothing an orchestrator consumed was lost.
-
-  What it cost was paid on every phase: a full Node startup, the whole module graph again (~730 ms of
-  remark per isolate), a fresh parse cache whose miss counters restarted from zero, and a fresh
-  worker pool built and torn down before the next phase began — because phases run sequentially, so
-  those pools never overlapped. A `vat validate` was three Node processes; it is one.
-
-  Three failure modes disappear with the process boundary rather than being handled: a phase can no
-  longer be killed by a signal, exit without a status code, or write a document that fails to parse.
-  `MAX_PHASE_STDOUT_BYTES` (256 MiB) went with them — it existed only because `spawnSync`'s 1 MB
-  default silently TRUNCATED a ~2.3 MB real report into an unparseable one.
-
-  Two behaviours are deliberately preserved and worth stating, because both were easy to lose:
-  `vat skills build`'s published document keeps `skillsWithErrors` as a COUNT with the names under
-  `skillsWithErrorNames` (the summary object it is built from spells that field as an array, and
-  returning the summary would have flipped the type silently); and an unexpected failure still
-  publishes the shared `{status, error, duration}` envelope through the same writer as before.
-
-  One user-visible ordering change: `vat skills validate` and `vat skills build` now write their
-  stdout summary AFTER their stderr findings rather than before, which is what every other command in
-  the CLI already did.
-
-- **New ESLint rule `no-process-exit-in-phase`** (in `@vibe-agent-toolkit/utils/eslint`, not in
-  `configs.recommended` — it keys on VAT's `…Phase` naming convention). In-process, a `process.exit()`
-  inside a phase ends the WHOLE run, silently skipping every later phase and the orchestrator's own
-  aggregation. That was survivable while phases were child processes and is not now, and no type can
-  catch it. The twelve such calls the five phase commands held are gone.
-
-### Added
-
-- **`vat resources validate` can finally use the parse pool.** It is the parse-heaviest command VAT
-  ships — roughly twice the wall clock of `vat claude context`, ~70% of it in parsing — and its lane
-  spawned *zero* workers no matter how the pool was configured, because `ResourceRegistry` called the
-  parser directly and admitted files in a strictly sequential loop. So no pool change was measurable
-  on the one command that most needed it.
-
-  Fixing it was not "add a pool": that loop's docstring justified itself with *"Sequential execution
-  ensures deterministic duplicate ID detection"*, and that constraint is real. It is now discharged
-  the way the projection lane already discharges it — reading and parsing happen concurrently in a
-  half that decides everything and mutates nothing, and every mutation happens afterwards in input
-  order. Three guarantees rest on that and only the first is loud when it breaks: first-added wins on
-  a duplicate id, the unreadable/collision findings stay in attempt order, and the 1:many `byName` /
-  `byChecksum` indexes stay in corpus order rather than becoming machine-dependent.
-
-  `ResourceRegistryOptions.parsePool` accepts the same policy the projection lane takes. With the
-  pool off — still the default — the width is 1 and the lane behaves exactly as the old loop did.
-
-- **The parse-timing seam can now see the parse TIER, not just the parsers.** A new top-level `tier`
-  section in the dump — beside `kinds`, never inside it — brackets the eight things that happen
-  *around* a parse: the two halves of a cache read (a miss pays only the failed open, a hit pays the
-  `JSON.parse` and schema validation too), the cache write, and the four costs of using a worker
-  (`wire-dispatch`, `wire-roundtrip`, `wire-attach`, and the worker's own `worker-job` /
-  `worker-reply`). It is a separate section rather than a third `kinds[]` entry because every
-  consumer reads `kinds` as *parser* kinds, and folding dispatch time in there would land it inside
-  "which parser dominates this tree".
-
-  Dumps also carry a `threadId` now. Worker threads share their parent's pid, so a merge could
-  previously say "9 dumps, 1 process" but not *which* dump was the parent's — and for a tier row the
-  only question that matters is whether a cost landed on the serial parent or on a parallel worker.
-  The lab publishes `mainElapsedMs` beside `elapsedMs` on every tier row for exactly that reason, and
-  `vat-lab parse compare` reports both, so a change that merely *relocates* a cost cannot read as
-  "unchanged".
-
-- **`ParsePool.parseIntoCache` — an alternative transport where the worker writes the cache entry and
-  returns only its key**, selected by `VAT_PARSE_TRANSPORT=cache`. Off by default. It exists as the
-  measurable arm of a design question, and the measurement is recorded at `ParseTransport` in
-  `projection/blob-population.ts`: it moves 96% of the parent's cache-write cost onto the workers as
-  designed, and is still 8.3% slower on wall clock, because the parent was never the bottleneck and a
-  cache write costs 45% more from eight threads than from one.
-
-### Changed
-
-- **Both crawl lanes hand work out by PULL instead of in stepped windows.** The shared drive loop
-  used to slice `width` targets, await *all* of them, emit them, and only then touch the next slice.
-  A slice is as long as its slowest member, so every fast preparation in it sat finished while the
-  worker pool it feeds went idle — which is most of why worker utilization measured around 20%, with
-  the threads starved rather than contended. A target is now claimed the moment a slot frees, so the
-  tail is bounded by one preparation rather than by a whole slice of them, and it self-levels on
-  observed completions instead of on a guess at each target's cost.
-
-  Emission is unchanged: still strictly in target order, so no row order, index order or finding
-  order moves. Two bounds replace the one the slice used to imply — at most `width` preparations in
-  flight (the file-handle bound the sequential loop existed to defend) and at most four times that
-  many outstanding ahead of the emitted head, so a slow first document cannot buffer a whole corpus's
-  parse facts in memory. With the pool off — still the default — the width is 1 and the lane is
-  byte-for-byte the sequential loop it replaced.
-
-- **The crawl seam's `resource-registry:add-resource` row is renamed `resource-registry:admit` and is
-  now charged once per admission CALL rather than once per file.** `recordRegistryPass` sums each
-  bracket's elapsed time, so the moment the incumbent lane fans out, overlapping per-file brackets
-  would total up to `width ×` the wall clock they claim to measure — the same shape as the instrument
-  artifact that once reported a 6.5× parse-pool regression that never happened. Per-call is also the
-  grain `blob-population:derive` already used on the projection arm, so the two arms of the
-  flip comparison are now measured the same way instead of differently.
-
-  The id changed rather than being silently redefined because the *meaning* moved while the shape
-  stayed put — the one drift no schema catches. A dump captured before this change simply lacks the
-  new row, instead of quietly reporting a per-file number where a per-call one is expected.
-
-- `ParseCache.set` and the new `setByKey` return **`true` when the entry was persisted** instead of
-  `void`. The cache is fail-soft, so previously every failure path — a read-only mount, a full disk,
-  a hostile pre-created shard directory — returned the same `undefined` as success, and a caller that
-  needed to know had to read the entry back to find out. Measured, that read-back cost 1,677 extra
-  reads and decodes per cold adopter run to learn something the writer already knew.
-- Cache temp filenames include the writing thread. `pid` + a module-level counter was documented as
-  collision-free, and stopped being so the moment a worker thread could write: each isolate gets its
-  own counter starting at zero while sharing the process's pid.
-
-### Removed
-
-- **A reason for `DEFAULT_POOL_SIZE_CAP` that measurement disproved.** The cap was justified partly by
-  the claim that every document's structured clone is "charged to the PARENT thread, so it is
-  serial — the part of this design that does not parallelize". The new `wire-dispatch` row measures
-  it for the first time: **18.3 ms across 1,677 documents and 31.9 MB, 0.011 ms each** — 0.16% of the
-  command's wall clock. The other two reasons (per-isolate module load, Amdahl) stand; that one is
-  struck through in place rather than deleted, so the next reader does not re-derive it.
-
-### Removed
-
-- **Every hand-maintained version constant is gone — 15 of them, across `utils`, `resources`, `lab`
-  and `cli`.** `REPORT_FORMAT_VERSION`, five `*_FACET_VERSION`s, four `*_DUMP_VERSION`s (plus the
-  writer-side halves in `crawl-timing.ts` and `parse-timing.ts`), `SNAPSHOT_FORMAT_VERSION` and two
-  more found in test files. The `formatVersion`, `facetVersion` and `dumpVersion` fields they wrote
-  are gone from every artifact with them, and `buildReportEnvelope` lost its version argument.
-
-  Each of them existed to answer *"can I read this stored artifact?"*, and each sat next to a
-  `.strict()` Zod schema that answers it better: the schema moves the instant a field is added,
-  renamed or retyped, and it moves for whoever made the edit rather than for whoever remembered.
-  The integers were the weaker mechanism in practice, not only in principle — the crawl seam shipped
-  two meaning changes ahead of its bump, and one of them published a confident false delta in the
-  interval. Two of the three writer/reader pairs were also two literals in two packages with nothing
-  relating them, kept in step by a test asserting they were equal.
-
-  ⚠️ **Every stored lab report and QA snapshot is invalidated by this change and must be
-  re-captured.** That is the intended consequence: the envelope lost two required fields and is
-  strict, so a report from before this is refused at read rather than silently compared.
-
-  Three replacements, none of which anyone has to remember: a strict schema decides whether an
-  artifact is readable; both sides of a comparison are validated against *this build's* schema
-  rather than only against each other (which a matched pair of pre-change reports passes); and an
-  artifact declares its own capabilities where a change moves meaning rather than shape —
-  `CrawlTimingDump.charges` is the worked example. The one residual, `distinctArgs` becoming
-  nullable in the `io` facet, is documented at `readIoBody` rather than papered over.
-
-  Two guarantees got **stronger** on the way. `writeReport` now refuses to store a report it could
-  not read back — previously it only compared a version integer, so a genuinely malformed header
-  passed. And `readSnapshot` validates the QA-snapshot manifest against a new strict
-  `SnapshotManifestSchema`; it previously blind-cast `parsed as SnapshotManifest` behind the version
-  check, so a manifest whose shape was wrong loaded happily as long as the number matched.
-
-- **`LaneId` and `EnumerationRoute` are now derived from `LANE_IDS` / `ENUMERATION_ROUTES`.** The
-  runtime arrays are what `SnapshotManifestSchema` enumerates; deriving the union from them means
-  there is no second list to keep in step.
-
-### Added
-
-- **A collection can declare the MIME type of the files it matches, and that declaration reaches
-  the parser.** `resources.collections.<name>.mimeType` in `vibe-agent-toolkit.config.yaml` now
-  overrides the built-in extension tables — so a project whose `.ts` files really are prose, or
-  whose `.md` files really are data, can say so. Only a collection that *declares* a type
-  participates: one that does not is not consulted, cannot win, and cannot conflict.
-
-  Two collections declaring **different** types for one file is an error. It is reported rather
-  than thrown: the run completes with that file taking the built-in table's answer, and every
-  offending file is named as a `COLLECTION_MIME_CONFLICT` row on `realization_conditions` with both
-  collections and both types in the message. A config authoring mistake should read like a linter
-  finding, not kill a 9,000-file run on file 400 and hide the other six.
-
-  ⚠️ **The declaration is part of the projection store's key.** It changes which parser runs, which
-  changes the content key and every blob row derived from it, and it appears in no contributor
-  parameter set — so without this two runs over an unchanged tree that routed differently would
-  share a key and the second would be served the first's rows at exit 0. The key folds in a
-  fingerprint the routing derives from its own rules, rather than a hand-maintained list entry, so
-  a future parser or routing rule extends it with no edit at the cache.
-
-### Breaking
-
-- **VAT now routes files to a parser by MIME type, and only prose and markup get a document
-  parser.** Every file that was not `.html` used to be handed to `remark-parse` — so `.ts`, `.json`,
-  `.csv`, `.tf`, `.py` and everything else was parsed as Markdown. That was never a deliberate
-  allowlist; it was the else-branch of a two-value discriminator with nowhere for "neither" to go.
-  `text/markdown`, `text/plain` and `text/html` now reach a parser; **everything else keys
-  `none.<sha256>` and skips the AST pass entirely.**
-
-  What a `none` file still gets, unchanged: a `blobs` row, a real `tokenEstimate`, `measureContent`,
-  and its full complement of raw-source lexical references. Only `unified()` is skipped. A bundled
-  script is still a closure **member**; token accounting never reports `unknown-size` for one.
-
-  **What this removes was mostly wrong.** Measured on one adopter monorepo (8,768 keyed blobs):
-  **64.7% of every reference in the projection (66,307 of 102,466) came from a file that is not
-  Markdown** — 87.1% in VAT's own repo. All **230** `UNRESOLVED_REFERENCE` warnings came from
-  non-Markdown files and **zero** from `.md`; the mechanism is that a JSON-Schema `pattern` like
-  `/^[a-z][a-z0-9-]*$/` is two adjacent bracket groups, which CommonMark reads as a reference link.
-  **40% of all `blob_sections` rows (12,152 of 30,411)** were `#` comments in `.tf`/`.py`/`.yaml`
-  read as ATX headings. The code-fence protection that was assumed to guard against this covers
-  0.0–2.7% of real source files and inverts — JSDoc backticks get `inCodeSpan: true` while the
-  executable code around them gets `false`.
-
-  **Breaking in three ways.** (1) **Every content key changes** for a file that stopped being
-  Markdown, because the parser kind is mixed into the digest preimage — so stale parse-cache and
-  projection-store entries become unreachable rather than being served silently. No cache-version
-  constant was involved or added. (2) **`resource_realizations` gains a `mime` column** (index 8,
-  after `ext`); anything reading that table positionally must be updated. (3) **Non-Markdown files
-  are no longer closure DOORS.** They remain members — a Markdown file linking to a script still
-  pulls the script in — but a path named only from inside a script is no longer followed, because
-  it lexes as `bare-token` and the default `follow` set is the three Markdown forms. Widening that
-  default was considered and declined: it is 21,687 rows on VAT's own tree. **A data file reachable
-  only from a bundled script is therefore in no skill's closure and will not be packaged** — a known
-  gap, recorded in `docs/architecture/command-population-open-questions.md`, not a settled design.
-
-- **`vat claude context` now fails on a broken `vibe-agent-toolkit.config.yaml`, where it used to
-  ignore one.** That command read no config at all before this release. Its population is now typed
-  by the collections the config declares — that is what decides which parser runs — so it opens the
-  nearest ancestor config on every run, and a config that will not parse or does not validate exits
-  2 with `status: error` rather than answering from the built-in tables. **A tree with a broken
-  config that `vat claude context` used to answer will now refuse to.** The alternative was to
-  answer anyway from a routing the project's own config contradicts, which is the conflation the
-  config loader exists to refuse. A tree with *no* config is unaffected and always will be: absent
-  is not broken, and all three population lanes take the built-in tables for it.
-
-  **`vat inventory` deliberately does not follow.** Its subject is routinely someone else's plugin,
-  and root discovery is config-anchored, so a third party's unparseable YAML would otherwise decide
-  whether a read-only inventory runs. It degrades to the link walk, exits 0, and now says which of
-  the two things went wrong — the warning used to blame "the projection membership lane" for what
-  was a config parse error, sending the reader to VAT's code instead of to their own YAML.
-
-- **`vat claude context --all` now reports a cost map instead of one answer per path.** It used to
-  answer every path the projection realized: on one adopter monorepo that was 10,438 report blocks
-  and 205,918 lines over 561 seconds, which no reader — person or agent — can use. It now reports
-  the always-loaded cost once per distinct instruction chain (9 regions on this repo, not 2,829
-  blocks) and the on-demand cost per directory, because only the first of those two collapses.
-  **Anything parsing `--all`'s `answers` array must be updated**: the `--all` envelope is a
-  different shape and carries a `kind` discriminator. Naming paths explicitly
-  (`vat claude context src/ README.md`) is unchanged and is now the drill-down.
-
-### Performance
-
-- **Markdown parsing can optionally run on worker threads during projection population.** Off by
-  default while the design is finished; set `VAT_PARSE_POOL=1` to opt in. It starts only after
-  enough parse-cache misses to prove the work is real, so a fully warm run never starts a thread,
-  and output is byte-identical either way.
-
-- **`vat resources validate` made half of its filesystem calls re-asking questions it had already
-  answered.** Resolving a skill's test-input directories probes the filesystem for a conventional
-  eval suite under the subject *and* under every skill the project declares, and the memo that
-  deduplicates those probes was built per call while the caller looped per skill — so each of N
-  skills rebuilt an empty memo and re-probed all N paths. Measured on a 103-skill project:
-  **10,815 `existsSync` calls over 103 distinct paths, ~105× each — exactly 50% of every filesystem
-  call the command made**, and quadratic in skill count (103² = 10,609).
-
-  The probe is now created once per run and threaded, alongside the declared-eval-suite discovery
-  that is already assembled once per run for the same reason. Re-measured on the same project:
-  **21,648 → 10,936 user filesystem calls (−49.5%)**, with that site down to **103 calls over 103
-  distinct paths** — the total reduction equals that one site's reduction exactly. `vat skills
-  build` and `vat claude plugin build` share the helper and get the same fix.
-
-  The probe stays **run-scoped, never module-scoped**: its answer is a snapshot of the filesystem,
-  so a memo outliving the run would keep answering for a tree that had since changed. The threading
-  parameter is **required rather than defaulted** — an earlier fix in this same code defaulted its
-  parameter, which let every existing caller silently keep the old behaviour and shipped the rule as
-  a no-op.
-
-- **`whatLoadsAt` no longer rebuilds the whole projection's indexes on every query**, so a query
-  costs what its answer costs rather than what the tree costs. It was rebuilding six
-  projection-wide structures per call — a linear path scan, two id/path maps, a blob index, a
-  reference-shape map, and every import closure's provenance — none of which depend on the path
-  being asked about. Measured: per-query cost rose 4.6× for a 4.0× larger projection, making any
-  sweep quadratic. `vat claude context --all` on this repository goes **34.12 s → 2.74 s** with
-  byte-identical output; `vat claude budget` and single-path queries get the same fix for free.
-
-  A second, hidden instance is fixed with it: `closureProvenance` built a fresh base object on
-  every call, so the two whole-projection index memos in `closure-extent.ts` — keyed on that
-  object's identity — never hit once.
-
-- **`vat rag index` now exits 1 when a resource fails to index, and reports `status: partial`.** It
-  used to hardcode `status: success` and `process.exit(0)` whatever happened, so a run that lost
-  documents was indistinguishable from a clean one and no CI job could catch it — the `errors` list
-  was already in the output and nothing acted on it. **A pipeline that runs `vat rag index` can now
-  fail where it previously passed, and that failure is real: the named resources are absent from the
-  index and unsearchable.** Exit 2 remains the system-error code.
-
-- **`vat skill test run --baseline`'s control arm is now genuinely denied the skill** — it used to
-  reach the skill through the prompt, the environment and its own working directory. The delta now
-  measures the skill's *instructions*, not its capability. **Re-run any `--baseline` numbers taken
-  before this release** — a zero may have been a contaminated control, not a skill with no effect.
-
-- **Per-eval workspaces moved out of the harness root** to a random directory under OS tmp, reported
-  as `workspacesPath` on `RunHarnessResult` — breaking for anything assuming `<out>/workspaces/<id>`.
-  **`--keep` is now the only flag that retains them**; `--out` and `--workdir` no longer do.
-
-- **`vat skill test` now spawns with `--no-session-persistence`, and preflight refuses to run
-  without it.** Earlier runs left every headless session — the grading nonce and the eval's answer
-  key in it — under `$CLAUDE_CONFIG_DIR/projects/`, readable by the skill under test. Delete those
-  transcripts if you tested a skill you do not trust; a `claude` too old for the flag now exits 2.
-
-- **`vat skill test run` keeps `results/` after a default run.** Cleanup used to remove
-  `grading.json`, `friction.json`, `tool-eval.json` and `baseline.json` along with the harness
-  directory they sat in. The path is printed as `Results: <path>` and returned as `resultsPath`.
-
-- **Preflight's `flag <name>` checks now verify something.** All six passed unconditionally before,
-  because `claude --help` exits 0 for a flag that does not exist. Preflight can now fail (exit 2) on
-  a `claude` that used to pass it — which means the spawn would have failed later anyway.
-  `--max-turns` is reported as unverifiable rather than confirmed.
-
-- **`--out` and `--workdir` are now mutually exclusive** (exit 2). Passing both silently discarded
-  `--workdir`, so the path you named was never created.
-
-- **The parse cache is namespaced per build of VAT**, so a rebuilt or upgraded parser can no longer
-  serve entries from the old one — they live under `<tmpdir>/.vat-cache/<namespace>/parse/`.
-  `CONTENT_KEY_SCHEMA_VERSION` and `PARSE_CACHE_SCHEMA_VERSION` are gone from
-  `@vibe-agent-toolkit/resources`; `vatCacheNamespace()` / `vatCacheNamespaceRoot()` are new exports.
-
-- **`vat claude context` directory queries no longer charge every path-scoped rule**, so a
-  directory's reported on-demand token count drops sharply — a rule is charged only when its glob
-  covers the whole directory. `glob-rule-may-fire` gains `pattern`/`examplePath`,
-  `glob-rule-covers-dir` is new, and `existential-needs-a-file` replaces `directory-budget-unchecked`.
-
-- **`vat claude context` takes several paths, and `--format json`/`yaml` now emit
-  `{ root, answers: [...] }`** rather than a bare answer document. `answers` is a list even for a
-  single path, so existing callers read `answers[0]`. Every argument is resolved before enumeration,
-  so a mistyped path is refused immediately.
-
-- **`vat claude context --format json`/`yaml`: `limits`, `modelledBehaviours` and `boundsStatement`
-  moved off every answer onto the envelope, beside `root`.** `answers[i]` no longer carries them.
+#### CLI
+
+- **VAT routes files to a parser by MIME type, and only `text/markdown`, `text/plain` and `text/html`
+  reach one.** Every file that was not `.html` used to be parsed as Markdown — `.ts`, `.json`,
+  `.csv`, `.tf`, `.py` and everything else. Three things change for you: **every content key changes**
+  for a file that stopped being Markdown, so stale parse-cache and projection entries become
+  unreachable rather than being served; **`resource_realizations` gains a `mime` column** at index 8,
+  after `ext`, so anything reading that table positionally must be updated; and **non-Markdown files
+  are no longer closure *doors*** — they remain members, but a path named only from inside a bundled
+  script is no longer followed, so **a data file reachable only that way is in no skill's closure and
+  will not be packaged** (a known gap, recorded in
+  `docs/architecture/command-population-open-questions.md`).
 
 - **Resource scanning now uses the projection lane with the git enumerator by default.** Set
   `VAT_RESOURCES_CRAWL=walk` for the old link walk, or `VAT_EXTENT_SOURCE=filesystem` to keep the
-  projection and enumerate without git; outside a usable git working tree VAT falls back on its own.
-  ⚠️ A broken symlink is no longer reported as `LINK_BROKEN_FILE` — use `walk` if you rely on it.
+  projection and enumerate without git. ⚠️ A broken symlink is no longer reported as
+  `LINK_BROKEN_FILE` — use `walk` if you rely on it.
 
 - **Every resource crawl now sees uncommitted files.** Inside a git working tree the population is
   `tracked ∪ (untracked ∧ ¬ignored)` rather than `git ls-files`; gitignored files stay out. **Expect
   new findings on trees with uncommitted work** — that is the fix, not a regression.
 
-- **`vat inventory` no longer emits a `schema:` version label.** Scripts reading
-  `schema == "vat.inventory/v1alpha"` must drop the check and switch on `kind` instead.
-  `INVENTORY_SCHEMA_VERSION` is gone from `@vibe-agent-toolkit/agent-skills`.
+- **`vat rag index` now exits 1 and reports `status: partial` when a resource fails to index.** It
+  used to hardcode `status: success` and exit 0 whatever happened. **A pipeline can now fail where it
+  previously passed, and that failure is real:** the named resources are absent from the index and
+  unsearchable. Exit 2 remains the system-error code.
+
+- **`vat rag index` chunks are now sized from the provider's real token limit — re-index existing
+  databases, and CLEAR them first: `vat rag clear && vat rag index`.** The budget was a hardcoded
+  8191-token OpenAI figure applied to every provider, including the default local
+  `Xenova/all-MiniLM-L6-v2`, which reads **256** — everything past the real limit was cut at
+  inference time with nothing said. `vat rag index` alone is not enough: change detection is a
+  content hash, so unchanged files keep their stale, truncated vectors. There is no `--force`.
+
+- **Every hand-maintained version constant and version label is gone.** `INVENTORY_SCHEMA_VERSION`
+  (from `@vibe-agent-toolkit/agent-skills`), `CONTENT_KEY_SCHEMA_VERSION` and
+  `PARSE_CACHE_SCHEMA_VERSION` (from `@vibe-agent-toolkit/resources`), and 15 more across `utils`,
+  `resources` and `cli`. **Scripts reading `schema == "vat.inventory/v1alpha"` must drop the check and
+  switch on `kind` instead.** A strict schema now decides whether a stored artifact is readable, and
+  `vatCacheNamespace()` / `vatCacheNamespaceRoot()` are new exports. ⚠️ Stored QA snapshots are
+  invalidated and must be re-captured.
+
+- **Per-eval workspaces moved out of the harness root** to a random directory under OS tmp, reported
+  as `workspacesPath` on `RunHarnessResult` — breaking for anything assuming `<out>/workspaces/<id>`.
+  **`--keep` is now the only flag that retains them**; `--out` and `--workdir` no longer do.
+
+- **`vat skill test` now spawns with `--no-session-persistence`, and preflight refuses to run without
+  it.** A `claude` too old for the flag now exits 2. Earlier runs left every headless session — the
+  grading nonce and the eval's answer key in it — under `$CLAUDE_CONFIG_DIR/projects/`, readable by
+  the skill under test; delete those transcripts if you tested a skill you do not trust.
+
+- **`vat skill test run --baseline`'s control arm is now genuinely denied the skill** — it used to
+  reach the skill through the prompt, the environment and its own working directory. **Re-run any
+  `--baseline` numbers taken before this release**: a zero may have been a contaminated control, not
+  a skill with no effect.
+
+- **`--out` and `--workdir` are now mutually exclusive** (exit 2). Passing both silently discarded
+  `--workdir`, so the path you named was never created.
+
+- **`HarnessLockBusyError` and `UnresolvableEnvTokenError` now exit 2, not 1.** Both are
+  user-correctable, and CI recipes reading 1 as "the harness broke" used to fire on them. The lock
+  message now names the lock path.
+
+- **A duplicate expectation string within one eval is now rejected at parse time** (exit 2), instead
+  of throwing mid-run and destroying a fully-billed run over a suite typo. Two *different* evals may
+  still share expectation text.
+
+- **`vat skills validate` and `vat skills build` now write their stdout summary AFTER their stderr
+  findings** rather than before, which is what every other command already did.
+
+#### Library
 
 - **`@vibe-agent-toolkit/agent-schema` is now `@vibe-agent-toolkit/schema`.** Rename the dependency
   and every import specifier; nothing else about the package changed.
 
-- **(library) `safeExecSync()` and `safeExecResult()` throw when asked to run `git`.** Use `runGit()`
-  / `runGitOrThrow()` from `@vibe-agent-toolkit/utils`, which pin the repository explicitly instead
-  of inheriting whichever one the ambient environment names.
+- **`@vibe-agent-toolkit/resources` replaces `collectCodeContextRanges(tree)` with
+  `codeContextRangesFrom(spans)`.** It takes the flat `SourceSpan[]` a parse reports rather than an
+  mdast `Root`. Get one from the new `./remark-parser` subpath:
+  `openRemarkSession(content).spansAndKinds().spans`. `parseMarkdownContent` additionally accepts an
+  optional third `parser` argument; the default is unchanged. CLI users are unaffected.
 
-- **(library) The four inventory extractors take an options object with a REQUIRED
-  `gitTrackerSource`**; the install root moves into it, and `NO_GIT_TRACKER` restores the old
-  tracker-less walk. Behaviour changes too: gitignore questions are answered from a tracker's active
-  set, so a skill's `files.linked` can change under a symlinked ancestor, in a submodule, or `.git/`.
+- **`safeExecSync()` and `safeExecResult()` throw when asked to run `git`.** Use `runGit()` /
+  `runGitOrThrow()` from `@vibe-agent-toolkit/utils`, which pin the repository explicitly instead of
+  inheriting whichever one the ambient environment names.
 
-- **(library) `@vibe-agent-toolkit/resource-compiler`'s `parseMarkdown` is now `toMarkdownResource`.**
-  Rename the binding. `@vibe-agent-toolkit/resources`' own `parseMarkdown`, which takes a path rather
-  than content, keeps its name.
+- **The four inventory extractors take an options object with a REQUIRED `gitTrackerSource`**; the
+  install root moves into it, and `NO_GIT_TRACKER` restores the old tracker-less walk. Behaviour
+  changes too: gitignore questions are answered from a tracker's active set, so a skill's
+  `files.linked` can change under a symlinked ancestor, in a submodule, or `.git/`.
 
-- **(library) `@vibe-agent-toolkit/utils` no longer exports `verifyCaseSensitiveFilename`.** Use
+- **`@vibe-agent-toolkit/resource-compiler`'s `parseMarkdown` is now `toMarkdownResource`.** Rename
+  the binding. `@vibe-agent-toolkit/resources`' own `parseMarkdown`, which takes a path rather than
+  content, keeps its name.
+
+- **`@vibe-agent-toolkit/utils` no longer exports `verifyCaseSensitiveFilename`.** Use
   `fillSiblingNames(paths, fsCache)` to build a table once, then `classifyFilenameCaseFrom(table, path)`
   to judge. A single ad-hoc check migrates as
   `classifyFilenameCaseFrom(await fillSiblingNames([p], cache), p)`.
 
-- **(library) `EmbeddingProvider` implementations must expose `maxInputTokens`.** Report the model's
-  real input-token limit: chunk budgets and the over-length guard now read it instead of a
-  hardcoded constant.
+- **`EmbeddingProvider` implementations must expose `maxInputTokens`.** Report the model's real
+  input-token limit: chunk budgets and the over-length guard now read it instead of a hardcoded
+  constant.
 
-- **(library) `assertGraderPromptInvariants`'s second parameter is now the run nonce, not the
-  transcript, and it is required.** Pass the same nonce you passed to `buildGraderPrompt`.
+- **`assertGraderPromptInvariants`'s second parameter is now the run nonce, not the transcript, and
+  it is required.** Pass the same nonce you passed to `buildGraderPrompt`.
 
-- **(library) `ParsedTranscript.raw` is removed and `malformedLineCount: number` is added
-  (required).** `raw` had no reader and pinned the whole source string alive — 29 MB of retained
-  heap on a 27 MB transcript. `malformedLineCount` reports what the old shape could not: a transcript
-  whose lines were silently dropped used to be byte-identical to an empty one.
+- **`ParsedTranscript.raw` is removed and `malformedLineCount: number` is added (required).** `raw`
+  had no reader and pinned the whole source string alive — 29 MB of retained heap on a 27 MB
+  transcript. `mergeFragmentsToGrading` also no longer carries `runNonce` onto the merged report.
 
-- **(library) `mergeFragmentsToGrading` no longer carries `runNonce` onto the merged report.**
-
-- **`HarnessLockBusyError` and `UnresolvableEnvTokenError` now exit 2, not 1.** Both are
-  user-correctable — a lock conflict, and a suite that interpolates an undeclared `${TOKEN}` — and CI
-  recipes reading 1 as "the harness broke" used to fire on them. The lock message now names the lock
-  path so a stale lock can be cleared by hand.
-
-- **A duplicate expectation string within one eval is now rejected at parse time** (exit 2), instead
-  of throwing mid-run on the treatment arm and destroying a fully-billed run over a suite typo. Two
-  *different* evals may still share expectation text.
+- **A closure extent declaration now carries `referenceDialect`**, defaulting to `'href'` so every
+  existing declaration behaves as before. Code that compares a parsed `ExtentDeclaration`
+  structurally must account for it.
 
 ### Added
 
-- **`vat skill test configure --no-baseline`**, so a committed `baseline: true` can be turned off by
-  the same command that set it.
+- **`vat claude context [paths...]`** — reports which `CLAUDE.md` files, `.claude/rules` files and
+  `@`-imported files load into an agent's context at a path, why each is there, and its estimated
+  token cost. `--discoverable` adds, separately, what those files link to in one hop that the harness
+  does not load. `--all` reports a cost map: the always-loaded cost once per distinct instruction
+  chain, the on-demand cost per directory. `--format json`/`yaml` emit `{ root, answers: [...] }`.
+  The command reads the nearest ancestor `vibe-agent-toolkit.config.yaml` — that is what decides
+  which parser runs — and exits 2 on one that will not parse or validate; a tree with *no* config is
+  unaffected. The report publishes its own limits: the number is neither a floor nor a ceiling.
 
-- **`vat skill test run --no-baseline`, and a stderr note when config turns `--baseline` on.** It
+- **`vat claude budget [paths...]` — checks the always-loaded context a working location pays.**
+  Reports `ALWAYS_LOADED_CONTEXT_BUDGET` at `info` for any instruction chain over
+  `resources.validation.thresholds.alwaysLoadedContextTokens` (default 12,000, applied whether or not
+  the project has a config); set `resources.validation.severity.ALWAYS_LOADED_CONTEXT_BUDGET: ignore`
+  to silence it, or promote the code to `error` to make the command exit 1. One finding per distinct
+  context chain rather than per directory, so one oversized root file produces one finding. Gitignored
+  files are not counted at all, and the total is a stated lower bound — a global `~/.claude/CLAUDE.md`
+  and the enabled skill index are real cost a tree-only projection cannot see.
+
+- **A collection can declare the MIME type of the files it matches, and that declaration reaches the
+  parser.** `resources.collections.<name>.mimeType` overrides the built-in extension tables, so a
+  project whose `.ts` files really are prose, or whose `.md` files really are data, can say so. Two
+  collections declaring **different** types for one file is reported as a `COLLECTION_MIME_CONFLICT`
+  row naming both, and the run completes with the built-in table's answer, rather than killing a
+  9,000-file run on file 400.
+
+- **The resource projection** — a populated, queryable model of a project's documents, blobs, links
+  and membership, replacing ad-hoc crawling as the substrate for the resource commands.
+  `vat resources scan` gains `--format json` and two new fields, `lane` and `extentSource`, naming
+  which crawler and which enumerator actually ran.
+
+- **Optional SQLite persistence for the projection** — the new `@vibe-agent-toolkit/projection-sqlite`
+  package, enabled with `VAT_PROJECTION_STORE=sqlite`, lets a population survive between runs.
+
+- **A cross-process parse cache, on by default.** Parsing dominated `vat resources validate`; results
+  are now reused across runs and across processes, namespaced per build of VAT under
+  `<tmpdir>/.vat-cache/<namespace>/parse/`. `vat cache clear` removes VAT's on-disk caches, and
+  `--no-cache` on the root command disables them for one run.
+
+- **Markdown parsing can optionally run on worker threads during projection population.** Off by
+  default; set `VAT_PARSE_POOL=1` to opt in. It starts only after enough parse-cache misses to prove
+  the work is real, so a fully warm run never starts a thread, and output is byte-identical either
+  way. `vat resources validate` — the parse-heaviest command VAT ships — now participates;
+  `ResourceRegistryOptions.parsePool` accepts the same policy the projection lane takes.
+  `VAT_PARSE_POOL_SIZE`, `VAT_PARSE_POOL_MIN_MISSES` and `VAT_PARSE_LOOK_AHEAD` tune it; an explicit
+  policy value beats the environment, and a value that is not a positive whole number is ignored
+  rather than coerced.
+
+- **`vat inventory` answers skill membership from the projection** for a plugin-directory subject,
+  instead of the markdown link walk. The walk remains reachable as `VAT_INVENTORY_CRAWL=walker`, and
+  the other three subject shapes (`--user`, a marketplace root, a single `SKILL.md`) still use it.
+
+- **Four new `@vibe-agent-toolkit/resources` subpaths: `./parse-conformance`, `./link-parser`,
+  `./remark-parser` and `./markdown-processor`.** All four reach the markdown parser, so they are
+  deliberately absent from the `.` barrel — import them directly. `./parse-conformance` diffs any two
+  parser implementations field by field over `ParseFacts` and reports six kinds of disagreement;
+  `./remark-parser` exposes `openRemarkSession` and the `remarkParser` reference implementation.
+
+- **`vat skill test configure --no-baseline` and `vat skill test run --no-baseline`.** `--baseline`
   runs every eval twice and `--max-budget-usd` is a *per-spawn* cap, so a committed
-  `skills.config.<skill>.test.baseline: true` silently doubled your spend. The note names the config
-  key, `--no-baseline` forces it off for one run, and `--help` now says both.
+  `skills.config.<skill>.test.baseline: true` silently doubled your spend. A stderr note now names
+  the config key, and `--help` says both.
 
-- **`--baseline` now reports the delta it always claimed to**, as
-  `Baseline delta: +2 (with skill: 3/3, without skill: 1/3).` on stderr and as `baselineDelta` in
-  `baseline.json`, run-level and per eval — `null` where the arms were graded against different
+- **`--baseline` now reports the delta it always claimed to**, as `baselineDelta` in `baseline.json`
+  and on stderr, run-level and per eval — `null` where the arms were graded against different
   expectation counts. `grading.json` and `baseline.json` also gain `arm` and per-expectation `evalId`.
 
 - **`baselineIntegrity` in `baseline.json`, plus a stderr warning when a `--baseline` control arm
@@ -720,136 +196,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vat's to remove, and a control arm that finds one gives a silently wrong delta. Read `signals`,
   `degraded`, `comparable` and `contaminated` — a clean verdict and a blind one are different things.
 
-- **`isFilesystemAccessError(err)`** on `@vibe-agent-toolkit/utils` and its `./fs` subpath — whether
-  an error is the filesystem refusing a path (`EACCES`, `ENOENT`, `ENOSPC`, …) rather than a bug.
-  `vat audit` and skill packaging use it, so both agree on what counts as the environment's fault.
-
-- **`vat claude budget [paths...]` — checks the always-loaded context a working location pays.**
-  Reports `ALWAYS_LOADED_CONTEXT_BUDGET`, at `info`, for any instruction chain over a token budget.
-  The measured chain is the repo-root `CLAUDE.md`, every one on the directory path down to the
-  location, and **one level** of `@` imports. An `AGENTS.md` is measured only where a `CLAUDE.md`
-  imports it — Claude Code reads `CLAUDE.md`, not `AGENTS.md`, so an unimported one costs nothing
-  and is charged nothing. Path-scoped rules files are excluded, because they load when the agent
-  touches a matching file rather than at launch; an **unscoped rule in the root `.claude/rules/`**
-  is charged, because it does load at launch. Naming paths narrows which chains are reported; no
-  paths checks the whole tree. The command publishes the bounds of its own answer alongside it, the
-  way `vat claude context` does.
-
-  **It is its own command, not part of `vat resources validate`.** Neither validate nor `vat
-  validate` reports the budget or takes a flag for it in either direction. Its query sibling
-  `vat claude context` still never gates; `vat claude budget` is the half that has a threshold.
-
-  - **Threshold: `resources.validation.thresholds.alwaysLoadedContextTokens`, default 12,000.** The
-    default is a property of the pipeline, not of the config file: a project with no
-    `vibe-agent-toolkit.config.yaml` is checked at the same number. Set the key to move the budget,
-    or `resources.validation.severity.ALWAYS_LOADED_CONTEXT_BUDGET: ignore` to silence it. `info`
-    does not change the exit code; promoting the code to `error` makes the command exit 1.
-  - **One finding per distinct context chain, not per directory.** Directories that load the same set
-    of files share one finding, which names how many working locations pay it. In this repository 589
-    directories collapse to 9 such chains — 366 of them load only the root `CLAUDE.md` — so a single
-    oversized root file produces one finding rather than 366 identical ones.
-  - **Gitignored files are not counted at all.** `dist/`, `coverage/` and friends are neither
-    reported as working locations nor measured as context, so a generated `CLAUDE.md` or rules file
-    is invisible to the budget. `vat claude context` lists this as a stated limit
-    (`gitignored-not-realized`, direction `under-report`).
-  - **The total is a lower bound, and says so.** A global `~/.claude/CLAUDE.md` and the enabled skill
-    index are real always-loaded cost that a tree-only projection cannot see, and no per-directory
-    budget could act on them. Where rows were seen but not estimated, the message names the counts.
-
-- **`vat claude context <path>`** — reports which `CLAUDE.md` files, `.claude/rules` files and
-  `@`-imported files load into an agent's context at that path, why each one is there, and its
-  estimated token cost. A file argument is exact; a directory answers path-scoped rules as "may fire
-  here". The report publishes its own limits: the number is neither a floor nor a ceiling.
-
-- **`vat claude context --discoverable`** adds a second, disjoint set: what the loaded files link to
-  in one hop that the harness does not load. Its tokens are reported separately and never added to
-  the estimate — a markdown link is voluntary, so the figure is a ceiling, not a charge.
-
-- **`vat claude context --all`** answers for every path the projection realized, from one
-  enumeration. Bare `vat claude context` still means the current directory; paths are
-  deduplicated and sorted by code point, so two sweeps are diffable.
-
-- **(library) `closureProvenance()`** — which member of a closure pulled in which, and at what depth.
-
-- **(library) Claude `@`-import closures are now projected.** `ClaudeImportExtentContributor`
-  registers one closure extent per `CLAUDE.md` / `CLAUDE.local.md` / `.claude/rules` file to the
-  vendor's four-hop bound; `buildClaudeContextPopulation()` assembles the lane. Dangling `@` imports
-  now surface as `CLOSURE_REFERENCE_UNRESOLVED`, escaping `@~/…` as `CLOSURE_REFERENCE_OUTSIDE_ROOT`.
-
-- **(library) A closure extent declaration now carries `referenceDialect`.** It defaults to `'href'`,
-  so every existing declaration behaves as before; `'claude-import'` selects the vendor's reading of
-  a Claude import. Code that compares a parsed `ExtentDeclaration` structurally must account for it.
-
-- **(library) `.claude/rules` files carry a `rule-scope` tag.** `ClaudeRulesScopeContributor` reads
-  `paths:` off `blobs.frontmatter` and files `root`, `nested` or `path-scoped`.
-
-- **(library) `resource_tags` is now populated.** `AgenticConventionContributor`, `classifyPath()`
-  and `pluginRootsFrom()` are exported from `@vibe-agent-toolkit/resources`; each resource is tagged
-  with the harness convention its path carries (`claude-md`, `skill-md`, `subagent`, …) plus a
-  `loading` row valued `always` or `selected`. `vat claude budget` reads them to decide which files
-  are always-loaded, so the tag vocabulary and the budget share one definition rather than two.
-
-- **(library) HTML files now contribute `blob_references` rows.** `<a href>` and `<img src>` are
-  projected with a source span, under a `html-link` syntactic form of their own. `html-link` is not
-  in any closure's `follow` default, so HTML references are reported but never traversed — projected
-  membership still matches what `vat build` bundles.
-
-  Each authored attribute yields exactly ONE row. HTML's adoption-agency algorithm makes the tree
-  builder re-open a still-open `<a>`, and the reconstructed clone points at the same source
-  attribute — `<p><a href="./r.md">1</p>2</a>` used to produce two rows with an identical span, which
-  no span filter could tell apart and which left `edges.refOrdinal` ambiguous. The parser now
-  de-duplicates on the parse5 attribute token's own identity, so two separately authored copies of
-  the same href are still two rows.
-
-- **(library) `removeScratchDir()` on `@vibe-agent-toolkit/utils`** — best-effort temp-directory
-  teardown that warns and returns instead of failing. `setupAsyncTempDirSuite` and
-  `setupSyncTempDirSuite` use it and take an optional second argument to raise the budget;
-  `setupSyncTempDirSuite`'s `afterAll` is consequently `async`.
-
-- **The resource projection** — a populated, queryable model of a project's documents, blobs, links
-  and membership, replacing ad-hoc crawling as the substrate for the resource commands.
-  `vat resources scan` gains `--format json` and two new fields, `lane` and `extentSource`, naming
-  which crawler and which enumerator actually ran.
-
-- **`vat inventory` answers skill membership from the projection** for a plugin-directory subject,
-  instead of the markdown link walk. The walk remains reachable as `VAT_INVENTORY_CRAWL=walker`, and
-  the other three subject shapes (`--user`, a marketplace root, a single `SKILL.md`) still use it.
-
-- **Optional SQLite persistence for the projection** — the new `@vibe-agent-toolkit/projection-sqlite`
-  package, enabled with `VAT_PROJECTION_STORE=sqlite`, lets a population survive between runs.
-
-- **A cross-process parse cache, on by default.** Parsing dominated `vat resources validate`; results
-  are now reused across runs and across processes. `vat cache clear` removes VAT's on-disk caches,
-  and `--no-cache` on the root command disables them for one run.
+- **`vat skill test run` keeps `results/` after a default run.** Cleanup used to remove
+  `grading.json`, `friction.json`, `tool-eval.json` and `baseline.json`. The path is printed as
+  `Results: <path>` and returned as `resultsPath`.
 
 - **`externalSource` on a marketplace plugin entry** — reference a plugin published elsewhere rather
   than vendoring it.
 
-- **Three new rules in the published ESLint pack** — `@vibe-agent-toolkit/no-raw-text-decode`,
-  `@vibe-agent-toolkit/no-self-package-import` and `@vibe-agent-toolkit/no-bare-symlink-in-tests`.
-  Like its siblings, `no-bare-symlink-in-tests` reports an unanchored `exemptFiles` entry.
-
-- **`decodeTextContent()` on the new `@vibe-agent-toolkit/utils/text` subpath**, and `runGit()` /
-  `runGitOrThrow()` on the barrel.
+- **Four new rules in the published ESLint pack** — `@vibe-agent-toolkit/no-raw-text-decode`,
+  `no-self-package-import`, `no-bare-symlink-in-tests` and `no-process-exit-in-phase`. The last is
+  not in `configs.recommended`, because it keys on VAT's `…Phase` naming convention.
 
 - **New validation code `LINK_FROM_NON_ROUTABLE_FILE` (warning)** — a link out of a bundled HTML page
   that VAT did not follow.
 
+- **(library) `decodeTextContent()` on the new `@vibe-agent-toolkit/utils/text` subpath**, plus
+  `runGit()`, `runGitOrThrow()`, `isFilesystemAccessError(err)` and `removeScratchDir()` on the
+  barrel. `setupAsyncTempDirSuite` and `setupSyncTempDirSuite` use the last of these and take an
+  optional second argument to raise the budget; `setupSyncTempDirSuite`'s `afterAll` is consequently
+  `async`.
+
+- **(library) Claude `@`-import closures are now projected.** `ClaudeImportExtentContributor`
+  registers one closure extent per `CLAUDE.md` / `CLAUDE.local.md` / `.claude/rules` file to the
+  vendor's four-hop bound; `buildClaudeContextPopulation()` assembles the lane. Dangling `@` imports
+  surface as `CLOSURE_REFERENCE_UNRESOLVED`, escaping `@~/…` as `CLOSURE_REFERENCE_OUTSIDE_ROOT`.
+  `closureProvenance()` reports which member of a closure pulled in which, and at what depth.
+
+- **(library) `resource_tags` is now populated.** `AgenticConventionContributor`, `classifyPath()`
+  and `pluginRootsFrom()` are exported from `@vibe-agent-toolkit/resources`; each resource is tagged
+  with the harness convention its path carries (`claude-md`, `skill-md`, `subagent`, …) plus a
+  `loading` row valued `always` or `selected`, and `.claude/rules` files carry a `rule-scope` tag.
+  `vat claude budget` reads them, so the tag vocabulary and the budget share one definition.
+
+- **(library) HTML files now contribute `blob_references` rows.** `<a href>` and `<img src>` are
+  projected with a source span under a `html-link` syntactic form of their own. `html-link` is in no
+  closure's `follow` default, so HTML references are reported but never traversed — projected
+  membership still matches what `vat build` bundles. Each authored attribute yields exactly one row.
+
 ### Changed
+
+- **`vat validate`, `vat verify` and `vat build` no longer spawn a child process per phase.** Their
+  phases run in the orchestrator's own process, so each no longer pays a full Node startup, a second
+  copy of the module graph and a cold parse cache. `MAX_PHASE_STDOUT_BYTES` went with the process
+  boundary, along with three failure modes it existed to handle.
 
 - **A `vat` invocation no longer imports every command before running one.** Fourteen of the fifteen
   top-level commands sit behind per-command loaders — `doctor` is the exception, because it is the
-  command that checks the others load — so only the one named on the command line is loaded, and
-  the root `--no-cache` registration — which happens on every invocation — no longer drags the
-  resources package in behind it. On a 4-CPU Windows box `vat --version` goes from 2,477 ms to
-  370 ms, measured at the CLI entry point — the `vat` wrapper spawns a second node process, so
-  `time vat --version` reads higher than both. Help, a bare `vat`, an unknown command and any
-  unrecognised option still load the whole tree, because they have to render or search it.
+  command that checks the others load. On a 4-CPU Windows box `vat --version` goes from 2,477 ms to
+  370 ms. Help, a bare `vat`, an unknown command and any unrecognised option still load the whole
+  tree, because they have to render or search it.
 
-- **A warm resource scan no longer loads the markdown parser or the external-link validator it
-  never calls.** A warm `vat resources scan` drops from 4,000 ms to 2,969 ms over 184 documents,
-  and from 7,459 ms to 6,486 ms over 1,289. Cold scans are parse-bound (~23 ms/doc) and unchanged.
-  `parseMarkdown`/`parseHtml` keep their signatures but now load their parser on call.
+- **A warm resource scan no longer loads the markdown parser or the external-link validator it never
+  calls.** A warm `vat resources scan` drops from 4,000 ms to 2,969 ms over 184 documents, and from
+  7,459 ms to 6,486 ms over 1,289. Cold scans are parse-bound and unchanged. `parseMarkdown` /
+  `parseHtml` keep their signatures but now load their parser on call.
 
 - **`vat audit` and `vat inventory` no longer spawn a `git check-ignore` process per link target.**
   On a 1,484-document monorepo the whole command goes from 12.5 s to 2.5 s. Reports are unchanged.
@@ -857,9 +257,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The RAG backend is no longer loaded by every `vat` command, and can be omitted from an install**
   — it moved to `optionalDependencies`, and the four `vat rag` subcommands load it on demand.
 
+- **`vat resources validate` no longer re-asks the filesystem the same question once per skill, per
+  skill.** Measured on a 103-skill project: **21,648 → 10,936 filesystem calls (−49.5%)**, with the
+  quadratic site down from 10,815 calls over 103 distinct paths to 103. `vat skills build` and
+  `vat claude plugin build` share the helper and get the same fix.
+
 - **A markdown link whose target exists but cannot be read is now reported instead of silently
-  dropped** — new `LINK_TARGET_UNREADABLE` (error), configurable like any other code. Previously the
-  link vanished from the report entirely.
+  dropped** — new `LINK_TARGET_UNREADABLE` (error), configurable like any other code.
 
 - **A frontmatter link-validation failure is no longer reported as a frontmatter *schema* error.** It
   used to surface as `FRONTMATTER_SCHEMA_ERROR` once per resource in the collection, against a schema
@@ -874,6 +278,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Scanning a tree with large ignored directories does one filesystem probe per ignored path
   instead of one per contained file.**
 
+- **Preflight's `flag <name>` checks now verify something.** All six passed unconditionally before,
+  because `claude --help` exits 0 for a flag that does not exist. Preflight can now fail (exit 2) on
+  a `claude` that used to pass it — which means the spawn would have failed later anyway.
+  `--max-turns` is reported as unverifiable rather than confirmed.
+
 ### Security
 
 - **An eval suite could inject instructions into the grader prompt on the arm that decides the
@@ -884,7 +293,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Untrusted text can no longer write its own lines on your terminal.** Grader
   `friction[].message`, the contamination scan's degradation detail and `parseGradingJson`'s error
   message all echoed attacker-influenced bytes, so a grader could print a green line in vat's own
-  voice. All three are now escape-stripped and capped; the friction report is capped at 50 lines.
+  voice. All three are now escape-stripped and capped.
 
 - **The run nonce no longer reaches disk.** The merged report carried it into `grading.json` and
   `baseline.json`, which `--out` and `--keep` can put in a repo-local, committable path.
@@ -892,7 +301,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`baseline.json` evidence no longer leaks your login name, and its excerpt bound is no longer
   bypassable.** A `match` of the ordinary `--out ~/something` shape is `…/<username>/<dir>` and was
   emitted untruncated, and the ±60-character excerpt bound was skipped for any tool input containing
-  a newline, quote or backslash — one measured case produced an 8,097-character excerpt.
+  a newline, quote or backslash.
 
 - **`vat skill test` no longer copies your eval suite — `expected_output` answer keys included — into
   the OS temp dir when it does not need to.** The copy is now made only when the suite exists nowhere
@@ -913,109 +322,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Concurrent timing dumps silently overwrote each other.** The diagnostic dump writer chose its
-  collision-suffixed filename with `existsSync` and wrote it later, so between the check that
-  declared a name free and the write that claimed it, another thread could pick the same name — last
-  writer wins, and every caller is told it filed a dump. Harmless while one thread wrote per
-  process; not harmless now that the parse pool uses worker threads, which **share the parent's pid**
-  and therefore all race for one filename sequence as they exit together. Measured with 8 threads
-  filing 25 dumps each: **70 distinct files out of 200 — 130 dumps destroyed.**
-
-  Name choice and write are now one atomic operation, claiming each candidate with an
-  exclusive-create flag and advancing the counter only on `EEXIST`, so the operating system
-  arbitrates and exactly one writer can win each name. Re-measured: 200 of 200.
-
-  Exhausting the collision ceiling used to overwrite the last file — the same silent destruction by
-  another route, and the ceiling's own docstring had blessed it. It now declines and reports, and
-  that report is distinguishable from a genuine I/O failure rather than sharing one message with it.
-
 - **A namespaced `xlink:href` lost its source span in the link rewriter, silently dropping the
-  rewrite.** parse5 splits a namespaced attribute into a prefix and a name, so an SVG or MathML
-  `<a xlink:href="./doc.md">` is found by a search for `href` — but its source span is recorded
-  under the source spelling `xlink:href`, so a span lookup keyed on the bare name missed and the
-  rewrite was discarded as `no-source-location`. The link parser had already been fixed for this;
-  the rewriter had not, and the fixed half was carrying the very helper the unfixed half needed.
-  Both now key the lookup off the matched attribute's source spelling, and the rewriter reports the
-  attribute as authored (`xlink:href`) rather than as the bare table entry. Reproduced with `<svg>`,
-  `<math>`, and the uppercase `XLINK:HREF` spelling.
+  rewrite.** parse5 records a namespaced attribute's span under the source spelling `xlink:href`, so
+  a lookup keyed on the bare `href` missed and the rewrite was discarded as `no-source-location`.
+  Reproduced with `<svg>`, `<math>`, and the uppercase `XLINK:HREF` spelling.
 
-  Two docstrings that this falsified are corrected: line and offsets are **not** guaranteed to be
-  absent together in HTML — they come from independent sources there, unlike mdast, where they share
-  one `position` object. The invariant downstream still holds, but because the span check tests all
-  three columns independently rather than because a producer cannot supply one without the others.
-
-- **The `parse` lab facet claimed a share of the whole corpus while measuring only the files it
-  parsed.** Its headline line read `MARKDOWN DOMINATES this corpus — 99.8% ... (1,781 of 1,805
-  documents)`, but `1,805` counts the documents that reached an *instrumented* parser, not the tree.
-  That was a rounding error until parse routing began sending every non-prose file to no parser at
-  all; on a code-heavy adopter tree only **1,805 of 8,768 blobs** now reach one, so the line called
-  markdown dominant "of this corpus" while markdown was 20% of it. The facet reads timing dumps and
-  a file no parser ran over writes nothing to one, so it cannot see the corpus — the line now names
-  its denominator (`DOMINATES the documents PARSED ... Files routed to no parser are not in this
-  denominator`) rather than inventing a total the instrument does not have.
-
-- **Two docstrings and a test comment asserted that a `none`-routed file runs no code.** There are
-  two such routes and the claim described only the cheaper one: the resource registry's
-  `unparsedResourceFacts` really does just estimate tokens, but the projection's `unparsedFacts`
-  runs `findLexicalReferences`, `measureContent` and `estimateTokens` over the full content of every
-  non-prose file — and that is the lane `vat claude context`, `vat claude budget` and cold
-  population all use. The work is unattributed by the timing seam, and is now documented as bounded
-  (~0.8 s of a 16 s cold adopter run) rather than absent. No behaviour change: whether to give
-  `none` its own dump group is a versioned decision, since it would refuse every stored report.
-
-- **`vat qa-snapshot capture`'s parse-fact rows claimed a file was unparsed while carrying its
-  parse.** The oracle branched on `parserKind === 'html'`, so a file routed to no parser at all fell
-  into the else arm and was handed to `remark-parse` anyway — and the row was then stamped
-  `parserKind: 'none'` while carrying remark's `links` and `headings`. Since this snapshot is the
-  parse cache's correctness oracle, that filed a content key with facts no lane honouring the same
-  discriminator can reproduce. It now branches on the same `isParsableContent` narrowing the resource
-  registry uses, and shares the registry's unparsed-facts shape rather than restating it. Reachable
-  on any project whose `resources.include` admits a non-prose type.
-
-- **`vat rag index` embedded only the first part of each chunk, silently discarding the rest.**
-  The chunk budget was a hardcoded pair (512-token target, 8191-token "model limit") describing
-  OpenAI ada-002 and applied to every provider — including the default local
-  `Xenova/all-MiniLM-L6-v2`, which reads **256**. Everything past the model's real limit was cut at
-  inference time with nothing said. The budget is now derived from
-  `embeddingProvider.maxInputTokens`, so a provider that publishes its limit gets chunks that fit
-  it.
-
-  **Re-index existing databases, and CLEAR them first: `vat rag clear && vat rag index`.** Running
-  `vat rag index` alone is not enough — change detection is a content hash of the source document,
-  so every unchanged file is skipped and its stale, truncated vectors survive. There is no
-  `--force`.
-
-- **The chunker rejected a whole document rather than splitting its longest line.** Once the limit
-  became the provider's real 256, a single line over it threw, `chunkResource` propagated, and the
-  indexer's per-resource catch turned that into **zero chunks for the entire file** — so the fix
-  above, on its own, lost documents outright where it had previously lost only their tails. Wide
-  markdown table rows and unwrapped prose bullets were enough to trigger it. The chunker now never
-  throws: it descends paragraphs → lines → sentences → words → a character window, and every
+- **The chunker rejected a whole document rather than splitting its longest line**, so a single wide
+  markdown table row or unwrapped bullet produced zero chunks for the entire file. The chunker now
+  never throws: it descends paragraphs → lines → sentences → words → a character window, and every
   emitted chunk fits the budget with no content dropped.
 
 - **`splitBySentences` discarded sentence-terminating punctuation.** Its regex matched the text
-  *between* `.`/`!`/`?` and threw the delimiters away. Harmless while nothing called it; it is now
-  a rung of the chunking ladder, so it splits on a zero-width boundary and keeps them.
-  `splitByLines` and `splitByWords` join it on the public API.
+  *between* `.`/`!`/`?` and threw the delimiters away. `splitByLines` and `splitByWords` join it on
+  the public API.
 
 - **A protocol-relative URL was classified as a local file.** `classifyLink('//cdn.example.com/x.js')`
   returned `local_file`, so `vat resources validate` reported a broken link for a reference that
-  resolves over the network. It now returns `external`, in both the markdown and the HTML parser —
-  they share one classifier, so the two lanes can no longer disagree about the same href.
+  resolves over the network. Both the markdown and the HTML parser share one classifier, so the two
+  lanes can no longer disagree.
 
-- **`vat skill test run --dry-run` destroyed the previous run's artifacts.** The free "what would
-  this cost?" invocation — and any failure before the run proper, such as a bad `--env` token —
-  deleted `grading.json`, `baseline.json`, `friction.json` and `tool-eval.json` from the `results/`
-  of the expensive real run you were about to read. A dry run now writes nothing under `results/`.
+- **`vat skill test run --dry-run` destroyed the previous run's artifacts.** The free "what would this
+  cost?" invocation — and any failure before the run proper, such as a bad `--env` token — deleted
+  `grading.json`, `baseline.json`, `friction.json` and `tool-eval.json` from the `results/` of the
+  expensive real run you were about to read. A dry run now writes nothing under `results/`.
 
 - **An exhausted control-arm rate limit annihilated a fully-billed treatment run.** Both treatment
   executors and both treatment graders had run and been paid for, and `results/` was left holding
   `provenance.json` and nothing else.
 
-- **A transcript line could be silently corrupted and then dropped.** Executor stdout was decoded
-  per chunk, so any multi-byte character straddling a 64 KiB boundary damaged a line, and the parser
-  discarded unparseable lines without reporting it. Both are fixed, and `malformedLineCount` now
-  counts what is dropped.
+- **A transcript line could be silently corrupted and then dropped.** Executor stdout was decoded per
+  chunk, so any multi-byte character straddling a 64 KiB boundary damaged a line, and the parser
+  discarded unparseable lines without reporting it. `malformedLineCount` now counts what is dropped.
 
 - **`Harness:` printed a path cleanup had already removed** on any run returning early before the
   pipeline, and a failure while releasing the harness lock could replace a good run's result with an
@@ -1027,24 +364,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `baselineDelta.delta`, `controlArmFailures`, `degraded`, `comparable` and `contaminated` instead.
 
 - **The published `GradingReportJsonSchema` dropped `summary.passed <= summary.total`.**
-  `zod-to-json-schema` discards every `.refine()`, so external tooling validating against the
-  published document accepted `{"passed": 9, "total": 3}`. No JSON Schema draft can express a
-  cross-field comparison; it is now stated in the emitted `description` as not machine-enforced.
+  `zod-to-json-schema` discards every `.refine()`, so external tooling accepted
+  `{"passed": 9, "total": 3}`. No JSON Schema draft can express a cross-field comparison; it is now
+  stated in the emitted `description` as not machine-enforced.
 
 - **`vat skill test run --help` no longer promises cleanup that `--out`/`--workdir` never perform.**
   Under a location you chose, the staged *untrusted* skill bytes are retained whether or not you pass
-  `--keep`, and the grader output dir, held eval suite and per-eval workspaces live outside that root
-  and are reaped regardless. Behaviour is unchanged; the documentation was wrong.
+  `--keep`. Behaviour is unchanged; the documentation was wrong.
 
 - **`vat agent install --force` could not replace a broken dev-mode symlink**, such as one left
-  dangling by a rebuild that removed `dist/`. The install failed with a bare `EEXIST`, and the advice
-  it printed ("install without `--dev`") failed the same way. `--force` now clears the link whether
-  or not its target still exists.
+  dangling by a rebuild that removed `dist/`. `--force` now clears the link whether or not its target
+  still exists.
 
 - **A failed `vat claude plugin install --dev` no longer denies the state it leaves behind.** A
-  partial install — some skills linked, the rest not, the plugin unregistered — now says the install
-  is incomplete and to re-run, instead of offering only "check that the destination directory is
-  writable".
+  partial install now says the install is incomplete and to re-run.
+
+- **`vat inventory` now names which of two things went wrong when its projection lane degrades.** The
+  warning used to blame "the projection membership lane" for what was a config parse error, sending
+  the reader to VAT's code instead of to their own YAML. `vat inventory` deliberately keeps running
+  on an unparseable config — its subject is routinely someone else's plugin.
 
 - **Git commands run from inside a git hook could read — or write — the wrong repository.** Worst
   case, `vat claude marketplace publish` switched a branch and landed a commit in the repository you
@@ -1084,11 +422,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`vat skills build` no longer dies on a `files:` glob that matches a symlink to a directory** —
   anything a glob matches that cannot be packaged is skipped and reported as
-  `FILES_GLOB_SKIPPED_NON_REGULAR_FILE` (a warning), and the rest of the entry ships. A `files:`
-  entry that cannot be copied now names which entry it was.
+  `FILES_GLOB_SKIPPED_NON_REGULAR_FILE` (a warning), and the rest of the entry ships.
 
-- **`vat audit` no longer aborts when its own config cannot be read**, and no longer throws away
-  every finding when it hits one unreadable file or directory.
+- **`vat audit` no longer aborts when its own config cannot be read**, and no longer throws away every
+  finding when it hits one unreadable file or directory.
 
 - **A file that cannot be read no longer kills the command** in `vat resources scan`/`validate`.
 

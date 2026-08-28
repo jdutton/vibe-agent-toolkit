@@ -53,16 +53,37 @@ const PATHLESS_NAMES = ['validate', 'verify'];
  * subject positional either. A `{subject}` token in any of these would make
  * every repeat a usage error.
  */
-const CWD_SCOPED_NAMES = [...PATHLESS_NAMES, CONTEXT_SWEEP];
+const CWD_SCOPED_NAMES = [...PATHLESS_NAMES, CONTEXT_SWEEP, 'claude-budget'];
 
 /** Every command handed the subject as a positional argument. */
-const SUBJECT_NAMES = [...DEFAULT_NAMES, CONTEXT_ONE];
+const SUBJECT_NAMES = [
+  ...DEFAULT_NAMES,
+  CONTEXT_ONE,
+  'resources-population',
+  'inventory',
+  'skills-validate',
+  'skills-list',
+];
 
 /** Every command that reports findings by exit code, and so completes at 1. */
-const FINDINGS_NAMES = ['resources-validate', 'validate', 'verify'];
+const FINDINGS_NAMES = [
+  'resources-validate',
+  'validate',
+  'verify',
+  'claude-budget',
+  'skills-validate',
+];
 
 /** Every command documented as exiting 0 whatever it finds. */
-const ALWAYS_ZERO_NAMES = ['resources-scan', 'audit', CONTEXT_SWEEP, CONTEXT_ONE];
+const ALWAYS_ZERO_NAMES = [
+  'resources-scan',
+  'resources-population',
+  'audit',
+  'inventory',
+  'skills-list',
+  CONTEXT_SWEEP,
+  CONTEXT_ONE,
+];
 
 /** The paired arms that make `vat claude context`'s cost separable. */
 const CONTEXT_NAMES = [CONTEXT_SWEEP, CONTEXT_ONE];
@@ -123,6 +144,30 @@ describe('MEASURABLE_COMMANDS', () => {
 
   it.each(SUBJECT_NAMES)('gives %s the subject to operate on', (name) => {
     expect(specNamed(name).args).toContain(SUBJECT_TOKEN);
+  });
+
+  // The four lists above are hand-written, and until this pair of tests they
+  // were also silently incomplete: `inventory` and `resources-population` were
+  // in none of them, so both shipped with no assertion on their scoping or
+  // their exit codes at all. Every `it.each` above iterates a list, so a
+  // registry entry nobody adds to a list is not under-tested in a way anyone can
+  // see — it is simply absent from every case. These two close that by making
+  // the lists total: an entry added tomorrow without being classified reds here
+  // rather than passing unmentioned.
+  it('classifies every registered command as cwd-scoped or subject-taking, never both', () => {
+    const scoped = new Set([...CWD_SCOPED_NAMES, ...SUBJECT_NAMES]);
+    const both = CWD_SCOPED_NAMES.filter((name) => SUBJECT_NAMES.includes(name));
+
+    expect(both).toEqual([]);
+    expect(MEASURABLE_COMMAND_NAMES.filter((name) => !scoped.has(name))).toEqual([]);
+  });
+
+  it('classifies every registered command as findings-reporting or always-zero, never both', () => {
+    const classified = new Set([...FINDINGS_NAMES, ...ALWAYS_ZERO_NAMES]);
+    const both = FINDINGS_NAMES.filter((name) => ALWAYS_ZERO_NAMES.includes(name));
+
+    expect(both).toEqual([]);
+    expect(MEASURABLE_COMMAND_NAMES.filter((name) => !classified.has(name))).toEqual([]);
   });
 
   it('answers to every name it lists, and to nothing else', () => {

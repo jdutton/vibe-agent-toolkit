@@ -56,9 +56,7 @@
  * loosening the heuristics.
  */
 
-import type { Root } from 'mdast';
-import { visit } from 'unist-util-visit';
-
+import { assertSpanKindHandled, type SourceSpan } from './parse-capabilities.js';
 import { forEachScannableLine } from './scan-lines.js';
 import type { UnresolvedReference } from './types.js';
 
@@ -196,36 +194,21 @@ export function isPlausibleLinkText(text: string): boolean {
 type OffsetRange = [number, number];
 
 /**
- * Structural shape of any mdast node carrying offsets (all of them do), so one
- * visitor callback can serve every masked node type.
- */
-interface OffsetPositioned {
-  position?:
-    | { start: { offset?: number | undefined }; end: { offset?: number | undefined } }
-    | undefined;
-}
-
-/**
- * Character-offset range of the destination clause of a `link`, `image`, or
- * `definition` node: `(url "title")` for an inline link/image, `: url
- * "title"` for a definition, or the WHOLE node for an autolink (`<url>` — the
- * visible text IS the url, so there is no separate label/text to keep
- * unmasked).
+ * Character-offset range of the destination clause of an inline link, an image,
+ * or a definition: `(url "title")` for an inline link/image, `: url "title"` for
+ * a definition, or the WHOLE span for an autolink (`<url>` — the visible text IS
+ * the url, so there is no separate label/text to keep unmasked).
  *
  * Finds where the label/text bracket closes using the same
- * {@link findMatchingBracket} the raw scanner itself uses (honoring nesting
- * and escapes), then masks everything after it through the node's end. This
- * is what keeps the mask *destination-only* rather than whole-node: the
- * label/text before the close is left unmasked, so a genuine nested dangling
- * reference inside link/image text (`[![alt][inner-nope]](url)`) is still
- * found instead of being silently swallowed by the mask.
- *
- * @returns `undefined` when the node has no offset position to work from
+ * {@link findMatchingBracket} the raw scanner itself uses (honoring nesting and
+ * escapes), then masks everything after it through the span's end. This is what
+ * keeps the mask *destination-only* rather than whole-span: the label/text
+ * before the close is left unmasked, so a genuine nested dangling reference
+ * inside link/image text (`[![alt][inner-nope]](url)`) is still found instead of
+ * being silently swallowed by the mask.
  */
-function destinationMaskRange(node: OffsetPositioned, content: string): OffsetRange | undefined {
-  const start = node.position?.start.offset;
-  const end = node.position?.end.offset;
-  if (start === undefined || end === undefined) return undefined;
+function destinationMaskRange(span: SourceSpan, content: string): OffsetRange {
+  const { startOffset: start, endOffset: end } = span;
   const slice = content.slice(start, end);
   const bracketStart = slice.startsWith('!') ? 1 : 0;
   if (slice[bracketStart] !== '[') return [start, end]; // autolink: no separate label/text
@@ -234,104 +217,81 @@ function destinationMaskRange(node: OffsetPositioned, content: string): OffsetRa
 }
 
 /**
- * Node kinds {@link collectMaskFacts} reacts to.
- *
- * Passed to `visit` as its test so the walk is still ONE traversal while the
- * visitor's parameter narrows to exactly these kinds — which is what lets the
- * switch inside be exhaustive, so adding a kind here forces a case there.
- */
-const MASK_NODE_TYPES = [
-  'code',
-  'inlineCode',
-  'html',
-  'yaml',
-  'link',
-  'image',
-  'definition',
-] as const;
-
-/**
- * The two things {@link findUnresolvedReferences} needs from the AST, gathered
- * in a single walk.
+ * The two things {@link findUnresolvedReferences} needs from the spans.
  */
 interface MaskFacts {
-  /** Ranges the raw scanner must ignore — see {@link collectMaskedRanges}. */
+  /** Ranges the raw scanner must ignore. Document order; consumed unordered. */
   ranges: OffsetRange[];
   /** Every normalized spelling of every `[label]: url` identifier. */
   definedLabels: Set<string>;
 }
 
 /**
- * Walk the AST **once** for both the masked ranges and the defined labels.
+ * Sort one document's spans into the mask and the defined-label set.
  *
- * Replaces eight separate `visit()` passes (four whole-node mask kinds, three
- * destination-clause kinds, and the definition-identifier pass that used to
- * live in {@link findUnresolvedReferences}) with one traversal dispatching on
- * `node.type`. Each pass was a full tree walk over the same tree.
+ * A pure filter over `spans-and-kinds` output rather than a tree walk: it reuses
+ * the extents the parse already reported instead of running a second tokenizer,
+ * and it works for any implementation of that capability.
  *
- * Range ORDER changes from grouped-by-node-kind to document order, which is
- * unobservable: the only consumer is {@link isRangeFullyMasked}, whose
- * `.some()` is order-independent. Range CONTENT is unchanged.
+ * The switch is exhaustive over {@link SpanKind} rather than a pair of sets, so
+ * a kind added to the vocabulary is a type error here instead of a silent
+ * no-op. `reference-link` is the one kind that deliberately contributes
+ * nothing, which is what the raw scanner needs: a resolved reference must not
+ * suppress a dangling one nested inside its text.
+ *
+ * @param spans - Every construct's extent, from the spans-and-kinds capability
+ * @param content - The same source those offsets index into
  */
-function collectMaskFacts(tree: Root, content: string): MaskFacts {
+function maskFactsFrom(spans: readonly SourceSpan[], content: string): MaskFacts {
   const ranges: OffsetRange[] = [];
   const definedLabels = new Set<string>();
 
-  const pushRange = (node: OffsetPositioned): void => {
-    const start = node.position?.start.offset;
-    const end = node.position?.end.offset;
-    if (start !== undefined && end !== undefined) {
-      ranges.push([start, end]);
+  for (const span of spans) {
+    switch (span.kind) {
+      // Masked in FULL, because bracket content inside them is never a markdown
+      // reference: code blocks, inline code spans, raw HTML (block and inline —
+      // `<!-- [a][nope] -->` is commented-out scaffolding no reader sees, and
+      // inside an HTML block adding a definition would not make the reference
+      // resolve anyway), and YAML frontmatter.
+      case 'code-block':
+      case 'code-span':
+      case 'raw-html':
+      case 'frontmatter':
+        ranges.push([span.startOffset, span.endOffset]);
+        break;
+      // Masked only across their DESTINATION clause — qs/Rails-style bracket
+      // query params (`?filter[status][eq]=1`) and a title containing a stray
+      // `[a][b]` are ubiquitous and not dangling references. See
+      // {@link destinationMaskRange}.
+      case 'inline-link':
+      case 'image':
+      case 'link-definition':
+        ranges.push(destinationMaskRange(span, content));
+        break;
+      // ⚠️ Masks NOTHING, deliberately: a resolved `[text][label]` carries no
+      // destination clause of its own, and masking it whole would swallow a
+      // genuine dangling reference nested in its text.
+      case 'reference-link':
+        break;
+      default:
+        // A kind this build does not know masks nothing, which is the safe
+        // direction here — a finding is reported rather than suppressed.
+        assertSpanKindHandled(span.kind);
     }
-  };
-  const pushDestinationRange = (node: OffsetPositioned): void => {
-    const range = destinationMaskRange(node, content);
-    if (range !== undefined) ranges.push(range);
-  };
-
-  visit(tree, [...MASK_NODE_TYPES], (node) => {
-    switch (node.type) {
-      case 'code':
-      case 'inlineCode':
-      case 'html':
-      case 'yaml': {
-        pushRange(node);
-        break;
-      }
-      case 'link':
-      case 'image': {
-        pushDestinationRange(node);
-        break;
-      }
-      case 'definition': {
-        pushDestinationRange(node);
-        for (const key of referenceLabelKeys(node.identifier)) definedLabels.add(key);
-        break;
-      }
+    // `link-definition` spans only, per `SourceSpan.label`: an implementation
+    // that labels a `reference-link` would otherwise inject a DANGLING
+    // reference's own label into the defined set, resolving it against itself
+    // and deleting the finding.
+    //
+    // VAT normalizes the spelling itself — `referenceLabelKeys` indexes both
+    // the escaped and the unescaped form, precisely because implementations
+    // disagree about which one they carry.
+    if (span.kind === 'link-definition' && span.label !== undefined) {
+      for (const key of referenceLabelKeys(span.label)) definedLabels.add(key);
     }
-  });
+  }
 
   return { ranges, definedLabels };
-}
-
-/**
- * Character-offset ranges covered by regions whose bracket content must never
- * be interpreted as markdown: fenced/indented code blocks, inline code spans,
- * raw HTML (block and inline — `<!-- [a][nope] -->` is commented-out
- * scaffolding no reader sees, and inside an HTML block adding a definition
- * would not make the reference resolve anyway), YAML frontmatter, and the
- * destination clause (url/title) of `link`, `image`, and `definition` nodes —
- * qs/Rails-style bracket query params (`?filter[status][eq]=1`) and a title
- * containing a stray `[a][b]` are ubiquitous and not dangling references. See
- * {@link destinationMaskRange} for why only the destination, not the whole
- * node, is masked.
- *
- * Reuses the AST's own node positions rather than running a second tokenizer.
- *
- * Ranges come back in document order, and are consumed as an unordered set.
- */
-export function collectMaskedRanges(tree: Root, content: string): OffsetRange[] {
-  return collectMaskFacts(tree, content).ranges;
 }
 
 /**
@@ -500,13 +460,13 @@ export function findReferenceOccurrences(content: string): ReferenceOccurrence[]
 /**
  * Detect dangling reference-style links in a parsed markdown document.
  *
- * @param content - Raw markdown source (the same string parsed into `tree`)
- * @param tree - The parsed AST, used only to mask code/HTML/frontmatter spans
- *   and to collect already-normalized definition identifiers
+ * @param content - Raw markdown source (the same string the spans index into)
+ * @param spans - The parse's spans, used only to mask code/HTML/frontmatter and
+ *   destination clauses, and to collect the defined definition labels
  * @returns One finding per plausible dangling full/collapsed reference
  */
-export function findUnresolvedReferences(content: string, tree: Root): UnresolvedReference[] {
-  const { ranges: maskedRanges, definedLabels } = collectMaskFacts(tree, content);
+export function findUnresolvedReferences(content: string, spans: readonly SourceSpan[]): UnresolvedReference[] {
+  const { ranges: maskedRanges, definedLabels } = maskFactsFrom(spans, content);
   const findings: UnresolvedReference[] = [];
 
   for (const occurrence of findReferenceOccurrences(content)) {

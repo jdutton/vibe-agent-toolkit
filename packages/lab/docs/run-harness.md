@@ -110,7 +110,8 @@ the [facet contract](facets.md) forbids.
 
 The default is a default, not a definition. `MEASURABLE_COMMANDS` in the same file is the named
 registry — the three defaults plus `inventory`, `validate`, `verify`, `resources-population`,
-`claude-context-all` and `claude-context` — and `vat-lab <facet> run --command <name>` selects from
+`claude-context-all`, `claude-context`, `claude-budget`, `skills-validate` and `skills-list` — and
+`vat-lab <facet> run --command <name>` selects from
 it. Adding an entry to the registry changes what a caller *can* ask for and nothing about what a
 bare run measures. The flag is repeatable
 (`--command validate --command verify`), an unknown name is a usage error listing every valid one,
@@ -131,7 +132,46 @@ every stored `perf` and `io` report was taken over. Overriding the default never
 their scope from the config at the working directory, which the harness has already set to the
 subject. `verify` reads the built `dist/` tree, so a subject measured with it must have been built.
 `claude-context-all` is subject-less for the same reason — `--all` sweeps every path the projection
-realized and takes no positional.
+realized and takes no positional. So is `claude-budget`, and there for a sharper reason than
+convention: it **rejects** (exit 2) any path resolving outside the root it discovered, so a
+positional naming the subject fails from every working directory except the subject itself.
+
+## Reaching the rest of the enumerating verbs
+
+`docs/contributing/command-lane-table.md` counts **25 commands that enumerate a corpus**, and those
+are the ones where a cost regression actually hurts. This registry reaches ten of them. That gap is
+the reason `claude-budget`, `skills-validate` and `skills-list` are here:
+
+- **`claude-budget`** was the largest hole. It shares `claude-context`'s lane, route and population
+  exactly — same `buildClaudeContextPopulation`, same two `populate()` passes, same single crawl —
+  but asks a different question of it: `context` answers for the paths named, while `budget` sweeps
+  every working location through `sweepAlwaysLoadedBudgets()`. Its per-answer cost therefore grows
+  with the number of regions in the tree, and the `claude-context` pair is blind to that by
+  construction, because both of its arms hold the query count fixed.
+- **`skills-validate`** is the `registry-md-html` lane's cheapest read-only door. Every other
+  command that builds that registry — `skills build`, `skills package`, `claude plugin build`,
+  `agent build`, `skill test run` — writes output; `audit` and `verify` reach it but bundle other
+  work on top.
+- **`skills-list`** is the closest thing to a control for the crawl itself: one crawl, no
+  validation, no parse. Measured over an order of magnitude of document corpus it stays **flat**,
+  which is the shape to expect — its extent is the skills glob, not the document corpus — and that
+  is what makes it useful as a baseline a downstream change must not move. Run it yourself rather
+  than trusting a figure here; `vat-lab perf run <subject> --command skills-list` prints a current
+  one.
+
+Fifteen enumerating commands are still unreachable, and they are not all unreachable for the same
+reason — which matters, because only one of these groups is a real boundary:
+
+| Why it is out | Commands |
+|---|---|
+| Reaches a remote service, so the measurement would not be of vat | `corpus scan` (clones over the network), the five `claude org skills` verbs (Anthropic Admin API) |
+| Produces build output, so a subject must be prepared and is left dirty | `build`, `agent build`, `skills build`, `skills package`, `claude plugin build`, `skill test run`, `rag index` (also needs an embedding provider) |
+| **Nothing but the absence of an entry** | `skill review`, `claude marketplace validate` |
+
+The last row is the honest one: both are read-only and cheap, and neither is here yet. Anyone
+adding them should say what lane the row buys that an existing entry does not already cover —
+`skills-validate` and `audit` between them already reach `registry-md-html`, so a third door onto
+the same lane earns its place only if it isolates something they bundle.
 
 `claude-context-all` and `claude-context` are a **pair**, and the pair is the point. The sweep was
 measured at 561 seconds on a large adopter tree, and its per-answer cost scales with the size of the

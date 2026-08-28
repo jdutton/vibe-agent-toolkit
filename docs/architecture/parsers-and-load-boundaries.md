@@ -1,13 +1,16 @@
 # Parsers and Load Boundaries
 
-**Status: intended architecture.** This document states what VAT is being moved toward and what is
-already true. It is the input to an execution spec, not a description of shipped code — every
-section marks what holds today and what does not.
+**Status: half shipped, half intended, and each section says which.** The **parser** half is built —
+the three capabilities are named in code, a `ParseFacts` conformance suite exists, and a second
+implementation has been run through it (§5 steps 4–6). The **load-boundary** half is still a target:
+every published barrel violates the rule in §4, and steps 1–3 are open. Read no section as a
+description of shipped code unless it says so.
 
 Two ideas, and they are the same idea seen from two ends:
 
-1. **VAT does not need *a parser*. It needs three capabilities**, and today one pipeline supplies
-   all three and is paid for in full even when only the cheapest is wanted.
+1. **VAT does not need *a parser*. It needs three capabilities** — now named as interfaces, though
+   one implementation still supplies all three, and a caller who wants only the cheapest still pays
+   for the tokenize that serves them all.
 2. **Nothing heavy may load unless it is being used.** No parser, no vector store, no database
    driver — including the ones built into Node. As VAT grows, the barrel is the thing that must
    stay light, because every consumer of every symbol pays for it.
@@ -44,13 +47,14 @@ this: *"an externally registered parser is the case on the horizon."*
 
 ### How much mdast is actually left
 
-Three things in `parseMarkdownContent` take a `tree: Root`. Only one of them wants the structure:
+✅ **Nothing outside the implementation takes a tree any more.** Three consumers used to, and the
+analysis that led here is what decided the capability split — only one of them ever wanted structure:
 
-| Consumer | What it takes | What it actually needs |
-|---|---|---|
-| `collectCodeContextRanges(tree)` | `Root` | `node.type` + `position.{start,end}.offset` over 8 node types, returned as `{fences, codeSpans, excluded}` — **spans, not structure** |
-| `findUnresolvedReferences(content, tree)` | `Root` | spans, **plus the label text of each `definition`** — see below: it does its own normalizing |
-| `collectAstFacts(tree)` | `Root` | links and flat headings — **the only structural consumer**, and `buildHeadingTree` is already a separate function taking flat headings |
+| Consumer | What it took | What it actually needed | Today |
+|---|---|---|---|
+| `collectCodeContextRanges(tree)` | `Root` | `node.type` + `position.{start,end}.offset` over 8 node types, as `{fences, codeSpans, excluded}` — **spans, not structure** | `codeContextRangesFrom(spans)`, a pure filter |
+| `findUnresolvedReferences(content, tree)` | `Root` | spans, **plus the label text of each `definition`** — see below: it does its own normalizing | `findUnresolvedReferences(content, spans)` |
+| `collectAstFacts(tree)` | `Root` | links and flat headings — **the only structural consumer**, and `buildHeadingTree` is already a separate function taking flat headings | split across the two capabilities in `remark-parser.ts` |
 
 **The count is two, not two and a half.** `findUnresolvedReferences`' `@param` says it collects
 *"already-normalized definition identifiers"*, which reads as a dependency on the parser's
@@ -67,24 +71,45 @@ must supply is the definition's raw label and position — a span with a kind an
 more.** There is no third capability hiding here, and the spans-and-kinds contract needs one field
 rather than a home for a dialect rule.
 
-### What a replacement implementation actually has to supply — an open question, not a settled one
+### What a replacement implementation actually has to supply — now measured
 
-A flat token stream carrying **character offsets** would satisfy the span consumers. Whether any
-particular flat-token parser does is a question that must be answered per implementation, and the
-obvious candidate does not:
+A flat token stream carrying **character offsets** satisfies the span consumers, and that is the
+contract `SourceSpan` states: half-open UTF-16 code-unit offsets into the exact source string, such
+that `content.slice(start, end)` is the construct. Whether a particular flat-token parser meets it is
+answered per implementation, and the obvious candidate does not.
 
-> ⚠️ **`markdown-it@14` fails this contract three ways.** It reports line ranges, not character
-> offsets, and only for block tokens — inline children carry `map: null`. It emits **zero tokens for
-> a link definition** (the definition lands in `env.references` with no position at all), which is
-> exactly what `findUnresolvedReferences` needs identifiers from. And it produces no raw-HTML anchors
-> under its default `html: false`.
+> 🔑 **`markdown-it@14` places spans on BLOCK constructs only — three of the seven span-bearing
+> constructs in the conformance probe.** Measured by `markdown-it-conformance.test.ts` over a
+> document holding frontmatter, a heading, a link definition, an inline link, a reference link, an
+> inline code span, raw HTML and a fence: it places `frontmatter`, `link-definition` and
+> `code-block`, at offsets exact to the character. The four it cannot place are exactly the four
+> inline ones — `inline-link`, `reference-link`, `code-span`, `raw-html` — because inline tokens
+> carry `map: null`.
+
+⚠️ **The block/inline line is the whole finding, and it took two reviews to see it.** A first-pass
+adapter reported *seven* divergent fields and only one span; a fairness review closed five, and an
+independent corpus review then closed four more that a one-document probe could not express. All
+nine were the adapter's own, and all nine are catalogued in §3. What survived is one irreducible
+fact and its three consequences:
+
+- **No inline offsets at all.** The offsets an inline rule *can* see index the inline content string
+  — a paragraph's lines joined, trimmed and stripped of block indentation — which does not map back
+  to source offsets inside a list or a blockquote. Reconstructing them would be a guess, and a mask
+  at a guessed offset suppresses real findings instead of failing loudly.
+- **`links` loses `line`, `startOffset` and `endOffset`** on every inline entry. Text, href,
+  classification, `nodeType` and the by-kind bucketing all agree; only position is missing.
+- **`lexicalReferences` over-reports, and `unresolvedReferences` reports a link that is not
+  broken.** `codeContextRangesFrom` builds the lexer's exclusion set out of spans, so an inline link
+  with no span is a destination the lexer is never told to skip — and `maskFactsFrom` builds the
+  dangling-reference mask the same way, so a full reference form written inside a code span has no
+  `code-span` extent to hide behind and is reported as a broken link. Six of this repository's
+  documents produce one. 🔑 A missing span does not merely lose a fact — it changes what VAT's own
+  derivations conclude, and the last thing it changes is what a user is told.
 
 That is a conformance finding, not a disqualification — see §3 for why it enters as a test
 implementation anyway. It is recorded here because "a flat token stream satisfies all three" was an
-assumption, and the first implementation checked against it refuted it.
-
-⚠️ It also means the measured **10.62×** speed ratio is not like-for-like in a second way beyond
-frontmatter: the rival parses neither frontmatter nor raw HTML.
+assumption, and the first implementation checked against it refuted it: a flat token stream is
+sufficient, a flat token stream *without inline positions* is not.
 
 ### Three producer-named leaks to close, one of them not prose
 
@@ -113,8 +138,8 @@ this one is a cache cold-start, and that belongs in the plan rather than in a fo
 
 | Capability | What it answers | Already implemented as | Cost profile |
 |---|---|---|---|
-| **spans-and-kinds** | "where are the code fences, the raw HTML, the frontmatter, the links?" | `reference-lexer.ts` — but **on top of the parser, not beside it**: `collectCodeContextRanges(tree: Root)` lives in that file and is a `unist-util-visit` walk. Only the lexical-reference scan is raw-source | cheapest to *serve*; not currently cheap to *obtain* |
-| **structure** | "what is the heading tree, and where does each section start and end?" | `collectAstFacts` + `buildHeadingTree` | needed by chunking and navigation, not by link integrity |
+| **spans-and-kinds** | "where are the code fences, the raw HTML, the frontmatter, the links?" | `ParseSession.spansAndKinds()`, returning `links`, `anchors`, `frontmatterSource` and a flat `SourceSpan[]`. `codeContextRangesFrom` and the dangling-reference mask are pure filters over that array | cheapest to *serve*; still not cheap to *obtain* — see below |
+| **structure** | "what is the heading tree, and where does each section start and end?" | `ParseSession.structure()`, returning **flat, unslugged** headings. `github-slugger`'s suffixing and the nesting are renderer conventions VAT owns, applied by the composer | needed by chunking and navigation, not by link integrity |
 | **faithful edit** | "change this one value and leave every other byte alone" | `html-transform.ts`, which **never re-serializes** — it splices at parse5-reported offsets — and `frontmatter-editor.ts`, which states a byte-identity round-trip contract | needs source fidelity a normalizing serializer destroys |
 
 The third row is the one VAT already discovered and never named — but it is named in **two** places,
@@ -141,14 +166,19 @@ when you only wanted spans"* saves 24–26% × 64% = **15.4–16.6% of cold wall
 ceiling** — and less on Windows. That is the identical dead end that killed driving micromark
 directly.
 
-The measured 10.62× from `markdown-it` is a **different tokenizer**, not a skipped tree.
+The `markdown-it` ratio (§3) is a **different tokenizer**, not a skipped tree — which is why it is
+not a counter-example to the ceiling above, and equally why it is not a reason to swap.
 
 > The split does not make VAT fast. It makes VAT **swappable**, and swappable is what puts a faster
 > tokenizer within reach. They compose in that order and only that order.
 
 ## 3. A second implementation, and what it is for
 
-`markdown-it` enters as a **test-only implementation**, not shipped and not executed by default.
+`markdown-it` is a **test-only implementation**: it lives in `dev-tools`, so it reaches no published
+package's dependency graph, and nothing in the product can call it. It **does** run on every unit
+suite — `markdown-it-conformance.test.ts` — which is the point. A rival kept behind a flag nobody
+sets is a rival whose divergences drift unnoticed; running it every time is what makes the pinned
+finding list go red when a gap closes or a new one opens.
 
 The reason is not performance. It is that **a single-implementation interface is a claim nobody has
 tested.** A second implementation is the only thing that converts "loosely coupled" from an
@@ -160,20 +190,171 @@ This is a starting position, not a commitment against shipping. If the conforman
 `markdown-it` is better for a particular capability, promoting it for that capability is a decision
 the architecture should permit, not one it should have foreclosed.
 
-⚠️ Do not assume that capability is spans-and-kinds. It is the intuitive guess — a flat token stream
-looks like a natural fit — and it is the one the three-way failure in §1 lands hardest on: no
-character offsets, no positioned link definitions. The capability where a rival is most likely to win
-is an output of the conformance suite, not an input to it.
+✅ **That question has now been answered, and the answer is `structure`.** It was worth asking as an
+output of the suite rather than an input, because the intuitive guess was wrong in both directions:
+
+| Capability | `markdown-it`'s verdict | Who consumes it |
+|---|---|---|
+| `spans-and-kinds` | ❌ fails, and fails hardest — see §1 | **every `resources` user**: `codeContextRangesFrom` → `findLexicalReferences`, `maskFactsFrom` → `findUnresolvedReferences`, the `links` inventory, `anchors` |
+| `structure` | ✅ conforms | **`resources` and `cli`, not just `rag`**: `collectHeadingSlugs` → the registry's fragment index, so heading slugs are part of *link integrity*; `blob-sections.ts`/`blob-population.ts` (the projection store's `sections` rows, split on `heading.line`); `blob-facts.ts`'s `headingCount`; `vat resources scan`'s per-file count; `parse-fact-snapshot.ts`. `rag/chunking/chunk-resource.ts` is the one consumer outside `resources` |
+| `faithful-edit` | ❌ not claimed, cannot be | `html-transform.ts` — which is **parse5**, so this one was never the markdown parser's anyway |
+
+⛔ **So a rival wins one capability and loses the one every user depends on.** That is the whole
+promotion decision, and it is a no — but *not* because the capability it wins has no users. It has
+several, listed above and inside `resources` itself, and one of them is link integrity: heading
+slugs are half of the fragment index `checkAnchor` reads. The reason the win is worth nothing is
+structural. `parseMarkdownContent` pulls **both** read capabilities from a single session of a
+single implementation, so promoting `markdown-it` for `structure` alone means running two parsers
+over every document — paying a second full tokenize to obtain headings the parser that must already
+run for `spans-and-kinds` hands over for free.
+
+What *is* true of `rag` specifically is that it takes structure second-hand: `packages/rag/src`
+contains no reference to remark, mdast or `parseMarkdown` at all — it reads `ResourceMetadata` that
+`resources` already built, so chunking gets headings as a by-product of a link-integrity parse it
+has no use for.
+
+⚠️ The failure mode is what decides it, not the size of the gap, and it is now measured rather than
+predicted: on this repository's own markdown a `markdown-it` run reports **broken links that are not
+broken** — a full reference form inside a code span, unmasked because there is no `code-span` span to
+mask it with, in six documents. For a tool whose job is link integrity, being differently wrong
+about a user's links is worse than being slow.
+
+🔑 And the gap is not small. Closing it means building a **content→source mapping layer**: inline
+rules see the inline content string (a block's lines joined, block-indentation stripped, outer
+whitespace trimmed), so every inline construct needs its rule wrapped plus a per-token line
+alignment — with no clean answer at all for the core `linkify` post-pass, which splits already-built
+text tokens and offers no rule invocation to observe. Roughly 150–200 lines of position tracking
+bolted onto a parser that deliberately does not provide it, revalidated on every upgrade.
 
 ⚠️ **It is already in the tree, and that constrains how it enters.** `markdown-it` is a `dependency`
-of `@vibe-agent-toolkit/dev-tools` — in `src/`, not `test/` — where `parser-bakeoff.ts` instantiates
-it with a documented options set. A second, differently-configured instance would make the
-conformance verdict and the speed verdict statements about two different parsers. The conformance
-implementation must reuse that configuration, or change it in one place.
+of `@vibe-agent-toolkit/dev-tools` — in `src/`, not `test/` — and one `createMarkdownItProcessor()`
+in `markdown-it-parser.ts` is what both `parser-bakeoff.ts` and the conformance adapter build from.
+A second, differently-configured instance would make the conformance verdict and the speed verdict
+statements about two different parsers.
 
 **The equivalence harness is the conformance suite.** "Do two implementations produce identical
 `ParseFacts` over the corpus?" is the same code as "is this parser change faster or just
 differently wrong", and building it once serves both permanently.
+
+### 🚩 The adapter is the first suspect, and it was guilty nine times out of twelve
+
+The first `markdown-it-parser.ts` reported **seven** divergent `ParseFacts` fields. Reviewing it for
+fairness rather than for correctness left two, and the five that closed were the adapter's, not the
+parser's:
+
+| Reported as | Actually |
+|---|---|
+| "cannot see raw HTML" | `html: true` was never set; the default preset escapes it as text |
+| "cannot see frontmatter, and invents a setext heading" | no frontmatter plugin was installed |
+| "cannot see a link definition, so a resolvable reference reads as dangling" | `env.references` was never read, and a rule's extent is observable by wrapping the rule |
+| "cannot tell a reference link from an inline one" | same wrapper; an inline link closes with `)`, all three reference forms close with `]` |
+| "line-vs-character drift inflates `codeBlockCodeUnits`" | a line range's exclusive end is the *next line's start*, and the terminator was left on |
+
+The generalisation is the reviewable one: **a rival handed less work to do is a rival flattered by
+the result, and a rival denied its configuration is a rival condemned by its reviewer.** Both are
+the same error and only one of them is warned about in the usual places. Every "X cannot" in a
+conformance write-up owes an answer to "did the adapter try?".
+
+#### 🪤 And the review that found five was itself run against one document
+
+The five above were found by reading the adapter. An independent review then ran the *fixed*
+adapter over this repository's **293 tracked markdown files** — the same suite, the same code, a
+corpus instead of a probe — and found **four more adapter faults**, none of which the probe could
+express:
+
+| Found only on a corpus | The adapter's mistake |
+|---|---|
+| `contentMeasures` off on **17 documents** | a block token's `map` is a LINE range, and a fence inside a list item does not begin its line; remark anchors such a node at its own marker, so the span must scan to the opener |
+| a definition in a blockquote **dropped entirely** | same cause, worse effect — the label pattern does not match `> [ref]`, so the definition never reaches `findUnresolvedReferences` and a resolvable reference reads as dangling |
+| `headings` truncated on **6 documents** | `html: true` — fix #1 above — turns `<kbd>` in a heading into an `html_inline` token, and the text flattener only read `text` and `code_inline`. Headings feed the stateful slugger, so this moved **slugs** |
+| every block span one code unit long on CRLF, and `frontmatterSource` LF-normalized | the terminator trim dropped `\n` and not `\r\n`, and the frontmatter body was read from `markdown-it`'s own copy — its `normalize` core rule rewrites `\r\n` before any rule runs |
+
+🔑 **The lesson is about the probe, not the parser.** Four of these are the *same* mistake — a line
+range is not a character extent, at either end — and the fixture could not show it because every
+construct in it began at column zero and ended on an LF. A one-document probe systematically
+flatters a line-oriented implementation, which is precisely the implementation under test.
+
+⛔ **Three fields survive, and they are one gap seen from three distances:** `markdown-it` gives a
+position to block tokens only. Inline tokens carry `map: null`, and the offsets an inline rule sees
+index the *inline content string* — a paragraph's lines joined, trimmed, and stripped of block
+indentation — which cannot be mapped back to source offsets inside a list or a blockquote. So four
+of the eight span kinds are unreachable; `links` loses `line`/`startOffset`/`endOffset` on every
+inline entry; `lexicalReferences` over-reports, because a link with no span is a destination the
+lexer is never told to skip; and `unresolvedReferences` **reports a link that is not broken**,
+because a full reference form inside a code span has no `code-span` extent to be masked by. Six of
+this repository's documents produce one.
+
+That last step is the shape to remember: **a missing span does not merely lose a fact, it changes
+what VAT's own derivations conclude — and the last thing it changes is what a user is told.**
+
+### The speed number, at the stage that decides
+
+⛔ **No number is quoted here, deliberately.** `markdown-it` is roughly an order of magnitude faster
+than `remark-parse` on this repository, and **it does not matter** — it fails `spans-and-kinds`,
+which every `resources` consumer depends on, so this is the speed of something VAT will never ship.
+A precise figure in a durable document is a figure someone greps later and re-opens a settled
+question with. Run `bun run bakeoff:parsers . --stage parse|facts` if you need one; it prints its own
+corpus and pass count.
+
+Two things about the *shape* of the measurement do generalise, and they are the reason the flag
+exists at all:
+
+- **The capability adapter is real and asymmetric.** Turning a parse into `ParseFacts` costs remark
+  under a sixth of its parse time and `markdown-it` roughly two thirds of its, because mdast tree
+  walking is the expensive half of remark's total and a flat token walk is cheap. **A parse-stage
+  ratio is not what a swap buys** — always re-run with `--stage facts` before quoting one.
+- 🔑 **That gap widened as fidelity was fixed.** The adapter's share of `markdown-it`'s time was
+  markedly lower while it was getting four things wrong — the fence in a container, the CRLF
+  terminator, the frontmatter source, the heading flattener. Anchoring a span at its opener and
+  reading frontmatter from source are per-construct scans the earlier adapter simply did not do. **A
+  rival's speed advantage is measured against the fidelity it is actually delivering, and the
+  cheapest way to look fast is to answer a slightly different question.**
+
+⚠️ And compare stages only within one session: the parse-stage ratio moved ~9% between two sessions
+with **no change to the parser or its configuration**. The stage-to-stage *difference* is the
+finding; no absolute number is.
+
+⛔ Neither number is a reason to swap. §1 is: the offsets are the contract, and this rival does not
+have them.
+
+### 🪤 What the suite did NOT catch, learned by building it and then by attacking it
+
+`parse-conformance.ts` originally checked span fidelity one way: the character at `startOffset` must
+be one the kind can begin with — the cheapest check for an implementation reporting **line ranges**
+where character offsets were asked for.
+
+> ⚠️ It reported **nothing** against `markdown-it`, which does exactly that. Every span it emits is
+> a block construct, and a block begins a line, so a line-aligned offset lands on the right
+> character and the check passes.
+
+The unit mismatch surfaced one layer down instead: a line-aligned fence span ran to the start of the
+following line, so `contentMeasures.codeBlockCodeUnits` came out **one higher** than remark's. That
+was found by eye. Attacking the suite afterwards found four reasons it could not have found it:
+
+1. **It never looked at `endOffset`.** Injecting a candidate that adds one to *every* `endOffset` —
+   literally the shipped defect — produced **zero** span findings. `spanDefect` now checks that a
+   span does not end on a line terminator, which no construct's last character ever is, and which
+   is also the only check that sees a `\r` left behind on CRLF source.
+2. **A span never emitted produces no finding at all.** The suite inspects what came back; the
+   dropped blockquote definition was invisible to every span check and visible only in the facts
+   diff.
+3. **`code-block` admits a leading space**, because an indented code block opens with indentation —
+   so a fenced block whose extent wrongly swallowed its list indentation passed. Kept, because the
+   alternative is wrong, and named here as the reason check (1) matters more than it looks.
+4. **The overlap check compared neighbours.** Its stated argument — a straddle is always visible
+   between two spans adjacent once sorted — is false: with `[0,10)`, `[2,4)` and `[5,15)` the third
+   straddles the first and neighbours the second. It now tracks the furthest end seen.
+
+🚨 And the suite was **failing its own reference implementation 24 times** on this repository, in
+silence: `SPAN_OPENERS` expected `inline-link` to begin with `[` or `<`, and a GFM autolink literal
+is a bare `https://…` run with no delimiter. Nobody saw it because nothing had ever run the suite
+over a corpus.
+
+🔑 The generalisation survives all of it, strengthened: **the whole-`ParseFacts` diff is the
+instrument that discriminates**, and the span checks are a faster path to a subset of what it finds,
+never a substitute for it. What changed is the second half — *a check that has never been run over a
+corpus is not a check, it is a claim*, and every one of the holes above was found by pointing an
+existing function at 293 real documents rather than at one written to be parsed.
 
 ## 4. Load boundaries: nothing heavy loads unless it is used
 
@@ -361,20 +542,46 @@ In dependency order, each item independently landable:
    `subpath-purity`-style graph assertions where the question is *which import*; use a load-budget
    needle only where the question is *which invocation*. A boundary with no test is a boundary one
    careless import undoes.
-4. **Name the three capabilities in code** — the interface each parser implementation declares.
-   This is the step that has to be right, and the one worth arguing about on paper first.
-5. **Build the equivalence harness** as the conformance suite over `ParseFacts` for the corpus.
-   ⚠️ `parseFactsShapeSource()` already answers *"did these two artifacts come from the same shape?"*
-   — the conformance suite must build on it, not beside it, or someone will invent a
-   `CONFORMANCE_VERSION` and the repo's hardest rule falls over.
-6. **Add `markdown-it` as a test implementation** and run it through that suite. Whatever it says
-   about speed and fidelity per capability is then evidence, not opinion.
+4. ✅ **Name the three capabilities in code** — `parse-capabilities.ts`. `spans-and-kinds` yields
+   `links`, `anchors`, `frontmatterSource` and a flat `SourceSpan[]`; `structure` yields flat,
+   unslugged headings; `faithful-edit` yields **nothing** and is a claim about the offsets, checked
+   rather than implemented. `remark-parser.ts` is the reference implementation and
+   `parseMarkdownContent` is the composer, which now takes the implementation as a parameter.
+5. ✅ **Build the equivalence harness** — `parse-conformance.ts`, a field-by-field `ParseFacts` diff
+   with six kinds of finding (`capability-claim`, `threw`, `missing-capability`, `span-fidelity`,
+   `facts-differ` and `link-order`) that call for different responses. `link-order` is its own kind
+   rather than a `facts-differ` on `links` because a document-order implementation passes every
+   schema check in the repo and fails every parse-fact golden, which pins `links` by ordinal.
+   `capability-claim` is what makes `MarkdownParser.capabilities` falsifiable at all: the field is
+   declared rather than inferred so that it *can* be contradicted, and until the suite compared the
+   declaration against the methods actually served, a parser declaring nothing and a parser
+   declaring everything produced identical reports.
+   ⛔ There is no `CONFORMANCE_VERSION`: the report carries
+   `parseFactsShapeSource()`, so it **declares the fact shape it was taken against** and moves with
+   the schema.
+6. ✅ **Add `markdown-it` as a test implementation** — `dev-tools/src/markdown-it-parser.ts`, built
+   from the same `createMarkdownItProcessor()` the bake-off times so the fidelity verdict and the
+   speed verdict are about one parser. **Three `ParseFacts` fields diverge** — `links`,
+   `lexicalReferences` and `unresolvedReferences`, pinned by `markdown-it-conformance.test.ts`. The
+   *seven* an unfixed adapter first reported were mostly the adapter's own; see §1 and §3.
 
 Steps 1–3 are load-boundary work and need none of the parser work. Steps 4–6 are the parser
-interface, and no *behaviour* changes before 5 exists: **without a whole-corpus facts diff you
+interface, and no *behaviour* changed before 5 existed: **without a whole-corpus facts diff you
 cannot tell *faster* from *differently wrong*, and differently-wrong ships silently.** In practice 6
 is what exercises 5 — a harness with one implementation cannot demonstrate that it discriminates —
-so they land together rather than in sequence.
+so they landed together rather than in sequence.
+
+⚠️ **Step 1 is still open, and step 4 did not close it.** `SourceSpan.kind` is named in VAT's own
+vocabulary from the start (`code-block`, `inline-link`, `link-definition`, …) because spans are not
+persisted and were free to be named right. `LinkNodeTypeSchema` still enumerates mdast node names in
+the persisted link rows, and undoing that still costs a parse-cache cold start.
+
+🔑 **What 4–6 actually bought, stated so nobody re-litigates it as a perf change:** the three walks
+of the same tree (`collectAstFacts`, `collectCodeContextRanges`, `collectMaskFacts`) became one, and
+the two range consumers became pure filters over spans. Output is unchanged — the whole `resources`
+unit suite passed untouched, and a count of it is deliberately not quoted, because a hand-maintained
+number in a durable document rots — and no timing claim is made for it. The point is that a second
+implementation can now be measured against a contract instead of against a diff.
 
 ### 🔶 Where this plan is aimed is an open decision
 

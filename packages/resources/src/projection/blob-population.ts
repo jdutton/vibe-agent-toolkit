@@ -880,8 +880,8 @@ function emitPreparedBlob(
 /**
  * The code context a blob with no AST has: none.
  *
- * `findLexicalReferences` normally receives the ranges `collectCodeContextRanges`
- * walked out of the tree, and a `none` blob has no tree. Empty ranges are honest
+ * `findLexicalReferences` normally receives the ranges `codeContextRangesFrom`
+ * filtered out of the parse's spans, and a `none` blob is never parsed. Empty ranges are honest
  * rather than lossy here, and the measurement is what says so: the
  * fence/code-span annotation covered 0.0–2.7% of source files, and on those it
  * **inverted** — a backtick in a JSDoc comment read `inCodeSpan: true` while the

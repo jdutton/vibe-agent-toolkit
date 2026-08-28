@@ -1,47 +1,47 @@
-import type { Root } from 'mdast';
-import remarkFrontmatter from 'remark-frontmatter';
-import remarkGfm from 'remark-gfm';
-import remarkParse from 'remark-parse';
-import { unified } from 'unified';
 import { describe, expect, it } from 'vitest';
 
 import { blobReferencesFor } from '../src/projection/blob-references.js';
 import {
-  collectCodeContextRanges,
+  codeContextRangesFrom,
   detectVariableExpansion,
   findLexicalReferences,
 } from '../src/reference-lexer.js';
+import { openRemarkSession } from '../src/remark-parser.js';
 
 /** Hoisted because `sonarjs/no-duplicate-string` fires at three uses. */
 const AT_README = '@README.md';
 /** Hoisted for the same reason — asserted in three of the bare-token tests. */
 const BARE_TOKEN = 'bare-token';
 
-function parse(source: string): Root {
-  return unified().use(remarkParse).use(remarkGfm).use(remarkFrontmatter).parse(source) as Root;
+/**
+ * Ranges through the real seam — the shipped `spans-and-kinds` capability, then
+ * the partition — rather than through a locally composed processor. A local
+ * processor is a second definition of which plugins VAT parses with, and a
+ * lexer test that disagrees with the shipped chain tests a parser nobody runs.
+ */
+function rangesOf(source: string) {
+  return codeContextRangesFrom(openRemarkSession(source).spansAndKinds().spans);
 }
 
 function lex(source: string) {
-  return findLexicalReferences(source, collectCodeContextRanges(parse(source)));
+  return findLexicalReferences(source, rangesOf(source));
 }
 
-describe('collectCodeContextRanges', () => {
+describe('codeContextRangesFrom', () => {
   it('separates fenced blocks from inline code spans', () => {
-    const source = 'Text with `a span` here.\n\n```\nfenced\n```\n';
-    const ranges = collectCodeContextRanges(parse(source));
+    const ranges = rangesOf('Text with `a span` here.\n\n```\nfenced\n```\n');
     expect(ranges.codeSpans).toHaveLength(1);
     expect(ranges.fences).toHaveLength(1);
   });
 
   it('treats an indented code block as a fence', () => {
-    const ranges = collectCodeContextRanges(parse('Text.\n\n    indented\n'));
+    const ranges = rangesOf('Text.\n\n    indented\n');
     expect(ranges.fences).toHaveLength(1);
     expect(ranges.codeSpans).toHaveLength(0);
   });
 
   it('excludes markdown link, definition, frontmatter and raw-HTML spans', () => {
-    const source = '---\nid: x\n---\n\n[a](./b.md)\n\n[ref]: ./c.md\n\n<!-- @d.md -->\n';
-    const ranges = collectCodeContextRanges(parse(source));
+    const ranges = rangesOf('---\nid: x\n---\n\n[a](./b.md)\n\n[ref]: ./c.md\n\n<!-- @d.md -->\n');
     expect(ranges.excluded.length).toBeGreaterThanOrEqual(4);
   });
 });

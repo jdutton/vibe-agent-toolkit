@@ -298,12 +298,25 @@ export { quoteIdentifier } from './projection/sql-identifiers.js';
 // Lexical reference extraction: reference candidates the markdown AST cannot
 // see (@-prefixed tokens, variable-anchored paths, bounded bare tokens).
 export {
-  collectCodeContextRanges,
+  codeContextRangesFrom,
   detectVariableExpansion,
   findLexicalReferences,
   type CodeContextRanges,
   type OffsetRange,
 } from './reference-lexer.js';
+// The three capabilities VAT wants from a parser. Types plus one error class —
+// no implementation is reachable from here, so the barrel stays parser-free.
+export {
+  MissingCapabilityError,
+  type FlatHeading,
+  type MarkdownParser,
+  type ParseCapability,
+  type ParseSession,
+  type SourceSpan,
+  type SpanFacts,
+  type SpanKind,
+  type StructureFacts,
+} from './parse-capabilities.js';
 // `LexicalReference` and `ContentMeasures` are Zod-sourced (single source of
 // truth) — see schemas/parse-facts.ts, which is also what the parse cache
 // validates an entry against.

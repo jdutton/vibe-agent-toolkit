@@ -4,6 +4,7 @@ import {
   type ArmReport,
   checkCorpus,
   numericFlag,
+  requireStage,
   summarise,
 } from '../src/parser-bakeoff.js';
 
@@ -38,6 +39,7 @@ const EXPECT_BYTES = '--expect-bytes';
 function reportOf(overrides: Partial<ArmReport> = {}): ArmReport {
   return {
     arm: REMARK,
+    stage: 'parse',
     documents: FILES,
     bytes: BYTES,
     samples: [100, 200],
@@ -60,6 +62,24 @@ describe('the parser bake-off', () => {
       // which is the whole failure this guard exists to prevent.
       expect(() => numericFlag([EXPECT_FILES], EXPECT_FILES)).toThrow(/needs a number/);
       expect(() => numericFlag([EXPECT_FILES, 'lots'], EXPECT_FILES)).toThrow(/needs a number/);
+    });
+  });
+
+  describe('choosing a stage', () => {
+    it('defaults to the parser stage, so an existing invocation still means what it did', () => {
+      expect(requireStage([])).toBe('parse');
+    });
+
+    it('reads the stage the caller named', () => {
+      expect(requireStage(['--stage', 'facts'])).toBe('facts');
+    });
+
+    it('REFUSES an unknown stage rather than falling back to the default', () => {
+      // A silent fallback would print a parse-stage ratio under a facts-stage
+      // heading, which is the one way this tool can report a confident wrong
+      // number. The list is in the message so the caller can fix it.
+      expect(() => requireStage(['--stage', 'compose'])).toThrow(/--stage must be one of parse, facts/);
+      expect(() => requireStage(['--stage'])).toThrow(/--stage must be one of/);
     });
   });
 

@@ -261,9 +261,9 @@ export const TRAP_CORPUS_FILES: CorpusFiles = Object.freeze({
   // reference.md` supplies one genuine dangling label; every line below is
   // bracket-shaped text that must NOT be reported — a reference inside a fenced
   // block, a query string, an API signature with optional arguments, and a
-  // numeric citation. `collectMaskFacts` computes masked ranges and defined
-  // labels in one walk, and a masking regression is silent: it does not throw,
-  // it just starts reporting prose.
+  // numeric citation. `maskFactsFrom` (in `unresolved-references.ts`) derives
+  // masked ranges and defined labels from the parse's spans, and a masking
+  // regression is silent: it does not throw, it just starts reporting prose.
   'parse/masked-references.md': [
     '# Masked references',
     '',

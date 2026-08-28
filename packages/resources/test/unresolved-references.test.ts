@@ -11,9 +11,11 @@
 
 import { describe, expect, it } from 'vitest';
 
+import type { SourceSpan } from '../src/parse-capabilities.js';
 import {
   findMatchingBracket,
   findReferenceOccurrences,
+  findUnresolvedReferences,
   isPlausibleLinkText,
   isPlausibleReferenceLabel,
   labelHasAlphanumeric,
@@ -31,6 +33,42 @@ function buildNestedLine(depth: number): string {
   for (let i = 0; i < depth; i++) s = `[${s}][b]`;
   return s;
 }
+
+/** One dangling reference and one defined, with a definition to resolve the second. */
+const LABELLED_CONTENT = 'A [x][dangling] and [y][real].\n\n[real]: ./r.md\n';
+
+/** The only finding `LABELLED_CONTENT` may ever produce. */
+const DANGLING_ONLY = [{ label: 'dangling', line: 1 }];
+
+const REFERENCE_LINK = 'reference-link';
+
+/** The span list remark reports for `LABELLED_CONTENT`, as the contract defines it. */
+function conformantSpans(): SourceSpan[] {
+  return [
+    { kind: REFERENCE_LINK, startOffset: 2, endOffset: 15 },
+    { kind: REFERENCE_LINK, startOffset: 20, endOffset: 29 },
+    { kind: 'link-definition', startOffset: 32, endOffset: 46, label: 'real' },
+  ];
+}
+
+describe('findUnresolvedReferences — labels are trusted only on a definition span', () => {
+  it('reports the dangling reference and not the defined one', () => {
+    expect(findUnresolvedReferences(LABELLED_CONTENT, conformantSpans())).toEqual(DANGLING_ONLY);
+  });
+
+  it('ignores a label on a reference-link span, which would DELETE the finding', () => {
+    // 🪤 `SourceSpan.label` is documented "link-definition spans only", and that
+    // was a comment rather than a mechanism. A reference link *has* a label, so
+    // an adapter attaching one is the natural mistake — and harvesting it makes
+    // a DANGLING reference define itself, resolve against itself, and vanish.
+    // Silent: the finding does not move, it disappears.
+    const liar = conformantSpans().map((span) =>
+      span.kind === REFERENCE_LINK ? { ...span, label: 'dangling' } : span,
+    );
+
+    expect(findUnresolvedReferences(LABELLED_CONTENT, liar)).toEqual(DANGLING_ONLY);
+  });
+});
 
 describe('normalizeReferenceLabel', () => {
   it('trims, collapses internal whitespace, and case-folds', () => {
