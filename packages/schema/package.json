@@ -42,7 +42,7 @@
     "@vibe-agent-toolkit/utils": "workspace:*",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.7"
   },
   "repository": {
     "type": "git",

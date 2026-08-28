@@ -45,7 +45,7 @@
     "rimraf": "^6.0.1",
     "sharp": "^0.35.3",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.7"
   },
   "repository": {
     "type": "git",

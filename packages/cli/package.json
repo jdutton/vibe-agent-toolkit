@@ -71,7 +71,7 @@
     "@vibe-agent-toolkit/dev-tools": "workspace:*",
     "rimraf": "^6.0.1",
     "typescript": "^5.7.3",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.7"
   },
   "publishConfig": {
     "access": "public"
