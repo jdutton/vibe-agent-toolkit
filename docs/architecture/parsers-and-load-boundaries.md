@@ -196,13 +196,22 @@ output of the suite rather than an input, because the intuitive guess was wrong 
 | Capability | `markdown-it`'s verdict | Who consumes it |
 |---|---|---|
 | `spans-and-kinds` | ❌ fails, and fails hardest — see §1 | **every `resources` user**: `codeContextRangesFrom` → `findLexicalReferences`, `maskFactsFrom` → `findUnresolvedReferences`, the `links` inventory, `anchors` |
-| `structure` | ✅ conforms | **only `rag/chunking/chunk-resource.ts`**, which flattens `headings` and splits on `heading.line` |
+| `structure` | ✅ conforms | **`resources` and `cli`, not just `rag`**: `collectHeadingSlugs` → the registry's fragment index, so heading slugs are part of *link integrity*; `blob-sections.ts`/`blob-population.ts` (the projection store's `sections` rows, split on `heading.line`); `blob-facts.ts`'s `headingCount`; `vat resources scan`'s per-file count; `parse-fact-snapshot.ts`. `rag/chunking/chunk-resource.ts` is the one consumer outside `resources` |
 | `faithful-edit` | ❌ not claimed, cannot be | `html-transform.ts` — which is **parse5**, so this one was never the markdown parser's anyway |
 
-⛔ **So a rival wins the capability with no users and loses the one every user depends on.** That is
-the whole promotion decision, and it is a no. `packages/rag/src` contains no reference to remark,
-mdast or `parseMarkdown` at all — it reads `ResourceMetadata` that `resources` already built, so
-chunking gets headings as a by-product of a link-integrity parse it has no use for.
+⛔ **So a rival wins one capability and loses the one every user depends on.** That is the whole
+promotion decision, and it is a no — but *not* because the capability it wins has no users. It has
+several, listed above and inside `resources` itself, and one of them is link integrity: heading
+slugs are half of the fragment index `checkAnchor` reads. The reason the win is worth nothing is
+structural. `parseMarkdownContent` pulls **both** read capabilities from a single session of a
+single implementation, so promoting `markdown-it` for `structure` alone means running two parsers
+over every document — paying a second full tokenize to obtain headings the parser that must already
+run for `spans-and-kinds` hands over for free.
+
+What *is* true of `rag` specifically is that it takes structure second-hand: `packages/rag/src`
+contains no reference to remark, mdast or `parseMarkdown` at all — it reads `ResourceMetadata` that
+`resources` already built, so chunking gets headings as a by-product of a link-integrity parse it
+has no use for.
 
 ⚠️ The failure mode is what decides it, not the size of the gap, and it is now measured rather than
 predicted: on this repository's own markdown a `markdown-it` run reports **broken links that are not
@@ -539,13 +548,22 @@ In dependency order, each item independently landable:
    rather than implemented. `remark-parser.ts` is the reference implementation and
    `parseMarkdownContent` is the composer, which now takes the implementation as a parameter.
 5. ✅ **Build the equivalence harness** — `parse-conformance.ts`, a field-by-field `ParseFacts` diff
-   with three kinds of finding (`missing-capability`, `span-fidelity`, `facts-differ`) that call for
-   different responses. ⛔ There is no `CONFORMANCE_VERSION`: the report carries
+   with six kinds of finding (`capability-claim`, `threw`, `missing-capability`, `span-fidelity`,
+   `facts-differ` and `link-order`) that call for different responses. `link-order` is its own kind
+   rather than a `facts-differ` on `links` because a document-order implementation passes every
+   schema check in the repo and fails every parse-fact golden, which pins `links` by ordinal.
+   `capability-claim` is what makes `MarkdownParser.capabilities` falsifiable at all: the field is
+   declared rather than inferred so that it *can* be contradicted, and until the suite compared the
+   declaration against the methods actually served, a parser declaring nothing and a parser
+   declaring everything produced identical reports.
+   ⛔ There is no `CONFORMANCE_VERSION`: the report carries
    `parseFactsShapeSource()`, so it **declares the fact shape it was taken against** and moves with
    the schema.
 6. ✅ **Add `markdown-it` as a test implementation** — `dev-tools/src/markdown-it-parser.ts`, built
    from the same `createMarkdownItProcessor()` the bake-off times so the fidelity verdict and the
-   speed verdict are about one parser. Seven `ParseFacts` fields diverge; see §1 and §3.
+   speed verdict are about one parser. **Three `ParseFacts` fields diverge** — `links`,
+   `lexicalReferences` and `unresolvedReferences`, pinned by `markdown-it-conformance.test.ts`. The
+   *seven* an unfixed adapter first reported were mostly the adapter's own; see §1 and §3.
 
 Steps 1–3 are load-boundary work and need none of the parser work. Steps 4–6 are the parser
 interface, and no *behaviour* changed before 5 existed: **without a whole-corpus facts diff you
@@ -560,9 +578,10 @@ the persisted link rows, and undoing that still costs a parse-cache cold start.
 
 🔑 **What 4–6 actually bought, stated so nobody re-litigates it as a perf change:** the three walks
 of the same tree (`collectAstFacts`, `collectCodeContextRanges`, `collectMaskFacts`) became one, and
-the two range consumers became pure filters over spans. Output is unchanged — 2,739 `resources` unit
-tests pass untouched — and no timing claim is made for it. The point is that a second implementation
-can now be measured against a contract instead of against a diff.
+the two range consumers became pure filters over spans. Output is unchanged — the whole `resources`
+unit suite passed untouched, and a count of it is deliberately not quoted, because a hand-maintained
+number in a durable document rots — and no timing claim is made for it. The point is that a second
+implementation can now be measured against a contract instead of against a diff.
 
 ### 🔶 Where this plan is aimed is an open decision
 
