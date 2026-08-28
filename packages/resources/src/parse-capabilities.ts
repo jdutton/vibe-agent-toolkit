@@ -9,18 +9,19 @@
  *
  * | Capability | What it answers | What it owes `ParseFacts` |
  * |---|---|---|
- * | `spans-and-kinds` | where are the fences, the raw HTML, the frontmatter, the links? | `links`, `anchors`, `parseErrors`, `frontmatterSource` |
+ * | `spans-and-kinds` | where are the fences, the raw HTML, the frontmatter, the links? | `links`, `anchors`, `frontmatterSource` |
  * | `structure` | what is the heading outline? | `headings` |
  * | `faithful-edit` | can I splice at your offsets and leave every other byte alone? | **nothing** |
  *
  * ## ⛔ The split buys swappability, not speed
  *
- * Tokenizing is 74–76% of `remark-parse` and every capability above needs
- * tokenizing, so "skip the tree when you only wanted spans" has a 1.18–1.20×
- * ceiling on cold wall — the same dead end that killed driving micromark
- * directly. Nothing here is a performance change and no performance claim
- * belongs on it. What it buys is that a rival tokenizer can be measured against
- * a contract instead of against a diff.
+ * Every capability above needs tokenizing, and tokenizing is the bulk of a
+ * parse, so "skip the tree when you only wanted spans" has a ceiling low enough
+ * to have already killed driving micromark directly. Nothing here is a
+ * performance change and no performance claim belongs on it — run
+ * `bun run bakeoff:parsers . --stage parse|facts` if you want the current
+ * figures rather than a stale one copied into prose. What the split buys is
+ * that a rival tokenizer can be measured against a contract instead of a diff.
  *
  * ## 🔑 `faithful-edit` contributes ZERO fields, and that is not an oversight
  *
@@ -30,12 +31,21 @@
  * `ParseFacts` anywhere. So this module gives it no `toParseFacts()` and no
  * method of its own — it is a **property of the offsets** the other two
  * capabilities already report, declared by {@link ParseCapability} and checked
- * by the conformance suite (`parse-conformance.ts`), which splices every
- * reported span back over itself and demands the source returns byte-identical.
+ * by the conformance suite (`parse-conformance.ts`).
  *
- * ⚠️ `parseErrors` looks like it might belong to faithful-edit and does not: it
- * is parse5's own well-formedness list from `html-link-parser.ts`, i.e. the HTML
- * lane's spans-and-kinds.
+ * ⚠️ How it is checked, precisely — because the obvious test is a tautology.
+ * Splicing `content[a,b)` back with `content.slice(a, b)` is the identity for
+ * any in-range pair, so it can never fail and proves nothing. What
+ * `parse-conformance.ts` does instead is interrogate the offsets themselves: the
+ * range must be in bounds and non-empty, the **first** character must be one the
+ * kind can legally open with, the **last** must be one it can legally close with
+ * where the kind has a fixed closer, no span may end on a line terminator, and
+ * no two spans may straddle. Those are falsifiable; a round-trip is not.
+ *
+ * ⚠️ `parseErrors` is NOT owed by this capability, though it looks like it might
+ * be: it is parse5's own well-formedness list from `html-link-parser.ts`, i.e.
+ * the HTML lane's, and it reaches `ParseFacts` from there. No markdown
+ * implementation produces one, so `SpanFacts` does not ask for it.
  *
  * ## What is VAT's own, and must never be asked of an implementation
  *
@@ -48,7 +58,7 @@
  * — {@link SourceSpan.label} on a definition — rather than a dialect rule.
  */
 
-import type { HtmlParseError, ResourceLink } from './schemas/resource-metadata.js';
+import type { ResourceLink } from './schemas/resource-metadata.js';
 
 /**
  * The capabilities an implementation may declare.
@@ -92,6 +102,31 @@ export type SpanKind =
   | 'reference-link'
   /** `[label]: url` in its own right. */
   | 'link-definition';
+
+/**
+ * Compile-time proof that a span consumer routed every {@link SpanKind}.
+ *
+ * The two consumers of `spans-and-kinds` default in OPPOSITE directions for a
+ * kind they do not name — `codeContextRangesFrom` excludes it from lexing,
+ * `maskFactsFrom` ignores it — and both are deliberate. That makes an unrouted
+ * kind the worst shape of change: it compiles, it is silent, and it moves
+ * `lexicalReferences` on one side while leaving the dangling-reference mask on
+ * the other. The `image-reference` gap this file states above is exactly the
+ * kind somebody is expected to add.
+ *
+ * Passing `span.kind` here from a `default:` branch makes adding a kind a type
+ * error at every call site, so the decision is made once per consumer rather
+ * than inherited from whichever branch happened to be last.
+ *
+ * ⚠️ It deliberately does **not** throw. At runtime the only way to reach it is
+ * a non-conforming implementation emitting a kind this build has never heard
+ * of, and refusing an adopter's whole document over that is worse than taking
+ * the fallback each caller has already stated in prose.
+ */
+export function assertSpanKindHandled(_kind: never): void {
+  // Intentionally empty: the whole effect is in the parameter's `never` type,
+  // which is checked at compile time and erased at runtime.
+}
 
 /**
  * One construct's half-open extent in the decoded source.
@@ -150,7 +185,15 @@ export interface FlatHeading {
   level: number;
   /** Text with inline markup flattened away, image `alt` excluded. */
   text: string;
-  /** 1-based source line, when the implementation reports one. */
+  /**
+   * 1-based source line, when the implementation reports one.
+   *
+   * ⚠️ Optional in the type, load-bearing in practice: the projection splits
+   * `blob_sections` rows on this line, and `blob-population.ts` counts what it
+   * had to drop as `headingsSkippedForMissingLine`. An implementation that
+   * omits it is conformant and still silently shrinks the projection, so omit
+   * it only if the sections lane is not in your path.
+   */
   line?: number;
 }
 
@@ -172,8 +215,6 @@ export interface SpanFacts {
   spans: SourceSpan[];
   /** The frontmatter block's source, delimiters excluded. */
   frontmatterSource?: string;
-  /** Well-formedness diagnostics, for implementations that produce them. */
-  parseErrors?: HtmlParseError[];
 }
 
 /** Everything the `structure` capability yields for one document. */

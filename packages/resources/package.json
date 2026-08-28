@@ -18,6 +18,10 @@
       "types": "./dist/link-parser.d.ts",
       "default": "./dist/link-parser.js"
     },
+    "./remark-parser": {
+      "types": "./dist/remark-parser.d.ts",
+      "default": "./dist/remark-parser.js"
+    },
     "./parse-conformance": {
       "types": "./dist/parse-conformance.d.ts",
       "default": "./dist/parse-conformance.js"

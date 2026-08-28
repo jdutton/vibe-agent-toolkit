@@ -30,8 +30,9 @@
  * `blobs.tokenEstimate` runs over RAW content, and the harness strips block-level
  * HTML comments before injection — so a `CLAUDE.md` carrying maintainer notes is
  * over-counted here. Stated in `claude-context-limits.ts`, not fixed:
- * `collectCodeContextRanges` lumps `html` with `link`/`image`/`yaml` in one
- * `excluded` array, so separating it is real work for a zero-byte correction on
+ * `codeContextRangesFrom` lumps `raw-html` with `inline-link`/`image`/
+ * `frontmatter` in one `excluded` array, so separating it is real work for a
+ * zero-byte correction on
  * this repo, and the principled fix puts injected-size on the LENS rather than on
  * the blob.
  *

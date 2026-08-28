@@ -136,7 +136,15 @@ import {
  * each other so a slot added here cannot drift out of the dump.
  */
 export const ParsePass = {
-  // Markdown — `parseMarkdownContent` in link-parser.ts.
+  // Markdown. `EstimateTokens` is charged by the composer (`parseMarkdownContent`
+  // in link-parser.ts); the four remark slots below are charged inside
+  // `remark-parser.ts`.
+  //
+  // ⚠️ Those four are REMARK-shaped, and the composer now takes the parser as a
+  // parameter. Run a non-remark implementation through it — the bake-off does —
+  // and they stay 0 while `MarkdownTotal` still brackets the whole call, so the
+  // documented "unattributed = markdown-total − Σ(passes)" silently absorbs the
+  // entire candidate parse. The dump cannot yet say which parser produced it.
   EstimateTokens: 0,
   RemarkProcessor: 1,
   RemarkParse: 2,

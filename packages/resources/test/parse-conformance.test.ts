@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { MarkdownParser, ParseSession, SourceSpan } from '../src/parse-capabilities.js';
+import type { MarkdownParser, ParseSession, SourceSpan, SpanKind } from '../src/parse-capabilities.js';
 import { runParseConformance, type ConformanceFinding } from '../src/parse-conformance.js';
 import { openRemarkSession, remarkParser } from '../src/remark-parser.js';
 import { parseFactsShapeSource } from '../src/schemas/parse-facts.js';
@@ -64,6 +64,14 @@ const CORPUS = [
       // catches.
       'Bare https://example.com/ in prose.',
       '',
+      // 🪤 And the shape the letter-only opener list still got wrong: a GFM
+      // email autolink literal whose local part opens with a DIGIT or `_`. An
+      // opener list of `[`, `<` and a-zA-Z made the reference implementation
+      // fail against ITSELF here — a `span-fidelity` finding on remark, over
+      // correct prose. Both spellings, because they are separate character
+      // classes.
+      'Mail 1a@example.com or _dev@example.com now.',
+      '',
     ].join('\n'),
   },
   {
@@ -72,13 +80,25 @@ const CORPUS = [
   },
 ] as const;
 
+const SPANS_AND_KINDS = 'spans-and-kinds';
+const CAPABILITY_CLAIM = 'capability-claim';
+const FACTS_DIFFER = 'facts-differ';
+
+/** What a fully conformant implementation declares. */
+const ALL_CAPABILITIES = [SPANS_AND_KINDS, 'structure', 'faithful-edit'] as const;
+
 /** Wrap remark, replacing the session it hands back. */
 function stub(name: string, wrap: (session: ReturnType<typeof openRemarkSession>) => ParseSession): MarkdownParser {
   return {
     name,
-    capabilities: ['spans-and-kinds', 'structure', 'faithful-edit'],
+    capabilities: [...ALL_CAPABILITIES],
     open: (content) => wrap(openRemarkSession(content)),
   };
+}
+
+/** Every finding of one kind a candidate produces over the corpus. */
+function findingsFor<K extends ConformanceFinding['kind']>(candidate: MarkdownParser, kind: K) {
+  return findingsOfKind(runParseConformance(candidate, CORPUS).findings, kind);
 }
 
 /** Every span-fidelity finding a candidate produces over the corpus. */
@@ -124,7 +144,7 @@ describe('runParseConformance — link bucketing', () => {
       },
     }));
 
-    const findings = findingsOfKind(runParseConformance(documentOrder, CORPUS).findings, 'link-order');
+    const findings = findingsFor(documentOrder, 'link-order');
     expect(findings).toHaveLength(1);
     expect(findings[0]?.document).toBe('mixed.md');
   });
@@ -231,17 +251,161 @@ describe('runParseConformance — span fidelity', () => {
     const findings = spanFindings(swallowed);
     expect(findings.some((finding) => finding.reason === 'trailing-terminator')).toBe(true);
   });
+
+  it('catches an extent truncated by one character, which lands on no terminator', () => {
+    // 🪤 The textbook inclusive/exclusive off-by-one — the closing backtick
+    // falls off every code span, the closing `)` off every image. Before
+    // `SPAN_CLOSERS` existed this was caught on ONE document out of 339,
+    // because `trailing-terminator` only fires when the bad end happens to sit
+    // on a newline. The opener check cannot see it at all: the start is right.
+    const truncated = stub('truncated-by-one', (session) => ({
+      ...session,
+      spansAndKinds: () => {
+        const facts = session.spansAndKinds();
+        const spans = facts.spans.map((span) => ({ ...span, endOffset: span.endOffset - 1 }));
+        return { ...facts, spans };
+      },
+    }));
+
+    const findings = spanFindings(truncated);
+    expect(findings.some((finding) => finding.reason === 'closer-mismatch')).toBe(true);
+  });
+
+  it('reports a span kind outside the vocabulary instead of throwing', () => {
+    // 🚨 The single most likely thing a real second implementation does, and it
+    // used to take the whole run down with a TypeError: every table here is
+    // keyed by `SpanKind`, and `markdown-it` alone has `table`, `blockquote`
+    // and `list_item` tokens. The suite's own docstring promises one finding
+    // per document rather than an abort, so this must be a finding.
+    const foreignKind = stub('foreign-kind', (session) => ({
+      ...session,
+      spansAndKinds: () => {
+        const facts = session.spansAndKinds();
+        const alien = { kind: 'table' as SpanKind, startOffset: 0, endOffset: 3 };
+        return { ...facts, spans: [...facts.spans, alien] };
+      },
+    }));
+
+    // Must not throw — that is the whole point.
+    const findings = spanFindings(foreignKind);
+    expect(findings.some((finding) => finding.reason === 'unknown-kind')).toBe(true);
+  });
+
+  it('catches spans emitted out of document order', () => {
+    // `SpanFacts.spans` states "in document order" as a contract clause, and
+    // nothing held an implementation to it: every consumer sorts, so reversing
+    // every span list produced ZERO findings over the whole corpus.
+    const reversed = stub('reversed-spans', (session) => ({
+      ...session,
+      spansAndKinds: () => {
+        const facts = session.spansAndKinds();
+        return { ...facts, spans: [...facts.spans].reverse() };
+      },
+    }));
+
+    const findings = spanFindings(reversed);
+    expect(findings.some((finding) => finding.reason === 'out-of-order')).toBe(true);
+  });
+});
+
+describe('runParseConformance — the capability DECLARATION', () => {
+  it('catches a parser that serves a capability it did not declare', () => {
+    // `capabilities` is declared rather than inferred so that it CAN be
+    // contradicted. Until this check existed nothing read the field: a parser
+    // declaring `[]` and one declaring all three produced identical reports, so
+    // deleting the field entirely would have reddened no test.
+    const understated: MarkdownParser = {
+      name: 'understated',
+      capabilities: [SPANS_AND_KINDS],
+      open: (content) => openRemarkSession(content),
+    };
+
+    const findings = findingsFor(understated, CAPABILITY_CLAIM);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.capability).toBe('structure');
+    expect(findings[0]?.declared).toBe(false);
+    expect(findings[0]?.served).toBe(true);
+  });
+
+  it('catches a parser that declares a capability it does not serve', () => {
+    const overstated: MarkdownParser = {
+      name: 'overstated',
+      capabilities: [SPANS_AND_KINDS, 'structure'],
+      open: (content) => ({ spansAndKinds: openRemarkSession(content).spansAndKinds }),
+    };
+
+    const findings = findingsFor(overstated, CAPABILITY_CLAIM);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.capability).toBe('structure');
+    expect(findings[0]?.declared).toBe(true);
+    expect(findings[0]?.served).toBe(false);
+  });
+
+  it('is emitted once per RUN, not once per document', () => {
+    // It is a property of the implementation, not of any one parse, so it
+    // carries no document and must not scale with the corpus.
+    const understated: MarkdownParser = {
+      name: 'understated',
+      capabilities: [],
+      open: (content) => openRemarkSession(content),
+    };
+
+    const findings = findingsFor(understated, CAPABILITY_CLAIM);
+    expect(findings).toHaveLength(2);
+    expect(CORPUS.length).toBeGreaterThan(1);
+  });
+});
+
+describe('runParseConformance — throws are attributed to a side', () => {
+  it('survives a REFERENCE that throws, and says it was the reference', () => {
+    // The reference is remark by default, but the parameter exists so a caller
+    // can pass something else — and an unguarded reference meant one bad
+    // document cost the whole report rather than one row of it.
+    const brokenReference = stub('broken-reference', () => ({
+      spansAndKinds: () => {
+        throw new Error('reference exploded');
+      },
+      structure: () => ({ headings: [] }),
+    }));
+
+    const findings = findingsOfKind(runParseConformance(remarkParser, CORPUS, brokenReference).findings, 'threw');
+    expect(findings).toHaveLength(CORPUS.length);
+    expect(findings.every((finding) => finding.side === 'reference')).toBe(true);
+  });
+
+  it('reports a candidate whose SECOND session throws', () => {
+    // 🪤 `collectSpanFindings` opens an INDEPENDENT second session, so a throw
+    // there is not already recorded by the composer's pass. An implementation
+    // whose session is one-shot or stateful succeeds on the first and throws on
+    // the second — and swallowing it let such a candidate read completely clean
+    // on the whole span-fidelity axis.
+    const seen = new Set<string>();
+    const oneShot: MarkdownParser = {
+      name: 'one-shot-session',
+      capabilities: ['spans-and-kinds', 'structure', 'faithful-edit'],
+      open: (content) => {
+        if (content !== '' && seen.has(content)) throw new Error('session already consumed');
+        seen.add(content);
+        return openRemarkSession(content);
+      },
+    };
+
+    const findings = findingsFor(oneShot, 'threw');
+    expect(findings).toHaveLength(CORPUS.length);
+    expect(findings.every((finding) => finding.side === 'candidate')).toBe(true);
+    expect(findings[0]?.message).toContain('second session');
+  });
 });
 
 describe('runParseConformance — capabilities and failures', () => {
   it('reports a capability the candidate does not serve, once per document', () => {
     const spansOnly: MarkdownParser = {
       name: 'spans-only',
-      capabilities: ['spans-and-kinds'],
+      capabilities: [SPANS_AND_KINDS],
       open: (content) => ({ spansAndKinds: openRemarkSession(content).spansAndKinds }),
     };
 
-    const findings = findingsOfKind(runParseConformance(spansOnly, CORPUS).findings, 'missing-capability');
+    const findings = findingsFor(spansOnly, 'missing-capability');
     expect(findings).toHaveLength(CORPUS.length);
     expect(findings[0]?.capability).toBe('structure');
   });
@@ -254,10 +418,10 @@ describe('runParseConformance — capabilities and failures', () => {
       structure: () => ({ headings: [] }),
     }));
 
-    const findings = findingsOfKind(runParseConformance(broken, CORPUS).findings, 'threw');
+    const findings = findingsFor(broken, 'threw');
     expect(findings).toHaveLength(CORPUS.length);
     expect(findings[0]?.message).toBe('tokenizer exploded');
-    expect(findingsOfKind(runParseConformance(broken, CORPUS).findings, 'missing-capability')).toEqual([]);
+    expect(findingsFor(broken, 'missing-capability')).toEqual([]);
   });
 });
 
@@ -268,22 +432,39 @@ describe('runParseConformance — fact differences', () => {
       spansAndKinds: () => ({ ...session.spansAndKinds(), anchors: [] }),
     }));
 
-    const findings = findingsOfKind(runParseConformance(noAnchors, CORPUS).findings, 'facts-differ');
+    const findings = findingsFor(noAnchors, FACTS_DIFFER);
     expect(findings).toHaveLength(1);
     expect(findings[0]?.field).toBe('anchors');
     expect(findings[0]?.candidate).toBe('undefined');
   });
 
-  it('sees a field only ONE side populates', () => {
-    // Iterating the reference's keys alone would miss a candidate-only field,
-    // and iterating the candidate's alone would miss a reference-only one.
+  it('sees a field the REFERENCE populates and the candidate empties', () => {
     const noHeadings = stub('no-headings', (session) => ({
       ...session,
       structure: () => ({ headings: [] }),
     }));
 
-    const findings = findingsOfKind(runParseConformance(noHeadings, CORPUS).findings, 'facts-differ');
+    const findings = findingsFor(noHeadings, FACTS_DIFFER);
     expect(findings.map((finding) => finding.field)).toEqual(['headings', 'headings']);
+  });
+
+  it('sees a field only the CANDIDATE populates', () => {
+    // 🪤 The direction the union of keys exists for, and the one every other
+    // stub here misses: they all drop or alter a key the REFERENCE has, which
+    // reference-side iteration alone would still catch. `plain.md` carries no
+    // frontmatter, so remark omits the key entirely and the candidate invents
+    // it — the only case where `new Set(Object.keys(reference))` reds.
+    const invented = stub('candidate-only-field', (session) => ({
+      ...session,
+      spansAndKinds: () => ({ ...session.spansAndKinds(), frontmatterSource: 'invented: true' }),
+    }));
+
+    const findings = findingsFor(invented, FACTS_DIFFER).filter(
+      (finding) => finding.field === 'frontmatterSource',
+    );
+    const onPlain = findings.find((finding) => finding.document === 'plain.md');
+    expect(onPlain).toBeDefined();
+    expect(onPlain?.reference).toBe('undefined');
   });
 
   it('does not report a difference in key ORDER as a difference in value', () => {

@@ -56,7 +56,7 @@
  * loosening the heuristics.
  */
 
-import type { SourceSpan } from './parse-capabilities.js';
+import { assertSpanKindHandled, type SourceSpan } from './parse-capabilities.js';
 import { forEachScannableLine } from './scan-lines.js';
 import type { UnresolvedReference } from './types.js';
 
@@ -217,27 +217,6 @@ function destinationMaskRange(span: SourceSpan, content: string): OffsetRange {
 }
 
 /**
- * Span kinds masked in full, because bracket content inside them is never a
- * markdown reference: fenced/indented code blocks, inline code spans, raw HTML
- * (block and inline — `<!-- [a][nope] -->` is commented-out scaffolding no
- * reader sees, and inside an HTML block adding a definition would not make the
- * reference resolve anyway), and YAML frontmatter.
- */
-const WHOLE_MASK_KINDS = new Set<SourceSpan['kind']>(['code-block', 'code-span', 'raw-html', 'frontmatter']);
-
-/**
- * Span kinds masked only across their destination clause — qs/Rails-style
- * bracket query params (`?filter[status][eq]=1`) and a title containing a stray
- * `[a][b]` are ubiquitous and not dangling references. See
- * {@link destinationMaskRange}.
- *
- * ⚠️ `reference-link` is deliberately absent: a resolved `[text][label]` carries
- * no destination clause of its own, and masking it whole would swallow a
- * genuine dangling reference nested in its text.
- */
-const DESTINATION_MASK_KINDS = new Set<SourceSpan['kind']>(['inline-link', 'image', 'link-definition']);
-
-/**
  * The two things {@link findUnresolvedReferences} needs from the spans.
  */
 interface MaskFacts {
@@ -254,7 +233,9 @@ interface MaskFacts {
  * the extents the parse already reported instead of running a second tokenizer,
  * and it works for any implementation of that capability.
  *
- * A span kind in neither set — today only `reference-link` — contributes
+ * The switch is exhaustive over {@link SpanKind} rather than a pair of sets, so
+ * a kind added to the vocabulary is a type error here instead of a silent
+ * no-op. `reference-link` is the one kind that deliberately contributes
  * nothing, which is what the raw scanner needs: a resolved reference must not
  * suppress a dangling one nested inside its text.
  *
@@ -266,15 +247,46 @@ function maskFactsFrom(spans: readonly SourceSpan[], content: string): MaskFacts
   const definedLabels = new Set<string>();
 
   for (const span of spans) {
-    if (WHOLE_MASK_KINDS.has(span.kind)) {
-      ranges.push([span.startOffset, span.endOffset]);
-    } else if (DESTINATION_MASK_KINDS.has(span.kind)) {
-      ranges.push(destinationMaskRange(span, content));
+    switch (span.kind) {
+      // Masked in FULL, because bracket content inside them is never a markdown
+      // reference: code blocks, inline code spans, raw HTML (block and inline —
+      // `<!-- [a][nope] -->` is commented-out scaffolding no reader sees, and
+      // inside an HTML block adding a definition would not make the reference
+      // resolve anyway), and YAML frontmatter.
+      case 'code-block':
+      case 'code-span':
+      case 'raw-html':
+      case 'frontmatter':
+        ranges.push([span.startOffset, span.endOffset]);
+        break;
+      // Masked only across their DESTINATION clause — qs/Rails-style bracket
+      // query params (`?filter[status][eq]=1`) and a title containing a stray
+      // `[a][b]` are ubiquitous and not dangling references. See
+      // {@link destinationMaskRange}.
+      case 'inline-link':
+      case 'image':
+      case 'link-definition':
+        ranges.push(destinationMaskRange(span, content));
+        break;
+      // ⚠️ Masks NOTHING, deliberately: a resolved `[text][label]` carries no
+      // destination clause of its own, and masking it whole would swallow a
+      // genuine dangling reference nested in its text.
+      case 'reference-link':
+        break;
+      default:
+        // A kind this build does not know masks nothing, which is the safe
+        // direction here — a finding is reported rather than suppressed.
+        assertSpanKindHandled(span.kind);
     }
-    // VAT normalizes the label itself — `referenceLabelKeys` indexes both the
-    // escaped and the unescaped spelling, precisely because implementations
-    // disagree about which one they carry. See `SourceSpan.label`.
-    if (span.label !== undefined) {
+    // `link-definition` spans only, per `SourceSpan.label`: an implementation
+    // that labels a `reference-link` would otherwise inject a DANGLING
+    // reference's own label into the defined set, resolving it against itself
+    // and deleting the finding.
+    //
+    // VAT normalizes the spelling itself — `referenceLabelKeys` indexes both
+    // the escaped and the unescaped form, precisely because implementations
+    // disagree about which one they carry.
+    if (span.kind === 'link-definition' && span.label !== undefined) {
       for (const key of referenceLabelKeys(span.label)) definedLabels.add(key);
     }
   }

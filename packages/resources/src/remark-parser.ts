@@ -17,7 +17,8 @@
  *
  * That walk replaced three. `collectAstFacts` (links, headings, anchors,
  * frontmatter), `collectCodeContextRanges` (fence and exclusion ranges) and
- * `collectMaskFacts` (the dangling-reference mask) each traversed the same tree
+ * `collectMaskFacts` (the dangling-reference mask) — all three now deleted —
+ * each traversed the same tree
  * for facts that are all available from one pass over the union of their node
  * kinds. The two range consumers now filter {@link SpanFacts.spans} instead —
  * see `codeContextRangesFrom` and `maskFactsFrom`.

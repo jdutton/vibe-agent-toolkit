@@ -2,7 +2,7 @@
  * The one definition of the markdown processor VAT parses with.
  *
  * Three call sites need the SAME plugin list and would otherwise each spell it
- * out: the parser itself (`link-parser.ts`), the tokenize/tree-build split probe
+ * out: the parser itself (`remark-parser.ts`), the tokenize/tree-build split probe
  * (`parse-tokenize-probe.ts`), and any benchmark measuring a rival parser
  * against this one. A rival benchmarked against a processor missing a plugin is
  * a rival that was handed less work to do, and the resulting ratio is wrong in

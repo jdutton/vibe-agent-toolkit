@@ -31,13 +31,13 @@ import { flattenHeadings } from './blob-sections.js';
  *
  * ## What "code" means here, exactly
  *
- * Whatever the caller puts in `fences`, and `collectCodeContextRanges` fills that
- * array from every `code` AST node — which is **fenced and indented code blocks
- * alike**, since remark gives both the same node type. "Fenced" would name only
- * half of what is actually excluded.
+ * Whatever the caller puts in `fences`, and `codeContextRangesFrom` fills that
+ * array from every `code-block` span — which is **fenced and indented code
+ * blocks alike**, since the span vocabulary gives both the same kind. "Fenced"
+ * would name only half of what is actually excluded.
  *
- * **Inline code is NOT excluded.** `collectCodeContextRanges` files `inlineCode`
- * nodes into a separate `codeSpans` array, and no caller ever passes that array
+ * **Inline code is NOT excluded.** `codeContextRangesFrom` files `code-span`
+ * spans into a separate `codeSpans` array, and no caller ever passes that array
  * here — so a `` `token` `` in a sentence counts as prose, in both the size
  * count and the word count. That is a property of the wiring rather than a
  * decision this function makes, which is exactly why it has to be written down:
@@ -54,7 +54,7 @@ import { flattenHeadings } from './blob-sections.js';
  *
  * @param content - Decoded document text
  * @param fences - Code-block offset ranges (UTF-16 code units), from
- *   `collectCodeContextRanges` — fenced and indented blocks, never inline spans
+ *   `codeContextRangesFrom` — fenced and indented blocks, never inline spans
  * @returns The three measures
  */
 export function measureContent(content: string, fences: readonly OffsetRange[]): ContentMeasures {

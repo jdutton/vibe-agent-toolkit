@@ -38,7 +38,7 @@
  * Nothing else is dropped. Meaning is a lens's job.
  */
 
-import type { SourceSpan } from './parse-capabilities.js';
+import { assertSpanKindHandled, type SourceSpan } from './parse-capabilities.js';
 import { forEachScannableLine } from './scan-lines.js';
 import type { LexicalReference } from './schemas/parse-facts.js';
 import type { VariableExpansionSyntax } from './schemas/projection-blobs.js';
@@ -88,9 +88,27 @@ export function codeContextRangesFrom(spans: readonly SourceSpan[]): CodeContext
 
   for (const span of spans) {
     const range: OffsetRange = [span.startOffset, span.endOffset];
-    if (span.kind === 'code-block') fences.push(range);
-    else if (span.kind === 'code-span') codeSpans.push(range);
-    else excluded.push(range);
+    switch (span.kind) {
+      case 'code-block':
+        fences.push(range);
+        break;
+      case 'code-span':
+        codeSpans.push(range);
+        break;
+      case 'raw-html':
+      case 'frontmatter':
+      case 'inline-link':
+      case 'image':
+      case 'reference-link':
+      case 'link-definition':
+        excluded.push(range);
+        break;
+      default:
+        // A kind this build does not know: exclude it, which is the safe
+        // direction here — a reference is dropped rather than invented.
+        assertSpanKindHandled(span.kind);
+        excluded.push(range);
+    }
   }
 
   return { fences, codeSpans, excluded };
@@ -277,7 +295,7 @@ export function stripQueryOrFragment(token: string): string {
  * again to get them.
  *
  * @param content - Raw markdown source (the same string the ranges came from)
- * @param ranges - Code context and exclusions, from {@link collectCodeContextRanges}
+ * @param ranges - Code context and exclusions, from {@link codeContextRangesFrom}
  * @returns Every candidate, in document order
  */
 export function findLexicalReferences(content: string, ranges: CodeContextRanges): LexicalReference[] {
