@@ -182,6 +182,48 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     args: Object.freeze(['claude', 'context', '{subject}']),
     // Same exit-code contract as the sweep — see the entry above.
   }),
+  'claude-budget': Object.freeze({
+    name: 'claude-budget',
+    // No subject argument, and not as a convenience: `vat claude budget` REJECTS
+    // (exit 2) a path that resolves outside the root it discovered, so a
+    // positional pointing at the subject fails from anywhere else. Its scope
+    // comes from the cwd, which the harness has already set to the subject.
+    //
+    // Here because it was the largest hole in this registry. It shares
+    // `vat claude context`'s lane, route and population exactly — both reach
+    // `buildClaudeContextPopulation`, both take two `populate()` passes and one
+    // crawl (`docs/contributing/command-lane-table.md`) — but it asks a
+    // different question of that population: `context` answers for the paths
+    // named, while this sweeps EVERY working location through
+    // `sweepAlwaysLoadedBudgets()`. So the per-answer half of its cost grows
+    // with the number of regions in the tree rather than with the argument, and
+    // the `claude-context` pair could not see that half at all: both of its arms
+    // hold the query count fixed.
+    args: Object.freeze(['claude', 'budget']),
+    // Exits 1 when a chain is over budget and 0 when none is — a gate, so both
+    // codes are a run that swept the whole tree.
+    completedExitCodes: FINDINGS_COMPLETED_EXIT_CODES,
+  }),
+  'skills-validate': Object.freeze({
+    name: 'skills-validate',
+    // The `registry-md-html` lane's cheapest read-only entry point. Everything
+    // else that builds that registry — `skills build`, `skills package`,
+    // `claude plugin build`, `agent build`, `skill test run` — writes output, so
+    // this is the one command that exercises the second registry builder without
+    // a build target to prepare or a tree to dirty. `audit` and `verify` reach
+    // the same lane but each bundle other work on top of it.
+    args: Object.freeze(['skills', 'validate', '{subject}']),
+    completedExitCodes: FINDINGS_COMPLETED_EXIT_CODES,
+  }),
+  'skills-list': Object.freeze({
+    name: 'skills-list',
+    // The cheapest enumerating verb there is: one crawl, no validation, no
+    // parse. That is the point of measuring it — it is the closest thing the
+    // registry has to a control for the crawl itself, so a change that moves
+    // this row moved enumeration rather than anything downstream of it.
+    args: Object.freeze(['skills', 'list', '{subject}']),
+    // Listing reports what it found and exits 0 whatever that is.
+  }),
 }) satisfies Readonly<Record<string, MeasuredCommandSpec>>;
 
 /** Every name {@link MEASURABLE_COMMANDS} answers to, for help text and errors. */
