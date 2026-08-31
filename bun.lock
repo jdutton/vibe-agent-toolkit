@@ -127,6 +127,7 @@
         "@vibe-agent-toolkit/claude-marketplace": "workspace:*",
         "@vibe-agent-toolkit/discovery": "workspace:*",
         "@vibe-agent-toolkit/gateway-mcp": "workspace:*",
+        "@vibe-agent-toolkit/projection-sqlite": "workspace:*",
         "@vibe-agent-toolkit/resources": "workspace:*",
         "@vibe-agent-toolkit/schema": "workspace:*",
         "@vibe-agent-toolkit/utils": "workspace:*",
@@ -145,7 +146,6 @@
         "@types/semver": "^7.7.1",
         "@types/tar": "^6.1.13",
         "@vibe-agent-toolkit/dev-tools": "workspace:*",
-        "@vibe-agent-toolkit/projection-sqlite": "workspace:*",
         "@vibe-agent-toolkit/rag": "workspace:*",
         "@vibe-agent-toolkit/rag-lancedb": "workspace:*",
         "rimraf": "^6.0.1",
@@ -153,12 +153,10 @@
         "vitest": "^3.2.4",
       },
       "peerDependencies": {
-        "@vibe-agent-toolkit/projection-sqlite": "workspace:*",
         "@vibe-agent-toolkit/rag": "workspace:*",
         "@vibe-agent-toolkit/rag-lancedb": "workspace:*",
       },
       "optionalPeers": [
-        "@vibe-agent-toolkit/projection-sqlite",
         "@vibe-agent-toolkit/rag",
         "@vibe-agent-toolkit/rag-lancedb",
       ],

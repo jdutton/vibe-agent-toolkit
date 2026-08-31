@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### CLI
 
-- **The RAG and projection-store backends are no longer installed for you — `npm install` no longer
-  brings the RAG lane with it.** They were declared as `optionalDependencies`, which npm and pnpm
+- **The RAG backends are no longer installed for you — `npm install` no longer brings the RAG lane
+  with it.** They were declared as `optionalDependencies`, which npm and pnpm
   **install by default** (there, "optional" means the install may fail without failing the build, not
   that it is skipped), so every adopter downloaded `onnxruntime-web`, a LanceDB platform binary,
   `apache-arrow` and `protobufjs` whether or not they ever ran a `rag` command. Measured on a real
@@ -22,8 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   ```bash
   npm install @vibe-agent-toolkit/rag-lancedb    # vat rag
-  npm install @vibe-agent-toolkit/projection-sqlite   # VAT_PROJECTION_STORE
   ```
+
+  **The projection store is not affected and needs no install** — `@vibe-agent-toolkit/projection-sqlite`
+  ships as an ordinary dependency. It has no third-party dependencies at all (only `node:sqlite`,
+  built into Node) and a 152 KB dist, so the platform-binary cost this change is about simply does
+  not apply to it.
 
   Every other command is unaffected, and an absent backend was already a legible error naming the
   package to install — the CLI has always deferred loading these. Only the download changed.

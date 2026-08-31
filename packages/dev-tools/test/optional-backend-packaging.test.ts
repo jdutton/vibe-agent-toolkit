@@ -31,11 +31,30 @@ import { DEPENDENCY_FIELDS } from '../src/resolve-workspace-deps.js';
  * test suite is exactly what a regression here looks like.
  */
 describe('optional backend packaging (install-cost guard)', () => {
+  /**
+   * The backends that genuinely cost an adopter something.
+   *
+   * 🪤 `@vibe-agent-toolkit/projection-sqlite` is deliberately NOT here, and the
+   * distinction is the whole point rather than an oversight. The seam exists for
+   * a **platform-native binary**; measured, that package has zero third-party
+   * dependencies (only `node:sqlite`, built into Node) and a 152 KB dist, so it
+   * contributes nothing to the ~240 MB this guard is about — that figure is
+   * onnxruntime-web (136 MB), a LanceDB binary (93 MB), a third apache-arrow and
+   * protobufjs, every one of them reached through the RAG chain.
+   *
+   * Making it optional would also break something load-bearing: it is what
+   * `vat resources query` builds its **ephemeral in-memory store** from when no
+   * store is on disk. Behind an optional peer, "works without a cache" silently
+   * becomes "works only where someone installed a backend", which is exactly the
+   * capability gate the projection design refuses.
+   */
   const BACKENDS = [
-    '@vibe-agent-toolkit/projection-sqlite',
     '@vibe-agent-toolkit/rag',
     '@vibe-agent-toolkit/rag-lancedb',
   ] as const;
+
+  /** Free, and required by the query surface — so it must ship by default. */
+  const BUNDLED_BACKEND = '@vibe-agent-toolkit/projection-sqlite';
 
   const cliPkg = JSON.parse(
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- PROJECT_ROOT-derived path, not user input
@@ -76,6 +95,20 @@ describe('optional backend packaging (install-cost guard)', () => {
       cliPkg.devDependencies?.[backend],
       `${backend} must remain a devDependency, or the CLI's own suite cannot exercise the backend it defers`,
     ).toBeDefined();
+  });
+
+  it('the projection store ships by default rather than as an optional peer', () => {
+    expect(
+      cliPkg.dependencies?.[BUNDLED_BACKEND],
+      `${BUNDLED_BACKEND} must be an ordinary dependency: it costs 152 KB and pulls nothing`
+      + ' transitively, and `vat resources query` builds its ephemeral in-memory store from it —'
+      + ' behind an optional peer, a query would answer only where a backend happened to be installed',
+    ).toBeDefined();
+    expect(
+      cliPkg.peerDependencies?.[BUNDLED_BACKEND],
+      `${BUNDLED_BACKEND} was grouped with the heavy backends, but the platform-binary argument is false for it`,
+    ).toBeUndefined();
+    expect(cliPkg.optionalDependencies?.[BUNDLED_BACKEND]).toBeUndefined();
   });
 
   /**
