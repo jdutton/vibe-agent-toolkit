@@ -48,7 +48,7 @@
     "vite": "7.3.5",
     "vitest": "3.2.6",
     "lodash": "4.18.1",
-    "turbo": "2.10.11",
+    "turbo": "2.10.12",
     "ws": "8.21.1",
     "handlebars": "4.7.9"
   },
@@ -123,7 +123,7 @@
     "secretlint": "^11.7.1",
     "semver": "^7.8.5",
     "tsx": "^4.23.1",
-    "turbo": "2.10.11",
+    "turbo": "2.10.12",
     "typescript": "^5.9.3",
     "vibe-validate": "0.20.1",
     "vitest": "3.2.6",
@@ -131,7 +131,7 @@
   },
   "dependencies": {
     "@lancedb/lancedb": "0.22.3",
-    "apache-arrow": "15.0.0"
+    "apache-arrow": "15.0.2"
   },
   "patchedDependencies": {
     "@jscpd/finder@4.0.4": "patches/@jscpd%2Ffinder@4.0.4.patch"
