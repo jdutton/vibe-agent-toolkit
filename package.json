@@ -130,7 +130,7 @@
     "yaml": "2.9.0"
   },
   "dependencies": {
-    "@lancedb/lancedb": "0.22.3",
+    "@lancedb/lancedb": "0.37.1",
     "apache-arrow": "15.0.0"
   },
   "patchedDependencies": {
