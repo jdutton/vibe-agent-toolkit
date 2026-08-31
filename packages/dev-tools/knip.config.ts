@@ -66,6 +66,18 @@ const config: KnipConfig = {
         // static import) — declared so turbo's dependency graph knows cli#build
         // depends on dev-tools#build
         '@vibe-agent-toolkit/dev-tools',
+        // The heavy backends are opt-in optional peerDependencies loaded via
+        // dynamic import() through src/utils/optional-backend.ts, so knip sees
+        // them as "referenced optional peers". Intentional, and the same shape
+        // already blessed for `openai` in packages/rag below: referencing one is
+        // the whole point — the seam catches ERR_MODULE_NOT_FOUND and reports the
+        // package to install. Declaring them as optionalDependencies instead is
+        // what shipped ~300 MB to every adopter; see the note in
+        // packages/cli/package.json and the guard in
+        // packages/dev-tools/test/optional-backend-packaging.test.ts.
+        '@vibe-agent-toolkit/projection-sqlite',
+        '@vibe-agent-toolkit/rag',
+        '@vibe-agent-toolkit/rag-lancedb',
       ],
     },
 

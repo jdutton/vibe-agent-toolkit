@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### CLI
 
+- **The RAG and projection-store backends are no longer installed for you — `npm install` no longer
+  brings the RAG lane with it.** They were declared as `optionalDependencies`, which npm and pnpm
+  **install by default** (there, "optional" means the install may fail without failing the build, not
+  that it is skipped), so every adopter downloaded `onnxruntime-web`, a LanceDB platform binary,
+  `apache-arrow` and `protobufjs` whether or not they ever ran a `rag` command. Measured on a real
+  adopter upgrade: **~300 MB of `node_modules` and ~23 s of install time**. They are now **optional
+  peer dependencies**, which are not auto-installed. **If you use `vat rag` or opt into the projection
+  store, install the backend explicitly:**
+
+  ```bash
+  npm install @vibe-agent-toolkit/rag-lancedb    # vat rag
+  npm install @vibe-agent-toolkit/projection-sqlite   # VAT_PROJECTION_STORE
+  ```
+
+  Every other command is unaffected, and an absent backend was already a legible error naming the
+  package to install — the CLI has always deferred loading these. Only the download changed.
+
 - **VAT routes files to a parser by MIME type, and only `text/markdown`, `text/plain` and `text/html`
   reach one.** Every file that was not `.html` used to be parsed as Markdown — `.ts`, `.json`,
   `.csv`, `.tf`, `.py` and everything else. Three things change for you: **every content key changes**

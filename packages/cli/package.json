@@ -69,6 +69,9 @@
     "@types/semver": "^7.7.1",
     "@types/tar": "^6.1.13",
     "@vibe-agent-toolkit/dev-tools": "workspace:*",
+    "@vibe-agent-toolkit/projection-sqlite": "workspace:*",
+    "@vibe-agent-toolkit/rag": "workspace:*",
+    "@vibe-agent-toolkit/rag-lancedb": "workspace:*",
     "rimraf": "^6.0.1",
     "typescript": "^5.7.3",
     "vitest": "^3.2.4"
@@ -80,9 +83,21 @@
     "type": "git",
     "url": "https://github.com/jdutton/vibe-agent-toolkit.git"
   },
-  "optionalDependencies": {
+  "//peerDependencies-note": "The RAG and projection-store backends are OPTIONAL PEERS, never optionalDependencies. `optionalDependencies` are INSTALLED BY DEFAULT by npm and pnpm alike — 'optional' there means the install may fail without failing the build, not that it is skipped — so declaring them that way shipped ~300 MB (onnxruntime-web, a LanceDB platform binary, apache-arrow, protobufjs) to every adopter, contradicting the seam in src/utils/optional-backend.ts that exists precisely to keep them out. Optional peers are NOT auto-installed, so the manifest now says what that module already says: these ship separately, and an absent one is a legible error naming the package to install.",
+  "peerDependencies": {
     "@vibe-agent-toolkit/projection-sqlite": "workspace:*",
     "@vibe-agent-toolkit/rag": "workspace:*",
     "@vibe-agent-toolkit/rag-lancedb": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@vibe-agent-toolkit/projection-sqlite": {
+      "optional": true
+    },
+    "@vibe-agent-toolkit/rag": {
+      "optional": true
+    },
+    "@vibe-agent-toolkit/rag-lancedb": {
+      "optional": true
+    }
   }
 }
