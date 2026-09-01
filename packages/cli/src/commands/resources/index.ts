@@ -4,8 +4,32 @@
 
 import { Command, Option } from 'commander';
 
+import { queryCommand } from './query.js';
 import { scanCommand } from './scan.js';
 import { validateCommand } from './validate.js';
+
+/** What every subcommand's `--debug` flag says it does. */
+const DEBUG_HELP = 'Enable debug logging';
+
+/** The two serializations `scan` and `query` offer of one document. */
+const OUTPUT_YAML = 'yaml';
+const OUTPUT_JSON = 'json';
+
+/**
+ * The `--format` option `scan` and `query` share.
+ *
+ * A factory rather than a shared instance: Commander mutates an `Option` as it
+ * is added, so one object handed to two commands is one object two commands
+ * disagree about. `validate` deliberately does NOT use this — it offers a third
+ * format, `text`, which is a different question.
+ *
+ * @returns A fresh option for one command
+ */
+function yamlOrJsonFormat(): Option {
+  return new Option('--format <format>', 'Output format: yaml (default) or json')
+    .choices([OUTPUT_YAML, OUTPUT_JSON])
+    .default(OUTPUT_YAML);
+}
 
 export function createResourcesCommand(): Command {
   const resources = new Command('resources');
@@ -27,15 +51,10 @@ Configuration:
   resources
     .command('scan [path]')
     .description('Discover markdown resources in directory')
-    .option('--debug', 'Enable debug logging')
+    .option('--debug', DEBUG_HELP)
     .option('--verbose', 'Show full file list with details')
     .option('--collection <id>', 'Filter by collection ID')
-    .addOption(
-      new Option('--format <format>', 'Output format: yaml (default) or json').choices([
-        'yaml',
-        'json',
-      ]).default('yaml'),
-    )
+    .addOption(yamlOrJsonFormat())
     .action(scanCommand)
     .addHelpText(
       'after',
@@ -75,9 +94,63 @@ Examples:
     );
 
   resources
+    .command('query <sql> [path]')
+    .description('Run one read-only SQL statement against the resource projection')
+    .option('--debug', DEBUG_HELP)
+    .option('--param <values...>', 'Values bound in order to the ? placeholders in the statement')
+    .addOption(yamlOrJsonFormat())
+    .action(queryCommand)
+    .addHelpText(
+      'after',
+      `
+Description:
+  Populates this tree's resource projection and runs ONE read-only SQL
+  statement against it. Answers questions no command reports a field for --
+  which files carry which headings, what links at what, which paths were
+  refused and why.
+
+  The answer never depends on whether a cache exists. With a projection store
+  selected the query runs against it; with none, the same projection is loaded
+  into an in-memory database and the identical SQL runs against the identical
+  schema.
+
+Read-only, and single-statement:
+  The connection is put into PRAGMA query_only, so a write is refused by the
+  engine rather than by inspecting your SQL. A statement carrying a second
+  statement is refused outright -- SQLite compiles only the first and discards
+  the rest WITHOUT error, so the trailing text would be silently ignored.
+
+Output Fields:
+  status, root, rowCount, durationSecs
+  population: 'derived' or 'store' -- whether the rows were built this run or
+              read from the projection store. Reported because it cannot be
+              inferred: a correct hit and a correct re-derivation produce
+              identical rows
+  engine:     'sqlite' or 'ephemeral' -- which database answered. An ephemeral
+              engine is always 'derived'; a sqlite engine can be either
+  rows:       The selected rows, exactly as SQLite holds them -- a boolean as
+              0/1, a date and a JSON column as text. Values are NOT decoded,
+              because decoding needs a table spec and arbitrary SQL has none
+
+Exit Codes:
+  0 - The statement ran  |  2 - The statement was refused, or the crawl failed
+
+Requirements:
+  projectRoot: optional (falls back to cwd with a warning)
+  config:      optional (uses defaults if absent)
+
+Examples:
+  $ vat resources query 'SELECT path FROM resource_realizations LIMIT 5'
+  $ vat resources query 'SELECT COUNT(*) AS n FROM blobs'
+  $ vat resources query 'SELECT * FROM blob_conditions'      # what was refused
+  $ vat resources query 'SELECT target FROM blob_references WHERE kind = ?' --param markdown-link
+`
+    );
+
+  resources
     .command('validate [path]')
     .description('Validate markdown resources (link integrity, anchors)')
-    .option('--debug', 'Enable debug logging')
+    .option('--debug', DEBUG_HELP)
     .option('-v, --verbose', 'Show all scanned resources, including those without issues')
     .option('--frontmatter-schema <path>', 'Validate frontmatter against JSON Schema file (.json or .yaml)')
     .option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive', 'strict')

@@ -45,6 +45,7 @@
  * rather than silently declining.
  */
 
+import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
 import type { PopulationCache } from '@vibe-agent-toolkit/resources';
 import { gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
@@ -164,6 +165,20 @@ export interface OpenedPopulationCache {
   /** Hand this to `populate()`. */
   readonly cache: PopulationCache;
   /**
+   * The same store, typed so it can also be ASKED something.
+   *
+   * `PopulationCache.store` is `ProjectionStore` — the engine-free contract
+   * `@vibe-agent-toolkit/resources` states and every backend implements — and
+   * SQL is deliberately not on it (see {@link ProjectionSqlite.SqlQueryableStore}). This is the
+   * one field that remembers which backend actually opened, so a query lane does
+   * not have to re-open the database or feature-test the object it was handed.
+   *
+   * ⚠️ The SAME instance, not a second connection. Two connections to one file
+   * would be two snapshots, and a query would be free to answer from a tree the
+   * population never wrote.
+   */
+  readonly sql: ProjectionSqlite.SqlQueryableStore;
+  /**
    * Close the underlying connection.
    *
    * Must be called. A `DatabaseSync` left open holds its file handle and, in
@@ -209,6 +224,7 @@ export async function openPopulationCache(options: {
   const store = await loadStore();
   return {
     cache: { store, treeHash: snapshot.hash },
+    sql: store,
     close: () => store.close(),
   };
 }
@@ -224,10 +240,37 @@ export async function openPopulationCache(options: {
  *
  * @returns The opened store
  */
-async function loadStore(): Promise<PopulationCache['store']> {
+async function loadStore(): Promise<ProjectionSqlite.SqlQueryableStore> {
+  return (await loadBackend()).openSqliteProjectionStore();
+}
+
+/**
+ * Open a store that lives only in this process's memory.
+ *
+ * 🔑 **This is what keeps the query surface an ANSWER rather than a privilege.**
+ * A caller with no store selected — CI's first run, or a developer who never set
+ * the selector — still gets the same SQL over the same schema; the on-disk store
+ * only makes the second run cheap. Without it, "what does this tree contain"
+ * would be answerable only where a cache happened to exist, and two callers
+ * would hold differently-shaped views of one tree.
+ *
+ * It is a cache that cannot hit: nothing survives the close, so a caller must
+ * write the projection into it before asking anything.
+ *
+ * @returns An open, empty store; close it when done
+ */
+export async function openEphemeralQueryStore(): Promise<ProjectionSqlite.SqlQueryableStore> {
+  return (await loadBackend()).openEphemeralProjectionStore();
+}
+
+/**
+ * Load the selected backend module, or report it as uninstalled and exit.
+ *
+ * @returns The backend's module namespace
+ */
+async function loadBackend(): Promise<typeof ProjectionSqlite> {
   try {
-    const backend = await import('@vibe-agent-toolkit/projection-sqlite');
-    return backend.openSqliteProjectionStore();
+    return await import('@vibe-agent-toolkit/projection-sqlite');
   } catch (error) {
     if (!isModuleMissing(error)) throw error;
     reportMissingBackend(PROJECTION_STORE_BACKEND);
@@ -246,7 +289,11 @@ async function loadStore(): Promise<PopulationCache['store']> {
  *
  * It is also the `withGitSnapshotCache` bracket for the work inside it, so the
  * key and the extent filed under it come from ONE git snapshot — see the note
- * on the call below.
+ * inside {@link withOpenedStore}.
+ *
+ * `undefined` on a run with no store selected, which is the shape every
+ * population lane wants: no store means re-derive, not fail. A lane that needs
+ * something to ASK wants {@link withQueryStore} instead.
  *
  * @param options - Where the corpus is
  * @param options.root - The absolute corpus root
@@ -256,6 +303,77 @@ async function loadStore(): Promise<PopulationCache['store']> {
 export async function withPopulationCache<T>(
   options: { root: string },
   work: (cache: PopulationCache | undefined) => Promise<T>,
+): Promise<T> {
+  return withOpenedStore(options, (opened) => work(opened?.cache));
+}
+
+/**
+ * Run one command's work with a store it can ASK something, open for the whole
+ * duration.
+ *
+ * The query lane's bracket, and it differs from {@link withPopulationCache} in
+ * exactly one way: where that one hands back `undefined` and lets the caller
+ * populate uncached, this one falls back to an **in-memory** store so there is
+ * always something to run SQL against.
+ *
+ * 🔑 That fallback is the whole reason this exists, and it is a correctness
+ * property rather than a convenience. If a query only worked where a store
+ * happened to be on disk, the answer would depend on whether a cache was there —
+ * and the caller could not tell the two apart, because an empty result and no
+ * store look identical in the rows. One dialect, one schema, one answer; the
+ * on-disk store is purely the speed-up.
+ *
+ * ⚠️ The two arguments are NOT interchangeable, and a caller must use both:
+ * `cache` is what `populate()` reads and writes, and it is `undefined` on the
+ * ephemeral path — which is precisely when the caller must write the projection
+ * into `store` itself, because nothing else will have.
+ *
+ * ## Why {@link withPopulationCache} does not simply delegate to this
+ *
+ * It would open an in-memory database on every population in the toolkit,
+ * including the many that never ask a question — and, worse, it would load
+ * `node:sqlite` on Node 22.0–22.12, where it does not exist. A lane that needs
+ * no query must not acquire a query's dependencies.
+ *
+ * @param options - Where the corpus is
+ * @param options.root - The absolute corpus root
+ * @param work - Given the store to query, and the cache to populate through, or
+ *   `undefined` when the store is ephemeral and holds nothing yet
+ * @returns Whatever `work` returned
+ */
+export async function withQueryStore<T>(
+  options: { root: string },
+  work: (store: ProjectionSqlite.SqlQueryableStore, cache: PopulationCache | undefined) => Promise<T>,
+): Promise<T> {
+  return withOpenedStore(options, async (opened) => {
+    if (opened !== undefined) return work(opened.sql, opened.cache);
+
+    const ephemeral = await openEphemeralQueryStore();
+    try {
+      return await work(ephemeral, undefined);
+    } finally {
+      await ephemeral.close();
+    }
+  });
+}
+
+/**
+ * The shared body of both brackets: one git snapshot, one store, closed however
+ * the work ends.
+ *
+ * Extracted so the two public brackets differ only in what they do with the
+ * absent case. Written twice, the `withGitSnapshotCache` placement — which is
+ * the half that closes a real race, not merely a duplicate call — would be two
+ * places to get right.
+ *
+ * @param options - Where the corpus is
+ * @param options.root - The absolute corpus root
+ * @param work - Given the opened store, or `undefined` when none is selected
+ * @returns Whatever `work` returned
+ */
+async function withOpenedStore<T>(
+  options: { root: string },
+  work: (opened: OpenedPopulationCache | undefined) => Promise<T>,
 ): Promise<T> {
   // ONE git snapshot for the whole scope, and this is the level that gets it:
   // `openPopulationCache` below takes one to derive the store key, and the crawl
@@ -277,7 +395,7 @@ export async function withPopulationCache<T>(
     const opened = await openPopulationCache(options);
     if (opened === undefined) return work(undefined);
     try {
-      return await work(opened.cache);
+      return await work(opened);
     } finally {
       await opened.close();
     }
