@@ -70,6 +70,7 @@ export type {
   CollectionValidation,
   CollectionConfig,
   ResourcesConfig,
+  ResourceCheck,
   ProjectConfig,
   SkillFileEntry,
   SkillPackagingConfig,

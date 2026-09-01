@@ -99,6 +99,23 @@ export const PROJECTION_STORE_ENV = 'VAT_PROJECTION_STORE';
 export const PROJECTION_STORE_SQLITE = 'sqlite';
 
 /**
+ * Where the projection store's database lives, overriding the default.
+ *
+ * 🪤 **Without this there is no way to isolate a store, and "isolated" test
+ * fixtures were not.** `defaultStoreDirectory()` is
+ * `tmpdir/.vat-cache/<version>/projection-<shapeDigest>` and consults neither
+ * `XDG_CACHE_HOME` nor `HOME`, so a suite that set those believed it had its own
+ * database and was writing into the developer's — and on a shared build agent,
+ * two concurrent jobs write into one file.
+ *
+ * An environment variable rather than a config field, for the same reason
+ * {@link PROJECTION_STORE_ENV} is one: it says where an INSTRUMENT keeps its
+ * scratch space, not what the project means, and it has to be reachable from a
+ * harness that spawns the binary.
+ */
+export const PROJECTION_STORE_DIR_ENV = 'VAT_PROJECTION_STORE_DIR';
+
+/**
  * The env var that turns VAT's disk caches off for a run.
  *
  * Not this module's invention — `ParseCache` has read it since the parse cache
@@ -120,6 +137,9 @@ export const CACHE_DISABLED = '0';
  * it: RAG carries a platform-native binary, while this one carries a Node
  * version floor.
  */
+/** What Node throws for `import('node:sqlite')` before 22.13.0. */
+const UNKNOWN_BUILTIN_MODULE = 'ERR_UNKNOWN_BUILTIN_MODULE';
+
 const PROJECTION_STORE_BACKEND: OptionalBackend = {
   feature: 'The projection store',
   packageName: '@vibe-agent-toolkit/projection-sqlite',
@@ -241,7 +261,15 @@ export async function openPopulationCache(options: {
  * @returns The opened store
  */
 async function loadStore(): Promise<ProjectionSqlite.SqlQueryableStore> {
-  return (await loadBackend()).openSqliteProjectionStore();
+  const directory = process.env[PROJECTION_STORE_DIR_ENV];
+  // Spread rather than passed, because the backend defaults the field when it is
+  // ABSENT and an explicit `undefined` is a different argument under
+  // `exactOptionalPropertyTypes`. Empty string is treated as unset: an unset
+  // variable and one exported as `''` are the same intent, and `''` would
+  // otherwise resolve to the process cwd.
+  return (await loadBackend()).openSqliteProjectionStore(
+    directory === undefined || directory === '' ? {} : { directory },
+  );
 }
 
 /**
@@ -272,9 +300,47 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
   try {
     return await import('@vibe-agent-toolkit/projection-sqlite');
   } catch (error) {
+    if (missingNodeSqlite(error)) {
+      throw new Error(
+        'The projection store needs `node:sqlite`, which this Node does not have.'
+        + ` VAT runs on Node >= 22.0.0, but \`node:sqlite\` arrived in 22.13.0 — you are on ${process.version}.`
+        + ' Upgrade Node to 22.13.0 or newer. Installing a package will not help:'
+        + ' the module is built into Node, not published to npm.',
+      );
+    }
     if (!isModuleMissing(error)) throw error;
     reportMissingBackend(PROJECTION_STORE_BACKEND);
   }
+}
+
+/**
+ * Whether this failure is "your Node is too old", not "the package is absent".
+ *
+ * 🪤 The two are **different error codes**, and only one of them reaches
+ * {@link isModuleMissing}. `@vibe-agent-toolkit/projection-sqlite` imports
+ * `node:sqlite`, which arrived in Node 22.13.0; on 22.0–22.12 the import fails
+ * with `ERR_UNKNOWN_BUILTIN_MODULE`, not `ERR_MODULE_NOT_FOUND`. Without this
+ * branch the user gets a bare `No such built-in module: node:sqlite` — which
+ * names neither the version floor nor the fix.
+ *
+ * ⚠️ This became reachable on EVERY `vat resources query`/`check` run when the
+ * query lane started building its in-memory database unconditionally. It is not
+ * a corner: VAT's own floor is `>=22.0.0`, so a supported Node hits it.
+ *
+ * The repair stays distinct from the missing-package one on purpose:
+ * "install this package" is the wrong instruction for "upgrade Node", and
+ * sending someone round that loop cannot terminate.
+ *
+ * @param error - Whatever the dynamic import threw
+ * @returns True when Node itself lacks the builtin
+ */
+function missingNodeSqlite(error: unknown): boolean {
+  return (
+    typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: unknown }).code === UNKNOWN_BUILTIN_MODULE
+  );
 }
 
 /**
@@ -292,8 +358,11 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
  * inside {@link withOpenedStore}.
  *
  * `undefined` on a run with no store selected, which is the shape every
- * population lane wants: no store means re-derive, not fail. A lane that needs
- * something to ASK wants {@link withQueryStore} instead.
+ * population lane wants: no store means re-derive, not fail.
+ *
+ * ⚠️ A caller that wants to run SQL must NOT query this store. It is one
+ * database per VAT release, shared by every root on the machine, so arbitrary
+ * SQL over it answers from other repositories — see `projection-query.ts`.
  *
  * @param options - Where the corpus is
  * @param options.root - The absolute corpus root
@@ -308,63 +377,12 @@ export async function withPopulationCache<T>(
 }
 
 /**
- * Run one command's work with a store it can ASK something, open for the whole
- * duration.
+ * One git snapshot, one store, closed however the work ends.
  *
- * The query lane's bracket, and it differs from {@link withPopulationCache} in
- * exactly one way: where that one hands back `undefined` and lets the caller
- * populate uncached, this one falls back to an **in-memory** store so there is
- * always something to run SQL against.
- *
- * 🔑 That fallback is the whole reason this exists, and it is a correctness
- * property rather than a convenience. If a query only worked where a store
- * happened to be on disk, the answer would depend on whether a cache was there —
- * and the caller could not tell the two apart, because an empty result and no
- * store look identical in the rows. One dialect, one schema, one answer; the
- * on-disk store is purely the speed-up.
- *
- * ⚠️ The two arguments are NOT interchangeable, and a caller must use both:
- * `cache` is what `populate()` reads and writes, and it is `undefined` on the
- * ephemeral path — which is precisely when the caller must write the projection
- * into `store` itself, because nothing else will have.
- *
- * ## Why {@link withPopulationCache} does not simply delegate to this
- *
- * It would open an in-memory database on every population in the toolkit,
- * including the many that never ask a question — and, worse, it would load
- * `node:sqlite` on Node 22.0–22.12, where it does not exist. A lane that needs
- * no query must not acquire a query's dependencies.
- *
- * @param options - Where the corpus is
- * @param options.root - The absolute corpus root
- * @param work - Given the store to query, and the cache to populate through, or
- *   `undefined` when the store is ephemeral and holds nothing yet
- * @returns Whatever `work` returned
- */
-export async function withQueryStore<T>(
-  options: { root: string },
-  work: (store: ProjectionSqlite.SqlQueryableStore, cache: PopulationCache | undefined) => Promise<T>,
-): Promise<T> {
-  return withOpenedStore(options, async (opened) => {
-    if (opened !== undefined) return work(opened.sql, opened.cache);
-
-    const ephemeral = await openEphemeralQueryStore();
-    try {
-      return await work(ephemeral, undefined);
-    } finally {
-      await ephemeral.close();
-    }
-  });
-}
-
-/**
- * The shared body of both brackets: one git snapshot, one store, closed however
- * the work ends.
- *
- * Extracted so the two public brackets differ only in what they do with the
- * absent case. Written twice, the `withGitSnapshotCache` placement — which is
- * the half that closes a real race, not merely a duplicate call — would be two
- * places to get right.
+ * Still separate from {@link withPopulationCache} rather than inlined into it,
+ * because the opened handle carries more than the cache — {@link OpenedPopulationCache.sql}
+ * exists for a caller that needs to ASK the store something, and folding this in
+ * would make that unreachable without re-opening the database.
  *
  * @param options - Where the corpus is
  * @param options.root - The absolute corpus root

@@ -44,16 +44,29 @@ const binPath = getBinPath(import.meta.url);
 
 let projectDir: string;
 
+/**
+ * Where this suite's stores live — OUTSIDE the corpus, deliberately.
+ *
+ * 🪤 A store under `projectDir` is a member of the tree it is caching. Writing
+ * it changes the working tree, which changes `git write-tree`, which changes the
+ * store key — so every run misses, the cache tell never flips, and the database
+ * file itself shows up as a row in `resource_realizations`. Both symptoms are
+ * confusing and neither points at the cause.
+ */
+let storeDir: string;
+
 /** The store this suite writes, kept beneath the fixture so cleanup takes it. */
 function storeEnv(): NodeJS.ProcessEnv {
   return {
     ...process.env,
     VAT_PROJECTION_STORE: 'sqlite',
-    // Beneath the fixture, so the suite never reads or writes the developer's
-    // own store — a shared one would make the first run a HIT and delete the
-    // only arm that proves the flip.
-    XDG_CACHE_HOME: safePath.join(projectDir, '.cache'),
-    HOME: projectDir,
+    // 🪤 `VAT_PROJECTION_STORE_DIR`, and nothing else works. This read
+    // `XDG_CACHE_HOME` + `HOME` and its comment claimed isolation it did not
+    // have: `defaultStoreDirectory()` is under `tmpdir()` and consults neither,
+    // so every run in this suite was writing into the developer's own store —
+    // and the "first run is derived" arm survived only because the fixture's
+    // tree hash happened to be unique, not because of anything here.
+    VAT_PROJECTION_STORE_DIR: safePath.join(storeDir, 'shared'),
   };
 }
 
@@ -70,6 +83,7 @@ function query(sql: string, env?: NodeJS.ProcessEnv): { status: number | null; d
 describe('vat resources query', () => {
   beforeAll(() => {
     projectDir = createTestTempDir('vat-resources-query-');
+    storeDir = createTestTempDir('vat-resources-query-store-');
     fs.mkdirSync(safePath.join(projectDir, 'docs'), { recursive: true });
     fs.writeFileSync(
       safePath.join(projectDir, 'docs/a.md'),
@@ -90,6 +104,7 @@ describe('vat resources query', () => {
 
   afterAll(() => {
     cleanupTestTempDir(projectDir);
+    cleanupTestTempDir(storeDir);
   });
 
   it('answers a question about the blob tier, which no other resources command reports', () => {
@@ -107,31 +122,61 @@ describe('vat resources query', () => {
     expect(rows[0]?.n).toBeGreaterThan(0);
   });
 
-  it('answers with no store selected, from an in-memory database', () => {
-    // The capability rule: an answer must not depend on whether a cache
-    // happened to exist. With no `VAT_PROJECTION_STORE` the same SQL runs
-    // against an ephemeral store built from the same projection.
-    const { status, doc } = query("SELECT path FROM resource_realizations WHERE path = 'docs/a.md'");
+  it('gives the SAME answer with a store and without one', () => {
+    // 🚨 THE REGRESSION TEST. This is the assertion whose absence let a real
+    // defect ship: the suite compared store-to-store and used a `WHERE path =`
+    // filter that masked everything else, so nothing ever held the two
+    // configurations against each other.
+    //
+    // What it caught: the projection store is ONE database per VAT release,
+    // shared by every root on the machine, and arbitrary SQL has no key
+    // predicate — so a statement ran against it answered from every repository
+    // on the box. Measured on this two-file fixture before the fix:
+    // `COUNT(*) FROM resource_realizations` returned 3 with no store and
+    // **5,779** with one, and `WHERE path LIKE 'packages/%'` returned files from
+    // a different repository entirely.
+    //
+    // An UNFILTERED aggregate is the point. A `WHERE` clause narrow enough to
+    // name this fixture's own files cannot see foreign rows, which is exactly
+    // how the original suite passed.
+    const sql = 'SELECT COUNT(*) AS n FROM resource_realizations';
+    const withoutStore = query(sql);
+    const withStore = query(sql, storeEnv());
+
+    expect(withoutStore.status).toBe(0);
+    expect(withStore.status).toBe(0);
+    expect(withStore.doc['rows']).toStrictEqual(withoutStore.doc['rows']);
+  });
+
+  it('answers about THIS tree only, never about another repository', () => {
+    // The disclosure half of the same defect, asserted directly rather than
+    // through a count. This fixture has two markdown files under `docs/`; a row
+    // whose path starts with anything else came from a corpus this command was
+    // not pointed at, and its link text, heading text and frontmatter are in the
+    // result set with it.
+    const { status, doc } = query(
+      "SELECT path FROM resource_realizations WHERE path NOT LIKE 'docs/%' AND isDirectory = 0",
+      storeEnv(),
+    );
 
     expect(status).toBe(0);
-    expect(doc['engine']).toBe('ephemeral');
-    // An ephemeral engine can only ever have derived — there is nothing to hit.
-    expect(doc['population']).toBe('derived');
-    expect(doc['rowCount']).toBe(1);
+    expect(doc['rows']).toStrictEqual([]);
   });
 
   it('flips the cache tell from derived to store on the second run', () => {
     // 🔑 The claim the `population` field exists to make falsifiable. Two
     // correct runs produce identical ROWS, so the flip is the only observable
     // difference between a served population and a re-derived one.
-    const env = storeEnv();
+    // Its OWN store directory, so the flip does not depend on which tests ran
+    // first. Sharing one with the tests above made this fail the moment another
+    // test warmed it — an order dependency that is invisible in isolation and is
+    // exactly what a suite-wide shared cache buys.
+    const env = { ...storeEnv(), VAT_PROJECTION_STORE_DIR: safePath.join(storeDir, 'flip') };
     const first = query('SELECT COUNT(*) AS n FROM blobs', env);
     const second = query('SELECT COUNT(*) AS n FROM blobs', env);
 
     expect(first.status).toBe(0);
     expect(second.status).toBe(0);
-    expect(first.doc['engine']).toBe('sqlite');
-    expect(second.doc['engine']).toBe('sqlite');
     expect(first.doc['population']).toBe('derived');
     expect(second.doc['population']).toBe('store');
     // And the answer did not move, which is what makes the flip a saving rather
@@ -158,5 +203,32 @@ describe('vat resources query', () => {
 
     expect(status).toBe(2);
     expect(stderr).toContain('single statement');
+  });
+
+  it('refuses a second statement hidden behind a quoted IDENTIFIER', () => {
+    // 🚨 The guard scanned `'`, `"`, `--` and `/* */` and knew nothing about
+    // SQLite's other two identifier quotes. Given a backtick- or
+    // bracket-quoted name containing an apostrophe, it walked in unaware, read
+    // that apostrophe as opening a string, and swallowed the real `;` — so the
+    // guard passed and the DELETE was discarded in silence, which is precisely
+    // the intent-loss it exists to refuse.
+    for (const sql of [
+      "SELECT 1 AS `a'b`; DELETE FROM blobs WHERE 1=1",
+      "SELECT 1 AS [a'b]; DELETE FROM blobs WHERE 1=1",
+    ]) {
+      const { status, stderr } = query(sql);
+      expect(status, sql).toBe(2);
+      expect(stderr, sql).toContain('single statement');
+    }
+  });
+
+  it('accepts a legitimate identifier that merely CONTAINS a semicolon', () => {
+    // The other direction of the same bug, and the control that stops the fix
+    // being "refuse anything with a bracket in it". A `;` inside a quoted
+    // identifier is not a separator.
+    const { status, doc } = query('SELECT 1 AS [a;b]');
+
+    expect(status).toBe(0);
+    expect(doc['rowCount']).toBe(1);
   });
 });

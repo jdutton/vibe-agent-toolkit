@@ -135,6 +135,30 @@ export const CollectionConfigSchema = z.object({
 export type CollectionConfig = z.infer<typeof CollectionConfigSchema>;
 
 /**
+ * One SQL assertion a project makes about its own projection.
+ *
+ * 🔑 **The statement selects the VIOLATIONS.** Zero rows is the pass. The
+ * inverse spelling — select what must exist, assert non-empty — has a far worse
+ * failure mode: a typo'd table, a renamed column or a `WHERE` that matches
+ * nothing all return zero rows and read as success. Here they read as success
+ * too, but success is what selecting nothing MEANS, so the two cannot be
+ * confused into an assertion that silently stopped testing anything.
+ *
+ * See `projection/sql-checks.ts` for how rows become findings.
+ */
+export const ResourceCheckSchema = z.object({
+  description: z.string().min(1)
+    .describe('What this check asserts, in the author\'s own words. REQUIRED: it becomes the finding\'s message, and a check whose intent is only inferable from its SQL is one nobody can review or act on.'),
+  sql: z.string().min(1)
+    .describe('One read-only SQL statement selecting the VIOLATING rows — zero rows is a pass. Each returned row becomes one finding; a selected `path` column anchors that finding to the file. Runs against the same projection `vat resources query` reads, under PRAGMA query_only, and a statement carrying a second statement is refused.'),
+  severity: z.enum(['error', 'warning', 'info'])
+    .optional()
+    .describe('How a violation is reported. Defaults to `error` — the safe direction, since a check whose author did not think about severity is still an assertion they wanted enforced. An adopter can override it per code through resources.validation.severity, including to `ignore`.'),
+}).strict().describe('A SQL assertion over the resource projection');
+
+export type ResourceCheck = z.infer<typeof ResourceCheckSchema>;
+
+/**
  * Resources section of project configuration.
  */
 export const ResourcesConfigSchema = z.object({
@@ -148,6 +172,8 @@ export const ResourcesConfigSchema = z.object({
     .describe('Validation framework config: severity overrides and per-code allow entries (applied inside ResourceRegistry.validate)'),
   linkAuth: LinkAuthConfigSchema.optional()
     .describe('Authenticated external link resolution config (issue #113 / link-auth engine)'),
+  checks: z.record(z.string(), ResourceCheckSchema).optional()
+    .describe('Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code.'),
 }).describe('Resources section of project configuration');
 
 export type ResourcesConfig = z.infer<typeof ResourcesConfigSchema>;

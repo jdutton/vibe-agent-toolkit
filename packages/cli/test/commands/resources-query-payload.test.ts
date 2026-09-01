@@ -11,10 +11,8 @@
 import { PROJECTION_TABLES } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
-import {
-  buildProjectionQueryOutputData,
-  describeQueryFailure,
-} from '../../src/commands/resources/query.js';
+import { buildProjectionQueryOutputData } from '../../src/commands/resources/query.js';
+import { describeQueryFailure } from '../../src/utils/projection-query.js';
 
 /** A stand-in for whatever a statement selected. Two rows, so a count of 1 cannot pass. */
 const ROWS: readonly Record<string, unknown>[] = [
@@ -29,10 +27,10 @@ describe('the query payload', () => {
     // can answer "did the cache work" — only this can, and only because the
     // command observes contributor records rather than inspecting the result.
     const served = buildProjectionQueryOutputData({
-      rows: ROWS, root: '/corpus', population: 'store', engine: 'sqlite', durationMs: 120,
+      rows: ROWS, root: '/corpus', population: 'store', durationMs: 120,
     });
     const derived = buildProjectionQueryOutputData({
-      rows: ROWS, root: '/corpus', population: 'derived', engine: 'sqlite', durationMs: 1200,
+      rows: ROWS, root: '/corpus', population: 'derived', durationMs: 1200,
     });
 
     expect(served['population']).toBe('store');
@@ -43,22 +41,27 @@ describe('the query payload', () => {
     expect(served['population']).not.toBe(derived['population']);
   });
 
-  it('reports the engine separately, because an ephemeral run is not a cache miss', () => {
-    // The two facts come apart. `ephemeral` is always `derived`, but `sqlite`
-    // is either — so collapsing them into one field would make "no store was
-    // selected" and "the store was cold" indistinguishable, which is exactly
-    // the pair a reader needs to tell apart before trusting a timing.
+  it('publishes no `engine` field, because there is only one engine now', () => {
+    // ⚠️ A deliberate ABSENCE, pinned. An earlier version published
+    // `engine: sqlite | ephemeral` to say which database answered the SQL. It is
+    // gone because the answer is always the same: the statement runs against a
+    // per-run in-memory database holding this tree and nothing else, and the
+    // on-disk store is a population cache that is never queried.
+    //
+    // Pinned rather than merely deleted, because re-adding the field would mean
+    // someone had re-introduced the defect it used to describe — a query lane
+    // that reads a store shared by every root on the machine.
     const payload = buildProjectionQueryOutputData({
-      rows: ROWS, root: '/corpus', population: 'derived', engine: 'ephemeral', durationMs: 900,
+      rows: ROWS, root: '/corpus', population: 'derived', durationMs: 900,
     });
 
-    expect(payload['engine']).toBe('ephemeral');
+    expect(payload).not.toHaveProperty('engine');
     expect(payload['population']).toBe('derived');
   });
 
   it('states the row count beside the rows', () => {
     const payload = buildProjectionQueryOutputData({
-      rows: ROWS, root: '/corpus', population: 'derived', engine: 'ephemeral', durationMs: 5,
+      rows: ROWS, root: '/corpus', population: 'derived', durationMs: 5,
     });
 
     expect(payload['status']).toBe('success');
@@ -72,7 +75,7 @@ describe('the query payload', () => {
     // dropped the field would make it indistinguishable from a build too old to
     // report one.
     const payload = buildProjectionQueryOutputData({
-      rows: [], root: '/corpus', population: 'store', engine: 'sqlite', durationMs: 3,
+      rows: [], root: '/corpus', population: 'store', durationMs: 3,
     });
 
     expect(payload['rowCount']).toBe(0);

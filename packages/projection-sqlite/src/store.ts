@@ -170,7 +170,26 @@ function skipLiteralOrComment(sql: string, index: number): number {
     return end < 0 ? sql.length : end + 2;
   }
   const quote = sql[index];
-  return quote === "'" || quote === '"' ? skipQuoted(sql, index, quote) : index;
+  // 🚨 FOUR quoting forms, not two. SQLite accepts `'…'` (string), `"…"`,
+  // `` `…` `` (MySQL-style) and `[…]` (MS-style) as quoted IDENTIFIERS, and a
+  // scanner that knows only the first two DESYNCHRONISES on the others: given
+  // ``SELECT 1 AS `a'b`; DELETE FROM blobs``, it walks into the backticks
+  // unaware, treats the apostrophe inside as opening a string, and swallows the
+  // real `;` — so the guard passed and SQLite silently discarded the `DELETE`.
+  // Verified end to end before the fix; that is exactly the intent-loss this
+  // function exists to refuse, arriving through the function itself.
+  //
+  // It also failed in the other direction: a legitimate `SELECT 1 AS [a;b]` was
+  // rejected as multi-statement, because the `;` inside the identifier was read
+  // as a separator.
+  if (quote === "'" || quote === '"' || quote === '`') return skipQuoted(sql, index, quote);
+  // `[` is the odd one: its terminator is a DIFFERENT character and, unlike the
+  // other three, SQLite gives it no doubling escape — the first `]` ends it.
+  if (quote === '[') {
+    const end = sql.indexOf(']', index + 1);
+    return end < 0 ? sql.length : end + 1;
+  }
+  return index;
 }
 
 /**
@@ -724,7 +743,18 @@ class SqliteProjectionStore implements SqlQueryableStore {
     // (verified on Node 24.13.1 — `readOnly` is simply absent), so the only
     // honest alternative would be pattern-matching the caller's SQL, which is a
     // denylist and loses to the first `WITH … AS (DELETE …)` nobody thought of.
-    // The pragma is the engine refusing, which no phrasing gets around.
+    // The pragma is the engine refusing, which no phrasing talks out of it.
+    //
+    // ⚠️ **"Read-only" here means the DATA is safe, not that the process writes
+    // nothing.** Measured on Node 24.13.1 under `query_only = 1`:
+    // `ATTACH DATABASE '/any/path' AS x` is ACCEPTED and creates a zero-byte
+    // file there; `VACUUM INTO '/any/path'` throws `attempt to write a readonly
+    // database` but creates the file first. Neither truncates an existing
+    // non-SQLite file (`ATTACH` on one fails `file is not a database` with the
+    // contents intact), and `DELETE` is refused as expected — so this is a
+    // nuisance-write primitive, not a destructive one. Stated because the
+    // sentence above used to claim more than the pragma delivers, and a reader
+    // sizing up the blast radius deserves the real one.
     //
     // Restored in `finally` because this connection is the one every other
     // method on this store uses: leaving it read-only would turn the next

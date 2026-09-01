@@ -4,6 +4,7 @@
 
 import { Command, Option } from 'commander';
 
+import { checkCommand } from './check.js';
 import { queryCommand } from './query.js';
 import { scanCommand } from './scan.js';
 import { validateCommand } from './validate.js';
@@ -109,10 +110,10 @@ Description:
   which files carry which headings, what links at what, which paths were
   refused and why.
 
-  The answer never depends on whether a cache exists. With a projection store
-  selected the query runs against it; with none, the same projection is loaded
-  into an in-memory database and the identical SQL runs against the identical
-  schema.
+  One tree, one answer. The statement always runs against an in-memory
+  database holding THIS tree's projection and nothing else. A selected
+  projection store makes the population cheap and is never queried -- it is
+  one database per VAT release shared by every root on the machine.
 
 Read-only, and single-statement:
   The connection is put into PRAGMA query_only, so a write is refused by the
@@ -126,8 +127,6 @@ Output Fields:
               read from the projection store. Reported because it cannot be
               inferred: a correct hit and a correct re-derivation produce
               identical rows
-  engine:     'sqlite' or 'ephemeral' -- which database answered. An ephemeral
-              engine is always 'derived'; a sqlite engine can be either
   rows:       The selected rows, exactly as SQLite holds them -- a boolean as
               0/1, a date and a JSON column as text. Values are NOT decoded,
               because decoding needs a table spec and arbitrary SQL has none
@@ -144,6 +143,61 @@ Examples:
   $ vat resources query 'SELECT COUNT(*) AS n FROM blobs'
   $ vat resources query 'SELECT * FROM blob_conditions'      # what was refused
   $ vat resources query 'SELECT target FROM blob_references WHERE kind = ?' --param markdown-link
+`
+    );
+
+  resources
+    .command('check [path]')
+    .description('Run the project\'s declared SQL assertions over its resource projection')
+    .option('--debug', DEBUG_HELP)
+    .option('--check <name>', 'Run only this check, by its key in resources.checks')
+    .addOption(yamlOrJsonFormat())
+    .action(checkCommand)
+    .addHelpText(
+      'after',
+      `
+Description:
+  Runs every assertion declared under \`resources.checks\` in
+  vibe-agent-toolkit.config.yaml against the same projection \`vat resources
+  query\` reads, and fails the run when any error-severity check is violated.
+
+  A query answers a question once. This runs the questions a project decided
+  were worth asking every time.
+
+Declaring a check:
+  resources:
+    checks:
+      orphan-skills:
+        description: Every SKILL.md must be referenced by a plugin
+        sql: SELECT path FROM resource_realizations WHERE ...
+        severity: error        # optional; error is the default
+
+  The statement selects the VIOLATIONS -- zero rows is a pass. Each returned
+  row becomes one finding, and its columns are that finding's evidence; a
+  selected \`path\` column anchors the finding to the file.
+
+  Findings are ordinary validation issues with the code CUSTOM:<name>, so
+  resources.validation.severity can downgrade or ignore one you inherited.
+
+A check that cannot run FAILS:
+  A renamed column breaks a check's SQL. That is reported as an error naming
+  the check and listing the columns the projection actually has -- never
+  skipped, because a check that stopped running looks exactly like one that
+  passed.
+
+Output Fields:
+  status, root, population, checksRun, issueCounts, durationSecs
+  checksRun: How many checks ran. Read it: no findings from four checks and no
+             findings from NO checks are otherwise the same document
+  issues:    One row per violation ({code, severity, message, path?})
+
+Exit Codes:
+  0 - No error-severity findings  |  1 - At least one  |  2 - System error
+
+Examples:
+  $ vat resources check
+  $ vat resources check --check orphan-skills
+  $ vat resources check --format json
 `
     );
 

@@ -957,6 +957,11 @@ const SHARED_COUNTS_TYPE = /\bextends\s+SeverityCounts\b|\bSeverityCounts\s*&|&\
 /** Lanes that publish a per-severity counts block beside their status. */
 const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   'packages/cli/src/commands/resources/validate.ts',
+  // Publishes `issueCounts` beside its status from the day it shipped. Its
+  // findings are the project's own `resources.checks` SQL assertions, whose
+  // severities an adopter sets per check — so the distribution is exactly what a
+  // reader cannot reconstruct from a status here.
+  'packages/cli/src/commands/resources/check.ts',
   // Migrated onto the shared `calculateValidationStatus` + `countBySeverity`
   // pair, which ended five separate collapses and three different answers for
   // an info-only issue set.

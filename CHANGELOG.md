@@ -152,6 +152,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back as SQLite holds them, undecoded. Read `population: derived | store` in the output: it says
   whether the rows came from the projection store or were built by this run.
 
+- **`vat resources check [path]`** — runs the SQL assertions a project declares under
+  `resources.checks`, and exits 1 when one is violated. Each check is a `description` plus one `sql`
+  statement selecting the rows that VIOLATE it, so zero rows is a pass; findings carry the code
+  `CUSTOM:<name>`, which `resources.validation.severity` can downgrade or ignore. A check whose SQL
+  no longer runs is reported as an error, never skipped.
+
+- **`VAT_PROJECTION_STORE_DIR`** — sets where the projection store's database lives. Without it the
+  store is one database per VAT release shared by every root on the machine, so concurrent CI jobs
+  write into one file; set it per job to isolate them.
+
 - **`vat claude context [paths...]`** — reports which `CLAUDE.md` files, `.claude/rules` files and
   `@`-imported files load into an agent's context at a path, why each is there, and its estimated
   token cost. `--discoverable` adds, separately, what those files link to in one hop that the harness

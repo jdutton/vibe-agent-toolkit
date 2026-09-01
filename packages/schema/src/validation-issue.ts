@@ -40,8 +40,19 @@ import {
   type NonOverridableCode,
 } from './validation-codes.js';
 
-/** Full code space: registry codes (overridable) + info codes + structural/non-overridable codes. */
-export type ValidationIssueCode = IssueCode | InfoCode | NonOverridableCode;
+/**
+ * A finding from a project's own `resources.checks` SQL assertion.
+ *
+ * Namespaced so the user's code space and the shipped registry's stay disjoint
+ * **by construction**. The registry is closed and every entry carries a default
+ * severity, so an un-namespaced user code would either shadow a shipped one or
+ * reach `CODE_REGISTRY[code].defaultSeverity` with no entry to read. A
+ * `CUSTOM:` code never does: it carries the severity its check declared.
+ */
+export type CustomCheckCode = `CUSTOM:${string}`;
+
+/** Full code space: registry codes (overridable) + info codes + structural/non-overridable codes + user checks. */
+export type ValidationIssueCode = IssueCode | InfoCode | NonOverridableCode | CustomCheckCode;
 
 /**
  * Host-independent absolute-path test, mirroring `isAbsoluteAnyPlatform` in
