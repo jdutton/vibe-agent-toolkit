@@ -127,7 +127,78 @@ import {
   selectBlobFactsSql,
   selectExtentSql,
 } from './schema-sql.js';
-import { decodeValue, encodeValue, type SqliteResultValue } from './values.js';
+import { decodeValue, encodeValue, type SqliteResultValue, type SqliteValue } from './values.js';
+
+/**
+ * Walk past a quoted run starting at `start`, honouring SQL's doubled-quote
+ * escape (`'it''s'` is one string, not two).
+ *
+ * @param sql - The statement text
+ * @param start - Index of the opening quote
+ * @param quote - The quote character that opened it
+ * @returns Index just past the closing quote, or the end for an unterminated run
+ */
+function skipQuoted(sql: string, start: number, quote: string): number {
+  let index = start + 1;
+  while (index < sql.length) {
+    if (sql[index] !== quote) {
+      index += 1;
+    } else if (sql[index + 1] === quote) {
+      index += 2;
+    } else {
+      return index + 1;
+    }
+  }
+  return sql.length;
+}
+
+/**
+ * Walk past a string literal, quoted identifier or comment beginning at `index`.
+ *
+ * @param sql - The statement text
+ * @param index - Where to look
+ * @returns Index just past it, or `index` unchanged when none starts here
+ */
+function skipLiteralOrComment(sql: string, index: number): number {
+  const pair = sql.slice(index, index + 2);
+  if (pair === '--') {
+    const end = sql.indexOf('\n', index);
+    return end < 0 ? sql.length : end + 1;
+  }
+  if (pair === '/*') {
+    const end = sql.indexOf('*/', index + 2);
+    return end < 0 ? sql.length : end + 2;
+  }
+  const quote = sql[index];
+  return quote === "'" || quote === '"' ? skipQuoted(sql, index, quote) : index;
+}
+
+/**
+ * Index of the first `;` that actually separates statements.
+ *
+ * A scanner rather than a regex, and deliberately: the alternation this
+ * replaced tripped both `security/detect-unsafe-regex` and SonarJS's complexity
+ * ceiling, and the honest reading of those is that a pattern matching nested,
+ * escaped syntax is the wrong tool. This cannot backtrack at all — every branch
+ * moves the cursor forward — so the input being user-supplied costs nothing.
+ *
+ * @param sql - The statement text
+ * @returns The index, or `-1` when every `;` is inside a literal or comment
+ */
+function indexOfStatementSeparator(sql: string): number {
+  let index = 0;
+  while (index < sql.length) {
+    const skipped = skipLiteralOrComment(sql, index);
+    if (skipped > index) {
+      index = skipped;
+    } else if (sql[index] === ';') {
+      return index;
+    } else {
+      index += 1;
+    }
+  }
+  return -1;
+}
 
 /**
  * How long a blocked connection waits for a lock before giving up.
@@ -282,7 +353,7 @@ interface TablePlan {
  * await store.writeExtent({ rootId, treeHash }, extent);
  * await store.close();
  */
-export function openSqliteProjectionStore(options: SqliteStoreOptions = {}): ProjectionStore {
+export function openSqliteProjectionStore(options: SqliteStoreOptions = {}): SqlQueryableStore {
   const directory = options.directory ?? defaultStoreDirectory();
   // 0o700: this cache holds link text, heading text and frontmatter source from
   // a corpus that may be private. The mode is a POSIX mechanism — on Windows it
@@ -296,6 +367,101 @@ export function openSqliteProjectionStore(options: SqliteStoreOptions = {}): Pro
     database,
     Math.max(1, Math.trunc(options.retainedExtentsPerRoot ?? DEFAULT_RETAINED_EXTENTS_PER_ROOT)),
   );
+}
+
+/**
+ * A store that can also be asked an arbitrary read-only question.
+ *
+ * SQL is declared here and not on {@link ProjectionStore} because it is a
+ * property of *this backend*, not of storing a projection. The export format is
+ * deliberately engine-free so a consumer can choose DuckDB, a JSON reader or a
+ * golden diff; a `query` on the shared interface would quietly make SQLite the
+ * one engine every future backend had to reimplement.
+ */
+export interface SqlQueryableStore extends ProjectionStore {
+  /**
+   * Run one read-only statement and return its rows.
+   *
+   * 🪤 **Values come back exactly as SQLite holds them** — a boolean as `0`/`1`,
+   * a date and a JSON column as text. This does not run `decodeRows`, and the
+   * reason is that it *cannot*: decoding needs a {@link StoredTableSpec}, and
+   * arbitrary SQL has none. `SELECT COUNT(*)`, an alias, a join and an
+   * expression all produce columns no registry describes. Decoding only bare
+   * column selections would mean one store answering `true` or `1` for the same
+   * underlying row depending on how the caller phrased the question.
+   *
+   * @param sql - One `SELECT`, `WITH` or `VALUES` statement
+   * @param parameters - Bound in order, for every `?` in the statement
+   * @returns The rows, in the order SQLite produced them
+   * @throws If the statement is not read-only, if it is more than one
+   *   statement, or if SQLite rejects it — an unknown column included
+   */
+  query(sql: string, ...parameters: readonly SqliteValue[]): readonly Record<string, unknown>[];
+}
+
+/**
+ * Open a projection store that lives only in this process's memory.
+ *
+ * The point is not speed — it is that **the same SQL gets the same answer with
+ * no store on disk**. A query surface that only worked where a cache happened
+ * to exist would make the answer depend on whether one was there, and let two
+ * callers hold differently-shaped views of one tree. So a caller with no
+ * on-disk store builds one of these from the projection and runs the identical
+ * schema against it; the on-disk store stays purely a speed-up.
+ *
+ * It is a cache that cannot hit: nothing survives {@link ProjectionStore.close},
+ * and a second instance shares nothing with the first.
+ *
+ * 🪤 **This deliberately does not go through {@link configure}, and that is not
+ * a tidiness choice.** Every pragma `configure` sets is a property of a *file*:
+ *
+ * - `journal_mode = WAL` is the sharp one. On an in-memory database SQLite
+ *   *accepts the statement without throwing* and leaves the mode at `memory`,
+ *   so {@link enableWal}'s `catch` never fires, its `journalMode()` check never
+ *   returns `'wal'`, all {@link WAL_SWITCH_ATTEMPTS} attempts burn a blocking
+ *   `Atomics.wait`, and it ends about a second later at the final `throw` —
+ *   naming a rollback journal, when this is a memory journal. Wrong answer,
+ *   wrong diagnosis, one second of latency to deliver them.
+ * - `busy_timeout` covers contention between connections; nothing else can
+ *   reach this database.
+ * - `auto_vacuum` and `synchronous` describe how pages reach a file there is
+ *   none of.
+ *
+ * @returns An open store holding nothing; close it when done
+ *
+ * @example
+ * const store = openEphemeralProjectionStore();
+ * const { blobs, extent } = splitProjectionByScope(projection);
+ * await store.writeBlobFacts(blobs);
+ * await store.writeExtent({ rootId, treeHash }, extent);
+ */
+export function openEphemeralProjectionStore(): SqlQueryableStore {
+  const database = new DatabaseSync(':memory:');
+  createSchema(database);
+  return new SqliteProjectionStore(database, DEFAULT_RETAINED_EXTENTS_PER_ROOT);
+}
+
+/**
+ * Refuse text carrying more than one statement.
+ *
+ * 🪤 **Not belt-and-braces over `query_only`** — it is the only thing that says
+ * anything at all. Measured on Node 24.13.1: `prepare('SELECT 1; DELETE FROM t')`
+ * is *accepted*, compiles the first statement, and **silently discards the
+ * tail**. The rows survive, so nothing is destroyed; what is destroyed is the
+ * caller's intent, with no error and no output to show it went missing. A user
+ * whose second statement quietly evaporates is worse off than one told no.
+ *
+ * @param sql - The caller's statement text
+ * @throws If anything but whitespace follows a statement separator
+ */
+function assertSingleStatement(sql: string): void {
+  const separator = indexOfStatementSeparator(sql);
+  if (separator >= 0 && sql.slice(separator + 1).trim() !== '') {
+    throw new Error(
+      'A projection query must be a single statement. SQLite compiles only the first and discards'
+      + ' the rest without error, so the trailing text would be ignored rather than run.',
+    );
+  }
 }
 
 /**
@@ -401,7 +567,7 @@ function createSchema(database: DatabaseSync): void {
 }
 
 /** The `ProjectionStore` contract over one SQLite connection. */
-class SqliteProjectionStore implements ProjectionStore {
+class SqliteProjectionStore implements SqlQueryableStore {
   readonly #database: DatabaseSync;
   readonly #plans: readonly TablePlan[];
   readonly #recordExtent: StatementSync;
@@ -546,6 +712,30 @@ class SqliteProjectionStore implements ProjectionStore {
       }
       return result as unknown as ExtentScopedRows;
     });
+  }
+
+  /** @inheritdoc */
+  query(sql: string, ...parameters: readonly SqliteValue[]): readonly Record<string, unknown>[] {
+    this.#assertOpen();
+    assertSingleStatement(sql);
+
+    // 🪤 `PRAGMA query_only` and NOT an inspection of the statement, because
+    // there is nothing to inspect: `StatementSync` exposes no read-only flag
+    // (verified on Node 24.13.1 — `readOnly` is simply absent), so the only
+    // honest alternative would be pattern-matching the caller's SQL, which is a
+    // denylist and loses to the first `WITH … AS (DELETE …)` nobody thought of.
+    // The pragma is the engine refusing, which no phrasing gets around.
+    //
+    // Restored in `finally` because this connection is the one every other
+    // method on this store uses: leaving it read-only would turn the next
+    // `writeExtent` into "attempt to write a readonly database" somewhere with
+    // no query in sight.
+    this.#database.exec('PRAGMA query_only = 1');
+    try {
+      return this.#database.prepare(sql).all(...parameters) as readonly Record<string, unknown>[];
+    } finally {
+      this.#database.exec('PRAGMA query_only = 0');
+    }
   }
 
   /** @inheritdoc */
