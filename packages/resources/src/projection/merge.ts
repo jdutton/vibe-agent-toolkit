@@ -773,8 +773,40 @@ function storeKeyFor(
     gitTracker: options.gitTracker !== undefined,
     extentSource: crawlSourceSelector() ?? null,
     parseRouting: routing.fingerprint,
+    registrations: registrationQuestions(options),
   });
   return { rootId, treeHash: `${cache.treeHash} ${ambient}` };
+}
+
+/**
+ * What every registered contributor learned at CONSTRUCTION, sorted by id.
+ *
+ * The third ambient input, after the git oracle and the enumerator selector,
+ * and the one that hides inside the contributors rather than around them — see
+ * {@link ExtentContributor.registrationQuestion} for the failure that put it
+ * here. Contributors declaring nothing are omitted entirely rather than
+ * recorded as `null`, so registering one cannot move the key of a run whose
+ * question it did not change.
+ *
+ * Keyed by contributor id rather than emitted as a list, so registration ORDER
+ * cannot move the key: {@link canonicalJson} sorts object keys and preserves
+ * array order, so an object is order-independent by the digest's own rule and a
+ * list would have needed a sort here that no fixture could exercise while
+ * exactly one contributor declares anything.
+ *
+ * @param options - The run, for its registry
+ * @returns Every declared question, by contributor id; empty when none declares one
+ */
+function registrationQuestions(options: PopulateOptions): Record<string, JsonValue> {
+  const declared: Record<string, JsonValue> = {};
+  for (const contributor of [
+    ...options.registry.byStratum('base'),
+    ...options.registry.byStratum('closure'),
+  ]) {
+    if (contributor.registrationQuestion === undefined) continue;
+    declared[contributor.id] = contributor.registrationQuestion;
+  }
+  return declared;
 }
 
 /**

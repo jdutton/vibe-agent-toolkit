@@ -268,6 +268,18 @@ export class FilesystemExtentContributor implements ExtentContributor {
   /** Enumerates paths and keys bytes; reads no blob-keyed table. */
   readonly readsBlobs = false;
 
+  /**
+   * This registration's {@link ContentDemand}, so the store key can separate on it.
+   *
+   * 🚨 Not decoration and not provenance: without it a `'deferred'` registration
+   * and a keying one are **one question** to the reuse rule — same id, same
+   * `null` parameter set — and the deriving run is served an extent that names
+   * no content at all. `blobFactsCover` cannot catch that, because an extent
+   * with no keyed rows gives it nothing to fail on. See
+   * {@link ExtentContributor.registrationQuestion}.
+   */
+  readonly registrationQuestion: JsonValue;
+
   readonly #sourceFor: (root: string) => CrawlSource;
 
   readonly #contentDemand: ContentDemand;
@@ -288,6 +300,7 @@ export class FilesystemExtentContributor implements ExtentContributor {
   ) {
     this.#sourceFor = sourceFor;
     this.#contentDemand = contentDemand;
+    this.registrationQuestion = { contentDemand };
   }
 
   /**
