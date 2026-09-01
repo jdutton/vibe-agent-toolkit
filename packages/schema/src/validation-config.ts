@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { IssueCodeSchema, type IssueCode } from './validation-codes.js';
+import { isCustomCheckCode, type CustomCheckCode } from './validation-issue.js';
 
 export const SeverityLevelSchema = z.enum(['error', 'warning', 'info', 'ignore']);
 export type SeverityLevel = z.infer<typeof SeverityLevelSchema>;
@@ -78,10 +79,49 @@ export interface ValidationThresholds {
 // this repo enables: Zod infers an optional field as `T | undefined`, and without
 // the union the annotation is narrower than the schema it describes.
 export interface ValidationConfig {
-  severity?: Partial<Record<IssueCode, SeverityLevel>> | undefined;
+  severity?: Partial<Record<IssueCode | CustomCheckCode, SeverityLevel>> | undefined;
   allow?: Partial<Record<IssueCode, AllowEntry[]>> | undefined;
   thresholds?: ValidationThresholds | undefined;
 }
+
+/**
+ * The key space of `validation.severity`: every shipped registry code, **plus**
+ * the `CUSTOM:<name>` namespace `resources.checks` mints.
+ *
+ * ## Why this is a union and not the enum, and not `z.string()` either
+ *
+ * The enum alone was a shipped defect of the worst kind — following our own
+ * documentation bricked every command. `vat resources check --help`, the
+ * `resources.checks` schema description and `sql-checks.ts` all told adopters
+ * that `resources.validation.severity` could downgrade or ignore an inherited
+ * check. Zod parses record KEYS through the key schema, so `CUSTOM:my-check` was
+ * an `invalid_enum_value`; that failed `ProjectConfigSchema`, which failed
+ * `loadConfig`, which every command calls. The user's reward for doing what
+ * three docs told them was `exit 2` and a dump of the ~150-entry registry enum,
+ * on `vat resources scan` as readily as on `check`.
+ *
+ * `z.string()` would fix that and give back a worse thing: the enum branch is
+ * why a misspelled registry code (`LNIK_OUTSIDE_PROJECT`) is refused instead of
+ * silently overriding nothing, and it is what `zod-to-json-schema` emits as an
+ * `enum` for editor completion. So the accept set widens by exactly one closed
+ * namespace, and {@link isCustomCheckCode} — the acceptor that lives beside the
+ * minter — is the only thing that decides membership in it.
+ *
+ * ⚠️ `ValidationConfigSchema` is mounted at `resources.validation` **and** at
+ * `skills.config.<name>.validation`, so a `CUSTOM:` key parses under the skills
+ * mount too, where no check runs and it does nothing. Accepted rather than
+ * split: one key space with an inert corner is a smaller lie than two schemas
+ * that can disagree about what a code is, and the field name there names a skill
+ * the adopter is already looking at.
+ */
+export const SeverityOverrideCodeSchema = z.union([
+  IssueCodeSchema,
+  z.string().refine(isCustomCheckCode, {
+    message:
+      'a custom severity key must be `CUSTOM:<name>`, naming a check declared under'
+      + ' resources.checks',
+  }),
+]);
 
 // The `unknown` INPUT parameter is deliberate, not a leftover from satisfying the
 // compiler. This schema's job is to validate a `validation:` block parsed out of a
@@ -89,7 +129,15 @@ export interface ValidationConfig {
 // typed value would have no reason to parse it. Typing the input narrower would
 // only let a caller skip the check the schema exists to perform.
 export const ValidationConfigSchema: z.ZodType<ValidationConfig, z.ZodTypeDef, unknown> = z.object({
-  severity: z.record(IssueCodeSchema, SeverityLevelSchema).optional(),
+  severity: z.record(SeverityOverrideCodeSchema, SeverityLevelSchema).optional(),
+  // 🔑 `allow` stays keyed by the REGISTRY enum, and the asymmetry with
+  // `severity` above is the decision, not an oversight. `severity` reaches a
+  // check's findings for real: `resolveIssueSeverity` is code-agnostic and
+  // `vat resources check` calls it. The allow filter is `IssueCode`-typed and
+  // that command never runs it, so a `CUSTOM:` allow entry would parse, exempt
+  // nothing, and report nothing — the adopter would believe a path was excused
+  // while every finding under it still failed their build. A loud config error
+  // is the honest answer until the check lane actually runs the allow filter.
   allow: z.record(IssueCodeSchema, z.array(AllowEntrySchema)).optional(),
   // `.strict()` on the inner object as well as the outer one: a mistyped
   // threshold name is the failure this block is most likely to see, and a

@@ -69,11 +69,11 @@
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { PROJECTION_STORE_DIR_ENV } from '../../src/utils/projection-store.js';
 import {
   contributorsCharged,
   rowsStoredUnder,
   storeFilesUnder,
-  tmpdirEnv,
 } from '../helpers/projection-store-probe.js';
 import { createSuiteContext, executeCli, join, writeTestFile } from '../system/test-common.js';
 import { commitTestFixture } from '../test-helpers.js';
@@ -144,16 +144,20 @@ const COMMANDS: readonly CommandCase[] = [
 /**
  * Run one arm of one command and collect everything it can be judged on.
  *
- * @param options - The arm's command, its private temp directory, and whether
+ * @param options - The arm's command, its private store directory, and whether
  *   the store is selected for it
  * @param options.args - The `vat` argv, including `--format json`
- * @param options.temp - The arm's private `os.tmpdir()`, where its store lands
+ * @param options.isolatedStoreDir - The directory this arm's store lands in,
+ *   named through `VAT_PROJECTION_STORE_DIR`. The probes below read exactly this
+ *   directory, so an arm that failed to redirect would be measured against the
+ *   developer's live cache — `defaultStoreDirectory()` is one database per VAT
+ *   release, shared by every root on the machine
  * @param options.store - Whether to select the SQLite projection store
  * @returns The parsed document, the exit status, and the charged contributors
  */
 async function runArm(options: {
   args: readonly string[];
-  temp: string;
+  isolatedStoreDir: string;
   store: boolean;
 }): Promise<ArmResult> {
   const timing = context.createTempDir();
@@ -163,7 +167,12 @@ async function runArm(options: {
       VAT_RESOURCES_CRAWL: PROJECTION_LANE,
       VAT_CRAWL_TIMING: timing,
       ...(options.store ? { VAT_PROJECTION_STORE: 'sqlite' } : {}),
-      ...tmpdirEnv(options.temp),
+      // 🪤 Imported from the module under test, never spelled as a literal: a
+      // rename would otherwise leave every arm writing the shared default, where
+      // arm A's "no store file" assertions would still pass — vacuously, against
+      // a directory nothing ever wrote. Applied LAST in the spread so nothing
+      // added above can point one arm at another arm's store.
+      [PROJECTION_STORE_DIR_ENV]: options.isolatedStoreDir,
     },
   });
   // A run that crashed prints nothing, and an equivalence between two nothings
@@ -212,7 +221,7 @@ describe('the projection store and the answers it is supposed not to change', ()
       const withStore = context.createTempDir();
 
       // ── A: store off ──────────────────────────────────────────────────────
-      const armA = await runArm({ args, temp: withoutStore, store: false });
+      const armA = await runArm({ args, isolatedStoreDir: withoutStore, store: false });
       expect(storeFilesUnder(withoutStore)).toEqual([]);
       expect(rowsStoredUnder(withoutStore)).toBe(0);
       expect(storeCharges(armA)).toEqual([]);
@@ -221,14 +230,14 @@ describe('the projection store and the answers it is supposed not to change', ()
       // Asserted BEFORE the run: without this, a leaked store from another arm
       // would make B a second warm run wearing a cold label.
       expect(storeFilesUnder(withStore)).toEqual([]);
-      const armB = await runArm({ args, temp: withStore, store: true });
+      const armB = await runArm({ args, isolatedStoreDir: withStore, store: true });
       expect(armB.charged).toContain(STORE_WRITE);
       expect(storeFilesUnder(withStore)).toHaveLength(1);
       const rowsAfterCold = rowsStoredUnder(withStore);
       expect(rowsAfterCold).toBeGreaterThan(0);
 
       // ── C: store on, warm ─────────────────────────────────────────────────
-      const armC = await runArm({ args, temp: withStore, store: true });
+      const armC = await runArm({ args, isolatedStoreDir: withStore, store: true });
       expect(armC.charged).toContain(STORE_READ);
       // The half that says whether the store ANSWERED — see the header on why a
       // charged read alone cannot.

@@ -46,7 +46,7 @@
  */
 
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
-import type { PopulationCache } from '@vibe-agent-toolkit/resources';
+import type { PopulationCache, ProjectionStore } from '@vibe-agent-toolkit/resources';
 import { gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
 import { isModuleMissing, reportMissingBackend, type OptionalBackend } from './optional-backend.js';
@@ -101,12 +101,24 @@ export const PROJECTION_STORE_SQLITE = 'sqlite';
 /**
  * Where the projection store's database lives, overriding the default.
  *
- * 🪤 **Without this there is no way to isolate a store, and "isolated" test
- * fixtures were not.** `defaultStoreDirectory()` is
- * `tmpdir/.vat-cache/<version>/projection-<shapeDigest>` and consults neither
- * `XDG_CACHE_HOME` nor `HOME`, so a suite that set those believed it had its own
- * database and was writing into the developer's — and on a shared build agent,
- * two concurrent jobs write into one file.
+ * The default is `tmpdir/.vat-cache/<version>/projection-<shapeDigest>` — one
+ * database per VAT release, shared by every root on the machine. This names a
+ * different one **explicitly**, which is what an adopter with a per-job cache
+ * directory, a shared build agent running two jobs at once, or a test arm that
+ * must not touch the developer's live cache actually needs.
+ *
+ * 🪤 **What it replaces is redirecting `TMPDIR`, which works and is the wrong
+ * instrument.** `defaultStoreDirectory()` resolves through
+ * `vatCacheNamespaceRoot()` → `normalizedTmpdir()`, so pointing the OS temp
+ * directory elsewhere does move the store — along with every other temp
+ * consumer in the process, on a variable whose name is not the same on both
+ * platforms (`TMPDIR` on POSIX; `TEMP`, then `TMP`, on Windows, so setting one
+ * is silently inert on the other). It relocates the store as a side effect of
+ * relocating something larger. This variable says the one thing meant.
+ *
+ * ⚠️ It does **not** consult `XDG_CACHE_HOME` or `HOME`. A caller that set
+ * those believed it had its own database and was writing into the shared one;
+ * the fix is to name the directory here, not to add more implicit roots.
  *
  * An environment variable rather than a config field, for the same reason
  * {@link PROJECTION_STORE_ENV} is one: it says where an INSTRUMENT keeps its
@@ -180,24 +192,22 @@ export function projectionStoreSelected(): boolean {
   return process.env[PROJECTION_STORE_ENV] === PROJECTION_STORE_SQLITE;
 }
 
-/** An open store, the key half it is used with, and the way to let it go. */
+/**
+ * An open store, the key half it is used with, and the way to let it go.
+ *
+ * ⚠️ **Deliberately NOT typed for SQL, and do not re-widen it.** This handle
+ * reaches the database at {@link PROJECTION_STORE_DIR_ENV}'s directory, which
+ * defaults to one file per VAT release shared by every root on the machine —
+ * holding other repositories' link text, heading text and frontmatter. A field
+ * typed `SqlQueryableStore` used to live here "for a caller that needs to ASK
+ * the store something", and that caller was removed precisely because arbitrary
+ * SQL over this store answers from trees the asker never named. `populate()`
+ * needs the engine-free {@link PopulationCache} and nothing more; a query lane
+ * builds its own store (see `projection-query.ts`).
+ */
 export interface OpenedPopulationCache {
   /** Hand this to `populate()`. */
   readonly cache: PopulationCache;
-  /**
-   * The same store, typed so it can also be ASKED something.
-   *
-   * `PopulationCache.store` is `ProjectionStore` — the engine-free contract
-   * `@vibe-agent-toolkit/resources` states and every backend implements — and
-   * SQL is deliberately not on it (see {@link ProjectionSqlite.SqlQueryableStore}). This is the
-   * one field that remembers which backend actually opened, so a query lane does
-   * not have to re-open the database or feature-test the object it was handed.
-   *
-   * ⚠️ The SAME instance, not a second connection. Two connections to one file
-   * would be two snapshots, and a query would be free to answer from a tree the
-   * population never wrote.
-   */
-  readonly sql: ProjectionSqlite.SqlQueryableStore;
   /**
    * Close the underlying connection.
    *
@@ -244,7 +254,6 @@ export async function openPopulationCache(options: {
   const store = await loadStore();
   return {
     cache: { store, treeHash: snapshot.hash },
-    sql: store,
     close: () => store.close(),
   };
 }
@@ -258,9 +267,11 @@ export async function openPopulationCache(options: {
  * for "upgrade Node", and diagnosing a version floor as a missing dependency
  * sends a user round a loop that cannot terminate.
  *
- * @returns The opened store
+ * @returns The opened store, typed as the engine-free contract — the SQLite
+ *   backend really does return a `SqlQueryableStore`, and this narrows it away
+ *   on purpose so the population path cannot grow a query
  */
-async function loadStore(): Promise<ProjectionSqlite.SqlQueryableStore> {
+async function loadStore(): Promise<ProjectionStore> {
   const directory = process.env[PROJECTION_STORE_DIR_ENV];
   // Spread rather than passed, because the backend defaults the field when it is
   // ABSENT and an explicit `undefined` is a different argument under
@@ -300,21 +311,22 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
   try {
     return await import('@vibe-agent-toolkit/projection-sqlite');
   } catch (error) {
-    if (missingNodeSqlite(error)) {
-      throw new Error(
-        'The projection store needs `node:sqlite`, which this Node does not have.'
-        + ` VAT runs on Node >= 22.0.0, but \`node:sqlite\` arrived in 22.13.0 — you are on ${process.version}.`
-        + ' Upgrade Node to 22.13.0 or newer. Installing a package will not help:'
-        + ' the module is built into Node, not published to npm.',
-      );
-    }
+    const floor = nodeSqliteFloorFailure(error);
+    if (floor !== undefined) throw floor;
     if (!isModuleMissing(error)) throw error;
     reportMissingBackend(PROJECTION_STORE_BACKEND);
   }
 }
 
 /**
- * Whether this failure is "your Node is too old", not "the package is absent".
+ * The legible failure for "your Node is too old", or `undefined` when this is
+ * some other failure — including "the package is absent".
+ *
+ * Exported, and returning the error rather than throwing it, so the DIAGNOSIS
+ * is unit-testable without a mocked dynamic import. A test cannot make a mocked
+ * `import()` reject with a plain `{ code }` — the test runner wraps whatever a
+ * module factory throws in its own error, so the code never survives to be
+ * read — and the branch's whole value is the message it produces.
  *
  * 🪤 The two are **different error codes**, and only one of them reaches
  * {@link isModuleMissing}. `@vibe-agent-toolkit/projection-sqlite` imports
@@ -323,23 +335,35 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
  * branch the user gets a bare `No such built-in module: node:sqlite` — which
  * names neither the version floor nor the fix.
  *
- * ⚠️ This became reachable on EVERY `vat resources query`/`check` run when the
- * query lane started building its in-memory database unconditionally. It is not
- * a corner: VAT's own floor is `>=22.0.0`, so a supported Node hits it.
+ * ⚠️ It is reachable on EVERY `vat resources query`/`check` run, and not a
+ * corner: VAT's own floor is `>=22.0.0`, so a supported Node hits it. That was
+ * already true before the store-selected path stopped querying a shared
+ * database — the query lane has always fallen back to
+ * {@link openEphemeralQueryStore} when no store is selected, which is the
+ * default, so `node:sqlite` was required on every default run. Nothing here
+ * became newly reachable; the branch is load-bearing because the FLOOR is,
+ * whichever way the lane resolves its store.
  *
  * The repair stays distinct from the missing-package one on purpose:
  * "install this package" is the wrong instruction for "upgrade Node", and
  * sending someone round that loop cannot terminate.
  *
  * @param error - Whatever the dynamic import threw
- * @returns True when Node itself lacks the builtin
+ * @returns The error to raise when Node itself lacks the builtin; `undefined`
+ *   when this failure is something else and the caller should keep diagnosing
  */
-function missingNodeSqlite(error: unknown): boolean {
-  return (
+export function nodeSqliteFloorFailure(error: unknown): Error | undefined {
+  const isFloor =
     typeof error === 'object'
     && error !== null
     && 'code' in error
-    && (error as { code?: unknown }).code === UNKNOWN_BUILTIN_MODULE
+    && (error as { code?: unknown }).code === UNKNOWN_BUILTIN_MODULE;
+  if (!isFloor) return undefined;
+  return new Error(
+    'The projection store needs `node:sqlite`, which this Node does not have.'
+    + ` VAT runs on Node >= 22.0.0, but \`node:sqlite\` arrived in 22.13.0 — you are on ${process.version}.`
+    + ' Upgrade Node to 22.13.0 or newer. Installing a package will not help:'
+    + ' the module is built into Node, not published to npm.',
   );
 }
 
@@ -355,7 +379,7 @@ function missingNodeSqlite(error: unknown): boolean {
  *
  * It is also the `withGitSnapshotCache` bracket for the work inside it, so the
  * key and the extent filed under it come from ONE git snapshot — see the note
- * inside {@link withOpenedStore}.
+ * in the body.
  *
  * `undefined` on a run with no store selected, which is the shape every
  * population lane wants: no store means re-derive, not fail.
@@ -363,6 +387,9 @@ function missingNodeSqlite(error: unknown): boolean {
  * ⚠️ A caller that wants to run SQL must NOT query this store. It is one
  * database per VAT release, shared by every root on the machine, so arbitrary
  * SQL over it answers from other repositories — see `projection-query.ts`.
+ * That is also why this is the ONLY scope over the opened store: there is no
+ * separate "opened handle" bracket for a caller wanting more than the cache,
+ * because there is nothing legitimate for such a caller to want.
  *
  * @param options - Where the corpus is
  * @param options.root - The absolute corpus root
@@ -372,26 +399,6 @@ function missingNodeSqlite(error: unknown): boolean {
 export async function withPopulationCache<T>(
   options: { root: string },
   work: (cache: PopulationCache | undefined) => Promise<T>,
-): Promise<T> {
-  return withOpenedStore(options, (opened) => work(opened?.cache));
-}
-
-/**
- * One git snapshot, one store, closed however the work ends.
- *
- * Still separate from {@link withPopulationCache} rather than inlined into it,
- * because the opened handle carries more than the cache — {@link OpenedPopulationCache.sql}
- * exists for a caller that needs to ASK the store something, and folding this in
- * would make that unreachable without re-opening the database.
- *
- * @param options - Where the corpus is
- * @param options.root - The absolute corpus root
- * @param work - Given the opened store, or `undefined` when none is selected
- * @returns Whatever `work` returned
- */
-async function withOpenedStore<T>(
-  options: { root: string },
-  work: (opened: OpenedPopulationCache | undefined) => Promise<T>,
 ): Promise<T> {
   // ONE git snapshot for the whole scope, and this is the level that gets it:
   // `openPopulationCache` below takes one to derive the store key, and the crawl
@@ -413,7 +420,7 @@ async function withOpenedStore<T>(
     const opened = await openPopulationCache(options);
     if (opened === undefined) return work(undefined);
     try {
-      return await work(opened);
+      return await work(opened.cache);
     } finally {
       await opened.close();
     }

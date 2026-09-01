@@ -150,7 +150,7 @@ export const ResourceCheckSchema = z.object({
   description: z.string().min(1)
     .describe('What this check asserts, in the author\'s own words. REQUIRED: it becomes the finding\'s message, and a check whose intent is only inferable from its SQL is one nobody can review or act on.'),
   sql: z.string().min(1)
-    .describe('One read-only SQL statement selecting the VIOLATING rows — zero rows is a pass. Each returned row becomes one finding; a selected `path` column anchors that finding to the file. Runs against the same projection `vat resources query` reads, under PRAGMA query_only, and a statement carrying a second statement is refused.'),
+    .describe('One read-only SQL statement selecting the VIOLATING rows — zero rows is a pass. It must BEGIN with `SELECT`, `WITH` or `VALUES`; the first significant token decides, and anything else — `ATTACH`, `PRAGMA`, `EXPLAIN`, any write — is refused before it reaches SQLite, because a statement the engine accepts without producing rows cannot be told apart from a check that passed. (`EXPLAIN` is refused even though it is side-effect free: it is a PREFIX, and admitting one would mean deciding safety by looking past the first token.) Each returned row becomes one finding; a selected `path` column anchors that finding to the file. Runs against the same projection `vat resources query` reads, under PRAGMA query_only. A second statement is refused — SQLite would compile only the first and discard the rest without error — but a COMMENT after the terminating semicolon is accepted (`... ;  -- see ADR-14`), which SQL written as a YAML block scalar ends with routinely.'),
   severity: z.enum(['error', 'warning', 'info'])
     .optional()
     .describe('How a violation is reported. Defaults to `error` — the safe direction, since a check whose author did not think about severity is still an assertion they wanted enforced. An adopter can override it per code through resources.validation.severity, including to `ignore`.'),
@@ -160,6 +160,18 @@ export type ResourceCheck = z.infer<typeof ResourceCheckSchema>;
 
 /**
  * Resources section of project configuration.
+ *
+ * 🔑 **Strict, and the reason is the same one `ValidationConfigSchema` gives.** A
+ * mistyped key is the failure this block is most likely to see, and a
+ * passthrough object would ACCEPT `cheks:` and then STRIP it: the parse
+ * succeeds, so every rule under the typo is gone and nothing anywhere says so.
+ * A config whose only spelling is `cheks:` reads as one that declared no checks
+ * at all, and one that also spells `checks:` correctly keeps that half and loses
+ * the other silently — with `checks` present, `vat resources check`'s loud
+ * "no checks are declared" warning cannot even fire. The silent outcome is an
+ * unenforced RULE: the adopter believes a gate exists and it never runs. Every
+ * nested block here is already strict; this is the enclosing object that was
+ * leaking.
  */
 export const ResourcesConfigSchema = z.object({
   include: z.array(z.string()).optional()
@@ -174,7 +186,7 @@ export const ResourcesConfigSchema = z.object({
     .describe('Authenticated external link resolution config (issue #113 / link-auth engine)'),
   checks: z.record(z.string(), ResourceCheckSchema).optional()
     .describe('Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code.'),
-}).describe('Resources section of project configuration');
+}).strict().describe('Resources section of project configuration');
 
 export type ResourcesConfig = z.infer<typeof ResourcesConfigSchema>;
 

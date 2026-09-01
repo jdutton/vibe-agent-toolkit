@@ -16,32 +16,26 @@
  * holding a whole corpus can both be 118,784 bytes. Everything here counts ROWS,
  * out of the file, with the store's own connection closed.
  *
- * ## 🪤 Which variable names the temp directory is PLATFORM-SPECIFIC
+ * ## How an arm's store is isolated
  *
- * `defaultStoreDirectory()` derives from the OS temp directory and there is no
- * env var to point it elsewhere, so isolating an arm means isolating its
- * `os.tmpdir()`. Under `normalizedTmpdir()` that reads `TMPDIR` on POSIX and
- * `TEMP`, then `TMP`, on Windows — no name both platforms honour. Setting
- * `TMPDIR` alone is inert on Windows: the child resolves the runner's real temp
- * directory, writes its store there, and every assertion reads an isolated
- * directory no run ever touched, which passes every "nothing was written" arm
- * VACUOUSLY. {@link tmpdirEnv} sets all three.
+ * `VAT_PROJECTION_STORE_DIR` names the directory outright, and it is the only
+ * mechanism either suite uses. `defaultStoreDirectory()` is one database per VAT
+ * release, shared by every root on the machine, so an arm that does not redirect
+ * it is reading and writing the developer's live cache.
+ *
+ * 🪤 Both suites import the variable's NAME from the module under test rather
+ * than spelling it here, and that is not tidiness. A store nothing redirected
+ * lands in the shared default, so every probe below then reads a directory no
+ * run ever touched — and each one answers `[]` or `0`, which is exactly what a
+ * clean "nothing was written" arm looks like. The isolation and the assertions
+ * fail silently in the same direction, so only a positive control (an arm that
+ * requires rows to BE there) can tell the two apart.
  */
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-
-/**
- * Point a child's `os.tmpdir()` at one directory on every platform.
- *
- * @param temp - The arm's private temp directory
- * @returns The env pairs to merge, covering the POSIX and the Windows names
- */
-export function tmpdirEnv(temp: string): Record<string, string> {
-  return { TMPDIR: temp, TMP: temp, TEMP: temp };
-}
 
 /**
  * Every `projection.db` under one isolated temp directory.
@@ -51,7 +45,7 @@ export function tmpdirEnv(temp: string): Record<string, string> {
  * for a reason that has nothing to do with the store. Finding none is a real
  * answer — no store was ever opened.
  *
- * @param root - The isolated temp directory an arm ran under
+ * @param root - The directory one arm's store was isolated to
  * @returns Absolute paths of every store file found, in walk order
  */
 export function storeFilesUnder(root: string): string[] {
@@ -70,7 +64,7 @@ export function storeFilesUnder(root: string): string[] {
 /**
  * Rows held across every table of every store under one temp directory.
  *
- * @param root - The isolated temp directory an arm ran under
+ * @param root - The directory one arm's store was isolated to
  * @returns Total rows, which is 0 both for "no store file" and "an empty one"
  */
 export function rowsStoredUnder(root: string): number {

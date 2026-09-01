@@ -115,11 +115,20 @@ Description:
   projection store makes the population cheap and is never queried -- it is
   one database per VAT release shared by every root on the machine.
 
-Read-only, and single-statement:
-  The connection is put into PRAGMA query_only, so a write is refused by the
-  engine rather than by inspecting your SQL. A statement carrying a second
-  statement is refused outright -- SQLite compiles only the first and discards
-  the rest WITHOUT error, so the trailing text would be silently ignored.
+One query, and read-only:
+  The statement must BE a query -- its first significant token has to be
+  SELECT, WITH or VALUES. Anything else (ATTACH, PRAGMA, DELETE, EXPLAIN) is
+  refused before it reaches SQLite. That is a gate on statement KIND and
+  deliberately not an inspection of your SQL; EXPLAIN is excluded even though
+  it is side-effect free, because admitting a prefix keyword would mean
+  deciding safety by looking PAST the first token.
+
+  Read-only-ness stays the engine's job: the connection is put into PRAGMA
+  query_only, so a write is refused by SQLite rather than by pattern-matching.
+
+  One statement only -- SQLite compiles the first and discards the rest WITHOUT
+  error, so trailing text would be silently ignored. A comment after the
+  terminating semicolon is fine ('SELECT 1;  -- see ADR-14').
 
 Output Fields:
   status, root, rowCount, durationSecs
@@ -179,20 +188,45 @@ Declaring a check:
   Findings are ordinary validation issues with the code CUSTOM:<name>, so
   resources.validation.severity can downgrade or ignore one you inherited.
 
+  A check's SQL runs through the same surface as vat resources query, so
+  the same rule applies: it must be a query, beginning SELECT, WITH or VALUES.
+  A comment after the terminating semicolon is accepted.
+
 A check that cannot run FAILS:
   A renamed column breaks a check's SQL. That is reported as an error naming
   the check and listing the columns the projection actually has -- never
   skipped, because a check that stopped running looks exactly like one that
   passed.
 
+  That report carries the code RESOURCE_CHECK_BROKEN, and NO
+  resources.validation.severity entry can silence it -- the config schema
+  refuses it as a severity key. Downgrade or ignore the CHECK all you like;
+  you cannot downgrade the news that it stopped checking.
+
+A check with NOTHING TO RUN OVER fails the same way:
+  Zero findings is the pass condition, so a run whose projection enumerated no
+  members passed every check while asserting nothing. If checks ran and
+  membersEnumerated is 0, that is reported as RESOURCE_CHECK_BROKEN at error
+  and the run fails. Usual causes: a broad .gitignore pattern, a shallow or
+  sparse CI checkout, or a root that resolved somewhere other than intended.
+  Declaring no checks at all is different -- that stays a warning and exit 0.
+
 Output Fields:
-  status, root, population, checksRun, issueCounts, durationSecs
+  status, root, population, checksRun, membersEnumerated, issueCounts,
+  durationSecs
   checksRun: How many checks ran. Read it: no findings from four checks and no
              findings from NO checks are otherwise the same document
+  membersEnumerated:
+             How many members the projection enumerated -- the corpus the
+             checks ran AGAINST, where checksRun is how many rules ran. Four
+             checks over 8,000 files and four over 0 are otherwise the same
+             document, and only one of them is a gate
   issues:    One row per violation ({code, severity, message, path?})
 
 Exit Codes:
-  0 - No error-severity findings  |  1 - At least one  |  2 - System error
+  0 - No error-severity findings
+  1 - At least one (a violation, a broken check, or an empty corpus)
+  2 - System error, or an unknown --check name
 
 Examples:
   $ vat resources check

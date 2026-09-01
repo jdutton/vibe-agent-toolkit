@@ -22,7 +22,8 @@
  * shared by every `vat` invocation on the machine.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 
 import type { ExtentKey } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -134,6 +135,185 @@ describe('query', () => {
     await doomed.close();
 
     expect(() => doomed.query('SELECT 1 AS n')).toThrow();
+  });
+});
+
+/**
+ * What a foreign database holds, so a leak is recognisable rather than inferred.
+ *
+ * The real target is `tmpdir/.vat-cache/<version>/projection-*`, whose rows are
+ * link text, heading text and frontmatter from every repository on the machine.
+ * A stand-in with one obvious string proves the same reachability without
+ * needing that cache to exist.
+ */
+const FOREIGN_SECRET = 'not-this-repository';
+
+/**
+ * A real SQLite file that this store has no business reading.
+ *
+ * @param directory - Where to put it
+ * @returns Its absolute path
+ */
+function writeForeignDatabase(directory: string): string {
+  const path = safePath.join(directory, 'secret.db');
+  const foreign = new DatabaseSync(path);
+  foreign.exec('CREATE TABLE "secrets" ("k" TEXT, "v" TEXT)');
+  foreign.exec(`INSERT INTO "secrets" VALUES ('client', '${FOREIGN_SECRET}')`);
+  foreign.close();
+  return path;
+}
+
+/**
+ * Attach, and tolerate the statement-kind gate refusing to.
+ *
+ * 🪤 Deliberately not an assertion that it throws. Two independent guards stop a
+ * foreign schema outliving a call — the kind gate refuses `ATTACH`, and the
+ * detach sweep unwinds one that got through — and a test that pinned the first
+ * here would go vacuous the moment the second was the one under examination. The
+ * assertions that follow the call have to hold either way, which is the whole
+ * point of there being two.
+ *
+ * @param path - The database to try to attach
+ */
+function attachIfTheGateLetsIt(path: string): void {
+  try {
+    store.query(`ATTACH DATABASE '${path}' AS smuggled`);
+  } catch (error) {
+    expect(String(error), 'refused, but for some other reason').toMatch(/SELECT/);
+  }
+}
+
+describe('query cannot reach a database it was not opened on', () => {
+  let directory: string;
+  let secretPath: string;
+
+  beforeEach(() => {
+    directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-projection-attach-'));
+    secretPath = writeForeignDatabase(directory);
+  });
+
+  afterEach(() => {
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it('refuses ATTACH, which the engine itself accepts under query_only', () => {
+    const fresh = safePath.join(directory, 'created-by-attach.db');
+
+    expect(() => store.query(`ATTACH DATABASE '${fresh}' AS smuggled`)).toThrow(/SELECT/);
+    // A name this test built inside its own `mkdtempSync` directory moments ago.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- see above
+    expect(existsSync(fresh), 'the attach ran and left a file behind').toBe(false);
+  });
+
+  it('cannot carry an attached schema from one call into the next', () => {
+    // The reproduction that matters: `vat resources check` runs every declared
+    // check through ONE connection, so check `a` attaching and check `b` reading
+    // is not a contrived sequence — it is the shape of the command.
+    attachIfTheGateLetsIt(secretPath);
+
+    expect(() => store.query('SELECT "v" FROM "smuggled"."secrets"')).toThrow(/no such table/i);
+    expect(
+      store.query('SELECT "name" FROM pragma_database_list').map((row) => row['name']),
+      'a foreign schema survived the call that attached it',
+    ).toEqual(['main']);
+  });
+});
+
+describe('query requires a statement that is a query', () => {
+  it.each([
+    ['ATTACH', "ATTACH DATABASE ':memory:' AS x"],
+    ['PRAGMA', 'PRAGMA query_only = 0'],
+    ['EXPLAIN', 'EXPLAIN SELECT 1'],
+    ['EXPLAIN QUERY PLAN', 'EXPLAIN QUERY PLAN SELECT 1'],
+    ['a bare table name', '"blobs"'],
+  ])('refuses %s, which cannot fail and so cannot be a check', (_kind, sql) => {
+    // A statement SQLite accepts and that yields no rows is indistinguishable
+    // from a check that passed, because selecting nothing is what success means
+    // on the `resources.checks` surface.
+    expect(() => store.query(sql)).toThrow(/SELECT/);
+    expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
+  });
+
+  it.each([
+    ['SELECT', 'SELECT 1 AS n', 'n'],
+    ['a lower-case select', 'select 1 as n', 'n'],
+    ['WITH', 'WITH c("n") AS (VALUES (1)) SELECT "n" FROM c', 'n'],
+    ['VALUES', 'VALUES (1)', 'column1'],
+    ['a leading line comment', '-- looking\nSELECT 1 AS n', 'n'],
+    ['a leading block comment', '/* looking */ SELECT 1 AS n', 'n'],
+  ])('accepts %s', (_kind, sql, column) => {
+    expect(store.query(sql)[0]?.[column]).toBe(1);
+  });
+
+  it('leaves query_only carrying the writes a leading token cannot see', () => {
+    // `WITH … DELETE` is real SQLite grammar and its first token is `WITH`, so
+    // the kind gate passes it and the ENGINE is what refuses (measured on Node
+    // 24.13.1). This is the case that makes the two guards layered rather than
+    // one of them decoration — do not delete it to "cover" the token gate.
+    expect(() => store.query('WITH c(a) AS (VALUES (1)) DELETE FROM "blobs"')).toThrow(/read/i);
+    expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
+  });
+});
+
+describe('what follows the terminating semicolon', () => {
+  it.each([
+    ['a line comment', 'SELECT 1 AS n; -- done'],
+    ['a block comment', 'SELECT 1 AS n; /* done */'],
+    ['both, over several lines', 'SELECT 1 AS n;\n-- see ADR-14\n/* and this */\n'],
+  ])('accepts %s, which SQLite would not have run anyway', (_kind, sql) => {
+    // A `resources.checks` statement written as a YAML block scalar ending
+    // `…;  -- see ADR-14` used to become a "could not run" ERROR finding and
+    // fail the adopter's gate over a comment.
+    expect(store.query(sql)[0]?.['n']).toBe(1);
+  });
+
+  it.each([
+    ['a second statement', 'SELECT 1 AS n; DELETE FROM "blobs"'],
+    ['a second statement hidden behind a comment', 'SELECT 1 AS n; -- ok\nDELETE FROM "blobs"'],
+    ['a stray literal, which SQLite would also discard', "SELECT 1 AS n; 'leftover'"],
+  ])('still refuses %s', (_kind, sql) => {
+    expect(() => store.query(sql)).toThrow(/single statement/);
+    expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
+  });
+});
+
+describe('the separator scan agrees with SQLite on all four quoting forms', () => {
+  // The guard on the guard. SQLite accepts `'…'`, `"…"`, `` `…` `` and `[…]`,
+  // and a scanner that knows only some of them DESYNCHRONISES: it walks into the
+  // form it does not know, mistakes a character inside for a delimiter, and
+  // swallows the real `;` — so the guard passes and SQLite silently discards the
+  // smuggled tail. These cases are chosen for what a refactor would break.
+  it.each([
+    ['a double-quoted identifier', 'SELECT 1 AS "a;b"', 'a;b'],
+    ['a back-quoted identifier', 'SELECT 1 AS `a;b`', 'a;b'],
+    ['a bracketed identifier', 'SELECT 1 AS [a;b]', 'a;b'],
+    ['a doubled quote inside a double-quoted identifier', 'SELECT 1 AS "a""b;c"', 'a"b;c'],
+    ['a doubled back-quote', 'SELECT 1 AS `a``b;c`', 'a`b;c'],
+    ['a line-comment opener inside brackets', 'SELECT 1 AS [a--b]', 'a--b'],
+    ['a block-comment opener inside brackets', 'SELECT 1 AS [a/*b]', 'a/*b'],
+  ])('accepts a legitimate %s holding a semicolon', (_form, sql, column) => {
+    expect(store.query(sql)[0]?.[column]).toBe(1);
+  });
+
+  it('accepts an unterminated block comment, which really does swallow the rest', () => {
+    // Not a hole: SQLite runs the same text the same way (measured on Node
+    // 24.13.1 — it returns the one row), so the `DELETE` is a comment to both.
+    expect(store.query('SELECT 1 AS n /* still a comment ; DELETE FROM "blobs"')[0]?.['n']).toBe(1);
+    expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
+  });
+
+  it.each([
+    ['a double-quoted identifier', 'SELECT 1 AS "a;b"; DELETE FROM "blobs"'],
+    ['a back-quoted identifier holding an apostrophe', "SELECT 1 AS `a'b`; DELETE FROM \"blobs\""],
+    ['a bracketed identifier', 'SELECT 1 AS [a;b]; DELETE FROM "blobs"'],
+    ['a string literal', 'SELECT \'x;y\' AS n; DELETE FROM "blobs"'],
+    ['a doubled double-quote', 'SELECT 1 AS "a""b"; DELETE FROM "blobs"'],
+    ['a doubled back-quote', 'SELECT 1 AS `a``b`; DELETE FROM "blobs"'],
+    ['a bracket opener inside a string literal', 'SELECT \'[\' AS n; DELETE FROM "blobs"'],
+    ['a bracket SQLite itself ends at the first ]', 'SELECT 1 AS [a]]b]; DELETE FROM "blobs"'],
+  ])('refuses a second statement smuggled past %s', (_form, sql) => {
+    expect(() => store.query(sql)).toThrow(/single statement/);
+    expect(store.query(COUNT_BLOBS)[0]?.['n'], 'the smuggled DELETE ran').toBe(2);
   });
 });
 

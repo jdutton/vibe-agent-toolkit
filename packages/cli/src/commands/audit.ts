@@ -51,6 +51,7 @@ import {
   countBySeverity,
   type SeverityCounts,
   type ValidationIssue,
+  type SeverityConfig,
 } from '@vibe-agent-toolkit/schema';
 import {
   findProjectRoot,
@@ -797,7 +798,8 @@ function applySeverityFilter(
       : (skillsConfig.config?.[skillName]?.validation?.severity ?? {});
 
     // Merge: per-skill overrides default
-    const effectiveSeverity: Record<string, string> = { ...defaultSeverity, ...perSkillSeverity };
+    const effectiveSeverity: NonNullable<SeverityConfig['severity']> =
+      { ...defaultSeverity, ...perSkillSeverity };
 
     if (Object.keys(effectiveSeverity).length === 0) {
       return result;

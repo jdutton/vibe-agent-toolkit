@@ -75,9 +75,9 @@ const NAME_NOT_FOUND: readonly string[] = ['no such table:', 'no such column:'];
 export type PopulationOrigin = 'derived' | 'store';
 
 /**
- * Where a run's rows came from.
+ * What a run's rows are, and where they came from.
  *
- * ⚠️ There is deliberately no `engine` field beside this. An earlier version
+ * ⚠️ There is deliberately no `engine` field beside these. An earlier version
  * published one (`sqlite | ephemeral`) to say which database answered the SQL;
  * it is gone because the answer is now always the same — see the header — and a
  * field with one possible value tells a reader nothing while implying the other
@@ -95,6 +95,46 @@ export interface ProjectionProvenance {
   readonly population: PopulationOrigin;
 }
 
+/**
+ * How much of the tree the population actually covered.
+ *
+ * ## Why this is not a field on {@link ProjectionProvenance}
+ *
+ * Provenance is a fact both verbs PUBLISH verbatim — "these rows were served or
+ * re-derived" is the same sentence in either document. This is a fact a verb
+ * REASONS with, and only one of them has anything to reason about: `vat
+ * resources query` prints the rows a person selected, so its reader can see the
+ * extent for themselves, while `vat resources check` prints a verdict and a
+ * count of rules. Only the second can pass vacuously, and only the second needs
+ * to know.
+ *
+ * ## 🔑 The failure it exists to make visible
+ *
+ * `vat resources check` reported how many CHECKS ran; nothing said how many ROWS
+ * they ran against. So "four checks passed over eight thousand files" and "four
+ * checks passed over ZERO files" were byte-identical documents, and the second
+ * was a green gate asserting nothing. A broad `.gitignore`, a shallow or sparse
+ * checkout, a root that resolved elsewhere, or an extent source that enumerated
+ * nothing all produce it — and `buildResourceProjection` DECLINES ignored
+ * members rather than flagging them, so an emptied enumeration leaves no trace
+ * in the tables either.
+ */
+export interface PopulationExtent {
+  /**
+   * One per `(extentId, path)` row the population enumerated.
+   *
+   * 🪤 Realizations rather than any other count, because every alternative
+   * fails to reach zero on the case that matters: `roots` always holds exactly
+   * one row (the invariant thrown for below), so a total over all twelve tables
+   * is never 0; `blobs` is content-keyed and deduped, so it counts parse REACH
+   * and already has its own guard in `onBlobPopulation`; and `resources` counts
+   * identities, which a corpus can legitimately have none of while enumerating
+   * plenty. One row per enumerated path is non-zero exactly when something was
+   * enumerated.
+   */
+  readonly membersEnumerated: number;
+}
+
 /** Run one read-only statement against the populated projection. */
 export type AskProjection = (
   sql: string,
@@ -109,13 +149,18 @@ export type AskProjection = (
  * @param options.root - Absolute corpus root
  * @param options.logger - Where blob-stage refusals are reported (stderr, so a
  *   parseable document on stdout stays parseable)
- * @param work - Given the asker and where its rows came from. The store is open
- *   for exactly this call and closed however it ends
+ * @param work - Given the asker, where its rows came from, and how much of the
+ *   tree they cover. The store is open for exactly this call and closed however
+ *   it ends
  * @returns Whatever `work` returned
  */
 export async function withQueriedProjection<T>(
   options: { root: string; logger: Logger },
-  work: (ask: AskProjection, provenance: ProjectionProvenance) => Promise<T> | T,
+  work: (
+    ask: AskProjection,
+    provenance: ProjectionProvenance,
+    extent: PopulationExtent,
+  ) => Promise<T> | T,
 ): Promise<T> {
   const { root, logger } = options;
 
@@ -165,7 +210,15 @@ export async function withQueriedProjection<T>(
         }
       };
 
-      return await work(ask, { population: contributorRecords === 0 ? 'store' : 'derived' });
+      return await work(
+        ask,
+        { population: contributorRecords === 0 ? 'store' : 'derived' },
+        // Read off the PROJECTION rather than counted back out of the store with
+        // a `SELECT COUNT(*)`: a count that travelled through the same `ask` the
+        // caller's statements do would be broken by the very schema drift it
+        // exists to survive, and it is the population's size either way.
+        { membersEnumerated: projection.resourceRealizations.length },
+      );
     } finally {
       // Closed however the work ends. An in-memory database is reclaimed with the
       // process either way, but a command that runs several of these in one

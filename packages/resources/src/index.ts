@@ -803,11 +803,7 @@ export {
 // A project's own SQL assertions over its projection: what a returned row MEANS.
 // The statement itself is the CLI's business — only it knows a storage backend
 // exists — so the rule engine here never opens a database.
-export {
-  CUSTOM_CODE_PREFIX,
-  customCheckCode,
-  issuesFromCheckRows,
-} from './projection/sql-checks.js';
+export { issuesFromCheckRows } from './projection/sql-checks.js';
 
 export {
   buildResourcePopulation,

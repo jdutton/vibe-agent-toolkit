@@ -21,6 +21,17 @@
  *   worse failure mode: a typo'd table name, a renamed column, a `WHERE` that
  *   matches nothing — every one of them returns zero rows and reads as a pass.
  *
+ * 🔑 That second bullet is load-bearing prose held up by a gate in ANOTHER
+ * package: `assertIsQuery` in `packages/projection-sqlite/src/store.ts` refuses
+ * any statement whose first significant token is not `SELECT`, `WITH` or
+ * `VALUES`. Without it the sentence is false in the direction that matters — an
+ * author cannot pass vacuously by *selecting* nothing, but they could pass
+ * vacuously by not asserting at all. Both `ATTACH DATABASE 'evil.db' AS e` and
+ * `PRAGMA query_only = 0` were accepted, returned zero rows, and were counted as
+ * PASSING checks; the `ATTACH` also left a zero-byte file in the project
+ * directory. Do not weaken either half alone: this sentence is why that gate
+ * exists, and that gate is why this sentence is not a hole.
+ *
  * ## Why this module holds no SQL
  *
  * Only the CLI knows a storage backend exists (`utils/projection-store.ts` is
@@ -41,36 +52,34 @@
  * ⚠️ A `CUSTOM:` code therefore takes its severity from **the check's own
  * declaration** rather than from the registry, which holds no entry for it.
  *
- * A `resources.validation.severity` override still reaches it, and safely:
- * `resolveIssueSeverity` only calls `resolveSeverity` for a code the overrides
- * map actually lists, and `resolveSeverity` returns a listed value before it
- * ever indexes `CODE_REGISTRY`. So an adopter can downgrade or ignore a check
- * they inherited without editing the check. The declaration is the default, not
- * a ceiling.
+ * A `resources.validation.severity` override reaches it. The key space is
+ * widened for exactly this: `SeverityOverrideCodeSchema` in
+ * `packages/schema/src/validation-config.ts` is the shipped registry enum
+ * unioned with one refinement, `isCustomCheckCode`, so `CUSTOM:<name>` parses as
+ * a `severity` key while a misspelled REGISTRY code is still refused. Resolution
+ * is safe on the same key: `resolveIssueSeverity` calls `resolveSeverity` only
+ * for a code the overrides map actually lists, and `resolveSeverity` returns a
+ * listed value before it ever indexes `CODE_REGISTRY`. So an adopter downgrades
+ * or ignores a check they inherited without editing it — the declaration is the
+ * default, not a ceiling.
+ *
+ * ⚠️ **The override reaches VIOLATIONS only.** A check that cannot run — a
+ * renamed column, a table that is gone — is not reported under this code space
+ * at all: `vat resources check` emits `RESOURCE_CHECK_BROKEN` at `error`. That
+ * code is in `NonOverridableCode` in
+ * `packages/schema/src/validation-codes.ts` and deliberately **absent from
+ * `CODE_REGISTRY`**, so `ValidationConfigSchema` refuses it as a `severity` key
+ * outright — unsilenceable by construction rather than by convention. The two
+ * used to share `CUSTOM:<name>`, which meant the documented way to stand down an
+ * inherited check also silenced the news that it had stopped checking, and a
+ * renamed projection column produced exit 0 from a gate. Downgrade the check as
+ * far as you like; you cannot downgrade the report that it stopped asserting.
  */
 
+import { customCheckCode } from '@vibe-agent-toolkit/schema';
 import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { ResourceCheck } from '../schemas/project-config.js';
-
-/**
- * What a check's code is prefixed with.
- *
- * Exported so the CLI and any consumer filtering findings can test for a custom
- * code without restating the literal — the two spaces must stay disjoint, and a
- * second copy of `'CUSTOM:'` is how that stops being true.
- */
-export const CUSTOM_CODE_PREFIX = 'CUSTOM:';
-
-/**
- * The validation code one named check's findings carry.
- *
- * @param name - The check's key in `resources.checks`
- * @returns The namespaced code
- */
-export function customCheckCode(name: string): `${typeof CUSTOM_CODE_PREFIX}${string}` {
-  return `${CUSTOM_CODE_PREFIX}${name}`;
-}
 
 /**
  * Turn one check's selected rows into findings.
@@ -116,12 +125,26 @@ export function issuesFromCheckRows(
  * finding to the config file instead would put the reader where the check is
  * WRITTEN, which is never where the problem is.
  *
- * 🪤 Absolute and backslashed values are declined rather than passed through.
- * `ValidationIssueSchema` refines `location` to a relative POSIX path and would
- * reject them at the boundary; declining here means a check that selected an
- * absolute path loses its anchor instead of failing the whole run. Every
+ * 🪤 Absolute and backslashed values are declined rather than passed through,
+ * and **this function is the only thing enforcing that** on this path. Nothing
+ * between here and the output formats parses a check's findings through
+ * `ValidationIssueSchema`: the CLI's `resources check` hands these issues
+ * straight to the severity counts, so there is no validating boundary
+ * downstream to fall back on. Deleting a guard would emit an issue that violates
+ * `ValidationIssueSchema`'s refined `location` (relative, POSIX) with no gate
+ * catching it, and `validation.allow` globs are matched against `location`, so
+ * such a value would also silently match no allow entry an adopter wrote. Every
  * projection table stores root-relative POSIX paths, so this only fires on a
  * statement that built one itself.
+ *
+ * 📌 A path naming a **DIRECTORY** keeps its anchor. Decided rather than
+ * overlooked: this module holds no SQL and never opens a database, so it cannot
+ * tell `docs` (a directory row) from `docs` (an extension-less file), and
+ * refusing every extension-less path would unanchor legitimate file rows —
+ * `LICENSE`, `Makefile` — to catch a rarer one. The consequence an adopter has
+ * to know is that `validation.allow` globs match against `location`, and
+ * `docs/**` does not match the bare directory `docs`; allow the directory itself
+ * when a check selects directory rows.
  *
  * @param row - One selected row
  * @returns The location, or undefined when the row names no usable one

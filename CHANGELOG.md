@@ -100,6 +100,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`vat skills validate` and `vat skills build` now write their stdout summary AFTER their stderr
   findings** rather than before, which is what every other command already did.
 
+- **The `resources:` section of `vibe-agent-toolkit.config.yaml` is now strict — an unrecognized key
+  there fails config loading instead of being silently discarded.** A typo used to be stripped and the
+  parse still succeeded, so anything declared under it quietly stopped existing. **Remove or correct
+  any key that is not `include`, `exclude`, `collections`, `validation`, `linkAuth` or `checks`**; the
+  error surfaces on every `vat` command, not only the affected lane.
+
 #### Library
 
 - **`@vibe-agent-toolkit/agent-schema` is now `@vibe-agent-toolkit/schema`.** Rename the dependency
@@ -148,15 +154,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`vat resources query <sql> [path]`** — runs one read-only SQL statement against this tree's
   resource projection, so questions no command reports a field for get an answer (headings, link
-  targets, what the parser refused). Writes and multi-statement text are refused, and values come
-  back as SQLite holds them, undecoded. Read `population: derived | store` in the output: it says
+  targets, what the parser refused). The statement must begin with `SELECT`, `WITH` or `VALUES`;
+  writes and multi-statement text are refused, and values come back as SQLite holds them, undecoded. Read `population: derived | store` in the output: it says
   whether the rows came from the projection store or were built by this run.
 
 - **`vat resources check [path]`** — runs the SQL assertions a project declares under
   `resources.checks`, and exits 1 when one is violated. Each check is a `description` plus one `sql`
   statement selecting the rows that VIOLATE it, so zero rows is a pass; findings carry the code
-  `CUSTOM:<name>`, which `resources.validation.severity` can downgrade or ignore. A check whose SQL
-  no longer runs is reported as an error, never skipped.
+  `CUSTOM:<name>`, which `resources.validation.severity` can downgrade or ignore. A check that could
+  not run, and a run whose corpus enumerated nothing, are both reported as `RESOURCE_CHECK_BROKEN` —
+  which no `severity` entry can silence — and `membersEnumerated` in the output says how many members
+  the checks actually ran over. An unknown `--check` name exits 2.
 
 - **`VAT_PROJECTION_STORE_DIR`** — sets where the projection store's database lives. Without it the
   store is one database per VAT release shared by every root on the machine, so concurrent CI jobs

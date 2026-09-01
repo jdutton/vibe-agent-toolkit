@@ -16,12 +16,11 @@
  * selecting nothing is exactly what success looks like, deliberately.
  */
 
+import { customCheckCode } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
-import {
-  customCheckCode,
-  issuesFromCheckRows,
-} from '../src/projection/sql-checks.js';
+
+import { issuesFromCheckRows } from '../src/projection/sql-checks.js';
 
 /** The one check name these tests use, and the code it must produce. */
 const NAME = 'orphan-skills';
@@ -109,6 +108,61 @@ describe('issuesFromCheckRows', () => {
 
     expect(issue?.message).toContain(COUNT_CHECK.description);
     expect(issue?.message).toContain('n=51');
+  });
+
+  /** The location a one-row check reports for a given `path` value. */
+  const locationFor = (path: unknown): string | undefined =>
+    issuesFromCheckRows(NAME, CHECK, [{ path }])[0]?.location;
+
+  it('declines a backslashed path rather than emitting an invalid location', () => {
+    // 🪤 NOTHING on this path parses the findings through ValidationIssueSchema,
+    // so this guard is the ONLY enforcement of its `location` contract. A
+    // backslashed value emitted here would be a schema-violating issue that no
+    // gate catches — `validation.allow` globs are matched against `location`, so
+    // it would also silently fail to match any allow entry an adopter wrote.
+    expect(locationFor(String.raw`docs\guide.md`)).toBeUndefined();
+  });
+
+  it('declines a POSIX-absolute path', () => {
+    // Every projection table stores root-relative POSIX paths, so this only
+    // fires on a statement that built an absolute one itself (a literal, a
+    // concatenation). Losing the anchor beats emitting a location that names a
+    // machine rather than a place in the project.
+    expect(locationFor('/etc/passwd')).toBeUndefined();
+  });
+
+  it('declines a Windows drive-letter path even with forward slashes', () => {
+    // A separate branch from the backslash guard: `C:/Users/x/a.md` contains no
+    // backslash and does not start with `/`, so only the drive-letter test
+    // refuses it.
+    expect(locationFor('C:/Users/x/a.md')).toBeUndefined();
+  });
+
+  it('keeps the anchor when the path names a DIRECTORY (documented decision)', () => {
+    // 📌 DECIDED: a directory row keeps its anchor. This module holds no SQL and
+    // never opens a database, so it cannot tell `docs` (a directory row) from
+    // `docs` (a file with no extension) — the distinction lives in the
+    // projection's `kind` column, which the rows do not have to carry. Dropping
+    // every extension-less path would silently unanchor legitimate file rows
+    // (`LICENSE`, `Makefile`), which is the worse trade. Consequence an adopter
+    // must know: `validation.allow` globs are matched against `location`, and
+    // `docs/**` does not match the bare directory `docs` — allow the directory
+    // itself when a check selects directory rows.
+    expect(locationFor('docs')).toBe('docs');
+  });
+
+  it('renders a BLOB column through JSON rather than as [object Uint8Array]', () => {
+    // Query rows come back UNDECODED on purpose (arbitrary SQL has no table
+    // spec), so a BLOB column genuinely reaches the renderer as a Uint8Array.
+    // `String()` on one gives the reader `[object Uint8Array]`, which names the
+    // TYPE and never the value.
+    const [issue] = issuesFromCheckRows(
+      'blobbed',
+      { description: 'No blobs', sql: 'SELECT digest FROM blobs' },
+      [{ digest: new Uint8Array([1, 255]) }],
+    );
+
+    expect(issue?.message).toContain('digest={"0":1,"1":255}');
   });
 
   it('renders a null column as null rather than dropping it', () => {

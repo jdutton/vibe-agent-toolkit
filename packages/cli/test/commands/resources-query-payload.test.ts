@@ -48,9 +48,17 @@ describe('the query payload', () => {
     // per-run in-memory database holding this tree and nothing else, and the
     // on-disk store is a population cache that is never queried.
     //
-    // Pinned rather than merely deleted, because re-adding the field would mean
-    // someone had re-introduced the defect it used to describe — a query lane
-    // that reads a store shared by every root on the machine.
+    // 🪤 This pin is about the DOCUMENT, and it must not be read as a guard on
+    // the defect the field used to describe. `buildProjectionQueryOutputData` is
+    // a pure record builder that never sees a database: pointing the SQL back at
+    // the store shared by every root on the machine would need no `engine` field
+    // and would leave this assertion green all the way through the regression.
+    //
+    // What can actually fail on that is the two-root system test — two corpora,
+    // ONE store directory, warmed from the corpus the question is not about
+    // (`test/system/resources-query.system.test.ts`). This one is kept because a
+    // re-added field is real drift in a shape consumers parse, which is the only
+    // claim a pure builder is entitled to make.
     const payload = buildProjectionQueryOutputData({
       rows: ROWS, root: '/corpus', population: 'derived', durationMs: 900,
     });

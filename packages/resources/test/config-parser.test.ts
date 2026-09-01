@@ -327,6 +327,51 @@ describe('collections optional', () => {
   });
 });
 
+describe('resources section strictness', () => {
+  /** Every key the section legitimately carries, so the accept direction is pinned too. */
+  const EVERY_KEY = {
+    include: ['docs/**/*.md'],
+    exclude: ['**/node_modules/**'],
+    collections: { docs: { include: ['docs/**/*.md'] } },
+    validation: { severity: { EXTERNAL_URL_DEAD: 'ignore' } },
+    linkAuth: { providers: [{ use: 'github' }] },
+    checks: { 'no-orphans': { description: 'No orphans', sql: 'SELECT path FROM resources' } },
+  };
+
+  it('rejects a mistyped key instead of dropping every rule under it', () => {
+    // 🪤 The failure this section is most likely to see. Without `.strict()` Zod
+    // STRIPS `cheks`, the parse succeeds, and `vat resources check` finds a
+    // `checks` key that exists and holds nothing — so the loud "no checks are
+    // declared" warning cannot fire and the adopter believes a gate exists that
+    // never runs. Exactly the argument ValidationConfigSchema is strict for,
+    // with more at stake: the silent outcome here is an unenforced RULE.
+    const result = ProjectConfigSchema.safeParse({
+      version: 1,
+      resources: { cheks: EVERY_KEY.checks },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('does not silently keep the correctly-spelled half of a typo pair', () => {
+    const result = ProjectConfigSchema.safeParse({
+      version: 1,
+      resources: { checks: EVERY_KEY.checks, cheks: EVERY_KEY.checks },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('still accepts every legitimate key together', () => {
+    // The accept direction matters as much as the reject one: a strict schema
+    // that turns away a real key is a worse defect than the one it fixed.
+    const result = ProjectConfigSchema.safeParse({ version: 1, resources: EVERY_KEY });
+
+    expect(result.success).toBe(true);
+    expect(new Set(Object.keys(result.data?.resources ?? {}))).toStrictEqual(new Set(Object.keys(EVERY_KEY)));
+  });
+});
+
 describe('resources.validation config block', () => {
   it('should accept a resources.validation severity override', () => {
     const result = ProjectConfigSchema.safeParse({
