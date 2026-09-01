@@ -146,23 +146,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`vat resources query <sql> [path]`** — runs ONE read-only SQL statement against this tree's
-  resource projection, so questions no command reports a field for get an answer: which files carry
-  which headings, what links at what, which paths were refused and why. The statement is read-only
-  because the connection is put into `PRAGMA query_only` — an engine refusal, never an inspection of
-  your SQL — and a statement carrying a second statement is refused outright, because SQLite compiles
-  only the first and **discards the rest without error**. Values come back exactly as SQLite holds
-  them (a boolean as `0`/`1`, a date and a JSON column as text): decoding needs a table spec and
-  arbitrary SQL has none. A statement naming a column or table that does not exist gets the real
-  columns of the tables it named, rather than a bare SQLite error — VAT ships no schema version, so
-  that listing is how you find what a name became.
-
-  **The answer never depends on whether a cache exists.** With a projection store selected, the query
-  runs against it; with none, the same projection is loaded into an in-memory database and the
-  identical SQL runs against the identical schema. The document says which: `population` is `derived`
-  or `store` — whether the rows were built this run or read from the store — and `engine` is `sqlite`
-  or `ephemeral`. `population` is reported rather than inferred because it *cannot* be inferred: a
-  correct store hit and a correct re-derivation produce identical rows.
+- **`vat resources query <sql> [path]`** — runs one read-only SQL statement against this tree's
+  resource projection, so questions no command reports a field for get an answer (headings, link
+  targets, what the parser refused). Writes and multi-statement text are refused, and values come
+  back as SQLite holds them, undecoded. Read `population: derived | store` in the output: it says
+  whether the rows came from the projection store or were built by this run.
 
 - **`vat claude context [paths...]`** — reports which `CLAUDE.md` files, `.claude/rules` files and
   `@`-imported files load into an agent's context at a path, why each is there, and its estimated
@@ -360,18 +348,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@vibe-validate/utils` and `yaml` to the installed tree.
 
 ### Fixed
-
-- **A projection store could serve a content-less extent to a run that needed the bytes, and the run
-  reported success.** `contentDemand` — whether a registration keys file content at all — is a
-  constructor argument on the filesystem extent and appears in no parameter set, so the store's reuse
-  rule could not see it. A `'deferred'` registration keys *nothing*, which left `blobFactsCover` — the
-  guard that stops a blob-reading run accepting an extent the blob tier does not cover — with no keys
-  to fail on, so it passed **vacuously**. Two lanes over one tree asking the same registered question
-  under different demands were one question to the store, and the deriving one hydrated four empty
-  blob tables. A contributor now declares registration-time state as
-  `ExtentContributor.registrationQuestion`, and the store key folds it in beside the run's other
-  ambient inputs. Contributors that declare nothing are omitted from the key entirely, so registering
-  one cannot move the key of a run whose question it did not change.
 
 - **A namespaced `xlink:href` lost its source span in the link rewriter, silently dropping the
   rewrite.** parse5 records a namespaced attribute's span under the source spelling `xlink:href`, so

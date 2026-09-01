@@ -1,6 +1,6 @@
 ---
 name: vat-knowledge-resources
-description: Use when working with VAT resource collections, per-directory frontmatter schema validation, link validation, or the vat resources command. Covers collection configuration, schema mapping, and validation modes.
+description: Use when working with VAT resource collections, per-directory frontmatter schema validation, link validation, or the vat resources commands. Covers collection configuration, schema mapping, validation modes, and querying the resource projection with SQL via `vat resources query`.
 ---
 
 # VAT Resources: Collections & Frontmatter Validation
@@ -60,6 +60,33 @@ vat resources validate --collection systems
 # Validate with extra schema (adds to collection schemas)
 vat resources validate --frontmatter-schema ./extra.json
 ```
+
+## Asking the Projection a Question Directly
+
+`vat resources validate` answers the questions it was written for. When you need one it has no
+field for — which files carry which headings, what links at what, which paths the parser refused
+and why — `vat resources query` runs ONE read-only SQL statement against the same population:
+
+```bash
+vat resources query 'SELECT path FROM resource_realizations WHERE ext = ".md" LIMIT 5'
+vat resources query 'SELECT * FROM blob_conditions'        # what was refused, and why
+vat resources query 'SELECT target FROM blob_references WHERE kind = ?' --param markdown-link
+```
+
+A statement naming a table or column that does not exist gets the real columns of the tables it
+named — VAT ships no schema version, so that listing is how you find what a name became. Writes are
+refused by the engine (`PRAGMA query_only`), and a statement carrying a second statement is refused
+outright, because SQLite compiles only the first and **discards the rest without error**.
+
+**Read `population` in the output before you trust a timing.** It is `derived` or `store` — whether
+the rows were built by this run or read from the projection store — and it is reported rather than
+inferred, because a correct store hit and a correct re-derivation produce identical rows. `engine`
+is the independent second fact: `sqlite` or `ephemeral`. An `ephemeral` engine is always `derived`;
+a `sqlite` engine can be either, so the two together are what distinguish "no store was selected"
+from "the store was cold".
+
+⚠️ Values come back exactly as SQLite holds them — a boolean as `0`/`1`, a date and a JSON column
+as text. They are **not** decoded, because decoding needs a table spec and arbitrary SQL has none.
 
 ## A File Can Belong to Multiple Collections
 
