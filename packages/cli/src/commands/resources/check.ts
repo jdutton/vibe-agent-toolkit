@@ -56,6 +56,8 @@
  * change's call to make.
  */
 
+import { performance } from 'node:perf_hooks';
+
 import { issuesFromCheckRows, type ResourceCheck } from '@vibe-agent-toolkit/resources';
 import {
   calculateValidationStatus,
@@ -85,11 +87,52 @@ interface CheckOptions {
   format?: string;
 }
 
+/**
+ * What one declared check cost, and what it found.
+ *
+ * ## 🚨 The population is charged to NOBODY, and that is deliberate
+ *
+ * {@link durationMs} is the STATEMENT alone. The git tracker, the projection
+ * build and the load into the ephemeral database happen ONCE and serve every
+ * check in the run, so folding that shared setup into each rule would make N
+ * cheap rules look expensive and make the per-rule numbers sum to N times a cost
+ * paid once. It is published separately instead — `populationSecs` beside
+ * `population` in the document — so a reader can reconcile the parts against
+ * `durationSecs` rather than inferring the remainder and attributing it to
+ * whichever rule they happen to be reading.
+ *
+ * 🪤 This repo has already shipped the opposite mistake once, in another
+ * instrument: `parse ab` reported a pooled arm BACKWARDS because its estimate
+ * was thread-summed, and the report surfaced no caveat that would have told the
+ * reader. A shared cost silently attributed to one participant is the same
+ * defect wearing different clothes. If you ever want the population inside these
+ * numbers, divide it out explicitly and say so in the field name.
+ */
+export interface CheckCost {
+  /** The check's key in `resources.checks`. */
+  readonly name: string;
+  /** Wall time of this check's statement, and of nothing it shares with others. */
+  readonly durationMs: number;
+  /** Rows the statement returned — the violations it selected. Absent when the statement did not run. */
+  readonly rows?: number;
+  /** Set when the statement threw. A statement that did not complete has no row count. */
+  readonly broken?: true;
+}
+
 /** What one run of the checks produced. */
 interface CheckOutcome extends ProjectionProvenance, PopulationExtent {
   issues: readonly ValidationIssue[];
-  /** How many checks actually ran — the denominator every count below is read against. */
-  checksRun: number;
+  /**
+   * One record per check that actually ran — the denominator every count below
+   * is read against, and what each of them cost.
+   *
+   * 🔑 A LIST rather than a count beside a list. `checksRun` used to be carried
+   * separately and is now derived from `costs.length`, because two numbers that
+   * must agree are a drift bug with no gate on it: nothing fails when a new
+   * `continue` skips the record but not the counter, and the document then
+   * reports a denominator no published entry accounts for.
+   */
+  costs: readonly CheckCost[];
 }
 
 export interface CheckPayloadInput extends CheckOutcome {
@@ -107,7 +150,13 @@ export interface CheckPayloadInput extends CheckOutcome {
  * `checksRun` is published beside the counts and is not decoration: zero
  * findings from four checks and zero findings from **no** checks are the same
  * document without it, and they mean opposite things. A project whose config key
- * is misspelled would otherwise read as passing.
+ * is misspelled would otherwise read as passing. It is DERIVED from the `checks`
+ * list rather than carried alongside it, so the denominator and the entries that
+ * account for it cannot disagree.
+ *
+ * 🚨 `populationSecs` and the per-check `durationSecs` do not overlap and do not
+ * sum to `durationSecs`. The population is paid once and shared by every check;
+ * see {@link CheckCost} for why it is charged to none of them.
  *
  * @param input - The findings and the provenance of the run behind them
  * @returns The document to serialize
@@ -118,8 +167,12 @@ export function buildCheckOutputData(input: CheckPayloadInput): Record<string, u
     status: calculateValidationStatus(issues),
     root: input.root,
     population: input.population,
-    // The denominator. See above: without it an empty findings list is ambiguous.
-    checksRun: input.checksRun,
+    // Beside the origin, because a `population: store` a reader cannot price is
+    // a label taken on faith. Charged to no check — see {@link CheckCost}.
+    populationSecs: formatDurationSecs(input.populationMs),
+    // The denominator. See above: without it an empty findings list is
+    // ambiguous. Derived from `checks`, never carried beside it.
+    checksRun: input.costs.length,
     // The OTHER denominator, and the one whose absence shipped a green gate over
     // an empty repository. `checksRun` counts rules; this counts what they ran
     // against. Both are needed, because zero findings is the pass condition and
@@ -127,6 +180,24 @@ export function buildCheckOutputData(input: CheckPayloadInput): Record<string, u
     membersEnumerated: input.membersEnumerated,
     issueCounts: countBySeverity(issues),
     durationSecs: formatDurationSecs(input.durationMs),
+    // What each rule cost, directly under the total it is a breakdown of. A SQL
+    // surface is an unbounded cost — a project can declare a statement that
+    // scans every row of every table — and a single total attributes nothing:
+    // ten seconds is one expensive rule, a slow population, or forty cheap
+    // rules, and only this list tells them apart.
+    //
+    // 🪤 `rows` and `broken` are spread conditionally rather than defaulted.
+    // `rows: 0` on a statement that never returned would read as a clean pass,
+    // which is the exact confusion `RESOURCE_CHECK_BROKEN` exists to prevent —
+    // so a check that threw publishes no row count at all.
+    checks: input.costs.map((cost) => ({
+      name: cost.name,
+      // Three significant figures, so a 0.4 ms rule serializes as 0.0004 rather
+      // than rounding to a zero that reads as "not measured".
+      durationSecs: formatDurationSecs(cost.durationMs),
+      ...(cost.rows === undefined ? {} : { rows: cost.rows }),
+      ...(cost.broken === undefined ? {} : { broken: cost.broken }),
+    })),
     // 🪤 NOT run through `relativizePathEntries`. Every other payload builder
     // re-bases here because its producer keeps absolute paths internally; these
     // arrive project-relative instead, and re-basing an already-relative path
@@ -155,27 +226,54 @@ export function buildCheckOutputData(input: CheckPayloadInput): Record<string, u
 }
 
 /**
- * Run every declared check and collect its findings.
+ * Run every declared check, collect its findings, and price it.
+ *
+ * ## What the clock measures, and what it must not
+ *
+ * The span is `ask(check.sql)` and nothing else. Everything before the loop —
+ * the git tracker, `buildResourceProjection`, loading the ephemeral database —
+ * is paid ONCE for all of them and reaches the document as `populationSecs`; see
+ * {@link CheckCost} for why charging it here would be a lie in N places.
+ *
+ * ⚠️ `performance.now()`, never `Date.now()`. A rule over a small projection is
+ * routinely sub-millisecond, and a millisecond-granularity clock reports every
+ * one of them as `0` — which reads as "not measured" and makes the whole
+ * attribution worthless exactly where it is cheapest to get right.
+ *
+ * 🪤 The cost is recorded AFTER the mapping, so a throw anywhere in the body
+ * lands in the `catch` and files exactly one record either way. Recording it
+ * between the two would file two for one check whenever `issuesFromCheckRows`
+ * threw, and `checksRun` is that list's length.
  *
  * @param checks - The project's `resources.checks`
  * @param only - A single check key to run, or undefined for all of them
  * @param ask - Runs one statement against the populated projection
- * @returns The findings, and how many checks ran
+ * @param now - The clock, in milliseconds; injected so a test can assert an
+ *   exact duration rather than a range that passes on a timer that never started
+ * @returns The findings, and one cost record per check that ran
  */
 function runChecks(
   checks: Readonly<Record<string, ResourceCheck>>,
   only: string | undefined,
   ask: AskProjection,
-): { issues: ValidationIssue[]; checksRun: number } {
+  now: () => number,
+): { issues: ValidationIssue[]; costs: CheckCost[] } {
   const issues: ValidationIssue[] = [];
-  let checksRun = 0;
+  const costs: CheckCost[] = [];
 
   for (const [name, check] of Object.entries(checks)) {
     if (only !== undefined && name !== only) continue;
-    checksRun += 1;
+    const startedAt = now();
     try {
-      issues.push(...issuesFromCheckRows(name, check, ask(check.sql)));
+      const rows = ask(check.sql);
+      const durationMs = now() - startedAt;
+      issues.push(...issuesFromCheckRows(name, check, rows));
+      costs.push({ name, durationMs, rows: rows.length });
     } catch (error) {
+      // Priced up to the throw, and with NO row count: a statement that did not
+      // complete selected nothing, and `rows: 0` would say it selected nothing
+      // and passed.
+      costs.push({ name, durationMs: now() - startedAt, broken: true });
       // 🔑 A finding, not a skip, at `error`, and under its OWN code.
       //
       // The check's declared severity describes how bad a VIOLATION is; it says
@@ -200,7 +298,7 @@ function runChecks(
     }
   }
 
-  return { issues, checksRun };
+  return { issues, costs };
 }
 
 /**
@@ -310,6 +408,11 @@ function emptyCorpusFinding(
  * to one, which the loop cannot distinguish), so `checksRun` was never observed
  * above 1 and a `break` at the end of the loop would have left the suite green.
  *
+ * Pure in the same sense the payload builder is, with ONE seam: it reads a
+ * clock. That is why the clock is a parameter — the measurement is the point of
+ * the `costs` it returns, and a duration nothing can pin is a number nobody can
+ * trust.
+ *
  * @param options - The run
  * @param options.checks - The declared checks
  * @param options.only - A single check key, or undefined for all
@@ -318,7 +421,10 @@ function emptyCorpusFinding(
  * @param options.membersEnumerated - How many members the population enumerated.
  *   Told rather than asked, because no answer can reveal it: an `ask` over an
  *   empty projection and an `ask` over a clean one both return no rows
- * @returns The resolved findings, and how many checks ran
+ * @param options.now - The measurement clock in milliseconds, defaulting to
+ *   `performance.now()`. Injected only so a unit test can pin an exact per-check
+ *   duration; nothing in production passes it
+ * @returns The resolved findings, and one cost record per check that ran
  */
 export function runDeclaredChecks(options: {
   checks: Readonly<Record<string, ResourceCheck>>;
@@ -326,12 +432,14 @@ export function runDeclaredChecks(options: {
   ask: AskProjection;
   validation: SeverityOverrides | undefined;
   membersEnumerated: number;
-}): { issues: ValidationIssue[]; checksRun: number } {
-  const { issues, checksRun } = runChecks(options.checks, options.only, options.ask);
+  now?: () => number;
+}): { issues: ValidationIssue[]; costs: CheckCost[] } {
+  const now = options.now ?? (() => performance.now());
+  const { issues, costs } = runChecks(options.checks, options.only, options.ask, now);
   // The run-integrity report leads. An aggregate check selects a row whatever
   // the corpus is, so its findings can outnumber this one — and every one of
   // them is noise until the operator knows the gate ran over nothing.
-  const reported = [...emptyCorpusFinding(checksRun, options.membersEnumerated), ...issues];
+  const reported = [...emptyCorpusFinding(costs.length, options.membersEnumerated), ...issues];
   return {
     // The adopter's own `resources.validation.severity` still applies, so a
     // check inherited from a shared config can be downgraded or ignored without
@@ -343,7 +451,7 @@ export function runDeclaredChecks(options: {
     // overridable code, so the news that a check stopped checking survives every
     // override an adopter can write about the check itself.
     issues: resolveIssueSeverity(reported, options.validation),
-    checksRun,
+    costs,
   };
 }
 

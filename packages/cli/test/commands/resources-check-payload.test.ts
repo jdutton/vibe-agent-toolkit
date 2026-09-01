@@ -14,6 +14,14 @@
  * `checksRun` was never observed above 1, and a `break` at the end of
  * `runChecks` would have left the whole suite green. The two-check cases below
  * are the mutation guard for that.
+ *
+ * ## Why a fake clock rather than a real one
+ *
+ * The per-rule costs are the point of the `checks` list, and a real clock can
+ * only be asserted against loosely — `toBeGreaterThanOrEqual(0)` passes on a
+ * timer that never started. {@link fakeClock} advances a known amount per
+ * READING, so a duration is an exact value and "the population's cost leaked
+ * into a rule's" is a red rather than a shrug.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -22,6 +30,7 @@ import {
   buildCheckOutputData,
   requireDeclaredCheck,
   runDeclaredChecks,
+  type CheckCost,
   type CheckPayloadInput,
 } from '../../src/commands/resources/check.js';
 import type { AskProjection } from '../../src/utils/projection-query.js';
@@ -72,12 +81,52 @@ const ASK_BROKEN: AskProjection = () => {
   throw new Error('no such column: contentHash');
 };
 
+/**
+ * A clock that advances a fixed amount on every READING.
+ *
+ * The loop reads it twice per check — once before the statement and once after
+ * — so every check's measured duration is exactly `stepMs`, whatever order the
+ * checks run in and however many precede it. That makes a duration assertable
+ * as an equality rather than as a range, which is what lets the "the population
+ * was charged to a rule" mutation go red.
+ *
+ * @param stepMs - How far the clock moves per reading
+ * @returns The clock
+ */
+function fakeClock(stepMs: number): () => number {
+  let reading = 0;
+  return () => {
+    const at = reading;
+    reading += stepMs;
+    return at;
+  };
+}
+
+/**
+ * `count` cost records, for a payload case whose subject is the DENOMINATOR
+ * rather than any one rule's price.
+ *
+ * @param count - How many checks the run should look like it executed
+ * @returns One trivial record each
+ */
+function costsOf(count: number): CheckCost[] {
+  return Array.from({ length: count }, (_unused, index) => ({
+    name: `check-${index}`,
+    durationMs: 1,
+    rows: 0,
+  }));
+}
+
 /** Findings, minus the provenance the payload builder also wants. */
 function payloadInput(overrides: Partial<CheckPayloadInput> = {}): CheckPayloadInput {
   return {
     issues: [],
-    checksRun: 0,
+    costs: [],
     population: 'derived',
+    // Non-zero, for the same reason `membersEnumerated` is: a case that sets it
+    // to something else is visibly asserting about the population's cost rather
+    // than inheriting a placeholder.
+    populationMs: 40,
     // A NON-ZERO default on purpose: every case that does not care about the
     // corpus is a case that ran over one, so a case that sets this to 0 is
     // visibly asserting something about emptiness rather than inheriting it.
@@ -88,13 +137,65 @@ function payloadInput(overrides: Partial<CheckPayloadInput> = {}): CheckPayloadI
   };
 }
 
+/**
+ * Run the loop with a fake clock, on the checks and answers a case cares about.
+ *
+ * Every cost case needs the same four uninteresting arguments; naming them once
+ * keeps what each case is actually varying visible, and keeps the file under the
+ * duplication gate.
+ *
+ * @param options - The run
+ * @param options.checks - The declared checks
+ * @param options.ask - How the projection answers
+ * @param options.only - A `--check` filter, or undefined for all
+ * @param options.stepMs - How far the fake clock moves per reading
+ * @returns Whatever the loop returned
+ */
+function runWithClock(options: {
+  checks: Parameters<typeof runDeclaredChecks>[0]['checks'];
+  ask: AskProjection;
+  only?: string;
+  stepMs?: number;
+}): ReturnType<typeof runDeclaredChecks> {
+  return runDeclaredChecks({
+    checks: options.checks,
+    only: options.only,
+    ask: options.ask,
+    validation: undefined,
+    membersEnumerated: POPULATED,
+    now: fakeClock(options.stepMs ?? 1),
+  });
+}
+
+/** One entry of the document's `checks` list, as a reader sees it. */
+type PublishedCheck = { name: string; durationSecs: number; rows?: number; broken?: true };
+
+/**
+ * The `checks` list of the document built from a real run of the loop.
+ *
+ * Deliberately goes loop → payload rather than hand-feeding cost records: the
+ * two numbers that must agree (`checksRun` and the length of this list) can only
+ * be shown to agree on output the loop actually produced.
+ *
+ * @param options - Passed through to {@link runWithClock}
+ * @returns The document, and its `checks` list already narrowed
+ */
+function documentFor(options: Parameters<typeof runWithClock>[0]): {
+  payload: Record<string, unknown>;
+  checks: PublishedCheck[];
+} {
+  const { issues, costs } = runWithClock(options);
+  const payload = buildCheckOutputData(payloadInput({ issues, costs }));
+  return { payload, checks: payload['checks'] as PublishedCheck[] };
+}
+
 describe('runDeclaredChecks — the loop', () => {
   it('runs EVERY declared check, not just the first', () => {
     // 🔑 The `break` mutation guard. Insert `break` at the end of the loop in
-    // `runChecks` and this is the test that reds: `checksRun` drops to 1 and
+    // `runChecks` and this is the test that reds: one cost record survives and
     // `no-orphans` vanishes. Nothing in the spawned system suite could tell,
     // because no spawned case ever ran two checks.
-    const { issues, checksRun } = runDeclaredChecks({
+    const { issues, costs } = runDeclaredChecks({
       checks: TWO_VIOLATED,
       only: undefined,
       ask: ASK_ONE_ROW,
@@ -102,36 +203,36 @@ describe('runDeclaredChecks — the loop', () => {
       membersEnumerated: POPULATED,
     });
 
-    expect(checksRun).toBe(2);
+    expect(costs).toHaveLength(2);
     expect(issues.map((i) => i.code)).toStrictEqual([FIRST_CODE, SECOND_CODE]);
   });
 
   it('asks the projection once per check, with that check\'s own statement', () => {
-    // The denominator's other half: `checksRun: 2` from a loop that ran one
+    // The denominator's other half: two cost records from a loop that ran one
     // statement twice would be a lie the count could not expose.
     const ask = vi.fn<AskProjection>(() => []);
 
-    const { checksRun } = runDeclaredChecks({
+    const { costs } = runDeclaredChecks({
       checks: TWO_VIOLATED, only: undefined, ask, validation: undefined,
       membersEnumerated: POPULATED,
     });
 
-    expect(checksRun).toBe(2);
+    expect(costs).toHaveLength(2);
     expect(ask.mock.calls.map(([sql]) => sql)).toStrictEqual([FIRST_SQL, SECOND_SQL]);
   });
 
   it('runs only the named check under `only`, and counts only that one', () => {
-    const { issues, checksRun } = runDeclaredChecks({
+    const { issues, costs } = runDeclaredChecks({
       checks: TWO_VIOLATED, only: SECOND, ask: ASK_ONE_ROW, validation: undefined,
       membersEnumerated: POPULATED,
     });
 
-    expect(checksRun).toBe(1);
+    expect(costs).toHaveLength(1);
     expect(issues.map((i) => i.code)).toStrictEqual([SECOND_CODE]);
   });
 
   it('reports a broken check as a finding, never as a skip', () => {
-    const { issues, checksRun } = runDeclaredChecks({
+    const { issues, costs } = runDeclaredChecks({
       checks: BROKEN_CHECK,
       only: undefined,
       ask: ASK_BROKEN,
@@ -140,7 +241,7 @@ describe('runDeclaredChecks — the loop', () => {
     });
 
     // It RAN — the count must not pretend otherwise — and it produced an error.
-    expect(checksRun).toBe(1);
+    expect(costs).toHaveLength(1);
     expect(issues).toHaveLength(1);
     expect(issues[0]?.severity).toBe('error');
     // Names WHICH check, and WHY, or the operator has a red build and no lead.
@@ -156,13 +257,62 @@ describe('runDeclaredChecks — the loop', () => {
       return [{ path: 'docs/b.md', sql }];
     };
 
-    const { issues, checksRun } = runDeclaredChecks({
+    const { issues, costs } = runDeclaredChecks({
       checks: TWO_VIOLATED, only: undefined, ask, validation: undefined,
       membersEnumerated: POPULATED,
     });
 
-    expect(checksRun).toBe(2);
+    expect(costs).toHaveLength(2);
     expect(issues.map((i) => i.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN', SECOND_CODE]);
+  });
+});
+
+/**
+ * The per-rule price, which is the whole reason a cost record exists.
+ *
+ * A SQL surface is an unbounded cost: a project can declare a rule that scans
+ * every row of every table, and until this list shipped the document said only
+ * how long the WHOLE run took. "Which rule is expensive" was unanswerable
+ * without editing the config and re-running, one check at a time.
+ */
+describe('runDeclaredChecks — what each rule cost', () => {
+  it('measures each statement on the injected clock, exactly', () => {
+    // 🔑 Exact, not a range. Swap `performance.now()` for a constant, drop the
+    // second reading, or measure the wrong span and this reds — where
+    // `toBeGreaterThanOrEqual(0)` would pass on a timer that never started.
+    const { costs } = runWithClock({ checks: TWO_VIOLATED, ask: ASK_ONE_ROW, stepMs: 7 });
+
+    expect(costs.map((cost) => cost.name)).toStrictEqual([FIRST, SECOND]);
+    // Two readings per check, `stepMs` apart, so BOTH are 7 — a second check
+    // whose duration came out 21 would mean the span started at the run.
+    expect(costs.map((cost) => cost.durationMs)).toStrictEqual([7, 7]);
+  });
+
+  it('counts the rows the statement selected, and 0 is a count', () => {
+    // A rule that selected nothing still has a price and still ran. `rows: 0`
+    // says "asked, found nothing"; an absent key would say "did not complete",
+    // which is a different and much worse fact.
+    const three: AskProjection = () => [{ path: 'a' }, { path: 'b' }, { path: 'c' }];
+
+    expect(runWithClock({ checks: BROKEN_CHECK, ask: three }).costs[0]?.rows).toBe(3);
+    expect(runWithClock({ checks: BROKEN_CHECK, ask: ASK_NO_ROWS }).costs[0]?.rows).toBe(0);
+  });
+
+  it('marks a check that threw as broken, with NO row count at all', () => {
+    // 🪤 `rows: 0` on a statement that never returned would read as a clean
+    // pass. The key is absent, and `broken` is what is there instead.
+    const { issues, costs } = runWithClock({ checks: BROKEN_CHECK, ask: ASK_BROKEN, stepMs: 3 });
+
+    expect(costs).toStrictEqual([{ name: 'broken', durationMs: 3, broken: true }]);
+    expect(Object.hasOwn(costs[0] ?? {}, 'rows')).toBe(false);
+    // The finding is unchanged — the cost record is an addition, not a swap.
+    expect(issues.map((issue) => issue.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN']);
+  });
+
+  it('records one entry per check that RAN, so a --check filter shrinks the list', () => {
+    expect(runWithClock({ checks: TWO_VIOLATED, ask: ASK_ONE_ROW, only: SECOND }).costs)
+      .toStrictEqual([{ name: SECOND, durationMs: 1, rows: 1 }]);
+    expect(runWithClock({ checks: {}, ask: ASK_NO_ROWS }).costs).toStrictEqual([]);
   });
 });
 
@@ -179,7 +329,7 @@ describe('a check severity override does not silence a BROKEN check', () => {
     // 🔑 Revert the separate code (put `customCheckCode(name)` back on the
     // broken finding) and this reds: `resolveIssueSeverity` drops it and the
     // command exits 0 over a check that asserted nothing.
-    const { issues } = runDeclaredChecks({
+    const { issues, costs } = runDeclaredChecks({
       checks: BROKEN_CHECK,
       only: undefined,
       ask: ASK_BROKEN,
@@ -191,14 +341,14 @@ describe('a check severity override does not silence a BROKEN check', () => {
     expect(issues[0]?.code).toBe('RESOURCE_CHECK_BROKEN');
     expect(issues[0]?.severity).toBe('error');
     // And the document derived from it fails the run.
-    expect(buildCheckOutputData(payloadInput({ issues, checksRun: 1 }))['status']).toBe('error');
+    expect(buildCheckOutputData(payloadInput({ issues, costs }))['status']).toBe('error');
   });
 
   it('still reports it at error when the check is merely DEMOTED to warning', () => {
     // The quieter half of the same defect. `warning` does not drop the finding,
     // it drops it below the exit threshold — so the gate returns 0 and the
     // document says `status: warning` over a check that ran nothing.
-    const { issues } = runDeclaredChecks({
+    const { issues, costs } = runDeclaredChecks({
       checks: BROKEN_CHECK,
       only: undefined,
       ask: ASK_BROKEN,
@@ -207,7 +357,7 @@ describe('a check severity override does not silence a BROKEN check', () => {
     });
 
     expect(issues[0]?.severity).toBe('error');
-    expect(buildCheckOutputData(payloadInput({ issues, checksRun: 1 }))['status']).toBe('error');
+    expect(buildCheckOutputData(payloadInput({ issues, costs }))['status']).toBe('error');
   });
 
   it('still applies the override to the check\'s own VIOLATIONS', () => {
@@ -273,8 +423,8 @@ describe('the check payload', () => {
     // The field the docstring calls load-bearing, at a value the system suite
     // never produced. Zero findings from two checks and zero findings from NO
     // checks are the same document without it.
-    const ran = buildCheckOutputData(payloadInput({ checksRun: 2 }));
-    const none = buildCheckOutputData(payloadInput({ checksRun: 0 }));
+    const ran = buildCheckOutputData(payloadInput({ costs: costsOf(2) }));
+    const none = buildCheckOutputData(payloadInput({ costs: [] }));
 
     expect(ran['checksRun']).toBe(2);
     expect(none['checksRun']).toBe(0);
@@ -293,7 +443,7 @@ describe('the check payload', () => {
 
   it('renders each finding as code, severity, message and an optional path', () => {
     const payload = buildCheckOutputData(payloadInput({
-      checksRun: 1,
+      costs: costsOf(1),
       issues: [
         { code: 'CUSTOM:a', severity: 'error', message: 'bad', location: 'docs/a.md' },
         { code: 'CUSTOM:b', severity: 'warning', message: 'meh' },
@@ -317,7 +467,7 @@ describe('the check payload', () => {
     // against the root again would silently corrupt them.
     const payload = buildCheckOutputData(payloadInput({
       root: '/corpus',
-      checksRun: 1,
+      costs: costsOf(1),
       issues: [{ code: 'CUSTOM:a', severity: 'error', message: 'bad', location: 'docs/a.md' }],
     }));
 
@@ -326,12 +476,99 @@ describe('the check payload', () => {
   });
 
   it('reports success with a formatted duration when nothing was found', () => {
-    const payload = buildCheckOutputData(payloadInput({ checksRun: 3, durationMs: 1500 }));
+    const payload = buildCheckOutputData(payloadInput({ costs: costsOf(3), durationMs: 1500 }));
 
     expect(payload['status']).toBe('success');
     expect(payload['root']).toBe('/corpus');
     expect(payload['issueCounts']).toStrictEqual({ errors: 0, warnings: 0, info: 0 });
     expect(payload['durationSecs']).toBeDefined();
+  });
+});
+
+/**
+ * Publishing what the run SPENT, and on which rule.
+ *
+ * Jeff's framing: a SQL surface is an unbounded cost black box, and you cannot
+ * bound what you cannot attribute. `durationSecs` alone attributes nothing — a
+ * ten-second run is a slow rule, a slow population, or twenty cheap rules, and
+ * the document could not tell them apart.
+ */
+describe('the check payload publishes what each rule cost', () => {
+  it('lists one entry per check, with its own name and duration', () => {
+    const { checks } = documentFor({ checks: TWO_VIOLATED, ask: ASK_NO_ROWS, stepMs: 400 });
+
+    // 3 significant figures, so a sub-millisecond rule does NOT round to zero.
+    expect(checks).toStrictEqual([
+      { name: FIRST, durationSecs: 0.4, rows: 0 },
+      { name: SECOND, durationSecs: 0.4, rows: 0 },
+    ]);
+  });
+
+  it('keeps a sub-millisecond rule visible rather than rounding it to zero', () => {
+    // 🔑 The reason this is not `Date.now()`. Rules here are routinely faster
+    // than a millisecond; a 1 ms-granularity clock reports every one of them as
+    // 0 and the whole attribution says nothing.
+    const { checks } = documentFor({ checks: BROKEN_CHECK, ask: ASK_NO_ROWS, stepMs: 0.4 });
+
+    expect(checks[0]?.durationSecs).toBe(0.0004);
+  });
+
+  it('publishes broken instead of rows for a check that threw', () => {
+    const { checks, payload } = documentFor({ checks: BROKEN_CHECK, ask: ASK_BROKEN, stepMs: 2 });
+
+    expect(checks).toStrictEqual([{ name: 'broken', durationSecs: 0.002, broken: true }]);
+    // The run still fails on the finding, which the cost record does not replace.
+    expect(payload['status']).toBe('error');
+  });
+
+  it('derives checksRun from the very list it publishes, so the two cannot drift', () => {
+    // 🔑 Two numbers that must agree are a drift bug waiting to happen. Give
+    // `checksRun` a second source — carry it alongside the costs again — and
+    // this is the guard that reds when they disagree.
+    for (const only of [undefined, SECOND]) {
+      const { payload, checks } = documentFor({
+        checks: TWO_VIOLATED, ask: ASK_NO_ROWS, ...(only === undefined ? {} : { only }),
+      });
+
+      expect(payload['checksRun']).toBe(checks.length);
+      expect(checks.map((check) => check.name))
+        .toStrictEqual(only === undefined ? [FIRST, SECOND] : [SECOND]);
+    }
+  });
+
+  it('publishes an empty list and a zero denominator when nothing ran', () => {
+    const { payload, checks } = documentFor({ checks: {}, ask: ASK_NO_ROWS });
+
+    expect(checks).toStrictEqual([]);
+    expect(payload['checksRun']).toBe(0);
+  });
+
+  it('charges the shared population to NOBODY, and publishes it beside them', () => {
+    // 🚨 The measurement trap this whole block turns on. The git tracker, the
+    // projection build and the load happen ONCE for all N checks. Fold that into
+    // each rule's duration and every rule looks expensive and they sum to N×
+    // the truth — the same class as the pooled arm this repo reported backwards
+    // because its estimate was thread-summed.
+    const { issues, costs } = runWithClock({
+      checks: TWO_VIOLATED, ask: ASK_NO_ROWS, stepMs: 5,
+    });
+    const payload = buildCheckOutputData(payloadInput({ issues, costs, populationMs: 1230 }));
+
+    expect(payload['populationSecs']).toBe(1.23);
+    // Untouched by the population, and not summed with it.
+    expect((payload['checks'] as PublishedCheck[]).map((check) => check.durationSecs))
+      .toStrictEqual([0.005, 0.005]);
+  });
+
+  it('places each cost beside what it explains', () => {
+    // Field order is the whole readability argument: origin then its price,
+    // total then its breakdown. A reader who has to scroll to pair them will
+    // not pair them.
+    const keys = Object.keys(buildCheckOutputData(payloadInput({ costs: costsOf(1) })));
+
+    expect(keys.indexOf('populationSecs')).toBe(keys.indexOf('population') + 1);
+    expect(keys.indexOf('checks')).toBe(keys.indexOf('durationSecs') + 1);
+    expect(keys.indexOf('checks')).toBeLessThan(keys.indexOf('issues'));
   });
 });
 
@@ -358,7 +595,7 @@ describe('a corpus of zero members is a failure, not a pass', () => {
   it('fails the run when checks ran over an empty population', () => {
     // 🔑 The reproduced case. Delete the guard and this reds: `issues` is empty,
     // `status` is `success`, and the command exits 0 having asserted nothing.
-    const { issues, checksRun } = runDeclaredChecks({
+    const { issues, costs } = runDeclaredChecks({
       checks: TWO_VIOLATED,
       only: undefined,
       ask: ASK_NO_ROWS,
@@ -368,10 +605,10 @@ describe('a corpus of zero members is a failure, not a pass', () => {
 
     // The checks DID run — the count must not pretend otherwise. They just had
     // nothing to run over, which is the whole finding.
-    expect(checksRun).toBe(2);
+    expect(costs).toHaveLength(2);
     expect(issues).toHaveLength(1);
     expect(issues[0]?.severity).toBe('error');
-    expect(buildCheckOutputData(payloadInput({ issues, checksRun, membersEnumerated: 0 }))['status'])
+    expect(buildCheckOutputData(payloadInput({ issues, costs, membersEnumerated: 0 }))['status'])
       .toBe('error');
   });
 
@@ -413,14 +650,14 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // 🔑 The over-correction guard. Make the condition fire on a non-empty
     // corpus — drop the `> 0` test, compare the wrong number — and this reds:
     // an ordinary clean run starts reporting an error.
-    const { issues, checksRun } = runDeclaredChecks({
+    const { issues, costs } = runDeclaredChecks({
       checks: TWO_VIOLATED, only: undefined, ask: ASK_NO_ROWS, validation: undefined,
       membersEnumerated: 1,
     });
 
-    expect(checksRun).toBe(2);
+    expect(costs).toHaveLength(2);
     expect(issues).toStrictEqual([]);
-    expect(buildCheckOutputData(payloadInput({ issues, checksRun, membersEnumerated: 1 }))['status'])
+    expect(buildCheckOutputData(payloadInput({ issues, costs, membersEnumerated: 1 }))['status'])
       .toBe('success');
   });
 
@@ -429,12 +666,12 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     // deliberate exit 0 — declaring no checks is legitimate. A run with neither
     // checks nor corpus must not turn that legitimate state into an error, or
     // the operator gets two reports about one situation and the wrong verdict.
-    const { issues, checksRun } = runDeclaredChecks({
+    const { issues, costs } = runDeclaredChecks({
       checks: {}, only: undefined, ask: ASK_NO_ROWS, validation: undefined,
       membersEnumerated: 0,
     });
 
-    expect(checksRun).toBe(0);
+    expect(costs).toStrictEqual([]);
     expect(issues).toStrictEqual([]);
   });
 
@@ -459,8 +696,10 @@ describe('the check payload publishes the corpus it ran over', () => {
     // derived|store` exists because a store hit cannot be inferred from the
     // rows; `membersEnumerated` exists because a gate that ran over nothing
     // cannot be told from one that ran over the repository.
-    const over = buildCheckOutputData(payloadInput({ checksRun: 2, membersEnumerated: 8000 }));
-    const none = buildCheckOutputData(payloadInput({ checksRun: 2, membersEnumerated: 0 }));
+    const over = buildCheckOutputData(payloadInput({
+      costs: costsOf(2), membersEnumerated: 8000,
+    }));
+    const none = buildCheckOutputData(payloadInput({ costs: costsOf(2), membersEnumerated: 0 }));
 
     expect(over['membersEnumerated']).toBe(8000);
     expect(none['membersEnumerated']).toBe(0);

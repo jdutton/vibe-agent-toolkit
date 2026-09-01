@@ -156,7 +156,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resource projection, so questions no command reports a field for get an answer (headings, link
   targets, what the parser refused). The statement must begin with `SELECT`, `WITH` or `VALUES`;
   writes and multi-statement text are refused, and values come back as SQLite holds them, undecoded. Read `population: derived | store` in the output: it says
-  whether the rows came from the projection store or were built by this run.
+  whether the rows came from the projection store or were built by this run, and
+  `populationSecs` beside it says what that cost.
 
 - **`vat resources check [path]`** — runs the SQL assertions a project declares under
   `resources.checks`, and exits 1 when one is violated. Each check is a `description` plus one `sql`
@@ -164,7 +165,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CUSTOM:<name>`, which `resources.validation.severity` can downgrade or ignore. A check that could
   not run, and a run whose corpus enumerated nothing, are both reported as `RESOURCE_CHECK_BROKEN` —
   which no `severity` entry can silence — and `membersEnumerated` in the output says how many members
-  the checks actually ran over. An unknown `--check` name exits 2.
+  the checks actually ran over. The output also reports what each check cost — its own
+  duration and how many rows it selected — with the shared population cost stated separately
+  as `populationSecs`. An unknown `--check` name exits 2.
 
 - **`VAT_PROJECTION_STORE_DIR`** — sets where the projection store's database lives. Without it the
   store is one database per VAT release shared by every root on the machine, so concurrent CI jobs

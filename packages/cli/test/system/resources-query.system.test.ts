@@ -406,6 +406,28 @@ describe('vat resources query', () => {
     // second is an answer rather than a detector that never ran.
     expect(databasesUnder(flipDir)).toStrictEqual([PROJECTION_DATABASE]);
     expect(databasesUnder(decoyTmp)).toStrictEqual([]);
+
+    // 🔑 And what the flip was WORTH — the only arm that runs against a real
+    // clock and a real population, so it is the only one that can catch the
+    // number being published but never measured.
+    //
+    // 🪤 Deliberately NOT `second < first`. That is the interesting claim and it
+    // is the flaky one: this fixture is small enough that a warm run and a cold
+    // run are separated by less than the process noise between them, and a gate
+    // that fails one run in ten teaches people to re-run it. The real spread
+    // lives on a real tree (1.06 s against 0.19 s on this repository) and
+    // belongs to the lab, which compares across trees for a living.
+    //
+    // What IS pinned: the number is real. A millisecond-granularity clock
+    // reports a warm population on a two-file corpus as 0, and `> 0` is exactly
+    // the assertion a `Date.now()` regression fails. The upper bound catches the
+    // other direction — a field wired to the wrong term cannot be a subset of
+    // the run that contains it.
+    for (const run of [first, second]) {
+      expect(typeof run.doc['populationSecs']).toBe('number');
+      expect(run.doc['populationSecs']).toBeGreaterThan(0);
+      expect(run.doc['populationSecs']).toBeLessThanOrEqual(run.doc['durationSecs'] as number);
+    }
   });
 
   it('writes to the DEFAULT location when nothing names one, which is why the arm above means something', () => {

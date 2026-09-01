@@ -27,7 +27,13 @@
  * failure. The signal is real rather than declarative: a store hit
  * short-circuits `populate()` before the builder exists, so no contributor runs
  * and no timing record is filed. An empty record list IS the hit.
-
+ *
+ * `populationSecs` sits beside it and says what that origin was worth — the wall
+ * time of the setup both this verb and `vat resources check` pay before either
+ * runs a statement (roughly 1.06 s derived against 0.19 s warm on this
+ * repository). Without it the tell is a label a reader has to trust; with it the
+ * saving is a number they can check, and a per-statement cost published
+ * elsewhere has something to be read against.
  *
  * ## What this verb does NOT do
  *
@@ -88,6 +94,10 @@ export function buildProjectionQueryOutputData(input: ProjectionQueryPayloadInpu
     root: input.root,
     // The cache tell — see the header.
     population: input.population,
+    // Immediately after the origin, because the two are one statement: served
+    // or derived, and what that was worth. Separated they read as two unrelated
+    // numbers in a list.
+    populationSecs: formatDurationSecs(input.populationMs),
     rowCount: input.rows.length,
     durationSecs: formatDurationSecs(input.durationMs),
     rows: input.rows,

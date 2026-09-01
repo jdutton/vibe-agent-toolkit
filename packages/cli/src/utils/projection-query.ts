@@ -45,6 +45,8 @@
  * throw, so no command can forget it.
  */
 
+import { performance } from 'node:perf_hooks';
+
 import {
   buildResourceProjection,
   PROJECTION_TABLES,
@@ -93,6 +95,40 @@ export interface ProjectionProvenance {
    * It describes the POPULATION, which is the only thing the store now affects.
    */
   readonly population: PopulationOrigin;
+
+  /**
+   * 🔑 What that origin was WORTH. {@link population} says whether the
+   * projection was served or re-derived; this says what the difference cost, so
+   * the tell stops being a bare label a reader has to take on faith. Measured on
+   * this repository the two are roughly **1.06 s derived against 0.19 s warm**.
+   *
+   * The wall time of the SHARED setup and nothing else: everything
+   * {@link withQueriedProjection} does before it hands control to the caller's
+   * work — the git tracker, `buildResourceProjection`, opening the ephemeral
+   * database, and writing the blob tier and the extent into it.
+   *
+   * ## Why it belongs on shared provenance rather than on one verb
+   *
+   * Both verbs pay it, identically, because it is the half of the run they hold
+   * in common — a `check` that runs forty statements and a `query` that runs one
+   * do the same population first. And a per-statement cost is UNREADABLE without
+   * it: `vat resources check` publishes what each rule's SQL cost, and a reader
+   * handed forty small numbers and a large total has no way to tell an expensive
+   * rule from a setup everybody shares. Absent this field the only arithmetic
+   * available is "total minus the statements", which silently attributes the
+   * shared setup to whichever rule the reader is looking at.
+   *
+   * ⚠️ Measured with `performance.now()`, not `Date.now()`. A warm population
+   * lands well under a millisecond on a small tree, and a millisecond-granularity
+   * clock reports that as `0` — which reads as "not measured" rather than "very
+   * fast", turning the best case the store has into its least credible number.
+   *
+   * ⚠️ Deliberately ONE number, not a breakdown. Splitting it into crawl, parse
+   * and store-load is a real question and it is the lab's: an instrument that
+   * gets reviewed and re-run, rather than a product document that would then owe
+   * every consumer a stable sub-phase vocabulary.
+   */
+  readonly populationMs: number;
 }
 
 /**
@@ -171,6 +207,11 @@ export async function withQueriedProjection<T>(
     // is constructed, so this staying at zero is the ONLY observable difference
     // between a served population and a re-derived one.
     let contributorRecords = 0;
+    // Opened before the first thing the shared setup does and read after the
+    // last, so `populationMs` covers exactly what BOTH verbs pay and nothing a
+    // caller's work does. `performance.now()` rather than `Date.now()` because a
+    // warm population is routinely sub-millisecond — see `populationMs`.
+    const populationStart = performance.now();
     const gitTracker = await gitTrackerForProjectRoot(root);
     const projection = await buildResourceProjection({
       root,
@@ -199,6 +240,8 @@ export async function withQueriedProjection<T>(
       const { blobs, extent } = splitProjectionByScope(projection);
       await store.writeBlobFacts(blobs);
       await store.writeExtent({ rootId, treeHash: EPHEMERAL_TREE_HASH }, extent);
+      // The shared setup is done. Everything after this line is the caller's.
+      const populationMs = performance.now() - populationStart;
 
       const ask: AskProjection = (sql, ...parameters) => {
         try {
@@ -212,7 +255,7 @@ export async function withQueriedProjection<T>(
 
       return await work(
         ask,
-        { population: contributorRecords === 0 ? 'store' : 'derived' },
+        { population: contributorRecords === 0 ? 'store' : 'derived', populationMs },
         // Read off the PROJECTION rather than counted back out of the store with
         // a `SELECT COUNT(*)`: a count that travelled through the same `ask` the
         // caller's statements do would be broken by the very schema drift it

@@ -245,6 +245,37 @@ describe('vat resources check', () => {
     const codes = new Set((doc['issues'] as { code: string }[]).map((i) => i.code));
     expect([...codes].sort((a, b) => a.localeCompare(b)))
       .toStrictEqual(['CUSTOM:no-headings', 'CUSTOM:no-markdown']);
+
+    // 🔑 Per-rule cost, on a real clock against a real population — the only arm
+    // that can catch the numbers being published but never measured. The unit
+    // suite pins the document's SHAPE with an injected clock; nothing there can
+    // fail if the production clock is wrong, because there is no seam inside
+    // `withQueriedProjection` to inject one into.
+    //
+    // 🪤 The assertion is `> 0`, not a threshold. A statement over this fixture
+    // lands in the microseconds and a millisecond-granularity clock reports that
+    // as 0 — which is exactly what a `Date.now()` regression looks like, and
+    // exactly what `formatDurationSecs`' three SIGNIFICANT figures exist to
+    // preserve. No upper bound per rule and no ordering between the two: both
+    // are process noise at this size.
+    const costs = doc['checks'] as { name: string; durationSecs: number; rows: number }[];
+    expect(costs.map((c) => c.name).sort((a, b) => a.localeCompare(b)))
+      .toStrictEqual(['no-headings', NO_MD_KEY]);
+    for (const cost of costs) {
+      expect(cost.durationSecs).toBeGreaterThan(0);
+      // Both statements select the same markdown rows, so each rule genuinely
+      // returned something — a `rows: 0` here would mean the cost list was
+      // stapled on rather than read off the run.
+      expect(cost.rows).toBeGreaterThan(0);
+      // 🚨 The population is charged to NOBODY, asserted per rule rather than
+      // against the SUM. The leak this catches is the shared setup being folded
+      // into each entry, which would put every rule at or above the population;
+      // comparing one rule to it keeps the healthy margin at roughly two orders
+      // of magnitude, where a sum would narrow it once enough rules are declared
+      // and eventually flake on nothing but arithmetic.
+      expect(cost.durationSecs).toBeLessThan(doc['populationSecs'] as number);
+    }
+    expect(doc['populationSecs']).toBeLessThanOrEqual(doc['durationSecs'] as number);
   });
 
   it('accepts the documented CUSTOM: severity override instead of refusing the config', () => {

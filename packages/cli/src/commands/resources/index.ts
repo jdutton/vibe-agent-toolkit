@@ -136,6 +136,9 @@ Output Fields:
               read from the projection store. Reported because it cannot be
               inferred: a correct hit and a correct re-derivation produce
               identical rows
+  populationSecs:
+              What that population cost. The store's whole job is to make it
+              cheap, so this is the number that says whether it did
   rows:       The selected rows, exactly as SQLite holds them -- a boolean as
               0/1, a date and a JSON column as text. Values are NOT decoded,
               because decoding needs a table spec and arbitrary SQL has none
@@ -212,8 +215,8 @@ A check with NOTHING TO RUN OVER fails the same way:
   Declaring no checks at all is different -- that stays a warning and exit 0.
 
 Output Fields:
-  status, root, population, checksRun, membersEnumerated, issueCounts,
-  durationSecs
+  status, root, population, populationSecs, checksRun, membersEnumerated,
+  issueCounts, durationSecs, checks
   checksRun: How many checks ran. Read it: no findings from four checks and no
              findings from NO checks are otherwise the same document
   membersEnumerated:
@@ -221,6 +224,14 @@ Output Fields:
              checks ran AGAINST, where checksRun is how many rules ran. Four
              checks over 8,000 files and four over 0 are otherwise the same
              document, and only one of them is a gate
+  checks:    What each check COST -- {name, durationSecs, rows} per check, or
+             {name, durationSecs, broken} for one whose statement threw. rows
+             is what the statement selected, which is both its finding count
+             and its memory cost: rows are fully materialised
+  populationSecs:
+             What the shared population cost. It is NOT charged to any check:
+             every check's durationSecs is its own statement and nothing else,
+             so this is the term that reconciles them against durationSecs
   issues:    One row per violation ({code, severity, message, path?})
 
 Exit Codes:
