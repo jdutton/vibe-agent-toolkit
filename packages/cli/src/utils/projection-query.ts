@@ -31,8 +31,9 @@
  * ⇒ The store's job is to make the POPULATION cheap, and that is all. Whatever
  * `populate()` returns — served from the store or derived — is written into a
  * fresh in-memory database that holds this tree and nothing else, and the SQL
- * runs there. The saving is untouched (it was always in the population: 1.06 s
- * cold against 0.194 s warm), and "one tree, one answer" stops being a claim
+ * runs there. The saving is untouched (it was always in the population: on this
+ * repository {@link ProjectionProvenance.populationMs} reads 1.16-1.18 s derived
+ * against 0.29-0.31 s served), and "one tree, one answer" stops being a claim
  * about how callers behave and becomes a property of the shape.
  *
  * ## The store never reaches a caller
@@ -99,13 +100,40 @@ export interface ProjectionProvenance {
   /**
    * 🔑 What that origin was WORTH. {@link population} says whether the
    * projection was served or re-derived; this says what the difference cost, so
-   * the tell stops being a bare label a reader has to take on faith. Measured on
-   * this repository the two are roughly **1.06 s derived against 0.19 s warm**.
+   * the tell stops being a bare label a reader has to take on faith.
+   *
+   * Measured as THIS field, by running `vat resources query 'SELECT COUNT(*) AS
+   * n FROM blobs'` against this repository three times per arm with the parse
+   * cache warm: **1.16-1.18 s derived against 0.29-0.31 s served**. With a cold
+   * parse cache the derived arm is 33-35 s, so the pair above is the store's
+   * saving and not the parse cache's.
    *
    * The wall time of the SHARED setup and nothing else: everything
    * {@link withQueriedProjection} does before it hands control to the caller's
-   * work — the git tracker, `buildResourceProjection`, opening the ephemeral
-   * database, and writing the blob tier and the extent into it.
+   * work — opening the population cache (which, when a store is selected, is a
+   * `git write-tree` spawn plus the backend's dynamic import and
+   * `openSqliteProjectionStore()`), the git tracker, `buildResourceProjection`,
+   * opening the ephemeral database, and writing the blob tier and the extent
+   * into it.
+   *
+   * ⚠️ The population cache's CLOSE is outside it, necessarily: that runs in
+   * `withPopulationCache`'s `finally`, after the caller's work returns, and a
+   * span that ends before the work begins cannot contain it. It is a handle
+   * release, not population.
+   *
+   * 🪤 **The span's start is load-bearing, and moving it inward is silent.**
+   * This shipped with the clock started on the first line INSIDE
+   * `withPopulationCache`'s callback — which put the population-cache open, the
+   * only part of the setup a store adds, OUTSIDE the measurement, and only on
+   * the arm where a store exists. Measured on a two-file corpus with identical
+   * total wall time on both arms: no store 0.145 of 0.146 s, cold store 0.0475
+   * of 0.161 s. Same work, `populationSecs` three times apart, and a reader
+   * comparing a no-store run to a warm-store run read a 42x saving where the
+   * honest totals differ by 1.75x. The field was added to stop the cache tell
+   * being a label taken on faith and had become the artifact instead. A
+   * measurement that flatters one arm is this repository's most-repeated
+   * defect; the system suite now pins `populationSecs / durationSecs > 0.6` on a
+   * cold run so the next inward move is red rather than quiet.
    *
    * ## Why it belongs on shared provenance rather than on one verb
    *
@@ -200,18 +228,30 @@ export async function withQueriedProjection<T>(
 ): Promise<T> {
   const { root, logger } = options;
 
+  // 🚨 OUTSIDE `withPopulationCache`, and it must stay outside. That helper
+  // awaits `openPopulationCache` — a `git write-tree` spawn plus the backend's
+  // dynamic import and `openSqliteProjectionStore()` — BEFORE it invokes the
+  // callback below, and it pays that cost ONLY when a store is selected. A clock
+  // started inside the callback therefore drops the store's own setup out of the
+  // measurement on precisely the arm the number is used to praise. See
+  // `populationMs` for what that shipped as.
+  //
+  // What is NOT in the span, deliberately: `withPopulationCache`'s `finally`,
+  // which closes the opened cache AFTER `work` returns. A span that ends before
+  // `work` begins cannot contain it, and stretching the span past `work` would
+  // fold the caller's statements into a number whose entire purpose is to be
+  // read against them. The close is a handle release on an already-open
+  // database, not population.
+  let contributorRecords = 0;
+  const populationStart = performance.now();
+
   // The file-backed store, when one is selected, and ONLY as a population cache.
   // Its rows are never queried — see the header.
   return withPopulationCache({ root }, async (cache) => {
     // The cache tell. `populate()` short-circuits a hit before any contributor
     // is constructed, so this staying at zero is the ONLY observable difference
-    // between a served population and a re-derived one.
-    let contributorRecords = 0;
-    // Opened before the first thing the shared setup does and read after the
-    // last, so `populationMs` covers exactly what BOTH verbs pay and nothing a
-    // caller's work does. `performance.now()` rather than `Date.now()` because a
-    // warm population is routinely sub-millisecond — see `populationMs`.
-    const populationStart = performance.now();
+    // between a served population and a re-derived one. Declared with the clock
+    // above rather than here so the two cannot drift apart when one moves.
     const gitTracker = await gitTrackerForProjectRoot(root);
     const projection = await buildResourceProjection({
       root,

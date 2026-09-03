@@ -68,6 +68,39 @@ const POPULATED = 12;
 const ASK_ONE_ROW: AskProjection = (sql) => [{ path: 'docs/a.md', sql }];
 
 /**
+ * How many rows each declared statement selects: NON-ZERO, and different from
+ * each other.
+ *
+ * 🚨 **Both of those properties are load-bearing, and their absence was a blind
+ * spot.** Every case that reached a published `rows` used to answer with
+ * `ASK_NO_ROWS` or a hand-built cost record, so every expected count was `0` —
+ * and a reviewer who replaced the published value with the literal `0` got the
+ * whole file green. Nothing proved the count came from the statement at all.
+ * Unequal counts add the second half: a payload that paired each rule with
+ * ANOTHER rule's count also has to red.
+ */
+const ROWS_BY_SQL: Readonly<Record<string, number>> = {
+  [FIRST_SQL]: 3,
+  [SECOND_SQL]: 7,
+};
+
+/**
+ * An `ask` that answers each statement with its own row count from
+ * {@link ROWS_BY_SQL}.
+ *
+ * Refuses a statement it was not told about rather than answering zero: a
+ * silent `0` here would restore exactly the blindness this fake exists to close.
+ *
+ * @param sql - The statement the loop is running
+ * @returns That statement's violating rows
+ */
+const ASK_DISTINCT_ROWS: AskProjection = (sql) => {
+  const count = ROWS_BY_SQL[sql];
+  if (count === undefined) throw new Error(`This fake declares no row count for: ${sql}`);
+  return Array.from({ length: count }, (_unused, index) => ({ path: `docs/${index}.md` }));
+};
+
+/**
  * An `ask` that answers every statement with no rows — a clean pass over a
  * populated corpus, and also what an EMPTY corpus looks like to a check.
  *
@@ -103,6 +136,46 @@ function fakeClock(stepMs: number): () => number {
 }
 
 /**
+ * The smallest array length this runtime REFUSES to spread into an argument
+ * list, found by doubling.
+ *
+ * 🪤 **Measured, never hardcoded, because the limit is not a constant.** It is
+ * whatever fits in the REMAINING stack, so it moves with the stack the code is
+ * running on: a plain `node -e` on the main thread throws at about 125,000,
+ * while this unit suite runs in a worker thread with a larger stack and does not
+ * throw until 800,000. A literal picked from the first of those numbers is a
+ * test that passes on the BROKEN code here — which is how this guard was nearly
+ * written, and exactly the vacuous-guard class the defect it covers belongs to.
+ *
+ * Returning the first FAILING length rather than the last passing one is what
+ * makes the case above red on a spread: the real call sits a few frames deeper
+ * than this probe, so it has less stack, not more.
+ *
+ * @returns A length this runtime cannot spread
+ * @throws When no length up to 16M fails, which would mean the case above is
+ *   asserting nothing and must be rethought rather than quietly skipped
+ */
+function firstUnspreadableLength(): number {
+  for (let length = 100_000; length <= 16_000_000; length *= 2) {
+    const sink: number[] = [];
+    try {
+      sink.push(...Array.from<number>({ length }));
+    } catch {
+      return length;
+    }
+    // Read, so the probe is a real spread of a real array and not something a
+    // compiler or a linter is free to treat as dead.
+    if (sink.length !== length) throw new Error('The probe did not spread what it built.');
+  }
+
+  throw new Error(
+    'No array length up to 16,000,000 exceeded this runtime\'s argument limit, so the'
+    + ' huge-result-set case cannot distinguish a spread from an append. Rewrite it'
+    + ' rather than deleting it.',
+  );
+}
+
+/**
  * `count` cost records, for a payload case whose subject is the DENOMINATOR
  * rather than any one rule's price.
  *
@@ -113,7 +186,10 @@ function costsOf(count: number): CheckCost[] {
   return Array.from({ length: count }, (_unused, index) => ({
     name: `check-${index}`,
     durationMs: 1,
-    rows: 0,
+    // 🪤 Not `rows: 0`. These records exist for the DENOMINATOR cases, which do
+    // not read the count — and a file in which every expected count is zero is
+    // a file that cannot tell a published count from a hardcoded one.
+    rows: index + 1,
   }));
 }
 
@@ -288,14 +364,44 @@ describe('runDeclaredChecks — what each rule cost', () => {
     expect(costs.map((cost) => cost.durationMs)).toStrictEqual([7, 7]);
   });
 
-  it('counts the rows the statement selected, and 0 is a count', () => {
+  it('counts the rows EACH statement selected, and 0 is a count', () => {
+    // 🔑 Two checks whose statements return different, non-zero counts, so this
+    // reds on a hardcoded count AND on a count paired with the wrong rule —
+    // neither of which the all-zero cases this replaced could see.
+    const { costs } = runWithClock({ checks: TWO_VIOLATED, ask: ASK_DISTINCT_ROWS });
+
+    expect(costs.map((cost) => [cost.name, cost.rows]))
+      .toStrictEqual([[FIRST, ROWS_BY_SQL[FIRST_SQL]], [SECOND, ROWS_BY_SQL[SECOND_SQL]]]);
     // A rule that selected nothing still has a price and still ran. `rows: 0`
     // says "asked, found nothing"; an absent key would say "did not complete",
     // which is a different and much worse fact.
-    const three: AskProjection = () => [{ path: 'a' }, { path: 'b' }, { path: 'c' }];
-
-    expect(runWithClock({ checks: BROKEN_CHECK, ask: three }).costs[0]?.rows).toBe(3);
     expect(runWithClock({ checks: BROKEN_CHECK, ask: ASK_NO_ROWS }).costs[0]?.rows).toBe(0);
+  });
+
+  it('turns a huge result set into findings, never into a "could not run" report', () => {
+    // 🔑 Reachable, not theoretical. The loop used to do `issues.push(...rows)`,
+    // which spreads an array into an ARGUMENT LIST and throws `RangeError:
+    // Maximum call stack size exceeded` once the array is long enough. That
+    // throw landed in the `catch` written for a statement that would not
+    // COMPILE, so a rule that ran perfectly and selected a lot of rows was
+    // reported as `broken: true` — "could not run, so it is asserting nothing" —
+    // which is false, and sends the operator to read the SQL instead of the
+    // corpus. The sizes are not hypothetical: VAT's own `blob_references` table
+    // holds 29,645 rows today, and `SELECT * FROM blob_references` on a repo a
+    // few times this one's size crosses the limit on the main thread.
+    const rowCount = firstUnspreadableLength();
+    // Every row is the SAME object, so a million of them cost one allocation:
+    // nothing here reads a row twice or mutates one, and the subject is the
+    // COUNT.
+    const row = { path: 'docs/a.md' };
+    const askHuge: AskProjection = () => Array.from({ length: rowCount }, () => row);
+
+    const { issues, costs } = runWithClock({ checks: BROKEN_CHECK, ask: askHuge });
+
+    // A real price and a real row count — NOT `broken`, and not an absent count.
+    expect(costs).toStrictEqual([{ name: 'broken', durationMs: 1, rows: rowCount }]);
+    expect(issues).toHaveLength(rowCount);
+    expect(issues.filter((issue) => issue.code === 'RESOURCE_CHECK_BROKEN')).toStrictEqual([]);
   });
 
   it('marks a check that threw as broken, with NO row count at all', () => {
@@ -494,13 +600,19 @@ describe('the check payload', () => {
  * the document could not tell them apart.
  */
 describe('the check payload publishes what each rule cost', () => {
-  it('lists one entry per check, with its own name and duration', () => {
-    const { checks } = documentFor({ checks: TWO_VIOLATED, ask: ASK_NO_ROWS, stepMs: 400 });
+  it('lists one entry per check, with its own name, duration and row count', () => {
+    const { checks } = documentFor({
+      checks: TWO_VIOLATED, ask: ASK_DISTINCT_ROWS, stepMs: 400,
+    });
 
+    // 🔑 The counts are the statements' OWN, and they differ. Publish a literal
+    // `rows: 0` and this reds; publish each rule beside another rule's count and
+    // it reds too. Both mutations used to leave the whole file green, because
+    // every case that reached this field expected the same value: zero.
     // 3 significant figures, so a sub-millisecond rule does NOT round to zero.
     expect(checks).toStrictEqual([
-      { name: FIRST, durationSecs: 0.4, rows: 0 },
-      { name: SECOND, durationSecs: 0.4, rows: 0 },
+      { name: FIRST, durationSecs: 0.4, rows: ROWS_BY_SQL[FIRST_SQL] },
+      { name: SECOND, durationSecs: 0.4, rows: ROWS_BY_SQL[SECOND_SQL] },
     ]);
   });
 

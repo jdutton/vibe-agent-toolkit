@@ -62,16 +62,22 @@ describe('the query payload', () => {
   });
 
   it('says what the population cost, so the tell is a number and not just a label', () => {
-    // 🔑 The companion to `population`. On this repository the two origins are
-    // roughly 1.06 s derived against 0.19 s warm, so a reader who is told only
+    // 🔑 The companion to `population`. Measured as this field on this
+    // repository with the parse cache warm, the two origins are 1.16-1.18 s
+    // derived against 0.29-0.31 s served, so a reader who is told only
     // `population: store` has to take the saving on faith — and the saving is
     // the entire reason the store exists. Reported in seconds, like every other
     // duration in a vat document.
-    const served = payloadFor({ population: 'store', populationMs: 194 });
-    const derived = payloadFor({ population: 'derived', populationMs: 1060 });
+    //
+    // ⚠️ The millisecond inputs below are STAND-INS chosen to serialize
+    // distinctly, not measurements. This builder is pure and never runs a
+    // population; what the real spread is belongs to the docstring above and to
+    // the system suite, which is the only place a real clock is involved.
+    const served = payloadFor({ population: 'store', populationMs: 294 });
+    const derived = payloadFor({ population: 'derived', populationMs: 1170 });
 
-    expect(served['populationSecs']).toBe(0.194);
-    expect(derived['populationSecs']).toBe(1.06);
+    expect(served['populationSecs']).toBe(0.294);
+    expect(derived['populationSecs']).toBe(1.17);
   });
 
   it('reports the population cost separately from the whole run', () => {

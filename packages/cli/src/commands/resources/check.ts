@@ -226,24 +226,111 @@ export function buildCheckOutputData(input: CheckPayloadInput): Record<string, u
 }
 
 /**
+ * A value and what producing it cost, or the throw and what reaching it cost.
+ *
+ * Both arms carry the duration: a statement that failed still spent time, and
+ * the caller owes exactly one cost record per check on either path.
+ */
+type Timed<T> =
+  | { readonly ok: true; readonly value: T; readonly durationMs: number }
+  | { readonly ok: false; readonly error: unknown; readonly durationMs: number };
+
+/**
+ * Run a thunk between two readings of the clock, and report both.
+ *
+ * ## 🚨 Why this is a helper and not a stopwatch inline in the loop
+ *
+ * The loop used to read the clock into a `startedAt`, call `ask`, and subtract
+ * two lines later — and the claim below that "the span is `ask(check.sql)` and
+ * nothing else" had NO guard behind it. A reviewer moved the subtraction below
+ * the row-to-finding mapping, widening the measured span to cover work that is
+ * not the statement, and **the entire unit suite stayed green (36/36)**. That is
+ * measured, not assumed.
+ *
+ * No cleverer fake clock closes it. The injected clock advances per READING, so
+ * every mutation that keeps two readings per check yields the same number; a
+ * clock that advanced only inside `ask` could not tell the two positions apart
+ * either, because the real mapping never touches the clock — and making the
+ * mapping slow in real time would buy a flake, not a guard.
+ *
+ * So the span is a THUNK. What is timed is what is passed in, and widening it
+ * stops being a one-line move of a subtraction and becomes a visible rewrite of
+ * the call site.
+ *
+ * 🪤 The throw is CAUGHT rather than propagated, so the failing path has a
+ * duration too. Keep it that way: a `try` in the caller around a helper that
+ * only times the happy path re-opens the two-read stopwatch this closes.
+ *
+ * @param now - The clock, in milliseconds
+ * @param run - The work whose duration is wanted, and nothing else
+ * @returns What `run` produced or threw, and how long that took
+ */
+function timed<T>(now: () => number, run: () => T): Timed<T> {
+  const startedAt = now();
+  try {
+    return { ok: true, value: run(), durationMs: now() - startedAt };
+  } catch (error) {
+    return { ok: false, error, durationMs: now() - startedAt };
+  }
+}
+
+/**
+ * The finding for a statement that would not run.
+ *
+ * 🔑 A finding, not a skip, at `error`, and under its OWN code.
+ *
+ * The check's declared severity describes how bad a VIOLATION is; it says
+ * nothing about how bad it is that the check cannot run, and a `warning` check
+ * whose SQL broke would otherwise fail nothing while asserting nothing. That
+ * much was always true of the DECLARATION.
+ *
+ * 🪤 It was never true of an adopter OVERRIDE, and this finding used to carry
+ * `customCheckCode(name)` — the same code as a violation of that very check. So
+ * `severity: { 'CUSTOM:foo': 'ignore' }`, the documented way to stand down a
+ * check you inherited, also silenced "foo could not run", and `'warning'`
+ * demoted it below the exit threshold. A renamed projection column then produced
+ * exit 0 from a gate. `RESOURCE_CHECK_BROKEN` is a non-overridable code
+ * precisely so that config line cannot reach here.
+ *
+ * 🪤 Only `ask` reaches this. Turning the selected rows INTO findings is not a
+ * statement failure, and reporting it as one told the operator a working rule
+ * was broken — see the append in {@link runChecks}.
+ *
+ * @param name - The check's key in `resources.checks`
+ * @param error - Whatever the statement threw
+ * @returns The run-integrity finding
+ */
+function brokenCheckFinding(name: string, error: unknown): ValidationIssue {
+  return {
+    code: 'RESOURCE_CHECK_BROKEN',
+    severity: 'error',
+    message:
+      `The check "${name}" could not run, so it is asserting nothing: `
+      + (error instanceof Error ? error.message : String(error)),
+  };
+}
+
+/**
  * Run every declared check, collect its findings, and price it.
  *
  * ## What the clock measures, and what it must not
  *
- * The span is `ask(check.sql)` and nothing else. Everything before the loop —
- * the git tracker, `buildResourceProjection`, loading the ephemeral database —
- * is paid ONCE for all of them and reaches the document as `populationSecs`; see
- * {@link CheckCost} for why charging it here would be a lie in N places.
+ * The span is `ask(check.sql)` and nothing else — structurally, because it is
+ * the thunk handed to {@link timed}, which exists for that reason and documents
+ * the mutation that proved an inline stopwatch unguardable. Everything before
+ * the loop — the git tracker, `buildResourceProjection`, loading the ephemeral
+ * database — is paid ONCE for all of them and reaches the document as
+ * `populationSecs`; see {@link CheckCost} for why charging it here would be a
+ * lie in N places.
  *
  * ⚠️ `performance.now()`, never `Date.now()`. A rule over a small projection is
  * routinely sub-millisecond, and a millisecond-granularity clock reports every
  * one of them as `0` — which reads as "not measured" and makes the whole
  * attribution worthless exactly where it is cheapest to get right.
  *
- * 🪤 The cost is recorded AFTER the mapping, so a throw anywhere in the body
- * lands in the `catch` and files exactly one record either way. Recording it
- * between the two would file two for one check whenever `issuesFromCheckRows`
- * threw, and `checksRun` is that list's length.
+ * 🪤 Exactly one cost record per executed check, on both paths, because
+ * `checksRun` is this list's length. The record is filed before the rows become
+ * findings, so nothing between the two can leave a check unpriced.
  *
  * @param checks - The project's `resources.checks`
  * @param only - A single check key to run, or undefined for all of them
@@ -263,39 +350,28 @@ function runChecks(
 
   for (const [name, check] of Object.entries(checks)) {
     if (only !== undefined && name !== only) continue;
-    const startedAt = now();
-    try {
-      const rows = ask(check.sql);
-      const durationMs = now() - startedAt;
-      issues.push(...issuesFromCheckRows(name, check, rows));
-      costs.push({ name, durationMs, rows: rows.length });
-    } catch (error) {
+    const outcome = timed(now, () => ask(check.sql));
+
+    if (!outcome.ok) {
       // Priced up to the throw, and with NO row count: a statement that did not
       // complete selected nothing, and `rows: 0` would say it selected nothing
       // and passed.
-      costs.push({ name, durationMs: now() - startedAt, broken: true });
-      // 🔑 A finding, not a skip, at `error`, and under its OWN code.
-      //
-      // The check's declared severity describes how bad a VIOLATION is; it says
-      // nothing about how bad it is that the check cannot run, and a `warning`
-      // check whose SQL broke would otherwise fail nothing while asserting
-      // nothing. That much was always true of the DECLARATION.
-      //
-      // 🪤 It was never true of an adopter OVERRIDE, and this finding used to
-      // carry `customCheckCode(name)` — the same code as a violation of that very
-      // check. So `severity: { 'CUSTOM:foo': 'ignore' }`, the documented way to
-      // stand down a check you inherited, also silenced "foo could not run", and
-      // `'warning'` demoted it below the exit threshold. A renamed projection
-      // column then produced exit 0 from a gate. `RESOURCE_CHECK_BROKEN` is a
-      // non-overridable code precisely so that config line cannot reach here.
-      issues.push({
-        code: 'RESOURCE_CHECK_BROKEN',
-        severity: 'error',
-        message:
-          `The check "${name}" could not run, so it is asserting nothing: `
-          + (error instanceof Error ? error.message : String(error)),
-      });
+      costs.push({ name, durationMs: outcome.durationMs, broken: true });
+      issues.push(brokenCheckFinding(name, outcome.error));
+      continue;
     }
+
+    costs.push({ name, durationMs: outcome.durationMs, rows: outcome.value.length });
+    // 🪤 Appended one at a time, NEVER `issues.push(...findings)`. A spread
+    // becomes an ARGUMENT LIST, which throws `RangeError: Maximum call stack
+    // size exceeded` past roughly 125,000 elements on the main thread — and a
+    // check's result set is unbounded by construction. VAT's own
+    // `blob_references` table already holds 29,645 rows, so `SELECT * FROM
+    // blob_references` over a repository a few times this size reached it, and
+    // the throw landed in the arm above: a rule that ran perfectly was reported
+    // as one that "could not run, so it is asserting nothing". A loop does not
+    // put the argument limit in play at all.
+    for (const issue of issuesFromCheckRows(name, check, outcome.value)) issues.push(issue);
   }
 
   return { issues, costs };
@@ -375,7 +451,9 @@ export function requireDeclaredCheck(
  * message does not already say, while adding a second thing an adopter's CI has
  * to know to look for.
  *
- * @param checksRun - How many checks executed
+ * @param checksRun - How many checks EXECUTED. Under `--check` that is fewer
+ *   than the project declares, which is why the message says "ran" and not
+ *   "declared": the number is the size of the filtered run
  * @param membersEnumerated - How many members the population enumerated
  * @returns The finding, or nothing when the run had a corpus (or no checks)
  */
@@ -389,7 +467,7 @@ function emptyCorpusFinding(
     code: 'RESOURCE_CHECK_BROKEN',
     severity: 'error',
     message:
-      `The projection enumerated 0 members, so all ${checksRun} declared check(s)`
+      `The projection enumerated 0 members, so the ${checksRun} check(s) that ran`
       + ' asserted nothing: there were no rows for any statement to select and'
       + ' zero findings means only that the corpus was empty.'
       + ' Look at `.gitignore` (one broad pattern declines every file), at whether'

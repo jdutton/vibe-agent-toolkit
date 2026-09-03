@@ -226,8 +226,10 @@ Output Fields:
              document, and only one of them is a gate
   checks:    What each check COST -- {name, durationSecs, rows} per check, or
              {name, durationSecs, broken} for one whose statement threw. rows
-             is what the statement selected, which is both its finding count
-             and its memory cost: rows are fully materialised
+             is what the statement SELECTED, and it is a memory signal: rows
+             are fully materialised. It is not a finding count -- a severity
+             override of 'ignore' drops findings the statement still selected,
+             so sum(rows) and issueCounts legitimately disagree
   populationSecs:
              What the shared population cost. It is NOT charged to any check:
              every check's durationSecs is its own statement and nothing else,

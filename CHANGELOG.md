@@ -165,9 +165,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CUSTOM:<name>`, which `resources.validation.severity` can downgrade or ignore. A check that could
   not run, and a run whose corpus enumerated nothing, are both reported as `RESOURCE_CHECK_BROKEN` —
   which no `severity` entry can silence — and `membersEnumerated` in the output says how many members
-  the checks actually ran over. The output also reports what each check cost — its own
-  duration and how many rows it selected — with the shared population cost stated separately
-  as `populationSecs`. An unknown `--check` name exits 2.
+  the checks actually ran over. A `checks` entry per rule reports what it cost — its own
+  `durationSecs` and the `rows` it selected — with the shared population cost stated separately as
+  `populationSecs`. An unknown `--check` name exits 2.
 
 - **`VAT_PROJECTION_STORE_DIR`** — sets where the projection store's database lives. Without it the
   store is one database per VAT release shared by every root on the machine, so concurrent CI jobs

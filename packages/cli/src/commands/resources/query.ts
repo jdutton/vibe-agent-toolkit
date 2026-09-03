@@ -30,10 +30,12 @@
  *
  * `populationSecs` sits beside it and says what that origin was worth — the wall
  * time of the setup both this verb and `vat resources check` pay before either
- * runs a statement (roughly 1.06 s derived against 0.19 s warm on this
- * repository). Without it the tell is a label a reader has to trust; with it the
- * saving is a number they can check, and a per-statement cost published
- * elsewhere has something to be read against.
+ * runs a statement. Measured as that field on this repository with the parse
+ * cache warm: 1.16-1.18 s derived against 0.29-0.31 s served. Without it the
+ * tell is a label a reader has to trust; with it the saving is a number they can
+ * check, and a per-statement cost published elsewhere has something to be read
+ * against. `utils/projection-query.ts` states exactly which work the span covers
+ * and why its start line is load-bearing.
  *
  * ## What this verb does NOT do
  *

@@ -415,8 +415,9 @@ describe('vat resources query', () => {
     // is the flaky one: this fixture is small enough that a warm run and a cold
     // run are separated by less than the process noise between them, and a gate
     // that fails one run in ten teaches people to re-run it. The real spread
-    // lives on a real tree (1.06 s against 0.19 s on this repository) and
-    // belongs to the lab, which compares across trees for a living.
+    // lives on a real tree — `populationSecs` on the VAT repository reads
+    // 1.16-1.18 s derived against 0.29-0.31 s served — and belongs to the lab,
+    // which compares across trees for a living.
     //
     // What IS pinned: the number is real. A millisecond-granularity clock
     // reports a warm population on a two-file corpus as 0, and `> 0` is exactly
@@ -427,6 +428,57 @@ describe('vat resources query', () => {
       expect(typeof run.doc['populationSecs']).toBe('number');
       expect(run.doc['populationSecs']).toBeGreaterThan(0);
       expect(run.doc['populationSecs']).toBeLessThanOrEqual(run.doc['durationSecs'] as number);
+    }
+  });
+
+  it('measures the population from BEFORE the store is opened, not from inside it', () => {
+    // 🚨 THE SHRUNK-SPAN REGRESSION. `populationSecs` shipped with its clock
+    // started on the first line INSIDE `withPopulationCache`'s callback — but
+    // that helper awaits `openPopulationCache` BEFORE calling the callback, and
+    // that open is a `git write-tree` spawn plus the backend's dynamic import
+    // and `openSqliteProjectionStore()`. All of it happens ONLY when a store is
+    // selected, so the published number silently shed it on exactly the arm the
+    // number is used to praise.
+    //
+    // 🪤 The bounds the flip arm asserts CANNOT catch this. `> 0` and
+    // `<= durationSecs` are both satisfied by a reading of 48 ms against a real
+    // 161 ms — the defect that actually shipped. Only a FRACTION of the total
+    // distinguishes an honest span from a shrunken one.
+    //
+    // 🪤 A no-store arm cannot stand in for the store-selected one, which is why
+    // the store arm is first here. With no store `openPopulationCache` returns
+    // before it imports anything, so nothing was ever outside the span on that
+    // path: the no-store arm reads ~0.99 against the buggy build and the fixed
+    // one alike. It is kept below as the control that says the ratio is
+    // measurable at all, not as the guard.
+    //
+    // Both sides of the threshold are measured, on a two-file committed corpus
+    // (macOS, Node 24), as populationSecs/durationSecs:
+    //   DEFECT, cold store — 0.0475/0.161, 0.0466/0.148, 0.0492/0.159 → 0.29-0.32
+    //   FIXED,  cold store — 0.192/0.193, 0.157/0.159, 0.200/0.202   → 0.99
+    //   FIXED,  no store   — 0.156/0.158, 0.234/0.235, 0.157/0.157   → 0.99-1.00
+    // 0.6 sits roughly twice the worst defect reading and well below the best
+    // honest one, so it fails the defect without being noise-sensitive.
+    const coldDir = safePath.join(storeDir, 'span');
+    const withStore = query(COUNT_BLOBS, {
+      env: { ...storeEnv(), VAT_PROJECTION_STORE_DIR: coldDir },
+    });
+    const withoutStore = query(COUNT_BLOBS);
+
+    expect(withStore.status, withStore.stderr).toBe(0);
+    expect(withoutStore.status, withoutStore.stderr).toBe(0);
+    // A cold directory, so both arms really did populate. Without this the
+    // fraction could be high because the run was a warm no-op on both terms.
+    expect(withStore.doc['population']).toBe('derived');
+    expect(withoutStore.doc['population']).toBe('derived');
+    // The store arm was really keyed and opened — otherwise this asserts the
+    // no-store path twice under a store-shaped name.
+    expect(databasesUnder(coldDir)).toStrictEqual([PROJECTION_DATABASE]);
+
+    for (const run of [withStore, withoutStore]) {
+      const durationSecs = run.doc['durationSecs'] as number;
+      expect(durationSecs).toBeGreaterThan(0);
+      expect((run.doc['populationSecs'] as number) / durationSecs).toBeGreaterThan(0.6);
     }
   });
 
