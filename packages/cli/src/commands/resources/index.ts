@@ -253,11 +253,13 @@ A run that HANGS is killed and reported, not waited on:
     Killed by the budget -- exit 1, status: error, and a RESOURCE_CHECK_BROKEN
     finding naming the check that was in flight and the bound that was blown.
 
-    Died -- the child process was terminated by a signal, most often because it
-    ran out of memory materialising a result set (Node aborts with SIGABRT) or
-    because something outside killed it (a runner's OOM killer sends SIGKILL).
-    Also exit 1, status: error, RESOURCE_CHECK_BROKEN -- naming the signal, and
-    saying plainly that raising --budget is not the remedy.
+    Died -- the child ran out of memory materialising a result set (Node aborts
+    with SIGABRT), or something outside killed it (a runner's OOM killer sends
+    SIGKILL, a step timeout or a cancelled job sends SIGTERM), or it crashed in
+    native code (SIGSEGV), or it could not be started at all. Also exit 1,
+    status: error, RESOURCE_CHECK_BROKEN -- naming what ended it, with the
+    remedy that ending actually earns, and saying plainly that raising --budget
+    is not it.
 
   Either way the checks that COMPLETED keep their entry under checks (including
   rows), but their individual violations are NOT in issues -- the progress the
@@ -271,8 +273,10 @@ A run that HANGS is killed and reported, not waited on:
   work runs in this process, where the budget could not be enforced.
 
   --budget 0 removes the bound and runs everything in this process. Nothing
-  will then stop a runaway statement. An empty --budget is refused rather than
-  read as 0 -- an unset shell variable must not silently remove the bound.
+  will then stop a runaway statement. It has to be written exactly 0: an empty
+  --budget, and any other value that PARSES to zero (1e-400 underflows, -0 is
+  negative zero), are refused rather than read as 0 -- an unset shell variable
+  must not silently remove the bound.
   Ctrl-C still works at a keyboard, because this command installs no signal
   handler -- do not add one, a process blocked in synchronous SQLite survives
   SIGINT once a handler exists.
@@ -303,9 +307,9 @@ Exit Codes:
   0 - No error-severity findings
   1 - At least one (a violation, a broken check, an empty corpus, a run killed
       for making no progress within --budget, or a run whose child DIED)
-  2 - System error, an unknown --check name, an unusable --budget (including an
-      empty one, or one passed with --cost-log), or a run interrupted before
-      its population completed
+  2 - System error, an unknown --check name, an unusable --budget (an empty
+      one, one that means zero without being written 0, or one passed with
+      --cost-log), or a run interrupted before its population completed
 
 Examples:
   $ vat resources check

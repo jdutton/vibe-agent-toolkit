@@ -562,7 +562,18 @@ function inFlightPhrase(inFlight: UnitInFlight): string {
   if (inFlight.kind === 'reporting') {
     return 'after the last check had finished, while its document was being assembled';
   }
-  return 'while no check was running — between the population and the first statement';
+  // 🪤 The HEDGE is load-bearing and was once deleted on the strength of
+  // `checks-complete`. It does not cover this window. `price()` files the last
+  // check's cost BEFORE `issuesFromCheckRows` turns its rows into issues, and
+  // `checks-complete` is written after that conversion — so a kill in between
+  // leaves a log of nothing but completed checks, which reads as `idle`. The
+  // unhedged sentence then told an operator whose run had finished every rule
+  // that it died before the first statement. The window is narrow (the
+  // conversion runs ~0.74x the statement it follows, so a budget that survived
+  // the statement survives the conversion) but a narrow window is not a closed
+  // one, and the sentence costs nothing to keep honest.
+  return 'while no check was running — either between the population and the first'
+    + ' statement, or after the last one had filed its cost';
 }
 
 /**
@@ -576,42 +587,153 @@ function deathPhrase(death: AbnormalDeath): string {
   if (death.kind === 'spawn-failed') {
     return `the child process could not be started at all (${death.binary}: ${death.detail})`;
   }
+  if (death.kind === 'kill-failed') {
+    return 'the budget was blown and the SIGKILL that should have ended the run was REFUSED'
+      + ` (${death.detail})`;
+  }
   return 'the child process ended with neither an exit code nor a signal';
 }
 
 /**
- * What to DO about it — and the reason the signal is carried this far.
+ * What to do about a child that never started.
  *
- * 🔑 `SIGABRT` and `SIGKILL` are the two that actually happen, and they want
- * opposite things. SIGABRT is Node aborting on its own heap limit, so the fix is
- * in the statement. SIGKILL with no watchdog kill came from outside the run, so
- * the fix is in the runner. A message that conflated them would send half its
- * readers to the wrong file.
+ * 🚨 **"Check your PATH" is the wrong thing to tell a saturated runner.**
+ * `spawn` fails with `EAGAIN` when the machine has no free process slot and
+ * `ENOMEM` when it has no free memory — which is precisely the memory-pressured
+ * environment this whole feature exists for, and precisely where an operator
+ * least deserves to be sent hunting an installation problem that is not there.
  *
- * @param death - The ending the supervisor resolved
+ * @param detail - What `spawn` reported
  * @returns The remedy sentence
  */
-function deathRemedy(death: AbnormalDeath): string {
-  if (death.kind === 'spawn-failed') {
-    return ' Nothing ran at all, so this is an installation or PATH problem rather than'
-      + ' anything about the SQL.';
+function spawnFailedRemedy(detail: string): string {
+  if (/\b(?:EAGAIN|ENOMEM)\b/.test(detail)) {
+    return ' The child could not be started because the RUNNER had nothing left to start it'
+      + ' with — EAGAIN is "no free process slot" and ENOMEM is "no free memory" — so this is'
+      + ' about how loaded the machine is, not about the installation and not about the SQL.'
+      + ' Give the job a less contended runner, or reduce what else is running beside it.';
   }
-  if (death.kind === 'signal' && death.signal === 'SIGABRT') {
+  return ' Nothing ran at all, so this is an installation or PATH problem rather than'
+    + ' anything about the SQL.';
+}
+
+/**
+ * What to do about a kill the kernel refused.
+ *
+ * ⛔ This must never be composed from the spawn-failure sentence, however
+ * similar the plumbing is. The two are opposites: one child never existed, and
+ * this one is, as far as this process can tell, STILL RUNNING.
+ *
+ * @param death - The refused kill, and the pid it left behind
+ * @returns The remedy sentence
+ */
+function killFailedRemedy(detail: string, pid: number | undefined): string {
+  const handle = pid === undefined
+    ? ' The child\'s pid is not known to this process.'
+    : ` The child was process ${pid}.`;
+  return ' The run started, ran past its budget, and then REFUSED TO DIE: the watchdog sent'
+    + ` SIGKILL and the kernel would not deliver it (${detail}), which normally means EPERM.`
+    + handle
+    + ' It may still be running and still holding whatever the statement was holding, so'
+    + ' check for it and end it by hand before starting another run. Nothing about the SQL'
+    + ' or the installation is implicated by the refusal itself — but the bound could not be'
+    + ' enforced, so treat this run as unsupervised.'
+    // 🚨 Its OWN budget-role sentence, because the generic one below is false
+    // here: this is the single abnormal death the watchdog causes. Saying "the
+    // watchdog never fired" would repeat, in the report, the exact confusion
+    // that produced the defect.
+    + ' The watchdog DID fire — the budget is what decided this run should stop — but the'
+    + ' kill was refused, so raising the budget only moves when the refusal happens. It does'
+    + ' not make the run stoppable.';
+}
+
+/**
+ * What to do about a particular signal.
+ *
+ * 🚨 **The defect this closes: the fallback contradicted the sentence beside
+ * it.** Only `SIGABRT` and `SIGKILL` were partitioned on and everything else
+ * fell through to a sentence written for `no-status` — so a real `kill -TERM`
+ * produced "terminated by SIGTERM … The cause is outside anything this command
+ * can observe; the child left no exit code to report". It names the signal, and
+ * then says it can see nothing and was told nothing. SIGSEGV, SIGBUS, SIGHUP and
+ * SIGXCPU read the same way.
+ *
+ * ⚠️ **SIGTERM is not exotic; it is how CI kills things** — `timeout(1)`, a
+ * cancelled job, a container stopping. The old claim that "SIGABRT and SIGKILL
+ * are the two that actually happen" was wrong about the commonest one.
+ *
+ * @param signal - The signal `close` reported
+ * @returns The remedy sentence
+ */
+function signalRemedy(signal: string): string {
+  if (signal === 'SIGABRT') {
     return ' SIGABRT here is Node aborting on its own heap limit: the run exhausted memory'
       + ' MATERIALISING a result set, which is what an unbounded statement does as soon as it'
       + ' selects rows rather than an aggregate. The remedy is a narrower statement or a'
       + ' `LIMIT`, not a bigger machine.';
   }
-  if (death.kind === 'signal' && death.signal === 'SIGKILL') {
+  if (signal === 'SIGKILL') {
     return ' Nothing inside this run sends SIGKILL except the budget watchdog, and the watchdog'
       + ' did not fire — so something OUTSIDE killed the child: a kernel OOM killer on a'
       + ' memory-capped runner (it picks the largest process, which is this child and never the'
       + ' idle parent), a container memory limit, or an operator. Give the job more memory, or'
       + ' narrow the statement so it needs less.';
   }
-  return ' The cause is outside anything this command can observe; the child left no exit code'
-    + ' to report.';
+  if (signal === 'SIGTERM' || signal === 'SIGINT' || signal === 'SIGHUP') {
+    return ` Nothing inside this run sends ${signal}: something OUTSIDE asked the child to stop.`
+      + ' On CI that is almost always a step or job timeout (`timeout(1)`, a workflow'
+      + ' `timeout-minutes`), a cancelled pipeline, or a container being shut down. Look at the'
+      + ' job\'s own time limit and at whether the run was cancelled — not at the SQL, which was'
+      + ' still working when it was interrupted.';
+  }
+  if (signal === 'SIGSEGV' || signal === 'SIGBUS') {
+    return ` ${signal} is a CRASH inside native code, not anything an adopter's SQL can express:`
+      + ' the process was killed by the kernel for touching memory it should not have. That'
+      + ' points at a native module (`node:sqlite` is one) or at the platform, and it is worth'
+      + ' reporting with the Node version, the platform and the statement that was running.';
+  }
+  return ` ${signal} was not sent by anything inside this run, and this command has no specific`
+    + ' remedy for it: look at what else on this machine signals its child processes — a'
+    + ' supervisor, a resource limit, or an operator.';
 }
+
+/**
+ * What to DO about it — and the reason the death is carried this far as a union
+ * rather than as a string.
+ *
+ * 🔑 Every kind wants a DIFFERENT file looked at: SIGABRT is the statement,
+ * SIGKILL is the runner's memory, SIGTERM is the job's own timeout, a failed
+ * spawn is either the installation or the runner's load, and a refused kill is a
+ * process still running. A message that conflated any two of them would send
+ * half its readers to the wrong place.
+ *
+ * ⛔ **The last line is for `no-status` and nothing else.** It is the only
+ * ending about which this command genuinely knows nothing, and it used to be
+ * the fall-through for every unpartitioned signal — which produced messages
+ * that named a signal and then denied having any information about it.
+ *
+ * @param death - The ending the supervisor resolved
+ * @returns The remedy sentence
+ */
+function deathRemedy(death: AbnormalDeath): string {
+  if (death.kind === 'kill-failed') return killFailedRemedy(death.detail, death.pid);
+  if (death.kind === 'spawn-failed') return spawnFailedRemedy(death.detail) + WATCHDOG_UNINVOLVED;
+  if (death.kind === 'signal') return signalRemedy(death.signal) + WATCHDOG_UNINVOLVED;
+  return ' The cause is outside anything this command can observe; the child left no exit code'
+    + ' to report.' + WATCHDOG_UNINVOLVED;
+}
+
+/**
+ * The sentence that keeps an abnormal death from being blamed on the bound.
+ *
+ * ⛔ Appended by every arm of {@link deathRemedy} EXCEPT the refused kill, which
+ * writes its own — because there the watchdog is exactly what fired, and this
+ * sentence would repeat in the report the confusion that produced the defect:
+ * an `error` event read as a spawn failure, so `killed` was never consulted.
+ */
+const WATCHDOG_UNINVOLVED
+  = ' The budget was not what ended this run — the watchdog never fired — so raising it'
+  + ' would not help.';
 
 /**
  * The sentence that says what this document does NOT contain.
@@ -645,19 +767,53 @@ const INCOMPLETE_NOTICE
 function interruptedRunFinding(inFlight: UnitInFlight, ending: CheckRunEnding): ValidationIssue {
   const where = inFlightPhrase(inFlight);
   const message = ending.kind === 'budget'
-    ? `This run made no progress for ${ending.budgetSecs}s and was killed ${where}, so the`
-      + ' checks after it never executed and this document is not a verdict.'
-      + ' A statement that will not finish cannot be stopped from inside the process —'
-      + ' the query is synchronous and holds the event loop — so the bound is enforced by'
-      + ' killing the run. Raise it with `--budget <seconds>` if the work is legitimately'
-      + ' slow, or `--budget 0` to remove it (the run can then hang forever).'
+    ? budgetKillMessage(inFlight, ending.budgetSecs, where)
     : `This run DIED before it finished: ${deathPhrase(ending.death)} ${where}, so the checks`
       + ' after it never executed and this document is not a verdict.'
-      + deathRemedy(ending.death)
-      + ' The budget was not what ended this run — the watchdog never fired — so raising it'
-      + ' would not help.';
+      + deathRemedy(ending.death);
 
   return { code: 'RESOURCE_CHECK_BROKEN', severity: 'error', message: message + INCOMPLETE_NOTICE };
+}
+
+/**
+ * What a WATCHDOG kill means, which depends entirely on what was in flight.
+ *
+ * 🚨 **The defect this closes: the `reporting` state got the statement-hang
+ * body.** Creating that state adapted only the *where* clause, so a run whose
+ * ten checks had ALL completed and whose 1,000,000-issue document blew the
+ * budget was told "the checks after it never executed" and "a statement that
+ * will not finish cannot be stopped from inside the process — the query is
+ * synchronous and holds the event loop". Measured on that run: `checksRun: 10`,
+ * all ten costs present, no statement running, nothing holding the loop for any
+ * SQL reason. The operator was sent to hunt a hanging rule that does not exist,
+ * and the message never mentioned the thing that actually killed the run.
+ *
+ * ⚠️ It is easy to reach on a real gate, not a curiosity: serialising 2,000,000
+ * issues takes ~17 s after `checks-complete` is filed, which is one budget
+ * window on its own.
+ *
+ * @param inFlight - What the log's last state says
+ * @param budgetSecs - The bound that was blown
+ * @param where - The clause naming the unit, from {@link inFlightPhrase}
+ * @returns The message body
+ */
+function budgetKillMessage(inFlight: UnitInFlight, budgetSecs: number, where: string): string {
+  if (inFlight.kind === 'reporting') {
+    return `This run made no progress for ${budgetSecs}s and was killed ${where}.`
+      + ' Every declared check had already finished and filed its cost, so no statement was'
+      + ' running and there was nothing left to execute: the cause is the SIZE of the document'
+      + ' being assembled, not a rule that would not return. Serialising a large result is'
+      + ' linear in how much there is — 2,000,000 issues take about 17 seconds — so look at'
+      + ' the rules under `checks` that produced the most rows and narrow them (a `LIMIT`, or'
+      + ' one row per violation rather than one per member), or raise the bound with'
+      + ' `--budget <seconds>` so the document has time to be written.';
+  }
+  return `This run made no progress for ${budgetSecs}s and was killed ${where}, so the`
+    + ' checks after it never executed and this document is not a verdict.'
+    + ' A statement that will not finish cannot be stopped from inside the process —'
+    + ' the query is synchronous and holds the event loop — so the bound is enforced by'
+    + ' killing the run. Raise it with `--budget <seconds>` if the work is legitimately'
+    + ' slow, or `--budget 0` to remove it (the run can then hang forever).';
 }
 
 /**
@@ -793,6 +949,19 @@ export function runDeclaredChecks(options: {
   const { issues, costs } = runChecks(
     options.checks, options.only, options.ask, now, options.onProgress,
   );
+  // 🚨 HERE, and this line moved to get here. `checks-complete` buys the phase
+  // after the last statement a fresh watchdog window, and three places
+  // documented that phase as "resolving severities and serialising". It was
+  // emitted a level up, by `runOutcome`, AFTER this function returned — so
+  // `resolveIssueSeverity` below ran inside the LAST CHECK's window and the
+  // documented claim was false for the half of the phase that is quadratic in
+  // the issue count. Emitting it before that call is what makes the claim true,
+  // which is the useful direction: the alternative was to weaken three docs.
+  //
+  // ⚠️ It does NOT cover the last check's row-to-issue conversion, which
+  // `runChecks` does after filing that check's cost — see {@link inFlightPhrase}
+  // for why the `idle` sentence still has to hedge for that window.
+  options.onProgress?.({ kind: 'checks-complete' });
   // The run-integrity report leads. An aggregate check selects a row whatever
   // the corpus is, so its findings can outnumber this one — and every one of
   // them is noise until the operator knows the gate ran over nothing.
@@ -1061,16 +1230,12 @@ async function runOutcome(options: {
       populationMs: provenance.populationMs,
       membersEnumerated: extent.membersEnumerated,
     });
+    // 🪤 `checks-complete` is NOT emitted here. It used to be, and that put
+    // `resolveIssueSeverity` — which runs inside `runDeclaredChecks` — on the
+    // wrong side of the line, still charged to the last check's budget window
+    // while three separate docs said otherwise. It is emitted by
+    // `runDeclaredChecks` itself now, the instant the last statement is done.
     const ran = runDeclaredChecks({ checks, only, ask, validation, ...extent, onProgress });
-    // 🚨 One more line, and it is not decoration. After the last check files its
-    // cost the child is NOT done: it still resolves severities and serialises a
-    // document that runs to 639 KB of YAML at 5,000 issues, and it used to emit
-    // nothing at all through that phase. The watchdog's clock therefore kept
-    // running from the final cost line, and a budget that expired during
-    // serialisation SIGKILLed a run whose answer was already computed — a false
-    // failure that throws away a correct result. One `appendFileSync` buys that
-    // phase a fresh budget window, and names it honestly in a report.
-    onProgress?.({ kind: 'checks-complete' });
     return { ...ran, ...provenance, ...extent };
   });
 }

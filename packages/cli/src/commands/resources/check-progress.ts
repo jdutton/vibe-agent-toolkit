@@ -99,8 +99,16 @@ const CheckEntrySchema = z.object({
  * running from the final cost line and a budget that expired there SIGKILLed a
  * run whose work was complete — a false failure that discards a correct result.
  *
- * One `appendFileSync` buys serialisation a fresh budget window. It carries no
- * fields: the fact that it was written is the whole message.
+ * One `appendFileSync` buys severity resolution and serialisation a fresh budget
+ * window. It carries no fields: the fact that it was written is the whole
+ * message.
+ *
+ * 🪤 **Emitted by `runDeclaredChecks`, before it resolves severities.** It first
+ * shipped a level up, from `runOutcome` after that function had already
+ * returned, which left `resolveIssueSeverity` charged to the last check's window
+ * while this comment claimed otherwise. What it still does NOT cover is the last
+ * check's row-to-issue conversion — `runChecks` files that check's cost before
+ * converting its rows — which is why the report's `idle` sentence hedges.
  */
 const ChecksCompleteEntrySchema = z.object({
   kind: z.literal('checks-complete'),

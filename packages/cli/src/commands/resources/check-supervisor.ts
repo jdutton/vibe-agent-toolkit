@@ -21,8 +21,21 @@
  *   and the event loop that would schedule it is the resource that is blocked.
  *   Installing one removes the operator's Ctrl-C. There is no
  *   `process.on('SIGINT')` here and there must never be.
- * - **SIGTERM does not kill the child either**, for the same reason. The kill is
- *   `SIGKILL`, which the kernel delivers without the process's cooperation.
+ * - **The kill is `SIGKILL` because SIGKILL cannot be REGRESSED.** No code the
+ *   child runs, now or after any future edit, can handle, ignore or block it.
+ *
+ *   ⚠️ This header used to claim, as measured fact, that "SIGTERM does not kill
+ *   the child either, for the same reason". **That is false and was measured to
+ *   be false**: `kill -TERM` on a child blocked inside synchronous `node:sqlite`
+ *   `.all()` killed it instantly. The measurement above is about a process that
+ *   HAS a JS handler installed — a handler is a JS callback and the blocked
+ *   event loop is what would schedule it — and with no handler installed
+ *   SIGTERM's default disposition is kernel-delivered termination that needs no
+ *   cooperation at all. So SIGTERM works today only because nothing here
+ *   installs a handler, which is a property one future edit could silently
+ *   remove; SIGKILL is not a property anything can remove. The design did not
+ *   change, only the reason for it — recorded because a false claim is at its
+ *   worst in a section that tells the next reader not to re-derive it.
  * - **The database cannot be handed over.** `DatabaseSync` has no `serialize()`
  *   and `:memory:` is per-CONNECTION, so whoever runs the SQL populates its own
  *   projection. That is why the child is a whole `vat resources check` run and
@@ -88,6 +101,20 @@ const POLLS_PER_BUDGET = 10;
 const MIN_POLL_MS = 50;
 const MAX_POLL_MS = 250;
 
+/**
+ * How many refused SIGKILLs the watchdog sends before it stops trying and
+ * REPORTS instead.
+ *
+ * A retry count, not a bound on anything stored. It exists because the two ways
+ * a kill can fail want opposite responses: `ESRCH` is a race that resolves
+ * itself the instant `close` arrives, while `EPERM` is a permission fact that
+ * will be just as true on the thousandth attempt. Retrying a handful of times
+ * covers the first at negligible cost; continuing past that would turn the
+ * supervisor into a second unbounded hang, which is the thing this module
+ * exists to abolish. So it escalates to an honest report naming the pid.
+ */
+const KILL_ATTEMPTS_BEFORE_REPORTING = 5;
+
 /** What the watchdog remembers between polls. */
 export interface WatchdogState {
   /** How large the progress log was when it last changed. */
@@ -144,14 +171,30 @@ export function pollWatchdog(
  * purpose is to stop an unattended job hanging forever. An unset shell variable
  * is a far more common CI accident than the typo the guard was written for.
  *
- * 🔑 **Hex is deliberately KEPT.** `Number('0x10')` is 16 and `--budget 0x10`
- * runs with a sixteen-second bound. That is unambiguous, it cannot arise by
- * accident the way an empty variable can, and refusing it would buy nothing —
- * recorded here so the next reader does not "fix" it into a refusal.
+ * 🚨 **The blank string was only the visible half of the hazard, and the guard
+ * below it is the rest.** What actually removes the bound is `Number(raw) === 0`
+ * for a raw string nobody would recognise as a zero — `--budget 1e-400`
+ * underflows to `0`, and `--budget -0` is negative zero, which sails past the
+ * `seconds < 0` test because `-0 < 0` is false. Both were MEASURED to run
+ * completely unbounded, in process, exiting 0 with no supervision and no word
+ * said. So a value that PARSES to zero is refused unless the operator literally
+ * wrote a zero: `raw.trim() !== '0'` and it is an operator error. The escape
+ * hatch is still there, it just has to be spelled the one unambiguous way.
+ *
+ * ⚠️ That deliberately refuses `0.0` and `0x0` as well. They are not accidents
+ * an operator can fall into, they cost one character to rewrite, and a guard
+ * with an exception list is a guard whose next exception nobody argues about.
+ *
+ * 🔑 **Non-zero hex is deliberately KEPT.** `Number('0x10')` is 16 and
+ * `--budget 0x10` runs with a sixteen-second bound. That is unambiguous, it
+ * cannot arise by accident the way an empty variable can, and refusing it would
+ * buy nothing — recorded here so the next reader does not "fix" it into a
+ * refusal.
  *
  * @param raw - Whatever Commander parsed, or undefined
  * @returns The budget in seconds; 0 means no bound
- * @throws When the value is blank, or is not a non-negative number
+ * @throws When the value is blank, means zero without saying so, or is not a
+ *   non-negative number
  */
 export function parseBudgetSeconds(raw: string | undefined): number {
   if (raw === undefined) return DEFAULT_BUDGET_SECONDS;
@@ -171,6 +214,16 @@ export function parseBudgetSeconds(raw: string | undefined): number {
       `--budget must be a non-negative number of seconds, not "${raw}".`
       + ` It bounds how long the run may go without completing a unit of work;`
       + ` --budget 0 removes the bound entirely (and can then hang forever).`,
+    );
+  }
+  if (seconds === 0 && raw.trim() !== '0') {
+    throw new Error(
+      `--budget "${raw}" is a number that means ZERO — and 0 is this flag's escape`
+      + ' hatch for "no bound at all", so the run would have gone entirely'
+      + ' unsupervised and could hang forever. `1e-400` underflows to zero and `-0`'
+      + ' is negative zero, neither of which reads as a request to remove the bound.'
+      + ' Pass a positive number of seconds, or exactly `--budget 0` if removing it'
+      + ' is really what you mean.',
     );
   }
   return seconds;
@@ -252,6 +305,25 @@ export function requireSupervisableFlags(options: {
 export type AbnormalDeath =
   | { readonly kind: 'signal'; readonly signal: string }
   | { readonly kind: 'spawn-failed'; readonly binary: string; readonly detail: string }
+  /**
+   * The watchdog fired and the KILL WAS REFUSED — so the child is, as far as
+   * this process can tell, still running.
+   *
+   * 🚨 Distinct from `spawn-failed` and that distinction is the whole point.
+   * Both arrive on `child.on('error')` and the handler used to read every one of
+   * them as a spawn failure, which reported the exact opposite of what happened:
+   * "could not be started at all", "nothing ran at all", "the watchdog never
+   * fired". It started, it ran past its budget, the watchdog fired, and it would
+   * not die.
+   *
+   * `pid` is carried because it is the only handle the operator has left on a
+   * process this command could not stop.
+   */
+  | {
+    readonly kind: 'kill-failed';
+    readonly detail: string;
+    readonly pid: number | undefined;
+  }
   | { readonly kind: 'no-status' };
 
 /** What a child's ending MEANT, once the watchdog's belief is reconciled with it. */
@@ -292,11 +364,26 @@ export type RunResolution =
  * as killed fails closed, but it discards a correct result, which is its own
  * kind of wrong.
  *
+ * ## 🚨 The ORDER of the tests below is load-bearing
+ *
+ * `spawnError` used to be tested FIRST, so `killed` was never consulted on that
+ * branch — and `child.on('error')` is not only a spawn-failure listener. Node
+ * emits `error` on the ChildProcess when `subprocess.kill()` itself fails, so a
+ * refused SIGKILL landed on the spawn-failure branch and the report said the
+ * child "could not be started at all", that "nothing ran at all, so this is an
+ * installation or PATH problem", and that "the watchdog never fired". Three
+ * statements, all false, about a runaway that was still executing.
+ *
+ * So: a real ending first, then what the SUPERVISOR did (a refused kill, then a
+ * kill), and only then a failure to start. A run whose kill was refused must
+ * never claim the watchdog was uninvolved.
+ *
  * @param ending - What `close` reported, plus what the supervisor did and saw
  * @param ending.code - `close`'s first argument
  * @param ending.signal - `close`'s second argument
  * @param ending.killed - Whether the watchdog sent SIGKILL
  * @param ending.spawnError - Set when the child never started at all
+ * @param ending.killFailure - Set when the watchdog's SIGKILL was REFUSED
  * @returns What actually happened
  */
 export function resolveChildEnding(ending: {
@@ -304,14 +391,18 @@ export function resolveChildEnding(ending: {
   signal: string | null;
   killed: boolean;
   spawnError?: { binary: string; detail: string } | undefined;
+  killFailure?: { detail: string; pid: number | undefined } | undefined;
 }): RunResolution {
-  if (ending.spawnError !== undefined) {
-    return { kind: 'abnormal', death: { kind: 'spawn-failed', ...ending.spawnError } };
-  }
   if (ending.code !== null && ending.signal === null) {
     return { kind: 'completed', code: ending.code };
   }
+  if (ending.killFailure !== undefined) {
+    return { kind: 'abnormal', death: { kind: 'kill-failed', ...ending.killFailure } };
+  }
   if (ending.killed) return { kind: 'killed' };
+  if (ending.spawnError !== undefined) {
+    return { kind: 'abnormal', death: { kind: 'spawn-failed', ...ending.spawnError } };
+  }
   return ending.signal === null
     ? { kind: 'abnormal', death: { kind: 'no-status' } }
     : { kind: 'abnormal', death: { kind: 'signal', signal: ending.signal } };
@@ -344,6 +435,39 @@ export type SupervisedRun =
  * event, which Node turns into a stack dump instead of a report. It fails
  * closed, so this is legibility — but a stack dump is not a report.
  *
+ * ## 🚨 `error` is NOT only a spawn-failure listener, and reading it as one
+ * ABANDONED A LIVE CHILD
+ *
+ * Node emits `error` on the ChildProcess when `subprocess.kill()` itself fails.
+ * The shipped function ends `else { /* Other error, almost certainly EPERM. *\/
+ * this.emit('error', new ErrnoException(err, 'kill')); }`. So: the watchdog
+ * breached, `killed` was set, the SIGKILL was refused, `error` fired, the
+ * handler recorded a SPAWN failure and resolved immediately — which cleared the
+ * watchdog timer, so no further kill could ever be attempted — and the parent
+ * published a report saying the child "could not be started at all" and "the
+ * watchdog never fired" while the runaway was still executing. The bound this
+ * module exists to enforce became an orphaned unbounded hang, described as its
+ * own opposite.
+ *
+ * The handler therefore forks on `killed`, and the two arms are deliberately
+ * asymmetric:
+ *
+ * - **Before the watchdog fired**, an `error` means the child never started.
+ *   Resolve at once: there is nothing alive to wait for.
+ * - **After it fired**, an `error` means the KILL failed and the child is,
+ *   as far as this process can tell, still running. Do NOT resolve. Resolving
+ *   is what clears the timer, and clearing the timer is what makes the failure
+ *   permanent. The poll keeps breaching (the log is not growing and
+ *   `quietSince` is not reset), so it keeps re-sending SIGKILL, and a transient
+ *   refusal still lands. Only after {@link KILL_ATTEMPTS_BEFORE_REPORTING}
+ *   refusals does it give up — and it gives up by REPORTING, naming the pid,
+ *   never by claiming the child never started.
+ *
+ * ⚠️ Reachability of `EPERM` on one's own child is REASONED rather than
+ * reproduced — it is rare on macOS and Linux. Nothing in production was
+ * contorted to make it testable; the branch ordering and the message
+ * composition are pure functions and are pinned as such.
+ *
  * @param options - The run
  * @param options.args - The child's argv after the node binary, `--cost-log` included
  * @param options.logPath - The progress log both sides agreed on
@@ -365,36 +489,54 @@ export async function superviseCheck(options: {
   child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk));
 
   let killed = false;
+  let killAttempts = 0;
+  let killFailure: { detail: string; pid: number | undefined } | undefined;
+  let spawnError: { binary: string; detail: string } | undefined;
   let state: WatchdogState = { bytesSeen: 0, quietSince: startedAt };
-  const timer = setInterval(() => {
-    const poll = pollWatchdog(state, {
-      bytes: logSize(options.logPath),
-      now: Date.now(),
-      budgetMs: options.budgetMs,
-    });
-    state = poll.state;
-    if (!poll.breach) return;
-    killed = true;
-    // SIGKILL, because SIGTERM is measured NOT to reach a process blocked in
-    // synchronous native SQLite. See this module's header.
-    child.kill('SIGKILL');
-  }, pollIntervalMs(options.budgetMs));
+  // 🪤 Declared out here and started INSIDE the promise, so the watchdog can
+  // settle the run itself when it runs out of kills. Starting it outside would
+  // put the escalation out of the timer's reach and force the `error` handler
+  // back into resolving on a child that is still alive.
+  let timer: NodeJS.Timeout | undefined;
 
   const resolution = await new Promise<RunResolution>((resolve) => {
-    let spawnError: { binary: string; detail: string } | undefined;
     // 🪤 `error` does not always end the process, and it is not always followed
-    // by `close` — so it is REMEMBERED here and resolved on immediately. A
-    // promise settles once, so whichever event arrives first wins and the other
-    // is a no-op.
+    // by `close` — so a SPAWN failure is remembered and resolved on immediately.
+    // A promise settles once, so whichever event arrives first wins and the
+    // other is a no-op. A failed KILL is the opposite case: see this function's
+    // header for why it must not settle here.
     child.on('error', (cause: Error) => {
+      if (killed) {
+        killFailure = { detail: cause.message, pid: child.pid };
+        return;
+      }
       spawnError = { binary, detail: cause.message };
       resolve(resolveChildEnding({ code: null, signal: null, killed, spawnError }));
     });
     // ⛔ BOTH arguments. `exitCode ?? 0` here read every signal death as a
     // successful run — see {@link resolveChildEnding}.
     child.on('close', (code, signal) => {
-      resolve(resolveChildEnding({ code, signal, killed, spawnError }));
+      resolve(resolveChildEnding({ code, signal, killed, spawnError, killFailure }));
     });
+
+    timer = setInterval(() => {
+      const poll = pollWatchdog(state, {
+        bytes: logSize(options.logPath),
+        now: Date.now(),
+        budgetMs: options.budgetMs,
+      });
+      state = poll.state;
+      if (!poll.breach) return;
+      killed = true;
+      killAttempts += 1;
+      // SIGKILL, because no code the child could ever gain can handle, ignore
+      // or block it. See this module's header — and note the reason is NOT that
+      // SIGTERM fails to reach a blocked process, which was measured false.
+      child.kill('SIGKILL');
+      if (killFailure !== undefined && killAttempts >= KILL_ATTEMPTS_BEFORE_REPORTING) {
+        resolve(resolveChildEnding({ code: null, signal: null, killed, killFailure }));
+      }
+    }, pollIntervalMs(options.budgetMs));
   });
   clearInterval(timer);
 

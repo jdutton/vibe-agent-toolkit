@@ -10,10 +10,16 @@
  * external `SIGKILL` reaching a real process that is genuinely wedged inside
  * synchronous native SQLite. Every in-process alternative was measured and does
  * NOT work — `worker.terminate()` never resolves against such a thread, the
- * parent's own `process.exit()` does not exit, SIGTERM is not delivered, and
- * installing a signal handler makes the process survive SIGINT that would
- * otherwise have killed it instantly. So this file is where the design is either
- * true or not.
+ * parent's own `process.exit()` does not exit, and installing a signal handler
+ * makes the process survive SIGINT that would otherwise have killed it
+ * instantly. So this file is where the design is either true or not.
+ *
+ * ⚠️ This header used to add "SIGTERM is not delivered" to that list, and it is
+ * FALSE: `kill -TERM` on a child blocked inside synchronous `node:sqlite`
+ * `.all()` kills it instantly when no handler is installed. SIGKILL is still the
+ * right choice, for the reason `check-supervisor.ts`'s header now gives — it
+ * cannot be handled, ignored or blocked by any code the child might later gain —
+ * but that is a different claim from the one that was written here.
  *
  * ## 🪤 The wall-time bound is DERIVED, never a literal
  *

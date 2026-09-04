@@ -192,8 +192,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their individual violations are **not** in `issues`, and the finding says so. Interrupted before
   the population finished, there is no projection and no honest document, so that exits 2.
   `--budget 0` removes the bound and runs everything in one process, where a runaway statement can
-  hang forever; an **empty** `--budget` is refused (exit 2) rather than read as `0`, so an unset
-  shell variable cannot silently remove the bound, and `--budget` combined with the internal
+  hang forever. Only the literal `0` does that: any other value that merely *evaluates* to zero — an
+  empty or blank string, `1e-400`, `-0` — is refused (exit 2) rather than read as `0`, so an unset
+  shell variable cannot silently remove the bound. `--budget` combined with the internal
   `--cost-log` is refused rather than silently ignored.
 
 - **`VAT_PROJECTION_STORE_DIR`** — sets where the projection store's database lives. Without it the

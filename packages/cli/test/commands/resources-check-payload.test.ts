@@ -895,6 +895,12 @@ describe('runDeclaredChecks — progress emitted for an outside observer', () =>
       { kind: 'start', name: SECOND },
       { kind: 'asked', sql: SECOND_SQL },
       { kind: 'check', name: SECOND, durationMs: 1, rows: 7 },
+      // 🔑 Emitted HERE — by the loop's own caller, before severities are
+      // resolved — and not by `runOutcome` after this function has returned.
+      // The window it buys was documented as covering "resolving severities and
+      // serialising"; emitted a level up it covered only the serialising, and
+      // severity resolution stayed charged to the LAST CHECK's window.
+      { kind: 'checks-complete' },
     ]);
   });
 
@@ -908,6 +914,9 @@ describe('runDeclaredChecks — progress emitted for an outside observer', () =>
       { kind: 'start', name: 'broken' },
       { kind: 'asked', sql: 'SELECT contentHash FROM blobs' },
       { kind: 'check', name: 'broken', durationMs: 1, broken: true },
+      // Filed even when every rule broke: "no statement is running any more" is
+      // true however the statements ended, and the phase after it still costs.
+      { kind: 'checks-complete' },
     ]);
   });
 
