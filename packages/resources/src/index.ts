@@ -533,6 +533,10 @@ export {
 } from './config-parser.js';
 
 export {
+  formatConfigValidationError,
+} from './config-issues.js';
+
+export {
   ProjectConfigSchema,
   SkillExecutableEntrySchema,
   SkillFileEntrySchema,

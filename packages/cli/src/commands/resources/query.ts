@@ -129,7 +129,9 @@ async function runProjectionQuery(options: {
   logger: Logger;
 }): Promise<QueryOutcome> {
   const { root, sql, parameters, logger } = options;
-  return withQueriedProjection({ root, logger }, (ask, provenance) => ({
+  // The statement is compiled against the empty schema first, so a typo'd
+  // column costs milliseconds instead of a full population.
+  return withQueriedProjection({ root, logger, preflight: [sql] }, (ask, provenance) => ({
     rows: ask(sql, ...parameters),
     ...provenance,
   }));
@@ -175,6 +177,6 @@ export async function queryCommand(
 
     process.exit(0);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'Query');
+    handleCommandError(error, logger, startTime, 'Query', options.format);
   }
 }

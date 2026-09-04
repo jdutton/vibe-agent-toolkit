@@ -85,12 +85,16 @@ import { resolveVatBinPath } from '../../utils/vat-bin-path.js';
 /**
  * The bound applied when `--budget` is not passed, in seconds.
  *
- * Not a round number chosen for looks. Population alone is ~1.2 s warm on this
- * repository but 33-35 s with a cold parse cache, and a big adopter tree is
- * larger again — so a tight default would kill healthy runs, and a FALSE kill is
- * far worse than a slow honest failure: it teaches the operator to pass
- * `--budget 0` and lose the bound entirely. Five minutes still turns an infinite
- * hang into a clean bounded failure, which is the whole objective.
+ * Not a round number chosen for looks, and no longer sized against this
+ * repository alone. Population is ~1.2 s warm here and 33-35 s with a cold parse
+ * cache; on a real adopter tree of 9,992 tracked files it is ~5 s warm and
+ * **16.5 s cold**, which is the first time the default was checked outside VAT.
+ * So 300 s is ~18× the worst thing anyone has actually measured — deliberately
+ * loose, because a FALSE kill is far worse than a slow honest failure: it
+ * teaches the operator to pass `--budget 0` and lose the bound entirely. Five
+ * minutes still turns an infinite hang into a clean bounded failure, which is
+ * the whole objective. A tree ten times that adopter's lands near 165 s, still
+ * inside the default but no longer comfortably.
  */
 const DEFAULT_BUDGET_SECONDS = 300;
 

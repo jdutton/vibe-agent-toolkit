@@ -834,10 +834,12 @@ function noPopulationMessage(ending: CheckRunEnding): string {
   }
   return `The run made no progress for ${ending.budgetSecs}s and was killed before its`
     + ' population completed.' + tail
-    + ' Population is legitimately slow on a large tree — ~1.2s warm here but 33-35s with a'
-    + ' cold parse cache, and it reports progress only when it FINISHES, so the budget is a'
-    + ' total bound for that one unit — so raise it with `--budget <seconds>` before assuming'
-    + ' the crawl is stuck.';
+    + ' Population is legitimately slow on a large tree, and it reports progress only when it'
+    + ' FINISHES, so the budget is a total bound for that one unit — raise it with'
+    + ' `--budget <seconds>` before assuming the crawl is stuck.'
+    + ' For scale, two MEASURED trees, neither of them yours: VAT\'s own repository is ~1.2s'
+    + ' warm and 33-35s with a cold parse cache; a 10,000-file adopter tree is ~5s warm and'
+    + ' 16.5s cold. Your tree is a third number.';
 }
 
 /**
@@ -1191,7 +1193,7 @@ export async function checkCommand(
 
     process.exit(payload['status'] === 'error' ? 1 : 0);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'Check');
+    handleCommandError(error, logger, startTime, 'Check', options.format);
   }
 }
 
@@ -1217,6 +1219,16 @@ async function runOutcome(options: {
   onProgress: ProgressSink | undefined;
 }): Promise<CheckOutcome> {
   const { root, checks, only, logger, validation, onProgress } = options;
+  // 🪤 **No `preflight` here, deliberately.** `withQueriedProjection` can compile
+  // statements against the empty schema before populating — `vat resources query`
+  // passes its one statement and gets a typo back in milliseconds instead of
+  // after a full population. This verb must NOT, because a check that cannot run
+  // is not an operator error here: it is a `RESOURCE_CHECK_BROKEN` finding naming
+  // the check, at `error`, in a document that also reports how big the corpus was
+  // and what the population cost. Failing early would trade that document for a
+  // bare throw, and the finding exists precisely so a renamed column cannot end a
+  // gate quietly. The population is the price of an honest report, and it is
+  // charged once for every check rather than per broken one.
   return withQueriedProjection({ root, logger }, (ask, provenance, extent) => {
     // 🔑 Emitted HERE, inside the callback, because this is the one place where
     // the provenance and the extent are both exactly in hand — and emitted the

@@ -12,7 +12,7 @@ import { inspect } from 'node:util';
 import { countBySeverity, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { Logger } from './logger.js';
-import { writeYamlOutput } from './output.js';
+import { writeJsonOutput, writeYamlOutput } from './output.js';
 
 /**
  * Format duration for human readability
@@ -103,18 +103,34 @@ export function reportCommandError(
  * The command-line ending for {@link reportCommandError}. Exit 2 is the
  * UNEXPECTED failure, per the exit-code contract every command's help documents.
  *
+ * 🔑 **`format` is not decoration.** Every command offering `--format json`
+ * honoured it on the success path and emitted YAML here, so the one document a
+ * CI wrapper most needs to read — the one explaining why the command failed —
+ * arrived in a format its parser rejects. A consumer running
+ * `vat resources check --format json | jq .error` got a parse error on top of
+ * whatever went wrong, and had to guess at the second failure to find the first.
+ * A caller that has a `--format` option MUST pass it.
+ *
  * @param error - The error that occurred
  * @param logger - Logger instance for error output
  * @param startTime - Command start time (from Date.now())
  * @param commandName - Name of the command (for error message)
+ * @param format - What the operator asked for: `json`, or anything else (and
+ *   omitted) for YAML — matching the success path's own two-branch switch
  */
 export function handleCommandError(
   error: unknown,
   logger: Logger,
   startTime: number,
-  commandName: string
+  commandName: string,
+  format?: string | undefined,
 ): never {
-  writeYamlOutput(reportCommandError(error, logger, startTime, commandName));
+  const document = reportCommandError(error, logger, startTime, commandName);
+  if (format === 'json') {
+    writeJsonOutput(document);
+  } else {
+    writeYamlOutput(document);
+  }
   process.exit(2);
 }
 

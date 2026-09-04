@@ -498,6 +498,35 @@ export interface SqlQueryableStore extends ProjectionStore {
    *   rejects it — an unknown column included
    */
   query(sql: string, ...parameters: readonly SqliteValue[]): readonly Record<string, unknown>[];
+
+  /**
+   * Compile one statement and throw it away, running NOTHING.
+   *
+   * 🔑 **The point is what it does not do.** SQLite resolves every table and
+   * column name at *prepare* time, so a typo is knowable before a single row
+   * exists — but the only way to learn that was to run the statement, and by
+   * then the caller had paid for a full projection population. Measured on a
+   * real adopter: `SELECT path, no_such_column FROM blobs` cost **8.3 s**, all
+   * of it building a projection the statement could never have read.
+   *
+   * ⚠️ It must not EXECUTE, and that is why this exists rather than a
+   * `query()` against an empty store. Execution is where a check's unbounded
+   * cost lives — `WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c)`
+   * compiles instantly and then never returns, so a preflight that stepped it
+   * would hang before the run it was meant to make cheap even started.
+   * `EXPLAIN` is not the alternative: {@link assertIsQuery} refuses it by
+   * design, because admitting a prefix means deciding safety past the first
+   * token.
+   *
+   * Runs the same kind and single-statement gates as {@link query}, so a
+   * statement refused for what it IS is refused just as early as one refused
+   * for what it names.
+   *
+   * @param sql - One `SELECT`, `WITH` or `VALUES` statement
+   * @throws The same errors {@link query} throws for a statement that is not a
+   *   query, is more than one statement, or names something the schema lacks
+   */
+  assertCompiles(sql: string): void;
 }
 
 /**
@@ -951,6 +980,29 @@ class SqliteProjectionStore implements SqlQueryableStore {
       // costs one `PRAGMA database_list` per call — the alternative is trusting
       // that the gate above is airtight on a path whose failure discloses every
       // repository on the machine. See {@link detachForeignSchemas}.
+      this.#database.exec('PRAGMA query_only = 0');
+      detachForeignSchemas(this.#database);
+    }
+  }
+
+  /** @inheritdoc */
+  assertCompiles(sql: string): void {
+    this.#assertOpen();
+    assertSingleStatement(sql);
+    assertIsQuery(sql);
+
+    // `query_only` is set for the same reason {@link query} sets it, and NOT as
+    // ceremony: `prepare` is where SQLite decides a statement is legal, and a
+    // connection left writable would compile things this surface must never
+    // admit. The restore is in `finally` for the same reason too — this is the
+    // connection every other method uses.
+    this.#database.exec('PRAGMA query_only = 1');
+    try {
+      // Compiled and discarded. `.all()` is deliberately NOT called: stepping is
+      // the unbounded half, and the whole value of this method is being the half
+      // that is not.
+      this.#database.prepare(sql);
+    } finally {
       this.#database.exec('PRAGMA query_only = 0');
       detachForeignSchemas(this.#database);
     }

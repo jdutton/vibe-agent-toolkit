@@ -206,6 +206,58 @@ export type AskProjection = (
 ) => readonly Record<string, unknown>[];
 
 /**
+ * Compile every statement a run intends to ask, against the schema and NO rows,
+ * before anything is populated.
+ *
+ * ## 🔑 What this buys, measured
+ *
+ * SQLite resolves table and column names when a statement is *prepared*, not
+ * when it is stepped — so a typo is knowable before a single row exists. It was
+ * not knowable in practice, because the only place a statement met the schema
+ * was after the projection had been built. On a real adopter tree, `SELECT path,
+ * no_such_column …` cost **8.3 s**, every millisecond of it spent building a
+ * projection the statement could never have read. The same typo now costs the
+ * price of an empty in-memory database — one extra `createSchema` into
+ * `:memory:`, which is the whole overhead this adds on the happy path.
+ *
+ * It also moves the KIND refusals — a second statement, an `ATTACH`, a `PRAGMA`
+ * — in front of the population, so a statement rejected for what it is costs no
+ * more than one rejected for what it names.
+ *
+ * ⚠️ **This is a pre-flight, not a second gate.** `ask` still compiles and runs
+ * the real statement against the real projection, and nothing here is trusted in
+ * place of that. A statement that compiles here can still fail there — SQLite
+ * resolves names against a schema, and this is the same schema, but a run-time
+ * error (a bad cast, an overflow) belongs to stepping and is unreachable from a
+ * prepare.
+ *
+ * ⚠️ It deliberately does not STEP anything. Stepping is where a check's
+ * unbounded cost lives, and a preflight that ran `WITH RECURSIVE …` would hang
+ * before the run it exists to make cheap had begun.
+ *
+ * @param statements - Every statement the run will ask, in any order
+ * @throws The same legible failure `ask` throws, for the first statement that
+ *   does not compile
+ */
+export async function assertQueriesCompile(statements: readonly string[]): Promise<void> {
+  if (statements.length === 0) return;
+  const probe = await openEphemeralQueryStore();
+  try {
+    for (const sql of statements) {
+      try {
+        probe.assertCompiles(sql);
+      } catch (error) {
+        throw new Error(
+          describeQueryFailure(sql, error instanceof Error ? error.message : String(error)),
+        );
+      }
+    }
+  } finally {
+    await probe.close();
+  }
+}
+
+/**
  * Populate the tree, load it into something askable, and hand the caller a way
  * to ask.
  *
@@ -213,13 +265,16 @@ export type AskProjection = (
  * @param options.root - Absolute corpus root
  * @param options.logger - Where blob-stage refusals are reported (stderr, so a
  *   parseable document on stdout stays parseable)
+ * @param options.preflight - Every statement this run intends to ask, compiled
+ *   against the empty schema BEFORE the population starts. See
+ *   {@link assertQueriesCompile}
  * @param work - Given the asker, where its rows came from, and how much of the
  *   tree they cover. The store is open for exactly this call and closed however
  *   it ends
  * @returns Whatever `work` returned
  */
 export async function withQueriedProjection<T>(
-  options: { root: string; logger: Logger },
+  options: { root: string; logger: Logger; preflight?: readonly string[] },
   work: (
     ask: AskProjection,
     provenance: ProjectionProvenance,
@@ -227,6 +282,14 @@ export async function withQueriedProjection<T>(
   ) => Promise<T> | T,
 ): Promise<T> {
   const { root, logger } = options;
+
+  // 🔑 BEFORE the clock and before the population, because being before the
+  // population is the entire point — see {@link assertQueriesCompile}. It is an
+  // option rather than a step each verb remembers for the same reason everything
+  // else here is shared: a verb that forgot it would silently go back to paying
+  // a full population to learn about a typo, and nothing in its output would say
+  // so.
+  await assertQueriesCompile(options.preflight ?? []);
 
   // 🚨 OUTSIDE `withPopulationCache`, and it must stay outside. That helper
   // awaits `openPopulationCache` — a `git write-tree` spawn plus the backend's

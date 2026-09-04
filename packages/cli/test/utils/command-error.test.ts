@@ -148,6 +148,29 @@ describe('command-error utilities', () => {
       expect(yamlOutput).toContain('error: Unknown error');
     });
 
+    it('honours --format json, so a JSON consumer can parse the failure', () => {
+      // The shipped defect: every `--format json` command honoured the flag on
+      // the SUCCESS path and emitted YAML here, so the one document a CI wrapper
+      // most needs — the one saying why the command failed — arrived in a format
+      // its parser rejects. The consumer got a parse error stacked on top of the
+      // real error and had to guess at the second to find the first.
+      expect(() => handleCommandError(new Error('Boom'), mockLogger, Date.now(), 'TestCommand', 'json'))
+        .toThrow(PROCESS_EXIT_ERROR_MESSAGE);
+
+      const written = getYamlOutput(mockStdoutWrite);
+      // Parses as JSON, which is the whole claim — not merely "contains braces".
+      const parsed = JSON.parse(written) as { status: string; error: string };
+      expect(parsed.status).toBe('error');
+      expect(parsed.error).toBe('Boom');
+      expect(written).not.toContain(STATUS_ERROR_LINE);
+    });
+
+    it('stays YAML when the format is absent or anything but json', () => {
+      expect(() => handleCommandError(new Error('Boom'), mockLogger, Date.now(), 'TestCommand', 'yaml'))
+        .toThrow(PROCESS_EXIT_ERROR_MESSAGE);
+      expect(getYamlOutput(mockStdoutWrite)).toContain(STATUS_ERROR_LINE);
+    });
+
     it('sends the stack to the debug channel, so --debug can name the throw site', () => {
       // The defect: exit 2 is the UNEXPECTED failure, and the envelope carried
       // `error.message` and nothing else. A real internal `TypeError` reached a

@@ -172,6 +172,6 @@ export async function scanCommand(
 
     process.exit(0);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'Scan');
+    handleCommandError(error, logger, startTime, 'Scan', options.format);
   }
 }

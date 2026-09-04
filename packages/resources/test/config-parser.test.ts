@@ -97,7 +97,7 @@ resources:
 `;
     await writeFile(configPath, content);
 
-    await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid config file');
+    await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid configuration in');
   });
 
   it('should throw on wrong version number', async () => {
@@ -107,7 +107,7 @@ version: 2
 `;
     await writeFile(configPath, content);
 
-    await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid config file');
+    await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid configuration in');
   });
 
   it('should throw on collection without include', async () => {
@@ -121,7 +121,7 @@ resources:
 `;
     await writeFile(configPath, content);
 
-    await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid config file');
+    await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid configuration in');
   });
 
   it('should throw on empty include array', async () => {
@@ -135,7 +135,7 @@ resources:
 `;
     await writeFile(configPath, content);
 
-    await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid config file');
+    await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid configuration in');
   });
 });
 
@@ -288,7 +288,7 @@ claude:
 `;
     await writeFile(configPath, content);
 
-    await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid config file');
+    await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid configuration in');
   });
 
   it('should reject unknown fields in marketplace plugin entry (strict schema)', async () => {
@@ -308,7 +308,7 @@ claude:
 `;
     await writeFile(configPath, content);
 
-    await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid config file');
+    await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid configuration in');
   });
 });
 

@@ -106,6 +106,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any key that is not `include`, `exclude`, `collections`, `validation`, `linkAuth` or `checks`**; the
   error surfaces on every `vat` command, not only the affected lane.
 
+  ⚠️ **This breaks configs that work today, and the most likely offender is `resources.metadata`.**
+  That key was removed from the schema several releases ago and has been *accepted and silently
+  thrown away* ever since, so a config carrying it upgrades from "quietly ignored" to "every verb
+  exits 2". Verified against a real adopter: `resources scan`, `resources validate`,
+  `resources query`, `resources check` and `audit` all exited 2 in under a second. **Delete the
+  key** — nothing has read it since it was removed.
+
+  The refusal now names the file, names the key, says it may have been *removed* rather than
+  merely misspelled, and lists the keys that ARE accepted at that path (derived from the schema, so
+  it cannot go stale). It used to be a raw Zod JSON dump with none of that in it.
+
+  🪤 **Only the `resources:` object itself and the blocks under `checks`, `validation` and
+  `linkAuth` are strict.** `resources.collections.<name>` is still permissive, so a misspelled key
+  inside a collection is *still* accepted and stripped. That gap is left open deliberately rather
+  than by oversight — closing it is a second breaking change and gets its own release note.
+
 #### Library
 
 - **`@vibe-agent-toolkit/agent-schema` is now `@vibe-agent-toolkit/schema`.** Rename the dependency
@@ -179,8 +195,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   document is being built) — so a large repository with many rules is never at risk while its rules
   keep finishing. ⚠️ That per-unit property holds for the **checks**; the **population** reports
   progress only when it finishes, so for that one unit the budget is a total bound (a cold population
-  is ~33-35s here, and the default is set well above it rather than pretending to instrument it —
-  raise the bound on a large adopter tree with a cold parse cache).
+  is ~33-35s on VAT's own repository and 16.5s on a measured 9,992-file adopter tree, and the default
+  is set well above both rather than pretending to instrument it — raise the bound on a tree much
+  larger than that with a cold parse cache).
+
+  ⚠️ **Checks run over the TRACKED TREE, not over your configured resource set.**
+  `resources.include` / `resources.exclude` scope `vat resources scan` and `vat resources validate`;
+  they do **not** scope the projection, so they do not scope a check or a query. `.gitignore` **is**
+  honoured, so nothing under `node_modules` reaches the corpus — but a path you excluded in config
+  is still there and a check will fire on it. Measured on one adopter: `scan` reported 1,473 files
+  while the same tree's projection held 11,685 members, 142 of them under a config-excluded archive
+  directory, and a correct "every ADR carries frontmatter" check produced a real false finding on a
+  frozen historical file. Narrow the check's own SQL with a `WHERE path NOT LIKE …` predicate — it
+  is the only scope a check has. The `--help` for both verbs now says so.
 
   **An interrupted run never exits 0 and never looks like a pass**, and there are two ways to be
   interrupted. **Killed by the budget** exits 1 with `status: error` and a `RESOURCE_CHECK_BROKEN`
@@ -397,6 +424,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@vibe-validate/utils` and `yaml` to the installed tree.
 
 ### Fixed
+
+- **A typo'd column in `vat resources query` cost a full projection population before it was
+  reported.** SQLite resolves table and column names when a statement is *prepared*, so the answer
+  was knowable before a single row existed — but the only place a statement met the schema was after
+  the projection had been built. Measured on a real adopter tree: `SELECT contentKey,
+  no_such_column FROM blobs` took **8.3 s**, all of it building rows the statement could never have
+  read. The statement is now compiled against the empty schema first, so the same typo — and a
+  refused `ATTACH`, `PRAGMA` or second statement — comes back in milliseconds with the identical
+  message. It is compiled and discarded, never stepped: `vat resources check` deliberately keeps its
+  full population, because a check that cannot run is a `RESOURCE_CHECK_BROKEN` finding in a document
+  that reports the corpus size, not a bare throw.
+
+- **`--format json` was ignored on every command's failure path**, which emitted YAML. The one
+  document a CI wrapper most needs to read — the one saying why the command failed — arrived in a
+  format its parser rejects, so the consumer got a parse error stacked on the real error. `vat
+  resources scan / query / check` and `vat inventory` now honour the flag on the error path too.
+
+- **`vat audit` printed `AgentAudit failed:` for an unexpected error**, naming a command that does
+  not exist (copy-paste from the agent command family). It now reads `Audit failed:`.
+
+- **`vat audit` printed "Audit failed" while exiting 0.** Audit is advisory by design and its exit
+  code is deliberately 0, but the stderr line said failure, the document said `status: error`, and
+  the exit code said success — so an adopter wiring it into CI read a failure and got a green step.
+  The line now reads "Audit found N file(s) with errors — advisory, exit 0; use `vat validate` to
+  gate on this", and both summary lanes share one wording. **No exit code changed.**
+
+- **The budget-kill message quoted VAT's own repository timings as if they were universal.** It said
+  population is "~1.2s warm here but 33-35s" with a cold parse cache; a measured adopter tree is
+  ~5s warm and 16.5s cold, so an operator who tripped the budget read that their tree was 3-8x slower
+  than it should be and went looking for a fault that was not there. Both numbers are now given, both
+  labelled with the tree they came from, and the message says plainly that the reader's tree is a
+  third number.
 
 - **A namespaced `xlink:href` lost its source span in the link rewriter, silently dropping the
   rewrite.** parse5 records a namespaced attribute's span under the source spelling `xlink:href`, so

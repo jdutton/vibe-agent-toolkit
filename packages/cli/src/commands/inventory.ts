@@ -89,7 +89,7 @@ export async function inventoryCommand(
 		process.stdout.write(out);
 		process.exit(0);
 	} catch (error) {
-		handleCommandError(error, logger, startTime, 'Inventory');
+		handleCommandError(error, logger, startTime, 'Inventory', options.format);
 	}
 }
 

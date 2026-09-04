@@ -115,6 +115,23 @@ Description:
   projection store makes the population cheap and is never queried -- it is
   one database per VAT release shared by every root on the machine.
 
+The corpus is the TRACKED TREE, not your configured resource set:
+  The projection holds every file git tracks (plus untracked, non-ignored
+  work). .gitignore IS honoured -- nothing under node_modules reaches it.
+  resources.include and resources.exclude are NOT: they scope vat resources
+  scan and vat resources validate, and the projection ignores them.
+
+  Measured on one adopter: scan reported 1,473 files and the projection held
+  11,685 members, including 142 rows under a path that config excluded.
+
+  That is what a projection IS -- the tree, not a view of it -- and it is what
+  makes a query able to ask about files no collection claims. But it means a
+  WHERE clause is the only thing narrowing your statement. Write the exclusion
+  into the SQL:
+
+    SELECT path FROM resource_realizations
+     WHERE path NOT LIKE 'docs/architecture/adrs/archive/%'
+
 One query, and read-only:
   The statement must BE a query -- its first significant token has to be
   SELECT, WITH or VALUES. Anything else (ATTACH, PRAGMA, DELETE, EXPLAIN) is
@@ -219,6 +236,25 @@ A check that cannot run FAILS:
   refuses it as a severity key. Downgrade or ignore the CHECK all you like;
   you cannot downgrade the news that it stopped checking.
 
+Checks run over the TRACKED TREE, not your configured resource set:
+  resources.include and resources.exclude scope vat resources scan and vat
+  resources validate. They do NOT scope the projection, so they do not scope
+  a check. .gitignore IS honoured -- nothing under node_modules reaches it --
+  but a path you excluded in config is still in the corpus and a check will
+  fire on it.
+
+  Measured on one adopter: scan reported 1,473 files while the same tree's
+  projection held 11,685 members, 142 of them under a config-excluded archive
+  directory. A correct "every ADR carries frontmatter" check produced a real
+  false finding on a frozen historical file nobody intends to fix.
+
+  Narrow the check itself -- a WHERE clause is the only scope it has:
+
+    sql: |
+      SELECT path FROM resource_realizations
+       WHERE path LIKE 'docs/architecture/adrs/%'
+         AND path NOT LIKE 'docs/architecture/adrs/archive/%'
+
 A check with NOTHING TO RUN OVER fails the same way:
   Zero findings is the pass condition, so a run whose projection enumerated no
   members passed every check while asserting nothing. If checks ran and
@@ -242,10 +278,12 @@ A run that HANGS is killed and reported, not waited on:
   That per-unit property holds for the CHECKS. It does NOT hold for the
   population, which reports progress only when it FINISHES -- so for that one
   unit the budget is a total bound, and a population slower than the budget is
-  killed however healthily it is working. A cold population is ~33-35s here
-  (~1.2s warm) and most of that is one uninterruptible parse stage, so the
-  default is set well above it rather than pretending to instrument it. On a
-  large adopter tree with a cold parse cache, raise the bound.
+  killed however healthily it is working. Most of it is one uninterruptible
+  parse stage, so the default is set well above every tree anyone has measured
+  rather than pretending to instrument it. Two MEASURED trees, for scale, and
+  neither of them is yours: VAT's own repository is ~1.2s warm and 33-35s with
+  a cold parse cache; a 9,992-file adopter tree is ~5s warm and 16.5s cold. On
+  a tree much larger than that with a cold parse cache, raise the bound.
 
   An interrupted run NEVER exits 0 and never looks like a pass. There are two
   ways to be interrupted and they are reported differently:
@@ -290,7 +328,9 @@ Output Fields:
              How many members the projection enumerated -- the corpus the
              checks ran AGAINST, where checksRun is how many rules ran. Four
              checks over 8,000 files and four over 0 are otherwise the same
-             document, and only one of them is a gate
+             document, and only one of them is a gate. It counts the TRACKED
+             TREE and not your configured resource set, so it is legitimately
+             far larger than scan's filesScanned -- see the section above
   checks:    What each check COST -- {name, durationSecs, rows} per check, or
              {name, durationSecs, broken} for one whose statement threw. rows
              is what the statement SELECTED, and it is a memory signal: rows

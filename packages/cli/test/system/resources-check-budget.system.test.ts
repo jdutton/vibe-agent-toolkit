@@ -109,8 +109,31 @@ const MD_ROWS = "SELECT path FROM resource_realizations WHERE ext = '.md'";
 /** A cheap statement that selects nothing, so a run over it is a clean pass. */
 const TXT_ROWS = "SELECT path FROM resource_realizations WHERE ext = '.txt'";
 
-/** The bound the killed cases use. Small, so the suite does not pay for it. */
-const BUDGET_SECONDS = 2;
+/**
+ * The floor under the killed cases' bound. Small, so the suite does not pay for
+ * it on an idle machine.
+ */
+const BUDGET_FLOOR_SECONDS = 2;
+
+/**
+ * How many measured baselines of headroom the bound gets over the population.
+ *
+ * 🪤 **The bound cannot be a literal, and a literal is what shipped.** The
+ * budget is time WITHOUT progress, and the population is ONE unit — so a bound
+ * that does not clear the population kills the run before it starts, and the
+ * command exits 2 ("no projection to report on") instead of the 1 these cases
+ * assert. A flat 2 s cleared it comfortably on an idle machine and did not clear
+ * it when this file ran inside the full system suite: one CI run reported
+ * `expected 2 to be 1`, and the same file passed 7/7 in isolation minutes later.
+ * That is not a regression in the product, it is a test whose premise silently
+ * acquired a second requirement — that a population fit inside a hardcoded
+ * number of seconds — and the machine decides whether it holds.
+ *
+ * So the bound is derived from {@link baselineMs}, the probe this file already
+ * takes: a real run of the same verb over the same tree. A loaded machine moves
+ * the baseline and the bound together, which is the whole point of measuring it.
+ */
+const BUDGET_BASELINE_HEADROOM = 3;
 
 /** The hidden flag a supervising parent hands its child. */
 const COST_LOG_FLAG = '--cost-log';
@@ -189,6 +212,13 @@ describe('vat resources check --budget', () => {
   /** A real run of the same verb over the same tree, in-process and complete. */
   let baselineMs: number;
 
+  /**
+   * The bound the killed cases pass, in seconds — derived, never a literal.
+   *
+   * See {@link BUDGET_BASELINE_HEADROOM} for what a literal cost.
+   */
+  let budgetSeconds: number;
+
   beforeAll(() => {
     projectDir = createMarkdownGitFixture('vat-check-budget-');
 
@@ -196,6 +226,10 @@ describe('vat resources check --budget', () => {
     // cheap statement cost on THIS machine, measured by doing it.
     writeChecks(['quick', TXT_ROWS]);
     baselineMs = check('--budget', '0').elapsedMs;
+    budgetSeconds = Math.max(
+      BUDGET_FLOOR_SECONDS,
+      Math.ceil((baselineMs / 1000) * BUDGET_BASELINE_HEADROOM),
+    );
   });
 
   afterAll(() => {
@@ -220,7 +254,7 @@ describe('vat resources check --budget', () => {
     // returns, and neither does the CI job it stands for.
     writeChecks(['runaway', RUNAWAY_SQL]);
 
-    const { status, doc, elapsedMs } = check('--budget', String(BUDGET_SECONDS));
+    const { status, doc, elapsedMs } = check('--budget', String(budgetSeconds));
 
     // ⛔ Never 0, and never a document that reads as a pass.
     expect(status).toBe(1);
@@ -233,11 +267,11 @@ describe('vat resources check --budget', () => {
     expect(finding?.severity).toBe('error');
     // Names the rule, which is the only fact that makes the report actionable.
     expect(finding?.message).toContain('runaway');
-    expect(finding?.message).toContain(String(BUDGET_SECONDS));
+    expect(finding?.message).toContain(String(budgetSeconds));
 
     // The process ended — `executeCli` is synchronous and cannot return until it
     // does — and it ended promptly against a locally measured cost.
-    expect(elapsedMs).toBeLessThan(baselineMs * 2 + BUDGET_SECONDS * 1000 * KILL_SLACK);
+    expect(elapsedMs).toBeLessThan(baselineMs * 2 + budgetSeconds * 1000 * KILL_SLACK);
   });
 
   it('keeps the checks that COMPLETED, with the rows each selected', () => {
@@ -246,7 +280,7 @@ describe('vat resources check --budget', () => {
     // exists to preserve across a SIGKILL.
     writeChecks(['quick', MD_ROWS], ['runaway', RUNAWAY_SQL]);
 
-    const { status, doc } = check('--budget', String(BUDGET_SECONDS));
+    const { status, doc } = check('--budget', String(budgetSeconds));
 
     expect(status).toBe(1);
     const checks = doc['checks'] as PublishedCheck[];

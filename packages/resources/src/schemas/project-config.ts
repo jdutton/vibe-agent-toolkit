@@ -169,15 +169,26 @@ export type ResourceCheck = z.infer<typeof ResourceCheckSchema>;
  * at all, and one that also spells `checks:` correctly keeps that half and loses
  * the other silently — with `checks` present, `vat resources check`'s loud
  * "no checks are declared" warning cannot even fire. The silent outcome is an
- * unenforced RULE: the adopter believes a gate exists and it never runs. Every
- * nested block here is already strict; this is the enclosing object that was
- * leaking.
+ * unenforced RULE: the adopter believes a gate exists and it never runs.
+ *
+ * ⚠️ **"Every nested block here is already strict" is what this docstring used to
+ * say, and it was FALSE.** `ResourceCheckSchema`, `ValidationConfigSchema` and
+ * `LinkAuthConfigSchema` are strict; {@link CollectionConfigSchema},
+ * `CollectionValidationSchema` and `ExternalUrlValidationSchema` are NOT, so a
+ * misspelled key inside a collection is still accepted and stripped today. That
+ * is the same defect this block was tightened to close, one level down, and it
+ * is left open deliberately rather than by oversight: tightening it is a second
+ * breaking change for every adopter config in the wild, and this repo has
+ * already learned the hard way (see `config-issues.ts`) that such a change needs
+ * its own CHANGELOG note and its own real-adopter run rather than a ride-along
+ * in someone else's PR. Do not "restore" the old sentence; close the gap or
+ * leave the warning.
  */
 export const ResourcesConfigSchema = z.object({
   include: z.array(z.string()).optional()
-    .describe('Global default include patterns (not used by collections in Phase 2)'),
+    .describe('Global default include patterns for the SCANNING lane — `vat resources scan` and `vat resources validate`. ⚠️ It does NOT scope the projection, so it does not scope `vat resources query` or `vat resources check`: those read the tracked tree. See `exclude` for the measurement.'),
   exclude: z.array(z.string()).optional()
-    .describe('Global default exclude patterns (not used by collections in Phase 2)'),
+    .describe('Global default exclude patterns for the SCANNING lane — `vat resources scan` and `vat resources validate`. ⚠️ **It does NOT constrain the projection**, so `vat resources query` and `vat resources check` still see every path listed here. That is what a projection IS — the tree, not a view of it — and `.gitignore` IS honoured, so this is not a junk-enumeration problem. Measured on one adopter: `scan` reported 1,473 files while the same tree\'s projection held 11,685 members, 142 of them under a directory listed here. A check written against a path you excluded will fire on it; narrow the check\'s own SQL with a `WHERE path NOT LIKE …` predicate.'),
   collections: z.record(z.string(), CollectionConfigSchema).optional()
     .describe('Named collections of resources'),
   validation: ValidationConfigSchema.optional()
