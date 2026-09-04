@@ -12,6 +12,9 @@
 #      an IgnoredVulns entry when a fix is genuinely unavailable or unsafe.
 #   2. Every entry MUST have a `reason` explaining WHY it is safe to defer.
 #   3. Re-evaluate on each Dependabot bump; delete entries once a fix lands.
+#      `osv-scanner` prints an "unused ignores" list for entries whose advisory
+#      no longer matches anything in the lockfile — that list is the delete
+#      queue for rule 3, and it does not fail the build, so it must be read.
 #
 # Snapshot when this register was last reconciled: the transitive protobufjs@6
 # chain (previously via the native onnxruntime-node backend, loaded through
@@ -20,80 +23,44 @@
 # onnxruntime-web (WASM) directly — no onnx-proto in the resolution path, so
 # onnxruntime-web resolves the patched protobufjs@7 line unconditionally. 20+
 # other transitive advisories were pinned to patched versions in package.json
-# `overrides`. The advisories below are what remains — all low-severity ReDoS
-# in build/glob tooling, or fixes that require an unsafe global major-version
-# pin, or dev/test-only packages that are not in the published consumer graph.
+# `overrides`. The advisories below are what remains — fixes that require an
+# unsafe global major-version pin, a transitive exact-pin we do not control, or
+# dev/test-only packages that are not in the published consumer graph.
+#
+# Reconciled again on 2026-09-04 against the rule-3 delete queue: the
+# brace-expansion (1.x/2.x/5.x), picomatch (2.x/4.x) and ajv (6.x/8.x) entries
+# were all reported as unused ignores — every coexisting copy of those three had
+# independently floated onto a patched version (brace-expansion 1.1.18 / 2.1.4 /
+# 5.0.9, picomatch 2.3.2 / 4.0.5, ajv 6.15.0 / 8.20.0), so their seven entries
+# were deleted. `fast-uri` and `qs` were re-pinned in `overrides` (3.1.5→3.1.6,
+# 6.15.2→6.16.0) rather than registered, per rule 1.
 # ---------------------------------------------------------------------------
 
 # --- minimatch (ReDoS) --------------------------------------------------------
-# The tree carries minimatch 3.x, 9.x, AND 10.x simultaneously (3.x under dev
-# tooling, 9.x under glob@10 in agent-skills). A global `overrides` pin can only
-# force ONE version and would break the older-major consumers, so it is unsafe.
+# NOT a coexisting-majors problem any more: minimatch 3.1.5 and 9.0.9 are still
+# in the tree but neither is affected, and the tree already carries a PATCHED
+# 10.2.6 that every `^10.2.2` consumer (typescript-estree, test-exclude,
+# rimraf/glob) resolves to. The single vulnerable copy is minimatch@10.1.2,
+# pulled by exactly one package: eslint-plugin-sonarjs@3.0.7, which declares it
+# as an EXACT pin (`"minimatch": "10.1.2"`), not a range — so no amount of
+# floating or deduping moves it. bun's `overrides` map is flat and unscoped, so
+# pinning minimatch globally to 10.2.6 to reach that one copy would also drag
+# the minimatch@3 and minimatch@9 consumers across two major versions.
 # All three advisories are ReDoS in glob-pattern matching against attacker-
-# controlled globs — VAT only ever matches globs it authors. Consumers of the
-# published packages re-resolve VAT's floating ranges and pick up patched
-# minimatch independently of this lockfile.
+# controlled globs — VAT only ever matches globs it authors, and the affected
+# copy is reachable only from ESLint at lint time, never from a published
+# package. Consumers of the published packages re-resolve VAT's floating ranges
+# and pick up patched minimatch independently of this lockfile.
+# DELETE THESE when eslint-plugin-sonarjs widens or bumps its minimatch pin.
 [[IgnoredVulns]]
 id = "GHSA-23c5-xmqv-rm74"
-reason = "minimatch ReDoS; 3.x/9.x/10.x coexist so a single global pin is unsafe. Low severity, VAT-authored globs only. Re-evaluate when glob majors converge."
+reason = "minimatch ReDoS in the single copy pinned EXACTLY by eslint-plugin-sonarjs@3.0.7 (10.1.2); every other consumer already resolves the patched 10.2.6. Lint-time only, VAT-authored globs. Re-evaluate when eslint-plugin-sonarjs bumps its pin."
 [[IgnoredVulns]]
 id = "GHSA-3ppc-4f35-3m26"
-reason = "minimatch ReDoS; 3.x/9.x/10.x coexist so a single global pin is unsafe. Low severity, VAT-authored globs only. Re-evaluate when glob majors converge."
+reason = "minimatch ReDoS in the single copy pinned EXACTLY by eslint-plugin-sonarjs@3.0.7 (10.1.2); every other consumer already resolves the patched 10.2.6. Lint-time only, VAT-authored globs. Re-evaluate when eslint-plugin-sonarjs bumps its pin."
 [[IgnoredVulns]]
 id = "GHSA-7r86-cg39-jmmj"
-reason = "minimatch ReDoS; 3.x/9.x/10.x coexist so a single global pin is unsafe. Low severity, VAT-authored globs only. Re-evaluate when glob majors converge."
-
-# --- brace-expansion (ReDoS) --------------------------------------------------
-# Same shape as minimatch/picomatch below, and for the same reason: the tree
-# carries brace-expansion 1.x, 2.x, AND 5.x simultaneously. The advisory is
-# fixed separately in each line (1.1.18 / 2.1.4 / 5.0.9), so no single value in
-# the global `overrides` block can patch all three — pinning any one of them
-# forces the other two majors onto an incompatible version. ReDoS in brace
-# expansion of attacker-controlled patterns; VAT only expands patterns it
-# authors. Delete this entry when the majors converge, or if bun gains
-# per-consumer override scoping.
-[[IgnoredVulns]]
-id = "GHSA-rgw5-rvv9-x895"
-reason = "brace-expansion ReDoS; 1.x/2.x/5.x coexist and the fix lands separately in each line, so a single global pin is unsafe. VAT-authored patterns only. Re-evaluate when the majors converge."
-
-# --- picomatch (ReDoS / method injection) ------------------------------------
-# picomatch 2.x and 4.x both present (2.x transitively under chokidar/micromatch,
-# 4.x declared directly). v2→v4 is a breaking major, so a global pin would
-# regress the v2 consumers. Same threat model as minimatch (VAT-authored globs).
-[[IgnoredVulns]]
-id = "GHSA-3v7f-55p6-f55p"
-reason = "picomatch glob-matching issue; 2.x and 4.x coexist across a breaking major, unsafe to globally pin. VAT-authored globs only."
-[[IgnoredVulns]]
-id = "GHSA-c2c7-rcm5-vvqj"
-reason = "picomatch ReDoS via extglob quantifiers; 2.x and 4.x coexist across a breaking major, unsafe to globally pin. VAT-authored globs only."
-
-# --- ajv (ReDoS via $data) ---------------------------------------------------
-# ajv 6.x (transitive dev tooling) and 8.x (declared in resources) coexist; a
-# global pin cannot satisfy both majors. VAT never enables the `$data` option
-# (the sole vector) in any of its AJV usages.
-[[IgnoredVulns]]
-id = "GHSA-2g4f-4pwh-qvx6"
-reason = "ajv ReDoS only reachable with the $data option, which VAT never enables. 6.x/8.x coexist so a single global pin is unsafe."
-
-# --- brace-expansion (ReDoS / expansion DoS) ---------------------------------
-# 1.1.12 and 2.0.2 coexist: minimatch@3.1.2 declares `^1.1.7`, minimatch@9.0.5
-# declares `^2.0.1`. No single version satisfies both, and bun's `overrides` is a
-# FLAT package->version map — path-scoped pins are not expressible (verified on
-# bun 1.3.9: `overrides` with `minimatch@3.1.2/brace-expansion`, and `resolutions`
-# with both `pkg@ver/dep` and `pkg/dep` paths, all resolved to "no changes").
-# All three advisories are DoS on glob expansion; VAT only ever expands globs it
-# authors itself, never attacker-supplied patterns. Consumers of the published
-# packages re-resolve VAT's floating ranges and pick up patched copies
-# independently of this lockfile.
-[[IgnoredVulns]]
-id = "GHSA-f886-m6hf-6m8v"
-reason = "brace-expansion ReDoS; 1.x and 2.x coexist under different minimatch majors, unsafe to globally pin. VAT-authored globs only."
-[[IgnoredVulns]]
-id = "GHSA-3jxr-9vmj-r5cp"
-reason = "brace-expansion exponential-time expansion of consecutive `{}` groups. Per-major fixes exist (1.1.16 / 2.1.2) but bun's flat `overrides` map cannot pin per-major and 1.x/2.x coexist under minimatch@3 and minimatch@9. VAT-authored globs only. Re-evaluate if bun gains path-scoped overrides or when glob majors converge."
-[[IgnoredVulns]]
-id = "GHSA-mh99-v99m-4gvg"
-reason = "brace-expansion unbounded-expansion OOM. The advisory range is a single [0, 5.0.8) span with NO 1.x or 2.x backport, so no in-range fix exists for either coexisting copy — brace-expansion@5 is three majors past minimatch@3's `^1.1.7` and minimatch@9's `^2.0.1`. VAT-authored globs only."
+reason = "minimatch ReDoS in the single copy pinned EXACTLY by eslint-plugin-sonarjs@3.0.7 (10.1.2); every other consumer already resolves the patched 10.2.6. Lint-time only, VAT-authored globs. Re-evaluate when eslint-plugin-sonarjs bumps its pin."
 
 # --- @hono/node-server (serve-static path traversal on Windows) ---------------
 # The vulnerable surface is the `@hono/node-server/serve-static` subpath export.

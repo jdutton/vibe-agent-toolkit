@@ -388,6 +388,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Two supply-chain pins went stale and the dependency audit went red: `fast-uri` and `qs` are
+  re-pinned to their patched releases.** New advisories landed against the exact versions the root
+  `overrides` block was holding — `fast-uri` 3.1.5 (four advisories, CVSS 7.5) and `qs` 6.15.2 (two,
+  CVSS 6.3). Both are transitive-only and both had an in-range fix, so they are pinned forward
+  (`fast-uri` 3.1.6, `qs` 6.16.0) rather than added to the accepted-risk register, per that
+  register's own rule 1. Nothing in VAT's own code changed.
+
+- **Seven dead entries were deleted from the OSV accepted-risk register, and the `minimatch` reason
+  was corrected because it had stopped being true.** `osv-scanner` had been reporting the
+  brace-expansion, `picomatch` and `ajv` entries as *unused ignores* — every coexisting copy of those
+  three had independently floated onto a patched version — but an unused ignore does not fail the
+  build, so the list went unread and the register kept claiming to be suppressing risks that no
+  longer existed. The register's rule 3 now names that list as its delete queue. The three surviving
+  `minimatch` entries said the fix was blocked by "3.x/9.x/10.x coexisting"; that is no longer the
+  mechanism. The tree already carries a patched `minimatch` 10.2.6 that every `^10.2.2` consumer
+  resolves to, and the one vulnerable copy (10.1.2) is held by a single **exact** pin inside
+  `eslint-plugin-sonarjs@3.0.7` that no dedupe can move. The reasons now say that, and name the
+  condition that retires them.
+
 - **An eval suite could inject instructions into the grader prompt on the arm that decides the
   primary verdict.** `toolExpectations.mustRun` / `mustNotRun` / `mustSucceed` / `sequence` went raw
   into the grader's instruction region, and also defeated `assertGraderPromptInvariants`. It is now
