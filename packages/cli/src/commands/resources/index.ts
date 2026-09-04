@@ -234,25 +234,48 @@ A run that HANGS is killed and reported, not waited on:
   So the work runs in a child process and --budget <seconds> bounds it.
 
   The budget is time WITHOUT PROGRESS, not total runtime: the clock resets
-  every time the run finishes a unit (the population, then each check), so a
-  slow run over a large repository is never at risk while it is progressing.
-  Default 300. The population alone is ~1.2s warm here but 33-35s with a cold
-  parse cache, so a tight bound kills healthy runs -- a false kill is worse
-  than a slow honest failure.
+  every time the run finishes a unit (the population, then each check, then
+  once more when the checks are done and the document is being built). So a
+  large repository with many rules is never at risk while its rules keep
+  finishing. Default 300.
 
-  A killed run exits 1 with status: error and a RESOURCE_CHECK_BROKEN finding
-  naming the check that was in flight. The checks that COMPLETED keep their
-  entry under checks (including rows), but their individual violations are NOT
-  in issues -- the progress the child records is costs, not findings. Read that
-  issue list as incomplete.
+  That per-unit property holds for the CHECKS. It does NOT hold for the
+  population, which reports progress only when it FINISHES -- so for that one
+  unit the budget is a total bound, and a population slower than the budget is
+  killed however healthily it is working. A cold population is ~33-35s here
+  (~1.2s warm) and most of that is one uninterruptible parse stage, so the
+  default is set well above it rather than pretending to instrument it. On a
+  large adopter tree with a cold parse cache, raise the bound.
 
-  Killed before the population finished, there is no projection and no honest
-  document: that is an operator error (exit 2) naming the budget.
+  An interrupted run NEVER exits 0 and never looks like a pass. There are two
+  ways to be interrupted and they are reported differently:
+
+    Killed by the budget -- exit 1, status: error, and a RESOURCE_CHECK_BROKEN
+    finding naming the check that was in flight and the bound that was blown.
+
+    Died -- the child process was terminated by a signal, most often because it
+    ran out of memory materialising a result set (Node aborts with SIGABRT) or
+    because something outside killed it (a runner's OOM killer sends SIGKILL).
+    Also exit 1, status: error, RESOURCE_CHECK_BROKEN -- naming the signal, and
+    saying plainly that raising --budget is not the remedy.
+
+  Either way the checks that COMPLETED keep their entry under checks (including
+  rows), but their individual violations are NOT in issues -- the progress the
+  child records is costs, not findings. Read that issue list as incomplete.
+
+  Interrupted before the population finished, there is no projection and no
+  honest document: that is an operator error (exit 2) saying which of the two
+  happened.
+
+  --budget cannot be combined with --cost-log (exit 2): --cost-log means the
+  work runs in this process, where the budget could not be enforced.
 
   --budget 0 removes the bound and runs everything in this process. Nothing
-  will then stop a runaway statement. Ctrl-C still works at a keyboard,
-  because this command installs no signal handler -- do not add one, a process
-  blocked in synchronous SQLite survives SIGINT once a handler exists.
+  will then stop a runaway statement. An empty --budget is refused rather than
+  read as 0 -- an unset shell variable must not silently remove the bound.
+  Ctrl-C still works at a keyboard, because this command installs no signal
+  handler -- do not add one, a process blocked in synchronous SQLite survives
+  SIGINT once a handler exists.
 
 Output Fields:
   status, root, population, populationSecs, checksRun, membersEnumerated,
@@ -278,10 +301,11 @@ Output Fields:
 
 Exit Codes:
   0 - No error-severity findings
-  1 - At least one (a violation, a broken check, an empty corpus, or a run
-      killed for making no progress within --budget)
-  2 - System error, an unknown --check name, an unusable --budget, or a run
-      killed before its population completed
+  1 - At least one (a violation, a broken check, an empty corpus, a run killed
+      for making no progress within --budget, or a run whose child DIED)
+  2 - System error, an unknown --check name, an unusable --budget (including an
+      empty one, or one passed with --cost-log), or a run interrupted before
+      its population completed
 
 Examples:
   $ vat resources check

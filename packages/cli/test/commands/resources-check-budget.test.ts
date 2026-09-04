@@ -21,23 +21,32 @@
  * the largest adopter tree, which makes it useless as a hang detector; and it
  * would kill a healthy run that is merely large. The clock resets on every unit
  * the child completes, so a run of forty rules over a huge repository is never
- * at risk while it is making progress, and a single rule that stops making it is
- * caught in one budget. That distinction is the property {@link pollWatchdog}'s
- * cases exist to pin, and it is the one a total stopwatch would silently lose.
+ * at risk while its rules keep finishing, and a single rule that stops finishing
+ * is caught in one budget. That distinction is the property
+ * {@link pollWatchdog}'s cases exist to pin, and it is the one a total stopwatch
+ * would silently lose.
+ *
+ * ⚠️ It is a property of the CHECKS, and only of them. The population emits ONE
+ * line, at its end, so for the longest single unit in a cold run the budget IS
+ * the total-runtime bound — see `check-supervisor.ts`'s header for the measured
+ * reason instrumenting it further would look like an improvement and not be one.
  */
 
 import { describe, expect, it } from 'vitest';
 
 import type { ProgressEntry } from '../../src/commands/resources/check-progress.js';
+import { unitInFlight } from '../../src/commands/resources/check-progress.js';
 import {
   parseBudgetSeconds,
   pollWatchdog,
+  requireSupervisableFlags,
+  resolveChildEnding,
   runsInThisProcess,
   type WatchdogState,
 } from '../../src/commands/resources/check-supervisor.js';
 import {
   buildCheckOutputData,
-  buildKilledCheckInput,
+  buildInterruptedCheckInput,
   type CheckPayloadInput,
 } from '../../src/commands/resources/check.js';
 
@@ -60,6 +69,14 @@ const BROKEN_COST: ProgressEntry = {
 
 /** A watchdog that has seen nothing yet, at time zero. */
 const FRESH: WatchdogState = { bytesSeen: 0, quietSince: 0 };
+
+/** Whatever a supervising parent handed its child as `--cost-log`. */
+const A_COST_LOG = 'progress.jsonl';
+/** Node's own heap abort — the signal a runaway that SELECTS rows dies of. */
+const ABORTED = 'SIGABRT';
+/** A binary that is not there, for the spawn-failure cases. */
+const MISSING_BIN = '/nope/vat';
+const MISSING_BIN_DETAIL = `spawn ${MISSING_BIN} ENOENT`;
 
 describe('parseBudgetSeconds', () => {
   it('defaults to 300 seconds when the flag is not passed', () => {
@@ -103,7 +120,7 @@ describe('runsInThisProcess — the fork', () => {
     // parent passes its child; a child that read the budget instead would spawn
     // a child of its own, and so on. Note the budget is the DEFAULT here — the
     // cost log has to win against it, not merely alongside it.
-    expect(runsInThisProcess({ costLog: 'progress.jsonl', budgetSecs: 300 })).toBe(true);
+    expect(runsInThisProcess({ costLog: A_COST_LOG, budgetSecs: 300 })).toBe(true);
   });
 
   it('does the work HERE when the operator removed the bound', () => {
@@ -137,10 +154,18 @@ describe('pollWatchdog', () => {
     expect(breach).toBe(true);
   });
 
-  it('NEVER breaches a run that keeps making progress, however long it takes', () => {
-    // 🔑 The property that distinguishes this from a total stopwatch, and the
-    // whole reason a large adopter tree is safe. Twenty budgets' worth of wall
-    // time elapses; every poll sees a new line; nothing is killed.
+  it('NEVER breaches while units keep COMPLETING, however long the run takes', () => {
+    // 🔑 The property that distinguishes this from a total stopwatch. Twenty
+    // budgets' worth of wall time elapses; every poll sees a new line; nothing
+    // is killed.
+    //
+    // ⚠️ The name used to say "a run that keeps making progress", which
+    // overclaimed. This function is only ever as good as the lines it is fed,
+    // and the POPULATION emits exactly one, at its end — so for that unit the
+    // budget really is the total-runtime bound the design argues against. The
+    // per-unit property is true of the CHECKS. See `check-supervisor.ts`'s
+    // header for why instrumenting the population further would be worse than
+    // saying so: ~88% of a cold one is a single blob stage that emits nothing.
     let state = FRESH;
     for (let poll = 1; poll <= 20; poll += 1) {
       const result = pollWatchdog(state, {
@@ -174,10 +199,34 @@ describe('pollWatchdog', () => {
 function killed(
   entries: readonly ProgressEntry[] = [POPULATION, FIRST_COST, HUNG_START],
 ): CheckPayloadInput {
-  return buildKilledCheckInput({ entries, root: '/corpus', budgetSecs: 2, durationMs: 3400 });
+  return buildInterruptedCheckInput({
+    entries,
+    root: '/corpus',
+    ending: { kind: 'budget', budgetSecs: 2 },
+    durationMs: 3400,
+  });
 }
 
-describe('buildKilledCheckInput', () => {
+/**
+ * The recovered payload for a run whose child DIED — no watchdog involved.
+ *
+ * @param signal - What killed the child
+ * @param entries - What the child's log held, defaulting to the hang above
+ * @returns The input the document is built from
+ */
+function died(
+  signal: string,
+  entries: readonly ProgressEntry[] = [POPULATION, FIRST_COST, HUNG_START],
+): CheckPayloadInput {
+  return buildInterruptedCheckInput({
+    entries,
+    root: '/corpus',
+    ending: { kind: 'abnormal', death: { kind: 'signal', signal } },
+    durationMs: 3400,
+  });
+}
+
+describe('buildInterruptedCheckInput', () => {
   it('carries the population the child actually reported, never a fabricated one', () => {
     const input = killed();
 
@@ -261,5 +310,228 @@ describe('buildKilledCheckInput', () => {
 
   it('names the budget in the refusal, so the operator can raise it', () => {
     expect(() => killed([])).toThrow(/2/);
+  });
+});
+
+describe('parseBudgetSeconds — the EMPTY value', () => {
+  // 🚨 The defect: `Number('')` is 0, and 0 is this flag's documented escape
+  // hatch — "no bound, may hang forever". So `--budget "$CHECK_BUDGET"` with the
+  // variable unset did not shorten the bound and did not refuse; it silently
+  // REMOVED the bound, on the one flag whose whole job is to stop an unattended
+  // job hanging. An unset shell variable is a far more common CI accident than
+  // the typo'd `2O` the guard was originally written for.
+  it.each([
+    ['the empty string', ''],
+    ['a space', ' '],
+    ['a newline', '\n'],
+    ['a tab', '\t'],
+  ])('refuses %s rather than reading it as --budget 0', (_label, raw) => {
+    expect(() => parseBudgetSeconds(raw)).toThrow(/--budget/);
+  });
+
+  it('still accepts hex, deliberately', () => {
+    // `Number('0x10')` is 16, and that is KEPT. Hex is unambiguous, it cannot
+    // arise from an unset variable, and refusing it would buy nothing. Recorded
+    // as a decision so the next reader does not "fix" it into a refusal.
+    expect(parseBudgetSeconds('0x10')).toBe(16);
+  });
+});
+
+describe('requireSupervisableFlags', () => {
+  // 🚨 The defect: `--cost-log` wins the fork unconditionally, so
+  // `--budget 60 --cost-log /tmp/x` ran UNBOUNDED and said nothing. An
+  // explicitly-passed, documented flag must never be silently inert.
+  it('refuses an explicit budget alongside --cost-log', () => {
+    expect(() => requireSupervisableFlags({
+      costLog: A_COST_LOG, budgetRaw: '60', budgetSecs: 60,
+    })).toThrow(/--cost-log/);
+  });
+
+  it('allows --cost-log on its own — that is the child the parent spawns', () => {
+    // ⚠️ The real spawn path. `childArgs` appends `--cost-log` and does NOT
+    // forward `--budget`, so the supervised lane must survive this guard.
+    expect(() => requireSupervisableFlags({
+      costLog: A_COST_LOG, budgetRaw: undefined, budgetSecs: 300,
+    })).not.toThrow();
+  });
+
+  it('allows --budget 0 with --cost-log: both say "no supervision"', () => {
+    expect(() => requireSupervisableFlags({
+      costLog: A_COST_LOG, budgetRaw: '0', budgetSecs: 0,
+    })).not.toThrow();
+  });
+
+  it('allows a budget with no cost log — the ordinary supervised run', () => {
+    expect(() => requireSupervisableFlags({
+      costLog: undefined, budgetRaw: '60', budgetSecs: 60,
+    })).not.toThrow();
+  });
+});
+
+describe('resolveChildEnding', () => {
+  it('reports a clean exit with the code the child chose', () => {
+    expect(resolveChildEnding({ code: 1, signal: null, killed: false }))
+      .toStrictEqual({ kind: 'completed', code: 1 });
+  });
+
+  it('reports the watchdog kill as KILLED', () => {
+    expect(resolveChildEnding({ code: null, signal: 'SIGKILL', killed: true }))
+      .toStrictEqual({ kind: 'killed' });
+  });
+
+  it('reports a signal death nobody asked for as ABNORMAL, naming the signal', () => {
+    // 🚨 The critical defect this closes. `close` fires with `(code, signal)`,
+    // and a process that dies from a signal has `code === null`. The handler
+    // read only the code and coerced it with `?? 0`, so EVERY signal death
+    // became `{ outcome: 'completed', code: 0 }` — an empty document and
+    // `process.exit(0)`. A CI gate reads that as a clean pass.
+    //
+    // This is not hypothetical and needs no external actor: a check whose
+    // statement materialises an unbounded result set makes Node abort on its
+    // heap limit (SIGABRT), which is exactly the runaway shape the budget
+    // exists to catch. Before the supervisor existed the same input exited 134.
+    expect(resolveChildEnding({ code: null, signal: ABORTED, killed: false }))
+      .toStrictEqual({ kind: 'abnormal', death: { kind: 'signal', signal: ABORTED } });
+  });
+
+  it('reports a missing exit code with no signal as abnormal too', () => {
+    // Neither a code nor a signal is not a shape Node documents, and `?? 0` is
+    // exactly the wrong reading of it: "I cannot tell how this ended" must not
+    // become "it succeeded".
+    expect(resolveChildEnding({ code: null, signal: null, killed: false }))
+      .toStrictEqual({ kind: 'abnormal', death: { kind: 'no-status' } });
+  });
+
+  it('reports a child that could not be SPAWNED as abnormal, naming the binary', () => {
+    // Without an `error` listener Node throws `Unhandled 'error' event` and dies
+    // with a stack dump. It fails closed, so this is legibility — but a stack
+    // dump is not a report.
+    expect(resolveChildEnding({
+      code: null,
+      signal: null,
+      killed: false,
+      spawnError: { binary: MISSING_BIN, detail: MISSING_BIN_DETAIL },
+    })).toStrictEqual({
+      kind: 'abnormal',
+      death: { kind: 'spawn-failed', binary: MISSING_BIN, detail: MISSING_BIN_DETAIL },
+    });
+  });
+
+  it('honours a NORMAL exit that beat the watchdog\'s SIGKILL', () => {
+    // 🪤 A narrow ordering race, and it fails CLOSED — but it discards a correct
+    // answer. libuv runs timers BEFORE the poll phase that reaps the child, so
+    // the watchdog can set `killed` in the same loop turn as a child that has
+    // already exited 0. The kill only counts if it LANDED: a non-null code with
+    // a null signal means the child finished on its own terms, whatever the
+    // supervisor believes it did.
+    expect(resolveChildEnding({ code: 0, signal: null, killed: true }))
+      .toStrictEqual({ kind: 'completed', code: 0 });
+  });
+});
+
+describe('the document a run that DIED publishes', () => {
+  it('fails the run rather than publishing an empty pass', () => {
+    // ⛔ The whole point of the critical fix: an abnormal death must reach the
+    // same fail-closed document a watchdog kill does, never `exit(0)`.
+    expect(buildCheckOutputData(died(ABORTED))['status']).toBe('error');
+  });
+
+  it('reports it under the non-overridable run-integrity code', () => {
+    const [finding] = died(ABORTED).issues;
+
+    expect(finding?.code).toBe('RESOURCE_CHECK_BROKEN');
+    expect(finding?.severity).toBe('error');
+  });
+
+  it('names the SIGNAL and the check that was in flight', () => {
+    const [finding] = died(ABORTED).issues;
+
+    expect(finding?.message).toContain('SIGABRT');
+    expect(finding?.message).toContain('runaway');
+  });
+
+  it('tells a SIGABRT reader to narrow the statement, not to raise the budget', () => {
+    // 🔑 The two signals point at different remedies and a message that
+    // conflated them would waste the reader's time. SIGABRT is Node's own heap
+    // abort — the run materialised too many rows.
+    const [finding] = died(ABORTED).issues;
+
+    expect(finding?.message).toMatch(/heap|memory/i);
+    expect(finding?.message).toMatch(/LIMIT|narrower/);
+  });
+
+  it('tells a SIGKILL reader something OUTSIDE killed the run', () => {
+    // An OOM killer on a memory-capped runner picks the big CHILD, not the idle
+    // parent. Telling that operator to raise `--budget` makes it worse.
+    const [finding] = died('SIGKILL').issues;
+
+    expect(finding?.message).toMatch(/outside|OOM/i);
+  });
+
+  it('never tells an abnormal death to raise the budget', () => {
+    // ⛔ The budget did not end this run, and the watchdog wording ("no progress
+    // within the budget") would be a false diagnosis.
+    for (const signal of [ABORTED, 'SIGKILL', 'SIGSEGV']) {
+      expect(died(signal).issues[0]?.message).not.toMatch(/Raise it with `--budget/);
+    }
+  });
+
+  it('still tells a WATCHDOG kill to raise the budget', () => {
+    // The other half of the same distinction, pinned so the abnormal wording
+    // cannot swallow the one case where raising the bound IS the remedy.
+    expect(killed().issues[0]?.message).toMatch(/--budget/);
+  });
+
+  it('refuses a document when the child died before its population', () => {
+    expect(() => died(ABORTED, [])).toThrow(/SIGABRT/);
+  });
+
+  it('does not blame the budget in that refusal either', () => {
+    expect(() => died(ABORTED, [])).toThrow(/died|terminated/i);
+  });
+
+  it('names the binary when the child could not be spawned at all', () => {
+    const input = buildInterruptedCheckInput({
+      entries: [POPULATION, FIRST_COST, HUNG_START],
+      root: '/corpus',
+      ending: {
+        kind: 'abnormal',
+        death: { kind: 'spawn-failed', binary: MISSING_BIN, detail: MISSING_BIN_DETAIL },
+      },
+      durationMs: 12,
+    });
+
+    expect(input.issues[0]?.message).toContain(MISSING_BIN);
+  });
+});
+
+describe('unitInFlight — the reporting phase', () => {
+  it('says the run was BUILDING ITS DOCUMENT once the checks are done', () => {
+    // 🚨 The defect: after the last check files its cost the child still
+    // resolves severities and serialises the document — a 5,000-issue document
+    // is 639 KB of YAML — and it emitted NO progress line during that phase, so
+    // exceeding the budget there SIGKILLed a run that already had its answer.
+    // The child now files one line when the checks are done, which both gives
+    // serialisation a fresh budget window and names the phase honestly.
+    const entries: ProgressEntry[] = [POPULATION, FIRST_COST, { kind: 'checks-complete' }];
+
+    expect(unitInFlight(entries)).toStrictEqual({ kind: 'reporting' });
+  });
+
+  it('still says idle between the population and the first statement', () => {
+    // Different state, different sentence: nothing had started yet, as against
+    // everything having finished.
+    expect(unitInFlight([POPULATION])).toStrictEqual({ kind: 'idle' });
+  });
+
+  it('says the run was building its document in the finding it publishes', () => {
+    // 🪤 The assertion was `/document/i` first, and it was a BLIND instrument:
+    // every one of these messages already says "this document is not a verdict",
+    // so collapsing `reporting` back into `idle` left it green. The phrase that
+    // actually distinguishes the two phases is the one asserted on.
+    const [finding] = killed([POPULATION, FIRST_COST, { kind: 'checks-complete' }]).issues;
+
+    expect(finding?.message).toContain('after the last check had finished');
+    expect(finding?.message).not.toContain('no check was running');
   });
 });

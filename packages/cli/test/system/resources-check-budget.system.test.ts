@@ -25,6 +25,21 @@
  * It is also not the point. An UNBOUNDED runaway never returns at all, so the
  * decisive fact is that the process terminated; the bound only stops a
  * pathologically slow kill from passing as a prompt one.
+ *
+ * ## 🚨 TWO death modes, and both must be covered
+ *
+ * A runaway ends one of two ways and the supervisor takes a different branch for
+ * each: the watchdog fires (`killed` true, exit code never consulted), or the
+ * child DIES on its own — out of memory, aborted by Node or killed by the
+ * runner (`killed` false, and `close` reports a signal instead of a code).
+ *
+ * This file originally covered only the first, and said so: it picked an
+ * aggregate over the recursive CTE because "a cross join would eventually
+ * exhaust memory and die on its own, which would let this test pass without the
+ * watchdog doing anything". The avoided mode was where the defect lived — the
+ * signal argument was unread, `?? 0` made every signal death exit 0, and the run
+ * printed nothing. Steering a fixture around a mode is not the same as knowing
+ * what the mode does, so both are exercised here now.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -49,6 +64,40 @@ let projectDir: string;
 const RUNAWAY_SQL
   = 'WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c) SELECT count(*) FROM c';
 
+/**
+ * A statement that never terminates and MATERIALISES rows while it runs.
+ *
+ * 🚨 The other death mode, and it must be covered BESIDE the aggregate above —
+ * not instead of it. The two exercise different halves of the supervisor:
+ *
+ * - `count(*)` returns no rows, so memory stays flat and the run only ends when
+ *   the WATCHDOG fires. That is the case where `killed` is true.
+ * - This one returns a row per iteration, `.all()` materialises them, V8 hits
+ *   its heap limit and Node ABORTS the process. `killed` is false, `close` fires
+ *   with `code === null` and `signal === 'SIGABRT'`, and nothing outside the run
+ *   was involved.
+ *
+ * The original file chose the aggregate deliberately — "a cross join would
+ * eventually exhaust memory and die on its own, which would let this test pass
+ * without the watchdog doing anything" — and so every case in it landed in the
+ * one branch where the exit code is never consulted. The avoided mode was the
+ * one that was broken: `close`'s signal argument was unread and `?? 0` turned
+ * every signal death into `{ completed, code: 0 }`, so this input printed
+ * nothing and exited 0. A CI gate reads that as a clean pass, on exactly the
+ * shape the bound exists to catch.
+ */
+const MEMORY_DEATH_SQL
+  = 'WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c) SELECT i AS path FROM c';
+
+/**
+ * A heap cap for the spawned processes, so the abort above takes ~1 s.
+ *
+ * 🪤 It changes the TIME to the abort, never the mechanism — and it is what
+ * stops this case depending on how much memory the machine happens to have.
+ * Without it the same run aborts after minutes of paging on a large box.
+ */
+const CHILD_HEAP_CAP = { NODE_OPTIONS: '--max-old-space-size=192' };
+
 /** A cheap statement that selects the fixture's markdown files. */
 const MD_ROWS = "SELECT path FROM resource_realizations WHERE ext = '.md'";
 /** A cheap statement that selects nothing, so a run over it is a clean pass. */
@@ -56,6 +105,9 @@ const TXT_ROWS = "SELECT path FROM resource_realizations WHERE ext = '.txt'";
 
 /** The bound the killed cases use. Small, so the suite does not pay for it. */
 const BUDGET_SECONDS = 2;
+
+/** The hidden flag a supervising parent hands its child. */
+const COST_LOG_FLAG = '--cost-log';
 
 /**
  * How many times the measured baseline plus the budget the kill may take.
@@ -87,8 +139,26 @@ interface BudgetRun {
 
 /** Run the verb in the fixture and time it. */
 function check(...args: string[]): BudgetRun {
+  return checkWithEnv({}, ...args);
+}
+
+/**
+ * The same run with extra environment for BOTH processes.
+ *
+ * `executeCli` replaces the environment when it is given one, so the ambient one
+ * is spread in first — and the parent passes its own environment to the child it
+ * spawns, which is how a heap cap reaches the process that actually runs the SQL.
+ *
+ * @param extra - Variables to add
+ * @param args - The verb's arguments
+ * @returns What the spawn produced
+ */
+function checkWithEnv(extra: NodeJS.ProcessEnv, ...args: string[]): BudgetRun {
   const startedAt = Date.now();
-  const result = executeCli(binPath, ['resources', 'check', ...args], { cwd: projectDir });
+  const result = executeCli(binPath, ['resources', 'check', ...args], {
+    cwd: projectDir,
+    env: { ...process.env, ...extra },
+  });
   return {
     status: result.status,
     doc: (yaml.parse(result.stdout) ?? {}) as Record<string, unknown>,
@@ -182,6 +252,30 @@ describe('vat resources check --budget', () => {
     expect(doc['membersEnumerated']).toBeGreaterThan(0);
   });
 
+  it('FAILS a run whose child died of memory, and never reports it as a pass', () => {
+    // 🚨 The regression this closes, end to end. The budget here is far larger
+    // than the run takes, so the watchdog is provably NOT what ends it: the
+    // child aborts on its own heap limit in about a second. Before the fix this
+    // printed nothing at all and exited 0.
+    writeChecks(['runaway', MEMORY_DEATH_SQL]);
+
+    const { status, doc } = checkWithEnv(CHILD_HEAP_CAP, '--budget', '30');
+
+    // ⛔ Never 0, and never an empty document.
+    expect(status).toBe(1);
+    expect(doc['status']).toBe('error');
+
+    const [finding] = doc['issues'] as CheckFinding[];
+    expect(finding?.code).toBe('RESOURCE_CHECK_BROKEN');
+    // The signal, because SIGABRT and SIGKILL point at different remedies.
+    expect(finding?.message).toContain('SIGABRT');
+    // And the rule that was in flight, which is what makes it actionable.
+    expect(finding?.message).toContain('runaway');
+    // ⛔ NOT the watchdog's advice. Raising the bound does not help a run that
+    // exhausted its heap, and telling this operator to do it wastes their time.
+    expect(finding?.message).not.toMatch(/no progress/);
+  }, 120_000);
+
   it('refuses a budget that is not a number, as an operator error', () => {
     writeChecks(['quick', TXT_ROWS]);
 
@@ -199,13 +293,32 @@ describe('vat resources check --budget', () => {
     writeChecks(['quick', MD_ROWS]);
     const logPath = safePath.join(projectDir, 'progress.jsonl');
 
-    const { status } = check('--cost-log', logPath);
+    const { status } = check(COST_LOG_FLAG, logPath);
 
     expect(status).toBe(1);
     const kinds = fs.readFileSync(logPath, 'utf-8')
       .split('\n')
       .filter((line) => line.trim() !== '')
       .map((line) => (JSON.parse(line) as { kind: string }).kind);
-    expect(kinds).toStrictEqual(['population', 'start', 'check']);
+    // 🔑 `checks-complete` is the LAST line and it is not decoration: after the
+    // final cost the child still resolves severities and serialises the
+    // document, and it used to emit nothing at all during that phase — so a
+    // budget that expired there SIGKILLed a run which already had its answer.
+    // This line gives serialisation a fresh window, for one `appendFileSync`.
+    expect(kinds).toStrictEqual(['population', 'start', 'check', 'checks-complete']);
+  });
+
+  it('refuses --budget alongside --cost-log rather than silently ignoring the bound', () => {
+    // 🚨 `--cost-log` wins the supervise-or-work fork unconditionally, so
+    // `--budget 60 --cost-log x` ran with NO bound and said nothing about it. An
+    // explicitly-passed, documented flag must never be silently inert.
+    writeChecks(['quick', TXT_ROWS]);
+
+    const { status, doc } = check(
+      '--budget', '60', COST_LOG_FLAG, safePath.join(projectDir, 'ignored.jsonl'),
+    );
+
+    expect(status).toBe(2);
+    expect(doc['error']).toContain(COST_LOG_FLAG);
   });
 });

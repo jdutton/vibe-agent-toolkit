@@ -89,10 +89,28 @@ const CheckEntrySchema = z.object({
   broken: z.literal(true).optional(),
 }).strict();
 
+/**
+ * Every check has filed its cost; the document is about to be built.
+ *
+ * 🚨 **The defect this closes is a run killed AFTER it had its answer.** When
+ * the last check files its cost the child is not finished: it still resolves
+ * severities and serialises the document, and a document with 5,000 issues is
+ * 639 KB of YAML. That phase emitted nothing, so the watchdog's clock kept
+ * running from the final cost line and a budget that expired there SIGKILLed a
+ * run whose work was complete — a false failure that discards a correct result.
+ *
+ * One `appendFileSync` buys serialisation a fresh budget window. It carries no
+ * fields: the fact that it was written is the whole message.
+ */
+const ChecksCompleteEntrySchema = z.object({
+  kind: z.literal('checks-complete'),
+}).strict();
+
 const ProgressEntrySchema = z.discriminatedUnion('kind', [
   PopulationEntrySchema,
   StartEntrySchema,
   CheckEntrySchema,
+  ChecksCompleteEntrySchema,
 ]);
 
 /** One line of the progress log. */
@@ -101,13 +119,18 @@ export type ProgressEntry = z.infer<typeof ProgressEntrySchema>;
 /**
  * What the run was doing when it was killed.
  *
- * `idle` is a real answer and not a fallback: a run can be cut off after its
- * last check completed, while it is assembling findings or writing its document.
- * Naming a rule there would blame one that finished.
+ * `idle` and `reporting` are both real answers and neither is a fallback.
+ * `idle` is the gap between the population and the first statement — nothing had
+ * started. `reporting` is the opposite end: every check finished and the child
+ * was assembling and serialising its document. Naming a rule in either would
+ * blame one that did not hang, and collapsing the two would tell an operator
+ * "between the population and the first statement" about a run that completed
+ * forty rules.
  */
 export type UnitInFlight =
   | { readonly kind: 'population' }
   | { readonly kind: 'check'; readonly name: string }
+  | { readonly kind: 'reporting' }
   | { readonly kind: 'idle' };
 
 /**
@@ -177,7 +200,12 @@ export function unitInFlight(entries: readonly ProgressEntry[]): UnitInFlight {
     (entry): entry is Extract<ProgressEntry, { kind: 'start' }> =>
       entry.kind === 'start' && !completed.has(entry.name),
   );
-  return started === undefined ? { kind: 'idle' } : { kind: 'check', name: started.name };
+  if (started !== undefined) return { kind: 'check', name: started.name };
+  // 🔑 Checked AFTER the in-flight statement, never before. The line means "no
+  // check is running any more"; a `start` without a cost means one still is, and
+  // a log holding both is damaged in a way that must still name the rule.
+  if (entries.some((entry) => entry.kind === 'checks-complete')) return { kind: 'reporting' };
+  return { kind: 'idle' };
 }
 
 /**

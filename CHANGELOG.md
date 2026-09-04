@@ -175,13 +175,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stop it: the query is synchronous, it holds the event loop, and `node:sqlite` exposes no interrupt.
   The work therefore runs in a child process that the parent kills when it stops making progress. The
   budget is time **without progress**, not total runtime — the clock resets each time the run
-  finishes a unit (the population, then each check) — so a slow run over a large repository is never
-  at risk while it is progressing. A killed run exits 1 with `status: error` and a
-  `RESOURCE_CHECK_BROKEN` finding naming the check that was in flight; the checks that completed keep
-  their `checks` entry and `rows`, but their individual violations are **not** in `issues`, and the
-  finding says so. Killed before the population finished, there is no projection and no honest
-  document, so that exits 2. `--budget 0` removes the bound and runs everything in one process, where
-  a runaway statement can hang forever.
+  finishes a unit (the population, then each check, then once more when the checks are done and the
+  document is being built) — so a large repository with many rules is never at risk while its rules
+  keep finishing. ⚠️ That per-unit property holds for the **checks**; the **population** reports
+  progress only when it finishes, so for that one unit the budget is a total bound (a cold population
+  is ~33-35s here, and the default is set well above it rather than pretending to instrument it —
+  raise the bound on a large adopter tree with a cold parse cache).
+
+  **An interrupted run never exits 0 and never looks like a pass**, and there are two ways to be
+  interrupted. **Killed by the budget** exits 1 with `status: error` and a `RESOURCE_CHECK_BROKEN`
+  finding naming the check that was in flight. **Died** — the child process was terminated by a
+  signal, most often Node aborting on its own heap limit (`SIGABRT`) while a statement materialised
+  an unbounded result set, or a runner's OOM killer (`SIGKILL`) — also exits 1 with `status: error`
+  and `RESOURCE_CHECK_BROKEN`, naming the **signal** and saying plainly that raising `--budget` is
+  not the remedy. Either way the checks that completed keep their `checks` entry and `rows`, but
+  their individual violations are **not** in `issues`, and the finding says so. Interrupted before
+  the population finished, there is no projection and no honest document, so that exits 2.
+  `--budget 0` removes the bound and runs everything in one process, where a runaway statement can
+  hang forever; an **empty** `--budget` is refused (exit 2) rather than read as `0`, so an unset
+  shell variable cannot silently remove the bound, and `--budget` combined with the internal
+  `--cost-log` is refused rather than silently ignored.
 
 - **`VAT_PROJECTION_STORE_DIR`** — sets where the projection store's database lives. Without it the
   store is one database per VAT release shared by every root on the machine, so concurrent CI jobs

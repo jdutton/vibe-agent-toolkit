@@ -89,9 +89,11 @@ import {
 } from './check-progress.js';
 import {
   parseBudgetSeconds,
+  requireSupervisableFlags,
   runsInThisProcess,
   superviseCheck,
   withProgressLog,
+  type AbnormalDeath,
 } from './check-supervisor.js';
 
 /**
@@ -537,57 +539,165 @@ function emptyCorpusFinding(
 }
 
 /**
- * The finding for a run the supervisor KILLED for making no progress.
+ * How a supervised run stopped short of publishing its own document.
+ *
+ * Two endings, and telling them apart is the whole reason this is a type rather
+ * than a number. A watchdog kill means *no progress within the budget*, and the
+ * remedy may genuinely be a larger bound. An abnormal death means *the run
+ * died* — most often out of memory — and there the budget was never involved,
+ * so advice to raise it is a false diagnosis that makes the situation worse.
+ */
+export type CheckRunEnding =
+  | { readonly kind: 'budget'; readonly budgetSecs: number }
+  | { readonly kind: 'abnormal'; readonly death: AbnormalDeath };
+
+/**
+ * Where the run was when it stopped, as a phrase.
+ *
+ * @param inFlight - What the log's last state says
+ * @returns A clause naming the unit
+ */
+function inFlightPhrase(inFlight: UnitInFlight): string {
+  if (inFlight.kind === 'check') return `while the check "${inFlight.name}" was running`;
+  if (inFlight.kind === 'reporting') {
+    return 'after the last check had finished, while its document was being assembled';
+  }
+  return 'while no check was running — between the population and the first statement';
+}
+
+/**
+ * What ended the child, as a phrase.
+ *
+ * @param death - The ending the supervisor resolved
+ * @returns A clause naming the mechanism
+ */
+function deathPhrase(death: AbnormalDeath): string {
+  if (death.kind === 'signal') return `the child process was terminated by ${death.signal}`;
+  if (death.kind === 'spawn-failed') {
+    return `the child process could not be started at all (${death.binary}: ${death.detail})`;
+  }
+  return 'the child process ended with neither an exit code nor a signal';
+}
+
+/**
+ * What to DO about it — and the reason the signal is carried this far.
+ *
+ * 🔑 `SIGABRT` and `SIGKILL` are the two that actually happen, and they want
+ * opposite things. SIGABRT is Node aborting on its own heap limit, so the fix is
+ * in the statement. SIGKILL with no watchdog kill came from outside the run, so
+ * the fix is in the runner. A message that conflated them would send half its
+ * readers to the wrong file.
+ *
+ * @param death - The ending the supervisor resolved
+ * @returns The remedy sentence
+ */
+function deathRemedy(death: AbnormalDeath): string {
+  if (death.kind === 'spawn-failed') {
+    return ' Nothing ran at all, so this is an installation or PATH problem rather than'
+      + ' anything about the SQL.';
+  }
+  if (death.kind === 'signal' && death.signal === 'SIGABRT') {
+    return ' SIGABRT here is Node aborting on its own heap limit: the run exhausted memory'
+      + ' MATERIALISING a result set, which is what an unbounded statement does as soon as it'
+      + ' selects rows rather than an aggregate. The remedy is a narrower statement or a'
+      + ' `LIMIT`, not a bigger machine.';
+  }
+  if (death.kind === 'signal' && death.signal === 'SIGKILL') {
+    return ' Nothing inside this run sends SIGKILL except the budget watchdog, and the watchdog'
+      + ' did not fire — so something OUTSIDE killed the child: a kernel OOM killer on a'
+      + ' memory-capped runner (it picks the largest process, which is this child and never the'
+      + ' idle parent), a container memory limit, or an operator. Give the job more memory, or'
+      + ' narrow the statement so it needs less.';
+  }
+  return ' The cause is outside anything this command can observe; the child left no exit code'
+    + ' to report.';
+}
+
+/**
+ * The sentence that says what this document does NOT contain.
+ *
+ * 🚨 Load-bearing, and shared by both endings. The progress log records COSTS,
+ * not findings: a check that completed contributes its `rows` (how many rows its
+ * statement selected) but not the violations those rows would have become,
+ * because the child never got to turn them into issues. A reader who took the
+ * issue list as the complete account would conclude the finished rules found
+ * nothing.
+ */
+const INCOMPLETE_NOTICE
+  = ' ⚠️ The checks listed under `checks` DID complete and `rows` is what each'
+  + ' statement selected, but their individual violations are NOT in `issues`: the'
+  + ' progress log records costs, not findings. Read that list as incomplete.';
+
+/**
+ * The finding for a run that was interrupted, however it was interrupted.
  *
  * 🪤 **`RESOURCE_CHECK_BROKEN`, and for the reason {@link emptyCorpusFinding}
  * gives.** It is the same run-integrity claim — *these assertions did not
  * execute, so the green means nothing* — and it needs the identical
  * non-overridability, which `ValidationConfigSchema` grants by refusing that
- * code as a `severity` key. A killed run must never be silenceable by the config
- * of the very project whose SQL hung.
- *
- * 🚨 **The message says what this document does NOT contain, and that sentence
- * is load-bearing.** The progress log records COSTS, not findings: a check that
- * completed contributes its `rows` (how many rows its statement selected) but
- * not the violations those rows would have become, because the child was killed
- * before it turned them into issues. A reader who took the issue list as the
- * complete account would conclude the finished rules found nothing.
+ * code as a `severity` key. An interrupted run must never be silenceable by the
+ * config of the very project whose SQL hung.
  *
  * @param inFlight - What the run was doing when the log stopped growing
- * @param budgetSecs - The bound that was blown, so the operator can raise it
+ * @param ending - Which way the run ended, and what the operator can do
  * @returns The run-integrity finding
  */
-function killedRunFinding(inFlight: UnitInFlight, budgetSecs: number): ValidationIssue {
-  const named = inFlight.kind === 'check'
-    ? `while the check "${inFlight.name}" was running`
-    : 'while no check was running — between the population and the first statement,'
-      + ' or after the last one';
-
-  return {
-    code: 'RESOURCE_CHECK_BROKEN',
-    severity: 'error',
-    message:
-      `This run made no progress for ${budgetSecs}s and was killed ${named}, so the checks`
-      + ' after it never executed and this document is not a verdict.'
+function interruptedRunFinding(inFlight: UnitInFlight, ending: CheckRunEnding): ValidationIssue {
+  const where = inFlightPhrase(inFlight);
+  const message = ending.kind === 'budget'
+    ? `This run made no progress for ${ending.budgetSecs}s and was killed ${where}, so the`
+      + ' checks after it never executed and this document is not a verdict.'
       + ' A statement that will not finish cannot be stopped from inside the process —'
       + ' the query is synchronous and holds the event loop — so the bound is enforced by'
       + ' killing the run. Raise it with `--budget <seconds>` if the work is legitimately'
       + ' slow, or `--budget 0` to remove it (the run can then hang forever).'
-      + ' ⚠️ The checks listed under `checks` DID complete and `rows` is what each'
-      + ' statement selected, but their individual violations are NOT in `issues`: the'
-      + ' progress log records costs, not findings. Read that list as incomplete.',
-  };
+    : `This run DIED before it finished: ${deathPhrase(ending.death)} ${where}, so the checks`
+      + ' after it never executed and this document is not a verdict.'
+      + deathRemedy(ending.death)
+      + ' The budget was not what ended this run — the watchdog never fired — so raising it'
+      + ' would not help.';
+
+  return { code: 'RESOURCE_CHECK_BROKEN', severity: 'error', message: message + INCOMPLETE_NOTICE };
 }
 
 /**
- * Rebuild the document from what a killed run left on disk.
+ * The refusal when there is no population line to build a document from.
+ *
+ * Separate wording per ending for the same reason the finding is: telling an
+ * operator whose child was OOM-killed to raise `--budget` sends them to change
+ * the one thing that had nothing to do with it.
+ *
+ * @param ending - Which way the run ended
+ * @returns The operator-error message
+ */
+function noPopulationMessage(ending: CheckRunEnding): string {
+  const tail = ' There is no projection to report on and no honest document to publish.';
+  if (ending.kind === 'abnormal') {
+    return `This run DIED before its population completed: ${deathPhrase(ending.death)}.`
+      + tail + deathRemedy(ending.death);
+  }
+  return `The run made no progress for ${ending.budgetSecs}s and was killed before its`
+    + ' population completed.' + tail
+    + ' Population is legitimately slow on a large tree — ~1.2s warm here but 33-35s with a'
+    + ' cold parse cache, and it reports progress only when it FINISHES, so the budget is a'
+    + ' total bound for that one unit — so raise it with `--budget <seconds>` before assuming'
+    + ' the crawl is stuck.';
+}
+
+/**
+ * Rebuild the document from what an INTERRUPTED run left on disk.
+ *
+ * Both interruptions come here — the watchdog's kill and an abnormal death —
+ * because everything below this line is identical for them: the same recovered
+ * costs, the same non-overridable finding, the same refusal when there is no
+ * population. Only the sentences differ, and {@link CheckRunEnding} carries that.
  *
  * 🔑 It feeds {@link buildCheckOutputData}, the SAME builder a completed run
- * uses. A second payload builder for the killed lane would be a second shape to
+ * uses. A second payload builder for this lane would be a second shape to
  * keep in step with every future field — and the failure mode is silent, because
- * nobody reads a killed run's document until the day they need it.
+ * nobody reads an interrupted run's document until the day they need it.
  *
- * 🚨 **A run killed during POPULATION gets no document at all.** There is no
+ * 🚨 **A run interrupted during POPULATION gets no document at all.** There is no
  * projection, so `population`, `populationSecs` and `membersEnumerated` have no
  * honest value — and inventing `membersEnumerated: 0` would be worse than a
  * blank, because that value already MEANS "this gate ran over an empty corpus",
@@ -597,28 +707,20 @@ function killedRunFinding(inFlight: UnitInFlight, budgetSecs: number): Validatio
  * @param options - The wreckage
  * @param options.entries - What `parseProgressLog` recovered
  * @param options.root - The corpus root the parent resolved
- * @param options.budgetSecs - The bound that was blown
- * @param options.durationMs - Wall time from spawn to kill
+ * @param options.ending - Which way the run was interrupted
+ * @param options.durationMs - Wall time from spawn to ending
  * @returns The input to {@link buildCheckOutputData}
  * @throws When the child never reported a completed population
  */
-export function buildKilledCheckInput(options: {
+export function buildInterruptedCheckInput(options: {
   entries: readonly ProgressEntry[];
   root: string;
-  budgetSecs: number;
+  ending: CheckRunEnding;
   durationMs: number;
 }): CheckPayloadInput {
-  const { entries, root, budgetSecs, durationMs } = options;
+  const { entries, root, ending, durationMs } = options;
   const population = entries.find((entry) => entry.kind === 'population');
-  if (population === undefined) {
-    throw new Error(
-      `The run made no progress for ${budgetSecs}s and was killed before its population`
-      + ' completed, so there is no projection to report on and no honest document to'
-      + ' publish. Population is legitimately slow on a large tree — ~1.2s warm here but'
-      + ' 33-35s with a cold parse cache — so raise the bound with `--budget <seconds>`'
-      + ' before assuming the crawl is stuck.',
-    );
-  }
+  if (population === undefined) throw new Error(noPopulationMessage(ending));
 
   return {
     root,
@@ -626,7 +728,7 @@ export function buildKilledCheckInput(options: {
     population: population.population,
     populationMs: population.populationMs,
     membersEnumerated: population.membersEnumerated,
-    issues: [killedRunFinding(unitInFlight(entries), budgetSecs)],
+    issues: [interruptedRunFinding(unitInFlight(entries), ending)],
     // 🪤 Rebuilt field by field rather than passed through. The log's check
     // entry carries a `kind` discriminator that `CheckCost` does not, and the
     // conditional spreads keep `rows`/`broken` ABSENT rather than `undefined` —
@@ -800,10 +902,17 @@ async function superviseCheckRun(options: {
     if (run.outcome === 'completed') return { forward: run.stdout, code: run.code };
 
     return {
-      payload: buildCheckOutputData(buildKilledCheckInput({
+      payload: buildCheckOutputData(buildInterruptedCheckInput({
         entries: parseProgressLog(run.log),
         root,
-        budgetSecs: options.budgetSecs,
+        // 🚨 The abnormal ending reaches the SAME fail-closed document the
+        // watchdog's kill does. It used to reach `{ outcome: 'completed', code:
+        // 0 }` instead, because the close handler never read `close`'s signal
+        // argument — so a child that aborted on its heap limit printed nothing
+        // and exited 0, on precisely the runaway shape the bound exists for.
+        ending: run.outcome === 'killed'
+          ? { kind: 'budget', budgetSecs: options.budgetSecs }
+          : { kind: 'abnormal', death: run.death },
         durationMs: run.elapsedMs,
       })),
     };
@@ -843,6 +952,13 @@ export async function checkCommand(
 
   try {
     const budgetSecs = parseBudgetSeconds(options.budget);
+    // Before anything is spawned: a budget the fork below would silently ignore
+    // is an operator error, not a bound.
+    requireSupervisableFlags({
+      costLog: options.costLog,
+      budgetRaw: options.budget,
+      budgetSecs,
+    });
     // The presence of `--cost-log` says "you ARE the child". `--budget 0` says
     // the operator declined the bound; both run the work here, and the second
     // can therefore hang forever, which its help text says.
@@ -864,7 +980,8 @@ export async function checkCommand(
         process.exit(ending.code);
       }
       emitCheckDocument(ending.payload, options.format);
-      // ⛔ Never 0. A killed run must not look like a pass.
+      // ⛔ Never 0. A run that did not finish — killed by the watchdog OR dead of
+      // its own memory — must not look like a pass.
       process.exit(1);
     }
 
@@ -944,10 +1061,16 @@ async function runOutcome(options: {
       populationMs: provenance.populationMs,
       membersEnumerated: extent.membersEnumerated,
     });
-    return {
-      ...runDeclaredChecks({ checks, only, ask, validation, ...extent, onProgress }),
-      ...provenance,
-      ...extent,
-    };
+    const ran = runDeclaredChecks({ checks, only, ask, validation, ...extent, onProgress });
+    // 🚨 One more line, and it is not decoration. After the last check files its
+    // cost the child is NOT done: it still resolves severities and serialises a
+    // document that runs to 639 KB of YAML at 5,000 issues, and it used to emit
+    // nothing at all through that phase. The watchdog's clock therefore kept
+    // running from the final cost line, and a budget that expired during
+    // serialisation SIGKILLed a run whose answer was already computed — a false
+    // failure that throws away a correct result. One `appendFileSync` buys that
+    // phase a fresh budget window, and names it honestly in a report.
+    onProgress?.({ kind: 'checks-complete' });
+    return { ...ran, ...provenance, ...extent };
   });
 }
