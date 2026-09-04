@@ -139,7 +139,7 @@ interface RAGAdminProvider {
 #### `OnnxEmbeddingProvider` (Default)
 
 - **Model**: `Xenova/all-MiniLM-L6-v2` (384 dimensions)
-- **Runtime**: `onnxruntime-web` (WASM) — batteries-included, no extra install
+- **Runtime**: `onnxruntime-web` (WASM) — a regular dependency of `@vibe-agent-toolkit/rag`, so nothing extra to install once that package is present. ⚠️ The RAG packages themselves are **optional peer dependencies** of the CLI and are not installed with it: `npm install @vibe-agent-toolkit/rag-lancedb`.
 - **Speed**: ~100 chunks/sec on M1 Mac
 - **Size**: ~23MB int8-quantized model download (cached locally)
 - **Pro**: No API costs, works offline, no native addon

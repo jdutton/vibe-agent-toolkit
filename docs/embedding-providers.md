@@ -118,7 +118,7 @@ Two rules follow:
 
 | Provider | Speed | Quality | Cost | API Key | Dimensions | `maxInputTokens` | Runtime | Install |
 |----------|-------|---------|------|---------|------------|------------------|---------|---------|
-| **ONNX** | Fast | Good | Free | No | 384 | 256 | WASM (`onnxruntime-web`) | Batteries-included — no extra install |
+| **ONNX** | Fast | Good | Free | No | 384 | 256 | WASM (`onnxruntime-web`) | Nothing to install beyond `@vibe-agent-toolkit/rag` |
 | **OpenAI** | Medium | Excellent | $$ | Yes | 1536/3072 | 8192 (8191 for ada-002) | Cloud API | `npm install openai` |
 
 Note how far apart those input limits are — 32x — and that dimensions tell you
@@ -134,12 +134,13 @@ the provider it is actually using.
 
 ### OnnxEmbeddingProvider
 
-**Local, batteries-included embeddings via `onnxruntime-web` (WASM).**
+**Local embeddings via `onnxruntime-web` (WASM), bundled with `@vibe-agent-toolkit/rag`.**
 
 ```typescript
 import { OnnxEmbeddingProvider } from '@vibe-agent-toolkit/rag';
 
-// No install step — onnxruntime-web ships as a regular dependency of @vibe-agent-toolkit/rag
+// No install step BEYOND @vibe-agent-toolkit/rag itself — onnxruntime-web is a regular
+// dependency of it. See "Installing Provider Dependencies": the RAG packages are opt-in.
 
 // Auto-downloads model on first run
 const provider = new OnnxEmbeddingProvider({
@@ -233,7 +234,24 @@ rather than over-claims. (The ada-002 off-by-one is the entire provenance of the
 
 ## Installing Provider Dependencies
 
-**`OnnxEmbeddingProvider` is batteries-included** — `onnxruntime-web` ships as a regular dependency of `@vibe-agent-toolkit/rag`, so local embeddings work with no extra install.
+### ⚠️ First: the RAG packages themselves are opt-in
+
+Installing `@vibe-agent-toolkit/cli` does **not** install the RAG lane. `@vibe-agent-toolkit/rag`
+and `@vibe-agent-toolkit/rag-lancedb` are declared as **optional peer dependencies**, which npm and
+pnpm do not auto-install:
+
+```bash
+npm install @vibe-agent-toolkit/rag-lancedb    # pulls @vibe-agent-toolkit/rag with it
+```
+
+They were `optionalDependencies` previously, where "optional" means *the install may fail without
+failing the build* — not *skipped* — so every adopter paid for the RAG stack whether or not they
+used it. Measured against the published tarballs: **389 MB installed, 92 MB with those skipped.**
+
+**`OnnxEmbeddingProvider` then needs nothing further** — `onnxruntime-web` is a regular dependency
+of `@vibe-agent-toolkit/rag`, so once that package is present local embeddings work with no extra
+install. "Batteries-included" below is scoped to that: it means no *second* install on top of the
+RAG package, not that `vat rag` runs from a bare CLI install.
 
 **OpenAI is an optional peer dependency** — install only if you want it:
 
@@ -530,7 +548,7 @@ const results = await ragProvider.query({
 ```
 Need embeddings?
 ├─ Local, free, no API key?
-│  └─ Use OnnxEmbeddingProvider (batteries-included, no extra install)
+│  └─ Use OnnxEmbeddingProvider (nothing to install beyond @vibe-agent-toolkit/rag)
 │
 ├─ Production cloud / Highest quality?
 │  ├─ Need best accuracy?

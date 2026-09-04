@@ -1,11 +1,37 @@
 ---
 name: vat-rag
-description: Use when running `vat rag index` / `vat rag query` or configuring RAG for agent context — covers the CLI commands, native embedding providers and vector store support, chunking, custom metadata, and extension points for adding new backends.
+description: Use when running `vat rag index` / `vat rag query` or configuring RAG for agent context — covers installing the RAG backends (they are OPT-IN, not installed with the CLI), the CLI commands, native embedding providers and vector store support, chunking, custom metadata, and extension points for adding new backends.
 ---
 
 # VAT RAG: Indexing and Querying Markdown with Native Providers
 
 This skill covers VAT's RAG (retrieval-augmented generation) surface: the `vat rag` CLI commands, the embedding and vector-store providers that ship natively, and how to extend either side. For authoring the markdown that gets indexed (frontmatter schemas, collections) use `vibe-agent-toolkit:vat-knowledge-resources`.
+
+## ⚠️ Install the RAG backends first — they are NOT installed with the CLI
+
+`vat rag` needs `@vibe-agent-toolkit/rag-lancedb`, and installing the CLI does **not** bring it.
+Both RAG packages are declared as **optional peer dependencies**, which npm and pnpm do not
+auto-install:
+
+```bash
+npm install @vibe-agent-toolkit/rag-lancedb    # pulls @vibe-agent-toolkit/rag with it
+```
+
+**Why it is opt-in.** They were `optionalDependencies` before, and "optional" there means *the
+install may fail without failing the build* — not *skipped*. So every adopter downloaded
+`onnxruntime-web`, a LanceDB platform binary, `gpt-tokenizer` and `apache-arrow` whether or not
+they ever ran a `rag` command. Measured against the published tarballs: **389 MB installed, 92 MB
+with those skipped — a 297 MB difference** none of which a non-RAG adopter was using.
+
+Without the install every `vat rag` command fails with a legible error naming the package to
+install — the CLI has always deferred loading these, so nothing else is affected. **The projection
+store is unrelated and needs no install**: `@vibe-agent-toolkit/projection-sqlite` is an ordinary
+dependency with no third-party deps at all.
+
+⛔ Where the provider table below says an embedding provider needs no install, that is scoped to
+the embedding RUNTIME and assumes the step above is done: **once `@vibe-agent-toolkit/rag` is
+present**, `onnxruntime-web` comes with it and local embeddings need nothing further. It does not
+mean `vat rag` works from a bare CLI install.
 
 ## CLI Commands
 
@@ -41,14 +67,14 @@ VAT's `@vibe-agent-toolkit/rag` package provides the core interfaces and a small
 
 | Provider | Model | Where it runs |
 |---|---|---|
-| `OnnxEmbeddingProvider` (default) | `Xenova/all-MiniLM-L6-v2` (default, 384-dim) | Local, via `onnxruntime-web` (WASM) — no API key, batteries-included (no extra install) |
+| `OnnxEmbeddingProvider` (default) | `Xenova/all-MiniLM-L6-v2` (default, 384-dim) | Local, via `onnxruntime-web` (WASM) — no API key, and no install beyond `@vibe-agent-toolkit/rag` itself |
 | `OpenAIEmbeddingProvider` | `text-embedding-3-small` (default) | OpenAI API — requires `OPENAI_API_KEY` |
 
 All implement the `EmbeddingProvider` interface (`name`, `model`, `dimensions`, `embed(text)`, `embedBatch(texts)`), so the rest of the RAG pipeline doesn't care which one is wired in.
 
 ### Vector store
 
-- `@vibe-agent-toolkit/rag-lancedb` — native LanceDB-backed store, lives on disk under `.rag-db/` by default. Supports approximate-nearest-neighbor search, metadata filtering, and incremental re-indexing.
+- `@vibe-agent-toolkit/rag-lancedb` — native LanceDB-backed store, **installed explicitly** (see the top of this skill), lives on disk under `.rag-db/` by default. Supports approximate-nearest-neighbor search, metadata filtering, and incremental re-indexing.
 
 ### Chunking and metadata
 

@@ -505,6 +505,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The agent-facing skills documented a field that no longer exists, and did not document
+  `vat resources check` at all.** `vat-knowledge-resources` described an `engine: sqlite |
+  ephemeral` output field, and an inference rule built on combining it with `population` — that
+  field was removed before release (the statement now always runs against an in-memory database
+  holding this tree's projection, so the value was constant). It also had no mention of
+  `vat resources check`, `--budget`, `populationMs`, or the fact that `resources.include` /
+  `resources.exclude` do **not** scope the projection — the last of which produced a genuine false
+  finding on a real adopter (`scan` reported 1,473 files where the projection held 11,685). All four
+  are now documented, and the router skill and CLI cheat-sheet route to `query` and `check` instead
+  of only `validate`.
+
+- **The RAG docs told adopters no install was needed, without saying the RAG packages are now
+  opt-in.** `onnxruntime-web` is still an ordinary dependency of `@vibe-agent-toolkit/rag`, so
+  "batteries-included" was true of the embedding runtime — but the CLI no longer installs
+  `@vibe-agent-toolkit/rag` at all, so an adopter following those docs from a bare CLI install would
+  hit a missing-backend error at the first `vat rag` command. `vat-rag`, `docs/embedding-providers.md`
+  and `docs/architecture/rag.md` now state the prerequisite (`npm install
+  @vibe-agent-toolkit/rag-lancedb`) and scope the no-extra-install claim to what it actually covers.
+
 - **On Windows, a `vat resources check` whose child died of memory published NOTHING — the other
   half of the signal-death defect, which the signal fix could not reach.** A child that exhausts its
   heap is reported by `close` as `(null, 'SIGABRT')` on macOS and Linux, and the supervisor turns
