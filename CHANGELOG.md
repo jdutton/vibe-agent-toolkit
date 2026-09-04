@@ -16,7 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **install by default** (there, "optional" means the install may fail without failing the build, not
   that it is skipped), so every adopter downloaded `onnxruntime-web`, a LanceDB platform binary,
   `apache-arrow` and `protobufjs` whether or not they ever ran a `rag` command. Measured on a real
-  adopter upgrade: **~300 MB of `node_modules` and ~23 s of install time**. They are now **optional
+  adopter upgrade: **~300 MB of `node_modules` and ~23 s of install time**. Reproduced directly
+  against the published rc.4 tarballs on 2026-09-04: `pnpm add @vibe-agent-toolkit/cli@0.2.0-rc.4`
+  installs **389 MB**, and the same install with those optional entries skipped — which is exactly
+  what an optional *peer* achieves — installs **92 MB**. The **297 MB** difference is
+  `onnxruntime-web` (137 MB), the LanceDB platform binary (94 MB), `gpt-tokenizer` (44 MB) and
+  `apache-arrow` (8 MB); none of those four appear in the tree at all afterwards. They are now **optional
   peer dependencies**, which are not auto-installed. **If you use `vat rag` or opt into the projection
   store, install the backend explicitly:**
 
@@ -26,8 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **The projection store is not affected and needs no install** — `@vibe-agent-toolkit/projection-sqlite`
   ships as an ordinary dependency. It has no third-party dependencies at all (only `node:sqlite`,
-  built into Node) and a 152 KB dist, so the platform-binary cost this change is about simply does
-  not apply to it.
+  built into Node) and a **118 KB unpacked** dist as published in rc.4, so the platform-binary cost
+  this change is about simply does not apply to it.
 
   Every other command is unaffected, and an absent backend was already a legible error naming the
   package to install — the CLI has always deferred loading these. Only the download changed.
