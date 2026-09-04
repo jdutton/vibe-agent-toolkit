@@ -91,6 +91,15 @@ const FOREIGN_PATH = `${FOREIGN_PREFIX}/zzz.md`;
 const PROJECTION_DATABASE = 'projection.db';
 
 /**
+ * The least of a run's wall time `populationSecs` may honestly account for.
+ *
+ * Anchored to the DEFECT side rather than to a machine: see the case that reads
+ * it for both sides of the threshold, the platform that moved it, and why it
+ * must not be lowered a second time.
+ */
+const HONEST_SPAN_FRACTION = 0.45;
+
+/**
  * A cheap aggregate, used wherever the QUESTION does not matter and only the run
  * does — the cache-tell arms, which are about where a population came from.
  */
@@ -457,8 +466,25 @@ describe('vat resources query', () => {
     //   DEFECT, cold store — 0.0475/0.161, 0.0466/0.148, 0.0492/0.159 → 0.29-0.32
     //   FIXED,  cold store — 0.192/0.193, 0.157/0.159, 0.200/0.202   → 0.99
     //   FIXED,  no store   — 0.156/0.158, 0.234/0.235, 0.157/0.157   → 0.99-1.00
-    // 0.6 sits roughly twice the worst defect reading and well below the best
-    // honest one, so it fails the defect without being noise-sensitive.
+    //
+    // 🪤 **The threshold was 0.6 and that was calibrated on ONE platform.** A
+    // `windows-latest` runner read 0.579 on the FIXED build and failed — an
+    // honest reading, not the defect, because Windows spends real time after the
+    // population that macOS does not: closing the database, and every file
+    // operation passing a virus scanner. macOS honest overhead outside the span
+    // is ~1 ms; that run's was ~40% of the command.
+    //
+    //   FIXED,  cold store, windows-latest — → 0.579
+    //
+    // So the bound is anchored to the DEFECT side, which is a property of the
+    // code's shape rather than of the machine: the span sheds a fixed chunk of
+    // work, and no amount of platform slowness moves a shrunken reading UP. 0.45
+    // is 1.4x the worst defect reading (0.32) and 0.78x the worst honest one
+    // (0.579).
+    //
+    // ⛔ If this fails again, do NOT lower it a second time — that walks the
+    // bound down to meet the defect. Make the store arm's POST-population work
+    // measurable instead, so the fraction stops competing with it.
     const coldDir = safePath.join(storeDir, 'span');
     const withStore = query(COUNT_BLOBS, {
       env: { ...storeEnv(), VAT_PROJECTION_STORE_DIR: coldDir },
@@ -478,7 +504,8 @@ describe('vat resources query', () => {
     for (const run of [withStore, withoutStore]) {
       const durationSecs = run.doc['durationSecs'] as number;
       expect(durationSecs).toBeGreaterThan(0);
-      expect((run.doc['populationSecs'] as number) / durationSecs).toBeGreaterThan(0.6);
+      expect((run.doc['populationSecs'] as number) / durationSecs)
+        .toBeGreaterThan(HONEST_SPAN_FRACTION);
     }
   });
 

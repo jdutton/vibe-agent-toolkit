@@ -328,7 +328,27 @@ export type AbnormalDeath =
     readonly detail: string;
     readonly pid: number | undefined;
   }
-  | { readonly kind: 'no-status' };
+  | { readonly kind: 'no-status' }
+  /**
+   * The child exited with a CODE, and published nothing at all.
+   *
+   * 🚨 The Windows half of the signal-death defect, and it survived the fix for
+   * the POSIX half. A fatal abort — Node's own heap limit among them — has no
+   * signal to report on a platform that has none, so `close` fires with
+   * `(134, null)` where macOS and Linux give `(null, 'SIGABRT')`. That shape is
+   * indistinguishable from an ordinary nonzero exit to
+   * {@link resolveChildEnding}, which read it as a COMPLETED run and handed the
+   * parent an empty string to forward. Measured on `windows-latest`: exit 134,
+   * zero bytes of stdout, on precisely the runaway the bound exists to catch.
+   *
+   * It did not fail OPEN — 134 is not 0 — so a gate still went red. But the
+   * report was absent, which is the other half of what the original defect did.
+   *
+   * `code` is carried because it is the only thing left that says HOW the child
+   * died: 128 + n is the conventional encoding of a fatal signal, and
+   * `deathRemedy` reads the signal back out of it.
+   */
+  | { readonly kind: 'no-output'; readonly code: number };
 
 /** What a child's ending MEANT, once the watchdog's belief is reconciled with it. */
 export type RunResolution =
@@ -410,6 +430,49 @@ export function resolveChildEnding(ending: {
   return ending.signal === null
     ? { kind: 'abnormal', death: { kind: 'no-status' } }
     : { kind: 'abnormal', death: { kind: 'signal', signal: ending.signal } };
+}
+
+/**
+ * Reconcile "how the process ended" with "what it left behind".
+ *
+ * ## 🚨 A completion that PUBLISHED NOTHING did not complete
+ *
+ * {@link resolveChildEnding} answers a question about the process — what `close`
+ * reported, reconciled with what the supervisor did. This answers a DIFFERENT
+ * one, about the artifact, and the two disagree in exactly one place: a child
+ * that exited with a code and wrote no document.
+ *
+ * Every in-process path through `checkCommand` ends at `emitCheckDocument` or at
+ * `handleCommandError`, and both write to stdout — a clean pass, a violation, a
+ * bricked config, a mistyped `--check`. There is no exit this command can take
+ * that legitimately publishes nothing. So an empty stdout is not a quiet run, it
+ * is a run that was cut off before it could say anything, and forwarding its
+ * exit code verbatim tells the operator a number and nothing else.
+ *
+ * ## 🪤 Why this is not folded into {@link resolveChildEnding}
+ *
+ * That function's branch ORDER is load-bearing and reasoned entirely about
+ * process endings and supervisor beliefs. The emptiness of stdout belongs to
+ * neither, and threading it through would put an artifact test inside an
+ * ordering argument that has already been got wrong twice. It runs AFTER, on the
+ * one branch it can change, and it changes no other.
+ *
+ * ⚠️ **Blank, not unparseable.** The parent forwards the child's document
+ * verbatim precisely so it stays `--format`-agnostic, so it cannot ask whether
+ * the bytes parse without learning the format. A truncated document — an abort
+ * that landed mid-write — therefore still forwards, and that is the honest
+ * limit of this test rather than an oversight.
+ *
+ * @param resolution - How the process ended
+ * @param stdout - Everything the child wrote to stdout
+ * @returns The resolution, with a silent completion re-read as abnormal
+ */
+export function resolveSilentCompletion(
+  resolution: RunResolution,
+  stdout: string,
+): RunResolution {
+  if (resolution.kind !== 'completed' || stdout.trim() !== '') return resolution;
+  return { kind: 'abnormal', death: { kind: 'no-output', code: resolution.code } };
 }
 
 /** How a supervised run ended. */
@@ -544,17 +607,19 @@ export async function superviseCheck(options: {
   });
   clearInterval(timer);
 
-  if (resolution.kind === 'completed') {
-    return {
-      outcome: 'completed',
-      code: resolution.code,
-      stdout: Buffer.concat(chunks).toString('utf-8'),
-    };
+  const stdout = Buffer.concat(chunks).toString('utf-8');
+  // 🚨 AFTER the ending is resolved, never inside it. A child that exited with a
+  // code and published nothing did not complete, whatever `close` said — see
+  // {@link resolveSilentCompletion} for the platform this is about.
+  const ending = resolveSilentCompletion(resolution, stdout);
+
+  if (ending.kind === 'completed') {
+    return { outcome: 'completed', code: ending.code, stdout };
   }
   const wreckage = { log: readLog(options.logPath), elapsedMs: Date.now() - startedAt };
-  return resolution.kind === 'killed'
+  return ending.kind === 'killed'
     ? { outcome: 'killed', ...wreckage }
-    : { outcome: 'abnormal', death: resolution.death, ...wreckage };
+    : { outcome: 'abnormal', death: ending.death, ...wreckage };
 }
 
 /**

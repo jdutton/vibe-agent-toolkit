@@ -32,6 +32,8 @@
  * reason instrumenting it further would look like an improvement and not be one.
  */
 
+import { constants } from 'node:os';
+
 import { describe, expect, it } from 'vitest';
 
 import type { ProgressEntry } from '../../src/commands/resources/check-progress.js';
@@ -42,6 +44,7 @@ import {
   pollWatchdog,
   requireSupervisableFlags,
   resolveChildEnding,
+  resolveSilentCompletion,
   runsInThisProcess,
   type WatchdogState,
 } from '../../src/commands/resources/check-supervisor.js';
@@ -491,6 +494,104 @@ describe('resolveChildEnding', () => {
     // supervisor believes it did.
     expect(resolveChildEnding({ code: 0, signal: null, killed: true }))
       .toStrictEqual({ kind: 'completed', code: 0 });
+  });
+});
+
+/**
+ * The exit code a fatal abort surfaces as, DERIVED from Node's own signal table.
+ *
+ * 🪤 Never the literal `134`. The number is `128 + SIGABRT`, and writing it out
+ * would put the platform's numbering in a second place — where it would be a
+ * test that agrees with itself rather than with the code it guards.
+ */
+const ABORT_EXIT_CODE = 128 + constants.signals.SIGABRT;
+
+/** A document, as far as the parent forwarding it is concerned. */
+const A_DOCUMENT = 'status: ok\n';
+
+describe('resolveSilentCompletion — the WINDOWS half of the signal-death defect', () => {
+  it('re-reads a completion that published NOTHING as abnormal, carrying the code', () => {
+    // 🚨 The defect. Windows has no signals, so Node reports its own fatal heap
+    // abort as `close(134, null)` where macOS and Linux report
+    // `close(null, 'SIGABRT')`. That shape is an ordinary nonzero exit to
+    // `resolveChildEnding`, so the parent forwarded an EMPTY string and exited
+    // 134 — no document, no finding, no remedy, on precisely the runaway the
+    // bound exists to catch. Measured on `windows-latest` for six consecutive
+    // pushes while macOS and Linux stayed green.
+    expect(resolveSilentCompletion({ kind: 'completed', code: ABORT_EXIT_CODE }, ''))
+      .toStrictEqual({
+        kind: 'abnormal',
+        death: { kind: 'no-output', code: ABORT_EXIT_CODE },
+      });
+  });
+
+  it('reads whitespace as nothing, because a newline is not a report', () => {
+    expect(resolveSilentCompletion({ kind: 'completed', code: 1 }, '\n  \n').kind)
+      .toBe('abnormal');
+  });
+
+  it('leaves a completion that DID publish alone, whatever its exit code', () => {
+    // ⛔ The negative control, and it is what stops this function from being
+    // "always abnormal". A check that finds violations exits 1 WITH a document,
+    // and that is the commonest non-zero run there is.
+    expect(resolveSilentCompletion({ kind: 'completed', code: 1 }, A_DOCUMENT))
+      .toStrictEqual({ kind: 'completed', code: 1 });
+  });
+
+  it('leaves a KILLED run alone — the watchdog already spoke for it', () => {
+    // A killed child publishes nothing by definition; re-reading its ending as
+    // `no-output` would swap the watchdog's accurate account for a worse one.
+    expect(resolveSilentCompletion({ kind: 'killed' }, '')).toStrictEqual({ kind: 'killed' });
+  });
+
+  it('leaves an ending that was ALREADY abnormal alone', () => {
+    const signalled = {
+      kind: 'abnormal',
+      death: { kind: 'signal', signal: ABORTED },
+    } as const;
+
+    expect(resolveSilentCompletion(signalled, '')).toStrictEqual(signalled);
+  });
+});
+
+describe('the document a SILENT completion publishes', () => {
+  /** The Windows shape: exited with a code that encodes an abort, said nothing. */
+  const aborted = (): CheckPayloadInput =>
+    diedOf({ kind: 'no-output', code: ABORT_EXIT_CODE });
+
+  it('fails the run, exactly as the signal death does', () => {
+    expect(buildCheckOutputData(aborted())['status']).toBe('error');
+  });
+
+  it('gives the IDENTICAL heap remedy a SIGABRT reader gets', () => {
+    // 🔑 The whole point of recovering the signal from the code: the operator
+    // hit the same wall, so they get the same advice. Asserting the heap
+    // sentence rather than the signal NAME, because the generic fall-through
+    // below also names an exit code — only this branch mentions the heap.
+    const [finding] = aborted().issues;
+
+    expect(finding?.message).toMatch(/heap|memory/i);
+    expect(finding?.message).toMatch(/LIMIT|narrower/);
+  });
+
+  it('quotes the exit code, which is the only evidence the operator has left', () => {
+    expect(aborted().issues[0]?.message).toContain(String(ABORT_EXIT_CODE));
+  });
+
+  it('does not blame the budget, which did not fire', () => {
+    expect(aborted().issues[0]?.message).not.toMatch(/Raise it with `--budget/);
+  });
+
+  it('calls an exit code that encodes NO signal a defect in vat', () => {
+    // ⛔ The other arm, and it must not borrow the heap remedy. `2` is a config
+    // error the child chose deliberately — and every path through the command
+    // ends by writing a document, so a `2` with no document is vat's bug, not
+    // the adopter's SQL.
+    const [finding] = diedOf({ kind: 'no-output', code: 2 }).issues;
+
+    expect(finding?.message).toMatch(/defect in vat/i);
+    expect(finding?.message).not.toMatch(/heap/i);
+    expect(finding?.message).not.toContain(NO_INFORMATION);
   });
 });
 

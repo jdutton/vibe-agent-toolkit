@@ -505,6 +505,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **On Windows, a `vat resources check` whose child died of memory published NOTHING — the other
+  half of the signal-death defect, which the signal fix could not reach.** A child that exhausts its
+  heap is reported by `close` as `(null, 'SIGABRT')` on macOS and Linux, and the supervisor turns
+  that into a `RESOURCE_CHECK_BROKEN` document naming the statement and exiting 1. Windows has no
+  signals, so the identical abort arrives as `(134, null)` — indistinguishable from an ordinary
+  non-zero exit — and the parent forwarded **zero bytes of stdout and exit 134**. It did not fail
+  open, so a gate still went red, but the operator got a number and no report at all, on precisely
+  the runaway the `--budget` bound exists to catch. Reproduced on `windows-latest` for six
+  consecutive CI runs while both Unix matrix legs stayed green.
+
+  The fix does not test for the platform. Every path through `vat resources check` ends by writing a
+  document, so a child that exited with a code and published nothing did not complete, whatever its
+  exit code says; that ending now reaches the same fail-closed document a watchdog kill does. The
+  remedy is recovered from the exit code — 128 + *n* is read back through Node's own signal table, so
+  a Windows operator hitting the heap limit gets the identical "narrow the statement or add a
+  `LIMIT`" advice a Linux one gets. An exit code encoding no signal is reported as a defect in vat
+  rather than in the adopter's SQL, because there is no exit this command can legitimately take
+  without publishing something.
+
 - **A typo'd column in `vat resources query` cost a full projection population before it was
   reported.** SQLite resolves table and column names when a statement is *prepared*, so the answer
   was knowable before a single row existed — but the only place a statement met the schema was after

@@ -56,6 +56,7 @@
  * change's call to make.
  */
 
+import { constants } from 'node:os';
 import { performance } from 'node:perf_hooks';
 
 import { issuesFromCheckRows, type ResourceCheck } from '@vibe-agent-toolkit/resources';
@@ -591,6 +592,9 @@ function deathPhrase(death: AbnormalDeath): string {
     return 'the budget was blown and the SIGKILL that should have ended the run was REFUSED'
       + ` (${death.detail})`;
   }
+  if (death.kind === 'no-output') {
+    return `the child process exited ${death.code} and published no report at all`;
+  }
   return 'the child process ended with neither an exit code nor a signal';
 }
 
@@ -698,6 +702,68 @@ function signalRemedy(signal: string): string {
 }
 
 /**
+ * The shell convention for "terminated by signal n": an exit code of 128 + n.
+ *
+ * Not a tunable and not a schema — it is the encoding POSIX shells, Node and
+ * every CI runner already agree on, and the only reason it is named is so
+ * {@link signalFromExitCode} reads as arithmetic rather than as a magic number.
+ */
+const SIGNAL_EXIT_BASE = 128;
+
+/**
+ * Read a fatal signal back out of an exit code, or nothing.
+ *
+ * 🔑 **Derived from Node's own signal table, never a hand-written map.** A
+ * literal `134 → SIGABRT` would be a second place for the platform's numbering
+ * to live, and it would be wrong on any platform that numbers differently.
+ * `os.constants.signals` is the same table Node uses to name a signal in
+ * `close`, and it is populated on Windows too even though nothing there raises
+ * one — which is exactly the case this function exists for.
+ *
+ * ⚠️ Returns `undefined` for an ordinary exit code, which is the common case and
+ * the reason the caller must have something to say without a signal: `2` is a
+ * config error, not `SIG(-126)`.
+ *
+ * @param code - The exit code the child reported
+ * @returns The signal name that code encodes, or undefined if it encodes none
+ */
+function signalFromExitCode(code: number): string | undefined {
+  const raised = code - SIGNAL_EXIT_BASE;
+  if (raised <= 0) return undefined;
+  return Object.entries(constants.signals).find(([, number]) => number === raised)?.[0];
+}
+
+/**
+ * What to do about a child that exited with a code and said nothing.
+ *
+ * 🚨 **This is the SAME event as a signal death, seen on a platform without
+ * signals.** Windows has none, so Node reports its own fatal abort — the heap
+ * limit among them — as exit 134 with `signal === null`, where macOS and Linux
+ * report `SIGABRT` with no code at all. An operator hitting the heap limit on
+ * Windows CI deserves the identical remedy as one hitting it on Linux, so the
+ * signal is recovered from the code and {@link signalRemedy} answers both.
+ *
+ * The exit code is quoted either way, because on this path it is the only
+ * evidence the operator has: the child published nothing.
+ *
+ * @param code - The exit code the child reported
+ * @returns The remedy sentence
+ */
+function noOutputRemedy(code: number): string {
+  const signal = signalFromExitCode(code);
+  if (signal !== undefined) {
+    return ` Exit ${code} is 128 + ${signal}: a platform with no signal to report — Windows —`
+      + ` surfaces as an exit code what macOS and Linux report as ${signal} itself.`
+      + signalRemedy(signal);
+  }
+  return ` Exit ${code} is not a fatal-signal code, so the child chose it and then failed to`
+    + ' publish the document every path through this command ends by writing. That is a defect'
+    + ' in vat rather than in the checks: report it with this exit code, the platform and the'
+    + ' statement that was running. The child\'s stderr was inherited, so whatever it managed'
+    + ' to say is above this report.';
+}
+
+/**
  * What to DO about it — and the reason the death is carried this far as a union
  * rather than as a string.
  *
@@ -719,6 +785,7 @@ function deathRemedy(death: AbnormalDeath): string {
   if (death.kind === 'kill-failed') return killFailedRemedy(death.detail, death.pid);
   if (death.kind === 'spawn-failed') return spawnFailedRemedy(death.detail) + WATCHDOG_UNINVOLVED;
   if (death.kind === 'signal') return signalRemedy(death.signal) + WATCHDOG_UNINVOLVED;
+  if (death.kind === 'no-output') return noOutputRemedy(death.code) + WATCHDOG_UNINVOLVED;
   return ' The cause is outside anything this command can observe; the child left no exit code'
     + ' to report.' + WATCHDOG_UNINVOLVED;
 }
