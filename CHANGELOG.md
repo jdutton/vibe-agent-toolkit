@@ -518,11 +518,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The fix does not test for the platform. Every path through `vat resources check` ends by writing a
   document, so a child that exited with a code and published nothing did not complete, whatever its
   exit code says; that ending now reaches the same fail-closed document a watchdog kill does. The
-  remedy is recovered from the exit code — 128 + *n* is read back through Node's own signal table, so
-  a Windows operator hitting the heap limit gets the identical "narrow the statement or add a
-  `LIMIT`" advice a Linux one gets. An exit code encoding no signal is reported as a defect in vat
-  rather than in the adopter's SQL, because there is no exit this command can legitimately take
-  without publishing something.
+  abort is then recognised by its exit code — **134 on every platform**, because it comes from
+  Node's own abort path — so a Windows operator hitting the heap limit gets the identical "narrow
+  the statement or add a `LIMIT`" advice a Linux one gets. Any other code gets a deliberately
+  non-committal sentence: this command cannot tell an external termination it has no name for from a
+  bug of its own, and claiming either would send half its readers to the wrong place.
+
+  ⚠️ Do **not** re-derive 134 from `os.constants.signals`. On macOS and Linux it is `128 + SIGABRT`
+  with `SIGABRT` = 6; on Windows MSVC numbers `SIGABRT` **22**, so that derivation yields 150 and
+  matches nothing Node emits. A first attempt at this fix derived it that way in both the production
+  code and its unit test, so the two agreed with each other, the round-trip passed on every machine,
+  and the pair was wrong together on the one platform the branch exists for.
 
 - **A typo'd column in `vat resources query` cost a full projection population before it was
   reported.** SQLite resolves table and column names when a statement is *prepared*, so the answer

@@ -32,8 +32,6 @@
  * reason instrumenting it further would look like an improvement and not be one.
  */
 
-import { constants } from 'node:os';
-
 import { describe, expect, it } from 'vitest';
 
 import type { ProgressEntry } from '../../src/commands/resources/check-progress.js';
@@ -52,6 +50,7 @@ import {
   buildCheckOutputData,
   buildInterruptedCheckInput,
   type CheckPayloadInput,
+  NODE_FATAL_ABORT_EXIT_CODE,
 } from '../../src/commands/resources/check.js';
 
 /** The log lines a run writes before it hangs on its second rule. */
@@ -498,13 +497,19 @@ describe('resolveChildEnding', () => {
 });
 
 /**
- * The exit code a fatal abort surfaces as, DERIVED from Node's own signal table.
+ * The exit code a fatal abort surfaces as.
  *
- * 🪤 Never the literal `134`. The number is `128 + SIGABRT`, and writing it out
- * would put the platform's numbering in a second place — where it would be a
- * test that agrees with itself rather than with the code it guards.
+ * 🪤 **This was `128 + constants.signals.SIGABRT` and that was a BLIND
+ * derivation.** The production code derived it the same way, so the round-trip
+ * agreed with itself and passed on every machine — while being wrong together on
+ * the one platform the branch exists for. MSVC numbers `SIGABRT` **22**, not 6,
+ * so on Windows the pair computed 150; Node's measured abort code there is
+ * **134**, the same as Unix, because it comes from Node's own abort path and not
+ * from the platform's signal table. The value now comes from the code under
+ * test, and {@link NODE_FATAL_ABORT_EXIT_CODE}'s own number is pinned separately
+ * below — which is the assertion the derived version could never make.
  */
-const ABORT_EXIT_CODE = 128 + constants.signals.SIGABRT;
+const ABORT_EXIT_CODE = NODE_FATAL_ABORT_EXIT_CODE;
 
 /** A document, as far as the parent forwarding it is concerned. */
 const A_DOCUMENT = 'status: ok\n';
@@ -582,15 +587,24 @@ describe('the document a SILENT completion publishes', () => {
     expect(aborted().issues[0]?.message).not.toMatch(/Raise it with `--budget/);
   });
 
-  it('calls an exit code that encodes NO signal a defect in vat', () => {
-    // ⛔ The other arm, and it must not borrow the heap remedy. `2` is a config
-    // error the child chose deliberately — and every path through the command
-    // ends by writing a document, so a `2` with no document is vat's bug, not
-    // the adopter's SQL.
+  it('pins the abort code as the MEASURED 134, not as a derivation', () => {
+    // 🚨 The assertion the old derived constant could not make. Deriving the
+    // number in the test the same way the code derives it is a round-trip that
+    // agrees with itself: it passed on Windows against 150 while Node was
+    // emitting 134, and the system case failed on the real platform instead.
+    // 134 is measured on macOS, Linux AND `windows-latest`.
+    expect(NODE_FATAL_ABORT_EXIT_CODE).toBe(134);
+  });
+
+  it('does not borrow the heap remedy for an exit code that is not the abort', () => {
+    // ⛔ The other arm. `2` is a config error the child chose deliberately, and
+    // this command cannot tell an unnameable external termination from a bug of
+    // its own — so it must claim neither the heap nor a specific cause.
     const [finding] = diedOf({ kind: 'no-output', code: 2 }).issues;
 
     expect(finding?.message).toMatch(/defect in vat/i);
     expect(finding?.message).not.toMatch(/heap/i);
+    expect(finding?.message).not.toMatch(/SIGABRT/);
     expect(finding?.message).not.toContain(NO_INFORMATION);
   });
 });

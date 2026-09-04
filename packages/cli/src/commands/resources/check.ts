@@ -56,7 +56,6 @@
  * change's call to make.
  */
 
-import { constants } from 'node:os';
 import { performance } from 'node:perf_hooks';
 
 import { issuesFromCheckRows, type ResourceCheck } from '@vibe-agent-toolkit/resources';
@@ -702,65 +701,56 @@ function signalRemedy(signal: string): string {
 }
 
 /**
- * The shell convention for "terminated by signal n": an exit code of 128 + n.
+ * The exit code Node uses for its own fatal abort, on EVERY platform.
  *
- * Not a tunable and not a schema — it is the encoding POSIX shells, Node and
- * every CI runner already agree on, and the only reason it is named is so
- * {@link signalFromExitCode} reads as arithmetic rather than as a magic number.
+ * 🚨 **This is measured, and it is NOT the local platform's signal number.** On
+ * macOS and Linux 134 is the shell encoding `128 + SIGABRT`, where `SIGABRT` is
+ * 6. On Windows `os.constants.signals.SIGABRT` is **22** — MSVC numbers it
+ * differently — so deriving the code from that table gives 150 and matches
+ * nothing Node ever emits. A `windows-latest` run of the heap-abort case
+ * reported exactly **134**, the same as Unix: the number comes from Node's own
+ * abort path, not from the platform's signal table.
+ *
+ * 🪤 An earlier version of this file DID derive it from `os.constants.signals`,
+ * and its unit test derived the same way — so the test agreed with the code, the
+ * round-trip passed on every machine, and the pair was wrong together on the one
+ * platform the branch exists for. The value is therefore pinned as a measured
+ * fact, and a test asserts the number itself rather than re-deriving it.
+ *
+ * ⛔ Not a version constant: it decides nothing about whether stored data is
+ * still valid. It is an external protocol value, like an API header.
  */
-const SIGNAL_EXIT_BASE = 128;
-
-/**
- * Read a fatal signal back out of an exit code, or nothing.
- *
- * 🔑 **Derived from Node's own signal table, never a hand-written map.** A
- * literal `134 → SIGABRT` would be a second place for the platform's numbering
- * to live, and it would be wrong on any platform that numbers differently.
- * `os.constants.signals` is the same table Node uses to name a signal in
- * `close`, and it is populated on Windows too even though nothing there raises
- * one — which is exactly the case this function exists for.
- *
- * ⚠️ Returns `undefined` for an ordinary exit code, which is the common case and
- * the reason the caller must have something to say without a signal: `2` is a
- * config error, not `SIG(-126)`.
- *
- * @param code - The exit code the child reported
- * @returns The signal name that code encodes, or undefined if it encodes none
- */
-function signalFromExitCode(code: number): string | undefined {
-  const raised = code - SIGNAL_EXIT_BASE;
-  if (raised <= 0) return undefined;
-  return Object.entries(constants.signals).find(([, number]) => number === raised)?.[0];
-}
+export const NODE_FATAL_ABORT_EXIT_CODE = 134;
 
 /**
  * What to do about a child that exited with a code and said nothing.
  *
  * 🚨 **This is the SAME event as a signal death, seen on a platform without
  * signals.** Windows has none, so Node reports its own fatal abort — the heap
- * limit among them — as exit 134 with `signal === null`, where macOS and Linux
- * report `SIGABRT` with no code at all. An operator hitting the heap limit on
- * Windows CI deserves the identical remedy as one hitting it on Linux, so the
- * signal is recovered from the code and {@link signalRemedy} answers both.
+ * limit among them — as an exit code with `signal === null`, where macOS and
+ * Linux report `SIGABRT` with no code at all. An operator hitting the heap limit
+ * on Windows CI deserves the identical remedy as one hitting it on Linux, so the
+ * abort is recognised by its code and {@link signalRemedy} answers both.
  *
- * The exit code is quoted either way, because on this path it is the only
- * evidence the operator has: the child published nothing.
+ * ⚠️ Every OTHER code gets a deliberately non-committal sentence. This command
+ * cannot tell an external termination it has no name for from a bug of its own,
+ * and claiming either would send half its readers to the wrong place — the exact
+ * defect {@link signalRemedy}'s fall-through was written to fix.
  *
  * @param code - The exit code the child reported
  * @returns The remedy sentence
  */
 function noOutputRemedy(code: number): string {
-  const signal = signalFromExitCode(code);
-  if (signal !== undefined) {
-    return ` Exit ${code} is 128 + ${signal}: a platform with no signal to report — Windows —`
-      + ` surfaces as an exit code what macOS and Linux report as ${signal} itself.`
-      + signalRemedy(signal);
+  if (code === NODE_FATAL_ABORT_EXIT_CODE) {
+    return ` Exit ${code} is Node's own fatal abort. A platform with no signal to report — Windows`
+      + ' — surfaces as an exit code what macOS and Linux report as SIGABRT itself, and it is the'
+      + ' same event.' + signalRemedy('SIGABRT');
   }
-  return ` Exit ${code} is not a fatal-signal code, so the child chose it and then failed to`
-    + ' publish the document every path through this command ends by writing. That is a defect'
-    + ' in vat rather than in the checks: report it with this exit code, the platform and the'
-    + ' statement that was running. The child\'s stderr was inherited, so whatever it managed'
-    + ' to say is above this report.';
+  return ` Exit ${code} is not Node's abort code, and the child published none of the document`
+    + ' every path through this command ends by writing — so this is either a termination from'
+    + ' outside that left an exit code instead of a signal, or a defect in vat. The child\'s stderr'
+    + ' was inherited, so whatever it managed to say is above this report; if there is nothing'
+    + ' there either, report this exit code with the platform and the statement that was running.';
 }
 
 /**
