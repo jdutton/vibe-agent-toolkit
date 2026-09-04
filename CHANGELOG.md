@@ -169,6 +169,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `durationSecs` and the `rows` it selected — with the shared population cost stated separately as
   `populationSecs`. An unknown `--check` name exits 2.
 
+  **`--budget <seconds>` bounds the run, so a runaway statement is killed and reported instead of
+  hanging the build (default 300).** A check's SQL is adopter-authored and unbounded — an accidental
+  cross join or an unterminated `WITH RECURSIVE` runs forever, and nothing inside the process can
+  stop it: the query is synchronous, it holds the event loop, and `node:sqlite` exposes no interrupt.
+  The work therefore runs in a child process that the parent kills when it stops making progress. The
+  budget is time **without progress**, not total runtime — the clock resets each time the run
+  finishes a unit (the population, then each check) — so a slow run over a large repository is never
+  at risk while it is progressing. A killed run exits 1 with `status: error` and a
+  `RESOURCE_CHECK_BROKEN` finding naming the check that was in flight; the checks that completed keep
+  their `checks` entry and `rows`, but their individual violations are **not** in `issues`, and the
+  finding says so. Killed before the population finished, there is no projection and no honest
+  document, so that exits 2. `--budget 0` removes the bound and runs everything in one process, where
+  a runaway statement can hang forever.
+
 - **`VAT_PROJECTION_STORE_DIR`** — sets where the projection store's database lives. Without it the
   store is one database per VAT release shared by every root on the machine, so concurrent CI jobs
   write into one file; set it per job to isolate them.

@@ -31,7 +31,7 @@ import {
 } from './test-common.js';
 // The SYNCHRONOUS `executeCli` — `test-common.ts` exports an async one of the
 // same name whose result has no `stdout` until awaited.
-import { executeCli } from './test-helpers/index.js';
+import { createMarkdownGitFixture, executeCli } from './test-helpers/index.js';
 
 const binPath = getBinPath(import.meta.url);
 
@@ -139,12 +139,7 @@ function expectRunIntegrityFailure(...args: string[]): CheckFinding {
 
 describe('vat resources check', () => {
   beforeAll(() => {
-    projectDir = createTestTempDir('vat-resources-check-');
-    fs.mkdirSync(safePath.join(projectDir, 'docs'), { recursive: true });
-    fs.writeFileSync(safePath.join(projectDir, 'docs/a.md'), '# Alpha\n', 'utf-8');
-    fs.writeFileSync(safePath.join(projectDir, 'docs/b.md'), '# Bravo\n', 'utf-8');
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- fixture setup
-    spawnSync('git', ['init', '--quiet'], { cwd: projectDir });
+    projectDir = createMarkdownGitFixture('vat-resources-check-');
   });
 
   afterAll(() => {

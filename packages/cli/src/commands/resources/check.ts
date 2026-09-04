@@ -64,14 +64,15 @@ import {
   countBySeverity,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { loadConfigCached } from '../../utils/config-loader.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { resolveIssueSeverity, type SeverityOverrides } from '../../utils/issue-severity.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { writeJsonOutput, writeYamlOutput } from '../../utils/output.js';
-import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
+import { writeJsonOutput, writeStdoutSync, writeYamlOutput } from '../../utils/output.js';
+import { projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
 import {
   withQueriedProjection,
   type AskProjection,
@@ -79,12 +80,47 @@ import {
   type ProjectionProvenance,
 } from '../../utils/projection-query.js';
 
+import {
+  createProgressWriter,
+  parseProgressLog,
+  unitInFlight,
+  type ProgressEntry,
+  type UnitInFlight,
+} from './check-progress.js';
+import {
+  parseBudgetSeconds,
+  runsInThisProcess,
+  superviseCheck,
+  withProgressLog,
+} from './check-supervisor.js';
+
+/**
+ * Where a supervised run announces what it is doing, one unit at a time.
+ *
+ * A plain callback rather than the writer itself, so the loop knows nothing
+ * about files: the unit suite hands it an array, the supervised child hands it
+ * {@link createProgressWriter}'s append, and `--budget 0` hands it nothing.
+ */
+export type ProgressSink = (entry: ProgressEntry) => void;
+
 interface CheckOptions {
   debug?: boolean;
   /** Run only this check, by its config key. */
   check?: string;
   /** `yaml` (default) or `json`. Same document either way. */
   format?: string;
+  /**
+   * How long the run may go WITHOUT completing a unit of work, in seconds.
+   * `0` removes the bound and keeps everything in this process.
+   */
+  budget?: string;
+  /**
+   * Hidden. Where to append progress — and, by its mere presence, the
+   * instruction to do the work here rather than supervise a child that does.
+   * Set by {@link childArgs} and by nothing else; an operator passing it by hand
+   * gets an unsupervised run and a log file, which is harmless.
+   */
+  costLog?: string;
 }
 
 /**
@@ -332,11 +368,24 @@ function brokenCheckFinding(name: string, error: unknown): ValidationIssue {
  * `checksRun` is this list's length. The record is filed before the rows become
  * findings, so nothing between the two can leave a check unpriced.
  *
+ * ## 🚨 Why the loop announces itself before it can be stopped
+ *
+ * {@link ProgressSink} is told a check is about to run, and told again when it
+ * is priced. That ordering is not decoration: this verb runs adopter-authored
+ * SQL unattended, an accidental cross join or an unterminated `WITH RECURSIVE`
+ * runs forever, and NOTHING in-process can interrupt it — the query is
+ * synchronous, it holds the event loop, and `node:sqlite` exposes no interrupt.
+ * The supervisor's only lever is an external `SIGKILL`, which publishes nothing
+ * of the killed process's memory. So the name of the rule that hangs has to be
+ * on disk BEFORE it is entered, or it is not recoverable at all.
+ *
  * @param checks - The project's `resources.checks`
  * @param only - A single check key to run, or undefined for all of them
  * @param ask - Runs one statement against the populated projection
  * @param now - The clock, in milliseconds; injected so a test can assert an
  *   exact duration rather than a range that passes on a timer that never started
+ * @param onProgress - Told what is about to run and what it cost, or undefined
+ *   when nothing is watching (the in-process lane, and `--budget 0`)
  * @returns The findings, and one cost record per check that ran
  */
 function runChecks(
@@ -344,24 +393,34 @@ function runChecks(
   only: string | undefined,
   ask: AskProjection,
   now: () => number,
+  onProgress: ProgressSink | undefined,
 ): { issues: ValidationIssue[]; costs: CheckCost[] } {
   const issues: ValidationIssue[] = [];
   const costs: CheckCost[] = [];
+  /** File the cost with the observer as well as with the caller — one place. */
+  const price = (cost: CheckCost): void => {
+    costs.push(cost);
+    onProgress?.({ kind: 'check', ...cost });
+  };
 
   for (const [name, check] of Object.entries(checks)) {
     if (only !== undefined && name !== only) continue;
+    // 🪤 BEFORE `timed`, and not one line later. `ask` is where a runaway
+    // statement never returns from, so an announcement below it is filed by
+    // every check except the one whose name the operator needs.
+    onProgress?.({ kind: 'start', name });
     const outcome = timed(now, () => ask(check.sql));
 
     if (!outcome.ok) {
       // Priced up to the throw, and with NO row count: a statement that did not
       // complete selected nothing, and `rows: 0` would say it selected nothing
       // and passed.
-      costs.push({ name, durationMs: outcome.durationMs, broken: true });
+      price({ name, durationMs: outcome.durationMs, broken: true });
       issues.push(brokenCheckFinding(name, outcome.error));
       continue;
     }
 
-    costs.push({ name, durationMs: outcome.durationMs, rows: outcome.value.length });
+    price({ name, durationMs: outcome.durationMs, rows: outcome.value.length });
     // 🪤 Appended one at a time, NEVER `issues.push(...findings)`. A spread
     // becomes an ARGUMENT LIST, which throws `RangeError: Maximum call stack
     // size exceeded` past roughly 125,000 elements on the main thread — and a
@@ -478,6 +537,111 @@ function emptyCorpusFinding(
 }
 
 /**
+ * The finding for a run the supervisor KILLED for making no progress.
+ *
+ * 🪤 **`RESOURCE_CHECK_BROKEN`, and for the reason {@link emptyCorpusFinding}
+ * gives.** It is the same run-integrity claim — *these assertions did not
+ * execute, so the green means nothing* — and it needs the identical
+ * non-overridability, which `ValidationConfigSchema` grants by refusing that
+ * code as a `severity` key. A killed run must never be silenceable by the config
+ * of the very project whose SQL hung.
+ *
+ * 🚨 **The message says what this document does NOT contain, and that sentence
+ * is load-bearing.** The progress log records COSTS, not findings: a check that
+ * completed contributes its `rows` (how many rows its statement selected) but
+ * not the violations those rows would have become, because the child was killed
+ * before it turned them into issues. A reader who took the issue list as the
+ * complete account would conclude the finished rules found nothing.
+ *
+ * @param inFlight - What the run was doing when the log stopped growing
+ * @param budgetSecs - The bound that was blown, so the operator can raise it
+ * @returns The run-integrity finding
+ */
+function killedRunFinding(inFlight: UnitInFlight, budgetSecs: number): ValidationIssue {
+  const named = inFlight.kind === 'check'
+    ? `while the check "${inFlight.name}" was running`
+    : 'while no check was running — between the population and the first statement,'
+      + ' or after the last one';
+
+  return {
+    code: 'RESOURCE_CHECK_BROKEN',
+    severity: 'error',
+    message:
+      `This run made no progress for ${budgetSecs}s and was killed ${named}, so the checks`
+      + ' after it never executed and this document is not a verdict.'
+      + ' A statement that will not finish cannot be stopped from inside the process —'
+      + ' the query is synchronous and holds the event loop — so the bound is enforced by'
+      + ' killing the run. Raise it with `--budget <seconds>` if the work is legitimately'
+      + ' slow, or `--budget 0` to remove it (the run can then hang forever).'
+      + ' ⚠️ The checks listed under `checks` DID complete and `rows` is what each'
+      + ' statement selected, but their individual violations are NOT in `issues`: the'
+      + ' progress log records costs, not findings. Read that list as incomplete.',
+  };
+}
+
+/**
+ * Rebuild the document from what a killed run left on disk.
+ *
+ * 🔑 It feeds {@link buildCheckOutputData}, the SAME builder a completed run
+ * uses. A second payload builder for the killed lane would be a second shape to
+ * keep in step with every future field — and the failure mode is silent, because
+ * nobody reads a killed run's document until the day they need it.
+ *
+ * 🚨 **A run killed during POPULATION gets no document at all.** There is no
+ * projection, so `population`, `populationSecs` and `membersEnumerated` have no
+ * honest value — and inventing `membersEnumerated: 0` would be worse than a
+ * blank, because that value already MEANS "this gate ran over an empty corpus",
+ * which is a different and wrong claim. The throw becomes an operator error
+ * (exit 2) through the same `handleCommandError` path everything else here uses.
+ *
+ * @param options - The wreckage
+ * @param options.entries - What `parseProgressLog` recovered
+ * @param options.root - The corpus root the parent resolved
+ * @param options.budgetSecs - The bound that was blown
+ * @param options.durationMs - Wall time from spawn to kill
+ * @returns The input to {@link buildCheckOutputData}
+ * @throws When the child never reported a completed population
+ */
+export function buildKilledCheckInput(options: {
+  entries: readonly ProgressEntry[];
+  root: string;
+  budgetSecs: number;
+  durationMs: number;
+}): CheckPayloadInput {
+  const { entries, root, budgetSecs, durationMs } = options;
+  const population = entries.find((entry) => entry.kind === 'population');
+  if (population === undefined) {
+    throw new Error(
+      `The run made no progress for ${budgetSecs}s and was killed before its population`
+      + ' completed, so there is no projection to report on and no honest document to'
+      + ' publish. Population is legitimately slow on a large tree — ~1.2s warm here but'
+      + ' 33-35s with a cold parse cache — so raise the bound with `--budget <seconds>`'
+      + ' before assuming the crawl is stuck.',
+    );
+  }
+
+  return {
+    root,
+    durationMs,
+    population: population.population,
+    populationMs: population.populationMs,
+    membersEnumerated: population.membersEnumerated,
+    issues: [killedRunFinding(unitInFlight(entries), budgetSecs)],
+    // 🪤 Rebuilt field by field rather than passed through. The log's check
+    // entry carries a `kind` discriminator that `CheckCost` does not, and the
+    // conditional spreads keep `rows`/`broken` ABSENT rather than `undefined` —
+    // which is what makes `rows: 0` on a statement that never returned
+    // impossible, exactly as it is on the completed path.
+    costs: entries.filter((entry) => entry.kind === 'check').map((entry) => ({
+      name: entry.name,
+      durationMs: entry.durationMs,
+      ...(entry.rows === undefined ? {} : { rows: entry.rows }),
+      ...(entry.broken === undefined ? {} : { broken: entry.broken }),
+    })),
+  };
+}
+
+/**
  * Run the declared checks and resolve their severities — the whole of this
  * verb's logic, with the database taken out.
  *
@@ -502,6 +666,10 @@ function emptyCorpusFinding(
  * @param options.now - The measurement clock in milliseconds, defaulting to
  *   `performance.now()`. Injected only so a unit test can pin an exact per-check
  *   duration; nothing in production passes it
+ * @param options.onProgress - Where each check's `start` and cost are announced
+ *   so an outside supervisor can see them, or undefined when the run is not
+ *   supervised. Optional rather than required because `--budget 0` and every
+ *   unit case run with nobody watching
  * @returns The resolved findings, and one cost record per check that ran
  */
 export function runDeclaredChecks(options: {
@@ -511,9 +679,18 @@ export function runDeclaredChecks(options: {
   validation: SeverityOverrides | undefined;
   membersEnumerated: number;
   now?: () => number;
+  // `| undefined` explicitly, not merely optional: under
+  // `exactOptionalPropertyTypes` the production caller — which has a sink or has
+  // none, depending on a flag — could not pass `undefined` otherwise, and would
+  // be pushed into a conditional spread. This repo has already shipped a defect
+  // where a conditional spread silently dropped a renamed field, because a
+  // spread gets no excess-property check.
+  onProgress?: ProgressSink | undefined;
 }): { issues: ValidationIssue[]; costs: CheckCost[] } {
   const now = options.now ?? (() => performance.now());
-  const { issues, costs } = runChecks(options.checks, options.only, options.ask, now);
+  const { issues, costs } = runChecks(
+    options.checks, options.only, options.ask, now, options.onProgress,
+  );
   // The run-integrity report leads. An aggregate check selects a row whatever
   // the corpus is, so its findings can outnumber this one — and every one of
   // them is noise until the operator knows the gate ran over nothing.
@@ -534,7 +711,125 @@ export function runDeclaredChecks(options: {
 }
 
 /**
+ * Serialize the document in the format the operator asked for.
+ *
+ * Extracted because BOTH endings publish one — a completed run and a killed one
+ * — and two copies of a two-branch format switch is how one of them ends up
+ * ignoring `--format json`.
+ *
+ * @param payload - The document
+ * @param format - `json`, or anything else for YAML
+ */
+function emitCheckDocument(payload: Record<string, unknown>, format: string | undefined): void {
+  if (format === 'json') {
+    writeJsonOutput(payload);
+  } else {
+    writeYamlOutput(payload);
+  }
+}
+
+/**
+ * The child's argv — this very command, plus the hidden flag that stops it
+ * spawning a child of its own.
+ *
+ * 🚨 `--cost-log` is ALWAYS appended, and that is the recursion guard. Its
+ * presence is the sole discriminator between "supervise a child" and "do the
+ * work"; a path that built these arguments without it would fork bomb.
+ *
+ * @param pathArg - The corpus root the operator named, or undefined
+ * @param options - What the operator passed
+ * @param logPath - The progress log both sides watch
+ * @returns The child's arguments after the CLI entry point
+ */
+function childArgs(
+  pathArg: string | undefined,
+  options: CheckOptions,
+  logPath: string,
+): string[] {
+  return [
+    'resources',
+    'check',
+    ...(pathArg === undefined ? [] : [pathArg]),
+    ...(options.check === undefined ? [] : ['--check', options.check]),
+    ...(options.format === undefined ? [] : ['--format', options.format]),
+    ...(options.debug === true ? ['--debug'] : []),
+    '--cost-log',
+    logPath,
+  ];
+}
+
+/** What a supervised run decided to publish. */
+type SupervisedEnding =
+  | { readonly forward: string; readonly code: number }
+  | { readonly payload: Record<string, unknown> };
+
+/**
+ * Run the checks in a child bounded by `budgetSecs`, and report either what it
+ * said or what killing it revealed.
+ *
+ * 🪤 The endings are RETURNED rather than exited on from inside
+ * `withProgressLog`. `process.exit` skips a `finally`, so exiting in there would
+ * leak the temp directory on every single run — and it is the successful runs,
+ * which are all of them but one, that would accumulate.
+ *
+ * @param options - The run
+ * @param options.pathArg - The corpus root the operator named, or undefined
+ * @param options.options - What the operator passed
+ * @param options.budgetSecs - The bound, in seconds
+ * @returns What to publish, and with what exit code
+ * @throws When the child was killed before its population completed
+ */
+async function superviseCheckRun(options: {
+  pathArg: string | undefined;
+  options: CheckOptions;
+  budgetSecs: number;
+}): Promise<SupervisedEnding> {
+  const startDir = options.pathArg ?? process.cwd();
+  // 🪤 The SILENT resolution, deliberately. `projectRootOrLoudCwd` warns on
+  // stderr when there is no project ancestor, and the CHILD runs that policy for
+  // real — a parent that ran it too would print the same warning twice for one
+  // run. The parent needs a root only to label a KILLED run's document.
+  const root = projectRootOrNull(startDir) ?? safePath.resolve(startDir);
+
+  return withProgressLog(async (logPath) => {
+    const run = await superviseCheck({
+      args: childArgs(options.pathArg, options.options, logPath),
+      logPath,
+      budgetMs: options.budgetSecs * 1000,
+    });
+    if (run.outcome === 'completed') return { forward: run.stdout, code: run.code };
+
+    return {
+      payload: buildCheckOutputData(buildKilledCheckInput({
+        entries: parseProgressLog(run.log),
+        root,
+        budgetSecs: options.budgetSecs,
+        durationMs: run.elapsedMs,
+      })),
+    };
+  });
+}
+
+/**
  * Run the project's declared checks against its projection.
+ *
+ * ## 🚨 Why this verb spawns a child and `vat resources query` does not
+ *
+ * Both verbs run SQL an adopter wrote, over the same projection, through the
+ * same `withQueriedProjection` — which does NOT diverge here, and must not. The
+ * fork is this function and nothing below it.
+ *
+ * `query`'s author is at the keyboard, and Ctrl-C already works for them. It
+ * works for one reason worth stating, because it is fragile: NO signal handler
+ * is installed anywhere on this path. A process blocked in synchronous
+ * `node:sqlite` dies instantly on SIGINT while that remains true, and SURVIVES
+ * SIGINT and SIGTERM the moment a handler exists — the handler is a JS callback
+ * and the event loop that would schedule it is the blocked resource. Adding one
+ * would take Ctrl-C away from `query` without adding anything to `check`.
+ *
+ * `check` runs unattended in CI, where nobody is there to press it. So it gets a
+ * bound enforced from outside itself, and a hang becomes a bounded failure
+ * instead of a job that burns its runner minutes and reports nothing.
  *
  * @param pathArg - The corpus root, or omitted for the current directory
  * @param options - Parsed command-line options
@@ -547,6 +842,32 @@ export async function checkCommand(
   const startTime = Date.now();
 
   try {
+    const budgetSecs = parseBudgetSeconds(options.budget);
+    // The presence of `--cost-log` says "you ARE the child". `--budget 0` says
+    // the operator declined the bound; both run the work here, and the second
+    // can therefore hang forever, which its help text says.
+    if (!runsInThisProcess({ costLog: options.costLog, budgetSecs })) {
+      const ending = await superviseCheckRun({ pathArg, options, budgetSecs });
+      if ('forward' in ending) {
+        // Verbatim. The child already built the document the operator's
+        // `--format` asked for, and re-serializing it here would be a second
+        // place for that shape to live.
+        //
+        // ⚠️ `durationSecs` in it is therefore the CHILD's wall time and does
+        // not include this process's own startup and spawn (~0.15 s measured).
+        // Deliberate: the field is a breakdown that `populationSecs` and the
+        // per-rule costs have to reconcile against, and folding in a supervisor
+        // overhead none of them can account for would leave a remainder a
+        // reader would attribute to whichever rule they were looking at — the
+        // exact defect `CheckCost` documents.
+        writeStdoutSync(ending.forward);
+        process.exit(ending.code);
+      }
+      emitCheckDocument(ending.payload, options.format);
+      // ⛔ Never 0. A killed run must not look like a pass.
+      process.exit(1);
+    }
+
     const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
     const config = loadConfigCached(projectRoot);
     const checks = config?.resources?.checks;
@@ -571,17 +892,16 @@ export async function checkCommand(
       only: options.check,
       logger,
       validation: config?.resources?.validation,
+      onProgress: options.costLog === undefined
+        ? undefined
+        : createProgressWriter(options.costLog),
     });
     const payload = buildCheckOutputData({
       ...outcome,
       root: projectRoot,
       durationMs: Date.now() - startTime,
     });
-    if (options.format === 'json') {
-      writeJsonOutput(payload);
-    } else {
-      writeYamlOutput(payload);
-    }
+    emitCheckDocument(payload, options.format);
 
     process.exit(payload['status'] === 'error' ? 1 : 0);
   } catch (error) {
@@ -598,6 +918,8 @@ export async function checkCommand(
  * @param options.only - A single check key, or undefined for all
  * @param options.logger - Where blob-stage refusals are reported
  * @param options.validation - The project's severity overrides, or undefined
+ * @param options.onProgress - Where each unit is announced for a supervisor
+ *   outside this process, or undefined when nothing is watching
  * @returns The findings and the provenance of the population behind them
  */
 async function runOutcome(options: {
@@ -606,11 +928,26 @@ async function runOutcome(options: {
   only: string | undefined;
   logger: Logger;
   validation: SeverityOverrides | undefined;
+  onProgress: ProgressSink | undefined;
 }): Promise<CheckOutcome> {
-  const { root, checks, only, logger, validation } = options;
-  return withQueriedProjection({ root, logger }, (ask, provenance, extent) => ({
-    ...runDeclaredChecks({ checks, only, ask, validation, ...extent }),
-    ...provenance,
-    ...extent,
-  }));
+  const { root, checks, only, logger, validation, onProgress } = options;
+  return withQueriedProjection({ root, logger }, (ask, provenance, extent) => {
+    // 🔑 Emitted HERE, inside the callback, because this is the one place where
+    // the provenance and the extent are both exactly in hand — and emitted the
+    // INSTANT population completes, because its arrival is what tells a
+    // supervisor that a kill has a projection to report on. It also resets the
+    // watchdog, so the population is bounded by the budget without being charged
+    // the first check's share of it.
+    onProgress?.({
+      kind: 'population',
+      population: provenance.population,
+      populationMs: provenance.populationMs,
+      membersEnumerated: extent.membersEnumerated,
+    });
+    return {
+      ...runDeclaredChecks({ checks, only, ask, validation, ...extent, onProgress }),
+      ...provenance,
+      ...extent,
+    };
+  });
 }

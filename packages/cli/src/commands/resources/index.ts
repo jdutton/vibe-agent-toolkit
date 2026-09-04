@@ -163,6 +163,19 @@ Examples:
     .description('Run the project\'s declared SQL assertions over its resource projection')
     .option('--debug', DEBUG_HELP)
     .option('--check <name>', 'Run only this check, by its key in resources.checks')
+    .option(
+      '--budget <seconds>',
+      'Kill the run if it goes this long without completing a unit of work'
+      + ' (default: 300; 0 removes the bound and can then hang forever)',
+    )
+    .addOption(
+      // Hidden because it is not an operator's flag: it is how a supervising
+      // parent tells the child it spawned to do the work rather than spawn one
+      // of its own, and where to append its progress. Documenting it would
+      // invite adopters to depend on a file whose only contract is the
+      // `.strict()` schema the same build reads it with.
+      new Option('--cost-log <path>', 'Internal: append per-unit progress here').hideHelp(),
+    )
     .addOption(yamlOrJsonFormat())
     .action(checkCommand)
     .addHelpText(
@@ -214,6 +227,33 @@ A check with NOTHING TO RUN OVER fails the same way:
   sparse CI checkout, or a root that resolved somewhere other than intended.
   Declaring no checks at all is different -- that stays a warning and exit 0.
 
+A run that HANGS is killed and reported, not waited on:
+  A check's SQL is adopter-authored and unbounded -- an accidental cross join
+  or a WITH RECURSIVE that never terminates runs forever, and nothing inside
+  the process can stop it (the query is synchronous and holds the event loop).
+  So the work runs in a child process and --budget <seconds> bounds it.
+
+  The budget is time WITHOUT PROGRESS, not total runtime: the clock resets
+  every time the run finishes a unit (the population, then each check), so a
+  slow run over a large repository is never at risk while it is progressing.
+  Default 300. The population alone is ~1.2s warm here but 33-35s with a cold
+  parse cache, so a tight bound kills healthy runs -- a false kill is worse
+  than a slow honest failure.
+
+  A killed run exits 1 with status: error and a RESOURCE_CHECK_BROKEN finding
+  naming the check that was in flight. The checks that COMPLETED keep their
+  entry under checks (including rows), but their individual violations are NOT
+  in issues -- the progress the child records is costs, not findings. Read that
+  issue list as incomplete.
+
+  Killed before the population finished, there is no projection and no honest
+  document: that is an operator error (exit 2) naming the budget.
+
+  --budget 0 removes the bound and runs everything in this process. Nothing
+  will then stop a runaway statement. Ctrl-C still works at a keyboard,
+  because this command installs no signal handler -- do not add one, a process
+  blocked in synchronous SQLite survives SIGINT once a handler exists.
+
 Output Fields:
   status, root, population, populationSecs, checksRun, membersEnumerated,
   issueCounts, durationSecs, checks
@@ -238,13 +278,15 @@ Output Fields:
 
 Exit Codes:
   0 - No error-severity findings
-  1 - At least one (a violation, a broken check, or an empty corpus)
-  2 - System error, or an unknown --check name
+  1 - At least one (a violation, a broken check, an empty corpus, or a run
+      killed for making no progress within --budget)
+  2 - System error, an unknown --check name, an unusable --budget, or a run
+      killed before its population completed
 
 Examples:
   $ vat resources check
   $ vat resources check --check orphan-skills
-  $ vat resources check --format json
+  $ vat resources check --budget 60
 `
     );
 

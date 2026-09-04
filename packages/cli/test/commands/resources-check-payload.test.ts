@@ -26,6 +26,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
+import type { ProgressEntry } from '../../src/commands/resources/check-progress.js';
 import {
   buildCheckOutputData,
   requireDeclaredCheck,
@@ -818,5 +819,127 @@ describe('the check payload publishes the corpus it ran over', () => {
     // Two documents that differ ONLY in the corpus size. Drop the field and
     // these become equal, which is precisely the ambiguity that shipped.
     expect(over).not.toStrictEqual(none);
+  });
+});
+
+/**
+ * The statement itself, recorded on the SAME timeline as the progress entries.
+ *
+ * 🚨 **Without this the ordering guard is vacuous, and that was measured.**
+ * Moving the `start` emit to AFTER `ask` returns left the whole file green,
+ * because a fake `ask` that emits nothing produces the identical
+ * `[start, check]` sequence either way. The interleaved marker is what makes
+ * "announced BEFORE the statement" a property of the timeline rather than of
+ * two adjacent lines. The real `ask` this stands in for never returns at all,
+ * which is the case the whole design exists for.
+ */
+type Timeline = (ProgressEntry | { kind: 'asked'; sql: string })[];
+
+/**
+ * Run the loop with a sink and an `ask` that both write to one timeline.
+ *
+ * @param options - The run
+ * @param options.checks - The declared checks
+ * @param options.ask - How the projection answers
+ * @returns Everything that happened, in the order it happened
+ */
+function progressOf(options: {
+  checks: Parameters<typeof runDeclaredChecks>[0]['checks'];
+  ask: AskProjection;
+}): Timeline {
+  const seen: Timeline = [];
+  runDeclaredChecks({
+    checks: options.checks,
+    only: undefined,
+    ask: (sql, ...parameters) => {
+      seen.push({ kind: 'asked', sql });
+      return options.ask(sql, ...parameters);
+    },
+    validation: undefined,
+    membersEnumerated: POPULATED,
+    now: fakeClock(1),
+    onProgress: (entry) => seen.push(entry),
+  });
+  return seen;
+}
+
+/**
+ * The progress the loop reports as it goes, so a run that never returns can
+ * still be reported ON.
+ *
+ * ## Why the loop has to emit at all
+ *
+ * `vat resources check` runs adopter-authored SQL as an unattended CI gate. An
+ * accidental cross join or a `WITH RECURSIVE` with no termination runs forever,
+ * and nothing in-process can stop it: the query is synchronous, it blocks the
+ * event loop, and `node:sqlite` exposes no interrupt. The only lever is an
+ * external `SIGKILL`, and a killed process publishes nothing — so whatever the
+ * operator is going to learn has to have been written down BEFORE the statement
+ * that hangs was entered.
+ *
+ * That is what `start` is for, and why its ORDER is the property under test: a
+ * `start` filed after the statement returned would be filed by every check
+ * except the one that matters.
+ */
+describe('runDeclaredChecks — progress emitted for an outside observer', () => {
+  it('announces each check BEFORE its statement runs, and prices it after', () => {
+    // 🔑 The ordering is the whole guard. Move the `start` emit below the
+    // statement and the log of a killed run names every check except the one
+    // that hung — which is the only fact the operator needed.
+    const entries = progressOf({ checks: TWO_VIOLATED, ask: ASK_DISTINCT_ROWS });
+
+    expect(entries).toStrictEqual([
+      { kind: 'start', name: FIRST },
+      { kind: 'asked', sql: FIRST_SQL },
+      { kind: 'check', name: FIRST, durationMs: 1, rows: 3 },
+      { kind: 'start', name: SECOND },
+      { kind: 'asked', sql: SECOND_SQL },
+      { kind: 'check', name: SECOND, durationMs: 1, rows: 7 },
+    ]);
+  });
+
+  it('announces and prices a check whose statement THREW, on the same path', () => {
+    // 🪤 The broken arm `continue`s, which is exactly where an emission gets
+    // forgotten. A run killed while the NEXT check hangs would then attribute
+    // the hang to the broken one, because its cost line never arrived.
+    const entries = progressOf({ checks: BROKEN_CHECK, ask: ASK_BROKEN });
+
+    expect(entries).toStrictEqual([
+      { kind: 'start', name: 'broken' },
+      { kind: 'asked', sql: 'SELECT contentHash FROM blobs' },
+      { kind: 'check', name: 'broken', durationMs: 1, broken: true },
+    ]);
+  });
+
+  it('emits the same cost records it returns, so the two accounts cannot drift', () => {
+    // The recovered document is built from these lines; a completed run's is
+    // built from the returned `costs`. Two shapes would be two payload builders
+    // waiting to disagree.
+    const seen: ProgressEntry[] = [];
+    const { costs } = runDeclaredChecks({
+      checks: TWO_VIOLATED,
+      only: undefined,
+      ask: ASK_DISTINCT_ROWS,
+      validation: undefined,
+      membersEnumerated: POPULATED,
+      now: fakeClock(1),
+      onProgress: (entry) => seen.push(entry),
+    });
+
+    const priced = seen
+      .filter((entry) => entry.kind === 'check')
+      .map(({ kind: _kind, ...cost }) => cost);
+    expect(priced).toStrictEqual(costs);
+  });
+
+  it('runs unchanged when nobody is listening', () => {
+    // `--budget 0` and the in-process lane pass no sink. A loop that required
+    // one would turn the documented escape hatch into a crash.
+    const { costs } = runDeclaredChecks({
+      checks: TWO_VIOLATED, only: undefined, ask: ASK_DISTINCT_ROWS, validation: undefined,
+      membersEnumerated: POPULATED,
+    });
+
+    expect(costs).toHaveLength(2);
   });
 });

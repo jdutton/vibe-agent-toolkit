@@ -14,7 +14,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { scan } from '@vibe-agent-toolkit/discovery';
 import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
@@ -23,30 +22,12 @@ import { isGitUrl, parseGitUrl } from '@vibe-agent-toolkit/utils/git';
 import * as yaml from 'yaml';
 
 import { createLogger } from '../../utils/logger.js';
+import { resolveVatBinPath } from '../../utils/vat-bin-path.js';
 import { withClonedRepo } from '../audit/git-url-clone.js';
 import { deriveScanRoot, getValidationResults } from '../audit.js';
 
 import type { AuditOutcome, AuditSummary, PluginRow, ReviewOutcome, ReviewSummary } from './report.js';
 import type { PluginEntry } from './seed.js';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
-/**
- * Resolve the path to the built vat CLI entry. Works whether the runner is
- * invoked from compiled dist (production) or from source under vitest. In
- * either case we always invoke the *compiled* `dist/bin.js` — `node` cannot
- * execute `.ts` directly, so the source-tree fallback walks across to
- * `packages/cli/dist/bin.js`. A build is therefore required before tests that
- * exercise the review path can pass.
- */
-function resolveVatBinPath(): string {
-  // Compiled tree: packages/cli/dist/commands/corpus/runner.js → packages/cli/dist/bin.js
-  const compiled = safePath.resolve(__dirname, '../../bin.js');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- internal path
-  if (existsSync(compiled)) return compiled;
-  // Source tree (vitest): packages/cli/src/commands/corpus/runner.ts → packages/cli/dist/bin.js
-  return safePath.resolve(__dirname, '../../../dist/bin.js');
-}
 
 export interface RunnerOptions {
   runDir: string;
