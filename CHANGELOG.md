@@ -37,6 +37,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Every other command is unaffected, and an absent backend was already a legible error naming the
   package to install — the CLI has always deferred loading these. Only the download changed.
 
+- **`@vibe-agent-toolkit/runtime-langchain` now requires `@langchain/core` 1.x, not 0.3.x.** If you
+  use the LangChain adapter, upgrade `@langchain/core` to `^1.2.9` and `@langchain/openai` to
+  `^1.5.11` alongside it. VAT's own adapter code needed one change to follow: `DynamicStructuredTool`
+  widened its generic defaults, so `convertPureFunctionToTool`'s declared return type is now
+  parameterised (`DynamicStructuredTool<z.ZodType<TInput>>`) instead of bare. Every symbol the
+  adapter imports — `BaseChatModel`, `HumanMessage`/`SystemMessage`/`AIMessage`,
+  `DynamicStructuredTool` — exists unchanged in 1.x, and all 21 adapter tests pass against it.
+
+  **This was done for a security reason, not for currency.** Five of the six advisories still on the
+  accepted-risk register had a single root cause: `@langchain/core@0.3.80` declared
+  `langsmith: "^0.3.67"`, and every published fix (0.4.6 / 0.5.18 / 0.5.19 / 0.6.0) fell outside that
+  range, so no override, pin or dedupe could reach it. Moving to core 1.x resolves `langsmith`
+  **0.10.1** and drops `uuid@10` from the tree entirely. **The accepted-risk register is now a single
+  entry** — a CVSS 2.5 `esbuild` dev-server advisory in build-time-only tooling — down from ten.
+
 - **VAT routes files to a parser by MIME type, and only `text/markdown`, `text/plain` and `text/html`
   reach one.** Every file that was not `.html` used to be parsed as Markdown — `.ts`, `.json`,
   `.csv`, `.tf`, `.py` and everything else. Three things change for you: **every content key changes**

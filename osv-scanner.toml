@@ -17,80 +17,43 @@
 #      queue for rule 3, and it does not fail the build, so it must be read.
 #   4. A `reason` that names a BLOCKER ("waiting on X to widen its range") is a
 #      claim with an expiry date. Re-check the blocker itself, not just whether
-#      the advisory still fires — two of the entries deleted on 2026-09-04 were
-#      being held by blockers that upstream had already removed, one of them a
-#      CVSS 8.7. Nothing in the tooling tells you a reason has gone stale.
+#      the advisory still fires — nothing in the tooling tells you a reason has
+#      gone stale, and on 2026-09-04 three of the four blockers named in this
+#      file turned out to have already been removed upstream, one of them
+#      holding a CVSS 8.7.
 #
-# Snapshot when this register was last reconciled: the transitive protobufjs@6
-# chain (previously via the native onnxruntime-node backend, loaded through
-# @xenova/transformers@2 / @huggingface/transformers@3 → onnxruntime-web@1.14
-# → onnx-proto) was eliminated by replacing the native embedding backend with
-# onnxruntime-web (WASM) directly — no onnx-proto in the resolution path, so
-# onnxruntime-web resolves the patched protobufjs@7 line unconditionally. 20+
-# other transitive advisories were pinned to patched versions in package.json
-# `overrides`.
+# ---------------------------------------------------------------------------
+# Reconciled 2026-09-04: 10 entries -> 1.
 #
-# Reconciled on 2026-09-04, 10 entries -> 6:
-#   * brace-expansion (1.x/2.x/5.x), picomatch (2.x/4.x) and ajv (6.x/8.x) —
-#     SEVEN entries, all reported as unused ignores. Every coexisting copy had
-#     independently floated onto a patched version. Deleted under rule 3.
-#   * minimatch — THREE entries (one CVSS 8.7) whose reason claimed a global pin
-#     was unsafe because 3.x/9.x/10.x coexisted. The real blocker was narrower:
-#     eslint-plugin-sonarjs@3.0.7 pinned minimatch to an EXACT 10.1.2 that no
-#     dedupe could move. eslint-plugin-sonarjs@4.2.0 widened that to `^10.2.5`,
-#     so the bump retired all three. Fixed, not accepted.
-#   * @hono/node-server — ONE entry whose reason said the fix (2.0.5) was a
-#     major outside @modelcontextprotocol/sdk's declared `^1.19.9`. That was
-#     true when written and is not now: the fix was backported to 1.19.15, well
-#     inside the existing range. Pinned to 1.19.17. Fixed, not accepted.
-#   * fast-uri and qs picked up new advisories against the exact versions
-#     `overrides` was holding; both re-pinned forward (3.1.6 / 6.16.0) under
-#     rule 1 rather than registered here.
+#   * brace-expansion / picomatch / ajv — SEVEN entries, all reported as unused
+#     ignores; every coexisting copy had floated onto a patched version.
+#     Deleted under rule 3.
+#   * minimatch — THREE entries (one CVSS 8.7). The reason blamed 3.x/9.x/10.x
+#     coexisting; the real blocker was an EXACT `minimatch: "10.1.2"` inside
+#     eslint-plugin-sonarjs@3.0.7. 4.2.0 widened it to `^10.2.5`. FIXED.
+#   * @hono/node-server — ONE entry. The reason said the fix (2.0.5) was a major
+#     outside @modelcontextprotocol/sdk's `^1.19.9`; it had been backported to
+#     1.19.15, inside that range. Pinned to 1.19.17. FIXED.
+#   * langsmith x4 + uuid x1 — FIVE entries, one root cause: @langchain/core
+#     0.3.80 declared `langsmith: "^0.3.67"`, which excluded every fix. Moving
+#     the adapter to @langchain/core 1.x (and @langchain/openai 1.x) resolves
+#     langsmith 0.10.1 and drops uuid@10 from the tree entirely. FIXED — see the
+#     CHANGELOG breaking note, since this is a major bump of a published adapter.
+#   * fast-uri and qs — new advisories against the exact versions `overrides`
+#     held; re-pinned forward (3.1.6 / 6.16.0) under rule 1 rather than listed.
+#
+# What that leaves is a single advisory, below. If you are adding a second one,
+# the bar is rule 1: show that a real fix was tried first.
 # ---------------------------------------------------------------------------
 
 # --- esbuild (dev-server file read) ------------------------------------------
 # The advisory affects `esbuild serve` (the dev server). VAT never runs the
-# esbuild dev server; esbuild is build-time-only tooling (via vite/tsx) and is
-# not present in any published package. Fix requires an esbuild 0.x major bump
-# that would force a Vite upgrade.
-# BLOCKER TO RE-CHECK (rule 4): whether vite's declared esbuild range has moved
-# to admit 0.28.1.
+# esbuild dev server; esbuild is build-time-only tooling (reached via vite/tsx)
+# and is not present in any published package. CVSS 2.5.
+# BLOCKER TO RE-CHECK (rule 4), stated so it can be tested rather than believed:
+# the fix is esbuild 0.28.1, and the copy in this tree is pulled transitively by
+# vite. Check whether vite's declared esbuild range now admits 0.28.x; if it
+# does, this entry is retired by a `overrides` pin and this file becomes empty.
 [[IgnoredVulns]]
 id = "GHSA-g7r4-m6w7-qqqr"
-reason = "esbuild advisory affects the `esbuild serve` dev server, which VAT never runs. Build-time-only, not shipped. Fix needs a breaking esbuild/vite bump."
-
-# --- uuid (missing buffer bounds check) --------------------------------------
-# uuid@10 is dev/test-only (reached via langsmith/@langchain/core). The fix is
-# a breaking major bump to uuid@11; not worth destabilizing the langchain
-# adapter's tooling for a dev-only, buf-parameter-only issue VAT never triggers.
-# Shares a root cause with the langsmith block below: both are held by
-# @langchain/core@0.3.x, and both retire together if that moves.
-[[IgnoredVulns]]
-id = "GHSA-w5hq-g745-h8pq"
-reason = "uuid bounds check only affects the optional `buf` argument, which VAT never passes. Dev/test-only (langsmith path). Fix requires breaking uuid@11 major bump."
-
-# --- langsmith (SSRF / prototype pollution / deserialization) ----------------
-# langsmith is ONLY reachable through @vibe-agent-toolkit/runtime-langchain,
-# which is an opt-in runtime adapter and is NOT in the dependency closure of the
-# `vibe-agent-toolkit` package that end consumers install.
-# BLOCKER TO RE-CHECK (rule 4), stated precisely so it can be tested: the
-# vulnerable langsmith@0.3.87 is held by @langchain/core@0.3.80, which declares
-# `langsmith: "^0.3.67"`. EVERY fix (0.4.6 / 0.5.18 / 0.5.19 / 0.6.0) is outside
-# that range, so no dedupe, floating or override reaches it — the only exit is
-# moving @langchain/core itself off 0.3.x, which our packages declare as
-# `^0.3.29`. Verified 2026-09-04 that bumping @langchain/openai to 0.6.17 does
-# NOT do this: it still peers `@langchain/core >=0.3.68 <0.4.0`. @langchain/core
-# 1.x declares `langsmith: ">=0.5.0 <1.0.0"` and would retire all five entries
-# (these four plus the uuid one above), but that is a major adapter upgrade.
-[[IgnoredVulns]]
-id = "GHSA-3644-q5cj-c5c7"
-reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Held by @langchain/core@0.3.x, whose declared `^0.3.67` excludes every fix; retires only when @langchain/core moves to 1.x."
-[[IgnoredVulns]]
-id = "GHSA-fw9q-39r9-c252"
-reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Held by @langchain/core@0.3.x, whose declared `^0.3.67` excludes every fix; retires only when @langchain/core moves to 1.x."
-[[IgnoredVulns]]
-id = "GHSA-rr7j-v2q5-chgv"
-reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Held by @langchain/core@0.3.x, whose declared `^0.3.67` excludes every fix; retires only when @langchain/core moves to 1.x."
-[[IgnoredVulns]]
-id = "GHSA-v34v-rq6j-cj6p"
-reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Held by @langchain/core@0.3.x, whose declared `^0.3.67` excludes every fix; retires only when @langchain/core moves to 1.x."
+reason = "esbuild advisory affects the `esbuild serve` dev server, which VAT never runs. Build-time-only, not shipped in any published package. Fix (0.28.1) is outside vite's declared range; re-check whether vite has widened it."

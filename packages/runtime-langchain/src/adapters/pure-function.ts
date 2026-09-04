@@ -36,7 +36,11 @@ export function convertPureFunctionToTool<TInput, TOutput>(
   inputSchema: z.ZodType<TInput>,
   outputSchema: z.ZodType<TOutput>,
 ): {
-  tool: DynamicStructuredTool;
+  // Parameterised on the input schema rather than left bare. `DynamicStructuredTool`'s
+  // generic defaults widened in @langchain/core 1.x, so the bare form no longer
+  // accepts the instance this function actually builds under
+  // `exactOptionalPropertyTypes`.
+  tool: DynamicStructuredTool<z.ZodType<TInput>>;
   metadata: {
     name: string;
     description: string;
@@ -111,7 +115,10 @@ export function convertPureFunctionsToTools(
 ): Record<
   string,
   {
-    tool: DynamicStructuredTool;
+    // Erased to `unknown` here because `batchConvert` calls through with
+    // `PureFunctionAgent<unknown, unknown>`; see the note on the single-agent
+    // overload above for why this is parameterised at all.
+    tool: DynamicStructuredTool<z.ZodType<unknown>>;
     metadata: { name: string; description: string; version: string; archetype: string };
   }
 > {

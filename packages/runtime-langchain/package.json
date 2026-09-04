@@ -20,12 +20,12 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@langchain/core": "^0.3.29",
+    "@langchain/core": "^1.2.9",
     "@vibe-agent-toolkit/agent-runtime": "workspace:*",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@langchain/openai": "^0.3.16",
+    "@langchain/openai": "^1.5.11",
     "@types/node": "^22.10.5",
     "@vibe-agent-toolkit/dev-tools": "workspace:*",
     "tsx": "^4.19.2",
