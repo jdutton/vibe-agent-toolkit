@@ -150,7 +150,7 @@ describe('chunkResource', () => {
 
     const result = chunkResource(resource, config);
 
-    expect(result.chunks.length).toBe(1);
+    expect(result.chunks).toHaveLength(1);
     expect(result.chunks[0]?.content).toBe('Plain text without headings.');
   });
 

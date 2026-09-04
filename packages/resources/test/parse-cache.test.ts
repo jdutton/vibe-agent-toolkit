@@ -411,7 +411,7 @@ describe('fixture distinguishability', () => {
     const keyed = keyedFromBytes(LOSSY_BYTES);
 
     expect(keyed.byteLength).toBe(LOSSY_BYTE_LENGTH);
-    expect(keyed.content.length).toBe(LOSSY_STRING_LENGTH);
+    expect(keyed.content).toHaveLength(LOSSY_STRING_LENGTH);
     expect(Buffer.byteLength(keyed.content, 'utf-8')).toBe(LOSSY_REENCODED_LENGTH);
   });
 });

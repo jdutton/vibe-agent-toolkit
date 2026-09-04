@@ -94,7 +94,11 @@ describe('ResourceRegistry indexes', () => {
     const IN_HREF = 'ref\u00E9rence.md';
 
     beforeEach(async () => {
-      expect(ON_DISK).not.toBe(IN_HREF);
+      // The guard that can fail: `ON_DISK` is really decomposed, and folding
+      // it lands exactly on the href spelling. Comparing the two constants to
+      // each other is settled at authoring time and pins nothing.
+      expect(ON_DISK).not.toBe(ON_DISK.normalize('NFC'));
+      expect(ON_DISK.normalize('NFC')).toBe(IN_HREF);
       // eslint-disable-next-line security/detect-non-literal-fs-filename
       await fs.writeFile(safePath.join(tempDir, ON_DISK), '# Target\n', 'utf-8');
     });

@@ -146,7 +146,11 @@ describe('validateLink target lookups', () => {
    * string this test would pass while demonstrating nothing.
    */
   it('warns, rather than passing silently, for a composed href naming a decomposed file', async () => {
-    expect(ACCENTED_ON_DISK).not.toBe(ACCENTED_IN_HREF);
+    // The guard that can fail: `ACCENTED_ON_DISK` is really decomposed, and
+    // folding it lands exactly on the href spelling. Comparing the two
+    // constants to each other is settled at authoring time and pins nothing.
+    expect(ACCENTED_ON_DISK).not.toBe(ACCENTED_ON_DISK.normalize('NFC'));
+    expect(ACCENTED_ON_DISK.normalize('NFC')).toBe(ACCENTED_IN_HREF);
 
     const issue = await validateHref(tempDir, `./${ACCENTED_IN_HREF}`, fsCache);
 

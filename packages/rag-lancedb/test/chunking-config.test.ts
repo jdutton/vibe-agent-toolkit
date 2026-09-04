@@ -180,7 +180,7 @@ describe('resolveChunkingConfig', () => {
       paddingFactor: 0.9,
     });
 
-    expect(config.paddingFactor).toBe(0.9);
+    expect(config.paddingFactor).toBeCloseTo(0.9, 10);
     expect(warnings.join('\n')).toMatch(/truncat/i);
   });
 

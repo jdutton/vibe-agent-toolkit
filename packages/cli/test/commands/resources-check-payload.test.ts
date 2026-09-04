@@ -623,7 +623,8 @@ describe('the check payload publishes what each rule cost', () => {
     // 0 and the whole attribution says nothing.
     const { checks } = documentFor({ checks: BROKEN_CHECK, ask: ASK_NO_ROWS, stepMs: 0.4 });
 
-    expect(checks[0]?.durationSecs).toBe(0.0004);
+    // 5e-11 window, so a rounded-to-`0` duration still reds — that IS the assertion.
+    expect(checks[0]?.durationSecs).toBeCloseTo(0.0004, 10);
   });
 
   it('publishes broken instead of rows for a check that threw', () => {
@@ -667,7 +668,7 @@ describe('the check payload publishes what each rule cost', () => {
     });
     const payload = buildCheckOutputData(payloadInput({ issues, costs, populationMs: 1230 }));
 
-    expect(payload['populationSecs']).toBe(1.23);
+    expect(payload['populationSecs']).toBeCloseTo(1.23, 10);
     // Untouched by the population, and not summed with it.
     expect((payload['checks'] as PublishedCheck[]).map((check) => check.durationSecs))
       .toStrictEqual([0.005, 0.005]);

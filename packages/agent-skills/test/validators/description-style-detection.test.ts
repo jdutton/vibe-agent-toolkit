@@ -66,7 +66,7 @@ describe('classifyDescriptionYamlStyle', () => {
   });
 
   it('returns null when no description line is present', () => {
-    expect(classifyDescriptionYamlStyle('name: my-skill\n')).toBe(null);
+    expect(classifyDescriptionYamlStyle('name: my-skill\n')).toBeNull();
   });
 
   it('tolerates trailing whitespace on the marker', () => {

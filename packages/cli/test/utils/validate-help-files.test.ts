@@ -24,7 +24,7 @@ describe('validate-help-files', () => {
       // The actual error case is tested in build validation
       // This test verifies the function exists and has the expected signature
       expect(validateHelpFiles).toBeDefined();
-      expect(validateHelpFiles.length).toBe(0); // No parameters
+      expect(validateHelpFiles).toHaveLength(0); // Arity: takes no parameters
     });
   });
 });

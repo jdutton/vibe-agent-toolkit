@@ -151,7 +151,13 @@ describe('normalizationMismatchIssue', () => {
   it('has a fixture that differs as bytes and agrees only after folding', () => {
     // Guard the premise. Both assertions have to hold or every case below is
     // demonstrating something other than what it claims.
-    expect(NFD_NAME).not.toBe(NFC_NAME);
+    //
+    // Comparing the two constants to EACH OTHER cannot fail — they are two
+    // distinct literals, so that comparison is settled at authoring time and
+    // pins nothing. The premise that can actually go false is a property of
+    // `NFD_NAME` itself: that it is really decomposed (not silently already
+    // NFC) and that folding it lands exactly on `NFC_NAME`.
+    expect(NFD_NAME).not.toBe(NFD_NAME.normalize('NFC'));
     expect(NFD_NAME.normalize('NFC')).toBe(NFC_NAME);
   });
 

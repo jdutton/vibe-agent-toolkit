@@ -81,7 +81,7 @@ describe('scanPythonImports', () => {
     ].join('\n');
 
     const result = scanPythonImports(content, 'scripts/mixed.py', TEST_LOCATION_ROOT);
-    expect(result.length).toBe(1);
+    expect(result).toHaveLength(1);
     expect(result[0]?.matchText).toContain('pandas');
   });
 

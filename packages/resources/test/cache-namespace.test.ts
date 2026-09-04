@@ -98,7 +98,7 @@ describe('devNamespaceDigest', () => {
     // was resolved, the shape from `ParseFactsSchema` itself — so neither can
     // fall behind what it stands for. What is left over lives in `vat cache
     // clear` (a change of meaning, at unchanged shape).
-    expect(devNamespaceDigest.length).toBe(2);
+    expect(devNamespaceDigest).toHaveLength(2);
   });
 
   it('moves when the module directory moves, so two worktrees never share a namespace', () => {

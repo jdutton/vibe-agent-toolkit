@@ -76,8 +76,10 @@ describe('the query payload', () => {
     const served = payloadFor({ population: 'store', populationMs: 294 });
     const derived = payloadFor({ population: 'derived', populationMs: 1170 });
 
-    expect(served['populationSecs']).toBe(0.294);
-    expect(derived['populationSecs']).toBe(1.17);
+    // 5e-11 windows: EXACTNESS assertions, not tolerances. 0.294 and 1.17 must
+    // stay distinguishable from each other and from the millisecond inputs.
+    expect(served['populationSecs']).toBeCloseTo(0.294, 10);
+    expect(derived['populationSecs']).toBeCloseTo(1.17, 10);
   });
 
   it('reports the population cost separately from the whole run', () => {
@@ -87,8 +89,8 @@ describe('the query payload', () => {
     // against. Defaults here are distinct so a swap of the two fields is red.
     const payload = payloadFor({ durationMs: 1500, populationMs: 400 });
 
-    expect(payload['durationSecs']).toBe(1.5);
-    expect(payload['populationSecs']).toBe(0.4);
+    expect(payload['durationSecs']).toBeCloseTo(1.5, 10);
+    expect(payload['populationSecs']).toBeCloseTo(0.4, 10);
   });
 
   it('keeps a sub-millisecond population non-zero', () => {
@@ -99,7 +101,9 @@ describe('the query payload', () => {
     // SIGNIFICANT figures, so a fractional millisecond survives serialization.
     const payload = payloadFor({ populationMs: 0.4 });
 
-    expect(payload['populationSecs']).toBe(0.0004);
+    // 5e-11 window: tight enough that a rounded-to-`0` value still reds, which
+    // is the whole point of the case. The `not.toBe(0)` below restates it.
+    expect(payload['populationSecs']).toBeCloseTo(0.0004, 10);
     expect(payload['populationSecs']).not.toBe(0);
   });
 

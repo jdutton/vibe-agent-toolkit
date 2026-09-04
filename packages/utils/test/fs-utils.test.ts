@@ -267,8 +267,8 @@ describe('fs-utils', () => {
       const missing = safePath.join(tempDir, 'no-such-dir');
       const spy = vi.spyOn(fs, 'readdir');
 
-      expect(await cache.readdir(missing)).toBe(null);
-      expect(await cache.readdir(missing)).toBe(null);
+      expect(await cache.readdir(missing)).toBeNull();
+      expect(await cache.readdir(missing)).toBeNull();
 
       expect(spy).toHaveBeenCalledTimes(1);
       spy.mockRestore();

@@ -15,6 +15,11 @@
 #      `osv-scanner` prints an "unused ignores" list for entries whose advisory
 #      no longer matches anything in the lockfile — that list is the delete
 #      queue for rule 3, and it does not fail the build, so it must be read.
+#   4. A `reason` that names a BLOCKER ("waiting on X to widen its range") is a
+#      claim with an expiry date. Re-check the blocker itself, not just whether
+#      the advisory still fires — two of the entries deleted on 2026-09-04 were
+#      being held by blockers that upstream had already removed, one of them a
+#      CVSS 8.7. Nothing in the tooling tells you a reason has gone stale.
 #
 # Snapshot when this register was last reconciled: the transitive protobufjs@6
 # chain (previously via the native onnxruntime-node backend, loaded through
@@ -23,65 +28,33 @@
 # onnxruntime-web (WASM) directly — no onnx-proto in the resolution path, so
 # onnxruntime-web resolves the patched protobufjs@7 line unconditionally. 20+
 # other transitive advisories were pinned to patched versions in package.json
-# `overrides`. The advisories below are what remains — fixes that require an
-# unsafe global major-version pin, a transitive exact-pin we do not control, or
-# dev/test-only packages that are not in the published consumer graph.
+# `overrides`.
 #
-# Reconciled again on 2026-09-04 against the rule-3 delete queue: the
-# brace-expansion (1.x/2.x/5.x), picomatch (2.x/4.x) and ajv (6.x/8.x) entries
-# were all reported as unused ignores — every coexisting copy of those three had
-# independently floated onto a patched version (brace-expansion 1.1.18 / 2.1.4 /
-# 5.0.9, picomatch 2.3.2 / 4.0.5, ajv 6.15.0 / 8.20.0), so their seven entries
-# were deleted. `fast-uri` and `qs` were re-pinned in `overrides` (3.1.5→3.1.6,
-# 6.15.2→6.16.0) rather than registered, per rule 1.
+# Reconciled on 2026-09-04, 10 entries -> 6:
+#   * brace-expansion (1.x/2.x/5.x), picomatch (2.x/4.x) and ajv (6.x/8.x) —
+#     SEVEN entries, all reported as unused ignores. Every coexisting copy had
+#     independently floated onto a patched version. Deleted under rule 3.
+#   * minimatch — THREE entries (one CVSS 8.7) whose reason claimed a global pin
+#     was unsafe because 3.x/9.x/10.x coexisted. The real blocker was narrower:
+#     eslint-plugin-sonarjs@3.0.7 pinned minimatch to an EXACT 10.1.2 that no
+#     dedupe could move. eslint-plugin-sonarjs@4.2.0 widened that to `^10.2.5`,
+#     so the bump retired all three. Fixed, not accepted.
+#   * @hono/node-server — ONE entry whose reason said the fix (2.0.5) was a
+#     major outside @modelcontextprotocol/sdk's declared `^1.19.9`. That was
+#     true when written and is not now: the fix was backported to 1.19.15, well
+#     inside the existing range. Pinned to 1.19.17. Fixed, not accepted.
+#   * fast-uri and qs picked up new advisories against the exact versions
+#     `overrides` was holding; both re-pinned forward (3.1.6 / 6.16.0) under
+#     rule 1 rather than registered here.
 # ---------------------------------------------------------------------------
-
-# --- minimatch (ReDoS) --------------------------------------------------------
-# NOT a coexisting-majors problem any more: minimatch 3.1.5 and 9.0.9 are still
-# in the tree but neither is affected, and the tree already carries a PATCHED
-# 10.2.6 that every `^10.2.2` consumer (typescript-estree, test-exclude,
-# rimraf/glob) resolves to. The single vulnerable copy is minimatch@10.1.2,
-# pulled by exactly one package: eslint-plugin-sonarjs@3.0.7, which declares it
-# as an EXACT pin (`"minimatch": "10.1.2"`), not a range — so no amount of
-# floating or deduping moves it. bun's `overrides` map is flat and unscoped, so
-# pinning minimatch globally to 10.2.6 to reach that one copy would also drag
-# the minimatch@3 and minimatch@9 consumers across two major versions.
-# All three advisories are ReDoS in glob-pattern matching against attacker-
-# controlled globs — VAT only ever matches globs it authors, and the affected
-# copy is reachable only from ESLint at lint time, never from a published
-# package. Consumers of the published packages re-resolve VAT's floating ranges
-# and pick up patched minimatch independently of this lockfile.
-# DELETE THESE when eslint-plugin-sonarjs widens or bumps its minimatch pin.
-[[IgnoredVulns]]
-id = "GHSA-23c5-xmqv-rm74"
-reason = "minimatch ReDoS in the single copy pinned EXACTLY by eslint-plugin-sonarjs@3.0.7 (10.1.2); every other consumer already resolves the patched 10.2.6. Lint-time only, VAT-authored globs. Re-evaluate when eslint-plugin-sonarjs bumps its pin."
-[[IgnoredVulns]]
-id = "GHSA-3ppc-4f35-3m26"
-reason = "minimatch ReDoS in the single copy pinned EXACTLY by eslint-plugin-sonarjs@3.0.7 (10.1.2); every other consumer already resolves the patched 10.2.6. Lint-time only, VAT-authored globs. Re-evaluate when eslint-plugin-sonarjs bumps its pin."
-[[IgnoredVulns]]
-id = "GHSA-7r86-cg39-jmmj"
-reason = "minimatch ReDoS in the single copy pinned EXACTLY by eslint-plugin-sonarjs@3.0.7 (10.1.2); every other consumer already resolves the patched 10.2.6. Lint-time only, VAT-authored globs. Re-evaluate when eslint-plugin-sonarjs bumps its pin."
-
-# --- @hono/node-server (serve-static path traversal on Windows) ---------------
-# The vulnerable surface is the `@hono/node-server/serve-static` subpath export.
-# The only thing that pulls @hono/node-server into the tree is
-# @modelcontextprotocol/sdk@1.26.0, which (a) declares `^1.19.9`, so the 2.0.5
-# fix is out of its declared range and a global pin would force a semver-major
-# adapter swap under it, and (b) imports only `getRequestListener` from the
-# package root, in `server/streamableHttp.js` — it never imports serve-static.
-# VAT's single MCP consumer (packages/gateway-mcp) uses StdioServerTransport
-# exclusively and never constructs the Streamable HTTP transport, so the module
-# is not loaded at all. The advisory is additionally Windows-only static-file
-# serving, which VAT never does.
-[[IgnoredVulns]]
-id = "GHSA-frvp-7c67-39w9"
-reason = "@hono/node-server path traversal is in the `serve-static` export, which is never imported: @modelcontextprotocol/sdk uses only `getRequestListener` for its Streamable HTTP transport, and VAT's gateway-mcp is stdio-only. Fix (2.0.5) is a major bump outside the SDK's declared `^1.19.9`, so a global pin is unsafe. Re-evaluate when the MCP SDK widens its range."
 
 # --- esbuild (dev-server file read) ------------------------------------------
 # The advisory affects `esbuild serve` (the dev server). VAT never runs the
 # esbuild dev server; esbuild is build-time-only tooling (via vite/tsx) and is
 # not present in any published package. Fix requires an esbuild 0.x major bump
 # that would force a Vite upgrade.
+# BLOCKER TO RE-CHECK (rule 4): whether vite's declared esbuild range has moved
+# to admit 0.28.1.
 [[IgnoredVulns]]
 id = "GHSA-g7r4-m6w7-qqqr"
 reason = "esbuild advisory affects the `esbuild serve` dev server, which VAT never runs. Build-time-only, not shipped. Fix needs a breaking esbuild/vite bump."
@@ -90,6 +63,8 @@ reason = "esbuild advisory affects the `esbuild serve` dev server, which VAT nev
 # uuid@10 is dev/test-only (reached via langsmith/@langchain/core). The fix is
 # a breaking major bump to uuid@11; not worth destabilizing the langchain
 # adapter's tooling for a dev-only, buf-parameter-only issue VAT never triggers.
+# Shares a root cause with the langsmith block below: both are held by
+# @langchain/core@0.3.x, and both retire together if that moves.
 [[IgnoredVulns]]
 id = "GHSA-w5hq-g745-h8pq"
 reason = "uuid bounds check only affects the optional `buf` argument, which VAT never passes. Dev/test-only (langsmith path). Fix requires breaking uuid@11 major bump."
@@ -97,19 +72,25 @@ reason = "uuid bounds check only affects the optional `buf` argument, which VAT 
 # --- langsmith (SSRF / prototype pollution / deserialization) ----------------
 # langsmith is ONLY reachable through @vibe-agent-toolkit/runtime-langchain,
 # which is an opt-in runtime adapter and is NOT in the dependency closure of the
-# `vibe-agent-toolkit` package that end consumers install. The vulnerable copy
-# (0.3.87) is pinned transitively by @langchain/core@0.3.x; forcing a patched
-# langsmith major risks breaking @langchain/core. These do not reach the CLI /
-# resources / skills surface that adopters actually consume.
+# `vibe-agent-toolkit` package that end consumers install.
+# BLOCKER TO RE-CHECK (rule 4), stated precisely so it can be tested: the
+# vulnerable langsmith@0.3.87 is held by @langchain/core@0.3.80, which declares
+# `langsmith: "^0.3.67"`. EVERY fix (0.4.6 / 0.5.18 / 0.5.19 / 0.6.0) is outside
+# that range, so no dedupe, floating or override reaches it — the only exit is
+# moving @langchain/core itself off 0.3.x, which our packages declare as
+# `^0.3.29`. Verified 2026-09-04 that bumping @langchain/openai to 0.6.17 does
+# NOT do this: it still peers `@langchain/core >=0.3.68 <0.4.0`. @langchain/core
+# 1.x declares `langsmith: ">=0.5.0 <1.0.0"` and would retire all five entries
+# (these four plus the uuid one above), but that is a major adapter upgrade.
 [[IgnoredVulns]]
 id = "GHSA-3644-q5cj-c5c7"
-reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Pinned by @langchain/core@0.3.x."
+reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Held by @langchain/core@0.3.x, whose declared `^0.3.67` excludes every fix; retires only when @langchain/core moves to 1.x."
 [[IgnoredVulns]]
 id = "GHSA-fw9q-39r9-c252"
-reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Pinned by @langchain/core@0.3.x."
+reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Held by @langchain/core@0.3.x, whose declared `^0.3.67` excludes every fix; retires only when @langchain/core moves to 1.x."
 [[IgnoredVulns]]
 id = "GHSA-rr7j-v2q5-chgv"
-reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Pinned by @langchain/core@0.3.x."
+reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Held by @langchain/core@0.3.x, whose declared `^0.3.67` excludes every fix; retires only when @langchain/core moves to 1.x."
 [[IgnoredVulns]]
 id = "GHSA-v34v-rq6j-cj6p"
-reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Pinned by @langchain/core@0.3.x."
+reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Held by @langchain/core@0.3.x, whose declared `^0.3.67` excludes every fix; retires only when @langchain/core moves to 1.x."

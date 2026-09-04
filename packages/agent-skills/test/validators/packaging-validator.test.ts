@@ -556,11 +556,21 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 		expect(issue?.line).toBeGreaterThan(0);
 	});
 
-	it('should also catch the bare $CLAUDE_PLUGIN_ROOT form (no braces)', async () => {
-		const issue = await findNonPortableAssetIssue(
-			getTempDir,
-			'\n# Test Skill\n\nRun: `node $CLAUDE_PLUGIN_ROOT/scripts/run.mjs go`',
-		);
+	it.each([
+		{
+			label: 'the bare $CLAUDE_PLUGIN_ROOT form (no braces)',
+			body: '\n# Test Skill\n\nRun: `node $CLAUDE_PLUGIN_ROOT/scripts/run.mjs go`',
+		},
+		{
+			label: 'the CLAUDE_PROJECT_DIR anchor (another Claude-only variable)',
+			body: '\n# Test Skill\n\nRun: `node "${CLAUDE_PROJECT_DIR}/skills/x/scripts/run.mjs" go`',
+		},
+		{
+			label: 'an absolute script path passed to a runtime',
+			body: '\n# Test Skill\n\nRun: `node /Users/me/skill/scripts/run.mjs go`',
+		},
+	])('should flag $label', async ({ body }) => {
+		const issue = await findNonPortableAssetIssue(getTempDir, body);
 		expect(issue).toBeDefined();
 		expect(issue?.severity).toBe('warning');
 	});
@@ -579,24 +589,6 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 			'\n# Test Skill\n\nSet a cache dir: `export CACHE="${TMPDIR:-/tmp}/test-cache"`',
 		);
 		expect(issue).toBeUndefined();
-	});
-
-	it('should flag the CLAUDE_PROJECT_DIR anchor (another Claude-only variable)', async () => {
-		const issue = await findNonPortableAssetIssue(
-			getTempDir,
-			'\n# Test Skill\n\nRun: `node "${CLAUDE_PROJECT_DIR}/skills/x/scripts/run.mjs" go`',
-		);
-		expect(issue).toBeDefined();
-		expect(issue?.severity).toBe('warning');
-	});
-
-	it('should flag an absolute script path passed to a runtime', async () => {
-		const issue = await findNonPortableAssetIssue(
-			getTempDir,
-			'\n# Test Skill\n\nRun: `node /Users/me/skill/scripts/run.mjs go`',
-		);
-		expect(issue).toBeDefined();
-		expect(issue?.severity).toBe('warning');
 	});
 
 	// Regression: a naive `\$\{?NAME\}?` consumed the closing brace of an
@@ -709,71 +701,52 @@ describe('validateSkillForPackaging - Non-portable commands', () => {
 		expect(issue?.message).toContain('timeout');
 	});
 
-	it('should flag `grep -P` (PCRE unsupported by BSD/macOS grep)', async () => {
-		const issue = await findNonPortableCommandIssue(
-			getTempDir,
-			'\n# Test Skill\n\nFilter: `grep -P "\\d+" file.txt`',
-		);
+	it.each([
+		{
+			label: '`grep -P` (PCRE unsupported by BSD/macOS grep)',
+			body: '\n# Test Skill\n\nFilter: `grep -P "\\d+" file.txt`',
+			rule: 'grep-pcre',
+		},
+		{
+			label: '`sed -i` with no backup suffix',
+			body: '\n# Test Skill\n\nEdit: `sed -i s/foo/bar/ file.txt`',
+			rule: 'sed-i-no-backup',
+		},
+		{
+			label: '`readlink -f`',
+			body: '\n# Test Skill\n\nResolve: `readlink -f ./path`',
+			rule: 'readlink-f',
+		},
+		{
+			label: 'GNU `date -d`',
+			body: '\n# Test Skill\n\nParse: `date -d "2026-01-01" +%s`',
+			rule: 'date-d',
+		},
+	])('should flag $label', async ({ body, rule }) => {
+		const issue = await findNonPortableCommandIssue(getTempDir, body);
 		expect(issue).toBeDefined();
-		expect(issue?.message).toContain('grep-pcre');
+		expect(issue?.message).toContain(rule);
 	});
 
-	it('should flag `sed -i` with no backup suffix', async () => {
-		const issue = await findNonPortableCommandIssue(
-			getTempDir,
-			'\n# Test Skill\n\nEdit: `sed -i s/foo/bar/ file.txt`',
-		);
-		expect(issue).toBeDefined();
-		expect(issue?.message).toContain('sed-i-no-backup');
-	});
-
-	it('should flag `readlink -f`', async () => {
-		const issue = await findNonPortableCommandIssue(
-			getTempDir,
-			'\n# Test Skill\n\nResolve: `readlink -f ./path`',
-		);
-		expect(issue).toBeDefined();
-		expect(issue?.message).toContain('readlink-f');
-	});
-
-	it('should flag GNU `date -d`', async () => {
-		const issue = await findNonPortableCommandIssue(
-			getTempDir,
-			'\n# Test Skill\n\nParse: `date -d "2026-01-01" +%s`',
-		);
-		expect(issue).toBeDefined();
-		expect(issue?.message).toContain('date-d');
-	});
-
-	it('should NOT flag a portable command (`grep -E`)', async () => {
-		const issue = await findNonPortableCommandIssue(
-			getTempDir,
-			'\n# Test Skill\n\nFilter: `grep -E "[0-9]+" file.txt`',
-		);
-		expect(issue).toBeUndefined();
-	});
-
-	it('should NOT flag `sed -i.bak` (portable attached suffix)', async () => {
-		const issue = await findNonPortableCommandIssue(
-			getTempDir,
-			'\n# Test Skill\n\nEdit: `sed -i.bak s/foo/bar/ file.txt`',
-		);
-		expect(issue).toBeUndefined();
-	});
-
-	it('should NOT flag a prose mention of "timeout" (not in command position)', async () => {
-		const issue = await findNonPortableCommandIssue(
-			getTempDir,
-			'\n# Test Skill\n\nThe request will timeout if the server is slow.',
-		);
-		expect(issue).toBeUndefined();
-	});
-
-	it('should NOT flag prose use of the word "grep" without the -P flag', async () => {
-		const issue = await findNonPortableCommandIssue(
-			getTempDir,
-			'\n# Test Skill\n\nYou can grep the logs to find the error.',
-		);
+	it.each([
+		{
+			label: 'a portable command (`grep -E`)',
+			body: '\n# Test Skill\n\nFilter: `grep -E "[0-9]+" file.txt`',
+		},
+		{
+			label: '`sed -i.bak` (portable attached suffix)',
+			body: '\n# Test Skill\n\nEdit: `sed -i.bak s/foo/bar/ file.txt`',
+		},
+		{
+			label: 'a prose mention of "timeout" (not in command position)',
+			body: '\n# Test Skill\n\nThe request will timeout if the server is slow.',
+		},
+		{
+			label: 'prose use of the word "grep" without the -P flag',
+			body: '\n# Test Skill\n\nYou can grep the logs to find the error.',
+		},
+	])('should NOT flag $label', async ({ body }) => {
+		const issue = await findNonPortableCommandIssue(getTempDir, body);
 		expect(issue).toBeUndefined();
 	});
 

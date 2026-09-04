@@ -116,7 +116,7 @@ function queryTopResourceId(cli: CliTarget, query: string): string {
 
   expect(output.status).toBe('success');
   expect(output.stats.totalMatches).toBe(1);
-  expect(output.chunks.length).toBe(1);
+  expect(output.chunks).toHaveLength(1);
 
   const [topHit] = output.chunks;
   return topHit.resourceId;

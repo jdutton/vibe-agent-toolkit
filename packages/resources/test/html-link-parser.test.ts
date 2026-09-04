@@ -263,7 +263,7 @@ describe('parseHtmlContent', () => {
     // power and the assertions below become vacuous.
     expect(stats.size).toBe(17);
     expect(Buffer.byteLength(content)).toBe(19);
-    expect(content.length).toBe(17);
+    expect(content).toHaveLength(17);
 
     const fromFile = await parseHtml(file);
     expect(fromFile.sizeBytes).toBe(stats.size);
@@ -520,25 +520,26 @@ describe('A2 — line agrees with the span on a multi-line start tag', () => {
  * `alt` is explicitly not link text.
  */
 describe('A3 — anchor text content, not a hardcoded empty string', () => {
-  it('populates text from the <a> element\'s child text content', () => {
-    const source = '<a href="./g.md">Guide</a>';
+  it.each([
+    {
+      name: "populates text from the <a> element's child text content",
+      source: '<a href="./g.md">Guide</a>',
+      texts: ['Guide'],
+    },
+    {
+      name: 'concatenates text through nested inline markup inside the <a>',
+      source: '<a href="./g.md"><b>Bold</b> and plain</a>',
+      texts: ['Bold and plain'],
+    },
+    {
+      name: 'leaves text empty for <img src>, which has no child nodes to collect',
+      source: '<img src="./logo.png" alt="Logo">',
+      texts: [''],
+    },
+  ])('$name', ({ source, texts }) => {
     const { links } = parseHtmlContent(source, source.length);
 
-    expect(links.map((link) => link.text)).toEqual(['Guide']);
-  });
-
-  it('concatenates text through nested inline markup inside the <a>', () => {
-    const source = '<a href="./g.md"><b>Bold</b> and plain</a>';
-    const { links } = parseHtmlContent(source, source.length);
-
-    expect(links.map((link) => link.text)).toEqual(['Bold and plain']);
-  });
-
-  it('leaves text empty for <img src>, which has no child nodes to collect', () => {
-    const source = '<img src="./logo.png" alt="Logo">';
-    const { links } = parseHtmlContent(source, source.length);
-
-    expect(links.map((link) => link.text)).toEqual(['']);
+    expect(links.map((link) => link.text)).toEqual(texts);
   });
 });
 

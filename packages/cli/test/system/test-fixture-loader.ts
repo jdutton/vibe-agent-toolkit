@@ -47,7 +47,7 @@ export async function getTestFixturesPath(): Promise<string> {
 
   // Extract ZIP (fast on Windows, cross-platform using adm-zip)
   const zip = new AdmZip(zipPath);
-  // eslint-disable-next-line sonarjs/no-unsafe-unzip -- ZIP is trusted (committed to repo)
+   
   zip.extractAllTo(tempBase, true);
 
   // Path to extracted fixtures

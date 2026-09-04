@@ -29,25 +29,20 @@ describe('validateCatName', () => {
     expect(result.reason).toContain('purrs approvingly');
   });
 
-  it('should reject vulgar names', () => {
-    const result = validateCatName('Poopface');
+  it.each([
+    { case: 'should reject vulgar names', name: 'Poopface', reason: 'VULGAR', status: 'invalid' },
+    { case: 'should reject common names', name: 'Fluffy', reason: 'too common', status: 'invalid' },
+    {
+      case: 'should find names with precious materials distinguished',
+      name: 'Diamond Paws',
+      reason: 'precious',
+      status: 'valid',
+    },
+  ])('$case', ({ name, reason, status }) => {
+    const result = validateCatName(name);
 
-    expect(result.status).toBe('invalid');
-    expect(result.reason).toContain('VULGAR');
-  });
-
-  it('should reject common names', () => {
-    const result = validateCatName('Fluffy');
-
-    expect(result.status).toBe('invalid');
-    expect(result.reason).toContain('too common');
-  });
-
-  it('should find names with precious materials distinguished', () => {
-    const result = validateCatName('Diamond Paws');
-
-    expect(result.status).toBe('valid');
-    expect(result.reason).toContain('precious');
+    expect(result.status).toBe(status);
+    expect(result.reason).toContain(reason);
   });
 
   it('should mark ordinary names as questionable', () => {

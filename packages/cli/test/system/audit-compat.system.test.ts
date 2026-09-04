@@ -153,7 +153,7 @@ describe('Audit --compat flag (system test)', () => {
 
     // Both plugins should have compatibility data
     const withCompat = files.filter(f => f['compatibility'] !== undefined);
-    expect(withCompat.length).toBe(2);
+    expect(withCompat).toHaveLength(2);
 
     // Each compat entry should have analyzed per-target verdicts
     for (const entry of withCompat) {
@@ -187,7 +187,7 @@ This skill has no plugin.json so no compat analysis applies.
 
     // No compat data on skill entries (they are not plugins)
     const withCompat = files.filter(f => f['compatibility'] !== undefined);
-    expect(withCompat.length).toBe(0);
+    expect(withCompat).toHaveLength(0);
   });
 
   it('--compat works with --no-recursive flag', () => {

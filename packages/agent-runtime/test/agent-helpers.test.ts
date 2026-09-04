@@ -82,76 +82,26 @@ describe('executeLLMCall', () => {
     expect(result).toEqual({ status: 'success', data: { value: 42 } });
   });
 
-  it('should map timeout errors', async () => {
+  it.each([
+    { label: 'timeout errors', message: 'Request timeout', expected: 'llm-timeout' },
+    { label: 'ETIMEDOUT errors', message: 'ETIMEDOUT', expected: 'llm-timeout' },
+    { label: 'rate limit errors', message: 'Rate limit exceeded (429)', expected: 'llm-rate-limit' },
+    { label: 'content policy errors', message: 'Content policy violation', expected: ERROR_LLM_REFUSAL },
+    { label: 'content filter errors', message: 'Blocked by content filter', expected: ERROR_LLM_REFUSAL },
+    { label: 'token limit errors', message: 'Token limit exceeded', expected: 'llm-token-limit' },
+    { label: '503 service errors', message: 'Service unavailable (503)', expected: ERROR_LLM_UNAVAILABLE },
+    { label: '502 bad gateway errors', message: 'Bad gateway (502)', expected: ERROR_LLM_UNAVAILABLE },
+    {
+      label: 'unknown errors to the llm-unavailable default',
+      message: 'Something unexpected happened',
+      expected: ERROR_LLM_UNAVAILABLE,
+    },
+  ])('should map $label', async ({ message, expected }) => {
     const result = await executeLLMCall(async () => {
-      throw new Error('Request timeout');
+      throw new Error(message);
     });
 
-    expect(result).toEqual({ status: 'error', error: 'llm-timeout' });
-  });
-
-  it('should map ETIMEDOUT errors', async () => {
-    const result = await executeLLMCall(async () => {
-      throw new Error('ETIMEDOUT');
-    });
-
-    expect(result).toEqual({ status: 'error', error: 'llm-timeout' });
-  });
-
-  it('should map rate limit errors', async () => {
-    const result = await executeLLMCall(async () => {
-      throw new Error('Rate limit exceeded (429)');
-    });
-
-    expect(result).toEqual({ status: 'error', error: 'llm-rate-limit' });
-  });
-
-  it('should map content policy errors', async () => {
-    const result = await executeLLMCall(async () => {
-      throw new Error('Content policy violation');
-    });
-
-    expect(result).toEqual({ status: 'error', error: ERROR_LLM_REFUSAL });
-  });
-
-  it('should map content filter errors', async () => {
-    const result = await executeLLMCall(async () => {
-      throw new Error('Blocked by content filter');
-    });
-
-    expect(result).toEqual({ status: 'error', error: ERROR_LLM_REFUSAL });
-  });
-
-  it('should map token limit errors', async () => {
-    const result = await executeLLMCall(async () => {
-      throw new Error('Token limit exceeded');
-    });
-
-    expect(result).toEqual({ status: 'error', error: 'llm-token-limit' });
-  });
-
-  it('should map 503 service errors', async () => {
-    const result = await executeLLMCall(async () => {
-      throw new Error('Service unavailable (503)');
-    });
-
-    expect(result).toEqual({ status: 'error', error: ERROR_LLM_UNAVAILABLE });
-  });
-
-  it('should map 502 bad gateway errors', async () => {
-    const result = await executeLLMCall(async () => {
-      throw new Error('Bad gateway (502)');
-    });
-
-    expect(result).toEqual({ status: 'error', error: ERROR_LLM_UNAVAILABLE });
-  });
-
-  it('should default to llm-unavailable for unknown errors', async () => {
-    const result = await executeLLMCall(async () => {
-      throw new Error('Something unexpected happened');
-    });
-
-    expect(result).toEqual({ status: 'error', error: ERROR_LLM_UNAVAILABLE });
+    expect(result).toEqual({ status: 'error', error: expected });
   });
 
   it('should handle parse errors', async () => {
@@ -329,85 +279,39 @@ describe('executeExternalEvent', () => {
     });
   });
 
-  it('should map timeout errors', async () => {
+  it.each([
+    { label: 'timeout errors', message: 'Request timed out', expected: 'event-timeout' },
+    { label: 'ETIMEDOUT errors', message: 'ETIMEDOUT', expected: 'event-timeout' },
+    { label: 'rejected errors', message: 'Request was rejected', expected: ERROR_EVENT_REJECTED },
+    { label: 'denied errors', message: 'Access denied', expected: ERROR_EVENT_REJECTED },
+    { label: 'refused errors', message: 'Connection refused', expected: ERROR_EVENT_REJECTED },
+    {
+      label: 'invalid response errors',
+      message: 'Invalid response format',
+      expected: ERROR_EVENT_INVALID_RESPONSE,
+    },
+    {
+      label: 'malformed errors',
+      message: 'Malformed data',
+      expected: ERROR_EVENT_INVALID_RESPONSE,
+    },
+    {
+      label: 'parse errors',
+      message: 'Failed to parse response',
+      expected: ERROR_EVENT_INVALID_RESPONSE,
+    },
+    {
+      label: 'unknown errors to the event-unavailable default',
+      message: 'Something unexpected',
+      expected: 'event-unavailable',
+    },
+  ])('should map $label', async ({ message, expected }) => {
     const handler = async () => {
-      throw new Error('Request timed out');
+      throw new Error(message);
     };
     const output = await executeExternalEvent({ handler });
 
-    expect(output.result).toEqual({ status: 'error', error: 'event-timeout' });
-  });
-
-  it('should map ETIMEDOUT errors', async () => {
-    const handler = async () => {
-      throw new Error('ETIMEDOUT');
-    };
-    const output = await executeExternalEvent({ handler });
-
-    expect(output.result).toEqual({ status: 'error', error: 'event-timeout' });
-  });
-
-  it('should map rejected errors', async () => {
-    const handler = async () => {
-      throw new Error('Request was rejected');
-    };
-    const output = await executeExternalEvent({ handler });
-
-    expect(output.result).toEqual({ status: 'error', error: ERROR_EVENT_REJECTED });
-  });
-
-  it('should map denied errors', async () => {
-    const handler = async () => {
-      throw new Error('Access denied');
-    };
-    const output = await executeExternalEvent({ handler });
-
-    expect(output.result).toEqual({ status: 'error', error: ERROR_EVENT_REJECTED });
-  });
-
-  it('should map refused errors', async () => {
-    const handler = async () => {
-      throw new Error('Connection refused');
-    };
-    const output = await executeExternalEvent({ handler });
-
-    expect(output.result).toEqual({ status: 'error', error: ERROR_EVENT_REJECTED });
-  });
-
-  it('should map invalid response errors', async () => {
-    const handler = async () => {
-      throw new Error('Invalid response format');
-    };
-    const output = await executeExternalEvent({ handler });
-
-    expect(output.result).toEqual({ status: 'error', error: ERROR_EVENT_INVALID_RESPONSE });
-  });
-
-  it('should map malformed errors', async () => {
-    const handler = async () => {
-      throw new Error('Malformed data');
-    };
-    const output = await executeExternalEvent({ handler });
-
-    expect(output.result).toEqual({ status: 'error', error: ERROR_EVENT_INVALID_RESPONSE });
-  });
-
-  it('should map parse errors', async () => {
-    const handler = async () => {
-      throw new Error('Failed to parse response');
-    };
-    const output = await executeExternalEvent({ handler });
-
-    expect(output.result).toEqual({ status: 'error', error: ERROR_EVENT_INVALID_RESPONSE });
-  });
-
-  it('should default to event-unavailable for unknown errors', async () => {
-    const handler = async () => {
-      throw new Error('Something unexpected');
-    };
-    const output = await executeExternalEvent({ handler });
-
-    expect(output.result).toEqual({ status: 'error', error: 'event-unavailable' });
+    expect(output.result).toEqual({ status: 'error', error: expected });
   });
 
   it('should include error message in metadata', async () => {

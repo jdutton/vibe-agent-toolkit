@@ -710,7 +710,7 @@ Content for section 4 with even more text.`
         text: 'content',
         filters: { resourceId: maliciousId },
       });
-      expect(maliciousDeleted.chunks.length).toBe(0);
+      expect(maliciousDeleted.chunks).toHaveLength(0);
     });
 
     it('should handle resource IDs with multiple single quotes', async () => {
@@ -737,7 +737,7 @@ Content for section 4 with even more text.`
         text: 'content',
         filters: { resourceId: complexId },
       });
-      expect(afterDelete.chunks.length).toBe(0);
+      expect(afterDelete.chunks).toHaveLength(0);
     });
   });
 

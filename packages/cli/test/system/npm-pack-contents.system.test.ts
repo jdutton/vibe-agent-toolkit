@@ -117,7 +117,7 @@ beforeAll(() => {
 describe('published @vibe-agent-toolkit/cli tarball', () => {
   it('packs the CLI package itself, not the surrounding workspace', () => {
     expect(cliPack.report.name).toBe('@vibe-agent-toolkit/cli');
-    expect(cliPack.packedPaths.length).toBe(cliPack.report.entryCount);
+    expect(cliPack.packedPaths).toHaveLength(cliPack.report.entryCount);
     expect(cliPack.report.unpackedSize).toBeGreaterThan(0);
   });
 

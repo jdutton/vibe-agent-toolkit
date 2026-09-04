@@ -317,7 +317,7 @@ describe('BertTokenizer', () => {
     it('should produce attention mask of all 1s for real tokens', () => {
       const result = tokenizer.tokenize(helloWorld);
 
-      expect(result.attentionMask.length).toBe(result.inputIds.length);
+      expect(result.attentionMask).toHaveLength(result.inputIds.length);
       expect(result.attentionMask.every((v) => v === 1)).toBe(true);
     });
 
@@ -388,10 +388,10 @@ describe('BertTokenizer', () => {
 
       const result = tokenizer.tokenize(longPhrase, maxLength);
 
-      expect(result.inputIds.length).toBe(maxLength);
+      expect(result.inputIds).toHaveLength(maxLength);
       expect(safeGet(result.inputIds, 0)).toBe(CLS_TOKEN);
       expect(safeGet(result.inputIds, result.inputIds.length - 1)).toBe(SEP_TOKEN);
-      expect(result.attentionMask.length).toBe(result.inputIds.length);
+      expect(result.attentionMask).toHaveLength(result.inputIds.length);
     });
   });
 

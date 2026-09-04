@@ -1433,9 +1433,11 @@ function extractSkillName(
     return frontmatterName;
   }
 
-  // Try H1 title (use [^\n] instead of .+ to avoid backtracking)
-  // eslint-disable-next-line sonarjs/slow-regex -- Using [^\n]+ instead of .+ to avoid backtracking
-  const h1Match = /^#\s+([^\n]+)$/m.exec(parseResult.content);
+  // Try H1 title. `[ \t]` is a single fixed-width class, not a quantifier, so it
+  // cannot compete with the `[^\n]*` capture for the same space — that ambiguity
+  // is what made the old `\s+([^\n]+)` form backtrack super-linearly. Trailing
+  // whitespace is removed by the .trim() below, exactly as before.
+  const h1Match = /^#[ \t]([^\n]*)$/m.exec(parseResult.content);
   if (h1Match?.[1]) {
     return h1Match[1].trim();
   }

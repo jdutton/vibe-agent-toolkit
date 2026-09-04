@@ -969,7 +969,7 @@ describe('end to end: injected into a real node process', () => {
     // The child spawns two grandchildren, both of which inherit NODE_OPTIONS.
     // All three dump. The harness doc claims propagation; here it is measured.
     const names = readdirSync(dir).filter((name) => name.endsWith('.json'));
-    expect(names.length).toBe(3);
+    expect(names).toHaveLength(3);
     expect(names.some((name) => name.startsWith(`io-${pid}-`))).toBe(true);
   });
 });

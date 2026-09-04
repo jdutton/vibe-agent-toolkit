@@ -338,6 +338,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`eslint-plugin-sonarjs` upgraded 3.0.7 → 4.2.0, and its expanded rule set was adopted rather
+  than switched off.** The bump was taken for a security reason (it retires three `minimatch`
+  advisories — see Security), and it reported 98 new errors and 23 new warnings across 54 files.
+  All are fixed: nine genuine ReDoS findings in production regexes, and the rest test hygiene —
+  51 assertions moved to specific matchers, 19 float comparisons to `toBeCloseTo`, 10 sibling cases
+  collapsed into `it.each`, one hook ordering, plus 10 stale `eslint-disable` directives deleted
+  because the rules they named no longer fire. Nothing was suppressed.
+
+- **Three test assertions were found to be structurally blind and were strengthened.** All three
+  were the same premise guard written three times — `expect(NFD_FORM).not.toBe(NFC_FORM)` over two
+  string literals, a comparison settled at authoring time that could never fail — while their own
+  docstrings described a runtime failure mode (an editor silently re-composing the fixture) that the
+  assertion did not catch. A fourth, in the Vercel AI SDK adapter's session-isolation test, asserted
+  only that two histories were non-empty and so passed even if both agents shared one array, which
+  is the exact bug the test is named for. All four now assert something that can fail.
+
+- Patch bumps folded in from Dependabot: `vitest` 3.2.6 → 3.2.7, `turbo` 2.10.11 → 2.10.12,
+  `apache-arrow` 15.0.0 → 15.0.2.
+
 - **`vat validate`, `vat verify` and `vat build` no longer spawn a child process per phase.** Their
   phases run in the orchestrator's own process, so each no longer pays a full Node startup, a second
   copy of the module graph and a cold parse cache. `MAX_PHASE_STDOUT_BYTES` went with the process
@@ -394,6 +413,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CVSS 6.3). Both are transitive-only and both had an in-range fix, so they are pinned forward
   (`fast-uri` 3.1.6, `qs` 6.16.0) rather than added to the accepted-risk register, per that
   register's own rule 1. Nothing in VAT's own code changed.
+
+- **Four more accepted risks were retired by real fixes, because two of the register's stated
+  blockers had quietly expired.** The `@hono/node-server` entry said the fix needed a 2.x major
+  outside `@modelcontextprotocol/sdk`'s declared `^1.19.9`; the fix had since been backported to
+  1.19.15, inside that range, so the pin moved to 1.19.17. The three `minimatch` entries — one of
+  them **CVSS 8.7** — were held by a single **exact** `minimatch: "10.1.2"` pin inside
+  `eslint-plugin-sonarjs@3.0.7` that no dedupe could move; `eslint-plugin-sonarjs@4.2.0` widened it
+  to `^10.2.5`, so the bump drops the vulnerable copy entirely. Accepted risks are now **6, down
+  from 10**, and the register gained a rule 4: a reason that names a blocker is a claim with an
+  expiry date, and nothing in the tooling tells you when it goes stale.
+
+- **Nine regexes in production code could be driven into quadratic backtracking, and are now
+  linear.** These were previously triaged behind `sonarjs/slow-regex` disable comments whose stated
+  reasoning ("negated character classes are non-backtracking") was wrong. Measured on hostile input:
+  the inline-link scanner took **2,632 ms on 40k unclosed brackets**, and the cat-agent age parser
+  **13.6 s on 80k digits**. Both are now **≤1.1 ms** on the same input, with identical output on
+  every case tested. The fixes are real rather than cosmetic: a negative lookbehind stops the scan
+  restarting at every character of a run, and adjacent quantifiers that could both claim the same
+  space (`\s+` beside `[^\n]+`) were made disjoint. ⚠️ Worth recording for whoever meets this next:
+  the obvious atomic-group rewrite `(?=(X))\1` **satisfies the linter while remaining quadratic**
+  (measured: 17.4× growth for 4× input, versus 22.9× before) — it silences the rule without fixing
+  the defect, which is worse than a disable comment.
 
 - **Seven dead entries were deleted from the OSV accepted-risk register, and the `minimatch` reason
   was corrected because it had stopped being true.** `osv-scanner` had been reporting the

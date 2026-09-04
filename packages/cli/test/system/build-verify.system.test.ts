@@ -281,6 +281,10 @@ const VERIFY_SUCCESS_MARKER = 'status: success';
 describe('vat verify command (system test)', () => {
   const suite = setupBuildVerifyTestSuite();
 
+  afterEach(() => {
+    suite.cleanup();
+  });
+
   describe('against a marketplace fixture', () => {
     let verifyResult: Awaited<ReturnType<typeof suite.runVerify>>;
 
@@ -301,10 +305,6 @@ describe('vat verify command (system test)', () => {
     it('should include marketplace phase when claude.marketplaces config exists', () => {
       expect(verifyResult.stdout).toContain(`marketplace:${MARKETPLACE_NAME}`);
     });
-  });
-
-  afterEach(() => {
-    suite.cleanup();
   });
 
   it('should skip marketplace phase when no claude config exists', async () => {

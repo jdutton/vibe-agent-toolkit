@@ -57,7 +57,7 @@ export class BuildHookError extends Error {
  * skill code via --i-understand-this-runs-skill-code.
  */
 function defaultSpawn(cmd: string, opts: { shell: boolean; cwd: string; stdio: 'inherit' }): { status: number | null } {
-  // eslint-disable-next-line sonarjs/os-command -- developer-authored build command from trusted project config; equivalent to running pnpm/npm build manually
+   
   return spawnSync(cmd, { ...opts, shell: true });
 }
 

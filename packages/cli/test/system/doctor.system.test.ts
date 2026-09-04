@@ -55,8 +55,7 @@ async function runVatDoctor(cwd: string, options?: { verbose?: boolean }): Promi
 
   // One block per rendered check: an outcome icon at the start of a line.
   const renderedChecks = (output.match(/^(?:✅|❌|❓|⏭️) /gm) ?? []).length;
-  // eslint-disable-next-line sonarjs/slow-regex -- single bounded digit group
-  const hidden = /(\d+) not shown/.exec(output);
+  const hidden = /(\d{1,9}) not shown/.exec(output);
 
   return {
     exitCode,

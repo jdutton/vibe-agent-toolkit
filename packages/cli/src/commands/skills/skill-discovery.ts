@@ -42,8 +42,10 @@ export async function readSkillName(skillPath: string): Promise<string | undefin
     return name;
   }
   // Fallback: try H1 title
-  // eslint-disable-next-line sonarjs/slow-regex -- Using [^\n]+ instead of .+ to avoid backtracking
-  const h1Match = /^#\s+([^\n]+)$/m.exec(content);
+  // `[ \t]` is a single fixed-width class, not a quantifier, so it cannot compete
+  // with the `[^\n]*` capture for the same space — that ambiguity is what made the
+  // old `\s+([^\n]+)` form backtrack super-linearly. .trim() below is unchanged.
+  const h1Match = /^#[ \t]([^\n]*)$/m.exec(content);
   if (h1Match?.[1]) {
     return h1Match[1].trim();
   }

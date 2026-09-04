@@ -113,11 +113,11 @@ describe('convertConversationalAssistantToFunction', () => {
 
     // First turn
     let result = await chat({ message: 'Turn 1' });
-    expect(result.session.history.length).toBe(3); // system + user + assistant
+    expect(result.session.history).toHaveLength(3); // system + user + assistant
 
     // Second turn
     result = await chat({ message: 'Turn 2' }, result.session);
-    expect(result.session.history.length).toBe(5); // previous 3 + user + assistant
+    expect(result.session.history).toHaveLength(5); // previous 3 + user + assistant
   });
 
   it('should handle session state across turns', async () => {

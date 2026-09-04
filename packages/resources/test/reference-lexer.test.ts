@@ -205,24 +205,26 @@ describe('findLexicalReferences — hasExtension across a query string or fragme
   // to already match `EXTENSION_SUFFIX`, so a bare token with a trailing query never becomes a
   // candidate at all) — they are admitted UNCONDITIONALLY via `@`-prefix, `./` explicit-relative,
   // or a variable expansion, so a query/fragment tail reaches `toLexicalReference` untouched.
-  it('an @-prefixed token with a trailing query string', () => {
-    const refs = lex('See @docs/guide.md?v=2 for details.\n');
+  it.each([
+    {
+      name: 'an @-prefixed token with a trailing query string',
+      line: 'See @docs/guide.md?v=2 for details.\n',
+      raw: '@docs/guide.md?v=2',
+    },
+    {
+      name: 'an explicitly relative token with a trailing fragment',
+      line: 'Look in ./guide.md#section now.\n',
+      raw: './guide.md#section',
+    },
+    {
+      name: 'a variable-expansion token with a trailing query string',
+      line: 'Open ${CLAUDE_PLUGIN_ROOT}/guide.md?v=2 now.\n',
+      raw: '${CLAUDE_PLUGIN_ROOT}/guide.md?v=2',
+    },
+  ])('$name', ({ line, raw }) => {
+    const refs = lex(line);
     expect(refs).toHaveLength(1);
-    expect(refs[0]?.raw).toBe('@docs/guide.md?v=2');
-    expect(refs[0]?.hasExtension).toBe(true);
-  });
-
-  it('an explicitly relative token with a trailing fragment', () => {
-    const refs = lex('Look in ./guide.md#section now.\n');
-    expect(refs).toHaveLength(1);
-    expect(refs[0]?.raw).toBe('./guide.md#section');
-    expect(refs[0]?.hasExtension).toBe(true);
-  });
-
-  it('a variable-expansion token with a trailing query string', () => {
-    const refs = lex('Open ${CLAUDE_PLUGIN_ROOT}/guide.md?v=2 now.\n');
-    expect(refs).toHaveLength(1);
-    expect(refs[0]?.raw).toBe('${CLAUDE_PLUGIN_ROOT}/guide.md?v=2');
+    expect(refs[0]?.raw).toBe(raw);
     expect(refs[0]?.hasExtension).toBe(true);
   });
 

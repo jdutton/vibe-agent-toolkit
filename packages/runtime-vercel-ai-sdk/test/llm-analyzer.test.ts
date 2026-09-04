@@ -45,7 +45,7 @@ it('spreads additionalSettings into generateText and omits unset knobs', async (
   expect(output).toEqual({ name: 'Emberpaw', reasoning: 'A cat of quiet fire' });
   const settings = vi.mocked(generateText).mock.calls.at(-1)?.[0] as Record<string, unknown>;
   expect(settings['topP']).toBe(0.25);
-  expect(settings['temperature']).toBe(0.4);
+  expect(settings['temperature'] as number).toBeCloseTo(0.4, 10);
   expect(settings['model']).toBe(TEST_MODEL);
   expect(settings['prompt']).toContain('Noun: "Ember"');
   expect(settings).not.toHaveProperty('maxTokens');
