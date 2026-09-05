@@ -1,14 +1,17 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- test writes to temp dirs from computed paths */
-import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { parseHtml, parseHtmlContent } from '../src/html-link-parser.js';
 import { blobReferencesFor } from '../src/projection/blob-references.js';
 import type { ResourceLink } from '../src/types.js';
 
-const dirs: string[] = [];
+import { scratchFixtureWriter } from './test-helpers.js';
+
+const fixtures = scratchFixtureWriter('vat-html-');
+
+afterAll(fixtures.cleanup);
 
 /**
  * Cut `source` with each link's span, or `undefined` where a link carries none.
@@ -114,14 +117,6 @@ function parseLinkPositions(source: string): LinkPosition[] {
 const RECONSTRUCTED_ANCHOR_HTML =
   '<a href="./x.md"><div><a href="./y.md"><div>d</div></a></div>';
 
-async function writeHtml(name: string, body: string): Promise<string> {
-  const dir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-html-'));
-  dirs.push(dir);
-  const file = safePath.join(dir, name);
-  await writeFile(file, body, 'utf-8');
-  return file;
-}
-
 /**
  * Parse one file through both entry points, from the same bytes on disk.
  *
@@ -143,30 +138,9 @@ async function parseBothWays(file: string): Promise<{
   return { fromFile, fromContent: parseHtmlContent(content, stats.size), content };
 }
 
-/**
- * Write raw bytes, bypassing UTF-8 encoding.
- *
- * Needed because every ASCII fixture makes `stat().size` and
- * `Buffer.byteLength(decodedContent)` equal, so an ASCII-only suite cannot tell
- * the two apart — and telling them apart is the whole point of `sizeBytes`
- * being a parameter.
- */
-async function writeHtmlBytes(name: string, bytes: Uint8Array): Promise<string> {
-  const dir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-html-'));
-  dirs.push(dir);
-  const file = safePath.join(dir, name);
-  await writeFile(file, bytes);
-  return file;
-}
-
-afterAll(async () => {
-  const { rm } = await import('node:fs/promises');
-  await Promise.all(dirs.map((d) => rm(d, { recursive: true, force: true })));
-});
-
 describe('parseHtml', () => {
   it('extracts <a href> and <img src> links', async () => {
-    const file = await writeHtml(
+    const file = await fixtures.write(
       'page.html',
       '<html><body><a href="./other.html">x</a><img src="img/logo.png"></body></html>',
     );
@@ -177,7 +151,7 @@ describe('parseHtml', () => {
   });
 
   it('collects id and name attributes as anchors', async () => {
-    const file = await writeHtml(
+    const file = await fixtures.write(
       'anchors.html',
       '<html><body><h2 id="intro">Intro</h2><a name="legacy"></a></body></html>',
     );
@@ -187,14 +161,14 @@ describe('parseHtml', () => {
   });
 
   it('reports malformed markup via parseErrors', async () => {
-    const file = await writeHtml('bad.html', '<html><body><p>unclosed</body></html>');
+    const file = await fixtures.write('bad.html', '<html><body><p>unclosed</body></html>');
     const result = await parseHtml(file);
     expect(result.parseErrors).toBeDefined();
     expect((result.parseErrors ?? []).length).toBeGreaterThan(0);
   });
 
   it('omits anchors/parseErrors when there are none', async () => {
-    const file = await writeHtml('clean.html', '<!doctype html><title>t</title><p>hi</p>');
+    const file = await fixtures.write('clean.html', '<!doctype html><title>t</title><p>hi</p>');
     const result = await parseHtml(file);
     expect(result.anchors).toBeUndefined();
     expect(result.parseErrors).toBeUndefined();
@@ -203,7 +177,7 @@ describe('parseHtml', () => {
 
 describe('parseHtmlContent', () => {
   it('is equivalent to parseHtml for the same file', async () => {
-    const file = await writeHtml(
+    const file = await fixtures.write(
       'equivalence.html',
       [
         // No doctype on purpose: parse5 reports `missing-doctype`, so this
@@ -252,7 +226,7 @@ describe('parseHtmlContent', () => {
     // `Buffer.byteLength(content)` in `parseHtml` leaves every test green. That
     // swap is a real defect — `sizeBytes` reaches packaged output bytes via
     // content-transform.ts — so it must be falsifiable here.
-    const file = await writeHtmlBytes(
+    const file = await fixtures.write(
       'malformed.html',
       Uint8Array.from([...Buffer.from('<p id="bad">'), 0xff, ...Buffer.from('</p>')]),
     );
@@ -449,7 +423,7 @@ describe('link source spans', () => {
     // BOTH halves lose their offsets. This one additionally proves the offsets
     // exist, by slicing with them.
     const body = ['<a href="./one.md">1</a>', '<img src="./two.png">'].join('\n');
-    const file = await writeHtml('offsets.html', body);
+    const file = await fixtures.write('offsets.html', body);
 
     const { fromFile, fromContent, content } = await parseBothWays(file);
 

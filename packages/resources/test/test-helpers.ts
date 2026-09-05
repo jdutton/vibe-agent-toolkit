@@ -859,3 +859,45 @@ export function workerThreadCount(): number {
   const report = process.report?.getReport() as { workers?: unknown[] } | undefined;
   return Array.isArray(report?.workers) ? report.workers.length : 0;
 }
+
+/** A fixture writer that isolates every file and cleans up after the suite. */
+export interface ScratchFixtureWriter {
+  /** Write `data` as `name` in a fresh scratch dir; returns the file path. */
+  write(name: string, data: string | Uint8Array): Promise<string>;
+  /** Bounded, best-effort removal of every dir handed out. Pass to `afterAll`. */
+  cleanup(): Promise<void>;
+}
+
+/**
+ * A writer that puts each fixture in its own scratch dir under the temp dir.
+ *
+ * One dir per file, rather than one per suite, because these suites assert on
+ * `stat().size` and on directory contents — a shared parent lets one fixture's
+ * bytes answer another's question.
+ *
+ * `data` is `string | Uint8Array` because `writeFile` treats the two alike bar
+ * the encoding default, and passing raw bytes is the only way to write
+ * malformed UTF-8. That matters: every ASCII fixture makes `stat().size` and
+ * `Buffer.byteLength(decodedContent)` equal, so an ASCII-only suite cannot tell
+ * the two apart — and telling them apart is the whole point of `sizeBytes`
+ * being a parameter.
+ *
+ * @param prefix - `mkdtemp` prefix, so a leaked dir names the suite that made it
+ * @returns The writer and its teardown
+ */
+export function scratchFixtureWriter(prefix: string): ScratchFixtureWriter {
+  const dirs: string[] = [];
+  return {
+    write: async (name: string, data: string | Uint8Array): Promise<string> => {
+      const dir = await mkdtemp(safePath.join(normalizedTmpdir(), prefix));
+      dirs.push(dir);
+      const file = safePath.join(dir, name);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: self-created scratch dir
+      await writeFile(file, data);
+      return file;
+    },
+    cleanup: async (): Promise<void> => {
+      await Promise.all(dirs.splice(0).map((dir) => removeScratchDir(dir)));
+    },
+  };
+}

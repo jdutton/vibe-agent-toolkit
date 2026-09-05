@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ContentCache } from '../src/content-cache.js';
@@ -195,7 +195,7 @@ describe('fetchAuthenticated — content cache integration', () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await removeScratchDir(tempDir);
   });
 
   it('writes through to the cache on a fresh fetch', async () => {
@@ -314,7 +314,7 @@ describe('fetchAuthenticated — token never persisted (§8)', () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await removeScratchDir(tempDir);
   });
 
   it('the token value never appears in any on-disk .json file after a successful fetch+cache', async () => {

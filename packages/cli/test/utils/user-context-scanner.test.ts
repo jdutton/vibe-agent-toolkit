@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 
 
 import * as claudePaths from '@vibe-agent-toolkit/claude-marketplace';
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 
 import { scanUserContext } from '../../src/utils/user-context-scanner.js';
@@ -21,7 +21,7 @@ describe('scanUserContext', () => {
   });
 
   afterAll(async () => {
-    await rm(suiteDir, { recursive: true, force: true });
+    await removeScratchDir(suiteDir);
   });
 
   beforeEach(async () => {

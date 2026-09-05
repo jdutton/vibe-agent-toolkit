@@ -9,10 +9,10 @@
  * @vitest-pool forks
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as agentRunner from '../../src/utils/agent-runner.js';
@@ -110,7 +110,7 @@ describe('agent-runner', () => {
   afterAll(async () => {
     // Clean up temp directory
     if (tempDir) {
-      await rm(tempDir, { recursive: true, force: true });
+      await removeScratchDir(tempDir);
     }
     vi.restoreAllMocks();
   });

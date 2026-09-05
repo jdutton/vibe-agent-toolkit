@@ -1,7 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- test reads and writes temp dirs from computed paths */
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { computeContentKey, type ParsableContent } from '../src/content-key.js';
@@ -249,7 +249,7 @@ describe('parse timing seam', () => {
     // Always leave the seam off: it is module-level state shared by every test
     // in this file, and an enabled seam would leak into the next one.
     __setParseTimingForTest(null);
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await removeScratchDir(tempDir);
   });
 
   describe('disabled', () => {

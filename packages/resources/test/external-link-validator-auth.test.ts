@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
@@ -56,7 +56,7 @@ beforeEach(async () => {
   tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'link-auth-validator-'));
 });
 afterEach(async () => {
-  await rm(tempDir, { recursive: true, force: true });
+  await removeScratchDir(tempDir);
 });
 
 describe('ExternalLinkValidator — authenticated branch (verified)', () => {

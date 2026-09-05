@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExternalLinkCache } from '../src/external-link-cache.js';
@@ -38,7 +38,7 @@ describe('ExternalLinkCache', () => {
 	});
 
 	afterEach(async () => {
-		await fs.rm(tempDir, { recursive: true, force: true });
+		await removeScratchDir(tempDir);
 	});
 
 	it('should store and retrieve link status', async () => {

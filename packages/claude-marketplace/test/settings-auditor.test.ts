@@ -8,7 +8,7 @@
 
 import * as fs from 'node:fs/promises';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -51,7 +51,7 @@ describe('settings auditor answer shapes', () => {
   });
 
   afterAll(async () => {
-    await fs.rm(dir, { recursive: true, force: true });
+    await removeScratchDir(dir);
   });
 
   describe('validateSettingsFile', () => {

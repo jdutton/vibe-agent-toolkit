@@ -16,10 +16,10 @@
  */
 
 import type * as FsPromises from 'node:fs/promises';
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ensureModelFiles } from '../../src/embedding-providers/onnx-utils.js';
@@ -82,7 +82,7 @@ describe('ensureModelFiles publication', () => {
 
   afterEach(async () => {
     vi.unstubAllGlobals();
-    await rm(cacheDir, { recursive: true, force: true });
+    await removeScratchDir(cacheDir);
   });
 
   it('publishes the model by renaming a sibling temp, never writing the cache path in place', async () => {

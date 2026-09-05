@@ -1,7 +1,12 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- test writes to temp dirs from computed paths */
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  normalizedTmpdir,
+  removeScratchDir,
+  resolveFromImportMeta,
+  safePath,
+} from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -61,7 +66,7 @@ describe('devNamespaceDigest', () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await removeScratchDir(tempDir);
   });
 
   it('survives a rebuild of every module the old fingerprint watched', async () => {

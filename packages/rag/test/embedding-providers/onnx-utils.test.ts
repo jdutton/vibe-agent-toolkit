@@ -5,10 +5,10 @@
  * without requiring model downloads.
  */
 
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -147,7 +147,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await rm(vocabDir, { recursive: true, force: true });
+  await removeScratchDir(vocabDir);
 });
 
 // ---------------------------------------------------------------------------
