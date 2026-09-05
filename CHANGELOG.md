@@ -505,6 +505,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The `vat-skill-distribution` skill taught a config key that does not exist.** It showed
+  `skills.config.<name>.claudeWebTarget`, which the `.strict()` project-config schema refuses — so
+  an agent following the published skill produced a config that failed to load on **every** vat
+  command. Replaced with `files:` source→dest mappings, the real mechanism. The same section also
+  claimed `--target claude-web` sorts files into `scripts/` and `assets/`; it flattens everything
+  into `references/`.
+
+- **Every `rag:` config block in the RAG usage guide was unparseable.** There is no top-level `rag:`
+  key — RAG is configured through `resources.include`/`exclude`, the `--db` flag, and
+  `LanceDBRAGProvider.create()` in library code. Copying an example broke every vat command, not
+  just RAG ones. All eight blocks in that guide are now validated against the shipped schemas.
+
+- **`dateRange` and `hybridSearch` were documented as working RAG filters and are implemented
+  nowhere.** So are top-level `filters.tags`, `filters.type` and `filters.headingPath` — only
+  `filters.resourceId` and `filters.metadata` reach the query. An unimplemented filter does not
+  narrow your results, it **widens** them: the query degrades to an unfiltered full-recall search
+  with no error. Move `tags`/`type`/`headingPath` under `filters.metadata`; `dateRange` and
+  `hybridSearch` have no replacement. Documented, not yet guarded.
+
 - **A usage mistake no longer reports itself as a failed check.** Every command's `--help` publishes
   the same three-way exit contract — `0` no error-severity findings, `1` at least one, `2` a system
   error — and VAT's own refusals honoured it: an unknown `--check` name and an unusable `--budget`

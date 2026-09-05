@@ -152,7 +152,9 @@ const provider = new OnnxEmbeddingProvider({
 const vector = await provider.embed('What is RAG?');
 console.log(vector.length); // 384
 
-// Batch (true batched ONNX inference - single model call)
+// Batch: one ONNX call over one padded batch tensor. That is NOT a per-chunk
+// speedup, and with the default int8 weights a chunk's vector depends on its
+// batch neighbours — see "The int8 vector is not a function of its own text".
 const vectors = await provider.embedBatch([
   'Chunk 1 text',
   'Chunk 2 text',
@@ -173,7 +175,7 @@ const vectors = await provider.embedBatch([
 ```typescript
 const provider = new OnnxEmbeddingProvider({
   modelPath: '/path/to/pre-downloaded/model',  // Skip auto-download
-  quantized: false,                              // Use full fp32 weights instead of int8
+  quantized: false,                              // fp32 weights instead of the int8 default (see below)
   cacheDir: '/custom/cache/dir',                  // Override cache location
   numThreads: 1,                                  // WASM threads (default: 1)
   // maxSequenceLength: 256,                      // ONLY to describe a DIFFERENT model
@@ -185,6 +187,58 @@ not a way to make chunks fit. Raising it to 512 for all-MiniLM-L6-v2 does not
 give the model a 512-token window — the model still reads 256 and drops the
 rest — it only stops the chunker from knowing that. Set it only when you point
 `modelPath` at a different model that genuinely has a different window.
+
+#### The int8 vector is not a function of its own text
+
+`quantized` defaults to `true`, and `quantized: false` is not a quality knob with
+a speed price attached. Measured 2026-08 against `Xenova/all-MiniLM-L6-v2` on one
+macOS machine, by probing one fixed string against different batch neighbours:
+
+| Build | Same string, different batch neighbours | Speed | Download |
+|---|---|---|---|
+| int8 — `quantized: true`, the default | cosine **0.9917-0.9928**, maxAbs up to **2.27e-2** | 141.8 ms/chunk | 22 MB |
+| fp32 — `quantized: false` | **bit-identical in every arm** | 122.2 ms/chunk | 86 MB |
+
+The int8 vector moved with *what the other rows in the batch contained* — their
+content, not their padded length. **Mechanism**: dynamic int8 quantization
+computes activation scales **per tensor**, and the tensor spans the whole batch,
+so one row's activations set the scale another row is quantized with. fp32 has no
+activation scales, so it has no coupling.
+
+Two results ride along, both cutting against the shipped defaults:
+
+- **fp32 is faster than the int8 build it is supposed to accelerate** — 122.2 vs
+  141.8 ms/chunk. The quantization buys the 22 MB vs 86 MB download, not speed.
+- **Batching is a pessimization.** `tokenizeBatch` pads every member to the
+  longest sequence in the batch, so a batch of 32 does *more* work than 32 batches
+  of one: 118.0 ms/chunk at batch size 1, against 141.8 batched.
+
+Both configurations were bit-stable across separate processes on one machine.
+**Cross-platform bit-stability is untested and therefore not claimed here.**
+
+**What this means for caching and invalidation.** Production embeds one resource
+at a time — `LanceDBRAGProvider` calls `embedBatch` once per resource, handing it
+that resource's whole chunk list. So a file's **ordered vector set** is
+deterministic, but **an individual chunk's vector is not a function of that
+chunk's text**. Two byte-identical chunks in different files get different
+vectors. Two rules follow:
+
+1. **The cache unit is `(content_key, chunk_policy, model_config) → the file's
+   ordered vector set`**, never a per-chunk vector keyed on that chunk's own
+   hash. A per-chunk cache would serve a vector computed under some other batch's
+   activation scales.
+2. **The stored model identity is insufficient to invalidate on.** `enrichChunks`
+   records only the bare model string `Xenova/all-MiniLM-L6-v2`, which
+   distinguishes neither quantized from fp32, nor sequence length, nor pooling
+   rule — and each of those changes every vector.
+
+If you need reproducible vectors — a golden test, a differential comparison across
+runs, a store you will append to over months — set `quantized: false` and accept
+the 86 MB download; it is also the faster of the two. The int8 default stays
+reasonable when the download matters and every vector in a store comes from one
+build: a same-string cosine of 0.9917 is a small perturbation. Its effect on
+retrieval quality has not been measured, so treat that as an argument rather than
+a result.
 
 ### OpenAIEmbeddingProvider
 

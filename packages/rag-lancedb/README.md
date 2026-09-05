@@ -122,15 +122,21 @@ The provider handles serialization/deserialization automatically based on your Z
 
 ### Filtering
 
+Filters are compiled into a SQL `WHERE` clause against the LanceDB table. **Two filter keys are honoured**; every other field on the query type is currently ignored (see [Declared but not implemented](#declared-but-not-implemented) below).
+
+| Filter | Behaviour |
+|---|---|
+| `filters.resourceId` | Exact match on the source resource. Accepts a string or an array (`resourceid IN (...)`). An empty array matches nothing. |
+| `filters.metadata` | Any field declared in your metadata schema — default or custom. Fields not present in the schema are skipped. |
+
 All metadata fields (default or custom) are filterable:
 
 ```typescript
 const result = await provider.query({
   text: 'authentication',
   filters: {
-    // Core filters
+    // Core filter
     resourceId: 'doc-1',
-    dateRange: { start: new Date('2025-01-01'), end: new Date() },
 
     // Metadata filters (type-safe)
     metadata: {
@@ -143,6 +149,35 @@ const result = await provider.query({
 ```
 
 Array fields use substring matching (SQL `LIKE`). Other fields use exact matching.
+
+### Declared but not implemented
+
+Some fields are declared on the query types but **no shipped provider reads them**. Passing one is not a type error for the fields on the interface, raises nothing at runtime, and logs no warning — the field is simply never translated into a `WHERE` clause.
+
+**This does not narrow your results; it widens them.** The provider applies a `WHERE` clause only when the filter builder produced one, so a query whose only filter is an unimplemented one runs as an **unfiltered, full-recall vector search over the entire index**. You get plausible-looking results drawn from documents the filter was meant to exclude, with nothing to tell you the filter did not apply.
+
+| Field | Declared in | Status |
+|---|---|---|
+| `filters.dateRange` | `RAGQuery` interface + `RAGQuerySchema` | Never implemented. Silently ignored. |
+| `hybridSearch` (`enabled`, `keywordWeight`) | `RAGQuery` interface + `RAGQuerySchema` | Never implemented. Search is always pure vector search; `enabled: true` changes nothing. |
+| `filters.tags`, `filters.type`, `filters.headingPath` | `RAGQuerySchema` only | Silently ignored **at the top level of `filters`**. These are metadata fields — move them under `filters.metadata` and they are honoured. |
+
+**If you already wrote one of these into your code, it has never had any effect.** To recover:
+
+- `tags`, `type`, `headingPath` — move them under `filters.metadata`:
+
+  ```typescript
+  // ❌ Silently ignored: full-recall search, no filtering at all
+  filters: { tags: ['validation'] }
+
+  // ✅ Honoured
+  filters: { metadata: { tags: ['validation'] } }
+  ```
+
+- `dateRange` — no replacement. Model the date as a field on your own metadata schema and filter on it via `filters.metadata`, or filter the returned chunks yourself after the query.
+- `hybridSearch` — no replacement. Remove it; leaving it in place misrepresents what the query does.
+
+> **Note on `RAGQuerySchema`.** The Zod schema exported from `@vibe-agent-toolkit/rag` declares `filters.tags` / `type` / `headingPath` / `dateRange` but has **no `metadata` key at all** — so a filter validated against that schema cannot express the one filter path that works. Type provider calls against the `RAGQuery` **interface** (`@vibe-agent-toolkit/rag`, `interfaces/provider.ts`), not against `z.infer<typeof RAGQuerySchema>`.
 
 ## Quick Start
 
@@ -182,11 +217,16 @@ const rag = await LanceDBRAGProvider.create({
 });
 
 // Query
+// NOTE: `tags` is a metadata field, so it must go under `filters.metadata`.
+// A top-level `filters.tags` is silently ignored and degrades the query to an
+// unfiltered full-recall search - see "Declared but not implemented" above.
 const result = await rag.query({
   text: 'How do I validate schemas?',
   limit: 5,
   filters: {
-    tags: ['validation'],
+    metadata: {
+      tags: ['validation'],
+    },
   },
 });
 

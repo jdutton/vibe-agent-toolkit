@@ -389,6 +389,19 @@ export async function crawlAndResolveRegistry(
  * Safe to hold for a process lifetime: every VAT entry point is a short-lived
  * CLI invocation. Note the crawl excludes build output (`BUILD_OUTPUT_GLOBS` via
  * the crawler's defaults), so packaging a skill mid-run cannot invalidate it.
+ *
+ * 🚨 That exclusion is ALSO the cause of a live defect, and this paragraph is the
+ * reason the defect must not be fixed by widening the crawl. The packager's
+ * post-build lane sees an EMPTY link graph because the built tree it validates
+ * falls under `**\/dist\/**` — measured, and now pinned by a committed test; the
+ * numbers, the control that proves the cause, and the fixture all live in the
+ * `runPostBuildValidation` docstring in `../skill-packager.ts`, and are not
+ * restated here.
+ *
+ * ⛔ The exclusion is the stated safety argument DIRECTLY ABOVE, for a memo shared
+ * by the audit lane, the validate lane AND the built lane. Widening the crawl so
+ * one lane can see its own output retracts that argument for every lane sharing
+ * this memo — it is not a one-lane fix, and it lands here, not there.
  */
 const walkRegistryCache = new Map<string, Promise<ResourceRegistry>>();
 

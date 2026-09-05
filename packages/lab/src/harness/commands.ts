@@ -117,6 +117,30 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     args: Object.freeze(['resources', 'scan', '{subject}', '--verbose', '--format', 'json']),
     // Exits 0 whatever it finds — scanning reports statistics, not findings.
   }),
+  'resources-query': Object.freeze({
+    name: 'resources-query',
+    // The ONLY entry whose own output names which population arm the run took
+    // (`population: derived | store`) and what that arm cost
+    // (`populationSecs`). Every other entry is silent about it, so an A/B
+    // varying `VAT_PROJECTION_STORE` can only be confirmed from a `crawl`
+    // dump's `projection-store:read` / `projection-store:write` charges — this
+    // one says it in the document itself.
+    //
+    // The statement is deliberately trivial. `resources query` is populate +
+    // one SQL, so with a counting query essentially all of its wall time IS the
+    // population, which is the quantity a projection store exists to move. A
+    // heavier statement would dilute exactly the signal this entry is for.
+    args: Object.freeze([
+      'resources',
+      'query',
+      'SELECT count(*) AS members FROM resource_realizations',
+      '{subject}',
+      '--format',
+      'json',
+    ]),
+    // Exits 0 when the statement ran; 2 when it was refused or the crawl
+    // failed, and a refusal measured nothing. So the default codes.
+  }),
   'resources-validate': Object.freeze({
     name: 'resources-validate',
     args: Object.freeze(['resources', 'validate', '{subject}', '--format', 'json']),

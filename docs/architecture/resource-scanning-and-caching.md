@@ -345,6 +345,16 @@ alone would be sizing a fixture that cannot distinguish.
 `builtin:filesystem` + 174.8 ms `blob-population:derive` = 850.1 ms of the 851.9 ms). Summing them
 per arm inflates the projection arm alone and corrupts the ratio. Compare `enumerate` to `enumerate`.
 
+⚠️ **Reading the files is not what the 4,580.7 ms is made of, and that pairing is the number that
+killed git-OID read elimination — so never quote the 4,580.7 ms without it.** Measured 2026-08 on
+**this** repository — a different, smaller corpus, stated so the comparison is not mistaken for a
+same-tree one — reading *every* file costs **94 ms warm** (2,096 files / 26.5 MB, ≈45 µs per file).
+Even crediting read elimination with the whole of that against the adopter's arm, a *perfect* result
+removes **≲2%** of it. Quoted alone, the 4,580.7 ms invites an optimization that cannot pay for
+itself; quoted as a pair, the arm is visibly enumeration and derivation, not I/O. §6's blob-SHA memo
+bullet reaches the same bound from the syscall side (≈15% of that command's filesystem calls), and
+[Content Keying and Git](./content-keying-and-git.md) carries the rest of the refutation.
+
 **It is opt-in, and the asymmetry with `vat inventory`'s default-on selector is the point.** The
 inventory flip was defensible as a default because it was provably a byte-for-byte no-op. This lane
 cannot claim that, because it deliberately does not agree: it drops committed symlinks (§4), and for
@@ -727,6 +737,15 @@ cost for a CLI dependency, not a browser bundle.
 - [Resource Projection](./resource-projection.md) — the output side: the shipped parse-cache output
   shape, the proposed blob-keyed and path-dependent schema targeted for stage 3, and tree-shape
   caching.
-- The design journey behind this document — rejected approaches, measurements, and the session that
-  produced it — lives in the (gitignored, not committed) design spec; see that file's pointer back to
-  this one.
+- [Content Keying and Git](./content-keying-and-git.md) — the keying side: why a git blob OID and
+  VAT's `contentKey` hash different preimages, the `git cat-file --filters` framing trap, why the git
+  crawl lane needs no file read at all, and (§9) how to reproduce every measurement it states.
+- **The design journey behind this document is not preserved as a separate document, and no such
+  document should be looked for.** The rejected approaches and the measurements were captured into
+  the committed artefacts they constrain, and those are the authority: this file, [Content Keying and
+  Git](./content-keying-and-git.md), [Resource Projection §5](./resource-projection.md), the
+  docstrings in `packages/resources/src/content-key.ts` ("Why there is no git rung here") and
+  `packages/resources/src/cache-namespace.ts` (the rejected build fingerprint, with the measurement
+  that rejected it), and `packages/cli/src/pipeline-oracles/README.md` for the oracles the
+  enumeration and parse-fact measurements are taken with. A claim here that has lost its provenance
+  is re-measured, not looked up.

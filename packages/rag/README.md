@@ -250,7 +250,9 @@ const provider = new OnnxEmbeddingProvider();
 const embedding = await provider.embed('Search query text');
 console.log(embedding.length); // 384
 
-// Batch embedding for efficiency
+// Batch embedding: one ONNX call, but not a per-chunk speedup — padding makes a
+// batch of 32 slower per chunk than 32 singles, and int8 vectors shift with their
+// batch neighbours. Measurements: ../../docs/embedding-providers.md
 const embeddings = await provider.embedBatch(['text1', 'text2', 'text3']);
 ```
 

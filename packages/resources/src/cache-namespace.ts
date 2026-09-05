@@ -35,6 +35,33 @@
  * - **Dev checkout:** `0.1.42-dev-<6 hex>` over the package root path *and*
  *   `ParseFactsSchema`'s own shape.
  *
+ * ## The bound on "consistent by construction"
+ *
+ * That claim covers VAT's own code and **not** the parsers VAT depends on, and
+ * it is stated here so it is not read wider than it holds. This package declares
+ * `remark-parse ^11.0.0`, `yaml ^2.6.1`, `parse5 ^7.3.0` and
+ * `github-slugger ^2.0.0` — four semver **ranges**, not four pins (analysed
+ * 2026-08-17, re-read off `packages/resources/package.json` 2026-09-05 and all
+ * four are still ranges). Two machines installing the *identical* VAT release
+ * can therefore resolve different minors of any of them, share one namespace,
+ * and write disagreeing facts under identical keys.
+ *
+ * That is a **wrongness** class, not the coldness class the rest of this
+ * docstring reasons about: precisely the failure the namespace exists to
+ * prevent, arriving through the one door it does not guard.
+ *
+ * **This is not an argument for a version constant, and one must not be added in
+ * answer to it.** A hand-bumped integer is banned in this repo (see the closing
+ * paragraph, and it was already removed from this very file once), and it would
+ * not even address this: the drift lives in a *dependency resolution* that no
+ * human-maintained number tracks — it would move only when someone remembered,
+ * which is exactly the failure mode. The two honest options are to derive the
+ * discriminator from the **resolved dependency set** (the versions actually
+ * installed, read the way {@link readVersion} reads this package's own), or to
+ * leave the mechanism as it is and write the bound down. This paragraph is the
+ * second option, taken deliberately: recorded as a known limit rather than
+ * silently asserted away.
+ *
  * The path component is load-bearing and must survive any future change here:
  * every worktree on a machine reads the same version out of the same manifest,
  * so branch A and branch B and the published release of that number would

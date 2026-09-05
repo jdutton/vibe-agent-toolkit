@@ -466,7 +466,14 @@ vat rag index docs/
 
 ### Performance Optimization
 
-1. **Batch Indexing**: Index all docs at once, not one-by-one
+1. **One indexing run, not many** — process startup and model load dominate, so
+   `vat rag index docs/` beats a loop that indexes files one at a time. This is *not* an
+   argument for a large `embedBatch` batch: `tokenizeBatch` pads every member to the
+   longest sequence in the batch, so a batch of 32 measured *slower per chunk* than 32
+   batches of one — 118.0 ms/chunk at batch size 1 against 141.8 batched (2026-08,
+   `Xenova/all-MiniLM-L6-v2` int8, one macOS machine). With the int8 default a chunk's
+   vector also depends on its batch neighbours; see
+   [Embedding Providers](../embedding-providers.md).
 2. **Cache Models**: ONNX models cache in `~/.cache/vat-onnx-models/`
 3. **Separate Stores**: Multiple stores > one large store for unrelated content
 4. **Prune Old Content**: Run `vat rag clear` when docs are restructured

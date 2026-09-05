@@ -595,6 +595,7 @@ Material for developers working on VAT itself (not for users of VAT) lives under
 - [vat-debugging.md](docs/contributing/vat-debugging.md) — reproducing VAT bugs, `VAT_ROOT_DIR` adopter testing, failing-test-first fixes before landing changes
 - [vat-install-architecture.md](docs/contributing/vat-install-architecture.md) — design landscape for VAT's install/uninstall surfaces; read before proposing new install methods
 - [command-lane-table.md](docs/contributing/command-lane-table.md) — which of the 69 commands enumerate the filesystem, through which of the three entry points, and which three only do so by spawning child processes; read before changing enumeration or the crawl routes
+- [content-routing.md](docs/contributing/content-routing.md) — where a piece of knowledge belongs: which committed file owns a design rationale, a measurement, or a ruling, and what to delete outright because git already holds it. Read before writing durable prose anywhere in `docs/`
 - [packages/lab/README.md](packages/lab/README.md) — the **quality lab**: a separate CLI that reports on a project and compares along one of three axes (which project, which version of it, which vat build). Read before adding any dev/QA/profiling verb — it owns that scope, and its [scope doc](packages/lab/docs/scope.md) decides what belongs there versus in `vat`
 
 **⚠️ Measuring anything? The lab is the instrument — do not hand-roll a probe.** The trigger is
