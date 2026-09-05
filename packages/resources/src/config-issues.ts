@@ -4,12 +4,12 @@
  *
  * ## Why this module exists
  *
- * `ResourcesConfigSchema` and every block under it are `.strict()`, which is the
- * right call — a passthrough object ACCEPTS `cheks:` and then STRIPS it, so an
- * unenforced rule reads as a config that declared no rules. But strictness is
- * only worth having if the refusal is legible, and it was not. The two config
- * readers in the toolkit each formatted the same `ZodError` differently and
- * neither named the file:
+ * `ResourcesConfigSchema` is `.strict()`, which is the right call — a
+ * passthrough object ACCEPTS `cheks:` and then STRIPS it, so an unenforced rule
+ * reads as a config that declared no rules. But strictness is only worth having
+ * if the refusal is legible, and it was not. The two config readers in the
+ * toolkit each formatted the same `ZodError` differently and neither named the
+ * file:
  *
  * - `cli/utils/config-loader.ts` interpolated `error.message`, which in Zod 3 is
  *   a **JSON dump of the issue array**. Measured on a real adopter carrying
@@ -19,6 +19,19 @@
  *   the config path, never said the key had been removed, and offered no remedy.
  * - `resources/config-parser.ts` joined `path: message` pairs with commas, which
  *   is legible but says nothing more than Zod's own wording.
+ *
+ * ⚠️ **NOT every block under it is strict, and this docstring used to say
+ * otherwise.** `ResourceCheckSchema`, `ValidationConfigSchema` and
+ * `LinkAuthConfigSchema` are strict; `CollectionConfigSchema`,
+ * `CollectionValidationSchema` and `ExternalUrlValidationSchema` are **not**, so
+ * a misspelled key inside a collection is still accepted and stripped today.
+ * That gap is left open deliberately — closing it is a second breaking change
+ * for every adopter config and needs its own CHANGELOG note and its own adopter
+ * run. `ResourcesConfigSchema`'s own docstring carries the same warning and ends
+ * *"Do not 'restore' the old sentence"*; this module is where a maintainer
+ * working on strictness actually lands, so the warning has to be here too. The
+ * false sentence survived one round of fixing precisely because it lived in two
+ * places and only one was corrected.
  *
  * ⛔ **The general rule this exists to serve:** tightening a schema from
  * passthrough to strict is a breaking change for every config in the wild, and

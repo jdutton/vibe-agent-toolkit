@@ -505,6 +505,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+_The six items below came out of an independent adversarial review of this release._
+
+- **A `resources.validation.severity` entry naming a check you do not declare now says so, instead
+  of silently overriding nothing.** `CUSTOM:<name>` keys are validated for their SHAPE by the config
+  schema, which cannot see `resources.checks` — so `CUSTOM:orphan-skills` left behind after that
+  check was renamed parsed cleanly, applied to no finding, and reported nothing. In one direction
+  the adopter believes a check is stood down and it keeps failing their build; in the other a stale
+  entry hides a rename. `vat resources check` now warns on stderr, before the crawl, naming every
+  stale key and the checks that ARE declared. It is a **warning, not a refusal** — unlike an unknown
+  `--check` name, which is typed for one run and still exits 2, a `severity` entry lives in a
+  committed config that may be shared across repositories or outlive a check through a rename in
+  flight.
+
+- **The refusal for a bad `severity` key no longer sends half its readers to the wrong place.** Every
+  rejected key got one sentence: *"a custom severity key must be `CUSTOM:<name>`, naming a check
+  declared under resources.checks"*. An adopter who wrote `RESOURCE_CHECK_BROKEN: ignore` — after
+  reading three docs that describe that code at length — was told they had misspelled a *custom*
+  key. A registry-shaped key now gets its own message saying it is either a misspelled registry code
+  or one deliberately kept unsilenceable, and points at `CUSTOM:<name>` for what they CAN override.
+  The message also **no longer claims the custom name must be declared**, because nothing enforced
+  that — see the warning above for where the check actually lives now.
+
+- **The publish step refuses any `workspace:` specifier that survived its rewrite.** Only the exact
+  string `workspace:*` is rewritten; `workspace:^`, `workspace:~` and `workspace:0.2.0` passed
+  straight through, and nothing downstream looked — the pre-publish workspace step *counts*
+  specifiers and never fails on one. npm rejects a published `workspace:` with
+  `EUNSUPPORTEDPROTOCOL`, and bun accepts it silently, so this repo's own tooling could not see it.
+  That is how `@vibe-agent-toolkit/cli@0.2.0-rc.3` shipped uninstallable; the fix for that closed the
+  axis of *which fields are scanned* and left the axis of *which specifier forms are matched* wide
+  open. `workspace:^` is the realistic way in, because it is what a person writes for a **peer**
+  range — the field this release introduces. The guard is now on the outcome: after the rewrite, no
+  `workspace:` may remain, whoever declared it.
+
+- **The pre-publish workspace check read three of the four dependency fields.** It omitted
+  `optionalDependencies` — the exact omission that shipped rc.3 — while sitting beside the shared
+  field list written to make that impossible. It now iterates that list.
+
+- **`config-issues.ts` claimed every block under `resources:` is `.strict()`.** It is not:
+  `collections`, its `validation` and `externalUrls` are still permissive, so a misspelled key inside
+  a collection is accepted and stripped. The claim was corrected in the schema itself earlier in this
+  release — whose docstring now ends *"Do not 'restore' the old sentence"* — but survived in this
+  second copy, which is the module a maintainer working on strictness actually opens.
+
+- **The ReDoS-hardened link regexes are now pinned, including one behaviour that had already moved.**
+  The `(?<!\[)` rewrite is genuinely linear (measured 549.6 ms → 0.1 ms on 40,000 unclosed brackets,
+  where the old pattern grew ×4 per doubling) and loses no match — but `rewriter-helpers.test.ts` had
+  not changed since v0.1.38, so nothing said so. The sibling edit to the reference-definition pattern
+  silently stopped matching a definition whose destination is only whitespace (`[a]:` followed by
+  spaces). That is malformed input either way and leaving it alone is the better answer; it is now a
+  pinned decision rather than a side effect, alongside a linearity bound expressed as a ratio between
+  two input sizes rather than a wall-clock floor.
+
 - **The agent-facing skills documented a field that no longer exists, and did not document
   `vat resources check` at all.** `vat-knowledge-resources` described an `engine: sqlite |
   ephemeral` output field, and an inference rule built on combining it with `population` — that

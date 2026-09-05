@@ -62,6 +62,8 @@ import { issuesFromCheckRows, type ResourceCheck } from '@vibe-agent-toolkit/res
 import {
   calculateValidationStatus,
   countBySeverity,
+  CUSTOM_CHECK_CODE_PREFIX,
+  isCustomCheckCode,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -477,6 +479,64 @@ export function requireDeclaredCheck(
       ? 'This project declares none — add them under `resources.checks` in'
         + ' vibe-agent-toolkit.config.yaml.'
       : `Declared under \`resources.checks\`: ${declared.join(', ')}.`),
+  );
+}
+
+/**
+ * Name every `CUSTOM:` severity override that overrides nothing.
+ *
+ * 🔑 **The same silent-green shape as an unknown `--check` name, one surface
+ * over.** {@link requireDeclaredCheck} refuses `--check nope` because a filter
+ * that matched nothing ran nothing and exited 0. A `validation.severity` entry
+ * keyed `CUSTOM:<name>` for a check that is not declared is the mirror image: it
+ * parses (the schema validates the KEY's shape and cannot see
+ * `resources.checks`), applies to no finding, and says nothing. An adopter
+ * renames a check and leaves the override behind, or mistypes it while standing
+ * down an inherited one — and in the second direction the check they meant to
+ * silence keeps failing their build with no clue why.
+ *
+ * ⚠️ **A warning, not a refusal, and the asymmetry with `--check` is
+ * deliberate.** `--check` is a flag typed for THIS run, so a mistake is an
+ * operator error and exiting 2 costs nothing. A `severity` entry lives in a
+ * committed config that may legitimately be shared across repositories or
+ * outlive a check through a rename in flight; refusing it would be a new
+ * breaking config error, which is exactly the change this release already
+ * decided not to make twice (see `ResourcesConfigSchema`). Stderr, so the
+ * document on stdout stays parseable — the same channel and the same reasoning
+ * as the "no checks are declared" warning in {@link checkCommand}.
+ *
+ * 📌 The registry half of the key space needs no equivalent: a misspelled
+ * REGISTRY code is already refused by `SeverityOverrideCodeSchema`'s enum
+ * branch. Only the open `CUSTOM:` namespace can name something that does not
+ * exist.
+ *
+ * @param checks - The project's `resources.checks`
+ * @param validation - The project's `resources.validation`, or undefined
+ * @param logger - Where the warning goes (stderr)
+ */
+export function warnUndeclaredOverrides(
+  checks: Readonly<Record<string, ResourceCheck>>,
+  validation: SeverityOverrides | undefined,
+  logger: Logger,
+): void {
+  const stale = Object.keys(validation?.severity ?? {})
+    .filter((code) => isCustomCheckCode(code))
+    // 🪤 `Object.hasOwn`, not `in` — same reason {@link requireDeclaredCheck}
+    // uses it: `in` walks the prototype chain, so an override keyed
+    // `CUSTOM:toString` would look declared and stay silent.
+    .filter((code) => !Object.hasOwn(checks, code.slice(CUSTOM_CHECK_CODE_PREFIX.length)));
+  if (stale.length === 0) return;
+
+  const declared = Object.keys(checks);
+  logger.warn(
+    `resources.validation.severity names ${stale.length} check(s) this project does not declare,`
+    + ` so ${stale.length === 1 ? 'it overrides' : 'they override'} nothing: ${stale.join(', ')}.`
+    + (declared.length === 0
+      ? ' No checks are declared at all.'
+      : ` Declared under \`resources.checks\`: ${declared.join(', ')}.`)
+    + ' Correct the spelling, or delete the entry — a severity override for a check that no longer'
+    + ' exists is not silencing anything, and a MISTYPED one leaves the check you meant to stand'
+    + ' down still failing the build.',
   );
 }
 
@@ -1230,6 +1290,10 @@ export async function checkCommand(
 
     // Before the crawl: a mistyped flag is an operator error and pays nothing.
     requireDeclaredCheck(checks ?? {}, options.check);
+    // Also before the crawl, and for the same reason: an override that overrides
+    // nothing is knowable from the config alone, and the operator should read it
+    // beside the other config news rather than after a full population.
+    warnUndeclaredOverrides(checks ?? {}, config?.resources?.validation, logger);
 
     const outcome = await runOutcome({
       root: projectRoot,

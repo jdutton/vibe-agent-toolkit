@@ -31,10 +31,29 @@ import {
   buildCheckOutputData,
   requireDeclaredCheck,
   runDeclaredChecks,
+  warnUndeclaredOverrides,
   type CheckCost,
   type CheckPayloadInput,
 } from '../../src/commands/resources/check.js';
+import { createLogger, type Logger } from '../../src/utils/logger.js';
 import type { AskProjection } from '../../src/utils/projection-query.js';
+
+/**
+ * A logger that captures what reached stderr, and nothing else.
+ *
+ * Module scope rather than inside its `describe`: a test-scoped helper is a
+ * lint error here (`local/no-test-scoped-functions`, SonarQube S1515).
+ *
+ * @returns The logger to pass, and the array its warnings land in
+ */
+function spyLogger(): { logger: Logger; warnings: string[] } {
+  const warnings: string[] = [];
+  const logger = {
+    ...createLogger({ debug: false }),
+    warn: (message: string) => warnings.push(message),
+  } as unknown as Logger;
+  return { logger, warnings };
+}
 
 /** The two check keys the loop cases use, and the codes their findings carry. */
 const FIRST = 'no-markdown';
@@ -522,6 +541,96 @@ describe('requireDeclaredCheck — an unknown --check name', () => {
     // is exactly the silent green this guard exists to close.
     expect(() => requireDeclaredCheck(TWO_VIOLATED, 'toString')).toThrow(/toString/);
     expect(() => requireDeclaredCheck(TWO_VIOLATED, '__proto__')).toThrow();
+  });
+});
+
+/**
+ * The MIRROR of the block above, on the config surface instead of the flag.
+ *
+ * `--check nope` was a silent green until `requireDeclaredCheck` closed it. A
+ * `validation.severity` entry keyed `CUSTOM:<name>` for an undeclared check is
+ * the same shape one surface over: the schema validates the key's SHAPE and
+ * cannot see `resources.checks`, so it parses, overrides nothing, and says
+ * nothing. Warned rather than refused — see `warnUndeclaredOverrides` for why
+ * the asymmetry with the flag is deliberate.
+ */
+describe('warnUndeclaredOverrides — a severity override that overrides nothing', () => {
+  it('warns when a CUSTOM: override names a check the project does not declare', () => {
+    const { logger, warnings } = spyLogger();
+
+    warnUndeclaredOverrides(TWO_VIOLATED, { severity: { 'CUSTOM:renamed-away': 'ignore' } }, logger);
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('CUSTOM:renamed-away');
+  });
+
+  it('names the checks that ARE declared, so the operator sees the typo', () => {
+    const { logger, warnings } = spyLogger();
+
+    warnUndeclaredOverrides(TWO_VIOLATED, { severity: { 'CUSTOM:no-markdow': 'ignore' } }, logger);
+
+    expect(warnings[0]).toContain(FIRST);
+    expect(warnings[0]).toContain(SECOND);
+  });
+
+  it('says nothing when every CUSTOM: override names a declared check', () => {
+    // ⭐ The control. Without it this suite would pass on a function that warns
+    // unconditionally, which is worse than one that never warns — an adopter
+    // learns to skip the line.
+    const { logger, warnings } = spyLogger();
+
+    warnUndeclaredOverrides(TWO_VIOLATED, { severity: { [`CUSTOM:${FIRST}`]: 'ignore' } }, logger);
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it('says nothing about REGISTRY codes, which the schema enum already refuses', () => {
+    const { logger, warnings } = spyLogger();
+
+    warnUndeclaredOverrides(TWO_VIOLATED, { severity: { LINK_BROKEN_FILE: 'ignore' } }, logger);
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it('says nothing when there are no overrides at all', () => {
+    const { logger, warnings } = spyLogger();
+
+    warnUndeclaredOverrides(TWO_VIOLATED, undefined, logger);
+    warnUndeclaredOverrides(TWO_VIOLATED, {}, logger);
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it('reports every stale override at once, not just the first', () => {
+    const { logger, warnings } = spyLogger();
+
+    warnUndeclaredOverrides(
+      TWO_VIOLATED,
+      { severity: { 'CUSTOM:gone-a': 'ignore', 'CUSTOM:gone-b': 'warning' } },
+      logger,
+    );
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('CUSTOM:gone-a');
+    expect(warnings[0]).toContain('CUSTOM:gone-b');
+  });
+
+  it('does not treat an inherited Object property as a declared check', () => {
+    // 🪤 Same trap as the flag guard: `in` walks the prototype chain, so
+    // `CUSTOM:toString` would look declared and stay silent.
+    const { logger, warnings } = spyLogger();
+
+    warnUndeclaredOverrides(TWO_VIOLATED, { severity: { 'CUSTOM:toString': 'ignore' } }, logger);
+
+    expect(warnings[0]).toContain('CUSTOM:toString');
+  });
+
+  it('says the project declares none, when it declares none', () => {
+    const { logger, warnings } = spyLogger();
+
+    warnUndeclaredOverrides({}, { severity: { 'CUSTOM:anything': 'ignore' } }, logger);
+
+    expect(warnings[0]).toContain('No checks are declared at all');
   });
 });
 

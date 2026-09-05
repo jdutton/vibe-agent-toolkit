@@ -27,7 +27,7 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 import { gitTreeSnapshot, withGitSnapshotCache } from '../src/git-snapshot.js';
 import { GitTracker } from '../src/git-tracker.js';
@@ -38,33 +38,64 @@ const APPEARED_AFTER = 'appeared-after.md';
 /** A path committed before the snapshot, so both routes must know it. */
 const COMMITTED = 'committed.md';
 
-let root: string;
+/** Every repository built here, so `afterAll` can remove them in one pass. */
+const created: string[] = [];
 
-function git(...args: string[]): void {
+function git(cwd: string, ...args: string[]): void {
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
-  const result = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
   if (result.status !== 0) {
     throw new Error(`git ${args.join(' ')} failed: ${result.stderr ?? result.error?.message}`);
   }
 }
 
-beforeEach(() => {
-  root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-tracker-priming-'));
+/**
+ * A fresh repository with {@link COMMITTED} committed.
+ *
+ * 🪤 **Called from inside each test, NEVER from a `beforeEach`, and that is the
+ * whole reason this is a function.** It spawns six `git` processes, and vitest's
+ * unit config deliberately sets no `hookTimeout` override — `vitest.shared.ts`
+ * says so in as many words: *"Unit hooks should fail fast at vitest's 10s
+ * default — a unit hook that needs longer is doing real I/O and belongs in the
+ * integration or system tier instead."* Six process spawns on a contended
+ * `windows-latest` runner exceed that, and they did: PR #219 went red on
+ * `Hook timed out in 10000ms` pointing at the `mkdirSync` on this file's first
+ * setup line, which reads as a filesystem fault and is really six git spawns
+ * against a 10-second budget.
+ *
+ * Moving the same work into the test BODY puts it under `testTimeout` —
+ * `platformTestTimeout`, 900 s on win32 — which is the budget sized for real
+ * I/O. Nothing about the work changed; only which clock bounds it. This is also
+ * exactly what the sibling suite `git-snapshot-cache.test.ts` already does, so
+ * the two files now agree.
+ *
+ * ⛔ Do not "tidy" this back into a `beforeEach`, and do not answer it with a
+ * `hookTimeout` override — the config's refusal to have one is a decision, not
+ * an omission.
+ *
+ * @returns The repository root
+ */
+function makeRepo(): string {
+  const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-tracker-priming-'));
+  created.push(root);
   mkdirSyncReal(root, { recursive: true });
-  git('init', '-q');
-  git('config', 'user.email', 'test@example.com');
-  git('config', 'user.name', 'Test');
+  git(root, 'init', '-q');
+  git(root, 'config', 'user.email', 'test@example.com');
+  git(root, 'config', 'user.name', 'Test');
   writeFileSync(safePath.join(root, COMMITTED), '# committed\n');
-  git('add', '-A');
-  git('commit', '-qm', 'init');
-});
+  git(root, 'add', '-A');
+  git(root, 'commit', '-qm', 'init');
+  return root;
+}
 
-afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+afterAll(() => {
+  for (const dir of created) rmSync(dir, { recursive: true, force: true });
 });
 
 describe('GitTracker priming from an open snapshot', () => {
   it('reads the active set off the snapshot in hand, asking git nothing further', async () => {
+    const root = makeRepo();
+
     await withGitSnapshotCache(async () => {
       // Somebody else's snapshot — in production this is the projection store
       // taking one to key itself, before the tracker is ever initialized.
@@ -93,6 +124,8 @@ describe('GitTracker priming from an open snapshot', () => {
     // snapshot, so the peek misses and the tracker spawns as it always has.
     // Without this the test above would also pass against a tracker that had
     // simply stopped populating anything.
+    const root = makeRepo();
+
     await withGitSnapshotCache(async () => {
       writeFileSync(safePath.join(root, APPEARED_AFTER), 'x\n');
 
@@ -110,6 +143,8 @@ describe('GitTracker priming from an open snapshot', () => {
     // untracked-not-ignored, with nothing marking which entries were already
     // tracked. It therefore cannot serve a tracked-only request, and priming
     // from it would silently widen the caller's set.
+    const root = makeRepo();
+
     await withGitSnapshotCache(async () => {
       expect(gitTreeSnapshot({ cwd: root })).not.toBeNull();
       writeFileSync(safePath.join(root, APPEARED_AFTER), 'x\n');

@@ -149,6 +149,21 @@ describe('AllowEntrySchema', () => {
  * accept every misspelled registry code, which is the typo class the enum was
  * closed to catch.
  */
+/**
+ * What the schema said about one bad severity key.
+ *
+ * Module scope rather than inside its `describe`: a test-scoped helper is a lint
+ * error here (`local/no-test-scoped-functions`, SonarQube S1515).
+ *
+ * @param key - The key to submit
+ * @returns The serialized issues, so a test can assert on the wording
+ */
+function refusalFor(key: string): string {
+  const result = ValidationConfigSchema.safeParse({ severity: { [key]: 'ignore' } });
+  expect(result.success).toBe(false);
+  return result.success ? '' : JSON.stringify(result.error.issues);
+}
+
 describe('ValidationConfigSchema — the CUSTOM: override namespace', () => {
   it('accepts a severity override keyed by a custom check code', () => {
     const result = ValidationConfigSchema.safeParse({
@@ -193,6 +208,54 @@ describe('ValidationConfigSchema — the CUSTOM: override namespace', () => {
   ])('still rejects %s as a severity key', (_label, key) => {
     const result = ValidationConfigSchema.safeParse({ severity: { [key]: 'ignore' } });
     expect(result.success).toBe(false);
+  });
+
+  /**
+   * The refusal MESSAGE, which used to send half its readers to the wrong place.
+   *
+   * One sentence answered every rejected key: *"a custom severity key must be
+   * `CUSTOM:<name>`, naming a check declared under resources.checks"*. Two
+   * things were wrong with it, and both are pinned below.
+   */
+  describe('the refusal message', () => {
+    it('tells a NON-OVERRIDABLE code apart from a misspelled custom key', () => {
+      // 🔑 An adopter who writes `RESOURCE_CHECK_BROKEN: ignore` has read three
+      // docs describing that code at length. Telling them they misspelled a
+      // CUSTOM key is not what happened and not what to do about it.
+      const message = refusalFor('RESOURCE_CHECK_BROKEN');
+
+      expect(message).toContain('RESOURCE_CHECK_BROKEN');
+      expect(message).toContain('unsilenceable');
+      // And it still points at the thing they CAN override.
+      expect(message).toContain('CUSTOM:');
+    });
+
+    it('gives a registry-SHAPED typo the same reading, since the two are indistinguishable', () => {
+      // `LNIK_OUTSIDE_PROJECT` and `RESOURCE_CHECK_BROKEN` are the same fact to
+      // this schema — a SCREAMING_SNAKE key not in the registry — so one message
+      // has to carry both readings rather than guessing.
+      expect(refusalFor('LNIK_OUTSIDE_PROJECT')).toContain('misspelled registry code');
+    });
+
+    it('does NOT claim the custom name must be declared, because nothing enforces that', () => {
+      // 🚨 The message used to end "naming a check declared under
+      // resources.checks" and no code checked it: `isCustomCheckCode` tests the
+      // prefix and nothing else, so `CUSTOM:not-a-real-check` parsed, overrode
+      // nothing, and said nothing. An adopter who believes a stale override
+      // would be refused stops looking for one. The guard is a run-time warning
+      // in `vat resources check` now; the message must not promise it here.
+      expect(refusalFor('custom:wrong-case')).not.toContain('declared under');
+    });
+
+    it('still accepts a CUSTOM: key naming no declared check — this schema cannot see them', () => {
+      // The counterpart of the test above, stated as behaviour rather than as
+      // wording: this schema has no access to `resources.checks`, so refusing
+      // here is not available. `warnUndeclaredOverrides` is where it is caught.
+      const result = ValidationConfigSchema.safeParse({
+        severity: { [customCheckCode('a-check-that-does-not-exist')]: 'ignore' },
+      });
+      expect(result.success).toBe(true);
+    });
   });
 
   it('rejects a custom key under `allow`, because the allow filter would ignore it', () => {
