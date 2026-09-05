@@ -12,137 +12,48 @@
 #      an IgnoredVulns entry when a fix is genuinely unavailable or unsafe.
 #   2. Every entry MUST have a `reason` explaining WHY it is safe to defer.
 #   3. Re-evaluate on each Dependabot bump; delete entries once a fix lands.
+#      `osv-scanner` prints an "unused ignores" list for entries whose advisory
+#      no longer matches anything in the lockfile — that list is the delete
+#      queue for rule 3, and it does not fail the build, so it must be read.
+#   4. A `reason` that names a BLOCKER ("waiting on X to widen its range") is a
+#      claim with an expiry date. Re-check the blocker itself, not just whether
+#      the advisory still fires — nothing in the tooling tells you a reason has
+#      gone stale, and on 2026-09-04 three of the four blockers named in this
+#      file turned out to have already been removed upstream, one of them
+#      holding a CVSS 8.7.
 #
-# Snapshot when this register was last reconciled: the transitive protobufjs@6
-# chain (previously via the native onnxruntime-node backend, loaded through
-# @xenova/transformers@2 / @huggingface/transformers@3 → onnxruntime-web@1.14
-# → onnx-proto) was eliminated by replacing the native embedding backend with
-# onnxruntime-web (WASM) directly — no onnx-proto in the resolution path, so
-# onnxruntime-web resolves the patched protobufjs@7 line unconditionally. 20+
-# other transitive advisories were pinned to patched versions in package.json
-# `overrides`. The advisories below are what remains — all low-severity ReDoS
-# in build/glob tooling, or fixes that require an unsafe global major-version
-# pin, or dev/test-only packages that are not in the published consumer graph.
 # ---------------------------------------------------------------------------
-
-# --- minimatch (ReDoS) --------------------------------------------------------
-# The tree carries minimatch 3.x, 9.x, AND 10.x simultaneously (3.x under dev
-# tooling, 9.x under glob@10 in agent-skills). A global `overrides` pin can only
-# force ONE version and would break the older-major consumers, so it is unsafe.
-# All three advisories are ReDoS in glob-pattern matching against attacker-
-# controlled globs — VAT only ever matches globs it authors. Consumers of the
-# published packages re-resolve VAT's floating ranges and pick up patched
-# minimatch independently of this lockfile.
-[[IgnoredVulns]]
-id = "GHSA-23c5-xmqv-rm74"
-reason = "minimatch ReDoS; 3.x/9.x/10.x coexist so a single global pin is unsafe. Low severity, VAT-authored globs only. Re-evaluate when glob majors converge."
-[[IgnoredVulns]]
-id = "GHSA-3ppc-4f35-3m26"
-reason = "minimatch ReDoS; 3.x/9.x/10.x coexist so a single global pin is unsafe. Low severity, VAT-authored globs only. Re-evaluate when glob majors converge."
-[[IgnoredVulns]]
-id = "GHSA-7r86-cg39-jmmj"
-reason = "minimatch ReDoS; 3.x/9.x/10.x coexist so a single global pin is unsafe. Low severity, VAT-authored globs only. Re-evaluate when glob majors converge."
-
-# --- brace-expansion (ReDoS) --------------------------------------------------
-# Same shape as minimatch/picomatch below, and for the same reason: the tree
-# carries brace-expansion 1.x, 2.x, AND 5.x simultaneously. The advisory is
-# fixed separately in each line (1.1.18 / 2.1.4 / 5.0.9), so no single value in
-# the global `overrides` block can patch all three — pinning any one of them
-# forces the other two majors onto an incompatible version. ReDoS in brace
-# expansion of attacker-controlled patterns; VAT only expands patterns it
-# authors. Delete this entry when the majors converge, or if bun gains
-# per-consumer override scoping.
-[[IgnoredVulns]]
-id = "GHSA-rgw5-rvv9-x895"
-reason = "brace-expansion ReDoS; 1.x/2.x/5.x coexist and the fix lands separately in each line, so a single global pin is unsafe. VAT-authored patterns only. Re-evaluate when the majors converge."
-
-# --- picomatch (ReDoS / method injection) ------------------------------------
-# picomatch 2.x and 4.x both present (2.x transitively under chokidar/micromatch,
-# 4.x declared directly). v2→v4 is a breaking major, so a global pin would
-# regress the v2 consumers. Same threat model as minimatch (VAT-authored globs).
-[[IgnoredVulns]]
-id = "GHSA-3v7f-55p6-f55p"
-reason = "picomatch glob-matching issue; 2.x and 4.x coexist across a breaking major, unsafe to globally pin. VAT-authored globs only."
-[[IgnoredVulns]]
-id = "GHSA-c2c7-rcm5-vvqj"
-reason = "picomatch ReDoS via extglob quantifiers; 2.x and 4.x coexist across a breaking major, unsafe to globally pin. VAT-authored globs only."
-
-# --- ajv (ReDoS via $data) ---------------------------------------------------
-# ajv 6.x (transitive dev tooling) and 8.x (declared in resources) coexist; a
-# global pin cannot satisfy both majors. VAT never enables the `$data` option
-# (the sole vector) in any of its AJV usages.
-[[IgnoredVulns]]
-id = "GHSA-2g4f-4pwh-qvx6"
-reason = "ajv ReDoS only reachable with the $data option, which VAT never enables. 6.x/8.x coexist so a single global pin is unsafe."
-
-# --- brace-expansion (ReDoS / expansion DoS) ---------------------------------
-# 1.1.12 and 2.0.2 coexist: minimatch@3.1.2 declares `^1.1.7`, minimatch@9.0.5
-# declares `^2.0.1`. No single version satisfies both, and bun's `overrides` is a
-# FLAT package->version map — path-scoped pins are not expressible (verified on
-# bun 1.3.9: `overrides` with `minimatch@3.1.2/brace-expansion`, and `resolutions`
-# with both `pkg@ver/dep` and `pkg/dep` paths, all resolved to "no changes").
-# All three advisories are DoS on glob expansion; VAT only ever expands globs it
-# authors itself, never attacker-supplied patterns. Consumers of the published
-# packages re-resolve VAT's floating ranges and pick up patched copies
-# independently of this lockfile.
-[[IgnoredVulns]]
-id = "GHSA-f886-m6hf-6m8v"
-reason = "brace-expansion ReDoS; 1.x and 2.x coexist under different minimatch majors, unsafe to globally pin. VAT-authored globs only."
-[[IgnoredVulns]]
-id = "GHSA-3jxr-9vmj-r5cp"
-reason = "brace-expansion exponential-time expansion of consecutive `{}` groups. Per-major fixes exist (1.1.16 / 2.1.2) but bun's flat `overrides` map cannot pin per-major and 1.x/2.x coexist under minimatch@3 and minimatch@9. VAT-authored globs only. Re-evaluate if bun gains path-scoped overrides or when glob majors converge."
-[[IgnoredVulns]]
-id = "GHSA-mh99-v99m-4gvg"
-reason = "brace-expansion unbounded-expansion OOM. The advisory range is a single [0, 5.0.8) span with NO 1.x or 2.x backport, so no in-range fix exists for either coexisting copy — brace-expansion@5 is three majors past minimatch@3's `^1.1.7` and minimatch@9's `^2.0.1`. VAT-authored globs only."
-
-# --- @hono/node-server (serve-static path traversal on Windows) ---------------
-# The vulnerable surface is the `@hono/node-server/serve-static` subpath export.
-# The only thing that pulls @hono/node-server into the tree is
-# @modelcontextprotocol/sdk@1.26.0, which (a) declares `^1.19.9`, so the 2.0.5
-# fix is out of its declared range and a global pin would force a semver-major
-# adapter swap under it, and (b) imports only `getRequestListener` from the
-# package root, in `server/streamableHttp.js` — it never imports serve-static.
-# VAT's single MCP consumer (packages/gateway-mcp) uses StdioServerTransport
-# exclusively and never constructs the Streamable HTTP transport, so the module
-# is not loaded at all. The advisory is additionally Windows-only static-file
-# serving, which VAT never does.
-[[IgnoredVulns]]
-id = "GHSA-frvp-7c67-39w9"
-reason = "@hono/node-server path traversal is in the `serve-static` export, which is never imported: @modelcontextprotocol/sdk uses only `getRequestListener` for its Streamable HTTP transport, and VAT's gateway-mcp is stdio-only. Fix (2.0.5) is a major bump outside the SDK's declared `^1.19.9`, so a global pin is unsafe. Re-evaluate when the MCP SDK widens its range."
+# Reconciled 2026-09-04: 10 entries -> 1.
+#
+#   * brace-expansion / picomatch / ajv — SEVEN entries, all reported as unused
+#     ignores; every coexisting copy had floated onto a patched version.
+#     Deleted under rule 3.
+#   * minimatch — THREE entries (one CVSS 8.7). The reason blamed 3.x/9.x/10.x
+#     coexisting; the real blocker was an EXACT `minimatch: "10.1.2"` inside
+#     eslint-plugin-sonarjs@3.0.7. 4.2.0 widened it to `^10.2.5`. FIXED.
+#   * @hono/node-server — ONE entry. The reason said the fix (2.0.5) was a major
+#     outside @modelcontextprotocol/sdk's `^1.19.9`; it had been backported to
+#     1.19.15, inside that range. Pinned to 1.19.17. FIXED.
+#   * langsmith x4 + uuid x1 — FIVE entries, one root cause: @langchain/core
+#     0.3.80 declared `langsmith: "^0.3.67"`, which excluded every fix. Moving
+#     the adapter to @langchain/core 1.x (and @langchain/openai 1.x) resolves
+#     langsmith 0.10.1 and drops uuid@10 from the tree entirely. FIXED — see the
+#     CHANGELOG breaking note, since this is a major bump of a published adapter.
+#   * fast-uri and qs — new advisories against the exact versions `overrides`
+#     held; re-pinned forward (3.1.6 / 6.16.0) under rule 1 rather than listed.
+#
+# What that leaves is a single advisory, below. If you are adding a second one,
+# the bar is rule 1: show that a real fix was tried first.
+# ---------------------------------------------------------------------------
 
 # --- esbuild (dev-server file read) ------------------------------------------
 # The advisory affects `esbuild serve` (the dev server). VAT never runs the
-# esbuild dev server; esbuild is build-time-only tooling (via vite/tsx) and is
-# not present in any published package. Fix requires an esbuild 0.x major bump
-# that would force a Vite upgrade.
+# esbuild dev server; esbuild is build-time-only tooling (reached via vite/tsx)
+# and is not present in any published package. CVSS 2.5.
+# BLOCKER TO RE-CHECK (rule 4), stated so it can be tested rather than believed:
+# the fix is esbuild 0.28.1, and the copy in this tree is pulled transitively by
+# vite. Check whether vite's declared esbuild range now admits 0.28.x; if it
+# does, this entry is retired by a `overrides` pin and this file becomes empty.
 [[IgnoredVulns]]
 id = "GHSA-g7r4-m6w7-qqqr"
-reason = "esbuild advisory affects the `esbuild serve` dev server, which VAT never runs. Build-time-only, not shipped. Fix needs a breaking esbuild/vite bump."
-
-# --- uuid (missing buffer bounds check) --------------------------------------
-# uuid@10 is dev/test-only (reached via langsmith/@langchain/core). The fix is
-# a breaking major bump to uuid@11; not worth destabilizing the langchain
-# adapter's tooling for a dev-only, buf-parameter-only issue VAT never triggers.
-[[IgnoredVulns]]
-id = "GHSA-w5hq-g745-h8pq"
-reason = "uuid bounds check only affects the optional `buf` argument, which VAT never passes. Dev/test-only (langsmith path). Fix requires breaking uuid@11 major bump."
-
-# --- langsmith (SSRF / prototype pollution / deserialization) ----------------
-# langsmith is ONLY reachable through @vibe-agent-toolkit/runtime-langchain,
-# which is an opt-in runtime adapter and is NOT in the dependency closure of the
-# `vibe-agent-toolkit` package that end consumers install. The vulnerable copy
-# (0.3.87) is pinned transitively by @langchain/core@0.3.x; forcing a patched
-# langsmith major risks breaking @langchain/core. These do not reach the CLI /
-# resources / skills surface that adopters actually consume.
-[[IgnoredVulns]]
-id = "GHSA-3644-q5cj-c5c7"
-reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Pinned by @langchain/core@0.3.x."
-[[IgnoredVulns]]
-id = "GHSA-fw9q-39r9-c252"
-reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Pinned by @langchain/core@0.3.x."
-[[IgnoredVulns]]
-id = "GHSA-rr7j-v2q5-chgv"
-reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Pinned by @langchain/core@0.3.x."
-[[IgnoredVulns]]
-id = "GHSA-v34v-rq6j-cj6p"
-reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Pinned by @langchain/core@0.3.x."
+reason = "esbuild advisory affects the `esbuild serve` dev server, which VAT never runs. Build-time-only, not shipped in any published package. Fix (0.28.1) is outside vite's declared range; re-check whether vite has widened it."

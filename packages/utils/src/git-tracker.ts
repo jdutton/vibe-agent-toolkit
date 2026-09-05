@@ -301,7 +301,38 @@ export class GitTracker {
    * so a repeated miss on the same path stays O(1).
    *
    * For paths OUTSIDE the project root, falls back to {@link isIgnored} so
-   * legacy behavior is preserved.
+   * legacy behavior is preserved. That fallback is the expensive one, and its
+   * cost does not resemble the in-root cost at all.
+   *
+   * ## ⚠️ The out-of-root fallback costs an order of magnitude more per path
+   *
+   * Measured 2026-08 in the D9 parity fixture: an out-of-root path costs
+   * **185–427 ms**, against **12–28 ms** for every in-repo path — ≈7–36× on
+   * those ranges.
+   *
+   * The mechanism is the delegation above plus what git does with it.
+   * {@link isIgnored} runs `git check-ignore` with the PROJECT ROOT as cwd; git
+   * exits 128 for a path outside that repository; and {@link isGitIgnored}'s
+   * exit-128 recovery walk then spawns `check-ignore` ONCE PER ANCESTOR up to
+   * `/`. No ancestor of an out-of-root path is ever the project root that would
+   * stop the walk, and every one of those ancestors is outside the repository
+   * too — so each also exits 128 and the walk never breaks early either. The
+   * verdict is cached, so the price is paid once per DISTINCT out-of-root path
+   * rather than once per call.
+   *
+   * The consequence for a caller choosing between the two oracles: switching
+   * from {@link isIgnored} to this method removes the spawn population **only
+   * for in-root paths**. A lane feeding out-of-root paths in bulk keeps the
+   * per-path spawn in full. So a comment asserting that the out-of-project case
+   * is rare, safe or cheap is asserting something this measurement contradicts:
+   * it is rare in some lanes, and it is never cheap.
+   *
+   * The exit-128 walk itself is documented in {@link isGitIgnored} — but only
+   * for the two cases already answered there: the SYMLINK case it exists to
+   * serve, and the NO-REPOSITORY case, which an early return now short-circuits
+   * before any spawn. The IN-REPO OUT-OF-ROOT path is the third case, it is
+   * documented nowhere there, and it is the one that still pays the walk in
+   * full. That is why the number lives here.
    *
    * Requires {@link initialize} with `includeUntracked: true` (the default).
    * When initialized without untracked files, this method delegates to

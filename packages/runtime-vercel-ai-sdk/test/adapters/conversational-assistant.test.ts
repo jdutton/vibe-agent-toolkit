@@ -366,22 +366,30 @@ describe('conversational-assistant adapter', () => {
       const sessionB: ConversationSession = { history: [] };
 
       // Instance A - first turn
-      await assistants.instanceA({ message: 'A1' }, sessionA);
+      const a1 = await assistants.instanceA({ message: 'A1' }, sessionA);
 
       // Instance B - first turn
-      await assistants.instanceB({ message: 'B1' }, sessionB);
+      const b1 = await assistants.instanceB({ message: 'B1' }, sessionB);
 
       // Instance A - second turn (should have more history)
-      await assistants.instanceA({ message: 'A2' }, sessionA);
+      const a2 = await assistants.instanceA({ message: 'A2' }, sessionA);
 
       // Instance B - second turn (independent history)
-      await assistants.instanceB({ message: 'B2' }, sessionB);
+      const b2 = await assistants.instanceB({ message: 'B2' }, sessionB);
 
-      // Verify independent sessions
-      expect(sessionA.history.length).toBeGreaterThan(0);
-      expect(sessionB.history.length).toBeGreaterThan(0);
-      expect(sessionA.history.length).not.toBe(0); // Should have accumulated
-      expect(sessionB.history.length).not.toBe(0); // Should have accumulated
+      // Verify independent sessions: each session accumulated ONLY its own turns. A
+      // non-emptiness check cannot see the failure this guards — two instances sharing one
+      // history array leaves both sessions non-empty, so assert the exact contents.
+      expect(sessionA.history.map((message) => message.content)).toEqual(['A1', 'A2']);
+      expect(sessionB.history.map((message) => message.content)).toEqual(['B1', 'B2']);
+
+      // The handler reports the history length it saw, so a shared array would count 1, 2, 3, 4.
+      expect([a1.reply, b1.reply, a2.reply, b2.reply]).toEqual([
+        'History length: 1',
+        'History length: 1',
+        'History length: 2',
+        'History length: 2',
+      ]);
     });
   });
 });

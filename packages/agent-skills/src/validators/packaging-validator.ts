@@ -389,6 +389,19 @@ export async function crawlAndResolveRegistry(
  * Safe to hold for a process lifetime: every VAT entry point is a short-lived
  * CLI invocation. Note the crawl excludes build output (`BUILD_OUTPUT_GLOBS` via
  * the crawler's defaults), so packaging a skill mid-run cannot invalidate it.
+ *
+ * 🚨 That exclusion is ALSO the cause of a live defect, and this paragraph is the
+ * reason the defect must not be fixed by widening the crawl. The packager's
+ * post-build lane sees an EMPTY link graph because the built tree it validates
+ * falls under `**\/dist\/**` — measured, and now pinned by a committed test; the
+ * numbers, the control that proves the cause, and the fixture all live in the
+ * `runPostBuildValidation` docstring in `../skill-packager.ts`, and are not
+ * restated here.
+ *
+ * ⛔ The exclusion is the stated safety argument DIRECTLY ABOVE, for a memo shared
+ * by the audit lane, the validate lane AND the built lane. Widening the crawl so
+ * one lane can see its own output retracts that argument for every lane sharing
+ * this memo — it is not a one-lane fix, and it lands here, not there.
  */
 const walkRegistryCache = new Map<string, Promise<ResourceRegistry>>();
 
@@ -1433,9 +1446,11 @@ function extractSkillName(
     return frontmatterName;
   }
 
-  // Try H1 title (use [^\n] instead of .+ to avoid backtracking)
-  // eslint-disable-next-line sonarjs/slow-regex -- Using [^\n]+ instead of .+ to avoid backtracking
-  const h1Match = /^#\s+([^\n]+)$/m.exec(parseResult.content);
+  // Try H1 title. `[ \t]` is a single fixed-width class, not a quantifier, so it
+  // cannot compete with the `[^\n]*` capture for the same space — that ambiguity
+  // is what made the old `\s+([^\n]+)` form backtrack super-linearly. Trailing
+  // whitespace is removed by the .trim() below, exactly as before.
+  const h1Match = /^#[ \t]([^\n]*)$/m.exec(parseResult.content);
   if (h1Match?.[1]) {
     return h1Match[1].trim();
   }

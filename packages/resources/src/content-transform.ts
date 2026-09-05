@@ -462,8 +462,13 @@ function isInsideCode(offset: number, ranges: ReadonlyArray<readonly [number, nu
  * - Group 1: Reference identifier
  * - Group 2: URL (may include trailing whitespace)
  */
-// eslint-disable-next-line sonarjs/slow-regex -- Controlled markdown reference link definitions on line boundaries
-const MARKDOWN_DEFINITION_REGEX = /^\[([^\]]*?)\]:\s*(.+)$/gm;
+// The `\s*` and the capture must not both be able to match a space — that
+// ambiguity is what made the old `\s*(.+)` form backtrack super-linearly.
+// Requiring the destination to start with `\S` makes them disjoint while
+// keeping CommonMark's destination-on-the-next-line form working. The only
+// input that behaves differently is a whitespace-only destination, which both
+// callers `.trim()` to '' and then fail to find in the registry regardless.
+const MARKDOWN_DEFINITION_REGEX = /^\[([^\]]*)\]:\s*(\S[^\n]*)$/gm;
 
 /**
  * Transform markdown content by rewriting links according to rules.

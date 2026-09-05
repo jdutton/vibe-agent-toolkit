@@ -56,9 +56,13 @@ export {
 } from './values.js';
 
 // The store. Opens WAL with the pragmas in the one order that survives
-// contention — see `store.ts`.
+// contention — see `store.ts`. The ephemeral variant answers the same schema
+// with no file at all, so a query does not depend on a cache being there; it
+// deliberately skips every one of those pragmas, which are all file properties.
 export {
+  type SqlQueryableStore,
   type SqliteStoreOptions,
   defaultStoreDirectory,
+  openEphemeralProjectionStore,
   openSqliteProjectionStore,
 } from './store.js';

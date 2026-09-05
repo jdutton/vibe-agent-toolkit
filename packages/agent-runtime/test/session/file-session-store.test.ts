@@ -1,7 +1,7 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp } from 'node:fs/promises';
 
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
 // Everything under test comes from `src`, never from this package's own name.
@@ -49,7 +49,7 @@ describe('FileSessionStore', () => {
   });
 
   afterAll(async () => {
-    await rm(suiteDir, { recursive: true, force: true });
+    await removeScratchDir(suiteDir);
   });
 
   beforeEach(async () => {

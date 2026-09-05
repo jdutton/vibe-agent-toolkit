@@ -29,7 +29,8 @@ import { createSymlinkAsync, setupAsyncTempDirSuite, symlinkCapability } from '.
 import { setupNestedDirectory } from './test-helpers.js';
 
 /**
- * Ledger D7 — the same visible filename in two Unicode normalization forms.
+ * The enumerated-vs-derived path class (docs/architecture/resource-scanning-and-caching.md §3.6):
+ * the same visible filename in two Unicode normalization forms.
  *
  * **The fixture is code-generated for a reason.** A file committed to git with an
  * accented name cannot be trusted to arrive decomposed: macOS editors and git
@@ -267,8 +268,8 @@ describe('fs-utils', () => {
       const missing = safePath.join(tempDir, 'no-such-dir');
       const spy = vi.spyOn(fs, 'readdir');
 
-      expect(await cache.readdir(missing)).toBe(null);
-      expect(await cache.readdir(missing)).toBe(null);
+      expect(await cache.readdir(missing)).toBeNull();
+      expect(await cache.readdir(missing)).toBeNull();
 
       expect(spy).toHaveBeenCalledTimes(1);
       spy.mockRestore();
@@ -684,7 +685,8 @@ describe('fs-utils', () => {
     });
 
     /**
-     * Ledger D7 over a real directory. The module-scope fixture constants explain
+     * The enumerated-vs-derived path class over a real directory. The module-scope
+     * fixture constants explain
      * why both forms are escape sequences; what this block adds is the round trip
      * through `readdir`.
      *

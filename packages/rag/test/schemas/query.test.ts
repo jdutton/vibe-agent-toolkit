@@ -71,7 +71,7 @@ describe('RAGQuerySchema', () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.hybridSearch?.enabled).toBe(true);
-      expect(result.data.hybridSearch?.keywordWeight).toBe(0.3);
+      expect(result.data.hybridSearch?.keywordWeight).toBeCloseTo(0.3, 10);
     }
   });
 

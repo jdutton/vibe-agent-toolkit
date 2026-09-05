@@ -26,9 +26,14 @@ export interface TokenizerOutput {
    * Content tokens the length cap discarded — 0 when the text fitted whole.
    *
    * Truncation used to be a bare `break`: no throw, no warning, no counter, no
-   * flag. A measured 42-44% of every indexed corpus disappeared through it
-   * without a single observable signal. This number is that signal, and callers
-   * are expected to surface it.
+   * flag — and it returned a well-formed `inputIds` array of exactly the legal
+   * length, so no amount of checking return values could find it. This number is
+   * the signal that was missing, and callers are expected to surface it.
+   *
+   * ⛔ This comment used to quote "a measured 42-44% of every indexed corpus".
+   * Retired, not corrected — that figure was measured against raw
+   * `chunkByTokens`, not the shipped `chunkResource` path. The mechanism is the
+   * durable part; the rate is not.
    */
   droppedTokens: number;
 }

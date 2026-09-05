@@ -38,6 +38,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import { PROJECT_ROOT, log, safeExecSync } from './common.js';
+import { DEPENDENCY_FIELDS } from './resolve-workspace-deps.js';
 import { validatePackageList } from './validate-package-list.js';
 
 /**
@@ -366,15 +367,17 @@ try {
   let workspaceCount = 0;
 
   for (const { pkgJson } of publishablePackages) {
-    const allDeps = {
-      ...(pkgJson['dependencies'] as Record<string, string> | undefined),
-      ...(pkgJson['devDependencies'] as Record<string, string> | undefined),
-      ...(pkgJson['peerDependencies'] as Record<string, string> | undefined),
-    };
-
-    for (const depVersion of Object.values(allDeps)) {
-      if (typeof depVersion === 'string' && depVersion.startsWith('workspace:')) {
-        workspaceCount++;
+    // 🪤 Iterated from DEPENDENCY_FIELDS rather than spelled out here. This
+    // block listed three of the four and omitted `optionalDependencies` — the
+    // exact omission that shipped v0.2.0-rc.3 uninstallable, sitting in the
+    // sibling file to the list written to make it impossible. A second copy of
+    // a list is a second place for it to fall behind.
+    for (const field of DEPENDENCY_FIELDS) {
+      const deps = pkgJson[field] as Record<string, string> | undefined;
+      for (const depVersion of Object.values(deps ?? {})) {
+        if (typeof depVersion === 'string' && depVersion.startsWith('workspace:')) {
+          workspaceCount++;
+        }
       }
     }
   }

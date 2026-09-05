@@ -28,7 +28,7 @@
 import { promises as fs } from 'node:fs';
 import { availableParallelism } from 'node:os';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { computeContentKey, type KeyedContent } from '../src/content-key.js';
@@ -238,10 +238,7 @@ afterEach(async () => {
   const pools = openPools.splice(0, openPools.length);
   await Promise.all(pools.map(async (pool) => pool.shutdown()));
   const roots = cacheRoots.splice(0, cacheRoots.length);
-  await Promise.all(
-     
-    roots.map(async (root) => fs.rm(root, { recursive: true, force: true })),
-  );
+  await Promise.all(roots.map(async (root) => removeScratchDir(root)));
   __setParseWorkerEntryForTest(null);
 });
 

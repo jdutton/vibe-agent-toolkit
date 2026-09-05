@@ -170,7 +170,7 @@ function launch(
   // `windowsShellQuote`. Token selection is utils' too (a bare name stays bare
   // so cmd.exe re-resolves it through PATHEXT; an explicit path is quoted).
   const shellLine = buildWindowsShellLine(resolveShellCommandToken(command, resolved), [...args]);
-  // eslint-disable-next-line sonarjs/os-command -- Windows DEP0190 workaround: the command comes from a resolved instrument, and args are per-arg shell-quoted via windowsShellQuote()
+   
   return spawnSync(shellLine, { ...options, shell: true });
 }
 

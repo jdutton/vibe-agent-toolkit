@@ -800,6 +800,24 @@ export type NonOverridableCode =
   | 'SKILL_DESCRIPTION_EMPTY'
   | 'SKILL_MISCONFIGURED_LOCATION'
   | 'LINK_INTEGRITY_BROKEN'
+  // 🔑 A DECLARED CHECK COULD NOT RUN — a run-integrity report, and the reason it
+  // is here rather than in CODE_REGISTRY is a defect that this list makes
+  // unrepresentable.
+  //
+  // A `vat resources check` finding carries the code `CUSTOM:<name>`, and so did
+  // this one: the same code for "the check found a violation" and for "the check
+  // is broken". That collision was harmless only while `CUSTOM:` keys were
+  // (wrongly) unconfigurable. The moment they parse, `severity: { 'CUSTOM:foo':
+  // 'ignore' }` — a documented, ordinary thing to write about a check you
+  // inherited and disagree with — ALSO silences "foo could not run", and
+  // `'warning'` demotes it below the exit threshold. A renamed projection column
+  // would then yield exit 0 from a command whose entire purpose is to be a gate.
+  //
+  // So the report gets its own code, and that code is NOT overridable at all:
+  // `ValidationConfigSchema` refuses it as a `severity` key, because a run whose
+  // assertions did not execute has no legitimate `ignore`. Downgrade the CHECK
+  // all you like; you cannot downgrade the news that it stopped checking.
+  | 'RESOURCE_CHECK_BROKEN'
   | 'PATH_STYLE_WINDOWS'
   // FILENAME_COLLISION is NOT here: it has a CODE_REGISTRY entry and is emitted
   // through the same framework as every other packaging finding. Listing a code

@@ -64,16 +64,70 @@ export const DEPENDENCY_FIELDS = [
  *
  * Mutates `packageJson` in place.
  *
+ * 🚨 **Throws on any `workspace:` specifier it did not rewrite, and that
+ * post-condition is the actual guard.** {@link DEPENDENCY_FIELDS} closed the
+ * axis that produced v0.2.0-rc.3 — a field nobody remembered to list — and left
+ * the other one open: {@link resolveDependencies} matches the exact string
+ * `workspace:*` and nothing else, so `workspace:^`, `workspace:~` and
+ * `workspace:0.2.0` pass through untouched. Nothing downstream noticed:
+ * `publish.yml` runs this and publishes, and `pre-publish-check`'s workspace
+ * step COUNTS specifiers without ever failing on one.
+ *
+ * `workspace:^` is not exotic — it is the natural thing to write for a **peer**
+ * range, which is the field this release introduces. npm rejects a published
+ * `workspace:` with `EUNSUPPORTEDPROTOCOL`, making the release uninstallable;
+ * bun understands the protocol and hides it, and this repo uses bun everywhere,
+ * so the one tool that would catch it is the one nothing runs.
+ *
+ * So the check is on the OUTCOME rather than on the inputs believed to produce
+ * it: after the rewrite, no first-party `workspace:` may remain, whatever form
+ * it was written in. A future edit that adds a supported form makes this pass by
+ * handling it, not by being remembered.
+ *
  * @param packageJson - The parsed manifest to rewrite
  * @param version - The concrete version to substitute
  * @returns How many specifiers were rewritten
+ * @throws When any `workspace:` specifier survives the rewrite
  */
 export function resolveWorkspaceDependencies(packageJson: PackageJson, version: string): number {
   let resolved = 0;
   for (const field of DEPENDENCY_FIELDS) {
     resolved += resolveDependencies(packageJson[field], version);
   }
+  assertNoWorkspaceSpecifiers(packageJson);
   return resolved;
+}
+
+/**
+ * Refuse a manifest still carrying a `workspace:` specifier after the rewrite.
+ *
+ * Reads EVERY field in {@link DEPENDENCY_FIELDS} and reports all survivors at
+ * once — a publish that fails on one specifier, gets it fixed, and fails on the
+ * next is three CI runs to learn one thing.
+ *
+ * It does not filter on {@link SCOPE}. A third-party `workspace:` specifier is
+ * just as uninstallable, and this is the last place anything looks.
+ *
+ * @param packageJson - The manifest, after rewriting
+ * @throws When any specifier still begins `workspace:`
+ */
+function assertNoWorkspaceSpecifiers(packageJson: PackageJson): void {
+  const survivors: string[] = [];
+  for (const field of DEPENDENCY_FIELDS) {
+    for (const [dep, spec] of Object.entries(packageJson[field] ?? {})) {
+      if (spec.startsWith('workspace:')) survivors.push(`${field}.${dep} = "${spec}"`);
+    }
+  }
+  if (survivors.length === 0) return;
+
+  throw new Error(
+    `${packageJson.name} still carries ${survivors.length} workspace specifier(s) after the`
+    + ` rewrite:\n  ${survivors.join('\n  ')}\n`
+    + '\nOnly the exact string `workspace:*` is rewritten. npm refuses any other form at install'
+    + ' time with EUNSUPPORTEDPROTOCOL — and bun accepts it silently, so publishing this would'
+    + ' ship a release that is uninstallable under npm and looks fine here. Write `workspace:*`,'
+    + ' or teach this script the form you need.',
+  );
 }
 
 function resolveDependencies(deps: Record<string, string> | undefined, version: string): number {

@@ -6,9 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { validateCommand } from '../../src/commands/skills/validate.js';
 import {
   errorDiagnostics,
+  exitCodeForCommanderEnding,
   formatDuration,
   handleCommandError,
   handleValidationGateFailure,
+  USAGE_ERROR_EXIT_CODE,
 } from '../../src/utils/command-error.js';
 import type { Logger } from '../../src/utils/logger.js';
 
@@ -148,6 +150,29 @@ describe('command-error utilities', () => {
       expect(yamlOutput).toContain('error: Unknown error');
     });
 
+    it('honours --format json, so a JSON consumer can parse the failure', () => {
+      // The shipped defect: every `--format json` command honoured the flag on
+      // the SUCCESS path and emitted YAML here, so the one document a CI wrapper
+      // most needs — the one saying why the command failed — arrived in a format
+      // its parser rejects. The consumer got a parse error stacked on top of the
+      // real error and had to guess at the second to find the first.
+      expect(() => handleCommandError(new Error('Boom'), mockLogger, Date.now(), 'TestCommand', 'json'))
+        .toThrow(PROCESS_EXIT_ERROR_MESSAGE);
+
+      const written = getYamlOutput(mockStdoutWrite);
+      // Parses as JSON, which is the whole claim — not merely "contains braces".
+      const parsed = JSON.parse(written) as { status: string; error: string };
+      expect(parsed.status).toBe('error');
+      expect(parsed.error).toBe('Boom');
+      expect(written).not.toContain(STATUS_ERROR_LINE);
+    });
+
+    it('stays YAML when the format is absent or anything but json', () => {
+      expect(() => handleCommandError(new Error('Boom'), mockLogger, Date.now(), 'TestCommand', 'yaml'))
+        .toThrow(PROCESS_EXIT_ERROR_MESSAGE);
+      expect(getYamlOutput(mockStdoutWrite)).toContain(STATUS_ERROR_LINE);
+    });
+
     it('sends the stack to the debug channel, so --debug can name the throw site', () => {
       // The defect: exit 2 is the UNEXPECTED failure, and the envelope carried
       // `error.message` and nothing else. A real internal `TypeError` reached a
@@ -246,5 +271,41 @@ describe('command-error utilities', () => {
       expect(mockProcessExit).toHaveBeenCalledWith(1);
       expect(mockProcessExit).not.toHaveBeenCalledWith(2);
     });
+  });
+});
+
+describe('exitCodeForCommanderEnding', () => {
+  // Commander reports a SUCCESSFUL termination through the same error channel
+  // as a failing one: `--help` and `--version` both end via `_exit(0, …)`.
+  // Remapping those would turn every help page into a failing CI step.
+  it('leaves a successful commander ending at 0', () => {
+    expect(exitCodeForCommanderEnding(0)).toBe(0);
+  });
+
+  // The regression this whole mapping exists for. Commander's default for an
+  // unknown option is exit 1 — which every command's `--help` publishes as
+  // "at least one error-severity finding". `vat resources check --json` (the
+  // option is `--format json`) therefore claimed a check had been violated
+  // when nothing had run.
+  it('remaps commander default 1 to the system-error code, so a usage mistake is not read as a finding', () => {
+    expect(exitCodeForCommanderEnding(1)).toBe(USAGE_ERROR_EXIT_CODE);
+    expect(exitCodeForCommanderEnding(1)).not.toBe(1);
+  });
+
+  // An unknown COMMAND arrives as code `commander.help` with a non-zero exit,
+  // because the `command:*` handler renders help with `{ error: true }`. Any
+  // non-zero ending is a usage mistake regardless of the code string, which is
+  // why the exit code is the discriminator and the string is not.
+  it('treats every non-zero commander ending as a usage mistake', () => {
+    for (const code of [1, 2, 3, 64, 127]) {
+      expect(exitCodeForCommanderEnding(code)).toBe(USAGE_ERROR_EXIT_CODE);
+    }
+  });
+
+  // Pins the contract's own number. `handleCommandError` exits 2 for an
+  // unexpected system error and `handleValidationGateFailure` exits 1 for a
+  // finding; a usage mistake belongs with the former, never the latter.
+  it('uses the same code the unexpected-failure path uses', () => {
+    expect(USAGE_ERROR_EXIT_CODE).toBe(2);
   });
 });

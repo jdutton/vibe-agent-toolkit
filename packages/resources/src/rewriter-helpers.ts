@@ -134,14 +134,33 @@ export function rewriteFrontmatterFieldsAtPaths(
 }
 
 /**
- * Inline + reference-style link patterns. These match `transformContent`'s
- * regex contract — see content-transform.ts for the rationale on negated
- * character classes.
+ * Inline + reference-style link patterns.
+ *
+ * ⚠️ These do NOT match `transformContent`'s contract, though this comment used
+ * to claim they did. `content-transform.ts`'s `MARKDOWN_LINK_REGEX` excludes `[`
+ * from the link text (`[^[\]]`); this one does not (`[^\]]`). The two therefore
+ * disagree on nested brackets, and an image inside a link is the common case:
+ * given `[![alt](img.png)](url)`, `transformContent` rewrites the INNER image
+ * (text `alt`, href `img.png`) while `rewriteBodyLinks` rewrites the OUTER
+ * (text `![alt`, href `img.png`). Pre-existing, unresolved, and recorded here
+ * rather than silently reconciled: deciding which grammar is correct is a
+ * product call about what a link IS, not a cleanup — and this regex is on the
+ * parse hot path.
  */
-// eslint-disable-next-line sonarjs/slow-regex -- negated character classes [^\]] and [^)] are non-backtracking
-const INLINE_LINK_REGEX = /\[([^\]]*)\]\(([^)]*)\)/g;
-// eslint-disable-next-line sonarjs/slow-regex -- Controlled markdown reference link definitions on line boundaries
-const DEFINITION_LINK_REGEX = /^\[([^\]]*?)\]:\s*(.+)$/gm;
+// The `(?<!\[)` is load-bearing, not cosmetic. Without it a run of `[` with no
+// closing bracket makes the engine restart the `[^\]]*` scan at EVERY bracket,
+// which is quadratic: measured 2,632 ms on 40k brackets. Because any match
+// starting at the second `[` of a run is also matchable from the first (the
+// negated class admits `[`), skipping non-initial brackets loses no match and
+// makes the scan linear — the same input drops to 0.1 ms.
+const INLINE_LINK_REGEX = /(?<!\[)\[([^\]]*)\]\(([^)]*)\)/g;
+// The `\s*` and the capture must not both be able to match a space — that
+// ambiguity is what made the old `\s*(.+)` form backtrack super-linearly.
+// Requiring the destination to start with `\S` makes them disjoint while
+// keeping CommonMark's destination-on-the-next-line form working. The only
+// input that behaves differently is a whitespace-only destination, which both
+// callers `.trim()` to '' and then fail to find in the registry regardless.
+const DEFINITION_LINK_REGEX = /^\[([^\]]*)\]:\s*(\S[^\n]*)$/gm;
 
 /**
  * Apply `rewriteHref` to every inline-link and reference-definition href in

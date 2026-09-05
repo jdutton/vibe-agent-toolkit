@@ -22,18 +22,49 @@ export interface RAGQuery<TMetadata extends Record<string, unknown> = DefaultRAG
   /** Maximum results to return (default: 10) */
   limit?: number;
 
-  /** Filters */
+  /**
+   * Filters
+   *
+   * 🔑 `resourceId` and `metadata` are the only two keys a shipped provider
+   * reads: `buildWhereClause` in `@vibe-agent-toolkit/rag-lancedb` branches on
+   * exactly those and destructures nothing else.
+   */
   filters?: {
     /** Filter by resource ID(s) */
     resourceId?: string | string[];
-    /** Filter by date range */
+    /**
+     * Filter by date range
+     *
+     * 🚨 NOT IMPLEMENTED by any shipped provider. `buildWhereClause` in
+     * `@vibe-agent-toolkit/rag-lancedb` never destructures this field, and no
+     * other provider implements `RAGQueryProvider`.
+     *
+     * ⚠️ Silently ignored — no error, no warning, and the failure WIDENS the
+     * result set rather than narrowing it: an unread filter contributes no SQL
+     * condition, `query()` applies a WHERE clause only when one was produced, so
+     * a query filtered solely by `dateRange` degrades to an unfiltered
+     * full-recall vector search over the whole index.
+     *
+     * Until a provider implements it, model the date as a field on your metadata
+     * schema and filter via `metadata`, or filter the returned chunks yourself.
+     */
     dateRange?: { start: Date; end: Date };
 
     /** Metadata filters (type-safe based on TMetadata) */
     metadata?: Partial<TMetadata>;
   };
 
-  /** Hybrid search configuration (vector + keyword) */
+  /**
+   * Hybrid search configuration (vector + keyword)
+   *
+   * 🚨 NOT IMPLEMENTED by any shipped provider. Nothing outside this declaration,
+   * `RAGQuerySchema` and their tests references it; `LanceDBRAGProvider.query()`
+   * always performs a pure vector search.
+   *
+   * ⚠️ Silently ignored: `enabled: true` produces no keyword pass, no error and
+   * no warning, and the results are indistinguishable from omitting the field —
+   * so nothing tells a caller that hybrid search did not happen.
+   */
   hybridSearch?: {
     enabled: boolean;
     /** Keyword weight (0-1, balance between semantic and keyword) */

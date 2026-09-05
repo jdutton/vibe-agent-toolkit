@@ -57,7 +57,7 @@ const META = {
       const summaryPath = safePath.join(outDir, firstRun, 'summary.yaml');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
       const summary = yaml.parse(readFileSync(summaryPath, 'utf-8')) as Record<string, unknown>;
-      expect((summary.plugins as unknown[]).length).toBe(1);
+      expect(summary.plugins as unknown[]).toHaveLength(1);
     },
     60_000
   );

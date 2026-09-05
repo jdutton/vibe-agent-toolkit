@@ -382,7 +382,9 @@ describe('mergeParseDumps', () => {
       mergeParseDumps([dumpWithPasses(1, [{ pass: LEXER, calls: 1, elapsedMs: 0.000_333 }], 0.000_999)]),
       MARKDOWN,
     );
-    expect(markdown.passes[0]?.elapsedMs).toBe(0.000_333);
+    // 5e-13 is twelve orders of magnitude below the thousandths the seam would round
+    // to, so this still fails on any rounding while staying off exact float equality.
+    expect(markdown.passes[0]?.elapsedMs).toBeCloseTo(0.000_333, 12);
     expect(markdown.total.elapsedMs).toBeGreaterThanOrEqual(markdown.passes[0]?.elapsedMs ?? 0);
   });
 

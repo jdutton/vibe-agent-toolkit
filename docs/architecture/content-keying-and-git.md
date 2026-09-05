@@ -12,8 +12,10 @@ re-derived wrongly — **the git one is the portable one.**
 
 This document exists because that reasoning is easy to state backwards. It records which key is sound
 for what, the measured behaviour of the git plumbing that would supply either, and the consequences
-that follow for the git crawl lane. It is a reference, not a plan: everything measured here is
-reproducible from §7, and everything asserted about VAT's own code carries a `file:line`.
+that follow for the git crawl lane, together with the one optimization that was proposed on top of
+that lane and refuted (§10) and the three shapes nobody should rebuild (§12). It is a reference, not
+a plan: everything measured here is either reproducible from §9 or carries its date and its corpus,
+and everything asserted about VAT's own code carries a `file:line`.
 
 It sits alongside two neighbours and does not repeat them.
 [Resource Scanning and Object Caching](./resource-scanning-and-caching.md) covers *discovering* what
@@ -155,7 +157,7 @@ contract says it does, and the failure is silent enough to ship.
 
 git 2.50.1 (Apple Git-155), throwaway repository under `GIT_CONFIG_NOSYSTEM=1` and
 `GIT_CONFIG_GLOBAL=/dev/null`, `.gitattributes` = `*.md eol=crlf`, one document authored with LF and
-re-materialized through a checkout. Reproduce with §7.
+re-materialized through a checkout. Reproduce with §9.
 
 | invocation | exit | announced size | payload delivered |
 |---|---|---|---|
@@ -295,6 +297,10 @@ Anyone widening where a hint is offered or consumed owns the condition at `conte
 paths sharing an OID must also share their `filter.*` and `working-tree-encoding` configuration.
 Normalizing what the OID names is not that condition and cannot be made into it.
 
+Anyone widening it in the other direction — into a mechanism that *eliminates reads* rather than one
+that reuses an answer already computed — owns §10 instead. That was proposed, measured and refuted,
+and the entire prize it reached for is 45 reads.
+
 ## 7. Git LFS: a documented limitation, not a feature to build
 
 Git LFS is the one divergence that is a genuine *indirection* rather than an encoding difference. Under
@@ -394,6 +400,123 @@ To verify the framing consequence in §5.2, plant a second document with a diffe
 same repository, feed both `<oid> <path>` lines to one `--batch --filters` process, then parse the
 output by git's documented contract: read the header, skip `size` bytes, and assert the next byte is
 LF. It is `\r`, and record 1's header no longer parses.
+
+## 10. What was proposed and refuted: the OID as a read-elimination key
+
+§6.2's ruling for the git lane is *do not read the bytes at all*. A more ambitious proposal sat next
+to it and was measured in 2026-08: keep the keyed lane reading, but give it a persisted
+`(blobSha, parserKind) → contentKey` memo plus an eligibility gate, so that a path whose OID is
+already known skips its read entirely. Every number came back against it.
+
+They are recorded here because a conclusion without its numbers cannot be defended the next time
+someone re-derives the idea — and this one is easy to re-derive, because it sounds obviously right.
+
+### 10.1 The three decisive numbers
+
+**1. ~2% of reads are eliminable, and VAT already eliminates them.** One blob is read per *distinct*
+key, so a keyed path's read is skippable only when some other path shares its identity. On this
+repository, 2026-08: **2,096 tracked paths → 2,051 distinct OIDs = 45 eliminable reads (2.1%)**.
+That is exactly the set the `contentHint`/`hintHits` route of §6.3 already collapses, so the memo's
+whole read-side prize had been banked before it was proposed.
+
+**2. The proposed eligibility gate excludes 100% of both real trees.** Measured 2026-08 with
+`git check-attr --stdin -z text eol filter`: a large adopter monorepo, **8,405 paths → 0 eligible**;
+this repository, **2,096 paths → 0 eligible**. The cause is not exotic configuration — it is the
+most common `.gitattributes` line in existence. `* text=auto eol=lf` sets `text` and `eol` on
+*every* path. ⇒ **Any gate phrased "text/eol attribute active ⇒ ineligible" is empty by
+construction.** It ships green, does nothing, and nothing about it looks wrong on the way past.
+
+This is §5.3's blindness with its sign flipped, and one `.gitattributes` line causes both: there,
+uniform normalization makes a *broken* implementation pass every test anyone thinks to write here;
+here, the same uniformity makes a *correct* implementation do nothing at all. Note that the adopter
+tree fails the gate too, so a second corpus would not have caught it either — that is the difference
+between this and the §5.3 case, and it is why the gate had to be measured rather than reviewed.
+
+**3. Reads were never the cost.** Reading *every* file in this repository costs **94 ms warm**
+(2026-08; 2,096 files / 26.5 MB, ≈45 µs per file), against the **4,580.7 ms**
+`resource-registry:enumerate` arm measured on a large adopter monorepo. ⚠️ **Those are two different
+trees.** It is a cross-corpus ratio, not a same-tree one, and it is stated that way deliberately
+rather than tidied into a single figure. Even crediting perfect read elimination with the whole
+94 ms against that arm, it removes ≲2% of it — and the honest elimination is not 94 ms at all, it is
+the 45 reads of point 1. [Resource Scanning and Object Caching](./resource-scanning-and-caching.md)
+pairs the two figures at its adopter table and rules that the 4,580.7 ms is never to be quoted
+without them; *why* that pair is decisive is this section.
+
+### 10.2 The sound gate, which is worth more than the refutation
+
+The refutation kills one optimization. The gate it produced outlives it, and anything in this class
+should start from the gate rather than from attribute names:
+
+- A `filter` attribute (a clean/smudge pair) active ⇒ **ineligible**, unconditionally. A filter is an
+  arbitrary transformation, and nothing may be inferred about the bytes it produced.
+- With no filter, the only transformation git can apply is EOL normalization, and normalization
+  strictly **removes CR bytes** — it never adds one. Therefore:
+
+> 🔑 **Absent a `filter`, blob size == working-tree size ⟺ the bytes are identical.**
+
+Two properties make that better than the gate it replaces. It is **complete** for the EOL case rather
+than a heuristic — under that condition a size match is a proof, not evidence. And it catches
+`core.autocrlf`, which `git check-attr` is **blind to**: Git for Windows defaults it to `true` while
+`check-attr` reports the path as `unspecified`, so an attribute-only gate reads a CRLF checkout as
+untouched. Working-tree size is a `stat` and blob size is already carried by the enumeration, which
+is what lets the gate sit in front of the read it is deciding about rather than after it.
+
+### 10.3 The cost nobody would guess: the temp-index snapshot
+
+Decoupling the read from the working tree needs a snapshot, and a snapshot costs a **~140 ms
+temp-index write that puts loose objects into `.git/objects` on every run** (2026-08, this
+repository). Two consequences, either disqualifying on its own:
+
+- It **mutates the repository it is reading.** A read-only command that grows the adopter's object
+  store on every invocation is not a read-only command.
+- **Break-even is ≈3,100 files, and it loses on every cold-index run** — a fresh worktree, a CI
+  checkout — *regardless* of corpus size. Those are exactly the two shapes CI presents, so the run
+  that would justify the cost is the one run that can never show it.
+
+## 11. What the keyed entries cost on disk, and why they are not compressed
+
+These measure the content-keyed cache rather than git. They belong here because each is a fact about
+what keying *produces*, and each one closed a question that otherwise gets re-opened by intuition.
+
+**Compression was rejected, and the rejection is re-derivable rather than permanent.** Measured
+2026-08 over this repository's cache: the median entry is **924 bytes**, **54% are under 1 KB** and
+**87% under 4 KB**, none pretty-printed, and only ~**1%** exceed 16 KB. gzip saves 60% on a sample —
+and at that median frees **no actual disk at all**, because a sub-block entry still occupies one
+allocation block, while adding an inflate to every read. ⇒ It buys nothing measurable and charges
+every reader. The two facts that decide it are the median and the filesystem's block size, so anyone
+re-opening this re-measures the median first: if the ~1% tail over 16 KB grows into the bulk of the
+bytes, the arithmetic changes and the rejection does not survive it.
+
+**The corpus bytes are read and hashed three times per run.** `collectRealization` reads and hashes
+once per `(extent, path)` — so once for each extent a path belongs to — and blob population then
+reads again on top. That multiplier, not a single read, is what §6.2's *read nothing* ruling attacks
+at the source, and it is what any read-elimination proposal would actually have to beat.
+
+**Scale is not this repository, and it is not off by the file count.** Measured 2026-08: a large
+adopter monorepo at **20,671 paths / 1,188.8 MB** against this repository's **5,684 paths /
+40.8 MB** — **29× the bytes for a 4.2× corpus**, so the mean file is about seven times larger there.
+⇒ Anything whose cost scales with bytes rather than with files is sized wrong here by roughly that
+factor, and a per-file average taken from this tree does not transfer.
+
+⚠️ **Three path counts for this repository appear in this document — 2,096 (§10), 5,684 (above) and
+8,548 (§5.3) — and they are not interchangeable.** Each probe enumerated the population its own
+question needed, at its own date. A number is only comparable to another taken over the same
+population; carrying one across to the other's ratio silently changes what is being claimed.
+
+## 12. 🛑 Do not rebuild
+
+Three shapes were proposed, measured and refuted in the work above. They are transcribed verbatim so
+that the next person to think of one finds it named before spiking it:
+
+1. The persisted `(blobSha, parserKind) → contentKey` memo.
+2. "git OID as content identity to eliminate reads."
+3. Any gate phrased "text/eol attribute active ⇒ ineligible".
+
+None of the three is refuted by taste, and none is re-opened by an argument. (1) and (2) are bounded
+above by the 45 eliminable reads of §10.1, and (3) is empty by construction on every tree carrying
+`* text=auto eol=lf`. Reopening any of them means producing a measurement that moves those numbers,
+on a tree that is named. What survives and should be reused is §10.2's size-equality gate, which is
+sound whether or not anything is ever built on top of it.
 
 ## Related
 

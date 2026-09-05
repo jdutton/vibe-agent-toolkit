@@ -750,6 +750,57 @@ async function validateNoCitationsToNeverCommittedDirs(): Promise<void> {
   });
 }
 
+/**
+ * Rule 12: Nothing under a never-committed directory may itself be tracked
+ *
+ * Rule 10 guards the OUTWARD direction — a tracked file citing a path inside one
+ * of these dirs. This guards the inward one, and it is a different failure: a
+ * file force-added past `.gitignore` INTO `docs/superpowers/`, which then merges
+ * to `main` and stays there.
+ *
+ * That is not hypothetical. Two zones specs were force-added on 2026-08-12 "for
+ * safekeeping on a long-lived branch", each opening with its own
+ * "REMOVE BEFORE PR MERGE" banner — a reminder addressed to a human, discharged
+ * from memory, which survived twenty-four days and a full green CI run because
+ * nothing mechanical was watching. Rule 10 could not see them: they were not
+ * citations, they were the cited thing.
+ *
+ * Error, not warning, and deliberately so. A dangling citation misleads a reader;
+ * this merges a working document into the permanent record, where the pre-1.0
+ * convention that specs are deleted when the work ships no longer applies to it.
+ * There is no legitimate steady state in which one of these paths is tracked — a
+ * document that needs to be citable gets promoted to {@link PROMOTED_DOC_HOME}
+ * instead, which is the same remedy Rule 10 recommends.
+ */
+async function validateNothingTrackedUnderNeverCommittedDirs(): Promise<void> {
+  // `trim: false` — the listing is NUL-delimited, and a path beginning with a
+  // space sorts first, so a trim would rename it out of the population.
+  const tracked = runGitOrThrow(['ls-files', '-z'], { cwd: REPO_ROOT, trim: false }) as string;
+
+  for (const relPath of tracked.split('\0')) {
+    if (!relPath) {
+      continue;
+    }
+    const dir = NEVER_COMMITTED_DIRS.find((d) => toForwardSlash(relPath).startsWith(d));
+    if (dir === undefined) {
+      continue;
+    }
+
+    errors.push({
+      type: ERROR_TYPES.FORBIDDEN_DIRECTORY,
+      path: relPath,
+      message:
+        `Tracked, but \`${dir}\` is a gitignored working directory — this file was ` +
+        `force-added past .gitignore and will merge to main permanently. A ` +
+        `"remove before merge" note in the file itself is not a mechanism; nothing ` +
+        `reads it. Either \`git rm\` it once its durable content is captured in a ` +
+        `committed document, or promote it to ${PROMOTED_DOC_HOME} if it genuinely ` +
+        `needs to be citable.`,
+      severity: 'error',
+    });
+  }
+}
+
 /* ────────────────────────────────────────────────────────────────────────────
  * Gate: a lane that reports findings must publish per-severity COUNTS beside
  * its status, not only the status.
@@ -957,6 +1008,11 @@ const SHARED_COUNTS_TYPE = /\bextends\s+SeverityCounts\b|\bSeverityCounts\s*&|&\
 /** Lanes that publish a per-severity counts block beside their status. */
 const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   'packages/cli/src/commands/resources/validate.ts',
+  // Publishes `issueCounts` beside its status from the day it shipped. Its
+  // findings are the project's own `resources.checks` SQL assertions, whose
+  // severities an adopter sets per check — so the distribution is exactly what a
+  // reader cannot reconstruct from a status here.
+  'packages/cli/src/commands/resources/check.ts',
   // Migrated onto the shared `calculateValidationStatus` + `countBySeverity`
   // pair, which ended five separate collapses and three different answers for
   // an info-only issue set.
@@ -1370,6 +1426,7 @@ async function validate(): Promise<void> {
 
   // Durability - claims that rot in silence
   await validateNoCitationsToNeverCommittedDirs();
+  await validateNothingTrackedUnderNeverCommittedDirs();
   await validateVendorClaimFreshness();
   await validateSeverityCountsRatchet();
 

@@ -63,10 +63,22 @@ const SAFE_EXEC_EXEMPT = { exemptFiles: ['packages/utils/src/safe-exec.ts'] };
  * name deliberately, to exercise the public entry point the way a consumer does.
  */
 function selfImportConfigs() {
-  return readdirSync('packages', { withFileTypes: true })
+  // 🪤 Resolved against THIS FILE, never against the cwd. `readdirSync('packages')`
+  // is relative to wherever eslint was started, so any invocation from inside a
+  // package — `turbo run lint`, which sets cwd to the package it is linting —
+  // died with `ENOENT: scandir 'packages'` before linting a line. Not a finding
+  // and not a lint error: a config load failure, exit 2, in every package.
+  //
+  // A `URL` rather than a `path.join`: this file is subject to the `no-path-join`
+  // rule it declares two functions below, and a relative `URL` needs no exemption
+  // to be correct on Windows either. The `files:` globs stay strings because flat
+  // config already resolves those against the config file's own directory.
+  const packagesDir = new URL('packages/', import.meta.url);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- a URL built from this file's own location and a literal segment; no input reaches it.
+  return readdirSync(packagesDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .flatMap((entry) => {
-      const manifest = `packages/${entry.name}/package.json`;
+      const manifest = new URL(`${entry.name}/package.json`, packagesDir);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- the path is a workspace directory name read from `packages/` moments earlier, not user input.
       if (!existsSync(manifest)) return [];
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- same path, existence just confirmed above.

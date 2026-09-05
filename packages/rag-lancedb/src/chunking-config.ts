@@ -28,11 +28,28 @@ import type { ChunkingConfig, EmbeddingProvider, TokenCounter } from '@vibe-agen
 /**
  * How much higher the embedder's own tokenizer counts than the chunker's.
  *
- * The chunker measures in cl100k (gpt-tokenizer); the local model tokenizes in
- * BERT WordPiece over a ~30k vocab, which splits the same text into more
- * pieces — measured at 1.13-1.18x at p50 across four corpora. A budget that
- * ignores the gap overflows even when the target equals the model's limit
- * exactly, so the safety margin is sized against the top of that range.
+ * The local model tokenizes in BERT WordPiece over a ~30k vocab, which splits
+ * the same text into more pieces than the estimators upstream of it. A budget
+ * that ignores the gap overflows even when the target equals the model's limit
+ * exactly, so the safety margin is sized against the top of a measured range.
+ *
+ * ⚠️ **A ratio whose operands are unstated is not a measurement.** The range this
+ * 1.18 comes from is **`chars/4` → WordPiece**, measured 2026-08 across four
+ * corpora: **1.13-1.18x at p50, 1.30-1.41x at p90**. `chars/4` is
+ * {@link FastTokenCounter}; the counter the shipped LanceDB path passes in is
+ * {@link ApproximateTokenCounter}, which counts in **cl100k** (gpt-tokenizer).
+ * So this factor is the top of a p50 range measured against a DIFFERENT
+ * estimator than the one it is applied to — **cl100k → WordPiece has never been
+ * measured** — and `tokenCounter` is a caller input, so a caller may supply
+ * either. Restating either ratio without naming both of its ends puts the
+ * mis-attribution back.
+ *
+ * ⚠️ **p50 sizes the margin; p90 is why the margin is not a guarantee.** At
+ * 1.30-1.41x roughly a tenth of chunks diverge half again as far as this factor
+ * allows for, so the padding derived from it bounds the typical chunk and not
+ * the tail. Raising the constant to cover p90 is a budget decision with a recall
+ * cost, not a bug fix — and it wants the cl100k measurement first, because the
+ * tail belongs to the same estimator pair the p50 does.
  */
 export const ESTIMATOR_DIVERGENCE_FACTOR = 1.18;
 
@@ -131,7 +148,10 @@ export function resolveChunkingConfig(inputs: ChunkingConfigInputs): ResolvedChu
     warnings.push(
       `Chunk budget (targetChunkSize ${String(config.targetChunkSize)} x paddingFactor ` +
         `${String(config.paddingFactor)}) can produce chunks that '${embeddingProvider.model}' will ` +
-        `truncate: the chunker counts in cl100k but the model tokenizes ~${String(ESTIMATOR_DIVERGENCE_FACTOR)}x higher, ` +
+        // Deliberately does not name the chunker's estimator: `tokenCounter` is a caller
+        // input, so it may be cl100k or `chars/4`, and the factor was measured against the
+        // latter. Naming one of them here shipped a mis-attribution to adopters.
+        `truncate: the model's own tokenizer counts ~${String(ESTIMATOR_DIVERGENCE_FACTOR)}x higher than the chunker's estimate, ` +
         `which overruns its ${String(modelTokenLimit)}-token limit. Lower paddingFactor or targetChunkSize.`,
     );
   }

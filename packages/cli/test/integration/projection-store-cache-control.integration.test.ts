@@ -19,18 +19,28 @@
  * was written". Every assertion below counts ROWS, out of the file, with the
  * store's own connection closed.
  *
- * ## Isolation is the temp directory, not a store option
+ * ## Isolation is `VAT_PROJECTION_STORE_DIR`
  *
- * `defaultStoreDirectory()` is derived from the OS temp directory and there is
- * no env var to point it elsewhere — deliberately, since a cache nobody can
- * misplace is a feature. So each arm gets its own temp directory, which is what
- * the derivation reads through `normalizedTmpdir()`. That also keeps this suite
- * off the developer's live cache: a test that populated or cleared the real
- * `<tmpdir>/.vat-cache` would be a bug whether or not it passed.
+ * Each arm names its own store directory. That keeps this suite off the
+ * developer's live cache — `defaultStoreDirectory()` is one database per VAT
+ * release, shared by every root on the machine, and a test that populated or
+ * cleared it would be a bug whether or not it passed.
  *
- * The probes that read that directory back — and the platform trap in isolating
- * it — live in `test/helpers/projection-store-probe.ts`, shared with the
- * equivalence suite.
+ * 🪤 The variable is imported from the module under test rather than spelled as
+ * a literal here, so a rename cannot leave this suite quietly pointing at the
+ * shared default. The positive control below is the backstop: if the child
+ * ignored the variable altogether, the arm that asserts rows WERE written finds
+ * an empty directory and fails, rather than the "nothing was written" arms
+ * passing vacuously.
+ *
+ * Redirecting `TMPDIR` also moves the store, and this suite used to do that. It
+ * is the wrong instrument twice over: it moves every other temp consumer in the
+ * child in order to move one, and the variable name differs by platform —
+ * `TMPDIR` on POSIX, `TEMP` then `TMP` on Windows — so setting one is silently
+ * inert on the other.
+ *
+ * The probes that read the store back live in
+ * `test/helpers/projection-store-probe.ts`, shared with the equivalence suite.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -38,11 +48,11 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { PROJECTION_STORE_DIR_ENV } from '../../src/utils/projection-store.js';
 import {
   contributorsCharged,
   rowsStoredUnder,
   storeFilesUnder,
-  tmpdirEnv,
 } from '../helpers/projection-store-probe.js';
 import { executeCli, getBinPath } from '../system/test-common.js';
 import { commitTestFixture } from '../test-helpers.js';
@@ -71,25 +81,27 @@ afterAll(() => {
   rmSync(scratch, { recursive: true, force: true });
 });
 
-/** A private OS temp directory, so this arm's store cannot be any other arm's. */
-function isolatedTmpdir(label: string): string {
-  return mkdtempSync(safePath.join(scratch, `${label}-tmp-`));
+/** A private store directory, so this arm's store cannot be any other arm's. */
+function isolatedStoreDir(label: string): string {
+  return mkdtempSync(safePath.join(scratch, `${label}-store-`));
 }
 
 /**
  * Run `vat resources validate` over the fixture corpus.
  *
- * @param temp - The arm's private `TMPDIR`
+ * @param storeDir - The arm's private `VAT_PROJECTION_STORE_DIR`
  * @param extra - Flags before the subcommand, and any further environment
  * @returns Nothing; the arm is judged by what landed on disk, not by stdout
  */
 async function runValidate(
-  temp: string,
+  storeDir: string,
   extra: { flags?: readonly string[]; env?: Record<string, string> } = {},
 ): Promise<void> {
   const result = await executeCli(binPath, [...(extra.flags ?? []), 'resources', 'validate'], {
     cwd: corpus,
-    env: { ...STORE_ON, ...extra.env, ...tmpdirEnv(temp) },
+    // The store directory is applied LAST so no caller can accidentally point an
+    // arm at another arm's store through `extra.env`.
+    env: { ...STORE_ON, ...extra.env, [PROJECTION_STORE_DIR_ENV]: storeDir },
   });
   // A run that crashed writes no store either, and would make every "nothing
   // was written" assertion below pass for the wrong reason.
@@ -101,28 +113,28 @@ describe('the projection store under the cache controls', () => {
     // The positive control, and the reason the two arms below mean anything: a
     // selector that had stopped working would make every "no rows" assertion
     // vacuously true.
-    const temp = isolatedTmpdir('on');
+    const storeDir = isolatedStoreDir('on');
 
-    await runValidate(temp);
+    await runValidate(storeDir);
 
-    expect(storeFilesUnder(temp)).toHaveLength(1);
-    expect(rowsStoredUnder(temp)).toBeGreaterThan(0);
+    expect(storeFilesUnder(storeDir)).toHaveLength(1);
+    expect(rowsStoredUnder(storeDir)).toBeGreaterThan(0);
   });
 
   it.each([
     ['the root --no-cache flag', { flags: ['--no-cache'] }],
     ['VAT_CACHE=0 in the environment', { env: { VAT_CACHE: '0' } }],
   ])('writes NO rows under %s', async (_description, extra) => {
-    const temp = isolatedTmpdir('off');
+    const storeDir = isolatedStoreDir('off');
 
-    await runValidate(temp, extra);
+    await runValidate(storeDir, extra);
 
     // No file at all is the strongest form, and the one this fix produces: the
     // store is declined before the backend is imported, so nothing creates the
     // database or its schema. The row count is asserted too, so a future change
     // that opens an empty store still fails on the thing that matters.
-    expect(storeFilesUnder(temp)).toEqual([]);
-    expect(rowsStoredUnder(temp)).toBe(0);
+    expect(storeFilesUnder(storeDir)).toEqual([]);
+    expect(rowsStoredUnder(storeDir)).toBe(0);
   });
 
   it('does not READ a store that a previous run left warm', async () => {
@@ -139,22 +151,22 @@ describe('the projection store under the cache controls', () => {
     // `resources validate` run MISSES: it charges `projection-store:write` and
     // `builtin:filesystem` exactly as the cold run does. See the equivalence
     // suite, whose per-command `warmHitsStore` records which commands hit.
-    const temp = isolatedTmpdir('warm');
-    await runValidate(temp);
-    expect(rowsStoredUnder(temp)).toBeGreaterThan(0);
+    const storeDir = isolatedStoreDir('warm');
+    await runValidate(storeDir);
+    expect(rowsStoredUnder(storeDir)).toBeGreaterThan(0);
 
     const warmTiming = mkdtempSync(safePath.join(scratch, 'timing-warm-'));
-    await runValidate(temp, { env: { VAT_CRAWL_TIMING: warmTiming } });
+    await runValidate(storeDir, { env: { VAT_CRAWL_TIMING: warmTiming } });
     expect(contributorsCharged(warmTiming)).toContain('projection-store:read');
 
     const coldTiming = mkdtempSync(safePath.join(scratch, 'timing-cold-'));
-    await runValidate(temp, { flags: ['--no-cache'], env: { VAT_CRAWL_TIMING: coldTiming } });
+    await runValidate(storeDir, { flags: ['--no-cache'], env: { VAT_CRAWL_TIMING: coldTiming } });
 
     const charged = contributorsCharged(coldTiming);
     expect(charged).not.toContain('projection-store:read');
     expect(charged).toContain('builtin:filesystem');
     // And the warm store is still there, untouched — `--no-cache` declines to
     // use a cache, it does not clear one. `vat cache clear` is that command.
-    expect(rowsStoredUnder(temp)).toBeGreaterThan(0);
+    expect(rowsStoredUnder(storeDir)).toBeGreaterThan(0);
   });
 });

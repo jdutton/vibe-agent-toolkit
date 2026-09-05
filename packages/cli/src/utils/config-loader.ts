@@ -8,7 +8,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { ProjectConfigSchema, type ProjectConfig } from '@vibe-agent-toolkit/resources';
+import { formatConfigValidationError, ProjectConfigSchema, type ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
@@ -68,12 +68,19 @@ export function loadConfig(projectRoot: string): ProjectConfig | undefined {
     const content = readFileSync(configPath, 'utf-8');
     const parsed = yaml.parse(content);
 
-    // Validate with canonical schema from resources package
+    // Validate with canonical schema from resources package.
+    //
+    // 🔑 The message comes from the shared formatter, NOT from `error.message`.
+    // In Zod 3 that property is a **JSON dump of the issue array**, and it was
+    // what an adopter got: five verbs exiting 2 in under a second on a blob that
+    // never named this file, never said which key was refused in words, and
+    // offered no remedy. Every strict block in the schema is a refusal an
+    // adopter has to be able to act on from the terminal alone.
     const result = ProjectConfigSchema.safeParse(parsed);
 
     if (!result.success) {
       throw new Error(
-        `Invalid configuration file: ${result.error.message}`
+        formatConfigValidationError(result.error, { configPath, schema: ProjectConfigSchema }),
       );
     }
 

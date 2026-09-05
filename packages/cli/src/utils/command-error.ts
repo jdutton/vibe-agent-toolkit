@@ -12,7 +12,7 @@ import { inspect } from 'node:util';
 import { countBySeverity, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { Logger } from './logger.js';
-import { writeYamlOutput } from './output.js';
+import { writeJsonOutput, writeYamlOutput } from './output.js';
 
 /**
  * Format duration for human readability
@@ -103,18 +103,34 @@ export function reportCommandError(
  * The command-line ending for {@link reportCommandError}. Exit 2 is the
  * UNEXPECTED failure, per the exit-code contract every command's help documents.
  *
+ * 🔑 **`format` is not decoration.** Every command offering `--format json`
+ * honoured it on the success path and emitted YAML here, so the one document a
+ * CI wrapper most needs to read — the one explaining why the command failed —
+ * arrived in a format its parser rejects. A consumer running
+ * `vat resources check --format json | jq .error` got a parse error on top of
+ * whatever went wrong, and had to guess at the second failure to find the first.
+ * A caller that has a `--format` option MUST pass it.
+ *
  * @param error - The error that occurred
  * @param logger - Logger instance for error output
  * @param startTime - Command start time (from Date.now())
  * @param commandName - Name of the command (for error message)
+ * @param format - What the operator asked for: `json`, or anything else (and
+ *   omitted) for YAML — matching the success path's own two-branch switch
  */
 export function handleCommandError(
   error: unknown,
   logger: Logger,
   startTime: number,
-  commandName: string
+  commandName: string,
+  format?: string | undefined,
 ): never {
-  writeYamlOutput(reportCommandError(error, logger, startTime, commandName));
+  const document = reportCommandError(error, logger, startTime, commandName);
+  if (format === 'json') {
+    writeJsonOutput(document);
+  } else {
+    writeYamlOutput(document);
+  }
   process.exit(2);
 }
 
@@ -157,4 +173,53 @@ export function handleValidationGateFailure(
 ): never {
   writeYamlOutput(buildValidationGateFailure(subject, issues));
   process.exit(1);
+}
+
+/**
+ * The exit code a USAGE mistake ends on: a flag this program does not declare,
+ * a verb it does not know, a missing or invalid argument.
+ *
+ * 🔑 **Two is not a style choice — one was a factual lie.** Every command's
+ * `--help` publishes the same three-way contract: `0` no error-severity
+ * findings, `1` at least one, `2` a system error. Commander's default for a
+ * usage mistake is `process.exit(1)`, so `vat resources check --json` (the
+ * option is `--format json`) exited **1** — which, read against the contract
+ * the command itself prints, asserts that at least one check was violated.
+ * Nothing had run. A CI wrapper spelled `if [ $? -ne 0 ]; then report_findings`
+ * therefore reported findings that were never computed, and the operator went
+ * looking for a violation that did not exist.
+ *
+ * The same hole swallowed a mistyped verb (`vat resources chekc`) and every
+ * unknown option on all 69 commands. VAT's own refusals were already correct —
+ * an unknown `--check` name and an unusable `--budget` both exit 2 — so the
+ * inconsistency was Commander's default leaking through the one path VAT had
+ * not claimed.
+ *
+ * ⚠️ **Help and `--version` are NOT usage mistakes.** They terminate through
+ * the same `_exit` path with code 0 and must stay 0; only a non-zero commander
+ * ending is remapped. See {@link exitCodeForCommanderEnding}.
+ */
+export const USAGE_ERROR_EXIT_CODE = 2;
+
+/**
+ * Map a commander termination to the exit code VAT's contract promises.
+ *
+ * Commander reports BOTH successful and failing terminations through the same
+ * `CommanderError`: `--help` and `--version` carry `exitCode` 0, while an
+ * unknown option, an unknown command and `help({ error: true })` carry non-zero.
+ * Anything non-zero is a usage mistake by construction — commander raises these
+ * only while parsing, before any action runs — so it maps to
+ * {@link USAGE_ERROR_EXIT_CODE}.
+ *
+ * 🪤 Do NOT switch on `error.code` (`commander.unknownOption`, `commander.help`,
+ * …). The unknown-COMMAND path arrives as `commander.help` with exitCode 1,
+ * because the `command:*` handler renders help with `{ error: true }` — so the
+ * code string says "help" for a case that is emphatically not one. The exit
+ * code commander already computed is the honest discriminator; the string is not.
+ *
+ * @param commanderExitCode - The `exitCode` commander put on its CommanderError
+ * @returns 0 for a successful ending, {@link USAGE_ERROR_EXIT_CODE} otherwise
+ */
+export function exitCodeForCommanderEnding(commanderExitCode: number): number {
+  return commanderExitCode === 0 ? 0 : USAGE_ERROR_EXIT_CODE;
 }

@@ -228,7 +228,7 @@ describe('nonNegativeNumber', () => {
   it('accepts a fractional value rather than rounding a measurement', () => {
     // A noise floor is a measurement, not a count: rounding it up would widen
     // the band in which real effects are dismissed as noise.
-    expect(parse('12.4')).toBe(12.4);
+    expect(parse('12.4')).toBeCloseTo(12.4, 10);
     expect(parse('0')).toBe(0);
   });
 
@@ -248,12 +248,15 @@ describe('fastestRepeat — the reduction `parse` and `crawl` hand to ab', () =>
   // whole reason the median defect survived: no test exercised a real estimate.
   const SAMPLES = [9258.195, 9085.774, 9381.952];
   const MIN = 9085.774;
+  // The three samples are ~170ms and ~300ms apart, so a 5e-7 tolerance still tells
+  // the minimum apart from the median and from the row total the fallback would use.
+  const PRECISION = 6;
 
   it('publishes the smallest repeat, not the reported median one', () => {
     // `totalMs` is the median repeat the row reports whole. Handing that to `ab`
     // is a min-over-medians, and it measured +172.4ms of phantom effect on the
     // first real `parse ab` — ~1.8x that run's noise floor.
-    expect(fastestRepeat({ totalMs: SAMPLES[0] as number, totalMsSamples: SAMPLES })).toBe(MIN);
+    expect(fastestRepeat({ totalMs: SAMPLES[0] as number, totalMsSamples: SAMPLES })).toBeCloseTo(MIN, PRECISION);
   });
 
   it('ignores the row total whenever samples exist, even a smaller one', () => {
@@ -261,7 +264,7 @@ describe('fastestRepeat — the reduction `parse` and `crawl` hand to ab', () =>
     // per-repeat truth, not because they happen to be smaller. A reduction that
     // took `Math.min(totalMs, ...samples)` would pass the test above and fail
     // this one.
-    expect(fastestRepeat({ totalMs: 1, totalMsSamples: SAMPLES })).toBe(MIN);
+    expect(fastestRepeat({ totalMs: 1, totalMsSamples: SAMPLES })).toBeCloseTo(MIN, PRECISION);
   });
 
   it('falls back to the row total only when no repeat published a sample', () => {

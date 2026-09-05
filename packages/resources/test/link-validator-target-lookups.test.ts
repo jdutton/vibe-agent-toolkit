@@ -126,16 +126,17 @@ describe('validateLink target lookups', () => {
   });
 
   /**
-   * Ledger D7 — the user-facing half, and the whole verdict in one place.
+   * The enumerated-vs-derived path class (docs/architecture/resource-scanning-and-caching.md §3.6),
+   * its user-facing half, and the whole verdict in one place.
    *
    * The target exists. Only its Unicode normalization form differs from the
    * href's. Three answers are possible and only the third is true:
    *
-   * 1. `LINK_BROKEN_FILE` — what VAT emitted before D7, when the listing
+   * 1. `LINK_BROKEN_FILE` — what VAT emitted before the fold, when the listing
    *    comparison found no match at all (not even the case-mismatch hint, which
    *    needs the case-insensitive branch to match). A false positive: the file
    *    is plainly there.
-   * 2. `null` — what VAT emitted after D7 folded both sides before comparing.
+   * 2. `null` — what VAT emits now that both sides are folded before comparing.
    *    Also wrong, in the opposite direction and far more quietly: on
    *    Linux/ext4 (CI, and most deploy targets) that href opens nothing, and the
    *    run was silent about it. This assertion USED to read `.toBeNull()`.
@@ -146,13 +147,17 @@ describe('validateLink target lookups', () => {
    * string this test would pass while demonstrating nothing.
    */
   it('warns, rather than passing silently, for a composed href naming a decomposed file', async () => {
-    expect(ACCENTED_ON_DISK).not.toBe(ACCENTED_IN_HREF);
+    // The guard that can fail: `ACCENTED_ON_DISK` is really decomposed, and
+    // folding it lands exactly on the href spelling. Comparing the two
+    // constants to each other is settled at authoring time and pins nothing.
+    expect(ACCENTED_ON_DISK).not.toBe(ACCENTED_ON_DISK.normalize('NFC'));
+    expect(ACCENTED_ON_DISK.normalize('NFC')).toBe(ACCENTED_IN_HREF);
 
     const issue = await validateHref(tempDir, `./${ACCENTED_IN_HREF}`, fsCache);
 
     expect(issue?.code).toBe('LINK_NORMALIZATION_MISMATCH');
     expect(issue?.severity).toBe('warning');
-    // Not broken: D7's fix must survive. An error here is the pre-D7 regression.
+    // Not broken: the fold must survive. An error here is the pre-fold regression.
     expect(issue?.severity).not.toBe('error');
     // Both spellings, escaped — quoted verbatim they are the same glyphs.
     expect(issue?.message).toContain(String.raw`ref\u{E9}rence.md`);

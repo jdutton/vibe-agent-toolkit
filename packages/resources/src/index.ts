@@ -84,6 +84,7 @@ export type {
   ValidationResult,
   ProjectConfig,
   ResourcesConfig,
+  ResourceCheck,
   CollectionConfig,
   CollectionValidation,
   ValidationMode,
@@ -532,6 +533,10 @@ export {
 } from './config-parser.js';
 
 export {
+  formatConfigValidationError,
+} from './config-issues.js';
+
+export {
   ProjectConfigSchema,
   SkillExecutableEntrySchema,
   SkillFileEntrySchema,
@@ -799,8 +804,14 @@ export {
 // The resources lane's population, sourced from that extent instead of from
 // `git ls-files` — which is what lets `vat resources validate` see a markdown
 // file the author has written but not yet committed.
+// A project's own SQL assertions over its projection: what a returned row MEANS.
+// The statement itself is the CLI's business — only it knows a storage backend
+// exists — so the rule engine here never opens a database.
+export { issuesFromCheckRows } from './projection/sql-checks.js';
+
 export {
   buildResourcePopulation,
+  buildResourceProjection,
   type ResourcePopulation,
   type ResourcePopulationSource,
 } from './projection/resource-population.js';

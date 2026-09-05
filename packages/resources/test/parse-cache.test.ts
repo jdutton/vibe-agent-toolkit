@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -211,7 +211,7 @@ function setupParseCacheTestSuite(): ParseCacheTestSuite {
     // leave a directory `rm` cannot descend into.
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: self-created tempDir
     await fs.chmod(tempDir, MODE_RW_OWNER).catch(() => undefined);
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await removeScratchDir(tempDir);
   });
 
   const makeCache = (options: ParseCacheOptions = {}): ParseCache =>
@@ -411,7 +411,7 @@ describe('fixture distinguishability', () => {
     const keyed = keyedFromBytes(LOSSY_BYTES);
 
     expect(keyed.byteLength).toBe(LOSSY_BYTE_LENGTH);
-    expect(keyed.content.length).toBe(LOSSY_STRING_LENGTH);
+    expect(keyed.content).toHaveLength(LOSSY_STRING_LENGTH);
     expect(Buffer.byteLength(keyed.content, 'utf-8')).toBe(LOSSY_REENCODED_LENGTH);
   });
 });

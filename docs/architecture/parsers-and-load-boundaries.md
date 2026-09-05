@@ -583,6 +583,25 @@ unit suite passed untouched, and a count of it is deliberately not quoted, becau
 number in a durable document rots — and no timing claim is made for it. The point is that a second
 implementation can now be measured against a contract instead of against a diff.
 
+⚠️ **The absent timing claim has a history, and both of its numbers are kept.** The predecessor
+collapse — fifteen full-AST traversals per file down to two, recorded in `CHANGELOG.md` as the bare
+fact *"Markdown parsing walks the syntax tree twice per document instead of fifteen times"* — was
+originally argued from **3,899 ms of a 9,091 ms parse cost, i.e. 43% of parse**. Direct attribution
+over VAT's 265-file corpus (2026-08-08), holding read/stat and micromark out, measured read+stat
+**17 ms**, micromark tokenization **864 ms**, the fifteen walks **306 ms**: traversal is **26% of
+parse, not 43%** — a **~1.7× overstatement**. The collapse itself took traversal 306 ms → 66 ms
+(−78%), which is −15% of whole-corpus `parseMarkdown` (1,155 ms → 979 ms). **26% superseded 43% on
+2026-08-10.** On that same attribution micromark's own tokenization is **73% of parse** and is
+untouchable without changing parsers — a different denominator from §2's 74–76% of `remark-parse`,
+pointing at the same floor.
+
+🔑 **The superseded figure is recorded beside the surviving one on purpose: a recalibration that
+silently replaces its predecessor is indistinguishable in review from a number that was always
+right.** What follows from it is a planning bound and not a perf claim — further AST-collapse work,
+the HTML parser being the obvious candidate, is bounded by what is left of a **26%** slice rather
+than a 43% one, so it is justified on correctness or DRY grounds or not at all. Neither figure
+licenses reading the 3→1 collapse above as a speed change; that one stays untimed by choice.
+
 ### 🔶 Where this plan is aimed is an open decision
 
 Steps 1–3 as written pin the surfaces this document happened to examine. The measurements in §4 say

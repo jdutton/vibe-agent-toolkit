@@ -1,7 +1,12 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- test writes to temp dirs from computed paths */
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  normalizedTmpdir,
+  removeScratchDir,
+  resolveFromImportMeta,
+  safePath,
+} from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -61,7 +66,7 @@ describe('devNamespaceDigest', () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await removeScratchDir(tempDir);
   });
 
   it('survives a rebuild of every module the old fingerprint watched', async () => {
@@ -98,7 +103,7 @@ describe('devNamespaceDigest', () => {
     // was resolved, the shape from `ParseFactsSchema` itself — so neither can
     // fall behind what it stands for. What is left over lives in `vat cache
     // clear` (a change of meaning, at unchanged shape).
-    expect(devNamespaceDigest.length).toBe(2);
+    expect(devNamespaceDigest).toHaveLength(2);
   });
 
   it('moves when the module directory moves, so two worktrees never share a namespace', () => {

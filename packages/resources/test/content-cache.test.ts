@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ContentCache } from '../src/content-cache.js';
@@ -72,7 +72,7 @@ describe('ContentCache — round-trip', () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await removeScratchDir(tempDir);
   });
 
   it('stores and retrieves bytes + metadata for the same URL', async () => {
@@ -127,7 +127,7 @@ describe('ContentCache — TTL expiry (§6.3 30-min default)', () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await removeScratchDir(tempDir);
   });
 
   it('at exactly the TTL the entry is still valid (boundary: `>` not `>=`)', async () => {
@@ -187,7 +187,7 @@ describe('ContentCache — shape validation at the read boundary', () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await removeScratchDir(tempDir);
   });
 
   it('treats an entry carrying the removed `version` field as a miss', async () => {
@@ -262,7 +262,7 @@ describe('ContentCache — fail-soft IO (per #125 review)', () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await removeScratchDir(tempDir);
   });
 
   it('treats corrupted JSON as a miss', async () => {
@@ -316,7 +316,7 @@ describe('ContentCache — security disciplines (§6.3, §8)', () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await removeScratchDir(tempDir);
   });
 
   it('never serializes fields outside ContentMetadata into the .json file', async () => {

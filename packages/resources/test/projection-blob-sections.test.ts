@@ -93,8 +93,8 @@ describe('blobSectionsFor', () => {
     expect(section?.bytes).toBe(9);
     // The two values `bytes` is NOT: 7 code units (`body.length`) and 6 code
     // points. `bytes` is the table's only size column and it means bytes.
-    expect(doc.length).toBe(7);
-    expect([...doc].length).toBe(6);
+    expect(doc).toHaveLength(7);
+    expect([...doc]).toHaveLength(6);
   });
 
   it('runs the last section to the end of the document', () => {

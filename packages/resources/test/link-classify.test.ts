@@ -22,7 +22,7 @@ describe('classifyLink (exported)', () => {
     expect(classifyLink('docs/foo.md#section')).toBe('local_file');
   });
   it('classifies unknown protocols as unknown', () => {
-    // eslint-disable-next-line sonarjs/code-eval -- test input; classifyLink must reject this href as 'unknown'
+     
     expect(classifyLink('javascript:void(0)')).toBe('unknown');
     expect(classifyLink('tel:+1234567890')).toBe('unknown');
   });

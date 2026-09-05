@@ -54,9 +54,13 @@ export interface EmbeddingProvider {
    * Required, deliberately. It was previously absent, and the only consumer —
    * the chunker in `@vibe-agent-toolkit/rag-lancedb` — filled the hole with a
    * hardcoded 8191 (OpenAI ada-002's limit) for every provider, including a
-   * local model that reads 256. The result was 84-86% of chunks truncated and
-   * 42-44% of every corpus never reaching the model, with the "exceeds model
-   * token limit" guard permanently unable to fire. An optional field with a
+   * local model that reads 256. The result was that chunks were cut at inference
+   * time with nothing said, and the "exceeds model token limit" guard was
+   * permanently unable to fire. (⛔ This passage used to quote "84-86% of chunks
+   * truncated, 42-44% of every corpus". Retired, not corrected: that was measured
+   * against raw `chunkByTokens` while the shipped path is `chunkResource`, which
+   * splits at headings first — see the retirement in
+   * `packages/rag-lancedb/src/chunking-config.ts`.) An optional field with a
    * fallback would reproduce exactly that bug for any provider that forgot it.
    */
   maxInputTokens: number;
@@ -102,6 +106,26 @@ chunk budget from it — so a number that is too high means chunks the model
 silently truncates before inference, with no error anywhere. That is not
 hypothetical: it is the measured bug this member exists to prevent.
 
+Naming where that silence came from matters, because it is not where a reader
+would look. The chunker packed 460 tokens into a chunk — a hardcoded 512-token
+target times a 0.9 padding factor — for an embedder whose 256-token window holds
+254 once `[CLS]` and `[SEP]` are charged. That ratio is what made truncation the
+normal case rather than an edge case. The silence itself was one layer further
+down: `BertTokenizer.tokenize` reserved those two positions and then simply
+`break`ed out of the token loop when the budget ran out — no throw, no warning,
+no truncation flag. It returned a well-formed `inputIds` array of exactly the
+legal length, so no amount of checking return values could have caught it.
+
+Both halves are closed now, and it is worth knowing which is which.
+`resolveChunkingConfig()` sizes the budget from `maxInputTokens` before anything
+is embedded: for the default local model the effective target is 215 tokens
+(256 x 0.84), not 460. And `tokenize` no longer leaves the loop early — it counts
+every content token and returns `droppedTokens`, which `OnnxEmbeddingProvider`
+books into `truncationStats`, passes to an `onTruncation` callback, or, failing
+both, warns about once on stderr. For any provider that reports neither, the
+original rule stands: compare your chunk budget against the model's real limit
+yourself, because nothing downstream will tell you.
+
 Two rules follow:
 
 1. **Look the number up for your specific model, per model, the way
@@ -118,7 +142,7 @@ Two rules follow:
 
 | Provider | Speed | Quality | Cost | API Key | Dimensions | `maxInputTokens` | Runtime | Install |
 |----------|-------|---------|------|---------|------------|------------------|---------|---------|
-| **ONNX** | Fast | Good | Free | No | 384 | 256 | WASM (`onnxruntime-web`) | Batteries-included — no extra install |
+| **ONNX** | Fast | Good | Free | No | 384 | 256 | WASM (`onnxruntime-web`) | Nothing to install beyond `@vibe-agent-toolkit/rag` |
 | **OpenAI** | Medium | Excellent | $$ | Yes | 1536/3072 | 8192 (8191 for ada-002) | Cloud API | `npm install openai` |
 
 Note how far apart those input limits are — 32x — and that dimensions tell you
@@ -134,12 +158,13 @@ the provider it is actually using.
 
 ### OnnxEmbeddingProvider
 
-**Local, batteries-included embeddings via `onnxruntime-web` (WASM).**
+**Local embeddings via `onnxruntime-web` (WASM), bundled with `@vibe-agent-toolkit/rag`.**
 
 ```typescript
 import { OnnxEmbeddingProvider } from '@vibe-agent-toolkit/rag';
 
-// No install step — onnxruntime-web ships as a regular dependency of @vibe-agent-toolkit/rag
+// No install step BEYOND @vibe-agent-toolkit/rag itself — onnxruntime-web is a regular
+// dependency of it. See "Installing Provider Dependencies": the RAG packages are opt-in.
 
 // Auto-downloads model on first run
 const provider = new OnnxEmbeddingProvider({
@@ -151,7 +176,9 @@ const provider = new OnnxEmbeddingProvider({
 const vector = await provider.embed('What is RAG?');
 console.log(vector.length); // 384
 
-// Batch (true batched ONNX inference - single model call)
+// Batch: one ONNX call over one padded batch tensor. That is NOT a per-chunk
+// speedup, and with the default int8 weights a chunk's vector depends on its
+// batch neighbours — see "The int8 vector is not a function of its own text".
 const vectors = await provider.embedBatch([
   'Chunk 1 text',
   'Chunk 2 text',
@@ -172,7 +199,7 @@ const vectors = await provider.embedBatch([
 ```typescript
 const provider = new OnnxEmbeddingProvider({
   modelPath: '/path/to/pre-downloaded/model',  // Skip auto-download
-  quantized: false,                              // Use full fp32 weights instead of int8
+  quantized: false,                              // fp32 weights instead of the int8 default (see below)
   cacheDir: '/custom/cache/dir',                  // Override cache location
   numThreads: 1,                                  // WASM threads (default: 1)
   // maxSequenceLength: 256,                      // ONLY to describe a DIFFERENT model
@@ -184,6 +211,58 @@ not a way to make chunks fit. Raising it to 512 for all-MiniLM-L6-v2 does not
 give the model a 512-token window — the model still reads 256 and drops the
 rest — it only stops the chunker from knowing that. Set it only when you point
 `modelPath` at a different model that genuinely has a different window.
+
+#### The int8 vector is not a function of its own text
+
+`quantized` defaults to `true`, and `quantized: false` is not a quality knob with
+a speed price attached. Measured 2026-08 against `Xenova/all-MiniLM-L6-v2` on one
+macOS machine, by probing one fixed string against different batch neighbours:
+
+| Build | Same string, different batch neighbours | Speed | Download |
+|---|---|---|---|
+| int8 — `quantized: true`, the default | cosine **0.9917-0.9928**, maxAbs up to **2.27e-2** | 141.8 ms/chunk | 22 MB |
+| fp32 — `quantized: false` | **bit-identical in every arm** | 122.2 ms/chunk | 86 MB |
+
+The int8 vector moved with *what the other rows in the batch contained* — their
+content, not their padded length. **Mechanism**: dynamic int8 quantization
+computes activation scales **per tensor**, and the tensor spans the whole batch,
+so one row's activations set the scale another row is quantized with. fp32 has no
+activation scales, so it has no coupling.
+
+Two results ride along, both cutting against the shipped defaults:
+
+- **fp32 is faster than the int8 build it is supposed to accelerate** — 122.2 vs
+  141.8 ms/chunk. The quantization buys the 22 MB vs 86 MB download, not speed.
+- **Batching is a pessimization.** `tokenizeBatch` pads every member to the
+  longest sequence in the batch, so a batch of 32 does *more* work than 32 batches
+  of one: 118.0 ms/chunk at batch size 1, against 141.8 batched.
+
+Both configurations were bit-stable across separate processes on one machine.
+**Cross-platform bit-stability is untested and therefore not claimed here.**
+
+**What this means for caching and invalidation.** Production embeds one resource
+at a time — `LanceDBRAGProvider` calls `embedBatch` once per resource, handing it
+that resource's whole chunk list. So a file's **ordered vector set** is
+deterministic, but **an individual chunk's vector is not a function of that
+chunk's text**. Two byte-identical chunks in different files get different
+vectors. Two rules follow:
+
+1. **The cache unit is `(content_key, chunk_policy, model_config) → the file's
+   ordered vector set`**, never a per-chunk vector keyed on that chunk's own
+   hash. A per-chunk cache would serve a vector computed under some other batch's
+   activation scales.
+2. **The stored model identity is insufficient to invalidate on.** `enrichChunks`
+   records only the bare model string `Xenova/all-MiniLM-L6-v2`, which
+   distinguishes neither quantized from fp32, nor sequence length, nor pooling
+   rule — and each of those changes every vector.
+
+If you need reproducible vectors — a golden test, a differential comparison across
+runs, a store you will append to over months — set `quantized: false` and accept
+the 86 MB download; it is also the faster of the two. The int8 default stays
+reasonable when the download matters and every vector in a store comes from one
+build: a same-string cosine of 0.9917 is a small perturbation. Its effect on
+retrieval quality has not been measured, so treat that as an argument rather than
+a result.
 
 ### OpenAIEmbeddingProvider
 
@@ -233,7 +312,24 @@ rather than over-claims. (The ada-002 off-by-one is the entire provenance of the
 
 ## Installing Provider Dependencies
 
-**`OnnxEmbeddingProvider` is batteries-included** — `onnxruntime-web` ships as a regular dependency of `@vibe-agent-toolkit/rag`, so local embeddings work with no extra install.
+### ⚠️ First: the RAG packages themselves are opt-in
+
+Installing `@vibe-agent-toolkit/cli` does **not** install the RAG lane. `@vibe-agent-toolkit/rag`
+and `@vibe-agent-toolkit/rag-lancedb` are declared as **optional peer dependencies**, which npm and
+pnpm do not auto-install:
+
+```bash
+npm install @vibe-agent-toolkit/rag-lancedb    # pulls @vibe-agent-toolkit/rag with it
+```
+
+They were `optionalDependencies` previously, where "optional" means *the install may fail without
+failing the build* — not *skipped* — so every adopter paid for the RAG stack whether or not they
+used it. Measured against the published tarballs: **389 MB installed, 92 MB with those skipped.**
+
+**`OnnxEmbeddingProvider` then needs nothing further** — `onnxruntime-web` is a regular dependency
+of `@vibe-agent-toolkit/rag`, so once that package is present local embeddings work with no extra
+install. "Batteries-included" below is scoped to that: it means no *second* install on top of the
+RAG package, not that `vat rag` runs from a bare CLI install.
 
 **OpenAI is an optional peer dependency** — install only if you want it:
 
@@ -530,7 +626,7 @@ const results = await ragProvider.query({
 ```
 Need embeddings?
 ├─ Local, free, no API key?
-│  └─ Use OnnxEmbeddingProvider (batteries-included, no extra install)
+│  └─ Use OnnxEmbeddingProvider (nothing to install beyond @vibe-agent-toolkit/rag)
 │
 ├─ Production cloud / Highest quality?
 │  ├─ Need best accuracy?

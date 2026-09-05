@@ -116,7 +116,7 @@ function queryTopResourceId(cli: CliTarget, query: string): string {
 
   expect(output.status).toBe('success');
   expect(output.stats.totalMatches).toBe(1);
-  expect(output.chunks.length).toBe(1);
+  expect(output.chunks).toHaveLength(1);
 
   const [topHit] = output.chunks;
   return topHit.resourceId;
@@ -205,9 +205,9 @@ describe('RAG CLI (Node.js dogfooding)', () => {
     // than fixed: `targetChunkSize` defaults to the provider's own
     // `maxInputTokens` (256 for the local all-MiniLM-L6-v2) and `paddingFactor`
     // to 0.84, giving 215. It used to be a hardcoded 512 × 0.9 = 460 handed to a
-    // model that reads 256 — which truncated 84-86% of chunks and dropped 42-44%
-    // of the corpus before inference. This count went 8 → 12 because chunks now
-    // fit the model.
+    // model that reads 256, so chunks were cut before inference. (The old
+    // "84-86% / 42-44%" figures are retired — see `src/chunking-config.ts`.)
+    // This count went 8 → 12 because chunks now fit the model.
     //
     // That second term is the entire point of `chunk-sizing.md`.
     // `chunkResource` is a HYBRID: it splits on heading boundaries first and

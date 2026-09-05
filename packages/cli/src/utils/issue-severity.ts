@@ -19,12 +19,24 @@
  * `resolveAssetReference` and `resolveSkillReference` in CLAUDE.md.
  */
 
-import { type IssueCode, resolveSeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import {
+  type IssueCode,
+  resolveSeverity,
+  type SeverityConfig,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/schema';
 
-/** A `validation.severity` map as it appears in config, or nothing. */
-export interface SeverityOverrides {
-  severity?: Record<string, string> | undefined;
-}
+/**
+ * A `validation.severity` map as it appears in config, or nothing.
+ *
+ * ⚠️ **Do not re-hand-roll this as `Record<string, string>`.** It was that, and
+ * the key space is now the registry enum PLUS `CUSTOM:<name>` — a `Partial`
+ * mapped type whose values are `SeverityLevel | undefined`. A
+ * `Record<string, string>` is not assignable to it and broke every consumer the
+ * moment the custom key space landed. `SeverityConfig` is the schema's own
+ * `Pick<ValidationConfig, 'severity'>`, so the two cannot drift again.
+ */
+export type SeverityOverrides = SeverityConfig;
 
 /**
  * Re-severity findings against a `validation.severity` map, dropping the codes

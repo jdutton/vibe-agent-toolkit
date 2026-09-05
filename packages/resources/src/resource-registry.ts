@@ -600,7 +600,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * text* (`resolveLocalHref`, composed as an editor writes it). `Map.get` is
    * exact string equality, so `café.md` misses `café.md` and the link to a file
    * that plainly exists gets no `resolvedId` — see {@link resolveLinks} for what
-   * a missing `resolvedId` then costs at packaging time. Ledger entry D7.
+   * a missing `resolvedId` then costs at packaging time. One of the three sites of the
+   * enumerated-vs-derived path class, collected in docs/architecture/resource-scanning-and-caching.md §3.6.
    *
    * ⚠️ Only the KEY is normalized. `resource.filePath` keeps the on-disk form,
    * because that is the string handed to the filesystem, and on Linux the
@@ -2073,6 +2074,50 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * of the target resource if it exists in the registry.
    *
    * Mutates the ResourceLink objects in place.
+   *
+   * ⚠️ **Unguarded, over a registry that may be shared by a whole batch.** This
+   * takes no zone or scope parameter: it overwrites `resolvedId` on every
+   * `local_file` link of every resource in the registry, including documents
+   * belonging to some *other* skill. `packageSkills` in
+   * `@vibe-agent-toolkit/agent-skills` (`skill-packager.ts`) builds exactly ONE
+   * registry for the batch and hands it to every `packageSkill` call, and
+   * `registerBundledAssets` calls `registry.addResource(assetPath)` and then
+   * this method across the whole registry — once per skill, N times per batch.
+   * So skill A bundling `foo.yaml` leaves skill B's link to that same file
+   * already stamped before skill B is packaged at all.
+   *
+   * The consequence that would matter is order-dependent **bundling**, not just
+   * stamping. `processLink` in `walk-link-graph.ts` reads
+   * `link.resolvedId ? getResourceById(...) : getResource(targetPath)`, so an
+   * asset skill A registered takes the registry-resource branch for skill B
+   * rather than the bundled-asset branch: a different collection
+   * (`bundledResourceMap` → `bundledResources` → `outputResources`, instead of
+   * `bundledAssetSet` → `bundledAssets`), a different `maxBundledDepth`
+   * contribution, and `recordUnfollowedLinks` running over it. Note the
+   * `resolvedId` stamp is not the only lever — the `getResource(targetPath)`
+   * fallback finds the shared registration on its own. The *shared registry* is
+   * the mechanism; this method is one of its two writers.
+   *
+   * Nothing downstream absorbs it, either: `outputResources` in
+   * `skill-packager.ts` is a **shallow** spread (`{...resource, filePath}`), so
+   * `links` is the same array object as the source registry's. There is no
+   * two-registry isolation — it is one mutable object graph with two path views.
+   *
+   * ⚠️ **Status, which is as load-bearing as the hazard: shape confirmed,
+   * consequence NOT reproduced.** An independent fact-check (2026-08-12, against
+   * the 2026-08-06 design review) produced **zero** reproductions. The
+   * global-mutation shape above is verified by reading the code; the
+   * order-dependent bundling consequence is *not* demonstrated by a running case
+   * and must not be called a shipped bug until one exists. Both halves are
+   * recorded on purpose: without the hazard the next reader deletes this caution
+   * as unmotivated, without the status they repeat a claim they cannot show.
+   *
+   * One leg of the original hazard has since closed. It cited "assets bypass
+   * depth limits, registry resources do not" — but `processRegistryResource`
+   * (`walk-link-graph.ts`, re-read 2026-09-05) now tests `isRoutable` BEFORE
+   * `maxDepth`, so a non-routable registry member — and a `.yaml` asset is
+   * exactly that — is treated as a leaf and bypasses the depth limit just as a
+   * plain asset does. The divergence in *which collection it lands in* remains.
    *
    * @example
    * ```typescript

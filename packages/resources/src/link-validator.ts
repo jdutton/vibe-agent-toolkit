@@ -693,7 +693,8 @@ export function escapeNonAscii(name: string): string {
  * ⚠️ **Why this is a warning and not `LINK_BROKEN_FILE`.** The file genuinely
  * exists and the link genuinely opens where it was written: macOS/APFS and
  * Windows reconcile NFC against NFD at the syscall level. Reporting it as broken
- * would reinstate the exact false positive that folding fixed (ledger entry D7 —
+ * would reinstate the exact false positive that folding fixed (the enumerated-vs-derived
+ * path class, collected in docs/architecture/resource-scanning-and-caching.md §3.6 —
  * an accented file that plainly exists reported as missing). What folding *also*
  * did was hide the converse: on Linux/ext4 the two forms are simply different
  * filenames, so the link 404s on CI and on most deploy targets while the author's
@@ -797,9 +798,26 @@ export function gitIgnoreSafetyIssue(
     return null;
   }
 
-  // Prefer the O(1) active-set lookup on the shared GitTracker (no spawn).
-  // isIgnoredByActiveSet falls back internally to isIgnored for paths outside
-  // the project root, so this is safe for the rare out-of-project case.
+  // Prefer the O(1) active-set lookup on the shared GitTracker (no spawn) — the
+  // in-repo path, and the only cheap one.
+  //
+  // ⚠️ **The out-of-root path is not cheap, and this comment used to claim it
+  // was** ("safe for the rare out-of-project case", unmeasured). Measured
+  // 2026-08 on the D9 parity fixture: an out-of-root path costs **185–427 ms**
+  // against **12–28 ms** for every in-repo path — an order of magnitude, per
+  // path. `isIgnoredByActiveSet` delegates to `isIgnored` outside the project
+  // root, and `isIgnored`'s exit-128 recovery walk spawns `git check-ignore`
+  // once per ancestor up to `/`. The cost lives on that function's own docstring
+  // in `@vibe-agent-toolkit/utils` (`git-tracker.ts`); do not restate the
+  // mechanism here, and do not assert cheapness — asserting it is how the next
+  // reader skips the measurement.
+  //
+  // Correct either way, and mostly off the expensive path AT THIS SITE: the
+  // `isWithinProjectFrom` guard above already returned for an out-of-project
+  // `resolvedTarget`. `sourceFilePath` carries no such guard, so the first call
+  // below can still take it. Any lane feeding out-of-root paths in bulk keeps
+  // the per-path spawn.
+  //
   // When no tracker is threaded in, fall back to isGitIgnored (one-off spawn).
   const sourceIsIgnored = options.gitTracker
     ? options.gitTracker.isIgnoredByActiveSet(sourceFilePath)
@@ -1040,7 +1058,8 @@ export function fragmentIndexEntry(filePath: string, fragments: Set<string> = ne
  * *enumerated* paths and queried by {@link checkAnchor} with a path *derived
  * from markdown link text*; on macOS those routinely differ in normalization
  * form for the same file, and an exact-string miss here is silent — a miss
- * answers `'skip'`, so the anchor is simply never checked. Ledger entry D7.
+ * answers `'skip'`, so the anchor is simply never checked. One of the three sites of the
+ * enumerated-vs-derived path class, collected in docs/architecture/resource-scanning-and-caching.md §3.6.
  * Only the key is normalized: the entry's matching policy still derives from the
  * raw path, and `isHtmlPath` is extension-based and normalization-agnostic.
  */

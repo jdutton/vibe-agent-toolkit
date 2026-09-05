@@ -72,14 +72,14 @@ describe('measureContent', () => {
     // asserted here as what the answer is NOT.
     const fenceBody = FENCED.slice(start, end);
     expect(end - start).toBe(FENCE_CODE_UNITS);
-    expect([...fenceBody].length).toBe(FENCE_CODE_POINTS);
+    expect([...fenceBody]).toHaveLength(FENCE_CODE_POINTS);
 
     expect(measureContent(FENCED, [fenceRange()]).codeBlockCodeUnits).toBe(FENCE_CODE_UNITS);
   });
 
   it('counts zero code units for a fence-free document, and its prose in code units', () => {
     const measures = measureContent(PROSE, []);
-    expect([...PROSE].length).toBe(PROSE_CODE_POINTS); // what a code-point regression would report
+    expect([...PROSE]).toHaveLength(PROSE_CODE_POINTS); // what a code-point regression would report
     expect(measures.codeBlockCodeUnits).toBe(0);
     expect(measures.proseCodeUnits).toBe(PROSE_CODE_UNITS);
   });
@@ -124,7 +124,7 @@ describe('measureContent', () => {
     // reads to `unicorn/no-useless-spread` as cloning an array, when it is a
     // string being spread into code points.
     const fenceBody = content.slice(start, end);
-    expect([...fenceBody].length).toBe(14); // code points, the value this is NOT
+    expect([...fenceBody]).toHaveLength(14); // code points, the value this is NOT
 
     const measures = measureContent(content, [[start, end]]);
     expect(measures.codeBlockCodeUnits).toBe(15); // code units — the value this test pins

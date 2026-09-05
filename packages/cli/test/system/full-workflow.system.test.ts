@@ -1,6 +1,3 @@
-/* eslint-disable sonarjs/slow-regex */
-// Test assertions legitimately use regex patterns
-
 import { createServer, type Server } from 'node:http';
 import { type AddressInfo } from 'node:net';
 
@@ -162,8 +159,9 @@ resources:
     });
 
     expect(result.status).toBe(0);
-    // eslint-disable-next-line security/detect-unsafe-regex -- Simple semver pattern for test validation
-    expect(result.stdout).toMatch(/\d+\.\d+\.\d+(-[a-z0-9.]+)?-dev \(\/test\/path\)/);
+    // Bounded digit runs and an explicit empty alternative (rather than `?`) so
+    // the pattern cannot backtrack super-linearly. `(?:X|)` is exactly `(?:X)?`.
+    expect(result.stdout).toMatch(/\d{1,9}\.\d{1,9}\.\d{1,9}(?:-[a-z0-9.]{1,40}|)-dev \(\/test\/path\)/);
   });
 
   it('should show comprehensive help with --help --verbose', () => {

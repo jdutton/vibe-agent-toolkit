@@ -42,6 +42,6 @@ export function spawnHardened(
   // Windows shell path (.cmd/.bat/.ps1). Token selection is shared with the sync
   // `safeExecSync` path so the two cannot drift — see `resolveShellCommandToken`.
   const shellLine = buildWindowsShellLine(resolveShellCommandToken(command, resolved), args);
-  // eslint-disable-next-line sonarjs/os-command -- Windows DEP0190 workaround: command is a PATH-resolved bare name or an explicit path; args are per-arg shell-quoted via windowsShellQuote()
+   
   return spawn(shellLine, { ...options, shell: true });
 }

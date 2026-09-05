@@ -91,18 +91,27 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { CollectionConfig } from '../schemas/project-config.js';
+import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { ContributorRegistry } from './contributor.js';
 import { AgenticConventionContributor } from './contributors/agentic-convention.js';
-import { DECLINE_IGNORED, FilesystemExtentContributor } from './contributors/filesystem-extent.js';
-import { crawlSourceFor, type CrawlSourceKind } from './crawl-source.js';
 import {
+  DECLINE_IGNORED,
+  DEFAULT_CONTENT_DEMAND,
+  FilesystemExtentContributor,
+} from './contributors/filesystem-extent.js';
+import { crawlSourceFor, type CrawlSource, type CrawlSourceKind } from './crawl-source.js';
+import {
+  type BlobPopulationReport,
   CONTENT_PARSING_SKIP,
+  type ContributorTiming,
   DISCARD_BLOB_POPULATION,
   populate,
   populationOracles,
   type PopulationCache,
 } from './merge.js';
+import type { Projection } from './projection.js';
+import type { ContentDemand } from './realizations.js';
 
 /**
  * A way to obtain the enumerated file population for a root, together with the
@@ -167,6 +176,77 @@ export interface ResourcePopulation {
   readonly paths: readonly string[];
   /** Which enumerator ran — the instance's own kind, not the env's request. */
   readonly extentSource: CrawlSourceKind;
+}
+
+/**
+ * Register the contributors every resources lane shares, and the parameters
+ * they run under.
+ *
+ * Extracted rather than copied because there are now two lanes over one
+ * question — {@link buildResourcePopulation}, which wants a file list and no
+ * bytes, and {@link buildResourceProjection}, which wants the rows a query runs
+ * against — and the two must register the SAME contributors under the SAME
+ * parameters or they stop describing one population. A second copy would drift,
+ * and the drift would surface as two commands disagreeing about which files
+ * exist rather than as a diff anyone reads.
+ *
+ * ## The two axes this seam keeps separate
+ *
+ * `contentDemand` varies per lane and is the argument; `DECLINE_IGNORED` does
+ * not vary and is fixed here. That asymmetry is the whole design:
+ *
+ * - **Membership is identical** across both lanes. Both admit
+ *   `tracked ∪ (untracked ∧ ¬ignored)` — see the header — so both decline the
+ *   gitignored half, and a query cannot answer about a file validation would
+ *   never have looked at.
+ * - **Keying is not.** One lane reads four columns and pays nothing for bytes;
+ *   the other needs `contentKey` or there are no blobs to query.
+ *
+ * 🪤 Those two axes reach the store by different routes, and mixing them up is
+ * how a query silently returns nothing: `DECLINE_IGNORED` is a parameter set and
+ * the reuse rule sees it, while `contentDemand` is a constructor argument the
+ * reuse rule sees only because the contributor declares it as its
+ * {@link ExtentContributor.registrationQuestion}. Without that declaration these
+ * two lanes are ONE question to the store, and the deriving one is served the
+ * other's content-less extent.
+ *
+ * @param source - The run's single enumerator, already selected by its caller
+ *   so the instance stays nameable
+ * @param contentDemand - What this lane needs keyed
+ * @returns The registry and the parameter sets to hand {@link populate}
+ */
+function resourceContributors(
+  source: CrawlSource,
+  contentDemand: ContentDemand,
+): { registry: ContributorRegistry; parameters: Record<string, JsonValue> } {
+  const registry = new ContributorRegistry();
+  const filesystem = new FilesystemExtentContributor(() => source, contentDemand);
+  registry.register(filesystem);
+
+  // AFTER the enumerator, and the order is load-bearing: `byStratum` returns
+  // registration order and the driver runs base contributors sequentially, each
+  // reading the base the previous ones grew. Registered first, this would
+  // classify an empty realization table and report a complete, empty extent —
+  // the same silent-success shape `ContributorRegistry.forKind` refuses.
+  //
+  // Safe under `CONTENT_PARSING_SKIP` specifically because it declares
+  // `readsBlobs: false`: the skip is checked against that, and a blob reader
+  // registered here would be a loud error rather than a degraded extent.
+  registry.register(new AgenticConventionContributor());
+
+  return {
+    registry,
+    // Both lanes drop every `gitignored` row, so they ask the extent not to
+    // produce them — see `DECLINE_IGNORED`. Measured on an 8,548-file adopter
+    // tree, the declined rows were 11,122 of 20,908 and cost 11,122 `lstat` plus
+    // ~12,362 `realpathSync.native` calls, every one of them for a row the
+    // caller then discarded.
+    //
+    // Keyed off the INSTANCE's own id rather than a second copy of the literal:
+    // a parameter set filed under an id no registered contributor answers to is
+    // silently ignored, so the two must not be able to drift.
+    parameters: { [filesystem.id]: DECLINE_IGNORED },
+  };
 }
 
 /**
@@ -249,7 +329,6 @@ export async function buildResourcePopulation(options: {
   // "the switch did nothing". Those must not look alike.
   const source = crawlSourceFor(root);
 
-  const registry = new ContributorRegistry();
   // `'deferred'`, and it is the same argument as `contentParsing: CONTENT_PARSING_SKIP` one layer
   // down — see the header. This lane reads four realization columns and
   // `contentKey` is not one of them, so every byte read to compute one was read
@@ -259,34 +338,15 @@ export async function buildResourcePopulation(options: {
   // than any of the three that say there was nothing to read.
   //
   // ⚠️ Stated per LANE, never flipped in the contributor: `vat inventory`
-  // registers the same class and DOES run the blob stage over what it keys.
-  const filesystem = new FilesystemExtentContributor(() => source, 'deferred');
-  registry.register(filesystem);
-
-  // AFTER the enumerator, and the order is load-bearing: `byStratum` returns
-  // registration order and the driver runs base contributors sequentially, each
-  // reading the base the previous ones grew. Registered first, this would
-  // classify an empty realization table and report a complete, empty extent —
-  // the same silent-success shape `ContributorRegistry.forKind` refuses.
-  //
-  // Safe in THIS lane specifically because it declares `readsBlobs: false`:
-  // `CONTENT_PARSING_SKIP` below is checked against that, and a blob reader
-  // registered here would be a loud error rather than a degraded extent.
-  registry.register(new AgenticConventionContributor());
+  // registers the same class and DOES run the blob stage over what it keys, and
+  // {@link buildResourceProjection} is a THIRD lane over this same registry that
+  // keys everything.
+  const { registry, parameters } = resourceContributors(source, 'deferred');
 
   const projection = await populate({
     root,
     registry,
-    // This lane drops every `gitignored` row in its own loop below, so it asks
-    // the extent not to produce them — see `DECLINE_IGNORED`. Measured on an
-    // 8,548-file adopter tree, the declined rows were 11,122 of 20,908 and cost
-    // 11,122 `lstat` plus ~12,362 `realpathSync.native` calls, every one of them
-    // for a row this function then discarded.
-    //
-    // Keyed off the INSTANCE's own id rather than a second copy of the literal:
-    // a parameter set filed under an id no registered contributor answers to is
-    // silently ignored, so the two must not be able to drift.
-    parameters: { [filesystem.id]: DECLINE_IGNORED },
+    parameters,
     // See the header: this lane consumes realizations only, and the stage is
     // ~90% of its cold cost. Stated rather than inferred, and refused if a blob
     // reader is ever registered above.
@@ -323,4 +383,85 @@ export async function buildResourcePopulation(options: {
     paths.push(safePath.resolve(root, row.path));
   }
   return { paths, extentSource: source.kind };
+}
+
+
+/**
+ * Populate the resources lane's tree and hand back the PROJECTION, content and
+ * all.
+ *
+ * The sibling of {@link buildResourcePopulation}, and the reason there are two:
+ * that one answers *which files are members* and deliberately reads no byte;
+ * this one answers *what is in them*, which is what a query about headings,
+ * links or sections needs. They register one registry through
+ * {@link resourceContributors}, so the population they describe is the same
+ * population — only the keying differs.
+ *
+ * ## Why this is not `buildResourcePopulation` with a flag
+ *
+ * A flag would put the ~90% blob cost one boolean away from every caller that
+ * only wants a file list, and the default would decide which of two very
+ * different commands is fast. Two named lanes make the cost a property of what
+ * you asked for.
+ *
+ * ## 🔑 There is no store gate on the answer
+ *
+ * A caller with no projection store still gets rows here — this lane populates
+ * either way, and a store, when there is one, only makes the second run cheap.
+ * That is the rule the query surface is built on: an answer must not depend on
+ * whether a cache happened to exist, or two callers hold differently-shaped
+ * views of one tree.
+ *
+ * @param options - The root, the run's oracles, and the blob-stage observer
+ * @param options.root - Absolute root to populate
+ * @param options.gitTracker - The ignore oracle, or omitted. Not cosmetic: this
+ *   lane passes `DECLINE_IGNORED`, so the tracker decides which members there
+ *   ARE. With none, nothing is ignored and the population is the whole
+ *   enumeration — correct rather than a hole, because outside a repository
+ *   there is no ignore oracle to consult
+ * @param options.cache - A projection store to answer this population from, or
+ *   omitted to re-derive every time
+ * @param options.collections - The project's `resources.collections`, so a
+ *   declared `mimeType` routes the file it matches to a parser
+ * @param options.onBlobPopulation - Receives what the blob stage derived and
+ *   what it REFUSED to derive. **Required**, and this is the lane where it earns
+ *   that: a corpus whose every document was declined as binary populates as
+ *   empty and would otherwise report success
+ * @param options.onContributorTiming - One record per contributor invocation, or
+ *   omitted. 🔑 This is also the **cache tell**: a store hit short-circuits
+ *   before the builder exists, so NO contributor runs and no record is filed. An
+ *   observer that saw nothing was served from the store; one that saw
+ *   `builtin:filesystem@1` re-derived. Nothing else distinguishes them — a
+ *   correct hit and a correct re-population produce identical rows, which is
+ *   exactly why "did the cache work" needs an observation rather than a diff
+ * @returns The populated projection
+ */
+export async function buildResourceProjection(options: {
+  root: string;
+  gitTracker?: GitTracker | undefined;
+  cache?: PopulationCache | undefined;
+  collections?: Readonly<Record<string, CollectionConfig>> | undefined;
+  onBlobPopulation: (report: BlobPopulationReport) => void;
+  onContributorTiming?: ((timing: ContributorTiming) => void) | undefined;
+}): Promise<Projection> {
+  const root = safePath.resolve(options.root);
+  // Same one-call-early selection as the population lane, for the same reason:
+  // `crawlSourceFor` falls back silently, so the instance that ran must stay
+  // nameable rather than re-derivable from the environment.
+  const source = crawlSourceFor(root);
+  // The DEFAULT demand, stated rather than defaulted, because it is the half of
+  // this lane that differs from its sibling and a reader comparing the two
+  // should find the difference at the call rather than in an argument list.
+  const { registry, parameters } = resourceContributors(source, DEFAULT_CONTENT_DEMAND);
+
+  return populate({
+    root,
+    registry,
+    parameters,
+    onBlobPopulation: options.onBlobPopulation,
+    ...(options.onContributorTiming === undefined
+      ? {}
+      : { onContributorTiming: options.onContributorTiming }),
+    ...populationOracles(options),
+  });
 }

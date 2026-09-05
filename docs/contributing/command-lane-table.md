@@ -4,10 +4,17 @@ Which of VAT's commands read the filesystem to build a resource population, and 
 entry point. This exists to replace the standing claim *"~70 commands, 5 examined"* with a bounded
 list, so the four-phase pipeline work knows exactly whose behaviour it must preserve.
 
-**Population: 67 commands** — 66 leaves plus `vat audit`, the only command group that is also
+**Population: 69 commands** — 68 leaves plus `vat audit`, the only command group that is also
 runnable in its own right (`vat audit [git-url-or-path]` alongside its `settings` subcommand).
 
-**25 enumerate. 42 do not.**
+**27 enumerate. 42 do not.**
+
+⚠️ It read *"67 commands — 66 leaves, 25 enumerate"* until 2026-09-01. Two leaves were added that
+day, both at `packages/cli/src/commands/resources/index.ts › createResourcesCommand()`:
+`vat resources query` and `vat resources check`. Both enumerate, and both go through
+`buildResourceProjection()` — the first commands on the projection lane that do **not** run under
+`contentDemand: 'deferred'` / `CONTENT_PARSING_SKIP`, because a question about headings, links or
+sections needs the blob rows the other resources lanes deliberately never pay for.
 
 ⚠️ It read *"66 commands — 65 leaves, 24 enumerate"* until 2026-08-23. The leaf added is
 `vat claude budget`, registered at `packages/cli/src/commands/claude/index.ts ›
@@ -104,6 +111,8 @@ process" — a cross-process cache is the only kind that can help them.
 | `vat skills validate` | `crawl` + `registry-md-html` | `skills/validate-command.ts` |
 | `vat skill review` | `crawl` + `registry-md-html` | `skill/review.ts` |
 | `vat corpus scan` | `crawl` + `registry-md-html` | `corpus/index.ts` (inline; see limits) |
+| `vat resources check` | `crawl`, *in a spawned child* | `resources/check.ts` — one population, same lane as `resources query` below; both reach it through `packages/cli/src/utils/projection-query.ts › withQueriedProjection()`. ⚠️ Since `--budget` landed, the crawl happens in a CHILD process by default: the parent spawns `dist/bin.js resources check … --cost-log <path>` and enumerates nothing itself, so it can kill a run that stops making progress (a check's SQL is adopter-authored and a runaway statement cannot be interrupted in process). `--budget 0` keeps everything in one process. This makes it the fourth spawning command, but unlike the three orchestrators above it spawns ITSELF, exactly once, and its lane is unchanged |
+| `vat resources query` | `crawl` | `resources/query.ts` — one population, via `packages/resources/src/projection/resource-population.ts › buildResourceProjection()`. The same registry and the same `DECLINE_IGNORED` parameter set as `resources scan`/`validate`, with content parsing ON. ⚠️ Its ROW SET is a strict superset of what `scan`/`validate` see: those post-filter directories, non-existent rows and gitignored rows out of the population, so `SELECT COUNT(*) FROM resource_realizations` counts directories a validate run never looks at |
 | `vat resources scan` | `crawl` | `resources/scan.ts` |
 | `vat resources validate` | `crawl` ×1 | `resources/validate.ts` — one crawl, for the resource population, via `packages/cli/src/utils/resource-loader.ts › loadResourcesWithConfig()`. Read `crawl` ×3 until 2026-08-22 and `crawl` ×2 until 2026-08-23, when the second population — built for the then-default-on `ALWAYS_LOADED_CONTEXT_BUDGET` check — moved out to `vat claude budget`. This command has no knowledge of the context budget at all now: no check, no flag in either direction |
 | `vat skills list` | `crawl` | `skills/list.ts` |

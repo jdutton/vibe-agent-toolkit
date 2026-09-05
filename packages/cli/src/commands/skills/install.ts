@@ -237,7 +237,7 @@ function emitYamlSummary(args: {
 async function extractZipToTemp(zipPath: string): Promise<string> {
   const tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-skills-install-zip-'));
   const zip = new AdmZip(zipPath);
-  // eslint-disable-next-line sonarjs/no-unsafe-unzip -- extracted to a dedicated temp dir, not user-visible path
+   
   zip.extractAllTo(tempDir, /* overwrite */ true);
   return tempDir;
 }

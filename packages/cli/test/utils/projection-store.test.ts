@@ -118,7 +118,25 @@ const backend = vi.hoisted(() => {
     };
   }
 
-  return { stores, makeStore, openCalls: { count: 0 } };
+  // `options` records the ARGUMENT, not just the count. Without it every
+  // assertion in this file passes for a build that dropped the `directory`
+  // argument entirely — and such a build silently writes the developer's own
+  // live cache, which is exactly what `VAT_PROJECTION_STORE_DIR` exists to
+  // prevent. The count alone cannot see that.
+  const openCalls = { count: 0, options: [] as unknown[] };
+
+  // The module namespace itself, so the version-floor test can hand the SAME
+  // double back to `vi.doMock` after temporarily replacing it with one that
+  // throws. A second, separately-written copy would drift from this one.
+  const moduleExports = (): Record<string, unknown> => ({
+    openSqliteProjectionStore: (options: unknown) => {
+      openCalls.count += 1;
+      openCalls.options.push(options);
+      return makeStore().store;
+    },
+  });
+
+  return { stores, makeStore, moduleExports, openCalls };
 });
 
 /**
@@ -131,12 +149,7 @@ const backend = vi.hoisted(() => {
  * once the link DOES land: this file should keep testing the wiring, not the
  * engine, and should not start or stop passing because of an install decision.
  */
-vi.mock('@vibe-agent-toolkit/projection-sqlite', () => ({
-  openSqliteProjectionStore: () => {
-    backend.openCalls.count += 1;
-    return backend.makeStore().store;
-  },
-}));
+vi.mock('@vibe-agent-toolkit/projection-sqlite', () => backend.moduleExports());
 
 /**
  * `gitTreeSnapshot` is left REAL and merely counted.
@@ -162,7 +175,9 @@ vi.mock('@vibe-agent-toolkit/utils/git', async (importOriginal) => {
 
 const {
   CACHE_ENV,
+  nodeSqliteFloorFailure,
   openPopulationCache,
+  PROJECTION_STORE_DIR_ENV,
   PROJECTION_STORE_ENV,
   PROJECTION_STORE_SQLITE,
   projectionStoreSelected,
@@ -235,6 +250,7 @@ afterAll(() => {
 let restoreGitEnv: () => void;
 let savedSelector: string | undefined;
 let savedCacheSwitch: string | undefined;
+let savedStoreDir: string | undefined;
 
 beforeEach(() => {
   // 🪤 A git child inherits `GIT_DIR` / `GIT_INDEX_FILE` from whatever spawned
@@ -244,8 +260,10 @@ beforeEach(() => {
   restoreGitEnv = detachGitEnv();
   savedSelector = process.env[PROJECTION_STORE_ENV];
   savedCacheSwitch = process.env[CACHE_ENV];
+  savedStoreDir = process.env[PROJECTION_STORE_DIR_ENV];
   backend.stores.length = 0;
   backend.openCalls.count = 0;
+  backend.openCalls.options.length = 0;
   git.calls.count = 0;
 });
 
@@ -260,6 +278,11 @@ afterEach(() => {
   // every later test in this worker.
   delete process.env[CACHE_ENV];
   if (savedCacheSwitch !== undefined) process.env[CACHE_ENV] = savedCacheSwitch;
+  // Same reason again, and this one is the sharpest: a leaked
+  // `VAT_PROJECTION_STORE_DIR` pointing at a deleted temp directory would make
+  // every later store open somewhere no assertion looks.
+  delete process.env[PROJECTION_STORE_DIR_ENV];
+  if (savedStoreDir !== undefined) process.env[PROJECTION_STORE_DIR_ENV] = savedStoreDir;
   restoreGitEnv();
   vi.restoreAllMocks();
 });
@@ -430,6 +453,110 @@ describe('openPopulationCache', () => {
     // read after that would miss while the cache looked perfectly healthy.
     expect(first?.cache.treeHash).toBe(second?.cache.treeHash);
     expect(first?.cache.treeHash).toMatch(/^[0-9a-f]{40}$/);
+  });
+});
+
+/**
+ * Open one store and hand back the OPTIONS the backend was constructed with.
+ *
+ * @param value - What `VAT_PROJECTION_STORE_DIR` holds; `undefined` unsets it
+ * @returns The single argument `openSqliteProjectionStore` received
+ */
+async function openedWithStoreDir(value: string | undefined): Promise<unknown> {
+  process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+  if (value === undefined) delete process.env[PROJECTION_STORE_DIR_ENV];
+  else process.env[PROJECTION_STORE_DIR_ENV] = value;
+
+  const opened = await openPopulationCache({ root: repoRoot });
+  await opened?.close();
+
+  // Asserted before the caller inspects the argument: a run that opened no
+  // store at all would otherwise hand back `undefined` and compare it happily
+  // against nothing.
+  expect(backend.openCalls.count).toBe(1);
+  return backend.openCalls.options[0];
+}
+
+describe('the directory the backend is opened with', () => {
+  it('passes the directory VAT_PROJECTION_STORE_DIR names', async () => {
+    // 🪤 The ONLY assertion in this file that can see the variable being read.
+    // Every other test here counts opens and inspects stores, and a build that
+    // dropped the `directory` argument entirely would pass all of them — while
+    // writing the shared default database, which on this machine holds other
+    // repositories' link text, heading text and frontmatter. That is the failure
+    // the variable exists to prevent, so it is asserted rather than assumed.
+    const directory = safePath.join(createTempDir(), 'named-store');
+
+    expect(await openedWithStoreDir(directory)).toStrictEqual({ directory });
+  });
+
+  it.each([
+    ['unset', undefined],
+    ['exported as the empty string', ''],
+  ])('lets the backend default the directory when the variable is %s', async (_description, value) => {
+    // `toStrictEqual`, not `toEqual`: an explicitly-passed
+    // `{ directory: undefined }` is a DIFFERENT argument from `{}` under
+    // `exactOptionalPropertyTypes`, and only the second lets the backend apply
+    // `defaultStoreDirectory()`. `toEqual` treats the two as equal and would
+    // make the module's spread-rather-than-pass note untested.
+    //
+    // The empty-string arm is not a curiosity: `''` would resolve to the process
+    // cwd, so treating it as "unset" is a decision, and an unexported variable
+    // and one exported as `''` are the same intent.
+    expect(await openedWithStoreDir(value)).toStrictEqual({});
+  });
+});
+
+/**
+ * The `node:sqlite` version floor, tested at the DIAGNOSIS rather than through
+ * the dynamic import.
+ *
+ * 🪤 **A mocked `import()` cannot deliver this error.** Vitest replaces whatever
+ * a module factory throws with its own `[vitest] There was an error when mocking
+ * a module` error, so the `code` the branch reads never survives the seam —
+ * measured, both with a throwing `vi.mock` factory (which `vi.resetModules()`
+ * does not even re-run) and with `vi.doMock`. That is why the mapping is an
+ * exported pure function: the alternative is a test that mocks the import,
+ * exercises the OTHER branch, and looks like coverage.
+ */
+describe('nodeSqliteFloorFailure', () => {
+  it('names the version floor and the fix when Node lacks the builtin', () => {
+    // Node 22.0–22.12 throws `ERR_UNKNOWN_BUILTIN_MODULE` for
+    // `import('node:sqlite')`. Bare, the user sees `No such built-in module:
+    // node:sqlite`, which names neither the floor nor the repair.
+    const failure = nodeSqliteFloorFailure(
+      Object.assign(new Error('No such built-in module: node:sqlite'), {
+        code: 'ERR_UNKNOWN_BUILTIN_MODULE',
+      }),
+    );
+
+    expect(failure?.message).toContain('22.13.0');
+    expect(failure?.message).toContain(process.version);
+    // And it forecloses the wrong repair explicitly: "install this package"
+    // sends someone round a loop that cannot terminate, because the module is
+    // built into Node rather than published to npm.
+    expect(failure?.message).toContain('built into Node');
+  });
+
+  it.each([
+    ['the package really is absent', 'ERR_MODULE_NOT_FOUND'],
+    ['the failure carries some other code', 'EACCES'],
+  ])('declines to diagnose a floor when %s', (_description, code) => {
+    // Returning `undefined` is what lets `loadBackend` fall through to the
+    // install repair. Claiming the floor here would tell a user to upgrade Node
+    // when the fix is to install a package — the same terminating-loop failure
+    // in the other direction.
+    expect(nodeSqliteFloorFailure(Object.assign(new Error('nope'), { code }))).toBeUndefined();
+  });
+
+  it.each([
+    ['undefined', undefined],
+    ['null', null],
+    ['a string', 'ERR_UNKNOWN_BUILTIN_MODULE'],
+  ])('declines to diagnose %s, which carries no code at all', (_description, thrown) => {
+    // `throw` accepts any value, and the string arm is the sharp one: it CONTAINS
+    // the code, so a substring test on the thrown value would claim the floor.
+    expect(nodeSqliteFloorFailure(thrown)).toBeUndefined();
   });
 });
 

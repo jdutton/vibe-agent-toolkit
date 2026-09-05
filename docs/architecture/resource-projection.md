@@ -36,11 +36,11 @@ correctness testing, `packages/cli/src/pipeline-oracles/types.ts` (`ParseFactRow
 `ConditionFact`), exists as a test oracle, not as a queryable projection.
 
 **The table sets in §2 and §3 below are the proposed (🔷), unbuilt blob-keyed schema** — carried
-over from the design spec's §6 as the target shape for stage 3 ("projection publication and export")
-to build toward, not a description of what exists in code today. (The prose *around* those tables
-still correctly describes shipped reality where it says so — e.g. `checksum`, collections, and
-`routable` below are each partly or fully real; only the tables themselves, and any column
-introduced by them, are proposed.) The tables are keyed on content, not path: the same bytes
+over from the (retired, uncommitted) design spec as the target shape for stage 3 ("projection
+publication and export") to build toward, not a description of what exists in code today. (The prose
+*around* those tables still correctly describes shipped reality where it says so — e.g. `checksum`,
+collections, and `routable` below are each partly or fully real; only the tables themselves, and any
+column introduced by them, are proposed.) The tables are keyed on content, not path: the same bytes
 anywhere in the corpus — same file at two paths, same file at two points in history, same file
 across two adopters — would produce one row, computed once, reused everywhere.
 
@@ -69,19 +69,54 @@ boundaries) that does not exist anywhere in the codebase yet — a separate, lar
 
 **The proposed schema would store frontmatter as a JSON column, not DuckDB's `VARIANT`.** (Measured
 against `@duckdb/duckdb-wasm` v1.5.4, 2026-08 — a claim about another vendor's product, worth
-re-checking on a future DuckDB upgrade rather than trusted indefinitely.) VARIANT's accessor surface
-is narrower than its storage and carries sharp edges: extraction requires a constant key (a key census
-can't be expressed at all), `variant_keys()` doesn't exist, `len()` throws on one row shape and
-silently returns `NULL` on another, a raw cast is a struct literal rather than JSON, and key order
-doesn't survive a Parquet round-trip. At VAT's corpus scale, `json_extract` is fast enough and
-portable, so JSON wins on all of those without giving up query capability. (Note this is a deliberate
-divergence from the shipped parse cache's YAML-source choice above — a projection query surface and a
-cache round-trip are different decisions with different constraints; see §5.)
+re-checking on a future DuckDB upgrade rather than trusted indefinitely. ⚠️ It was measured on the
+**wasm** build, and a later correction established that wasm was the wrong build to spike at all —
+see *Why not a columnar engine* at the end of this section. VARIANT's accessor surface is a SQL-level
+property and so is unlikely to differ on `@duckdb/node-api`, but it has not been re-measured there.)
+VARIANT's accessor surface is narrower than its storage and carries sharp edges: extraction requires
+a constant key (a key census can't be expressed at all), `variant_keys()` doesn't exist, `len()`
+throws on one row shape and silently returns `NULL` on another, a raw cast is a struct literal
+rather than JSON, and key order doesn't survive a Parquet round-trip. At VAT's corpus scale,
+`json_extract` is fast enough and portable, so JSON wins on all of those without giving up query
+capability. (Note this is a deliberate divergence from the shipped parse cache's YAML-source choice
+above — a projection query surface and a cache round-trip are different decisions with different
+constraints; see §5.)
 
 **The proposed `blob_conditions` table would carry an escape hatch:** when there is no enum yet,
 `code = 'PARSE_ODDITY'` with free text, promoted to a real code once the base rate justifies it. Today,
 `ParseFacts.parseErrors`/`frontmatterError`/`unresolvedReferences` carry the equivalent information as
 fields on the shipped cache entry rather than as a separate row shape.
+
+### Why not a columnar engine — and why the published half of that spike is the wrong build
+
+The projection ships on SQLite (`packages/projection-sqlite`, opt-in). DuckDB was spiked in 2026-08
+and not adopted. The spike is recorded here for one reason: it ran against `@duckdb/duckdb-wasm`
+v1.5.4, and a **2026-08-17 correction established that wasm was the wrong build to spike**. Without
+both halves written down, the next person to revisit a columnar engine re-runs a spike whose answer
+is already known, from a starting point that has already been refuted.
+
+Measured on `@duckdb/duckdb-wasm` v1.5.4 (2026-08):
+
+- cold start **1,393 ms on node against 4,635 ms under bun**;
+- **149 MB installed** for **44.7 MiB actually needed**;
+- a **3.9 MiB extension sidecar** — `json` *and* `parquet` are both network downloads — which has to
+  be warmed at build time and seeded again at runtime;
+- ⚠️ **a cache miss on `LOAD parquet` hangs rather than erroring.** It is synchronous on the blocking
+  build, so no JS timer can interrupt it: any path that could miss needs a killable child process and
+  an external `SIGKILL`, and **there is no Windows answer** to that;
+- fixed-size `FLOAT[N]` **does not survive a Parquet round-trip** — it returns as `FLOAT[]` and
+  `array_cosine_similarity` stops binding.
+
+⛔ **The correction (2026-08-17): every one of those caveats is wasm-only.** `@duckdb/node-api`
+statically links parquet, so there are zero `LOAD`/`INSTALL` statements on that path — and the hang,
+the sidecar, the `SIGKILL` requirement and the bun-vs-node cold-start gap all evaporate with them.
+
+⚠️ **Exactly one caveat survives, and it is an open question rather than a refutation: 108 MB for one
+platform binding.** That is not the same decision in both directions — 108 MB in a private
+application is a cost the owner absorbs, while 108 MB in a *published* toolkit is a cost every
+adopter absorbs on install, once per platform. The obvious mitigation, `optionalDependencies`
+gating, is a pattern this repo has separately found unreliable: optional dependencies are installed
+by default rather than skipped, so the gate does not hold and the bytes reach adopters anyway.
 
 ## 3. Path-dependent tables (🔷 proposed) — rebuilt by joining, cheap, disposable
 
@@ -159,6 +194,17 @@ than against taste** (`packages/resources/src/projection/agentic-tags.ts` carrie
   exactly the file whose cost is worst — the same direction of error the `loading` rank rule exists
   to prevent. The rule is `paths:` present → `selected` (excluded), absent → `always` (charged).
 
+  ⭐ **The magnitude, so nobody "simplifies" the rule back to a class-wide answer.** The same
+  refusal to read frontmatter fails in the other direction too, and that direction has a measured
+  size: charging every `.claude/rules/*` file as always-loaded **overstated one measured corpus by
+  29,715 tokens — a 3× error on the very metric this check exists to report** (2026-08, the only
+  corpus then carrying rules files at scale, where **all 53 of them carried `paths:`**). That
+  53/53 is a base rate and not a rule — which is exactly why `loading` must be computed per file
+  from frontmatter rather than assumed for the class. Neither wholesale answer is close: one
+  under-reports the worst file, the other triples the number. Without the figure a reader cannot
+  tell whether this correction was cosmetic or dominant, and a future edit that flattens it back to
+  "rules files are `always`" has nothing to argue against.
+
   ⭐ **This passage shipped BEFORE the code obeyed it, and that gap was a real defect.**
   `alwaysLoadedBudget`'s `qualifies()` excluded every rule admission, so `vat claude budget` and
   `vat claude context` disagreed about the same directory — the query lane classed an unscoped root
@@ -202,6 +248,43 @@ column — a file can be a traversal node in one lane and a leaf-only member in 
 `resource_tags` or a column on `resource_zones`. Today the same decision is enforced directly in the
 walker rather than as a queryable row.
 
+⭐ **Why this is policy and not taste.** Stated bare, "HTML is a leaf" reads as a preference; it is
+not. Anthropic's skill-authoring guidance routes exclusively through markdown, and it does so by
+silence rather than by prohibition: in the cached copy
+([`docs/external/anthropic-skill-authoring-best-practices.md`](../external/anthropic-skill-authoring-best-practices.md),
+fetched 2026-04-18, live page re-diffed 2026-07-30 with no substantive drift) **every reference
+example is `.md`** — `reference/finance.md`, `reference/sales.md`, `advanced.md`, `FORMS.md`,
+`form_validation_rules.md` — **every bundled script is `.py`**, and **HTML appears zero times**
+(counted over that cache 2026-09-05). VAT's own two skill-facing docs say the same nothing:
+`vat-skill-authoring.md` and `vat-skill-review.md` mention HTML zero times each (2026-09-05). So no
+guidance on either side — vendor or ours — describes an HTML file as a step on a reference path,
+which is precisely the question `routable` asks. What neither side licenses is *dropping* the file:
+it still ships, and a rewriter must still be able to reach its links. That is the membership half.
+
+<!-- @vendor-claim reviewed=2026-07-30 verify=Re-fetch https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/best-practices, diff it against docs/external/anthropic-skill-authoring-best-practices.md, and re-run the count above — are all reference examples still `.md`, all scripts still `.py`, and HTML still absent? -->
+
+⭐ **The consequence the design deliberately makes loud, which is the real argument for requiring
+membership.** `SKILL.md → guide.html → diagram.svg` bundles `guide.html` and **drops
+`diagram.svg`**. The walk treats the HTML as a leaf, so the installed skill carries a page whose
+`<img src>` points at a file that is not there: a dead image, in the artifact the user gets.
+Membership does not prevent that drop — the traversal rule makes it necessary. What membership buys
+is that VAT can *see* it. Because the HTML member is parsed, its links exist as rows, so every
+local-file link out of a non-routable member is recorded as a `non-routable-source` exclusion and
+surfaced as `LINK_FROM_NON_ROUTABLE_FILE` instead of vanishing (`walk-link-graph.ts ›
+recordUnfollowedLinks`; `isRoutable` is `parserKindForPath(…) === 'markdown'`, so a format gains a
+routability answer in the same edit that gives it a parser — both verified 2026-09-05).
+
+⭐ **Generalize past HTML — that is the reusable half; HTML is only the worked example.** The
+membership requirement exists so that a drop the traversal rule makes *necessary* is still
+**reported**. Strip membership and the identical skill ships identically broken, but nothing in VAT
+can say so: the leaf's links were never read, so there is no row to exclude and no code to raise.
+**Silent drop → reported drop is the whole argument.** Any future non-routable format inherits it,
+and any proposal to keep a format out of the projection entirely — "we never follow it anyway" — is
+a proposal to go back to the silent version. ⚠️ The mirror-image move is equally a membership
+decision, not a tidy-up: `html-link` is deliberately absent from `follow`'s default and from
+`claude-context-discovery.ts`'s `FOLLOWED_FORMS`, and adding it would make `vat inventory` report
+members `vat build` does not bundle (`packages/resources/src/schemas/projection-blobs.ts:108-132`).
+
 ## 4. Tree-shape caching — a different layer from the object cache
 
 [Resource Scanning and Object Caching §5](./resource-scanning-and-caching.md#5-whats-shared-whats-not)
@@ -224,11 +307,17 @@ cache, not a replacement for either layer.
 ## 5. Cache properties (parse cache, ✅ shipped stage 2)
 
 - **Disposable.** No durability promise, no generations, no compaction, no CI-restore contract, no
-  on-disk format obligation to adopters. Recovery is "rescan." OS purge *is* the eviction policy.
+  on-disk format obligation to adopters. Recovery is "rescan." ⚠️ **OS purge is the eviction policy
+  on macOS only** — `/var/folders` is atime-purged there, but Linux `/tmp` persists to reboot, so on
+  CI runners and on most adopter servers nothing evicts anything and the cache grows without bound.
+  See *Eviction and cache lifecycle* below for the 🔷 proposed design and the five defects a review
+  found in the obvious version of it.
 - **Location:** `normalizedTmpdir()/.vat-cache/<namespace>/parse/`. Uses `normalizedTmpdir()` from
   `packages/utils/src/path-utils.ts`, never raw `tmpdir()` — on Windows CI the latter returns 8.3
-  short names. `$XDG_CACHE_HOME` is deliberately not used: `~/.cache` on Linux is not OS-purged, so
-  using it would leave the cache with no eviction mechanism at all.
+  short names. `$XDG_CACHE_HOME` is deliberately not used: `~/.cache` on Linux is not OS-purged
+  either, so moving there would surrender the one platform that purges for free without gaining
+  eviction on any platform that does not — while promoting a cache with no lifecycle into a
+  long-lived per-user directory. That is the same platform asymmetry the bullet above states.
 - **Confidentiality is mode `0700`**, and that's explicitly POSIX-only — `chmod` on Windows only
   toggles the read-only bit, so this mitigation does not carry to that platform.
 - **Threat model, narrowed by what actually shipped.** The parse cache is *not* a full plaintext copy
@@ -289,7 +378,88 @@ cache, not a replacement for either layer.
   (The proposed `blob_conditions` table in §2 would formalize this as its
   own row shape; today it's fields on the same cache entry.)
 
-## 6. Status
+### Eviction and cache lifecycle (🔷 proposed)
+
+**Nothing evicts the parse cache, and on Linux nothing ever will.** The bullets above describe a
+cache with no lifecycle at all: entries are written and never removed, and the only de-facto GC is
+the platform accident named in the *Disposable* bullet. That makes this strand **independently
+justified** — it is worth building whether or not any content-identity work ever follows it, because
+it is the only thing standing between an unbounded `/tmp` directory and every long-lived CI runner
+or adopter server. `vat cache clear` is the whole of the current answer, and it is a manual one.
+
+The shape under consideration is mark-and-sweep: a **manifest** of the content keys a tree still
+roots, plus a periodic sweep that drops entries no manifest reaches. A design of exactly that shape
+was reviewed on 2026-08-17 and **five defects were found**. They are recorded here because every one
+of them will be re-hit by whoever builds this, and four of the five are silent when they go wrong.
+
+1. **Fail-soft is inverted for a root set.** Everywhere else in this cache a corrupt read costs one
+   reparse; a corrupt *root set* deletes everyone else's entries. A run killed mid-write leaves a
+   truncated manifest that parses cleanly as a **smaller** root set, which is a valid-looking
+   instruction to delete. Required: the manifest is written by atomic temp+`rename`, the same
+   discipline the entries already use; an unparseable or unexpectedly-absent manifest **aborts the
+   sweep** rather than reading as empty; and the manifest is written **before** the entries it roots.
+2. **Nothing roots the SHA-256 keyspace.** "Non-git corpora need no root tracking" and "drop blobs
+   unreachable from any root" are individually reasonable and jointly delete every SHA-256 entry on
+   the first sweep. That keyspace needs an explicit exemption — separate directories per keyspace,
+   so the sweep cannot reach it by accident — and then a retention policy of its own, because
+   `~/.claude/plugins/` churns on every plugin update and grows forever inside the *live* namespace.
+3. **Manifest identity is the worktree path, never the tree hash.** Tree-hash keying mints a fresh
+   manifest per edit — on the order of **200 a day at ~55 KB each** on an active checkout — and
+   makes the effective root set the union of every intermediate tree state, so nothing is ever
+   unreachable and the sweep never collects. The tree hash is only an "unchanged ⇒ skip the rewrite"
+   validator, and it is unsound even for that alone: root sets are **command-scoped**
+   (`vat resources validate` on a subtree parses a different blob set than `vat build` does), so
+   a manifest update is **union, never replace**.
+4. **Namespace-level removal is the write-time TTL that was already rejected.** Dropping a whole
+   namespace directory on age has only one signal available — mtime — and a namespace serving 100%
+   warm hits writes nothing. It therefore looks stalest exactly when it is most valuable.
+5. **No name grammar and no lock.** "Delete what is not in the live set" would eat `auth-<user>/`
+   and `external-links.json` — tenants that deliberately live outside the namespace (see the
+   namespacing bullet above) and whose contents are **not** freely re-derivable, since link auth
+   needs credentials. That is data loss, not a cache miss, so the sweep needs a name grammar stating
+   what it is permitted to consider in the first place. And the `last-swept` marker has to be
+   *acquired* — `O_EXCL` or rename — with stale-lock recovery, because a CI matrix, or this repo's
+   own three test suites, would otherwise sweep concurrently; `cache/clear.ts` already documents
+   that shape producing `ENOTEMPTY`. Neither the manifest nor the marker gets `isSafeShardDir`'s
+   ownership/mode hardening as the design stood, so in a world-writable `/tmp` a local user could
+   plant a marker and **silently disable sweeping** for everyone on the box.
+
+## 6. Deliberately not built: history and temporal replay
+
+Replaying the projection across a repository's history — "what did this corpus look like at commit
+X" — is **not built and not planned.** It is recorded here rather than dropped for two reasons: two
+live invariants keep the door open and are breakable by someone who does not know why they exist,
+and one finding dissolves most of the demand for the door.
+
+**The two invariants, both live today:**
+
+- **`parseMarkdownContent(content)` must stay content-only.** It takes bytes, not a path, so a blob
+  that is not on disk — one read straight out of `git cat-file` — is parseable. Adding a path
+  parameter or an `fs` read to that signature would close history permanently, silently, and for a
+  reason having nothing to do with history.
+- **Nothing path-, origin- or commit-derived may ever enter the cache key.** The content key is
+  `<parserKind>.<sha256>` over bytes (§2), and this is one of the reasons: the same blob parsed at
+  HEAD and parsed at a commit from last year must land on the same entry, or any historical pass
+  re-parses the entire corpus from cold.
+
+**Validation stays HEAD-only by design**, and that is not a gap waiting to be filled. Checking a
+historical document against today's config is an anachronism — it reports findings that were not
+findings when the document was written, under rules that did not exist.
+
+🎯 **The finding that dissolves the project.** The highest-value temporal question anyone actually
+asked for is **provenance staleness** — a document citing sources that have since moved on. That
+needs *"last commit touching X versus last commit touching Y"* for a few hundred paths. It does not
+need a replay of anything. It is a product feature reachable one `git log -1` at a time; replay is a
+research project, and the two were only ever conflated because both contain the word "history."
+
+The price of the replay road is four problems inherited from the prototype, recorded so the price is
+visible before anyone pays it: `commits.seq` used as a **replay-range ordinal**, which silently
+changes meaning the moment commits are appended; **per-commit edge snapshots** — 1.9 M rows for 400
+commits — where a change-log is the shape that data wants; **`--first-parent` only**, so everything
+merged in is invisible; and **`(ref, commit)` needed as the identity** for any multi-branch corpus,
+which a bare commit key cannot express.
+
+## 7. Status
 
 - ✅ **Shipped** (stages 1b/2): the pipeline restructure and the object-level, content-addressed parse
   cache described in §5.
@@ -369,4 +539,12 @@ cache, not a replacement for either layer.
 - [Resource Scanning and Object Caching](./resource-scanning-and-caching.md) — the input side: how
   bytes are discovered and read, and the object-level cache this document's tables are built from.
 - The design journey behind this document — rejected approaches, falsified claims, and the
-  measurements that produced these decisions — lives in the (gitignored, not committed) design spec.
+  measurements that produced these decisions — is captured in the committed docs and in the code
+  itself. There is no separate design spec to consult, and no uncommitted one is coming back. Within
+  this document: the columnar-engine spike and the correction that refuted its premise (§2), the
+  eviction design and the five defects a review found in it (§5), the namespace rejections and what
+  replaced them (§5), and the history road and the finding that dissolves it (§6). Elsewhere:
+  [Content Keying and Git](./content-keying-and-git.md) for why a git blob OID and VAT's content key
+  hash different preimages, [Resource Scanning and Object Caching](./resource-scanning-and-caching.md)
+  for the two-lane cost model, and `packages/resources/src/cache-namespace.ts`'s module docstring for
+  the two hand-maintained namespace discriminators that were tried and removed.

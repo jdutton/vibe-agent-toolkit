@@ -973,6 +973,50 @@ function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger
  * future forward here would be a no-op that warns, not a corrupted extent key.
  * What it would still NOT be is a speed-up, which is why nothing is forwarded:
  * the built tree is a different tree, so there is no stored answer for it to hit.
+ *
+ * ## 🚨 This lane's link graph is EMPTY — and that is the NORMAL case
+ *
+ * Measured 2026-08 on a probe fixture (one skill, one `reference.md` reachable by
+ * a single relative link from `SKILL.md`), run three ways with ONE variable —
+ * where the packaged output lands:
+ *
+ * | lane | output location | `fileCount` | `directFileCount` | `maxLinkDepth` | `totalLines` |
+ * |---|---|---:|---:|---:|---:|
+ * | source | n/a | 2 | 1 | 1 | 13 |
+ * | built | INSIDE the project (`<root>/dist/skills/<name>/`) | **1** | **0** | **0** | **10** |
+ * | built | outside any project root (control) | 2 | 1 | 1 | 14 |
+ *
+ * The middle row is the defect; the third row PROVES the cause — the only
+ * difference between them is whether the output falls under the crawl's
+ * `**\/dist\/**` exclusion (`BUILD_OUTPUT_GLOBS`). `packageSkill`'s default output
+ * IS the middle row, so this is the normal case, not an edge case. The result's
+ * own `files.dependencies` still reads `["reference.md"]`: the packager copied it,
+ * and the validator invoked here — immediately afterwards — cannot see it.
+ *
+ * ⚠️ It is not only a metrics hole. `collectNonPortableAssetReferenceIssues` and
+ * `collectNonPortableCommandIssues` iterate `bundledFiles`, so in the built lane
+ * they never open a single bundled reference file. A non-portable
+ * `${CLAUDE_PLUGIN_ROOT}` invocation inside a bundled reference is caught at
+ * source and CANNOT be caught in the built artifact.
+ *
+ * 🔑 Measured vs inferred. The three rows are MEASURED (2026-08, that probe).
+ * That the finding is still LIVE is inferred from this function's own body: it
+ * passes only the built `SKILL.md` path, with no registry and no population
+ * source rooted at the output tree, so `validateSkillForPackaging` resolves
+ * `findProjectRoot` back to the SOURCE project and crawls it under the default
+ * exclude — the built tree is never enumerated, `getResource` misses, and the
+ * walk starts from nothing. The probe is no longer only a probe: it is pinned as
+ * a committed regression test at
+ * `packages/cli/test/integration/built-lane-link-graph.integration.test.ts`
+ * (fixture `BUNDLING_SKILL_FILES`), asserting the middle row as today's
+ * behaviour. When this is fixed, those assertions flip in the fixing change.
+ *
+ * ⛔ Do NOT fix it by widening the crawl. That same `**\/dist\/**` exclusion is
+ * the stated correctness proof for `crawlAndResolveRegistry`'s process-lifetime
+ * memo, which the audit lane, the validate lane AND this lane all share — see the
+ * comment on `walkRegistryCache` in `validators/packaging-validator.ts`. Widening
+ * it retracts that argument for every lane sharing the memo; this is not a
+ * one-lane fix.
  */
 async function runPostBuildValidation(
   outputPath: string,

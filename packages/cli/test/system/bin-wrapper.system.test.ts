@@ -15,9 +15,8 @@ describe('Bin wrapper (vat command)', () => {
     const result = await executeBunVat(import.meta.url, ['--version']);
 
     expect(result.status).toBe(0);
-    // Version format matching is safe despite backtracking potential
-    // eslint-disable-next-line sonarjs/slow-regex
-    expect(result.stdout).toMatch(/\d+\.\d+\.\d+/);
+    // Bounded digit runs, so the match cannot backtrack super-linearly.
+    expect(result.stdout).toMatch(/\d{1,9}\.\d{1,9}\.\d{1,9}/);
   });
 
   it('should handle --help flag', async () => {

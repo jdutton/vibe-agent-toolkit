@@ -4,8 +4,33 @@
 
 import { Command, Option } from 'commander';
 
+import { checkCommand } from './check.js';
+import { queryCommand } from './query.js';
 import { scanCommand } from './scan.js';
 import { validateCommand } from './validate.js';
+
+/** What every subcommand's `--debug` flag says it does. */
+const DEBUG_HELP = 'Enable debug logging';
+
+/** The two serializations `scan` and `query` offer of one document. */
+const OUTPUT_YAML = 'yaml';
+const OUTPUT_JSON = 'json';
+
+/**
+ * The `--format` option `scan` and `query` share.
+ *
+ * A factory rather than a shared instance: Commander mutates an `Option` as it
+ * is added, so one object handed to two commands is one object two commands
+ * disagree about. `validate` deliberately does NOT use this — it offers a third
+ * format, `text`, which is a different question.
+ *
+ * @returns A fresh option for one command
+ */
+function yamlOrJsonFormat(): Option {
+  return new Option('--format <format>', 'Output format: yaml (default) or json')
+    .choices([OUTPUT_YAML, OUTPUT_JSON])
+    .default(OUTPUT_YAML);
+}
 
 export function createResourcesCommand(): Command {
   const resources = new Command('resources');
@@ -27,15 +52,10 @@ Configuration:
   resources
     .command('scan [path]')
     .description('Discover markdown resources in directory')
-    .option('--debug', 'Enable debug logging')
+    .option('--debug', DEBUG_HELP)
     .option('--verbose', 'Show full file list with details')
     .option('--collection <id>', 'Filter by collection ID')
-    .addOption(
-      new Option('--format <format>', 'Output format: yaml (default) or json').choices([
-        'yaml',
-        'json',
-      ]).default('yaml'),
-    )
+    .addOption(yamlOrJsonFormat())
     .action(scanCommand)
     .addHelpText(
       'after',
@@ -75,9 +95,273 @@ Examples:
     );
 
   resources
+    .command('query <sql> [path]')
+    .description('Run one read-only SQL statement against the resource projection')
+    .option('--debug', DEBUG_HELP)
+    .option('--param <values...>', 'Values bound in order to the ? placeholders in the statement')
+    .addOption(yamlOrJsonFormat())
+    .action(queryCommand)
+    .addHelpText(
+      'after',
+      `
+Description:
+  Populates this tree's resource projection and runs ONE read-only SQL
+  statement against it. Answers questions no command reports a field for --
+  which files carry which headings, what links at what, which paths were
+  refused and why.
+
+  One tree, one answer. The statement always runs against an in-memory
+  database holding THIS tree's projection and nothing else. A selected
+  projection store makes the population cheap and is never queried -- it is
+  one database per VAT release shared by every root on the machine.
+
+The corpus is the TRACKED TREE, not your configured resource set:
+  The projection holds every file git tracks (plus untracked, non-ignored
+  work). .gitignore IS honoured -- nothing under node_modules reaches it.
+  resources.include and resources.exclude are NOT: they scope vat resources
+  scan and vat resources validate, and the projection ignores them.
+
+  Measured on one adopter: scan reported 1,473 files and the projection held
+  11,685 members, including 142 rows under a path that config excluded.
+
+  That is what a projection IS -- the tree, not a view of it -- and it is what
+  makes a query able to ask about files no collection claims. But it means a
+  WHERE clause is the only thing narrowing your statement. Write the exclusion
+  into the SQL:
+
+    SELECT path FROM resource_realizations
+     WHERE path NOT LIKE 'docs/architecture/adrs/archive/%'
+
+One query, and read-only:
+  The statement must BE a query -- its first significant token has to be
+  SELECT, WITH or VALUES. Anything else (ATTACH, PRAGMA, DELETE, EXPLAIN) is
+  refused before it reaches SQLite. That is a gate on statement KIND and
+  deliberately not an inspection of your SQL; EXPLAIN is excluded even though
+  it is side-effect free, because admitting a prefix keyword would mean
+  deciding safety by looking PAST the first token.
+
+  Read-only-ness stays the engine's job: the connection is put into PRAGMA
+  query_only, so a write is refused by SQLite rather than by pattern-matching.
+
+  One statement only -- SQLite compiles the first and discards the rest WITHOUT
+  error, so trailing text would be silently ignored. A comment after the
+  terminating semicolon is fine ('SELECT 1;  -- see ADR-14').
+
+Output Fields:
+  status, root, rowCount, durationSecs
+  population: 'derived' or 'store' -- whether the rows were built this run or
+              read from the projection store. Reported because it cannot be
+              inferred: a correct hit and a correct re-derivation produce
+              identical rows
+  populationSecs:
+              What that population cost. The store's whole job is to make it
+              cheap, so this is the number that says whether it did
+  rows:       The selected rows, exactly as SQLite holds them -- a boolean as
+              0/1, a date and a JSON column as text. Values are NOT decoded,
+              because decoding needs a table spec and arbitrary SQL has none
+
+Exit Codes:
+  0 - The statement ran  |  2 - The statement was refused, or the crawl failed
+
+Requirements:
+  projectRoot: optional (falls back to cwd with a warning)
+  config:      optional (uses defaults if absent)
+
+Examples:
+  $ vat resources query 'SELECT path FROM resource_realizations LIMIT 5'
+  $ vat resources query 'SELECT COUNT(*) AS n FROM blobs'
+  $ vat resources query 'SELECT * FROM blob_conditions'      # what was refused
+  $ vat resources query 'SELECT target FROM blob_references WHERE kind = ?' --param markdown-link
+`
+    );
+
+  resources
+    .command('check [path]')
+    .description('Run the project\'s declared SQL assertions over its resource projection')
+    .option('--debug', DEBUG_HELP)
+    .option('--check <name>', 'Run only this check, by its key in resources.checks')
+    .option(
+      '--budget <seconds>',
+      'Kill the run if it goes this long without completing a unit of work'
+      + ' (default: 300; 0 removes the bound and can then hang forever)',
+    )
+    .addOption(
+      // Hidden because it is not an operator's flag: it is how a supervising
+      // parent tells the child it spawned to do the work rather than spawn one
+      // of its own, and where to append its progress. Documenting it would
+      // invite adopters to depend on a file whose only contract is the
+      // `.strict()` schema the same build reads it with.
+      new Option('--cost-log <path>', 'Internal: append per-unit progress here').hideHelp(),
+    )
+    .addOption(yamlOrJsonFormat())
+    .action(checkCommand)
+    .addHelpText(
+      'after',
+      `
+Description:
+  Runs every assertion declared under \`resources.checks\` in
+  vibe-agent-toolkit.config.yaml against the same projection \`vat resources
+  query\` reads, and fails the run when any error-severity check is violated.
+
+  A query answers a question once. This runs the questions a project decided
+  were worth asking every time.
+
+Declaring a check:
+  resources:
+    checks:
+      orphan-skills:
+        description: Every SKILL.md must be referenced by a plugin
+        sql: SELECT path FROM resource_realizations WHERE ...
+        severity: error        # optional; error is the default
+
+  The statement selects the VIOLATIONS -- zero rows is a pass. Each returned
+  row becomes one finding, and its columns are that finding's evidence; a
+  selected \`path\` column anchors the finding to the file.
+
+  Findings are ordinary validation issues with the code CUSTOM:<name>, so
+  resources.validation.severity can downgrade or ignore one you inherited.
+
+  A check's SQL runs through the same surface as vat resources query, so
+  the same rule applies: it must be a query, beginning SELECT, WITH or VALUES.
+  A comment after the terminating semicolon is accepted.
+
+A check that cannot run FAILS:
+  A renamed column breaks a check's SQL. That is reported as an error naming
+  the check and listing the columns the projection actually has -- never
+  skipped, because a check that stopped running looks exactly like one that
+  passed.
+
+  That report carries the code RESOURCE_CHECK_BROKEN, and NO
+  resources.validation.severity entry can silence it -- the config schema
+  refuses it as a severity key. Downgrade or ignore the CHECK all you like;
+  you cannot downgrade the news that it stopped checking.
+
+Checks run over the TRACKED TREE, not your configured resource set:
+  resources.include and resources.exclude scope vat resources scan and vat
+  resources validate. They do NOT scope the projection, so they do not scope
+  a check. .gitignore IS honoured -- nothing under node_modules reaches it --
+  but a path you excluded in config is still in the corpus and a check will
+  fire on it.
+
+  Measured on one adopter: scan reported 1,473 files while the same tree's
+  projection held 11,685 members, 142 of them under a config-excluded archive
+  directory. A correct "every ADR carries frontmatter" check produced a real
+  false finding on a frozen historical file nobody intends to fix.
+
+  Narrow the check itself -- a WHERE clause is the only scope it has:
+
+    sql: |
+      SELECT path FROM resource_realizations
+       WHERE path LIKE 'docs/architecture/adrs/%'
+         AND path NOT LIKE 'docs/architecture/adrs/archive/%'
+
+A check with NOTHING TO RUN OVER fails the same way:
+  Zero findings is the pass condition, so a run whose projection enumerated no
+  members passed every check while asserting nothing. If checks ran and
+  membersEnumerated is 0, that is reported as RESOURCE_CHECK_BROKEN at error
+  and the run fails. Usual causes: a broad .gitignore pattern, a shallow or
+  sparse CI checkout, or a root that resolved somewhere other than intended.
+  Declaring no checks at all is different -- that stays a warning and exit 0.
+
+A run that HANGS is killed and reported, not waited on:
+  A check's SQL is adopter-authored and unbounded -- an accidental cross join
+  or a WITH RECURSIVE that never terminates runs forever, and nothing inside
+  the process can stop it (the query is synchronous and holds the event loop).
+  So the work runs in a child process and --budget <seconds> bounds it.
+
+  The budget is time WITHOUT PROGRESS, not total runtime: the clock resets
+  every time the run finishes a unit (the population, then each check, then
+  once more when the checks are done and the document is being built). So a
+  large repository with many rules is never at risk while its rules keep
+  finishing. Default 300.
+
+  That per-unit property holds for the CHECKS. It does NOT hold for the
+  population, which reports progress only when it FINISHES -- so for that one
+  unit the budget is a total bound, and a population slower than the budget is
+  killed however healthily it is working. Most of it is one uninterruptible
+  parse stage, so the default is set well above every tree anyone has measured
+  rather than pretending to instrument it. Two MEASURED trees, for scale, and
+  neither of them is yours: VAT's own repository is ~1.2s warm and 33-35s with
+  a cold parse cache; a 9,992-file adopter tree is ~5s warm and 16.5s cold. On
+  a tree much larger than that with a cold parse cache, raise the bound.
+
+  An interrupted run NEVER exits 0 and never looks like a pass. There are two
+  ways to be interrupted and they are reported differently:
+
+    Killed by the budget -- exit 1, status: error, and a RESOURCE_CHECK_BROKEN
+    finding naming the check that was in flight and the bound that was blown.
+
+    Died -- the child ran out of memory materialising a result set (Node aborts
+    with SIGABRT), or something outside killed it (a runner's OOM killer sends
+    SIGKILL, a step timeout or a cancelled job sends SIGTERM), or it crashed in
+    native code (SIGSEGV), or it could not be started at all. Also exit 1,
+    status: error, RESOURCE_CHECK_BROKEN -- naming what ended it, with the
+    remedy that ending actually earns, and saying plainly that raising --budget
+    is not it.
+
+  Either way the checks that COMPLETED keep their entry under checks (including
+  rows), but their individual violations are NOT in issues -- the progress the
+  child records is costs, not findings. Read that issue list as incomplete.
+
+  Interrupted before the population finished, there is no projection and no
+  honest document: that is an operator error (exit 2) saying which of the two
+  happened.
+
+  --budget cannot be combined with --cost-log (exit 2): --cost-log means the
+  work runs in this process, where the budget could not be enforced.
+
+  --budget 0 removes the bound and runs everything in this process. Nothing
+  will then stop a runaway statement. It has to be written exactly 0: an empty
+  --budget, and any other value that PARSES to zero (1e-400 underflows, -0 is
+  negative zero), are refused rather than read as 0 -- an unset shell variable
+  must not silently remove the bound.
+  Ctrl-C still works at a keyboard, because this command installs no signal
+  handler -- do not add one, a process blocked in synchronous SQLite survives
+  SIGINT once a handler exists.
+
+Output Fields:
+  status, root, population, populationSecs, checksRun, membersEnumerated,
+  issueCounts, durationSecs, checks
+  checksRun: How many checks ran. Read it: no findings from four checks and no
+             findings from NO checks are otherwise the same document
+  membersEnumerated:
+             How many members the projection enumerated -- the corpus the
+             checks ran AGAINST, where checksRun is how many rules ran. Four
+             checks over 8,000 files and four over 0 are otherwise the same
+             document, and only one of them is a gate. It counts the TRACKED
+             TREE and not your configured resource set, so it is legitimately
+             far larger than scan's filesScanned -- see the section above
+  checks:    What each check COST -- {name, durationSecs, rows} per check, or
+             {name, durationSecs, broken} for one whose statement threw. rows
+             is what the statement SELECTED, and it is a memory signal: rows
+             are fully materialised. It is not a finding count -- a severity
+             override of 'ignore' drops findings the statement still selected,
+             so sum(rows) and issueCounts legitimately disagree
+  populationSecs:
+             What the shared population cost. It is NOT charged to any check:
+             every check's durationSecs is its own statement and nothing else,
+             so this is the term that reconciles them against durationSecs
+  issues:    One row per violation ({code, severity, message, path?})
+
+Exit Codes:
+  0 - No error-severity findings
+  1 - At least one (a violation, a broken check, an empty corpus, a run killed
+      for making no progress within --budget, or a run whose child DIED)
+  2 - System error, an unknown --check name, an unusable --budget (an empty
+      one, one that means zero without being written 0, or one passed with
+      --cost-log), or a run interrupted before its population completed
+
+Examples:
+  $ vat resources check
+  $ vat resources check --check orphan-skills
+  $ vat resources check --budget 60
+`
+    );
+
+  resources
     .command('validate [path]')
     .description('Validate markdown resources (link integrity, anchors)')
-    .option('--debug', 'Enable debug logging')
+    .option('--debug', DEBUG_HELP)
     .option('-v, --verbose', 'Show all scanned resources, including those without issues')
     .option('--frontmatter-schema <path>', 'Validate frontmatter against JSON Schema file (.json or .yaml)')
     .option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive', 'strict')

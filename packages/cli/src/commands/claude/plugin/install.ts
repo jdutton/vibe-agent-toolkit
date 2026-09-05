@@ -426,7 +426,7 @@ async function handleZipInstall(
   if (!options.dryRun) {
     logger.info('   Extracting ZIP...');
     const zip = new AdmZip(sourcePath);
-    // eslint-disable-next-line sonarjs/no-unsafe-unzip -- User-provided local files, isolated plugin directory
+     
     zip.extractAllTo(installPath, /* overwrite */ true);
   }
 

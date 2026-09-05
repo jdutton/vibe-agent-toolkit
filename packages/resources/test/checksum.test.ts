@@ -1,27 +1,17 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- test writes to temp dirs from computed paths */
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { calculateChecksum, calculateChecksumFromContent } from '../src/checksum.js';
 import { SHA256Schema } from '../src/schemas/checksum.js';
 
-const dirs: string[] = [];
+import { scratchFixtureWriter } from './test-helpers.js';
 
-/** Write raw bytes, bypassing UTF-8 encoding, and return the path. */
-async function writeBytes(name: string, bytes: Uint8Array): Promise<string> {
-  const dir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-checksum-'));
-  dirs.push(dir);
-  const file = safePath.join(dir, name);
-  await writeFile(file, bytes);
-  return file;
-}
+const fixtures = scratchFixtureWriter('vat-checksum-');
 
-afterAll(async () => {
-  await Promise.all(dirs.map((d) => rm(d, { recursive: true, force: true })));
-});
+afterAll(fixtures.cleanup);
 
 describe('SHA256Schema', () => {
   it('should accept valid SHA-256 hash', () => {
@@ -52,7 +42,7 @@ describe('SHA256Schema', () => {
 describe('calculateChecksumFromContent', () => {
   it('agrees with the file-reading half on plain ASCII', async () => {
     const content = '# Hello\n\nplain ascii body\n';
-    const file = await writeBytes('ascii.md', Buffer.from(content, 'utf-8'));
+    const file = await fixtures.write('ascii.md', Buffer.from(content, 'utf-8'));
 
     expect(await calculateChecksum(file)).toBe(calculateChecksumFromContent(content));
   });
@@ -73,7 +63,7 @@ describe('calculateChecksumFromContent', () => {
    */
   it('hashes the decoded string, NOT the raw bytes on disk', async () => {
     const bytes = Uint8Array.from([...Buffer.from('# Bad\n'), 0xff, ...Buffer.from('\n')]);
-    const file = await writeBytes('malformed.md', bytes);
+    const file = await fixtures.write('malformed.md', bytes);
 
     const decoded = await readFile(file, 'utf-8');
     const decodedDigest = createHash('sha256').update(decoded, 'utf-8').digest('hex');

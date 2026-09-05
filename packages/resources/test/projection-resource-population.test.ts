@@ -12,7 +12,11 @@ import {
   EXTENT_SOURCE_GIT,
   type CrawlSourceKind,
 } from '../src/projection/crawl-source.js';
-import { buildResourcePopulation } from '../src/projection/resource-population.js';
+import { DISCARD_BLOB_POPULATION } from '../src/projection/merge.js';
+import {
+  buildResourcePopulation,
+  buildResourceProjection,
+} from '../src/projection/resource-population.js';
 import type {
   BlobScopedRows,
   ExtentKey,
@@ -286,5 +290,94 @@ describe('buildResourcePopulation reports which enumerator ran', () => {
     // `git`, the report has become a copy of the environment and every
     // comparison built on it is void.
     expect(await extentSourceOf()).toBe('filesystem');
+  });
+});
+
+describe('buildResourceProjection', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+
+  it('derives the blob rows its sibling deliberately never pays for', async () => {
+    // The whole reason this lane exists. `buildResourcePopulation` runs under
+    // `contentParsing: CONTENT_PARSING_SKIP` and `contentDemand: 'deferred'`, so
+    // a query about headings, links or sections against ITS projection would
+    // return nothing and report success. These counts are what make the query
+    // surface answerable at all — and they are asserted as counts rather than as
+    // "not undefined", because four empty tables is exactly the failure shape.
+    await write(DOC_A, '# A\n\nSee [b](./docs/b.md).\n');
+    await write('docs/b.md', '# B\n');
+
+    const projection = await buildResourceProjection({
+      root: suite.tempDir,
+      onBlobPopulation: DISCARD_BLOB_POPULATION,
+    });
+
+    expect(projection.blobs.length).toBeGreaterThan(0);
+    expect(projection.blobSections.length).toBeGreaterThan(0);
+    expect(projection.blobReferences.length).toBeGreaterThan(0);
+  });
+
+  it('describes the same membership as the population lane', async () => {
+    // The claim `resourceContributors` makes by being shared: two lanes, one
+    // registry, one population. If these ever disagree, `vat resources query` is
+    // answering about a corpus `vat resources validate` never looked at — and
+    // the disagreement would be silent, because each command is self-consistent.
+    //
+    // Compared on the FILES only: this lane's projection also carries the
+    // directory rows the population loop drops, which is a difference in what
+    // the caller reads rather than in what was enumerated.
+    await write(DOC_A, '# A\n');
+    await write('docs/b.md', '# B\n');
+
+    const projection = await buildResourceProjection({
+      root: suite.tempDir,
+      onBlobPopulation: DISCARD_BLOB_POPULATION,
+    });
+    const realizedFiles = projection.resourceRealizations
+      .filter((row) => !row.isDirectory && row.exists && !row.gitignored)
+      .map((row) => toForwardSlash(row.path))
+      .sort(compareCodeUnits);
+
+    expect(realizedFiles).toEqual(await populationOf());
+  });
+
+  it('declines the gitignored half exactly as the population lane does', async () => {
+    // The shared `DECLINE_IGNORED` parameter set, asserted where it is
+    // observable. A query that could answer about `build/generated.md` would be
+    // answering about a file the project told git to forget and validation never
+    // sees.
+    const tracker = await buildIgnoredFixture();
+
+    const projection = await buildResourceProjection({
+      root: suite.tempDir,
+      gitTracker: tracker,
+      onBlobPopulation: DISCARD_BLOB_POPULATION,
+    });
+    const realized = projection.resourceRealizations.map((row) => toForwardSlash(row.path));
+
+    expect(realized).not.toContain(IGNORED_DOC);
+    expect(realized).not.toContain(IGNORED_DIR);
+    // The discriminator: an extent that realized nothing would pass without it.
+    expect(realized).toContain(COMMITTED);
+    expect(realized).toContain(UNCOMMITTED);
+  });
+
+  it('files a contributor record when it derived, which is the cache tell', async () => {
+    // 🔑 The observable half of "did the store answer". A hit short-circuits
+    // before any contributor runs, so an EMPTY record list is the tell — and
+    // this is its negative control: a lane that filed nothing even while
+    // deriving would make every future hit unfalsifiable, since a correct hit
+    // and a correct re-derivation produce identical rows.
+    await write(DOC_A, '# A\n');
+    const filed: string[] = [];
+
+    await buildResourceProjection({
+      root: suite.tempDir,
+      onBlobPopulation: DISCARD_BLOB_POPULATION,
+      onContributorTiming: (timing) => filed.push(timing.contributorId),
+    });
+
+    expect(filed).toContain('builtin:filesystem');
   });
 });

@@ -973,7 +973,7 @@ type Narrowing = 'on' | 'off';
 // `JsonValue` IS a union by definition, and it is the declared parameter type of
 // both `populate` and `contribute`; narrowing this return would only move the cast
 // to every call site.
-// eslint-disable-next-line sonarjs/function-return-type -- see the note above
+ 
 function declarationFor(
   skill: CorpusSkill,
   config: SkillPackagingConfig,

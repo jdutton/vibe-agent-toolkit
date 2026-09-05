@@ -69,9 +69,41 @@ vat rag stats
 
 ## Configuration Examples
 
+### How RAG is actually configured
+
+**There is no `rag:` section in `vibe-agent-toolkit.config.yaml`, and there never has been.**
+`ProjectConfigSchema` is `.strict()` and accepts exactly six top-level keys — `version`, `skills`,
+`resources`, `claude`, `extents`, `test` (`packages/resources/src/schemas/project-config.ts`). An
+unrecognized top-level key is not stripped, it is *refused*: the config fails to load and **every**
+`vat` command exits, not just the RAG ones.
+
+Three separate surfaces configure a RAG run, and only the first is a config file:
+
+| What you want to control | Where it lives | Notes |
+|---|---|---|
+| Which files get indexed | `resources.include` / `resources.exclude` in `vibe-agent-toolkit.config.yaml` | Read by `vat rag index` when no path argument is given |
+| Where the database lives | `--db <path>`, on every `vat rag` subcommand | Defaults to `<projectRoot>/.rag-db` |
+| Embedding provider, chunk budget, content transform, document storage | `LanceDBRAGProvider.create({ … })` — **library only** | The CLI passes only `dbPath` and `readonly`; there is no flag and no config key for any of these |
+
+Three consequences worth stating plainly, because each one used to be documented the other way round
+here:
+
+- **There is no "store" concept in config.** Multiple databases are multiple `--db` invocations,
+  which is exactly what the Usage blocks below show.
+- **`collections:` does not scope indexing.** A collection labels files that were already crawled,
+  so that per-collection validation and `mimeType` can apply to them; it does not narrow the crawl.
+  With no `resources.include`, the crawl defaults to `**/*.md`, `**/*.html`, `**/*.htm` across the
+  whole project root (`DEFAULT_RESOURCE_INCLUDE`, `resource-registry.ts:199`). Write
+  `resources.include` when you mean "index only these".
+- **The embedding model is not selectable from the CLI.** `vat rag index` constructs
+  `LanceDBRAGProvider` with `{ dbPath, readonly: false }` and nothing else, so every CLI run uses
+  the default `OnnxEmbeddingProvider` (`Xenova/all-MiniLM-L6-v2`, `maxInputTokens: 256`) and the
+  chunk budget derived from it. To use OpenAI embeddings or override the chunk budget you must
+  drive the library yourself — see [Selecting an embedding provider](#selecting-an-embedding-provider).
+
 ### Example 1: Simple Project
 
-**Use Case**: Single documentation directory, one RAG store
+**Use Case**: Index one documentation directory into the default database
 
 **vibe-agent-toolkit.config.yaml**:
 
@@ -79,32 +111,28 @@ vat rag stats
 version: 1
 
 resources:
-  collections:
-    docs:
-      include:
-        - ./docs/**/*.md
-        - ./README.md
-
-rag:
-  stores:
-    main:
-      db: ./.rag-db
-      resources: docs
+  include:
+    - docs/**/*.md
+    - README.md
 ```
 
 **Usage**:
 
 ```bash
-# Index uses config automatically
+# Index using the config's include patterns, into <projectRoot>/.rag-db
 vat rag index
 
-# Query uses default store
+# Query the same default database
 vat rag query "installation guide"
 ```
 
 ### Example 2: Multi-Language Documentation
 
-**Use Case**: Separate RAG stores for different languages
+**Use Case**: Separate RAG databases for different languages
+
+There is no config that maps a subtree to a database — the mapping is made on the command line, one
+`--db` per database. The config's job here is only to keep non-documentation markdown out of the
+crawl.
 
 **Config**:
 
@@ -112,34 +140,20 @@ vat rag query "installation guide"
 version: 1
 
 resources:
-  collections:
-    docs-en:
-      include:
-        - ./docs/en/**/*.md
-    docs-fr:
-      include:
-        - ./docs/fr/**/*.md
-    docs-es:
-      include:
-        - ./docs/es/**/*.md
-
-rag:
-  stores:
-    en-rag:
-      db: ./dist/rag-en
-      resources: docs-en
-    fr-rag:
-      db: ./dist/rag-fr
-      resources: docs-fr
-    es-rag:
-      db: ./dist/rag-es
-      resources: docs-es
+  include:
+    - docs/**/*.md
+  exclude:
+    - '**/node_modules/**'
+    - '**/dist/**'
 ```
 
 **Usage**:
 
 ```bash
-# Index each language separately
+# Index each language into its own database.
+# The path argument narrows the crawl to that subtree; the config's `exclude`
+# still applies, but its `include` is replaced by the default resource patterns
+# scoped to the subtree.
 vat rag index --db ./dist/rag-en docs/en/
 vat rag index --db ./dist/rag-fr docs/fr/
 vat rag index --db ./dist/rag-es docs/es/
@@ -151,7 +165,10 @@ vat rag query "installation" --db ./dist/rag-fr
 
 ### Example 3: API Documentation + Examples
 
-**Use Case**: Separate stores for API reference vs usage examples
+**Use Case**: Separate databases for API reference vs usage examples
+
+Collections earn their place here: they attach per-collection *validation* to each subtree. They do
+not decide what gets indexed — the `--db` + path pairs below do that.
 
 **Config**:
 
@@ -159,63 +176,34 @@ vat rag query "installation" --db ./dist/rag-fr
 version: 1
 
 resources:
-  defaults:
-    exclude:
-      - '**/node_modules/**'
-      - '**/dist/**'
+  exclude:
+    - '**/node_modules/**'
+    - '**/dist/**'
 
   collections:
     api-reference:
       include:
-        - ./api-docs/**/*.md
-      metadata:
-        defaults:
-          type: api-reference
-          tags: [api, reference]
+        - api-docs/**/*.md
+      validation:
+        frontmatterSchema: schemas/api-frontmatter.json
+        mode: permissive
 
     examples:
       include:
-        - ./examples/**/*.{md,js,ts}
-      metadata:
-        defaults:
-          type: example
-          tags: [example, tutorial]
-
-rag:
-  defaults:
-    embedding:
-      provider: openai
-      model: text-embedding-3-small
-    chunking:
-      # Both values below are deliberate downsizes for retrieval granularity.
-      # text-embedding-3-small reads 8192 tokens, so there is headroom here; the
-      # derived default would be 8192. Overriding UPWARD is never available — the
-      # ceiling belongs to the model.
-      targetSize: 256  # Smaller chunks for API docs
-
-  stores:
-    api-rag:
-      db: ./dist/api-rag
-      resources: api-reference
-
-    examples-rag:
-      db: ./dist/examples-rag
-      resources: examples
-      chunking:
-        targetSize: 512  # Larger chunks for examples (still well under 8192)
+        - examples/**/*.md
 ```
 
-> ⚠️ **`chunking:` in YAML is not read by `vat rag index` today.** The CLI constructs
-> `LanceDBRAGProvider` without passing `targetChunkSize` or `paddingFactor`, so every run uses the
-> budget derived from the embedding provider's own `maxInputTokens`. The blocks above document the
-> intended shape; the working override is the library one —
-> `LanceDBRAGProvider.create({ targetChunkSize, paddingFactor, … })`. Writing `targetSize:` in
-> `vibe-agent-toolkit.config.yaml` changes nothing and produces no warning.
+> ⚠️ **Chunk size is not settable from YAML.** There is no config key for it at any level: the CLI
+> constructs `LanceDBRAGProvider` without `targetChunkSize` or `paddingFactor`, so every `vat rag
+> index` run uses the budget derived from the embedding provider's own `maxInputTokens`. The working
+> override is the library one — `LanceDBRAGProvider.create({ targetChunkSize, paddingFactor, … })`.
+> Overriding *upward* is never available: the ceiling belongs to the model, and
+> `resolveChunkingConfig` clamps an over-large target and warns.
 
 **Usage**:
 
 ```bash
-# Index both stores
+# Index each subtree into its own database
 vat rag index --db ./dist/api-rag api-docs/
 vat rag index --db ./dist/examples-rag examples/
 
@@ -228,7 +216,11 @@ vat rag query "authentication example" --db ./dist/examples-rag
 
 ### Example 4: Agent Development Project
 
-**Use Case**: Agent toolkit with multiple agents and shared knowledge base
+**Use Case**: Agent toolkit with multiple agents and a shared knowledge base
+
+Agents are discovered by their `agent.yaml` files on disk — there is no `agents:` key in
+`vibe-agent-toolkit.config.yaml`, and adding one makes the config unloadable. Run `vat agent list`
+to see what was discovered.
 
 **Config**:
 
@@ -236,65 +228,77 @@ vat rag query "authentication example" --db ./dist/examples-rag
 version: 1
 
 resources:
-  defaults:
-    exclude:
-      - '**/node_modules/**'
-      - '**/dist/**'
-      - '**/.git/**'
+  exclude:
+    - '**/node_modules/**'
+    - '**/dist/**'
+    - '**/.git/**'
 
   collections:
     toolkit-docs:
       include:
-        - ./docs/**/*.md
-        - ./README.md
+        - docs/**/*.md
+        - README.md
     agent-guides:
       include:
-        - ./guides/**/*.md
+        - guides/**/*.md
     api-reference:
       include:
-        - ./api/**/*.md
-
-agents:
-  include:
-    - ./packages/*/agents/**
-    - ./agents/**
-
-rag:
-  defaults:
-    embedding:
-      provider: onnx
-      model: Xenova/all-MiniLM-L6-v2
-    # No chunking block: the budget derives from the provider. This model's
-    # maxInputTokens is 256, so the derived target is 256 and the derived
-    # paddingFactor ~0.84. An over-large target IS clamped and warned about —
-    # but only when it reaches `resolveChunkingConfig`, i.e. via the library
-    # option, NOT via this YAML key, which `vat rag index` does not read.
-
-  stores:
-    agent-knowledge:
-      db: ./dist/agent-knowledge-rag
-      resources: toolkit-docs
-    guide-rag:
-      db: ./dist/guide-rag
-      resources: agent-guides
-    api-rag:
-      db: ./dist/api-rag
-      resources: api-reference
-      chunking:
-        targetSize: 128  # Deliberately finer-grained than the derived 256
+        - api/**/*.md
 ```
+
+**Usage**:
+
+```bash
+vat rag index --db ./dist/agent-knowledge-rag docs/
+vat rag index --db ./dist/guide-rag guides/
+vat rag index --db ./dist/api-rag api/
+```
+
+### Selecting an embedding provider
+
+The CLI has no switch for this. Both providers ship from `@vibe-agent-toolkit/rag` and are passed to
+the provider factory as `embeddingProvider`:
+
+```typescript
+import { OpenAIEmbeddingProvider } from '@vibe-agent-toolkit/rag';
+import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
+
+const provider = await LanceDBRAGProvider.create({
+  dbPath: './dist/api-rag',
+  // Default is OnnxEmbeddingProvider (Xenova/all-MiniLM-L6-v2, 256 input tokens).
+  embeddingProvider: new OpenAIEmbeddingProvider({
+    apiKey: process.env.OPENAI_API_KEY ?? '',
+    model: 'text-embedding-3-small',   // 8192 input tokens
+  }),
+  // Optional: a SMALLER chunk target than the model's ceiling, for finer retrieval.
+  targetChunkSize: 256,
+});
+```
+
+`OpenAIEmbeddingProvider` loads the `openai` package at construction time; it is an optional
+dependency, so install it in your project before using this path.
+
+A database is bound to the embedding model that built it. Changing the provider means re-indexing
+into a fresh path (or `vat rag clear` first).
 
 ---
 
 ## Agent Integration
 
+> ⚠️ **There is no `rag` tool type in an agent manifest.** `ToolSchema` is `.strict()` and its `type`
+> is `z.enum(['mcp', 'library', 'builtin'])` with no `config` key
+> (`packages/schema/src/tool.ts`), so a tool entry written as `type: rag` fails manifest validation.
+> `AgentManifestSchema` is also `.strict()` and accepts only `metadata`, `spec` and `tests` — an
+> `apiVersion:` or `kind:` line is refused, not ignored. The manifest carries an optional `spec.rag`
+> block that *validates* (`RAGConfigSchema`, marked "details TBD in Phase 2"), but no runtime reads
+> it. Until it does, RAG wiring for an agent is TypeScript you write, shown below.
+
 ### Example: Code Review Agent with RAG
 
-**Agent Manifest** (`agent.yaml`):
+**Agent Manifest** (`agent.yaml`) — the manifest declares the agent; it does not declare the RAG
+database:
 
 ```yaml
-apiVersion: v1
-kind: Agent
 metadata:
   name: code-review-agent
   version: 1.0.0
@@ -308,13 +312,6 @@ spec:
   prompts:
     system:
       $ref: ./prompts/system.md
-
-  tools:
-    - name: search_best_practices
-      type: rag
-      config:
-        dbPath: ../../dist/best-practices-rag
-        description: Search coding best practices documentation
 ```
 
 **System Prompt** (`prompts/system.md`):
@@ -336,14 +333,13 @@ Example tool usage:
 
 ```typescript
 import { loadAgentManifest } from '@vibe-agent-toolkit/agent-config';
-import { createRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
+import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
 
 const manifest = await loadAgentManifest('./code-review-agent');
 
-// Create RAG provider for tool
-const ragTool = manifest.spec.tools.find(t => t.type === 'rag');
-const ragProvider = await createRAGProvider({
-  dbPath: ragTool.config.dbPath,
+// The database path is the caller's to choose — the manifest has no field for it.
+const ragProvider = await LanceDBRAGProvider.create({
+  dbPath: './dist/best-practices-rag',
   readonly: true,
 });
 
@@ -368,17 +364,16 @@ async function reviewCode(code: string) {
 
 **Use Case**: Agent that answers questions about project documentation
 
-**Agent Setup**:
+**Agent Setup** — again in TypeScript, not in `agent.yaml`, for the reason given at the top of this
+section:
 
-```yaml
-# doc-assistant/agent.yaml
-spec:
-  tools:
-    - name: search_docs
-      type: rag
-      config:
-        dbPath: ../dist/docs-rag
-        description: Search project documentation
+```typescript
+import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
+
+const ragProvider = await LanceDBRAGProvider.create({
+  dbPath: './dist/docs-rag',
+  readonly: true,
+});
 ```
 
 **Usage**:
@@ -449,11 +444,11 @@ vat rag index docs/
 **Use Case**: Search across multiple RAG stores
 
 ```typescript
-const stores = [
-  createRAGProvider({ dbPath: './dist/api-rag' }),
-  createRAGProvider({ dbPath: './dist/guides-rag' }),
-  createRAGProvider({ dbPath: './dist/examples-rag' }),
-];
+const stores = await Promise.all([
+  LanceDBRAGProvider.create({ dbPath: './dist/api-rag', readonly: true }),
+  LanceDBRAGProvider.create({ dbPath: './dist/guides-rag', readonly: true }),
+  LanceDBRAGProvider.create({ dbPath: './dist/examples-rag', readonly: true }),
+]);
 
 // Query all stores in parallel
 const results = await Promise.all(
@@ -695,18 +690,13 @@ my-knowledge-base/
 version: 1
 
 resources:
-  collections:
-    all-notes:
-      include:
-        - ./notes/**/*.md
-        - ./bookmarks/**/*.md
-
-rag:
-  stores:
-    knowledge:
-      db: ./.rag-db
-      resources: all-notes
+  include:
+    - notes/**/*.md
+    - bookmarks/**/*.md
 ```
+
+`include` — not `collections` — is what narrows the crawl, and `.rag-db` is the default database
+path, so `vat rag index` with no arguments does the right thing here.
 
 **Usage**:
 
@@ -742,32 +732,22 @@ team-docs/
 version: 1
 
 resources:
-  collections:
-    team-docs:
-      include:
-        - ./onboarding/**/*.md
-        - ./processes/**/*.md
-        - ./technical/**/*.md
-
-agents:
   include:
-    - ./agents/**
-
-rag:
-  stores:
-    team-knowledge:
-      db: ./dist/docs-rag
-      resources: team-docs
-      embedding:
-        provider: openai
-        model: text-embedding-3-small
+    - onboarding/**/*.md
+    - processes/**/*.md
+    - technical/**/*.md
 ```
+
+The agent under `agents/doc-assistant/` needs no config entry — it is discovered by its own
+`agent.yaml`. The database path is given on the command line below, and the embedding model is the
+CLI default; an OpenAI model would mean driving `LanceDBRAGProvider.create` yourself, per
+[Selecting an embedding provider](#selecting-an-embedding-provider).
 
 **Deploy**:
 
 ```bash
-# Build RAG database
-bun run vat rag index
+# Build RAG database at the path shown in the tree above
+bun run vat rag index --db ./dist/docs-rag
 
 # Deploy doc-assistant agent
 bun run vat agent build doc-assistant

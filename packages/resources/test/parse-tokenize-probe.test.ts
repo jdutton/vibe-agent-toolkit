@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { parseMarkdownContent } from '../src/link-parser.js';
@@ -72,7 +72,7 @@ describe('the markdown tokenize/tree-build split probe', () => {
   });
 
   afterAll(async () => {
-    await fs.rm(timingDirectory, { recursive: true, force: true });
+    await removeScratchDir(timingDirectory);
   });
 
   beforeEach(() => {

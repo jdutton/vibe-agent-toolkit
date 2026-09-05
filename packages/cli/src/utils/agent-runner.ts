@@ -53,9 +53,13 @@ function substituteTemplate(template: string, variables: Record<string, string>)
 
   // Strip Jinja2 conditional blocks {% if ... %}...{% endif %}
   // This is a simple regex approach for MVP - won't handle nested conditionals
-  // Using [^] instead of [\s\S] to match any character including newlines
-  // eslint-disable-next-line sonarjs/slow-regex -- Simple template stripping, not user-controlled input
-  result = result.replaceAll(/\{%\s*if\s+[^%]+%\}[^]*?\{%\s*endif\s*%\}/gu, '');
+  // Using [^] instead of [\s\S] to match any character including newlines.
+  // The condition's first character must be `[^%\s]` so that `\s+` and the
+  // condition cannot both claim the same space — that ambiguity made the old
+  // `\s+[^%]+` form backtrack super-linearly (measured 35 ms on an 8k-space
+  // input and growing quadratically; 0 ms after). A jinja `{% if %}` with an
+  // empty condition is not valid template syntax and never matched usefully.
+  result = result.replaceAll(/\{%\s*if\s+[^%\s][^%]*%\}[^]*?\{%\s*endif\s*%\}/gu, '');
 
   return result.trim();
 }

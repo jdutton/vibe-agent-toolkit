@@ -508,11 +508,17 @@ export interface FilenameCaseVerdict {
  *    listing can hold both `readme.md` and `README.md`, in either order; asking
  *    for `README.md` must report it present regardless of which one `readdir`
  *    happened to return first. Same argument, one form weaker, for pass 2.
- * 2. **NFC-folded** `toNfc(entry) === toNfc(expectedName)`. `é` has two encodings
- *    (NFC `U+00E9` vs NFD `e` + `U+0301`) that are `!==` and that case-folding
- *    does not reconcile, so without this pass an accented file that plainly
- *    exists was reported flatly *missing* — not even a case-mismatch hint, since
- *    that needs pass 3 to match (ledger entry D7).
+ * 2. **NFC-folded** `toNfc(entry) === toNfc(expectedName)`. The two columns are
+ *    different kinds of value and routinely disagree about one file: `entry` is
+ *    an *enumerated* path (`readdir` hands back whatever is on disk, commonly
+ *    decomposed) while `expectedName` is a path *derived from markdown link
+ *    text* (composed, as an editor writes it). `é` has two encodings (NFC
+ *    `U+00E9` vs NFD `e` + `U+0301`) that are `!==` and that case-folding does
+ *    not reconcile, so without this pass an accented file that plainly exists
+ *    was reported flatly *missing* — not even a case-mismatch hint, since that
+ *    needs pass 3 to match. This is one of three sites on that seam; the class
+ *    is collected in `docs/architecture/resource-scanning-and-caching.md` §3.6
+ *    (ledger entry D7).
  * 3. **case-insensitive, on the folded forms.** Folding first is required, not
  *    tidy: `toLowerCase()` does not reconcile NFC against NFD, so a name that
  *    differs in *both* case and normalization falls out as `absent` and the
@@ -528,7 +534,10 @@ export interface FilenameCaseVerdict {
  * (so it must not be reported broken), *and* it resolves only by folding (so a
  * caller can warn). {@link classifyFilenameCaseFrom}'s consumer in
  * `@vibe-agent-toolkit/resources` turns `'normalized'` into
- * `LINK_NORMALIZATION_MISMATCH`.
+ * `LINK_NORMALIZATION_MISMATCH`. The prohibition that bounds every fold reached
+ * from here — it yields a comparison key, never a path to open — is stated once
+ * at {@link toNfc}, which is also where the reason it is not folded into
+ * `safePath.resolve` lives.
  *
  * **Folding is deferred to the miss path, and that is a real saving.** Pass 1
  * calls `toNfc` zero times, so a corpus whose links all resolve byte-exactly —

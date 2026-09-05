@@ -99,7 +99,7 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
 
     // Security invariant: every grader spawn ran OUTSIDE the skill's harness sandbox.
     const harnessRoot = safePath.join(tempDir, 'harness');
-    expect(fake.graderSandboxDirs.length).toBe(2);
+    expect(fake.graderSandboxDirs).toHaveLength(2);
     for (const dir of fake.graderSandboxDirs) {
       expect(isUnderRoot(dir, harnessRoot)).toBe(false);
     }
@@ -115,8 +115,8 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
     const result = await runToExit(harnessOpts(skillDir, fake.spawn));
 
     expect(result.exitCode).toBe(0);
-    expect(fake.graderNonces.length).toBe(2);
-    expect(fake.graderSandboxDirs.length).toBe(2);
+    expect(fake.graderNonces).toHaveLength(2);
+    expect(fake.graderSandboxDirs).toHaveLength(2);
     for (const nonce of fake.graderNonces) {
       expect(nonce).not.toBe(''); // the nonce really was delivered (via the prompt / stdin)
       for (const dir of fake.graderSandboxDirs) {
@@ -180,7 +180,7 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
     const grading = JSON.parse(readFileSync(safePath.join(resultsDir, GRADING_JSON), 'utf8'));
     expect(grading.summary).toEqual({ passed: 0, total: 1 });
     // Only 1 grader spawn ran (tier 0); the gate stopped tier 1 before launching it.
-    expect(fake.graderSandboxDirs.length).toBe(1);
+    expect(fake.graderSandboxDirs).toHaveLength(1);
   });
 
   it('tier-0 all-pass: tier 1 runs and both tiers are graded (no skips, exit 0)', async () => {
@@ -199,7 +199,7 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
     const resultsDir = safePath.join(tempDir, 'harness', 'results');
     const grading = JSON.parse(readFileSync(safePath.join(resultsDir, GRADING_JSON), 'utf8'));
     expect(grading.summary).toEqual({ passed: 2, total: 2 });
-    expect(fake.graderSandboxDirs.length).toBe(2);
+    expect(fake.graderSandboxDirs).toHaveLength(2);
   });
 
   it('a forged grader-fragment nonce is rejected (exit 1) and a PRIOR run\'s stale friction.json is wiped first', async () => {

@@ -60,17 +60,17 @@
       "cache": true
     },
     "test:unit": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^build", "build"],
       "outputs": [],
       "cache": true
     },
     "test:integration": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^build", "build"],
       "outputs": [],
       "cache": true
     },
     "test:system": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^build", "build"],
       "outputs": [],
       "cache": true
     },

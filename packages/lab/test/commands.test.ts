@@ -60,6 +60,7 @@ const SUBJECT_NAMES = [
   ...DEFAULT_NAMES,
   CONTEXT_ONE,
   'resources-population',
+  'resources-query',
   'inventory',
   'skills-validate',
   'skills-list',
@@ -78,6 +79,10 @@ const FINDINGS_NAMES = [
 const ALWAYS_ZERO_NAMES = [
   'resources-scan',
   'resources-population',
+  // `resources query` reports no findings: it exits 0 when the statement ran
+  // and 2 when it was refused or the crawl failed. A 1 from it is not a verdict
+  // about the tree, so accepting one would let a broken run count as measured.
+  'resources-query',
   'audit',
   'inventory',
   'skills-list',

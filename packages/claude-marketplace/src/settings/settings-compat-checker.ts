@@ -23,17 +23,25 @@ function parseInlineTools(inline: string): string[] {
   return inline.split(',').map(s => s.trim()).filter(Boolean);
 }
 
+const ALLOWED_TOOLS_KEY = 'allowed-tools:';
+
 function parseAllowedTools(frontmatterText: string): string[] | undefined {
   const lines = frontmatterText.split('\n');
-  const headerIdx = lines.findIndex(l => /^allowed-tools:/i.test(l));
+  const headerIdx = lines.findIndex(l => l.toLowerCase().startsWith(ALLOWED_TOOLS_KEY));
   if (headerIdx === -1) return undefined;
 
   const header = lines[headerIdx] ?? '';
-  // eslint-disable-next-line sonarjs/slow-regex -- input is a single pre-split line (bounded), no backtracking risk
-  const headerMatch = /^allowed-tools:\s*([^\n]+)$/.exec(header);
+  // `header` is already one line (the text was split on \n), so there is nothing
+  // for a regex to scan for here: the inline value is just whatever follows the
+  // key. Slicing is linear, where the old `\s*([^\n]+)` form backtracked
+  // super-linearly because `\s*` and `[^\n]+` compete for the same spaces.
+  // This also makes the parse case-insensitive, matching the case-insensitive
+  // test that located the header in the first place — previously an
+  // `Allowed-Tools:` line was found and then silently failed to parse.
+  const inlineValue = header.slice(ALLOWED_TOOLS_KEY.length);
 
-  if (headerMatch?.[1]) {
-    return parseInlineTools(headerMatch[1].trim());
+  if (inlineValue.length > 0) {
+    return parseInlineTools(inlineValue.trim());
   }
 
   // Multi-line list: following lines prefixed with "  - "

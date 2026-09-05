@@ -84,7 +84,7 @@ describe('vat corpus scan — integration', () => {
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
     const summary = yaml.parse(readFileSync(summaryPath, 'utf-8')) as Record<string, unknown>;
-    expect((summary.plugins as unknown[]).length).toBe(2);
+    expect(summary.plugins as unknown[]).toHaveLength(2);
     expect((summary.totals as Record<string, number>).plugins).toBe(2);
 
     const cleanAudit = safePath.join(runDir, 'clean-audit.yaml');

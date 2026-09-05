@@ -1242,7 +1242,7 @@ describe('stage item construction', () => {
       thrown = e;
     }
     expect(thrown).toBeInstanceOf(DuplicateStagedSkillError);
-    expect((thrown as DuplicateStagedSkillError).name === 'DuplicateStagedSkillError').toBe(true);
+    expect((thrown as DuplicateStagedSkillError).name).toBe('DuplicateStagedSkillError');
     expect((thrown as Error).message).toContain('subject');
   });
 

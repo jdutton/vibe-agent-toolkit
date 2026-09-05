@@ -112,7 +112,9 @@ describe('resources scan payload', () => {
     // exist.
     const data = scanPayload(false);
 
-    expect(data.durationSecs).toBe(0.234);
+    // A 5e-11 window: an EXACTNESS check, not a tolerance. The failure it guards
+    // is `234` (milliseconds) leaking into a field named `...Secs`.
+    expect(data.durationSecs).toBeCloseTo(0.234, 10);
     expect(data).not.toHaveProperty('duration');
   });
 

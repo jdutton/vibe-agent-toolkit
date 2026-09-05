@@ -40,8 +40,71 @@ import {
   type NonOverridableCode,
 } from './validation-codes.js';
 
-/** Full code space: registry codes (overridable) + info codes + structural/non-overridable codes. */
-export type ValidationIssueCode = IssueCode | InfoCode | NonOverridableCode;
+/**
+ * What a user-authored check's validation code is prefixed with.
+ *
+ * 🔑 **THE definition site for the `CUSTOM:` code space** — the minter
+ * ({@link customCheckCode}), the acceptor ({@link isCustomCheckCode}) and the
+ * type ({@link CustomCheckCode}) are all below it, and `validation-config.ts`
+ * refines the `validation.severity` key schema with the acceptor.
+ *
+ * That co-location is the whole point, and it was not academic: the minter lived
+ * in `resources` while the config's key schema was the closed registry enum, so
+ * the two spaces disagreed about whether `CUSTOM:my-check` was a code an adopter
+ * could name. It was mintable and unconfigurable, and a config containing what
+ * three separate docs prescribed failed `ProjectConfigSchema` outright — which
+ * is not a `vat resources check` failure but a `loadConfig` failure, so it broke
+ * every command. One definition, in the package at the bottom of the dependency
+ * graph, is what makes that disagreement unrepresentable.
+ */
+export const CUSTOM_CHECK_CODE_PREFIX = 'CUSTOM:';
+
+/**
+ * A finding from a project's own `resources.checks` SQL assertion.
+ *
+ * Namespaced so the user's code space and the shipped registry's stay disjoint
+ * **by construction**. The registry is closed and every entry carries a default
+ * severity, so an un-namespaced user code would either shadow a shipped one or
+ * reach `CODE_REGISTRY[code].defaultSeverity` with no entry to read. A
+ * `CUSTOM:` code never does: it carries the severity its check declared.
+ */
+export type CustomCheckCode = `${typeof CUSTOM_CHECK_CODE_PREFIX}${string}`;
+
+/**
+ * The validation code one named check's findings carry.
+ *
+ * @param name - The check's key in `resources.checks`
+ * @returns The namespaced code
+ */
+export function customCheckCode(name: string): CustomCheckCode {
+  return `${CUSTOM_CHECK_CODE_PREFIX}${name}`;
+}
+
+/**
+ * Whether a code names a user-authored check rather than a shipped one.
+ *
+ * Deliberately NOT a regex, and deliberately not stricter than
+ * `resources.checks` itself. That record is keyed by `z.string()`, so a check
+ * name may hold dots, spaces, anything non-empty; a pattern narrower than that
+ * would make a legitimately-named check UN-OVERRIDABLE — an adopter told they
+ * could silence an inherited check, writing the only key that could silence it,
+ * and having their whole config refused. So the rule is exactly the minter's
+ * shape read backwards: the prefix, then a name.
+ *
+ * The one thing it must still refuse is the bare prefix. `CUSTOM:` names no
+ * check, and accepting it would let a typo sit in a config silently overriding
+ * nothing.
+ *
+ * @param code - Any validation code
+ * @returns True iff `code` is `CUSTOM:` followed by a non-empty name
+ */
+export function isCustomCheckCode(code: string): code is CustomCheckCode {
+  return code.startsWith(CUSTOM_CHECK_CODE_PREFIX)
+    && code.length > CUSTOM_CHECK_CODE_PREFIX.length;
+}
+
+/** Full code space: registry codes (overridable) + info codes + structural/non-overridable codes + user checks. */
+export type ValidationIssueCode = IssueCode | InfoCode | NonOverridableCode | CustomCheckCode;
 
 /**
  * Host-independent absolute-path test, mirroring `isAbsoluteAnyPlatform` in

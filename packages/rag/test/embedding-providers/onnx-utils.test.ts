@@ -5,10 +5,10 @@
  * without requiring model downloads.
  */
 
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -147,7 +147,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await rm(vocabDir, { recursive: true, force: true });
+  await removeScratchDir(vocabDir);
 });
 
 // ---------------------------------------------------------------------------
@@ -317,7 +317,7 @@ describe('BertTokenizer', () => {
     it('should produce attention mask of all 1s for real tokens', () => {
       const result = tokenizer.tokenize(helloWorld);
 
-      expect(result.attentionMask.length).toBe(result.inputIds.length);
+      expect(result.attentionMask).toHaveLength(result.inputIds.length);
       expect(result.attentionMask.every((v) => v === 1)).toBe(true);
     });
 
@@ -365,8 +365,10 @@ describe('BertTokenizer', () => {
 
     it('should report exactly how many content tokens truncation dropped', () => {
       // Truncation used to `break` out of the loop with no throw, warning,
-      // counter or flag — 42-44% of a real corpus vanished into the model
-      // without a single observable signal. The dropped count is that signal.
+      // counter or flag, returning a well-formed array of exactly the legal
+      // length — so checking return values could never find it. The dropped
+      // count is the signal that was missing. (The old "42-44%" rate is
+      // retired; the mechanism is the durable part.)
       const maxLength = 5; // [CLS] + 3 content + [SEP]
       // longPhrase is 8 in-vocab single-piece words => 8 content tokens.
       const expectedDropped = 5;
@@ -388,10 +390,10 @@ describe('BertTokenizer', () => {
 
       const result = tokenizer.tokenize(longPhrase, maxLength);
 
-      expect(result.inputIds.length).toBe(maxLength);
+      expect(result.inputIds).toHaveLength(maxLength);
       expect(safeGet(result.inputIds, 0)).toBe(CLS_TOKEN);
       expect(safeGet(result.inputIds, result.inputIds.length - 1)).toBe(SEP_TOKEN);
-      expect(result.attentionMask.length).toBe(result.inputIds.length);
+      expect(result.attentionMask).toHaveLength(result.inputIds.length);
     });
   });
 

@@ -1,6 +1,3 @@
-/* eslint-disable sonarjs/slow-regex */
-// Test assertions legitimately use regex patterns
-
 import { it, beforeAll, afterAll } from 'vitest';
 
 import {
@@ -73,7 +70,7 @@ describe('Context detection (system test)', () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/\d+\.\d+\.\d+/);
+    expect(result.stdout).toMatch(/\d{1,9}\.\d{1,9}\.\d{1,9}/);
   });
 
   it('should detect local context when project has node_modules', () => {
@@ -88,7 +85,7 @@ describe('Context detection (system test)', () => {
 
     // Should still work (falls back to global)
     expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/\d+\.\d+\.\d+/);
+    expect(result.stdout).toMatch(/\d{1,9}\.\d{1,9}\.\d{1,9}/);
   });
 
   it('should fall back to global context', () => {

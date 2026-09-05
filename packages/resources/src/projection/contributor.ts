@@ -110,6 +110,43 @@ export interface ExtentContributor {
    */
   readonly readsBlobs: boolean;
   /**
+   * Registration-time state that changes the rows this contributor produces,
+   * and which its parameter set does not name.
+   *
+   * ## Why this exists at all — the hole it closes was measured, not imagined
+   *
+   * The reuse rule reads a stored extent as an answer to `(contributorId,
+   * parameterSet)`. That pair is the *whole* question only while every input a
+   * contributor reads reaches it through one of the two. A constructor argument
+   * reaches it through neither, so two registrations of one class, under one id,
+   * under one parameter set, can produce materially different rows and be served
+   * each other's answer.
+   *
+   * `FilesystemExtentContributor`'s `contentDemand` is that argument.
+   * `DECLINE_IGNORED`'s docstring places it in the constructor on the grounds
+   * that it "changes what a row *says* (`contentState`), never which rows
+   * exist" — which is true, and incomplete in one direction. A `'deferred'`
+   * registration keys nothing, so `keyedContentKeys` returns the empty list and
+   * `blobFactsCover` — the guard that stops a blob-reading run accepting a
+   * content-less extent — passes **vacuously**, having no keys to fail on. The
+   * deriving run then hydrates four empty blob tables and reports success.
+   *
+   * ⇒ Whatever a contributor learns at construction and cannot state in a
+   * parameter set is declared here, and {@link storeKeyFor} folds it into the
+   * key beside the run's other ambient inputs.
+   *
+   * ## Optional, and here that is the SAFE direction
+   *
+   * Unlike {@link readsBlobs}, whose absent value would be an *assertion* about
+   * a contributor nobody checked, an absent value here adds nothing to a key
+   * that already separates on everything else. It cannot admit a hit that would
+   * otherwise miss; it can only fail to separate one the author never declared.
+   * So a contributor whose constructor takes nothing — or whose arguments are
+   * already folded into its {@link id}, as `ClosureExtentContributor`'s are —
+   * correctly says nothing.
+   */
+  readonly registrationQuestion?: JsonValue | undefined;
+  /**
    * Produce this contributor's rows against the projection built so far.
    *
    * @param base - Read-only view of everything merged before this invocation

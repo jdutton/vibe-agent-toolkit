@@ -20,17 +20,23 @@ wrong one.
 | Cross-cutting or component concept — "what is X" | `docs/concepts/` | on demand | no |
 | Engineering practice — "how we do X" | `docs/guides/` | on demand | no |
 | Architectural shape and evolution plan | `docs/architecture/` | on demand | no |
-| Design authority with history | `docs/superpowers/specs/` | on demand | no |
-| Implementation plan / phase state | `docs/superpowers/plans/` or git history | n/a | no |
+| Design rationale — why a shape was chosen, what was rejected, the measurement that decided it | [`docs/architecture/`](../architecture/README.md) beside the shape it explains, or the docstring of the module that enforces it | on demand | no |
 | Working-on-VAT-itself material (debugging, install internals) | `docs/contributing/` | on demand | no |
 | Deep mechanics, worked examples, long code samples for one package | `packages/<pkg>/docs/<topic>.md` | on demand | no |
 | Author-facing capability | the skill — `SKILL.md` + `resources/` | on demand | **yes** |
-| One-run metric, personal attribution, PR reference, commit SHA, status date | **delete** | n/a | n/a |
+| One-run metric, personal attribution, PR reference, commit SHA, status date, implementation plan, phase state | **delete** — git history holds it | n/a | n/a |
 
 VAT has no ADR directory today — an architectural *decision* (as opposed to the current shape) has no
-dedicated home yet and currently lands as prose in `docs/architecture/*.md` or the owning spec. That's
-a known gap, not a resolved routing choice; don't invent an ADR mechanism to fill it as a side effect
-of a routing pass.
+dedicated home yet and currently lands as prose in `docs/architecture/*.md`, next to the shape it
+decided. That's a known gap, not a resolved routing choice; don't invent an ADR mechanism to fill it
+as a side effect of a routing pass.
+
+⚠️ **There is no committed design-spec directory, so "put it in the spec" is not an available
+answer.** Rationale and rejected alternatives go into the committed document that owns the shape —
+[`docs/architecture/`](../architecture/README.md) — or into the docstring of the module that enforces
+it. `packages/resources/src/content-key.ts` ("Why there is no git rung here") and
+`packages/resources/src/cache-namespace.ts` (the rejected build fingerprint, with the measurement that
+rejected it) are the worked examples of the docstring form.
 
 ## The extraction procedure
 
@@ -60,14 +66,16 @@ whose opening line is contraband never carries a rule out with it.
 The order is load-bearing: contraband is removed first because removing it frequently brings an
 over-budget file back under budget without touching a single rule.
 
-## Two rulings, carried over unchanged
+## Two standing rulings
 
-- **Decision history that isn't in a spec isn't a category.** Design exploration folds into the spec
-  that owns it; a decision with no spec home is a signal the spec is incomplete, not that `CLAUDE.md`
-  should hold it.
+- **Decision history is not a category of its own.** Design exploration folds into the committed
+  document that owns the shape it explains — a `docs/architecture/*.md` page, or the docstring of the
+  module that enforces the shape. A decision with no such home is a signal that document is
+  incomplete, not that `CLAUDE.md` should hold it.
 - **A contract number is not a one-run metric.** A durable invariant — a count code enforces — belongs
   in code as a named constant, and docs cite the constant, never the number. A measurement that must
-  persist belongs in the owning spec's evidence trail, dated.
+  persist belongs, dated and with its corpus, in the committed document that owns the shape it
+  measures.
 
 ## Reachability is the gate this depends on
 

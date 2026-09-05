@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/cli",
-  "version": "0.2.0-rc.4",
+  "version": "0.2.0-rc.5",
   "description": "Command-line interface for vibe-agent-toolkit",
   "type": "module",
   "bin": {
@@ -43,16 +43,17 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "//dependencies-note": "DO NOT add example agent packages or adopter packages here. Adopter packages (like vat-development-agents) depend on the CLI binary at build time — declaring them as deps creates a circular build dependency. They are built in a second turbo pass via package#task overrides in turbo.json.",
+  "//dependencies-note": "DO NOT add example agent packages or adopter packages here. Adopter packages (like vat-development-agents) depend on the CLI binary at build time \u2014 declaring them as deps creates a circular build dependency. They are built in a second turbo pass via package#task overrides in turbo.json.",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
     "@vibe-agent-toolkit/agent-config": "workspace:*",
-    "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/agent-skills": "workspace:*",
     "@vibe-agent-toolkit/claude-marketplace": "workspace:*",
     "@vibe-agent-toolkit/discovery": "workspace:*",
     "@vibe-agent-toolkit/gateway-mcp": "workspace:*",
+    "@vibe-agent-toolkit/projection-sqlite": "workspace:*",
     "@vibe-agent-toolkit/resources": "workspace:*",
+    "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "adm-zip": "^0.6.0",
     "commander": "^12.1.0",
@@ -69,6 +70,8 @@
     "@types/semver": "^7.7.1",
     "@types/tar": "^6.1.13",
     "@vibe-agent-toolkit/dev-tools": "workspace:*",
+    "@vibe-agent-toolkit/rag": "workspace:*",
+    "@vibe-agent-toolkit/rag-lancedb": "workspace:*",
     "rimraf": "^6.0.1",
     "typescript": "^5.7.3",
     "vitest": "^3.2.4"
@@ -80,9 +83,17 @@
     "type": "git",
     "url": "https://github.com/jdutton/vibe-agent-toolkit.git"
   },
-  "optionalDependencies": {
-    "@vibe-agent-toolkit/projection-sqlite": "workspace:*",
+  "//peerDependencies-note": "The RAG backends are OPTIONAL PEERS, never optionalDependencies. `optionalDependencies` are INSTALLED BY DEFAULT by npm and pnpm alike - 'optional' there means the install may fail without failing the build, not that it is skipped - so declaring them that way shipped ~240 MB (onnxruntime-web 136 MB, a LanceDB platform binary 93 MB, a third apache-arrow, protobufjs) to every adopter, contradicting the seam in src/utils/optional-backend.ts that exists precisely to keep them out. Optional peers are NOT auto-installed, so the manifest now says what that module already says: these ship separately, and an absent one is a legible error naming the package to install. projection-sqlite is deliberately NOT in this group: it has zero third-party dependencies (only node:sqlite, which is built into Node) and a 152 KB dist, so the platform-binary argument that justifies the seam is simply false for it. It is also what `vat resources query` builds its ephemeral in-memory store from, and a query surface that works only where a backend was separately installed is the capability gate the projection design forbids.",
+  "peerDependencies": {
     "@vibe-agent-toolkit/rag": "workspace:*",
     "@vibe-agent-toolkit/rag-lancedb": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@vibe-agent-toolkit/rag": {
+      "optional": true
+    },
+    "@vibe-agent-toolkit/rag-lancedb": {
+      "optional": true
+    }
   }
 }

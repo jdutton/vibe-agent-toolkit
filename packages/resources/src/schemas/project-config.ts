@@ -135,20 +135,69 @@ export const CollectionConfigSchema = z.object({
 export type CollectionConfig = z.infer<typeof CollectionConfigSchema>;
 
 /**
+ * One SQL assertion a project makes about its own projection.
+ *
+ * 🔑 **The statement selects the VIOLATIONS.** Zero rows is the pass. The
+ * inverse spelling — select what must exist, assert non-empty — has a far worse
+ * failure mode: a typo'd table, a renamed column or a `WHERE` that matches
+ * nothing all return zero rows and read as success. Here they read as success
+ * too, but success is what selecting nothing MEANS, so the two cannot be
+ * confused into an assertion that silently stopped testing anything.
+ *
+ * See `projection/sql-checks.ts` for how rows become findings.
+ */
+export const ResourceCheckSchema = z.object({
+  description: z.string().min(1)
+    .describe('What this check asserts, in the author\'s own words. REQUIRED: it becomes the finding\'s message, and a check whose intent is only inferable from its SQL is one nobody can review or act on.'),
+  sql: z.string().min(1)
+    .describe('One read-only SQL statement selecting the VIOLATING rows — zero rows is a pass. It must BEGIN with `SELECT`, `WITH` or `VALUES`; the first significant token decides, and anything else — `ATTACH`, `PRAGMA`, `EXPLAIN`, any write — is refused before it reaches SQLite, because a statement the engine accepts without producing rows cannot be told apart from a check that passed. (`EXPLAIN` is refused even though it is side-effect free: it is a PREFIX, and admitting one would mean deciding safety by looking past the first token.) Each returned row becomes one finding; a selected `path` column anchors that finding to the file. Runs against the same projection `vat resources query` reads, under PRAGMA query_only. A second statement is refused — SQLite would compile only the first and discard the rest without error — but a COMMENT after the terminating semicolon is accepted (`... ;  -- see ADR-14`), which SQL written as a YAML block scalar ends with routinely.'),
+  severity: z.enum(['error', 'warning', 'info'])
+    .optional()
+    .describe('How a violation is reported. Defaults to `error` — the safe direction, since a check whose author did not think about severity is still an assertion they wanted enforced. An adopter can override it per code through resources.validation.severity, including to `ignore`.'),
+}).strict().describe('A SQL assertion over the resource projection');
+
+export type ResourceCheck = z.infer<typeof ResourceCheckSchema>;
+
+/**
  * Resources section of project configuration.
+ *
+ * 🔑 **Strict, and the reason is the same one `ValidationConfigSchema` gives.** A
+ * mistyped key is the failure this block is most likely to see, and a
+ * passthrough object would ACCEPT `cheks:` and then STRIP it: the parse
+ * succeeds, so every rule under the typo is gone and nothing anywhere says so.
+ * A config whose only spelling is `cheks:` reads as one that declared no checks
+ * at all, and one that also spells `checks:` correctly keeps that half and loses
+ * the other silently — with `checks` present, `vat resources check`'s loud
+ * "no checks are declared" warning cannot even fire. The silent outcome is an
+ * unenforced RULE: the adopter believes a gate exists and it never runs.
+ *
+ * ⚠️ **"Every nested block here is already strict" is what this docstring used to
+ * say, and it was FALSE.** `ResourceCheckSchema`, `ValidationConfigSchema` and
+ * `LinkAuthConfigSchema` are strict; {@link CollectionConfigSchema},
+ * `CollectionValidationSchema` and `ExternalUrlValidationSchema` are NOT, so a
+ * misspelled key inside a collection is still accepted and stripped today. That
+ * is the same defect this block was tightened to close, one level down, and it
+ * is left open deliberately rather than by oversight: tightening it is a second
+ * breaking change for every adopter config in the wild, and this repo has
+ * already learned the hard way (see `config-issues.ts`) that such a change needs
+ * its own CHANGELOG note and its own real-adopter run rather than a ride-along
+ * in someone else's PR. Do not "restore" the old sentence; close the gap or
+ * leave the warning.
  */
 export const ResourcesConfigSchema = z.object({
   include: z.array(z.string()).optional()
-    .describe('Global default include patterns (not used by collections in Phase 2)'),
+    .describe('Global default include patterns for the SCANNING lane — `vat resources scan` and `vat resources validate`. ⚠️ It does NOT scope the projection, so it does not scope `vat resources query` or `vat resources check`: those read the tracked tree. See `exclude` for the measurement.'),
   exclude: z.array(z.string()).optional()
-    .describe('Global default exclude patterns (not used by collections in Phase 2)'),
+    .describe('Global default exclude patterns for the SCANNING lane — `vat resources scan` and `vat resources validate`. ⚠️ **It does NOT constrain the projection**, so `vat resources query` and `vat resources check` still see every path listed here. That is what a projection IS — the tree, not a view of it — and `.gitignore` IS honoured, so this is not a junk-enumeration problem. Measured on one adopter: `scan` reported 1,473 files while the same tree\'s projection held 11,685 members, 142 of them under a directory listed here. A check written against a path you excluded will fire on it; narrow the check\'s own SQL with a `WHERE path NOT LIKE …` predicate.'),
   collections: z.record(z.string(), CollectionConfigSchema).optional()
     .describe('Named collections of resources'),
   validation: ValidationConfigSchema.optional()
     .describe('Validation framework config: severity overrides and per-code allow entries (applied inside ResourceRegistry.validate)'),
   linkAuth: LinkAuthConfigSchema.optional()
     .describe('Authenticated external link resolution config (issue #113 / link-auth engine)'),
-}).describe('Resources section of project configuration');
+  checks: z.record(z.string(), ResourceCheckSchema).optional()
+    .describe('Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code.'),
+}).strict().describe('Resources section of project configuration');
 
 export type ResourcesConfig = z.infer<typeof ResourcesConfigSchema>;
 

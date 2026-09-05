@@ -162,7 +162,7 @@ function resolveAndSpawn(
   }
 
   const shellLine = buildWindowsShellLine(resolveShellCommandToken(command, commandPath), args);
-  // eslint-disable-next-line sonarjs/os-command -- Windows DEP0190 workaround: command resolved via which.sync(); args are per-arg shell-quoted via windowsShellQuote()
+   
   return spawnSync(shellLine, { ...spawnOptions, shell: true });
 }
 

@@ -61,6 +61,7 @@ import { EXTENT_SOURCE_ENV, EXTENT_SOURCE_GIT } from '../src/projection/crawl-so
 import { serializeProjection } from '../src/projection/export.js';
 import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
+import type { ContentDemand } from '../src/projection/realizations.js';
 import type {
   BlobScopedRows,
   ExtentKey,
@@ -362,10 +363,22 @@ function extentKeyOf(key: ExtentKey): string {
 // Driving the corpus
 // ---------------------------------------------------------------------------
 
-/** The filesystem extent alone — a population that reads no blob table. */
-function filesystemOnly(): ContributorRegistry {
+/**
+ * The filesystem extent alone — a population that reads no blob table.
+ *
+ * @param contentDemand - What this registration asks be keyed, or omitted to
+ *   leave the historical default in place. Constructed by the no-argument form
+ *   when omitted rather than by passing the default literal, so the arm that
+ *   states nothing stays the arm that shipped
+ * @returns A registry holding one contributor
+ */
+function filesystemOnly(contentDemand?: ContentDemand): ContributorRegistry {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
+  registry.register(
+    contentDemand === undefined
+      ? new FilesystemExtentContributor()
+      : new FilesystemExtentContributor(undefined, contentDemand),
+  );
   return registry;
 }
 
@@ -622,6 +635,64 @@ describe('populate through a projection store', () => {
       // confidently wrong membership.
       expect(viaGit.contributorRuns.length).toBeGreaterThan(0);
       expect(store.writeExtentCalls).toBe(2);
+    });
+
+    it('misses when the stored run deliberately keyed no content and this one needs it', async () => {
+      // 🚨 The THIRD ambient input, and the one the blob-coverage rule cannot
+      // catch. `contentDemand` is a CONSTRUCTOR argument on the filesystem
+      // extent, deliberately not a parameter set — `DECLINE_IGNORED`'s docstring
+      // argues it "changes what a row says, never which rows exist", so it is
+      // absent from `zone_provenance` and the reuse rule cannot see it.
+      //
+      // That argument is incomplete in exactly one direction. A `'deferred'`
+      // registration keys NOTHING, so its realizations carry
+      // `contentState: 'deferred'` and `keyedContentKeys` returns the empty
+      // list — which makes `blobFactsCover` vacuously TRUE. The guard that
+      // exists to stop a blob-reading run accepting a content-less extent
+      // passes it, because there are no keys to fail on.
+      //
+      // So a deriving run hits an extent that names no bytes, hydrates four
+      // empty blob tables, and reports success. That is the silent-emptiness
+      // failure the coverage rule was written for, arriving by the one route it
+      // does not cover — and it is reachable by default the moment two lanes
+      // over one tree ask the same registered question under different demands.
+      const store = new FakeProjectionStore();
+      const deferred = await run({
+        registry: filesystemOnly('deferred'),
+        store,
+        contentParsing: CONTENT_PARSING_SKIP,
+      });
+      // The stored extent is real and non-empty — it simply names no content.
+      // Without this the assertion below could pass on an extent that was never
+      // written at all.
+      expect(deferred.projection.resourceRealizations.length).toBeGreaterThan(0);
+      expect(store.writeExtentCalls).toBe(1);
+
+      const deriving = await run({ registry: filesystemOnly(), store });
+
+      expect(deriving.contributorRuns).toContain(`${FILESYSTEM_ID}@1`);
+      expect(deriving.projection.blobs.length).toBeGreaterThan(0);
+      expect(store.writeExtentCalls).toBe(2);
+    });
+
+    it('still hits when both runs asked for the same demand, so the demand did not simply stop matching', async () => {
+      // The control for the miss above, and it is what stops the fix being "add
+      // something that never matches". Two `'deferred'` runs are one question
+      // and must still share an answer.
+      const store = new FakeProjectionStore();
+      const first = await run({
+        registry: filesystemOnly('deferred'),
+        store,
+        contentParsing: CONTENT_PARSING_SKIP,
+      });
+      const second = await run({
+        registry: filesystemOnly('deferred'),
+        store,
+        contentParsing: CONTENT_PARSING_SKIP,
+      });
+
+      expect(second.contributorRuns).toEqual([]);
+      expect(second.document).toBe(first.document);
     });
 
     it('still hits when the ambient inputs match, so the key did not simply stop working', async () => {

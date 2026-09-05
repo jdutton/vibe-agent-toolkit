@@ -108,7 +108,7 @@ describe('isGitIgnored', () => {
     // The walk is the whole point of this branch: file + three ancestors = 4 calls.
     // Pinning the exact count means the `gitFindRoot` short-circuit cannot quietly
     // truncate the in-repository symlink recovery.
-    expect(vi.mocked(runGit).mock.calls.length).toBe(4);
+    expect(vi.mocked(runGit).mock.calls).toHaveLength(4);
   });
 
   /**
@@ -137,7 +137,7 @@ describe('isGitIgnored', () => {
     vi.mocked(runGit).mockReturnValue(makeRunResult(1));
 
     expect(isGitIgnored('src/index.ts', CWD)).toBe(false);
-    expect(vi.mocked(runGit).mock.calls.length).toBe(1);
+    expect(vi.mocked(runGit).mock.calls).toHaveLength(1);
   });
 
   it('returns false when exit 128 and ancestor walk is exhausted without finding ignored parent', () => {

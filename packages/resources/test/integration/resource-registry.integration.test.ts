@@ -161,7 +161,7 @@ describe('ResourceRegistry - Integration Tests', () => {
       const validPath = safePath.join(fixturesDir, 'valid.md');
       const resource = await registry.addResource(validPath);
 
-      expect(resource.links.length).toBe(4);
+      expect(resource.links).toHaveLength(4);
 
       // Check link types
       const linkTypes = resource.links.map((link) => link.type);
@@ -501,7 +501,7 @@ describe('ResourceRegistry - Integration Tests', () => {
       it('should match resources by glob pattern', () => {
         const resources = registry.getResourcesByPattern(VALID_MD_PATTERN);
 
-        expect(resources.length).toBe(1);
+        expect(resources).toHaveLength(1);
         expect(resources[0]?.id).toBe('valid-md');
       });
 

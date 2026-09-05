@@ -109,7 +109,7 @@ describe('file-crawler', () => {
         include: ['**/*.md'],
       });
 
-      expect(files.length).toBe(4); // README.md, guide.md, api.md, performance.md
+      expect(files).toHaveLength(4); // README.md, guide.md, api.md, performance.md
       expect(files.every((f) => f.endsWith('.md'))).toBe(true);
       expect(files.some((f) => f.endsWith('README.md'))).toBe(true);
       expect(files.some((f) => f.includes('node_modules'))).toBe(false);
@@ -124,7 +124,7 @@ describe('file-crawler', () => {
         exclude: ['**/docs/**', '**/node_modules/**'],
       });
 
-      expect(files.length).toBe(1); // Only README.md
+      expect(files).toHaveLength(1); // Only README.md
       expect(files[0]).toMatch(/README\.md$/);
     });
 
@@ -136,7 +136,7 @@ describe('file-crawler', () => {
         include: ['docs/**/*.md'],
       });
 
-      expect(files.length).toBe(3); // guide.md, api.md, performance.md
+      expect(files).toHaveLength(3); // guide.md, api.md, performance.md
       expect(files.every((f) => f.includes('docs'))).toBe(true);
     });
 
@@ -149,7 +149,7 @@ describe('file-crawler', () => {
         absolute: false,
       });
 
-      expect(files.length).toBe(4);
+      expect(files).toHaveLength(4);
       expect(files.every((f) => !path.isAbsolute(f))).toBe(true);
       expect(files.includes('README.md')).toBe(true);
     });
@@ -162,7 +162,7 @@ describe('file-crawler', () => {
         include: ['**/*.md', '**/*.ts'],
       });
 
-      expect(files.length).toBe(6); // 4 .md files + 2 .ts files
+      expect(files).toHaveLength(6); // 4 .md files + 2 .ts files
       expect(files.some((f) => f.endsWith('.md'))).toBe(true);
       expect(files.some((f) => f.endsWith('.ts'))).toBe(true);
     });
@@ -221,7 +221,7 @@ describe('file-crawler', () => {
         exclude: ['**/advanced/**', '**/node_modules/**'], // Include node_modules in exclude
       });
 
-      expect(files.length).toBe(3); // Excludes docs/advanced/performance.md and node_modules
+      expect(files).toHaveLength(3); // Excludes docs/advanced/performance.md and node_modules
       expect(files.some((f) => f.includes('performance'))).toBe(false);
       expect(files.some((f) => f.includes('node_modules'))).toBe(false);
     });
@@ -234,7 +234,7 @@ describe('file-crawler', () => {
         include: ['**/g*.md'], // guide.md
       });
 
-      expect(files.length).toBe(1);
+      expect(files).toHaveLength(1);
       expect(files[0]).toMatch(/guide\.md$/);
     });
 
@@ -250,7 +250,7 @@ describe('file-crawler', () => {
         });
 
         // Should only find README.md, not link.md (symlink)
-        expect(files.length).toBe(1);
+        expect(files).toHaveLength(1);
         expect(files[0]).toMatch(/README\.md$/);
       });
 
@@ -265,7 +265,7 @@ describe('file-crawler', () => {
         });
 
         // Should find README.md and link.md (followed symlink)
-        expect(files.length).toBe(2);
+        expect(files).toHaveLength(2);
       });
 
       it('should enumerate each real file once when a directory symlink loops', () => {
@@ -336,7 +336,7 @@ describe('file-crawler', () => {
         include: ['**/*.md'],
       });
 
-      expect(files.length).toBe(4);
+      expect(files).toHaveLength(4);
       expect(files.every((f) => f.endsWith('.md'))).toBe(true);
     });
 
@@ -370,7 +370,7 @@ describe('file-crawler', () => {
         include: ['docs/**/*.md'], // Always forward slashes in patterns
       });
 
-      expect(files.length).toBe(3);
+      expect(files).toHaveLength(3);
       expect(files.every((f) => f.includes('docs'))).toBe(true);
     });
 

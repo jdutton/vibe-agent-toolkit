@@ -56,6 +56,30 @@ resources:
     expect(() => loadConfig(tempDir)).toThrow();
   });
 
+  it('refuses a key VAT removed, and says so in words the adopter can act on', () => {
+    // The BLOCKER the crucible found: `resources.metadata` was accepted and
+    // silently stripped for releases, then became a hard config-load failure
+    // that took out all five verbs on a real adopter tree — reported as a raw
+    // JSON dump naming neither the file nor a remedy.
+    const configPath = safePath.join(tempDir, CONFIG_FILENAME);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
+    fs.writeFileSync(configPath, 'version: 1\nresources:\n  metadata:\n    frontmatter: true\n');
+
+    let message = '';
+    try {
+      loadConfig(tempDir);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain(configPath);
+    expect(message).toContain('resources: unrecognized key "metadata"');
+    expect(message).toContain('removed from VAT\'s schema');
+    expect(message).toContain('Accepted here:');
+    // The regression guard: `ZodError.message` is the issue array, serialized.
+    expect(message).not.toContain('"code":');
+  });
+
   it('should throw on invalid YAML syntax', () => {
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
     const configContent = `invalid: yaml: syntax:\n`;

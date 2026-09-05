@@ -51,6 +51,7 @@ import {
   countBySeverity,
   type SeverityCounts,
   type ValidationIssue,
+  type SeverityConfig,
 } from '@vibe-agent-toolkit/schema';
 import {
   findProjectRoot,
@@ -797,7 +798,8 @@ function applySeverityFilter(
       : (skillsConfig.config?.[skillName]?.validation?.severity ?? {});
 
     // Merge: per-skill overrides default
-    const effectiveSeverity: Record<string, string> = { ...defaultSeverity, ...perSkillSeverity };
+    const effectiveSeverity: NonNullable<SeverityConfig['severity']> =
+      { ...defaultSeverity, ...perSkillSeverity };
 
     if (Object.keys(effectiveSeverity).length === 0) {
       return result;
@@ -1021,7 +1023,10 @@ export async function auditCommand(
     const scanPath = targetPath ? safePath.resolve(targetPath) : process.cwd();
     await runAuditAtPath(scanPath, options);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'AgentAudit');
+    // 'Audit', not 'AgentAudit'. The old name was copy-pasted from the agent
+    // command family and named a command that does not exist, so the one line an
+    // operator has to search for did not match what they typed.
+    handleCommandError(error, logger, startTime, 'Audit');
   }
 }
 
@@ -1664,6 +1669,17 @@ function findingSubject(result: ValidationResult, root: string): string {
 }
 
 /**
+ * The clause every "audit found errors" line ends with.
+ *
+ * One string because the two summary lanes — per-file and per-skill — both make
+ * the same claim and used to word it differently, which is how one of them ended
+ * up saying "Audit failed" over an exit code of 0. Naming the command that DOES
+ * gate is the actionable half: an adopter reading "advisory" still has to be
+ * told what to reach for instead.
+ */
+const ADVISORY_EXIT_NOTE = '— advisory, exit 0; use `vat validate` to gate on this';
+
+/**
  * Render supporting evidence beneath each CAPABILITY_* issue when the
  * audit was invoked with --verbose. Evidence comes from the validation
  * result itself (per-file SKILL evidence) and from any attached
@@ -1713,10 +1729,15 @@ function handleAuditResults(
     logger.error(`\u26a0 ${totalSettingsConflicts} settings conflict(s) found — see 'settings' section in YAML output`);
   }
 
-  // Audit is advisory only — always exit 0 for validation results.
-  // Use vat skills validate for gated validation (exit 1 on errors).
+  // 🔑 Audit is advisory only — always exit 0 for validation results, and the
+  // WORDING has to agree with that or the three signals contradict each other.
+  // This line used to read "Audit failed", beside `status: error` in the
+  // document, on exit 0: an adopter wiring `vat audit` into CI read a failure,
+  // saw a failure status, and got a green step. "Found" is what actually
+  // happened; the gate is `vat validate`, which is named here rather than
+  // implied.
   if (errorCount > 0) {
-    logger.error(`Audit failed: ${errorCount} file(s) with errors`);
+    logger.error(`Audit found ${errorCount} file(s) with errors ${ADVISORY_EXIT_NOTE}`);
     logFindingsForStatus(results, 'error', summary.root, logger.error.bind(logger), verbose);
   } else if (warningCount > 0) {
     logger.info(`Audit passed with warnings: ${warningCount} file(s)`);
@@ -2662,7 +2683,7 @@ function logHierarchicalSummary(
   // Use vat skills validate for gated validation (exit 1 on errors).
   if (status === 'error') {
     const errorCount = results.filter((r: ValidationResult) => r.status === 'error').length;
-    logger.error(`Audit found ${errorCount} skill(s) with errors (${totalSkills} scanned, ${skillsWithIssues} with issues)`);
+    logger.error(`Audit found ${errorCount} skill(s) with errors (${totalSkills} scanned, ${skillsWithIssues} with issues) ${ADVISORY_EXIT_NOTE}`);
   } else if (status === 'warning') {
     const warningCount = results.filter((r: ValidationResult) => r.status === 'warning').length;
     logger.info(`Audit passed with warnings: ${warningCount} skill(s) (${totalSkills} scanned, ${skillsWithIssues} with issues)`);
