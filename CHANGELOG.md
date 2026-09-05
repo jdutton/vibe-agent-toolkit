@@ -11,6 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### CLI
 
+- **VAT now requires Node >= 22.13.0, raised from >= 22.0.0 across every package.** This corrects a
+  promise VAT was already failing to keep rather than removing support anyone had: `vat resources
+  query` and `vat resources check` build their projection through `node:sqlite`, which arrived in
+  **22.13.0**, so on Node 22.0–22.12 those two commands could not run at all while every manifest
+  advertised them as supported. Thirteen patch releases were claimed and not delivered. If you are
+  on Node 22.0–22.12, upgrade to 22.13.0 or newer; every other Node that worked before still works.
+
+  **`vat doctor` was the worst offender and is fixed in the same change.** It compared the MAJOR
+  version only, against `20` — so it reported `v20.0.0` and `v22.0.0` as healthy environments, with
+  the message `meets requirement: >=20.0.0`, a third number matching neither the manifests nor
+  reality. A doctor that green-lights an environment the toolkit cannot run in ends the user's
+  investigation at exactly the wrong moment. It now reads `engines.node` from the CLI's own manifest
+  and compares the full range, so the floor has one source and this check cannot drift behind it
+  again. The sample output in `packages/cli/README.md` and `packages/cli/docs/doctor.md` showed the
+  same stale `>=20.0.0` and has been corrected.
+
 - **The RAG backends are no longer installed for you — `npm install` no longer brings the RAG lane
   with it.** They were declared as `optionalDependencies`, which npm and pnpm
   **install by default** (there, "optional" means the install may fail without failing the build, not

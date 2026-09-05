@@ -20,7 +20,7 @@ import type { DoctorCheckResult, DoctorOutcome } from '../../src/commands/doctor
  * Environment mock configuration
  */
 export interface DoctorEnvironmentConfig {
-  /** Node.js version string (default: 'v22.0.0') */
+  /** Node.js version string (default: 'v22.13.0', the declared floor) */
   nodeVersion?: string | null;
   /** Git version string (default: 'git version 2.43.0') */
   gitVersion?: string | null;
@@ -40,6 +40,13 @@ export interface DoctorFileSystemConfig {
   configContent?: string;
   /** Whether in VAT source tree (default: false) */
   isVatSourceTree?: boolean;
+  /**
+   * The `engines.node` range the mocked CLI manifest declares.
+   *
+   * `null` makes it declare none, which is the packaging-fault branch
+   * `checkNodeVersion` reports rather than guessing a floor.
+   */
+  nodeEngines?: string | null;
 }
 
 /**
@@ -91,7 +98,7 @@ export async function mockDoctorEnvironment(
   config?: DoctorEnvironmentConfig,
 ): Promise<() => void> {
   const opts = {
-    nodeVersion: 'v22.0.0',
+    nodeVersion: 'v22.13.0',
     gitVersion: 'git version 2.43.0',
     vatVersion: '0.1.0',
     ...config,
@@ -154,6 +161,7 @@ export async function mockDoctorFileSystem(
     configExists: true,
     configContent: 'version: "1.0"\nagents: {}\n',
     isVatSourceTree: false,
+    nodeEngines: '>=22.13.0' as string | null,
     ...config,
   };
 
@@ -169,9 +177,18 @@ export async function mockDoctorFileSystem(
       const name = isCliPackage
         ? '@vibe-agent-toolkit/cli'
         : 'vibe-agent-toolkit';
+      /*
+       * `engines` is supplied by the fixture, not copied from the real
+       * manifest: `checkNodeVersion` derives the floor from whatever the
+       * manifest declares, so what these tests own is the COMPARISON, not the
+       * number. The real floor is pinned by
+       * `packages/utils/test/package-exports.test.ts`. Pass `nodeEngines: null`
+       * to drive the manifest-declares-nothing branch.
+       */
       return JSON.stringify({
         name,
         version: opts.packageVersion,
+        ...(opts.nodeEngines === null ? {} : { engines: { node: opts.nodeEngines } }),
       });
     }
 

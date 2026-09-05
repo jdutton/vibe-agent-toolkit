@@ -9,8 +9,18 @@
  *
  * What it does carry is a **version floor**. `node:sqlite` first appears in
  * **Node 22.13.0** and is absent from 22.12.0, so this package's `engines`
- * requires `>=22.13.0` while the rest of the toolkit stays at `>=22.0.0` — a
- * backend nobody has to install should not raise everyone else's floor. The
+ * requires `>=22.13.0`.
+ *
+ * ⚠️ **That floor is now the whole toolkit's, and this package is why.** It
+ * used to read "while the rest of the toolkit stays at `>=22.0.0` — a backend
+ * nobody has to install should not raise everyone else's floor." That argument
+ * died when this package stopped being optional: the CLI depends on it
+ * outright, and `vat resources query|check` build their ephemeral store from it
+ * on every run, so Node 22.0–22.12 could not run those commands while the
+ * manifests still advertised support for them. The toolkit floor moved to
+ * `>=22.13.0` to stop advertising what it cannot do. This declaration stays
+ * because the requirement is **intrinsic here** — this is the code that imports
+ * `node:sqlite` — not because it differs any more. The
  * module needs no flag from the Node 24 line onward, but **unflagged is not
  * silent**: it still emits one `ExperimentalWarning` per process there, as it
  * does on Node 22 — verified on 24.13.1. This package deliberately does not

@@ -32,7 +32,7 @@ const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Manifest;
 
 describe('utils package manifest', () => {
   it('declares the Node floor so adopters get an install-time signal', () => {
-    expect(manifest.engines?.node).toBe('>=22.0.0');
+    expect(manifest.engines?.node).toBe('>=22.13.0');
   });
 
   it.each([

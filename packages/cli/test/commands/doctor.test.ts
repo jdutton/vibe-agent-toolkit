@@ -64,33 +64,65 @@ describe('doctor command - unit tests', () => {
   });
 
   describe('checkNodeVersion', () => {
-    it('passes when Node.js >= 20', async () => {
-      await mockDoctorEnvironment({ nodeVersion: 'v22.0.0' });
+    /*
+     * The manifest is filesystem content, and `checkNodeVersion` derives the
+     * required range from it — so these tests need the fs mock as well as the
+     * environment one. Without it the check correctly reports a manifest that
+     * declares no floor, which is a different failure from the one under test.
+     */
+    beforeEach(async () => {
+      await mockDoctorFileSystem();
+    });
+
+    it('passes on the declared floor itself', async () => {
+      await mockDoctorEnvironment({ nodeVersion: 'v22.13.0' });
 
       const result = checkNodeVersion();
 
-      assertCheckPassed(result, CHECK_NODE_VERSION, 'v22.0.0');
+      assertCheckPassed(result, CHECK_NODE_VERSION, 'v22.13.0');
       assertCheckPassed(result, CHECK_NODE_VERSION, 'meets requirement');
     });
 
-    it('passes when Node.js = 20', async () => {
-      await mockDoctorEnvironment({ nodeVersion: 'v20.0.0' });
+    it('passes above the floor', async () => {
+      await mockDoctorEnvironment({ nodeVersion: 'v24.13.1' });
 
       const result = checkNodeVersion();
 
-      assertCheckPassed(result, CHECK_NODE_VERSION, 'v20.0.0');
+      assertCheckPassed(result, CHECK_NODE_VERSION, 'v24.13.1');
     });
 
-    it('fails when Node.js < 20', async () => {
-      await mockDoctorEnvironment({ nodeVersion: 'v18.0.0' });
+    /*
+     * ⭐ The first two rows are the point. The boundary is a MINOR — `node:sqlite`
+     * is absent from 22.12.0 and present in 22.13.0 — so the old `major >= 20`
+     * test could not see the difference between the only two versions that
+     * matter, and reported BOTH `v22.0.0` and `v20.0.0` as healthy environments
+     * in which `vat resources query|check` cannot run at all. A doctor that
+     * green-lights an environment the toolkit cannot run in is worse than no
+     * doctor: it ends the user's investigation at exactly the wrong moment.
+     */
+    it.each([
+      ['v22.12.0', 'one patch below the floor, where node:sqlite is still absent'],
+      ['v22.0.0', 'the version the old major-only check called healthy'],
+      ['v20.0.0', 'two majors below the floor'],
+    ])('fails on %s — %s', async (nodeVersion) => {
+      await mockDoctorEnvironment({ nodeVersion });
+
+      const result = checkNodeVersion();
+
+      assertCheckFailed(result, CHECK_NODE_VERSION, 'too old', 'https://nodejs.org');
+    });
+
+    it('reports a manifest that declares no floor, rather than guessing one', async () => {
+      await mockDoctorFileSystem({ nodeEngines: null });
+      await mockDoctorEnvironment({ nodeVersion: 'v24.13.1' });
 
       const result = checkNodeVersion();
 
       assertCheckFailed(
         result,
         CHECK_NODE_VERSION,
-        'too old',
-        'https://nodejs.org',
+        'declares no engines.node',
+        'Reinstall',
       );
     });
 

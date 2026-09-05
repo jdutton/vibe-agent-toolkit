@@ -115,6 +115,15 @@ export interface DoctorOptions {
 }
 
 // Constants for check names and URLs
+/**
+ * This package's own manifest.
+ *
+ * `../../package.json` resolves to `packages/cli/package.json` from both
+ * `src` and `dist`, which is why every reader in this file uses that form.
+ * Named once so the three of them cannot drift onto different files.
+ */
+const CLI_MANIFEST_URL = new URL('../../package.json', import.meta.url);
+
 const CHECK_NAME_NODE_VERSION = 'Node.js version';
 const NODEJS_INSTALL_URL = 'Install Node.js: https://nodejs.org/';
 const CHECK_NAME_GIT_INSTALLED = 'Git installed';
@@ -126,6 +135,33 @@ const CREATE_CONFIG_SUGGESTION = 'Create vibe-agent-toolkit.config.yaml in proje
 const CHECK_NAME_VAT_VERSION = 'vat version';
 const CHECK_NAME_CLI_BUILD_STATUS = 'CLI build status';
 const CHECK_NAME_COMMAND_MODULES = 'Command modules';
+
+/**
+ * The Node range VAT actually requires, read from this package's own manifest.
+ *
+ * ⛔ **Derived, never written down here.** A second copy of a floor drifts from
+ * the first in silence, and this one had: the check below used to pass anything
+ * whose MAJOR was `>= 20`, while the manifest said `>=22.0.0` and
+ * `vat resources query|check` need 22.13.0 for `node:sqlite`. Three numbers
+ * disagreeing, and the one users were shown was the most permissive — so
+ * `vat doctor` reported a healthy environment that could not run the toolkit.
+ * Reading `engines.node` makes the manifest the single answer, so bumping the
+ * floor cannot leave this check behind.
+ *
+ * @returns The `engines.node` range, or `undefined` when the manifest cannot
+ *   be read or declares none — a packaging fault the caller reports rather
+ *   than papers over with a guess
+ */
+function requiredNodeRange(): string | undefined {
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a URL built from import.meta.url, not from input
+    const manifest: unknown = JSON.parse(readFileSync(CLI_MANIFEST_URL, 'utf8'));
+    const range = (manifest as { engines?: { node?: unknown } }).engines?.node;
+    return typeof range === 'string' && range.length > 0 ? range : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Check Node.js version meets requirements
@@ -143,9 +179,21 @@ export function checkNodeVersion(): DoctorCheckResult {
       };
     }
 
-    const majorVersion = Number.parseInt(version.replace('v', '').split('.')[0] ?? '');
+    // Compared with the full range, not a major: `node:sqlite` arrived in
+    // 22.13.0, so a major-only test passes 22.0.0 for a toolkit that cannot
+    // run `vat resources query` there.
+    const range = requiredNodeRange();
+    if (range === undefined) {
+      return {
+        name: CHECK_NAME_NODE_VERSION,
+        outcome: 'fail',
+        message: 'Cannot determine the required Node.js version: the CLI manifest declares no engines.node',
+        suggestion: 'Reinstall @vibe-agent-toolkit/cli — its package.json is incomplete',
+      };
+    }
 
-    if (Number.isNaN(majorVersion)) {
+    const parsed = semver.coerce(version);
+    if (parsed === null) {
       return {
         name: CHECK_NAME_NODE_VERSION,
         outcome: 'fail',
@@ -154,16 +202,16 @@ export function checkNodeVersion(): DoctorCheckResult {
       };
     }
 
-    return majorVersion >= 20
+    return semver.satisfies(parsed, range)
       ? {
           name: CHECK_NAME_NODE_VERSION,
           outcome: 'pass',
-          message: `${version} (meets requirement: >=20.0.0)`,
+          message: `${version} (meets requirement: ${range})`,
         }
       : {
           name: CHECK_NAME_NODE_VERSION,
           outcome: 'fail',
-          message: `${version} is too old. Node.js 20+ required.`,
+          message: `${version} is too old. Node.js ${range} required.`,
           suggestion: 'Upgrade Node.js: https://nodejs.org/ or use nvm',
         };
   } catch (error) {
@@ -420,9 +468,8 @@ export async function checkVatVersion(
 ): Promise<DoctorCheckResult> {
   try {
     // Get current version from package.json
-    const packageJsonPath = new URL('../../package.json', import.meta.url);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Package.json path is trusted static import
-    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+    const packageJson = JSON.parse(readFileSync(CLI_MANIFEST_URL, 'utf8'));
     const currentVersion = packageJson.version;
 
     // Fetch latest version from npm registry
@@ -632,9 +679,8 @@ export function checkCliBuildSync(projectRoot: string | null): DoctorCheckResult
     }
 
     // Get running version
-    const runningPackagePath = new URL('../../package.json', import.meta.url);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Static import path is safe
-    const runningPackage = JSON.parse(readFileSync(runningPackagePath, 'utf8'));
+    const runningPackage = JSON.parse(readFileSync(CLI_MANIFEST_URL, 'utf8'));
     const runningVersion = runningPackage.version;
 
     // Get source version

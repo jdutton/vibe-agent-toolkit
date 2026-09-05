@@ -103,7 +103,7 @@ report and states how many it hid):
 Running diagnostic checks...
 
 ✅ Node.js version
-   v22.0.0 (meets requirement: >=20.0.0)
+   v22.13.0 (meets requirement: >=22.13.0)
 
 ✅ Git installed
    git version 2.43.0

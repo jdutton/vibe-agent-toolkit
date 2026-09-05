@@ -96,7 +96,7 @@ Running diagnostic checks...
    Current: 0.1.0 — up to date
 
 ✅ Node.js version
-   v22.0.0 (meets requirement: >=20.0.0)
+   v22.13.0 (meets requirement: >=22.13.0)
 
 ✅ Git installed
    git version 2.43.0

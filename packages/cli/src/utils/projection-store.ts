@@ -336,13 +336,19 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
  * names neither the version floor nor the fix.
  *
  * ⚠️ It is reachable on EVERY `vat resources query`/`check` run, and not a
- * corner: VAT's own floor is `>=22.0.0`, so a supported Node hits it. That was
- * already true before the store-selected path stopped querying a shared
- * database — the query lane has always fallen back to
+ * corner: the query lane has always fallen back to
  * {@link openEphemeralQueryStore} when no store is selected, which is the
- * default, so `node:sqlite` was required on every default run. Nothing here
- * became newly reachable; the branch is load-bearing because the FLOOR is,
- * whichever way the lane resolves its store.
+ * default, so `node:sqlite` is required on every default run of those two
+ * commands whichever way the lane resolves its store.
+ *
+ * ✅ **VAT's declared floor is now `>=22.13.0`, so this no longer fires on a
+ * SUPPORTED Node.** It used to: the manifests said `>=22.0.0` while these two
+ * commands could not run below 22.13.0, which meant thirteen Node patch
+ * releases were advertised as supported and hard-failed here. The floor was
+ * raised to stop advertising what VAT cannot do. The branch stays load-bearing
+ * for the Node that is merely *installed* rather than supported — `engines` is
+ * a warning in npm and nothing at all under most runners, so a user on 22.4
+ * still reaches this and still deserves to be told which number is wrong.
  *
  * The repair stays distinct from the missing-package one on purpose:
  * "install this package" is the wrong instruction for "upgrade Node", and
@@ -361,7 +367,7 @@ export function nodeSqliteFloorFailure(error: unknown): Error | undefined {
   if (!isFloor) return undefined;
   return new Error(
     'The projection store needs `node:sqlite`, which this Node does not have.'
-    + ` VAT runs on Node >= 22.0.0, but \`node:sqlite\` arrived in 22.13.0 — you are on ${process.version}.`
+    + ` VAT requires Node >= 22.13.0, which is where \`node:sqlite\` arrived — you are on ${process.version}.`
     + ' Upgrade Node to 22.13.0 or newer. Installing a package will not help:'
     + ' the module is built into Node, not published to npm.',
   );
