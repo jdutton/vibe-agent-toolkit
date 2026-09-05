@@ -37,8 +37,9 @@ Poor fits:
 | TypeScript agent archetypes, `agent.yaml`, result envelopes, orchestration, runtime adapters | `vibe-agent-toolkit:vat-agent-authoring` |
 | `vat audit` on plugins, marketplaces, skills, or settings — including `--compat`, `--exclude`, `--user`, CI use | `vibe-agent-toolkit:vat-audit` |
 | Markdown collections, `resources:` config, frontmatter schema validation, `vat resources validate` | `vibe-agent-toolkit:vat-knowledge-resources` |
+| Asking the resource projection SQL questions (`vat resources query`) or declaring standing SQL assertions that gate CI (`vat resources check`, `--budget`) | `vibe-agent-toolkit:vat-knowledge-resources` |
 | `vat build`, `vat verify`, plugin/marketplace layout, npm publishing, postinstall | `vibe-agent-toolkit:vat-skill-distribution` |
-| `vat rag index` / `vat rag query`, embedding providers, vector stores, chunking | `vibe-agent-toolkit:vat-rag` |
+| `vat rag index` / `vat rag query`, **installing the opt-in RAG backends**, embedding providers, vector stores, chunking | `vibe-agent-toolkit:vat-rag` |
 | Pre-publication quality review, `vat skill review`, validation-code triage | `vibe-agent-toolkit:vat-skill-review` |
 | Behaviorally testing a packaged skill in isolation — `vat skill test run`/`configure`, friction triage, auth modes, security caveats | `vibe-agent-toolkit:vat-skill-testing` |
 | Anthropic Admin API: org users, cost/usage, workspace skills, `ANTHROPIC_ADMIN_API_KEY` | `vibe-agent-toolkit:vat-enterprise-org` |
@@ -54,8 +55,10 @@ vat build                  # build all artifacts (skills → claude plugins)
 vat verify                 # verify built artifacts (after vat build)
 vat skills validate        # validate skill quality
 vat resources validate     # validate markdown collections
+vat resources query <sql>  # one read-only SQL statement over the resource projection
+vat resources check        # run the project's declared SQL assertions (fails CI on violations)
 vat audit                  # audit plugins/skills/marketplaces/settings
-vat rag index docs/        # index markdown for RAG
+vat rag index docs/        # index markdown for RAG (needs @vibe-agent-toolkit/rag-lancedb)
 vat skill review <path>    # pre-publication review
 vat claude org --help      # enterprise admin surface
 ```

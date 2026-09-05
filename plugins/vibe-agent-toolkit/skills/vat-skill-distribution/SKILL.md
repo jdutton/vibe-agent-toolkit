@@ -426,24 +426,38 @@ Produces a ZIP:
 my-skill.zip
 └── my-skill/
     ├── SKILL.md             # skill definition (required)
-    ├── scripts/             # executable code (.mjs, .py, .sh) — optional
-    ├── references/          # markdown reference material — optional
-    └── assets/              # static data, templates, config — optional
+    └── references/          # every auto-discovered bundled file — optional
 ```
 
-Configure source path mappings in `vibe-agent-toolkit.config.yaml`:
+⚠️ **`claude-web` does not route by extension.** The `claude-code` target sorts auto-discovered
+files into `resources/`, `scripts/`, `templates/` and `assets/` by extension; `claude-web`
+flattens *all* of them into `references/` (`getResourceSubdirForFile` in
+`packages/agent-skills/src/skill-packager.ts`). Do not write a skill that expects a
+`scripts/foo.py` path in a claude-web ZIP.
+
+To place a file somewhere the automatic routing would not put it — a build artifact, an unlinked
+file, or a routing override — declare an explicit source→dest mapping with `files:`. Destinations
+are relative to the skill output directory, so they are what fixes the layout for either target:
+
 ```yaml
 skills:
   include:
     - "skills/**/SKILL.md"
   config:
     my-skill:
-      claudeWebTarget:
-        scripts: ["./src/helpers/**/*.ts"]
-        assets: ["./assets/**"]
+      files:
+        - source: "dist/helpers/format.mjs"
+          dest: "scripts/format.mjs"
+        - source: "assets/template.json"
+          dest: "assets/template.json"
 ```
 
-TypeScript files in `scripts` are tree-shaken and compiled to standalone `.mjs`.
+`source` is relative to the project root and may be a glob; `dest` is relative to the skill output
+directory and must stay inside it. See `vibe-agent-toolkit:vat-skill-authoring` for the full
+`files:` semantics.
+
+⚠️ VAT does **not** compile or bundle TypeScript for you. `source` must point at a file that
+already exists at build time — run your own build step first and point `files:` at its output.
 
 ## Quick Reference
 
