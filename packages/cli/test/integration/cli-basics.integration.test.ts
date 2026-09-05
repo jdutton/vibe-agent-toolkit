@@ -214,3 +214,50 @@ describe('deleted `pipeline` verb (absence pin)', () => {
     expect(result.stderr).toContain("unknown command 'pipeline'");
   });
 });
+
+/**
+ * The exit code a USAGE mistake ends on.
+ *
+ * Every command's `--help` publishes the same three-way contract — `0` no
+ * error-severity findings, `1` at least one, `2` a system error — and commander's
+ * default for a usage mistake is `process.exit(1)`. So `vat resources check
+ * --json` (the option is `--format json`) exited 1, which against that contract
+ * asserts a check was violated. Nothing had run.
+ *
+ * 🪤 These assertions pin the NUMBER, not `not.toBe(0)`. The whole family was
+ * already non-zero before the fix, so `not.toBe(0)` passed on the broken code
+ * and could not have caught this — the repo's signature defect
+ * (a control that cannot fail). A regression to commander's default reds these.
+ */
+describe('usage mistakes exit 2, not the 1 that means "findings" (integration)', () => {
+  const USAGE = 2;
+
+  it.each([
+    ['unknown root option', ['--nope']],
+    ['unknown root command', ['nosuchverb']],
+    ['unknown subcommand option', ['resources', 'check', '--json']],
+    ['unknown subcommand', ['resources', 'chekc']],
+    ['unknown option on a nested command', ['skills', 'validate', '--nope']],
+    ['unknown command in a group', ['skills', 'nosuchthing']],
+  ])('%s exits %i', (_label, args) => {
+    const result = runVat(...args);
+
+    expect(result.status).toBe(USAGE);
+  });
+
+  // The counterpart the remap must NOT touch. Commander reports a successful
+  // termination through the same error channel as a failing one — `--help` and
+  // `--version` both end via `_exit(0, …)` — so a mapping that keyed on "did
+  // commander throw" instead of on its exit code would turn every help page
+  // into a failing CI step.
+  it.each([
+    ['root help', ['--help']],
+    ['version', ['--version']],
+    ['subcommand help', ['resources', 'check', '--help']],
+    ['group help', ['resources', '--help']],
+  ])('%s still exits 0', (_label, args) => {
+    const result = runVat(...args);
+
+    expect(result.status).toBe(0);
+  });
+});

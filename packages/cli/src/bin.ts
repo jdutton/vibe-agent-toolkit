@@ -8,10 +8,11 @@
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describeStdioBlocking, makeStdioBlocking } from '@vibe-agent-toolkit/utils/process';
-import { Command } from 'commander';
+import { Command, CommanderError } from 'commander';
 
 import { COMMAND_LOADERS } from './command-loaders.js';
 import { registerCacheControl } from './commands/cache/cache-control.js';
+import { exitCodeForCommanderEnding } from './utils/command-error.js';
 import { loadVerboseHelp, writeHelpSync } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
 import { version, getVersionString, type VersionContext } from './version.js';
@@ -320,7 +321,37 @@ program.on('command:*', (operands) => {
   program.help({ error: true });
 });
 
-program.parse();
+/**
+ * Route EVERY command's usage errors through VAT's exit-code contract.
+ *
+ * 🪤 **`exitOverride()` on the root alone reaches nothing.** Commander's
+ * `_exit` reads `this._exitCallback` off the command that actually errored and
+ * never walks up to a parent, and `addCommand()` — how every command here is
+ * registered — does NOT copy inherited settings (only the `.command()` factory
+ * does, at command.js:164). So the override has to be applied to each node.
+ *
+ * This must run AFTER the lazy dispatcher above has added whichever commands
+ * this invocation needs, and after `loadDoctor()`, or it walks a tree that is
+ * still empty and the very commands being invoked keep commander's default.
+ *
+ * @param command - The command whose subtree gets the override
+ */
+function overrideExitAcrossTree(command: Command): void {
+  command.exitOverride();
+  for (const sub of command.commands) overrideExitAcrossTree(sub);
+}
+overrideExitAcrossTree(program);
+
+try {
+  program.parse();
+} catch (error) {
+  // Only commander's own terminations land here. `parse()` is synchronous and
+  // every action handler is async, so an action's failure is a floating
+  // rejection and never reaches this catch — which is why rethrowing anything
+  // else is the correct move rather than a swallow.
+  if (!(error instanceof CommanderError)) throw error;
+  process.exit(exitCodeForCommanderEnding(error.exitCode));
+}
 
 function showVerboseHelp(): void {
   writeHelpSync(loadVerboseHelp()); // Loads from packages/cli/docs/index.md

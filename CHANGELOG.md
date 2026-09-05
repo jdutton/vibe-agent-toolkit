@@ -505,6 +505,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A usage mistake no longer reports itself as a failed check.** Every command's `--help` publishes
+  the same three-way exit contract — `0` no error-severity findings, `1` at least one, `2` a system
+  error — and VAT's own refusals honoured it: an unknown `--check` name and an unusable `--budget`
+  both exit 2. But an unknown OPTION and an unknown COMMAND fell through to Commander's default of
+  `process.exit(1)`. So `vat resources check --json` (the option is `--format json`) exited **1**,
+  which against the contract the command itself prints asserts that at least one check was violated.
+  Nothing had run. A CI wrapper spelled `if [ $? -ne 0 ]; then report_findings` therefore reported
+  findings that were never computed, and the same hole swallowed a mistyped verb
+  (`vat resources chekc`) and every unknown option across all 69 commands. Usage mistakes now exit
+  **2** everywhere. `--help` and `--version` are unaffected and still exit 0 — Commander reports a
+  successful termination through the same channel as a failing one, so only a non-zero ending is
+  remapped.
+
+- **Two `NON_PORTABLE_*` waivers applied when validating and were ignored when building.** An
+  `allow` glob matches an issue's `location`, and the two lanes report different locations for the
+  same document: `vat skills validate` names the authored source
+  (`resources/skills/vat-skill-review.md`) while `vat build` names the packaged artifact
+  (`dist/skills/vat-skill-review/SKILL.md`). VAT's own config named only the source, so
+  `NON_PORTABLE_ASSET_REFERENCE` and `NON_PORTABLE_COMMAND` were silenced in one lane and warned in
+  the other on files this config had already ruled on. Both entries now carry both spellings. If you
+  have a waiver that works under `vat skills validate` and not under `vat build`, this is why.
+
 _The six items below came out of an independent adversarial review of this release._
 
 - **A `resources.validation.severity` entry naming a check you do not declare now says so, instead

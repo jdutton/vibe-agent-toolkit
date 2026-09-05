@@ -54,17 +54,34 @@ skills:
         # CLAUDE_PLUGIN_ROOT to TEACH the NON_PORTABLE_ASSET_REFERENCE rule
         # (anti-pattern example + checklist text). Scoped to those two files so
         # the check still fires for every other skill in this package.
+        #
+        # 🪤 BOTH spellings of each file are required, and the second is not
+        # redundant. An allow glob matches an issue's `location`, and the two
+        # lanes report DIFFERENT locations for the same document: `vat skills
+        # validate` reports the authored source (`resources/skills/vat-skill-
+        # review.md`) while `vat build` reports the packaged artifact
+        # (`dist/skills/vat-skill-review/SKILL.md`). Naming only the source
+        # silenced the validate lane and left the build lane warning on a file
+        # this config had already ruled on — measured, both codes, both files.
+        # Keep the two paths in ONE entry rather than splitting them: an allow
+        # entry's identity is its whole content, so one entry with both globs is
+        # "used" in either lane, where two entries would make each ALLOW_UNUSED
+        # in the lane it does not match.
         NON_PORTABLE_ASSET_REFERENCE:
           - paths:
               - "**/vat-skill-authoring.md"
+              - "**/vat-skill-authoring/SKILL.md"
               - "**/vat-skill-review.md"
+              - "**/vat-skill-review/SKILL.md"
             reason: "Intentional CLAUDE_PLUGIN_ROOT mentions: these skills document the anti-pattern they enforce"
         # vat-skill-review's checklist deliberately names `grep -P` (and other
         # non-portable utilities) to TEACH the NON_PORTABLE_COMMAND rule. Scoped
-        # to that file so the check still fires for every other skill.
+        # to that file so the check still fires for every other skill. Both
+        # spellings for the same reason as the block above.
         NON_PORTABLE_COMMAND:
           - paths:
               - "**/vat-skill-review.md"
+              - "**/vat-skill-review/SKILL.md"
             reason: "Intentional non-portable-command mentions: this skill documents the anti-pattern it enforces"
   config:
     vibe-agent-toolkit:
