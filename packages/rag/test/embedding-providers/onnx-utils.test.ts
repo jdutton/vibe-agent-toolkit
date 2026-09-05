@@ -365,8 +365,10 @@ describe('BertTokenizer', () => {
 
     it('should report exactly how many content tokens truncation dropped', () => {
       // Truncation used to `break` out of the loop with no throw, warning,
-      // counter or flag — 42-44% of a real corpus vanished into the model
-      // without a single observable signal. The dropped count is that signal.
+      // counter or flag, returning a well-formed array of exactly the legal
+      // length — so checking return values could never find it. The dropped
+      // count is the signal that was missing. (The old "42-44%" rate is
+      // retired; the mechanism is the durable part.)
       const maxLength = 5; // [CLS] + 3 content + [SEP]
       // longPhrase is 8 in-vocab single-piece words => 8 content tokens.
       const expectedDropped = 5;

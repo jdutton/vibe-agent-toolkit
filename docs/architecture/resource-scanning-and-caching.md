@@ -564,6 +564,38 @@ What the migration bought inside `utils`, beyond consistency: a `.gitignore` wri
 silently wrong, with no error anywhere. And a `package.json` carrying a UTF-8 BOM made `JSON.parse`
 throw, which `findNodeWorkspaceRoot`'s `catch` reported as "not the workspace root".
 
+### 3.6 ✅ An enumerated path and a derived path are different kinds of value
+
+**The rule, declared here: a path handed back by the filesystem and a path computed from text a
+human typed are not the same kind of value, and only the enumerated one may be used as a key.** Like
+§2.1 and §3.5 this is a binding statement rather than a note.
+
+An **enumerated** path comes out of `readdir`, `git ls-files` or a crawl — whatever bytes the
+filesystem actually holds, commonly decomposed (NFD) on macOS/APFS. A **derived** path is computed
+from markdown link text, composed (NFC) as an editor writes it. For one file the two are equal on
+sight and unequal as strings, so every exact-string comparison across the seam — `===`, `Map.get`,
+`Set.has`, `toLowerCase()` — misses. The miss never surfaces as an error: it reads as *that file is
+not there*, which is a finding, and a wrong one.
+
+Three sites in this codebase sit on that seam. Each states its own half; this table is only the
+index, so the class is navigable from any one of them:
+
+| site | the two sides | what a miss would have cost |
+|---|---|---|
+| `ResourceRegistry.resourcesByPath` — `packages/resources/src/resource-registry.ts` | index filled from enumerated paths, queried with a link-derived path | no `resolvedId`, and then order-dependent bundling at packaging time |
+| `fragmentIndex()` / `checkAnchor()` — `packages/resources/src/link-validator.ts` | index filled from enumerated paths, queried from link text | a miss answers `'skip'`, so the anchor is silently never checked |
+| `classifyFilenameCase()` — `packages/utils/src/fs-utils.ts` | a `readdir` listing judged against a basename taken from link text | an accented file that plainly exists reported flatly missing |
+
+**The prohibition that bounds all three is stated once, at `toNfc` in
+`packages/utils/src/path-core.ts`:** folding produces a comparison key and never a path to open,
+which is also why it is not folded into `safePath.resolve`. Read it there rather than re-deriving
+it — the asymmetry it turns on is not visible on the machine most of this is authored on.
+
+Each of the three carries a `Ledger entry D7` tag naming the fix that produced it. That ledger was
+never a committed document, so **this section is where the class lives**; the tags are archaeology,
+not a pointer to follow. (Unrelated: `docs/validation-codes.md` has its own *decision record* D7,
+about directory-index resolution. Different sequence, different subject.)
+
 
 ## 4. Symlinks
 

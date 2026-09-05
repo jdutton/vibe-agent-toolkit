@@ -176,14 +176,40 @@ budget from `embeddingProvider.maxInputTokens`. There is no 512/0.9 default any 
   honoured as a *clamp plus warning*, never silently applied.
 - `paddingFactor`: derived, not chosen — `(limit - 2) / (limit * 1.18)`, rounded down to
   two decimals (≈0.84). The 2 is `[CLS]`/`[SEP]`; the 1.18 is measured divergence between
-  the chunker's cl100k counting and the model's own tokenizer.
+  a `chars/4` estimate and the model's own WordPiece tokenizer (2026-08, four corpora:
+  1.13–1.18× at p50, 1.30–1.41× at p90). ⚠️ **`tokenCounter` is a caller input**, and the
+  LanceDB path supplies a cl100k counter — a pair that has never been measured. See
+  `ESTIMATOR_DIVERGENCE_FACTOR` in `packages/rag-lancedb/src/chunking-config.ts` before
+  restating this ratio: naming only one of its ends is what put the mis-attribution here.
 - `modelTokenLimit`: the provider's `maxInputTokens` verbatim.
 
 **Why derived**: the previous hardcoded pair (512-token target, 8191-token "model limit")
 described OpenAI ada-002 and was applied to every provider, including the default local
-all-MiniLM-L6-v2, which reads 256. Measured result: 84-86% of chunks truncated, 42-44% of
-every corpus never reaching the model, and an "exceeds model token limit" guard that could
-not fire because 8191 is 32x the real limit.
+all-MiniLM-L6-v2, which reads 256. Result: chunks were cut at inference time with nothing
+said, and an "exceeds model token limit" guard that could not fire because 8191 is 32× the
+real limit.
+
+⛔ **This paragraph used to quote "84–86% of chunks truncated, 42–44% of every corpus".
+Those figures are retired, not corrected** — they were measured against raw `chunkByTokens`,
+and the shipped path is `chunkResource`, which splits at markdown headings *first*, so the
+number does not reproduce against the thing it described; a re-measurement through the real
+path put the loss at roughly a third to a half of it. No replacement percentage is quoted
+here: a corpus-shaped rate moves whenever the corpus does, and the argument does not need
+one. The full retirement is in `packages/rag-lancedb/src/chunking-config.ts`.
+
+**What that pair actually produced**: 512 x a 0.9 padding factor = a 460-token chunk,
+handed to a model whose 256-token window holds 254 once `[CLS]` and `[SEP]` are charged.
+The derived budget puts the same chunk at 215 tokens (256 x 0.84).
+
+**Why nothing said so**: `BertTokenizer.tokenize` reserved those two special-token
+positions and then `break`ed out of the token loop once the budget ran out — no throw, no
+warning, no truncation flag, and a returned `inputIds` array of exactly the legal length.
+Checking return values could not have found it; only comparing the chunk budget against
+the model's own limit could. Both ends carry instrumentation now —
+`resolveChunkingConfig()` makes that comparison up front, and `tokenize` returns
+`droppedTokens`, which `OnnxEmbeddingProvider` surfaces via `truncationStats`, an
+`onTruncation` callback, or a one-time stderr warning. A provider that reports neither
+leaves the comparison to the caller.
 
 ### 5. LanceDB Provider
 

@@ -30,9 +30,19 @@ export interface EmbeddingProvider {
    * Required, deliberately. It was previously absent, and the only consumer —
    * the chunker in `@vibe-agent-toolkit/rag-lancedb` — filled the hole with a
    * hardcoded 8191 (OpenAI ada-002's limit) for every provider, including a
-   * local model that reads 256. The result was 84-86% of chunks truncated and
-   * 42-44% of every corpus never reaching the model, with the "exceeds model
-   * token limit" guard permanently unable to fire. An optional field with a
+   * local model that reads 256. The result was that chunks were cut at inference
+   * time with nothing said, and the "exceeds model token limit" guard was
+   * permanently unable to fire.
+   *
+   * ⛔ This passage used to quote "84-86% of chunks truncated, 42-44% of every
+   * corpus". Retired, not corrected: it was measured against raw `chunkByTokens`
+   * while the shipped path is `chunkResource`, which splits at markdown headings
+   * FIRST, so the figure does not reproduce against the thing it described. No
+   * replacement percentage is quoted — a corpus-shaped rate moves whenever the
+   * corpus does, and this argument does not need one. Full reasoning lives with
+   * `ESTIMATOR_DIVERGENCE_FACTOR` in `@vibe-agent-toolkit/rag-lancedb`.
+   *
+   * An optional field with a
    * fallback would reproduce exactly that bug for any provider that forgot it.
    */
   maxInputTokens: number;

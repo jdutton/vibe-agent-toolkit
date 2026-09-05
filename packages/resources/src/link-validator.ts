@@ -693,7 +693,8 @@ export function escapeNonAscii(name: string): string {
  * ⚠️ **Why this is a warning and not `LINK_BROKEN_FILE`.** The file genuinely
  * exists and the link genuinely opens where it was written: macOS/APFS and
  * Windows reconcile NFC against NFD at the syscall level. Reporting it as broken
- * would reinstate the exact false positive that folding fixed (ledger entry D7 —
+ * would reinstate the exact false positive that folding fixed (the enumerated-vs-derived
+ * path class, collected in docs/architecture/resource-scanning-and-caching.md §3.6 —
  * an accented file that plainly exists reported as missing). What folding *also*
  * did was hide the converse: on Linux/ext4 the two forms are simply different
  * filenames, so the link 404s on CI and on most deploy targets while the author's
@@ -1057,7 +1058,8 @@ export function fragmentIndexEntry(filePath: string, fragments: Set<string> = ne
  * *enumerated* paths and queried by {@link checkAnchor} with a path *derived
  * from markdown link text*; on macOS those routinely differ in normalization
  * form for the same file, and an exact-string miss here is silent — a miss
- * answers `'skip'`, so the anchor is simply never checked. Ledger entry D7.
+ * answers `'skip'`, so the anchor is simply never checked. One of the three sites of the
+ * enumerated-vs-derived path class, collected in docs/architecture/resource-scanning-and-caching.md §3.6.
  * Only the key is normalized: the entry's matching policy still derives from the
  * raw path, and `isHtmlPath` is extension-based and normalization-agnostic.
  */

@@ -600,7 +600,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * text* (`resolveLocalHref`, composed as an editor writes it). `Map.get` is
    * exact string equality, so `café.md` misses `café.md` and the link to a file
    * that plainly exists gets no `resolvedId` — see {@link resolveLinks} for what
-   * a missing `resolvedId` then costs at packaging time. Ledger entry D7.
+   * a missing `resolvedId` then costs at packaging time. One of the three sites of the
+   * enumerated-vs-derived path class, collected in docs/architecture/resource-scanning-and-caching.md §3.6.
    *
    * ⚠️ Only the KEY is normalized. `resource.filePath` keeps the on-disk form,
    * because that is the string handed to the filesystem, and on Linux the

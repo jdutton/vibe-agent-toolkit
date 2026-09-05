@@ -73,7 +73,8 @@ describe('ResourceRegistry indexes', () => {
   });
 
   /**
-   * Ledger D7 — the path index reconciles Unicode normalization forms.
+   * The path index reconciles Unicode normalization forms — the enumerated-vs-derived
+   * path class, collected in docs/architecture/resource-scanning-and-caching.md §3.6.
    *
    * The two sides of `resourcesByPath` come from different places: keys from
    * filesystem enumeration (`readdir` hands back whatever is on disk, commonly

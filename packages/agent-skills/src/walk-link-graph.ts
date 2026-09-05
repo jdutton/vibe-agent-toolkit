@@ -136,7 +136,29 @@ export interface LinkGraphResult {
  * Options for walking the link graph.
  */
 export interface WalkLinkGraphOptions {
-  /** Max depth for following markdown links (Infinity for 'full') */
+  /**
+   * Max depth for following markdown links (Infinity for 'full').
+   *
+   * ⚠️ **This bounds ROUTING, not bundling.** The limit is consulted at exactly
+   * one site — the depth check in {@link processRegistryResource} — and that
+   * site is reached only for a target the walker walks THROUGH. The deciding
+   * predicate is {@link isRoutable}, i.e. `parserKindForPath(path) ===
+   * 'markdown'`; every target for which it is false is bundled as a leaf with
+   * no depth test at all:
+   *
+   * - a link target that is not a registry member (an image, a PDF, JSON) —
+   *   the unconditional add in {@link processLink};
+   * - a link target that IS a registry member but is not markdown (HTML, and
+   *   anything else a registry's include globs admit whose parser kind is
+   *   `html` or `none`) — the early return in
+   *   {@link processRegistryResource}, which tests routability BEFORE depth on
+   *   purpose so that parsing a file never shrinks what ships.
+   *
+   * So the exemption is not "assets": it is **everything that is not
+   * markdown**. `maxDepth: 1` still ships a non-markdown file linked from a
+   * document ten hops out, as long as markdown routed to that document. See
+   * {@link walkLinkGraph}'s semantics list for the statement of the rule.
+   */
   maxDepth: number;
   /** Ordered exclude rules (first match wins) */
   excludeRules: ExcludeRule[];
@@ -803,7 +825,17 @@ function processLink(
     // makes it free — this used to be a second `existsSync` of the identical
     // path in the same tick.
   } else if (state.pathProbe.probe(targetPath).exists) {
-    // Not in registry — non-markdown asset that exists on disk
+    // Not in registry — non-markdown asset that exists on disk.
+    //
+    // ⚠️ `currentDepth` is deliberately NOT consulted here, and its absence is
+    // the behaviour, not an oversight. An asset is a leaf: bundling it enqueues
+    // nothing, so there is no depth for a limit to bound. A `maxDepth` of 1
+    // therefore still ships every image, JSON and PDF hanging off a
+    // depth-3 document, provided some routed markdown reached that document.
+    // Stated in {@link walkLinkGraph}'s own semantics list ("Non-markdown
+    // assets bypass depth limits") and mirrored for non-routable REGISTRY
+    // members in {@link processRegistryResource} — do not "fix" one site
+    // without the other; they are one rule with two arms.
     state.bundledAssetSet.add(toForwardSlash(targetPath));
   } else {
     // File doesn't exist and not in registry, and not deferred (handled above).

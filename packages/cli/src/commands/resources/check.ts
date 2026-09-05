@@ -47,6 +47,99 @@
  * and exited 0. `requireDeclaredCheck` refuses it before the crawl, naming the
  * declared set. A gate that cannot fail is worse than no gate.
  *
+ * ## 🔑 SQL is the surface a user OPTED IN to, so no BUILT-IN check may be SQL
+ *
+ * Every check this verb runs is adopter-declared: {@link checkCommand} reads
+ * `config?.resources?.checks` and nothing else, and warns loudly when a project
+ * declares none. There are no built-ins, and the one way to end that quietly is
+ * to author the first one as SQL. A default-on rule written as a statement makes
+ * the engine, the projection and the population mandatory for everyone who
+ * inherits it, without anybody deciding that. So: **built-ins are TypeScript
+ * predicates over the projection's row model.** SQL stays the two places a user
+ * asked for it — this verb's declared checks, and `vat resources query`.
+ *
+ * ⚠️ The engine today is `node:sqlite`, built into Node, so the thing at stake is
+ * not an install — it is the POPULATION. On an ~11,700-member adopter tree
+ * building the projection is **>99.9%** of a check run (16.5 s cold, ~1.3 s from
+ * the store) against **0.0008–0.004 s** for the statements themselves; see
+ * `vat-knowledge-resources.md`, which carries that measurement. That is exactly
+ * the cost "What this does NOT do" below refuses to put on every adopter's
+ * pre-commit path, and a default-on SQL check would put it there without the
+ * decision. The INSTALL cost is deferred rather than gone: the open question
+ * about a columnar engine is a 108 MB platform binding on a published toolkit,
+ * and this invariant is what keeps that question still answerable either way.
+ *
+ * ## 🔑 The DEFAULT check set belongs to the pipeline, not to the config file
+ *
+ * A directory with no `vibe-agent-toolkit.config.yaml` must run exactly the same
+ * default-on checks as one with a config; config only ADDS to that set or
+ * OVERRIDES a severity in it. This is load-bearing rather than a convenience:
+ * *"'default-on error' is meaningless as a category if being default-on requires
+ * a config file to say so."*
+ *
+ * It is therefore a constraint on WHERE the defaults live in code, not only on
+ * what they are. They cannot be defaulted into the parsed config object, because
+ * an absent config is `undefined` and every default would vanish with it — for
+ * the project that never wrote one, which is the population the category exists
+ * for. The rest of VAT already behaves this way and is the shape to match:
+ * `vat audit` completes its entire scan first and reads config only to apply
+ * severity overrides, warning and CONTINUING when the file cannot be read; and
+ * `loadResourcesWithConfig` hands `vat resources validate` a registry whose
+ * built-in validators run whether `loadConfig` returned a config or nothing.
+ * This verb has no defaults yet, so the invariant is a rule for the first one —
+ * and the day it is written is the easiest day to break it.
+ *
+ * ## Keeping a TypeScript check and its SQL twin: two good reasons, one trap
+ *
+ * The proposal was "write the predicate twice, in TypeScript and in SQL, and run
+ * whichever is faster". Two thirds of it are worth having.
+ *
+ * ✅ **As documentation.** An SQL twin is executable documentation of the row
+ * model, and strictly better than prose about it: prose can describe a column
+ * that no longer exists and never say so, while a statement stops compiling —
+ * which this verb reports as `RESOURCE_CHECK_BROKEN` rather than as a skip.
+ *
+ * ✅ **As a differential oracle.** Run both over the frozen corpus and assert
+ * IDENTICAL findings. That is the only thing which makes a dual implementation
+ * better than a single one rather than worse: two implementations with no
+ * mandatory differential test are simply two places for one rule to be wrong.
+ * Apply it selectively, to genuinely relational checks — done by default, every
+ * new rule costs three artifacts instead of one.
+ *
+ * ⛔ **As a runtime optimizer — rejected, on two INDEPENDENT grounds.** It would
+ * essentially never choose SQL: `buildResourceProjection` hands the rows back in
+ * memory before the ephemeral database exists at all, so the TypeScript arm is a
+ * for-loop over data already in hand, and the SQL arm's whole measured share of a
+ * run is the 0.0008–0.004 s above. A scheduler would be choosing between two
+ * arms of the 0.1%. And it reintroduces the dependency through the back door: an
+ * optimizer that MAY choose SQL means SQL MAY be needed at check time, which for
+ * anyone shipping the thing is the same as needed. **Optionality is not a
+ * property you can keep while also letting a scheduler reach for the optional
+ * thing.**
+ *
+ * ## 🔑 Adopter SQL runs UNSANDBOXED on purpose — and contributed SQL is not adopter SQL
+ *
+ * What a statement may BE is gated hard, and documented where it is enforced:
+ * `assertIsQuery` and `detachForeignSchemas` in
+ * `packages/projection-sqlite/src/store.ts` refuse `ATTACH` and `PRAGMA`, with
+ * the measured cross-repository leak that motivated both, and CHANGELOG.md's
+ * `--budget` entry carries why nothing inside this process can interrupt a
+ * runaway statement. Read those; do not restate them here.
+ *
+ * What is written down nowhere else is that everything PAST those gates is
+ * unsandboxed deliberately. A `.sql` file the adopter points their own config at
+ * is adopter code, at the same trust boundary as their eslint config: they wrote
+ * it or they chose to inherit it, and VAT is not the thing standing between a
+ * project and its own repository.
+ *
+ * 🚨 That reasoning covers exactly ONE trust domain, and the rule scoping it is
+ * the other half: **contributed SQL is a reviewed EXAMPLE, never an
+ * auto-executed check.** A contribution channel is third-party text, and a
+ * statement arriving through one has none of the "they chose it" the paragraph
+ * above rests on. Ship it as documentation an adopter copies into their own
+ * `resources.checks` deliberately. One paragraph must not be stretched to cover
+ * both domains.
+ *
  * ## What this does NOT do
  *
  * It does not fold into `vat resources validate`. That command is on every

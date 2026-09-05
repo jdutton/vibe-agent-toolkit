@@ -70,6 +70,31 @@ Use these approaches:
 - **Fail Fast**: Validate inputs early, throw immediately on invalid state
 - **Zod Validation**: Use Zod's `.safeParse()` for runtime validation with typed errors
 
+## Escape Hatches: Exercise Them, or Do Not Ship Them
+
+An escape hatch — a legacy path kept "just in case", a fallback, a `--no-x` flag, a documented
+rollback procedure — is a **claim that something works**. A claim nothing exercises decays to
+false: the path rots as the code around it moves, and the seam does not hold when someone finally
+pulls it, on the day they can least afford it.
+
+There are two acceptable states, and no third:
+
+1. **Wire it into a CI lane that actually pulls it.** Not a lane that merely imports the legacy
+   module — one that *selects* it and runs the suite through it. If no lane exercises the hatch,
+   the hatch is untested no matter what the coverage number says about the lines it contains.
+2. **Do not ship it, and state plainly what the adopter does instead.** "Pin the previous version
+   and file a bug" is a real remedy with zero maintenance surface. Publishing that is honest;
+   publishing a flag that will not work when pulled is not.
+
+**A rotted hatch is worse than an absent one**, because people plan around it: a reviewer accepts a
+risky change on the strength of a rollback, and the rollback is found dead only when it is needed.
+An absent hatch is priced correctly at review time.
+
+**Verify a remedy by running it, not by reviewing it.** This repo has found three dead escape
+hatches that way and none by reading them — the documented steps looked right in every case. When
+a doc tells a reader to set a flag, revert a setting or run a command, execute it exactly as
+written before you believe it.
+
 ## Code Quality Standards
 
 ### TypeScript
@@ -103,6 +128,8 @@ Use these approaches:
 - [ ] DRY: no duplication that should be extracted
 - [ ] Zod schemas have `.describe()` for documentation
 - [ ] CLI commands have clear help text
+- [ ] Any escape hatch (fallback, legacy path, `--no-x` flag, documented rollback) is
+      exercised by a CI lane — or is not shipped
 
 ## Technical Debt Management
 

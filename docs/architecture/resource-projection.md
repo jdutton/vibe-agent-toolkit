@@ -248,6 +248,43 @@ column — a file can be a traversal node in one lane and a leaf-only member in 
 `resource_tags` or a column on `resource_zones`. Today the same decision is enforced directly in the
 walker rather than as a queryable row.
 
+⭐ **Why this is policy and not taste.** Stated bare, "HTML is a leaf" reads as a preference; it is
+not. Anthropic's skill-authoring guidance routes exclusively through markdown, and it does so by
+silence rather than by prohibition: in the cached copy
+([`docs/external/anthropic-skill-authoring-best-practices.md`](../external/anthropic-skill-authoring-best-practices.md),
+fetched 2026-04-18, live page re-diffed 2026-07-30 with no substantive drift) **every reference
+example is `.md`** — `reference/finance.md`, `reference/sales.md`, `advanced.md`, `FORMS.md`,
+`form_validation_rules.md` — **every bundled script is `.py`**, and **HTML appears zero times**
+(counted over that cache 2026-09-05). VAT's own two skill-facing docs say the same nothing:
+`vat-skill-authoring.md` and `vat-skill-review.md` mention HTML zero times each (2026-09-05). So no
+guidance on either side — vendor or ours — describes an HTML file as a step on a reference path,
+which is precisely the question `routable` asks. What neither side licenses is *dropping* the file:
+it still ships, and a rewriter must still be able to reach its links. That is the membership half.
+
+<!-- @vendor-claim reviewed=2026-07-30 verify=Re-fetch https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/best-practices, diff it against docs/external/anthropic-skill-authoring-best-practices.md, and re-run the count above — are all reference examples still `.md`, all scripts still `.py`, and HTML still absent? -->
+
+⭐ **The consequence the design deliberately makes loud, which is the real argument for requiring
+membership.** `SKILL.md → guide.html → diagram.svg` bundles `guide.html` and **drops
+`diagram.svg`**. The walk treats the HTML as a leaf, so the installed skill carries a page whose
+`<img src>` points at a file that is not there: a dead image, in the artifact the user gets.
+Membership does not prevent that drop — the traversal rule makes it necessary. What membership buys
+is that VAT can *see* it. Because the HTML member is parsed, its links exist as rows, so every
+local-file link out of a non-routable member is recorded as a `non-routable-source` exclusion and
+surfaced as `LINK_FROM_NON_ROUTABLE_FILE` instead of vanishing (`walk-link-graph.ts ›
+recordUnfollowedLinks`; `isRoutable` is `parserKindForPath(…) === 'markdown'`, so a format gains a
+routability answer in the same edit that gives it a parser — both verified 2026-09-05).
+
+⭐ **Generalize past HTML — that is the reusable half; HTML is only the worked example.** The
+membership requirement exists so that a drop the traversal rule makes *necessary* is still
+**reported**. Strip membership and the identical skill ships identically broken, but nothing in VAT
+can say so: the leaf's links were never read, so there is no row to exclude and no code to raise.
+**Silent drop → reported drop is the whole argument.** Any future non-routable format inherits it,
+and any proposal to keep a format out of the projection entirely — "we never follow it anyway" — is
+a proposal to go back to the silent version. ⚠️ The mirror-image move is equally a membership
+decision, not a tidy-up: `html-link` is deliberately absent from `follow`'s default and from
+`claude-context-discovery.ts`'s `FOLLOWED_FORMS`, and adding it would make `vat inventory` report
+members `vat build` does not bundle (`packages/resources/src/schemas/projection-blobs.ts:108-132`).
+
 ## 4. Tree-shape caching — a different layer from the object cache
 
 [Resource Scanning and Object Caching §5](./resource-scanning-and-caching.md#5-whats-shared-whats-not)

@@ -54,9 +54,13 @@ export interface EmbeddingProvider {
    * Required, deliberately. It was previously absent, and the only consumer —
    * the chunker in `@vibe-agent-toolkit/rag-lancedb` — filled the hole with a
    * hardcoded 8191 (OpenAI ada-002's limit) for every provider, including a
-   * local model that reads 256. The result was 84-86% of chunks truncated and
-   * 42-44% of every corpus never reaching the model, with the "exceeds model
-   * token limit" guard permanently unable to fire. An optional field with a
+   * local model that reads 256. The result was that chunks were cut at inference
+   * time with nothing said, and the "exceeds model token limit" guard was
+   * permanently unable to fire. (⛔ This passage used to quote "84-86% of chunks
+   * truncated, 42-44% of every corpus". Retired, not corrected: that was measured
+   * against raw `chunkByTokens` while the shipped path is `chunkResource`, which
+   * splits at headings first — see the retirement in
+   * `packages/rag-lancedb/src/chunking-config.ts`.) An optional field with a
    * fallback would reproduce exactly that bug for any provider that forgot it.
    */
   maxInputTokens: number;
@@ -101,6 +105,26 @@ export interface EmbeddingProvider {
 chunk budget from it — so a number that is too high means chunks the model
 silently truncates before inference, with no error anywhere. That is not
 hypothetical: it is the measured bug this member exists to prevent.
+
+Naming where that silence came from matters, because it is not where a reader
+would look. The chunker packed 460 tokens into a chunk — a hardcoded 512-token
+target times a 0.9 padding factor — for an embedder whose 256-token window holds
+254 once `[CLS]` and `[SEP]` are charged. That ratio is what made truncation the
+normal case rather than an edge case. The silence itself was one layer further
+down: `BertTokenizer.tokenize` reserved those two positions and then simply
+`break`ed out of the token loop when the budget ran out — no throw, no warning,
+no truncation flag. It returned a well-formed `inputIds` array of exactly the
+legal length, so no amount of checking return values could have caught it.
+
+Both halves are closed now, and it is worth knowing which is which.
+`resolveChunkingConfig()` sizes the budget from `maxInputTokens` before anything
+is embedded: for the default local model the effective target is 215 tokens
+(256 x 0.84), not 460. And `tokenize` no longer leaves the loop early — it counts
+every content token and returns `droppedTokens`, which `OnnxEmbeddingProvider`
+books into `truncationStats`, passes to an `onTruncation` callback, or, failing
+both, warns about once on stderr. For any provider that reports neither, the
+original rule stands: compare your chunk budget against the model's real limit
+yourself, because nothing downstream will tell you.
 
 Two rules follow:
 

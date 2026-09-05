@@ -4,8 +4,12 @@
  * The defect this pins: `vat rag index` packed chunks to 512 * 0.9 = 460
  * estimated tokens and handed them to a local model that reads 256 — and the
  * "exceeds model token limit" guard was hardcoded to 8191 (OpenAI ada-002's
- * limit, 32x the local model's), so it could never fire. 84-86% of chunks were
- * truncated; 42-44% of every corpus never reached the model.
+ * limit, 32x the local model's), so it could never fire. Chunks were cut at
+ * inference time with nothing said.
+ *
+ * ⛔ This used to quote "84-86% of chunks truncated; 42-44% of every corpus".
+ * Retired, not corrected — measured against raw `chunkByTokens`, not the shipped
+ * `chunkResource` path. See the retirement in `src/chunking-config.ts`.
  *
  * The chunk budget must therefore be DERIVED from the embedding provider's own
  * published limit, never from a constant.
