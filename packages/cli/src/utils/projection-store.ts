@@ -50,6 +50,7 @@ import type { PopulationCache, ProjectionStore } from '@vibe-agent-toolkit/resou
 import { gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
 import { isModuleMissing, reportMissingBackend, type OptionalBackend } from './optional-backend.js';
+import { installSqliteWarningFilter } from './sqlite-experimental-warning.js';
 
 /**
  * The env var that selects a projection store for this process.
@@ -308,6 +309,16 @@ export async function openEphemeralQueryStore(): Promise<ProjectionSqlite.SqlQue
  * @returns The backend's module namespace
  */
 async function loadBackend(): Promise<typeof ProjectionSqlite> {
+  // `node:sqlite` emits one ExperimentalWarning as it loads, even on a Node that
+  // needs no flag for it. `projection-sqlite` refuses to suppress that itself —
+  // correctly, since a blanket NODE_NO_WARNINGS hides real warnings — and
+  // assigns the filter to whichever caller turns the backend on by default.
+  // That caller is this module, and this import is the boundary.
+  //
+  // Restored immediately afterwards: the warning fires at module evaluation, so
+  // holding the filter open any longer would start hiding warnings this import
+  // did not cause.
+  const restoreWarnings = installSqliteWarningFilter();
   try {
     return await import('@vibe-agent-toolkit/projection-sqlite');
   } catch (error) {
@@ -315,6 +326,8 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
     if (floor !== undefined) throw floor;
     if (!isModuleMissing(error)) throw error;
     reportMissingBackend(PROJECTION_STORE_BACKEND);
+  } finally {
+    restoreWarnings();
   }
 }
 
@@ -336,11 +349,26 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
  * branch the user gets a bare `No such built-in module: node:sqlite` — which
  * names neither the version floor nor the fix.
  *
- * ⚠️ It is reachable on EVERY `vat resources query`/`check` run, and not a
- * corner: the query lane has always fallen back to
- * {@link openEphemeralQueryStore} when no store is selected, which is the
- * default, so `node:sqlite` is required on every default run of those two
- * commands whichever way the lane resolves its store.
+ * ⚠️ It is reachable on an ordinary run and is not a corner: the query lane has
+ * always fallen back to {@link openEphemeralQueryStore} when no store is
+ * selected, which is the default, so `node:sqlite` is required on a default
+ * `vat resources query` whichever way the lane resolves its store.
+ *
+ * 🪤 This used to say "EVERY `vat resources query`/`check` run", and that was
+ * too strong for `check`. Measured against the built CLI on Node v24.13.1 by
+ * counting the `ExperimentalWarning` `node:sqlite` emits at load — the only
+ * externally visible tell that the module was reached at all:
+ *
+ * | Command | Warnings | Backend loaded? |
+ * |---|---|---|
+ * | `vat resources query "SELECT …"` | 1 | yes |
+ * | `vat resources check`, no checks declared | 0 | **no** |
+ *
+ * `check` reaches a store only when the project declares checks for it to
+ * evaluate, so a repo with none never loads the backend and never needed the
+ * floor for that command. The floor argument is unaffected — `query` alone
+ * establishes it — but "every default run of those two commands" was a claim
+ * nothing had counted.
  *
  * ✅ **VAT's declared floor is now `>=22.13.0`, so this no longer fires on a
  * SUPPORTED Node.** It used to: the manifests said `>=22.0.0` while these two

@@ -1,0 +1,91 @@
+# Executes VAT's declared Node floor, rather than merely asserting it.
+#
+# The floor was raised to >=22.13.0 because `node:sqlite` loads unflagged only
+# from that release (it was added in 22.5.0 behind --experimental-sqlite). Before
+# this job existed the floor was a *claim*: the validation matrix runs Node 24
+# only, and every other workflow pins a floating '22' — which resolves to the
+# newest 22.x, never to the floor. So nothing anywhere executed the oldest Node
+# VAT says it supports, which is exactly how thirteen patch releases came to
+# advertise support for a range two commands could not run in.
+#
+# Kept out of the generated validation matrix on purpose. Adding a second
+# nodeVersions entry there would multiply the matrix by the Windows leg, whose
+# full validate has been measured at ~79 minutes, to re-run checks that are not
+# Node-version-sensitive. What is version-sensitive is small and lives here.
+name: Node Floor
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  floor:
+    name: Run the declared Node floor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Derived, never hardcoded. A literal '22.13.0' here would be a second
+      # place a human has to remember when the floor moves, and nothing would
+      # fail if they forgot — the job would keep testing a version VAT no longer
+      # claims. `validate-repo-structure.ts` enforces that every package agrees
+      # with this same root value, so there is one source and this reads it.
+      - name: Derive the declared Node floor from the root manifest
+        id: floor
+        run: |
+          FLOOR=$(node -p "require('./package.json').engines.node.replace(/^[^0-9]*/, '')")
+          if [ -z "$FLOOR" ]; then
+            echo "::error::Could not derive a Node floor from root package.json engines.node"
+            exit 1
+          fi
+          echo "Declared floor: $FLOOR"
+          echo "version=$FLOOR" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js at the floor
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ steps.floor.outputs.version }}
+
+      # setup-node accepts a semver range, so asking for the floor can quietly
+      # give you something newer. That would make every assertion below pass for
+      # the wrong reason.
+      - name: Assert the runner is actually at the floor
+        run: |
+          ACTUAL=$(node -p "process.versions.node")
+          echo "Running Node: $ACTUAL (floor: ${{ steps.floor.outputs.version }})"
+          if [ "$ACTUAL" != "${{ steps.floor.outputs.version }}" ]; then
+            echo "::error::Expected Node ${{ steps.floor.outputs.version }} but got $ACTUAL — this job would have tested the wrong runtime."
+            exit 1
+          fi
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build packages
+        run: bun run build
+
+      # The load-bearing claim of the whole floor: on this Node, and without a
+      # flag, the builtin resolves.
+      - name: node:sqlite loads unflagged
+        run: node --input-type=module -e "import 'node:sqlite'; console.log('node:sqlite loaded unflagged');"
+
+      # Under `node`, never `bun`. Bun ships `bun:sqlite`, a different API with
+      # no version floor, so running these through the repo's bun-based script
+      # runner would answer a different question than the one being asked.
+      - name: vat doctor reports a healthy environment at the floor
+        run: node packages/cli/dist/bin.js doctor
+
+      # The command measured to require the backend on a default run. `resources
+      # check` is deliberately NOT here: with no checks declared it never opens a
+      # store, so it would pass without exercising anything.
+      - name: vat resources query runs at the floor
+        run: node packages/cli/dist/bin.js resources query "SELECT count(*) AS n FROM resources"
