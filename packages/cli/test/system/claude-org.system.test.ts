@@ -114,6 +114,22 @@ describe('vat claude org', () => {
       await expectSkillsKeyError(args);
     });
 
+    // Like `install`, `versions add` validates its source path before authenticating.
+    it('org skills versions add reports a missing source before any key check', async () => {
+      const result = await runOrgWithoutKeys(['skills', 'versions', 'add', 'skill_abc123', './fake-skill']);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('Source not found');
+      expect(result.stderr).not.toContain('ANTHROPIC_ADMIN_API_KEY');
+    });
+
+    // The whole point of the command is that it takes the skill id outright, so a
+    // missing id must be a usage error rather than something it tries to infer.
+    it('org skills versions add requires a skill id', async () => {
+      const result = await runOrgWithoutKeys(['skills', 'versions', 'add']);
+      expect(result.status).not.toBe(0);
+      expect(`${result.stderr}${result.stdout}`).toMatch(/missing required argument/i);
+    });
+
     // `skills install` validates its source path BEFORE authenticating, so a bad path
     // reports the path — the credential is not what is wrong yet. Pinned separately so
     // the ordering is deliberate rather than incidental.

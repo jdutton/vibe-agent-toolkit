@@ -185,15 +185,26 @@ export async function collectSkillUploadFiles(skillDir: string): Promise<Collect
 	return collected;
 }
 
+/** A skill directory packaged for upload, before any decision about where to send it. */
+interface PreparedUpload {
+	readonly displayTitle: string;
+	readonly files: MultipartFile[];
+}
+
 /**
- * Upload a single skill directory to the org via Skills API.
+ * Package a skill directory into the multipart file set the API takes.
+ *
+ * Deliberately separate from SENDING it. Creating a skill and adding a version to
+ * one differ only in the endpoint; the bundle, the exclusions and the size ceiling
+ * are identical, and a skill that packages one way when created and another way
+ * when updated would be the bug this split exists to prevent. Which endpoint gets
+ * the bundle is the caller's command, never something inferred from the workspace.
  */
-async function uploadSkillDir(
-	client: OrgApiClient,
+async function prepareSkillUpload(
 	skillDir: string,
 	titleOverride: string | undefined,
 	logger: UploadLogger,
-): Promise<SkillUploadResult> {
+): Promise<PreparedUpload> {
 	const skillMdPath = safePath.join(skillDir, 'SKILL.md');
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from CLI arg
 	if (!existsSync(skillMdPath)) {
@@ -238,7 +249,54 @@ async function uploadSkillDir(
 		throw new Error(`${describeOversizeBundle(sized, totalSize)}. The API will refuse this upload.`);
 	}
 
+	return { displayTitle, files };
+}
+
+/**
+ * Upload a skill directory as a NEW skill.
+ *
+ * Always creates. It does not look for an existing skill of the same title and
+ * quietly switch to adding a version: `display_title` is not unique in a workspace
+ * (the API enforces it only when the field is sent explicitly, and derives a title
+ * from frontmatter otherwise), so such a lookup returns 0, 1 or N matches and the
+ * command's effect would depend on which. Updating an existing skill is
+ * `skills versions add`, which takes the id outright.
+ */
+async function uploadSkillDir(
+	client: OrgApiClient,
+	skillDir: string,
+	titleOverride: string | undefined,
+	logger: UploadLogger,
+): Promise<SkillUploadResult> {
+	const { displayTitle, files } = await prepareSkillUpload(skillDir, titleOverride, logger);
 	return sendSkillUpload(client, displayTitle, files);
+}
+
+/**
+ * Upload a skill directory as a new VERSION of an existing skill.
+ *
+ * The server assigns the version identifier and promotes it to `latest_version`;
+ * nothing here numbers a version.
+ */
+async function uploadSkillVersionDir(
+	client: OrgApiClient,
+	skillId: string,
+	skillDir: string,
+	logger: UploadLogger,
+): Promise<SkillUploadResult> {
+	const { files } = await prepareSkillUpload(skillDir, undefined, logger);
+	// No `display_title` field: this version belongs to a skill that already has a
+	// title, and sending one here would be an attempt to rename by side effect.
+	const multipart = buildMultipartFormData({}, files);
+	const result = await client.uploadSkillVersion<{
+		type: string; skill_id: string; id: string; version: string; name: string; created_at: string;
+	}>(skillId, multipart);
+	return {
+		id: result.skill_id,
+		displayTitle: result.name,
+		version: result.version,
+		createdAt: result.created_at,
+	};
 }
 
 /**
@@ -377,7 +435,7 @@ async function installFromLocal(
 			filename: basename(sourcePath),
 			content: zipContent,
 		}];
-		logger.info(`Uploading ZIP: ${sourcePath} (${(zipContent.length / 1024).toFixed(1)}KB)`);
+		logger.info(`Uploading ZIP: ${sourcePath} (${formatBytes(zipContent.length)})`);
 		logger.info(`Display title: ${displayTitle}`);
 
 		return sendSkillUpload(client, displayTitle, files);
@@ -548,7 +606,49 @@ Example:
   $ vat claude org skills versions delete skill_abc123 1775007400733130
 `);
 
+	const versionsAddCmd = new Command('add');
+	versionsAddCmd
+		.description('Publish a new version of an existing skill')
+		.argument(SKILL_ID_ARG, SKILL_ID_DESC)
+		.argument('<source>', 'Path to built skill directory or ZIP file')
+		.option('--debug', DEBUG_OPT_DESC)
+		.action(async (skillId: string, source: string, options: { debug?: boolean }) => {
+			await executeOrgCommand('OrgSkillsVersionsAdd', options.debug, async ({ client, logger }) => {
+				const resolved = source.startsWith('/') ? source : safePath.join(process.cwd(), source);
+				// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg
+				if (!existsSync(resolved)) throw new Error(`Source not found: ${resolved}`);
+				// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg
+				if (!statSync(resolved).isDirectory()) {
+					throw new Error(`Source must be a skill directory: ${resolved}`);
+				}
+				logger.info(`Publishing new version of ${skillId} from: ${resolved}`);
+				return uploadSkillVersionDir(client, skillId, resolved, logger);
+			});
+		})
+		.addHelpText('after', `
+Description:
+  Publishes the contents of a skill directory as a NEW VERSION of an existing
+  skill. Uses the Skills API (beta). Requires ANTHROPIC_API_KEY.
+
+  This is how you ship a change to a skill you have already published. It is a
+  separate command from \`install\` on purpose: \`install\` always creates a new
+  skill, this always adds a version to the skill you name, and neither inspects
+  the workspace to decide which it "should" do. A display title is NOT unique in
+  a workspace, so resolving one to a skill can match none, one, or several — and
+  a wrong match would append your version to somebody else's skill.
+
+  Find the id with \`vat claude org skills list\`. The API assigns the version
+  identifier and makes it the skill's latest; nothing is numbered locally.
+
+  The same exclusions as \`install\` apply: the eval suite, node_modules/ and
+  .git/ are never uploaded.
+
+Example:
+  $ vat claude org skills versions add skill_abc123 dist/skills/org-admin
+`);
+
 	versionsCmd.addCommand(versionsListCmd);
+	versionsCmd.addCommand(versionsAddCmd);
 	versionsCmd.addCommand(versionsDeleteCmd);
 
 	command.addCommand(listCmd);

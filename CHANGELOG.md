@@ -414,6 +414,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`vat claude org skills versions add <skill-id> <source>` — publishing a change to an
+  already-published skill is now possible at all.** `install` only ever POSTs a create, and the API
+  rejects a reused `display_title`, so the first publish of a skill worked and every later one
+  failed — which is the normal case, since you publish because something changed. The new command
+  POSTs to `/v1/skills/{id}/versions`; the server assigns the version identifier and promotes it to
+  `latest_version`, so nothing is numbered locally.
+
+  **It takes the skill id rather than resolving one, and `install` still only creates.** Neither
+  command inspects the workspace to decide which operation it "should" perform. A `display_title` is
+  *not* unique: the API enforces uniqueness only when the field is sent explicitly, and derives a
+  title from SKILL.md frontmatter otherwise — two skills with one title are reachable and were
+  observed. A title→id lookup therefore matches none, one, or several, and a wrong match appends
+  your version to somebody else's skill. Packaging is shared between the two commands (identical
+  exclusions and size ceiling); only the endpoint differs, and which endpoint is the command you
+  typed.
+
 - **`vat claude org skills install` now refuses an over-ceiling bundle before uploading it, and
   reports sizes in the units it labels.** The Skills API's `413` is correct but arrives only after
   the whole body has crossed the wire — 11 s for a 30 MB bundle, measured — and names no file, so

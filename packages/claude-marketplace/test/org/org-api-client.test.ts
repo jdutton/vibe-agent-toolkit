@@ -1,6 +1,11 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 
-import { OrgApiClient, buildMultipartFormData, createOrgApiClientFromEnv } from '../../src/org/org-api-client.js';
+import {
+  OrgApiClient,
+  buildMultipartFormData,
+  createOrgApiClientFromEnv,
+  skillVersionsPath,
+} from '../../src/org/org-api-client.js';
 
 const ADMIN_KEY = 'sk-ant-admin-test';
 const API_KEY = 'sk-ant-api-test';
@@ -127,6 +132,25 @@ describe('buildMultipartFormData', () => {
     const r1 = buildMultipartFormData({}, []);
     const r2 = buildMultipartFormData({}, []);
     expect(r1.boundary).not.toBe(r2.boundary);
+  });
+});
+
+describe('skillVersionsPath', () => {
+  it('addresses the versions collection, which is where a new version is POSTed', () => {
+    expect(skillVersionsPath('skill_abc123')).toBe('/v1/skills/skill_abc123/versions');
+  });
+
+  it('addresses a single version when one is named', () => {
+    expect(skillVersionsPath('skill_abc123', '1775007400733130'))
+      .toBe('/v1/skills/skill_abc123/versions/1775007400733130');
+  });
+
+  it('percent-encodes both ids rather than splicing them into the path', () => {
+    // Both are server-minted and opaque. One carrying a slash would otherwise
+    // address a different resource — and for the POST that means appending a
+    // version to somebody else's skill.
+    expect(skillVersionsPath('skill/../evil')).toBe('/v1/skills/skill%2F..%2Fevil/versions');
+    expect(skillVersionsPath('s', '../../x')).toBe('/v1/skills/s/versions/..%2F..%2Fx');
   });
 });
 

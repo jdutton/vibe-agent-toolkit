@@ -62,6 +62,18 @@ export function buildMultipartFormData(
   };
 }
 
+/**
+ * Path to a skill's versions collection, or to one version when `version` is given.
+ *
+ * Both ids are server-minted and opaque, so both are percent-encoded rather than
+ * spliced in: an id carrying a `/` would otherwise address a different resource,
+ * and for the POST that means appending a version to the wrong skill.
+ */
+export function skillVersionsPath(skillId: string, version?: string): string {
+  const base = `/v1/skills/${encodeURIComponent(skillId)}/versions`;
+  return version === undefined ? base : `${base}/${encodeURIComponent(version)}`;
+}
+
 export interface OrgApiClientOptions {
   /** Admin API key (sk-ant-admin...) — required for /v1/organizations/*, and ONLY for those. */
   adminApiKey?: string;
@@ -169,16 +181,35 @@ export class OrgApiClient {
 
   /** DELETE a specific version of a skill. */
   async deleteSkillVersion<T>(skillId: string, version: string): Promise<T> {
-    const url = this.buildUrl(
-      `/v1/skills/${encodeURIComponent(skillId)}/versions/${encodeURIComponent(version)}`,
-    );
+    const url = this.buildUrl(skillVersionsPath(skillId, version));
     const headers = this.buildSkillsHeaders();
     return this.request<T>('DELETE', url, headers);
   }
 
   /** Upload a skill via multipart/form-data POST to /v1/skills. */
   async uploadSkill<T>(multipart: MultipartResult): Promise<T> {
-    const url = this.buildUrl('/v1/skills');
+    return this.postMultipart<T>(this.buildUrl('/v1/skills'), multipart);
+  }
+
+  /**
+   * Add a new version to an EXISTING skill: multipart POST to
+   * `/v1/skills/{id}/versions`.
+   *
+   * The skill id is taken, never inferred. `display_title` is not unique in a
+   * workspace — the API enforces uniqueness only when the field is sent
+   * explicitly, and derives a title from SKILL.md frontmatter otherwise, so two
+   * skills can and do carry the same title. That makes a title→id lookup a
+   * 0-, 1-, or N-match guess, and guessing wrong here appends a version to the
+   * wrong skill. The caller supplies the id; `versions list` is how you find it.
+   *
+   * The server assigns the version identifier and promotes it to
+   * `latest_version` — nothing client-side numbers a version.
+   */
+  async uploadSkillVersion<T>(skillId: string, multipart: MultipartResult): Promise<T> {
+    return this.postMultipart<T>(this.buildUrl(skillVersionsPath(skillId)), multipart);
+  }
+
+  private postMultipart<T>(url: string, multipart: MultipartResult): Promise<T> {
     const headers: Record<string, string> = {
       ...this.buildSkillsHeaders(),
       'content-type': multipart.contentType, // overrides application/json from buildSkillsHeaders
