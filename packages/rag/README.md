@@ -108,12 +108,18 @@ import type { RAGQueryProvider, RAGQuery } from '@vibe-agent-toolkit/rag';
 const rag: RAGQueryProvider = ...; // Implementation
 
 // Query the RAG database
+// `tags` and `type` are METADATA fields: they are honoured under `filters.metadata`
+// and only there. A shipped provider throws on them at the top level of `filters` —
+// it used to ignore them, which silently turned a filtered query into an unfiltered
+// full-recall search over the whole index.
 const result = await rag.query({
   text: 'How do I validate schemas?',
   limit: 5,
   filters: {
-    tags: ['validation'],
-    type: 'documentation'
+    metadata: {
+      tags: ['validation'],
+      type: 'documentation'
+    }
   }
 });
 

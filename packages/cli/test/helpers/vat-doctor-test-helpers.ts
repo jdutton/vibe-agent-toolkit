@@ -78,6 +78,18 @@ export interface DoctorResult {
 // ============================================================================
 
 /**
+ * `process.version` as this worker really has it, captured before any test can stub it.
+ *
+ * Captured at module load on purpose: reading it lazily inside the stub helper would let a
+ * second call capture the FIRST stub as "pristine", and the real value would be lost for
+ * the rest of the worker.
+ */
+const PRISTINE_VERSION_DESCRIPTOR = Object.getOwnPropertyDescriptor(
+  process,
+  'version',
+) as PropertyDescriptor;
+
+/**
  * Setup environment mocks for doctor tests
  *
  * Mocks execSync calls for version checks and system commands.
@@ -123,17 +135,48 @@ export async function mockDoctorEnvironment(
     return Buffer.from('');
   });
 
-  // Also mock getToolVersion from utils
+  // Also mock getToolVersion from utils.
+  //
+  // ⚠️ `checkNodeVersion` deliberately does NOT go through this. It reads
+  // `process.version` — the interpreter running VAT — because a spawned `node` is a
+  // different question under any version manager or shim. Mocking `getToolVersion` for
+  // 'node' was how a real defect stayed invisible: the suite supplied a Node version the
+  // check never consulted, so it could not see WHICH Node was being tested. `nodeVersion`
+  // now drives `process.version` below, and this entry is kept only for `git`.
   const { getToolVersion } = await import('@vibe-agent-toolkit/utils/process');
   vi.mocked(getToolVersion).mockImplementation((toolName: string) => {
-    if (toolName === 'node') return opts.nodeVersion;
     if (toolName === 'git') return opts.gitVersion;
     return null;
   });
 
+  // `process.version` is a non-writable own property, so it is replaced by definition.
+  // The descriptor restored is the one captured at module load, never the one this call
+  // is about to overwrite — otherwise a second call would "restore" the first stub and the
+  // real version would be gone for the rest of the worker.
+  if (opts.nodeVersion !== null) {
+    Object.defineProperty(process, 'version', {
+      value: opts.nodeVersion,
+      configurable: true,
+      writable: false,
+    });
+  }
+
   return () => {
+    restoreProcessVersion();
     vi.restoreAllMocks();
   };
+}
+
+/**
+ * Put `process.version` back to this worker's real value.
+ *
+ * Call from `afterEach` in any suite that stubs it. `vi.restoreAllMocks()` does not undo
+ * an `Object.defineProperty`, so without this the stub leaks into every later test in the
+ * file — including ones that never asked for a Node version and would then be asserting
+ * against a fabricated one.
+ */
+export function restoreProcessVersion(): void {
+  Object.defineProperty(process, 'version', PRISTINE_VERSION_DESCRIPTOR);
 }
 
 /**

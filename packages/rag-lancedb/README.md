@@ -167,13 +167,23 @@ Some fields are declared on the query types but **no shipped provider reads them
 - `tags`, `type`, `headingPath` — move them under `filters.metadata`:
 
   ```typescript
-  // ❌ Throws: "Unsupported RAG filter: `filters.tags` — move it to `filters.metadata.tags`"
-  //    (before this was a guard, it ran a full-recall search with no filtering at all)
+  // ❌ Throws (before this was a guard, it ran a full-recall search with no filtering at all):
+  //
+  //   Unsupported RAG filter:
+  //     - `filters.tags`: move it to `filters.metadata.tags` — it is a metadata field and is
+  //       honoured only there.
+  //
+  //   These are refused rather than ignored because ignoring them widens the search: an unread
+  //   filter contributes no SQL condition, so the query would run as an unfiltered search over
+  //   the entire index and return results the filter was meant to exclude.
   filters: { tags: ['validation'] }
 
   // ✅ Honoured
   filters: { metadata: { tags: ['validation'] } }
   ```
+
+  Every offending key present is reported in one error, so a query carrying two of them does not
+  have to be fixed twice (the heading reads `Unsupported RAG filters:` in that case).
 
 - `dateRange` — no replacement. Model the date as a field on your own metadata schema and filter on it via `filters.metadata`, or filter the returned chunks yourself after the query.
 - `hybridSearch` — no replacement. Remove it, or set `enabled: false` to state that a pure vector search is what you want.

@@ -14,7 +14,9 @@ choice, not a default. Choosing this one costs almost nothing: `node:sqlite`
 ships with Node, so there is no binary, no WASM module, no extension to seed and
 nothing to download.
 
-**Requires Node >= 22.13.0** — `node:sqlite` is absent from 22.12.0. That is now
+**Requires Node >= 22.13.0** — `node:sqlite` was added in 22.5.0 behind
+`--experimental-sqlite`, and 22.13.0 is the first 22.x where it loads without that
+flag. That is now
 the whole toolkit's floor, and this package is the reason: the CLI depends on it
 outright and `vat resources query|check` build their ephemeral store from it on
 every run, so Node 22.0–22.12 could not run those commands while the manifests

@@ -148,49 +148,77 @@ const CHECK_NAME_COMMAND_MODULES = 'Command modules';
  * Reading `engines.node` makes the manifest the single answer, so bumping the
  * floor cannot leave this check behind.
  *
- * @returns The `engines.node` range, or `undefined` when the manifest cannot
- *   be read or declares none — a packaging fault the caller reports rather
- *   than papers over with a guess
+ * @returns The `engines.node` range, or which of two DIFFERENT problems occurred.
+ *   `undeclared` is a packaging fault the caller reports as a failure; `unreadable`
+ *   means nothing was verified, which this module's own doctrine calls `undetermined`.
+ *   Collapsing them told a user with an unreadable manifest to reinstall an incomplete
+ *   one — the wrong diagnosis and the wrong remedy.
  */
-function requiredNodeRange(): string | undefined {
+function requiredNodeRange(): { range: string } | { problem: 'unreadable' | 'undeclared' } {
+  let raw: string;
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- a URL built from import.meta.url, not from input
-    const manifest: unknown = JSON.parse(readFileSync(CLI_MANIFEST_URL, 'utf8'));
-    const range = (manifest as { engines?: { node?: unknown } }).engines?.node;
-    return typeof range === 'string' && range.length > 0 ? range : undefined;
+    raw = readFileSync(CLI_MANIFEST_URL, 'utf8');
   } catch {
-    return undefined;
+    // Distinguished from `undeclared` deliberately. This module's own doctrine says a
+    // file that cannot be read is `undetermined` — nothing was verified — not a `fail`.
+    // Collapsing the two told a user with an unreadable manifest that it was incomplete
+    // and to reinstall, which is the wrong diagnosis and the wrong remedy.
+    return { problem: 'unreadable' };
+  }
+
+  try {
+    const manifest: unknown = JSON.parse(raw);
+    const range = (manifest as { engines?: { node?: unknown } }).engines?.node;
+    return typeof range === 'string' && range.length > 0 ? { range } : { problem: 'undeclared' };
+  } catch {
+    return { problem: 'unreadable' };
   }
 }
 
 /**
  * Check Node.js version meets requirements
+ *
+ * 🔑 Reads `process.version` — the interpreter actually executing this process — and NOT
+ * a spawned `node --version`. Those are different questions whenever VAT is launched
+ * through a shim (Volta, asdf, corepack, an IDE terminal, `npx --node-version`) or by an
+ * absolute interpreter path, which is common. Asking `PATH` produced all three wrong
+ * answers at once: it FAILED a healthy environment whose `PATH` node was old, it PASSED
+ * an environment that cannot run `vat resources query|check` when only `PATH`'s node was
+ * new, and where `node` was not on `PATH` at all it reported Node as "Not detected" —
+ * from inside a Node process.
+ *
+ * The check that matters is whether the interpreter running VAT can run VAT, so it must
+ * be asked of that interpreter. `nodeSqliteFloorFailure` in `utils/projection-store.ts`
+ * already reported `process.version`; this makes the two agree instead of answering one
+ * question from two sources.
  */
 export function checkNodeVersion(): DoctorCheckResult {
   try {
-    const version = getToolVersion('node');
+    // Not `getToolVersion('node')`. See the note above: that spawns PATH's node, which is
+    // not necessarily — and under any version manager, not usually — this process.
+    const version = process.version;
 
-    if (!version) {
-      return {
-        name: CHECK_NAME_NODE_VERSION,
-        outcome: 'fail',
-        message: 'Not detected',
-        suggestion: NODEJS_INSTALL_URL,
-      };
-    }
-
-    // Compared with the full range, not a major: `node:sqlite` arrived in
+    // Compared with the full range, not a major: `node:sqlite` is unflagged from
     // 22.13.0, so a major-only test passes 22.0.0 for a toolkit that cannot
     // run `vat resources query` there.
-    const range = requiredNodeRange();
-    if (range === undefined) {
-      return {
-        name: CHECK_NAME_NODE_VERSION,
-        outcome: 'fail',
-        message: 'Cannot determine the required Node.js version: the CLI manifest declares no engines.node',
-        suggestion: 'Reinstall @vibe-agent-toolkit/cli — its package.json is incomplete',
-      };
+    const required = requiredNodeRange();
+    if (!('range' in required)) {
+      return required.problem === 'unreadable'
+        ? {
+            name: CHECK_NAME_NODE_VERSION,
+            outcome: 'undetermined',
+            message: `Cannot read the CLI manifest to learn the required Node.js version (running ${version})`,
+            suggestion: 'Check permissions on the installed @vibe-agent-toolkit/cli package',
+          }
+        : {
+            name: CHECK_NAME_NODE_VERSION,
+            outcome: 'fail',
+            message: 'Cannot determine the required Node.js version: the CLI manifest declares no engines.node',
+            suggestion: 'Reinstall @vibe-agent-toolkit/cli — its package.json is incomplete',
+          };
     }
+    const { range } = required;
 
     const parsed = semver.coerce(version);
     if (parsed === null) {
@@ -211,8 +239,12 @@ export function checkNodeVersion(): DoctorCheckResult {
       : {
           name: CHECK_NAME_NODE_VERSION,
           outcome: 'fail',
-          message: `${version} is too old. Node.js ${range} required.`,
-          suggestion: 'Upgrade Node.js: https://nodejs.org/ or use nvm',
+          // "does not satisfy", not "is too old". The range comes from the manifest and
+          // this code no longer controls its shape: an upper bound or a gap (excluding the
+          // odd-numbered 23 line, say) would make a NEWER Node fail here, and telling that
+          // user to upgrade is advice that cannot work.
+          message: `${version} does not satisfy the required range. Node.js ${range} required.`,
+          suggestion: 'Install a Node.js version in that range: https://nodejs.org/ or use nvm',
         };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);

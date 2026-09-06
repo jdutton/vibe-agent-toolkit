@@ -22,6 +22,20 @@ const PUBLIC_DOC = 'public-doc';
 const RESTRICTED_DOC = 'restricted-doc';
 const QUERY_TEXT = 'handbook';
 
+/**
+ * Reach the runtime guard with a shape the TypeScript surface already rejects.
+ *
+ * `RAGQuery['filters']` declares neither `tags` nor an arbitrary key, so a typed caller
+ * gets a COMPILE error — the better of the two refusals. The runtime guard exists for the
+ * JavaScript caller, the JSON payload and the `as` cast, who never meet the type.
+ *
+ * @param filters - The filter object to smuggle past the compiler
+ * @returns The same object, typed as the query's filter parameter
+ */
+function asUntypedFilters(filters: Record<string, unknown>): { resourceId?: string | string[] } {
+  return filters as { resourceId?: string | string[] };
+}
+
 const suite = setupLanceDBTestSuite();
 
 /**
@@ -112,6 +126,38 @@ describe('unsupported queries are refused rather than widened', () => {
     await expect(
       suite.provider.query({ text: QUERY_TEXT, hybridSearch: { enabled: true } }),
     ).rejects.toThrow(/hybrid search/i);
+  });
+
+  it('refuses an unsupported FILTER before touching the database too', async () => {
+    // The same property for the other half of the guard. The README claims the refusal
+    // needs neither a connection nor an embedding; without this case only the
+    // hybridSearch half was pinned, and the filter half was reaching `buildWhereClause`
+    // by a route this suite never proved ran first. With nothing indexed, an unguarded
+    // query fails with "No data indexed yet" — a message this assertion cannot match —
+    // so the test distinguishes the guard from the absence of one.
+    suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
+
+    await expect(
+      suite.provider.query({ text: QUERY_TEXT, filters: asUntypedFilters({ tags: ['auth'] }) }),
+    ).rejects.toThrow(/`filters\.tags`: move it to `filters\.metadata\.tags`/);
+  });
+
+  it('reports every unsupported key present in one error', async () => {
+    suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
+
+    let message = '';
+    try {
+      await suite.provider.query({
+        text: QUERY_TEXT,
+        filters: asUntypedFilters({ tags: ['auth'], type: 'guide' }),
+      });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+
+    // One error naming both, so a query carrying two does not have to be fixed twice.
+    expect(message).toMatch(/filters\.tags/);
+    expect(message).toMatch(/filters\.type/);
   });
 
   it('allows hybridSearch when it is explicitly disabled', async () => {

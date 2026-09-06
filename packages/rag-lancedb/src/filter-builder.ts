@@ -5,6 +5,7 @@
  * Uses duck typing for Zod v3/v4 compatibility.
  */
 
+import { assertFiltersProducedConditions, assertQuerySupported, type QuerySupport } from '@vibe-agent-toolkit/rag';
 import { getZodTypeName, unwrapZodType, ZodTypeNames } from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape, ZodTypeAny } from 'zod';
 
@@ -106,8 +107,22 @@ export function buildMetadataWhereClause(
     // Get Zod type for this field from schema
     const zodType = schema.shape[key];
     if (!zodType) {
-      // Field not in schema - skip it
-      continue;
+      // 🚨 This used to `continue`, and skipping is the same silent-widening defect the
+      // top-level guard refuses: a key with no branch contributes no condition, and a
+      // query left with no conditions runs unfiltered over the whole index. It became
+      // indefensible once the top-level refusals started telling callers to "move it to
+      // `filters.metadata`" — under a custom metadata schema that lacks the field, obeying
+      // that remedy landed the caller straight back in the bug. Column names are also
+      // lowercased on write, so `headingpath` vs `headingPath` reached here too.
+      const declared = Object.keys(schema.shape)
+        .map((name) => ['`', name, '`'].join(''))
+        .join(', ');
+      throw new Error(
+        `Unknown metadata filter field \`${key}\`: it is not declared in this provider's ` +
+          `metadata schema, so it can never match. Declared fields are ${declared}. ` +
+          'Filtering on an undeclared field would contribute no condition and let the query ' +
+          'run unfiltered over the entire index, so it is refused rather than skipped.',
+      );
     }
 
     conditions.push(buildMetadataFilter(key, value, zodType));
@@ -117,80 +132,36 @@ export function buildMetadataWhereClause(
 }
 
 /**
- * Filter keys VAT's published query surface declares that no shipped provider reads
- * at that position, each mapped to what the caller should do instead.
+ * What this provider can honour in a query.
  *
- * 🚨 These are refused rather than ignored because ignoring them WIDENS. An unread
- * key contributes no SQL condition, and `LanceDBRAGProvider.query()` applies a WHERE
- * clause only when one was produced — so a query whose only filter is one of these
- * would run as an unfiltered full-recall vector search over the entire index, and
- * return plausible results drawn from exactly the documents the filter was meant to
- * exclude. A RAG filter is usually a correctness or access boundary, which makes the
- * silent-widening version closer to a data-exposure defect than to a missing feature.
- *
- * `tags`, `type` and `headingPath` are ordinary metadata fields; only their position
- * at the top level of `filters` is unsupported. `dateRange` is implemented nowhere.
+ * 🔑 An ALLOWLIST, and the whole point of the shape. Enumerating the four fields known
+ * to be unimplemented would close four instances and leave the class open: any other
+ * unrecognised key — a typo'd `resourceid`, a field lifted from a design document, a
+ * field a future release declares before implementing — would still widen in silence.
+ * Declaring what IS read refuses everything else by construction.
  */
-const UNSUPPORTED_FILTERS = new Map<string, string>([
-  [
-    'dateRange',
-    'no provider implements a date-range filter at any position. Model the date as a field on your metadata schema and filter via `filters.metadata`, or filter the returned chunks yourself.',
-  ],
-  ['tags', 'move it to `filters.metadata.tags` — it is a metadata field and is honoured only there.'],
-  ['type', 'move it to `filters.metadata.type` — it is a metadata field and is honoured only there.'],
-  [
-    'headingPath',
-    'move it to `filters.metadata.headingPath` — it is a metadata field and is honoured only there.',
-  ],
-]);
-
-/**
- * Refuse a filter object carrying a key no provider reads
- *
- * @param filters - RAG query filters, as supplied by the caller
- * @throws Error naming every unsupported key present, and its remedy
- */
-export function assertFiltersAreSupported(filters: Record<string, unknown>): void {
-  const offenders = Object.entries(filters)
-    .filter(([key, value]) => value !== undefined && UNSUPPORTED_FILTERS.has(key))
-    .map(([key]) => `  - \`filters.${key}\`: ${UNSUPPORTED_FILTERS.get(key) ?? ''}`);
-
-  if (offenders.length === 0) {
-    return;
-  }
-
-  throw new Error(
-    `Unsupported RAG filter${offenders.length > 1 ? 's' : ''}:\n${offenders.join('\n')}\n\n` +
-      'These are refused rather than ignored because ignoring them widens the search: ' +
-      'an unread filter contributes no SQL condition, so the query would run as an ' +
-      'unfiltered search over the entire index and return results the filter was meant ' +
-      'to exclude.',
-  );
-}
+export const LANCEDB_QUERY_SUPPORT: QuerySupport = {
+  filterKeys: ['resourceId', 'metadata'],
+  hybridSearch: false,
+};
 
 /**
  * Build complete WHERE clause from RAG query filters
  *
- * Handles both core filters (resourceId) and custom metadata filters. Any key in
- * {@link UNSUPPORTED_FILTERS} throws rather than being dropped.
+ * Handles both core filters (resourceId) and custom metadata filters. A key this
+ * provider does not read throws rather than being dropped, and so does a filter that
+ * was supplied but resolved to no condition at all.
  *
  * @param filters - RAG query filters
  * @param metadataSchema - Zod schema for metadata
- * @returns Complete SQL WHERE clause or null
- * @throws Error if `filters` carries a declared-but-unimplemented key
+ * @returns Complete SQL WHERE clause, or null when no filter was requested
+ * @throws Error if `filters` carries an unsupported key, an undeclared metadata field,
+ *   or asks for a filter that produces no condition
  */
 export function buildWhereClause<TMetadata extends Record<string, unknown>>(
   filters: {
     resourceId?: string | string[];
     metadata?: Partial<TMetadata>;
-    /** 🚨 Implemented by no provider. Passing it THROWS — see {@link UNSUPPORTED_FILTERS}. */
-    dateRange?: { start: Date; end: Date };
-    /** 🚨 Unsupported at this position. Passing it THROWS; use `metadata.tags`. */
-    tags?: string[];
-    /** 🚨 Unsupported at this position. Passing it THROWS; use `metadata.type`. */
-    type?: string;
-    /** 🚨 Unsupported at this position. Passing it THROWS; use `metadata.headingPath`. */
-    headingPath?: string;
   } | undefined,
   metadataSchema: ZodObject<ZodRawShape>
 ): string | null {
@@ -198,7 +169,11 @@ export function buildWhereClause<TMetadata extends Record<string, unknown>>(
     return null;
   }
 
-  assertFiltersAreSupported(filters);
+  // Guarded here as well as in `query()` because this is public API: a caller can reach
+  // the filter→SQL path without going through the provider, and a guard with a bypass is
+  // worse than none because it advertises a safety it does not have. One implementation,
+  // two entry points.
+  assertQuerySupported({ filters: filters as Record<string, unknown> }, LANCEDB_QUERY_SUPPORT);
 
   const conditions: string[] = [];
 
@@ -218,11 +193,17 @@ export function buildWhereClause<TMetadata extends Record<string, unknown>>(
 
   // Handle metadata filters
   if (filters.metadata) {
-    const metadataClause = buildMetadataWhereClause(filters.metadata, metadataSchema);
+    const metadataClause = buildMetadataWhereClause(filters.metadata as Record<string, unknown>, metadataSchema);
     if (metadataClause) {
       conditions.push(metadataClause);
     }
   }
+
+  // The backstop an allowlist structurally cannot provide: a SUPPORTED key whose value
+  // resolves to nothing still yields zero conditions, and zero conditions is
+  // indistinguishable at the point of use from "no filter was requested" — which is
+  // exactly how the original defect widened.
+  assertFiltersProducedConditions(filters as Record<string, unknown>, conditions.length);
 
   return conditions.length > 0 ? conditions.join(' AND ') : null;
 }

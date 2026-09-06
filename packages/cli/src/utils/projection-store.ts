@@ -149,7 +149,7 @@ export const CACHE_DISABLED = '0';
  * it: RAG carries a platform-native binary, while this one carries a Node
  * version floor.
  */
-/** What Node throws for `import('node:sqlite')` before 22.13.0. */
+/** What Node throws for `import('node:sqlite')` when it is absent or still flagged. */
 const UNKNOWN_BUILTIN_MODULE = 'ERR_UNKNOWN_BUILTIN_MODULE';
 
 const PROJECTION_STORE_BACKEND: OptionalBackend = {
@@ -330,7 +330,8 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
  *
  * 🪤 The two are **different error codes**, and only one of them reaches
  * {@link isModuleMissing}. `@vibe-agent-toolkit/projection-sqlite` imports
- * `node:sqlite`, which arrived in Node 22.13.0; on 22.0–22.12 the import fails
+ * `node:sqlite`, which loads unflagged from Node 22.13.0 (it was added in 22.5.0
+ * behind `--experimental-sqlite`); on 22.0–22.12 an ordinary import fails
  * with `ERR_UNKNOWN_BUILTIN_MODULE`, not `ERR_MODULE_NOT_FOUND`. Without this
  * branch the user gets a bare `No such built-in module: node:sqlite` — which
  * names neither the version floor nor the fix.
@@ -372,7 +373,8 @@ export function nodeSqliteFloorFailure(error: unknown): Error | undefined {
     // precisely so it has one home; restating it in a string would be the
     // second copy that change exists to remove, and it would go stale silently
     // the next time the floor moves.
-    + ` \`node:sqlite\` arrived in Node 22.13.0 — you are on ${process.version}.`
+    + ` \`node:sqlite\` loads unflagged from Node 22.13.0 (added in 22.5.0 behind`
+    + ` \`--experimental-sqlite\`) — you are on ${process.version}.`
     + ' Upgrade Node to 22.13.0 or newer. Installing a package will not help:'
     + ' the module is built into Node, not published to npm.',
   );

@@ -4,7 +4,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   checkCliBuildSync,
@@ -28,6 +28,7 @@ import {
   mockDoctorConfig,
   mockDoctorEnvironment,
   mockDoctorFileSystem,
+  restoreProcessVersion,
 } from '../helpers/vat-doctor-test-helpers.js';
 
 // Mock modules before importing
@@ -61,6 +62,12 @@ const ADVISORY_CHECK = 'p3-advisory';
 describe('doctor command - unit tests', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  // `vi.clearAllMocks()` does not undo an `Object.defineProperty`, so a stubbed
+  // `process.version` would otherwise leak into every later test in this file.
+  afterEach(() => {
+    restoreProcessVersion();
   });
 
   describe('checkNodeVersion', () => {
@@ -109,7 +116,54 @@ describe('doctor command - unit tests', () => {
 
       const result = checkNodeVersion();
 
-      assertCheckFailed(result, CHECK_NODE_VERSION, 'too old', 'https://nodejs.org');
+      assertCheckFailed(result, CHECK_NODE_VERSION, 'does not satisfy', 'https://nodejs.org');
+    });
+
+    /*
+     * ⭐ WHICH Node is being checked, which no other test here can see.
+     *
+     * `checkNodeVersion` must read `process.version` — the interpreter running VAT — and
+     * NOT a spawned `node --version`. Under any version manager or shim (Volta, asdf,
+     * corepack, an IDE terminal, `npx --node-version`) those differ, and asking PATH gave
+     * all three wrong answers: it failed a healthy environment, PASSED one that cannot run
+     * `vat resources query|check`, and reported "Not detected" from inside a Node process.
+     *
+     * This test drives them APART on purpose: `process.version` is below the floor while
+     * the spawned `node` reports a version above it. A check that consults PATH passes and
+     * fails this test. The suite could not previously express this, because it supplied the
+     * Node version through the very function the check should not be calling.
+     */
+    it('reads the running interpreter, not a spawned node from PATH', async () => {
+      await mockDoctorEnvironment({ nodeVersion: 'v22.12.0' });
+      const { getToolVersion } = await import('@vibe-agent-toolkit/utils/process');
+      vi.mocked(getToolVersion).mockImplementation((toolName: string) =>
+        toolName === 'node' ? 'v24.13.1' : null,
+      );
+
+      const result = checkNodeVersion();
+
+      assertCheckFailed(result, CHECK_NODE_VERSION, 'does not satisfy', 'https://nodejs.org');
+      // The floor-failing version is the one the RUNNING interpreter reports...
+      expect(result.message).toContain('v22.12.0');
+      // ...and never the one PATH would have supplied.
+      expect(result.message).not.toContain('v24.13.1');
+      expect(getToolVersion).not.toHaveBeenCalledWith('node');
+    });
+
+    it('reports an unreadable manifest as undetermined, not as one declaring no floor', async () => {
+      // This module's own doctrine: a file that cannot be read means nothing was verified.
+      // Collapsing it into `fail` told the user their manifest was incomplete and to
+      // reinstall — the wrong diagnosis and the wrong remedy.
+      await mockDoctorFileSystem();
+      await mockDoctorEnvironment({ nodeVersion: 'v24.13.1' });
+      vi.mocked(readFileSync).mockImplementation(() => {
+        throw new Error(UNREADABLE);
+      });
+
+      const result = checkNodeVersion();
+
+      expect(result.outcome).toBe('undetermined');
+      expect(result.message).toContain('Cannot read the CLI manifest');
     });
 
     it('reports a manifest that declares no floor, rather than guessing one', async () => {
@@ -126,13 +180,12 @@ describe('doctor command - unit tests', () => {
       );
     });
 
-    it('fails when Node.js not detected', async () => {
-      await mockDoctorEnvironment({ nodeVersion: null });
-
-      const result = checkNodeVersion();
-
-      assertCheckFailed(result, CHECK_NODE_VERSION, 'Not detected', 'Install');
-    });
+    /*
+     * There is deliberately no "Node not detected" test any more. That branch existed only
+     * because the check spawned `node` from PATH, where absence is possible. `process.version`
+     * is always present in a running Node process, so a test for its absence would assert a
+     * state that cannot occur — and the branch itself was one of the three wrong answers.
+     */
   });
 
   describe('checkGitInstalled', () => {

@@ -85,7 +85,7 @@ vat doctor --verbose
 ```
 
 **What it checks:**
-- Node.js version (>=20 required)
+- Node.js version (>=22.13.0 required — the range comes from the CLI's own `engines.node`)
 - Git installation and repository
 - Configuration file exists and is valid
 - VAT version (checks for updates)
@@ -131,7 +131,7 @@ If checks fail, doctor provides specific suggestions:
 
 ```
 ❌ Node.js version
-   v18.0.0 is too old. Node.js 20+ required.
+   v22.4.0 does not satisfy the required range. Node.js >=22.13.0 required.
    💡 Upgrade Node.js: https://nodejs.org/ or use nvm
 ```
 

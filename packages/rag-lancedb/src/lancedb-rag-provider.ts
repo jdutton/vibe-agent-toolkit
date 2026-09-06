@@ -22,6 +22,7 @@ import type {
 } from '@vibe-agent-toolkit/rag';
 import {
   ApproximateTokenCounter,
+  assertQuerySupported,
   chunkResource,
   DefaultRAGMetadataSchema,
   enrichChunks,
@@ -40,7 +41,7 @@ import type { ZodObject, ZodRawShape } from 'zod';
 
 import { resolveChunkingConfig } from './chunking-config.js';
 import { createDocumentRecord, overlayChunkMetadata, type DocumentRecord } from './document-helpers.js';
-import { assertFiltersAreSupported, buildWhereClause, escapeSQLString } from './filter-builder.js';
+import { buildWhereClause, escapeSQLString, LANCEDB_QUERY_SUPPORT } from './filter-builder.js';
 import {
   chunkToLanceRow,
   lanceRowToChunk,
@@ -321,28 +322,20 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    */
   async query(query: RAGQuery<TMetadata>): Promise<RAGResult<TMetadata>> {
     // Refuse a query this provider cannot honour BEFORE doing any work — the check is
-    // deterministic and needs neither a connection nor an embedding.
+    // deterministic and needs neither a connection nor an embedding, so an unindexed
+    // provider reports the unsupported field rather than reporting that nothing is
+    // indexed yet.
     //
-    // `hybridSearch` is guarded here rather than in `buildWhereClause` because it is not
-    // a filter and never reaches it. The filter half is guarded inside `buildWhereClause`
-    // itself, which is public API and reachable without going through this method; both
-    // halves therefore have exactly one implementation each.
+    // One call covers BOTH halves, so a query carrying an unsupported filter AND an
+    // unsupported `hybridSearch` reports all of them together. An earlier shape threw on
+    // `hybridSearch` first and reached the filter check only afterwards, which reported
+    // one offender out of three and made the caller fix the same query twice.
     //
-    // Silently ignoring `enabled: true` produces no keyword pass, no error, and results
-    // indistinguishable from having omitted the field — so nothing would tell a caller
-    // that hybrid search did not happen.
-    if (query.hybridSearch?.enabled === true) {
-      throw new Error(
-        'Unsupported RAG query: `hybridSearch.enabled` is true, but no shipped provider ' +
-          'implements hybrid search — every search is pure vector search. This is refused ' +
-          'rather than ignored because the results would be indistinguishable from omitting ' +
-          'the field, so nothing would tell you the keyword pass never ran. Omit ' +
-          '`hybridSearch` to run the vector search explicitly.',
-      );
-    }
-    if (query.filters) {
-      assertFiltersAreSupported(query.filters);
-    }
+    // The check lives in `@vibe-agent-toolkit/rag`, not here: the query surface it
+    // enforces is declared there, and a second provider (the RAG skill actively invites
+    // pgvector/Qdrant implementations) would otherwise inherit the declared fields and
+    // none of the enforcement. What THIS provider supports is data it declares.
+    assertQuerySupported(query as { filters?: Record<string, unknown> }, LANCEDB_QUERY_SUPPORT);
 
     // Workaround for the @lancedb/lancedb + Bun Arrow buffer lifecycle bug:
     // after table modifications we recreate the connection entirely before reading.

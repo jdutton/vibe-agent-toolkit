@@ -153,11 +153,17 @@ describe('Filter Builder', () => {
       expect(result).toBe(EXPECTED_DOMAIN_FILTER);
     });
 
-    it('should skip fields not in schema', () => {
+    // 🚨 This test used to assert the OPPOSITE — that an unknown field is skipped and the
+    // clause built from the remaining ones. It was pinning the bug. Skipping is the same
+    // silent-widening failure the top-level guard refuses, and it became indefensible once
+    // those refusals started telling callers to "move it to `filters.metadata`": under a
+    // schema that lacks the field, obeying the remedy landed the caller back in the bug.
+    it('should refuse a field the schema does not declare, rather than skipping it', () => {
       const schema = z.object({ domain: z.string() });
       const filters = { domain: TEST_DOMAIN, unknownField: 'value' };
-      const result = buildMetadataWhereClause(filters, schema);
-      expect(result).toBe(EXPECTED_DOMAIN_FILTER);
+      expect(() => buildMetadataWhereClause(filters, schema)).toThrow(
+        /Unknown metadata filter field `unknownField`/,
+      );
     });
 
     it('should return null for empty filters', () => {

@@ -11,48 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### RAG
 
-- **A RAG filter that no provider implements now throws instead of being ignored — because
-  ignoring it widened your search rather than narrowing it.** Six fields were declared on VAT's
-  published query surface and four of them reached no provider at the position they were declared:
-  `filters.dateRange` and `hybridSearch` (implemented nowhere), and `filters.tags` / `filters.type`
-  / `filters.headingPath` (honoured only under `filters.metadata`). `buildWhereClause` never
-  destructured any of them, and `query()` applies a `WHERE` clause only when the builder produced
-  one — so **a query whose only filter was an unimplemented one ran as an unfiltered, full-recall
-  vector search over the entire index**, returning plausible results drawn from exactly the
-  documents the filter was meant to exclude, with no error and no warning. A RAG filter is usually
-  a correctness or access boundary, which puts the silent version closer to a data-exposure defect
-  than to a missing feature.
+- **A RAG filter no provider implements now throws instead of being silently ignored.** Ignoring
+  one *widened* your search: a query filtered only by an unimplemented field ran unfiltered over the
+  whole index. Move `filters.tags` / `type` / `headingPath` under `filters.metadata`; replace
+  `filters.dateRange` with a date field on your own metadata schema; drop `hybridSearch` or set
+  `enabled: false`. A metadata field your schema does not declare, and any unrecognised filter key,
+  now throw for the same reason.
 
-  Each refusal names the offending key and its remedy, and reports every offending key present in
-  one error. The check is deterministic and runs **before** the query touches the database or
-  computes an embedding, so an unindexed provider reports the unsupported field rather than
-  reporting that nothing is indexed yet. To migrate: move `tags` / `type` / `headingPath` under
-  `filters.metadata`, where they have always been honoured; drop `dateRange` in favour of a date
-  field on your own metadata schema; and drop `hybridSearch` or set `enabled: false` (every search
-  was, and remains, pure vector search).
+- **`RAGQuerySchema` gained a `filters.metadata` key.** Without it, a schema-validated
+  `filters.metadata` was stripped — the one filter path that works could not be expressed. Moves the
+  generated `RAGQueryJsonSchema` output; no action needed unless you consume that schema.
 
-- **`RAGQuerySchema` gained the `filters.metadata` key it was missing.** The Zod schema declared
-  the four unimplemented filters but had no `metadata` key at all — and because a Zod object
-  **strips** unknown keys rather than rejecting them, a `filters.metadata` passed through that
-  schema was silently discarded before it could reach a provider. The one filter path that works
-  was the one path the schema describing it could not express, which also made the new refusals'
-  remedy unreachable for schema-validated callers. This moves the generated `RAGQueryJsonSchema`
-  output. The schema validates **structure, not provider support**: the four refused fields still
-  parse there and are refused at `query()`.
-
-  The defect had survived a green suite because `query.test.ts` only asserted that `safeParse`
-  succeeded and never constructed a provider — structurally incapable of seeing that a filtered
-  query returned the whole corpus. The new `unsupported-filters` (unit) and `unsupported-query`
-  (integration) suites in `@vibe-agent-toolkit/rag-lancedb` close that: the integration suite
-  indexes two distinguishable documents and asserts the unfiltered control returns both, so the
-  refusals are demonstrably preventing a full-recall result rather than passing over an empty index.
+- **New in `@vibe-agent-toolkit/rag`: `assertQuerySupported(query, support)`.** Any RAG provider
+  should call it and declare its own `QuerySupport`; without it a provider inherits the declared
+  query fields and none of the refusals.
 
 #### CLI
 
 - **VAT now requires Node >= 22.13.0, raised from >= 22.0.0 across every package.** This corrects a
   promise VAT was already failing to keep rather than removing support anyone had: `vat resources
-  query` and `vat resources check` build their projection through `node:sqlite`, which arrived in
-  **22.13.0**, so on Node 22.0–22.12 those two commands could not run at all while every manifest
+  query` and `vat resources check` build their projection through `node:sqlite`, which loads
+  unflagged only from **22.13.0** (it was added in 22.5.0 behind `--experimental-sqlite`), so on
+  Node 22.0–22.12 those two commands could not run unaided while every manifest
   advertised them as supported. Thirteen patch releases were claimed and not delivered. If you are
   on Node 22.0–22.12, upgrade to 22.13.0 or newer; every other Node that worked before still works.
 
@@ -64,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and compares the full range, so the floor has one source and this check cannot drift behind it
   again. The sample output in `packages/cli/README.md` and `packages/cli/docs/doctor.md` showed the
   same stale `>=20.0.0` and has been corrected.
+
+  **The check now reads `process.version` — the interpreter running VAT — not a spawned
+  `node --version`.** Under any version manager or shim those differ, and asking `PATH` could pass
+  an environment VAT cannot run in, fail a healthy one, or report Node as "Not detected" from
+  inside a Node process.
 
 - **The RAG backends are no longer installed for you — `npm install` no longer brings the RAG lane
   with it.** They were declared as `optionalDependencies`, which npm and pnpm
@@ -452,14 +437,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   v0.2.0-rc.5 release burned two of its four attempts on credential failures the job only reported
   after it had started pushing packages: an expired token surfaced as `E404` — npm answers an
   unauthenticated `PUT` with "not found", so an expired token is indistinguishable from a package
-  that does not exist — and its replacement then failed `EOTP` for lacking 2FA bypass. Both are
-  answerable in one call before the first publish, and now are.
+  that does not exist — and its replacement then failed `EOTP` for lacking 2FA bypass.
+
+  **It catches the expired token, not the `EOTP`.** `whoami` is a read; npm demands the OTP only on
+  a write, so a token that authenticates but cannot publish still fails at publish.
 
 - **`bun run pre-release` prints its `--allow-branch` tip as a runnable command** rather than naming
   the flag and leaving the reader to reconstruct the invocation.
 
 - **The `node:sqlite` error no longer restates VAT's Node floor.** It gives the durable Node fact —
-  the module arrived in 22.13.0 — instead of a copy of `engines.node` that would go stale the next
+  the module loads unflagged from 22.13.0 (added in 22.5.0 behind `--experimental-sqlite`) —
+  instead of a copy of `engines.node` that would go stale the next
   time the floor moves. The floor has one home, and `vat doctor` derives it from there; a string
   repeating it was the same second-copy defect this release removes elsewhere.
 
@@ -656,7 +644,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `filters.resourceId` and `filters.metadata` reach the query. An unimplemented filter does not
   narrow your results, it **widens** them: the query degrades to an unfiltered full-recall search
   with no error. Move `tags`/`type`/`headingPath` under `filters.metadata`; `dateRange` and
-  `hybridSearch` have no replacement. Documented, not yet guarded.
+  `hybridSearch` have no replacement. **Superseded within this same `[Unreleased]` section:** see
+  the Breaking → RAG entry above, which makes all of these refuse rather than widen.
 
 - **A usage mistake no longer reports itself as a failed check.** Every command's `--help` publishes
   the same three-way exit contract — `0` no error-severity findings, `1` at least one, `2` a system

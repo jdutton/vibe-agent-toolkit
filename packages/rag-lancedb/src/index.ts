@@ -15,8 +15,8 @@ export {
 export type { ContentTransformOptions, LinkRewriteRule, LinkRewriteMatch } from '@vibe-agent-toolkit/resources';
 export { chunkToLanceRow, lanceRowToChunk, type LanceDBRow } from './schema.js';
 export {
-  assertFiltersAreSupported,
   buildMetadataFilter,
   buildMetadataWhereClause,
   buildWhereClause,
+  LANCEDB_QUERY_SUPPORT,
 } from './filter-builder.js';
