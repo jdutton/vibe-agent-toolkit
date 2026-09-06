@@ -1,0 +1,165 @@
+{
+  "$ref": "#/definitions/okf-concept-frontmatter",
+  "definitions": {
+    "okf-concept-frontmatter": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S",
+          "description": "REQUIRED (§4.1). A short, self-explanatory kind — \"BigQuery Table\", \"Playbook\", \"Metric\". NOT centrally registered: an unknown value is legal and consumers must tolerate it"
+        },
+        "title": {
+          "type": "string",
+          "description": "Recommended. Human-readable display name"
+        },
+        "description": {
+          "type": "string",
+          "description": "Recommended. One sentence summarizing the concept"
+        },
+        "resource": {
+          "type": "string",
+          "description": "Recommended. URI uniquely identifying the underlying asset; absent for abstract concepts"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Recommended. Short strings for cross-cutting categorization"
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "resource": {
+                "type": "string",
+                "minLength": 1,
+                "description": "REQUIRED (§5.1). A followable artifact — URL, bundle-relative path, references/ path — or a scope descriptor such as \"all queries in BigQuery project X\""
+              },
+              "id": {
+                "type": "string",
+                "description": "Stable key used as a markdown footnote label to attribute individual claims"
+              },
+              "title": {
+                "type": "string",
+                "description": "Human-readable label for the source"
+              },
+              "author": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Credibility signal: who or what produced the source"
+              },
+              "usage_count": {
+                "type": "number",
+                "description": "Credibility signal: how often the resource was exercised over usage_window. Liveness and trend, never a score"
+              },
+              "last_modified": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                ],
+                "description": "Credibility signal: when the source itself last changed (distinct from generated.at)"
+              },
+              "usage_window": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "$ref": "#/definitions/okf-concept-frontmatter/properties/sources/items/properties/last_modified",
+                    "description": "Start of the usage window"
+                  },
+                  "to": {
+                    "$ref": "#/definitions/okf-concept-frontmatter/properties/sources/items/properties/last_modified",
+                    "description": "End of the usage window"
+                  }
+                },
+                "additionalProperties": true,
+                "description": "Per-entry override of the sibling-level usage_window"
+              }
+            },
+            "required": [
+              "resource"
+            ],
+            "additionalProperties": true,
+            "description": "One provenance source (§5.1)"
+          },
+          "description": "Provenance: the materials this concept derives from (§5.1)"
+        },
+        "usage_window": {
+          "$ref": "#/definitions/okf-concept-frontmatter/properties/sources/items/properties/usage_window",
+          "description": "Datetime range framing every usage_count in sources (§5.1)"
+        },
+        "generated": {
+          "type": "object",
+          "properties": {
+            "by": {
+              "type": "string",
+              "minLength": 1,
+              "description": "REQUIRED within generated (§5.2)"
+            },
+            "at": {
+              "$ref": "#/definitions/okf-concept-frontmatter/properties/sources/items/properties/last_modified",
+              "description": "When the content last meaningfully changed"
+            }
+          },
+          "required": [
+            "by"
+          ],
+          "additionalProperties": true,
+          "description": "Trust: how the current content was produced (§5.2)"
+        },
+        "verified": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "by": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Who or what confirmed the content"
+                },
+                "at": {
+                  "$ref": "#/definitions/okf-concept-frontmatter/properties/sources/items/properties/last_modified",
+                  "description": "When the verification happened"
+                }
+              },
+              "required": [
+                "by"
+              ],
+              "additionalProperties": true,
+              "description": "One verification event (§5.2)"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/okf-concept-frontmatter/properties/verified/anyOf/0"
+              }
+            }
+          ],
+          "description": "Trust: verification events. A bare mapping MUST be read as a one-element list (§5.2)"
+        },
+        "status": {
+          "type": "string",
+          "description": "Lifecycle (§5.4). Conventionally draft | stable | deprecated; absent means stable. Left open because §11 makes values beyond those three soft guidance"
+        },
+        "stale_after": {
+          "$ref": "#/definitions/okf-concept-frontmatter/properties/sources/items/properties/last_modified",
+          "description": "Lifecycle (§5.5). An absolute instant: the concept is stale when now >= stale_after"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": true,
+      "description": "OKF v0.2 concept-document frontmatter — permissive by specification (§4.1, §11)"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

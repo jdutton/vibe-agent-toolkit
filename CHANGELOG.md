@@ -238,6 +238,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Node floor is now enforced across every manifest and executed in CI.** A repo-structure rule
+  derives the floor from the root `package.json` and fails the gate when any package disagrees, or
+  when a published package declares none; a `Node Floor` workflow then runs `vat doctor` and
+  `vat resources query` on that exact version. Nothing to do unless you add a package — give it
+  `engines.node` matching the root, or mark it `private`.
+
+- **`vat okf validate` — conformance checking for Open Knowledge Format bundles.** Declare one with
+  `okf.bundles.<name>.root`; every non-reserved `.md` beneath it is checked for parseable frontmatter
+  with a non-empty `type`, and cross-links are resolved against the bundle root. There is no
+  `include`/`exclude` on purpose — the population is the specification's, and a narrower one would
+  let VAT report a clean bundle it never fully read. Read a clean report precisely: §11.1 and §11.2
+  in full, §11.3 only in part — the *body* structure of `index.md` and `log.md` is not checked.
+
+- **`vat ard emit` — writes a `.well-known/ard.json` discovery manifest.** Set `ard.publisher` and
+  `ard.baseUrl`; published skills become entries automatically. Marketplaces, OKF bundles and MCP
+  servers are emitted only if you supply `ard.entries.<name>.type`, because the ARD specification
+  names no media type for any of them and VAT will not guess one under your domain.
+  `representativeQueries` is authored, never generated — see
+  `docs/concepts/knowledge-interop-formats.md`.
+
 - **Characterization tests pinning the markdown link-rewriting divergence**
   (`packages/resources/test/link-grammar-divergence.test.ts`). `transformContent` and
   `rewriteBodyLinks` disagree on an image inside a link, and the disagreement had been recorded in
@@ -664,6 +684,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@vibe-validate/utils` and `yaml` to the installed tree.
 
 ### Fixed
+
+- **`vat resources query` no longer prints Node's SQLite `ExperimentalWarning` on every run.** The
+  backend emits one per process even on a Node that needs no flag, and it was reaching users on the
+  default path. Now filtered by name at the point of import, so real warnings still print — the
+  reason a blanket `NODE_NO_WARNINGS` was never the fix. Nothing to do.
 
 - **The `vat-skill-distribution` skill taught a config key that does not exist.** It showed
   `skills.config.<name>.claudeWebTarget`, which the `.strict()` project-config schema refuses — so

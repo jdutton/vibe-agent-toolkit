@@ -123,8 +123,81 @@ An ARD entry can advertise an OKF bundle today only through namespaced `@context
 blessed `application/okf-bundle` media type is an open proposal, not a fact. Do not design as though
 the two join cleanly.
 
+## Declaring them in `vibe-agent-toolkit.config.yaml`
+
+Both surfaces are top-level, because both describe things a **project publishes** rather than files
+a collection matches.
+
+```yaml
+okf:
+  bundles:
+    playbooks:
+      root: knowledge/playbooks      # population is SPEC-DEFINED beneath this root
+      # severity: error              # default; adopters may lower it
+
+ard:
+  publisher: example.com             # the <publisher> segment of every entry URN
+  baseUrl: https://example.com/skills
+  trustManifest:
+    identity: https://example.com
+    identityType: https
+  entries:
+    my-skill:
+      representativeQueries:         # AUTHORED — VAT never generates these
+        - How do I file an expense report?
+        - What is the reimbursement limit?
+```
+
+Three things about that shape are deliberate, and each is a decision that has been reached for
+before:
+
+**An OKF bundle has a `root` and no `include`/`exclude`.** The population is whatever the
+specification says lives under the root. A glob that matched fewer files would let VAT certify a
+bundle as conformant while a file it never read broke it — the same failure shape as an `exclude`
+that narrows a report without narrowing the thing being reported on.
+
+**A bundle root is almost always a purpose-built subtree.** Pointing one at a pre-existing docs
+directory is rarely conformant, and the number is not close. Measured on this repository's own
+tracked `docs/` on 2026-09-06: **75 concept documents, 18 with YAML frontmatter, 0 carrying a
+`type:`**, and not one reserved `index.md` or `log.md` in the tree — 0% conformant. The choice is a
+subtree written to be a bundle, or frontmatter retrofitted onto every file. The specification offers
+no third option, and VAT does not invent one. (The count is dated because it moves whenever a doc is
+added; re-measure rather than quoting it.)
+
+**ARD asks for a publisher domain and nothing VAT can derive.** `identifier`, `displayName`, `type`,
+`url`, `version`, `updatedAt`, `description` and `tags` all come from surfaces the config already
+declares; restating one in `ard.entries` would create a second source of truth that can disagree
+with the first. What remains is what cannot be derived without fabricating it —
+`representativeQueries` above all. **VAT never generates those.** A wrong representative query is
+worse than a missing one: it makes a resource discoverable for the wrong task, and unlike a broken
+link nothing downstream ever reports it. Emitting without them is exactly conformant, since upstream
+treats absence as a warning.
+
+The full rulings live in the schema docstrings in
+`packages/resources/src/schemas/project-config.ts`, which is the module that enforces them.
+
+### Which media type VAT emits for which surface
+
+| Surface | `type` | Status |
+|---|---|---|
+| A skill | `application/ai-skill+md` | **Coined by us.** One occurrence in the whole spec, in an example. Sound only because ARD's envelope is type-agnostic |
+| A Claude marketplace | ⛔ none derived | `application/ai-catalog+json` appears **nowhere** in the spec. `ai-catalog` survives only as ARD's *predecessor* well-known path, and upstream's `ai-catalog.schema.json` is the container manifest, not a value for an entry's `type` |
+| An OKF bundle | ⛔ none derived | `application/okf-bundle` is an open upstream issue, not a fact |
+| An MCP server | ⛔ none derived | There is no adopter-facing MCP config surface to derive from |
+
+Where no type can be derived, VAT emits an entry only if the author supplies one explicitly. It does
+not guess a media type on a publisher's behalf, because the guess would be published under their
+domain.
+
+Upstream's entry schema is vendored at [`docs/external/ard/`](../external/ard/README.md) and used as
+a test-time oracle — VAT validates the JSON it emits against it, and never fetches it at runtime.
+That README also records a casing divergence between upstream's schema and its own prose, which
+VAT's emitter works around.
+
 ## Related
 
+- [ARD vendored schema](../external/ard/README.md) — upstream's entry schema, what was parsed out of
+  it, and the one divergence VAT works around
 - [Zones: extents and lenses](../architecture/zones.md) — the lens model that decides how a
   reference resolves, including the `wiki` lens
 - [Resource projection](../architecture/resource-projection.md) — the tables, and the planned
