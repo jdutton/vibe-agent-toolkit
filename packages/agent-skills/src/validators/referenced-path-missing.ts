@@ -84,9 +84,6 @@ const BUNDLED_SUBDIRS: ReadonlySet<string> = new Set<string>([
 /** Glob and placeholder syntax — a token carrying any of it is not a literal path. */
 const NON_LITERAL = /[*?<>{}[\]]/u;
 
-/** How many missing paths the message spells out before summarising. */
-const MAX_LISTED = 4;
-
 /**
  * Whether `token` is a literal path rooted at a bundled subdirectory.
  *
@@ -147,6 +144,42 @@ function existsUnder(root: string, rel: string, budget = 5000): boolean {
 }
 
 /**
+ * Emit one `PACKAGED_REFERENCED_PATH_MISSING` per missing path.
+ *
+ * One issue PER MISSING PATH, not one per document — and each carries the missing
+ * path as `link`.
+ *
+ * This is what makes a single misfire waivable without disabling the rule for the
+ * file. `applyAllowFilter` matches an allow glob against `location` OR `link`, so
+ * an adopter can silence exactly one illustrative path:
+ *
+ * ```yaml
+ * validation:
+ *   allow:
+ *     PACKAGED_REFERENCED_PATH_MISSING:
+ *       - paths: ["resources/gates.md"]
+ *         reason: "Illustrative path in a skill that teaches link syntax."
+ * ```
+ *
+ * …while a DIFFERENT missing path in that same document still fires. Waiving by
+ * `location` (`**\/some-skill/SKILL.md`) remains available and is the coarser
+ * choice — it suppresses future real findings in that file, which is precisely
+ * what the per-path form avoids.
+ *
+ * The three anchors are three different things, the same split
+ * `REFERENCE_TARGET_MISSING` documents: `location` is the file you open, `field`
+ * is not used here, and `link` is the target that does not exist — emphatically
+ * NOT the location, since naming a nonexistent path as "where to look" is advice
+ * you cannot follow.
+ *
+ * ⚠️ A waiver must survive both lanes. `vat skills validate` reports the authored
+ * source path and `vat build` reports the packaged artifact path, so a `location`
+ * glob written for one silently leaks in the other — give ONE entry both
+ * spellings rather than two entries, or each is reported `ALLOW_UNUSED` in the
+ * lane it does not match. A `link` glob is immune to that split: the missing path
+ * is skill-relative and identical in both lanes, which is a second reason to
+ * prefer it.
+ *
  * @param docFiles Absolute paths of packaged markdown documents to scan
  *   (SKILL.md and any bundled reference files).
  * @param skillDir Absolute path to the packaged skill output — the base every
@@ -154,7 +187,7 @@ function existsUnder(root: string, rel: string, budget = 5000): boolean {
  * @param siblingSearchRoot Absolute path to the widest tree a reference may
  *   legitimately resolve in (the plugin root). Defaults to `skillDir`, which makes
  *   the check skill-local and measurably noisier (3.8% vs 1.9% on a 52-skill
- *   corpus of 52 built skills); callers that know the plugin root should pass it.
+ *   corpus of built skills); callers that know the plugin root should pass it.
  */
 export async function detectMissingReferencedPaths(
   docFiles: readonly string[],
@@ -172,16 +205,21 @@ export async function detectMissingReferencedPaths(
     );
     if (missing.length === 0) continue;
 
-    const listed = missing.slice(0, MAX_LISTED).join(', ');
-    const suffix = missing.length > MAX_LISTED ? ` (and ${missing.length - MAX_LISTED} more)` : '';
-    issues.push({
-      severity: registryEntry.defaultSeverity,
-      code: 'PACKAGED_REFERENCED_PATH_MISSING',
-      message: `References a bundled path that is not in the package: ${listed}${suffix}`,
-      location: safePath.relative(skillDir, docFile),
-      fix: registryEntry.fix,
-      reference: registryEntry.reference,
-    });
+    const location = safePath.relative(skillDir, docFile);
+    for (const rel of missing) {
+      issues.push({
+        severity: registryEntry.defaultSeverity,
+        code: 'PACKAGED_REFERENCED_PATH_MISSING',
+        message: `References "${rel}", which is not in the packaged output`,
+        location,
+        // The missing path, so an allow glob can waive THIS reference without
+        // silencing the whole document. Never the location: a path that does not
+        // exist is not somewhere a reader can look.
+        link: rel,
+        fix: registryEntry.fix,
+        reference: registryEntry.reference,
+      });
+    }
   }
 
   return issues;

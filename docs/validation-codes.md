@@ -464,6 +464,17 @@ Only meaningful when a skill is actually being bundled. Most fire from `vat skil
 - **Scope:** Built phase only. A `files:` config entry materialises `scripts/` at build time, so a source skill directory legitimately lacks the subdirectory its body references; running this at source phase flags every injected script.
 - **Not covered here:** markdown links. [`PACKAGED_BROKEN_LINK`](#packaged_broken_link) already reports a link whose target is missing, at `error`. This code sees only the bare tokens the markdown parser did not claim — a path inside a code block, a code span, or prose.
 - **Fix:** Ship the file, correct the path, or — if the token is illustrative rather than a real reference — reword it so it is not a bare bundled-subdirectory path. A file injected at build time belongs in `skills.config.<name>.files` as a `source`/`dest` pair.
+- **Waiving one misfire without disabling the rule:** each finding carries the missing path as its `link`, and an `allow` glob matches **either** `location` **or** `link`. So waive the single path, not the file:
+
+  ```yaml
+  validation:
+    allow:
+      PACKAGED_REFERENCED_PATH_MISSING:
+        - paths: ["resources/gates.md"]
+          reason: "Illustrative path in a skill that teaches link syntax; not a real reference."
+  ```
+
+  A *different* missing path in that same document still fires. Waiving by `location` (`paths: ["**/some-skill/SKILL.md"]`) is the coarser choice and suppresses future real findings in that file — reach for it only when the whole document is illustrative. Prefer the `link` form for a second reason too: `vat skills validate` reports the authored source path while `vat build` reports the packaged path, so a `location` glob written for one lane silently leaks in the other (give one entry *both* spellings if you use it), whereas the missing path is skill-relative and identical in both.
 
 ### `PACKAGED_AGENT_INSTRUCTION_FILE`
 

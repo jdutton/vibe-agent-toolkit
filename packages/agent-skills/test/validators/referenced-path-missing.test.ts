@@ -1,6 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- fixture paths built from this test's own mkdtemp root, no external input */
 import * as fs from 'node:fs';
 
+import { applyAllowFilter } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -75,6 +76,9 @@ describe('detectMissingReferencedPaths', () => {
     expect(issues[0]?.severity).toBe('warning');
     expect(issues[0]?.message).toContain('scripts/multi-template/resolver.py');
     expect(issues[0]?.location).toBe('SKILL.md');
+    // The missing path rides `link`, never `location` — that is what makes a
+    // single reference waivable without silencing the file.
+    expect(issues[0]?.link).toBe('scripts/multi-template/resolver.py');
   });
 
   // A KNOWN RECALL LIMIT, pinned so it is a decision rather than a surprise.
@@ -138,15 +142,54 @@ describe('detectMissingReferencedPaths', () => {
     await expect(detectMissingReferencedPaths(skillMdOf(dir), dir)).resolves.toEqual([]);
   });
 
-  it('reports one issue per document, summarising beyond four paths', async () => {
-    const dir = writeSkill(
-      ['`references/a.md`', '`references/b.md`', '`references/c.md`', '`references/d.md`', '`references/e.md`'].join('\n\n'),
-    );
+  // One issue PER PATH, not per document. Emitting a single issue carrying a
+  // joined list would make the coarse `location` waiver the only option, and a
+  // waiver for one illustrative path would then silence every real finding in
+  // that file for good.
+  it('reports one issue per missing path, each anchored on its own link', async () => {
+    const dir = writeSkill(['`references/a.md`', '`references/b.md`', '`references/c.md`'].join('\n\n'));
 
     const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir);
 
-    expect(issues).toHaveLength(1);
-    expect(issues[0]?.message).toContain('and 1 more');
+    expect(issues).toHaveLength(3);
+    expect(issues.map(i => i.link)).toEqual(['references/a.md', 'references/b.md', 'references/c.md']);
+    expect(new Set(issues.map(i => i.location))).toEqual(new Set(['SKILL.md']));
+  });
+
+  // The whole point of the `link` anchor, exercised through the SHIPPED allow
+  // filter rather than a restatement of its rules: waive one illustrative path
+  // and the real finding beside it survives.
+  it('lets an allow entry waive ONE path while a real finding in the same file still fires', async () => {
+    const dir = writeSkill('Teaching example `resources/gates.md`, and a real one `references/setup.md`.');
+    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir);
+    expect(issues).toHaveLength(2);
+
+    const { emitted } = applyAllowFilter(issues, {
+      allow: {
+        PACKAGED_REFERENCED_PATH_MISSING: [
+          { paths: ['resources/gates.md'], reason: 'Illustrative path in a skill that teaches link syntax.' },
+        ],
+      },
+    });
+
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]?.link).toBe('references/setup.md');
+  });
+
+  // …and the coarse form still works, for a file that is entirely illustrative.
+  it('still supports waiving a whole document by location', async () => {
+    const dir = writeSkill('`resources/gates.md` and `references/setup.md`.');
+    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir);
+
+    const { emitted } = applyAllowFilter(issues, {
+      allow: {
+        PACKAGED_REFERENCED_PATH_MISSING: [
+          { paths: ['**/SKILL.md'], reason: 'This skill is documentation about skill authoring.' },
+        ],
+      },
+    });
+
+    expect(emitted).toEqual([]);
   });
 });
 
