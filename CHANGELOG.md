@@ -188,6 +188,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`PACKAGED_SIZE_EXCEEDS_API_LIMIT` (warning, built phase) — the first byte measurement in VAT's
+  validators.** The two checks whose names suggest they already covered this could not:
+  `SKILL_TOTAL_SIZE_LARGE` counts *lines* of bundled markdown and `SKILL_TOO_MANY_FILES` counts
+  *files*, so the shape that actually blocks a publish — one large binary, which has no lines and is
+  one file — was invisible to both by construction. The reported instance is a 35.7 MB `.wasm`
+  runtime bundled by three skills in one adopter marketplace, over the ceiling on its own before a
+  byte of markdown counts. Unlike those two thresholds, which are VAT maintainability opinions the
+  vendor counter-signals, 30 MB is the Skills API's documented refusal ("Total upload size must be
+  under 30 MB (uncompressed)"), so this catches a real external gate at build time instead of at the
+  end of an upload. The message names the largest files, which is usually the whole diagnosis.
+  `warning`, not `error`, because the ceiling is target-specific: a bundle over it still installs
+  fine as a Claude Code plugin, and VAT has no API publish target to condition on yet.
+
+- **`MCP_TOOL_NAME_UNQUALIFIED` (warning) — promoted from a manual `vat skill review` checklist
+  line.** Anthropic's guidance is that a bare MCP tool name "may fail to locate the tool, especially
+  when multiple MCP servers are available", but VAT had held the rule back as a human checklist item
+  with the note that "a bare identifier in prose is only a defect when the skill actually drives
+  MCP". That reservation is now dissolved rather than argued with: the detector reports a bare tool
+  name **only when the same document also spells that tool fully-qualified** — as `mcp__server__tool`
+  or `ServerName:tool_name` — so a document that does not drive MCP has an empty vocabulary and
+  cannot produce a finding. Measured over 966 documents in four corpora before promotion: 8 firing,
+  **0 false positives**, and the authoring project itself fires 0. Each finding carries the bare tool
+  name as its `link`, so one identifier can be waived with `validation.allow` while a different bare
+  tool name in the same document still fires.
+
 - **Two skill-portability checks for hosts that are not Claude Code.** `NON_PORTABLE_ASSET_REFERENCE`
   gained a `claude-skill-dir` variant (`${CLAUDE_SKILL_DIR}`, `$CLAUDE_SKILL_DIR`,
   `$env:CLAUDE_SKILL_DIR`) and an `api-skill-mount` variant (a hardcoded `/skills/<name>/` path).

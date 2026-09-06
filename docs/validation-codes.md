@@ -476,6 +476,54 @@ Only meaningful when a skill is actually being bundled. Most fire from `vat skil
 
   A *different* missing path in that same document still fires. Waiving by `location` (`paths: ["**/some-skill/SKILL.md"]`) is the coarser choice and suppresses future real findings in that file — reach for it only when the whole document is illustrative. Prefer the `link` form for a second reason too: `vat skills validate` reports the authored source path while `vat build` reports the packaged path, so a `location` glob written for one lane silently leaks in the other (give one entry *both* spellings if you use it), whereas the missing path is skill-relative and identical in both.
 
+### `PACKAGED_SIZE_EXCEEDS_API_LIMIT`
+
+- **Default:** `warning`
+- **What:** The packaged skill's files total **30 MB or more uncompressed**, the documented ceiling for a Skills API upload ("Total upload size must be under 30 MB (uncompressed)").
+- **Why it matters:** This is the only **byte** measurement in VAT's validators, and the gap it closes is structural rather than a matter of degree. The two checks whose names suggest they already cover it do not: [`SKILL_TOTAL_SIZE_LARGE`](#skill_total_size_large) counts **lines** of bundled markdown and [`SKILL_TOO_MANY_FILES`](#skill_too_many_files) counts **files**. The shape that actually blocks a publish is one large binary — which has no lines and is one file, so both are blind to it by construction. The measured instance is a 35.7 MB `.wasm` runtime bundled by three skills in one adopter marketplace: over the ceiling on its own, before a byte of markdown counts.
+- **Unlike its neighbours, this threshold is not a VAT opinion.** `MAX_TOTAL_LINES` and `MAX_FILE_COUNT` are VAT-originated maintainability heuristics that Anthropic's own guidance counter-signals ("Bundle comprehensive resources … no context penalty until accessed"). 30 MB is the API's documented refusal. The finding names an external gate, and it is worth meeting at build time — where the author can still act — rather than at the end of an upload.
+- **Why it is a warning and not an error:** the ceiling is **target-specific**. A bundle over it builds, publishes and installs perfectly well as a Claude Code plugin; it fails only on a Skills API upload, and VAT has no API publish target to condition the severity on yet. Promote it when that target exists.
+- **Decimal, not binary.** The vendor writes "30 MB" without saying which, and the two readings differ by 1.4 MB. VAT reads it as 30,000,000 bytes — the conservative choice for a check whose job is to refuse before the API does. It fires slightly early rather than waving through a bundle the upload will reject.
+- **Scope:** Built phase only. A `files:` entry materialises files at build time, so the bytes that ship are only knowable after the build; measuring the source directory answers a different question.
+- **Reading the message:** it leads with the largest files, not just the total. A bundle at this size has hundreds of files and the cause is nearly always one or two of them, so a bare total tells an author they have a problem without telling them where it is.
+- **Fix:** Drop or externalise the largest files the message names — a runtime the skill can download, or that its host already provides, does not have to ship inside the skill. If this skill is never published to the Skills API, record that in config rather than living with the warning:
+
+  ```yaml
+  validation:
+    severity:
+      PACKAGED_SIZE_EXCEEDS_API_LIMIT: ignore
+  ```
+
+### `MCP_TOOL_NAME_UNQUALIFIED`
+
+- **Default:** `warning`
+- **What:** A skill document tells an agent to call an MCP tool by its **bare name** in an inline code span, in a document that spells that same tool **fully-qualified** somewhere else — either as `mcp__<server>__<tool>` (the Claude Code form) or `ServerName:tool_name` (the API form).
+- **Why it matters:** Anthropic's skill-authoring guidance is explicit — "Without the server prefix, Claude may fail to locate the tool, especially when multiple MCP servers are available." The measured instance is a skill that lists `mcp__plugin_github_github__get_me` in its frontmatter and then instructs the agent to run `` `get_me` `` — an agent copying the step has to guess which server it belongs to.
+- **The document supplies its own vocabulary, which is what makes this checkable.** A bare snake_case identifier is not evidence of anything; `page_size` and `next_page_token` are everywhere in these documents. What makes one an MCP *tool name* is that the same document also writes it qualified. So the detector never guesses at whether a skill drives MCP — a document that does not has an empty vocabulary and cannot produce a finding. This was a manual `vat skill review` checklist line until 2026-09-06, held back on exactly that reservation ("a bare identifier in prose is only a defect when the skill actually drives MCP"); the self-vocabulary shape dissolves it rather than arguing with it.
+- **Measured before promotion**, per [validation rule design](./validation-rule-design.md#the-bar-for-adding-a-new-rule). Population = documents spelling at least one MCP tool fully-qualified:
+
+  | Corpus | docs | population | firing | occurrences |
+  |---|---|---|---|---|
+  | the authoring project itself | 206 | 2 | **0** | 0 |
+  | adopter A, built skills | 107 | 1 | 1 | 3 |
+  | adopter B, built skills | 21 | 0 | 0 | 0 |
+  | 632-skill install corpus | 632 | 19 | 7 | 19 |
+
+  Zero false positives across the 8 firing documents, two of which are skills in a first-party marketplace plugin — so this is not a house style being legislated. The authoring-project column is the one that earned its place: it caught two false-vocabulary sources (`node:child_process`, and OAuth scope strings such as `whiteboard:read:list_whiteboards`) that were invisible on both adopter corpora, and requiring an uppercase letter in the server half — matching Anthropic's own `GitHub:` / `BigQuery:` examples — removed them.
+- **Why it is a warning and not an error:** with a single MCP server mounted the bare name usually still resolves, so the skill is degraded rather than broken. The vendor's own wording is conditional for the same reason.
+- **Only code spans count.** An agent copies what is inside backticks; the same word in running prose is discussion.
+- **Fix:** Write the tool fully-qualified everywhere the skill tells an agent to call it — `ServerName:tool_name` for the API, or the `mcp__<server>__<tool>` form Claude Code uses. If one occurrence is deliberate — a table of tool names, say — waive that identifier rather than the document with a `validation.allow` entry whose `paths` name the tool, since each finding carries the bare tool name as its `link`:
+
+  ```yaml
+  validation:
+    allow:
+      MCP_TOOL_NAME_UNQUALIFIED:
+        - paths: ["get_me"]
+          reason: "Named bare in the availability-probe step on purpose; the qualified form is three lines above."
+  ```
+
+  A different bare tool name in the same document still fires.
+
 ### `PACKAGED_AGENT_INSTRUCTION_FILE`
 
 - **Default:** `warning`

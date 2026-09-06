@@ -81,6 +81,7 @@ import {
   testInputLinkIssues,
 } from './test-input.js';
 import { detectPackagedAgentInstructionFiles } from './validators/agent-instruction-presence.js';
+import { checkPackagedSizeLimit } from './validators/packaged-size-limit.js';
 import { validateSkillForPackaging, type PackagingValidationResult, type SkillPackagingConfig } from './validators/packaging-validator.js';
 import { materializeIssue } from './validators/rule-engine/index.js';
 import { deferredAssetsToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
@@ -843,6 +844,10 @@ export async function packageSkill(
     // its own output, not the plugin it will be installed into), so this runs
     // skill-local; `vat verify`, which walks a whole plugin, passes the wider root.
     ...await checkMissingReferencedPaths(outputPath),
+    // The only byte measurement in the pipeline. Built phase for the same reason
+    // as its neighbour above: a `files:` entry materializes files here that the
+    // source tree does not have, so the bytes that ship are only knowable now.
+    ...checkPackagedSizeLimit(outputPath),
     // A receipt for every file a glob matched and the never-package list refused.
     // Reported as an issue, not written to stderr: a file vanishing from a bundle
     // has to be visible in `issueCounts`, or CI reads a clean report for a build

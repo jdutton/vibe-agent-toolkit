@@ -81,6 +81,10 @@ export const CODE_TO_SECTION: Record<string, ChecklistSection> = {
   SKILL_TOO_MANY_FILES: SEC_BODY,
   SKILL_TIME_SENSITIVE_CONTENT: SEC_BODY,
   NO_PROGRESSIVE_DISCLOSURE: SEC_BODY,
+  // Body structure, not Compatibility: the defect is that the document names a
+  // tool ambiguously, which is a property of how the body is written. The
+  // checklist's own line for it lives under the CLI-backed body items.
+  MCP_TOOL_NAME_UNQUALIFIED: SEC_BODY,
 
   // References and bundled files
   PACKAGED_UNREFERENCED_FILE: SEC_REFERENCES,
@@ -91,6 +95,10 @@ export const CODE_TO_SECTION: Record<string, ChecklistSection> = {
   LINK_TO_NAVIGATION_FILE: SEC_REFERENCES,
   LINK_TO_AGENT_INSTRUCTION_FILE: SEC_REFERENCES,
   PACKAGED_AGENT_INSTRUCTION_FILE: SEC_REFERENCES,
+  // "References and bundled files" rather than "Body structure": the finding is
+  // about what the bundle CONTAINS, and it sits next to the other checks that
+  // read the packaged file set rather than its prose.
+  PACKAGED_SIZE_EXCEEDS_API_LIMIT: SEC_REFERENCES,
   FILES_GLOB_DROPPED_NEVER_PACKAGED: SEC_REFERENCES,
   FILES_GLOB_MATCHED_NOTHING: SEC_REFERENCES,
   FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED: SEC_REFERENCES,

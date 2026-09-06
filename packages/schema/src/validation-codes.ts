@@ -192,6 +192,29 @@ export const CODE_REGISTRY = {
     'Ship the file, correct the path, or — if the token is an illustrative example rather than a real reference — reword it so it is not a bare bundled-subdirectory path. A file injected at build time belongs in skills.config.<name>.files as a source/dest pair.',
     'packaged_referenced_path_missing',
   ),
+  // The only BYTE measurement in the validators. Everything else that sounds like
+  // a size check counts lines (SKILL_TOTAL_SIZE_LARGE, ≤2000) or files
+  // (SKILL_TOO_MANY_FILES, ≤6), which makes all of them structurally blind to the
+  // shape that actually blocks a publish: one large binary. The measured instance
+  // is a 35.7 MB `.wasm` bundled by three skills in one adopter marketplace — over
+  // the ceiling on its own, before any markdown counts, and invisible to a line
+  // counter because it has no lines.
+  //
+  // Unlike its line-counting neighbours this threshold is NOT a VAT opinion. It is
+  // the Skills API's documented refusal ("Total upload size must be under 30 MB
+  // (uncompressed)"), so the finding names a real, external gate rather than a
+  // maintainability preference — and it is worth catching at build, where the
+  // author can still act, instead of at the end of an upload.
+  //
+  // `warning` rather than `error` because the ceiling is target-specific: a bundle
+  // over it publishes and installs perfectly well as a Claude Code plugin, and VAT
+  // has no API publish target to condition on yet. Promote it there when it exists.
+  PACKAGED_SIZE_EXCEEDS_API_LIMIT: entry(
+    'warning',
+    'The packaged skill exceeds the Anthropic Skills API upload ceiling of 30 MB uncompressed.',
+    'Shrink the bundle: drop or externalise the largest files the message names — a runtime that a skill downloads or that its host already provides does not have to ship inside the skill. The ceiling applies to Skills API uploads only; a bundle over it still installs as a Claude Code plugin, so set severity.PACKAGED_SIZE_EXCEEDS_API_LIMIT to ignore if this skill is never published to the API.',
+    'packaged_size_exceeds_api_limit',
+  ),
   PACKAGED_AGENT_INSTRUCTION_FILE: entry(
     'warning',
     'A repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) is present in the scanned tree — a built skill bundle, an installed plugin, or a plugin source directory.',
@@ -468,6 +491,29 @@ export const CODE_REGISTRY = {
     'A skill document (SKILL.md or a reachable bundled reference file) instructs an agent to run a shell command that hard-codes a GNU/Linux-only utility or flag (e.g. `timeout`, `grep -P`, `sed -i` with no suffix, `readlink -f`, `date -d`). These fail, or behave differently, on macOS/BSD where the agent may execute them.',
     'Use a portable equivalent: `grep -E` for PCRE, `sed -i.bak`/an explicit suffix, a temp file instead of bare `-i`, a portable resolve instead of `readlink -f`, and `date -v`/`-j -f` instead of `date -d`. Gate or avoid `timeout` (absent on macOS by default). See the vibe-agent-toolkit:vat-skill-review skill.',
     'non_portable_command',
+  ),
+  // Promoted from a `vat skill review` checklist line, which had carried the
+  // vendor's rule with the note "Not enforced by any validation code; a shift-left
+  // candidate awaiting corpus evidence per docs/validation-rule-design.md, since a
+  // bare identifier in prose is only a defect when the skill actually drives MCP."
+  //
+  // That reservation is what the detector is built around rather than argued with:
+  // it reports a bare tool name only when the SAME document also spells that tool
+  // fully-qualified, so a document that does not drive MCP has an empty vocabulary
+  // and cannot produce a finding. Measured 2026-09-06 over 994 documents in four
+  // corpora — 8 firing, 0 false positives, and the authoring project fires 0. The
+  // full table and the two false-vocabulary sources the population check caught
+  // are in `agent-skills/src/validators/mcp-tool-qualification.ts`.
+  //
+  // `warning`, not `error`: with a single MCP server mounted the bare name usually
+  // still resolves, so the skill is degraded rather than broken. Anthropic's own
+  // wording is conditional for the same reason — "especially when multiple MCP
+  // servers are available".
+  MCP_TOOL_NAME_UNQUALIFIED: entry(
+    'warning',
+    'A skill document tells an agent to call an MCP tool by its bare name, in a document that spells that same tool fully-qualified elsewhere.',
+    'Write the tool fully-qualified everywhere the skill tells an agent to call it — `ServerName:tool_name` for the API, or the `mcp__<server>__<tool>` form Claude Code uses. Without the server prefix Claude may fail to locate the tool when several MCP servers are mounted. If an occurrence is deliberate (a table of tool names, say), waive that one identifier with a validation.allow entry whose paths name the tool.',
+    'mcp_tool_name_unqualified',
   ),
   SKILL_FRONTMATTER_EXTRA_FIELDS: entry(
     'warning',
