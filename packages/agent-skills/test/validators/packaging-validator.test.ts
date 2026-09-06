@@ -1568,3 +1568,53 @@ describe('glob files: entries that can ship nothing are reported before any buil
 		).toEqual([]);
 	});
 });
+
+// ---------------------------------------------------------------------------
+// MCP_TOOL_NAME_UNQUALIFIED reaches TWO lanes from here: SKILL.md, scanned via
+// the frontmatter-stripped `parseResult.content`, and every bundled `.md`,
+// scanned from bytes read straight off disk. The stripping is the detector's
+// invariant — "an `allowed-tools:` manifest does not by itself supply the
+// vocabulary" — and only the first lane used to obey it, so a bundled reference
+// file carrying that frontmatter fired on its own prose.
+// ---------------------------------------------------------------------------
+const MCP_CODE = 'MCP_TOOL_NAME_UNQUALIFIED';
+const REFERENCE_KEY = 'reference.md';
+const SKILL_LINKING_REFERENCE = `${SKILL_HEADER}See [reference](./reference.md).`;
+
+/** Package a skill whose one bundled reference file carries `referenceContent`. */
+async function mcpWarningsFor(
+	getTempDir: () => string,
+	referenceContent: string,
+): Promise<ValidationIssue[]> {
+	const result = (await setupPackagingValidationTest(
+		getTempDir,
+		{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+		SKILL_LINKING_REFERENCE,
+		{ [REFERENCE_KEY]: referenceContent },
+	)) as PackagingValidationResult;
+	return activeWarningsOf(result).filter(issue => issue.code === MCP_CODE);
+}
+
+describe('validateSkillForPackaging - MCP tool qualification across both scan lanes', () => {
+	// Positive control FIRST: without it the silence below proves only that the
+	// bundled lane never ran.
+	it('reports a bare tool name in a bundled reference file', async () => {
+		const warnings = await mcpWarningsFor(
+			getTempDir,
+			'# Reference\n\nResolve with `mcp__gh__get_me`.\n\nThen call `get_me` again.\n',
+		);
+
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]?.link).toBe('get_me');
+		expect(warnings[0]?.location).toBe(REFERENCE_KEY);
+	});
+
+	it('does not let a bundled file’s allowed-tools frontmatter supply the vocabulary', async () => {
+		const warnings = await mcpWarningsFor(
+			getTempDir,
+			'---\nallowed-tools:\n  - mcp__x__do_thing\n---\n\n# Reference\n\nCall `do_thing` when asked.\n',
+		);
+
+		expect(warnings).toEqual([]);
+	});
+});

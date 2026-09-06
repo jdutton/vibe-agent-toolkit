@@ -81,13 +81,28 @@ export const CODE_TO_SECTION: Record<string, ChecklistSection> = {
   SKILL_TOO_MANY_FILES: SEC_BODY,
   SKILL_TIME_SENSITIVE_CONTENT: SEC_BODY,
   NO_PROGRESSIVE_DISCLOSURE: SEC_BODY,
-  // Body structure, not Compatibility: the defect is that the document names a
-  // tool ambiguously, which is a property of how the body is written. The
-  // checklist's own line for it lives under the CLI-backed body items.
+  // Body structure: the defect is that the document names a tool ambiguously,
+  // which is a property of how the body is written.
+  //
+  // ⚠️ This deliberately does NOT follow the checklist document, where the line
+  // for this code sits under `## CLI-Backed Skills — Additional Checks`
+  // (SEC_CLI_BACKED). That section scopes itself, in its own preamble, to
+  // "skills that bundle executable scripts and instruct agents to run commands"
+  // — and a skill can drive MCP while bundling nothing at all, so grouping the
+  // automated finding there would file it under a heading whose stated scope it
+  // does not meet. (An earlier version of this comment justified SEC_BODY by
+  // citing "the CLI-backed body items", a section that has never existed.)
   MCP_TOOL_NAME_UNQUALIFIED: SEC_BODY,
 
   // References and bundled files
   PACKAGED_UNREFERENCED_FILE: SEC_REFERENCES,
+  // Beside its exact inverse above. PACKAGED_UNREFERENCED_FILE asks "is every
+  // shipped file mentioned?" and this one asks "is every mentioned path
+  // shipped?" — one reviewer question, two directions — so a reviewer must meet
+  // them in the same section. It was absent here for its whole first release and
+  // fell to 'Other automated findings'; the exhaustiveness test in
+  // review-checklist.test.ts now makes that omission impossible to repeat.
+  PACKAGED_REFERENCED_PATH_MISSING: SEC_REFERENCES,
   PACKAGED_BROKEN_LINK: SEC_REFERENCES,
   REFERENCE_TOO_DEEP: SEC_REFERENCES,
   LINK_OUTSIDE_PROJECT: SEC_REFERENCES,
@@ -108,6 +123,21 @@ export const CODE_TO_SECTION: Record<string, ChecklistSection> = {
   LINK_TO_SKILL_DEFINITION: SEC_REFERENCES,
   LINK_DROPPED_BY_DEPTH: SEC_REFERENCES,
   LINK_INTEGRITY_BROKEN: SEC_REFERENCES,
+
+  // Frontmatter hygiene — both codes are named by name in that section of
+  // vat-skill-review.md, so this is transcription, not a judgement call.
+  SKILL_FRONTMATTER_EXTRA_FIELDS: SEC_FRONTMATTER,
+  SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE: SEC_FRONTMATTER,
+
+  // Cross-skill dependencies — likewise named in that section's own item.
+  SKILL_CROSS_SKILL_AUTH_UNDECLARED: SEC_CROSS_SKILL,
+
+  // CLI-backed additional checks — both are named in checklist items under
+  // `## CLI-Backed Skills — Additional Checks`, and unlike MCP_TOOL_NAME_UNQUALIFIED
+  // above they meet that section's stated scope: they only fire on a skill that
+  // bundles scripts or tells an agent to run commands.
+  NON_PORTABLE_ASSET_REFERENCE: SEC_CLI_BACKED,
+  NON_PORTABLE_COMMAND: SEC_CLI_BACKED,
 
   // Compatibility (orthogonal to the formal checklist but worth its own section)
   CAPABILITY_LOCAL_SHELL: SEC_COMPAT,

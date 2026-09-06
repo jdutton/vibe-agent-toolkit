@@ -182,10 +182,18 @@ export const CODE_REGISTRY = {
   // dist. No human review of the source can see that, which is why it is worth
   // a code despite the narrower precision.
   //
-  // Warning, not error, on measured evidence: 1 misfire in 52 built adopter
-  // skills, and the residual class is irreducible — a skill whose SUBJECT is
-  // skill authoring cites example paths it does not ship. VAT's own
+  // Warning, not error, on measured evidence: 2 misfires in 52 built adopter
+  // skills — 3.8% — and the residual class is irreducible: a skill whose SUBJECT
+  // is skill authoring cites example paths it does not ship. VAT's own
   // vat-skill-authoring is in that class.
+  //
+  // ⚠️ 3.8% is the rate that SHIPS, and it is the one to quote. Two filters run
+  // in production: literal paths only, and the first segment must be a bundled
+  // subdirectory. The validator's own table records a 1.9% row for a third rule
+  // that widens resolution to the whole plugin — it never had a production
+  // caller, and its pass-through parameter has been removed from
+  // `checkMissingReferencedPaths` so the documented rate and the shipped rate
+  // cannot drift apart again.
   PACKAGED_REFERENCED_PATH_MISSING: entry(
     'warning',
     'SKILL.md (or a bundled reference file) names a path under a bundled subdirectory that is not present in the packaged output.',
@@ -213,8 +221,8 @@ export const CODE_REGISTRY = {
   // has no API publish target to condition on yet. Promote it there when it exists.
   PACKAGED_SIZE_EXCEEDS_API_LIMIT: entry(
     'warning',
-    'The packaged skill exceeds the Anthropic Skills API upload ceiling of 30 MiB uncompressed.',
-    'Shrink the bundle: drop or externalise the largest files the message names — a runtime that a skill downloads or that its host already provides does not have to ship inside the skill. The ceiling applies to Skills API uploads only; a bundle over it still installs as a Claude Code plugin, so set severity.PACKAGED_SIZE_EXCEEDS_API_LIMIT to ignore if this skill is never published to the API.',
+    'The packaged skill totals 30 MiB (31,457,280 bytes) or more uncompressed — at or over the Anthropic Skills API upload ceiling.',
+    'Shrink the bundle: drop or externalise the largest files the message names — a runtime that a skill downloads or that its host already provides does not have to ship inside the skill. The ceiling applies to Skills API uploads only; a bundle over it still installs as a Claude Code plugin, so if this skill is never published to the API, waive the finding with a validation.allow entry whose paths name the largest file the message reports — each finding carries that file as its link, so one entry waives the bundles that file explains and every other skill keeps the check. Set severity.PACKAGED_SIZE_EXCEEDS_API_LIMIT to ignore only as the blunt fallback: that disables the check for the whole project.',
     'packaged_size_exceeds_api_limit',
   ),
   PACKAGED_AGENT_INSTRUCTION_FILE: entry(
@@ -484,8 +492,8 @@ export const CODE_REGISTRY = {
   ),
   NON_PORTABLE_ASSET_REFERENCE: entry(
     'warning',
-    'A skill document (SKILL.md or a reachable bundled reference file) references a bundled script/asset via a non-portable anchor (CLAUDE_PLUGIN_ROOT). It is a Claude Code plugin-only variable that points at the plugin, not the skill, so the path breaks when the skill is mounted standalone (claude.ai upload, API container).',
-    'Reference bundled files by a path relative to the skill directory (e.g. `scripts/run.mjs`), never via CLAUDE_PLUGIN_ROOT, an absolute path, or an env-var anchor. See the vibe-agent-toolkit:vat-skill-authoring skill.',
+    'A skill document (SKILL.md or a reachable bundled reference file) references a bundled script/asset via a non-portable anchor — a family of five variants, each named in its own finding: CLAUDE_PLUGIN_ROOT, CLAUDE_PROJECT_DIR, CLAUDE_SKILL_DIR, the API code-execution container mount point /skills/<name>/, or an absolute path passed to a runtime. None is part of the portable Agent Skills contract, so the path breaks on some surface the skill can be mounted on.',
+    'Reference bundled files by a path relative to the skill directory (e.g. `scripts/run.mjs`), never via an env-var anchor (CLAUDE_PLUGIN_ROOT, CLAUDE_SKILL_DIR), a host-specific mount point (/skills/<name>/), or an absolute path. When a process genuinely needs an absolute path, instruct the agent to cd into the skill directory first. CLAUDE_PROJECT_DIR is the exception: it denotes the repository the skill operates ON, which no skill-relative path can express, so take that location as an explicit parameter with $CLAUDE_PROJECT_DIR only as a fallback. See the vibe-agent-toolkit:vat-skill-authoring skill.',
     'non_portable_asset_reference',
   ),
   NON_PORTABLE_COMMAND: entry(
@@ -501,11 +509,18 @@ export const CODE_REGISTRY = {
   //
   // That reservation is what the detector is built around rather than argued with:
   // it reports a bare tool name only when the SAME document also spells that tool
-  // fully-qualified, so a document that does not drive MCP has an empty vocabulary
-  // and cannot produce a finding. Measured 2026-09-06 over 994 documents in four
-  // corpora — 8 firing, 0 false positives, and the authoring project fires 0. The
-  // full table and the two false-vocabulary sources the population check caught
-  // are in `agent-skills/src/validators/mcp-tool-qualification.ts`.
+  // fully-qualified IN ITS PROSE — an `allowed-tools:` frontmatter list is a
+  // manifest and is stripped before the vocabulary is read — so a document that
+  // does not drive MCP has an empty vocabulary and cannot produce a finding.
+  //
+  // Re-measured 2026-09-06 with the current detector, after the hyphen,
+  // per-match and frontmatter fixes: 883 documents over two corpora — 7 firing,
+  // 11 occurrences, 0 false positives, and the authoring project fires 0. The
+  // full table, the two false-vocabulary sources the population check caught,
+  // and why the earlier adopter rows were dropped rather than restated are in
+  // `agent-skills/src/validators/mcp-tool-qualification.ts`. Do not resurrect the
+  // 994- or 966-document figures: they were taken with regexes this build no
+  // longer runs.
   //
   // `warning`, not `error`: with a single MCP server mounted the bare name usually
   // still resolves, so the skill is degraded rather than broken. Anthropic's own
@@ -514,7 +529,7 @@ export const CODE_REGISTRY = {
   MCP_TOOL_NAME_UNQUALIFIED: entry(
     'warning',
     'A skill document tells an agent to call an MCP tool by its bare name, in a document that spells that same tool fully-qualified elsewhere.',
-    'Write the tool fully-qualified everywhere the skill tells an agent to call it — `ServerName:tool_name` for the API, or the `mcp__<server>__<tool>` form Claude Code uses. Without the server prefix Claude may fail to locate the tool when several MCP servers are mounted. If an occurrence is deliberate (a table of tool names, say), waive that one identifier with a validation.allow entry whose paths name the tool.',
+    'Write the tool fully-qualified everywhere the skill tells an agent to call it — `ServerName:tool_name` for the API, or the `mcp__<server>__<tool>` form Claude Code uses. Without the server prefix Claude may fail to locate the tool when several MCP servers are mounted. A line that already spells the tool fully-qualified is exempt, so a bare-to-qualified mapping table needs no waiver. If an occurrence really is deliberate — an availability probe naming the tool the way the host lists it, say — waive that one identifier with a validation.allow entry whose paths name the tool.',
     'mcp_tool_name_unqualified',
   ),
   SKILL_FRONTMATTER_EXTRA_FIELDS: entry(

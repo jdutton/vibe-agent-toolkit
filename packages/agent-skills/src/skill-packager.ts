@@ -840,9 +840,18 @@ export async function packageSkill(
     // The inverse of checkUnreferencedFiles: paths the docs NAME that the bundle
     // does not contain. Built phase only — a `files:` dest exists here and not in
     // the source tree, so the same check at source phase flags every injected
-    // script. No sibling root is available at this call site (the packager knows
-    // its own output, not the plugin it will be installed into), so this runs
-    // skill-local; `vat verify`, which walks a whole plugin, passes the wider root.
+    // script.
+    //
+    // SKILL-LOCAL, and this is the ONLY caller. The packager knows its own output
+    // directory, not the plugin the skill will be installed into, so it cannot
+    // supply the wider sibling search root that measures 1.9% instead of 3.8% —
+    // and no other lane calls this check at all. Do not read the 1.9% figure in
+    // the validator's docstring as describing what runs here; the 3.8% row does.
+    // Wiring a plugin-wide root would have to happen in a lane that walks plugins,
+    // and `vat build`'s validateShippedPluginSkillLinks is not it: it runs only
+    // checkBrokenPackagedLinks, and its documented stance is that a skill is a
+    // self-contained portable unit whose references must not escape its own
+    // directory in the first place.
     ...await checkMissingReferencedPaths(outputPath),
     // The only byte measurement in the pipeline. Built phase for the same reason
     // as its neighbour above: a `files:` entry materializes files here that the

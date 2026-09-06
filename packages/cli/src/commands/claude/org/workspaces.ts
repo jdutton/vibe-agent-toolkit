@@ -53,8 +53,10 @@ function createMembersSubgroup(): Command {
       ) => {
         await executeOrgCommand('OrgWorkspaceMembersList', options.debug, async ({ client }) => {
           const params = buildPaginationParams(options);
+          // Encoded, not spliced: the id is opaque and comes straight from argv, and one
+          // carrying a `/` would address a different resource.
           const resp = await client.get<WorkspaceMembersResponse>(
-            `/v1/organizations/workspaces/${workspaceId}/members`,
+            `/v1/organizations/workspaces/${encodeURIComponent(workspaceId)}/members`,
             params,
           );
           return {
@@ -152,7 +154,8 @@ Example:
     .option('--debug', 'Enable debug logging')
     .action(async (workspaceId: string, options: { debug?: boolean }) => {
       await executeOrgCommand('OrgWorkspacesGet', options.debug, async ({ client }) => {
-        return client.get<Workspace>(`/v1/organizations/workspaces/${workspaceId}`);
+        // Encoded, not spliced: same opaque-id-from-argv class as `skillVersionsPath`.
+        return client.get<Workspace>(`/v1/organizations/workspaces/${encodeURIComponent(workspaceId)}`);
       });
     })
     .addHelpText('after', `

@@ -824,6 +824,13 @@ export async function validateSkillForPackaging(
       const bundledLocation = issueLocation(bundledFile, locationRoot);
       collectNonPortableAssetReferenceIssues(content, bundledLocation, rawIssues);
       collectNonPortableCommandIssues(content, bundledLocation, rawIssues);
+      // Whole-file bytes, frontmatter included — safe because the detector
+      // strips leading frontmatter itself. It did not always, and this lane was
+      // the half of the invariant nobody was enforcing: a bundled file carrying
+      // `allowed-tools: [mcp__x__do_thing]` seeded the vocabulary the SKILL.md
+      // lane's comment (below) says must come from prose, then fired on its own
+      // body. Pinned by "does not let a bundled file's allowed-tools frontmatter
+      // supply the vocabulary" in packaging-validator.test.ts.
       collectUnqualifiedMcpToolIssues(content, bundledLocation, rawIssues);
     }
   }
@@ -838,10 +845,12 @@ export async function validateSkillForPackaging(
   collectTimeSensitiveContentIssues(parseResult.content, skillLocation, rawIssues);
   collectNonPortableAssetReferenceIssues(parseResult.content, skillLocation, rawIssues);
   collectNonPortableCommandIssues(parseResult.content, skillLocation, rawIssues);
-  // Reads `parseResult.content`, the body WITHOUT frontmatter — so an
-  // `allowed-tools:` list of `mcp__…` names does not by itself supply the
-  // vocabulary. That is deliberate: the qualified spelling has to appear in the
-  // prose an agent reads, or "the document contradicts itself" is not the finding.
+  // An `allowed-tools:` list of `mcp__…` names does not by itself supply the
+  // vocabulary: the qualified spelling has to appear in the prose an agent
+  // reads, or "the document contradicts itself" is not the finding. That now
+  // holds because the DETECTOR strips frontmatter, not because this call site
+  // happens to pass the post-frontmatter slice — which is all that was ever
+  // true here, and only here.
   collectUnqualifiedMcpToolIssues(parseResult.content, skillLocation, rawIssues);
 
   // Cross-skill dependency smell: body declares a requires/depends token the

@@ -380,17 +380,19 @@ export async function checkUnreferencedFiles(
  * See `validators/referenced-path-missing.ts` for the measured precision argument
  * behind each filter, and for why this is a warning rather than an error.
  *
+ * SKILL-LOCAL, deliberately and visibly. `detectMissingReferencedPaths` takes a
+ * wider `siblingSearchRoot` that measures better (1.9% vs 3.8% on a 52-skill
+ * corpus), and this wrapper does not forward one, because no caller it has can
+ * supply one: the packager knows its own output directory, not the plugin the
+ * skill will be installed into. The parameter is not mirrored here as an unused
+ * pass-through — a plugin-aware caller would call the validator directly, where
+ * the seam and its measurement live.
+ *
  * @param outputDir Absolute path to the packaged skill output.
- * @param siblingSearchRoot Widest tree a reference may legitimately resolve in
- *   (the plugin root, for a caller that walks whole plugins). Defaults to
- *   `outputDir` — skill-local, and measurably noisier.
  */
-export async function checkMissingReferencedPaths(
-  outputDir: string,
-  siblingSearchRoot: string = outputDir,
-): Promise<ValidationIssue[]> {
+export async function checkMissingReferencedPaths(outputDir: string): Promise<ValidationIssue[]> {
   const docFiles = walkDir(outputDir).filter(f => f.endsWith('.md'));
-  return detectMissingReferencedPaths(docFiles, outputDir, siblingSearchRoot);
+  return detectMissingReferencedPaths(docFiles, outputDir);
 }
 
 /**

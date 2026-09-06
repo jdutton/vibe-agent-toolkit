@@ -28,6 +28,20 @@
  * cannot produce a finding — which dissolves the checklist's reservation rather
  * than arguing with it.
  *
+ * ## Prose supplies the vocabulary; frontmatter does not
+ *
+ * Leading YAML frontmatter is stripped here, in the detector, before anything is
+ * read from it. An `allowed-tools:` list of `mcp__…` names is a manifest, not the
+ * document contradicting itself, so it must not seed the vocabulary — and a bare
+ * name in the body below it is then simply a document that never qualified the
+ * tool at all.
+ *
+ * Enforcing that HERE rather than at each call site is deliberate: it used to
+ * hold only because the SKILL.md lane in `packaging-validator.ts` happened to
+ * pass a frontmatter-stripped slice, while the same file's bundled-`.md` lane
+ * passed whole files straight off disk. One lane obeyed the invariant its own
+ * comment asserted and the other did not.
+ *
  * ## The uppercase rule in the API form, and why it is load-bearing
  *
  * The server half must carry an uppercase letter (`GitHub:create_issue`,
@@ -51,29 +65,65 @@
  *
  * | Corpus | docs | population | firing | occurrences |
  * |---|---|---|---|---|
- * | VAT itself (`packages/**\/*.md`, dist excluded) | 206 | 2 | **0** | 0 |
- * | adopter A (`SKILL.md`, dist excluded) | 107 | 1 | 1 | 3 |
- * | adopter B (`SKILL.md`) | 21 | 0 | 0 | 0 |
- * | 632-skill install corpus | 632 | 19 | 7 | 19 |
+ * | VAT itself (`packages/**\/*.md`, dist + node_modules excluded) | 206 | 2 | **0** | 0 |
+ * | installed skills (`SKILL.md` under `~/.claude/plugins`, `~/.claude/skills`) | 677 | 28 | 7 | 11 |
  *
- * Zero false positives across the 8 firing documents. Two of them are skills in
- * a first-party marketplace plugin, so this is not a house style being
- * legislated. These are the SHIPPED detector's numbers, re-run through this
- * module rather than through the throwaway probe that first found them — the
- * probe de-duplicated per document and reported 18 occurrences where this code,
- * de-duplicating per LINE, reports 19. Per line is the intended granularity: two
- * bare uses of one tool are two places to fix, each with its own line number. `warning`, not `error`: with a single MCP server mounted the bare
- * name usually resolves, so the skill is degraded rather than broken.
+ * Re-measured with THIS detector after the hyphen, per-match and frontmatter
+ * fixes. The previous table's two adopter rows are gone rather than restated:
+ * they were taken with the previous regexes, and neither corpus is reachable
+ * from this worktree to re-run.
+ *
+ * All 11 occurrences were read: every one names a tool bare that the same
+ * document qualifies in its own prose. Zero false positives.
+ *
+ * The pre-fix detector, run over the SAME 677 documents, reported 19
+ * occurrences from the same 7 documents. The extra 8 were four copies of one
+ * skill naming `create_repository` and `create_branch` bare, whose only
+ * qualified spelling is its `allowed-tools:` frontmatter — so those 8 were
+ * never emitted by the shipped SKILL.md lane, which has always passed a
+ * frontmatter-stripped slice. The old number described the probe, not the
+ * product; this one describes both lanes, because both now strip.
+ *
+ * `warning`, not `error`: with a single MCP server mounted the bare name
+ * usually resolves, so the skill is degraded rather than broken.
  */
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 /**
- * `mcp__<server>__<tool>` — the Claude Code spelling. The server segment is
- * non-greedy so the LAST `__` separates server from tool, which is what makes
- * `mcp__plugin_github_github__get_me` yield `get_me` and not `github__get_me`.
+ * `mcp__<server>__<tool>` — the Claude Code spelling.
+ *
+ * The server segment is non-greedy, so the FIRST `__` after it closes the server
+ * half and everything to its right is the tool. `mcp__plugin_github_github__get_me`
+ * therefore yields `get_me`, and `mcp__zapier__gmail__send_email` yields
+ * `gmail__send_email` — the tool half a document that writes that name bare will
+ * write.
+ *
+ * ⚠️ This comment used to say the LAST `__` was the separator, and to credit the
+ * non-greedy quantifier for it. Non-greedy stops at the FIRST. FIRST is also the
+ * behaviour to want: Claude Code joins server segments with SINGLE underscores
+ * (`plugin_<plugin>_<server>`), so the first `__` after `mcp__` closes the server
+ * half — checked against a live session's whole mounted-tool roster, 200-plus
+ * names, not one of which carries `__` inside its server half.
+ * Nothing caught the false claim because no fixture could: the one that pinned
+ * this line was `mcp__plugin_github_github__get_me`, whose server half has only
+ * single underscores, so its first and last `__` are the same character.
+ *
+ * Both halves admit `-`. `\w` does not, and excluding it made two whole
+ * families invisible:
+ *
+ * - **Hyphenated SERVER names matched nothing at all.** Claude Code mounts
+ *   plugin servers as `plugin_<plugin>_<server>` and hyphenated plugin names are
+ *   the norm (`mcp__plugin_microsoft-docs_microsoft-learn__microsoft_docs_search`,
+ *   `mcp__claude-in-chrome__browser_batch`). A document driving MCP solely
+ *   through such a server had an empty vocabulary and could produce no finding,
+ *   true ones included.
+ * - **Hyphenated TOOL names truncated at the hyphen**, and `\b` was satisfied
+ *   there, so `mcp__plugin_context7_context7__resolve-library-id` put `resolve`
+ *   into the vocabulary. Every later code span spelling that ordinary English
+ *   word — or `query`, from `query-docs` — became a finding.
  */
-const CLAUDE_CODE_QUALIFIED = /\bmcp__\w+?__([a-z][a-z0-9_]*)\b/gu;
+const CLAUDE_CODE_QUALIFIED = /\bmcp__[\w-]+?__([a-z][a-z0-9_-]*)\b/gu;
 
 /**
  * `ServerName:tool_name` — the API spelling. Deliberately shapeless: two flat
@@ -104,10 +154,13 @@ const CLAUDE_CODE_QUALIFIED = /\bmcp__\w+?__([a-z][a-z0-9_]*)\b/gu;
  * seconds. Same mechanism, and the same measured shape, as the lookbehind on
  * `INLINE_LINK_REGEX` in `post-build-checks.ts`.
  *
- * The growth is pinned by a test rather than by this comment, because a regex can
- * be rewritten into a shape a checker likes while staying quadratic — and, as the
- * table shows, flagged while already being linear. Neither direction is
- * observable from the linter's verdict.
+ * A test holds the catastrophic case out rather than this comment, because a
+ * regex can be rewritten into a shape a checker likes while staying quadratic —
+ * and, as the table shows, flagged while already being linear. Neither direction
+ * is observable from the linter's verdict. That test asserts a fixed budget on
+ * one input size, not a growth ratio: the two columns above are four orders of
+ * magnitude apart, so an absolute gate separates them, whereas a ratio needs a
+ * denominator too small to measure honestly on a fast machine.
  */
 const API_QUALIFIED = /(?<![\w-])([\w-]+):([a-z0-9_]+)\b/gu;
 
@@ -121,6 +174,28 @@ const SERVER_IS_NAMED = /[A-Z]/u;
 
 /** A lowercase letter opens every MCP tool name. */
 const TOOL_STARTS_LOWERCASE = /^[a-z]/u;
+
+/**
+ * Separators the greedy tool capture can end on when the name is followed by an
+ * uppercase letter (`mcp__x__foo-Bar` captures `foo-`).
+ */
+const TOOL_SEPARATORS = new Set(['-', '_']);
+
+/**
+ * The capture without those trailing separators.
+ *
+ * Trimmed in code, twice over. Requiring a non-separator last character inside
+ * {@link CLAUDE_CODE_QUALIFIED} costs a nested quantifier for a case handled here
+ * in one pass; and the obvious `.replace(/[-_]+$/u, '')` is itself super-linear —
+ * `sonarjs/super-linear-regex` rejects it, correctly, because a long run of
+ * separators makes every position a candidate start. A backwards walk has
+ * nothing to backtrack.
+ */
+function withoutTrailingSeparators(tool: string): string {
+  let end = tool.length;
+  while (end > 0 && TOOL_SEPARATORS.has(tool[end - 1] ?? '')) end--;
+  return tool.slice(0, end);
+}
 
 /**
  * A tool half is snake_case: it opens with a lowercase letter and carries at
@@ -140,24 +215,59 @@ function isSnakeCaseToolName(tool: string): boolean {
 /** Inline code spans. Newline-free so a runaway backtick cannot swallow a paragraph. */
 const CODE_SPAN = /`([^`\n]+)`/g;
 
+/** The fence that opens and closes YAML frontmatter. */
+const FRONTMATTER_FENCE = '---';
+
 /**
- * Every MCP tool name `content` spells fully-qualified, in either spelling.
- *
- * Exported for tests: this set IS the detector's premise, and pinning it directly
- * is cheaper and clearer than inferring it from emitted issues.
+ * Index one past the closing frontmatter fence, or 0 when `lines` opens no
+ * frontmatter. An unterminated opening fence is not frontmatter: a document
+ * whose first line happens to be a horizontal rule keeps all of its body.
  */
-export function qualifiedMcpToolNames(content: string): Set<string> {
-  const vocabulary = new Set<string>();
-  for (const match of content.matchAll(CLAUDE_CODE_QUALIFIED)) {
-    if (match[1] !== undefined) vocabulary.add(match[1]);
+function frontmatterEnd(lines: readonly string[]): number {
+  if (lines[0]?.trim() !== FRONTMATTER_FENCE) return 0;
+  for (let index = 1; index < lines.length; index++) {
+    if (lines[index]?.trim() === FRONTMATTER_FENCE) return index + 1;
   }
-  for (const match of content.matchAll(API_QUALIFIED)) {
+  return 0;
+}
+
+/**
+ * `content` split into lines, with any leading YAML frontmatter blanked rather
+ * than removed — every reported `line` stays the line the author will open the
+ * file to, which dropping the lines outright would silently shift.
+ */
+function scannableLines(content: string): string[] {
+  const lines = content.split('\n');
+  const end = frontmatterEnd(lines);
+  for (let index = 0; index < end; index++) lines[index] = '';
+  return lines;
+}
+
+/** Every MCP tool name `text` spells fully-qualified, in either spelling. */
+function qualifiedNamesIn(text: string): Set<string> {
+  const vocabulary = new Set<string>();
+  for (const match of text.matchAll(CLAUDE_CODE_QUALIFIED)) {
+    const tool = withoutTrailingSeparators(match[1] ?? '');
+    if (tool !== '') vocabulary.add(tool);
+  }
+  for (const match of text.matchAll(API_QUALIFIED)) {
     const [, server, tool] = match;
     if (server === undefined || tool === undefined) continue;
     if (!SERVER_IS_NAMED.test(server) || !isSnakeCaseToolName(tool)) continue;
     vocabulary.add(tool);
   }
   return vocabulary;
+}
+
+/**
+ * Every MCP tool name `content` spells fully-qualified in its body, in either
+ * spelling. Frontmatter supplies nothing; see the module docstring.
+ *
+ * Exported for tests: this set IS the detector's premise, and pinning it directly
+ * is cheaper and clearer than inferring it from emitted issues.
+ */
+export function qualifiedMcpToolNames(content: string): Set<string> {
+  return qualifiedNamesIn(scannableLines(content).join('\n'));
 }
 
 /**
@@ -185,7 +295,7 @@ export function qualifiedMcpToolNames(content: string): Set<string> {
  * the module docstring were all taken with the code-span rule already applied, so
  * nothing here says what admitting prose would have cost.
  *
- * @param content Raw markdown of one skill document.
+ * @param content Raw markdown of one skill document, frontmatter and all.
  * @param docLocation Project-relative path of that document, for the anchor.
  */
 export function collectUnqualifiedMcpToolIssues(
@@ -193,22 +303,33 @@ export function collectUnqualifiedMcpToolIssues(
   docLocation: string,
   issues: ValidationIssue[],
 ): void {
-  const vocabulary = qualifiedMcpToolNames(content);
+  const lines = scannableLines(content);
+  const vocabulary = qualifiedNamesIn(lines.join('\n'));
   if (vocabulary.size === 0) return;
 
   const registryEntry = CODE_REGISTRY.MCP_TOOL_NAME_UNQUALIFIED;
-  const lines = content.split('\n');
 
   for (const [index, line] of lines.entries()) {
-    // A line that already carries the qualified spelling is the definition the
-    // vocabulary was built from, not a bare use of it. Reporting it would flag
-    // the very thing this code asks authors to write.
-    if (line.includes('mcp__')) continue;
-
     const seenOnLine = new Set<string>();
+    // Computed only once a span has already hit the vocabulary, so an ordinary
+    // line pays nothing for the exemption below.
+    let qualifiedOnLine: Set<string> | undefined;
+
     for (const match of line.matchAll(CODE_SPAN)) {
       const inner = (match[1] ?? '').trim();
       if (!vocabulary.has(inner) || seenOnLine.has(inner)) continue;
+
+      // A line that spells THIS tool fully-qualified is the definition the
+      // vocabulary was built from — a "`get_me` — that is `GitHub:get_me`"
+      // gloss, or a row of a bare-to-qualified mapping table. Reporting it
+      // would flag the very thing this code asks authors to write.
+      //
+      // Per MATCH, not per line: a line that qualifies tool A while naming
+      // tool B bare is exactly the defect this check exists to report, and a
+      // per-line skip dropped it without a trace.
+      qualifiedOnLine ??= qualifiedNamesIn(line);
+      if (qualifiedOnLine.has(inner)) continue;
+
       seenOnLine.add(inner);
       issues.push({
         severity: registryEntry.defaultSeverity,
