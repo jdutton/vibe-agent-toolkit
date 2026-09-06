@@ -117,24 +117,88 @@ export function buildMetadataWhereClause(
 }
 
 /**
+ * Filter keys VAT's published query surface declares that no shipped provider reads
+ * at that position, each mapped to what the caller should do instead.
+ *
+ * 🚨 These are refused rather than ignored because ignoring them WIDENS. An unread
+ * key contributes no SQL condition, and `LanceDBRAGProvider.query()` applies a WHERE
+ * clause only when one was produced — so a query whose only filter is one of these
+ * would run as an unfiltered full-recall vector search over the entire index, and
+ * return plausible results drawn from exactly the documents the filter was meant to
+ * exclude. A RAG filter is usually a correctness or access boundary, which makes the
+ * silent-widening version closer to a data-exposure defect than to a missing feature.
+ *
+ * `tags`, `type` and `headingPath` are ordinary metadata fields; only their position
+ * at the top level of `filters` is unsupported. `dateRange` is implemented nowhere.
+ */
+const UNSUPPORTED_FILTERS = new Map<string, string>([
+  [
+    'dateRange',
+    'no provider implements a date-range filter at any position. Model the date as a field on your metadata schema and filter via `filters.metadata`, or filter the returned chunks yourself.',
+  ],
+  ['tags', 'move it to `filters.metadata.tags` — it is a metadata field and is honoured only there.'],
+  ['type', 'move it to `filters.metadata.type` — it is a metadata field and is honoured only there.'],
+  [
+    'headingPath',
+    'move it to `filters.metadata.headingPath` — it is a metadata field and is honoured only there.',
+  ],
+]);
+
+/**
+ * Refuse a filter object carrying a key no provider reads
+ *
+ * @param filters - RAG query filters, as supplied by the caller
+ * @throws Error naming every unsupported key present, and its remedy
+ */
+export function assertFiltersAreSupported(filters: Record<string, unknown>): void {
+  const offenders = Object.entries(filters)
+    .filter(([key, value]) => value !== undefined && UNSUPPORTED_FILTERS.has(key))
+    .map(([key]) => `  - \`filters.${key}\`: ${UNSUPPORTED_FILTERS.get(key) ?? ''}`);
+
+  if (offenders.length === 0) {
+    return;
+  }
+
+  throw new Error(
+    `Unsupported RAG filter${offenders.length > 1 ? 's' : ''}:\n${offenders.join('\n')}\n\n` +
+      'These are refused rather than ignored because ignoring them widens the search: ' +
+      'an unread filter contributes no SQL condition, so the query would run as an ' +
+      'unfiltered search over the entire index and return results the filter was meant ' +
+      'to exclude.',
+  );
+}
+
+/**
  * Build complete WHERE clause from RAG query filters
  *
- * Handles both core filters (resourceId) and custom metadata filters.
+ * Handles both core filters (resourceId) and custom metadata filters. Any key in
+ * {@link UNSUPPORTED_FILTERS} throws rather than being dropped.
  *
  * @param filters - RAG query filters
  * @param metadataSchema - Zod schema for metadata
  * @returns Complete SQL WHERE clause or null
+ * @throws Error if `filters` carries a declared-but-unimplemented key
  */
 export function buildWhereClause<TMetadata extends Record<string, unknown>>(
   filters: {
     resourceId?: string | string[];
     metadata?: Partial<TMetadata>;
+    /** 🚨 Implemented by no provider. Passing it THROWS — see {@link UNSUPPORTED_FILTERS}. */
+    dateRange?: { start: Date; end: Date };
+    /** 🚨 Unsupported at this position. Passing it THROWS; use `metadata.tags`. */
+    tags?: string[];
+    /** 🚨 Unsupported at this position. Passing it THROWS; use `metadata.type`. */
+    type?: string;
+    /** 🚨 Unsupported at this position. Passing it THROWS; use `metadata.headingPath`. */
+    headingPath?: string;
   } | undefined,
   metadataSchema: ZodObject<ZodRawShape>
 ): string | null {
   if (!filters) {
     return null;
   }
+
+  assertFiltersAreSupported(filters);
 
   const conditions: string[] = [];
 

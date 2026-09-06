@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+#### RAG
+
+- **A RAG filter that no provider implements now throws instead of being ignored — because
+  ignoring it widened your search rather than narrowing it.** Six fields were declared on VAT's
+  published query surface and four of them reached no provider at the position they were declared:
+  `filters.dateRange` and `hybridSearch` (implemented nowhere), and `filters.tags` / `filters.type`
+  / `filters.headingPath` (honoured only under `filters.metadata`). `buildWhereClause` never
+  destructured any of them, and `query()` applies a `WHERE` clause only when the builder produced
+  one — so **a query whose only filter was an unimplemented one ran as an unfiltered, full-recall
+  vector search over the entire index**, returning plausible results drawn from exactly the
+  documents the filter was meant to exclude, with no error and no warning. A RAG filter is usually
+  a correctness or access boundary, which puts the silent version closer to a data-exposure defect
+  than to a missing feature.
+
+  Each refusal names the offending key and its remedy, and reports every offending key present in
+  one error. The check is deterministic and runs **before** the query touches the database or
+  computes an embedding, so an unindexed provider reports the unsupported field rather than
+  reporting that nothing is indexed yet. To migrate: move `tags` / `type` / `headingPath` under
+  `filters.metadata`, where they have always been honoured; drop `dateRange` in favour of a date
+  field on your own metadata schema; and drop `hybridSearch` or set `enabled: false` (every search
+  was, and remains, pure vector search).
+
+- **`RAGQuerySchema` gained the `filters.metadata` key it was missing.** The Zod schema declared
+  the four unimplemented filters but had no `metadata` key at all — and because a Zod object
+  **strips** unknown keys rather than rejecting them, a `filters.metadata` passed through that
+  schema was silently discarded before it could reach a provider. The one filter path that works
+  was the one path the schema describing it could not express, which also made the new refusals'
+  remedy unreachable for schema-validated callers. This moves the generated `RAGQueryJsonSchema`
+  output. The schema validates **structure, not provider support**: the four refused fields still
+  parse there and are refused at `query()`.
+
+  The defect had survived a green suite because `query.test.ts` only asserted that `safeParse`
+  succeeded and never constructed a provider — structurally incapable of seeing that a filtered
+  query returned the whole corpus. The new `unsupported-filters` (unit) and `unsupported-query`
+  (integration) suites in `@vibe-agent-toolkit/rag-lancedb` close that: the integration suite
+  indexes two distinguishable documents and asserts the unfiltered control returns both, so the
+  refusals are demonstrably preventing a full-recall result rather than passing over an empty index.
+
 #### CLI
 
 - **VAT now requires Node >= 22.13.0, raised from >= 22.0.0 across every package.** This corrects a

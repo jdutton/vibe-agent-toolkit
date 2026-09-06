@@ -37,6 +37,18 @@ describe('RAGQuerySchema', () => {
     }
   });
 
+  /**
+   * ⚠️ Parsing is not support. This schema validates STRUCTURE; whether a provider
+   * can honour a field is a separate question, answered by
+   * `assertFiltersAreSupported` in `@vibe-agent-toolkit/rag-lancedb` and pinned by
+   * that package's `unsupported-filters` / `unsupported-query` suites.
+   *
+   * `tags`, `type`, `headingPath` and `hybridSearch.enabled: true` all parse here and
+   * are all REFUSED at `query()`. Do not read a green assertion below as evidence that
+   * one of them works — this file never constructs a provider, so it is structurally
+   * incapable of seeing that a filtered query returned the whole corpus. That blindness
+   * is exactly how the widening defect survived a green suite.
+   */
   it('should validate query with filters', () => {
     const query: RAGQuery = {
       text: TEST_SEARCH_TERM,
@@ -54,6 +66,23 @@ describe('RAGQuerySchema', () => {
     if (result.success) {
       expect(result.data.filters?.tags).toEqual(['validation', 'schema']);
       expect(result.data.filters?.type).toBe('documentation');
+    }
+  });
+
+  it('should preserve filters.metadata rather than stripping it', () => {
+    // A Zod object strips unknown keys instead of rejecting them, so before this
+    // schema declared `metadata`, the ONE filter path a provider honours was silently
+    // discarded by validating against the schema that is supposed to describe it.
+    const query: RAGQuery = {
+      text: TEST_SEARCH_TERM,
+      filters: { metadata: { domain: 'security', priority: 1 } },
+    };
+
+    const result = RAGQuerySchema.safeParse(query);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.filters?.metadata).toEqual({ domain: 'security', priority: 1 });
     }
   });
 
