@@ -175,6 +175,23 @@ export const CODE_REGISTRY = {
     'Add a markdown link or code-block mention in SKILL.md or a linked resource. A file consumed programmatically belongs in skills.config.<name>.files as a source/dest pair — a declared dest is exempt, so do NOT restate it in validation.allow.',
     'packaged_unreferenced_file',
   ),
+  // The exact inverse of PACKAGED_UNREFERENCED_FILE: that code asks "is every
+  // shipped file mentioned?", this one asks "is every mentioned path shipped?".
+  // Same substrate, opposite direction — and only this direction catches a
+  // BUILD DROP, where the file is correct in the source repo and absent from
+  // dist. No human review of the source can see that, which is why it is worth
+  // a code despite the narrower precision.
+  //
+  // Warning, not error, on measured evidence: 1 misfire in 52 built adopter
+  // skills, and the residual class is irreducible — a skill whose SUBJECT is
+  // skill authoring cites example paths it does not ship. VAT's own
+  // vat-skill-authoring is in that class.
+  PACKAGED_REFERENCED_PATH_MISSING: entry(
+    'warning',
+    'SKILL.md (or a bundled reference file) names a path under a bundled subdirectory that is not present in the packaged output.',
+    'Ship the file, correct the path, or — if the token is an illustrative example rather than a real reference — reword it so it is not a bare bundled-subdirectory path. A file injected at build time belongs in skills.config.<name>.files as a source/dest pair.',
+    'packaged_referenced_path_missing',
+  ),
   PACKAGED_AGENT_INSTRUCTION_FILE: entry(
     'warning',
     'A repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) is present in the scanned tree — a built skill bundle, an installed plugin, or a plugin source directory.',

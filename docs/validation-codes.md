@@ -455,6 +455,16 @@ Only meaningful when a skill is actually being bundled. Most fire from `vat skil
 - **Three peer ways to not be an orphan:** reachable by a markdown link from `SKILL.md`; mentioned by path anywhere in packaged content (a code-block invocation is documentation); or **declared under `skills.config.<name>.files` as a `source`/`dest` pair**. Declaration is proof of intent on equal footing with documentation — you cannot forget a file you named twice in config — so a `files:` dest never fires this code, glob-expanded dests included.
 - **Fix:** Add a markdown link or code-block mention in `SKILL.md` or a linked resource. A file consumed programmatically — a vendored engine, a generated schema, a data pack — belongs in `skills.config.<name>.files`; a declared dest is already exempt, so **do not restate it in `validation.allow`**. A hand-maintained waiver list that duplicates the `files:` map is a symptom, not a fix.
 
+### `PACKAGED_REFERENCED_PATH_MISSING`
+
+- **Default:** `warning`
+- **What:** `SKILL.md` (or a bundled reference file) names a path under a bundled subdirectory — `scripts/`, `templates/`, `resources/`, `assets/`, `references/` — that is not present in the packaged output.
+- **Why it matters:** The exact inverse of [`PACKAGED_UNREFERENCED_FILE`](#packaged_unreferenced_file). That code asks "is every shipped file mentioned?"; this one asks "is every mentioned path shipped?". Only this direction can see a **build drop** — a reference that is correct in the source repository whose target did not survive into the bundle. The source looks right, so neither human review nor an agent reading the source can catch it.
+- **Why it is a warning and not an error:** Answering it requires extracting path tokens from prose and code rather than searching for a known filename, so a residual false-positive class is irreducible: a skill whose *subject* is skill authoring cites example paths it does not ship. Measured at **1 misfire in 52 built skills** on a live adopter marketplace, with three filters doing the work — literal paths only (no globs or `<placeholders>`), first segment must be a bundled subdirectory, and the target must be absent from the whole plugin rather than just the skill.
+- **Scope:** Built phase only. A `files:` config entry materialises `scripts/` at build time, so a source skill directory legitimately lacks the subdirectory its body references; running this at source phase flags every injected script.
+- **Not covered here:** markdown links. [`PACKAGED_BROKEN_LINK`](#packaged_broken_link) already reports a link whose target is missing, at `error`. This code sees only the bare tokens the markdown parser did not claim — a path inside a code block, a code span, or prose.
+- **Fix:** Ship the file, correct the path, or — if the token is illustrative rather than a real reference — reword it so it is not a bare bundled-subdirectory path. A file injected at build time belongs in `skills.config.<name>.files` as a `source`/`dest` pair.
+
 ### `PACKAGED_AGENT_INSTRUCTION_FILE`
 
 - **Default:** `warning`

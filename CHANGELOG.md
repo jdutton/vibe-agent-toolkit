@@ -188,6 +188,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Two skill-portability checks for hosts that are not Claude Code.** `NON_PORTABLE_ASSET_REFERENCE`
+  gained a `claude-skill-dir` variant (`${CLAUDE_SKILL_DIR}`, `$CLAUDE_SKILL_DIR`,
+  `$env:CLAUDE_SKILL_DIR`) and an `api-skill-mount` variant (a hardcoded `/skills/<name>/` path).
+  Both are host literals wearing portability's clothes: the variable is load-bearing in Claude Code
+  and expands to *empty* in the Anthropic API code-execution container, which mounts the skill at a
+  literal `/skills/<name>/` with cwd `/` and sets no equivalent variable; the mount path is the
+  mirror-image mistake and resolves nowhere else. The portable form is a bare relative path, which
+  every host resolves because the *model* resolves it against the skill directory — and when a
+  process genuinely needs an absolute path, the remedy text now says to `cd` into the skill
+  directory first, which is the fix authors do not guess. Reported by an adopter publishing 61
+  skills to the Messages API, where `vat skill review` had been silent on a skill whose every
+  command was `${CLAUDE_SKILL_DIR}`-anchored. The `$env:` form is newly matched for
+  `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PROJECT_DIR` too, which previously flagged a skill's bash line
+  and waved through the PowerShell line beneath it.
+
+- **`PACKAGED_REFERENCED_PATH_MISSING`** (warning) — the inverse of `PACKAGED_UNREFERENCED_FILE`.
+  That code asks whether every shipped file is mentioned; this one asks whether every mentioned
+  path is shipped, and it is the only check that can see a **build drop**: a reference that is
+  correct in the source repository whose target did not survive into the bundle. The source looks
+  right, so neither review nor an agent reading the source catches it. Runs at the built phase only
+  (a `files:` dest exists in the output and not in the source tree) and covers only the bare path
+  tokens the markdown parser did not claim — a path inside a code block, a code span, or prose —
+  since `PACKAGED_BROKEN_LINK` already reports a markdown link with a missing target, at `error`.
+  Warning rather than error on measured evidence: **1 misfire in 52 built skills** on a live
+  marketplace, the residual class being skills whose subject *is* skill authoring and which cite
+  example paths they do not ship. See
+  [`docs/validation-codes.md`](docs/validation-codes.md#packaged_referenced_path_missing) for the
+  three filters and what each is worth.
+
 - **`vat resources query <sql> [path]`** — runs one read-only SQL statement against this tree's
   resource projection, so questions no command reports a field for get an answer (headings, link
   targets, what the parser refused). The statement must begin with `SELECT`, `WITH` or `VALUES`;

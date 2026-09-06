@@ -652,6 +652,49 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 		expect(issue?.message).toContain('claude-plugin-root');
 	});
 
+	// CLAUDE_SKILL_DIR is load-bearing in Claude Code and MEANINGLESS in the API
+	// code-execution container, which mounts the skill at a literal `/skills/<name>/`
+	// with cwd `/` and sets no equivalent variable (measured live by an adopter
+	// against the Messages API). So `node "${CLAUDE_SKILL_DIR}/scripts/x.mjs"`
+	// expands to `node "/scripts/x.mjs"` there and the file does not exist. The
+	// portable form is a bare relative path, which every host resolves because the
+	// MODEL resolves it against the skill directory.
+	it.each([
+		{ label: 'braced', body: 'Run: `node "${CLAUDE_SKILL_DIR}/scripts/run.mjs" go`' },
+		{ label: 'bare', body: 'Run: `node "$CLAUDE_SKILL_DIR/scripts/run.mjs" go`' },
+		{ label: 'powershell', body: 'Run: `node "$env:CLAUDE_SKILL_DIR/scripts/run.mjs" go`' },
+	])('flags a $label CLAUDE_SKILL_DIR-anchored script path', async ({ body }) => {
+		const issue = await findNonPortableAssetIssue(getTempDir, `\n# Test Skill\n\n${body}`);
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+		expect(issue?.message).toContain('claude-skill-dir');
+		expect(issue?.line).toBeGreaterThan(0);
+	});
+
+	// The remedy an author cannot guess: when a PROCESS genuinely needs an absolute
+	// path (a script argument, a template path), the portable instruction is to cd
+	// into the skill directory first — not to pick a different variable.
+	it('advises both the relative path and the cd remedy for CLAUDE_SKILL_DIR', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `node "${CLAUDE_SKILL_DIR}/scripts/run.mjs" go`',
+		);
+		expect(issue?.fix).toContain('relative to the skill directory');
+		expect(issue?.fix).toMatch(/\bcd\b/);
+	});
+
+	// The other direction of the same mistake: the API container's literal mount
+	// point hardcoded into a skill, which resolves nowhere in Claude Code.
+	it('flags a hardcoded /skills/<name>/ mount path', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nOpen the guide at `/skills/test-skill/reference/guide.md` first.',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+		expect(issue?.message).toContain('api-skill-mount');
+	});
+
 	it('should flag CLAUDE_PLUGIN_ROOT in a reachable bundled reference file, not just SKILL.md', async () => {
 		const tempDir = getTempDir();
 		// SKILL.md body is clean; the anti-pattern lives in a linked reference file.

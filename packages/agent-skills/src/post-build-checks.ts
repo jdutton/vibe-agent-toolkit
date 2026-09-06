@@ -14,6 +14,7 @@ import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { normalizeRelPath } from './files-config.js';
+import { detectMissingReferencedPaths } from './validators/referenced-path-missing.js';
 import { evaluate, makeRuleContext, materializeIssue } from './validators/rule-engine/index.js';
 
 /**
@@ -365,6 +366,31 @@ export async function checkUnreferencedFiles(
   }
 
   return issues;
+}
+
+/**
+ * Check that every bundled-subdirectory path the packaged docs NAME is present in
+ * the packaged output — the inverse of {@link checkUnreferencedFiles}.
+ *
+ * Markdown links are deliberately out of scope here; {@link checkBrokenPackagedLinks}
+ * already covers a link with a missing target, at error severity. This lane sees
+ * only the bare tokens the markdown AST did not claim — a path inside a code
+ * block, a code span, or prose — which is the population nothing else can reach.
+ *
+ * See `validators/referenced-path-missing.ts` for the measured precision argument
+ * behind each filter, and for why this is a warning rather than an error.
+ *
+ * @param outputDir Absolute path to the packaged skill output.
+ * @param siblingSearchRoot Widest tree a reference may legitimately resolve in
+ *   (the plugin root, for a caller that walks whole plugins). Defaults to
+ *   `outputDir` — skill-local, and measurably noisier.
+ */
+export async function checkMissingReferencedPaths(
+  outputDir: string,
+  siblingSearchRoot: string = outputDir,
+): Promise<ValidationIssue[]> {
+  const docFiles = walkDir(outputDir).filter(f => f.endsWith('.md'));
+  return detectMissingReferencedPaths(docFiles, outputDir, siblingSearchRoot);
 }
 
 /**

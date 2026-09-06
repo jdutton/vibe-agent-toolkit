@@ -69,7 +69,7 @@ import {
   type SkillFileEntry,
 } from './files-config.js';
 import { READ_REMEDY, withFsAttribution } from './fs-attribution.js';
-import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
+import { checkBrokenPackagedLinks, checkMissingReferencedPaths, checkUnreferencedFiles } from './post-build-checks.js';
 import {
   checkPackagedTestInput,
   partitionTestInputFileEntries,
@@ -836,6 +836,13 @@ export async function packageSkill(
     ...collisionIssues,
     ...await checkUnreferencedFiles(outputPath, filesConfigDests),
     ...await checkBrokenPackagedLinks(outputPath, droppedGlobDests),
+    // The inverse of checkUnreferencedFiles: paths the docs NAME that the bundle
+    // does not contain. Built phase only — a `files:` dest exists here and not in
+    // the source tree, so the same check at source phase flags every injected
+    // script. No sibling root is available at this call site (the packager knows
+    // its own output, not the plugin it will be installed into), so this runs
+    // skill-local; `vat verify`, which walks a whole plugin, passes the wider root.
+    ...await checkMissingReferencedPaths(outputPath),
     // A receipt for every file a glob matched and the never-package list refused.
     // Reported as an issue, not written to stderr: a file vanishing from a bundle
     // has to be visible in `issueCounts`, or CI reads a clean report for a build
