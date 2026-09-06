@@ -3,16 +3,32 @@
  * Verifies our reimplementation of Claude Code's permission matching logic.
  */
 
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { describe, expect, it } from 'vitest';
 
 import {
   classifyBashRule,
   isSubsumedBy,
   matchesBashRule,
+  matchesPathRule,
   matchesPermissionRule,
   parseBashRuleContent,
   parsePermissionRule,
 } from '../src/settings/permission-matcher.js';
+
+// A plugin directory that is deliberately NOT process.cwd(): every path-lane
+// assertion below has to hold for a caller that passes its own root, which is
+// what production does. A POSIX-absolute literal would lose its drive on
+// Windows, so this is built from tmpdir().
+const PLUGIN_DIR = safePath.join(normalizedTmpdir(), 'vat-permission-matcher-plugin');
+const SECRETS_PATTERN = './secrets/**';
+const SECRETS_KEY = './secrets/key';
+const SECRETS_KEY_RELATIVE = 'secrets/key';
+const HELP_STAR = 'Bash(* --help *)';
+const HELP_PREFIX = 'Bash(* --help:*)';
+const NPM_HELP = 'npm --help';
+const NPM_HELP_X = 'npm --help x';
 
 // String constants to avoid sonarjs/no-duplicate-string
 const EXACT = 'exact';
@@ -144,6 +160,62 @@ describe('matchesPermissionRule', () => {
     expect(matchesPermissionRule('bash', NPM_RUN_LINT, BASH_NPM_RUN_STAR)).toBe(false);
     expect(matchesPermissionRule('Bash', NPM_RUN_LINT, BASH_NPM_RUN_STAR)).toBe(true);
   });
+
+  // "Claude Code checks file permissions against `Edit(path)` and `Read(path)`
+  //  rules only … accepts the rule but never consults it, and warns at startup."
+  //
+  // 🚩 We consulted path rules for six tools. Reporting a `Write(...)` deny rule
+  // as blocking something Claude Code never checks is a wrong answer about an
+  // adopter's config in the direction of over-reporting. `NotebookRead` was in
+  // the set and is not in the doc's list at all.
+  it('consults path rules for Read and Edit only', () => {
+    const file = safePath.join(PLUGIN_DIR, SECRETS_KEY_RELATIVE);
+    for (const tool of ['Read', 'Edit']) {
+      expect(matchesPermissionRule(tool, file, `${tool}(${SECRETS_PATTERN})`, PLUGIN_DIR)).toBe(true);
+    }
+    for (const tool of ['Write', 'Glob', 'NotebookRead', 'NotebookEdit']) {
+      expect(matchesPermissionRule(tool, file, `${tool}(${SECRETS_PATTERN})`, PLUGIN_DIR)).toBe(false);
+    }
+  });
+
+  // A bare `Write` denies the TOOL and still matches — the carve-out is about
+  // rules that carry a path. `Write(*)` carries one, so it is accepted and never
+  // consulted, and reporting it as blocking anything would be a wrong answer.
+  it('still honours a bare rule for a tool whose path rules are never consulted', () => {
+    expect(matchesPermissionRule('Write', '/any/file', 'Write')).toBe(true);
+    expect(matchesPermissionRule('Write', '/any/file', 'Write(*)')).toBe(false);
+  });
+});
+
+// 🚩 This lane had NO tests at all, which is how the defect below survived.
+describe('matchesPathRule', () => {
+  // `matchesPathRule` takes an explicit `cwd`, then computed the relative path
+  // with `safePath.relative(root, filePath)`. Node resolves a RELATIVE filePath
+  // against `process.cwd()`, not against `root` — so the answer depended on
+  // where the process happened to be launched. Its only production caller passes
+  // the plugin directory, which is never `process.cwd()`, so the path lane of
+  // the deny check returned false for everything.
+  it('resolves a relative file path against the cwd it was GIVEN', () => {
+    expect(matchesPathRule(SECRETS_KEY, SECRETS_PATTERN, PLUGIN_DIR)).toBe(true);
+    expect(matchesPathRule(SECRETS_KEY_RELATIVE, SECRETS_PATTERN, PLUGIN_DIR)).toBe(true);
+    expect(matchesPathRule('./public/readme.md', SECRETS_PATTERN, PLUGIN_DIR)).toBe(false);
+  });
+
+  // The consequence worth pinning: the verdict must not move when the process
+  // is launched somewhere else. Two unrelated roots, same relative path.
+  it('gives the same verdict regardless of where the process was launched', () => {
+    const other = safePath.join(normalizedTmpdir(), 'vat-permission-matcher-elsewhere');
+    expect(matchesPathRule(SECRETS_KEY, SECRETS_PATTERN, PLUGIN_DIR)).toBe(
+      matchesPathRule(SECRETS_KEY, SECRETS_PATTERN, other),
+    );
+  });
+
+  it('still handles an absolute file path under and outside the root', () => {
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, SECRETS_KEY_RELATIVE), SECRETS_PATTERN, PLUGIN_DIR)).toBe(true);
+    expect(
+      matchesPathRule(safePath.join(normalizedTmpdir(), 'somewhere-else/secrets/key'), SECRETS_PATTERN, PLUGIN_DIR),
+    ).toBe(false);
+  });
 });
 
 describe('isSubsumedBy', () => {
@@ -188,6 +260,46 @@ describe('isSubsumedBy', () => {
   it('agrees with matchesBashRule about the bare-command rule', () => {
     expect(matchesBashRule('ls', LS_STAR)).toBe(true);
     expect(isSubsumedBy('Bash(ls)', LS_STAR)).toBe(true);
+  });
+
+  // 🚩 THE SOUNDNESS INVARIANT, and the only one that matters here.
+  //
+  // `settings-conflict-analyzer` turns `isSubsumedBy(narrow, broad) === true`
+  // into user-facing advice to DELETE `narrow`. So the property to hold is not
+  // "isSubsumedBy agrees with matchesBashRule" — that formulation is satisfied
+  // by the very bug this catches, because `matchesBashRule('npm test *',
+  // 'Bash(npm * *)')` tests the rule TEXT as a command and answers true. The
+  // property is: **if we advise deleting a rule, no command may lose
+  // permission.** `Bash(npm test *)` was reported redundant under
+  // `Bash(npm * *)`, and deleting it silently revoked bare `npm test`, which a
+  // two-wildcard rule does not permit.
+  //
+  // Checked over every ordered pair of the rule corpus, so a future rule shape
+  // is covered without anyone adding a case.
+  const RULE_CORPUS = [
+    'Bash(npm * *)', 'Bash(npm test *)', 'Bash(npm *)', BASH_NPM_RUN_PREFIX,
+    BASH_NPM_RUN_LINT, GIT_STAR, GIT_PUSH_STAR, LS_STAR, 'Bash(ls)',
+    'Bash(cd *)', 'Bash(builtin cd)', 'Bash(grep *)', 'Bash(*)', 'Bash',
+  ];
+  const COMMAND_CORPUS = [
+    'npm', 'npm test', 'npm test x', NPM_RUN_LINT, 'npm run', 'git', GIT_STATUS,
+    GIT_PUSH_ORIGIN_MAIN, 'ls', LS_LA, LSOF, 'cd', 'cd /tmp', 'builtin cd',
+    'nice -n 5 npm test', 'xargs grep p', 'grep p', 'echo hi',
+  ];
+
+  it('never advises deleting a rule that permits a command the broad rule does not', () => {
+    const unsound: string[] = [];
+    for (const narrow of RULE_CORPUS) {
+      for (const broad of RULE_CORPUS) {
+        if (narrow === broad || !isSubsumedBy(narrow, broad)) continue;
+        for (const command of COMMAND_CORPUS) {
+          if (matchesBashRule(command, narrow) && !matchesBashRule(command, broad)) {
+            unsound.push(`${narrow} reported redundant under ${broad}, but loses "${command}"`);
+          }
+        }
+      }
+    }
+    expect(unsound).toEqual([]);
   });
 });
 
@@ -278,8 +390,8 @@ describe('published table — trailing wildcard', () => {
   // "That holds only when the trailing `*` is the rule's only wildcard:
   //  `Bash(* --help *)` matches `npm --help x` but not `npm --help`."
   it('does not match the bare command when another wildcard is present', () => {
-    expect(matchesBashRule('npm --help x', 'Bash(* --help *)')).toBe(true);
-    expect(matchesBashRule('npm --help', 'Bash(* --help *)')).toBe(false);
+    expect(matchesBashRule(NPM_HELP_X, HELP_STAR)).toBe(true);
+    expect(matchesBashRule(NPM_HELP, HELP_STAR)).toBe(false);
   });
 
   // "The space before a trailing `*` is part of the rule. `Bash(ls *)` requires
@@ -294,6 +406,30 @@ describe('published table — trailing wildcard', () => {
 
   // "The `:*` suffix is an equivalent way to write a trailing wildcard, so
   //  `Bash(ls:*)` matches the same commands as `Bash(ls *)`."
+  // 🚩 The equivalence held only for rules with no OTHER wildcard, because the
+  // `:*` spelling routed to a matcher that compared its base LITERALLY — so any
+  // `*` earlier in the rule stayed a `*` character instead of becoming a
+  // wildcard. Two spellings the table calls equivalent gave different answers.
+  it('honours ":*" equivalence when the rule has another wildcard too', () => {
+    const command = 'gitx push origin main x';
+    expect(matchesBashRule(command, 'Bash(gitx * main *)')).toBe(true);
+    expect(matchesBashRule(command, 'Bash(gitx * main:*)')).toBe(true);
+    // And they must still agree when the answer is no.
+    expect(matchesBashRule('gitx push origin other x', 'Bash(gitx * main *)')).toBe(false);
+    expect(matchesBashRule('gitx push origin other x', 'Bash(gitx * main:*)')).toBe(false);
+  });
+
+  // The other half of the same divergence: the bare-command permit is granted
+  // only when the trailing wildcard is the rule's ONLY one. The `:*` branch
+  // granted it unconditionally, so `Bash(* --help:*)` permitted a bare
+  // `npm --help` that the table's own worked example refuses.
+  it('applies the only-wildcard restriction to ":*" as well', () => {
+    expect(matchesBashRule(NPM_HELP, HELP_STAR)).toBe(false);
+    expect(matchesBashRule(NPM_HELP, HELP_PREFIX)).toBe(false);
+    expect(matchesBashRule(NPM_HELP_X, HELP_STAR)).toBe(true);
+    expect(matchesBashRule(NPM_HELP_X, HELP_PREFIX)).toBe(true);
+  });
+
   it('treats ":*" as equivalent to a trailing " *"', () => {
     for (const command of ['ls', LS_LA]) {
       expect(matchesBashRule(command, 'Bash(ls:*)')).toBe(matchesBashRule(command, LS_STAR));

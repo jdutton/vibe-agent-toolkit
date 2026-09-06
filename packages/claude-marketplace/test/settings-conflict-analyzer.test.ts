@@ -139,8 +139,15 @@ describe('analyzeRuleConflicts', () => {
       },
     };
     const conflicts = analyzeRuleConflicts(effective);
-    // Each rule is subsumed by the other → 2 redundant conflicts
-    expect(conflicts.filter(c => c.kind === KIND_REDUNDANT)).toHaveLength(2);
+    // ⚠️ This used to assert 2, with the comment "each rule is subsumed by the
+    // other" — which described the DEFECT rather than catching it. Advising
+    // deletion of both copies of a deny rule tells the reader to delete the
+    // permission outright. The same rule declared at two settings levels is the
+    // ordinary case, not a corner one: only the project-level copy is redundant.
+    const redundant = conflicts.filter(c => c.kind === KIND_REDUNDANT);
+    expect(redundant).toHaveLength(1);
+    expect(redundant[0]?.rule.provenance.level).toBe('project');
+    expect(redundant[0]?.shadowedBy.provenance.level).toBe('user');
   });
 
   it('detects redundant rule in allow bucket when broader sibling exists', () => {
@@ -205,6 +212,29 @@ describe('analyzeRuleConflicts', () => {
     assertSingleConflict(makeEffective([BASH], [BASH_GIT_STAR]), {
       kind: KIND_SHADOWED_BY_DENY, rule: BASH_GIT_STAR, shadowedBy: BASH,
     });
+  });
+
+  // 🚩 `candidate !== target` is object identity, so two TEXTUALLY identical
+  // rules each subsumed the other and BOTH were advised for deletion. Acting on
+  // that advice removes the permission entirely. Only the later copy is
+  // redundant; the first one is the rule that survives.
+  it('reports a duplicated rule redundant once, not twice', () => {
+    const effective = makeEffective([BASH_RM_STAR, BASH_RM_STAR]);
+    const redundant = analyzeRuleConflicts(effective).filter(c => c.kind === KIND_REDUNDANT);
+    expect(redundant).toHaveLength(1);
+    // The survivor must be the FIRST occurrence — deleting that one is what
+    // loses the permission.
+    expect(redundant[0]?.rule).toBe(effective.permissions.deny[1]);
+    expect(redundant[0]?.shadowedBy).toBe(effective.permissions.deny[0]);
+  });
+
+  it('reports each later copy when a rule appears three times', () => {
+    const effective = makeEffective([], [], [BASH_GIT_STAR, BASH_GIT_STAR, BASH_GIT_STAR]);
+    const redundant = analyzeRuleConflicts(effective).filter(c => c.kind === KIND_REDUNDANT);
+    expect(redundant).toHaveLength(2);
+    for (const conflict of redundant) {
+      expect(conflict.shadowedBy).toBe(effective.permissions.allow[0]);
+    }
   });
 
   it('preserves provenance on detected conflicts', () => {

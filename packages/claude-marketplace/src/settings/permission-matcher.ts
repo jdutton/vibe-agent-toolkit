@@ -122,8 +122,24 @@ export interface ParsedBashRule {
   regex?: RegExp | undefined;
 }
 
-/** Tool names that use path-based matching (node-ignore / gitignore spec) */
-const PATH_TOOLS = new Set(['Read', 'Edit', 'Write', 'Glob', 'NotebookRead', 'NotebookEdit']);
+/**
+ * Tool names whose path rules Claude Code actually consults:
+ * *"Claude Code checks file permissions against `Edit(path)` and `Read(path)`
+ * rules only"* (v2.1.210+).
+ */
+const PATH_TOOLS = new Set(['Read', 'Edit']);
+
+/**
+ * Tools whose path rules Claude Code *"accepts … but never consults, and warns
+ * at startup"*. A rule like `Write(./secrets/**)` blocks nothing, so reporting
+ * it as blocking something is a wrong answer about an adopter's config.
+ *
+ * 🚩 All four used to live in {@link PATH_TOOLS} and were matched as if they
+ * were consulted. `NotebookRead` is not named in the doc's list at all — it was
+ * simply assumed in. A bare `Write` still denies the TOOL and is unaffected;
+ * only a rule carrying a path falls under this.
+ */
+const UNCONSULTED_PATH_TOOLS = new Set(['Write', 'Glob', 'NotebookRead', 'NotebookEdit']);
 
 /**
  * Wrappers stripped before a Bash rule is matched, per the published table:
@@ -507,9 +523,15 @@ export function parseBashRuleContent(content: string): ParsedBashRule {
   }
 
   if (type === 'prefix') {
-    // Strip the ":*" suffix to get the base
+    // Strip the ":*" suffix to get the base.
     const base = normalised.slice(0, -2);
-    return { type, content: base };
+    // 🚩 The base is compiled as a WILDCARD pattern, not compared literally.
+    // *"The `:*` suffix is an equivalent way to write a trailing wildcard"* — and
+    // it was not: a literal comparison left any earlier `*` in the rule as a `*`
+    // CHARACTER, so `Bash(gitx * main:*)` matched nothing while the identical
+    // `Bash(gitx * main *)` matched. Two spellings the table calls equivalent
+    // must not have two matchers.
+    return { type, content: base, regex: compileWildcardRule(`${base} *`) };
   }
 
   return { type, content: normalised };
@@ -530,10 +552,15 @@ export function parseBashRuleContent(content: string): ParsedBashRule {
  * the `:*` branch and into {@link stripWrappers}, which serves every lane.
  */
 function bareCommandFor(content: string): string | undefined {
-  if (content.endsWith(':*')) return content.slice(0, -2);
-  if (!content.endsWith(' *')) return undefined;
-  // Only when the trailing star is the rule's ONLY wildcard.
+  // Both spellings of a trailing wildcard, stripped the same way.
+  //
+  // 🚩 The `:*` branch used to return unconditionally, skipping the only-wildcard
+  // restriction the ` *` branch applies. That handed `Bash(* --help:*)` a bare
+  // permit for `npm --help` — the exact command the table's own worked example
+  // says `Bash(* --help *)` must refuse.
+  if (!content.endsWith(':*') && !content.endsWith(' *')) return undefined;
   const withoutTrailing = content.slice(0, -2);
+  // Only when the trailing star is the rule's ONLY wildcard.
   return withoutTrailing.includes('*') ? undefined : withoutTrailing;
 }
 
@@ -547,28 +574,31 @@ function bareCommandFor(content: string): string | undefined {
  * it tests the whole string as one command and will answer `true` for a rule
  * that must not permit it.
  *
- * It stays exported because {@link isSubsumedBy} genuinely needs it: comparing
- * two RULES is not the same question as testing a command, and splitting a
- * rule's content on `&&` or stripping `timeout` out of it would be nonsense.
+ * ⛔ It used to be exported, on the stated grounds that {@link isSubsumedBy}
+ * "genuinely needs it" because comparing two RULES is not the same question as
+ * testing a command. That reasoning is what let the two disagree: `isSubsumedBy`
+ * re-derived the answer here, skipped wrapper stripping and the bare-command
+ * rule, and so reported `Bash(npm test *)` redundant under `Bash(npm * *)` —
+ * advice that revokes bare `npm test`. It now asks {@link matchesBashRule}, and
+ * nothing outside this module needs the raw form, so it is no longer exported.
  *
  * @param command - The actual command to test (e.g. "git push origin main")
  * @param parsedRule - The parsed rule to match against
  */
-export function matchesParsedBashRule(command: string, parsedRule: ParsedBashRule): boolean {
+function matchesParsedBashRule(command: string, parsedRule: ParsedBashRule): boolean {
   const normCommand = normaliseWhitespace(command);
 
   switch (parsedRule.type) {
     case 'exact':
       return normCommand === parsedRule.content;
 
-    case 'prefix': {
-      // Base itself, or base + space + anything. `xargs` is NOT special-cased
-      // here any more: it is one of the wrappers {@link stripWrappers} removes
-      // before matching, so every lane gets it rather than this one alone.
-      const base = parsedRule.content;
-      return normCommand === base || normCommand.startsWith(`${base} `);
-    }
-
+    // `:*` compiles to the same regex as the equivalent trailing ` *`, so both
+    // spellings answer through one matcher. The bare base is granted by
+    // {@link bareCommandFor} — and only when the trailing wildcard is the rule's
+    // ONLY one, which is exactly the restriction the literal comparison here
+    // used to bypass. `xargs` is not special-cased: it is one of the wrappers
+    // {@link stripWrappers} removes, so every lane gets it.
+    case 'prefix':
     case 'wildcard':
       return parsedRule.regex?.test(normCommand) ?? false;
 
@@ -665,7 +695,14 @@ export function matchesPathRule(
   }
 
   const ig = createIgnore().add(pattern);
-  const relative = safePath.relative(root, filePath);
+  // 🚩 Resolve against `root` explicitly. `safePath.relative(root, filePath)`
+  // alone lets Node resolve a RELATIVE filePath against `process.cwd()` rather
+  // than against the root this function was handed, so the verdict depended on
+  // where the process was launched. The only production caller passes a plugin
+  // directory, which is never `process.cwd()` — so the whole path lane of the
+  // deny check answered `false` for everything. An absolute filePath is
+  // unaffected: `resolve` returns it unchanged.
+  const relative = safePath.relative(root, safePath.resolve(root, filePath));
 
   // node-ignore can't match paths that go "up" (..)
   if (relative.startsWith('..')) return false;
@@ -706,6 +743,10 @@ export function matchesPermissionRule(
     return matchesPathRule(toolInput, content, cwd);
   }
 
+  // Accepted by Claude Code, never consulted — so it blocks nothing, including
+  // when the path is `*`. Must come BEFORE the `content === '*'` fallthrough.
+  if (UNCONSULTED_PATH_TOOLS.has(toolName)) return false;
+
   // MCP tools and others: bare match only (already handled above)
   // Any content match is treated as wildcard
   if (content === '*') return true;
@@ -737,27 +778,25 @@ export function isSubsumedBy(narrowRule: string, broadRule: string): boolean {
   // Both bare — narrowContent is undefined but broadContent is not (checked above)
   if (narrowContent === undefined) return false;
 
-  // Bash rules: check if broad rule's pattern matches narrow rule's content
+  // Bash rules: ask {@link matchesBashRule} both halves of the question, so
+  // there is only ever ONE implementation of "does this rule permit this?".
+  // Re-deriving the answer here is what let the two drift apart.
   if (narrowTool === 'Bash') {
-    const broadParsed = parseBashRuleContent(broadContent);
-    const narrowParsed = parseBashRuleContent(narrowContent);
-
-    if (broadParsed.type === 'exact') {
-      // Exact broad only subsumes exact narrow with same content
-      return narrowParsed.type === 'exact' && narrowParsed.content === broadParsed.content;
-    }
-
-    // Wildcard AND prefix. The `prefix` case used to be absent, so a `:*` rule
-    // subsumed nothing at all and the conflict analyzer never reported a rule
-    // made redundant by one.
+    // A rule's extension includes the bare command it permits, and that is the
+    // half a broad rule can fail to cover.
     //
-    // 🔑 The bare-command test has to be here too, or this function and
-    // {@link matchesBashRule} disagree about the same pair: `Bash(ls *)` permits
-    // bare `ls`, so it must also SUBSUME `Bash(ls)`. Two answers to one question
-    // is how a checker starts contradicting itself.
-    const bare = bareCommandFor(broadContent);
-    if (bare !== undefined && narrowParsed.content === bare) return true;
-    return matchesParsedBashRule(narrowParsed.content, broadParsed);
+    // 🚩 `Bash(npm test *)` was reported redundant under `Bash(npm * *)`, and
+    // `settings-conflict-analyzer` turns that into advice to DELETE it — which
+    // silently revoked bare `npm test`, because a rule with two wildcards does
+    // not permit a bare command. Pinned by the soundness property in the suite:
+    // if we advise deleting a rule, no command may lose permission.
+    const narrowBare = bareCommandFor(narrowContent);
+    if (narrowBare !== undefined && !matchesBashRule(narrowBare, broadRule)) return false;
+
+    // Then the rest of narrow's extension, with its content read as a command.
+    // Wrappers are stripped on this path too, so `Bash(builtin cd)` is correctly
+    // reported redundant under `Bash(cd *)` — it was not before.
+    return matchesBashRule(narrowContent, broadRule);
   }
 
   return false;

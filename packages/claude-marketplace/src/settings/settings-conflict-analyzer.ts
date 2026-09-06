@@ -23,14 +23,30 @@ export interface RuleConflict {
 
 /**
  * Return the first rule in `candidates` that subsumes `target`, or undefined.
+ *
+ * 🚩 Two rules can subsume each OTHER — most obviously when they are textually
+ * identical, which happens whenever the same rule is declared at two settings
+ * levels. `candidate !== target` is object identity, so both copies used to be
+ * reported redundant and BOTH advised for deletion; acting on that advice
+ * removes the permission entirely. When the subsumption is mutual the rules are
+ * equivalent, so only the LATER copy is redundant and the first one survives.
+ *
+ * That tie-break applies only within one bucket. Across buckets (an ask rule
+ * against the deny list) the target has no position among the candidates, and a
+ * deny rule identical to an ask rule genuinely does shadow it.
  */
 function findShadowingRule(
   target: ProvenanceRule,
   candidates: ProvenanceRule[]
 ): ProvenanceRule | undefined {
-  return candidates.find(
-    candidate => candidate !== target && isSubsumedBy(target.rule, candidate.rule)
-  );
+  const targetIndex = candidates.indexOf(target);
+  return candidates.find((candidate, index) => {
+    if (candidate === target) return false;
+    if (!isSubsumedBy(target.rule, candidate.rule)) return false;
+    if (targetIndex === -1) return true; // Different bucket: no ordering to apply.
+    if (!isSubsumedBy(candidate.rule, target.rule)) return true; // Strictly broader.
+    return index < targetIndex; // Equivalent: only an EARLIER copy shadows.
+  });
 }
 
 /**

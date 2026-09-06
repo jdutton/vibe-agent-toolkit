@@ -562,6 +562,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `timeout -s ls 30 rm -rf /` as permitted. A wrapper carrying a flag with a non-numeric value is
   now left unstripped and reported as not matching; `timeout 30 …` and `nice -n 5 …` are unchanged.
 
+- **The settings auditor advised deleting rules that were not redundant.** A rule appearing at two
+  settings levels had BOTH copies reported redundant, and `Bash(npm test *)` was reported redundant
+  under `Bash(npm * *)` — deleting either as advised revokes a permission. Re-run `vat` settings
+  checks and re-read any rule you deleted on that advice.
+
+- **Path deny rules were checked for six tools and matched none of them in practice.** Claude Code
+  consults `Read(path)` and `Edit(path)` only, so `Write(…)`, `Glob(…)` and the Notebook rules now
+  report as blocking nothing; separately, relative paths resolved against the process's own
+  directory rather than the plugin's, so the path lane never matched. Both now report correctly.
+
+- **`Bash(x:*)` and `Bash(x *)` gave different answers** despite being documented as equivalent —
+  `:*` matched its base literally, so any other `*` in the rule stopped working, and it granted a
+  bare-command permit the ` *` spelling refuses. Re-check reports for rules using the `:*` spelling.
+
 - **Two supply-chain pins went stale and the dependency audit went red: `fast-uri` and `qs` are
   re-pinned to their patched releases.** New advisories landed against the exact versions the root
   `overrides` block was holding — `fast-uri` 3.1.5 (four advisories, CVSS 7.5) and `qs` 6.15.2 (two,
