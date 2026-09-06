@@ -78,8 +78,14 @@
  * direction. Verified `false` (reported as "no conflict") where Claude Code blocks:
  * `Bash(curl:*)` vs `curl https://x && echo done` (ANY subcommand); `Bash(rm *)` vs
  * `FOO=bar rm -rf tmp/` (deny matches past any leading assignment); `Bash(gitx clean *)` vs
- * `echo "$(gitx clean -f)"` (nested). Row 1 was caught before the compound split was added: that
- * change is correct for allow and made DENY worse.
+ * `echo "$(gitx clean -f)"` (nested); and `Bash(rm *)` vs `timeout -s KILL 30 rm -rf tmp/`, which
+ * {@link stripOneWrapper}'s own false-permit fix turned from `true` to `false`. Row 1 was caught
+ * before the compound split was added.
+ *
+ * 🔑 Two separate, individually-correct allow-lane fixes have now each made the deny lane worse.
+ * That is the argument for closing this, not the row count: **every future allow-lane correctness
+ * fix will do the same until the lane is a parameter.** All four re-measured on `e5963fed` through
+ * {@link matchesPermissionRule}, the entry point the caller actually uses.
  *
  * The fix is a lane parameter plus a `matchesDenyRule` entry point with ANY-subcommand semantics,
  * descent into `$(…)` and control-flow bodies, and unconditional leading-assignment stripping.
@@ -197,7 +203,15 @@ function isWrapperOwnToken(token: string): boolean {
  * The heuristic cannot know a wrapper flag's arity, so when the skip halts on
  * the token immediately after a flag, the only honest answer is to strip
  * nothing. That refuses `timeout -s KILL 30 npm test` under `Bash(npm test *)`
- * — an under-match, and the direction to keep.
+ * — an under-match, and the direction to keep FOR THE ALLOW LANE.
+ *
+ * 🪤 It is the WRONG direction for the deny lane, which is the only lane with a
+ * caller: `Bash(rm *)` vs `timeout -s KILL 30 rm -rf tmp/` went `true` → `false`
+ * with this fix, and Claude Code blocks it. Measured on `e5963fed`. That is not
+ * a reason to revert — the false permit this closed is the more severe
+ * direction, and a deny under-match is an under-REPORT in a checker rather than
+ * a runtime grant — but note the shape: **every allow-lane correctness fix makes
+ * the deny lane worse until the lane parameter exists.** See the file header.
  */
 function stripOneWrapper(command: string): string {
   const tokens = command.split(' ');
