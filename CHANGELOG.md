@@ -9,7 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+#### RAG
+
+- **A RAG filter no provider implements now throws instead of being silently ignored.** Ignoring
+  one *widened* your search: a query filtered only by an unimplemented field ran unfiltered over the
+  whole index. Move `filters.tags` / `type` / `headingPath` under `filters.metadata`; replace
+  `filters.dateRange` with a date field on your own metadata schema; drop `hybridSearch` or set
+  `enabled: false`. A metadata field your schema does not declare, and any unrecognised filter key,
+  now throw for the same reason.
+
+- **`RAGQuerySchema` gained a `filters.metadata` key.** Without it, a schema-validated
+  `filters.metadata` was stripped — the one filter path that works could not be expressed. Moves the
+  generated `RAGQueryJsonSchema` output; no action needed unless you consume that schema.
+
+- **New in `@vibe-agent-toolkit/rag`: `assertQuerySupported(query, support)`.** Any RAG provider
+  should call it and declare its own `QuerySupport`; without it a provider inherits the declared
+  query fields and none of the refusals.
+
 #### CLI
+
+- **VAT now requires Node >= 22.13.0, raised from >= 22.0.0 across every package.** This corrects a
+  promise VAT was already failing to keep rather than removing support anyone had: `vat resources
+  query` and `vat resources check` build their projection through `node:sqlite`, which loads
+  unflagged only from **22.13.0** (it was added in 22.5.0 behind `--experimental-sqlite`), so on
+  Node 22.0–22.12 those two commands could not run unaided while every manifest
+  advertised them as supported. Thirteen patch releases were claimed and not delivered. If you are
+  on Node 22.0–22.12, upgrade to 22.13.0 or newer; every other Node that worked before still works.
+
+  **`vat doctor` was the worst offender and is fixed in the same change.** It compared the MAJOR
+  version only, against `20` — so it reported `v20.0.0` and `v22.0.0` as healthy environments, with
+  the message `meets requirement: >=20.0.0`, a third number matching neither the manifests nor
+  reality. A doctor that green-lights an environment the toolkit cannot run in ends the user's
+  investigation at exactly the wrong moment. It now reads `engines.node` from the CLI's own manifest
+  and compares the full range, so the floor has one source and this check cannot drift behind it
+  again. The sample output in `packages/cli/README.md` and `packages/cli/docs/doctor.md` showed the
+  same stale `>=20.0.0` and has been corrected.
+
+  **The check now reads `process.version` — the interpreter running VAT — not a spawned
+  `node --version`.** Under any version manager or shim those differ, and asking `PATH` could pass
+  an environment VAT cannot run in, fail a healthy one, or report Node as "Not detected" from
+  inside a Node process.
 
 - **The RAG backends are no longer installed for you — `npm install` no longer brings the RAG lane
   with it.** They were declared as `optionalDependencies`, which npm and pnpm
@@ -144,6 +183,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Library
 
+- **`matchesPermissionRule` and `matchesBashRule` now require a `lane` argument** (`'allow' | 'deny'
+  | 'ask'`), with no default — a default would have left every existing caller on the old behaviour
+  and the bug in place. Pass `'allow'` to keep today's semantics, or use the new `matchesAllowRule` /
+  `matchesDenyRule` wrappers. `PermissionLane` is exported alongside them.
+
+- **Deny and ask rules now match the way Claude Code publishes them, which is not how allow rules
+  match.** A deny rule applies when **any** subcommand matches (allow needs every one), reaches
+  commands nested in a subshell or command substitution, and matches past any leading environment
+  assignment. Permission-conflict reports will flag things they previously missed — re-run any saved
+  one. Allow-lane answers are unchanged apart from `NODE_ENV=` now being stripped, per the table.
+
 - **`@vibe-agent-toolkit/agent-schema` is now `@vibe-agent-toolkit/schema`.** Rename the dependency
   and every import specifier; nothing else about the package changed.
 
@@ -187,6 +237,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   structurally must account for it.
 
 ### Added
+
+- **The Node floor is now enforced across every manifest and executed in CI.** A repo-structure rule
+  derives the floor from the root `package.json` and fails the gate when any package disagrees, or
+  when a published package declares none; a `Node Floor` workflow then runs `vat doctor` and
+  `vat resources query` on that exact version. Nothing to do unless you add a package — give it
+  `engines.node` matching the root, or mark it `private`.
+
+- **`vat okf validate` — conformance checking for Open Knowledge Format bundles.** Declare one with
+  `okf.bundles.<name>.root`; every non-reserved `.md` beneath it is checked for parseable frontmatter
+  with a non-empty `type`, and cross-links are resolved against the bundle root. There is no
+  `include`/`exclude` on purpose — the population is the specification's, and a narrower one would
+  let VAT report a clean bundle it never fully read. Read a clean report precisely: §11.1 and §11.2
+  in full, §11.3 only in part — the *body* structure of `index.md` and `log.md` is not checked.
+
+- **`vat ard emit` — writes a `.well-known/ard.json` discovery manifest.** Set `ard.publisher` and
+  `ard.baseUrl`; published skills become entries automatically. Marketplaces, OKF bundles and MCP
+  servers are emitted only if you supply `ard.entries.<name>.type`, because the ARD specification
+  names no media type for any of them and VAT will not guess one under your domain.
+  `representativeQueries` is authored, never generated — see
+  `docs/concepts/knowledge-interop-formats.md`.
+
+- **Characterization tests pinning the markdown link-rewriting divergence**
+  (`packages/resources/test/link-grammar-divergence.test.ts`). `transformContent` and
+  `rewriteBodyLinks` disagree on an image inside a link, and the disagreement had been recorded in
+  both modules' docstrings while **both suites stayed green** — nothing mechanical read the prose,
+  and a third grammar had already appeared unnoticed. The tests pin current behaviour, state per
+  case which arm is wrong and what a fix would look like, and record the parsed-view root cause:
+  mdast reports one link (the outer href) while both regexes match the inner one, so
+  `transformContent` misses its own lookup and silently rewrites nothing.
+
+- **New concept guide: [Knowledge interop formats](docs/concepts/knowledge-interop-formats.md)** —
+  what the Open Knowledge Format (OKF) and Agentic Resource Discovery (ARD) each are, how they
+  differ (OKF says what a knowledge package *is*; ARD says where an agent *finds* available
+  resources), and VAT's producer-side stance toward both. Written against the specifications read
+  directly rather than summarised, and it is explicit about the soft spots: `application/ai-skill+md`
+  appears in ARD exactly once, in a worked example, so a publisher emitting it is coining a media
+  type rather than adopting a registered one; and OKF conformance requires frontmatter on *every*
+  non-reserved `.md` in a bundle, so the cost of declaring a bundle is paid per file. `docs/README.md`
+  gains a **Concepts** section, which also closes a pre-existing reachability gap — `docs/concepts/`
+  was indexed nowhere.
 
 - **`vat resources query <sql> [path]`** — runs one read-only SQL statement against this tree's
   resource projection, so questions no command reports a field for get an answer (headings, link
@@ -345,6 +435,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   surface as `CLOSURE_REFERENCE_UNRESOLVED`, escaping `@~/…` as `CLOSURE_REFERENCE_OUTSIDE_ROOT`.
   `closureProvenance()` reports which member of a closure pulled in which, and at what depth.
 
+- **The Bash permission matcher now follows Claude Code's published behavior table, closing four
+  of seven known divergences.** `permission-matcher.ts` feeds `settings-compat-checker` and
+  `settings-conflict-analyzer`, so each divergence was a wrong answer about an adopter's permission
+  config. Fixed: a trailing ` *` now matches the bare command when it is the rule's only wildcard
+  (`Bash(ls *)` matches `ls`); compound commands now split on `&&`, `||`, `;`, `|`, `|&`, `&` and
+  newlines with an allow rule required to match **every** subcommand, so `Bash(safe-cmd *)` no
+  longer reports `safe-cmd && other-cmd` as permitted — that was the one divergence whose direction
+  was dangerous; a dangling `&&`/`||` is treated as unparseable and approves nothing; the documented
+  wrappers (`timeout`, `time`, `nice`, `nohup`, `stdbuf`, `command`, `builtin`, `noglob`, and bare
+  `xargs`) are stripped before matching, while `command -v` and `nocorrect` are not; and `:*` and
+  ` *` now resolve through one path, so `xargs` is no longer honoured on one spelling and not the
+  other. Each rule quotes the sentence it encodes and is pinned by a `published table — …` suite.
+
+  **Three divergences remain, and are now documented rather than merely listed:** leading
+  environment-assignment stripping is deliberately *not* implemented because the table does not
+  publish which variables count as known-safe, and guessing would produce false positives;
+  `PATH_TOOLS` is still over-broad; and MCP tool-name globs are unsupported. The module also now
+  states the structural gap behind all three — matching is asymmetric between allow and deny/ask,
+  and the module is not told which lane it is serving, so everything it implements is the allow
+  lane. A behaviour change for anyone calling `matchesBashRule` or `matchesPermissionRule`.
+
+- **`isSubsumedBy` no longer contradicts `matchesBashRule`, and a `:*` rule now subsumes what it
+  permits.** Two defects the review of the change above turned up. A `prefix` (`:*`) broad rule fell
+  through to `return false`, so it subsumed **nothing** — `Bash(npm run:*)` never made
+  `Bash(npm run lint)` redundant, and `settings-conflict-analyzer` is built entirely on this
+  function, so it silently under-reported. Separately, once `Bash(ls *)` began permitting bare `ls`,
+  subsumption had to learn the same rule or the two functions would answer one question two ways.
+  Both are pinned.
+
+- **The publish workflow now runs an `npm whoami` preflight before it publishes anything.** The
+  v0.2.0-rc.5 release burned two of its four attempts on credential failures the job only reported
+  after it had started pushing packages: an expired token surfaced as `E404` — npm answers an
+  unauthenticated `PUT` with "not found", so an expired token is indistinguishable from a package
+  that does not exist — and its replacement then failed `EOTP` for lacking 2FA bypass.
+
+  **It catches the expired token, not the `EOTP`.** `whoami` is a read; npm demands the OTP only on
+  a write, so a token that authenticates but cannot publish still fails at publish.
+
+- **`bun run pre-release` prints its `--allow-branch` tip as a runnable command** rather than naming
+  the flag and leaving the reader to reconstruct the invocation.
+
+- **The `node:sqlite` error no longer restates VAT's Node floor.** It gives the durable Node fact —
+  the module loads unflagged from 22.13.0 (added in 22.5.0 behind `--experimental-sqlite`) —
+  instead of a copy of `engines.node` that would go stale the next
+  time the floor moves. The floor has one home, and `vat doctor` derives it from there; a string
+  repeating it was the same second-copy defect this release removes elsewhere.
+
+- **`CollectionConfigSchema`'s docstring now states the three-axis rule for `mimeType`.** "Make the
+  mime type more specific than `text/markdown`" is a recurring request that collapses three
+  questions into one field: which parser reads these bytes (`mimeType`, per file, in the content
+  key), whether the frontmatter is well-formed (`validation.frontmatterSchema`, per file), and what
+  kind of resource this is to a discovery consumer (a media type, per *published unit*). The third
+  does not fit, because a published unit is not a file — a skill is a directory published as one
+  thing. `mimeType` means "which parser runs", and a list of them is not the answer either: widening
+  it would invert the conflict rule that exists to keep the value single. A stale example pointing at
+  a nonexistent `@vibe-agent-toolkit/schemas/skill.v1.json` is corrected in the same change.
+
+- **`docs/architecture/zones.md` records the evidence behind the modelled-but-unbuilt `wiki` lens** —
+  measured on a private multi-package adopter monorepo, dated, with its corpus — plus the two
+  constraints building it must satisfy: a wikilink's namespace is declared and never inferred, and
+  resolution may have to cross roots. It also notes that pruning `.claude/worktrees` is load-bearing
+  for any such measurement: an unpruned scan sees 55,203 markdown files instead of 1,945.
+
 - **(library) `resource_tags` is now populated.** `AgenticConventionContributor`, `classifyPath()`
   and `pluginRootsFrom()` are exported from `@vibe-agent-toolkit/resources`; each resource is tagged
   with the harness convention its path carries (`claude-md`, `skill-md`, `subagent`, …) plus a
@@ -427,6 +580,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **The settings checker reported an unparseable Bash command as permitted.** An odd quote or an
+  unclosed `(` switched off separator detection for the rest of the command, so `Bash(echo *)`
+  approved `echo hi # don't` + newline + `rm -rf /`. Both now report unparseable — re-run any saved
+  permission report, because verdicts can flip from permitted to refused.
+
+- **A backslash in a permission rule compiled as a regex escape instead of as itself.**
+  `Bash(a\b *)` reported `a b` as permitted, and any rule holding a Windows path matched something
+  other than what it said. Re-check any rule containing a backslash.
+
+- **A wrapper flag's value was treated as the wrapped command**, so `Bash(ls *)` reported
+  `timeout -s ls 30 rm -rf /` as permitted. A wrapper carrying a flag with a non-numeric value is
+  now left unstripped and reported as not matching; `timeout 30 …` and `nice -n 5 …` are unchanged.
+
+- **The settings auditor advised deleting rules that were not redundant.** A rule appearing at two
+  settings levels had BOTH copies reported redundant, and `Bash(npm test *)` was reported redundant
+  under `Bash(npm * *)` — deleting either as advised revokes a permission. Re-run `vat` settings
+  checks and re-read any rule you deleted on that advice.
+
+- **Path deny rules were checked for six tools and matched none of them in practice.** Claude Code
+  consults `Read(path)` and `Edit(path)` only, so `Write(…)`, `Glob(…)` and the Notebook rules now
+  report as blocking nothing; separately, relative paths resolved against the process's own
+  directory rather than the plugin's, so the path lane never matched. Both now report correctly.
+
+- **`Bash(x:*)` and `Bash(x *)` gave different answers** despite being documented as equivalent —
+  `:*` matched its base literally, so any other `*` in the rule stopped working, and it granted a
+  bare-command permit the ` *` spelling refuses. Re-check reports for rules using the `:*` spelling.
+
 - **Two supply-chain pins went stale and the dependency audit went red: `fast-uri` and `qs` are
   re-pinned to their patched releases.** New advisories landed against the exact versions the root
   `overrides` block was holding — `fast-uri` 3.1.5 (four advisories, CVSS 7.5) and `qs` 6.15.2 (two,
@@ -505,6 +685,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`vat resources query` no longer prints Node's SQLite `ExperimentalWarning` on every run.** The
+  backend emits one per process even on a Node that needs no flag, and it was reaching users on the
+  default path. Now filtered by name at the point of import, so real warnings still print — the
+  reason a blanket `NODE_NO_WARNINGS` was never the fix. Nothing to do.
+
 - **The `vat-skill-distribution` skill taught a config key that does not exist.** It showed
   `skills.config.<name>.claudeWebTarget`, which the `.strict()` project-config schema refuses — so
   an agent following the published skill produced a config that failed to load on **every** vat
@@ -522,7 +707,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `filters.resourceId` and `filters.metadata` reach the query. An unimplemented filter does not
   narrow your results, it **widens** them: the query degrades to an unfiltered full-recall search
   with no error. Move `tags`/`type`/`headingPath` under `filters.metadata`; `dateRange` and
-  `hybridSearch` have no replacement. Documented, not yet guarded.
+  `hybridSearch` have no replacement. **Superseded within this same `[Unreleased]` section:** see
+  the Breaking → RAG entry above, which makes all of these refuse rather than widen.
 
 - **A usage mistake no longer reports itself as a failed check.** Every command's `--help` publishes
   the same three-way exit contract — `0` no error-severity findings, `1` at least one, `2` a system

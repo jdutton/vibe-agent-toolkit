@@ -70,6 +70,7 @@ const ERROR_TYPES = {
  * Common directories to skip during validation
  */
 const WORKTREES_DIR = '.worktrees';
+const PACKAGE_MANIFEST_FILENAME = 'package.json';
 const COMMON_SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.claude']);
 const SKIP_DIRS_WITH_HUSKY = new Set([...COMMON_SKIP_DIRS, '.husky', WORKTREES_DIR]);
 
@@ -366,12 +367,12 @@ async function validateNoNestedPackageJson(): Promise<void> {
   await walkDirectory(REPO_ROOT, '.', {
     skipDirs,
     onFile: async ({ name, relPath }) => {
-      if (name === 'package.json') {
+      if (name === PACKAGE_MANIFEST_FILENAME) {
         // Normalize path separators
         const normalizedPath = relPath.replaceAll('\\', '/');
 
         // Check if it's in a valid location
-        const isRootPackageJson = normalizedPath === 'package.json';
+        const isRootPackageJson = normalizedPath === PACKAGE_MANIFEST_FILENAME;
         const isInPackagesDir = /^packages\/[^/]+\/package\.json$/.test(normalizedPath);
         const isInTestFixtures = /^packages\/[^/]+\/test\/fixtures\//.test(normalizedPath);
 
@@ -1074,6 +1075,18 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   // so an adopter who promotes the code to `error` gates on the same number the
   // report shows.
   'packages/cli/src/commands/claude/budget.ts',
+  // OKF conformance. Its severity is adopter-configurable PER BUNDLE
+  // (`okf.bundles.<name>.severity`), so a project that lowers a bundle to
+  // `warning` gets `status: passed` and exit 0 over real conformance findings —
+  // correct, and unreadable from the status word alone. `issueCounts` is what
+  // separates "nothing was found" from "everything found was downgraded", and
+  // the exit code is read from `issueCounts.errors` rather than from the status
+  // so the gate and the report can never disagree. The counts are built here
+  // rather than by `countBySeverity`, whose `ValidationIssue.code` is the shared
+  // registry union whereas an OKF code comes from the specification's own
+  // vocabulary; the field keeps the shared `SeverityCounts` TYPE, so the shape
+  // stays checked against the canonical one.
+  'packages/cli/src/commands/okf/validate.ts',
 ]);
 
 /**
@@ -1400,6 +1413,133 @@ function printResults(): void {
 }
 
 /**
+ * A package manifest reduced to what the engine-floor rule decides on.
+ */
+export interface PackageManifestSummary {
+  /** Repo-relative path, e.g. `packages/cli/package.json`. */
+  path: string;
+  /** `private: true` — the package is never installed by an adopter. */
+  isPrivate: boolean;
+  /** `engines.node`, or `undefined` when the manifest declares none. */
+  engineNode: string | undefined;
+}
+
+/**
+ * Rule: every published package declares the SAME Node floor as the root.
+ *
+ * 🔑 The floor is **derived from the root manifest**, never restated here. A
+ * literal in this function would be one more place a human has to remember to
+ * change, which is the entire defect it exists to catch — and it is the shape
+ * CLAUDE.md's no-version-constants rule forbids for exactly this reason: a
+ * number nothing checks drifts from the thing it claims to describe, silently,
+ * because forgetting to update it fails nothing.
+ *
+ * The gap this closes was real and shipped. The floor was raised to `>=22.13.0`
+ * across 23 manifests with nothing asserting they agree: the only floor test in
+ * the tree pinned `packages/utils` with a hardcoded string, while `vat doctor`
+ * reads `packages/cli`. Those two could diverge and every test stayed green —
+ * "one source of truth" was a convention held in a contributor's memory rather
+ * than a mechanism, which is how thirteen patch releases advertised a floor the
+ * code did not honour.
+ *
+ * A **private** package may omit `engines` (an adopter never installs it), but
+ * if it declares one it must still agree — a wrong floor is wrong whether or not
+ * npm shows it to anyone, and a private package graduating to published would
+ * otherwise carry the drift with it.
+ */
+export function findEngineFloorDisagreements(
+  rootFloor: string | undefined,
+  packages: readonly PackageManifestSummary[],
+): ValidationError[] {
+  if (rootFloor === undefined) {
+    return [
+      {
+        type: ERROR_TYPES.STRUCTURAL_VIOLATION,
+        path: PACKAGE_MANIFEST_FILENAME,
+        message:
+          'Root package.json declares no engines.node. Every other manifest is checked against it, so there is no floor to derive and the rule cannot run.',
+        severity: 'error',
+      },
+    ];
+  }
+
+  const findings: ValidationError[] = [];
+
+  for (const manifest of packages) {
+    if (manifest.engineNode === undefined) {
+      if (!manifest.isPrivate) {
+        findings.push({
+          type: ERROR_TYPES.STRUCTURAL_VIOLATION,
+          path: manifest.path,
+          message: `Published package declares no engines.node. Adopters get no install-time signal about the Node floor. Add "engines": { "node": "${rootFloor}" } to match the root manifest.`,
+          severity: 'error',
+        });
+      }
+      continue;
+    }
+
+    if (manifest.engineNode !== rootFloor) {
+      findings.push({
+        type: ERROR_TYPES.STRUCTURAL_VIOLATION,
+        path: manifest.path,
+        message: `engines.node is "${manifest.engineNode}" but the root manifest declares "${rootFloor}". Every package in this monorepo ships one floor; change the root and all packages together, never one of them.`,
+        severity: 'error',
+      });
+    }
+  }
+
+  return findings;
+}
+
+/** The subset of a package manifest this file reads. */
+interface RawManifest {
+  private?: boolean;
+  engines?: { node?: string };
+}
+
+async function readManifest(path: string): Promise<RawManifest | undefined> {
+  try {
+    return JSON.parse(await readFile(path, 'utf8')) as RawManifest;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Gate: the Node engine floor is declared once and agreed everywhere.
+ */
+async function validateEngineFloorAgreement(): Promise<void> {
+  const rootManifest = await readManifest(safePath.join(REPO_ROOT, PACKAGE_MANIFEST_FILENAME));
+  const packagesDir = safePath.join(REPO_ROOT, 'packages');
+
+  let entries;
+  try {
+    entries = await readdir(packagesDir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  const summaries: PackageManifestSummary[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+
+    const manifest = await readManifest(
+      safePath.join(packagesDir, entry.name, PACKAGE_MANIFEST_FILENAME),
+    );
+    if (manifest === undefined) continue;
+
+    summaries.push({
+      path: `packages/${entry.name}/${PACKAGE_MANIFEST_FILENAME}`,
+      isPrivate: manifest.private === true,
+      engineNode: manifest.engines?.node,
+    });
+  }
+
+  errors.push(...findEngineFloorDisagreements(rootManifest?.engines?.node, summaries));
+}
+
+/**
  * Main validation function
  */
 async function validate(): Promise<void> {
@@ -1429,6 +1569,7 @@ async function validate(): Promise<void> {
   await validateNothingTrackedUnderNeverCommittedDirs();
   await validateVendorClaimFreshness();
   await validateSeverityCountsRatchet();
+  await validateEngineFloorAgreement();
 
   printResults();
 

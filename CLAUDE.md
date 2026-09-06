@@ -594,7 +594,7 @@ Material for developers working on VAT itself (not for users of VAT) lives under
 
 - [vat-debugging.md](docs/contributing/vat-debugging.md) — reproducing VAT bugs, `VAT_ROOT_DIR` adopter testing, failing-test-first fixes before landing changes
 - [vat-install-architecture.md](docs/contributing/vat-install-architecture.md) — design landscape for VAT's install/uninstall surfaces; read before proposing new install methods
-- [command-lane-table.md](docs/contributing/command-lane-table.md) — which of the 69 commands enumerate the filesystem, through which of the three entry points, and which three only do so by spawning child processes; read before changing enumeration or the crawl routes
+- [command-lane-table.md](docs/contributing/command-lane-table.md) — which of the 71 commands enumerate the filesystem, through which of the four entry points, and which three only do so by spawning child processes; read before changing enumeration or the crawl routes
 - [content-routing.md](docs/contributing/content-routing.md) — where a piece of knowledge belongs: which committed file owns a design rationale, a measurement, or a ruling, and what to delete outright because git already holds it. Read before writing durable prose anywhere in `docs/`
 - [packages/lab/README.md](packages/lab/README.md) — the **quality lab**: a separate CLI that reports on a project and compares along one of three axes (which project, which version of it, which vat build). Read before adding any dev/QA/profiling verb — it owns that scope, and its [scope doc](packages/lab/docs/scope.md) decides what belongs there versus in `vat`
 
@@ -616,6 +616,8 @@ regressions nobody will catch — that is a merge concern, not a tooling inconve
 ## External Documentation Cache
 
 Cached copies of external guidance (e.g., Anthropic's skill-authoring best-practices doc) live under [`docs/external/`](docs/external/), each naming its source URL and fetch date in its preamble. See [`.claude/rules/external-doc-cache-refresh.md`](.claude/rules/external-doc-cache-refresh.md) for the refresh policy.
+
+Machine artifacts are cached here too — an upstream JSON Schema VAT validates its own output against, such as [`docs/external/ard/`](docs/external/ard/README.md). Those live in a subdirectory with a sibling `README.md` carrying the preamble the artifact has nowhere to put, and their refresh is a **byte diff** rather than a reading. The sibling names any upstream quirk VAT's code works around, so a refresh must re-check those specifically: a quirk that gets fixed upstream changes what VAT should emit. ⛔ Vendoring never justifies a version constant — recording "fetched on `<date>`; upstream declares `<version>`" is an external fact, but an integer deciding validity is the thing this file bans.
 
 ## Questions?
 

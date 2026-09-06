@@ -944,3 +944,93 @@ export {
   type ProjectionDocument,
 } from './projection/export.js';
 
+
+// ARD (Agentic Resource Discovery) entry emission — "emit, never depend".
+// ARD is v0.91, status Proposal: VAT builds entries out of surfaces it already
+// declares and never reads one back or derives behaviour from one. The Zod
+// schema here is what the emitter is written against; the vendored
+// `docs/external/ard/ard-entry.schema.json` stays the authority the test suite
+// judges emitted instances by. Two of the four surfaces derive NO media type,
+// because the specification names none for them — that refusal is the design,
+// not a gap. See docs/concepts/knowledge-interop-formats.md.
+export {
+  ARD_CONTEXT_URI,
+  ARD_DEFAULT_NAMESPACES,
+  ARD_IDENTIFIER_PATTERN_SOURCE,
+  ARD_NAME_SEGMENT_PATTERN,
+  ARD_PUBLISHER_SEGMENT_PATTERN,
+  ARD_SKILL_MEDIA_TYPE,
+  ARD_WELL_KNOWN_PATH,
+  ArdDerivationError,
+  ArdEntrySchema,
+  ArdManifestSchema,
+  ArdMetadataValueSchema,
+  ArdTrustManifestSchema,
+  buildArdEntries,
+  buildArdEntry,
+  buildArdManifest,
+  defaultArdNamespace,
+  deriveArdMediaType,
+  isArdIdentifier,
+  writeArdManifest,
+  type ArdEntry,
+  type ArdManifest,
+  type ArdSurface,
+  type ArdSurfaceKind,
+  type ArdTrustManifest,
+} from './ard/index.js';
+
+// The `ard:` config block itself. Exported beside the emitter because a caller
+// that assembles surfaces (the CLI does) needs the config type to hand to
+// `buildArdEntry`, and re-declaring it would be a second source of truth for a
+// shape `ProjectConfigSchema` already owns.
+export {
+  ArdConfigSchema,
+  ArdEntryOverridesSchema,
+  ArdTrustManifestConfigSchema,
+  type ArdConfig,
+  type ArdEntryOverrides,
+  type ArdTrustManifestConfig,
+} from './schemas/project-config.js';
+
+// OKF (Open Knowledge Format) bundle conformance — producer-side only.
+// A bundle is a DIRECTORY of markdown concepts (§3), so the population VAT
+// judges is spec-defined and maximal: every non-reserved `.md` beneath the
+// declared root. There is deliberately no include/exclude to narrow it — a glob
+// that matched fewer files would let VAT certify a bundle while a file it never
+// read broke conformance. §11's "a consumer MUST NOT reject ..." binds
+// consumers; VAT is tooling for publishers, so findings default to `error`.
+// The frontmatter schema is `.passthrough()` for the mirror-image reason: an
+// adopter's bundle is EXTERNAL data, and §4.1 forbids rejecting unknown keys.
+// See docs/concepts/knowledge-interop-formats.md.
+export {
+  OKF_FINDING_CODES,
+  discoverOkfBundle,
+  okfBundleRuns,
+  validateOkfBundle,
+  type OkfBundleFiles,
+  type OkfBundleReport,
+  type OkfBundleRunOptions,
+  type OkfFinding,
+  type OkfFindingCode,
+  type OkfSeverity,
+  type ValidateOkfBundleOptions,
+} from './okf/index.js';
+
+// The OKF concept-document frontmatter schema, and the `okf:` config block.
+// The schema also ships as a committed JSON Schema sibling
+// (`schemas/okf-concept-frontmatter.json`) so an adopter can point a
+// collection's `frontmatterSchema` at it through `resolveAssetReference` —
+// which is why tracking a future OKF revision is a file swap, not a code change.
+export {
+  OkfConceptFrontmatterSchema,
+  OkfSourceSchema,
+  type OkfConceptFrontmatter,
+  type OkfSource,
+} from './schemas/okf-concept.js';
+export {
+  OkfBundleConfigSchema,
+  OkfConfigSchema,
+  type OkfBundleConfig,
+  type OkfConfig,
+} from './schemas/project-config.js';

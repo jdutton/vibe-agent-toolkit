@@ -20,6 +20,13 @@ export type {
   TokenCounter,
 } from './interfaces/index.js';
 
+// Query support (what a provider can honour, and the refusal of everything else)
+export {
+  assertQuerySupported,
+  assertFiltersProducedConditions,
+  type QuerySupport,
+} from './query-support.js';
+
 // Schemas (Zod)
 export {
   CoreRAGChunkSchema,

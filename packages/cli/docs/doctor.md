@@ -12,7 +12,7 @@ providing actionable suggestions for any problems found.
 **Purpose:** Check environment and project setup health
 
 **What it checks:**
-1. Node.js version (>=20 required)
+1. Node.js version (>=22.13.0 required — the range comes from the CLI's own `engines.node`)
 2. Git installed and version
 3. Current directory is a git repository
 4. Configuration file exists (vibe-agent-toolkit.config.yaml)
@@ -96,7 +96,7 @@ Running diagnostic checks...
    Current: 0.1.0 — up to date
 
 ✅ Node.js version
-   v22.0.0 (meets requirement: >=20.0.0)
+   v22.13.0 (meets requirement: >=22.13.0)
 
 ✅ Git installed
    git version 2.43.0
@@ -152,7 +152,7 @@ When checks fail, doctor provides specific suggestions:
 
 ```
 ❌ Node.js version
-   v18.0.0 is too old. Node.js 20+ required.
+   v22.4.0 does not satisfy the required range. Node.js >=22.13.0 required.
    💡 Upgrade Node.js: https://nodejs.org/ or use nvm
 ```
 
@@ -248,7 +248,7 @@ fi
 
 ### Node.js Version Check
 
-- **Requirement:** Node.js 20 or higher
+- **Requirement:** Node.js >=22.13.0, read at runtime from the CLI's `engines.node` so this check cannot drift behind the floor. Checked against `process.version` — the interpreter running VAT — not against a spawned `node` from `PATH`, which differs under any version manager.
 - **Why:** VAT uses modern JavaScript features
 - **Fix:** Install Node.js from https://nodejs.org/ or use nvm
 

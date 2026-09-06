@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { PROJECTION_TABLES } from '../../resources/src/projection/table-registry.js';
+import { OkfConceptFrontmatterSchema } from '../../resources/src/schemas/okf-concept.js';
 import {
   EdgeResolutionRowSchema,
   EdgeRowSchema,
@@ -64,6 +65,30 @@ for (const spec of Object.values(PROJECTION_TABLES)) {
 }
 
 for (const [name, schema] of NON_TABLE_ROW_SCHEMAS) {
+  writeJsonSchema(name, schema);
+}
+
+/**
+ * Schemas that describe an EXTERNAL format rather than one of VAT's own rows.
+ *
+ * `okf-concept-frontmatter` is the OKF v0.2 concept-document shape. It is
+ * generated here alongside the projection schemas because the mechanism is the
+ * same — Zod is the single source of truth, the `.json` sibling is committed —
+ * but it belongs to a different category, and the categories must stay visible:
+ * a projection schema is `.strict()` because VAT writes those rows, and this one
+ * is `.passthrough()` because an adopter writes it and OKF §4.1 forbids
+ * rejecting unknown keys. Filing it with the rows would invite someone to
+ * "tighten it for consistency".
+ *
+ * It ships as a committed artifact so an adopter can point a collection's
+ * `frontmatterSchema` at it through `resolveAssetReference` — which is also why
+ * tracking a future OKF revision is a file swap rather than a code change.
+ */
+const EXTERNAL_FORMAT_SCHEMAS = [
+  ['okf-concept-frontmatter', OkfConceptFrontmatterSchema],
+] as const;
+
+for (const [name, schema] of EXTERNAL_FORMAT_SCHEMAS) {
   writeJsonSchema(name, schema);
 }
 

@@ -8,7 +8,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { SettingsConflict } from '../types.js';
 
-import { matchesPermissionRule } from './permission-matcher.js';
+import { matchesDenyRule } from './permission-matcher.js';
 import type { EffectiveSettings, ProvenanceRule } from './settings-merger.js';
 
 interface SkillFrontmatter {
@@ -142,6 +142,19 @@ function extractToolInput(tool: string): string {
   return tool.endsWith(')') ? tool.slice(idx + 1, -1) : tool.slice(idx + 1);
 }
 
+/**
+ * Whether a DENY rule blocks this tool call.
+ *
+ * 🔑 The lane is not incidental. Every rule reaching here comes from
+ * `effectiveSettings.permissions.deny`, and Claude Code's deny matching is not
+ * the mirror of its allow matching — a deny rule applies when ANY subcommand
+ * matches, reaches into nested commands, and matches past a leading assignment.
+ * Asking the allow-lane question here under-matches, and an under-match in this
+ * checker is silently reported to the adopter as "no conflict" for a tool their
+ * org policy actually blocks. `matchesDenyRule` is the entry point that asks the
+ * right question; `matchesPermissionRule` takes the lane explicitly and has no
+ * default, so this can never drift back by omission.
+ */
 function isToolBlocked(
   toolName: string,
   toolInput: string,
@@ -150,12 +163,12 @@ function isToolBlocked(
 ): boolean {
   if (toolInput === '*') {
     return (
-      matchesPermissionRule(toolName, '', rule, pluginDir) ||
+      matchesDenyRule(toolName, '', rule, pluginDir) ||
       rule === toolName ||
       rule.startsWith(`${toolName}(`)
     );
   }
-  return matchesPermissionRule(toolName, toolInput, rule, pluginDir);
+  return matchesDenyRule(toolName, toolInput, rule, pluginDir);
 }
 
 async function checkToolBlockingConflicts(

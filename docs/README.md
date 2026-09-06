@@ -23,6 +23,11 @@ VAT is opinionated about skill and plugin quality. Three docs articulate what we
 
 See also: [Skill Packaging Shapes](./architecture/skill-packaging.md) for the artifact shape terminology.
 
+## Concepts
+
+- **[Roots and Config](./concepts/roots-and-config.md)** - Canonical definitions for roots, project root, and config discovery
+- **[Knowledge Interop Formats](./concepts/knowledge-interop-formats.md)** - OKF and ARD: what a knowledge bundle is, and how agents discover published resources
+
 ## Guides
 
 - **[Collection Validation](./guides/collection-validation.md)** - Per-collection frontmatter validation with JSON Schemas
