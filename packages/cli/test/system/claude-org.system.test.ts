@@ -8,6 +8,8 @@
  * - Help text
  */
 
+import { homedir } from 'node:os';
+
 import { describe, expect, it } from 'vitest';
 
 import { executeCli, executeCliAndParseYaml, getBinPath } from './test-common.js';
@@ -32,6 +34,22 @@ async function expectAdminKeyError(args: string[]): Promise<void> {
   const result = await runOrgWithoutKeys(args);
   expect(result.status).toBe(2);
   expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
+}
+
+/**
+ * Expect exit 2 naming the REGULAR key — and never the admin key.
+ *
+ * `/v1/skills` authenticates with `ANTHROPIC_API_KEY` and never sends the admin key,
+ * so a workspace member holding only a regular key must be able to run these. Asserting
+ * the admin key is ABSENT is the whole point: the command previously demanded it at
+ * construction time and thereby refused every non-admin, and an assertion that accepted
+ * either message is what let that ship.
+ */
+async function expectSkillsKeyError(args: string[]): Promise<void> {
+  const result = await runOrgWithoutKeys(args);
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain('ANTHROPIC_API_KEY');
+  expect(result.stderr).not.toContain('ANTHROPIC_ADMIN_API_KEY');
 }
 
 /** Expect exit 1 with not-yet-implemented stub for the given command name. */
@@ -59,14 +77,8 @@ describe('vat claude org', () => {
   });
 
   describe('missing regular API key for skills', () => {
-    it('org skills list exits 2 with API key message', async () => {
-      const result = await runOrgWithoutKeys(['skills', 'list']);
-      expect(result.status).toBe(2);
-      // Either message is acceptable — depends on which key is checked first
-      expect(
-        result.stderr.includes('ANTHROPIC_API_KEY') ||
-          result.stderr.includes('ANTHROPIC_ADMIN_API_KEY'),
-      ).toBe(true);
+    it('org skills list exits 2 naming the regular key, not the admin key', async () => {
+      await expectSkillsKeyError(['skills', 'list']);
     });
   });
 
@@ -97,12 +109,72 @@ describe('vat claude org', () => {
 
   describe('implemented skills commands (key errors without credentials)', () => {
     it.each([
-      { cmd: 'skills install', args: ['skills', 'install', './fake-skill'] },
       { cmd: 'skills delete', args: ['skills', 'delete', 'skill_abc123'] },
       { cmd: 'skills versions list', args: ['skills', 'versions', 'list', 'my-skill'] },
       { cmd: 'skills versions delete', args: ['skills', 'versions', 'delete', 'my-skill', '1.0.0'] },
-    ])('org $cmd exits 2 with API key message when no key', async ({ args }) => {
-      await expectAdminKeyError(args);
+    ])('org $cmd exits 2 naming the regular key, not the admin key', async ({ args }) => {
+      await expectSkillsKeyError(args);
+    });
+
+    // Like `install`, `versions add` validates its source path before authenticating.
+    it('org skills versions add reports a missing source before any key check', async () => {
+      const result = await runOrgWithoutKeys(['skills', 'versions', 'add', 'skill_abc123', './fake-skill']);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('Source not found');
+      expect(result.stderr).not.toContain('ANTHROPIC_ADMIN_API_KEY');
+    });
+
+    // The whole point of the command is that it takes the skill id outright, so a
+    // missing id must be a usage error rather than something it tries to infer.
+    //
+    // The exact code, not `not.toBe(0)`: that assertion is satisfied by exit 1,
+    // which every command's --help publishes as "at least one error-severity
+    // finding" — a claim about a run that never started. USAGE_ERROR_EXIT_CODE is 2
+    // precisely so a wrapper can tell the two apart, and an assertion that accepts
+    // either cannot see the difference it exists to protect.
+    it('org skills versions add requires a skill id', async () => {
+      const result = await runOrgWithoutKeys(['skills', 'versions', 'add']);
+      expect(result.status).toBe(2);
+      expect(`${result.stderr}${result.stdout}`).toMatch(/missing required argument/i);
+    });
+
+    // `skills install` validates its source path BEFORE authenticating, so a bad path
+    // reports the path — the credential is not what is wrong yet. Pinned separately so
+    // the ordering is deliberate rather than incidental.
+    it('org skills install reports a missing source before any key check', async () => {
+      const result = await runOrgWithoutKeys(['skills', 'install', './fake-skill']);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('Source not found');
+      expect(result.stderr).not.toContain('ANTHROPIC_ADMIN_API_KEY');
+    });
+
+    /**
+     * A usage mistake must publish the document the command's help promises, on
+     * the exit code its contract publishes — not a Node crash dump.
+     *
+     * Measured before the fix: `node dist/bin.js claude org skills install` exited
+     * **1** with **0 bytes on stdout** and a stderr carrying ten frames of
+     * commander internals plus absolute $HOME paths. Both guards threw from the
+     * async Commander action, outside executeOrgCommand, and `bin.ts` parses
+     * synchronously — so the rejection reached no catch at all.
+     */
+    it.each([
+      { case: 'neither <source> nor --from-npm', args: ['skills', 'install'], message: 'Provide a <source> path' },
+      {
+        case: 'both <source> and --from-npm',
+        args: ['skills', 'install', './some-skill', '--from-npm', 'pkg@1.0.0'],
+        message: 'Provide either <source> or --from-npm',
+      },
+    ])('org skills install with $case exits 2 with a YAML error document', async ({ args, message }) => {
+      const result = await runOrgWithoutKeys(args);
+
+      expect(result.status).toBe(2);
+      expect(result.stdout).toContain('status: error');
+      expect(result.stdout).toContain(message);
+      // No stack dump, and no absolute home directory anywhere in the output.
+      // A literal, not a regex: a V8 stack frame is four spaces then `at `.
+      expect(result.stderr).not.toContain('    at ');
+      expect(`${result.stdout}${result.stderr}`).not.toContain(homedir());
     });
   });
 
