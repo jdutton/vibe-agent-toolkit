@@ -60,7 +60,7 @@ export type ExternalUrlValidation = z.infer<typeof ExternalUrlValidationSchema>;
  */
 export const CollectionValidationSchema = z.object({
   frontmatterSchema: z.string().optional()
-    .describe('Path to JSON Schema file for frontmatter validation (relative to config file or package reference like @vibe-agent-toolkit/schemas/skill.v1.json)'),
+    .describe('Path to JSON Schema file for frontmatter validation (relative to config file or package reference like @vibe-agent-toolkit/agent-skills/schemas/skill-frontmatter.json)'),
   mode: ValidationModeSchema.optional()
     .describe('Validation mode (default: strict)'),
   checkUrlLinks: z.boolean().optional()
@@ -97,6 +97,33 @@ export type CollectionValidation = z.infer<typeof CollectionValidationSchema>;
  * Parsing one file with two parsers was considered and rejected: a blob has one
  * content key and one set of derived facts, so "both" is not a representable
  * answer.
+ *
+ * ## `mimeType` is ONE of three axes — do not enrich it to carry the other two
+ *
+ * "Make the mime type more specific than `text/markdown`" is a recurring
+ * request, and the answer is no. Three different questions get collapsed into
+ * it, and only the first is this field's:
+ *
+ * | Question | Answered by | Scope |
+ * |---|---|---|
+ * | What parser reads these bytes? | `mimeType` | per FILE, and it is in the content key |
+ * | Is this frontmatter well-formed for its kind? | `validation.frontmatterSchema` | per FILE, at validation time |
+ * | What KIND of resource is this to a discovery consumer? | a publish-time media type | per PUBLISHED UNIT |
+ *
+ * The third is the one people are reaching for, and it does not fit here
+ * because **a published unit is not a file**. A skill is a directory —
+ * `SKILL.md` plus its resources — published as one thing; an OKF bundle is a
+ * directory with a root. A media type naming that unit (`application/ai-skill+md`)
+ * would be the right value at the wrong granularity, and it cannot be carried by
+ * an include glob either, since a glob never names a root.
+ *
+ * A list of mime types is likewise not the answer — see the paragraph above.
+ * Widening this field to a list would also invert the conflict rule, which
+ * exists precisely to keep the value single so a config mistake is caught.
+ *
+ * So: this field means exactly one thing, "which parser runs", forever. Kind
+ * belongs wherever the publishable unit is declared. See
+ * `docs/concepts/knowledge-interop-formats.md`.
  */
 export const CollectionConfigSchema = z.object({
   include: z.array(z.string()).min(1)

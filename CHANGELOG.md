@@ -204,6 +204,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **New concept guide: [Knowledge interop formats](docs/concepts/knowledge-interop-formats.md)** —
+  what the Open Knowledge Format (OKF) and Agentic Resource Discovery (ARD) each are, how they
+  differ (OKF says what a knowledge package *is*; ARD says where an agent *finds* available
+  resources), and VAT's producer-side stance toward both. Written against the specifications read
+  directly rather than summarised, and it is explicit about the soft spots: `application/ai-skill+md`
+  appears in ARD exactly once, in a worked example, so a publisher emitting it is coining a media
+  type rather than adopting a registered one; and OKF conformance requires frontmatter on *every*
+  non-reserved `.md` in a bundle, so the cost of declaring a bundle is paid per file. `docs/README.md`
+  gains a **Concepts** section, which also closes a pre-existing reachability gap — `docs/concepts/`
+  was indexed nowhere.
+
 - **`vat resources query <sql> [path]`** — runs one read-only SQL statement against this tree's
   resource projection, so questions no command reports a field for get an answer (headings, link
   targets, what the parser refused). The statement must begin with `SELECT`, `WITH` or `VALUES`;
@@ -360,6 +371,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   vendor's four-hop bound; `buildClaudeContextPopulation()` assembles the lane. Dangling `@` imports
   surface as `CLOSURE_REFERENCE_UNRESOLVED`, escaping `@~/…` as `CLOSURE_REFERENCE_OUTSIDE_ROOT`.
   `closureProvenance()` reports which member of a closure pulled in which, and at what depth.
+
+- **The publish workflow now runs an `npm whoami` preflight before it publishes anything.** The
+  v0.2.0-rc.5 release burned two of its four attempts on credential failures the job only reported
+  after it had started pushing packages: an expired token surfaced as `E404` — npm answers an
+  unauthenticated `PUT` with "not found", so an expired token is indistinguishable from a package
+  that does not exist — and its replacement then failed `EOTP` for lacking 2FA bypass. Both are
+  answerable in one call before the first publish, and now are.
+
+- **`bun run pre-release` prints its `--allow-branch` tip as a runnable command** rather than naming
+  the flag and leaving the reader to reconstruct the invocation.
+
+- **`CollectionConfigSchema`'s docstring now states the three-axis rule for `mimeType`.** "Make the
+  mime type more specific than `text/markdown`" is a recurring request that collapses three
+  questions into one field: which parser reads these bytes (`mimeType`, per file, in the content
+  key), whether the frontmatter is well-formed (`validation.frontmatterSchema`, per file), and what
+  kind of resource this is to a discovery consumer (a media type, per *published unit*). The third
+  does not fit, because a published unit is not a file — a skill is a directory published as one
+  thing. `mimeType` means "which parser runs", and a list of them is not the answer either: widening
+  it would invert the conflict rule that exists to keep the value single. A stale example pointing at
+  a nonexistent `@vibe-agent-toolkit/schemas/skill.v1.json` is corrected in the same change.
+
+- **`docs/architecture/zones.md` records the evidence behind the modelled-but-unbuilt `wiki` lens** —
+  measured on a private multi-package adopter monorepo, dated, with its corpus — plus the two
+  constraints building it must satisfy: a wikilink's namespace is declared and never inferred, and
+  resolution may have to cross roots. It also notes that pruning `.claude/worktrees` is load-bearing
+  for any such measurement: an unpruned scan sees 55,203 markdown files instead of 1,945.
 
 - **(library) `resource_tags` is now populated.** `AgenticConventionContributor`, `classifyPath()`
   and `pluginRootsFrom()` are exported from `@vibe-agent-toolkit/resources`; each resource is tagged
