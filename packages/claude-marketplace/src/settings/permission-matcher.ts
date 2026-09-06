@@ -15,7 +15,12 @@
  * documents, not what the binary does, so a passing suite means "we match the
  * docs", never "we match `nA0()`".
  *
- * @vendor-claim reviewed=2026-09-06 verify=Re-run the matcher against the published behavior table at https://code.claude.com/docs/en/permissions — the `published table` suites in test/permission-matcher.test.ts encode it clause by clause, so re-reading the page and re-running them IS the check. That falsifies cheaply; it cannot CONFIRM equivalence to nA0(), which needs a decompile of a current binary. Bump reviewed= for a table re-read; note in the docstring if only the table was checked.
+ * ⛔ `reviewed=` is 2026-04-08 and stays there until someone decompiles a current binary. It was
+ * briefly bumped to 2026-09-06 on a table re-read — in the same commit that rewrote the instruction
+ * forbidding exactly that, so nothing outside the change ever adjudicated the rule. Restored. The
+ * 90-day warning this now raises is correct: nobody has confirmed equivalence to `nA0()` since.
+ *
+ * @vendor-claim reviewed=2026-04-08 verify=Re-read the published behavior table at https://code.claude.com/docs/en/permissions clause by clause against this file. ⛔ Do NOT treat a green `published table` suite as the check: it is a SUBSET, and these published clauses have no assertion behind them at all — redirections vs the `&` separator, tool-name globs, env-assignment stripping, deny/ask ANY-subcommand, nested commands, Edit/Read-only path lanes, `Bash(command:rm *)` being ignored, and `WebFetch(domain:…)`. A reviewer who only re-runs the suite ships every one of those. The table falsifies cheaply and can never CONFIRM equivalence to nA0(), which needs a decompile of a current binary. Bump reviewed= only for a decompile; a table-only re-read is noted in the docstring and leaves the date alone.
  *
  * Note the version discrepancy this pin creates: docs/skill-quality-and-compatibility.md
  * establishes plugin-loader semantics from Claude Code 2.1.126, while the matching
@@ -37,8 +42,8 @@
  *       wildcard — see {@link bareCommandFor}.
  * ✅ 2. Compound commands now split on `&&`, `||`, `;`, `|`, `|&`, `&` and newlines, and an allow
  *       rule must match EVERY subcommand — see {@link splitCompound}. This was the false POSITIVE,
- *       the one divergence with a dangerous direction. A dangling `&&`/`||` is unparseable and
- *       approves nothing.
+ *       the one divergence with a dangerous direction. A dangling `&&`/`||`, an unterminated quote
+ *       and an unclosed `(` are all unparseable and approve nothing.
  * ✅ 3. Wrappers are stripped — see {@link stripWrappers}. `command -v` and `nocorrect` are not,
  *       per the table. ⚠️ Which tokens belong to the wrapper is a documented HEURISTIC; read
  *       {@link isWrapperOwnToken} before trusting it on a flag with a non-numeric value.
@@ -57,14 +62,28 @@
  * ⛔ 7. MCP tool-name globs are unsupported. The table splits them: deny/ask accept a glob in the
  *       tool-name position, while allow accepts one only after a literal `mcp__<server>__` prefix.
  *
- * ## The structural gap this module cannot close alone
+ * ## 🚨 The structural gap: this module serves the ALLOW lane and its only caller is DENY
  *
- * 🔑 Matching is NOT symmetric between allow and deny/ask, and this module is not told which it is
- * serving. The table: an allow rule needs every subcommand to match, while deny and ask apply when
- * ANY subcommand matches, *"including a command nested inside a subshell, a command substitution,
- * or a control-flow body"*. Everything here implements the ALLOW lane, which under-matches for
- * deny — the unsafe direction for a deny check. A deny lane needs its own entry point that descends
- * into `$(…)` and control-flow bodies; do not reach for {@link splitCompound} to build it.
+ * 🔑 Matching is NOT symmetric between allow and deny/ask. The table: an allow rule needs EVERY
+ * subcommand to match, while deny and ask apply when ANY subcommand matches, *"including a command
+ * nested inside a subshell, a command substitution, or a control-flow body"*. Everything here
+ * implements the ALLOW lane.
+ *
+ * ⛔ An earlier version of this comment said the module "is not told which lane it is serving."
+ * That was never a structural fact — it was a fact nobody looked up. {@link matchesPermissionRule}
+ * has exactly ONE production call site, `settings-compat-checker.ts:158`, fed from `:262` with
+ * `effectiveSettings.permissions.deny`. The answer is: always deny.
+ *
+ * 🪤 So allow-lane correctness is, for the only caller, deny-lane UNDER-matching — the unsafe
+ * direction. Verified `false` (reported as "no conflict") where Claude Code blocks:
+ * `Bash(curl:*)` vs `curl https://x && echo done` (ANY subcommand); `Bash(rm *)` vs
+ * `FOO=bar rm -rf tmp/` (deny matches past any leading assignment); `Bash(gitx clean *)` vs
+ * `echo "$(gitx clean -f)"` (nested). Row 1 was caught before the compound split was added: that
+ * change is correct for allow and made DENY worse.
+ *
+ * The fix is a lane parameter plus a `matchesDenyRule` entry point with ANY-subcommand semantics,
+ * descent into `$(…)` and control-flow bodies, and unconditional leading-assignment stripping.
+ * Until then, do not reach for {@link splitCompound} to build a deny lane.
  *
  * Also reported and not re-measured here: allow-vs-deny depth asymmetry for single-segment relative
  * patterns, and a leading `/` anchoring at the settings source rather than cwd.
@@ -158,9 +177,8 @@ function normaliseWhitespace(s: string): string {
  * gives one worked example (`timeout 30 npm test`). Skipping flag-shaped and
  * duration-shaped tokens covers that example and the ordinary `nice -n 5` form,
  * but a wrapper flag taking a non-numeric value — `timeout -s KILL 30 cmd` —
- * stops the skip early and will not match. That is a known under-match: it
- * refuses a command Claude Code would allow, never the reverse, which is the
- * safe direction for a checker that reports on someone's config.
+ * stops the skip on the flag's own VALUE. See {@link stripOneWrapper} for why
+ * that case must refuse to strip rather than strip to the wrong place.
  */
 function isWrapperOwnToken(token: string): boolean {
   // `^\d[\d.]*[a-z]?$` rather than `^\d+(?:\.\d+)?[a-z]?$`: one leading digit
@@ -172,6 +190,14 @@ function isWrapperOwnToken(token: string): boolean {
 
 /**
  * Strip one leading wrapper, or return the command unchanged when none applies.
+ *
+ * 🚩 A flag's VALUE can land in the command position, and stripping to it was a
+ * FALSE PERMIT: in `timeout -s ls 30 rm -rf /`, `-s` is skipped as a flag, `ls`
+ * halts the skip, and `Bash(ls *)` was reported as permitting `ls 30 rm -rf /`.
+ * The heuristic cannot know a wrapper flag's arity, so when the skip halts on
+ * the token immediately after a flag, the only honest answer is to strip
+ * nothing. That refuses `timeout -s KILL 30 npm test` under `Bash(npm test *)`
+ * — an under-match, and the direction to keep.
  */
 function stripOneWrapper(command: string): string {
   const tokens = command.split(' ');
@@ -190,6 +216,9 @@ function stripOneWrapper(command: string): string {
 
   let index = 1;
   while (index < tokens.length - 1 && isWrapperOwnToken(tokens[index] as string)) index += 1;
+  // The token the skip halted on may be the VALUE of the flag before it, not a
+  // command. Unknowable from here, so strip nothing rather than strip wrong.
+  if (tokens[index - 1]?.startsWith('-') === true) return command;
   return tokens.slice(index).join(' ');
 }
 
@@ -214,6 +243,10 @@ function stripWrappers(command: string): string {
  * has nothing after it, such as in `npm test &&`, Claude Code treats the command
  * as unparseable and doesn't split it into subcommands for allow-rule matching."*
  *
+ * Unparseable here means a dangling `&&`/`||`, an unterminated quote, or an
+ * unclosed `(`. All three refuse, per *"when Claude Code can't fully parse a
+ * command, it asks for approval instead."*
+ *
  * ⚠️ ALLOW-lane semantics. Deny and ask rules are the mirror image — they apply
  * when ANY subcommand matches, *"including a command nested inside a subshell, a
  * command substitution, or a control-flow body"* — and this function does not
@@ -222,23 +255,36 @@ function stripWrappers(command: string): string {
  * be reused there without handling nesting first.
  */
 function splitCompound(command: string): string[] | undefined {
-  const { parts, dangling } = scanTopLevel(command.trim());
-  if (dangling) return undefined;
+  const parts = scanTopLevel(command.trim());
+  if (parts === undefined) return undefined;
   return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
-/** How far into `command` a quoted run starting at `start` extends, past its closer. */
-function endOfQuoted(command: string, start: number): number {
+/**
+ * How far into `command` a quoted run starting at `start` extends, past its
+ * closer — or `undefined` when the quote is never closed.
+ *
+ * ⚠️ The `undefined` is load-bearing and must never be softened into "the rest
+ * of the string is quoted". That was the original behaviour and it was a FALSE
+ * PERMIT: it made every separator after an odd quote invisible, so
+ * `Bash(echo *)` approved `echo hi # don't⏎rm -rf /` — the apostrophe being the
+ * entire difference between that and a correct refusal. See {@link scanTopLevel}.
+ */
+function endOfQuoted(command: string, start: number): number | undefined {
   const quote = command[start];
   let index = start + 1;
   while (index < command.length) {
     const char = command[index];
-    // Inside single quotes a backslash is literal, per POSIX.
+    // Inside single quotes a backslash is literal, per POSIX. Bash's `$'…'`
+    // form does honour `\'`, which this does not read, so `echo $'a\'b'` scans
+    // as an unterminated quote and is REFUSED. That is a known under-match and
+    // it is the direction to keep: honouring the escape without also tracking
+    // the `$` prefix would re-open the false permit above.
     if (char === '\\' && quote === '"') index += 2;
     else if (char === quote) return index + 1;
     else index += 1;
   }
-  return command.length; // Unterminated quote: the rest of the string is quoted.
+  return undefined; // Unterminated quote: the command cannot be fully parsed.
 }
 
 /**
@@ -263,10 +309,19 @@ function separatorAt(command: string, index: number): string | undefined {
  *
  * A single linear scan, so there is no backtracking to reason about.
  *
+ * 🚩 Every way this scan can fail resolves to `undefined`, never to a best
+ * guess. *"When Claude Code can't fully parse a command, it asks for approval
+ * instead."* An unterminated quote and an unbalanced `(` used to degrade into
+ * "assume the rest is quoted" and "stay inside the subshell forever"; both
+ * silenced separator detection for the remainder of the command, and both were
+ * therefore FALSE PERMITS — `Bash(npm test *)` approved `npm test # (⏎rm -rf /`.
+ * A graceful degradation in a permission checker has exactly one safe
+ * direction, and it is refusal.
+ *
  * @param command - The trimmed command text
- * @returns The top-level parts, and whether a `&&`/`||` was left dangling
+ * @returns The top-level parts, or `undefined` when the command is unparseable
  */
-function scanTopLevel(command: string): { parts: string[]; dangling: boolean } {
+function scanTopLevel(command: string): string[] | undefined {
   const parts: string[] = [];
   let current = '';
   let depth = 0;
@@ -281,6 +336,7 @@ function scanTopLevel(command: string): { parts: string[]; dangling: boolean } {
     const separator = depth === 0 ? separatorAt(command, index) : undefined;
     if (separator === undefined) {
       const run = literalRunAt(command, index);
+      if (run === undefined) return undefined; // Unterminated quote.
       current += run;
       index += run.length;
       continue;
@@ -291,22 +347,29 @@ function scanTopLevel(command: string): { parts: string[]; dangling: boolean } {
     index += separator.length;
   }
 
-  parts.push(current);
+  if (depth !== 0) return undefined; // Unclosed `(` or `$(`.
   const dangling =
     lastSeparator !== undefined &&
     LOGICAL_SEPARATORS.has(lastSeparator) &&
     current.trim().length === 0;
-  return { parts, dangling };
+  if (dangling) return undefined;
+
+  parts.push(current);
+  return parts;
 }
 
 /**
  * The literal run beginning at `index` — a whole quoted section, a backslash
- * escape pair, or a single ordinary character. Never a separator: the caller
- * has already established that this position is not one.
+ * escape pair, or a single ordinary character — or `undefined` when a quote
+ * opens here and is never closed. Never a separator: the caller has already
+ * established that this position is not one.
  */
-function literalRunAt(command: string, index: number): string {
+function literalRunAt(command: string, index: number): string | undefined {
   const char = command[index] as string;
-  if (char === '"' || char === "'") return command.slice(index, endOfQuoted(command, index));
+  if (char === '"' || char === "'") {
+    const end = endOfQuoted(command, index);
+    return end === undefined ? undefined : command.slice(index, end);
+  }
   if (char === '\\' && index + 1 < command.length) return command.slice(index, index + 2);
   return char;
 }
@@ -356,6 +419,68 @@ export function classifyBashRule(content: string): BashRuleType {
   return 'exact';
 }
 
+/** The regex source for one wildcard: anything, including spaces. */
+const ANY_RUN = '.*';
+
+/** The rule spelling for a literal `*`. */
+const ESCAPED_STAR = String.raw`\*`;
+
+/**
+ * The regex source matching `text` literally — every metacharacter escaped,
+ * BACKSLASH INCLUDED.
+ *
+ * 🚩 The escape class this replaced omitted `\`, so a backslash in the rule
+ * survived into the compiled regex as the start of an escape sequence. That was
+ * a FALSE PERMIT: `Bash(a\b *)` matched `a b`, because `\b` compiled to a word
+ * boundary rather than to the two characters the rule author wrote. `\d`, `\s`,
+ * `\w` and `\B` all did the same, and any Windows path in a rule compiled to
+ * something other than itself.
+ */
+function escapeRegexLiteral(text: string): string {
+  return text.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+}
+
+/**
+ * Compile a wildcard rule's content into an anchored regex.
+ *
+ * `\*` is a literal star; every other `*` is a wildcard. A RUN of consecutive
+ * wildcards collapses to one `.*`, which permits exactly what the run permitted.
+ *
+ * 🚩 That collapse is not cosmetic. Adjacent `.*` backtrack polynomially, and
+ * both inputs here are attacker-reachable files this auditor reads — a
+ * `settings.json` permission entry and a `SKILL.md` `allowed-tools` entry.
+ * Measured before the collapse, rule `Bash(a**********z)` against `a` + n×`b`:
+ * n=20 → 228 ms, n=24 → 314 ms, n=28 → 1087 ms — doubling every ~4 characters,
+ * so a 40-character rule takes minutes. One `.*` is linear.
+ *
+ * ⚠️ A previous commit claimed to have "removed a super-linear pattern" here.
+ * It removed the SPLITTER's, and left this one — which it had just built.
+ */
+function compileWildcardRule(content: string): RegExp {
+  const parts: string[] = [];
+  let literal = '';
+  let index = 0;
+
+  while (index < content.length) {
+    if (content.startsWith(ESCAPED_STAR, index)) {
+      literal += '*';
+      index += ESCAPED_STAR.length;
+    } else if (content.charAt(index) === '*') {
+      if (literal.length > 0) parts.push(escapeRegexLiteral(literal));
+      literal = '';
+      if (parts.at(-1) !== ANY_RUN) parts.push(ANY_RUN);
+      index += 1;
+    } else {
+      literal += content.charAt(index);
+      index += 1;
+    }
+  }
+  if (literal.length > 0) parts.push(escapeRegexLiteral(literal));
+
+  // eslint-disable-next-line security/detect-non-literal-regexp -- every literal run goes through escapeRegexLiteral; the only unescaped construct in the source is this function's own ANY_RUN, so no rule text reaches the compiler raw
+  return new RegExp(`^${parts.join('')}$`);
+}
+
 /**
  * Parse a Bash rule content string into a ParsedBashRule for matching.
  */
@@ -364,20 +489,7 @@ export function parseBashRuleContent(content: string): ParsedBashRule {
   const type = classifyBashRule(normalised);
 
   if (type === 'wildcard') {
-    // Build anchored regex:
-    // 1. Escape all regex special chars except backslash (used for \* escape)
-    // 2. Replace unescaped * with .* (matches anything including spaces)
-    // 3. Replace \* with literal *
-    const escaped = normalised
-      // Escape regex special chars (except * and \)
-      .replaceAll(/[.+?^${}()|[\]]/g, String.raw`\$&`)
-      // Replace unescaped * with .*
-      .replaceAll(/(?<!\\)\*/g, '.*')
-      // Replace \* with literal *
-      .replaceAll(String.raw`\*`, String.raw`\*`);
-
-    // eslint-disable-next-line security/detect-non-literal-regexp -- regex built from sanitized wildcard pattern, not raw user input
-    return { type, content: normalised, regex: new RegExp(`^${escaped}$`) };
+    return { type, content: normalised, regex: compileWildcardRule(normalised) };
   }
 
   if (type === 'prefix') {

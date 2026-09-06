@@ -549,6 +549,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **The settings checker reported an unparseable Bash command as permitted.** An odd quote or an
+  unclosed `(` switched off separator detection for the rest of the command, so `Bash(echo *)`
+  approved `echo hi # don't` + newline + `rm -rf /`. Both now report unparseable — re-run any saved
+  permission report, because verdicts can flip from permitted to refused.
+
+- **A backslash in a permission rule compiled as a regex escape instead of as itself.**
+  `Bash(a\b *)` reported `a b` as permitted, and any rule holding a Windows path matched something
+  other than what it said. Re-check any rule containing a backslash.
+
+- **A wrapper flag's value was treated as the wrapped command**, so `Bash(ls *)` reported
+  `timeout -s ls 30 rm -rf /` as permitted. A wrapper carrying a flag with a non-numeric value is
+  now left unstripped and reported as not matching; `timeout 30 …` and `nice -n 5 …` are unchanged.
+
 - **Two supply-chain pins went stale and the dependency audit went red: `fast-uri` and `qs` are
   re-pinned to their patched releases.** New advisories landed against the exact versions the root
   `overrides` block was holding — `fast-uri` 3.1.5 (four advisories, CVSS 7.5) and `qs` 6.15.2 (two,

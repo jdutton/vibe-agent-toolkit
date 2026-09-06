@@ -212,6 +212,40 @@ describe('parseBashRuleContent', () => {
     expect(parsed.type).toBe(EXACT);
     expect(parsed.content).toBe(GIT_STATUS);
   });
+
+  // 🚩 A backslash in the rule used to survive unescaped into the compiled
+  // regex, so `\b` became a word boundary and `Bash(a\b *)` permitted `a b`.
+  // Every Windows path in a rule compiled to something other than itself.
+  it('escapes a backslash in the rule rather than compiling it as an escape', () => {
+    expect(matchesBashRule('a b', String.raw`Bash(a\b *)`)).toBe(false);
+    expect(matchesBashRule(String.raw`a\b c`, String.raw`Bash(a\b *)`)).toBe(true);
+    for (const sequence of [String.raw`\d`, String.raw`\s`, String.raw`\w`, String.raw`\B`]) {
+      expect(matchesBashRule('a1 c', `Bash(a${sequence} *)`)).toBe(false);
+    }
+  });
+
+  // `\*` is a literal star, not a wildcard — the behaviour a dead identity
+  // `.replaceAll('\\*', '\\*')` claimed to provide.
+  it('treats an escaped star as a literal star', () => {
+    expect(matchesBashRule('a* c', String.raw`Bash(a\* *)`)).toBe(true);
+    expect(matchesBashRule('ax c', String.raw`Bash(a\* *)`)).toBe(false);
+  });
+
+  // 🚩 Adjacent `.*` backtrack polynomially, and both inputs are attacker-
+  // reachable files this auditor reads (a settings.json permission, a SKILL.md
+  // allowed-tools entry). Measured on the uncollapsed form, `Bash(a**********z)`
+  // against `a` + n×`b`: n=20 → 228 ms, n=24 → 314 ms, n=28 → 1087 ms.
+  //
+  // Asserted on the regex SHAPE, not on a stopwatch: a duration threshold in a
+  // unit test adds a second, machine-decided requirement and goes red under
+  // load rather than on a regression.
+  it('collapses a run of wildcards to a single .*', () => {
+    const parsed = parseBashRuleContent('a**********z');
+    expect(parsed.regex?.source).toBe('^a.*z$');
+    expect(parsed.regex?.test('a' + 'b'.repeat(28) + 'z')).toBe(true);
+    // A run of wildcards permits exactly what one wildcard permits.
+    expect(parsed.regex?.test('a' + 'b'.repeat(28))).toBe(false);
+  });
 });
 
 // ============================================================================
@@ -314,6 +348,16 @@ describe('published table — compound commands', () => {
   });
 
   // Same class: a separator inside `$(…)` or `(…)` is not top level.
+  //
+  // ⛔ UNSOURCED — the one expectation in these `published table —` suites with
+  // no quoted sentence behind it. The page's ONLY nesting statement is the
+  // deny/ask one ("Deny and ask rules apply when any subcommand matches them,
+  // including a command nested inside a subshell, a command substitution, or a
+  // control-flow body"); it never says the ALLOW lane ignores nested commands.
+  // Reading the ANY-vs-EVERY asymmetry (real) as also a descends-vs-doesn't
+  // asymmetry (not stated) is an INFERENCE, and this assertion locks in the
+  // permissive half of it: it is why `echo $(rm -rf /)` matches `Bash(echo *)`.
+  // Do not cite this test as the source. Resolve it against the product.
   it('does not split inside a subshell or command substitution', () => {
     expect(matchesBashRule('echo $(ls | wc -l)', ECHO_STAR)).toBe(true);
   });
@@ -321,6 +365,46 @@ describe('published table — compound commands', () => {
   // An escaped separator is a literal character, not a split point.
   it('does not split on an escaped separator', () => {
     expect(matchesBashRule(String.raw`echo a\&\&b`, ECHO_STAR)).toBe(true);
+  });
+
+  // 🚩 Every separator assertion above expects `false`, so they would all still
+  // pass if the splitter refused every input it was given. These pin the
+  // POSITIVE direction: the separator must actually split, and each side must
+  // then be matched on its own.
+  it('splits at a separator rather than refusing the whole command', () => {
+    for (const sep of ['&&', '||', ';', '|', '|&', '\n']) {
+      expect(matchesBashRule(`npm test ${sep} npm run lint`, NPM_STAR)).toBe(true);
+      expect(matchesBashRule(`npm test ${sep} rm -rf /`, NPM_STAR)).toBe(false);
+    }
+  });
+
+  // "When Claude Code can't fully parse a command, it asks for approval instead."
+  //
+  // 🚩 Both forms below were FALSE PERMITS: an unterminated quote made the
+  // scanner treat the whole rest of the line as quoted, and an unbalanced `(`
+  // held it at depth > 0 forever. Either way every later separator became
+  // invisible and the rule's trailing wildcard swallowed whatever followed —
+  // the `rm -rf /` in each of these was reported as permitted by an `echo` or
+  // `npm` rule. Both "graceful degradations" degraded toward PERMITTING.
+  it('treats an unterminated quote as unparseable', () => {
+    expect(matchesBashRule("echo hi # don't\nrm -rf /", ECHO_STAR)).toBe(false);
+    expect(matchesBashRule('echo "unclosed\nrm -rf /', ECHO_STAR)).toBe(false);
+    expect(matchesBashRule(String.raw`echo $'a\'b' && rm -rf /`, ECHO_STAR)).toBe(false);
+    // The control: the same first command with the apostrophe removed parses,
+    // splits, and is refused on the merits rather than by luck.
+    expect(matchesBashRule('echo hi # dont\nrm -rf /', ECHO_STAR)).toBe(false);
+  });
+
+  it('treats an unbalanced parenthesis as unparseable', () => {
+    expect(matchesBashRule('npm test # (\nrm -rf /', NPM_STAR)).toBe(false);
+    expect(matchesBashRule('echo $(ls\nrm -rf /', ECHO_STAR)).toBe(false);
+  });
+
+  // The refusal has to stay narrow: a balanced subshell and a closed quote are
+  // still parseable, so the fix cannot be a blanket "refuse anything quoted".
+  it('still parses balanced parens and closed quotes', () => {
+    expect(matchesBashRule('echo (a; b)', ECHO_STAR)).toBe(true);
+    expect(matchesBashRule("echo 'a; b' && echo c", ECHO_STAR)).toBe(true);
   });
 });
 
@@ -349,5 +433,23 @@ describe('published table — wrappers', () => {
   it('strips bare xargs but not xargs with flags', () => {
     expect(matchesBashRule('xargs grep pattern', GREP_STAR)).toBe(true);
     expect(matchesBashRule('xargs -n1 grep pattern', GREP_STAR)).toBe(false);
+  });
+
+  // 🚩 A flag's VALUE can land in the command position. `timeout -s ls 30 rm -rf /`
+  // used to strip to `ls 30 rm -rf /`, so `Bash(ls *)` reported a FALSE PERMIT on
+  // a command that runs `rm -rf /`. The heuristic cannot know a wrapper flag's
+  // arity, so halting on the token right after a flag must strip nothing.
+  it('does not strip to a wrapper flag own value', () => {
+    expect(matchesBashRule('timeout -s ls 30 rm -rf /', LS_STAR)).toBe(false);
+    expect(matchesBashRule('nice -n rm 5 npm test', 'Bash(rm *)')).toBe(false);
+  });
+
+  // The cost of that refusal, stated so it is not mistaken for a bug: a wrapper
+  // flag with a non-numeric value now refuses rather than mis-strips.
+  it('refuses rather than guesses when a wrapper flag takes a value', () => {
+    expect(matchesBashRule('timeout -s KILL 30 npm test', NPM_TEST_STAR)).toBe(false);
+    // The documented forms are unaffected — the halt lands after a duration.
+    expect(matchesBashRule('timeout 30 npm test', NPM_TEST_STAR)).toBe(true);
+    expect(matchesBashRule('nice -n 5 npm test', NPM_TEST_STAR)).toBe(true);
   });
 });
