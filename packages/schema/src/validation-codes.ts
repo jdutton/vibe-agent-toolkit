@@ -201,17 +201,19 @@ export const CODE_REGISTRY = {
   // counter because it has no lines.
   //
   // Unlike its line-counting neighbours this threshold is NOT a VAT opinion. It is
-  // the Skills API's documented refusal ("Total upload size must be under 30 MB
-  // (uncompressed)"), so the finding names a real, external gate rather than a
-  // maintainability preference — and it is worth catching at build, where the
-  // author can still act, instead of at the end of an upload.
+  // the Skills API's own refusal — measured, not just read: an over-ceiling bundle
+  // returns `413 Request exceeds the maximum size`. So the finding names a real,
+  // external gate rather than a maintainability preference, and it is worth catching
+  // at build, where the author can still act, instead of at the end of an upload.
+  // The exact ceiling (30 MiB, not the decimal reading of the vendor's "30 MB") and
+  // the uploads that bracket it are documented at API_SKILL_MAX_UPLOAD_BYTES.
   //
   // `warning` rather than `error` because the ceiling is target-specific: a bundle
   // over it publishes and installs perfectly well as a Claude Code plugin, and VAT
   // has no API publish target to condition on yet. Promote it there when it exists.
   PACKAGED_SIZE_EXCEEDS_API_LIMIT: entry(
     'warning',
-    'The packaged skill exceeds the Anthropic Skills API upload ceiling of 30 MB uncompressed.',
+    'The packaged skill exceeds the Anthropic Skills API upload ceiling of 30 MiB uncompressed.',
     'Shrink the bundle: drop or externalise the largest files the message names — a runtime that a skill downloads or that its host already provides does not have to ship inside the skill. The ceiling applies to Skills API uploads only; a bundle over it still installs as a Claude Code plugin, so set severity.PACKAGED_SIZE_EXCEEDS_API_LIMIT to ignore if this skill is never published to the API.',
     'packaged_size_exceeds_api_limit',
   ),

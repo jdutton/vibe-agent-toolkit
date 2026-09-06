@@ -33,12 +33,15 @@ function writeBundle(files: Record<string, number>): string {
 }
 
 describe('API_SKILL_MAX_UPLOAD_BYTES', () => {
-  // The vendor writes "under 30 MB (uncompressed)" without saying MB or MiB. VAT
-  // reads it decimal, deliberately: that fires slightly early rather than waving
-  // through a bundle the upload will reject. Pinned so the reading cannot drift
-  // to mebibytes silently — the two differ by 1.4 MB.
-  it('is 30 million bytes, the decimal reading of the documented ceiling', () => {
-    expect(API_SKILL_MAX_UPLOAD_BYTES).toBe(30_000_000);
+  // The vendor writes "under 30 MB (uncompressed)" without saying MB or MiB, and the
+  // two readings differ by 1.46 MB. This is not a reading — it is the measurement:
+  // a 30,700,000-byte bundle was ACCEPTED by the live Skills API (which refutes the
+  // decimal reading outright) and 31,500,000 was refused 413, bracketing the ceiling
+  // onto 30 MiB. Pinned so it cannot drift back to decimal, which would re-introduce
+  // a false-positive warning on every bundle between 30.0 and 31.4 MB.
+  it('is 30 MiB, the measured ceiling — not the decimal reading of "30 MB"', () => {
+    expect(API_SKILL_MAX_UPLOAD_BYTES).toBe(31_457_280);
+    expect(API_SKILL_MAX_UPLOAD_BYTES).not.toBe(30_000_000);
   });
 });
 

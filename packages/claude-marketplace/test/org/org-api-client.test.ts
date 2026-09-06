@@ -10,11 +10,25 @@ const ENV_API_KEY = 'sk-ant-api-env-test';
 describe('OrgApiClient', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  describe('constructor validation', () => {
-    it('throws a clear error when admin key is missing', () => {
-      expect(() => new OrgApiClient({ adminApiKey: '' })).toThrow('ANTHROPIC_ADMIN_API_KEY');
+  describe('key requirements are per-surface, not per-client', () => {
+    // The two surfaces this client speaks to take DIFFERENT keys: /v1/organizations/*
+    // takes the admin key, /v1/skills takes a regular workspace key and never sees the
+    // admin key at all. So neither key can be a construction-time requirement — demanding
+    // the admin key up front locks a workspace member out of the skills endpoints their
+    // own key already authorizes, which is exactly the shape `vat claude org skills
+    // install` shipped with. Each requirement is asserted where the key is actually used.
+    it('constructs with only a regular API key, for the skills-endpoint caller', () => {
+      expect(() => new OrgApiClient({ apiKey: API_KEY })).not.toThrow();
     });
-    it('constructs without error when key is provided', () => {
+    it('lets a skills-only client build skills headers and send its own key', () => {
+      const client = new OrgApiClient({ apiKey: API_KEY });
+      expect(client.buildSkillsHeaders()['x-api-key']).toBe(API_KEY);
+    });
+    it('throws only when an ADMIN endpoint is reached without an admin key', () => {
+      const client = new OrgApiClient({ apiKey: API_KEY });
+      expect(() => client.buildAdminHeaders()).toThrow('ANTHROPIC_ADMIN_API_KEY');
+    });
+    it('constructs without error when the admin key is provided', () => {
       expect(() => new OrgApiClient({ adminApiKey: ADMIN_KEY })).not.toThrow();
     });
   });

@@ -38,20 +38,40 @@ import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema'
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 /**
- * The Skills API's documented refusal, verbatim: "Total upload size must be under
- * 30 MB (uncompressed)".
+ * The Skills API's refusal ceiling, in bytes. The vendor documents it as "Total
+ * upload size must be under 30 MB (uncompressed)" and the 413 says "requests up
+ * to 30MBs", neither of which says whether MB means 10^6 or 2^20 — a 1.4 MB gap.
  *
- * Read as decimal megabytes (30,000,000 bytes) rather than mebibytes
- * (31,457,280). The vendor writes "MB" and does not say which, and the two
- * readings differ by 1.4 MB. Decimal is the conservative choice for a check whose
- * whole job is to refuse before an upload does: it fires slightly early rather
- * than waving through a bundle the API will reject. The failure mode of being
- * wrong is a warning on a bundle that would have squeaked through, against an
- * author discovering the limit at the end of an upload.
+ * **This is measured, not read.** VAT first assumed decimal (30,000,000) as the
+ * conservative reading. Uploading against the live API disproved it:
  *
- * @vendor-claim reviewed=2026-09-06 verify=Re-read the "Skill structure and limits" section of https://platform.claude.com/docs/en/build-with-claude/skills-guide and confirm the ceiling is still "under 30 MB (uncompressed)"; if it states MB vs MiB explicitly, drop the decimal reading above and use what it says
+ * | Bundle content bytes | Result |
+ * |---|---|
+ * | 30,700,000 | **accepted** — above decimal 30 MB, so decimal is wrong |
+ * | 31,500,000 | 413 refused |
+ * | 35,900,338 | 413 refused |
+ *
+ * That brackets the ceiling to (30,700,000, 31,500,000], and 2^20 × 30 =
+ * 31,457,280 is the only round number in the window. So the limit is mebibytes,
+ * and the old decimal constant warned ~1.46 MB early — a false-positive band on
+ * every bundle between 30.0 and 31.4 MB, which is exactly where a big bundle
+ * lands.
+ *
+ * ## What this counts versus what the API counts
+ *
+ * The API measures the REQUEST; this check measures the bundle's file bytes.
+ * Multipart framing (a boundary and headers per part) makes the request a few
+ * hundred bytes larger, so a bundle within roughly a kilobyte under the ceiling
+ * can still be refused. That residue is deliberately not padded out with a fudge
+ * factor: an invented margin is a number nobody can re-derive, and the check
+ * already fires AT the ceiling rather than only above it.
+ *
+ * @vendor-claim reviewed=2026-09-06 verify=Re-measure rather than re-read — the docs do not state the unit. Upload two skill bundles via `vat claude org skills install`, one just under and one just over this constant, and confirm the first is accepted and the second returns 413. Adjust only if the bracket moves.
  */
-export const API_SKILL_MAX_UPLOAD_BYTES = 30_000_000;
+export const API_SKILL_MAX_UPLOAD_BYTES = 31_457_280;
+
+/** How the vendor writes the ceiling, for messages: their "30 MB" is 30 MiB. */
+const CEILING_LABEL = '30 MiB';
 
 /** Naive English pluralisation; every noun this file counts is regular. */
 function plural(noun: string, count: number): string {
@@ -160,12 +180,17 @@ export function checkPackagedSizeLimit(
   const tail = remainder > 0 ? `, and ${remainder} more ${plural('file', remainder)}` : '';
 
   const registryEntry = CODE_REGISTRY.PACKAGED_SIZE_EXCEEDS_API_LIMIT;
+  // Name the real ceiling the way the vendor does ("30 MB", meaning 30 MiB) so the
+  // author can match the message against the docs and the 413 they would have got.
+  // A caller-supplied limit is a test's, and reads better in the decimal units the
+  // totals are already reported in.
+  const ceiling = limitBytes === API_SKILL_MAX_UPLOAD_BYTES ? CEILING_LABEL : formatBytes(limitBytes);
   return [{
     severity: registryEntry.defaultSeverity,
     code: 'PACKAGED_SIZE_EXCEEDS_API_LIMIT',
     message:
       `Packaged skill is ${formatBytes(total)} across ${files.length} ` +
-      `${plural('file', files.length)}, over the ${formatBytes(limitBytes)} Anthropic Skills API ` +
+      `${plural('file', files.length)}, over the ${ceiling} Anthropic Skills API ` +
       `upload ceiling. Largest: ${named}${tail}`,
     // The bundle root, because the finding is about the bundle. Naming the
     // largest file here would claim that one file is the defect, which is only

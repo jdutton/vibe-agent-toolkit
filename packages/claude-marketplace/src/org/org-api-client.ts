@@ -63,9 +63,9 @@ export function buildMultipartFormData(
 }
 
 export interface OrgApiClientOptions {
-  /** Admin API key (sk-ant-admin...) — required for /v1/organizations/* */
-  adminApiKey: string;
-  /** Regular API key (sk-ant-api...) — required for /v1/skills */
+  /** Admin API key (sk-ant-admin...) — required for /v1/organizations/*, and ONLY for those. */
+  adminApiKey?: string;
+  /** Regular API key (sk-ant-api...) — required for /v1/skills, which never sees the admin key. */
   apiKey?: string;
 }
 
@@ -82,16 +82,19 @@ export interface ReportPaginationParams {
 }
 
 export class OrgApiClient {
-  private readonly adminApiKey: string;
+  private readonly adminApiKey: string | undefined;
   private readonly apiKey: string | undefined;
 
+  /**
+   * Neither key is required to construct a client, because this class fronts two
+   * surfaces with two different keys: `/v1/organizations/*` takes the admin key,
+   * `/v1/skills` takes a regular workspace key and never sees the admin key at all.
+   * A construction-time demand for either one locks out the caller who legitimately
+   * holds only the other — which is what made `vat claude org skills install` refuse
+   * to run for a workspace member whose regular key already authorized the upload.
+   * Each key is therefore required at the point it is actually sent.
+   */
   constructor(opts: OrgApiClientOptions) {
-    if (!opts.adminApiKey) {
-      throw new Error(
-        'ANTHROPIC_ADMIN_API_KEY is required for org administration commands.\n' +
-          'Set it in your environment: export ANTHROPIC_ADMIN_API_KEY=sk-ant-admin-...',
-      );
-    }
     this.adminApiKey = opts.adminApiKey;
     this.apiKey = opts.apiKey;
   }
@@ -101,6 +104,12 @@ export class OrgApiClient {
   }
 
   buildAdminHeaders(): Record<string, string> {
+    if (!this.adminApiKey) {
+      throw new Error(
+        'ANTHROPIC_ADMIN_API_KEY is required for org administration commands.\n' +
+          'Set it in your environment: export ANTHROPIC_ADMIN_API_KEY=sk-ant-admin-...',
+      );
+    }
     return {
       'x-api-key': this.adminApiKey,
       'anthropic-version': ANTHROPIC_VERSION,
@@ -223,10 +232,10 @@ export class OrgApiClient {
  * Throws with a clear message if the required key is missing.
  */
 export function createOrgApiClientFromEnv(): OrgApiClient {
-  const adminKey = process.env['ANTHROPIC_ADMIN_API_KEY'] ?? '';
+  const adminKey = process.env['ANTHROPIC_ADMIN_API_KEY'];
   const apiKey = process.env['ANTHROPIC_API_KEY'];
   return new OrgApiClient({
-    adminApiKey: adminKey,
+    ...(adminKey !== undefined && adminKey !== '' && { adminApiKey: adminKey }),
     ...(apiKey !== undefined && { apiKey }),
   });
 }

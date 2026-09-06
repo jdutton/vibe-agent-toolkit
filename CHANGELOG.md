@@ -195,9 +195,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one file — was invisible to both by construction. The reported instance is a 35.7 MB `.wasm`
   runtime bundled by three skills in one adopter marketplace, over the ceiling on its own before a
   byte of markdown counts. Unlike those two thresholds, which are VAT maintainability opinions the
-  vendor counter-signals, 30 MB is the Skills API's documented refusal ("Total upload size must be
-  under 30 MB (uncompressed)"), so this catches a real external gate at build time instead of at the
-  end of an upload. The message names the largest files, which is usually the whole diagnosis.
+  vendor counter-signals, this one is the Skills API's own refusal, verified against the live API:
+  an over-ceiling upload returns `413 Request exceeds the maximum size`. So it catches a real
+  external gate at build time instead of at the end of an upload. The ceiling is **30 MiB
+  (31,457,280 bytes)**, established by measurement rather than by reading "30 MB" — a
+  30,700,000-byte bundle was accepted (refuting the decimal reading) while 31,500,000 was refused. The message names the largest files, which is usually the whole diagnosis.
   `warning`, not `error`, because the ceiling is target-specific: a bundle over it still installs
   fine as a Claude Code plugin, and VAT has no API publish target to condition on yet.
 
@@ -559,7 +561,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **The `vat-skill-distribution` skill taught a config key that does not exist.** It showed
+- **`vat claude org skills *` demanded an admin key it never sends, locking every non-admin out of
+  the Skills API.** `OrgApiClient`'s constructor hard-required `ANTHROPIC_ADMIN_API_KEY`, so all four
+  skills commands (`list`, `install`, `delete`, `versions`) refused to start without it — while
+  `buildSkillsHeaders()` authenticates with `ANTHROPIC_API_KEY` alone and never reads the admin key
+  at all. The command's own `--help` said as much ("Requires ANTHROPIC_API_KEY (regular key, not
+  admin key)"), and `/v1/skills` is available to any workspace member, so upload was gated behind a
+  credential that neither the endpoint nor the code path uses. Each key is now required at the point
+  it is actually sent: a client built with only a regular key reaches the skills endpoints, and
+  `buildAdminHeaders()` raises the same clear error as before when an `/v1/organizations/*` call is
+  made without an admin key. Verified against the live API — `list` and `install` now succeed with a
+  regular workspace key. The existing tests could not have caught this: every one of them constructed
+  the client with an admin key, so none exercised the skills-only caller. It showed
   `skills.config.<name>.claudeWebTarget`, which the `.strict()` project-config schema refuses — so
   an agent following the published skill produced a config that failed to load on **every** vat
   command. Replaced with `files:` source→dest mappings, the real mechanism. The same section also
