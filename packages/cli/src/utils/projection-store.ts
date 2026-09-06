@@ -367,7 +367,12 @@ export function nodeSqliteFloorFailure(error: unknown): Error | undefined {
   if (!isFloor) return undefined;
   return new Error(
     'The projection store needs `node:sqlite`, which this Node does not have.'
-    + ` VAT requires Node >= 22.13.0, which is where \`node:sqlite\` arrived — you are on ${process.version}.`
+    // States the NODE fact (when the module arrived), never VAT's floor. The
+    // floor lives in `engines.node` and `vat doctor` derives it from there
+    // precisely so it has one home; restating it in a string would be the
+    // second copy that change exists to remove, and it would go stale silently
+    // the next time the floor moves.
+    + ` \`node:sqlite\` arrived in Node 22.13.0 — you are on ${process.version}.`
     + ' Upgrade Node to 22.13.0 or newer. Installing a package will not help:'
     + ' the module is built into Node, not published to npm.',
   );

@@ -204,6 +204,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Characterization tests pinning the markdown link-rewriting divergence**
+  (`packages/resources/test/link-grammar-divergence.test.ts`). `transformContent` and
+  `rewriteBodyLinks` disagree on an image inside a link, and the disagreement had been recorded in
+  both modules' docstrings while **both suites stayed green** — nothing mechanical read the prose,
+  and a third grammar had already appeared unnoticed. The tests pin current behaviour, state per
+  case which arm is wrong and what a fix would look like, and record the parsed-view root cause:
+  mdast reports one link (the outer href) while both regexes match the inner one, so
+  `transformContent` misses its own lookup and silently rewrites nothing.
+
 - **New concept guide: [Knowledge interop formats](docs/concepts/knowledge-interop-formats.md)** —
   what the Open Knowledge Format (OKF) and Agentic Resource Discovery (ARD) each are, how they
   differ (OKF says what a knowledge package *is*; ARD says where an agent *finds* available
@@ -372,6 +381,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   surface as `CLOSURE_REFERENCE_UNRESOLVED`, escaping `@~/…` as `CLOSURE_REFERENCE_OUTSIDE_ROOT`.
   `closureProvenance()` reports which member of a closure pulled in which, and at what depth.
 
+- **The Bash permission matcher now follows Claude Code's published behavior table, closing four
+  of seven known divergences.** `permission-matcher.ts` feeds `settings-compat-checker` and
+  `settings-conflict-analyzer`, so each divergence was a wrong answer about an adopter's permission
+  config. Fixed: a trailing ` *` now matches the bare command when it is the rule's only wildcard
+  (`Bash(ls *)` matches `ls`); compound commands now split on `&&`, `||`, `;`, `|`, `|&`, `&` and
+  newlines with an allow rule required to match **every** subcommand, so `Bash(safe-cmd *)` no
+  longer reports `safe-cmd && other-cmd` as permitted — that was the one divergence whose direction
+  was dangerous; a dangling `&&`/`||` is treated as unparseable and approves nothing; the documented
+  wrappers (`timeout`, `time`, `nice`, `nohup`, `stdbuf`, `command`, `builtin`, `noglob`, and bare
+  `xargs`) are stripped before matching, while `command -v` and `nocorrect` are not; and `:*` and
+  ` *` now resolve through one path, so `xargs` is no longer honoured on one spelling and not the
+  other. Each rule quotes the sentence it encodes and is pinned by a `published table — …` suite.
+
+  **Three divergences remain, and are now documented rather than merely listed:** leading
+  environment-assignment stripping is deliberately *not* implemented because the table does not
+  publish which variables count as known-safe, and guessing would produce false positives;
+  `PATH_TOOLS` is still over-broad; and MCP tool-name globs are unsupported. The module also now
+  states the structural gap behind all three — matching is asymmetric between allow and deny/ask,
+  and the module is not told which lane it is serving, so everything it implements is the allow
+  lane. A behaviour change for anyone calling `matchesBashRule` or `matchesPermissionRule`.
+
+- **`isSubsumedBy` no longer contradicts `matchesBashRule`, and a `:*` rule now subsumes what it
+  permits.** Two defects the review of the change above turned up. A `prefix` (`:*`) broad rule fell
+  through to `return false`, so it subsumed **nothing** — `Bash(npm run:*)` never made
+  `Bash(npm run lint)` redundant, and `settings-conflict-analyzer` is built entirely on this
+  function, so it silently under-reported. Separately, once `Bash(ls *)` began permitting bare `ls`,
+  subsumption had to learn the same rule or the two functions would answer one question two ways.
+  Both are pinned.
+
 - **The publish workflow now runs an `npm whoami` preflight before it publishes anything.** The
   v0.2.0-rc.5 release burned two of its four attempts on credential failures the job only reported
   after it had started pushing packages: an expired token surfaced as `E404` — npm answers an
@@ -381,6 +419,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`bun run pre-release` prints its `--allow-branch` tip as a runnable command** rather than naming
   the flag and leaving the reader to reconstruct the invocation.
+
+- **The `node:sqlite` error no longer restates VAT's Node floor.** It gives the durable Node fact —
+  the module arrived in 22.13.0 — instead of a copy of `engines.node` that would go stale the next
+  time the floor moves. The floor has one home, and `vat doctor` derives it from there; a string
+  repeating it was the same second-copy defect this release removes elsewhere.
 
 - **`CollectionConfigSchema`'s docstring now states the three-axis rule for `mimeType`.** "Make the
   mime type more specific than `text/markdown`" is a recurring request that collapses three

@@ -31,6 +31,13 @@ jobs:
       # `PUT` as a 404 that claims the package "is not in this registry", so a dead token
       # surfaces at the publish step as a bogus missing-package error, after the whole build
       # and pre-publish suite has already run. Check the credential before spending that.
+      #
+      # ⚠️ This catches an ABSENT or EXPIRED token, and nothing more. `whoami` is a READ, so
+      # a token that authenticates but cannot write — no publish grant, or 2FA enforced with
+      # no bypass, which is the `EOTP` that cost rc.5 its third attempt — passes this step and
+      # still fails at publish. A green preflight means "the credential exists", never "the
+      # publish will succeed". There is no cheap read that proves write access, so the gap is
+      # stated rather than papered over.
       - name: Verify npm credentials
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
