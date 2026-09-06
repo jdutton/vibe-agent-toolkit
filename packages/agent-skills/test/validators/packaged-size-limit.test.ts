@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   API_SKILL_MAX_UPLOAD_BYTES,
   checkPackagedSizeLimit,
+  describeOversizeBundle,
   formatBytes,
 } from '../../src/validators/packaged-size-limit.js';
 
@@ -114,5 +115,50 @@ describe('checkPackagedSizeLimit', () => {
     // A size check must never be the thing that fails a build; "VAT could not
     // look" is RESOURCE_UNREADABLE's job, not this code's.
     expect(checkPackagedSizeLimit(safePath.join(root, 'absent'), LIMIT)).toEqual([]);
+  });
+});
+
+describe('describeOversizeBundle', () => {
+  // `vat claude org skills install` refuses over-ceiling bundles BEFORE uploading,
+  // using this same builder, so an author meets one wording whether the finding
+  // reaches them at build time or at upload time. These pin the shared contract —
+  // if the uploader ever grows its own copy of this sentence, that is the drift
+  // this suite exists to make visible.
+  const oversize = [
+    { path: 'scripts/runtime.wasm', bytes: 35_700_000 },
+    { path: 'SKILL.md', bytes: 70_800 },
+    { path: 'resources/guide.md', bytes: 54_400 },
+    { path: 'resources/a.md', bytes: 10 },
+    { path: 'resources/b.md', bytes: 10 },
+  ];
+  const oversizeTotal = oversize.reduce((sum, f) => sum + f.bytes, 0);
+
+  it('leads with the largest files, which are usually the whole diagnosis', () => {
+    const message = describeOversizeBundle(oversize, oversizeTotal);
+    expect(message).toContain('scripts/runtime.wasm (35.7 MB)');
+    expect(message).toContain('SKILL.md (70.8 kB)');
+    expect(message).toContain('resources/guide.md (54.4 kB)');
+    // The rest are counted, not listed — a bundle this size has too many to name.
+    expect(message).toContain('and 2 more files');
+    expect(message).not.toContain('resources/a.md');
+  });
+
+  it('names the ceiling as the vendor writes it, so it matches the docs and the 413', () => {
+    // The vendor's "30 MB" is 30 MiB. Rendering the constant in decimal would print
+    // "31.5 MB" and leave the author unable to match this against either the
+    // documentation or the API's own refusal text.
+    expect(describeOversizeBundle(oversize, oversizeTotal)).toContain('over the 30 MiB');
+    expect(describeOversizeBundle(oversize, oversizeTotal)).not.toContain('over the 31.5 MB');
+  });
+
+  it('renders a caller-supplied limit in decimal, matching the totals beside it', () => {
+    // A non-default limit is a test's or a caller's, not the vendor's ceiling, so
+    // the MiB label would misattribute where the number came from.
+    expect(describeOversizeBundle(oversize, oversizeTotal, 1_000_000)).toContain('over the 1.0 MB');
+  });
+
+  it('does not say "1 files" when the bundle is a single file', () => {
+    expect(describeOversizeBundle([{ path: 'big.bin', bytes: 40_000_000 }], 40_000_000))
+      .toContain('across 1 file,');
   });
 });

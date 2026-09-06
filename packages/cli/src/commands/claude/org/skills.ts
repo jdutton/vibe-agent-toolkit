@@ -4,7 +4,13 @@
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import {   basename } from 'node:path';
 
-import { evalSuiteUnitPath, readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
+import {
+  API_SKILL_MAX_UPLOAD_BYTES,
+  describeOversizeBundle,
+  evalSuiteUnitPath,
+  formatBytes,
+  readDeclaredSkillName,
+} from '@vibe-agent-toolkit/agent-skills';
 import { buildMultipartFormData } from '@vibe-agent-toolkit/claude-marketplace';
 import type { MultipartFile, OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -215,9 +221,21 @@ async function uploadSkillDir(
 	}
 
 	const totalSize = files.reduce((sum, f) => sum + f.content.length, 0);
-	logger.info(`   ${dirName}: ${files.length} files, ${(totalSize / 1024).toFixed(1)}KB, title="${displayTitle}"`);
+	logger.info(`   ${dirName}: ${files.length} files, ${formatBytes(totalSize)}, title="${displayTitle}"`);
 	for (const excluded of collected.excluded) {
 		logger.info(`   Excluded from upload: ${excluded} (never published with a skill)`);
+	}
+
+	// Refuse over-ceiling bundles here rather than letting the API do it. The 413 is
+	// correct but arrives only after the whole body has gone over the wire (11s for a
+	// 30 MB bundle, measured) and says nothing about WHICH file is the problem. This
+	// is the same finding `PACKAGED_SIZE_EXCEEDS_API_LIMIT` raises at build time, in
+	// the same words, for the author who reached the upload without having run it.
+	// Measured on the collected files, so the exclusions reported just above are
+	// already accounted for — this is the bundle actually being sent.
+	if (totalSize >= API_SKILL_MAX_UPLOAD_BYTES) {
+		const sized = files.map(f => ({ path: f.filename, bytes: f.content.length }));
+		throw new Error(`${describeOversizeBundle(sized, totalSize)}. The API will refuse this upload.`);
 	}
 
 	return sendSkillUpload(client, displayTitle, files);

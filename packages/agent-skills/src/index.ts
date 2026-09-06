@@ -93,6 +93,12 @@ export { generateFixSuggestion } from './validators/validation-utils.js';
 export { detectKebabCaseViolation, type KebabCaseSurface } from './validators/kebab-case-detection.js';
 export { detectMissingRecommendedFields } from './validators/plugin-recommended-fields.js';
 export { detectPackagedAgentInstructionFiles } from './validators/agent-instruction-presence.js';
+export {
+  API_SKILL_MAX_UPLOAD_BYTES,
+  describeOversizeBundle,
+  formatBytes,
+  type SizedFile,
+} from './validators/packaged-size-limit.js';
 // The single construction site for a coded finding. Exported so a CLI lane that
 // discovers a finding of its own builds it from CODE_REGISTRY like every other
 // producer — a hand-rolled `{severity, code, message, fix, reference}` literal is

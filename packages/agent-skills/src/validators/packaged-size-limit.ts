@@ -81,7 +81,7 @@ function plural(noun: string, count: number): string {
 /** How many offenders the message names before it stops listing. */
 const LARGEST_FILES_NAMED = 3;
 
-interface SizedFile {
+export interface SizedFile {
   /** Path relative to the packaged skill root. */
   readonly path: string;
   readonly bytes: number;
@@ -152,6 +152,38 @@ function fileSizeOrUndefined(path: string): number | undefined {
 }
 
 /**
+ * The one sentence describing an over-ceiling bundle, shared by the build-time
+ * validator and by `vat claude org skills install`'s pre-flight refusal.
+ *
+ * Both say the same thing for the same reason, so neither owns the wording: the
+ * uploader's copy would otherwise drift from the validator's, and an author who
+ * met the warning at build would meet a differently-worded version of it at
+ * upload. It takes already-measured files rather than a directory because the
+ * uploader knows something the walker cannot — which files it EXCLUDED (evals,
+ * `node_modules`, `.git`) — and must describe the bundle it is actually sending.
+ */
+export function describeOversizeBundle(
+  files: readonly SizedFile[],
+  total: number,
+  limitBytes: number = API_SKILL_MAX_UPLOAD_BYTES,
+): string {
+  const largest = [...files].sort((a, b) => b.bytes - a.bytes).slice(0, LARGEST_FILES_NAMED);
+  const named = largest.map(file => `${file.path} (${formatBytes(file.bytes)})`).join(', ');
+  const remainder = files.length - largest.length;
+  const tail = remainder > 0 ? `, and ${remainder} more ${plural('file', remainder)}` : '';
+  // Name the real ceiling the way the vendor does ("30 MB", meaning 30 MiB) so the
+  // author can match the message against the docs and the 413 they would have got.
+  // A caller-supplied limit is a test's, and reads better in the decimal units the
+  // totals are already reported in.
+  const ceiling = limitBytes === API_SKILL_MAX_UPLOAD_BYTES ? CEILING_LABEL : formatBytes(limitBytes);
+  return (
+    `Packaged skill is ${formatBytes(total)} across ${files.length} ` +
+    `${plural('file', files.length)}, over the ${ceiling} Anthropic Skills API ` +
+    `upload ceiling. Largest: ${named}${tail}`
+  );
+}
+
+/**
  * Emit `PACKAGED_SIZE_EXCEEDS_API_LIMIT` when the packaged bundle at `outputDir`
  * is at or over the API upload ceiling.
  *
@@ -174,24 +206,11 @@ export function checkPackagedSizeLimit(
   const total = files.reduce((sum, file) => sum + file.bytes, 0);
   if (total < limitBytes) return [];
 
-  const largest = [...files].sort((a, b) => b.bytes - a.bytes).slice(0, LARGEST_FILES_NAMED);
-  const named = largest.map(file => `${file.path} (${formatBytes(file.bytes)})`).join(', ');
-  const remainder = files.length - largest.length;
-  const tail = remainder > 0 ? `, and ${remainder} more ${plural('file', remainder)}` : '';
-
   const registryEntry = CODE_REGISTRY.PACKAGED_SIZE_EXCEEDS_API_LIMIT;
-  // Name the real ceiling the way the vendor does ("30 MB", meaning 30 MiB) so the
-  // author can match the message against the docs and the 413 they would have got.
-  // A caller-supplied limit is a test's, and reads better in the decimal units the
-  // totals are already reported in.
-  const ceiling = limitBytes === API_SKILL_MAX_UPLOAD_BYTES ? CEILING_LABEL : formatBytes(limitBytes);
   return [{
     severity: registryEntry.defaultSeverity,
     code: 'PACKAGED_SIZE_EXCEEDS_API_LIMIT',
-    message:
-      `Packaged skill is ${formatBytes(total)} across ${files.length} ` +
-      `${plural('file', files.length)}, over the ${ceiling} Anthropic Skills API ` +
-      `upload ceiling. Largest: ${named}${tail}`,
+    message: describeOversizeBundle(files, total, limitBytes),
     // The bundle root, because the finding is about the bundle. Naming the
     // largest file here would claim that one file is the defect, which is only
     // true when it alone exceeds the ceiling.

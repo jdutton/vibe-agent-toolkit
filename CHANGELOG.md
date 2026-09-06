@@ -414,6 +414,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`vat claude org skills install` now refuses an over-ceiling bundle before uploading it, and
+  reports sizes in the units it labels.** The Skills API's `413` is correct but arrives only after
+  the whole body has crossed the wire — 11 s for a 30 MB bundle, measured — and names no file, so
+  an author learns they have a problem and not where it is. The command now raises the same finding
+  `PACKAGED_SIZE_EXCEEDS_API_LIMIT` gives at build time, in the same words (one shared builder, so
+  the two cannot drift), naming the largest files, in 12 ms. It measures the collected upload set,
+  so the exclusions it just reported (evals, `node_modules`, `.git`) are already accounted for.
+  Separately, the progress line divided by 1024 and labelled the result "KB", so a 35,900,338-byte
+  bundle printed as `35058.9KB`; it now prints `35.9 MB`.
+
 - **`eslint-plugin-sonarjs` upgraded 3.0.7 → 4.2.0, and its expanded rule set was adopted rather
   than switched off.** The bump was taken for a security reason (it retires three `minimatch`
   advisories — see Security), and it reported 98 new errors and 23 new warnings across 54 files.
