@@ -47,7 +47,7 @@ describe('summarizeOkfBundles', () => {
 
     expect(summary.status).toBe('no-bundles');
     expect(summary.findingCount).toBe(0);
-    expect(summary.errorCount).toBe(0);
+    expect(summary.issueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
   });
 
   it('names the config key to add, so the fix does not need a docs lookup', () => {
@@ -68,17 +68,23 @@ describe('summarizeOkfBundles', () => {
     const summary = summarizeOkfBundles([report('knowledge', [finding('error')])]);
 
     expect(summary.status).toBe('failed');
-    expect(summary.errorCount).toBe(1);
+    expect(summary.issueCounts.errors).toBe(1);
     expect(summary.findingCount).toBe(1);
   });
 
   it('passes, but still counts, when every finding is below error', () => {
+    // THE case the counts block exists for. A bundle lowered to `warning` via
+    // `okf.bundles.<name>.severity` reports `passed` and exits 0 while carrying
+    // real conformance findings — so the whole distribution is asserted, not
+    // just the error bucket. Assert it as one object: checking only
+    // `errors === 0` would pass just as happily if the warning and info
+    // findings had been dropped on the floor instead of counted.
     const summary = summarizeOkfBundles([
       report('knowledge', [finding('warning'), finding('info')]),
     ]);
 
     expect(summary.status).toBe('passed');
-    expect(summary.errorCount).toBe(0);
+    expect(summary.issueCounts).toEqual({ errors: 0, warnings: 1, info: 1 });
     expect(summary.findingCount).toBe(2);
   });
 
@@ -88,7 +94,7 @@ describe('summarizeOkfBundles', () => {
       report('b', [finding('error'), finding('warning')]),
     ]);
 
-    expect(summary.errorCount).toBe(2);
+    expect(summary.issueCounts).toEqual({ errors: 2, warnings: 1, info: 0 });
     expect(summary.findingCount).toBe(3);
     expect(summary.status).toBe('failed');
   });

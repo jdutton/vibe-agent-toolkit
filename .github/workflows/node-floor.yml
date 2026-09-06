@@ -64,11 +64,34 @@ jobs:
             exit 1
           fi
 
+      # Pinned to a full commit SHA, not a moving `@v2` tag: a tag is mutable and
+      # this is a third-party action, so `@v2` is a standing agreement to run
+      # whatever that owner points it at next. The SHA is v2.2.0. `actions/*`
+      # above stay on tags — they are first-party and exempt from the same rule.
       - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
+      # `--frozen-lockfile` so this job resolves the versions the lockfile names
+      # rather than re-resolving them — otherwise the answer to "does the floor
+      # hold" could drift with an upstream release rather than with this repo.
+      #
+      # `--ignore-scripts` blocks lifecycle scripts from DEPENDENCIES, which is
+      # the actual exposure: arbitrary code from the registry running at install
+      # time. It does not mean this job needs no lifecycle script — it needs
+      # exactly one, and the next step runs it explicitly instead.
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      # ⚠️ Load-bearing, and NOT boilerplate to be dropped alongside the flag
+      # above. Bun's workspace resolution is internal and invisible to Node, so
+      # this repo's own postinstall symlinks the workspace packages into
+      # node_modules/@vibe-agent-toolkit/ for anything spawned with `node`.
+      # Every command below is spawned with `node`, so without this they fail to
+      # resolve their own imports. Run as its own step because `--ignore-scripts`
+      # suppresses it: first-party, visible in the log, and auditable — which is
+      # what the rule about install-time scripts is actually asking for.
+      - name: Link workspace packages for Node resolution
+        run: bun run postinstall
 
       - name: Build packages
         run: bun run build

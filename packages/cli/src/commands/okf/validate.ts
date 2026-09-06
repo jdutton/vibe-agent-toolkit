@@ -15,7 +15,9 @@ import {
   parseConfigFile,
   validateOkfBundle,
   type OkfBundleReport,
+  type OkfFinding,
 } from '@vibe-agent-toolkit/resources';
+import type { SeverityCounts } from '@vibe-agent-toolkit/schema';
 import { findConfigFile } from '@vibe-agent-toolkit/utils';
 
 import { handleCommandError } from '../../utils/command-error.js';
@@ -33,7 +35,7 @@ interface OkfValidateReport {
   status: OkfValidateStatus;
   bundles: OkfBundleReport[];
   findingCount: number;
-  errorCount: number;
+  issueCounts: SeverityCounts;
   /** Present only when there was nothing to check; says what to declare. */
   notice?: string;
 }
@@ -61,36 +63,73 @@ export type OkfValidateStatus = 'passed' | 'failed' | 'no-bundles';
 export interface OkfValidateSummary {
   status: OkfValidateStatus;
   findingCount: number;
-  errorCount: number;
+  /**
+   * The severity distribution, published BESIDE the status rather than folded
+   * into it.
+   *
+   * Load-bearing here specifically because OKF severity is adopter-configurable
+   * per bundle (`okf.bundles.<name>.severity`). A project that lowers a bundle
+   * to `warning` gets `status: passed` and exit 0 for a bundle carrying real
+   * conformance findings — correct, and completely opaque from the status word
+   * alone. The distribution is the only thing in the report that distinguishes
+   * "nothing was found" from "everything found was downgraded".
+   */
+  issueCounts: SeverityCounts;
   notice?: string;
+}
+
+/**
+ * Count one bundle set's findings by severity.
+ *
+ * Not `countBySeverity` from `@vibe-agent-toolkit/schema`: that takes
+ * `ValidationIssue[]`, whose `code` is the shared `IssueCode` registry union,
+ * and an OKF finding's code is drawn from the specification's own vocabulary
+ * rather than that registry. The counts field is still typed as the shared
+ * `SeverityCounts`, so the SHAPE stays checked against the canonical one and a
+ * bucket cannot be added, renamed or dropped here alone.
+ *
+ * @param findings - Every finding across every bundle that was checked
+ * @returns The per-severity distribution
+ */
+function countOkfFindings(findings: readonly OkfFinding[]): SeverityCounts {
+  let errors = 0;
+  let warnings = 0;
+  let info = 0;
+  for (const finding of findings) {
+    if (finding.severity === 'error') {
+      errors += 1;
+    } else if (finding.severity === 'warning') {
+      warnings += 1;
+    } else {
+      info += 1;
+    }
+  }
+  return { errors, warnings, info };
 }
 
 /**
  * Decide the status word and the counts for a set of bundle reports.
  *
  * @param bundles - One report per bundle that was actually checked
- * @returns The status, the finding and error counts, and a notice when nothing
- *   was declared
+ * @returns The status, the finding count and severity distribution, and a
+ *   notice when nothing was declared
  */
 export function summarizeOkfBundles(bundles: readonly OkfBundleReport[]): OkfValidateSummary {
-  const findingCount = bundles.reduce((total, report) => total + report.findings.length, 0);
-  const errorCount = bundles.reduce(
-    (total, report) =>
-      total + report.findings.filter((finding) => finding.severity === 'error').length,
-    0,
-  );
+  const findings = bundles.flatMap((report) => report.findings);
+  const findingCount = findings.length;
+  const issueCounts = countOkfFindings(findings);
 
   if (bundles.length === 0) {
     return {
       status: 'no-bundles',
       findingCount,
-      errorCount,
+      issueCounts,
       notice:
         'No OKF bundles are declared, so nothing was checked. Declare one under `okf.bundles.<name>.root` in vibe-agent-toolkit.config.yaml; every non-reserved .md beneath that root is then checked for frontmatter carrying a non-empty `type`.',
     };
   }
 
-  return { status: errorCount > 0 ? 'failed' : 'passed', findingCount, errorCount };
+  return { status: issueCounts.errors > 0 ? 'failed' : 'passed', findingCount, issueCounts };
 }
 
 /**
@@ -139,7 +178,10 @@ export async function okfValidateCommand(
     } else {
       writeYamlOutput(report);
     }
-    process.exit(report.errorCount > 0 ? 1 : 0);
+    // Read from the counts the report PUBLISHES, not from the status word: an
+    // adopter who promotes or lowers a bundle's severity then gates on exactly
+    // the number a reader can see.
+    process.exit(report.issueCounts.errors > 0 ? 1 : 0);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'OKF validate', options.format);
   }

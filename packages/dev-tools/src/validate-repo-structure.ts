@@ -1075,6 +1075,18 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   // so an adopter who promotes the code to `error` gates on the same number the
   // report shows.
   'packages/cli/src/commands/claude/budget.ts',
+  // OKF conformance. Its severity is adopter-configurable PER BUNDLE
+  // (`okf.bundles.<name>.severity`), so a project that lowers a bundle to
+  // `warning` gets `status: passed` and exit 0 over real conformance findings —
+  // correct, and unreadable from the status word alone. `issueCounts` is what
+  // separates "nothing was found" from "everything found was downgraded", and
+  // the exit code is read from `issueCounts.errors` rather than from the status
+  // so the gate and the report can never disagree. The counts are built here
+  // rather than by `countBySeverity`, whose `ValidationIssue.code` is the shared
+  // registry union whereas an OKF code comes from the specification's own
+  // vocabulary; the field keeps the shared `SeverityCounts` TYPE, so the shape
+  // stays checked against the canonical one.
+  'packages/cli/src/commands/okf/validate.ts',
 ]);
 
 /**
