@@ -143,7 +143,11 @@ function collectOverrideOnlySurfaces(
         name,
         kind,
         reason:
-          `the ARD specification names no media type for a ${kind}, so VAT derives none. ` +
+          // No indefinite article: `kind` interpolates to `mcp-server` and
+          // `okf-bundle` as well as `skill`, so a hardcoded "a" is wrong for
+          // half the vocabulary and "a/an" cannot be chosen from the kind
+          // without a rule this message does not deserve.
+          `the ARD specification names no media type for surface kind "${kind}", so VAT derives none. ` +
           `Set \`ard.entries.${name}.type\` to advertise it.`,
       });
       continue;

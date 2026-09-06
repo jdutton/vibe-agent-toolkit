@@ -942,9 +942,19 @@ export const ArdTrustManifestConfigSchema = z.object({
 export type ArdTrustManifestConfig = z.infer<typeof ArdTrustManifestConfigSchema>;
 
 export const ArdConfigSchema = z.object({
-  publisher: z.string().regex(/^[a-z0-9.-]+$/i)
+  // The message spells out DOMAIN, because the field name alone reads as a
+  // display name and the bare regex failure says only "Invalid". An adopter's
+  // first attempt here is their organisation's name, spaces and capitals
+  // included, and the error has to be the thing that redirects them.
+  publisher: z.string().regex(
+    /^[a-z0-9.-]+$/i,
+    'ard.publisher must be a DOMAIN, not a display name — e.g. "example.com". Letters, digits, dots and hyphens only (regex: ^[a-z0-9.-]+$). It becomes the <publisher> segment of every entry URN.',
+  )
     .describe('Publisher domain, e.g. "example.com". Becomes the <publisher> segment of every entry URN and the anchor trustManifest.identity must align with.'),
-  namespace: z.string().regex(/^[a-z0-9._-]+$/i).optional()
+  namespace: z.string().regex(
+    /^[a-z0-9._-]+$/i,
+    'ard.namespace must be a single URN segment: letters, digits, dots, underscores and hyphens only (regex: ^[a-z0-9._-]+$).',
+  ).optional()
     .describe('URN namespace segment between publisher and name (default: "skills" for skills, "bundles" for OKF bundles)'),
   // Optional in the SCHEMA, required in PRACTICE, and the gap is worth stating.
   // ARD requires exactly one of `url` or `data` on every entry. `data` is the
