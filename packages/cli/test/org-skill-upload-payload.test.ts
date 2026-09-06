@@ -24,7 +24,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { API_SKILL_MAX_UPLOAD_BYTES } from '@vibe-agent-toolkit/agent-skills';
-import { ApiRequestError } from '@vibe-agent-toolkit/claude-marketplace';
+import { ApiRequestError, buildMultipartFormData } from '@vibe-agent-toolkit/claude-marketplace';
 import type { MultipartFile, OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
 import type { SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import {
@@ -41,12 +41,15 @@ import type { SkillUploadResult } from '../src/commands/claude/org/skills.js';
 import {
   buildUploadBodyOrRefuse,
   collectSkillUploadFiles,
+  EXISTING_VERSIONS_REFUSAL,
+  explainAnsweredNothing,
   installFromLocal,
   readCreateSkillResponse,
   readDeleteResponse,
   readSkillVersionResponse,
   resolveSourceArgument,
   summarizeNpmInstall,
+  withRemedy,
 } from '../src/commands/claude/org/skills.js';
 
 let tempDir: string;
@@ -296,6 +299,16 @@ function clientThatMustNotBeCalled(): OrgApiClient {
   return { uploadSkill: refuse, uploadSkillVersion: refuse } as unknown as OrgApiClient;
 }
 
+/** A client whose create call succeeds, for the paths that get as far as sending. */
+function clientReturningSkill(): OrgApiClient {
+  return {
+    uploadSkill: () => Promise.resolve({
+      id: 'skill_1', type: 'skill', display_title: 'small',
+      latest_version: '17', created_at: CREATED_AT,
+    }),
+  } as unknown as OrgApiClient;
+}
+
 /** The one heavy file most of these fixtures are built around. */
 const BLOB_PATH = 'big/blob.wasm';
 
@@ -304,9 +317,51 @@ function fileBytes(files: readonly MultipartFile[]): number {
   return files.reduce((sum, f) => sum + f.content.length, 0);
 }
 
+/**
+ * The file-content bytes that make the multipart body EXACTLY `target` bytes.
+ *
+ * Derived by asking the SHIPPED builder how much framing it puts around this
+ * exact part list, never by restating "156 bytes plus the filename" here: a
+ * second copy of that arithmetic would agree with the builder only by
+ * coincidence, and would keep agreeing right up until somebody changed a header.
+ * The boundary is randomly generated but constant in LENGTH, so the overhead is
+ * deterministic.
+ */
+function contentBytesForBodyOf(target: number, filename: string): number {
+  return target - buildMultipartFormData({}, [sizedFile(filename, 0)]).body.length;
+}
+
 describe('buildUploadBodyOrRefuse', () => {
-  it('refuses a bundle of exactly the ceiling', () => {
-    expect(() => buildUploadBodyOrRefuse({}, [sizedFile(BLOB_PATH,API_SKILL_MAX_UPLOAD_BYTES)]))
+  /**
+   * The ceiling is INCLUSIVE, and that is MEASURED against the live API rather
+   * than reasoned about:
+   *
+   * | raw file bytes | + framing | = body   | API result |
+   * |---|---|---|---|
+   * | 31,456,735 | 545 | **31,457,280** | `status: success` |
+   * | 31,456,736 | 545 | 31,457,281     | `413` |
+   *
+   * This pair used to assert the opposite — that the gate fires AT the ceiling —
+   * on the argument that doing so was the conservative reading. It is not
+   * conservative, it is wrong in the one direction that costs an operator an
+   * upload the API would have taken, with no way to tell that VAT and not
+   * Anthropic refused it.
+   *
+   * The BUILD-time lane keeps firing at its own ceiling and is right to: it
+   * weighs FILE bytes, and files totalling exactly the limit always frame up into
+   * a request LARGER than the limit. Two measures, two rules, on purpose.
+   */
+  it('accepts a body of EXACTLY the ceiling — the boundary is measured, not assumed', () => {
+    const content = contentBytesForBodyOf(API_SKILL_MAX_UPLOAD_BYTES, BLOB_PATH);
+    const multipart = buildUploadBodyOrRefuse({}, [sizedFile(BLOB_PATH, content)]);
+
+    expect(multipart.body).toHaveLength(API_SKILL_MAX_UPLOAD_BYTES);
+  });
+
+  it('refuses a body ONE BYTE over the ceiling', () => {
+    const content = contentBytesForBodyOf(API_SKILL_MAX_UPLOAD_BYTES, BLOB_PATH) + 1;
+
+    expect(() => buildUploadBodyOrRefuse({}, [sizedFile(BLOB_PATH, content)]))
       .toThrow(/upload ceiling/);
   });
 
@@ -398,28 +453,92 @@ describe('installFromLocal ceiling enforcement', () => {
     ).rejects.toThrow(/upload ceiling/);
   });
 
-  it('refuses an over-ceiling directory before contacting the API', async () => {
+  /**
+   * Doubles as the F7 pin: this run refuses LOCALLY, so no line printed before
+   * the refusal may claim an upload started. The measured complaint was a log
+   * reading `Uploading skill directory: …` immediately above a local size
+   * refusal — the operator was told about work that never happened.
+   */
+  it('refuses an over-ceiling directory before contacting the API, and never claims it uploaded', async () => {
     const skillDir = safePath.join(tempDir, 'over-ceiling-dir');
     writeSkillContent(skillDir, 'sample');
     writeFileSync(safePath.join(skillDir, 'runtime.wasm'), Buffer.alloc(API_SKILL_MAX_UPLOAD_BYTES));
+    const logger = recordingLogger();
 
     await expect(
-      installFromLocal(skillDir, undefined, clientThatMustNotBeCalled(), recordingLogger()),
+      installFromLocal(skillDir, undefined, clientThatMustNotBeCalled(), logger),
     ).rejects.toThrow(/upload ceiling/);
+
+    const log = logger.lines.join('\n');
+    expect(log).toContain('Packaging skill directory:');
+    expect(log).not.toMatch(/Uploading/);
   });
 
   it('sends an under-ceiling ZIP', async () => {
     const zipPath = safePath.join(tempDir, 'small.zip');
     writeFileSync(zipPath, Buffer.from('stand-in for zip bytes; nothing here parses them'));
-    const client = {
-      uploadSkill: () => Promise.resolve({
-        id: 'skill_1', type: 'skill', display_title: 'small',
-        latest_version: '17', created_at: CREATED_AT,
-      }),
-    } as unknown as OrgApiClient;
 
-    await expect(installFromLocal(zipPath, undefined, client, recordingLogger()))
+    await expect(installFromLocal(zipPath, undefined, clientReturningSkill(), recordingLogger()))
       .resolves.toMatchObject({ id: 'skill_1', version: '17' });
+  });
+});
+
+// ── What the progress log claims, and when ─────────────────────────────
+
+describe('the upload progress log', () => {
+  /**
+   * A ZIP's display title is the FILENAME — nothing reads the SKILL.md inside
+   * the archive — so `wiki-lint-v2.zip` publishes a skill titled `wiki-lint-v2`,
+   * a different skill from `wiki-lint`, and the API does not refuse it because
+   * display_title uniqueness is enforced only when the field is sent. VAT cannot
+   * cheaply read the declared name out of the archive (Node ships no ZIP
+   * reader), so the provenance is DISCLOSED rather than fixed, and this pins the
+   * disclosure.
+   */
+  it('says a ZIP took its display title from the filename', async () => {
+    const zipPath = safePath.join(tempDir, 'wiki-lint-v2.zip');
+    writeFileSync(zipPath, Buffer.from('stand-in for zip bytes'));
+    const logger = recordingLogger();
+
+    await installFromLocal(zipPath, undefined, clientReturningSkill(), logger);
+
+    const log = logger.lines.join('\n');
+    expect(log).toContain('Display title: "wiki-lint-v2" (from the ZIP filename');
+    expect(log).toContain('NOT from the SKILL.md inside it');
+    // Nothing had been sent when this printed, so it must not say "Uploading".
+    expect(log).toContain('Preparing ZIP:');
+  });
+
+  it('attributes an overridden title to --title', async () => {
+    const zipPath = safePath.join(tempDir, 'wiki-lint-v3.zip');
+    writeFileSync(zipPath, Buffer.from('stand-in for zip bytes'));
+    const logger = recordingLogger();
+
+    await installFromLocal(zipPath, 'Wiki Lint', clientReturningSkill(), logger);
+
+    expect(logger.lines.join('\n')).toContain('Display title: "Wiki Lint" (from --title)');
+  });
+
+  /** `1 files` was shipped. Every count this line prints is regular. */
+  it('counts one file as "1 file"', async () => {
+    const dir = safePath.join(tempDir, 'one-file-skill');
+    mkdirSyncReal(dir, { recursive: true });
+    writeAt(dir, 'SKILL.md', '---\nname: solo\ndescription: Sample.\n---\n\n# solo\n');
+    const logger = recordingLogger();
+
+    await installFromLocal(dir, undefined, clientReturningSkill(), logger);
+
+    expect(logger.lines.join('\n')).toContain('solo: 1 file,');
+  });
+
+  it('counts two files as "2 files"', async () => {
+    const dir = safePath.join(tempDir, 'two-file-skill');
+    writeSkillContent(dir, 'duo');
+    const logger = recordingLogger();
+
+    await installFromLocal(dir, undefined, clientReturningSkill(), logger);
+
+    expect(logger.lines.join('\n')).toContain('duo: 2 files,');
   });
 });
 
@@ -491,6 +610,93 @@ describe('a display_title already taken', () => {
     await expect(installFromLocal(
       smallSkillDir('five-hundred'), undefined, clientRejectingWith(notFour), recordingLogger(),
     )).rejects.not.toThrow(/versions add/);
+  });
+});
+
+// ── A delete refusal that has a specific next command ──────────────────
+
+describe('a skill that still has versions', () => {
+  /**
+   * Measured live, and the other half of a fix that only ever landed on the
+   * create path:
+   *
+   *   $ vat claude org skills delete skill_01YE6TZqhCcfnCeEcT3tFzH3
+   *   OrgSkillsDelete failed: API error 400: Cannot delete skill with existing
+   *   versions. Delete all versions first.
+   *
+   * The vendor's sentence is correct and names no VAT command. `--all` is the
+   * one that does both steps, and this command already implements it.
+   */
+  const vendor400 = new ApiRequestError(
+    'API error 400: Cannot delete skill with existing versions. Delete all versions first.',
+    400,
+    undefined,
+  );
+
+  /** What a `delete` run without `--all` carries. */
+  const remedies = [EXISTING_VERSIONS_REFUSAL];
+
+  it('names --all as the one-step path, and the by-hand commands after it', () => {
+    const message = (withRemedy(vendor400, remedies) as Error).message;
+
+    expect(message).toContain('--all');
+    expect(message).toContain('vat claude org skills versions delete');
+    expect(message).toContain('vat claude org skills versions list');
+    // The vendor's own words survive; the remedy is appended, never substituted.
+    expect(message).toContain('Cannot delete skill with existing versions');
+  });
+
+  it('adds nothing when this run already deleted the versions', () => {
+    // A `--all` run carries NO remedies, because pointing an operator who just
+    // watched --all delete every version back at --all is the loop this remedy
+    // exists to break. A refusal after it means something the version listing did
+    // not show, and the vendor's sentence is then the honest whole of it.
+    expect(withRemedy(vendor400, [])).toBe(vendor400);
+  });
+
+  it('leaves an unrelated 400 exactly as the API worded it', () => {
+    const unrelated = new ApiRequestError('API error 400: skill_id is malformed', 400, undefined);
+
+    expect(withRemedy(unrelated, remedies)).toBe(unrelated);
+  });
+
+  it('leaves a non-400 alone, even one that mentions versions', () => {
+    const notFound = new ApiRequestError(
+      'API error 404: no such skill, so it has no versions', 404, undefined,
+    );
+
+    expect(withRemedy(notFound, remedies)).toBe(notFound);
+  });
+});
+
+// ── A request the server never answered ────────────────────────────────
+
+describe('a transport failure on an upload', () => {
+  /**
+   * Observed once at the ceiling: `OrgSkillsInstall failed: socket hang up`,
+   * with the same input returning a clean 413 twice afterwards. The server drop
+   * is not ours to fix; what the client can add is the size it actually sent and
+   * the fact that a POST which failed with no status may still have created
+   * something. No threshold constant for "near the ceiling" — the two numbers
+   * are printed and the reader draws the conclusion.
+   */
+  it('reports the body it sent, the ceiling, and the duplicate risk', () => {
+    const hangup = new Error('socket hang up');
+
+    const explained = explainAnsweredNothing(hangup, 31_000_000) as Error;
+
+    expect(explained.message).toContain('socket hang up');
+    expect(explained.message).toContain('29.6 MiB');
+    expect(explained.message).toContain('30.0 MiB');
+    expect(explained.message).toContain('never replays a POST');
+    expect(explained.message).toContain('vat claude org skills list');
+    expect(explained.cause).toBe(hangup);
+  });
+
+  it('leaves a completed exchange alone — a 413 is a verdict, not a lost connection', () => {
+    const refused = new ApiRequestError('API error 413: requests up to 30MBs', 413, undefined);
+
+    expect(explainAnsweredNothing(refused, 31_457_281)).toBe(refused);
   });
 });
 

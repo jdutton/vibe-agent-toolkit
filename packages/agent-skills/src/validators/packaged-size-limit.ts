@@ -85,7 +85,25 @@ import { safePath } from '@vibe-agent-toolkit/utils';
  * The uploader therefore weighs the body it built rather than the sum of its
  * file bytes, and says so in its own message ({@link OversizeMeasure}). Neither
  * lane pads its threshold with a fudge factor: an invented margin is a number
- * nobody can re-derive, and both fire AT the ceiling rather than only above it.
+ * nobody can re-derive.
+ *
+ * ## The two lanes compare DIFFERENTLY, and that is the correct answer
+ *
+ * The ceiling is INCLUSIVE, measured: a request body of exactly 31,457,280 bytes
+ * (31,456,735 file bytes plus 545 of framing) returned `status: success`, and one
+ * byte more returned `413`. So:
+ *
+ * - **Request bytes: `>` refuses.** The uploader knows the exact body and must
+ *   not refuse one the API would take.
+ * - **File bytes: `>=` refuses** — this lane, {@link checkPackagedSizeLimit}.
+ *   Framing is never zero, so files totalling exactly the limit ALWAYS frame up
+ *   into a request larger than the limit and earn a real 413.
+ *
+ * An earlier version of this comment claimed "both fire AT the ceiling rather
+ * than only above it" and offered that as the conservative reading. It was
+ * reasoned, never measured, and the measurement above refutes it for the request
+ * lane. Do not harmonise the two operators: they are applied to different
+ * quantities and each is right about the one it can see.
  *
  * @vendor-claim reviewed=2026-09-06 verify=Re-measure rather than re-read — the docs do not state the unit. Upload two skill bundles via `vat claude org skills install`, one just under and one just over this constant, and confirm the first is accepted and the second returns 413. Adjust only if the bracket moves.
  */
@@ -429,6 +447,11 @@ export function checkPackagedSizeLimit(
   const { files, unweighed } = walkBundle(outputDir);
   const issues = unweighedIssues(unweighed);
   const total = files.reduce((sum, file) => sum + file.bytes, 0);
+  // `>=`, deliberately unlike the uploader's `>`. This weighs FILE bytes, and
+  // per-part framing is never zero, so a bundle whose files total exactly the
+  // limit is always a request LARGER than the limit — a real 413. See
+  // {@link API_SKILL_MAX_UPLOAD_BYTES} for the measured boundary and why the two
+  // operators must not be made to match.
   if (total < limitBytes) return issues;
 
   const registryEntry = CODE_REGISTRY.PACKAGED_SIZE_EXCEEDS_API_LIMIT;

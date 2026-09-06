@@ -171,7 +171,29 @@ export function readSkillVersionResponse(raw: unknown): SkillUploadResult {
 
 /**
  * Build the multipart request body for an upload, refusing it before anything is
- * sent when THAT BODY is at or over the API's upload ceiling.
+ * sent when THAT BODY is OVER the API's upload ceiling.
+ *
+ * 🔑 **The ceiling is INCLUSIVE, and that is measured rather than reasoned.** A
+ * request body of exactly {@link API_SKILL_MAX_UPLOAD_BYTES} bytes is ACCEPTED;
+ * one byte more is refused `413`:
+ *
+ * | raw file bytes | + framing | = body | live API |
+ * |---|---|---|---|
+ * | 31,456,735 | 545 | **31,457,280** | `status: success` |
+ * | 31,456,736 | 545 | 31,457,281 | `413` |
+ *
+ * So the comparison here is `>`, not `>=`. An earlier version of this code used
+ * `>=` on the argument that firing AT the ceiling was the conservative reading —
+ * an argument that was never measured, and the measurement above refutes it. It
+ * is not conservative: it refuses a body the API takes, and the operator has no
+ * way to tell that VAT and not Anthropic said no.
+ *
+ * ⚠️ **The build-time lane deliberately differs, and must not be "harmonised"
+ * with this one.** `checkPackagedSizeLimit` fires when FILE BYTES reach the same
+ * number — `>=` — because framing is never zero, so files totalling exactly the
+ * limit always produce a request LARGER than the limit and therefore a real 413.
+ * Two lanes, two measures, two rules: **file bytes `>=` refuse; request bytes `>`
+ * refuse.** Both are right about the quantity each can see.
  *
  * THE one gate every upload passes through, whichever shape it started as. The
  * check used to live inside the directory-packaging step alone, so
@@ -204,7 +226,10 @@ export function buildUploadBodyOrRefuse(
 	files: readonly MultipartFile[],
 ): MultipartResult {
 	const multipart = buildMultipartFormData(fields, [...files]);
-	if (multipart.body.length >= API_SKILL_MAX_UPLOAD_BYTES) {
+	// `>`, not `>=`: a body of exactly the ceiling was ACCEPTED by the live API and
+	// one byte more was refused 413. The two measured rows, and why the build-time
+	// lane keeps `>=` on a different quantity, are in this function's doc comment.
+	if (multipart.body.length > API_SKILL_MAX_UPLOAD_BYTES) {
 		const sized = files.map(f => ({ path: f.filename, bytes: f.content.length }));
 		const measure = { of: 'upload-request' as const, bytes: multipart.body.length };
 		throw new Error(`${describeOversizeBundle(sized, measure)}. The API will refuse this upload.`);
@@ -213,7 +238,53 @@ export function buildUploadBodyOrRefuse(
 }
 
 /**
- * The remedy for the one vendor refusal that has a specific next command.
+ * A vendor refusal this CLI can answer with a specific next command.
+ *
+ * `matches` are ALL required, and are deliberately more than one: a single word
+ * like `version` appears in refusals that have nothing to do with this case, so
+ * each entry names both the subject the API is talking about and the verdict it
+ * reached about it.
+ */
+interface VendorRefusalRemedy {
+	/** Every pattern must match the API's message for the remedy to apply. */
+	readonly matches: readonly RegExp[];
+	/** Appended to the vendor's sentence — never substituted for it. */
+	readonly remedy: string;
+}
+
+/**
+ * A failed request, re-thrown with the command that answers it when — and only
+ * when — the API said one of the specific things listed by the caller.
+ *
+ * **What is matched, exactly:** an {@link ApiRequestError} whose `statusCode` is
+ * 400 and whose message satisfies every pattern of one {@link
+ * VendorRefusalRemedy}. Both live wordings are measured, not guessed:
+ * `400 Skill cannot reuse an existing display_title` and
+ * `400 Cannot delete skill with existing versions. Delete all versions first.`
+ *
+ * **How it fails safe:** anything that does not match is returned UNTOUCHED, so
+ * an unrelated 400 keeps the API's exact words and gets no misleading remedy. If
+ * the vendor rewords a refusal, the operator loses a hint — they never gain a
+ * wrong one. The remedy is appended, so the vendor's sentence survives in full.
+ *
+ * One mechanism, several refusals, and each call site passes only the refusals
+ * that are REACHABLE from it — a second copy of this matcher per case is how the
+ * two would come to disagree about what "fail safe" means.
+ */
+export function withRemedy(error: unknown, candidates: readonly VendorRefusalRemedy[]): unknown {
+	if (!(error instanceof ApiRequestError) || error.statusCode !== 400) return error;
+	const message = error.message;
+	const matched = candidates.find(c => c.matches.every(pattern => pattern.test(message)));
+	if (matched === undefined) return error;
+	return new ApiRequestError(
+		`${message}\n${matched.remedy}`,
+		error.statusCode,
+		error.retryAfterHeader,
+	);
+}
+
+/**
+ * The display title is taken.
  *
  * It tells the operator how to FIND the id and does not offer to find it for
  * them: `display_title` is unique only when the field is sent explicitly, so a
@@ -221,45 +292,124 @@ export function buildUploadBodyOrRefuse(
  * none, one, or several. Appending a version to the wrong match is silent and
  * destroys somebody else's skill, so the id is always the operator's to supply.
  */
-const DUPLICATE_TITLE_REMEDY =
-	'This workspace already has a skill with that display title, and `install` only ever CREATES. '
-	+ 'To ship a change to that skill, add a version to it: find its id with '
-	+ '`vat claude org skills list`, then run '
-	+ '`vat claude org skills versions add <skill-id> <source>`. '
-	+ 'VAT will not turn the title into an id for you — display_title is not unique in general '
-	+ '(the API enforces it only when the field is sent), so a title can match none, one, or '
-	+ 'several skills. To create a genuinely separate skill instead, pass a different --title.';
+const DUPLICATE_TITLE_REFUSAL: VendorRefusalRemedy = {
+	matches: [/display_title/i, /reuse|already|exist|duplicat|unique/i],
+	remedy:
+		'This workspace already has a skill with that display title, and `install` only ever CREATES. '
+		+ 'To ship a change to that skill, add a version to it: find its id with '
+		+ '`vat claude org skills list`, then run '
+		+ '`vat claude org skills versions add <skill-id> <source>`. '
+		+ 'VAT will not turn the title into an id for you — display_title is not unique in general '
+		+ '(the API enforces it only when the field is sent), so a title can match none, one, or '
+		+ 'several skills. To create a genuinely separate skill instead, pass a different --title.',
+};
 
 /**
- * A failed create, re-thrown with the command that answers it when — and only
- * when — the API said the display title is taken.
+ * The skill still has versions, so it cannot be deleted.
  *
- * **What is matched, exactly:** an {@link ApiRequestError} whose `statusCode` is
- * 400, whose message names `display_title`, and which also carries a
- * reuse/duplicate word. The live API's wording is
- * `400 Skill cannot reuse an existing display_title`, measured; all three
- * conditions must hold.
- *
- * **How it fails safe:** anything that does not match is returned UNTOUCHED, so
- * an unrelated 400 keeps the API's exact words and gets no misleading remedy. If
- * the vendor rewords the refusal, the operator loses a hint — they never gain a
- * wrong one. The remedy is appended, never substituted, so the vendor's sentence
- * survives in full.
- *
- * Only the CREATE path is wrapped. `versions add` sends no `display_title` at
- * all, and the uniqueness rule is a property of that field being sent — so this
- * refusal is unreachable there, and suggesting `versions add` to somebody already
- * running it would be nonsense.
+ * `--all` leads, because it IS the one-step path: the `--all` branch of this
+ * command fetches every version and deletes them before deleting the skill. The
+ * by-hand sequence follows for an operator who wants to see what is there first.
+ * Naming only `versions delete` would send them round a loop they can already
+ * ask the CLI to run.
  */
+export const EXISTING_VERSIONS_REFUSAL: VendorRefusalRemedy = {
+	matches: [/versions?/i, /cannot delete|delete all version|existing version/i],
+	remedy:
+		'A skill cannot be deleted while it still has versions. '
+		+ 'Re-run with `--all` — `vat claude org skills delete <skill-id> --all` deletes every '
+		+ 'version and then the skill, in one command. To do it by hand instead: list them with '
+		+ '`vat claude org skills versions list <skill-id>`, delete each with '
+		+ '`vat claude org skills versions delete <skill-id> <version>`, then delete the skill.',
+};
+
+/** Only the CREATE path can earn a duplicate-title refusal — see {@link uploadSkillDir}. */
 export function withDuplicateTitleRemedy(error: unknown): unknown {
-	if (!(error instanceof ApiRequestError) || error.statusCode !== 400) return error;
-	if (!/display_title/i.test(error.message)) return error;
-	if (!/reuse|already|exist|duplicat|unique/i.test(error.message)) return error;
-	return new ApiRequestError(
-		`${error.message}\n${DUPLICATE_TITLE_REMEDY}`,
-		error.statusCode,
-		error.retryAfterHeader,
+	return withRemedy(error, [DUPLICATE_TITLE_REFUSAL]);
+}
+
+/**
+ * The refusals a `skills delete` run WITHOUT `--all` can earn.
+ *
+ * The empty counterpart is not a missing case, it is the answer for a run that
+ * already used `--all`: this command's `--all` branch deletes every version
+ * before the skill, so an operator who just watched it do that does not need to
+ * be told to run `--all` — that is exactly the loop the remedy exists to break.
+ * A refusal after `--all` means something the version listing did not show, and
+ * the vendor's own sentence is then the honest whole of what VAT knows.
+ */
+const DELETE_REMEDIES: readonly VendorRefusalRemedy[] = [EXISTING_VERSIONS_REFUSAL];
+const DELETE_REMEDIES_AFTER_ALL: readonly VendorRefusalRemedy[] = [];
+
+/** DELETE one skill, explaining the refusals this invocation could earn. */
+async function deleteSkillOrExplain(
+	client: OrgApiClient,
+	skillId: string,
+	remedies: readonly VendorRefusalRemedy[],
+): Promise<unknown> {
+	try {
+		return await client.deleteSkill<unknown>(skillId);
+	} catch (error) {
+		throw withRemedy(error, remedies);
+	}
+}
+
+/**
+ * A failure that got NO answer from the server, re-thrown saying what was sent
+ * and what a retry would risk.
+ *
+ * The trigger is the ABSENCE of an {@link ApiRequestError}: every completed
+ * exchange — a 2xx, a 413 — arrives as one, so anything else is the transport
+ * giving up before a status existed. The live case is `socket hang up` on an
+ * upload near the ceiling; the same input then answered a clean 413 twice, so
+ * the drop is the server's and there is nothing on this side to fix.
+ *
+ * What IS worth saying is the part the operator cannot see: the body size that
+ * actually went out — a number this code is holding, not an estimate — and that
+ * a POST which failed without a status may or may not have created the skill.
+ * The client never replays one for exactly that reason, so the retry is the
+ * operator's, and it can leave two skills behind if the first attempt landed.
+ *
+ * **No threshold.** There is no constant here for "close to the ceiling" and
+ * there must not be: an invented margin is a number nobody can re-derive. The
+ * body size is printed beside the ceiling and the reader draws their own
+ * conclusion.
+ */
+export function explainAnsweredNothing(error: unknown, bodyBytes: number): unknown {
+	if (error instanceof ApiRequestError) return error;
+	const cause = error instanceof Error ? error.message : String(error);
+	return new Error(
+		`${cause}\nThe connection closed before the API answered, so this is not a verdict on the `
+		+ `upload. VAT sent a ${formatBytes(bodyBytes)} request body against a `
+		+ `${formatBytes(API_SKILL_MAX_UPLOAD_BYTES)} ceiling; the API has been observed to drop a `
+		+ 'connection near that ceiling instead of returning 413. Whether anything was created is '
+		+ 'unknown — VAT never replays a POST, because one that failed with no status may still '
+		+ 'have taken effect. Check what exists (`vat claude org skills list`, or '
+		+ '`vat claude org skills versions list <skill-id>`) before re-running this command.',
+		{ cause: error },
 	);
+}
+
+/**
+ * THE one call that crosses the wire, with both post-hoc explanations applied:
+ * the transport annotation (which describes the REQUEST) first, then whichever
+ * vendor refusals this endpoint can actually earn.
+ *
+ * Shared so the two upload endpoints cannot drift on either. Reading the
+ * response is deliberately OUTSIDE the try — a response-shape refusal is VAT's
+ * own verdict on a completed exchange and must never be dressed up as a
+ * transport failure.
+ */
+async function sendUpload<T>(
+	send: () => Promise<T>,
+	bodyBytes: number,
+	remedy: (error: unknown) => unknown,
+): Promise<T> {
+	try {
+		return await send();
+	} catch (error) {
+		throw remedy(explainAnsweredNothing(error, bodyBytes));
+	}
 }
 
 /**
@@ -291,11 +441,11 @@ async function sendSkillUpload(
 	files: MultipartFile[],
 ): Promise<SkillUploadResult> {
 	const multipart = buildUploadBodyOrRefuse({ display_title: displayTitle }, files);
-	try {
-		return readCreateSkillResponse(await client.uploadSkill<unknown>(multipart));
-	} catch (error) {
-		throw withDuplicateTitleRemedy(error);
-	}
+	return readCreateSkillResponse(await sendUpload(
+		() => client.uploadSkill<unknown>(multipart),
+		multipart.body.length,
+		withDuplicateTitleRemedy,
+	));
 }
 
 /**
@@ -541,8 +691,8 @@ async function prepareSkillUpload(
 	const contentBytes = files.reduce((sum, f) => sum + f.content.length, 0);
 
 	logger.info(
-		`   ${dirName}: ${files.length} files, ${formatBytes(contentBytes)} of file content, `
-		+ `title="${displayTitle}"`,
+		`   ${dirName}: ${files.length} ${files.length === 1 ? 'file' : 'files'}, `
+		+ `${formatBytes(contentBytes)} of file content, title="${displayTitle}"`,
 	);
 	for (const excluded of collected.excluded) {
 		logger.info(`   Excluded from upload: ${excluded} (never published with a skill)`);
@@ -602,7 +752,14 @@ async function uploadSkillVersionDir(
 	// Its absence also changes the body's length, which is why the ceiling is
 	// weighed on the body this endpoint sends rather than on the one `install` builds.
 	const multipart = buildUploadBodyOrRefuse({}, files);
-	return readSkillVersionResponse(await client.uploadSkillVersion<unknown>(skillId, multipart));
+	// No refusal remedy: `versions add` sends no `display_title`, so the
+	// duplicate-title 400 is unreachable here, and suggesting `versions add` to
+	// somebody already running it would be nonsense.
+	return readSkillVersionResponse(await sendUpload(
+		() => client.uploadSkillVersion<unknown>(skillId, multipart),
+		multipart.body.length,
+		error => error,
+	));
 }
 
 /**
@@ -786,8 +943,23 @@ export async function installFromLocal(
 		// while the check lived only in the directory-packaging path. It is gated in
 		// `sendSkillUpload` below, on the same measure (the multipart body) as every
 		// other shape; this line reports the file's own bytes, which are smaller.
-		logger.info(`Uploading ZIP: ${sourcePath} (${formatBytes(zipContent.length)} of file content)`);
-		logger.info(`Display title: ${displayTitle}`);
+		//
+		// "Preparing", not "Uploading": nothing has been sent at this point, and the
+		// very next step can refuse locally. A line that claims an upload started is
+		// the log telling the operator about work that never happened.
+		logger.info(`Preparing ZIP: ${sourcePath} (${formatBytes(zipContent.length)} of file content)`);
+		// Where the title came FROM, not just what it is. A ZIP's title is the
+		// filename — `wiki-lint-v2.zip` publishes a skill called `wiki-lint-v2`,
+		// which is a DIFFERENT skill from `wiki-lint` and is not refused, because
+		// display_title uniqueness is enforced only when the field is sent. A
+		// directory takes its title from SKILL.md instead, so the same tree zipped
+		// and unzipped can publish under two names. VAT cannot read the SKILL.md
+		// inside the archive: Node ships no ZIP reader, and adding a dependency to
+		// parse one here would mean owning central-directory, zip64 and zip-slip
+		// handling for a log line. So the provenance is DISCLOSED instead.
+		logger.info(`Display title: "${displayTitle}" (${titleOverride === undefined
+			? 'from the ZIP filename — NOT from the SKILL.md inside it; pass --title to set it'
+			: 'from --title'})`);
 
 		return sendSkillUpload(client, displayTitle, files);
 	}
@@ -796,7 +968,15 @@ export async function installFromLocal(
 		throw new Error(`Source must be a directory or .zip file: ${sourcePath}`);
 	}
 
-	logger.info(`Uploading skill directory: ${sourcePath}`);
+	// "Packaging", not "Uploading". Everything that follows this line — reading the
+	// config, collecting the file set, weighing the request — happens locally and
+	// can refuse locally, and an operator who read "Uploading skill directory: X"
+	// above a local size refusal was told about an upload that never started. The
+	// line stays HERE rather than moving after the point of no return, because
+	// naming the source before the work is what makes a failure attributable at
+	// all — `--from-npm` packages several skills in a loop, and a packaging error
+	// with no path above it names nothing.
+	logger.info(`Packaging skill directory: ${sourcePath}`);
 	return uploadSkillDir(client, sourcePath, titleOverride, logger);
 }
 
@@ -865,8 +1045,14 @@ Description:
   Accepts a built skill directory, a ZIP file, or an npm package.
   Requires ANTHROPIC_API_KEY (regular key, not admin key).
 
-  The skill uploads under the "name" its SKILL.md frontmatter declares, which
+  A DIRECTORY uploads under the "name" its SKILL.md frontmatter declares, which
   is also the default display_title.
+
+  A ZIP takes its display_title from the ZIP FILENAME — nothing reads the
+  SKILL.md inside the archive — so my-skill-v2.zip publishes a skill titled
+  "my-skill-v2", which is a separate skill from "my-skill" and is not refused as
+  a duplicate. The title and where it came from are printed as the upload runs.
+  Pass --title to set it explicitly.
 
   A skill's eval suite is its answer key and is never uploaded: whatever the
   governing vibe-agent-toolkit.config.yaml declares as this skill's test input
@@ -874,10 +1060,12 @@ Description:
   when no config is discoverable. node_modules/ and .git/ are never uploaded
   either. Each exclusion is reported in the output.
 
-  An upload is refused before anything is sent when it would reach the API's
+  An upload is refused before anything is sent when it would EXCEED the API's
   30 MiB ceiling. What is weighed is the multipart REQUEST — the file bytes plus
   about 156 bytes of framing per file — because that is what the API measures.
-  A directory and a ZIP go through that same gate.
+  The ceiling is inclusive, measured: a request body of exactly 31,457,280 bytes
+  is accepted and one byte more is refused 413. A directory and a ZIP go through
+  that same gate.
 
 Exit Codes:
   0 - Every skill uploaded
@@ -913,16 +1101,24 @@ Examples:
 				}
 
 				logger.info(`Deleting skill: ${skillId}`);
-				return readDeleteResponse(
-					await client.deleteSkill<unknown>(skillId), skillId, 'skill_deleted',
+				// The vendor's refusal here names no VAT command — measured live as
+				// `400 Cannot delete skill with existing versions. Delete all versions
+				// first.` — so the one that answers it is appended, unless this run
+				// already deleted them.
+				const raw = await deleteSkillOrExplain(
+					client, skillId, options.all === true ? DELETE_REMEDIES_AFTER_ALL : DELETE_REMEDIES,
 				);
+				return readDeleteResponse(raw, skillId, 'skill_deleted');
 			});
 		})
 		.addHelpText('after', `
 Description:
   Deletes a skill from the organization. Uses the Skills API (beta).
-  Use --all to auto-delete all versions before the skill.
   Requires ANTHROPIC_API_KEY (regular key, not admin key).
+
+  The API refuses to delete a skill that still has versions (400). Use --all to
+  delete every version and then the skill in one command; without it, delete the
+  versions yourself with \`vat claude org skills versions delete\` first.
 
 Example:
   $ vat claude org skills delete skill_abc123 --all
@@ -998,7 +1194,10 @@ Example:
 				if (!statSync(resolved).isDirectory()) {
 					throw new Error(`Source must be a skill directory: ${resolved}`);
 				}
-				logger.info(`Publishing new version of ${skillId} from: ${resolved}`);
+				// "Packaging", not "Publishing" — see `installFromLocal`. Measured: this
+				// line printed, then `Failed to load config: …`, and nothing had been
+				// sent. The announcement now describes the step it actually precedes.
+				logger.info(`Packaging new version of ${skillId} from: ${resolved}`);
 				return uploadSkillVersionDir(client, skillId, resolved, logger);
 			});
 		})

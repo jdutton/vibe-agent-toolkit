@@ -460,7 +460,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the whole body has crossed the wire — 11 s for a 30 MB bundle, measured — and names no file, so
   an author learns they have a problem and not where it is. The command now raises the same finding
   `PACKAGED_SIZE_EXCEEDS_API_LIMIT` gives at build time, in the same words (one shared builder, so
-  the two cannot drift), naming the largest files, in 12 ms. It measures the collected upload set,
+  the two cannot drift), naming the largest files, in 212–221 ms across three runs on a 29-file,
+  51.7 MB bundle. It measures the collected upload set,
   so the exclusions it just reported (evals, `node_modules`, `.git`) are already accounted for, and
   it applies to a `.zip` source as well as a directory — the one input that is by construction a
   single large binary. Separately, the progress line divided by 1024 and labelled the result "KB",
@@ -630,6 +631,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unique in general — the API enforces it only when the field is sent — so a title can match none,
   one, or several skills. The remedy is appended, never substituted, and is matched narrowly enough
   that an unrelated `400` keeps the API's own words and gains no misleading advice.
+
+- **`vat claude org skills delete` did not name the command that unblocks it.** The API refuses to
+  delete a skill that still has versions; the failure now points at `--all`, which deletes every
+  version and then the skill in one command, and at the by-hand `versions list`/`versions delete`
+  sequence. Suppressed when the run already used `--all`.
+
+- **The upload progress log claimed work that had not happened.** `vat claude org skills install`
+  and `versions add` printed `Uploading …` before packaging, so a local refusal appeared under a
+  line announcing an upload that never started; they now print `Packaging …`/`Preparing …`. The
+  per-bundle line also said `1 files`.
+
+- **A skill upload that lost its connection now says so, and says what is unknown.** The Skills API
+  can drop a connection near its ceiling instead of returning `413`. The failure now reports the
+  request size VAT sent against the ceiling, and warns that a `POST` which got no status may still
+  have created the skill — check `vat claude org skills list` before re-running.
+
+- **`vat claude org skills install <file>.zip` takes its display title from the FILENAME**, not from
+  the `SKILL.md` inside the archive, so `my-skill-v2.zip` publishes a separate skill titled
+  `my-skill-v2`. That was silent; the title and its provenance are now printed and documented in
+  `--help`. Pass `--title` to set it explicitly.
 
 - **`vat claude org` reported the wrong reason for any HTTP failure whose body was not JSON.** A
   `413` from an edge proxy and a `401` both surfaced as `Failed to parse API response`, so neither

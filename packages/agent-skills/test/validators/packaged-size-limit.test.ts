@@ -106,7 +106,16 @@ describe('checkPackagedSizeLimit', () => {
   // fixture in 'names the largest files' that happens to sum to exactly the limit
   // — which two readers missed, concluding that flipping `<` to `<=` would survive
   // the suite. It would not, and now the suite says so in its own name.
-  it('fires AT exactly the ceiling, not only above it', () => {
+  //
+  // ⚠️ This lane keeps `>=` while the UPLOAD lane was corrected to `>`, and the
+  // difference is deliberate. The API's ceiling is inclusive — a request body of
+  // exactly 31,457,280 bytes was accepted live, one byte more was refused 413 —
+  // so an uploader holding the real body must not refuse at the ceiling. This
+  // check holds FILE bytes, and per-part multipart framing is never zero, so
+  // files totalling exactly the limit always become a request over it. Firing
+  // here is therefore not conservatism, it is correct. Do not "harmonise" the
+  // two operators; they are applied to different quantities.
+  it('fires AT exactly the ceiling in FILE bytes, because the request will be larger still', () => {
     const dir = writeBundle({ 'SKILL.md': 400, 'scripts/runtime.wasm': 9_600 });
     expect(codesFor(dir, LIMIT)).toEqual(['PACKAGED_SIZE_EXCEEDS_API_LIMIT']);
     // One byte less is silence — the pair is what makes the boundary a boundary.
