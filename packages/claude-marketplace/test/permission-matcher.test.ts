@@ -10,12 +10,24 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyBashRule,
   isSubsumedBy,
+  matchesAllowRule,
   matchesBashRule,
+  matchesDenyRule,
   matchesPathRule,
   matchesPermissionRule,
   parseBashRuleContent,
   parsePermissionRule,
 } from '../src/settings/permission-matcher.js';
+
+// Every suite from here to the lane suites at the bottom of this file pins the
+// ALLOW lane, and says so by binding it once rather than repeating the argument
+// ~70 times. `matchesBashRule`'s `lane` is REQUIRED with no default precisely so
+// that a caller cannot leave the question unanswered; binding it here answers it
+// out loud. The deny/ask lane is exercised explicitly at the bottom, and the
+// lane-neutral cases (path resolution, tool-name comparison) are asserted in
+// every lane there.
+const allowsBash = (command: string, rule: string): boolean =>
+  matchesBashRule(command, rule, 'allow');
 
 // A plugin directory that is deliberately NOT process.cwd(): every path-lane
 // assertion below has to hold for a caller that passes its own root, which is
@@ -96,69 +108,69 @@ describe('classifyBashRule', () => {
 
 describe('matchesBashRule', () => {
   it('bare Bash matches any command', () => {
-    expect(matchesBashRule(NPM_RUN_LINT, 'Bash')).toBe(true);
-    expect(matchesBashRule(GIT_PUSH_ORIGIN_MAIN, 'Bash')).toBe(true);
+    expect(allowsBash(NPM_RUN_LINT, 'Bash')).toBe(true);
+    expect(allowsBash(GIT_PUSH_ORIGIN_MAIN, 'Bash')).toBe(true);
   });
 
   it('Bash(*) matches any command', () => {
-    expect(matchesBashRule(NPM_RUN_LINT, 'Bash(*)')).toBe(true);
-    expect(matchesBashRule(GIT_PUSH_ORIGIN_MAIN, 'Bash(*)')).toBe(true);
+    expect(allowsBash(NPM_RUN_LINT, 'Bash(*)')).toBe(true);
+    expect(allowsBash(GIT_PUSH_ORIGIN_MAIN, 'Bash(*)')).toBe(true);
   });
 
   it('exact rule matches same command', () => {
-    expect(matchesBashRule(NPM_RUN_LINT, BASH_NPM_RUN_LINT)).toBe(true);
-    expect(matchesBashRule('npm run test', BASH_NPM_RUN_LINT)).toBe(false);
+    expect(allowsBash(NPM_RUN_LINT, BASH_NPM_RUN_LINT)).toBe(true);
+    expect(allowsBash('npm run test', BASH_NPM_RUN_LINT)).toBe(false);
   });
 
   it('wildcard * matches spaces (git * matches git push origin main)', () => {
-    expect(matchesBashRule(GIT_PUSH_ORIGIN_MAIN, GIT_STAR)).toBe(true);
-    expect(matchesBashRule(GIT_STATUS, GIT_STAR)).toBe(true);
+    expect(allowsBash(GIT_PUSH_ORIGIN_MAIN, GIT_STAR)).toBe(true);
+    expect(allowsBash(GIT_STATUS, GIT_STAR)).toBe(true);
     // ⚠️ This used to assert `false` with the comment "no space after git", and
     // that PINNED divergence #1 rather than catching it. The published table:
     // *"A `*` at the end, with a space before it, also matches the bare
     // command."* The space rule it was reaching for is a different one — it
     // makes `ls` a whole word, so `Bash(ls *)` still refuses `lsof` (asserted
     // in the next test) — and conflating the two is what kept the bug green.
-    expect(matchesBashRule('git', GIT_STAR)).toBe(true);
+    expect(allowsBash('git', GIT_STAR)).toBe(true);
   });
 
   it('wildcard anchoring: Bash(ls *) does NOT match lsof', () => {
-    expect(matchesBashRule(LS_LA, LS_STAR)).toBe(true);
-    expect(matchesBashRule(LSOF, LS_STAR)).toBe(false);
+    expect(allowsBash(LS_LA, LS_STAR)).toBe(true);
+    expect(allowsBash(LSOF, LS_STAR)).toBe(false);
   });
 
   it('non-Bash rule does not match', () => {
-    expect(matchesBashRule(NPM_RUN_LINT, 'Edit')).toBe(false);
-    expect(matchesBashRule(NPM_RUN_LINT, 'Read(./.env)')).toBe(false);
+    expect(allowsBash(NPM_RUN_LINT, 'Edit')).toBe(false);
+    expect(allowsBash(NPM_RUN_LINT, 'Read(./.env)')).toBe(false);
   });
 
   it('normalises whitespace before matching', () => {
-    expect(matchesBashRule('npm  run  lint', BASH_NPM_RUN_LINT)).toBe(true);
+    expect(allowsBash('npm  run  lint', BASH_NPM_RUN_LINT)).toBe(true);
   });
 
   it('prefix rule matches base and base + args', () => {
-    expect(matchesBashRule('npm run', BASH_NPM_RUN_PREFIX)).toBe(true);
-    expect(matchesBashRule(NPM_RUN_LINT, BASH_NPM_RUN_PREFIX)).toBe(true);
-    expect(matchesBashRule('xargs npm run', BASH_NPM_RUN_PREFIX)).toBe(true);
-    expect(matchesBashRule('xargs npm run lint', BASH_NPM_RUN_PREFIX)).toBe(true);
-    expect(matchesBashRule('npm install', BASH_NPM_RUN_PREFIX)).toBe(false);
+    expect(allowsBash('npm run', BASH_NPM_RUN_PREFIX)).toBe(true);
+    expect(allowsBash(NPM_RUN_LINT, BASH_NPM_RUN_PREFIX)).toBe(true);
+    expect(allowsBash('xargs npm run', BASH_NPM_RUN_PREFIX)).toBe(true);
+    expect(allowsBash('xargs npm run lint', BASH_NPM_RUN_PREFIX)).toBe(true);
+    expect(allowsBash('npm install', BASH_NPM_RUN_PREFIX)).toBe(false);
   });
 });
 
 describe('matchesPermissionRule', () => {
   it('bare Edit matches any Edit call', () => {
-    expect(matchesPermissionRule('Edit', '/some/file.ts', 'Edit')).toBe(true);
-    expect(matchesPermissionRule('Edit', '/any/path', 'Edit')).toBe(true);
+    expect(matchesAllowRule('Edit', '/some/file.ts', 'Edit')).toBe(true);
+    expect(matchesAllowRule('Edit', '/any/path', 'Edit')).toBe(true);
   });
 
   it('wrong tool name does not match', () => {
-    expect(matchesPermissionRule('Bash', NPM_RUN_LINT, 'Edit')).toBe(false);
-    expect(matchesPermissionRule('Edit', '/file', 'Bash')).toBe(false);
+    expect(matchesAllowRule('Bash', NPM_RUN_LINT, 'Edit')).toBe(false);
+    expect(matchesAllowRule('Edit', '/file', 'Bash')).toBe(false);
   });
 
   it('tool names are case-sensitive', () => {
-    expect(matchesPermissionRule('bash', NPM_RUN_LINT, BASH_NPM_RUN_STAR)).toBe(false);
-    expect(matchesPermissionRule('Bash', NPM_RUN_LINT, BASH_NPM_RUN_STAR)).toBe(true);
+    expect(matchesAllowRule('bash', NPM_RUN_LINT, BASH_NPM_RUN_STAR)).toBe(false);
+    expect(matchesAllowRule('Bash', NPM_RUN_LINT, BASH_NPM_RUN_STAR)).toBe(true);
   });
 
   // "Claude Code checks file permissions against `Edit(path)` and `Read(path)`
@@ -171,10 +183,10 @@ describe('matchesPermissionRule', () => {
   it('consults path rules for Read and Edit only', () => {
     const file = safePath.join(PLUGIN_DIR, SECRETS_KEY_RELATIVE);
     for (const tool of ['Read', 'Edit']) {
-      expect(matchesPermissionRule(tool, file, `${tool}(${SECRETS_PATTERN})`, PLUGIN_DIR)).toBe(true);
+      expect(matchesAllowRule(tool, file, `${tool}(${SECRETS_PATTERN})`, PLUGIN_DIR)).toBe(true);
     }
     for (const tool of ['Write', 'Glob', 'NotebookRead', 'NotebookEdit']) {
-      expect(matchesPermissionRule(tool, file, `${tool}(${SECRETS_PATTERN})`, PLUGIN_DIR)).toBe(false);
+      expect(matchesAllowRule(tool, file, `${tool}(${SECRETS_PATTERN})`, PLUGIN_DIR)).toBe(false);
     }
   });
 
@@ -182,8 +194,8 @@ describe('matchesPermissionRule', () => {
   // rules that carry a path. `Write(*)` carries one, so it is accepted and never
   // consulted, and reporting it as blocking anything would be a wrong answer.
   it('still honours a bare rule for a tool whose path rules are never consulted', () => {
-    expect(matchesPermissionRule('Write', '/any/file', 'Write')).toBe(true);
-    expect(matchesPermissionRule('Write', '/any/file', 'Write(*)')).toBe(false);
+    expect(matchesAllowRule('Write', '/any/file', 'Write')).toBe(true);
+    expect(matchesAllowRule('Write', '/any/file', 'Write(*)')).toBe(false);
   });
 });
 
@@ -258,7 +270,7 @@ describe('isSubsumedBy', () => {
   // and they did not: once `Bash(ls *)` began permitting bare `ls`, the rule
   // `Bash(ls)` became redundant, but subsumption still said otherwise.
   it('agrees with matchesBashRule about the bare-command rule', () => {
-    expect(matchesBashRule('ls', LS_STAR)).toBe(true);
+    expect(allowsBash('ls', LS_STAR)).toBe(true);
     expect(isSubsumedBy('Bash(ls)', LS_STAR)).toBe(true);
   });
 
@@ -267,7 +279,7 @@ describe('isSubsumedBy', () => {
   // `settings-conflict-analyzer` turns `isSubsumedBy(narrow, broad) === true`
   // into user-facing advice to DELETE `narrow`. So the property to hold is not
   // "isSubsumedBy agrees with matchesBashRule" — that formulation is satisfied
-  // by the very bug this catches, because `matchesBashRule('npm test *',
+  // by the very bug this catches, because `allowsBash('npm test *',
   // 'Bash(npm * *)')` tests the rule TEXT as a command and answers true. The
   // property is: **if we advise deleting a rule, no command may lose
   // permission.** `Bash(npm test *)` was reported redundant under
@@ -293,7 +305,7 @@ describe('isSubsumedBy', () => {
       for (const broad of RULE_CORPUS) {
         if (narrow === broad || !isSubsumedBy(narrow, broad)) continue;
         for (const command of COMMAND_CORPUS) {
-          if (matchesBashRule(command, narrow) && !matchesBashRule(command, broad)) {
+          if (allowsBash(command, narrow) && !allowsBash(command, broad)) {
             unsound.push(`${narrow} reported redundant under ${broad}, but loses "${command}"`);
           }
         }
@@ -329,18 +341,18 @@ describe('parseBashRuleContent', () => {
   // regex, so `\b` became a word boundary and `Bash(a\b *)` permitted `a b`.
   // Every Windows path in a rule compiled to something other than itself.
   it('escapes a backslash in the rule rather than compiling it as an escape', () => {
-    expect(matchesBashRule('a b', String.raw`Bash(a\b *)`)).toBe(false);
-    expect(matchesBashRule(String.raw`a\b c`, String.raw`Bash(a\b *)`)).toBe(true);
+    expect(allowsBash('a b', String.raw`Bash(a\b *)`)).toBe(false);
+    expect(allowsBash(String.raw`a\b c`, String.raw`Bash(a\b *)`)).toBe(true);
     for (const sequence of [String.raw`\d`, String.raw`\s`, String.raw`\w`, String.raw`\B`]) {
-      expect(matchesBashRule('a1 c', `Bash(a${sequence} *)`)).toBe(false);
+      expect(allowsBash('a1 c', `Bash(a${sequence} *)`)).toBe(false);
     }
   });
 
   // `\*` is a literal star, not a wildcard — the behaviour a dead identity
   // `.replaceAll('\\*', '\\*')` claimed to provide.
   it('treats an escaped star as a literal star', () => {
-    expect(matchesBashRule('a* c', String.raw`Bash(a\* *)`)).toBe(true);
-    expect(matchesBashRule('ax c', String.raw`Bash(a\* *)`)).toBe(false);
+    expect(allowsBash('a* c', String.raw`Bash(a\* *)`)).toBe(true);
+    expect(allowsBash('ax c', String.raw`Bash(a\* *)`)).toBe(false);
   });
 
   // 🚩 Adjacent `.*` backtrack polynomially, and both inputs are attacker-
@@ -383,25 +395,25 @@ describe('published table — trailing wildcard', () => {
   // "A `*` at the end, with a space before it, also matches the bare command.
   //  `Bash(ls *)` matches `ls`, and `Bash(git log *)` matches `git log`."
   it('a trailing " *" matches the bare command', () => {
-    expect(matchesBashRule('ls', LS_STAR)).toBe(true);
-    expect(matchesBashRule('git log', 'Bash(git log *)')).toBe(true);
+    expect(allowsBash('ls', LS_STAR)).toBe(true);
+    expect(allowsBash('git log', 'Bash(git log *)')).toBe(true);
   });
 
   // "That holds only when the trailing `*` is the rule's only wildcard:
   //  `Bash(* --help *)` matches `npm --help x` but not `npm --help`."
   it('does not match the bare command when another wildcard is present', () => {
-    expect(matchesBashRule(NPM_HELP_X, HELP_STAR)).toBe(true);
-    expect(matchesBashRule(NPM_HELP, HELP_STAR)).toBe(false);
+    expect(allowsBash(NPM_HELP_X, HELP_STAR)).toBe(true);
+    expect(allowsBash(NPM_HELP, HELP_STAR)).toBe(false);
   });
 
   // "The space before a trailing `*` is part of the rule. `Bash(ls *)` requires
   //  a space after `ls`, so `lsof` doesn't match. `Bash(ls*)` has no space, so
   //  it matches `lsof` too."
   it('honours the space before a trailing wildcard', () => {
-    expect(matchesBashRule(LS_LA, LS_STAR)).toBe(true);
-    expect(matchesBashRule(LSOF, LS_STAR)).toBe(false);
-    expect(matchesBashRule(LSOF, LS_GLUED)).toBe(true);
-    expect(matchesBashRule(LS_LA, LS_GLUED)).toBe(true);
+    expect(allowsBash(LS_LA, LS_STAR)).toBe(true);
+    expect(allowsBash(LSOF, LS_STAR)).toBe(false);
+    expect(allowsBash(LSOF, LS_GLUED)).toBe(true);
+    expect(allowsBash(LS_LA, LS_GLUED)).toBe(true);
   });
 
   // "The `:*` suffix is an equivalent way to write a trailing wildcard, so
@@ -412,11 +424,11 @@ describe('published table — trailing wildcard', () => {
   // wildcard. Two spellings the table calls equivalent gave different answers.
   it('honours ":*" equivalence when the rule has another wildcard too', () => {
     const command = 'gitx push origin main x';
-    expect(matchesBashRule(command, 'Bash(gitx * main *)')).toBe(true);
-    expect(matchesBashRule(command, 'Bash(gitx * main:*)')).toBe(true);
+    expect(allowsBash(command, 'Bash(gitx * main *)')).toBe(true);
+    expect(allowsBash(command, 'Bash(gitx * main:*)')).toBe(true);
     // And they must still agree when the answer is no.
-    expect(matchesBashRule('gitx push origin other x', 'Bash(gitx * main *)')).toBe(false);
-    expect(matchesBashRule('gitx push origin other x', 'Bash(gitx * main:*)')).toBe(false);
+    expect(allowsBash('gitx push origin other x', 'Bash(gitx * main *)')).toBe(false);
+    expect(allowsBash('gitx push origin other x', 'Bash(gitx * main:*)')).toBe(false);
   });
 
   // The other half of the same divergence: the bare-command permit is granted
@@ -424,17 +436,17 @@ describe('published table — trailing wildcard', () => {
   // granted it unconditionally, so `Bash(* --help:*)` permitted a bare
   // `npm --help` that the table's own worked example refuses.
   it('applies the only-wildcard restriction to ":*" as well', () => {
-    expect(matchesBashRule(NPM_HELP, HELP_STAR)).toBe(false);
-    expect(matchesBashRule(NPM_HELP, HELP_PREFIX)).toBe(false);
-    expect(matchesBashRule(NPM_HELP_X, HELP_STAR)).toBe(true);
-    expect(matchesBashRule(NPM_HELP_X, HELP_PREFIX)).toBe(true);
+    expect(allowsBash(NPM_HELP, HELP_STAR)).toBe(false);
+    expect(allowsBash(NPM_HELP, HELP_PREFIX)).toBe(false);
+    expect(allowsBash(NPM_HELP_X, HELP_STAR)).toBe(true);
+    expect(allowsBash(NPM_HELP_X, HELP_PREFIX)).toBe(true);
   });
 
   it('treats ":*" as equivalent to a trailing " *"', () => {
     for (const command of ['ls', LS_LA]) {
-      expect(matchesBashRule(command, 'Bash(ls:*)')).toBe(matchesBashRule(command, LS_STAR));
+      expect(allowsBash(command, 'Bash(ls:*)')).toBe(allowsBash(command, LS_STAR));
     }
-    expect(matchesBashRule(LSOF, 'Bash(ls:*)')).toBe(false);
+    expect(allowsBash(LSOF, 'Bash(ls:*)')).toBe(false);
   });
 });
 
@@ -444,17 +456,17 @@ describe('published table — compound commands', () => {
   //  `;`, `|`, `|&`, `&`, and newlines. A rule must match each subcommand
   //  independently."
   it('refuses a compound command when a subcommand does not match', () => {
-    expect(matchesBashRule('safe-cmd && other-cmd', SAFE_CMD_STAR)).toBe(false);
+    expect(allowsBash('safe-cmd && other-cmd', SAFE_CMD_STAR)).toBe(false);
   });
 
   it('recognises every documented separator', () => {
     for (const sep of ['&&', '||', ';', '|', '|&', '&', '\n']) {
-      expect(matchesBashRule(`safe-cmd ${sep} other-cmd`, SAFE_CMD_STAR)).toBe(false);
+      expect(allowsBash(`safe-cmd ${sep} other-cmd`, SAFE_CMD_STAR)).toBe(false);
     }
   });
 
   it('allows a compound command when every subcommand matches', () => {
-    expect(matchesBashRule('npm test && npm run lint', NPM_STAR)).toBe(true);
+    expect(allowsBash('npm test && npm run lint', NPM_STAR)).toBe(true);
   });
 
   // "When `&&` or `||` has nothing after it, such as in `npm test &&`, Claude
@@ -462,13 +474,13 @@ describe('published table — compound commands', () => {
   //  subcommands for allow-rule matching, so a rule such as `Bash(npm *)`
   //  doesn't approve it."
   it('treats a dangling operator as unparseable', () => {
-    expect(matchesBashRule('npm test &&', NPM_STAR)).toBe(false);
-    expect(matchesBashRule('npm test ||', NPM_STAR)).toBe(false);
+    expect(allowsBash('npm test &&', NPM_STAR)).toBe(false);
+    expect(allowsBash('npm test ||', NPM_STAR)).toBe(false);
   });
 
   // A trailing `;` is ordinary shell, not the unparseable form the table names.
   it('does not treat a trailing ";" as unparseable', () => {
-    expect(matchesBashRule('npm test;', NPM_STAR)).toBe(true);
+    expect(allowsBash('npm test;', NPM_STAR)).toBe(true);
   });
 
   // 🚩 Regression guard for a defect introduced WITH the compound splitting and
@@ -477,10 +489,10 @@ describe('published table — compound commands', () => {
   // quotes and left `b" file` as a subcommand no rule matches. Quoted
   // separators are far too common to break.
   it('does not split on a separator inside quotes', () => {
-    expect(matchesBashRule('grep -E "a|b" file', GREP_STAR)).toBe(true);
-    expect(matchesBashRule("grep -E 'a&&b' file", GREP_STAR)).toBe(true);
-    expect(matchesBashRule('git commit -m "fix: a && b"', 'Bash(git commit *)')).toBe(true);
-    expect(matchesBashRule('echo "a; b"', ECHO_STAR)).toBe(true);
+    expect(allowsBash('grep -E "a|b" file', GREP_STAR)).toBe(true);
+    expect(allowsBash("grep -E 'a&&b' file", GREP_STAR)).toBe(true);
+    expect(allowsBash('git commit -m "fix: a && b"', 'Bash(git commit *)')).toBe(true);
+    expect(allowsBash('echo "a; b"', ECHO_STAR)).toBe(true);
   });
 
   // Same class: a separator inside `$(…)` or `(…)` is not top level.
@@ -495,12 +507,12 @@ describe('published table — compound commands', () => {
   // permissive half of it: it is why `echo $(rm -rf /)` matches `Bash(echo *)`.
   // Do not cite this test as the source. Resolve it against the product.
   it('does not split inside a subshell or command substitution', () => {
-    expect(matchesBashRule('echo $(ls | wc -l)', ECHO_STAR)).toBe(true);
+    expect(allowsBash('echo $(ls | wc -l)', ECHO_STAR)).toBe(true);
   });
 
   // An escaped separator is a literal character, not a split point.
   it('does not split on an escaped separator', () => {
-    expect(matchesBashRule(String.raw`echo a\&\&b`, ECHO_STAR)).toBe(true);
+    expect(allowsBash(String.raw`echo a\&\&b`, ECHO_STAR)).toBe(true);
   });
 
   // 🚩 Every separator assertion above expects `false`, so they would all still
@@ -509,8 +521,8 @@ describe('published table — compound commands', () => {
   // then be matched on its own.
   it('splits at a separator rather than refusing the whole command', () => {
     for (const sep of ['&&', '||', ';', '|', '|&', '\n']) {
-      expect(matchesBashRule(`npm test ${sep} npm run lint`, NPM_STAR)).toBe(true);
-      expect(matchesBashRule(`npm test ${sep} rm -rf /`, NPM_STAR)).toBe(false);
+      expect(allowsBash(`npm test ${sep} npm run lint`, NPM_STAR)).toBe(true);
+      expect(allowsBash(`npm test ${sep} rm -rf /`, NPM_STAR)).toBe(false);
     }
   });
 
@@ -523,24 +535,24 @@ describe('published table — compound commands', () => {
   // the `rm -rf /` in each of these was reported as permitted by an `echo` or
   // `npm` rule. Both "graceful degradations" degraded toward PERMITTING.
   it('treats an unterminated quote as unparseable', () => {
-    expect(matchesBashRule("echo hi # don't\nrm -rf /", ECHO_STAR)).toBe(false);
-    expect(matchesBashRule('echo "unclosed\nrm -rf /', ECHO_STAR)).toBe(false);
-    expect(matchesBashRule(String.raw`echo $'a\'b' && rm -rf /`, ECHO_STAR)).toBe(false);
+    expect(allowsBash("echo hi # don't\nrm -rf /", ECHO_STAR)).toBe(false);
+    expect(allowsBash('echo "unclosed\nrm -rf /', ECHO_STAR)).toBe(false);
+    expect(allowsBash(String.raw`echo $'a\'b' && rm -rf /`, ECHO_STAR)).toBe(false);
     // The control: the same first command with the apostrophe removed parses,
     // splits, and is refused on the merits rather than by luck.
-    expect(matchesBashRule('echo hi # dont\nrm -rf /', ECHO_STAR)).toBe(false);
+    expect(allowsBash('echo hi # dont\nrm -rf /', ECHO_STAR)).toBe(false);
   });
 
   it('treats an unbalanced parenthesis as unparseable', () => {
-    expect(matchesBashRule('npm test # (\nrm -rf /', NPM_STAR)).toBe(false);
-    expect(matchesBashRule('echo $(ls\nrm -rf /', ECHO_STAR)).toBe(false);
+    expect(allowsBash('npm test # (\nrm -rf /', NPM_STAR)).toBe(false);
+    expect(allowsBash('echo $(ls\nrm -rf /', ECHO_STAR)).toBe(false);
   });
 
   // The refusal has to stay narrow: a balanced subshell and a closed quote are
   // still parseable, so the fix cannot be a blanket "refuse anything quoted".
   it('still parses balanced parens and closed quotes', () => {
-    expect(matchesBashRule('echo (a; b)', ECHO_STAR)).toBe(true);
-    expect(matchesBashRule("echo 'a; b' && echo c", ECHO_STAR)).toBe(true);
+    expect(allowsBash('echo (a; b)', ECHO_STAR)).toBe(true);
+    expect(allowsBash("echo 'a; b' && echo c", ECHO_STAR)).toBe(true);
   });
 });
 
@@ -550,25 +562,25 @@ describe('published table — wrappers', () => {
   //  stripped wrappers are `timeout`, `time`, `nice`, `nohup`, and `stdbuf`,
   //  plus the shell builtins `command` and `builtin`, and zsh's `noglob`."
   it('strips the documented wrappers', () => {
-    expect(matchesBashRule('timeout 30 npm test', NPM_TEST_STAR)).toBe(true);
+    expect(allowsBash('timeout 30 npm test', NPM_TEST_STAR)).toBe(true);
     for (const wrapper of ['time', 'nice', 'nohup', 'stdbuf', 'command', 'builtin', 'noglob']) {
-      expect(matchesBashRule(`${wrapper} ${NPM_TEST}`, NPM_TEST_STAR)).toBe(true);
+      expect(allowsBash(`${wrapper} ${NPM_TEST}`, NPM_TEST_STAR)).toBe(true);
     }
   });
 
   // "Two related forms aren't stripped: the query form `command -v`, which looks
   //  up a command rather than running one, and zsh's `nocorrect`."
   it('does not strip "command -v" or "nocorrect"', () => {
-    expect(matchesBashRule('command -v npm test', NPM_TEST_STAR)).toBe(false);
-    expect(matchesBashRule('nocorrect npm test', NPM_TEST_STAR)).toBe(false);
+    expect(allowsBash('command -v npm test', NPM_TEST_STAR)).toBe(false);
+    expect(allowsBash('nocorrect npm test', NPM_TEST_STAR)).toBe(false);
   });
 
   // "Bare `xargs` is also stripped, so `Bash(grep *)` matches `xargs grep
   //  pattern`. Stripping applies only when `xargs` has no flags: an invocation
   //  like `xargs -n1 grep pattern` is matched as an `xargs` command."
   it('strips bare xargs but not xargs with flags', () => {
-    expect(matchesBashRule('xargs grep pattern', GREP_STAR)).toBe(true);
-    expect(matchesBashRule('xargs -n1 grep pattern', GREP_STAR)).toBe(false);
+    expect(allowsBash('xargs grep pattern', GREP_STAR)).toBe(true);
+    expect(allowsBash('xargs -n1 grep pattern', GREP_STAR)).toBe(false);
   });
 
   // 🚩 A flag's VALUE can land in the command position. `timeout -s ls 30 rm -rf /`
@@ -576,16 +588,204 @@ describe('published table — wrappers', () => {
   // a command that runs `rm -rf /`. The heuristic cannot know a wrapper flag's
   // arity, so halting on the token right after a flag must strip nothing.
   it('does not strip to a wrapper flag own value', () => {
-    expect(matchesBashRule('timeout -s ls 30 rm -rf /', LS_STAR)).toBe(false);
-    expect(matchesBashRule('nice -n rm 5 npm test', 'Bash(rm *)')).toBe(false);
+    expect(allowsBash('timeout -s ls 30 rm -rf /', LS_STAR)).toBe(false);
+    expect(allowsBash('nice -n rm 5 npm test', 'Bash(rm *)')).toBe(false);
   });
 
   // The cost of that refusal, stated so it is not mistaken for a bug: a wrapper
   // flag with a non-numeric value now refuses rather than mis-strips.
   it('refuses rather than guesses when a wrapper flag takes a value', () => {
-    expect(matchesBashRule('timeout -s KILL 30 npm test', NPM_TEST_STAR)).toBe(false);
+    expect(allowsBash('timeout -s KILL 30 npm test', NPM_TEST_STAR)).toBe(false);
     // The documented forms are unaffected — the halt lands after a duration.
-    expect(matchesBashRule('timeout 30 npm test', NPM_TEST_STAR)).toBe(true);
-    expect(matchesBashRule('nice -n 5 npm test', NPM_TEST_STAR)).toBe(true);
+    expect(allowsBash('timeout 30 npm test', NPM_TEST_STAR)).toBe(true);
+    expect(allowsBash('nice -n 5 npm test', NPM_TEST_STAR)).toBe(true);
+  });
+});
+
+// ============================================================================
+// The allow/deny lane — F4, and its dependents F11, F12, F15
+// ============================================================================
+//
+// The module is written for the ALLOW lane and its only production caller uses
+// it for DENY. Matching is NOT symmetric, so every expectation below states the
+// lane it is asserting, and every lane-sensitive case asserts BOTH answers — an
+// implementation that returned the deny answer for the allow lane, or `true`
+// for everything in the deny lane, has to go red.
+
+const LANES = ['allow', 'deny', 'ask'] as const;
+const BASH = 'Bash';
+const CURL_PREFIX = 'Bash(curl:*)';
+const RM_STAR = 'Bash(rm *)';
+const GITX_CLEAN_STAR = 'Bash(gitx clean *)';
+const CURL_COMPOUND = 'curl https://x && echo done';
+const GITX_CLEAN_NESTED = 'echo "$(gitx clean -f)"';
+const ASSIGNED_RM = 'FOO=bar rm -rf tmp/';
+const WRAPPED_RM = 'timeout -s KILL 30 rm -rf tmp/';
+const NPM_TEST_X = 'npm test x';
+const MCP_TOOL = 'mcp__srv__tool';
+const MCP_SRV_GLOB = 'mcp__srv__*';
+const DOMAIN_EVIL = 'domain:evil.com';
+const WEBFETCH = 'WebFetch';
+const WEBFETCH_EVIL = 'WebFetch(domain:evil.com)';
+const RM_RF_ROOT = 'rm -rf /';
+
+describe('published table — the deny/ask lane', () => {
+  // "Deny and ask rules apply when any subcommand matches them" — where an
+  // allow rule "must match each subcommand independently".
+  it('matches when ANY subcommand matches, where allow needs every', () => {
+    expect(matchesPermissionRule(BASH, CURL_COMPOUND, CURL_PREFIX, 'deny')).toBe(true);
+    expect(matchesPermissionRule(BASH, CURL_COMPOUND, CURL_PREFIX, 'ask')).toBe(true);
+    expect(matchesPermissionRule(BASH, CURL_COMPOUND, CURL_PREFIX, 'allow')).toBe(false);
+  });
+
+  // "A deny or ask rule matches past any leading assignment."
+  it('matches past any leading assignment', () => {
+    expect(matchesPermissionRule(BASH, ASSIGNED_RM, RM_STAR, 'deny')).toBe(true);
+    expect(matchesPermissionRule(BASH, `NODE_ENV=x ${ASSIGNED_RM}`, RM_STAR, 'deny')).toBe(true);
+    expect(matchesPermissionRule(BASH, ASSIGNED_RM, RM_STAR, 'allow')).toBe(false);
+  });
+
+  // "…including a command nested inside a subshell, a command substitution, or
+  //  a control-flow body."
+  it('descends into a subshell, a command substitution and a control-flow body', () => {
+    for (const command of [
+      GITX_CLEAN_NESTED,
+      'echo `gitx clean -f`',
+      '(gitx clean -f)',
+      'if true; then gitx clean -f; fi',
+      'for f in a; do gitx clean -f; done',
+    ]) {
+      expect(matchesPermissionRule(BASH, command, GITX_CLEAN_STAR, 'deny')).toBe(true);
+    }
+  });
+
+  // ⚠️ The ALLOW-lane half of nesting is UNDETERMINED (see the ⛔ UNSOURCED note
+  // in the compound suite above). Only the deny half is published, so only the
+  // deny half is asserted here.
+  it('takes any wrapper-strip reading when the heuristic is ambiguous', () => {
+    expect(matchesPermissionRule(BASH, WRAPPED_RM, RM_STAR, 'deny')).toBe(true);
+    // The allow lane keeps its single conservative reading, so F5's false permit
+    // stays closed and its documented cost stays paid.
+    expect(matchesPermissionRule(BASH, 'timeout -s KILL 30 npm test', NPM_TEST_STAR, 'allow')).toBe(
+      false,
+    );
+    expect(matchesPermissionRule(BASH, 'timeout -s ls 30 rm -rf /', LS_STAR, 'allow')).toBe(false);
+  });
+
+  it('falls back to the raw whole string when the command is unparseable', () => {
+    // Approving an unparseable command is a false permit, so allow refuses.
+    expect(matchesPermissionRule(BASH, 'curl https://x &&', CURL_PREFIX, 'allow')).toBe(false);
+    // Reporting no conflict is the unsafe direction for a checker, so deny must
+    // not go silent — it tests the rule against the raw string instead.
+    expect(matchesPermissionRule(BASH, 'curl https://x &&', CURL_PREFIX, 'deny')).toBe(true);
+    expect(matchesPermissionRule(BASH, "curl https://x # don't", CURL_PREFIX, 'deny')).toBe(true);
+  });
+
+  // 🚩 THE BLINDNESS GUARD. Every expectation above is `true` for deny, so a
+  // deny lane that answered `true` unconditionally would satisfy all of them.
+  // These are the negatives, asserted in every lane.
+  it('does not match a command outside the rule, in any lane', () => {
+    for (const lane of LANES) {
+      expect(matchesPermissionRule(BASH, 'echo hi && ls -la', CURL_PREFIX, lane)).toBe(false);
+      expect(matchesPermissionRule(BASH, 'echo "$(ls -la)"', GITX_CLEAN_STAR, lane)).toBe(false);
+      expect(matchesPermissionRule(BASH, 'FOO=bar echo hi', RM_STAR, lane)).toBe(false);
+      expect(matchesPermissionRule(BASH, 'timeout -s KILL 30 echo hi', RM_STAR, lane)).toBe(false);
+      expect(matchesPermissionRule(BASH, 'gitx cleanup -f', GITX_CLEAN_STAR, lane)).toBe(false);
+      expect(matchesPermissionRule('Edit', '/some/file', 'Read', lane)).toBe(false);
+    }
+  });
+
+  // The table names deny and ask together in every clause, so they are one
+  // behaviour, not two implementations that could drift.
+  it('gives deny and ask the same answer', () => {
+    const cases: Array<[string, string]> = [
+      [CURL_COMPOUND, CURL_PREFIX],
+      [ASSIGNED_RM, RM_STAR],
+      [GITX_CLEAN_NESTED, GITX_CLEAN_STAR],
+      [WRAPPED_RM, RM_STAR],
+      ['echo hi && ls -la', CURL_PREFIX],
+      ['gitx cleanup -f', GITX_CLEAN_STAR],
+    ];
+    for (const [command, rule] of cases) {
+      expect(matchesPermissionRule(BASH, command, rule, 'ask')).toBe(
+        matchesPermissionRule(BASH, command, rule, 'deny'),
+      );
+    }
+  });
+
+  it('threads the lane through matchesBashRule too', () => {
+    expect(matchesBashRule(CURL_COMPOUND, CURL_PREFIX, 'deny')).toBe(true);
+    expect(matchesBashRule(CURL_COMPOUND, CURL_PREFIX, 'allow')).toBe(false);
+  });
+});
+
+describe('matchesAllowRule / matchesDenyRule', () => {
+  it('bind the lane and otherwise behave like matchesPermissionRule', () => {
+    expect(matchesDenyRule(BASH, CURL_COMPOUND, CURL_PREFIX)).toBe(true);
+    expect(matchesAllowRule(BASH, CURL_COMPOUND, CURL_PREFIX)).toBe(false);
+    expect(matchesDenyRule(BASH, ASSIGNED_RM, RM_STAR)).toBe(true);
+    expect(matchesAllowRule(BASH, ASSIGNED_RM, RM_STAR)).toBe(false);
+  });
+
+  it('still take a cwd for the path lane', () => {
+    const file = safePath.join(PLUGIN_DIR, SECRETS_KEY_RELATIVE);
+    expect(matchesDenyRule('Read', file, `Read(${SECRETS_PATTERN})`, PLUGIN_DIR)).toBe(true);
+    expect(matchesAllowRule('Read', file, `Read(${SECRETS_PATTERN})`, PLUGIN_DIR)).toBe(true);
+  });
+});
+
+describe('published table — tool-name globs', () => {
+  // Deny and ask accept a glob in the tool-name position; an allow rule accepts
+  // one only after a literal `mcp__<server>__` prefix.
+  it('deny and ask accept a glob in the tool-name position', () => {
+    for (const lane of ['deny', 'ask'] as const) {
+      expect(matchesPermissionRule(BASH, RM_RF_ROOT, '*', lane)).toBe(true);
+      expect(matchesPermissionRule(MCP_TOOL, 'x', 'mcp__*', lane)).toBe(true);
+      expect(matchesPermissionRule(MCP_TOOL, 'x', MCP_SRV_GLOB, lane)).toBe(true);
+    }
+  });
+
+  it('allow accepts a glob only after a literal mcp__<server>__ prefix', () => {
+    expect(matchesPermissionRule(MCP_TOOL, 'x', MCP_SRV_GLOB, 'allow')).toBe(true);
+    expect(matchesPermissionRule(MCP_TOOL, 'x', 'mcp__*', 'allow')).toBe(false);
+    expect(matchesPermissionRule(BASH, RM_RF_ROOT, '*', 'allow')).toBe(false);
+  });
+
+  // A glob is a glob, not a licence: it still has to match the tool name.
+  it('refuses a glob that does not cover the tool name', () => {
+    for (const lane of LANES) {
+      expect(matchesPermissionRule('mcp__other__tool', 'x', MCP_SRV_GLOB, lane)).toBe(false);
+      expect(matchesPermissionRule(BASH, RM_RF_ROOT, 'Edit*', lane)).toBe(false);
+    }
+  });
+});
+
+describe('published table — WebFetch(domain:…)', () => {
+  it('matches a domain rule against a domain tool input', () => {
+    for (const lane of LANES) {
+      expect(matchesPermissionRule(WEBFETCH, DOMAIN_EVIL, 'WebFetch(domain:*)', lane)).toBe(true);
+      expect(matchesPermissionRule(WEBFETCH, DOMAIN_EVIL, WEBFETCH_EVIL, lane)).toBe(true);
+      expect(matchesPermissionRule(WEBFETCH, 'domain:good.com', WEBFETCH_EVIL, lane)).toBe(false);
+    }
+  });
+});
+
+describe('published table — leading env assignment', () => {
+  // "an allow rule strips a leading assignment of certain known-safe environment
+  //  variables … won't match past an assignment of any other variable" — and the
+  // page names exactly one of them, `NODE_ENV`.
+  it('the allow lane strips the one published variable and no other', () => {
+    expect(matchesPermissionRule(BASH, 'NODE_ENV=test npm test', NPM_TEST_STAR, 'allow')).toBe(true);
+    expect(matchesPermissionRule(BASH, `FOO=bar ${NPM_TEST_X}`, NPM_TEST_STAR, 'allow')).toBe(false);
+    expect(
+      matchesPermissionRule(BASH, `NODE_ENV=test FOO=bar ${NPM_TEST_X}`, NPM_TEST_STAR, 'allow'),
+    ).toBe(false);
+  });
+
+  it('the deny lane strips past any leading assignment', () => {
+    expect(matchesPermissionRule(BASH, `FOO=bar ${NPM_TEST_X}`, NPM_TEST_STAR, 'deny')).toBe(true);
+    expect(
+      matchesPermissionRule(BASH, `NODE_ENV=test FOO=bar ${NPM_TEST_X}`, NPM_TEST_STAR, 'deny'),
+    ).toBe(true);
   });
 });

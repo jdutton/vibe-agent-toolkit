@@ -9,8 +9,15 @@ export type {
 } from './settings-merger.js';
 export { mergeSettingsLayers } from './settings-merger.js';
 
-export { matchesBashRule, matchesPathRule, matchesPermissionRule, isSubsumedBy } from './permission-matcher.js';
-export type { BashRuleType, ParsedBashRule } from './permission-matcher.js';
+export {
+  isSubsumedBy,
+  matchesAllowRule,
+  matchesBashRule,
+  matchesDenyRule,
+  matchesPathRule,
+  matchesPermissionRule,
+} from './permission-matcher.js';
+export type { BashRuleType, ParsedBashRule, PermissionLane } from './permission-matcher.js';
 
 export type { ReadSettingsOptions } from './settings-reader.js';
 export { readEffectiveSettings, readSettingsLayers } from './settings-reader.js';

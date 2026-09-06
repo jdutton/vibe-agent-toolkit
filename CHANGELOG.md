@@ -183,6 +183,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Library
 
+- **`matchesPermissionRule` and `matchesBashRule` now require a `lane` argument** (`'allow' | 'deny'
+  | 'ask'`), with no default — a default would have left every existing caller on the old behaviour
+  and the bug in place. Pass `'allow'` to keep today's semantics, or use the new `matchesAllowRule` /
+  `matchesDenyRule` wrappers. `PermissionLane` is exported alongside them.
+
+- **Deny and ask rules now match the way Claude Code publishes them, which is not how allow rules
+  match.** A deny rule applies when **any** subcommand matches (allow needs every one), reaches
+  commands nested in a subshell or command substitution, and matches past any leading environment
+  assignment. Permission-conflict reports will flag things they previously missed — re-run any saved
+  one. Allow-lane answers are unchanged apart from `NODE_ENV=` now being stripped, per the table.
+
 - **`@vibe-agent-toolkit/agent-schema` is now `@vibe-agent-toolkit/schema`.** Rename the dependency
   and every import specifier; nothing else about the package changed.
 
