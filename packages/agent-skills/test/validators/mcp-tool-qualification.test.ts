@@ -107,6 +107,43 @@ describe('qualifiedMcpToolNames — the detector’s premise', () => {
     );
     expect(vocabulary.size).toBe(0);
   });
+
+  /**
+   * 🚨 The one-word hole the hyphen fix did NOT close.
+   *
+   * `API_QUALIFIED` demanded an underscore in the tool half; `mcp__…` demanded
+   * nothing. So `mcp__claude-in-chrome__find` seeded the vocabulary with `find`,
+   * and every later code span spelling that ordinary English word became a
+   * finding. Same family as `resolve-library-id` → `resolve`, but the opposite
+   * mechanism: that one truncated a name, this one admits a name that is one
+   * word to begin with. Zero occurrences over 291 repo docs, so it is structural
+   * rather than observed.
+   */
+  it('does not build vocabulary from a ONE-WORD tool name in the mcp__ spelling', () => {
+    const vocabulary = qualifiedMcpToolNames(
+      'Locate it with `mcp__claude-in-chrome__find`, then use `find` again later.',
+    );
+
+    expect(vocabulary.size).toBe(0);
+  });
+
+  it('still admits a multi-word tool name spelled with hyphens, not just underscores', () => {
+    // The gate is "multi-segment", not "contains an underscore". Requiring `_`
+    // would drop the real kebab-cased tools the hyphen fix exists to preserve.
+    expect(sorted(qualifiedMcpToolNames('`mcp__plugin_context7_context7__query-docs`')))
+      .toEqual(['query-docs']);
+  });
+
+  /**
+   * `withoutTrailingSeparators` had no test of its own, and `return tool;`
+   * survived — the greedy tool capture ends on a separator when the next
+   * character is uppercase, so an unstripped capture puts `browser_` in the
+   * vocabulary and never matches the bare `browser_click` it was meant to.
+   */
+  it('strips a trailing separator the greedy capture leaves behind', () => {
+    expect(sorted(qualifiedMcpToolNames('`mcp__x__browser_click-Beta` in the beta server')))
+      .toEqual(['browser_click']);
+  });
 });
 
 // A regex can be rewritten into a shape a checker likes while staying
@@ -211,6 +248,30 @@ describe('collectUnqualifiedMcpToolIssues', () => {
     expect(issuesFor(
       '---\nallowed-tools:\n  - mcp__x__do_thing\n---\n\nCall `do_thing` when the user asks.\n',
     )).toEqual([]);
+  });
+
+  /**
+   * Frontmatter is BLANKED, not removed, and the reported `line` is what says so.
+   *
+   * `scannableLines` overwrites the frontmatter lines with `''` so every later
+   * line keeps its number. `lines.slice(end)` would strip the same content and
+   * shift every finding upward — and it survived the whole suite, because no case
+   * asserted a `line` on a document that HAS frontmatter. That is the shipped
+   * SKILL.md lane: every skill file starts with frontmatter.
+   */
+  it('keeps line numbers true on a document that HAS frontmatter', () => {
+    const issues = issuesFor(
+      '---\n' +               // 1
+      'name: demo\n' +        // 2
+      'description: x\n' +    // 3
+      '---\n' +               // 4
+      '\n' +                  // 5
+      'Qualified: `mcp__gh__get_me`.\n' + // 6
+      'Now run `get_me`.\n',              // 7
+    );
+
+    expect(links(issues)).toEqual(['get_me']);
+    expect(issues[0]?.line).toBe(7);
   });
 
   it('emits one issue per distinct tool per line, not one per document', () => {

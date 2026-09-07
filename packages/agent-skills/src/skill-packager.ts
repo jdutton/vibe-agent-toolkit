@@ -843,19 +843,23 @@ export async function packageSkill(
     // script.
     //
     // SKILL-LOCAL, and this is the ONLY caller. The packager knows its own output
-    // directory, not the plugin the skill will be installed into, so it cannot
-    // supply the wider sibling search root that measures 1.9% instead of 3.8% —
-    // and no other lane calls this check at all. Do not read the 1.9% figure in
-    // the validator's docstring as describing what runs here; the 3.8% row does.
-    // Wiring a plugin-wide root would have to happen in a lane that walks plugins,
-    // and `vat build`'s validateShippedPluginSkillLinks is not it: it runs only
-    // checkBrokenPackagedLinks, and its documented stance is that a skill is a
-    // self-contained portable unit whose references must not escape its own
-    // directory in the first place.
+    // directory, not the plugin the skill will be installed into, so there is no
+    // wider root to give it — the sibling-search parameter that measured 1.9%
+    // instead of 3.8% was deleted for having no caller. The shipped rate is 3.8%.
     ...await checkMissingReferencedPaths(outputPath),
     // The only byte measurement in the pipeline. Built phase for the same reason
     // as its neighbour above: a `files:` entry materializes files here that the
     // source tree does not have, so the bytes that ship are only knowable now.
+    //
+    // ⚠️ Runs before step 14, so it does not weigh what `generatePackageArtifacts`
+    // adds. Measured, so the residue is not a guess: the `zip` and `npm` formats
+    // write to `<outputPath>.zip` / `.tgz`, OUTSIDE the bundle and outside the
+    // upload; only the `npm` format's synthetic package.json and the `marketplace`
+    // format's manifest land inside, and both are a few hundred bytes. The order
+    // is not free to change — checkUnreferencedFiles two lines up would flag that
+    // same synthetic package.json — so the under-count is stated rather than
+    // fixed. If an artifact step ever writes something LARGE into outputPath, this
+    // call has to move after it and the framework run with it.
     ...checkPackagedSizeLimit(outputPath),
     // A receipt for every file a glob matched and the never-package list refused.
     // Reported as an issue, not written to stderr: a file vanishing from a bundle

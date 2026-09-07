@@ -165,6 +165,20 @@ describe('vat claude org', () => {
         args: ['skills', 'install', './some-skill', '--from-npm', 'pkg@1.0.0'],
         message: 'Provide either <source> or --from-npm',
       },
+      // The other two illegal combinations. Both flags used to be ACCEPTED and
+      // silently ignored on the lane that cannot honour them — which publishes a
+      // skill under the wrong title, or publishes every skill in a package when
+      // the operator named one.
+      {
+        case: '--title with --from-npm, which can publish several skills',
+        args: ['skills', 'install', '--from-npm', 'pkg@1.0.0', '--title', 'Mine'],
+        message: '--title applies to a single skill',
+      },
+      {
+        case: '--skill without --from-npm, which selects inside a package',
+        args: ['skills', 'install', './some-skill', '--skill', 'other'],
+        message: '--skill selects one skill inside an npm package',
+      },
     ])('org skills install with $case exits 2 with a YAML error document', async ({ args, message }) => {
       const result = await runOrgWithoutKeys(args);
 

@@ -189,11 +189,10 @@ export const CODE_REGISTRY = {
   //
   // ⚠️ 3.8% is the rate that SHIPS, and it is the one to quote. Two filters run
   // in production: literal paths only, and the first segment must be a bundled
-  // subdirectory. The validator's own table records a 1.9% row for a third rule
+  // subdirectory. The validator's table records a 1.9% row for a deleted third rule
   // that widens resolution to the whole plugin — it never had a production
-  // caller, and its pass-through parameter has been removed from
-  // `checkMissingReferencedPaths` so the documented rate and the shipped rate
-  // cannot drift apart again.
+  // caller, and the whole subsystem behind it has been DELETED, so the documented
+  // rate and the shipped rate cannot drift apart again.
   PACKAGED_REFERENCED_PATH_MISSING: entry(
     'warning',
     'SKILL.md (or a bundled reference file) names a path under a bundled subdirectory that is not present in the packaged output.',
@@ -221,7 +220,7 @@ export const CODE_REGISTRY = {
   // has no API publish target to condition on yet. Promote it there when it exists.
   PACKAGED_SIZE_EXCEEDS_API_LIMIT: entry(
     'warning',
-    'The packaged skill totals 30 MiB (31,457,280 bytes) or more uncompressed — at or over the Anthropic Skills API upload ceiling.',
+    'The packaged skill totals 30 MiB (31,457,280 bytes) or more uncompressed — at or over the Anthropic Skills API upload ceiling. The total leaves out the directories the uploader never sends (evals/, node_modules/, .git/) and any symbolic link, so it will not agree with `du -sb` on the same directory.',
     'Shrink the bundle: drop or externalise the largest files the message names — a runtime that a skill downloads or that its host already provides does not have to ship inside the skill. The ceiling applies to Skills API uploads only; a bundle over it still installs as a Claude Code plugin, so if this skill is never published to the API, waive the finding with a validation.allow entry whose paths name the largest file the message reports — each finding carries that file as its link, so one entry waives the bundles that file explains and every other skill keeps the check. Set severity.PACKAGED_SIZE_EXCEEDS_API_LIMIT to ignore only as the blunt fallback: that disables the check for the whole project.',
     'packaged_size_exceeds_api_limit',
   ),

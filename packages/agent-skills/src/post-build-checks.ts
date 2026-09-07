@@ -380,13 +380,19 @@ export async function checkUnreferencedFiles(
  * See `validators/referenced-path-missing.ts` for the measured precision argument
  * behind each filter, and for why this is a warning rather than an error.
  *
- * SKILL-LOCAL, deliberately and visibly. `detectMissingReferencedPaths` takes a
- * wider `siblingSearchRoot` that measures better (1.9% vs 3.8% on a 52-skill
- * corpus), and this wrapper does not forward one, because no caller it has can
- * supply one: the packager knows its own output directory, not the plugin the
- * skill will be installed into. The parameter is not mirrored here as an unused
- * pass-through — a plugin-aware caller would call the validator directly, where
- * the seam and its measurement live.
+ * SKILL-LOCAL, and there is nothing wider to be local to. `detectMissingReferencedPaths`
+ * once took a `siblingSearchRoot` that measured better (1.9% vs 3.8% on a 52-skill
+ * corpus) and had no caller able to supply one — the packager knows its own output
+ * directory, not the plugin the skill will be installed into. That parameter and its
+ * ~90-line walk are now deleted rather than kept as a seam; the shipped rate is 3.8%.
+ *
+ * ⚠️ This walk has NO exclusions, unlike `checkPackagedSizeLimit`'s, and the two are
+ * asking different questions rather than disagreeing. The size check asks what the
+ * Skills API will WEIGH, so it drops `evals/`, `node_modules/` and `.git/` because the
+ * uploader does. This one asks whether the packaged BUNDLE is self-consistent, and the
+ * bundle is what installs as a Claude Code plugin — `evals/` and all. A `.md` inside a
+ * bundled `evals/` really is shipped to a plugin user, so a path it names really is
+ * missing from what they get.
  *
  * @param outputDir Absolute path to the packaged skill output.
  */

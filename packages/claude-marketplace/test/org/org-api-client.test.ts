@@ -5,10 +5,13 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 import type { HttpRequester } from '../../src/org/org-api-client.js';
 import {
   ApiRequestError,
+  ApiTransportError,
+  CONNECT_TIMEOUT_MS,
   OrgApiClient,
   REQUEST_INACTIVITY_TIMEOUT_MS,
   buildMultipartFormData,
   createOrgApiClientFromEnv,
+  decideRetry,
   interpretApiResponse,
   isRetryableFailure,
   nextRetryDelayMs,
@@ -27,7 +30,22 @@ const SKILLS_PATH = '/v1/skills';
 // with no network at all. A 'stall' exchange never answers, which is how the
 // inactivity timeout is driven.
 
-type Exchange = 'stall' | { statusCode?: number; headers?: Record<string, string>; body?: string };
+/**
+ * One scripted outcome.
+ *
+ * The three `reset*` forms exist because a transport failure is not one thing,
+ * and the client now has to tell them apart: bytes may or may not have left the
+ * socket, and the failure may arrive on the REQUEST or on the RESPONSE stream.
+ */
+type Exchange =
+  | 'stall'
+  /** The connection drops after the body was written — the live `socket hang up`. */
+  | 'reset'
+  /** It fails before a socket exists at all — DNS, or a refused connection. */
+  | 'reset-before-socket'
+  /** It drops after the headers arrived, which emits on the RESPONSE stream. */
+  | 'reset-after-headers'
+  | { statusCode?: number; headers?: Record<string, string>; body?: string };
 
 interface CapturedCall {
   options: { method?: string; hostname?: string; path?: string; headers?: Record<string, string> };
@@ -35,11 +53,65 @@ interface CapturedCall {
   timeoutMs: number | undefined;
   destroyedWith: Error | undefined;
   fireTimeout: () => void;
+  /** What the fake socket reports as written, or `undefined` if none was assigned. */
+  socketBytesWritten: number | undefined;
+  /** Run the connect deadline's callback, as an unanswered DNS query would. */
+  fireConnectDeadline: () => void;
+  connectDeadlineCleared: boolean;
+  connectDeadlineUnrefed: boolean;
+}
+
+/** Marks the fake handle the connect deadline was given, so clears are attributable. */
+const CONNECT_DEADLINE_HANDLE = Symbol('connect-deadline');
+
+/** The one exchange that fails on the RESPONSE stream rather than the request. */
+const RESET_AFTER_HEADERS = 'reset-after-headers';
+
+/**
+ * Intercept ONLY the connect deadline's timer, so a test can fire it without
+ * waiting 30 real seconds and can observe that a successful request cleared it.
+ *
+ * Keyed on the delay, which is the one property that identifies it here — the
+ * inactivity budget goes through `req.setTimeout`, which the fake request object
+ * captures separately, and `node:timers/promises` `sleep` is a different binding
+ * this does not touch.
+ */
+function interceptConnectDeadline(currentCall: () => CapturedCall | undefined): void {
+  const realSetTimeout = globalThis.setTimeout;
+  const realClearTimeout = globalThis.clearTimeout;
+
+  vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+    fn: () => void, ms?: number, ...rest: unknown[]
+  ) => {
+    if (ms !== CONNECT_TIMEOUT_MS) {
+      return (realSetTimeout as (...a: unknown[]) => unknown)(fn, ms, ...rest);
+    }
+    const call = currentCall();
+    const handle = {
+      [CONNECT_DEADLINE_HANDLE]: true,
+      unref: (): unknown => {
+        if (call) call.connectDeadlineUnrefed = true;
+        return handle;
+      },
+    };
+    if (call) call.fireConnectDeadline = fn;
+    return handle;
+  }) as unknown as typeof setTimeout);
+
+  vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((handle: unknown) => {
+    if (handle !== null && typeof handle === 'object' && CONNECT_DEADLINE_HANDLE in handle) {
+      const call = currentCall();
+      if (call) call.connectDeadlineCleared = true;
+      return;
+    }
+    (realClearTimeout as (h: unknown) => void)(handle);
+  }) as unknown as typeof clearTimeout);
 }
 
 function createFakeTransport(script: Exchange[]): { calls: CapturedCall[]; requester: HttpRequester } {
   const calls: CapturedCall[] = [];
   const pending = [...script];
+  interceptConnectDeadline(() => calls.at(-1));
 
   const requester = (options: unknown, callback: (res: unknown) => void): unknown => {
     const chunks: Buffer[] = [];
@@ -50,6 +122,16 @@ function createFakeTransport(script: Exchange[]): { calls: CapturedCall[]; reque
       timeoutMs: undefined,
       destroyedWith: undefined,
       fireTimeout: () => undefined,
+      socketBytesWritten: undefined,
+      fireConnectDeadline: () => undefined,
+      connectDeadlineCleared: false,
+      connectDeadlineUnrefed: false,
+    };
+
+    /** Assign a socket the way Node does once the connection is established. */
+    const attachSocket = (bytesWritten: number): void => {
+      call.socketBytesWritten = bytesWritten;
+      req['socket'] = { bytesWritten, connecting: false, once: () => undefined };
     };
 
     req['setTimeout'] = (ms: number, onTimeout: () => void): unknown => {
@@ -70,12 +152,26 @@ function createFakeTransport(script: Exchange[]): { calls: CapturedCall[]; reque
       call.body = Buffer.concat(chunks);
       const exchange = pending.shift();
       if (exchange === undefined || exchange === 'stall') return req;
+      if (exchange === 'reset-before-socket') {
+        setImmediate(() => req.emit('error', new Error('getaddrinfo ENOTFOUND api.anthropic.com')));
+        return req;
+      }
+      if (exchange === 'reset') {
+        attachSocket(call.body.length);
+        setImmediate(() => req.emit('error', new Error('socket hang up')));
+        return req;
+      }
+      attachSocket(call.body.length);
       setImmediate(() => {
         const res: EventEmitter & Record<string, unknown> = Object.assign(new EventEmitter(), {
-          statusCode: exchange.statusCode ?? 200,
-          headers: exchange.headers ?? {},
+          statusCode: exchange === RESET_AFTER_HEADERS ? 200 : (exchange.statusCode ?? 200),
+          headers: exchange === RESET_AFTER_HEADERS ? {} : (exchange.headers ?? {}),
         });
         callback(res);
+        if (exchange === RESET_AFTER_HEADERS) {
+          res.emit('error', new Error('aborted'));
+          return;
+        }
         res.emit('data', Buffer.from(exchange.body ?? ''));
         res.emit('end');
       });
@@ -488,8 +584,145 @@ describe('retry, end to end through the transport', () => {
     const rateLimited: Exchange = { statusCode: 429, headers: { 'retry-after': '0' }, body: '{}' };
     const { calls, client } = clientWith([rateLimited, rateLimited, rateLimited, rateLimited]);
     await expect(client.getSkills(SKILLS_PATH)).rejects.toThrow('API error 429');
-    expect(calls.length).toBeGreaterThan(1);
-    expect(calls.length).toBeLessThan(4);
+    // EXACTLY three. `toBeGreaterThan(1) && toBeLessThan(4)` was satisfied by 2
+    // as well, so a budget silently cut from 3 to 2 survived the assertion.
+    expect(calls).toHaveLength(3);
+  });
+});
+
+// ── A failure that never earned a status ───────────────────────────────
+
+/**
+ * The two rejection shapes are not interchangeable, and the CLI's error text
+ * depends on telling them apart: a completed exchange is an `ApiRequestError`
+ * carrying a status, and a transport failure is an `ApiTransportError` carrying
+ * the bytes that left the socket. The CLI used to infer the second from "not the
+ * first", which made a missing API key print "the connection closed … VAT sent
+ * 6.8 KiB".
+ */
+describe('a transport failure carries what actually left the socket', () => {
+  /**
+   * A GET is idempotent, so a dropped connection IS replayed — the whole
+   * attempt budget has to be scripted or the client is left waiting on an
+   * exchange the fake never answers. Scripting one and letting the retry stall
+   * is how this suite hung the first time it was written.
+   */
+  const everyAttempt = (exchange: Exchange): Exchange[] => [exchange, exchange, exchange];
+
+  it('rejects with an ApiTransportError naming the bytes written', async () => {
+    const { calls, client } = clientWith(everyAttempt('reset'));
+    const failure = await client.getSkills(SKILLS_PATH).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ApiTransportError);
+    expect((failure as ApiTransportError).bytesSent).toBe(calls[0]?.socketBytesWritten);
+    expect((failure as ApiTransportError).deadlineExceeded).toBe(false);
+  });
+
+  it('reports zero bytes when no socket was ever assigned', async () => {
+    const { client } = clientWith(everyAttempt('reset-before-socket'));
+    const failure = await client.getSkills(SKILLS_PATH).catch((error: unknown) => error);
+
+    expect((failure as ApiTransportError).bytesSent).toBe(0);
+  });
+
+  /**
+   * A reset AFTER the headers arrived emits on the RESPONSE stream. With no
+   * listener there Node turns it into an unhandled 'error' event — a throw out of
+   * an emit, not a rejected promise — so the command died with a raw stack.
+   */
+  it('rejects rather than throwing when the response stream errors', async () => {
+    const { client } = clientWith(everyAttempt(RESET_AFTER_HEADERS));
+
+    await expect(client.getSkills(SKILLS_PATH)).rejects.toBeInstanceOf(ApiTransportError);
+  });
+
+  it('replays a dropped DELETE, so `delete --all` does not stop half-deleted', async () => {
+    // The OTHER half of the half-delete class. Retrying only STATUSES left a
+    // dropped connection part-way through the loop aborting it exactly as a 429
+    // used to.
+    const { calls, client } = clientWith(['reset', { statusCode: 204, body: '' }]);
+
+    await expect(client.deleteSkillVersion('skill_1', 'v1')).resolves.toBeUndefined();
+    expect(calls).toHaveLength(2);
+  });
+
+  it('never replays a dropped POST, which may already have created the skill', async () => {
+    const { calls, client } = clientWith(['reset', { statusCode: 200, body: '{"id":"unreachable"}' }]);
+
+    await expect(client.uploadSkill(buildMultipartFormData({}, []))).rejects.toBeInstanceOf(ApiTransportError);
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe('decideRetry', () => {
+  const reset = (): ApiTransportError => new ApiTransportError('socket hang up', 1024);
+  const deadline = (): ApiTransportError =>
+    new ApiTransportError('timed out', 1024, { deadlineExceeded: true });
+
+  it('replays a dropped connection on an idempotent method', () => {
+    expect(decideRetry('DELETE', 0, reset())).toEqual({ delayMs: expect.any(Number) });
+  });
+
+  it('never replays a dropped connection on a POST', () => {
+    expect(decideRetry('POST', 0, reset())).toEqual({ rethrow: expect.any(ApiTransportError) });
+  });
+
+  /**
+   * A deadline has already waited its full budget. Replaying one spends it again:
+   * three attempts on the 120 s inactivity budget is six minutes of silence
+   * before the operator hears anything, which is the opposite of what the
+   * timeout was added for.
+   */
+  it('never replays a deadline, even on an idempotent method', () => {
+    expect(decideRetry('DELETE', 0, deadline())).toEqual({ rethrow: expect.any(ApiTransportError) });
+  });
+
+  it('passes through an error that never reached the transport', () => {
+    const noKey = new Error('ANTHROPIC_API_KEY is required');
+    expect(decideRetry('GET', 0, noKey)).toEqual({ rethrow: noKey });
+  });
+
+  it('stops replaying once the attempt budget is spent', () => {
+    expect(decideRetry('DELETE', 99, reset())).toEqual({ rethrow: expect.any(ApiTransportError) });
+  });
+});
+
+// ── Getting a socket at all ────────────────────────────────────────────
+
+/**
+ * `req.setTimeout` arms on socket ASSIGNMENT, so until a socket exists there is
+ * no inactivity to measure. A DNS blackhole — a resolver that accepts the query
+ * and never answers — therefore hung the CLI indefinitely with no output, which
+ * is precisely the symptom the inactivity timeout was added to prevent.
+ */
+describe('connect deadline', () => {
+  it('destroys the request when no socket ever connects', async () => {
+    const { calls, client } = clientWith(['stall']);
+    const pending = client.getSkills(SKILLS_PATH).catch((error: unknown) => error);
+
+    calls[0]?.fireConnectDeadline();
+
+    const failure = await pending;
+    expect(String(failure)).toContain('Could not connect');
+    expect(String(failure)).toContain(String(CONNECT_TIMEOUT_MS));
+    // Nothing reached the wire, so the CLI must not speak of an unknown outcome.
+    expect((failure as ApiTransportError).bytesSent).toBe(0);
+    expect((failure as ApiTransportError).deadlineExceeded).toBe(true);
+  });
+
+  it('is cleared once the socket connects, so a long upload is never cut off', async () => {
+    const { calls, client } = clientWith([{ statusCode: 200, body: '{"ok":true}' }]);
+
+    await client.getSkills(SKILLS_PATH);
+
+    expect(calls[0]?.connectDeadlineCleared).toBe(true);
+  });
+
+  it('never holds the process open on its own', async () => {
+    const { calls, client } = clientWith([{ statusCode: 200, body: '{"ok":true}' }]);
+    await client.getSkills(SKILLS_PATH);
+
+    expect(calls[0]?.connectDeadlineUnrefed).toBe(true);
   });
 });
 

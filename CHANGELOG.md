@@ -455,6 +455,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The plugin-wide "sibling search root" behind `PACKAGED_REFERENCED_PATH_MISSING` was deleted, not
+  left unwired.** ~90 lines — a budgeted breadth-first mount-point walk, its truncated-search caveat
+  and two parameters — had **no production caller**: the packager is the only lane that runs the
+  check and it knows its own output directory, not the plugin the skill will be installed into.
+  Wiring it into `vat build`'s plugin-wide lane was considered and rejected (that lane's documented
+  stance is the opposite one, and it would report every finding twice). So `complete` was always
+  true, the caveat string could never ship, and the tests covering the walk attributed coverage to a
+  path production does not take. The **3.8%** measured misfire rate is unchanged — it was always the
+  one that shipped; the 1.9% row described a check VAT does not run. Callers of
+  `detectMissingReferencedPaths` now pass two arguments, not four.
+
 - **`vat claude org skills install` now refuses an over-ceiling bundle before uploading it, and
   reports sizes in the units it labels.** The Skills API's `413` is correct but arrives only after
   the whole body has crossed the wire — 11 s for a 30 MB bundle, measured — and names no file, so
@@ -465,7 +476,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the exclusions it just reported (evals, `node_modules`, `.git`) are already accounted for, and
   it applies to a `.zip` source as well as a directory — the one input that is by construction a
   single large binary. Separately, the progress line divided by 1024 and labelled the result "KB",
-  so a 35,900,338-byte bundle printed as `35058.9KB`; it now prints `35.9 MB`.
+  so a 35,900,338-byte bundle printed as `35058.9KB`; it now prints `34.2 MiB` — binary units,
+  because the ceiling it is read against is binary, and the label matches the divisor. Where a
+  size is compared to the ceiling the exact byte count is printed beside it, so a bundle one byte
+  over no longer reads `30.0 MiB … over the 30.0 MiB ceiling`.
 
 - **`eslint-plugin-sonarjs` upgraded 3.0.7 → 4.2.0, and its expanded rule set was adopted rather
   than switched off.** The bump was taken for a security reason (it retires three `minimatch`
@@ -535,6 +549,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--max-turns` is reported as unverifiable rather than confirmed.
 
 ### Security
+
+- **`vat claude org skills install` read symbolic links through to their targets and published the
+  result to a shared org workspace.** The collector refused only a link resolving to a *directory*;
+  a link to a *file* fell through both branches and `readFileSync` returned the target's bytes, so a
+  skill directory containing `notes.md -> /etc/passwd` uploaded 9,344 bytes of that file under the
+  in-bundle name `notes.md`, visible to every member of the workspace. Nothing in the run said a
+  link had been followed — the collector's "every withholding is reported" guarantee covers
+  exclusions, not dereferences. **Any symbolic link is now refused, whatever it resolves to**, and
+  the refusal names the path. A registry tarball could not plant one (node-tar 7 de-roots an
+  absolute linkpath, measured); the vector is a directory extracted with system `tar`, which does
+  recreate it, or cloned from an untrusted repo and handed to `install <dir>`. The build-time size
+  walk changed with it: it no longer weighs a linked file *through* the link, which its comment used
+  to defend as deliberate — "which matches the uploader". The two lanes did agree and both were
+  wrong. A link is now reported as an unweighed entry instead.
 
 - **Two supply-chain pins went stale and the dependency audit went red: `fast-uri` and `qs` are
   re-pinned to their patched releases.** New advisories landed against the exact versions the root
@@ -613,6 +641,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@vibe-validate/utils` and `yaml` to the installed tree.
 
 ### Fixed
+
+- **A missing API key made VAT claim a connection had closed and that it had sent 6.8 KiB.** The
+  transport annotation was gated on `!(error instanceof ApiRequestError)` — "anything that is not a
+  completed exchange must be a dropped connection". The header builder throws before a socket is
+  opened, so `ANTHROPIC_API_KEY= vat claude org skills install <dir>` told a first-time operator, on
+  top of the real message, that a connection had closed, that a 6.8 KiB body had gone out (the
+  length of a buffer that never left the process), and that the outcome was unknown — then sent them
+  to a recovery command that fails with the identical missing-key error. All three claims were
+  false. The annotation is now gated on a **recorded fact**: the client rejects a transport failure
+  as `ApiTransportError` carrying `bytesSent`, read off the socket at failure time. An error that
+  never reached the transport passes through untouched, and a failure that sent **zero** bytes now
+  says nothing was created rather than that the outcome is unknown.
+
+- **`vat claude org skills delete` reported `status: success` and exited 0 when the API said the
+  skill was NOT deleted.** `deleted: false` was computed and printed, and nothing branched on it, so
+  a CI wrapper spelled `… delete X || fail` reported green while the skill still existed. It now
+  ends on the same `orgCommandFailure` path the `--from-npm` batch uses: the document is still
+  published, the run exits **1**. `delete --all` also no longer discards its own report — a failure
+  part-way through the version loop lists the versions it irreversibly destroyed under
+  `deletedVersions` and exits 1, instead of throwing into exit 2 ("the run could not happen") with
+  no record of what it deleted. The version-delete lane accepts both `skill_version_deleted` and the
+  measured `skill_deleted`, because only the second has ever been seen from the live API and a
+  single guessed string would have failed every run.
+
+- **A DNS blackhole hung the CLI with no output — the exact symptom the request timeout was added to
+  prevent.** `req.setTimeout` arms on socket *assignment*, so until a socket exists there is no
+  inactivity to measure. A separate 30 s **connect deadline** now covers DNS, TCP and TLS, and is
+  cleared the moment the socket connects so a long upload is never cut off. A reset arriving *after*
+  the response headers also gets a listener: it emits on the response stream, and with none there
+  Node turned it into an unhandled `error` event — a throw, not a rejection — so the command died
+  with a raw stack.
+
+- **A dropped connection part-way through `delete --all` aborted the loop and left the skill
+  half-deleted.** Retrying covered statuses only, while `send`'s docstring claimed it had closed the
+  class. Transport failures on idempotent methods are now replayed too. A deadline is never
+  replayed (it has already waited its full budget) and a POST is never replayed at all.
+
+- **`vat claude org skills install MySkill.ZIP` was refused as "not a directory or .zip file".**
+  `endsWith('.zip')` is case-sensitive, and the refusal gave an operator no way to read it as being
+  about capitalisation. Both the match and the title derivation are now case-insensitive.
+
+- **`--title` with `--from-npm`, and `--skill` without it, were accepted and silently ignored.** The
+  first can publish a skill under the wrong title, the second publishes every skill in a package
+  when the operator named one. Both are now refused with exit 2, like the two illegal combinations
+  that already were.
+
+- **`vat claude org skills versions add` warned about behaviour the server forbids, and had no
+  remedy for the one refusal it can earn.** The code and the help said a changed frontmatter `name`
+  "silently re-roots" the version's file tree; measured, the server enforces name consistency per
+  `skill_id`, so it is a loud 400. That 400 previously arrived as the bare vendor sentence; it now
+  carries both fixes (restore the name, or publish the renamed tree as a new skill with `install`).
+
+- **A size finding's waiver anchor was non-deterministic on ties.** `link` — the key a
+  `validation.allow` entry matches — came from a size sort with no tiebreak over a `readdir`-ordered
+  walk, so two equal-sized files (a vendored runtime shipped twice, the shape that motivated the
+  check) could anchor either way. A waiver written on macOS then missed on a Linux CI runner *and*
+  was reported `ALLOW_UNUSED`. Ties now break by path in code-point order.
+
+- **A bundle one byte over the ceiling printed `30.0 MiB … over the 30.0 MiB ceiling`.**
+  `formatBytes` rounds to one decimal. Sizes compared against the ceiling now carry their exact byte
+  count alongside the rounded form.
+
+- **`MCP_TOOL_NAME_UNQUALIFIED` could learn a one-word tool name and then fire on the English word.**
+  The `ServerName:tool_name` spelling required an underscore in the tool half and the `mcp__…`
+  spelling required nothing, so `mcp__claude-in-chrome__find` seeded the vocabulary with `find`.
+  Both spellings now require a multi-segment name (an underscore *or* a hyphen — kebab-cased tools
+  like `resolve-library-id` stay in). The cost is that a genuinely single-word tool spelled bare goes
+  unreported, which is the safe direction for a warning whose whole argument is precision.
+
+- **A Windows operator's absolute `<source>` path was joined onto the working directory.**
+  `source.startsWith('/')` is false for `D:\builds\skill`, so the command reported
+  `Source not found: <cwd>/D:/builds/skill`. It now uses `isAbsoluteAnyPlatform`, which answers for
+  POSIX roots, drive letters and UNC paths on every host — so a POSIX-only CI can see the
+  drive-letter case at all.
 
 - **`vat claude org --help` told every reader that skills commands need two keys.** It said
   `Requires ANTHROPIC_ADMIN_API_KEY` followed by `Skills commands also require ANTHROPIC_API_KEY`,

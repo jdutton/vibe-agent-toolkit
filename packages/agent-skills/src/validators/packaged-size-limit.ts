@@ -105,7 +105,23 @@ import { safePath } from '@vibe-agent-toolkit/utils';
  * lane. Do not harmonise the two operators: they are applied to different
  * quantities and each is right about the one it can see.
  *
- * @vendor-claim reviewed=2026-09-06 verify=Re-measure rather than re-read — the docs do not state the unit. Upload two skill bundles via `vat claude org skills install`, one just under and one just over this constant, and confirm the first is accepted and the second returns 413. Adjust only if the bracket moves.
+ * ## If the bracket ever moves, these surfaces do NOT follow automatically
+ *
+ * Nothing derives the prose from this constant, so a re-measurement is a
+ * multi-file edit and the list belongs here, next to the number, rather than in
+ * whichever file the next maintainer happens to open:
+ *
+ * 1. This constant.
+ * 2. `docs/validation-codes.md`, `PACKAGED_SIZE_EXCEEDS_API_LIMIT` — several
+ *    bullets restate both the MiB figure and the exact byte count.
+ * 3. The `PACKAGED_SIZE_EXCEEDS_API_LIMIT` entry in
+ *    `packages/schema/src/validation-codes.ts` (its `description`).
+ * 4. The `vat-skill-review` skill's checklist item for the same code.
+ *
+ * The two `vat claude org skills` help texts interpolate this constant and need
+ * no edit. `CHANGELOG.md` is history and is never restated.
+ *
+ * @vendor-claim reviewed=2026-09-06 verify=Re-measure rather than re-read — the docs do not state the unit. Upload two skill bundles via `vat claude org skills install`, one just under and one just over this constant, and confirm the first is accepted and the second returns 413. Adjust only if the bracket moves; if it does, update the four surfaces listed above.
  */
 export const API_SKILL_MAX_UPLOAD_BYTES = 31_457_280;
 
@@ -197,6 +213,19 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(1)} ${BYTE_UNITS[unit] ?? ''}`.trimEnd();
 }
 
+/**
+ * A size AND its exact byte count, for the two numbers a refusal compares.
+ *
+ * {@link formatBytes} rounds to one decimal, so a bundle one byte over the
+ * ceiling read `30.0 MiB … over the 30.0 MiB ceiling` — a sentence that refutes
+ * itself and leaves an author with no way to know how much to cut. Rounded for
+ * scanning, exact for acting on; the ceiling is quoted the same way so the two
+ * can actually be compared as written.
+ */
+function sizeWithExactBytes(bytes: number): string {
+  return `${formatBytes(bytes)} (${bytes.toLocaleString('en-US')} bytes)`;
+}
+
 /** Mutable accumulator for {@link walkBundle}; the exported view is readonly. */
 interface WalkAccumulator {
   files: SizedFile[];
@@ -236,15 +265,21 @@ function bundleRelative(root: string, target: string): string {
  *
  * ## Symlinks, exactly
  *
- * A symlinked FILE is measured through the link: `statSync` follows it, so a link
- * resolving to a 30 MB file contributes 30 MB — which matches the uploader, whose
- * `readFileSync` reads the target's bytes.
+ * **No symlink is weighed, whatever it resolves to** — each becomes an unweighed
+ * entry naming the link, and the receipt says the uploader refuses it outright.
  *
- * A symlinked DIRECTORY is NOT walked and contributes nothing, because
- * `Dirent.isDirectory()` is lstat-based and answers `false` for it, so the entry
- * never reaches the stack. That is a genuine under-count, so it becomes an
- * unweighed entry rather than a silent zero — as does any other non-regular
- * entry (device, socket, FIFO) and any dangling link, whose `statSync` throws.
+ * ⚠️ An earlier version of this comment defended measuring a linked FILE
+ * *through* the link — "a link resolving to a 30 MB file contributes 30 MB,
+ * which matches the uploader, whose `readFileSync` reads the target's bytes."
+ * The two lanes did agree, and both were wrong: reading through the link is how
+ * `notes.md -> /etc/passwd` got published into a shared workspace. The uploader
+ * now refuses any symlink, so there is no such upload to weigh, and pricing one
+ * here would put a number on bytes that can never be sent.
+ *
+ * A symlinked DIRECTORY was never walked and contributed nothing, because
+ * `Dirent.isDirectory()` is lstat-based and answers `false` for it. Now it is
+ * reported for the same reason as the linked file, alongside any other
+ * non-regular entry (device, socket, FIFO) and any dangling link.
  */
 function walkBundle(root: string): BundleWalk {
   const acc: WalkAccumulator = { files: [], unweighed: [] };
@@ -256,6 +291,15 @@ function walkBundle(root: string): BundleWalk {
       const full = safePath.join(dir, dirent.name);
       if (dirent.isDirectory()) {
         if (!NEVER_UPLOADED_DIR_NAMES.has(dirent.name)) stack.push(full);
+        continue;
+      }
+      if (dirent.isSymbolicLink()) {
+        acc.unweighed.push({
+          path: bundleRelative(root, full),
+          reason:
+            'it is a symbolic link, which the uploader refuses rather than following — '
+            + 'no byte of its target can be sent, so none is weighed here',
+        });
         continue;
       }
       weighEntry(full, bundleRelative(root, full), acc);
@@ -294,13 +338,31 @@ function weighEntry(full: string, rel: string, acc: WalkAccumulator): void {
   }
   acc.unweighed.push({
     path: rel,
-    reason: 'it is not a regular file (a symbolic link to a directory, a device, or a socket)',
+    // Symbolic links never reach here — they are caught by the walk, which does
+    // not follow one. What is left is a device, a socket or a FIFO.
+    reason: 'it is not a regular file (a device, a socket, or a FIFO)',
   });
 }
 
-/** The bundle's files, heaviest first — the order both the message and the anchor want. */
+/**
+ * The bundle's files, heaviest first — the order both the message and the anchor
+ * want — with EQUAL sizes broken by path, in code-point order.
+ *
+ * 🔑 The tiebreak is not cosmetic: the heaviest file becomes the finding's `link`,
+ * and `link` is the key an adopter's `validation.allow` entry matches. Sorting on
+ * bytes alone left ties in the order `readdir` happened to return them, so two
+ * equal-sized files — a vendored runtime shipped twice, which is exactly the shape
+ * that motivated this check — could swap between a developer's macOS box and a
+ * Linux CI runner. The waiver then matched locally, missed in CI, and was reported
+ * `ALLOW_UNUSED` in the run that needed it.
+ *
+ * The comparator is explicit code points rather than `localeCompare`, for the same
+ * reason `walkableChildren` in the sibling module gives: the order only has to be
+ * the SAME everywhere, and `localeCompare` is locale- and ICU-dependent.
+ */
 function largestFirst(files: readonly SizedFile[]): SizedFile[] {
-  return [...files].sort((a, b) => b.bytes - a.bytes);
+  return [...files].sort((a, b) =>
+    b.bytes - a.bytes || (a.path < b.path ? -1 : Number(a.path > b.path)));
 }
 
 /**
@@ -350,11 +412,11 @@ export function describeOversizeBundle(
   const across = `${files.length} ${plural('file', files.length)}`;
   const fileBytes = files.reduce((sum, file) => sum + file.bytes, 0);
   const subject = measure.of === 'upload-request'
-    ? `Upload request body is ${formatBytes(measure.bytes)} — ${formatBytes(fileBytes)} `
+    ? `Upload request body is ${sizeWithExactBytes(measure.bytes)} — ${formatBytes(fileBytes)} `
       + `of file content across ${across}, plus per-part multipart framing —`
-    : `Packaged skill is ${formatBytes(measure.bytes)} across ${across},`;
+    : `Packaged skill is ${sizeWithExactBytes(measure.bytes)} across ${across},`;
   return (
-    `${subject} over the ${formatBytes(limitBytes)} Anthropic Skills API ` +
+    `${subject} over the ${sizeWithExactBytes(limitBytes)} Anthropic Skills API ` +
     `upload ceiling. Largest: ${named}${tail}`
   );
 }

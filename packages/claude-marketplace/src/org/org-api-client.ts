@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import type { ClientRequest, IncomingMessage } from 'node:http';
 import https from 'node:https';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -109,6 +110,19 @@ export type HttpRequester = typeof https.request;
 /** Socket-INACTIVITY budget: a slow-but-progressing 30 MB upload is never penalised. */
 export const REQUEST_INACTIVITY_TIMEOUT_MS = 120_000;
 
+/**
+ * Deadline for getting a CONNECTED socket at all — DNS plus TCP plus TLS.
+ *
+ * Separate from {@link REQUEST_INACTIVITY_TIMEOUT_MS} because `req.setTimeout`
+ * arms on socket ASSIGNMENT: until a socket exists there is no inactivity to
+ * measure, so a DNS blackhole (a resolver that accepts the query and never
+ * answers) hangs the CLI indefinitely with no output — precisely the symptom the
+ * inactivity timeout was added to prevent. This timer starts the moment the
+ * request is created and is cleared as soon as the socket connects, so it never
+ * penalises a long upload over an established connection.
+ */
+export const CONNECT_TIMEOUT_MS = 30_000;
+
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 500;
 const RETRY_MAX_DELAY_MS = 60_000;
@@ -126,6 +140,51 @@ export class ApiRequestError extends Error {
     this.name = 'ApiRequestError';
   }
 }
+
+/**
+ * A request that never earned a status, carrying the ONE fact a caller needs to
+ * describe it honestly: how many bytes actually left this process.
+ *
+ * 🔑 **The count is recorded, not inferred.** It is read off the socket
+ * (`bytesWritten`) at the moment the failure surfaced, so `0` is a measurement
+ * that nothing was sent — a DNS blackhole, a refused connection, a TLS handshake
+ * that never completed — and not a guess. That distinction is the whole point of
+ * this class: a caller that annotated a failure with "the connection closed and
+ * VAT sent N KiB" by testing `!(error instanceof ApiRequestError)` told a
+ * first-time operator with no API key that a connection had closed and that a
+ * request body had gone out, when the throw happened before a socket existed.
+ * **An error's CLASS is not evidence about how far the work got.** This one
+ * carries the evidence instead, and an error that never reached the transport is
+ * simply not one of these.
+ */
+export class ApiTransportError extends Error {
+  /**
+   * True when THIS client gave up on a deadline it set, rather than the network
+   * failing. A deadline has already waited its full budget, so replaying it just
+   * waits again — three attempts on a 120 s inactivity budget is six minutes of
+   * silence before the operator is told anything.
+   */
+  readonly deadlineExceeded: boolean;
+
+  constructor(
+    message: string,
+    /** Bytes this process wrote to the socket before the failure — measured, not estimated. */
+    readonly bytesSent: number,
+    options?: { cause?: unknown; deadlineExceeded?: boolean },
+  ) {
+    super(message, options);
+    this.name = 'ApiTransportError';
+    this.deadlineExceeded = options?.deadlineExceeded ?? false;
+  }
+}
+
+/**
+ * A deadline this client imposed — the inactivity budget or the connect budget.
+ *
+ * A class rather than a message test, because the retry decision must rest on a
+ * fact recorded where the decision was MADE, not on parsing the words back out.
+ */
+class RequestDeadlineExceeded extends Error {}
 
 export type ApiResponseOutcome<T> =
   | { readonly ok: true; readonly value: T }
@@ -212,6 +271,23 @@ export function isRetryableFailure(method: string, statusCode: number | undefine
   return statusCode !== undefined && RETRYABLE_STATUSES.has(statusCode);
 }
 
+/**
+ * Whether a failure that never earned a status should be tried again.
+ *
+ * A transport failure says nothing about whether the origin acted, so the METHOD
+ * has to: replaying a DELETE that may or may not have landed reaches the same end
+ * state, replaying a POST can create a second skill. This is the OTHER half of
+ * the half-delete class {@link isRetryableFailure} addresses — `delete --all`
+ * removes every version in a loop, and a dropped connection part-way through
+ * aborted it exactly as a 429 did, leaving the skill half-deleted. Retrying only
+ * STATUSES closed one of the two causes, and `send`'s docstring used to claim it
+ * closed both.
+ */
+export function isRetryableTransportFailure(method: string, attempt: number): boolean {
+  if (attempt + 1 >= MAX_RETRY_ATTEMPTS) return false;
+  return IDEMPOTENT_METHODS.has(method.toUpperCase());
+}
+
 /** Delay before the next attempt: the server's `Retry-After` if it sent one, else backoff. */
 export function nextRetryDelayMs(attempt: number, retryAfterMs?: number): number {
   const requested = retryAfterMs ?? RETRY_BASE_DELAY_MS * 2 ** attempt;
@@ -250,6 +326,114 @@ export interface ReportPaginationParams {
   starting_at?: string;
   ending_at?: string;
   next_page?: string;
+}
+
+/** Wait this long and try again, or give up with this error. */
+export type RetryDecision =
+  | { readonly delayMs: number }
+  | { readonly rethrow: unknown };
+
+/**
+ * What one failed attempt means for the next one — the WHOLE of the retry
+ * policy, in one pure function.
+ *
+ * Extracted from `send` both to keep that loop under the complexity ceiling and
+ * because the policy is the part worth testing directly: three inputs, one
+ * decision, no transport. The loop's only job is to honour it.
+ *
+ * Two failure shapes are handled and they are not symmetric. A status the origin
+ * returned is retried per {@link isRetryableFailure}, and when it is not, the
+ * error gains {@link notRetriedNote} so a rate limit VAT declined to replay reads
+ * as a decision rather than a flat refusal. A failure with NO status is retried
+ * per {@link isRetryableTransportFailure} — method-only, since nothing here says
+ * whether the origin acted — and is rethrown untouched, because the CLI annotates
+ * it from the bytes it carries.
+ */
+export function decideRetry(method: string, attempt: number, error: unknown): RetryDecision {
+  if (error instanceof ApiTransportError) {
+    // A deadline is never replayed, whatever the method: it already waited its
+    // full budget, so a retry only spends it again — three attempts on the 120 s
+    // inactivity budget is six minutes before the operator hears anything.
+    const replayable = !error.deadlineExceeded && isRetryableTransportFailure(method, attempt);
+    return replayable ? { delayMs: nextRetryDelayMs(attempt) } : { rethrow: error };
+  }
+  if (!(error instanceof ApiRequestError)) return { rethrow: error };
+  if (isRetryableFailure(method, error.statusCode, attempt)) {
+    return { delayMs: nextRetryDelayMs(attempt, parseRetryAfterMs(error.retryAfterHeader, Date.now())) };
+  }
+  return {
+    rethrow: new ApiRequestError(
+      error.message + notRetriedNote(method, error.statusCode, attempt + 1),
+      error.statusCode,
+      error.retryAfterHeader,
+    ),
+  };
+}
+
+/**
+ * Start the connect deadline and clear it the moment a socket is connected.
+ *
+ * Extracted from `request` because it is a self-contained lifecycle — arm, watch
+ * for a connect, disarm — and inlining it pushed that method past the cognitive
+ * complexity ceiling.
+ */
+function armConnectDeadline(
+  req: ClientRequest,
+  origin: string,
+  clear: () => void,
+): ReturnType<typeof setTimeout> {
+  const deadline = setTimeout(() => {
+    req.destroy(new RequestDeadlineExceeded(
+      `Could not connect to ${origin} within ${String(CONNECT_TIMEOUT_MS)}ms — ` +
+      'DNS resolution or the TCP/TLS handshake never completed, so nothing was sent.',
+    ));
+  }, CONNECT_TIMEOUT_MS);
+  // Never a reason for the process to stay alive; the request itself is.
+  deadline.unref?.();
+  req.on('socket', (socket) => {
+    if (socket.connecting) socket.once('connect', clear);
+    else clear();
+  });
+  return deadline;
+}
+
+/** Bytes a request handed to its socket — 0 when no socket was ever assigned. */
+function bytesWrittenBy(req: ClientRequest): number {
+  const written: unknown = req.socket?.bytesWritten;
+  return typeof written === 'number' ? written : 0;
+}
+
+/**
+ * Wire one response to the promise: its body on success, the typed failure
+ * otherwise.
+ *
+ * A separate function so `request` stays under the complexity ceiling, and
+ * because the three outcomes here — parsed, refused with a status, reset after
+ * the headers — are one decision that belongs together.
+ */
+function readResponse<T>(
+  res: IncomingMessage,
+  req: ClientRequest,
+  resolve: (value: T) => void,
+  reject: (error: Error) => void,
+): void {
+  const chunks: Buffer[] = [];
+  res.on('data', (chunk: Buffer) => chunks.push(chunk));
+  // A reset AFTER the headers arrived emits on the RESPONSE stream, not the
+  // request. With no listener Node turns that into an unhandled 'error' event —
+  // a thrown exception out of an emit, not a rejected promise — so the command
+  // died with a raw stack instead of the annotated failure the CLI builds.
+  res.on('error', (error: Error) => {
+    reject(new ApiTransportError(error.message, bytesWrittenBy(req), { cause: error }));
+  });
+  res.on('end', () => {
+    const outcome = interpretApiResponse<T>(res.statusCode, Buffer.concat(chunks).toString('utf-8'));
+    if (outcome.ok) {
+      resolve(outcome.value);
+      return;
+    }
+    reject(new ApiRequestError(outcome.message, res.statusCode, retryAfterOf(res.headers)));
+  });
 }
 
 export class OrgApiClient {
@@ -380,13 +564,17 @@ export class OrgApiClient {
   }
 
   /**
-   * Send one request, retrying only what `isRetryableFailure` allows.
+   * Send one request, retrying only what `isRetryableFailure` (a status) or
+   * `isRetryableTransportFailure` (no status at all) allows.
    *
    * Retrying matters because these calls run in loops — `delete --all` removes every
-   * version before the skill, and a rate limit part-way through used to abort the loop
-   * and leave the skill half-deleted. The DELETEs are idempotent, so replaying one is
-   * safe. A POST is never replayed; when one fails with a status a retry would have
-   * cleared, the error says so instead of silently doing nothing.
+   * version before the skill, and an interruption part-way through used to abort the
+   * loop and leave the skill half-deleted. There are TWO ways that happens: a
+   * retryable status, and a connection that drops without ever producing one. Both
+   * are replayed here, and only for idempotent methods. A POST is never replayed;
+   * when one fails with a status a retry would have cleared, the error says so
+   * instead of silently doing nothing, and when one fails with no status the caller
+   * is told exactly how far it got.
    */
   private async send<T>(
     method: string,
@@ -398,19 +586,24 @@ export class OrgApiClient {
       try {
         return await this.request<T>(method, url, headers, body);
       } catch (error) {
-        if (!(error instanceof ApiRequestError)) throw error;
-        if (!isRetryableFailure(method, error.statusCode, attempt)) {
-          throw new ApiRequestError(
-            error.message + notRetriedNote(method, error.statusCode, attempt + 1),
-            error.statusCode,
-            error.retryAfterHeader,
-          );
-        }
-        await sleep(nextRetryDelayMs(attempt, parseRetryAfterMs(error.retryAfterHeader, Date.now())));
+        const decision = decideRetry(method, attempt, error);
+        if ('rethrow' in decision) throw decision.rethrow;
+        await sleep(decision.delayMs);
       }
     }
   }
 
+  /**
+   * One attempt, resolving the parsed body or rejecting with the error that
+   * describes what actually happened.
+   *
+   * Two rejection shapes, and the difference is load-bearing: a completed
+   * exchange is an {@link ApiRequestError} carrying its status, and a failure
+   * that never earned one is an {@link ApiTransportError} carrying the bytes
+   * that left the socket. Every caller downstream reads the second to decide
+   * what it may honestly SAY about the request, so the count is taken from the
+   * socket at failure time rather than from the buffer that was handed in.
+   */
   private request<T>(method: string, url: string, headers: Record<string, string>, body?: Buffer): Promise<T> {
     return new Promise((resolve, reject) => {
       const parsed = new URL(url);
@@ -421,30 +614,40 @@ export class OrgApiClient {
         headers,
       };
 
+      // Declared before the request so the response callback can clear it without
+      // depending on a hoisted binding.
+      let connectDeadline: ReturnType<typeof setTimeout> | undefined;
+      const clearConnectDeadline = (): void => {
+        if (connectDeadline !== undefined) clearTimeout(connectDeadline);
+        connectDeadline = undefined;
+      };
+
       const req = this.httpRequest(options, (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (chunk: Buffer) => chunks.push(chunk));
-        res.on('end', () => {
-          const outcome = interpretApiResponse<T>(res.statusCode, Buffer.concat(chunks).toString('utf-8'));
-          if (outcome.ok) {
-            resolve(outcome.value);
-            return;
-          }
-          reject(new ApiRequestError(outcome.message, res.statusCode, retryAfterOf(res.headers)));
-        });
+        clearConnectDeadline();
+        readResponse<T>(res, req, resolve, reject);
       });
 
       // Node's request timeout is socket INACTIVITY, not total duration, so a slow but
       // progressing 30 MB upload is never cut off — only a connection that has stopped
       // moving is. Without this a stalled TCP connection hung the CLI with no output.
       req.setTimeout(REQUEST_INACTIVITY_TIMEOUT_MS, () => {
-        req.destroy(new Error(
+        req.destroy(new RequestDeadlineExceeded(
           `Request timed out: ${method} ${parsed.origin}${parsed.pathname} moved no data for ` +
           `${String(REQUEST_INACTIVITY_TIMEOUT_MS)}ms. The connection stalled; nothing was confirmed.`,
         ));
       });
 
-      req.on('error', reject);
+      // …and the deadline for getting a socket in the first place, which the one
+      // above cannot cover: it arms on socket ASSIGNMENT. See CONNECT_TIMEOUT_MS.
+      connectDeadline = armConnectDeadline(req, parsed.origin, clearConnectDeadline);
+
+      req.on('error', (error: Error) => {
+        clearConnectDeadline();
+        reject(new ApiTransportError(error.message, bytesWrittenBy(req), {
+          cause: error,
+          deadlineExceeded: error instanceof RequestDeadlineExceeded,
+        }));
+      });
       if (body) {
         req.write(body);
       }

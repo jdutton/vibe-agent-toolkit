@@ -36,11 +36,13 @@
  * name in the body below it is then simply a document that never qualified the
  * tool at all.
  *
- * Enforcing that HERE rather than at each call site is deliberate: it used to
- * hold only because the SKILL.md lane in `packaging-validator.ts` happened to
- * pass a frontmatter-stripped slice, while the same file's bundled-`.md` lane
- * passed whole files straight off disk. One lane obeyed the invariant its own
- * comment asserted and the other did not.
+ * Enforcing that HERE rather than at each call site is deliberate, and it is the
+ * only place it has ever held. ⛔ An earlier version of this paragraph said the
+ * SKILL.md lane in `packaging-validator.ts` "happened to pass a
+ * frontmatter-stripped slice" while the bundled-`.md` lane passed whole files.
+ * It does not and never did: `parseFileCached(...).content` is the raw source
+ * verbatim — that file says so itself, 190 lines above the call — so BOTH lanes
+ * fed frontmatter to the detector until this stripping landed.
  *
  * ## The uppercase rule in the API form, and why it is load-bearing
  *
@@ -76,13 +78,24 @@
  * All 11 occurrences were read: every one names a tool bare that the same
  * document qualifies in its own prose. Zero false positives.
  *
+ * ✅ **Re-measured after the multi-segment gate landed, and the table did not
+ * move**: both rows are identical (0 and 11), because every tool in this
+ * population is already multi-word. So the gate closes a structural hole without
+ * costing recall on anything observed — which is the only honest way to report
+ * it, since a precision change that nobody re-ran is a claim rather than a
+ * measurement.
+ *
  * The pre-fix detector, run over the SAME 677 documents, reported 19
  * occurrences from the same 7 documents. The extra 8 were four copies of one
  * skill naming `create_repository` and `create_branch` bare, whose only
- * qualified spelling is its `allowed-tools:` frontmatter — so those 8 were
- * never emitted by the shipped SKILL.md lane, which has always passed a
- * frontmatter-stripped slice. The old number described the probe, not the
- * product; this one describes both lanes, because both now strip.
+ * qualified spelling is its `allowed-tools:` frontmatter.
+ *
+ * ⛔ Those 8 WERE shipped. This paragraph used to claim the SKILL.md lane had
+ * "always passed a frontmatter-stripped slice" and that the 19 therefore
+ * described the probe rather than the product. `parseFileCached(...).content` is
+ * the raw file, frontmatter and all, so the shipped lane emitted every one of
+ * them. The 19 → 11 delta is a real behaviour change this detector made, not a
+ * correction to a probe.
  *
  * `warning`, not `error`: with a single MCP server mounted the bare name
  * usually resolves, so the skill is degraded rather than broken.
@@ -128,7 +141,7 @@ const CLAUDE_CODE_QUALIFIED = /\bmcp__[\w-]+?__([a-z][a-z0-9_-]*)\b/gu;
 /**
  * `ServerName:tool_name` — the API spelling. Deliberately shapeless: two flat
  * classes either side of a literal `:`, with every *judgement* about the halves
- * made in code by {@link SERVER_IS_NAMED} and {@link isSnakeCaseToolName}.
+ * made in code by {@link SERVER_IS_NAMED} and {@link isMultiSegmentToolName}.
  *
  * The natural spelling encodes both judgements inline —
  * `(?=[A-Za-z0-9-]*[A-Z])[A-Za-z][A-Za-z0-9-]*:([a-z][a-z0-9_]*_[a-z0-9_]+)` —
@@ -198,18 +211,33 @@ function withoutTrailingSeparators(tool: string): string {
 }
 
 /**
- * A tool half is snake_case: it opens with a lowercase letter and carries at
- * least one underscore.
+ * A tool half opens with a lowercase letter and is MULTI-SEGMENT — it carries an
+ * underscore or a hyphen.
+ *
+ * Applied to BOTH spellings; see {@link qualifiedNamesIn}. Gating only the API
+ * form let the `mcp__` form contribute ONE-WORD names to the vocabulary, so
+ * `mcp__claude-in-chrome__find` seeded `find` and every later code span spelling
+ * that ordinary English word became a finding. Same family as the uppercase-server
+ * rule, and not closed by the hyphen fix: that one stopped a name being TRUNCATED
+ * at its hyphen, this one stops a name that is one word to begin with.
+ *
+ * ⚠️ The separator set is `_` OR `-`, not `_` alone. Requiring an underscore
+ * would drop `resolve-library-id` and `query-docs` — real, kebab-spelled MCP
+ * tools whose whole capture the hyphen fix exists to preserve. What earns a place
+ * in the vocabulary is being multi-word, because that is what makes a bare
+ * occurrence unambiguous; `find` is a word, `resolve-library-id` is a name. The
+ * API lane's capture is `[a-z0-9_]+` and can hold no hyphen, so widening the
+ * predicate leaves that lane exactly as it was.
  *
  * Written as a predicate rather than the obvious `^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$`
  * because that spelling nests a quantifier inside a quantifier, which
- * `security/detect-unsafe-regex` flags as a ReDoS shape. The capture this runs on
- * is already `[a-z0-9_]+`, so the only two things left to decide are the first
- * character and the presence of an underscore — and `String.includes` decides the
- * second in linear time with nothing to backtrack.
+ * `security/detect-unsafe-regex` flags as a ReDoS shape. The captures this runs
+ * on are already character-class-constrained, so the only things left to decide
+ * are the first character and the presence of a separator — and `String.includes`
+ * decides that in linear time with nothing to backtrack.
  */
-function isSnakeCaseToolName(tool: string): boolean {
-  return TOOL_STARTS_LOWERCASE.test(tool) && tool.includes('_');
+function isMultiSegmentToolName(tool: string): boolean {
+  return TOOL_STARTS_LOWERCASE.test(tool) && (tool.includes('_') || tool.includes('-'));
 }
 
 /** Inline code spans. Newline-free so a runaway backtick cannot swallow a paragraph. */
@@ -248,12 +276,22 @@ function qualifiedNamesIn(text: string): Set<string> {
   const vocabulary = new Set<string>();
   for (const match of text.matchAll(CLAUDE_CODE_QUALIFIED)) {
     const tool = withoutTrailingSeparators(match[1] ?? '');
-    if (tool !== '') vocabulary.add(tool);
+    // The SAME multi-segment gate the API lane applies, and for the same reason.
+    // It used to sit on one lane only: `API_QUALIFIED` demanded an underscore
+    // while `mcp__…` demanded nothing, so `mcp__claude-in-chrome__find` seeded
+    // the vocabulary with `find` and every later code span spelling that ordinary
+    // word became a finding. Structurally the same class as the hyphen bug
+    // (`resolve-library-id` → `resolve`), which the hyphen fix does not close —
+    // that one truncated a name, this one admits a name that is one word to begin
+    // with. The cost is that a genuinely single-word MCP tool spelled bare goes
+    // unreported, which is the safe direction for a warning whose whole argument
+    // is precision.
+    if (tool !== '' && isMultiSegmentToolName(tool)) vocabulary.add(tool);
   }
   for (const match of text.matchAll(API_QUALIFIED)) {
     const [, server, tool] = match;
     if (server === undefined || tool === undefined) continue;
-    if (!SERVER_IS_NAMED.test(server) || !isSnakeCaseToolName(tool)) continue;
+    if (!SERVER_IS_NAMED.test(server) || !isMultiSegmentToolName(tool)) continue;
     vocabulary.add(tool);
   }
   return vocabulary;

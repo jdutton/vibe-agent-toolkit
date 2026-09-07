@@ -18,25 +18,23 @@
  *
  * ## The three rules, and why each exists
  *
- * All three were derived by measuring fire rates over 691 skills across three
- * corpora (two of them live marketplaces). Dropping any one of them makes the
- * check unusable, and the numbers are the argument:
+ * ## The two rules, and why each exists
+ *
+ * Fire rates measured over **684 skills across two corpora** (one of them a live
+ * marketplace). ⚠️ The heading and the prose here used to say "three rules" over
+ * "691 skills across three corpora" above a table listing two that sum to 684 —
+ * and to add that "dropping any one of them makes the check unusable" thirteen
+ * lines above the note that rule 3 has no production caller. Rule 3 IS dropped,
+ * the check ships anyway, and both of those sentences are gone rather than
+ * re-dated.
  *
  * | Rule | adopter A, 52 built skills | 632-skill install corpus |
  * |---|---|---|
  * | candidates only | 65.4% | 52.1% |
- * | + literal (this module) | 46.2% | 47.5% |
- * | + bundled-subdir prefix | **3.8%** | **10.4%** |
- * | + sibling search root | **1.9%** | 8.9% |
+ * | + literal (rule 1) | 46.2% | 47.5% |
+ * | + bundled-subdir prefix (rule 2) | **3.8%** | **10.4%** |
  *
- * ⚠️ **Rules 1 and 2 are what SHIPS. Rule 3 has no production caller**, so the
- * shipped check runs at the 3.8% row, not the 1.9% one. `checkMissingReferencedPaths`
- * is invoked from exactly one place — the packager, which knows its own output
- * directory and not the plugin it will be installed into — and it is not exported
- * from the package root, so no CLI lane can reach it either. The parameter and its
- * measurement are kept because the sibling population is real and the seam is the
- * only place a plugin-aware caller could attach; nothing here claims that caller
- * exists. See `detectMissingReferencedPaths`'s `siblingSearchRoot` note.
+ * Both rules ship, and the 3.8% row is what runs.
  *
  * 1. **Literal paths only.** A glob or a placeholder (`docs/**\/*.md`,
  *    `docs/product/<component>/prd.md`) is not a claim that a file exists.
@@ -48,10 +46,14 @@
  *    not a lexical one. Until `edges`/`edge_resolutions` have producers, this
  *    prefix test IS that lens, and its measured precision is recorded above so a
  *    future lens can be held to it.
- * 3. **Sibling search root.** A skill may legitimately reference a file at the
- *    plugin root or in a sibling skill — one measured skill points at a sibling's
- *    `resources/*.md`, another at a plugin-root `scripts/cli.py`. Both are false
- *    positives under a skill-local existence test.
+ *
+ * A third rule — a plugin-wide **sibling search root**, measured at 1.9% and
+ * 8.9% — was built and then DELETED, because nothing could call it. The rejected
+ * wiring and why a dead seam is not a head start are on
+ * {@link detectMissingReferencedPaths}. The sibling population is real: one
+ * measured skill points at a sibling's `resources/*.md`, another at a plugin-root
+ * `scripts/cli.py`, and both are false positives here. A plugin-aware lens that
+ * wants them should measure its own rule.
  *
  * ## Why this runs at the BUILT phase only
  *
@@ -83,7 +85,7 @@
  * bundled subdirectory and which carries no glob character.
  */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
@@ -111,12 +113,19 @@ const NON_LITERAL = /[*?<>{}[\]]/u;
  * `token` as bundle-relative segments, or `null` if it is not a bundle-relative
  * literal path at all.
  *
- * Three spellings name the same file and only one of them used to be recognized:
- * `scripts/x.mjs`, `./scripts/x.mjs` (the lexer admits a leading `./`
- * unconditionally) and `scripts\x.mjs` (a Windows-authored doc). Reading the
- * first segment off the RAW token gave `.` for the second and the whole path for
- * the third, so both were dropped — and a build drop referenced as
- * `./scripts/setup.mjs` is the very case this module exists for.
+ * Two spellings reach here and only one used to be recognized: `scripts/x.mjs`
+ * and `./scripts/x.mjs` (the lexer admits a leading `./` unconditionally).
+ * Reading the first segment off the RAW token gave `.` for the second, so it was
+ * dropped — and a build drop referenced as `./scripts/setup.mjs` is the very case
+ * this module exists for.
+ *
+ * ⚠️ The `toForwardSlash` call also normalizes `scripts\x.mjs`, and this comment
+ * used to claim that as a third recognized spelling. It is UNREACHABLE from the
+ * shipped lexer, which only emits a run containing one of `/ $ % @` — a
+ * backslash-only path never becomes a candidate, so no Windows-authored token
+ * arrives here in that form. The normalization stays because it costs nothing and
+ * a mixed `scripts/sub\x.mjs` does arrive; the CLAIM does not. The module's unit
+ * test is honest about this; the comment was not.
  *
  * `null` for anything that is not a relative path INSIDE the bundle: an absolute
  * path, an empty segment (`scripts//x`), a `.` segment, or — the one that
@@ -181,145 +190,6 @@ export async function bundledPathCandidates(filePath: string): Promise<string[]>
   return [...out];
 }
 
-/** Directories a resolution walk never enters — see {@link resolutionBases}. */
-const UNWALKED_DIRS: ReadonlySet<string> = new Set(['node_modules', '.git']);
-
-/**
- * How many directories a sibling-search walk may visit before giving up.
- *
- * A bound, not a tuning knob: an adopter's plugin root can sit inside a checkout
- * with an arbitrarily deep tree beneath it, and this check is a warning that must
- * not cost more than the build it rides along with. Exhausting it is REPORTED
- * rather than swallowed — see {@link RESOLUTION_SEARCH_INCOMPLETE}.
- */
-const SIBLING_SEARCH_BUDGET = 5000;
-
-/** The outcome of scanning a search root for places a reference may resolve. */
-export interface ResolutionBaseScan {
-  /** Absolute directories a bundle-relative path may be resolved against. */
-  bases: string[];
-  /** False if the walk was truncated or a directory could not be read. */
-  complete: boolean;
-}
-
-/**
- * Every directory under `siblingSearchRoot` a bundle-relative reference may
- * legitimately resolve against, always including `skillDir` itself.
- *
- * ## Why this is a list of MOUNT POINTS and not "anywhere under the root"
- *
- * The predecessor asked "does a file with this suffix path exist under any
- * directory in the tree?" That is a different question from "is the referenced
- * path present", and it answers `true` for cases that are plainly not the
- * reference: a skill naming `scripts/setup.mjs` whose `scripts/` the build
- * dropped went SILENT as soon as the bundle happened to ship a documentation
- * copy at `references/scripts/setup.mjs` — i.e. it went silent on exactly the
- * build-drop class the module exists to catch.
- *
- * A bundle-relative path can only be resolved against something a bundle is
- * mounted at. Those are the search root itself (the plugin root, which is where
- * a measured skill's `scripts/cli.py` lives) and every directory holding a
- * `SKILL.md` (a sibling skill's own root). Nothing else, and in particular not
- * an arbitrary intermediate directory.
- *
- * `node_modules` and `.git` are never entered. Both can hold a `SKILL.md` —
- * skills ship on npm, and a `.git` directory holds arbitrary worktree content —
- * and neither is a mount point for THIS reference; walking them also burns the
- * budget on trees that can never legitimately answer.
- *
- * Breadth-first, over entries sorted by code point, so which directories a
- * TRUNCATED walk reached is a property of the tree alone. The predecessor was
- * depth-first off a `pop()`ed stack in `readdir` order, which means that once the
- * budget bites, adding an unrelated directory elsewhere in the tree can change
- * which directories get visited — and therefore whether a finding fires.
- *
- * @param skillDir The packaged skill — always a base, and the only one when no
- *   wider root is supplied.
- * @param siblingSearchRoot The widest tree a reference may resolve in.
- * @param budget Maximum directories to visit. The default is the operational
- *   bound; tests pass a small one to exercise the truncated path deterministically.
- */
-export function resolutionBases(
-  skillDir: string,
-  siblingSearchRoot: string,
-  budget: number = SIBLING_SEARCH_BUDGET,
-): ResolutionBaseScan {
-  // The shipped call passes no wider root. There is then nothing to walk: a
-  // skill's own directory is the only mount point a skill-local check has, and
-  // `validateNoNestedSkillMd` has already refused a second SKILL.md inside it.
-  if (safePath.resolve(siblingSearchRoot) === safePath.resolve(skillDir)) {
-    return { bases: [skillDir], complete: true };
-  }
-
-  const bases = [skillDir];
-  const queue = [siblingSearchRoot];
-  let head = 0;
-  let complete = true;
-
-  while (head < queue.length) {
-    if (head >= budget) {
-      complete = false;
-      break;
-    }
-    const dir = queue[head++];
-    if (dir === undefined) break;
-    if (dir !== skillDir && isMountPoint(dir, siblingSearchRoot)) bases.push(dir);
-
-    const children = walkableChildren(dir);
-    if (children === null) {
-      // Unreadable (permissions, a race with a concurrent build). Recorded, not
-      // swallowed: a `false` from an unread directory must not be reported as a
-      // fact the walk established.
-      complete = false;
-      continue;
-    }
-    queue.push(...children);
-  }
-
-  return { bases, complete };
-}
-
-/** Whether a bundle-relative path may be resolved against `dir`. */
-function isMountPoint(dir: string, siblingSearchRoot: string): boolean {
-  if (dir === siblingSearchRoot) return true;
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- `dir` is the caller-supplied search root or a directory reached from it by readdir; no component comes from document content
-  return existsSync(safePath.join(dir, 'SKILL.md'));
-}
-
-/**
- * `dir`'s walkable subdirectories in a stable order, or `null` if it could not
- * be read.
- *
- * `sort` takes an explicit code-point comparator rather than `localeCompare`:
- * the ordering only has to be the SAME everywhere, and `localeCompare` is
- * locale- and ICU-dependent, which is the one property a determinism guarantee
- * cannot be built on.
- */
-function walkableChildren(dir: string): string[] | null {
-  let entries;
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- as isMountPoint
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return null;
-  }
-  return entries
-    .filter(entry => entry.isDirectory() && !UNWALKED_DIRS.has(entry.name))
-    .map(entry => safePath.join(dir, entry.name))
-    .sort((a, b) => (a < b ? -1 : Number(a > b)));
-}
-
-/**
- * Appended to the message when the walk that failed to find the path did not
- * finish. Absence is then the walk's best answer, not something it established,
- * and an adopter chasing a file that IS present needs to read that here rather
- * than deduce it.
- */
-const RESOLUTION_SEARCH_INCOMPLETE =
-  ' — note that the search of the surrounding tree was incomplete ' +
-  '(a directory could not be read, or the walk reached its budget), ' +
-  'so the file may exist somewhere the search did not reach';
-
 /**
  * Emit one `PACKAGED_REFERENCED_PATH_MISSING` per missing path.
  *
@@ -349,64 +219,61 @@ const RESOLUTION_SEARCH_INCOMPLETE =
  * NOT the location, since naming a nonexistent path as "where to look" is advice
  * you cannot follow.
  *
- * ⚠️ A waiver must survive both lanes. `vat skills validate` reports the authored
- * source path and `vat build` reports the packaged artifact path, so a `location`
- * glob written for one silently leaks in the other — give ONE entry both
- * spellings rather than two entries, or each is reported `ALLOW_UNUSED` in the
- * lane it does not match. A `link` glob is immune to that split: the missing path
- * is skill-relative and identical in both lanes, which is a second reason to
- * prefer it.
+ * ⚠️ ONE lane, not two. This code is emitted from `packageSkill` and nowhere
+ * else, so `vat skills validate` — which calls `validateSkillForPackaging(…,
+ * 'source')` and never `packageSkill` — cannot produce it. This note used to tell
+ * adopters to give a single allow entry BOTH the authored and packaged spellings
+ * "so a waiver survives both lanes", two bullets after the same file said "built
+ * phase only". Following it earns an `ALLOW_UNUSED` for the spelling that can
+ * never match. A `link` glob is still the better choice, for its own reason: the
+ * missing path is skill-relative, so it does not depend on where the bundle sits.
  *
  * @param docFiles Absolute paths of packaged markdown documents to scan
  *   (SKILL.md and any bundled reference files).
  * @param skillDir Absolute path to the packaged skill output — the base every
  *   candidate resolves against, and the base issue locations are relative to.
- * @param siblingSearchRoot Absolute path to the widest tree a reference may
- *   legitimately resolve in (the plugin root). Defaults to `skillDir`.
  *
- *   ⚠️ **No production caller passes anything else today**, so the shipped check
- *   is the skill-local one and its fire rate is the measured 3.8%, not 1.9%. The
- *   only caller is the packager, via `checkMissingReferencedPaths`, and it
- *   genuinely does not know the plugin root: it packages one skill into its own
- *   output directory before any plugin is assembled. `vat build`'s
- *   `validateShippedPluginSkillLinks` DOES walk a whole plugin tree, but it runs
- *   only `checkBrokenPackagedLinks`, and its documented stance is the opposite
- *   one — that a skill is a self-contained portable unit and an escape from its
- *   own directory is a defect, not a resolution. Wiring this parameter there
- *   would both contradict that stance and report every finding twice.
+ *   🚨 **SKILL-LOCAL, and there is no wider root to pass.** This function used to
+ *   take a `siblingSearchRoot` and a `searchBudget`, with a ~90-line breadth-first
+ *   mount-point walk behind them and a caveat string for a truncated search. NO
+ *   production caller ever passed either: the only caller is the packager, via
+ *   `checkMissingReferencedPaths`, and it genuinely does not know the plugin root
+ *   — it packages one skill into its own output directory before any plugin is
+ *   assembled. `vat build`'s `validateShippedPluginSkillLinks` does walk a whole
+ *   plugin tree, and wiring this there was considered and REJECTED: it runs only
+ *   `checkBrokenPackagedLinks`, its documented stance is the opposite one (a skill
+ *   is a self-contained portable unit, so an escape from its own directory is a
+ *   defect rather than a resolution), and it would report every finding twice.
  *
- *   The parameter stays because the sibling population is real and measured, and
- *   this is the seam a plugin-aware lens would attach at. It is not a claim that
- *   such a lens exists.
- * @param searchBudget Maximum directories the sibling-search walk may visit.
- *   Only meaningful when `siblingSearchRoot` differs from `skillDir`; see
- *   {@link resolutionBases}.
+ *   So the subsystem was deleted rather than kept as a seam. `complete` was always
+ *   `true`, the truncated-search caveat could never ship, and the tests that
+ *   covered the walk covered a path production does not take — while attributing
+ *   real coverage to it. The measured fire rate that ships is the skill-local
+ *   **3.8%**, and the 1.9% figure describes a check VAT does not run. If a
+ *   plugin-aware lens is ever built, it can grow its own resolution rule with its
+ *   own measurement; a dead parameter is not a head start.
  */
 export async function detectMissingReferencedPaths(
   docFiles: readonly string[],
   skillDir: string,
-  siblingSearchRoot: string = skillDir,
-  searchBudget?: number,
 ): Promise<ValidationIssue[]> {
   const registryEntry = CODE_REGISTRY.PACKAGED_REFERENCED_PATH_MISSING;
   const issues: ValidationIssue[] = [];
-  const { bases, complete } = resolutionBases(skillDir, siblingSearchRoot, searchBudget);
-  const searchCaveat = complete ? '' : RESOLUTION_SEARCH_INCOMPLETE;
 
   for (const docFile of docFiles) {
     const candidates = await bundledPathCandidates(docFile);
-    const missing = candidates.filter(rel => !bases.some(base =>
+    const missing = candidates.filter(rel =>
       // `rel` IS document content — the least trusted input in this module — so
       // it is constrained before it gets here rather than trusted: it reached
       // this line only by passing `bundleRelativeSegments`, which admits a
       // relative path with no empty, `.` or `..` segment and refuses every glob
       // and placeholder character, and by being rooted at one of the five known
-      // bundled subdirectory names. `base` is the caller's own directory or one
-      // reached from it by readdir. The probe is existence only — nothing is
-      // read, nothing is written — and a `true` merely suppresses a warning.
+      // bundled subdirectory names. `skillDir` is the caller's own directory. The
+      // probe is existence only — nothing is read, nothing is written — and a
+      // `true` merely suppresses a warning.
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- see above
-      existsSync(safePath.join(base, rel)),
-    ));
+      !existsSync(safePath.join(skillDir, rel)),
+    );
     if (missing.length === 0) continue;
 
     const location = safePath.relative(skillDir, docFile);
@@ -414,7 +281,7 @@ export async function detectMissingReferencedPaths(
       issues.push({
         severity: registryEntry.defaultSeverity,
         code: 'PACKAGED_REFERENCED_PATH_MISSING',
-        message: `References "${rel}", which is not in the packaged output${searchCaveat}`,
+        message: `References "${rel}", which is not in the packaged output`,
         location,
         // The missing path, so an allow glob can waive THIS reference without
         // silencing the whole document. Never the location: a path that does not

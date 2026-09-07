@@ -24,7 +24,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { API_SKILL_MAX_UPLOAD_BYTES } from '@vibe-agent-toolkit/agent-skills';
-import { ApiRequestError, buildMultipartFormData } from '@vibe-agent-toolkit/claude-marketplace';
+import { ApiRequestError, ApiTransportError, buildMultipartFormData } from '@vibe-agent-toolkit/claude-marketplace';
 import type { MultipartFile, OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
 import type { SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import {
@@ -43,12 +43,19 @@ import {
   collectSkillUploadFiles,
   EXISTING_VERSIONS_REFUSAL,
   explainAnsweredNothing,
+  findSkillsDir,
   installFromLocal,
+  listNodeModulePackages,
+  mergeDeleteReport,
   readCreateSkillResponse,
   readDeleteResponse,
   readSkillVersionResponse,
+  reportDelete,
   resolveSourceArgument,
+  SKILL_DELETED_TYPES,
+  SKILL_VERSION_DELETED_TYPES,
   summarizeNpmInstall,
+  VERSION_NAME_MISMATCH_REFUSAL,
   withRemedy,
 } from '../src/commands/claude/org/skills.js';
 
@@ -67,6 +74,9 @@ const ANSWER_KEY = '{"evals":[{"prompt":"2+2?","expected_output":"FAKE-ANSWER-KE
 
 /** A stand-in `created_at`; nothing under test reads its value. */
 const CREATED_AT = '2026-09-06T00:00:00Z';
+
+/** Bytes standing in for a ZIP archive. Nothing in the uploader parses them. */
+const ZIP_STAND_IN = 'stand-in for zip bytes';
 
 /** Write a file, creating parent directories as needed. */
 function writeAt(root: string, relPath: string, content: string): void {
@@ -199,6 +209,59 @@ describe('collectSkillUploadFiles', () => {
   });
 });
 
+// ── Which tree `--from-npm` decides to publish ─────────────────────────
+
+/** A package directory under `tempDir` with the given relative directories created. */
+function packageWith(name: string, dirs: readonly string[]): string {
+  const root = safePath.join(tempDir, name);
+  mkdirSyncReal(root, { recursive: true });
+  for (const dir of dirs) mkdirSyncReal(safePath.join(root, dir), { recursive: true });
+  return root;
+}
+
+/**
+ * `--from-npm` publishes to a shared org workspace, and NOTHING that decides
+ * which directory it publishes had a test. `packages/cli/src/commands/**` is
+ * coverage-excluded, so no report said so either.
+ */
+describe('finding the built skills inside a downloaded package', () => {
+  it('prefers the package\'s own dist/skills over anything in node_modules', () => {
+    const root = packageWith('own-dist', ['dist/skills', 'node_modules/dep/dist/skills']);
+
+    expect(findSkillsDir(root)).toBe(safePath.join(root, 'dist', 'skills'));
+  });
+
+  it('falls back to a dependency that ships built skills', () => {
+    const root = packageWith('via-dep', ['node_modules/dep/dist/skills']);
+
+    expect(findSkillsDir(root)).toBe(safePath.join(root, 'node_modules', 'dep', 'dist', 'skills'));
+  });
+
+  it('finds a SCOPED dependency, which is one directory deeper', () => {
+    const root = packageWith('via-scope', ['node_modules/@scope/pkg/dist/skills']);
+
+    expect(findSkillsDir(root)).toBe(
+      safePath.join(root, 'node_modules', '@scope', 'pkg', 'dist', 'skills'),
+    );
+  });
+
+  it('returns undefined when the package ships no built skills at all', () => {
+    expect(findSkillsDir(packageWith('no-skills', ['dist', 'src']))).toBeUndefined();
+  });
+
+  it('lists scoped and unscoped packages, and nothing when there is no node_modules', () => {
+    const root = packageWith('listing', ['node_modules/plain', 'node_modules/@scope/inner']);
+    const nodeModules = safePath.join(root, 'node_modules');
+
+    const byCodePoint = (a: string, b: string): number => (a < b ? -1 : Number(a > b));
+    expect(listNodeModulePackages(nodeModules).sort(byCodePoint)).toEqual([
+      safePath.join(nodeModules, '@scope', 'inner'),
+      safePath.join(nodeModules, 'plain'),
+    ].sort(byCodePoint));
+    expect(listNodeModulePackages(safePath.join(tempDir, 'nope', 'node_modules'))).toEqual([]);
+  });
+});
+
 // ── A symlinked directory inside a bundle ──────────────────────────────
 
 /**
@@ -263,6 +326,66 @@ describe.skipIf(SYMLINK_CAP === null)('a symlinked directory in the bundle', () 
     createSymlink(cap, safePath.join(tempDir, 'no-such-target'), safePath.join(root, 'gone'), 'dir');
 
     await expect(collectSkillUploadFiles(root)).rejects.toThrow(/gone/);
+  });
+});
+
+// ── A symlinked FILE inside a bundle: the egress case ──────────────────
+
+/**
+ * 🚨 DATA EGRESS, found by an independent security review.
+ *
+ * The collector refused only a link resolving to a DIRECTORY. A link to a FILE
+ * fell through both branches, was pushed as an ordinary file, and `readFileSync`
+ * returned the TARGET's bytes — so `notes.md -> /etc/passwd` was posted under the
+ * in-bundle name `notes.md` into a workspace every org member can read. Nothing
+ * in the run said a link had been followed: the collector's "every withholding is
+ * reported" guarantee covers exclusions, not dereferences.
+ *
+ * The vector is a directory extracted with system `tar` (which recreates an
+ * absolute linkpath) or cloned from an untrusted repo, then handed to
+ * `install <dir>`. node-tar 7 de-roots such a link, so a registry tarball cannot
+ * plant one — the defence lived in a dependency's default and not in this code.
+ */
+describe.skipIf(SYMLINK_CAP === null)('a symlinked file in the bundle', () => {
+  const cap = SYMLINK_CAP as SymlinkCapability;
+
+  /** A skill directory whose `linkName` points at a real file OUTSIDE it. */
+  function createTreeWithLinkedFile(dirName: string, linkName: string): string {
+    const root = safePath.join(tempDir, dirName);
+    writeSkillContent(root, 'sample');
+    const outside = safePath.join(tempDir, `${dirName}-secret.txt`);
+    writeFileSync(outside, 'SECRET-OUTSIDE-THE-BUNDLE\n', 'utf-8');
+    createSymlink(cap, outside, safePath.join(root, linkName), 'file');
+    return root;
+  }
+
+  it('refuses it rather than reading through it', async () => {
+    const root = createTreeWithLinkedFile('linked-file', 'notes.md');
+
+    await expect(collectSkillUploadFiles(root)).rejects.toThrow(/notes\.md/);
+  });
+
+  it('never places the link, or its target bytes, in the payload', async () => {
+    const root = createTreeWithLinkedFile('linked-file-payload', 'notes.md');
+
+    // The whole collection fails, so nothing is uploaded — which is the point:
+    // a partial payload that silently dropped the link would be the "skipping"
+    // outcome the collector's reporting guarantee rules out.
+    await expect(collectSkillUploadFiles(root)).rejects.toThrow(/symbolic link/);
+  });
+
+  /** A link that stays inside the bundle is refused too — one rule, no exceptions. */
+  it('refuses a link pointing at a file inside the same bundle', async () => {
+    const root = safePath.join(tempDir, 'linked-file-internal');
+    writeSkillContent(root, 'sample');
+    createSymlink(
+      cap,
+      safePath.join(root, 'resources', 'guide.md'),
+      safePath.join(root, 'alias.md'),
+      'file',
+    );
+
+    await expect(collectSkillUploadFiles(root)).rejects.toThrow(/alias\.md/);
   });
 });
 
@@ -434,6 +557,38 @@ describe('buildUploadBodyOrRefuse', () => {
     expect(() => buildUploadBodyOrRefuse({ display_title: 'small' }, [sizedFile('a/one.bin', 1024)]))
       .not.toThrow();
   });
+
+  /**
+   * The refusal names files in the SAME namespace `PACKAGED_SIZE_EXCEEDS_API_LIMIT`
+   * does, so a path copied out of one message matches a `validation.allow` entry
+   * written from the other.
+   *
+   * A directory's parts are keyed `<declared-name>/<bundle-relative-path>` because
+   * that is how the API roots them; the build-time finding is bundle-relative. The
+   * uploader printed the keyed spelling, so the two never matched.
+   */
+  it('names files bundle-relative, stripping the root the API keys them under', () => {
+    const message = (() => {
+      try {
+        buildUploadBodyOrRefuse({}, [
+          sizedFile('my-skill/scripts/runtime.wasm', API_SKILL_MAX_UPLOAD_BYTES),
+        ], 'my-skill');
+        return '';
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    })();
+
+    expect(message).toContain('scripts/runtime.wasm');
+    expect(message).not.toContain('my-skill/scripts/runtime.wasm');
+  });
+
+  it('leaves a ZIP part alone — one part named for the archive, with no root to strip', () => {
+    // No `bundleRoot`, because a ZIP has none. Stripping a leading segment here
+    // would eat the filename itself.
+    expect(() => buildUploadBodyOrRefuse({}, [sizedFile('big.zip', API_SKILL_MAX_UPLOAD_BYTES)]))
+      .toThrow(/big\.zip/);
+  });
 });
 
 describe('installFromLocal ceiling enforcement', () => {
@@ -481,6 +636,23 @@ describe('installFromLocal ceiling enforcement', () => {
     await expect(installFromLocal(zipPath, undefined, clientReturningSkill(), recordingLogger()))
       .resolves.toMatchObject({ id: 'skill_1', version: '17' });
   });
+
+  /**
+   * `endsWith('.zip')` is case-SENSITIVE, so `MySkill.ZIP` — a file both Windows
+   * and macOS treat as a zip archive — was refused as "not a directory or .zip
+   * file", a message an operator has no way to read as being about
+   * capitalisation.
+   */
+  it('accepts an uppercase .ZIP, and titles it without the extension', async () => {
+    const zipPath = safePath.join(tempDir, 'Loud.ZIP');
+    writeFileSync(zipPath, Buffer.from(ZIP_STAND_IN));
+    const logger = recordingLogger();
+
+    await expect(installFromLocal(zipPath, undefined, clientReturningSkill(), logger)).resolves.toBeDefined();
+    // `basename(path, '.zip')` matches the extension exactly, so the literal
+    // would have left `.ZIP` glued to the title.
+    expect(logger.lines.join('\n')).toContain('Display title: "Loud"');
+  });
 });
 
 // ── What the progress log claims, and when ─────────────────────────────
@@ -497,7 +669,7 @@ describe('the upload progress log', () => {
    */
   it('says a ZIP took its display title from the filename', async () => {
     const zipPath = safePath.join(tempDir, 'wiki-lint-v2.zip');
-    writeFileSync(zipPath, Buffer.from('stand-in for zip bytes'));
+    writeFileSync(zipPath, Buffer.from(ZIP_STAND_IN));
     const logger = recordingLogger();
 
     await installFromLocal(zipPath, undefined, clientReturningSkill(), logger);
@@ -511,7 +683,7 @@ describe('the upload progress log', () => {
 
   it('attributes an overridden title to --title', async () => {
     const zipPath = safePath.join(tempDir, 'wiki-lint-v3.zip');
-    writeFileSync(zipPath, Buffer.from('stand-in for zip bytes'));
+    writeFileSync(zipPath, Buffer.from(ZIP_STAND_IN));
     const logger = recordingLogger();
 
     await installFromLocal(zipPath, 'Wiki Lint', clientReturningSkill(), logger);
@@ -667,6 +839,54 @@ describe('a skill that still has versions', () => {
 
     expect(withRemedy(notFound, remedies)).toBe(notFound);
   });
+
+  /**
+   * The conjunction its docstring calls load-bearing, pinned.
+   *
+   * `matches` are ALL required precisely because a single word like `version`
+   * turns up in refusals that have nothing to do with this case. Every negative
+   * fixture above fails BOTH patterns, so `every` → `some` survived all of them
+   * — and under `some`, this message would collect a confidently wrong remedy
+   * telling the operator to re-run with `--all`.
+   */
+  it('requires EVERY pattern, not just one — a 400 matching half gets no remedy', () => {
+    const halfMatch = new ApiRequestError(
+      'API error 400: this skill has 3 versions, and the latest is malformed', 400, undefined,
+    );
+
+    // Matches /versions?/i and nothing in the verdict alternation.
+    expect(withRemedy(halfMatch, remedies)).toBe(halfMatch);
+  });
+});
+
+// ── A version published from a renamed tree ────────────────────────────
+
+/**
+ * The server enforces SKILL.md name consistency per `skill_id`, so publishing a
+ * version from a tree whose frontmatter `name` changed is a loud 400 — not the
+ * "silently re-roots the file tree" the code and help used to warn about. That
+ * makes it the ONE refusal `versions add` can earn, and it had no remedy at all:
+ * the call site passed `error => error`.
+ */
+describe('a versions-add name refusal', () => {
+  const renamed = new ApiRequestError(
+    'API error 400: skill name must match the existing skill', 400, undefined,
+  );
+
+  it('offers both fixes: restore the name, or publish it as a new skill', () => {
+    const message = (withRemedy(renamed, [VERSION_NAME_MISMATCH_REFUSAL]) as Error).message;
+
+    expect(message).toContain('SKILL.md');
+    expect(message).toContain('vat claude org skills install');
+    // The vendor's own words survive.
+    expect(message).toContain('skill name must match');
+  });
+
+  it('leaves an unrelated 400 alone', () => {
+    const unrelated = new ApiRequestError('API error 400: files[] is required', 400, undefined);
+
+    expect(withRemedy(unrelated, [VERSION_NAME_MISMATCH_REFUSAL])).toBe(unrelated);
+  });
 });
 
 // ── A request the server never answered ────────────────────────────────
@@ -680,12 +900,14 @@ describe('a transport failure on an upload', () => {
    * something. No threshold constant for "near the ceiling" — the two numbers
    * are printed and the reader draws the conclusion.
    */
-  it('reports the body it sent, the ceiling, and the duplicate risk', () => {
-    const hangup = new Error('socket hang up');
+  it('reports what it sent, the ceiling, and the duplicate risk', () => {
+    const hangup = new ApiTransportError('socket hang up', 30_900_000);
 
     const explained = explainAnsweredNothing(hangup, 31_000_000) as Error;
 
     expect(explained.message).toContain('socket hang up');
+    // The bytes that LEFT THE SOCKET, then the body they were part of.
+    expect(explained.message).toContain('29.5 MiB');
     expect(explained.message).toContain('29.6 MiB');
     expect(explained.message).toContain('30.0 MiB');
     expect(explained.message).toContain('never replays a POST');
@@ -697,6 +919,44 @@ describe('a transport failure on an upload', () => {
     const refused = new ApiRequestError('API error 413: requests up to 30MBs', 413, undefined);
 
     expect(explainAnsweredNothing(refused, 31_457_281)).toBe(refused);
+  });
+
+  /**
+   * 🚨 The regression this suite existed to have caught and did not.
+   *
+   * The gate used to be `if (error instanceof ApiRequestError) return error;` —
+   * "anything that is not a completed exchange must be a dropped connection".
+   * `buildSkillsHeaders()` throws a plain Error BEFORE a socket is opened, so
+   * `ANTHROPIC_API_KEY= vat claude org skills install <dir>` told a first-time
+   * operator that a connection had closed, that VAT had sent 6.8 KiB, and that
+   * the outcome was unknown — then sent them to a recovery command that fails
+   * with the same missing-key error. Three false claims and a loop.
+   *
+   * The old tests pinned a plain `Error('socket hang up')` and a real
+   * `ApiRequestError`, and BOTH still pass under the broken gate. Only an error
+   * from neither class distinguishes them.
+   */
+  it('leaves a failure that never reached the transport completely alone', () => {
+    const noKey = new Error('ANTHROPIC_API_KEY is required for workspace skills commands.');
+
+    const result = explainAnsweredNothing(noKey, 6_900);
+
+    expect(result).toBe(noKey);
+    expect((result as Error).message).not.toContain('connection closed');
+  });
+
+  it('says nothing was sent — not "unknown" — when no byte left the socket', () => {
+    // A DNS blackhole or a refused connection. The outcome is not unknown here,
+    // it is KNOWN: nothing happened. Sending the operator to `skills list` to
+    // check for a skill that was never sent is advice about a fiction.
+    const dead = new ApiTransportError('getaddrinfo ENOTFOUND api.anthropic.com', 0);
+
+    const explained = explainAnsweredNothing(dead, 6_900) as Error;
+
+    expect(explained.message).toContain('ENOTFOUND');
+    expect(explained.message).toContain('No byte of the request left this machine');
+    expect(explained.message).not.toContain('unknown');
+    expect(explained.message).not.toContain('vat claude org skills list');
   });
 });
 
@@ -761,25 +1021,92 @@ describe('readDeleteResponse', () => {
    * the moment the endpoint answers 204, and a TypeError is not a report.
    */
   it('reports the delete when the API answers with no body at all', () => {
-    expect(readDeleteResponse(undefined, 'skill_abc', 'skill_deleted'))
+    expect(readDeleteResponse(undefined, 'skill_abc', SKILL_DELETED_TYPES))
       .toEqual({ id: 'skill_abc', deleted: true });
   });
 
   it('reports the id and type the API echoed', () => {
     expect(readDeleteResponse(
-      { id: 'skill_abc', type: 'skill_deleted' }, 'skill_abc', 'skill_deleted',
+      { id: 'skill_abc', type: 'skill_deleted' }, 'skill_abc', SKILL_DELETED_TYPES,
     )).toEqual({ id: 'skill_abc', deleted: true });
   });
 
   it('does not claim a delete when the body names a different outcome', () => {
     expect(readDeleteResponse(
-      { id: 'skill_abc', type: 'skill_archived' }, 'skill_abc', 'skill_deleted',
+      { id: 'skill_abc', type: 'skill_archived' }, 'skill_abc', SKILL_DELETED_TYPES,
     )).toEqual({ id: 'skill_abc', deleted: false });
   });
 
   it('falls back to the id that was asked for when the body carries none', () => {
-    expect(readDeleteResponse({ type: 'skill_deleted' }, 'skill_abc', 'skill_deleted'))
+    expect(readDeleteResponse({ type: 'skill_deleted' }, 'skill_abc', SKILL_DELETED_TYPES))
       .toEqual({ id: 'skill_abc', deleted: true });
+  });
+
+  /**
+   * The version endpoint's success `type` has never been measured — only
+   * `skill_deleted`, from the SKILL endpoint. A single guessed string would make
+   * every `versions delete` report `deleted: false`, and now exit 1, if the
+   * vendor spells it differently by one character. Accepting either keeps the
+   * check honest about what it knows.
+   */
+  it('accepts both plausible spellings on the version lane, and only those', () => {
+    expect(readDeleteResponse({ type: 'skill_version_deleted' }, 'skill_abc', SKILL_VERSION_DELETED_TYPES).deleted)
+      .toBe(true);
+    expect(readDeleteResponse({ type: 'skill_deleted' }, 'skill_abc', SKILL_VERSION_DELETED_TYPES).deleted)
+      .toBe(true);
+    expect(readDeleteResponse({ type: 'skill_version_archived' }, 'skill_abc', SKILL_VERSION_DELETED_TYPES).deleted)
+      .toBe(false);
+  });
+});
+
+// ── A delete the API says did not happen is not a successful run ───────
+
+/**
+ * 🚨 `deleted: false` was computed, printed under `status: success`, and exited
+ * 0 — the exact "the run completed, its outcome is wrong" shape
+ * `orgCommandFailure` was built for, in the one branch nobody wired to it. A CI
+ * wrapper spelled `vat claude org skills delete X || fail` reported green while
+ * the skill was still there. Two independent reviewers found it.
+ */
+describe('reportDelete', () => {
+  it('exits 0 with status success when the API confirms the delete', () => {
+    const result = ending(reportDelete({ id: 'skill_abc', type: 'skill_deleted' }, 'skill_abc', SKILL_DELETED_TYPES));
+
+    expect(result.exitCode).toBe(0);
+    expect(result.document['status']).toBe('success');
+    expect(result.document['deleted']).toBe(true);
+  });
+
+  it('exits 1 with status error when the API names a different outcome', () => {
+    const result = ending(reportDelete({ id: 'skill_abc', type: 'skill_archived' }, 'skill_abc', SKILL_DELETED_TYPES));
+
+    expect(result.exitCode).toBe(1);
+    expect(result.document['status']).toBe('error');
+    // The document is still published: the verdict is what the operator needs.
+    expect(result.document['id']).toBe('skill_abc');
+    expect(result.document['deleted']).toBe(false);
+  });
+});
+
+describe('mergeDeleteReport', () => {
+  it('adds the versions a --all run destroyed without changing a success', () => {
+    const result = ending(mergeDeleteReport({ id: 'skill_abc', deleted: true }, ['v1', 'v2']));
+
+    expect(result.exitCode).toBe(0);
+    expect(result.document['deletedVersions']).toEqual(['v1', 'v2']);
+  });
+
+  it('keeps the failure tag OUT of the document while preserving the non-zero exit', () => {
+    // A naive `{ ...result, deletedVersions }` on a tagged failure publishes
+    // `orgCommandFailed` as if it were one of the skill's own fields.
+    const failed = reportDelete({ id: 'skill_abc', type: 'skill_archived' }, 'skill_abc', SKILL_DELETED_TYPES);
+
+    const result = ending(mergeDeleteReport(failed, ['v1']));
+
+    expect(result.exitCode).toBe(1);
+    expect(result.document['deletedVersions']).toEqual(['v1']);
+    expect(result.document).not.toHaveProperty('orgCommandFailed');
+    expect(result.document).not.toHaveProperty('document');
   });
 });
 

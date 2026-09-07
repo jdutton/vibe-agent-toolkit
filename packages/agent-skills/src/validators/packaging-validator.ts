@@ -847,14 +847,18 @@ export async function validateSkillForPackaging(
   collectNonPortableCommandIssues(parseResult.content, skillLocation, rawIssues);
   // An `allowed-tools:` list of `mcp__…` names does not by itself supply the
   // vocabulary: the qualified spelling has to appear in the prose an agent
-  // reads, or "the document contradicts itself" is not the finding. That now
-  // holds because the DETECTOR strips frontmatter, not because this call site
-  // happens to pass the post-frontmatter slice — which is all that was ever
-  // true here, and only here.
+  // reads, or "the document contradicts itself" is not the finding. That holds
+  // because the DETECTOR strips frontmatter. ⛔ It was NEVER true that this call
+  // site passed a post-frontmatter slice — `parseResult.content` is the raw file
+  // verbatim, as the comment 190 lines above says — so before the detector
+  // stripped, this lane did read `allowed-tools:` as prose and did ship the
+  // findings that came of it.
   collectUnqualifiedMcpToolIssues(parseResult.content, skillLocation, rawIssues);
 
   // Cross-skill dependency smell: body declares a requires/depends token the
-  // description does not mention. Uses the post-frontmatter content slice.
+  // description does not mention. Reads the RAW file, frontmatter included —
+  // which is what this detector wants, since the declaration it looks for can be
+  // written either side of the fence.
   if (parseResult.frontmatter) {
     rawIssues.push(...detectUndeclaredCrossSkillAuth(parseResult.frontmatter, parseResult.content, skillLocation));
   }

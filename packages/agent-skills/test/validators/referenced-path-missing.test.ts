@@ -10,7 +10,6 @@ import {
   bundledPathCandidates,
   detectMissingReferencedPaths,
   isBundledSubdirPath,
-  resolutionBases,
 } from '../../src/validators/referenced-path-missing.js';
 
 let root: string;
@@ -101,6 +100,12 @@ describe('isBundledSubdirPath — the rule that earns the precision', () => {
   // first segment of the RAW token — `.` for the first, the whole path for the
   // second. A build drop referenced as `./scripts/setup.mjs` is this module's
   // own headline case, and it was invisible.
+  //
+  // ⚠️ Only the `./` rows are reachable from the shipped LEXER. It emits a run
+  // only when it contains one of `/ $ % @`, so a backslash-ONLY path never
+  // becomes a candidate and never reaches this predicate. These rows pin the
+  // predicate's own contract, not an end-to-end capability — the module comment
+  // used to claim the latter.
   it.each([
     './scripts/run.mjs',
     './references/guide.md',
@@ -239,79 +244,30 @@ describe('detectMissingReferencedPaths', () => {
     expect(issues[0]?.link).toBe('scripts/setup.mjs');
   });
 
-  // A resolution base is a skill root, or the search root itself. A vendored
-  // copy under `node_modules/` (npm-distributed skills are real) or a blob under
-  // `.git/` is neither — and walking them burns the search budget on trees that
-  // can never legitimately answer.
-  it.each(['node_modules', '.git'])(
-    'does not resolve a reference against a copy under %s/',
-    async (excluded: string) => {
-      const dir = writeSkill('See `resources/guide.md`.');
-      const pluginRoot = safePath.join(root, 'plugin');
-      const vendored = safePath.join(pluginRoot, excluded, 'x');
-      markAsSkillRoot(vendored, 'vendored');
-      mkdirSyncReal(safePath.join(vendored, 'resources'), { recursive: true });
-      fs.writeFileSync(safePath.join(vendored, 'resources', 'guide.md'), '# vendored\n');
+  // The sibling population is REAL — a measured skill names a file only a
+  // sibling under the same plugin root ships — and the check is deliberately
+  // blind to it. A whole sibling-search subsystem existed for this case and had
+  // no production caller, so it was deleted; this pins the behaviour that
+  // remains, and it is the reason the SHIPPED fire rate is 3.8% and not 1.9%.
+  it('still fires when only a SIBLING skill under the plugin root ships the file', async () => {
+    const { dir } = writeSkillPointingAtSibling();
 
-      const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, pluginRoot);
+    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir);
 
-      expect(issues).toHaveLength(1);
-    });
-
-  // An exhausted budget and an unreadable directory both return "not found".
-  // The finding must not state absence as a fact the walk established.
-  it('says so in the message when the sibling search could not be completed', async () => {
-    const { dir, pluginRoot } = writeSkillPointingAtSibling();
-
-    // A budget of 1 stops the walk at the plugin root, so the sibling that holds
-    // the file is never visited.
-    const truncated = await detectMissingReferencedPaths(skillMdOf(dir), dir, pluginRoot, 1);
-    expect(truncated).toHaveLength(1);
-    expect(truncated[0]?.message).toContain('search of the surrounding tree was incomplete');
-
-    // …and a budget that lets the walk finish is silent, so the caveat tracks
-    // the WALK rather than being boilerplate on every finding.
-    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, pluginRoot)).resolves.toEqual([]);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.link).toBe('resources/handling-review-comments.md');
   });
 
-  it('reports a completed walk as complete and a truncated one as not', () => {
-    const dir = writeSkill('body');
-    const pluginRoot = safePath.join(root, 'plugin');
-    const sibling = safePath.join(pluginRoot, 'skills', 'other');
-    markAsSkillRoot(sibling, 'other');
+  // No caveat clause survives anywhere in the message. The deleted walk could
+  // report a truncated search, and its sentence must not linger as boilerplate.
+  it('states absence plainly, with no incomplete-search caveat', async () => {
+    const { dir } = writeSkillPointingAtSibling();
 
-    const full = resolutionBases(dir, pluginRoot);
-    expect(full.complete).toBe(true);
-    expect(full.bases).toContain(pluginRoot);
-    expect(full.bases).toContain(sibling);
-    expect(full.bases).toContain(dir);
+    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir);
 
-    expect(resolutionBases(dir, pluginRoot, 1).complete).toBe(false);
-
-    // The shipped call passes no wider root, so there is no walk to truncate:
-    // the skill's own directory is the only base a skill-local check can have.
-    expect(resolutionBases(dir, dir)).toEqual({ bases: [dir], complete: true });
-  });
-
-  // A skill may legitimately point at a plugin-root file or a sibling skill's
-  // resources. Both were false positives under a skill-local existence test.
-  //
-  // The sibling needs its own SKILL.md, and that is the point rather than
-  // fixture housekeeping: a bundle-relative path resolves against a MOUNT POINT
-  // (the search root, or a skill root), never against whatever intermediate
-  // directory happens to have a matching suffix beneath it.
-  //
-  // ⚠️ This exercises a seam NO PRODUCTION CALLER USES — see the
-  // `siblingSearchRoot` note on `detectMissingReferencedPaths`. What ships is
-  // the skill-local arm below.
-  it('stays silent when the target exists elsewhere under the sibling search root', async () => {
-    const { dir, pluginRoot } = writeSkillPointingAtSibling();
-
-    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, pluginRoot)).resolves.toEqual([]);
-    // …and the same input DOES fire when the caller scopes it to the skill only,
-    // which is what the shipped configuration does.
-    const skillLocal = await detectMissingReferencedPaths(skillMdOf(dir), dir);
-    expect(skillLocal).toHaveLength(1);
+    expect(issues[0]?.message).toBe(
+      'References "resources/handling-review-comments.md", which is not in the packaged output',
+    );
   });
 
   // LINK_BROKEN_FILE / PACKAGED_BROKEN_LINK already cover a markdown link with a

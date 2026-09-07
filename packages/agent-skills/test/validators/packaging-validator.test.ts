@@ -695,6 +695,20 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 		expect(issue?.message).toContain('api-skill-mount');
 	});
 
+	/**
+	 * The pattern's own comment names these two as the false positives its path
+	 * boundary exists to prevent — and neither had a test, so the boundary
+	 * (`(?:^|[\s"'`(])`) could be dropped with the suite still green. Both are
+	 * preceded by a word character, which is the whole mechanism.
+	 */
+	it.each([
+		['an installed-skill path in prose', 'Skills live under ~/.claude/skills/test-skill/ on disk.'],
+		['a project-relative directory', 'Put it in .claude/skills/test-skill/ and rebuild.'],
+	])('does NOT flag %s', async (_label, body) => {
+		const issue = await findNonPortableAssetIssue(getTempDir, `\n# Test Skill\n\n${body}`);
+		expect(issue).toBeUndefined();
+	});
+
 	it('should flag CLAUDE_PLUGIN_ROOT in a reachable bundled reference file, not just SKILL.md', async () => {
 		const tempDir = getTempDir();
 		// SKILL.md body is clean; the anti-pattern lives in a linked reference file.

@@ -173,6 +173,29 @@ describe('checkPackagedSizeLimit', () => {
     expect(issue?.location).toBe('.');
   });
 
+  /**
+   * 🚨 `link` is the WAIVER KEY, and it was decided by `readdir` order on ties.
+   *
+   * `sort((a, b) => b.bytes - a.bytes)` has no tiebreak, so two files of equal
+   * size — a vendored runtime shipped twice, which is exactly the shape that
+   * motivated this check — could anchor either way depending on the filesystem.
+   * An adopter's `validation.allow` entry then matched on their macOS box, missed
+   * on a Linux CI runner, and was reported `ALLOW_UNUSED` in the run that needed
+   * it. Pinning the CHOSEN name (not merely "one of them") is what makes this
+   * catch a regression rather than restate the ambiguity.
+   */
+  it('breaks a size tie by path, so the waiver anchor is the same on every machine', () => {
+    const dir = writeBundle({
+      'SKILL.md': 500,
+      'scripts/zzz-runtime.wasm': 9_600,
+      'assets/aaa-runtime.wasm': 9_600,
+    });
+
+    // Code-point order, so `assets/…` wins — deterministically, and independently
+    // of the order the directory happened to be read in.
+    expect(checkPackagedSizeLimit(dir, LIMIT)[0]?.link).toBe('assets/aaa-runtime.wasm');
+  });
+
   it('lets an allow entry waive ONE bundle while another bundle still fires', () => {
     const waived = writeBundle({ 'SKILL.md': 500, 'scripts/runtime.wasm': 9_600 }, 'waived');
     const other = writeBundle({ 'SKILL.md': 500, 'assets/data.bin': 9_600 }, 'other');
@@ -249,12 +272,29 @@ function requireSymlinks(): SymlinkCapability {
 describe.skipIf(cap === null)('checkPackagedSizeLimit — links in the packaged output', () => {
   const LIMIT = 10_000;
 
-  it('counts a symlinked FILE at the size of its target, which is what uploads', () => {
-    // `statSync` follows the link and the uploader reads the link's contents —
-    // both see the target's bytes, so the walk must too.
+  // ⛔ This case used to assert the OPPOSITE — that a symlinked file is counted
+  // "at the size of its target, which is what uploads". It was true of both lanes
+  // and both were wrong: reading through a link is how `notes.md -> /etc/passwd`
+  // reached a shared org workspace. The uploader now refuses any symlink, so
+  // there is no upload to weigh, and putting a number on bytes that can never be
+  // sent would be the false clean bill in the other direction.
+  it('does not weigh a symlinked FILE, and says why rather than scoring it zero', () => {
     const dir = writeBundle({ 'SKILL.md': 500, 'assets/real.bin': 9_600 });
     createSymlink(requireSymlinks(), safePath.join(dir, 'assets/real.bin'), safePath.join(dir, 'link.bin'));
-    expect(checkPackagedSizeLimit(dir, LIMIT)[0]?.message).toContain('link.bin (9.4 KiB)');
+
+    const issues = checkPackagedSizeLimit(dir, LIMIT);
+
+    // The real 9.6 kB file still counts, so the bundle is still over — but the
+    // link contributes nothing and gets its own receipt.
+    expect(issues.map(i => i.code).sort((a, b) => a.localeCompare(b))).toEqual(
+      ['PACKAGED_SIZE_EXCEEDS_API_LIMIT', 'SCAN_PATH_UNREADABLE'],
+    );
+    const receipt = issues.find(i => i.code === 'SCAN_PATH_UNREADABLE');
+    expect(receipt?.location).toBe('link.bin');
+    expect(receipt?.message).toContain('symbolic link');
+    // The finding names the real file, never the link, and its bytes are counted once.
+    expect(issues.find(i => i.code === 'PACKAGED_SIZE_EXCEEDS_API_LIMIT')?.message)
+      .toContain('assets/real.bin (9.4 KiB)');
   });
 
   it('reports a symlinked DIRECTORY it cannot weigh instead of scoring it zero', () => {

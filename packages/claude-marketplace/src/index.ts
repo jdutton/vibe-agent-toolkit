@@ -107,6 +107,12 @@ export {
   // on message TEXT to tell a 429 from a 400 — which is exactly the brittleness
   // the typed error was added to remove.
   ApiRequestError,
+  // Its counterpart for a failure that never earned a status. It carries the
+  // bytes that actually left the socket, which is the only fact a caller may
+  // build a claim about the request on — the CLI previously inferred one from
+  // `!(error instanceof ApiRequestError)` and told an operator with no API key
+  // that a connection had closed mid-upload.
+  ApiTransportError,
   buildMultipartFormData,
   createOrgApiClientFromEnv,
   OrgApiClient,
