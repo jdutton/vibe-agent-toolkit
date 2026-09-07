@@ -25,6 +25,8 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import sharp from 'sharp';
 import { z } from 'zod';
 
+import { isEntrypoint } from './common.js';
+
 /**
  * Schema for test fixture metadata stored in EXIF
  */
@@ -282,8 +284,11 @@ async function main() {
   await processDirectory(inputDir, outputDir, DEFAULT_CONFIG);
 }
 
-// Run if executed directly
-if (import.meta.main) {
+// Run if executed directly.
+//
+// ⛔ NOT `import.meta.main` — undefined before Node 24.2 / 22.18, and this
+// repo's floor is 22.13.0, so that form is silently always-false there.
+if (isEntrypoint(import.meta.url)) {
   await main();
 }
 

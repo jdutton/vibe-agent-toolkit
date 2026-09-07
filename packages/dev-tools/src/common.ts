@@ -11,7 +11,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { normalizePath } from '@vibe-agent-toolkit/utils/fs';
 import { safeExecResult } from '@vibe-agent-toolkit/utils/process';
 
 export { safeExecSync, safeExecResult } from '@vibe-agent-toolkit/utils/process';
@@ -63,6 +64,52 @@ export function getFilename(importMetaUrl: string): string {
  */
 export function getDirname(importMetaUrl: string): string {
   return dirname(fileURLToPath(importMetaUrl));
+}
+
+/**
+ * Was this module invoked as the process entrypoint, rather than imported?
+ *
+ * ⛔ **Do not reach for `import.meta.main` here.** It shipped in Node 24.2 and
+ * 22.18; this repo declares a floor of `>=22.13.0`, and on a real 22.13.0 the
+ * property is `undefined`:
+ *
+ * ```
+ * $ node-v22.13.0 --input-type=module -e "console.log(import.meta.main)"  -> undefined
+ * ```
+ *
+ * That is not a cosmetic gap. Every `if (import.meta.main)` guard in this
+ * package was silently dead on the declared floor — running
+ * `validate-repo-structure.ts` under 22.13.0 printed nothing and exited 0, so a
+ * contributor sitting exactly on the supported Node got a green pre-commit
+ * structure gate that had run no rule at all. Raising the floor to 22.18 would
+ * have hidden the defect behind the number instead of fixing it.
+ *
+ * `process.argv[1]` is defined on every Node this repo supports, so the
+ * comparison below is the portable form of the same question. The realpath pass
+ * covers the case where the script is reached through a symlink (a
+ * `node_modules/.bin` shim) on one side of the comparison but not the other.
+ *
+ * @param importMetaUrl - The calling module's `import.meta.url`
+ * @param entryPath - The invoked script path; defaults to `process.argv[1]`
+ * @returns `true` only when this module is the script Node was asked to run
+ */
+export function isEntrypoint(
+  importMetaUrl: string,
+  entryPath: string | undefined = process.argv[1],
+): boolean {
+  // An empty argv[1] would resolve to the cwd and could then match a module by
+  // accident; `undefined` happens under `node -e`. Neither is an entrypoint.
+  if (entryPath === undefined || entryPath === '') return false;
+
+  const modulePath = safePath.resolve(getFilename(importMetaUrl));
+  const invokedPath = safePath.resolve(entryPath);
+  if (modulePath === invokedPath) return true;
+
+  // `normalizePath` resolves symlinks and Windows 8.3 short names, and returns
+  // the path unchanged when it cannot — which is the right answer here, since
+  // the string comparison above has already decided the two differ and an
+  // unresolvable path carries no symlink information to compare.
+  return toForwardSlash(normalizePath(modulePath)) === toForwardSlash(normalizePath(invokedPath));
 }
 
 /**

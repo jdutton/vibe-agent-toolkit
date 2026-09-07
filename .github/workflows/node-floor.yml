@@ -36,12 +36,30 @@ jobs:
       # fail if they forgot — the job would keep testing a version VAT no longer
       # claims. `validate-repo-structure.ts` enforces that every package agrees
       # with this same root value, so there is one source and this reads it.
+      #
+      # ⚠️ The derived value must be a FULL x.y.z, and this step is where that is
+      # decided. The assertion further down compares it to `process.versions.node`
+      # for exact string equality, so a legal-but-partial floor — `>=22`, `22.x`,
+      # `>=22.13.0 <25` — derives to something setup-node happily resolves to a
+      # different patch release, and the assertion then fails saying the RUNNER is
+      # wrong. Fail-closed, so never a hole; but it sends the reader after the
+      # runner when the manifest is what needs changing. Refusing here is the only
+      # place the message can name the real cause.
+      #
+      # Both values are read out of the file by `node`, never interpolated into
+      # this script, so nothing a pull request writes in `engines.node` becomes
+      # shell source text.
       - name: Derive the declared Node floor from the root manifest
         id: floor
         run: |
-          FLOOR=$(node -p "require('./package.json').engines.node.replace(/^[^0-9]*/, '')")
+          DECLARED=$(node -p "require('./package.json').engines?.node ?? ''")
+          FLOOR=$(node -p "(require('./package.json').engines?.node ?? '').replace(/^[^0-9]*/, '')")
           if [ -z "$FLOOR" ]; then
             echo "::error::Could not derive a Node floor from root package.json engines.node"
+            exit 1
+          fi
+          if [[ ! "$FLOOR" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Root package.json declares engines.node \"$DECLARED\", which derives to \"$FLOOR\" — not a full x.y.z version. setup-node would resolve that to some other patch release and the assertion below would then fail while blaming the runner. Declare an exact floor, e.g. \">=22.13.0\"."
             exit 1
           fi
           echo "Declared floor: $FLOOR"
@@ -55,12 +73,22 @@ jobs:
       # setup-node accepts a semver range, so asking for the floor can quietly
       # give you something newer. That would make every assertion below pass for
       # the wrong reason.
+      #
+      # ⛔ The floor arrives through `env:`, NOT through `${{ }}` inside the
+      # script. A `${{ }}` expression is substituted as TEXT before bash parses
+      # the line, and this value's content is the pull request's own
+      # `engines.node` — so on this `pull_request` trigger a fork chose the shell
+      # this job ran. (Bounded: no secrets and a read-only token, and the job
+      # already runs PR code. Still not a shape to leave standing.) Through
+      # `env:` it is a shell variable, quoted at the point of use, and inert.
       - name: Assert the runner is actually at the floor
+        env:
+          FLOOR: ${{ steps.floor.outputs.version }}
         run: |
           ACTUAL=$(node -p "process.versions.node")
-          echo "Running Node: $ACTUAL (floor: ${{ steps.floor.outputs.version }})"
-          if [ "$ACTUAL" != "${{ steps.floor.outputs.version }}" ]; then
-            echo "::error::Expected Node ${{ steps.floor.outputs.version }} but got $ACTUAL — this job would have tested the wrong runtime."
+          echo "Running Node: $ACTUAL (floor: $FLOOR)"
+          if [ "$ACTUAL" != "$FLOOR" ]; then
+            echo "::error::Expected Node $FLOOR but got $ACTUAL — this job would have tested the wrong runtime."
             exit 1
           fi
 

@@ -68,6 +68,34 @@ export function isSqliteExperimentalWarning(warning: unknown, type?: unknown): b
 /** Restores the emitter this filter replaced. */
 export type RestoreWarningEmitter = () => void;
 
+/** The shape of `process.emitWarning`, as this module calls it. */
+type EmitWarning = (...args: unknown[]) => void;
+
+/** Marks a function as one of this module's filters, so a chain can be walked. */
+const FILTER_BRAND = Symbol('sqliteWarningFilter');
+
+/**
+ * An installed filter, holding a MUTABLE link to the emitter beneath it.
+ *
+ * 🪤 Mutable on purpose. Save-and-assign restore is correct only for LIFO
+ * restores, and nothing makes callers restore in that order: with A installed,
+ * then B, `restoreA()` used to write A's saved emitter straight back over B's
+ * filter — removing B and leaving A's own filter orphaned in the chain, alive
+ * for the life of the process, silently eating the one warning it was built to
+ * hide. Splicing a node out of the chain instead is order-independent.
+ */
+interface FilterEmitter {
+  (...args: unknown[]): void;
+  /** The emitter this filter delegates to. */
+  previous: EmitWarning;
+  readonly [FILTER_BRAND]: true;
+}
+
+/** Is this one of our filters, rather than the host's own emitter? */
+function isFilterEmitter(value: unknown): value is FilterEmitter {
+  return typeof value === 'function' && FILTER_BRAND in value;
+}
+
 /**
  * Wrap `process.emitWarning` so SQLite's load warning is dropped and every
  * other warning is emitted unchanged.
@@ -84,17 +112,46 @@ export type RestoreWarningEmitter = () => void;
 export function installSqliteWarningFilter(
   host: Pick<NodeJS.Process, 'emitWarning'> = process,
 ): RestoreWarningEmitter {
-  const original = host.emitWarning.bind(host) as (...args: unknown[]) => void;
-  const previous = host.emitWarning;
-
-  const filtered = (...args: unknown[]): void => {
+  const filtered = ((...args: unknown[]): void => {
     if (isSqliteExperimentalWarning(args[0], args[1])) return;
-    original(...args);
-  };
+    // Read through the node, not through a captured local: `previous` is
+    // rewritten when a filter below this one is spliced out.
+    Reflect.apply(filtered.previous, host, args);
+  }) as FilterEmitter;
 
-  host.emitWarning = filtered as NodeJS.Process['emitWarning'];
+  // Stored UNBOUND so chain identity survives — a `.bind()` here would make each
+  // filter delegate to a fresh wrapper, and no restore could then recognise the
+  // node it needs to splice out.
+  filtered.previous = host.emitWarning as EmitWarning;
+  Object.defineProperty(filtered, FILTER_BRAND, { value: true });
+
+  host.emitWarning = filtered as unknown as NodeJS.Process['emitWarning'];
 
   return () => {
-    host.emitWarning = previous;
+    removeFromChain(host, filtered);
   };
+}
+
+/**
+ * Take one filter out of the emitter chain, wherever it currently sits.
+ *
+ * Doing nothing when the filter is already gone is the correct answer, not a
+ * swallowed failure: a second `restore()` call, or a host whose emitter was
+ * replaced wholesale by something else, both mean this filter is no longer
+ * installed — which is exactly what the caller asked for.
+ */
+function removeFromChain(host: Pick<NodeJS.Process, 'emitWarning'>, filter: FilterEmitter): void {
+  if ((host.emitWarning as unknown) === filter) {
+    host.emitWarning = filter.previous as NodeJS.Process['emitWarning'];
+    return;
+  }
+
+  let node: unknown = host.emitWarning;
+  while (isFilterEmitter(node)) {
+    if (node.previous === (filter as unknown as EmitWarning)) {
+      node.previous = filter.previous;
+      return;
+    }
+    node = node.previous;
+  }
 }
