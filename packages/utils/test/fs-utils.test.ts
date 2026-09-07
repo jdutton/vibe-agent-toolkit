@@ -959,7 +959,16 @@ describe('fs-utils', () => {
         // regressed judge would take, through the same two module-level imports.
         // Without it, the zeros below are indistinguishable from instruments
         // that never attached to the functions under test.
-        new FsLookupCache().probe(target);
+        //
+        // It must probe the spelling that is really ON DISK, never the asked-for
+        // `target`: `probe` reaches `statSync` only when `existsSync` says yes,
+        // so on a case-sensitive filesystem (ext4 in CI) `One/Two` opens nothing
+        // and the control silently exercises one of the two syscalls it exists to
+        // exercise. The assertion below pins that property rather than trusting
+        // it — `exists` is `statSync`'s own guard, and `isDirectory: false` is a
+        // value only `statSync` can have produced.
+        const control = new FsLookupCache().probe(safePath.join(root, PLANTED_PATH));
+        expect(control).toEqual({ exists: true, isDirectory: false });
 
         expect(counts().every((n) => n > 0)).toBe(true);
         const beforeJudging = counts();
