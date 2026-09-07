@@ -112,6 +112,13 @@ with a regression test.
   `filters.metadata` was stripped — the one filter path that works could not be expressed. Moves the
   generated `RAGQueryJsonSchema` output.
 
+- **`RAGQuerySchema.safeParse` now rejects an unknown key instead of stripping it.** A misspelled
+  filter (`resourceID`) parsed clean and was deleted, and a deleted filter widens the search rather
+  than narrowing it — the same failure the refusal above exists to close, reached through VAT's own
+  validation path. `filters.metadata` stays open, because it is your schema. The published
+  `RAGQueryJsonSchema` is unchanged: it already declared `additionalProperties: false`, so the two
+  halves of one contract had disagreed.
+
 - **RAG providers should call the new `assertQuerySupported(query, support)` and declare their own
   `QuerySupport`.** Without it a provider inherits the declared query fields and none of the
   refusals.
@@ -130,8 +137,14 @@ with a regression test.
 - **Deny and ask rules now match the way Claude Code publishes them, which is not how allow rules
   match.** A deny rule applies when **any** subcommand matches (allow needs every one), reaches
   commands nested in a subshell or command substitution, and matches past any leading environment
-  assignment. **Re-run any saved permission-conflict report** — it will flag things it previously
-  missed. Allow-lane answers are unchanged apart from `NODE_ENV=` now being stripped.
+  assignment, a `case` arm, or a function body. On a command it cannot parse it now reaches a denied
+  program anywhere in the string, not only at the front. **Re-run any saved permission-conflict
+  report** — it will flag things it previously missed. Allow-lane answers are unchanged apart from
+  `NODE_ENV=` now being stripped.
+
+- **`ParsedBashRule.regex?: RegExp` is now `pattern?: WildcardPattern`, and `escapeRegexLiteral` is
+  removed.** Wildcard rules no longer compile to a regular expression at all (see Security), so
+  anything reading `.regex` must read `.pattern`. `WildcardPattern` is exported alongside it.
 
 - **`@vibe-agent-toolkit/agent-schema` is now `@vibe-agent-toolkit/schema`.** Rename the dependency
   and every import specifier; nothing else about the package changed.
@@ -221,12 +234,25 @@ with a regression test.
   frontmatter with a non-empty `type`, and cross-links are resolved against the bundle root. There
   is no `include`/`exclude` on purpose — the population is the specification's, and a narrower one
   would let VAT report a clean bundle it never fully read. Read a clean report precisely: §11.1 and
-  §11.2 in full, §11.3 only in part.
+  §11.2 in full, §11.3 only in part — and wikilinks are not read at all.
+  Cross-links are checked for case and Unicode normalization, so a bundle that resolves on the
+  author's Mac is not certified when it 404s on a case-sensitive filesystem
+  (`OKF_LINK_NORMALIZATION_MISMATCH`). A `/`-anchored link whose target exists at the repo root but
+  not under the bundle root gets its own code, `OKF_ROOT_RELATIVE_LINK_UNRESOLVED`, because the
+  remedy is to re-anchor rather than to write a missing document. An unreadable bundle root is that
+  bundle's own `OKF_BUNDLE_ROOT_UNREADABLE` finding at hard `error` — the per-bundle severity dial
+  cannot lower it, since an unreadable root means conformance was never assessed — and the other
+  bundles still run.
 
 - **`vat ard emit` — writes a `.well-known/ard.json` discovery manifest.** Set `ard.publisher` and
   `ard.baseUrl`; published skills become entries automatically. Marketplaces, OKF bundles and MCP
   servers are emitted only if you supply `ard.entries.<name>.type`, because the ARD specification
   names no media type for any of them and VAT will not guess one under your domain.
+  Overrides are keyed `ard.entries."<kind>:<name>"`; a bare key matching surfaces of more than one
+  kind is refused, naming both qualified forms, rather than retyping whichever it reached first. A
+  duplicate emitted `identifier`, a `skills.config` key naming a skill that does not exist, a
+  `publisher` that is not a real domain, and a `baseUrl` carrying a query, a fragment or a
+  non-`http(s)` scheme are all refused too.
 
 - **A collection can declare the MIME type of the files it matches, and that declaration reaches the
   parser.** `resources.collections.<name>.mimeType` overrides the built-in extension tables, so a
@@ -369,6 +395,16 @@ with a regression test.
   stripped before matching. Three divergences remain and are documented in the module: allow-lane
   environment-assignment stripping, an over-broad `PATH_TOOLS`, and unsupported MCP tool-name globs.
 
+- **A permission rule with wildcards separated by literals could hang the process, and `vat audit`
+  on an untrusted plugin was the way in.** Every `*` became `.*` in a compiled regular expression, so
+  `Bash(ab*b*b*b*b*b*b*b*z)` — a 24-character rule — took **26 seconds** against a 61-character
+  command, growing ~9x per added `b*`; an ordinary-looking
+  `Bash(npm * --registry * --registry * --registry * publish)` took 10 s on a 4 KB command. A
+  plugin's `SKILL.md` `allowed-tools:` and an adopter's `settings.json` are both attacker-reachable
+  inputs to that path. Wildcard rules are no longer compiled to a regular expression: matching is now
+  a linear two-pointer scan. **26,273 ms → 0.3 ms**, same answers. The tool-name and
+  `WebFetch(domain:…)` lanes shared the compiler and are fixed with it.
+
 - **Nine regexes in production code could be driven into quadratic backtracking, and are now
   linear.** Measured on hostile input, the inline-link scanner took **2,632 ms on 40k unclosed
   brackets** and is now ≤1.1 ms, with identical output on every case tested. They had been triaged
@@ -458,6 +494,11 @@ with a regression test.
   `allow` glob matches an issue's `location`, and the two lanes report different locations for the
   same document: `vat skills validate` names the authored source, `vat build` names the packaged
   artifact. If you have a waiver that works under one and not the other, name both spellings.
+
+- **An empty list filter matched everything instead of nothing.** `filters.metadata.tags: []` — the
+  ordinary "filter to the tags I computed, and I computed none" case — compiled to `tags LIKE '%%'`
+  and returned the whole index, while the structurally identical `filters.resourceId: []` correctly
+  matched nothing. Both branches now emit the same always-false condition.
 
 - **The chunker rejected a whole document rather than splitting its longest line**, so a single wide
   markdown table row or unwrapped bullet produced zero chunks for the entire file. It now never
