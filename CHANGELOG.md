@@ -642,6 +642,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`MCP_TOOL_NAME_UNQUALIFIED` could not fire on an installed skill, which is the corpus its
+  precision was measured on.** The detector's only call sites were inside
+  `validateSkillForPackaging`, and `vat audit` runs that validator only when the skill sits under a
+  governing `vibe-agent-toolkit.config.yaml`. Every skill under `~/.claude/plugins/**` and
+  `~/.claude/skills/**` has none, so it took the config-free `validateSkill` lane instead and the
+  check was structurally unreachable there: `vat audit --user` over **851 installed skills emitted
+  the code 0 times**, while the published measurement in `docs/validation-codes.md` — taken by
+  driving the detector directly over the same files — recorded 7 firing documents and 11
+  occurrences. `validateSkill` now calls the detector for SKILL.md and for each linked file, so the
+  shipped command reproduces that row exactly (**7 documents, 11 occurrences**), plus 4 occurrences
+  in 1 linked resource file the SKILL.md-only measurement never covered. No other code's count
+  moved, and no skill's error count changed — the code is `warning` severity. Two tests pin each
+  call site independently; deleting either one turns exactly one of them red.
+
 - **A missing API key made VAT claim a connection had closed and that it had sent 6.8 KiB.** The
   transport annotation was gated on `!(error instanceof ApiRequestError)` — "anything that is not a
   completed exchange must be a dropped connection". The header builder throws before a socket is

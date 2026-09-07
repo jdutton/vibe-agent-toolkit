@@ -15,6 +15,7 @@ import { detectUndeclaredCrossSkillAuth } from './cross-skill-dependency-detecti
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import { detectNonImperativeBody } from './imperative-body-detection.js';
 import { detectKebabCaseViolation } from './kebab-case-detection.js';
+import { collectUnqualifiedMcpToolIssues } from './mcp-tool-qualification.js';
 import type { LinkedFileValidationResult, ValidateOptions, ValidationResult } from './types.js';
 import { isNeverPackagedBasename } from './validation-rules.js';
 
@@ -119,6 +120,20 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   for (const obs of rootObservations) {
     issues.push(observationToIssue(obs, skillLocation));
   }
+
+  // Unqualified MCP tool names. This lane needs its OWN call: the detector is
+  // not one of `runCompatDetectors`, and until this line its only call sites
+  // were inside `validateSkillForPackaging`. That made the check structurally
+  // unreachable for every skill audited without a governing VAT config — which
+  // is every INSTALLED skill under `~/.claude/plugins/**`, the exact corpus the
+  // detector's precision table was measured on. `vat audit --user` before and
+  // after, over 851 installed skills: 0 occurrences -> 11 in 7 documents, with
+  // no other code's count moving — which is exactly the row
+  // docs/validation-codes.md already published from a DIRECT run of the
+  // detector. The command now reproduces the number the docs quote. See the
+  // sibling call in the linked-file walk below, and the two in
+  // packaging-validator.ts that this pair mirrors.
+  collectUnqualifiedMcpToolIssues(content, skillLocation, issues);
 
   // Transitive link traversal (BFS)
   const skillDir = options.rootDir ?? dirname(skillPath);
@@ -355,6 +370,21 @@ async function traverseLinks(
       const linkedCompatIssues = linkedObservations.map(obs => observationToIssue(obs, issueLocation(currentPath, locationRoot)));
       processed.fileIssues.push(...linkedCompatIssues);
       issues.push(...linkedCompatIssues);
+      // Same detector on each linked file, mirroring the per-bundled-file call
+      // in packaging-validator.ts. Without it the two lanes disagree about what
+      // they scan: a skill naming its tools bare in a referenced resource file
+      // is a finding when packaged and silence when audited. On the installed
+      // corpus it adds 4 occurrences in 1 document (11/7 -> 15/8).
+      // ⚠️ That is the ONLY linked-file sample the corpus offers, so this lane's
+      // precision rests on n=1 — and one of its four occurrences is a section
+      // HEADING naming the tool, a weaker shape than the step-an-agent-copies
+      // case the SKILL.md measurement was built from. Warning severity and the
+      // per-identifier `link` waiver are what make that acceptable to ship;
+      // re-measure here first if this code is ever proposed for `error`.
+      // Whole-file bytes, frontmatter included: the detector strips leading
+      // frontmatter itself, so an `allowed-tools:` list cannot seed the
+      // vocabulary it then fires against.
+      collectUnqualifiedMcpToolIssues(linkedContent, issueLocation(currentPath, locationRoot), issues);
     }
 
     // Record linked file result (skip SKILL.md itself — it's the root)
