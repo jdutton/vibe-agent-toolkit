@@ -297,6 +297,50 @@ function packagingResultToValidationResult(
  *   depth, so crawling again reports one file twice, while omitting it for a
  *   standalone bundle is the blindness this parameter exists to end.
  */
+/**
+ * Resolve a skill's nearest-ancestor `vibe-agent-toolkit.config.yaml`, treating
+ * one that cannot be LOADED as absent rather than as fatal.
+ *
+ * 🔑 Both audit lanes call this, and that is the point. They used to carry
+ * separate copies of the fork, and the copies disagreed: the single-target lane
+ * caught `ConfigLoadError` and fell back, the directory-scan lane let it throw.
+ * One unrecognized key in one nested config therefore aborted a whole-tree scan
+ * with exit 2 and zero skills audited, while auditing a single SKILL.md under
+ * that same config exited 0 — a verdict that depended on whether the argument
+ * was a file or its parent directory. Keeping the tolerance in ONE function is
+ * what stops the two answers drifting apart again.
+ *
+ * Degrading beats destroying, and silence is not the alternative — the policy
+ * `SCAN_PATH_UNREADABLE` states in its own registry docstring. So this warns
+ * rather than logging at debug, and dedupes on `configLog` because a whole
+ * plugin tree shares one config and a per-skill warning would be hundreds of
+ * identical lines.
+ *
+ * @returns the skill's display-safe packaging config, or `null` when there is
+ *   no governing config OR when the one found could not be loaded.
+ */
+async function resolveGoverningConfig(
+  skillPath: string,
+  logger: ReturnType<typeof createLogger>,
+  configLog: Set<string>,
+): Promise<ReturnType<typeof stripValidationAllowForDisplay> | null> {
+  let fullConfig: Awaited<ReturnType<typeof resolveSkillPackagingConfig>>;
+  try {
+    fullConfig = await resolveSkillPackagingConfig(skillPath);
+  } catch (err) {
+    if (!(err instanceof ConfigLoadError)) throw err;
+    // Keyed on the message, which names the offending config path, so the
+    // warning appears once however many skills that config governs.
+    const key = `unloadable:${err.message}`;
+    if (!configLog.has(key)) {
+      configLog.add(key);
+      logger.warn(`Ignoring unloadable config; these skills are validated config-free: ${err.message}`);
+    }
+    return null;
+  }
+  return fullConfig === null ? null : stripValidationAllowForDisplay(fullConfig);
+}
+
 async function validateSingleSkill(
   skillPath: string,
   options: AuditCommandOptions,
@@ -305,19 +349,12 @@ async function validateSingleSkill(
   crawlTree: boolean,
   isVATGenerated?: boolean
 ): Promise<ValidationResult> {
-  // Try config-aware validation: walk UP to the skill's nearest-ancestor
+  // Config-aware validation: walk UP to the skill's nearest-ancestor
   // vibe-agent-toolkit.config.yaml and apply the skill's packaging block. A
-  // broken governing config is tolerated here (audit is a bulk linter): log it
-  // and fall back to config-free validation rather than aborting the scan.
-  let fullConfig: Awaited<ReturnType<typeof resolveSkillPackagingConfig>>;
-  try {
-    fullConfig = await resolveSkillPackagingConfig(skillPath);
-  } catch (err) {
-    if (!(err instanceof ConfigLoadError)) throw err;
-    logger.debug(`  Ignoring broken governing config for ${skillPath}: ${err.message}`);
-    fullConfig = null;
-  }
-  const skillConfig = fullConfig === null ? null : stripValidationAllowForDisplay(fullConfig);
+  // config that cannot be loaded is treated as absent — see
+  // {@link resolveGoverningConfig}, which both audit lanes share so they cannot
+  // disagree about that again.
+  const skillConfig = await resolveGoverningConfig(skillPath, logger, new Set());
   if (skillConfig !== null) {
     logger.debug(`  Using config-aware validation for: ${skillPath}`);
     const { gitTracker } = await resolveScanContext(safePath.resolve(skillPath), locationRoot, logger);
@@ -1946,6 +1983,7 @@ async function handleFileEntry(
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
   scanCtx: ScanContext,
+  configLog: Set<string>,
 ): Promise<ValidationResult | null> {
   const { locationRoot } = scanCtx;
 
@@ -1962,8 +2000,11 @@ async function handleFileEntry(
     // Config-aware: walk UP to the skill's nearest-ancestor config and apply
     // ONLY that skill's declared packaging rules. Configs do not compose
     // across VAT projects — audit does not merge rules across sibling configs.
-    const fullConfig = await resolveSkillPackagingConfig(fullPath);
-    const skillConfig = fullConfig === null ? null : stripValidationAllowForDisplay(fullConfig);
+    // Shared with the single-target lane, so one unloadable nested config
+    // cannot abort this whole scan while that lane shrugs it off. `configLog`
+    // is the scan's existing config-log set, so the warning is emitted once for
+    // a config however many skills it governs.
+    const skillConfig = await resolveGoverningConfig(fullPath, logger, configLog);
     if (skillConfig !== null) {
       logger.debug(`  Using config-aware validation for: ${fullPath}`);
       // Thread the per-scan tracker into packaging validation so gitignore
@@ -2413,7 +2454,7 @@ async function scanEntry(
 ): Promise<ValidationResult[]> {
   try {
     if (entry.isFile()) {
-      const result = await handleFileEntry(entry, fullPath, ctx.options, ctx.logger, ctx.scanCtx);
+      const result = await handleFileEntry(entry, fullPath, ctx.options, ctx.logger, ctx.scanCtx, ctx.nestedConfigLog);
       return result === null ? [] : [result];
     }
     if (entry.isDirectory()) {

@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### CLI
 
+- **`vat audit` on a directory no longer exits 2 because one nested config is unloadable.** A
+  single unrecognized key in one `vibe-agent-toolkit.config.yaml` anywhere under the scanned tree
+  aborted the entire audit — exit `2`, zero skills validated, no findings reported — while
+  `vat audit <that same SKILL.md>` exited `0` and reported it as passing. Same tree, same skill,
+  two verdicts, decided only by whether the argument was a file or the directory above it. The
+  cause was two copies of the same config-resolution fork: the single-target lane guarded it (its
+  comment reads "audit is a bulk linter … rather than aborting the scan"), the directory-scan lane
+  — the one `--user` actually reaches, for 677 of 851 skills on a real run — did not. The scan now
+  degrades instead: it warns **once per config**, naming the file and the rejected key, and
+  validates the skills it governs config-free. This is the policy `SCAN_PATH_UNREADABLE` already
+  states — degrading beats destroying, and silence is not the alternative. **Scripts that treat
+  `vat audit`'s exit 2 as "config is broken" must now read the warning on stderr.** The config
+  schema itself is unchanged and still rejects unknown keys everywhere else.
+
 - **`vat claude org skills install` now exits non-zero when an upload fails.** A `--from-npm` run
   in which every skill was rejected reported `status: success` and exit `0`; it now reports
   `status: error` and exits `1`, with the per-skill results still in the document. Usage mistakes
