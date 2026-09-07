@@ -17,7 +17,9 @@ export {
   ArdManifestSchema,
   ArdMetadataValueSchema,
   ArdTrustManifestSchema,
+  isArdBaseUrl,
   isArdIdentifier,
+  isArdPublisherDomain,
   type ArdEntry,
   type ArdManifest,
   type ArdTrustManifest,
@@ -25,6 +27,7 @@ export {
 
 export {
   ArdDerivationError,
+  ardEntryOverrideKey,
   buildArdEntries,
   buildArdEntry,
   type ArdSurface,

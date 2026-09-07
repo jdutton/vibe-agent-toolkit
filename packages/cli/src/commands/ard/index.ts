@@ -44,9 +44,14 @@ Derivation:
   names none for a skill (it occurs once, in an example).
 
   A marketplace, an OKF bundle and an MCP server are emitted ONLY when the
-  author supplies \`ard.entries.<name>.type\`; the specification names no media
-  type for any of them, and VAT does not guess. Skipped surfaces are reported
-  on stderr.
+  author supplies \`ard.entries."<kind>:<name>".type\`; the specification names
+  no media type for any of them, and VAT does not guess. Skipped surfaces are
+  reported on stderr — including a \`skills.config\` key that discovery does not
+  find, which is never advertised.
+
+  \`ard.entries\` is keyed by "<kind>:<name>" — skills, marketplaces and OKF
+  bundles are independent key spaces, so a bare name that matches two of them
+  is REFUSED rather than applied to both.
 
   \`representativeQueries\` is authored, never generated. Its absence is a
   conformance WARNING upstream, not an error — an honest gap beats a
@@ -60,8 +65,9 @@ Requirements:
 
 Exit Codes:
   0 - Manifest written
-  1 - No \`ard:\` config, or a surface could not be derived
-  2 - Unexpected internal failure
+  1 - No \`ard:\` block in the config, or a surface could not be derived
+  2 - System error (no project root, no config file, invalid config, unexpected
+      internal failure)
 
 Example:
   $ vat ard emit --output dist/.well-known/ard.json

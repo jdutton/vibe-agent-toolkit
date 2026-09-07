@@ -6,7 +6,7 @@
 > **Spec declares:** v0.91, status **Proposal**, dated 2026-08-26
 > **License:** Apache-2.0 — © the ARD project / Linux Foundation working group. Reproduced verbatim.
 >
-> @vendor-claim reviewed=2026-09-06 verify=Re-fetch the Source URL and diff it against `ard-entry.schema.json` byte for byte. The `$id` is a `main`-branch URL on a Proposal-status spec, so it moves with no signal and no version in the path. Check specifically whether `EntryFields.properties.TrustManifest` has been corrected to `trustManifest` (see Divergences below) — that is the one difference VAT's emitter works around.
+> @vendor-claim reviewed=2026-09-06 verify=Re-fetch the Source URL and diff it against `ard-entry.schema.json` byte for byte. The `$id` is a `main`-branch URL on a Proposal-status spec, so it moves with no signal and no version in the path. Then re-check the casing divergence VAT's emitter works around FROM BOTH SIDES, because either side can move and only one of them is vendored here: (a) whether `EntryFields.properties.TrustManifest` in the schema has been corrected to `trustManifest`, and (b) re-count `trustManifest` versus `TrustManifest` in upstream `spec/ard.md` — VAT emits the camelCase spelling because the PROSE says so in all 11 occurrences, so if upstream instead corrects the prose to PascalCase, VAT is left emitting a term neither side defines and a schema-only diff reports nothing.
 >
 > **Refresh policy:** re-fetch when ARD publishes a version past v0.91, or every ~90 days,
 > whichever is sooner. `docs/external/` normally caches prose; this directory caches a machine
@@ -80,5 +80,17 @@ passes here is therefore not evidence that a trust manifest is well-formed.
 
 VAT follows the **prose**, emitting `trustManifest`, because that is what the specification defines
 and what a consumer implementing the spec will read. The test suite asserts this explicitly rather
-than letting the permissive branch hide it. Re-check on every refresh: if upstream corrects the
-casing, VAT's emitted entries start being genuinely validated and the workaround note can go.
+than letting the permissive branch hide it.
+
+⚠️ **The refresh has to check BOTH sides, and only one of them is vendored here.** `spec/ard.md` is
+not in this directory, so a byte diff of `ard-entry.schema.json` can only ever see upstream moving
+the *schema*. The failure is asymmetric:
+
+| What upstream does | What a schema-only diff sees | Where that leaves VAT |
+|---|---|---|
+| Corrects the schema to `trustManifest` | The diff | Emitted entries start being genuinely validated; the workaround note can go |
+| Corrects the **prose** to `TrustManifest` | **Nothing** | VAT keeps emitting a term neither side defines, silently, forever |
+
+So the `verify=` procedure re-counts `trustManifest` versus `TrustManifest` in upstream
+`spec/ard.md` as well. Today's count — 11 camelCase, 0 PascalCase — is the whole basis for the
+follow-the-prose decision, and a refresh that does not re-read it is not a refresh of this claim.

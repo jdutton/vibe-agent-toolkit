@@ -15,7 +15,13 @@
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  createSymlink,
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+  symlinkCapability,
+} from '@vibe-agent-toolkit/utils';
 import { afterEach } from 'vitest';
 
 /** Bundle-relative fixture path → file content, written verbatim as UTF-8. */
@@ -68,7 +74,95 @@ export const TABLE_TYPE = 'BigQuery Table';
 export const REFERENCE_TYPE = 'Reference';
 export const NO_FRONTMATTER = '# No frontmatter\n';
 
+/**
+ * One visible filename, `café.md`, in the two Unicode normalization forms.
+ *
+ * Built with `String.fromCodePoint` rather than typed as `\u` escapes: an
+ * escape typed into a source file is normalized into real bytes on the way in,
+ * which makes the two constants indistinguishable in review — and this pair's
+ * whole point is that they LOOK identical and are different bytes.
+ *
+ * NFD is the on-disk spelling and NFC the link spelling, because that is the
+ * direction that breaks: the bundle is authored on a Mac, where both forms open,
+ * and 404s on the byte-exact filesystem every consumer unpacks it onto.
+ */
+export const NFD_CAFE_DOC = `caf${String.fromCodePoint(0x65, 0x301)}.md`;
+export const NFC_CAFE_DOC = `caf${String.fromCodePoint(0xe9)}.md`;
+
 /** The finding codes a report carries, in report order. */
 export function codesOf(findings: ReadonlyArray<{ code: string }>): string[] {
   return findings.map((finding) => finding.code);
+}
+
+/**
+ * Proof this host can create a symlink, minted once for the whole suite.
+ *
+ * `symlinkCapability()` is the repo's sanctioned probe and `createSymlink` the
+ * one call site it unlocks — a hand-rolled `symlinkSync` here would be a second,
+ * differently-behaved answer to a question one function already owns (and the
+ * `local/no-bare-symlink-in-tests` rule exists to stop exactly that).
+ */
+const SYMLINK_CAPABILITY = symlinkCapability();
+
+/**
+ * Whether this machine can create a symlink at all.
+ *
+ * Windows refuses without Developer Mode or an elevated shell, and a suite that
+ * hard-failed there would be reporting the CI host's privileges rather than
+ * VAT's behaviour. Route it through `it.skipIf` so the skip is visible in the
+ * report — a symlink case that silently no-ops reads as a passing test for a
+ * property nobody exercised.
+ */
+export const SYMLINKS_AVAILABLE: boolean = SYMLINK_CAPABILITY !== null;
+
+/**
+ * What a planted symlink points at, which is a Windows question.
+ *
+ * `symlinkSync` needs `SeCreateSymbolicLinkPrivilege` there — Developer Mode or
+ * an elevated shell — which most CI agents do not hold. A *directory* link can
+ * dodge that entirely as a junction, so the two kinds are not interchangeable
+ * and the caller has to say which it means.
+ */
+export type SymlinkKind = 'file' | 'dir';
+
+/** The `type` argument that costs no privilege for this kind on this platform. */
+function symlinkType(kind: SymlinkKind): 'file' | 'dir' | 'junction' {
+  return kind === 'dir' && process.platform === 'win32' ? 'junction' : kind;
+}
+
+/**
+ * Plant a symlink inside an already-planted bundle.
+ *
+ * Separate from {@link plantOkfBundle}'s literal because a symlink is not
+ * content: it is an entry whose `Dirent` answers `isFile()` with `false`, which
+ * is precisely the fact the discovery suite is pinning.
+ *
+ * @param root - Absolute bundle root returned by {@link plantOkfBundle}
+ * @param linkPath - Bundle-relative path the link is created at
+ * @param targetPath - Bundle-relative path the link points at
+ * @param kind - Whether the target is a file or a directory
+ * @throws If the platform refuses the link, naming the privilege that is missing
+ */
+export function plantSymlink(
+  root: string,
+  linkPath: string,
+  targetPath: string,
+  kind: SymlinkKind,
+): void {
+  if (SYMLINK_CAPABILITY === null) {
+    throw new Error(
+      `Cannot plant the ${kind} symlink "${linkPath}": this host does not grant symlink ` +
+        `creation (on Windows that is SeCreateSymbolicLinkPrivilege — Developer Mode or an ` +
+        `elevated shell). Gate the test on SYMLINKS_AVAILABLE so the skip is visible in the report.`,
+    );
+  }
+
+  const link = safePath.joinUnderRoot(root, linkPath);
+  mkdirSyncReal(safePath.join(link, '..'), { recursive: true });
+  createSymlink(
+    SYMLINK_CAPABILITY,
+    safePath.joinUnderRoot(root, targetPath),
+    link,
+    symlinkType(kind),
+  );
 }

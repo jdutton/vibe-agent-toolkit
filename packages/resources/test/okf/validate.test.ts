@@ -13,6 +13,8 @@ import { describe, expect, it } from 'vitest';
 import { validateOkfBundle } from '../../src/okf/validate.js';
 
 import {
+  NFC_CAFE_DOC,
+  NFD_CAFE_DOC,
   NO_FRONTMATTER,
   REFERENCE_TYPE,
   TABLE_TYPE,
@@ -130,12 +132,16 @@ describe('validateOkfBundle', () => {
     });
 
     it('reports a bundle-relative link with no target', async () => {
+      // Deliberately re-pinned: this used to expect OKF_BROKEN_CROSS_LINK. A
+      // `/`-anchored href that does not resolve is the re-anchoring mistake, not
+      // a missing document — see the root-relative block below for why the two
+      // were split.
       const report = await reportFor({
         'concept.md': conceptDoc(REFERENCE_TYPE, 'See [gone](/tables/gone.md).'),
       });
 
       const [finding] = report.findings;
-      expect(finding?.code).toBe('OKF_BROKEN_CROSS_LINK');
+      expect(finding?.code).toBe('OKF_ROOT_RELATIVE_LINK_UNRESOLVED');
       expect(finding?.link).toBe('/tables/gone.md');
       expect(finding?.document).toBe('concept.md');
     });
@@ -187,7 +193,7 @@ describe('validateOkfBundle', () => {
         'tables/customers.md': conceptDoc(TABLE_TYPE),
       });
 
-      expect(codesOf(report.findings)).toEqual(['OKF_BROKEN_CROSS_LINK']);
+      expect(codesOf(report.findings)).toEqual(['OKF_ROOT_RELATIVE_LINK_UNRESOLVED']);
       expect(report.findings[0]?.document).toBe('index.md');
     });
 
@@ -199,6 +205,130 @@ describe('validateOkfBundle', () => {
 
       expect(codesOf(report.findings)).toEqual(['OKF_BROKEN_CROSS_LINK']);
       expect(report.findings[0]?.link).toBe('missing/');
+    });
+  });
+
+  describe('cross-link SPELLING — the bundle is unpacked on a byte-exact filesystem', () => {
+    // 🪤 The whole class this suite was blind to. `stat()` answers on the
+    // machine VAT is running on, and the publisher's machine is a Mac: both
+    // case and Unicode normalization are reconciled there and nowhere the
+    // tarball lands. VAT's OWN link validator already reports both, at error
+    // severity, over the identical corpus — so this lane was certifying bundles
+    // another lane of the same product calls broken.
+
+    it('reports a link whose case does not match the file on disk', async () => {
+      const report = await reportFor({
+        'k/a.md': conceptDoc(REFERENCE_TYPE, 'See [b](./Beta.md).'),
+        'k/beta.md': conceptDoc(REFERENCE_TYPE),
+      });
+
+      expect(codesOf(report.findings)).toEqual(['OKF_BROKEN_CROSS_LINK']);
+      // The remedy is the actual filename, so the message has to carry it.
+      expect(report.findings[0]?.message).toContain('beta.md');
+      expect(report.findings[0]?.link).toBe('./Beta.md');
+    });
+
+    it('reports a link that resolves only after Unicode normalization', async () => {
+      const report = await reportFor({
+        'k/a.md': conceptDoc(REFERENCE_TYPE, `See [cafe](./${NFC_CAFE_DOC}).`),
+        [`k/${NFD_CAFE_DOC}`]: conceptDoc(REFERENCE_TYPE),
+      });
+
+      expect(codesOf(report.findings)).toEqual(['OKF_LINK_NORMALIZATION_MISMATCH']);
+    });
+
+    it('says nothing when the spelling matches byte for byte', async () => {
+      // The negative control. Without it, a check that reported EVERY link
+      // would pass both assertions above.
+      const report = await reportFor({
+        'k/a.md': conceptDoc(REFERENCE_TYPE, `See [cafe](./${NFD_CAFE_DOC}).`),
+        [`k/${NFD_CAFE_DOC}`]: conceptDoc(REFERENCE_TYPE),
+      });
+
+      expect(report.findings).toEqual([]);
+    });
+  });
+
+  describe('a root-relative link is a different mistake from a missing document', () => {
+    // 🪤 On a real 889-document corpus the ratio was 452 root-relative links to
+    // 6 genuinely-missing documents, all under one code and one sentence. The
+    // six that mattered were unreadable. The remedies differ in KIND: "a leading
+    // / means the BUNDLE root, re-anchor it" versus "write the document".
+
+    it('gives a root-relative link that does not resolve its own code', async () => {
+      const report = await reportFor({
+        'k/a.md': conceptDoc(REFERENCE_TYPE, 'See [readme](/README.md).'),
+      });
+
+      expect(codesOf(report.findings)).toEqual(['OKF_ROOT_RELATIVE_LINK_UNRESOLVED']);
+      expect(report.findings[0]?.message).toContain('bundle root');
+    });
+
+    it('keeps the broken code for a relative link with no target', async () => {
+      const report = await reportFor({
+        'k/a.md': conceptDoc(REFERENCE_TYPE, 'See [nope](./nope.md).'),
+      });
+
+      expect(codesOf(report.findings)).toEqual(['OKF_BROKEN_CROSS_LINK']);
+    });
+
+    it('discriminates on the DECODED href, so %2F is caught too', async () => {
+      const report = await reportFor({
+        'k/a.md': conceptDoc(REFERENCE_TYPE, 'See [readme](%2FREADME.md).'),
+      });
+
+      expect(codesOf(report.findings)).toEqual(['OKF_ROOT_RELATIVE_LINK_UNRESOLVED']);
+    });
+  });
+
+  describe('an unreadable bundle root', () => {
+    it('reports the bundle it belongs to instead of aborting the run', async () => {
+      // 🪤 A thrown fs error exits 2 and discards every OTHER bundle's real
+      // findings. CI reads 2 as "the tool broke", not "the bundle is wrong".
+      const root = plantOkfBundle({ 'concept.md': conceptDoc('Metric') });
+
+      const report = await validateOkfBundle({
+        bundle: 'gone',
+        root: `${root}/nowhere`,
+        rootSpecifier: './nowhere',
+      });
+
+      expect(codesOf(report.findings)).toEqual(['OKF_BUNDLE_ROOT_UNREADABLE']);
+      expect(report.conceptDocuments).toEqual([]);
+      expect(report.hasErrors).toBe(true);
+    });
+
+    it('names the config key and the path AS WRITTEN, leaking no absolute path', async () => {
+      const root = plantOkfBundle({ 'concept.md': conceptDoc('Metric') });
+
+      const report = await validateOkfBundle({
+        bundle: 'gone',
+        root: `${root}/nowhere`,
+        rootSpecifier: './nowhere',
+      });
+
+      const message = report.findings[0]?.message ?? '';
+      expect(message).toContain("okf.bundles.gone.root");
+      expect(message).toContain("'./nowhere'");
+      expect(message).not.toContain(root);
+    });
+
+    it('stays at error even when the bundle dial is lowered', async () => {
+      // The dial answers "how hard do you gate on this bundle's CONFORMANCE".
+      // An unreadable root means conformance was never assessed at all, and a
+      // conformance dial cannot downgrade "I could not look" — that is the
+      // green-without-running shape.
+      const root = plantOkfBundle({ 'concept.md': conceptDoc('Metric') });
+
+      const report = await validateOkfBundle({
+        bundle: 'gone',
+        root: `${root}/nowhere`,
+        rootSpecifier: './nowhere',
+        severity: 'warning',
+      });
+
+      expect(report.findings[0]?.severity).toBe('error');
+      expect(report.hasErrors).toBe(true);
     });
   });
 

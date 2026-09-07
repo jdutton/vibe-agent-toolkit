@@ -76,6 +76,58 @@ export function isArdIdentifier(value: string): boolean {
 }
 
 /**
+ * Whether a `<publisher>` segment is the DOMAIN the config's own error message
+ * insists on.
+ *
+ * 🚨 {@link ARD_PUBLISHER_SEGMENT_PATTERN} is a *charset*, and a charset admits
+ * a single label. `publisher: com` therefore passed, and it is not a harmless
+ * oddity: publisher-authority binding is the one security-relevant check in
+ * this lane, and it is satisfied by "the identity's host equals the publisher
+ * or is a subdomain of it". With `com` as the publisher, `https://
+ * totally-unrelated.com/w` binds — every `.com` on the internet is a subdomain
+ * of `com`. Requiring a dot with non-empty labels on both sides is what makes
+ * the binding mean anything.
+ *
+ * Written as a split rather than a regex on purpose: the natural form,
+ * `[a-z0-9-]+(\.[a-z0-9-]+)+`, is star-height 2 and scores as super-linear
+ * even though the inner class excludes `.` and it is linear in fact. This
+ * module already refuses to argue with that scoring once (see
+ * {@link ARD_IDENTIFIER_PATTERN_SOURCE}); index arithmetic settles it again.
+ */
+export function isArdPublisherDomain(value: string): boolean {
+  if (!ARD_PUBLISHER_SEGMENT_PATTERN.test(value)) return false;
+  const labels = value.split('.');
+  return labels.length >= 2 && labels.every((label) => label.length > 0);
+}
+
+/**
+ * Whether a value can serve as the BASE that entry `url`s resolve against.
+ *
+ * 🚨 `z.string().url()` answers "is this a URL", which is a different question.
+ * It admits `mailto:ops@example.com`, and it admits a base carrying a query or
+ * a fragment — and a base's query and fragment do not survive relative
+ * resolution, so every entry in a manifest built on one would resolve to the
+ * same address. Those are not wrong-but-well-formed paths (the ruled-out
+ * baseUrl-doubling case is that); they address nothing and are mutually
+ * indistinguishable, which is the failure mode a discovery document must not
+ * have.
+ *
+ * Checked with the URL parser rather than a pattern: the parser is the thing
+ * that will do the resolving, so asking it is the only check that cannot
+ * disagree with the outcome.
+ */
+export function isArdBaseUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
+  return parsed.search === '' && parsed.hash === '';
+}
+
+/**
  * `metadata` values, which upstream constrains to scalars — not arbitrary
  * objects. A nested object here is a silent conformance failure, so the union
  * is spelled out rather than left as `unknown`.
@@ -151,7 +203,11 @@ const ArdEntryFieldsSchema = z
       .array(z.string())
       .optional()
       .describe('AUTHORED sample queries. VAT never generates these — a wrong one is worse than a missing one.'),
-    version: z.string().optional().describe('Version of the artifact'),
+    // `.min(1)` for the same reason `displayName` and `type` carry it: an empty
+    // string is not a shorter version, it is a field asserting a version that
+    // does not exist. A `package.json` carrying `"version": ""` reached this
+    // schema and emitted `"version": ""` at exit 0.
+    version: z.string().min(1).optional().describe('Version of the artifact'),
     updatedAt: z
       .string()
       .datetime({ offset: true })

@@ -19,6 +19,7 @@
 import type { OkfBundleReport, OkfFinding } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
+import { createOkfCommand } from '../src/commands/okf/index.js';
 import { summarizeOkfBundles } from '../src/commands/okf/validate.js';
 
 function finding(severity: OkfFinding['severity']): OkfFinding {
@@ -39,6 +40,28 @@ function report(bundle: string, findings: OkfFinding[] = []): OkfBundleReport {
     findings,
     hasErrors: findings.some((f) => f.severity === 'error'),
   };
+}
+
+/** A bundle whose root was read successfully and held not one markdown file. */
+function emptyReport(bundle: string): OkfBundleReport {
+  return {
+    bundle,
+    root: `/bundles/${bundle}`,
+    conceptDocuments: [],
+    reservedDocuments: [],
+    findings: [],
+    hasErrors: false,
+  };
+}
+
+/** The `validate` subcommand, with Commander's process.exit disabled. */
+function validateSubcommand() {
+  const okf = createOkfCommand();
+  okf.exitOverride();
+  const validate = okf.commands.find((command) => command.name() === 'validate');
+  if (validate === undefined) throw new Error('okf has no validate subcommand');
+  validate.exitOverride();
+  return { okf, validate };
 }
 
 describe('summarizeOkfBundles', () => {
@@ -103,9 +126,93 @@ describe('summarizeOkfBundles', () => {
     // A bundle root that exists and holds no concept documents is a real,
     // checked result. It must NOT collapse into the same word as "you declared
     // nothing" — that collapse is what made the original defect invisible.
-    const summary = summarizeOkfBundles([report('empty-but-declared')]);
+    const summary = summarizeOkfBundles([emptyReport('empty-but-declared')]);
 
     expect(summary.status).toBe('passed');
     expect(summary.status).not.toBe('no-bundles');
+  });
+
+  describe('a bundle root holding no markdown at all', () => {
+    // ⚠️ DELIBERATELY RE-PINNED. This suite used to assert only that an empty
+    // bundle reports `passed`, and said nothing about whether the report admits
+    // that nothing was read. That is the same green-without-running shape the
+    // `no-bundles` notice was added for, one level down: a `root:` typo landing
+    // on a real-but-wrong directory, or a root one level too deep, reads as a
+    // clean bill of health. The status word and the exit code do not move —
+    // nothing failed — but the report now says so out loud.
+
+    it('says so in the notice, naming the bundle', () => {
+      const summary = summarizeOkfBundles([emptyReport('empty')]);
+
+      expect(summary.notice).toBeDefined();
+      expect(summary.notice).toContain("'empty'");
+      expect(summary.status).toBe('passed');
+    });
+
+    it('names every empty bundle, not just the first', () => {
+      const summary = summarizeOkfBundles([emptyReport('one'), emptyReport('two')]);
+
+      expect(summary.notice).toContain("'one'");
+      expect(summary.notice).toContain("'two'");
+    });
+
+    it('stays silent when the bundle held documents', () => {
+      // The negative control: a notice attached unconditionally would satisfy
+      // both assertions above and mean nothing.
+      const summary = summarizeOkfBundles([report('knowledge')]);
+
+      expect(summary.notice).toBeUndefined();
+    });
+
+    it('counts a reserved-only bundle as read, not as empty', () => {
+      // An index.md is a document that WAS opened and judged (§8/§12), so the
+      // run is not vacuous even with no concept documents.
+      const summary = summarizeOkfBundles([
+        { ...emptyReport('index-only'), reservedDocuments: ['index.md'] },
+      ]);
+
+      expect(summary.notice).toBeUndefined();
+    });
+  });
+});
+
+describe('createOkfCommand', () => {
+  it('refuses an unknown --format instead of silently printing YAML', async () => {
+    // 🪤 `--format Json` in a pipeline used to get YAML and exit 0, so the
+    // mistake surfaced downstream in `jq` rather than here.
+    const { okf, validate } = validateSubcommand();
+
+    await expect(
+      okf.parseAsync(['validate', '--format', 'bogus'], { from: 'user' }),
+    ).rejects.toThrow(/bogus/);
+    expect(validate.opts()['format']).not.toBe('bogus');
+  });
+
+  it('still accepts both formats it advertises, and defaults to yaml', () => {
+    // The negative control for the refusal above: an option that rejected
+    // EVERYTHING would satisfy that test just as happily.
+    const { validate } = validateSubcommand();
+    const format = validate.options.find((option) => option.long === '--format');
+
+    expect(format?.argChoices).toEqual(['yaml', 'json']);
+    expect(format?.defaultValue).toBe('yaml');
+  });
+
+  it('does not promise cross-link coverage the check does not deliver', () => {
+    // The §6.1 line used to read "every markdown cross-link resolves inside the
+    // bundle". Wikilinks (`[[other-concept]]`) are invisible to the parser, so
+    // the sentence over-claimed. The parser gap is pre-existing; the CLAIM is
+    // what is fixed here.
+    const { validate } = validateSubcommand();
+    // `outputHelp()`, not `helpInformation()`: the latter renders only the
+    // generated usage/options block, so an assertion against it would be blind
+    // to every `addHelpText('after', …)` section — which is where the whole
+    // §6.1 claim lives.
+    let help = '';
+    validate.configureOutput({ writeOut: (chunk) => { help += chunk; } });
+    validate.outputHelp();
+
+    expect(help).toContain('§6.1');
+    expect(help).toContain('[[');
   });
 });

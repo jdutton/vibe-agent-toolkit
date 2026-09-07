@@ -69,6 +69,10 @@ export function okfBundleRuns(
     return {
       bundle,
       root: resolveAssetReference(config.root, baseDir),
+      // Carried verbatim so the unreadable-root finding can quote the string the
+      // adopter actually has to edit, rather than an absolute path that appears
+      // nowhere in their repository (and would leak $HOME into a CI log).
+      rootSpecifier: config.root,
       ...(config.severity !== undefined && { severity: config.severity }),
       ...(options.specVersion !== undefined && { specVersion: options.specVersion }),
     };

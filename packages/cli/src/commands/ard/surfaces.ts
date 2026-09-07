@@ -15,6 +15,7 @@
  */
 
 import {
+  ardEntryOverrideKey,
   defaultArdNamespace,
   type ArdConfig,
   type ArdSurface,
@@ -38,6 +39,22 @@ export interface ArdSurfaceCollection {
 export interface ArdSurfaceDefaults {
   /** The project's own package version, when it has one. */
   readonly version?: string | undefined;
+  /**
+   * Names of the skills `skills.include` discovery actually found.
+   *
+   * 🚨 Without this, every `skills.config` key was advertised on the author's
+   * word alone: a project with NO `skills/` directory and two config keys
+   * emitted two entries carrying real URLs at exit 0, with nothing on stderr —
+   * a published discovery document that is entirely 404s. The `skipped` channel
+   * exists so a surface is never silently DROPPED; the mirror case, silently
+   * INVENTING one, had no guard at all.
+   *
+   * Supplied by the caller rather than crawled here so this module stays pure,
+   * and `undefined` rather than `[]` when discovery did not run — an empty
+   * array is the answer "nothing exists", which must not be spelled the same
+   * way as "nobody asked".
+   */
+  readonly discoveredSkills?: readonly string[] | undefined;
 }
 
 /**
@@ -109,12 +126,29 @@ function collectSkillSurfaces(
   }
 
   const fallbackPublish = skills.defaults?.publish ?? true;
+  // `undefined` means discovery did not run, which is NOT the same claim as
+  // "discovery found nothing" — see `ArdSurfaceDefaults.discoveredSkills`.
+  const discovered =
+    defaults.discoveredSkills === undefined ? undefined : new Set(defaults.discoveredSkills);
   for (const [name, packaging] of Object.entries(skills.config)) {
     if ((packaging.publish ?? fallbackPublish) === false) {
       skipped.push({
         name,
         kind: 'skill',
         reason: 'skills.config.' + name + '.publish is false — an unpublished skill is not advertised.',
+      });
+      continue;
+    }
+    // Checked AFTER the publish opt-out, so an unpublished skill is reported
+    // once, for the reason its author chose, rather than twice.
+    if (discovered !== undefined && !discovered.has(name)) {
+      skipped.push({
+        name,
+        kind: 'skill',
+        reason:
+          `skills.config.${name} names a skill that \`skills.include\` discovery did not find, so ` +
+          'VAT will not advertise a URL for it — a discovery document must not publish a 404. ' +
+          'Either add the SKILL.md the globs reach, or remove the config key.',
       });
       continue;
     }
@@ -138,7 +172,13 @@ function collectOverrideOnlySurfaces(
   skipped: SkippedArdSurface[]
 ): void {
   for (const name of names) {
-    if (ard.entries?.[name]?.type === undefined) {
+    // Looked up through the same two-key rule the builder uses: the qualified
+    // `<kind>:<name>` first, the bare name as the unambiguous shorthand. A
+    // lookup that read only the bare key here would decide a marketplace was
+    // emittable on the strength of a SKILL's override.
+    const entries = ard.entries;
+    const overrides = entries?.[ardEntryOverrideKey(kind, name)] ?? entries?.[name];
+    if (overrides?.type === undefined) {
       skipped.push({
         name,
         kind,
@@ -148,7 +188,7 @@ function collectOverrideOnlySurfaces(
           // half the vocabulary and "a/an" cannot be chosen from the kind
           // without a rule this message does not deserve.
           `the ARD specification names no media type for surface kind "${kind}", so VAT derives none. ` +
-          `Set \`ard.entries.${name}.type\` to advertise it.`,
+          `Set \`ard.entries."${ardEntryOverrideKey(kind, name)}".type\` to advertise it.`,
       });
       continue;
     }

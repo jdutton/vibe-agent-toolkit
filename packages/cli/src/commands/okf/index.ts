@@ -7,7 +7,7 @@
  * extend than a top-level verb is to deprecate.
  */
 
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 
 import { okfValidateCommand, type OkfValidateOptions } from './validate.js';
 
@@ -47,7 +47,14 @@ Example:
     .command('validate')
     .description('Check declared OKF bundles for conformance (§11)')
     .argument('[bundle]', 'Validate only this declared bundle (default: all of them)')
-    .option('--format <yaml|json>', 'Output format', 'yaml')
+    .addOption(
+      // `.choices()`, not a bare `.option()`: an unrecognised value used to fall
+      // through to the YAML branch and exit 0, so `--format Json` in a pipeline
+      // failed downstream in `jq` instead of here, where the mistake is.
+      new Option('--format <format>', 'Output format: yaml (default) or json')
+        .choices(['yaml', 'json'])
+        .default('yaml'),
+    )
     .option(
       '--spec-version <version>',
       'Cross-check a bundle-root index.md okf_version against this revision (e.g. 0.2). Omitted, a declaration is reported but not judged.',
@@ -65,10 +72,18 @@ Description:
 
     §11.1  every non-reserved .md carries a parseable YAML frontmatter block
     §11.2  every one of those blocks carries a non-empty \`type\`
-    §6.1   every markdown cross-link resolves inside the bundle — a leading
-           "/" resolves against the BUNDLE ROOT, not the filesystem root
+    §6.1   every markdown LINK and IMAGE — the [text](target) form — resolves
+           inside the bundle. A leading "/" resolves against the BUNDLE ROOT,
+           not the filesystem root, and spelling is judged against the bytes on
+           disk, so a link that opens only because the author's filesystem folds
+           letter case or Unicode normalization form is reported: the bundle is
+           unpacked somewhere that does not fold.
     §8/§12 an index.md carries no frontmatter, except a bundle-root index.md,
            which may carry okf_version and nothing else
+
+  NOT covered by the §6.1 check: wikilinks. \`[[other-concept]]\` is invisible to
+  the markdown parser, so a bundle written in that style gets no cross-link
+  checking at all, and a clean report says nothing about those links.
 
   §11.3's structural rules for the BODY of index.md and log.md are not
   implemented, so a clean report means §11.1 and §11.2 in full and §11.3 only
@@ -83,8 +98,10 @@ Description:
 
 Exit Codes:
   0 - No error-severity findings
-  1 - At least one error-severity finding
-  2 - System error (no config file, unreadable bundle root, unknown bundle name)
+  1 - At least one error-severity finding, an unreadable bundle root among them
+      (it is reported as that bundle's own finding, so the other bundles in the
+      run are still checked and still reported)
+  2 - System error (no config file, unknown bundle name)
 
 Example:
   $ vat okf validate knowledge --format json

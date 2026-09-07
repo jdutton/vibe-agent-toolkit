@@ -29,7 +29,7 @@
  * and an exemption inferred from a case fold is an exemption VAT invented.
  */
 
-import { readdir } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 
 import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -62,11 +62,32 @@ function isMarkdownFilename(name: string): boolean {
 }
 
 /**
+ * Whether a symlinked entry resolves to a regular file whose bytes exist.
+ *
+ * `stat`, not `lstat`: the question is what the link *points at*, which is the
+ * thing `tar` dereferences into the bundle. A dangling link and a link to a
+ * directory both answer no — the first has no bytes to travel, the second is the
+ * doorway {@link walkInto} deliberately does not walk through.
+ *
+ * @param candidate - Absolute path of the symlink
+ * @returns True when following it lands on a regular file
+ */
+async function pointsAtRegularFile(candidate: string): Promise<boolean> {
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- an entry name read from a bundle root the adopter's own config named
+    return (await stat(candidate)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Walk one directory and everything beneath it, appending to the accumulators.
  *
  * Symlinked directories are not followed: a bundle is a distributable tree, and
  * a link out of it does not travel with the tarball. A symlinked *file* is read
- * like any other, because its bytes do travel when the bundle is packed.
+ * like any other, because its bytes do travel when the bundle is packed — which
+ * costs a `stat` per symlinked entry and nothing at all for a regular file.
  *
  * @param root - Absolute bundle root, for computing relative paths
  * @param dir - Absolute directory to walk
@@ -84,7 +105,18 @@ async function walkInto(root: string, dir: string, found: OkfBundleFiles): Promi
       continue;
     }
 
-    if (!entry.isFile() || !isMarkdownFilename(entry.name)) {
+    if (!isMarkdownFilename(entry.name)) {
+      continue;
+    }
+
+    // ⚠️ `isFile()` alone is FALSE for a symlink, because `readdir`'s Dirent is
+    // built from `lstat`. Testing only that silently dropped every symlinked
+    // concept document from the population — the exact opposite of what this
+    // module's header promises, and a §11.1 violation inside the root reported
+    // as a conformant bundle. The lane was incoherent with itself too: a LINK to
+    // that same file was resolved and judged, so one half saw the file and the
+    // other did not.
+    if (!entry.isFile() && !(entry.isSymbolicLink() && await pointsAtRegularFile(absolute))) {
       continue;
     }
 

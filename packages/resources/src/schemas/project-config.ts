@@ -2,6 +2,8 @@ import { ValidationConfigSchema } from '@vibe-agent-toolkit/schema';
 import { globMagicRemainder, hasParentTraversalSegment, isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
+import { isArdBaseUrl, isArdPublisherDomain } from '../ard/entry-schema.js';
+
 import { LinkAuthConfigSchema } from './link-auth.js';
 import { ReferenceSyntacticFormSchema } from './projection-blobs.js';
 import { JsonValueSchema } from './projection-shared.js';
@@ -946,9 +948,18 @@ export const ArdConfigSchema = z.object({
   // display name and the bare regex failure says only "Invalid". An adopter's
   // first attempt here is their organisation's name, spaces and capitals
   // included, and the error has to be the thing that redirects them.
-  publisher: z.string().regex(
-    /^[a-z0-9.-]+$/i,
-    'ard.publisher must be a DOMAIN, not a display name — e.g. "example.com". Letters, digits, dots and hyphens only (regex: ^[a-z0-9.-]+$). It becomes the <publisher> segment of every entry URN.',
+  //
+  // 🚨 The charset regex alone accepted a SINGLE LABEL, so the message said
+  // DOMAIN while the check did not enforce one. `publisher: com` was accepted,
+  // and publisher-authority binding — the one security-relevant check in this
+  // lane — reads as "the identity's host equals the publisher or is a subdomain
+  // of it". Under `com`, `https://totally-unrelated.com/w` binds, because every
+  // `.com` is a subdomain of `com`. `isArdPublisherDomain` adds the missing half
+  // (at least one dot, no empty label) and is the SAME predicate the emitter
+  // checks, so the config gate and the last gate cannot disagree.
+  publisher: z.string().refine(
+    isArdPublisherDomain,
+    'ard.publisher must be a DOMAIN, not a display name — e.g. "example.com". Letters, digits, dots and hyphens only, with at least one dot and no empty label. It becomes the <publisher> segment of every entry URN, and the authority trustManifest.identity is bound to.',
   )
     .describe('Publisher domain, e.g. "example.com". Becomes the <publisher> segment of every entry URN and the anchor trustManifest.identity must align with.'),
   namespace: z.string().regex(
@@ -965,12 +976,32 @@ export const ArdConfigSchema = z.object({
   // Kept optional here so the failure is a legible emission error naming the
   // missing key, not a schema rejection of a config whose other ARD settings
   // are fine.
-  baseUrl: z.string().url().optional()
+  //
+  // 🚨 `.url()` answers "is this a URL", which is a different question from
+  // "can entry paths RESOLVE against this". It admitted `mailto:` and it
+  // admitted a query or a fragment — and a base's query and fragment do not
+  // survive relative resolution, so `https://example.com/base?t=a#frag` made
+  // every entry in the manifest resolve to `https://example.com/base`. Those
+  // URLs address nothing and are indistinguishable from each other, which is a
+  // different class from the ruled-out baseUrl-doubling case (wrong, but
+  // well-formed and legible). Same predicate as the emitter's last gate.
+  baseUrl: z.string().refine(
+    isArdBaseUrl,
+    'ard.baseUrl must be an http(s) URL with no query and no fragment — e.g. "https://example.com/catalog". Entry paths are RESOLVED against it, and a base\'s query and fragment do not survive resolution, so every entry would resolve to the same address.',
+  ).optional()
     .describe('Base URL that entry `url` values resolve against. Required in practice: ARD demands `url` XOR `data`, and VAT has no inline artifact document to emit as `data`, so emission fails without it.'),
   trustManifest: ArdTrustManifestConfigSchema.optional()
     .describe('Org-level trust identity. ARD mandates only domain binding; everything else defers to the named trust framework.'),
+  // 🚨 Keyed by `<kind>:<name>` — `skill:expenses`, `okf-bundle:handbook`,
+  // `marketplace:vat` — because `skills.config`, `claude.marketplaces` and
+  // `okf.bundles` are INDEPENDENT key spaces and a bare name is therefore not
+  // an identity. A config declaring a skill and an OKF bundle both called
+  // `knowledge` had one `ard.entries.knowledge` block that reached both, and
+  // the skill was published typed as an OKF bundle at exit 0. A bare name stays
+  // legal for the ordinary case where it names one surface; emission REFUSES it
+  // the moment it names two.
   entries: z.record(z.string(), ArdEntryOverridesSchema).optional()
-    .describe('Author-supplied fields, keyed by the emitted entry name. Everything derivable is derived and must not appear here.'),
+    .describe('Author-supplied fields, keyed by "<kind>:<name>" (e.g. "skill:expenses", "okf-bundle:handbook") or by a bare name when only one surface carries it. Everything derivable is derived and must not appear here.'),
 }).strict().describe('ARD entry emission configuration (emit, never depend — ARD is v0.91 Proposal)');
 
 export type ArdConfig = z.infer<typeof ArdConfigSchema>;

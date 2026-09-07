@@ -20,31 +20,57 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { handleCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import { createLogger } from '../../utils/logger.js';
+import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
 
 import { collectArdSurfaces, type SkippedArdSurface } from './surfaces.js';
 
 /** Default destination, relative to the project root — the path ARD publishes at. */
 export const DEFAULT_ARD_OUTPUT = '.well-known/ard.json';
 
+/** The config filename every VAT project declares its surfaces in. */
+const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
+
 /**
- * The project declares no `ard` block, so there is nothing to emit.
+ * Which of the three absences stopped the run.
  *
- * Distinct from a derivation failure: nothing was wrong, the feature was simply
- * never configured. Both exit non-zero, because a caller that asked for a
- * manifest and got none must not read that as success.
+ * 🚨 `loadConfig` returns `undefined` for both "that directory does not exist"
+ * and "that directory has no config file", and the command used to report the
+ * third case for all of them: `--project-root /nope/nothing/here` answered "No
+ * `ard:` configuration found … Add an `ard:` block to
+ * vibe-agent-toolkit.config.yaml", prescribing an edit to a file in a directory
+ * that does not exist. Only a `stat` can tell them apart, so the command does
+ * one rather than inferring from a shared `undefined`.
+ *
+ * The distinction is also what the exit code reads: the first two are system
+ * errors (exit 2, as `vat okf validate` documents for the same conditions), the
+ * third is a project that never opted in (exit 1).
  */
+export type ArdConfigAbsence = 'no-project-root' | 'no-config-file' | 'no-ard-block';
+
+/** No manifest could be built, and this says which absence caused it. */
 export class ArdConfigMissingError extends Error {
   readonly projectRoot: string;
+  readonly absence: ArdConfigAbsence;
 
-  constructor(projectRoot: string) {
-    super(
-      `No \`ard:\` configuration found for ${projectRoot}. ` +
-        'Add an `ard:` block with a `publisher` domain to vibe-agent-toolkit.config.yaml.'
-    );
+  constructor(projectRoot: string, absence: ArdConfigAbsence) {
+    super(ABSENCE_MESSAGES[absence](projectRoot));
     this.name = 'ArdConfigMissingError';
     this.projectRoot = projectRoot;
+    this.absence = absence;
   }
 }
+
+const ABSENCE_MESSAGES: Readonly<Record<ArdConfigAbsence, (projectRoot: string) => string>> = {
+  'no-project-root': (projectRoot) =>
+    `Project root ${projectRoot} does not exist. Pass --project-root a directory that does, or ` +
+    'run `vat ard emit` from inside the project.',
+  'no-config-file': (projectRoot) =>
+    `No ${CONFIG_FILENAME} found in ${projectRoot}. ` +
+    'ARD entries are derived from the surfaces that file declares, so there is nothing to emit.',
+  'no-ard-block': (projectRoot) =>
+    `No \`ard:\` configuration found for ${projectRoot}. ` +
+    `Add an \`ard:\` block with a \`publisher\` domain to ${CONFIG_FILENAME}.`,
+};
 
 export interface ArdEmitOptions {
   /** Project root to read the config from (default: cwd). */
@@ -74,7 +100,12 @@ function readProjectVersion(projectRoot: string): string | undefined {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- existence just confirmed above; same path
     const parsed = JSON.parse(readFileSync(packagePath, 'utf-8')) as { version?: unknown };
-    return typeof parsed.version === 'string' ? parsed.version : undefined;
+    // `""` is ABSENT, not a version. A `package.json` carrying it emitted
+    // `"version": ""` on every entry at exit 0 — a field asserting a version
+    // that does not exist. The entry schema now refuses it too, so leaving this
+    // would turn a blank field into a hard emission failure instead.
+    if (typeof parsed.version !== 'string' || parsed.version === '') return undefined;
+    return parsed.version;
   } catch {
     // A package.json VAT cannot read is not a reason to refuse a manifest; the
     // entry is emitted without a `version`, which is a conformant entry.
@@ -92,14 +123,32 @@ function readProjectVersion(projectRoot: string): string | undefined {
  */
 export async function runArdEmit(options: ArdEmitOptions): Promise<ArdEmitResult> {
   const projectRoot = options.projectRoot ?? process.cwd();
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is the caller's declared root
+  if (!existsSync(projectRoot)) {
+    throw new ArdConfigMissingError(projectRoot, 'no-project-root');
+  }
   const config = loadConfig(projectRoot);
-  const ard = config?.ard;
-  if (config === undefined || ard === undefined) {
-    throw new ArdConfigMissingError(projectRoot);
+  if (config === undefined) {
+    throw new ArdConfigMissingError(projectRoot, 'no-config-file');
+  }
+  const ard = config.ard;
+  if (ard === undefined) {
+    throw new ArdConfigMissingError(projectRoot, 'no-ard-block');
   }
 
   const { surfaces, skipped } = collectArdSurfaces(config, {
     version: readProjectVersion(projectRoot),
+    // The SAME discovery `vat verify` runs, so the two commands cannot disagree
+    // about which skills this project has. Omitted entirely when the project
+    // declares no `skills` block: there is nothing to cross-check, and passing
+    // `[]` would claim discovery ran and found nothing.
+    ...(config.skills === undefined
+      ? {}
+      : {
+          discoveredSkills: (await discoverSkillsFromConfig(config.skills, projectRoot)).map(
+            (skill) => skill.name
+          ),
+        }),
   });
   const manifest = buildArdManifest(buildArdEntries(surfaces, ard));
   const outputPath = safePath.resolve(projectRoot, options.output ?? DEFAULT_ARD_OUTPUT);
@@ -120,10 +169,20 @@ export async function ardEmitCommand(options: ArdEmitOptions): Promise<void> {
       `Wrote ${result.entryCount} ARD entr${result.entryCount === 1 ? 'y' : 'ies'} to ${result.outputPath}\n`
     );
   } catch (error) {
-    // A configuration or derivation failure is the user's to fix, so it exits 1
-    // — the "your input was refused" code — rather than 2, which this CLI
-    // reserves for an unexpected internal failure.
-    if (error instanceof ArdConfigMissingError || error instanceof ArdDerivationError) {
+    // 🔑 Exit 1 is "VAT read your project and refused to emit"; exit 2 is a
+    // SYSTEM error — the run never got as far as a judgement. A project that
+    // declares no `ard:` block is the first; a missing root or a missing config
+    // file is the second, which is also what `vat okf validate` documents for
+    // the same conditions, and what an invalid config already did here through
+    // `handleCommandError`. The old split had a missing config file exiting 1
+    // and an invalid one exiting 2 while the help called 2 "Unexpected internal
+    // failure" — so a CI job reading 2 as a crash was paged for a typo.
+    if (error instanceof ArdConfigMissingError) {
+      process.stderr.write(`${error.message}\n`);
+      process.exit(error.absence === 'no-ard-block' ? 1 : 2);
+      return;
+    }
+    if (error instanceof ArdDerivationError) {
       process.stderr.write(`${error.message}\n`);
       process.exit(1);
       return;

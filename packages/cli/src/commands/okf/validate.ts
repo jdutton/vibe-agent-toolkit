@@ -108,11 +108,51 @@ function countOkfFindings(findings: readonly OkfFinding[]): SeverityCounts {
 }
 
 /**
+ * The bundles whose root was read successfully and held not one markdown file.
+ *
+ * 🪤 The same green-without-running shape the `no-bundles` notice exists for,
+ * one level down. A `root:` typo that lands on a real-but-wrong directory, or a
+ * root written one level too deep, produces `status: passed`, exit 0 and an
+ * empty findings list — a report indistinguishable from a bundle that was read
+ * in full and found conformant.
+ *
+ * A bundle carrying findings is excluded even when its document lists are empty:
+ * that is the unreadable-root case, which already says the truthful thing in its
+ * own finding, and "contains no .md files" would be a second, wronger sentence
+ * about a directory that does not exist.
+ *
+ * @param bundles - Every bundle report in the run
+ * @returns The names of the vacuous ones, in report order
+ */
+function vacuousBundles(bundles: readonly OkfBundleReport[]): string[] {
+  return bundles
+    .filter(
+      (report) =>
+        report.findings.length === 0 &&
+        report.conceptDocuments.length === 0 &&
+        report.reservedDocuments.length === 0,
+    )
+    .map((report) => report.bundle);
+}
+
+/**
+ * The sentence a run with one or more vacuous bundles carries.
+ *
+ * @param vacuous - Names of the bundles whose root held no markdown at all
+ * @returns A notice naming each of them and the config key to check
+ */
+function vacuousNotice(vacuous: readonly string[]): string {
+  const named = vacuous.map((bundle) => `'${bundle}'`).join(', ');
+  const subject = vacuous.length === 1 ? 'it' : 'them';
+  return `${named} contains no .md files, so nothing was checked in ${subject}. A root pointing one level too deep, or at a real-but-wrong directory, reads exactly like this — check \`okf.bundles.<name>.root\`.`;
+}
+
+/**
  * Decide the status word and the counts for a set of bundle reports.
  *
  * @param bundles - One report per bundle that was actually checked
  * @returns The status, the finding count and severity distribution, and a
- *   notice when nothing was declared
+ *   notice when nothing was declared or a declared bundle held nothing
  */
 export function summarizeOkfBundles(bundles: readonly OkfBundleReport[]): OkfValidateSummary {
   const findings = bundles.flatMap((report) => report.findings);
@@ -129,7 +169,18 @@ export function summarizeOkfBundles(bundles: readonly OkfBundleReport[]): OkfVal
     };
   }
 
-  return { status: issueCounts.errors > 0 ? 'failed' : 'passed', findingCount, issueCounts };
+  // Status and exit code deliberately do NOT move: nothing failed, and failing a
+  // build over an empty directory would be worse than the silence. It is the
+  // report that must stop implying a bundle was read when it was not.
+  const vacuous = vacuousBundles(bundles);
+  const status: OkfValidateStatus = issueCounts.errors > 0 ? 'failed' : 'passed';
+
+  return {
+    status,
+    findingCount,
+    issueCounts,
+    ...(vacuous.length > 0 && { notice: vacuousNotice(vacuous) }),
+  };
 }
 
 /**

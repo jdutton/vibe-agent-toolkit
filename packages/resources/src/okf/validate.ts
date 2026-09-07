@@ -21,12 +21,12 @@
  * only in part.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { FsLookupCache, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ParseResult } from '../link-parser.js';
 import { importParserModule } from '../parse-cache.js';
 
-import { discoverOkfBundle } from './discovery.js';
+import { discoverOkfBundle, type OkfBundleFiles } from './discovery.js';
 import { conceptFindings, indexFindings, type OkfFindingDraft } from './findings.js';
 import { linkFindings } from './links.js';
 import type { OkfBundleReport, OkfFinding, OkfSeverity } from './types.js';
@@ -37,6 +37,18 @@ export interface ValidateOkfBundleOptions {
   bundle: string;
   /** Absolute path to the bundle root, already resolved against the config file. */
   root: string;
+  /**
+   * The `root` value **as the config file wrote it**, for the unreadable-root
+   * finding to quote.
+   *
+   * Carried separately rather than derived, for two reasons. It is the string
+   * the adopter has to go and edit, so quoting the resolved absolute path would
+   * name a location that appears nowhere in their repository; and an absolute
+   * path in a finding message leaks the developer's home directory into every CI
+   * log, which `link-validator.ts` already refuses to do for the same reason.
+   * Absent, the message falls back to {@link ValidateOkfBundleOptions.root}.
+   */
+  rootSpecifier?: string;
   /** Severity for this bundle's findings. Defaults to `error`. */
   severity?: OkfSeverity;
   /**
@@ -118,6 +130,7 @@ async function inspectDocument(
   document: string,
   reserved: boolean,
   specVersion: string | undefined,
+  fsCache: FsLookupCache,
 ): Promise<DocumentInspection> {
   const absolutePath = safePath.join(root, document);
   const parsed: ParseResult = await parseOkfDocument(absolutePath);
@@ -125,7 +138,7 @@ async function inspectDocument(
   // Links are resolved in every document, reserved or not: an index.md is
   // precisely where a link to a deleted concept accumulates, since §8 has it
   // enumerate the directory's contents.
-  const drafts = await linkFindings(document, absolutePath, parsed.links, root);
+  const drafts = await linkFindings(document, absolutePath, parsed.links, root, fsCache);
 
   if (!reserved) {
     drafts.push(...conceptFindings(document, parsed));
@@ -149,6 +162,63 @@ async function inspectDocument(
   return { drafts };
 }
 
+/**
+ * The errno of a filesystem failure, and nothing else.
+ *
+ * ⚠️ The `Error.message` is deliberately NOT used: Node writes the full absolute
+ * path into it (`ENOENT: … scandir '/Users/…/nowhere'`), which is the home-directory
+ * leak the finding exists to avoid. The code says what went wrong — absent,
+ * not a directory, not permitted — and the specifier says where.
+ *
+ * @param error - Whatever the walk threw
+ * @returns The errno string, or a neutral word when there is none
+ */
+function fsErrorCode(error: unknown): string {
+  if (error instanceof Error && 'code' in error && typeof error.code === 'string') {
+    return error.code;
+  }
+  return 'unreadable';
+}
+
+/**
+ * The report a bundle whose root could not be listed gets.
+ *
+ * 🪤 This used to be a rethrow, which exited the whole command at 2 and took
+ * every OTHER bundle's real findings with it — one typo'd root and a CI log that
+ * says "the tool broke" rather than "this bundle is misconfigured". Reporting it
+ * as this bundle's own finding keeps the rest of the run intact.
+ *
+ * The severity is hard `error` and does not read
+ * {@link ValidateOkfBundleOptions.severity}: see {@link OkfSeverity} for why a
+ * conformance dial has no standing over a bundle whose conformance was never
+ * assessed.
+ *
+ * @param options - The run that failed, for the bundle name and the specifier
+ * @param root - The resolved absolute root, carried into the report as usual
+ * @param error - Whatever the walk threw
+ * @returns A one-finding report with an empty population
+ */
+function unreadableRootReport(
+  options: ValidateOkfBundleOptions,
+  root: string,
+  error: unknown,
+): OkfBundleReport {
+  const specifier = options.rootSpecifier ?? options.root;
+  return {
+    bundle: options.bundle,
+    root,
+    conceptDocuments: [],
+    reservedDocuments: [],
+    findings: [{
+      code: 'OKF_BUNDLE_ROOT_UNREADABLE',
+      severity: 'error',
+      document: '.',
+      message: `okf.bundles.${options.bundle}.root ('${specifier}') is not a readable directory (${fsErrorCode(error)}), so this bundle was not checked at all. Point it at the directory holding the bundle's concept documents, relative to vibe-agent-toolkit.config.yaml.`,
+    }],
+    hasErrors: true,
+  };
+}
+
 /** Order findings so two runs over one bundle produce comparable reports. */
 function byDocumentThenCode(left: OkfFindingDraft, right: OkfFindingDraft): number {
   if (left.document !== right.document) return left.document < right.document ? -1 : 1;
@@ -161,17 +231,26 @@ function byDocumentThenCode(left: OkfFindingDraft, right: OkfFindingDraft): numb
  *
  * @param options - The bundle to validate and how hard to gate on it
  * @returns The findings, the population they were drawn from, and any declared
- *   `okf_version`
- * @throws If the bundle root cannot be read — an unreadable root is a
- *   configuration finding, never a trivially conformant empty bundle
+ *   `okf_version`. An unreadable root yields a one-finding report rather than a
+ *   throw, so a sibling bundle's findings survive a misconfigured neighbour
  */
 export async function validateOkfBundle(
   options: ValidateOkfBundleOptions,
 ): Promise<OkfBundleReport> {
   const root = safePath.resolve(options.root);
   const severity: OkfSeverity = options.severity ?? 'error';
-  const files = await discoverOkfBundle(root);
 
+  let files: OkfBundleFiles;
+  try {
+    files = await discoverOkfBundle(root);
+  } catch (error) {
+    return unreadableRootReport(options, root, error);
+  }
+
+  // One cache for the whole bundle: link targets cluster into far fewer
+  // directories than there are links, so a per-document cache would re-list the
+  // same directory once per document that points into it.
+  const fsCache = new FsLookupCache();
   const drafts: OkfFindingDraft[] = [];
   let declaredOkfVersion: string | undefined;
 
@@ -181,7 +260,7 @@ export async function validateOkfBundle(
   ];
 
   for (const [document, reserved] of documents) {
-    const inspection = await inspectDocument(root, document, reserved, options.specVersion);
+    const inspection = await inspectDocument(root, document, reserved, options.specVersion, fsCache);
     drafts.push(...inspection.drafts);
     declaredOkfVersion ??= inspection.declaredOkfVersion;
   }

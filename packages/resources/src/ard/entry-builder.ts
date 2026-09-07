@@ -25,8 +25,9 @@ import type { ArdConfig, ArdEntryOverrides } from '../schemas/project-config.js'
 
 import {
   ARD_NAME_SEGMENT_PATTERN,
-  ARD_PUBLISHER_SEGMENT_PATTERN,
   ArdEntrySchema,
+  isArdBaseUrl,
+  isArdPublisherDomain,
   type ArdEntry,
 } from './entry-schema.js';
 import { defaultArdNamespace, deriveArdMediaType, type ArdSurfaceKind } from './surface.js';
@@ -74,11 +75,43 @@ export class ArdDerivationError extends Error {
 
 type ArdEntryDraft = z.input<typeof ArdEntrySchema>;
 
+/**
+ * The `ard.entries` key that names exactly one surface.
+ *
+ * 🚨 `skills.config`, `claude.marketplaces` and `okf.bundles` are three
+ * INDEPENDENT key spaces, so a bare name is not an identity — a config
+ * declaring a skill *and* an OKF bundle both called `knowledge` had a single
+ * `ard.entries.knowledge` block, and every field in it reached both. The skill
+ * silently lost its coined `application/ai-skill+md` and was published as an
+ * OKF bundle at exit 0. `capabilities` and `representativeQueries` bleed the
+ * same way, and a wrong representative query is the failure this module's
+ * docstring calls worse than a missing one.
+ *
+ * The qualified form `<kind>:<name>` is the precise key. `:` is outside
+ * {@link ARD_NAME_SEGMENT_PATTERN}, so a qualified key can never collide with a
+ * bare one. The bare form stays legal because it is unambiguous for the
+ * overwhelming majority of configs, where a name occurs in one key space only;
+ * {@link assertUnambiguousOverrideKeys} refuses it exactly when it is not.
+ */
+export function ardEntryOverrideKey(kind: ArdSurfaceKind, name: string): string {
+  return `${kind}:${name}`;
+}
+
+function findOverrides(
+  surface: Pick<ArdSurface, 'kind' | 'name'>,
+  config: ArdConfig
+): ArdEntryOverrides | undefined {
+  const entries = config.entries;
+  if (entries === undefined) return undefined;
+  return entries[ardEntryOverrideKey(surface.kind, surface.name)] ?? entries[surface.name];
+}
+
 function resolveIdentifier(surface: ArdSurface, config: ArdConfig): string {
-  if (!ARD_PUBLISHER_SEGMENT_PATTERN.test(config.publisher)) {
+  if (!isArdPublisherDomain(config.publisher)) {
     throw new ArdDerivationError(
       surface,
-      `ard.publisher "${config.publisher}" is not a valid URN segment (allowed: letters, digits, "." and "-").`
+      `ard.publisher "${config.publisher}" is not a publisher domain — it must be a DOMAIN such as ` +
+        '"example.com" (letters, digits, "." and "-", with at least one dot and no empty label).'
     );
   }
   const namespace = config.namespace ?? defaultArdNamespace(surface.kind);
@@ -102,27 +135,61 @@ function resolveType(surface: ArdSurface, overrides: ArdEntryOverrides | undefin
     throw new ArdDerivationError(
       surface,
       'the ARD specification names no media type for this surface, so VAT will not derive one. ' +
-        `Supply an explicit \`ard.entries.${surface.name}.type\` to emit it.`
+        `Supply an explicit \`ard.entries."${ardEntryOverrideKey(surface.kind, surface.name)}".type\` ` +
+        'to emit it.'
     );
   }
   return derived;
 }
 
 /**
- * Join a base URL and a relative path without letting either's slashes decide
- * the result — exactly one separator, whatever the caller wrote.
+ * RESOLVE a relative entry path against the configured base.
  *
- * Scanned rather than `replace(/\/+$/, '')`-ed: an anchored `+` over a
- * single-character class is linear in fact but scores as super-linear, and
- * rewriting a regex to satisfy a score is a game with no end. Index arithmetic
- * settles it.
+ * 🚨 This was string concatenation, and concatenation is not URL resolution.
+ * `https://example.com/base?tenant=acme#frag` + `/skills/expenses` produced
+ * `https://example.com/base?tenant=acme#frag/skills/expenses`, which is a URL a
+ * `format: uri` check accepts and which resolves to `https://example.com/base`
+ * for EVERY entry, because the path landed inside the fragment. `mailto:` —
+ * admitted by `z.string().url()` — produced `mailto:ops@example.com/skills/…`.
+ * Both address nothing and are mutually indistinguishable; that is a different
+ * class from a wrong-but-well-formed path.
+ *
+ * The base is refused rather than repaired ({@link isArdBaseUrl}) because a
+ * query and a fragment do not survive relative resolution: silently dropping
+ * them would publish a URL the author did not write, which is the same fault in
+ * a politer form. `ard.baseUrl` is refused at config load too — this gate
+ * catches a config assembled in process, and both read the one predicate.
+ *
+ * ⛔ The trailing slash is appended to the base's PATH before resolving, which
+ * deliberately preserves the ruled-out doubling case: `baseUrl:
+ * https://example.com/skills` with the namespace-mirroring path `skills/<name>`
+ * still yields `/skills/skills/<name>`. That is a config error the project has
+ * ruled it will not paper over, and letting `new URL` silently drop the last
+ * segment of a slash-less base would "fix" it into a different wrong answer.
+ *
+ * The leading-slash strip on `urlPath` is likewise kept: without it a caller's
+ * `/skills/a.md` would resolve against the ORIGIN and throw the base's path
+ * away.
  */
-function joinArdUrl(baseUrl: string, urlPath: string): string {
-  let end = baseUrl.length;
-  while (end > 0 && baseUrl[end - 1] === '/') end -= 1;
+function joinArdUrl(surface: ArdSurface, baseUrl: string, urlPath: string): string {
+  if (!isArdBaseUrl(baseUrl)) {
+    throw new ArdDerivationError(
+      surface,
+      `ard.baseUrl "${baseUrl}" cannot be a base for entry URLs. It must be an http(s) URL carrying ` +
+        'no query and no fragment — a base\'s query and fragment do not survive relative resolution, ' +
+        'so every entry would resolve to the same address.'
+    );
+  }
+  const base = new URL(baseUrl);
+  // Scanned rather than `replace(/\/+$/, '')`-ed: an anchored `+` over a
+  // single-character class is linear in fact but scores as super-linear, and
+  // rewriting a regex to satisfy a score is a game with no end.
+  let end = base.pathname.length;
+  while (end > 0 && base.pathname[end - 1] === '/') end -= 1;
+  base.pathname = `${base.pathname.slice(0, end)}/`;
   let start = 0;
   while (start < urlPath.length && urlPath[start] === '/') start += 1;
-  return `${baseUrl.slice(0, end)}/${urlPath.slice(start)}`;
+  return new URL(urlPath.slice(start), base).toString();
 }
 
 /**
@@ -138,7 +205,7 @@ function resolveLocation(
   config: ArdConfig
 ): { url: string } | { data: Record<string, unknown> } {
   if (config.baseUrl !== undefined && surface.urlPath !== undefined) {
-    return { url: joinArdUrl(config.baseUrl, surface.urlPath) };
+    return { url: joinArdUrl(surface, config.baseUrl, surface.urlPath) };
   }
   if (surface.data !== undefined) return { data: surface.data };
   throw new ArdDerivationError(
@@ -223,7 +290,7 @@ function applyOptionalFields(
  *   with the publisher.
  */
 export function buildArdEntry(surface: ArdSurface, config: ArdConfig): ArdEntry {
-  const overrides = config.entries?.[surface.name];
+  const overrides = findOverrides(surface, config);
   const draft: ArdEntryDraft = {
     identifier: resolveIdentifier(surface, config),
     displayName: surface.displayName,
@@ -249,10 +316,83 @@ export function buildArdEntry(surface: ArdSurface, config: ArdConfig): ArdEntry 
   return parsed.data;
 }
 
+/**
+ * Refuse a bare `ard.entries` key that names surfaces of more than one kind.
+ *
+ * The alternative — letting the first match win, or applying the block to all
+ * of them — is what shipped, and it retyped a skill as an OKF bundle without a
+ * word on stderr. A refusal is the only outcome that does not require the
+ * author to have noticed; the message names the qualified keys, so the fix is
+ * readable from the terminal.
+ *
+ * Judged over the surfaces actually being EMITTED, not over the config: a
+ * surface that was skipped cannot be bled onto, and warning about it would make
+ * this gate cry wolf.
+ */
+function assertUnambiguousOverrideKeys(
+  surfaces: readonly ArdSurface[],
+  config: ArdConfig
+): void {
+  const entries = config.entries;
+  if (entries === undefined) return;
+  const kindsByName = new Map<string, Set<ArdSurfaceKind>>();
+  for (const surface of surfaces) {
+    const kinds = kindsByName.get(surface.name) ?? new Set<ArdSurfaceKind>();
+    kinds.add(surface.kind);
+    kindsByName.set(surface.name, kinds);
+    if (kinds.size < 2 || entries[surface.name] === undefined) continue;
+    const qualified = [...kinds]
+      .map((kind) => `\`ard.entries."${ardEntryOverrideKey(kind, surface.name)}"\``)
+      .join(' and ');
+    throw new ArdDerivationError(
+      surface,
+      `\`ard.entries.${surface.name}\` is ambiguous — surfaces of ${kinds.size} different kinds are ` +
+        `named "${surface.name}" (${[...kinds].join(', ')}), and those are independent key spaces. ` +
+        `Qualify the override by kind: ${qualified}.`
+    );
+  }
+}
+
+/**
+ * Refuse two surfaces that collapse to one `identifier`.
+ *
+ * 🚨 ARD calls `identifier` the "globally unique discovery handle", and JSON
+ * Schema cannot express array-element uniqueness — so the vendored-schema
+ * oracle passes a manifest carrying the same identifier twice, which is a live
+ * instance of why `additionalProperties: true` makes schema validation weak
+ * evidence. Reachable from a legal config: a skill and a marketplace both named
+ * `main` under a single `ard.namespace` override emitted two byte-identical
+ * entries at exit 0.
+ */
+function assertUniqueIdentifiers(
+  entries: readonly ArdEntry[],
+  surfaces: readonly ArdSurface[]
+): void {
+  const seen = new Map<string, ArdSurface>();
+  for (const [index, entry] of entries.entries()) {
+    const surface = surfaces[index];
+    if (surface === undefined) continue;
+    const first = seen.get(entry.identifier);
+    if (first !== undefined) {
+      throw new ArdDerivationError(
+        surface,
+        `identifier "${entry.identifier}" is already emitted by the ${first.kind} "${first.name}". ` +
+          'An ARD identifier is a globally unique discovery handle, so two surfaces must not share ' +
+          'one. Give the surfaces distinct names, or drop the single `ard.namespace` override that ' +
+          'collapsed the per-kind namespaces.'
+      );
+    }
+    seen.set(entry.identifier, surface);
+  }
+}
+
 /** Build every entry, in the order the surfaces were given. */
 export function buildArdEntries(
   surfaces: readonly ArdSurface[],
   config: ArdConfig
 ): ArdEntry[] {
-  return surfaces.map((surface) => buildArdEntry(surface, config));
+  assertUnambiguousOverrideKeys(surfaces, config);
+  const entries = surfaces.map((surface) => buildArdEntry(surface, config));
+  assertUniqueIdentifiers(entries, surfaces);
+  return entries;
 }

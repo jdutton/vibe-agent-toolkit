@@ -21,13 +21,26 @@ import {
 
 import { MINIMAL_ARD_CONFIG, MINIMAL_SKILL_SURFACE, URL_ARD_CONFIG } from './ard-test-helpers.js';
 
+/** Surface kind whose media type the spec names none for, used in several cases. */
+const OKF_BUNDLE_KIND = 'okf-bundle';
+
+/** The two author-supplied media types the override cases hand in. */
+const OKF_BUNDLE_TYPE = 'application/okf-bundle';
+const VENDOR_CATALOG_TYPE = 'application/x-vendor-catalog+json';
+
+/** A name that deliberately occurs in two independent config key spaces. */
+const AMBIGUOUS_NAME = 'knowledge';
+
+/** The relative path the url-resolution cases append to a base. */
+const EXPENSES_PATH = 'skills/expenses';
+
 describe('deriveArdMediaType', () => {
   it('derives the coined skill media type for a skill surface', () => {
     expect(deriveArdMediaType('skill')).toBe(ARD_SKILL_MEDIA_TYPE);
     expect(ARD_SKILL_MEDIA_TYPE).toBe('application/ai-skill+md');
   });
 
-  it.each(['marketplace', 'okf-bundle', 'mcp-server'] as const)(
+  it.each(['marketplace', OKF_BUNDLE_KIND, 'mcp-server'] as const)(
     'derives NO media type for %s — the spec names none',
     (kind) => {
       expect(deriveArdMediaType(kind)).toBeUndefined();
@@ -51,7 +64,7 @@ describe('buildArdEntry — identifier', () => {
 
   it('defaults an OKF bundle to the "bundles" namespace', () => {
     const entry = buildArdEntry(
-      { kind: 'okf-bundle', name: 'handbook', displayName: 'Handbook', data: {} },
+      { kind: OKF_BUNDLE_KIND, name: 'handbook', displayName: 'Handbook', data: {} },
       { ...MINIMAL_ARD_CONFIG, entries: { handbook: { type: 'application/x-vendor-bundle' } } }
     );
     expect(entry.identifier).toBe('urn:air:example.com:bundles:handbook');
@@ -84,9 +97,9 @@ describe('buildArdEntry — type derivation and overrides', () => {
     };
     const entry = buildArdEntry(surface, {
       ...MINIMAL_ARD_CONFIG,
-      entries: { 'vat-marketplace': { type: 'application/x-vendor-catalog+json' } },
+      entries: { 'vat-marketplace': { type: VENDOR_CATALOG_TYPE } },
     });
-    expect(entry.type).toBe('application/x-vendor-catalog+json');
+    expect(entry.type).toBe(VENDOR_CATALOG_TYPE);
   });
 
   it('lets an author override the derived skill type', () => {
@@ -216,6 +229,150 @@ describe('buildArdEntry — trust manifest', () => {
       trustManifest: { identity: 'did:web:example.com' },
     });
     expect(entry.trustManifest?.identity).toBe('did:web:example.com');
+  });
+});
+
+describe('buildArdEntry — override key spaces', () => {
+  // 🚨 `skills.config`, `claude.marketplaces` and `okf.bundles` are three
+  // INDEPENDENT key spaces. Nothing stops the same name appearing in two of
+  // them, so a bare `ard.entries.<name>` key cannot say which surface it means.
+  // Driving the built CLI on a config carrying `skills.config.knowledge`,
+  // `okf.bundles.knowledge` and `ard.entries.knowledge.type:
+  // application/okf-bundle` emitted the SKILL typed `application/okf-bundle` —
+  // it silently lost its coined `application/ai-skill+md` — at exit 0.
+  const BUNDLE_SURFACE: ArdSurface = {
+    kind: OKF_BUNDLE_KIND,
+    name: AMBIGUOUS_NAME,
+    displayName: AMBIGUOUS_NAME,
+    data: {},
+  };
+  const SKILL_SURFACE: ArdSurface = {
+    kind: 'skill',
+    name: AMBIGUOUS_NAME,
+    displayName: AMBIGUOUS_NAME,
+    data: {},
+  };
+
+  it('reads an override qualified by kind', () => {
+    const entry = buildArdEntry(BUNDLE_SURFACE, {
+      ...MINIMAL_ARD_CONFIG,
+      entries: { 'okf-bundle:knowledge': { type: OKF_BUNDLE_TYPE } },
+    });
+    expect(entry.type).toBe(OKF_BUNDLE_TYPE);
+  });
+
+  it('never lets a kind-qualified override reach a same-named surface of another kind', () => {
+    const entry = buildArdEntry(SKILL_SURFACE, {
+      ...MINIMAL_ARD_CONFIG,
+      entries: {
+        'okf-bundle:knowledge': {
+          type: OKF_BUNDLE_TYPE,
+          capabilities: ['BundleOnly'],
+        },
+      },
+    });
+    expect(entry.type).toBe(ARD_SKILL_MEDIA_TYPE);
+    expect(entry).not.toHaveProperty('capabilities');
+  });
+
+  it('refuses a bare override key that matches surfaces of more than one kind', () => {
+    const build = (): unknown =>
+      buildArdEntries([SKILL_SURFACE, BUNDLE_SURFACE], {
+        ...MINIMAL_ARD_CONFIG,
+        entries: { knowledge: { type: OKF_BUNDLE_TYPE } },
+      });
+    expect(build).toThrow(ArdDerivationError);
+    expect(build).toThrow(/ard\.entries\.knowledge/);
+    expect(build).toThrow(/skill:knowledge/);
+    expect(build).toThrow(/okf-bundle:knowledge/);
+  });
+
+  it('still honours a bare key when only one kind carries that name', () => {
+    const entry = buildArdEntry(SKILL_SURFACE, {
+      ...MINIMAL_ARD_CONFIG,
+      entries: { knowledge: { capabilities: ['Knowledge'] } },
+    });
+    expect(entry.capabilities).toEqual(['Knowledge']);
+  });
+});
+
+describe('buildArdEntries — identifier uniqueness', () => {
+  // 🚨 `identifier` is ARD's "globally unique discovery handle", but JSON
+  // Schema cannot express array-element uniqueness, so the vendored-schema
+  // oracle passes a manifest carrying the same identifier twice. A skill named
+  // `main` plus a marketplace named `main` under a single global
+  // `ard.namespace` emitted TWO byte-identical entries at exit 0.
+  it('refuses two surfaces that collapse to one identifier, naming both', () => {
+    const build = (): unknown =>
+      buildArdEntries(
+        [
+          { kind: 'skill', name: 'main', displayName: 'main', data: {} },
+          { kind: 'marketplace', name: 'main', displayName: 'main', data: {} },
+        ],
+        {
+          ...MINIMAL_ARD_CONFIG,
+          namespace: 'things',
+          entries: { 'marketplace:main': { type: VENDOR_CATALOG_TYPE } },
+        }
+      );
+    expect(build).toThrow(ArdDerivationError);
+    expect(build).toThrow(/urn:air:example\.com:things:main/);
+    expect(build).toThrow(/skill/);
+    expect(build).toThrow(/marketplace/);
+  });
+
+  it('leaves distinct identifiers alone', () => {
+    const entries = buildArdEntries(
+      [
+        { kind: 'skill', name: 'main', displayName: 'main', data: {} },
+        { kind: 'skill', name: 'other', displayName: 'other', data: {} },
+      ],
+      MINIMAL_ARD_CONFIG
+    );
+    expect(entries).toHaveLength(2);
+  });
+});
+
+describe('buildArdEntry — url is RESOLVED, not concatenated', () => {
+  // 🚨 String concatenation put the entry path inside the base's fragment:
+  // `https://example.com/base?tenant=acme#frag` + `/skills/expenses` resolves
+  // to `https://example.com/base` for EVERY entry, and `format: uri` accepts
+  // it. `mailto:ops@example.com` — which `z.string().url()` admits — produced
+  // `mailto:ops@example.com/skills/expenses`, which addresses nothing.
+  it('refuses a baseUrl carrying a query or a fragment', () => {
+    for (const baseUrl of [
+      'https://example.com/base?tenant=acme',
+      'https://example.com/base#frag',
+      'https://example.com/base?tenant=acme#frag',
+    ]) {
+      expect(() =>
+        buildArdEntry(
+          { ...MINIMAL_SKILL_SURFACE, urlPath: EXPENSES_PATH },
+          { ...MINIMAL_ARD_CONFIG, baseUrl }
+        )
+      ).toThrow(ArdDerivationError);
+    }
+  });
+
+  it('refuses a non-http(s) baseUrl', () => {
+    expect(() =>
+      buildArdEntry(
+        { ...MINIMAL_SKILL_SURFACE, urlPath: EXPENSES_PATH },
+        { ...MINIMAL_ARD_CONFIG, baseUrl: 'mailto:ops@example.com' }
+      )
+    ).toThrow(ArdDerivationError);
+  });
+
+  it('leaves the RULED path-doubling case exactly as it was', () => {
+    // ⛔ Not a defect: `baseUrl: https://example.com/skills` plus the
+    // namespace-mirroring `skills/<name>` path is a config error the project
+    // has ruled it will not paper over. Pinned so a URL-resolution rewrite
+    // cannot quietly turn it into a different answer.
+    const entry = buildArdEntry(
+      { ...MINIMAL_SKILL_SURFACE, urlPath: EXPENSES_PATH },
+      { ...MINIMAL_ARD_CONFIG, baseUrl: 'https://example.com/skills' }
+    );
+    expect(entry.url).toBe('https://example.com/skills/skills/expenses');
   });
 });
 

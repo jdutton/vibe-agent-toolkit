@@ -12,6 +12,9 @@ import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 
+/** The config file every fixture project declares its surfaces in. */
+const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
+
 /** The publisher every fixture is anchored at. */
 export const FIXTURE_PUBLISHER = 'example.com';
 
@@ -89,6 +92,33 @@ export function projectWith(workDir: string, label: string, configYaml: string):
   rmSync(root, { recursive: true, force: true });
   const real = mkdirSyncReal(root, { recursive: true });
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is built from a test temp dir
-  writeFileSync(safePath.join(real, 'vibe-agent-toolkit.config.yaml'), configYaml, 'utf-8');
+  writeFileSync(safePath.join(real, CONFIG_FILENAME), configYaml, 'utf-8');
   return real;
+}
+
+/** Delete a project's config file, leaving the directory itself in place. */
+export function removeConfigFile(root: string): void {
+  rmSync(safePath.join(root, CONFIG_FILENAME), { force: true });
+}
+
+/**
+ * {@link projectWith}, plus a real `SKILL.md` for {@link PUBLISHED_SKILL}.
+ *
+ * Separate from `projectWith` on purpose: the difference between the two is the
+ * whole subject of the discovery cross-check, so a fixture that always planted
+ * the file would make the "advertises a skill that is not there" case
+ * unwritable.
+ */
+export function projectWithSkill(workDir: string, label: string, configYaml: string): string {
+  const root = projectWith(workDir, label, configYaml);
+  const skillDir = mkdirSyncReal(safePath.join(root, 'skills', PUBLISHED_SKILL), {
+    recursive: true,
+  });
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is built from a test temp dir
+  writeFileSync(
+    safePath.join(skillDir, 'SKILL.md'),
+    `---\nname: ${PUBLISHED_SKILL}\ndescription: A fixture skill\n---\n\n# ${PUBLISHED_SKILL}\n`,
+    'utf-8'
+  );
+  return root;
 }
