@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "@vibe-agent-toolkit/agent-runtime": "workspace:*",
-    "openai": "^4.77.3",
+    "openai": "^6.49.0",
     "zod": "^3.24.1",
     "zod-to-json-schema": "^3.24.1"
   },
