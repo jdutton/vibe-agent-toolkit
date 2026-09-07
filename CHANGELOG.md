@@ -22,10 +22,11 @@ with a regression test.
   `PATH`.
 
 - **An unrecognized key in `vibe-agent-toolkit.config.yaml` is now a warning on stderr, not
-  `exit 2`.** At the top level and under `skills:` and `claude:` a stray key used to fail every
-  `vat` command; it is now named, ignored and reported. **A script relying on `exit 2` for a stray
-  key must read stderr instead.** Every other validation failure — a wrong type, a missing required
-  field, a bad enum — still refuses.
+  `exit 2`.** The downgrade is path-agnostic — it applies at the top level and under every section
+  (`skills:`, `claude:`, `resources:`, `extents:`, `test:`, `okf:`, `ard:`), at any depth. A stray
+  key under a strict section used to fail every `vat` command; it is now named, ignored and
+  reported. **A script relying on `exit 2` for a stray key must read stderr instead.** Every other
+  validation failure — a wrong type, a missing required field, a bad enum — still refuses.
 
 - **`vat audit` on a directory no longer exits 2 because one nested config cannot be loaded.** One
   bad `vibe-agent-toolkit.config.yaml` anywhere under the scanned tree aborted the whole audit —
@@ -44,8 +45,10 @@ with a regression test.
 - **The RAG backends are no longer installed for you.** They were declared as
   `optionalDependencies`, which npm and pnpm install by default, so every adopter downloaded
   `onnxruntime-web`, a LanceDB platform binary and `apache-arrow` whether or not they ever ran a
-  `rag` command — **297 MB**, measured against the published rc.4 tarballs. They are now optional
-  *peer* dependencies. **If you use `vat rag`, install the backend explicitly:**
+  `rag` command — **~287 MB unpacked** (onnxruntime-web 137.5 MB, the LanceDB platform binary
+  97.8 MB, gpt-tokenizer 42.2 MB, apache-arrow 5.3 MB, protobufjs 3.0 MB), measured on
+  `darwin-arm64` against this release's pins; the platform binary is larger on `win32-x64`. They
+  are now optional *peer* dependencies. **If you use `vat rag`, install the backend explicitly:**
   `npm install @vibe-agent-toolkit/rag-lancedb`. The projection store is unaffected and needs no
   install.
 
@@ -88,16 +91,6 @@ with a regression test.
   instead.** A strict schema now decides whether a stored artifact is readable. ⚠️ Stored QA
   snapshots are invalidated and must be re-captured.
 
-- **The `resources:` section of `vibe-agent-toolkit.config.yaml` is now strict — an unrecognized key
-  fails config loading instead of being silently discarded.** **Remove or correct any key that is
-  not `include`, `exclude`, `collections`, `validation`, `linkAuth` or `checks`**; the error
-  surfaces on every `vat` command, not only the affected lane.
-  ⚠️ **This breaks configs that work today, and the likeliest offender is `resources.metadata`** —
-  removed from the schema several releases ago and silently thrown away ever since, so a config
-  carrying it upgrades from "quietly ignored" to "every verb exits 2". Delete the key.
-  🪤 `resources.collections.<name>` is still permissive, so a misspelled key inside a collection is
-  still accepted and stripped. Closing that is a separate breaking change.
-
 - **`vat skill test`: five changes, four of which need action.** Per-eval workspaces moved out of
   the harness root to a random OS-tmp directory, reported as `workspacesPath`, and **`--keep` is now
   the only flag that retains them** — `--out` and `--workdir` no longer do. Runs now spawn with
@@ -123,21 +116,22 @@ with a regression test.
 
 - **A RAG filter no provider implements now throws instead of being silently ignored.** Ignoring one
   *widened* your search: a query filtered only by an unimplemented field ran unfiltered over the
-  whole index. Move `filters.tags` / `type` / `headingPath` under `filters.metadata`; replace
-  `filters.dateRange` with a date field on your own metadata schema; drop `hybridSearch` or set
-  `enabled: false`. A metadata field your schema does not declare, and any unrecognised filter key,
-  now throw for the same reason.
-
-- **`RAGQuerySchema` gained a `filters.metadata` key.** Without it a schema-validated
-  `filters.metadata` was stripped — the one filter path that works could not be expressed. Moves the
-  generated `RAGQueryJsonSchema` output.
+  whole index. Move `filters.tags` / `type` / `headingPath` under `filters.metadata` — which works
+  only where your metadata schema **declares** those fields. The default metadata schema does; a
+  custom one that does not gets `Unknown metadata filter field`, by design, because an undeclared
+  field would contribute no condition. Replace `filters.dateRange` with a date field on your own
+  metadata schema. Omit `hybridSearch` entirely: `keywordWeight` is refused independently of
+  `enabled`, so `{enabled: false, keywordWeight: 0.3}` still throws — `{enabled: false}` on its own
+  is accepted. Any unrecognised filter key throws for the same reason.
 
 - **`RAGQuerySchema.safeParse` now rejects an unknown key instead of stripping it.** A misspelled
   filter (`resourceID`) parsed clean and was deleted, and a deleted filter widens the search rather
   than narrowing it — the same failure the refusal above exists to close, reached through VAT's own
   validation path. `filters.metadata` stays open, because it is your schema. The published
-  `RAGQueryJsonSchema` is unchanged: it already declared `additionalProperties: false`, so the two
-  halves of one contract had disagreed.
+  `RAGQueryJsonSchema` already declared `additionalProperties: false`, so this closes a
+  disagreement between the two halves of one contract rather than tightening the JSON half — but
+  the emitted schema does move, because `filters.metadata` is a new property and the filter
+  descriptions are rewritten.
 
 - **RAG providers should call the new `assertQuerySupported(query, support)` and declare their own
   `QuerySupport`.** Without it a provider inherits the declared query fields and none of the
@@ -174,21 +168,9 @@ with a regression test.
   command runs (confirmed by exhaustively enumerating 597,870 token lists). `vat audit` is the tool
   that reports where your settings and Claude Code disagree; this note is about what changed in VAT.
 
-- **`ParsedBashRule.regex?: RegExp` is now `pattern?: WildcardPattern`, and `escapeRegexLiteral` is
-  removed.** Wildcard rules no longer compile to a regular expression at all (see Security), so
-  anything reading `.regex` must read `.pattern`. `WildcardPattern` is exported alongside it.
-
-- **`vat ard emit`'s exit codes distinguish the project from the invocation.** **Exit 1** means VAT
-  read this project and produced no manifest by its own rules — it declares no `ard:` block, or a
-  surface could not be derived into a conformant entry. **Exit 2** means VAT never got that far — no
-  project root, no config file, a config it cannot parse, or an unexpected internal failure. A CI job
-  that tolerates repositories which never opted into ARD depends on exactly that split, so branch on
-  it rather than on "non-zero".
-
-- **`ValidateOkfBundleOptions.rootSpecifier` is now required, and `OkfBundleReport.root` carries it
-  instead of the resolved absolute path.** The report used to embed the developer's home directory
-  in every bundle entry, which then travelled into CI logs. A property a caller can opt out of is not
-  a property, so the option lost its default.
+- **`ParsedBashRule.regex?: RegExp` is now `pattern?: WildcardPattern`.** Wildcard rules no longer
+  compile to a regular expression at all (see Security), so anything reading `.regex` must read
+  `.pattern`. `WildcardPattern` is exported alongside it.
 
 - **⚠️ `vat resources validate` now checks the case and Unicode normalization of EVERY path
   component, not just the filename — which can turn a green repo red on a Mac or Windows box.** A
@@ -204,26 +186,12 @@ with a regression test.
   up to three times per link, so cost scaled with directory width. Measured on 4,000 documents ×
   10 links in one directory, identical findings both arms: **23.16 s → 0.22 s**.
 
-- **Link-fact table renames in `@vibe-agent-toolkit/resources`.** `linkTargetPaths` is now
-  `linkTargets` and returns `{referrer, target}[]` (the judge needs the referrer to bound its walk);
-  `LinkFactTables.siblingNames` is now `spellings`; `FileVerification.actualName` is now
-  `correction: {asked, actual}`. `pathCorrection` and `PathCorrection` are exported alongside them.
-
-- **`ParsedBashRule.regex?: RegExp` is now `pattern?: WildcardPattern`, and `escapeRegexLiteral` is
-  removed.** Wildcard rules no longer compile to a regular expression at all (see Security), so
-  anything reading `.regex` must read `.pattern`. `WildcardPattern` is exported alongside it.
-
 - **`@vibe-agent-toolkit/agent-schema` is now `@vibe-agent-toolkit/schema`.** Rename the dependency
   and every import specifier; nothing else about the package changed.
 
 - **`@vibe-agent-toolkit/resource-compiler`'s `parseMarkdown` is now `toMarkdownResource`.**
   `@vibe-agent-toolkit/resources`' own `parseMarkdown`, which takes a path rather than content,
   keeps its name.
-
-- **`@vibe-agent-toolkit/resources` replaces `collectCodeContextRanges(tree)` with
-  `codeContextRangesFrom(spans)`**, taking the flat `SourceSpan[]` a parse reports rather than an
-  mdast `Root`. Get one from the new `./remark-parser` subpath. `parseMarkdownContent` additionally
-  accepts an optional third `parser` argument; the default is unchanged. CLI users are unaffected.
 
 - **`safeExecSync()` and `safeExecResult()` throw when asked to run `git`.** Use `runGit()` /
   `runGitOrThrow()` from `@vibe-agent-toolkit/utils`, which pin the repository explicitly instead of
@@ -234,13 +202,14 @@ with a regression test.
   questions are now answered from a tracker's active set, so a skill's `files.linked` can change
   under a symlinked ancestor, in a submodule, or `.git/`.
 
-- **`@vibe-agent-toolkit/utils` no longer exports `verifyCaseSensitiveFilename`,
-  `fillSiblingNames`, `classifyFilenameCaseFrom`, `SiblingNamesTable` or `FilenameCaseVerdict`.**
-  Use `fillPathSpellings(requests, fsCache)` to build a table once, then
-  `pathSpellingFrom(table, referrer, target)` to judge. The removed pair judged only the
+- **`@vibe-agent-toolkit/utils` no longer exports `verifyCaseSensitiveFilename`.** Use
+  `fillPathSpellings(requests, fsCache)` to build a table once, then
+  `pathSpellingFrom(table, referrer, target)` to judge. The removed function judged only the
   **basename**, which left every directory component of a path to the host filesystem's own
   case-folding — the defect the whole-path judge exists to close, so it is deleted rather than
-  deprecated.
+  deprecated. (`fillSiblingNames`, `classifyFilenameCaseFrom`, `SiblingNamesTable` and
+  `FilenameCaseVerdict` went with it; they were introduced and removed inside this release series
+  and never appeared in a stable one, so there is nothing to migrate.)
 
 - **`assertGraderPromptInvariants`'s second parameter is now the run nonce, not the transcript, and
   it is required.** Pass the same nonce you passed to `buildGraderPrompt`.
@@ -249,11 +218,18 @@ with a regression test.
   had no reader and pinned the whole source string alive — 29 MB of retained heap on a 27 MB
   transcript. `mergeFragmentsToGrading` also no longer carries `runNonce` onto the merged report.
 
-- **A closure extent declaration now carries `referenceDialect`**, defaulting to `'href'` so every
-  existing declaration behaves as before. Code that compares a parsed `ExtentDeclaration`
-  structurally must account for it.
-
 ### Added
+
+- **`ruleConstrainsTool(toolName, rule, lane)`** is exported from
+  `@vibe-agent-toolkit/claude-marketplace`'s settings module. It answers "does this rule restrict
+  this tool at all?" off the same content-lane taxonomy `matchesPermissionRule` dispatches on, so a
+  caller summarising rules and a caller matching a concrete input cannot give different answers.
+
+- **The path-spelling result now says WHY a component is absent.** `PathSpelling` and
+  `ComponentMatch` carry `because: 'no_such_entry' | 'directory_unreadable'` on their absent arm,
+  and `FsLookupCache.readdir` returns a `DirectoryListing` union (`listed` / `absent` /
+  `unreadable`) rather than `string[] | null`. A single `null` previously meant both "no such
+  directory" and "I was refused", and only the first may read as absence.
 
 - **`vat claude org skills versions add <skill-id> <source>` — publishing a change to an
   already-published skill is now possible at all.** `install` only ever POSTs a create, and the API
@@ -407,6 +383,9 @@ with a regression test.
   bundle's own `OKF_BUNDLE_ROOT_UNREADABLE` finding at hard `error` — the per-bundle severity dial
   cannot lower it, since an unreadable root means conformance was never assessed — and the other
   bundles still run.
+  `ValidateOkfBundleOptions.rootSpecifier` is required and `OkfBundleReport.root` carries it rather
+  than the resolved absolute path, so a report does not embed the developer's home directory in
+  every bundle entry and carry it into CI logs.
 
 - **`vat ard emit` — writes a `.well-known/ard.json` discovery manifest.** Set `ard.publisher` and
   `ard.baseUrl`; published skills become entries automatically. Marketplaces, OKF bundles and MCP
@@ -424,6 +403,25 @@ with a regression test.
   `baseUrl` and still exited 0. A segment that merely contains dots (`v1.2`) is unaffected.
   `findArdEntryOverride`, `findShadowedArdOverrideKeys`, `isArdNameSegment` and `isArdUrlPath` are
   exported for callers building entries directly.
+  `--format json` publishes a machine-readable report — `status` (`written` | `empty`),
+  `outputPath`, `entryCount`, `skippedCount`, `shadowedCount` and the full skipped/shadowed lists —
+  so a pipeline can gate on a number instead of parsing stderr, and `--strict` turns "the manifest
+  advertises nothing" or "a configured surface was skipped" into exit 1. The DEFAULT exit code is
+  unchanged: an empty manifest is a legal artifact, so a plain run still exits 0 and says why on
+  stderr.
+  `trustManifest.identity` must carry an authority VAT can bind to `ard.publisher` — an HTTPS FQDN
+  URI or a SPIFFE ID, with a DID the one exempt form because DID methods encode their authority
+  per-method. A bare domain is none of the three, and it previously skipped publisher-authority
+  binding — the one check ARD mandates — in silence, at exit 0: the DID exemption was written as
+  "no `://`, no authority to parse", and `attacker.com` has no `://` either. The refusal is enforced
+  at CONFIG LOAD as well as at emission, sharing one predicate, so it fails every command that reads
+  the config rather than only this one.
+  The exit codes distinguish the project from the invocation: **exit 1** means VAT read this project
+  and produced no manifest by its own rules — it declares no `ard:` block, or a surface could not be
+  derived into a conformant entry — while **exit 2** means VAT never got that far (no project root,
+  no config file, a config it cannot parse, an unexpected internal failure). A CI job that tolerates
+  repositories which never opted into ARD depends on exactly that split, so branch on it rather than
+  on "non-zero".
 
 - **A collection can declare the MIME type of the files it matches, and that declaration reaches the
   parser.** `resources.collections.<name>.mimeType` overrides the built-in extension tables, so a
@@ -453,9 +451,12 @@ with a regression test.
 - **`externalSource` on a marketplace plugin entry** — reference a plugin published elsewhere rather
   than vendoring it.
 
-- **Four new rules in the published ESLint pack** — `@vibe-agent-toolkit/no-raw-text-decode`,
-  `no-self-package-import`, `no-bare-symlink-in-tests` and `no-process-exit-in-phase`. The last is
-  not in `configs.recommended`, because it keys on VAT's `…Phase` naming convention.
+- **Five new rules in the published ESLint pack** — `@vibe-agent-toolkit/no-raw-text-decode`,
+  `no-self-package-import`, `no-bare-symlink-in-tests`, `no-process-exit-in-phase` and
+  `no-fragile-entrypoint-guard`. **None of the five is in `configs.recommended`**: each keys on
+  something that is VAT's rather than portable — a naming convention, a required option, a seam a
+  consumer may not have, or a claim about the consumer's own Node floor. All five ship in `rules`,
+  and this repo enables each one explicitly, scoped to where it holds.
 
 - **New validation code `LINK_FROM_NON_ROUTABLE_FILE` (warning)** — a link out of a bundled HTML
   page that VAT did not follow.
@@ -490,7 +491,60 @@ with a regression test.
   `collectNonPortableAssetReferenceIssues()`, `collectNonPortableCommandIssues()` and
   `collectUnqualifiedMcpToolIssues()`, so an uploader can run the portability checks itself.
 
+- **(library) `RAGQuerySchema` gained a `filters.metadata` key.** Without it a schema-validated
+  `filters.metadata` was stripped — the one filter path that works could not be expressed. The
+  generated `RAGQueryJsonSchema` moves with it.
+
+- **(library) `codeContextRangesFrom(spans)` in `@vibe-agent-toolkit/resources`**, replacing
+  `collectCodeContextRanges(tree)`: it takes the flat `SourceSpan[]` a parse reports rather than an
+  mdast `Root`. Get one from the new `./remark-parser` subpath. `parseMarkdownContent` additionally
+  accepts an optional third `parser` argument; the default is unchanged. CLI users are unaffected.
+
+- **(library) A closure extent declaration carries `referenceDialect`**, defaulting to `'href'` so
+  every existing declaration behaves as before. Code that compares a parsed `ExtentDeclaration`
+  structurally must account for it.
+
+- **(library) `isEntrypoint(importMetaUrl, entryPath?)` on
+  `@vibe-agent-toolkit/utils/process`** — one answer to "am I the script Node was asked to run?".
+  `import.meta.main` is `undefined` below Node 22.18 and 24.2, and a raw compare against
+  `pathToFileURL(process.argv[1]).href` is false through a `node_modules/.bin` symlink; both
+  spellings silently guard nothing. The new `no-fragile-entrypoint-guard` ESLint rule keeps them
+  from coming back.
+
+- **(library) `assertFiltersProducedConditions` is exported from `@vibe-agent-toolkit/rag`, and
+  `LANCEDB_QUERY_SUPPORT` from `@vibe-agent-toolkit/rag-lancedb`** — the backstop that refuses a
+  filter set which produced no condition, and the shipped provider's declared `QuerySupport`.
+
+- **(library) The path-spelling surface is exported from `@vibe-agent-toolkit/utils`** —
+  `DirectorySpellingIndex` and `spellingWalkRoot`, plus the `PathSpelling`, `PathSpellingRequest`,
+  `PathSpellingTable` and `ComponentMatch` types, alongside `fillPathSpellings` /
+  `pathSpellingFrom`.
+
 ### Changed
+
+- **A stray key under `resources:` is now named on stderr instead of being silently discarded.**
+  The section declares its keys — `include`, `exclude`, `collections`, `validation`, `linkAuth` and
+  `checks` — and anything else is reported and ignored, exactly like an unknown key anywhere else in
+  the config (see Breaking). **Nothing fails to load**: a config carrying `resources.metadata`,
+  removed from the schema several releases ago and silently thrown away ever since, keeps working
+  and now says so once per run.
+  🪤 `resources.collections.<name>` is still permissive, so a misspelled key inside a collection is
+  accepted and stripped with nothing said.
+
+- **The CLI suppresses the one `ExperimentalWarning` `node:sqlite` emits at load.**
+  `vat resources query` builds its ephemeral store through `node:sqlite`, which Node loads unflagged
+  from 22.13.0 but still announces once per process — on an ordinary run, with no way to silence it
+  short of silencing everything. A process-wide filter matches that warning by **both** its
+  `ExperimentalWarning` type and SQLite's own message text, and passes every other warning through;
+  `@vibe-agent-toolkit/projection-sqlite` deliberately does not suppress it itself, leaving the
+  filtering to whichever caller turns the backend on by default.
+
+- **(internal) Link-fact table renames in `@vibe-agent-toolkit/resources`.** `linkTargetPaths` is
+  now `linkTargets` and returns `{referrer, target}[]` (the judge needs the referrer to bound its
+  walk); `LinkFactTables.siblingNames` is now `spellings`; `FileVerification.actualName` is now
+  `correction: {asked, actual}`. Not a breaking change: the barrel states that link-validator
+  internals are not exported, and the package's `exports` map declares no `./link-validator`
+  subpath, so no consumer could import any of them.
 
 - **`vat skill review` files five codes under named sections instead of `Other automated
   findings`** — `SKILL_FRONTMATTER_EXTRA_FIELDS`, `SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE`,
@@ -613,8 +667,12 @@ with a regression test.
   subcommand, so `Bash(safe-cmd *)` no longer reports `safe-cmd && other-cmd` as permitted; a
   dangling `&&` is treated as unparseable and approves nothing; and the documented wrappers
   (`timeout`, `time`, `nice`, `nohup`, `stdbuf`, `command`, `builtin`, `noglob`, bare `xargs`) are
-  stripped before matching. Three divergences remain and are documented in the module: allow-lane
-  environment-assignment stripping, an over-broad `PATH_TOOLS`, and unsupported MCP tool-name globs.
+  stripped before matching. Seven of the eight divergences found against that table are now fixed
+  and pinned — including per-lane environment-assignment stripping, `PATH_TOOLS` narrowed to `Read`
+  and `Edit`, and MCP tool-name globs. The one still open is not a divergence but a hole **in** the
+  table: whether the ALLOW lane descends into `$(…)`, backticks and control-flow bodies is
+  undetermined, so only the documented deny/ask nesting is implemented and the allow half is left
+  where it was rather than guessed at in either direction.
 
 - **A permission rule with wildcards separated by literals could hang the process, and `vat audit`
   on an untrusted plugin was the way in.** Every `*` became `.*` in a compiled regular expression, so
@@ -653,9 +711,10 @@ with a regression test.
   message all echoed attacker-influenced bytes, so a grader could print a green line in vat's own
   voice.
 
-- **The run nonce no longer reaches disk**, and **`baseline.json` evidence no longer leaks your
-  login name** or bypasses its excerpt bound for any tool input containing a newline, quote or
-  backslash.
+- **The run nonce no longer reaches the run's artifacts**, and **`baseline.json` evidence no longer
+  leaks your login name** or bypasses its excerpt bound for any tool input containing a newline,
+  quote or backslash. A grader still writes its nonce-bearing fragment to a file, but under an owner-only
+  (`0700`) directory, and it is consumed and unlinked on read.
 
 - **`vat skill test` no longer copies your eval suite — `expected_output` answer keys included —
   into the OS temp dir when it does not need to.** The copy is now made only when the suite exists
@@ -671,6 +730,43 @@ with a regression test.
   `@vibe-validate/utils` and `yaml` to the installed tree.
 
 ### Fixed
+
+- **`vat audit` no longer dies with an uncaught `TypeError` on a bare `Read`/`Edit` declaration.**
+  The settings checker asked the path matcher whether a deny rule blocked a tool whose input was the
+  empty string, and the underlying ignore matcher throws on an empty path (`path must not be empty`).
+  Any plugin whose `SKILL.md` declared a bare `Read` or `Edit` while org settings carried a
+  `Read(…)`/`Edit(…)` deny rule crashed the command outright. Fixed on both sides: the checker now
+  asks `ruleConstrainsTool`, and `matchesPathRule` answers `false` for an empty relative path rather
+  than throwing. Pre-existing — before `PATH_TOOLS` was narrowed it also fired for `Write`, `Glob`
+  and `NotebookRead`/`NotebookEdit`.
+
+- **A link through a directory VAT may traverse but not list is no longer reported as a missing
+  file.** Judging every path component made every ancestor directory need to be *listable*, not
+  merely traversable, so a POSIX `--x` directory (mode `0111`) — whose files open perfectly well —
+  turned a valid link into `LINK_BROKEN_FILE`. The listing result now distinguishes "no such
+  directory" (`ENOENT`/`ENOTDIR`) from "could not be read", and a link whose spelling could not be
+  verified produces no finding at any severity rather than a fabricated one. An unrecognised
+  listing failure is treated as unreadable, never as absence.
+
+- **The settings checker and the permission matcher can no longer disagree about the same rule.**
+  The checker string-prefixed rule names (`Write(`) while the matcher had just ruled that a
+  `Write(…)` path rule constrains nothing, so one deny rule produced opposite answers depending only
+  on whether a skill spelled the tool `Write` or `Write(./out/**)`. Both now dispatch on one shared
+  content-lane taxonomy. A tool VAT cannot introspect (an MCP tool with non-`*` content, e.g.
+  `mcp__srv__tool(foo)`) is no longer reported as conflicting with a bare declaration — matching the
+  answer the matcher already gave for every concrete input.
+
+- **A redirection is no longer mistaken for a command separator.** `&` was treated as a top-level
+  separator with no redirection awareness, so `2>&1` split into `… 2>` and `1`; the allow lane then
+  required a rule for `1` and refused the whole command. `ls -la > /dev/null 2>&1` against
+  `Bash(ls:*)` now matches. A genuine `&` — backgrounding or `&&` — still separates.
+
+- **A metadata filter value containing `%` or `_` no longer widens the search it was meant to
+  narrow.** Array and string metadata filters interpolate into a SQL `LIKE` pattern, and only quotes
+  were escaped, so `tags: ['%']` compiled to `tags LIKE '%%%'` — a clause matching every row, handed
+  back to a caller who had asked to be filtered. Wildcards and the escape character are now escaped
+  and the pattern carries an explicit `ESCAPE`, emitted only for values that need it so every
+  currently-working query is byte-identical.
 
 - **A usage mistake no longer reports itself as a failed check.** An unknown option and an unknown
   command fell through to Commander's default `exit(1)` — which, against the three-way exit contract
@@ -769,10 +865,11 @@ with a regression test.
   reset.** Requests now abort after 120 s of socket *inactivity* (a slow-but-progressing 30 MB
   upload is never cut off), and a further 30 s connect deadline covers a DNS blackhole, where there
   was no socket for the inactivity timer to watch. A reset arriving after the response headers is
-  now caught instead of becoming an unhandled `error` event. Rate-limit and gateway failures retry
-  up to three times honouring `Retry-After`, on idempotent methods only; a `POST` is never
-  replayed — it creates — and the error says so. **When an upload gets no status at all, check
-  `vat claude org skills list` before re-running: the skill may exist.**
+  now caught instead of becoming an unhandled `error` event. Rate-limit and gateway failures are
+  retried honouring `Retry-After`, on idempotent methods only, up to a maximum of three attempts
+  (two retries); a `POST` is never replayed — it creates — and the error says so. **When an upload
+  gets no status at all, check `vat claude org skills list` before re-running: the skill may
+  exist.**
 
 - **Multipart uploads now percent-encode `Content-Disposition` parameters (RFC 7578 §4.2).**
   Filenames and field names reach the wire from a downloaded package's SKILL.md frontmatter on the
