@@ -58,6 +58,12 @@ const BASH_NPM_RUN_STAR = 'Bash(npm run *)';
 const BASH_NPM_RUN_PREFIX = 'Bash(npm run:*)';
 const GIT_PUSH_ORIGIN_MAIN = 'git push origin main';
 const LS_STAR = 'Bash(ls *)';
+const RM_STAR = 'Bash(rm *)';
+const A_STAR_B_STAR_Z = 'Bash(a*b*z)';
+const GIT_ONELINE_STAR = 'Bash(git * --oneline *)';
+// The wrapper form whose flag VALUE lands in the command position — two
+// admissible readings, so the allow lane must take neither.
+const WRAPPER_FLAG_VALUE_CMD = 'timeout -s ls 30 rm -rf /';
 const LS_GLUED = 'Bash(ls*)';
 const LS_LA = 'ls -la';
 const LSOF = 'lsof';
@@ -316,13 +322,13 @@ describe('isSubsumedBy', () => {
 });
 
 describe('parseBashRuleContent', () => {
-  it('builds regex for wildcard rules', () => {
+  it('compiles a wildcard rule to the literal runs between its wildcards', () => {
     const parsed = parseBashRuleContent(NPM_RUN_STAR);
     expect(parsed.type).toBe(WILDCARD);
-    expect(parsed.regex).toBeDefined();
-    expect(parsed.regex?.test(NPM_RUN_LINT)).toBe(true);
-    expect(parsed.regex?.test('npm run build')).toBe(true);
-    expect(parsed.regex?.test('npm install')).toBe(false);
+    expect(parsed.pattern?.segments).toEqual(['npm run ', '']);
+    expect(allowsBash(NPM_RUN_LINT, BASH_NPM_RUN_STAR)).toBe(true);
+    expect(allowsBash('npm run build', BASH_NPM_RUN_STAR)).toBe(true);
+    expect(allowsBash('npm install', BASH_NPM_RUN_STAR)).toBe(false);
   });
 
   it('strips :* from prefix rules', () => {
@@ -355,20 +361,167 @@ describe('parseBashRuleContent', () => {
     expect(allowsBash('ax c', String.raw`Bash(a\* *)`)).toBe(false);
   });
 
-  // 🚩 Adjacent `.*` backtrack polynomially, and both inputs are attacker-
-  // reachable files this auditor reads (a settings.json permission, a SKILL.md
-  // allowed-tools entry). Measured on the uncollapsed form, `Bash(a**********z)`
-  // against `a` + n×`b`: n=20 → 228 ms, n=24 → 314 ms, n=28 → 1087 ms.
-  //
-  // Asserted on the regex SHAPE, not on a stopwatch: a duration threshold in a
-  // unit test adds a second, machine-decided requirement and goes red under
-  // load rather than on a regression.
-  it('collapses a run of wildcards to a single .*', () => {
+  // A run of wildcards permits exactly what one wildcard permits. Asserted on
+  // the ANSWERS, not on a compiled shape — see the cost suite below for why the
+  // shape assertion that used to live here was worthless.
+  it('treats a run of wildcards as one wildcard', () => {
     const parsed = parseBashRuleContent('a**********z');
-    expect(parsed.regex?.source).toBe('^a.*z$');
-    expect(parsed.regex?.test('a' + 'b'.repeat(28) + 'z')).toBe(true);
-    // A run of wildcards permits exactly what one wildcard permits.
-    expect(parsed.regex?.test('a' + 'b'.repeat(28))).toBe(false);
+    expect(parsed.type).toBe(WILDCARD);
+    expect(allowsBash('a' + 'b'.repeat(28) + 'z', 'Bash(a**********z)')).toBe(true);
+    expect(allowsBash('a' + 'b'.repeat(28), 'Bash(a**********z)')).toBe(false);
+  });
+});
+
+// ============================================================================
+// Wildcard matching COST — the property a compiled-shape assertion stood in for
+// ============================================================================
+//
+// 🚩 The assertion this replaces read `parsed.regex?.source === '^a.*z$'`. It was
+// TRUE while the safety property it stood for was FALSE. Collapsing only a RUN
+// of adjacent stars leaves wildcards SEPARATED BY LITERALS compiling to
+// `^a.*b.*b.*…z$`, which backtracks exponentially, and the shape assertion could
+// not see it because the shape it inspected is the one harmless case.
+//
+// Measured on the built module before the fix, rule `Bash(ab*b*b*b*b*b*b*b*z)`
+// against `ab`+n×`b`+`c`: n=20 → 1.5 ms, n=24 → 52 ms, n=28 → 159 ms,
+// n=32 → 437 ms (~2.7× per four characters), and a 61-character command took
+// 26,273 ms. The ordinary-looking rule
+// `Bash(npm * --registry * --registry * --registry * publish)` was polynomial on
+// the same module: 420 chars → 2.6 ms, 836 → 32 ms, 1,668 → 798 ms, 3,332 →
+// 12,504 ms. Both inputs are attacker-reachable files this auditor reads — a
+// `settings.json` permission entry and a plugin `SKILL.md` `allowed-tools:`
+// entry — and `vat audit` reaches this through `checkSettingsCompatibility`.
+//
+// Cost is asserted as a RATIO between two input sizes, never as a wall-clock
+// budget: a millisecond literal is a second, machine-decided requirement that
+// goes red under load rather than on a regression.
+
+/**
+ * The per-call cost of `run`, in milliseconds, averaged over as many calls as
+ * fit in one sampling window.
+ *
+ * The window is a measurement FLOOR, not a budget — it exists so that a call far
+ * below the clock's resolution is still timed against something larger than the
+ * clock — and nothing asserts on it. Only a RATIO of two of these is asserted on.
+ */
+function perCallMs(run: () => void): number {
+  const sampleWindowMs = 25;
+  const started = performance.now();
+  let calls = 0;
+  let elapsed = 0;
+  do {
+    run();
+    calls += 1;
+    elapsed = performance.now() - started;
+  } while (elapsed < sampleWindowMs);
+  return elapsed / calls;
+}
+
+/**
+ * How much more one call of `large` costs than one call of `small`.
+ *
+ * The two are sampled INTERLEAVED and the best round wins, which is what keeps
+ * this from going red under machine load rather than on a regression. Machine
+ * interference can only ever make a sample slower, never faster, so a ratio is
+ * only ever inflated — by a slow `large` round or a lucky-fast `small` one.
+ * Interleaving makes a noisy slice hit both sides of the same round, and taking
+ * the minimum ratio across rounds discards the rounds where it did not. The
+ * first round doubles as JIT warm-up and is discarded the same way.
+ */
+function costRatio(small: () => void, large: () => void): number {
+  const rounds = 7;
+  let best = Number.POSITIVE_INFINITY;
+  for (let round = 0; round < rounds; round += 1) {
+    const smallMs = perCallMs(small);
+    const largeMs = perCallMs(large);
+    best = Math.min(best, largeMs / smallMs);
+  }
+  return best;
+}
+
+// 4× the input, so a linear matcher lands at ~4× the cost or below (a failing
+// prefix/suffix check short-circuits, which pulls it under). The regexes this
+// replaced were 300×–1,800× over on the same pair.
+const MAX_COST_RATIO_FOR_4X_INPUT = 8;
+
+describe('wildcard matching cost is linear in the input', () => {
+  it('does not blow up on wildcards separated by literals', () => {
+    const rule = 'Bash(ab*b*b*b*b*b*b*b*z)';
+    // 9 characters and 36: exactly 4×.
+    const command = (n: number): string => 'ab' + 'b'.repeat(n) + 'c';
+    const ratio = costRatio(
+      () => {
+        matchesBashRule(command(6), rule, 'allow');
+      },
+      () => {
+        matchesBashRule(command(33), rule, 'allow');
+      },
+    );
+    expect(ratio).toBeLessThan(MAX_COST_RATIO_FOR_4X_INPUT);
+  });
+
+  it('does not blow up on an ordinary rule carrying four wildcards', () => {
+    const rule = 'Bash(npm * --registry * --registry * --registry * publish)';
+    // 420 characters and 1,668: ~4×.
+    const command = (n: number): string => 'npm ' + ' --registry a'.repeat(n);
+    const ratio = costRatio(
+      () => {
+        matchesBashRule(command(32), rule, 'allow');
+      },
+      () => {
+        matchesBashRule(command(128), rule, 'allow');
+      },
+    );
+    expect(ratio).toBeLessThan(MAX_COST_RATIO_FOR_4X_INPUT);
+  });
+
+  // 🚩 The blindness guard for the two above: a matcher that answered `false`
+  // in O(1) for everything would satisfy both ratios. These pin that a glob with
+  // wildcards separated by literals still matches what it should, including the
+  // overlap case a greedy scan can get wrong.
+  it('still answers correctly with wildcards separated by literals', () => {
+    expect(allowsBash('a1b2z', A_STAR_B_STAR_Z)).toBe(true);
+    expect(allowsBash('abz', A_STAR_B_STAR_Z)).toBe(true);
+    expect(allowsBash('az', A_STAR_B_STAR_Z)).toBe(false);
+    expect(allowsBash('a1b2y', A_STAR_B_STAR_Z)).toBe(false);
+    // The middle literal has to be found at a position that still leaves room
+    // for the suffix: `a*ab*b` needs four characters, not three.
+    expect(allowsBash('aab', 'Bash(a*ab*b)')).toBe(false);
+    expect(allowsBash('aabb', 'Bash(a*ab*b)')).toBe(true);
+    // A wildcard spans spaces, and the anchors are both ends of the command.
+    expect(allowsBash('git log --oneline main', GIT_ONELINE_STAR)).toBe(true);
+    expect(allowsBash('git log --oneline', GIT_ONELINE_STAR)).toBe(false);
+  });
+
+  // 🚩 The same class one layer down, and reached by the same attacker-supplied
+  // input: the deny lane emitted every ENCLOSING nested region whole and split
+  // each of them, so the work was quadratic in the nesting depth even though
+  // each region's own text is read only once. Measured on the shipped module,
+  // `'('×k + 'echo x' + ')'×k` against `Bash(rm *)`: k=25,000 → 4,487 ms, with 4×
+  // the length costing ~11× the time.
+  it('does not blow up on deeply nested regions in the deny lane', () => {
+    const command = (depth: number): string =>
+      '('.repeat(depth) + 'echo x' + ')'.repeat(depth);
+    const ratio = costRatio(
+      () => {
+        matchesDenyRule(BASH, command(3000), RM_STAR);
+      },
+      () => {
+        matchesDenyRule(BASH, command(12_000), RM_STAR);
+      },
+    );
+    expect(ratio).toBeLessThan(MAX_COST_RATIO_FOR_4X_INPUT);
+  });
+
+  // 🚩 The blindness guard for the ratio above: a `nestedRegions` that returned
+  // nothing would be linear and pass. The deny lane still has to find the
+  // command at the bottom of the nest.
+  it('still reaches a command nested thousands of regions deep', () => {
+    const nested = '('.repeat(3000) + 'rm -rf tmp' + ')'.repeat(3000);
+    expect(matchesDenyRule(BASH, nested, RM_STAR)).toBe(true);
+    expect(matchesDenyRule(BASH, '('.repeat(3000) + 'echo x' + ')'.repeat(3000), RM_STAR)).toBe(
+      false,
+    );
   });
 });
 
@@ -588,8 +741,8 @@ describe('published table — wrappers', () => {
   // a command that runs `rm -rf /`. The heuristic cannot know a wrapper flag's
   // arity, so halting on the token right after a flag must strip nothing.
   it('does not strip to a wrapper flag own value', () => {
-    expect(allowsBash('timeout -s ls 30 rm -rf /', LS_STAR)).toBe(false);
-    expect(allowsBash('nice -n rm 5 npm test', 'Bash(rm *)')).toBe(false);
+    expect(allowsBash(WRAPPER_FLAG_VALUE_CMD, LS_STAR)).toBe(false);
+    expect(allowsBash('nice -n rm 5 npm test', RM_STAR)).toBe(false);
   });
 
   // The cost of that refusal, stated so it is not mistaken for a bug: a wrapper
@@ -599,6 +752,27 @@ describe('published table — wrappers', () => {
     // The documented forms are unaffected — the halt lands after a duration.
     expect(allowsBash('timeout 30 npm test', NPM_TEST_STAR)).toBe(true);
     expect(allowsBash('nice -n 5 npm test', NPM_TEST_STAR)).toBe(true);
+  });
+
+  // ⚠️ CHARACTERIZATION. This pins the real edge of the wrapper heuristic, which
+  // the module header used to describe wrongly: it claimed the allow lane was
+  // "byte-for-byte" the pre-lane behaviour apart from the `NODE_ENV` strip. A
+  // 270,855-pair differential says otherwise — 1,219 divergences, 776 of them
+  // old=false→new=true, of which 736 are the `NODE_ENV` strip and 40 are THESE.
+  //
+  // 🔑 The behaviour is right and stays. `wrapperCommandStarts` returns a SINGLE
+  // reading when the resumed reading would run off the end of the token list, so
+  // the ambiguity only ever arises with the ambiguous token LAST — where the
+  // alternative reading is "the flag ate it and no command runs at all", and a
+  // permit cannot be wrong about a command that does not exist. The false permit
+  // this guards against has the other shape, and is asserted right below.
+  it('strips when the ambiguous token is LAST, and refuses when it is not', () => {
+    for (const command of ['timeout 30 -rf test', 'nice -n 5 -rf test', 'command -rf test']) {
+      expect(allowsBash(command, 'Bash(test *)')).toBe(true);
+    }
+    // Two admissible readings, so the allow lane takes neither.
+    expect(allowsBash(WRAPPER_FLAG_VALUE_CMD, LS_STAR)).toBe(false);
+    expect(allowsBash('nice -n rm 5 npm test', RM_STAR)).toBe(false);
   });
 });
 
@@ -615,7 +789,6 @@ describe('published table — wrappers', () => {
 const LANES = ['allow', 'deny', 'ask'] as const;
 const BASH = 'Bash';
 const CURL_PREFIX = 'Bash(curl:*)';
-const RM_STAR = 'Bash(rm *)';
 const GITX_CLEAN_STAR = 'Bash(gitx clean *)';
 const CURL_COMPOUND = 'curl https://x && echo done';
 const GITX_CLEAN_NESTED = 'echo "$(gitx clean -f)"';
@@ -659,6 +832,43 @@ describe('published table — the deny/ask lane', () => {
     }
   });
 
+  // 🚩 Nesting was implemented ONLY as "drop a leading control-flow KEYWORD", and
+  // a `case` arm is introduced by a PATTERN and `)`, not by a keyword — so the
+  // one body form the keyword list structurally cannot reach was the one form
+  // that went unmatched, while every other (`if/then`, `while/do`, `for/do`,
+  // `until/do`, `{ …; }`, `$(…)`, backticks, `(…)`, `<(…)`) passed. Observed:
+  // `Bash(rm *)` vs `case x in x) rm -rf tmp;; esac` returned false.
+  it('descends into a case arm, which no keyword introduces', () => {
+    for (const command of [
+      'case x in x) rm -rf tmp;; esac',
+      'case "$1" in *) rm -rf tmp;; esac',
+      // The POSIX spelling, where the arm pattern carries its own leading paren.
+      'case x in (x) rm -rf tmp;; esac',
+      // A later arm, which reaches denySegments without the `case` header.
+      'case x in a) echo hi;; b) rm -rf tmp;; esac',
+      // A function BODY arrives through the same reduction, because `foo()` is a
+      // whitespace-free group — the same direction the published clause asks for.
+      'foo() { rm -rf tmp; }',
+    ]) {
+      expect(matchesPermissionRule(BASH, command, RM_STAR, 'deny')).toBe(true);
+      expect(matchesPermissionRule(BASH, command, RM_STAR, 'ask')).toBe(true);
+    }
+  });
+
+  // 🚩 The precision guard for the arm reduction: a `)` is an arm terminator only
+  // when it closes nothing, or closes a whitespace-free group that is not a `$(`.
+  // Without that, `echo $(foo) rm` would report a conflict with `Bash(rm *)` over
+  // an `echo` whose second ARGUMENT is the word `rm`, and a `)` inside a string
+  // would do the same.
+  it('does not read a closing paren as a case arm when it is not one', () => {
+    for (const lane of LANES) {
+      expect(matchesPermissionRule(BASH, 'echo $(foo) rm', RM_STAR, lane)).toBe(false);
+      expect(matchesPermissionRule(BASH, 'echo "a) rm -rf tmp"', RM_STAR, lane)).toBe(false);
+      expect(matchesPermissionRule(BASH, "echo 'a) rm -rf tmp'", RM_STAR, lane)).toBe(false);
+      expect(matchesPermissionRule(BASH, 'case x in x) echo hi;; esac', RM_STAR, lane)).toBe(false);
+    }
+  });
+
   // ⚠️ The ALLOW-lane half of nesting is UNDETERMINED (see the ⛔ UNSOURCED note
   // in the compound suite above). Only the deny half is published, so only the
   // deny half is asserted here.
@@ -669,7 +879,7 @@ describe('published table — the deny/ask lane', () => {
     expect(matchesPermissionRule(BASH, 'timeout -s KILL 30 npm test', NPM_TEST_STAR, 'allow')).toBe(
       false,
     );
-    expect(matchesPermissionRule(BASH, 'timeout -s ls 30 rm -rf /', LS_STAR, 'allow')).toBe(false);
+    expect(matchesPermissionRule(BASH, WRAPPER_FLAG_VALUE_CMD, LS_STAR, 'allow')).toBe(false);
   });
 
   it('falls back to the raw whole string when the command is unparseable', () => {
@@ -679,6 +889,32 @@ describe('published table — the deny/ask lane', () => {
     // not go silent — it tests the rule against the raw string instead.
     expect(matchesPermissionRule(BASH, 'curl https://x &&', CURL_PREFIX, 'deny')).toBe(true);
     expect(matchesPermissionRule(BASH, "curl https://x # don't", CURL_PREFIX, 'deny')).toBe(true);
+  });
+
+  // 🚩 …and the whole string is not ENOUGH. The fallback pushed the raw region as
+  // ONE segment, so the rule had to match the entire command — which it almost
+  // never does for the class the fallback exists for. The denied command in an
+  // unparseable compound is not at the front: the very example the module quotes
+  // as its worked false permit, `echo hi # don't⏎rm -rf /`, answered `false`
+  // under `Bash(rm *)`, and so did `npm test # (⏎rm -rf /` and
+  // `echo "unclosed⏎rm -rf /`. Only the case where the denied program leads
+  // (`rm -rf tmp &&`) was caught. What makes these unparseable — an odd quote, an
+  // unbalanced `(` — is exactly what hid the separator, so the fallback recovers
+  // the separators the parser refused to trust.
+  it('reaches a denied command that is not at the front of an unparseable command', () => {
+    for (const command of [
+      "echo hi # don't\nrm -rf /",
+      'npm test # (\nrm -rf /',
+      'echo "unclosed\nrm -rf /',
+      'rm -rf tmp &&',
+    ]) {
+      expect(matchesPermissionRule(BASH, command, RM_STAR, 'deny')).toBe(true);
+      expect(matchesPermissionRule(BASH, command, RM_STAR, 'ask')).toBe(true);
+      // ⛔ The ALLOW lane must not widen with it. This is an UNDER-report being
+      // fixed, not a false permit: Claude Code asks for approval on a command it
+      // cannot parse, so allow keeps refusing every one of these.
+      expect(matchesPermissionRule(BASH, command, RM_STAR, 'allow')).toBe(false);
+    }
   });
 
   // 🚩 THE BLINDNESS GUARD. Every expectation above is `true` for deny, so a

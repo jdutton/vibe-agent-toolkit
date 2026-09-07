@@ -127,6 +127,7 @@ export type {
   SettingsPathsResult,
   SettingsTypeConfidence,
   SettingsValidateResult,
+  WildcardPattern,
 } from './settings/index.js';
 export {
   analyzeRuleConflicts,

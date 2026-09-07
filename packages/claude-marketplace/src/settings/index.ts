@@ -17,7 +17,12 @@ export {
   matchesPathRule,
   matchesPermissionRule,
 } from './permission-matcher.js';
-export type { BashRuleType, ParsedBashRule, PermissionLane } from './permission-matcher.js';
+export type {
+  BashRuleType,
+  ParsedBashRule,
+  PermissionLane,
+  WildcardPattern,
+} from './permission-matcher.js';
 
 export type { ReadSettingsOptions } from './settings-reader.js';
 export { readEffectiveSettings, readSettingsLayers } from './settings-reader.js';

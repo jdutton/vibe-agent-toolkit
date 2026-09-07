@@ -2,7 +2,7 @@
  * Permission rule matching — replicates Claude Code's actual permission matching logic.
  *
  * Two distinct systems depending on tool type:
- * - Bash rules: custom regex builder (exact | prefix | wildcard)
+ * - Bash rules: custom glob matcher (exact | prefix | wildcard)
  * - Read/Edit/Write/Glob path rules: node-ignore (gitignore spec)
  *
  * Sources: the Bash lane is now built to the PUBLISHED behavior table at
@@ -96,8 +96,24 @@
  * the deny lane takes ANY reading the wrapper heuristic admits ({@link stripOneWrapperReadings})
  * while the allow lane keeps its single conservative one.
  *
- * 🚩 The allow lane is not weakened anywhere by this. Where the two lanes differ, the allow side is
- * byte-for-byte the behaviour the false-permit fixes left it with.
+ * 🚩 The allow lane is not WEAKENED by any of this — but it is not unchanged either, and this block
+ * used to claim it was: *"where the two lanes differ, the allow side is byte-for-byte the behaviour
+ * the false-permit fixes left it with"*. That was a corpus-limited claim, and a 270,855-pair
+ * differential of the pre-lane matcher against {@link matchesAllowRule} falsified it. 1,219 pairs
+ * diverge. 776 are old=`false`→new=`true`: 736 of those are the intended `NODE_ENV` strip, and
+ * ⚠️ FORTY are not. The other 443 are old=`true`→new=`false` — the compound-split and unparseable
+ * refusals, every one in the safe direction.
+ *
+ * 🔑 The real boundary, in place of "unchanged": the allow lane takes a wrapper strip whenever the
+ * heuristic admits exactly ONE reading, and {@link wrapperCommandStarts} yields one reading — not
+ * two — when the resumed reading would run off the end of the token list. So `Bash(test *)` now
+ * matches `timeout 30 -rf test`, `nice -n 5 -rf test` and `command -rf test`, where the old code
+ * returned the command unchanged. That is correct and stays: the branch is reachable only when the
+ * ambiguous token is LAST, and there the alternative reading is *"the flag ate it and no command
+ * runs at all"* — a permit cannot be wrong about a command that does not exist. The false permit F5
+ * closed has the other shape and is untouched: `timeout -s ls 30 rm -rf /` still yields two
+ * readings, and the allow lane still takes neither. Pinned by *"strips when the ambiguous token is
+ * LAST, and refuses when it is not"* in the suite.
  *
  * Also reported and not re-measured here: allow-vs-deny depth asymmetry for single-segment relative
  * patterns, and a leading `/` anchoring at the settings source rather than cwd.
@@ -144,8 +160,8 @@ export interface ParsedBashRule {
   type: BashRuleType;
   /** Normalised rule content (after whitespace normalisation) */
   content: string;
-  /** Compiled regex for matching (wildcard type only) */
-  regex?: RegExp | undefined;
+  /** Compiled glob for matching (wildcard and prefix types only) */
+  pattern?: WildcardPattern | undefined;
 }
 
 /**
@@ -530,35 +546,67 @@ function literalRunAt(command: string, index: number): string | undefined {
   return char;
 }
 
+/**
+ * What an enclosing region keeps in place of a region emitted on its own — an
+ * empty group, so the enclosing text stays PARSEABLE and no invented word
+ * appears where a command could be read.
+ */
+const NESTED_REGION_PLACEHOLDER = '()';
+
 /** Accumulator for {@link nestedRegions}. */
 interface NestedScan {
   readonly found: string[];
-  readonly opens: number[];
-  backtick: number | undefined;
+  /**
+   * The text of each currently-open region, outermost first. Index 0 is the
+   * text outside every region, which the caller already has as `command` and
+   * which is therefore never emitted.
+   */
+  readonly open: string[];
+  inBacktick: boolean;
+}
+
+/** Append literal text to the innermost open region. */
+function appendToRegion(scan: NestedScan, text: string): void {
+  scan.open[scan.open.length - 1] += text;
 }
 
 /**
- * Record the grouping character at `index`, if it is one, closing a region into
- * {@link NestedScan.found} when it ends here.
+ * Close the innermost open region, emitting it, and leave a
+ * {@link NESTED_REGION_PLACEHOLDER} in the enclosing one.
+ *
+ * 🚩 The placeholder is what makes the scan LINEAR. Every enclosing region used
+ * to be re-emitted whole and then re-split, so `'('×k + 'echo x' + ')'×k` cost
+ * O(k²): measured on the shipped module, k=25,000 took 4,487 ms and 4× the
+ * length cost ~11× the time — from the same attacker-reachable input as the
+ * wildcard blowup. A region that has already been emitted on its own does not
+ * need to appear inside its parent as well.
  */
-function recordGrouping(command: string, index: number, scan: NestedScan): void {
-  const char = command[index];
+function closeRegion(scan: NestedScan): void {
+  if (scan.open.length === 1) return; // A closer with nothing open.
+  scan.found.push(scan.open.pop() as string);
+  appendToRegion(scan, NESTED_REGION_PLACEHOLDER);
+}
+
+/**
+ * Record the grouping character `char`, opening or closing a region — or report
+ * that it is not a grouping character at all.
+ */
+function recordGrouping(char: string, scan: NestedScan): boolean {
   if (char === '`') {
-    if (scan.backtick === undefined) {
-      scan.backtick = index + 1;
-    } else {
-      scan.found.push(command.slice(scan.backtick, index));
-      scan.backtick = undefined;
-    }
-    return;
+    if (scan.inBacktick) closeRegion(scan);
+    else scan.open.push('');
+    scan.inBacktick = !scan.inBacktick;
+    return true;
   }
   if (char === '(') {
-    scan.opens.push(index + 1);
-    return;
+    scan.open.push('');
+    return true;
   }
-  if (char !== ')') return;
-  const start = scan.opens.pop();
-  if (start !== undefined) scan.found.push(command.slice(start, index));
+  if (char === ')') {
+    closeRegion(scan);
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -590,25 +638,33 @@ function skipQuoting(command: string, index: number, inDouble: boolean): number 
  * asymmetry from the ANY-vs-EVERY half is the mistake this module already made
  * once. The allow lane is unchanged and its behaviour stays annotated
  * ⛔ UNSOURCED in the suite.
+ *
+ * A region carries a {@link NESTED_REGION_PLACEHOLDER} where each of its own
+ * nested regions sat, because those are emitted separately — see
+ * {@link closeRegion} for why that, and not a whole re-emission, is the shape
+ * this has to take.
  */
 function nestedRegions(command: string): string[] {
-  const scan: NestedScan = { found: [], opens: [], backtick: undefined };
+  const scan: NestedScan = { found: [], open: [''], inBacktick: false };
   let inDouble = false;
   let index = 0;
 
   while (index < command.length) {
-    if (command[index] === '"') {
+    const char = command[index] as string;
+    if (char === '"') {
       inDouble = !inDouble;
+      appendToRegion(scan, char);
       index += 1;
       continue;
     }
     const skipped = skipQuoting(command, index, inDouble);
     if (skipped === undefined) break; // Unterminated quote: nothing more to learn.
     if (skipped > index) {
+      appendToRegion(scan, command.slice(index, skipped));
       index = skipped;
       continue;
     }
-    recordGrouping(command, index, scan);
+    if (!recordGrouping(char, scan)) appendToRegion(scan, char);
     index += 1;
   }
 
@@ -616,31 +672,164 @@ function nestedRegions(command: string): string[] {
 }
 
 /**
- * Every command text a deny or ask rule is tested against: the top-level
- * subcommands, plus those of every nested region.
+ * Split on every separator LEXICALLY — blind to quoting, escaping and nesting.
  *
- * 🚩 The unparseable fallback is the opposite of the allow lane's, on purpose.
- * An allow rule must refuse a command it cannot parse — approving it is a false
- * permit. A deny rule that refuses reports "no conflict" about a command Claude
- * Code blocks, which is an under-REPORT, so it falls back to matching the rule
- * against the RAW whole string. That whole-string match is exactly what caught
- * `Bash(curl:*)` vs `curl https://x && echo done` before compound splitting
- * landed and quietly took it away.
+ * ⛔ Only for text {@link scanTopLevel} has already refused. On a parseable
+ * command this is the defect that split `grep -E "a|b" file` at the quoted `|`;
+ * on an UNPARSEABLE one there is no quote state to respect, because being unable
+ * to establish that state is what made it unparseable.
+ */
+function splitIgnoringQuoting(region: string): string[] {
+  const parts: string[] = [];
+  let current = '';
+  let index = 0;
+
+  while (index < region.length) {
+    const separator = separatorAt(region, index);
+    if (separator === undefined) {
+      current += region[index];
+      index += 1;
+      continue;
+    }
+    parts.push(current);
+    current = '';
+    index += separator.length;
+  }
+  parts.push(current);
+
+  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
+}
+
+/**
+ * The command texts to test a deny/ask rule against when a region cannot be
+ * parsed: the raw whole string, plus every lexically separated part of it.
+ *
+ * 🚩 The whole string ALONE was the defect. It is the right fallback direction —
+ * an allow rule must refuse a command it cannot parse, because approving it is a
+ * false permit, while a deny rule that refuses reports "no conflict" about a
+ * command Claude Code blocks, which is an under-REPORT — but requiring the rule
+ * to match the ENTIRE raw command almost never fires for the class the fallback
+ * exists for. The denied command in an unparseable compound is not at the front:
+ * `Bash(rm *)` answered `false` for `echo hi # don't⏎rm -rf /` (this module's own
+ * worked false-permit example), for `npm test # (⏎rm -rf /`, and for
+ * `echo "unclosed⏎rm -rf /`. Only `rm -rf tmp &&`, where the denied program
+ * leads, was ever caught.
+ *
+ * What makes these unparseable — an odd quote, an unbalanced `(` — is exactly
+ * what hid the separator from {@link scanTopLevel}, so the recovery is to take
+ * the separators back lexically rather than to give up on splitting.
+ *
+ * ⚠️ Deliberately a lexical SPLIT rather than every whitespace-delimited suffix
+ * of the raw string. Both reach the same commands here, but the suffix set is
+ * quadratic in the command length and this lane already carries one super-linear
+ * defect too many; the split is linear, and its parts are command-shaped rather
+ * than arbitrary token tails.
+ */
+function unparseableSegments(region: string): string[] {
+  return [...new Set([region.trim(), ...splitIgnoringQuoting(region)])];
+}
+
+/**
+ * Every command text a deny or ask rule is tested against: the top-level
+ * subcommands, plus those of every nested region, plus — for a region that
+ * cannot be parsed at all — {@link unparseableSegments}.
  */
 function denySegments(command: string): string[] {
   const segments: string[] = [];
   for (const region of [command, ...nestedRegions(command)]) {
     const parts = splitCompound(region);
-    if (parts === undefined || parts.length === 0) segments.push(region.trim());
+    if (parts === undefined || parts.length === 0) segments.push(...unparseableSegments(region));
     else segments.push(...parts);
   }
   return segments;
 }
 
 /**
+ * The index just past the `)` at `closeIndex` when it terminates a `case` ARM's
+ * pattern, or `-1` when it does not. `openIndex` is the `(` it closes, or `-1`
+ * when it closes nothing.
+ *
+ * A `)` that closes nothing is the bare `pattern)` spelling and always
+ * terminates an arm. Otherwise the group has to look like an arm's own
+ * parentheses rather than a subshell or a command substitution:
+ *
+ * - A `$(` is a command substitution — {@link nestedRegions} already reaches
+ *   inside it, and reading its `)` as an arm terminator would turn
+ *   `echo $(foo) rm` into a reading of `rm`, reporting a conflict over an `echo`
+ *   whose second ARGUMENT happens to be the word `rm`.
+ * - A group containing whitespace is a subshell, `(gitx clean -f)`, which
+ *   {@link nestedRegions} also already reaches.
+ *
+ * What is left — `(x)`, `(*.txt)` — is the POSIX spelling of an arm pattern.
+ */
+function caseArmBodyStartAt(command: string, openIndex: number, closeIndex: number): number {
+  const body = closeIndex + 1;
+  if (openIndex === -1) return body; // `pattern)` — a closer with nothing open.
+  if (command[openIndex - 1] === '$') return -1;
+  return /\s/.test(command.slice(openIndex + 1, closeIndex)) ? -1 : body;
+}
+
+/**
+ * The index just past the `)` that introduces a `case` arm's body, or `-1` when
+ * the command does not begin with an arm pattern.
+ *
+ * 🚩 Nesting used to be implemented ONLY as {@link stripLeadingControlKeyword} —
+ * "drop a leading keyword from a segment". A `case` arm is introduced by a
+ * pattern and a `)`, never by a keyword, so it was the one body form that
+ * construction structurally could not reach: `Bash(rm *)` answered `false` for
+ * `case x in x) rm -rf tmp;; esac` while every other body form (`if/then`,
+ * `while/do`, `for/do`, `until/do`, `{ …; }`, `$(…)`, backticks, `(…)`, `<(…)`)
+ * already matched. The published clause names *"a control-flow body"* without
+ * excepting `case`.
+ *
+ * Both POSIX spellings are recognised — a bare `pattern)`, which is a `)` that
+ * closes nothing, and the balanced `(pattern)` — and quoted text is skipped, so
+ * a `)` inside a string is never an arm.
+ *
+ * A function definition's body reaches the lane through the same reduction, since
+ * `foo()` is a whitespace-free group: `foo() { rm -rf /; }` reduces here to
+ * `{ rm -rf /`, and then through {@link stripLeadingControlKeyword} to the
+ * command. That is the same direction the published clause asks for, and it is
+ * pinned in the suite rather than left to be rediscovered as an accident.
+ */
+function caseArmBodyStart(command: string): number {
+  let index = 0;
+  let inDouble = false;
+  let openIndex = -1;
+
+  while (index < command.length) {
+    const skipped = skipQuoting(command, index, inDouble);
+    if (skipped === undefined) return -1; // Unterminated quote: nothing to learn.
+    if (skipped > index) {
+      index = skipped;
+      continue;
+    }
+    const at = index;
+    index += 1;
+
+    const char = command[at];
+    if (char === '"') inDouble = !inDouble;
+    else if (inDouble) continue; // A `(` or `)` inside a string is not an arm.
+    else if (char === '(') openIndex = at;
+    else if (char === ')') return caseArmBodyStartAt(command, openIndex, at);
+  }
+
+  return -1;
+}
+
+/**
+ * Drop a leading `case` arm pattern, so the arm's BODY is reachable as a
+ * command. See {@link caseArmBodyStart}.
+ */
+function stripCaseArmPattern(command: string): string {
+  const start = caseArmBodyStart(command);
+  return start === -1 ? command : command.slice(start).trim();
+}
+
+/**
  * Every reading of one deny/ask segment: the segment itself and the closure of
- * every reduction the lane admits — control-flow keyword, leading assignment,
- * and each wrapper strip the heuristic considers possible.
+ * every reduction the lane admits — control-flow keyword, `case` arm pattern,
+ * leading assignment, and each wrapper strip the heuristic considers possible.
  *
  * Every reduction strictly shortens the string, and repeats are dropped, so the
  * worklist terminates.
@@ -655,6 +844,7 @@ function denyReadings(segment: string): string[] {
     seen.add(current);
     queue.push(
       stripLeadingControlKeyword(current),
+      stripCaseArmPattern(current),
       stripLeadingAssignment(current, 'deny'),
       ...stripOneWrapperReadings(current),
     );
@@ -721,66 +911,112 @@ export function classifyBashRule(content: string): BashRuleType {
   return 'exact';
 }
 
-/** The regex source for one wildcard: anything, including spaces. */
-const ANY_RUN = '.*';
-
 /** The rule spelling for a literal `*`. */
 const ESCAPED_STAR = String.raw`\*`;
 
 /**
- * The regex source matching `text` literally — every metacharacter escaped,
- * BACKSLASH INCLUDED.
+ * A `*`-glob rule compiled for matching: the literal runs BETWEEN its
+ * wildcards, in order. `n` wildcards produce `n + 1` segments, so a rule with no
+ * wildcard is a single segment and the pattern is anchored at both ends.
  *
- * 🚩 The escape class this replaced omitted `\`, so a backslash in the rule
- * survived into the compiled regex as the start of an escape sequence. That was
- * a FALSE PERMIT: `Bash(a\b *)` matched `a b`, because `\b` compiled to a word
- * boundary rather than to the two characters the rule author wrote. `\d`, `\s`,
- * `\w` and `\B` all did the same, and any Windows path in a rule compiled to
- * something other than itself.
+ * ⛔ Deliberately NOT a `RegExp`. A glob whose wildcards are separated by
+ * literals compiles to `^a.*b.*b.*…z$`, and that backtracks EXPONENTIALLY —
+ * measured on the shipped module at 26,273 ms for a 24-character rule against a
+ * 61-character command, ~9× per added `b*`. The same module was polynomial on an
+ * ordinary-looking rule: `Bash(npm * --registry * --registry * --registry *
+ * publish)` cost 10,455 ms at a 4,171-character command. Both inputs are
+ * attacker-reachable files this auditor reads — a `settings.json` permission
+ * entry and a plugin `SKILL.md` `allowed-tools:` entry — and `vat audit` reaches
+ * them through `checkSettingsCompatibility`, so the blowup hangs CI.
+ *
+ * 🚩 The previous fix collapsed a RUN of adjacent stars to one `.*` and asserted
+ * the compiled SOURCE to prove it. That assertion was true and the safety
+ * property was false: `a*b*z` has no run to collapse. A shape assertion is not a
+ * cost claim — see the cost suite, which asserts a RATIO between two input
+ * sizes. ⛔ An atomic group (`(?=(X))\1`) is not the fix either: this repo has
+ * measured that it satisfies the linter while remaining quadratic.
  */
-function escapeRegexLiteral(text: string): string {
-  return text.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+export interface WildcardPattern {
+  /** The literal runs between wildcards, in order. Never empty. */
+  readonly segments: readonly string[];
 }
 
 /**
- * Compile a wildcard rule's content into an anchored regex.
+ * Compile a `*`-glob rule's content into a {@link WildcardPattern}.
  *
  * `\*` is a literal star; every other `*` is a wildcard. A RUN of consecutive
- * wildcards collapses to one `.*`, which permits exactly what the run permitted.
+ * wildcards opens no extra segment, because it permits exactly what one permits.
  *
- * 🚩 That collapse is not cosmetic. Adjacent `.*` backtrack polynomially, and
- * both inputs here are attacker-reachable files this auditor reads — a
- * `settings.json` permission entry and a `SKILL.md` `allowed-tools` entry.
- * Measured before the collapse, rule `Bash(a**********z)` against `a` + n×`b`:
- * n=20 → 228 ms, n=24 → 314 ms, n=28 → 1087 ms — doubling every ~4 characters,
- * so a 40-character rule takes minutes. One `.*` is linear.
- *
- * ⚠️ A previous commit claimed to have "removed a super-linear pattern" here.
- * It removed the SPLITTER's, and left this one — which it had just built.
+ * Nothing here is escaped, because nothing is handed to a regex compiler: the
+ * segments are matched as literal text. That also closes, structurally, the
+ * FALSE PERMIT this used to carry when the escape class omitted `\` — `Bash(a\b
+ * *)` matched `a b`, because `\b` compiled to a word boundary rather than to the
+ * two characters the rule author wrote.
  */
-function compileWildcardRule(content: string): RegExp {
-  const parts: string[] = [];
+function compileWildcardPattern(content: string): WildcardPattern {
+  const segments: string[] = [];
   let literal = '';
   let index = 0;
+  let afterWildcard = false;
 
   while (index < content.length) {
     if (content.startsWith(ESCAPED_STAR, index)) {
       literal += '*';
       index += ESCAPED_STAR.length;
+      afterWildcard = false;
     } else if (content.charAt(index) === '*') {
-      if (literal.length > 0) parts.push(escapeRegexLiteral(literal));
-      literal = '';
-      if (parts.at(-1) !== ANY_RUN) parts.push(ANY_RUN);
+      if (!afterWildcard) {
+        segments.push(literal);
+        literal = '';
+        afterWildcard = true;
+      }
       index += 1;
     } else {
       literal += content.charAt(index);
       index += 1;
+      afterWildcard = false;
     }
   }
-  if (literal.length > 0) parts.push(escapeRegexLiteral(literal));
+  segments.push(literal);
 
-  // eslint-disable-next-line security/detect-non-literal-regexp -- every literal run goes through escapeRegexLiteral; the only unescaped construct in the source is this function's own ANY_RUN, so no rule text reaches the compiler raw
-  return new RegExp(`^${parts.join('')}$`);
+  return { segments };
+}
+
+/**
+ * Whether `text` matches `pattern`, in O(n·m) with no backtracking.
+ *
+ * The standard two-pointer greedy scan for a `*`-only glob: the first segment
+ * must be a prefix and the last a suffix, and each middle segment is taken at
+ * its EARLIEST occurrence at or after the position the previous one ended. That
+ * greedy choice is optimal — matching a middle segment later can only leave less
+ * room for the ones after it — so one forward pass decides the question that a
+ * regex engine explores by backtracking.
+ *
+ * The `limit` is what stops the prefix and suffix from overlapping: `a*a`
+ * requires two characters, and `a*ab*b` requires four.
+ */
+function matchesWildcardPattern(pattern: WildcardPattern, text: string): boolean {
+  const { segments } = pattern;
+  const first = segments[0] as string;
+  const last = segments.at(-1) as string;
+
+  // No wildcard at all: the pattern is one literal segment.
+  if (segments.length === 1) return text === first;
+
+  if (!text.startsWith(first) || !text.endsWith(last)) return false;
+
+  let position = first.length;
+  const limit = text.length - last.length;
+  if (limit < position) return false;
+
+  for (let index = 1; index < segments.length - 1; index += 1) {
+    const segment = segments[index] as string;
+    const found = text.indexOf(segment, position);
+    if (found === -1 || found + segment.length > limit) return false;
+    position = found + segment.length;
+  }
+
+  return true;
 }
 
 /**
@@ -791,7 +1027,7 @@ export function parseBashRuleContent(content: string): ParsedBashRule {
   const type = classifyBashRule(normalised);
 
   if (type === 'wildcard') {
-    return { type, content: normalised, regex: compileWildcardRule(normalised) };
+    return { type, content: normalised, pattern: compileWildcardPattern(normalised) };
   }
 
   if (type === 'prefix') {
@@ -803,7 +1039,7 @@ export function parseBashRuleContent(content: string): ParsedBashRule {
     // CHARACTER, so `Bash(gitx * main:*)` matched nothing while the identical
     // `Bash(gitx * main *)` matched. Two spellings the table calls equivalent
     // must not have two matchers.
-    return { type, content: base, regex: compileWildcardRule(`${base} *`) };
+    return { type, content: base, pattern: compileWildcardPattern(`${base} *`) };
   }
 
   return { type, content: normalised };
@@ -864,7 +1100,7 @@ function matchesParsedBashRule(command: string, parsedRule: ParsedBashRule): boo
     case 'exact':
       return normCommand === parsedRule.content;
 
-    // `:*` compiles to the same regex as the equivalent trailing ` *`, so both
+    // `:*` compiles to the same glob as the equivalent trailing ` *`, so both
     // spellings answer through one matcher. The bare base is granted by
     // {@link bareCommandFor} — and only when the trailing wildcard is the rule's
     // ONLY one, which is exactly the restriction the literal comparison here
@@ -872,7 +1108,10 @@ function matchesParsedBashRule(command: string, parsedRule: ParsedBashRule): boo
     // {@link stripWrappers} removes, so every lane gets it.
     case 'prefix':
     case 'wildcard':
-      return parsedRule.regex?.test(normCommand) ?? false;
+      return (
+        parsedRule.pattern !== undefined &&
+        matchesWildcardPattern(parsedRule.pattern, normCommand)
+      );
 
     default:
       return false;
@@ -921,7 +1160,7 @@ function matchesToolName(ruleTool: string, toolName: string, lane: PermissionLan
   if (star === -1) return false;
   if (!isBlockingLane(lane) && !MCP_ALLOW_GLOB_PREFIX.test(ruleTool.slice(0, star))) return false;
 
-  return compileWildcardRule(ruleTool).test(toolName);
+  return matchesWildcardPattern(compileWildcardPattern(ruleTool), toolName);
 }
 
 /**
@@ -935,7 +1174,7 @@ function matchesToolName(ruleTool: string, toolName: string, lane: PermissionLan
  * asymmetry for it.
  */
 function matchesStructuredContent(toolInput: string, content: string): boolean {
-  return compileWildcardRule(content).test(normaliseWhitespace(toolInput));
+  return matchesWildcardPattern(compileWildcardPattern(content), normaliseWhitespace(toolInput));
 }
 
 /**
@@ -1041,7 +1280,7 @@ export function matchesPathRule(
 /**
  * Check whether a tool call is matched by a permission rule.
  *
- * Handles Bash rules (regex-based), path-tool rules (gitignore-based) and
+ * Handles Bash rules (glob-based), path-tool rules (gitignore-based) and
  * `WebFetch(domain:…)` selectors. A bare tool name (e.g. "Edit") matches all
  * uses of that tool.
  *
