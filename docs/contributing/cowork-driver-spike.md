@@ -107,8 +107,12 @@ Body: {
 }
 ```
 
-Limits: 30 MB bundle, ≤8 skills per request, workspace-scoped, unique
-`display_title` per workspace.
+Limits: 30 MiB (31,457,280 bytes) uncompressed bundle — the unit is binary,
+measured against the live API rather than read off the docs: a 30,700,000-byte
+bundle, above the decimal reading, was accepted. ≤8 skills per request,
+workspace-scoped. `display_title` is **not** unique per workspace — the API
+enforces uniqueness only when the field is sent explicitly, so two skills with
+one title are reachable and a title is never a safe key for a lookup.
 
 What's blocked / caveat (the load-bearing one): **Skills always
 execute inside the code-execution sandbox.** That sandbox does not

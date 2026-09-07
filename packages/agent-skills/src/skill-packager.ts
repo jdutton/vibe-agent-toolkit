@@ -69,7 +69,7 @@ import {
   type SkillFileEntry,
 } from './files-config.js';
 import { READ_REMEDY, withFsAttribution } from './fs-attribution.js';
-import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
+import { checkBrokenPackagedLinks, checkMissingReferencedPaths, checkUnreferencedFiles } from './post-build-checks.js';
 import {
   checkPackagedTestInput,
   partitionTestInputFileEntries,
@@ -81,6 +81,7 @@ import {
   testInputLinkIssues,
 } from './test-input.js';
 import { detectPackagedAgentInstructionFiles } from './validators/agent-instruction-presence.js';
+import { checkPackagedSizeLimit } from './validators/packaged-size-limit.js';
 import { validateSkillForPackaging, type PackagingValidationResult, type SkillPackagingConfig } from './validators/packaging-validator.js';
 import { materializeIssue } from './validators/rule-engine/index.js';
 import { deferredAssetsToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
@@ -836,6 +837,30 @@ export async function packageSkill(
     ...collisionIssues,
     ...await checkUnreferencedFiles(outputPath, filesConfigDests),
     ...await checkBrokenPackagedLinks(outputPath, droppedGlobDests),
+    // The inverse of checkUnreferencedFiles: paths the docs NAME that the bundle
+    // does not contain. Built phase only — a `files:` dest exists here and not in
+    // the source tree, so the same check at source phase flags every injected
+    // script.
+    //
+    // SKILL-LOCAL, and this is the ONLY caller. The packager knows its own output
+    // directory, not the plugin the skill will be installed into, so there is no
+    // wider root to give it — the sibling-search parameter that measured 1.9%
+    // instead of 3.8% was deleted for having no caller. The shipped rate is 3.8%.
+    ...await checkMissingReferencedPaths(outputPath),
+    // The only byte measurement in the pipeline. Built phase for the same reason
+    // as its neighbour above: a `files:` entry materializes files here that the
+    // source tree does not have, so the bytes that ship are only knowable now.
+    //
+    // ⚠️ Runs before step 14, so it does not weigh what `generatePackageArtifacts`
+    // adds. Measured, so the residue is not a guess: the `zip` and `npm` formats
+    // write to `<outputPath>.zip` / `.tgz`, OUTSIDE the bundle and outside the
+    // upload; only the `npm` format's synthetic package.json and the `marketplace`
+    // format's manifest land inside, and both are a few hundred bytes. The order
+    // is not free to change — checkUnreferencedFiles two lines up would flag that
+    // same synthetic package.json — so the under-count is stated rather than
+    // fixed. If an artifact step ever writes something LARGE into outputPath, this
+    // call has to move after it and the framework run with it.
+    ...checkPackagedSizeLimit(outputPath),
     // A receipt for every file a glob matched and the never-package list refused.
     // Reported as an issue, not written to stderr: a file vanishing from a bundle
     // has to be visible in `issueCounts`, or CI reads a clean report for a build

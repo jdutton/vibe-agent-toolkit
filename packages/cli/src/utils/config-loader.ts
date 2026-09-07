@@ -8,11 +8,18 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { formatConfigValidationError, ProjectConfigSchema, type ProjectConfig } from '@vibe-agent-toolkit/resources';
+import { parseConfigAllowingUnknownKeys, ProjectConfigSchema, type ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
+
+/**
+ * Config paths already warned about for unknown keys, so one config governing
+ * many skills produces one line rather than one per skill. Cleared with the
+ * config cache, which is what a test isolating a fixture resets.
+ */
+const warnedConfigPaths = new Set<string>();
 
 /**
  * A `vibe-agent-toolkit.config.yaml` exists but failed to parse or validate.
@@ -76,15 +83,22 @@ export function loadConfig(projectRoot: string): ProjectConfig | undefined {
     // never named this file, never said which key was refused in words, and
     // offered no remedy. Every strict block in the schema is a refusal an
     // adopter has to be able to act on from the terminal alone.
-    const result = ProjectConfigSchema.safeParse(parsed);
-
-    if (!result.success) {
-      throw new Error(
-        formatConfigValidationError(result.error, { configPath, schema: ProjectConfigSchema }),
-      );
-    }
-
-    return result.data;
+    // An UNKNOWN key warns and is dropped; every other validation failure still
+    // throws. See `parseConfigAllowingUnknownKeys` for the reasoning — briefly:
+    // a key VAT has no field for is a key VAT was already discarding, and
+    // turning that into an exit 2 broke commands that never read the section it
+    // was in. Warned once per config path, because `loadConfigCached` will
+    // otherwise re-warn for every skill under one project.
+    return parseConfigAllowingUnknownKeys(
+      ProjectConfigSchema,
+      parsed,
+      (message) => {
+        if (warnedConfigPaths.has(configPath)) return;
+        warnedConfigPaths.add(configPath);
+        process.stderr.write(`${message}\n`);
+      },
+      { configPath },
+    );
   } catch (error) {
     if (error instanceof Error) {
       // `cause` is load-bearing, not decoration: callers decide whether to
@@ -134,6 +148,9 @@ const loadErrorCache: Map<string, ConfigLoadError> = new Map();
 export function resetLoadedConfigCache(): void {
   loadedConfigCache.clear();
   loadErrorCache.clear();
+  // The warn-once ledger is part of this cache's state: a test that resets the
+  // caches and re-loads the same fixture expects to see the warning again.
+  warnedConfigPaths.clear();
 }
 
 /**

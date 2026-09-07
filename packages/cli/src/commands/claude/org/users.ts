@@ -60,7 +60,9 @@ Example:
     .option('--debug', 'Enable debug logging')
     .action(async (userId: string, options: { debug?: boolean }) => {
       await executeOrgCommand('OrgUsersGet', options.debug, async ({ client }) => {
-        return client.get<OrgUser>(`/v1/organizations/users/${userId}`);
+        // The id is opaque and comes straight from argv. Encoded, not spliced: one
+        // carrying a `/` would otherwise address a different resource entirely.
+        return client.get<OrgUser>(`/v1/organizations/users/${encodeURIComponent(userId)}`);
       });
     })
     .addHelpText('after', `

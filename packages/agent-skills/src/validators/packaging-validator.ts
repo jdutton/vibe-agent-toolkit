@@ -53,6 +53,7 @@ import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../wa
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
 import { detectUndeclaredCrossSkillAuth } from './cross-skill-dependency-detection.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
+import { collectUnqualifiedMcpToolIssues } from './mcp-tool-qualification.js';
 import { materializeIssue } from './rule-engine/index.js';
 import { SOURCE_ONLY_CODES } from './source-only-codes.js';
 import {
@@ -823,6 +824,14 @@ export async function validateSkillForPackaging(
       const bundledLocation = issueLocation(bundledFile, locationRoot);
       collectNonPortableAssetReferenceIssues(content, bundledLocation, rawIssues);
       collectNonPortableCommandIssues(content, bundledLocation, rawIssues);
+      // Whole-file bytes, frontmatter included — safe because the detector
+      // strips leading frontmatter itself. It did not always, and this lane was
+      // the half of the invariant nobody was enforcing: a bundled file carrying
+      // `allowed-tools: [mcp__x__do_thing]` seeded the vocabulary the SKILL.md
+      // lane's comment (below) says must come from prose, then fired on its own
+      // body. Pinned by "does not let a bundled file's allowed-tools frontmatter
+      // supply the vocabulary" in packaging-validator.test.ts.
+      collectUnqualifiedMcpToolIssues(content, bundledLocation, rawIssues);
     }
   }
 
@@ -836,9 +845,20 @@ export async function validateSkillForPackaging(
   collectTimeSensitiveContentIssues(parseResult.content, skillLocation, rawIssues);
   collectNonPortableAssetReferenceIssues(parseResult.content, skillLocation, rawIssues);
   collectNonPortableCommandIssues(parseResult.content, skillLocation, rawIssues);
+  // An `allowed-tools:` list of `mcp__…` names does not by itself supply the
+  // vocabulary: the qualified spelling has to appear in the prose an agent
+  // reads, or "the document contradicts itself" is not the finding. That holds
+  // because the DETECTOR strips frontmatter. ⛔ It was NEVER true that this call
+  // site passed a post-frontmatter slice — `parseResult.content` is the raw file
+  // verbatim, as the comment 190 lines above says — so before the detector
+  // stripped, this lane did read `allowed-tools:` as prose and did ship the
+  // findings that came of it.
+  collectUnqualifiedMcpToolIssues(parseResult.content, skillLocation, rawIssues);
 
   // Cross-skill dependency smell: body declares a requires/depends token the
-  // description does not mention. Uses the post-frontmatter content slice.
+  // description does not mention. Reads the RAW file, frontmatter included —
+  // which is what this detector wants, since the declaration it looks for can be
+  // written either side of the fence.
   if (parseResult.frontmatter) {
     rawIssues.push(...detectUndeclaredCrossSkillAuth(parseResult.frontmatter, parseResult.content, skillLocation));
   }
@@ -1098,9 +1118,23 @@ const RELATIVE_PATH_HINT =
  *     plain form; falling to (2) is what still flags the operator forms — a
  *     lone `\$\{NAME\}` alternative silently missed `${NAME:-default}`, an
  *     idiomatic non-portable reference.
+ *  3. `\$\{?env:NAME\b` — PowerShell's expansion, BOTH spellings. A skill that
+ *     documents a Windows invocation writes `$env:CLAUDE_SKILL_DIR` or
+ *     `${env:CLAUDE_SKILL_DIR}`, neither of which the two POSIX alternatives
+ *     match: after `$`/`${` comes `env:`, not the variable name. The forms are
+ *     equally non-portable, so leaving them out flagged the bash line of a skill
+ *     and waved through the PowerShell line directly beneath it.
+ *
+ * ⚠️ Compiled with the `i` flag, and that is about alternative 3 specifically.
+ * PowerShell variable and drive names are case-INSENSITIVE, so `$Env:NAME` and
+ * `$ENV:NAME` are as valid — and as commonly authored — as `$env:NAME`. A
+ * case-SENSITIVE `\$env:` matched one of the three and silently passed the other
+ * two, reintroducing exactly the asymmetry this alternative was added to remove.
+ * The variable names themselves are uppercase literals passed in by the call
+ * sites below, so case-insensitivity costs nothing there.
  */
 // eslint-disable-next-line security/detect-non-literal-regexp -- composed from a compile-time constant name, no user input
-const envVarPattern = (name: string): RegExp => new RegExp(String.raw`\$\{${name}\}|\$\{?${name}\b`);
+const envVarPattern = (name: string): RegExp => new RegExp(String.raw`\$\{${name}\}|\$\{?env:${name}\b|\$\{?${name}\b`, 'i');
 
 const NON_PORTABLE_ASSET_VARIANTS: readonly PortabilityVariant[] = [
   {
@@ -1118,6 +1152,40 @@ const NON_PORTABLE_ASSET_VARIANTS: readonly PortabilityVariant[] = [
     label: 'claude-project-dir',
     pattern: envVarPattern('CLAUDE_PROJECT_DIR'),
     fix: '`CLAUDE_PROJECT_DIR` is a Claude Code-only variable, so a skill relying on it will not resolve the user\'s project on other runtimes. There is no skill-relative equivalent — if the skill genuinely operates on the user\'s repository, take the location as an explicit parameter with `$CLAUDE_PROJECT_DIR` as a fallback, and make sure the skill\'s declared `targets` reflect the Claude Code dependency.',
+  },
+  {
+    // Load-bearing in Claude Code and MEANINGLESS in the API code-execution
+    // container. Both facts are true for good reasons, which is why this is a
+    // warning and not a rename: in Claude Code a skill may live under
+    // `~/.claude/skills/`, a plugin tree, a project dir or a marketplace install
+    // path while cwd is the user's repo, and the consumer needing a real path is
+    // often a PROCESS (a script argument) that does not share the model's
+    // context — there is no literal an author can write. The API container has
+    // the opposite property: the location is a stable literal (`/skills/<name>/`,
+    // cwd `/`) so nothing is parameterised and no equivalent variable is set,
+    // measured live against the Messages API. `${CLAUDE_SKILL_DIR}` therefore
+    // expands to empty there and `node "/scripts/x.mjs"` does not exist.
+    label: 'claude-skill-dir',
+    pattern: envVarPattern('CLAUDE_SKILL_DIR'),
+    fix: `\`CLAUDE_SKILL_DIR\` is set by Claude Code and is absent in the API code-execution container, where it expands to empty. ${RELATIVE_PATH_HINT} A relative path resolves on every target because the MODEL resolves it against the skill directory — not because cwd happens to be right. When a process genuinely needs an absolute path, instruct the agent to cd into the skill directory first rather than reaching for another variable.`,
+  },
+  {
+    // The same mistake pointed the other way: the API container's literal mount
+    // point hardcoded into a skill, which resolves nowhere in Claude Code. Anchored
+    // at a path boundary so `~/.claude/skills/x/` and `.claude/skills/` in prose
+    // (both preceded by a word character) are not flagged.
+    //
+    // ⚠️ The TRAILING separator is optional, and that is the common spelling —
+    // not an edge case. `/skills/<name>` with nothing after it is the mount
+    // POINT, which is what the sibling `claude-skill-dir` fix text tells authors
+    // to reach for ("cd into the skill directory first"). Requiring the trailing
+    // `/` made `cd /skills/my-skill && node scripts/run.mjs` invisible while
+    // firing on `node /skills/my-skill/scripts/run.mjs` on the next line. The
+    // `(?![\w.-])` branch keeps the name from being truncated mid-token, so a
+    // longer name is still matched whole rather than at a prefix.
+    label: 'api-skill-mount',
+    pattern: /(?:^|[\s"'`(])\/skills\/[A-Za-z0-9._-]+(?:\/|(?![\w.-]))/,
+    fix: `\`/skills/<name>/\` is the Anthropic API code-execution container's mount point and does not exist in Claude Code, a claude.ai upload, or any other host. ${RELATIVE_PATH_HINT} When a process genuinely needs an absolute path, instruct the agent to cd into the skill directory first.`,
   },
   {
     label: 'absolute-script-path',
@@ -1265,7 +1333,7 @@ function collectPortabilityFamilyIssues(
  * Collect NON_PORTABLE_ASSET_REFERENCE issues — scan one skill document for any
  * member of the non-portable asset-reference family.
  */
-function collectNonPortableAssetReferenceIssues(
+export function collectNonPortableAssetReferenceIssues(
   content: string,
   docLocation: string,
   issues: ValidationIssue[],
@@ -1285,7 +1353,7 @@ function collectNonPortableAssetReferenceIssues(
  * Collect NON_PORTABLE_COMMAND issues — scan one skill document for any member of
  * the non-portable shell-command family.
  */
-function collectNonPortableCommandIssues(
+export function collectNonPortableCommandIssues(
   content: string,
   docLocation: string,
   issues: ValidationIssue[],

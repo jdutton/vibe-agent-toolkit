@@ -29,6 +29,12 @@ export async function loadClaudeProjectConfig(): Promise<{
     throw new Error('No vibe-agent-toolkit.config.yaml found. Run from a project directory.');
   }
 
+  // No `onUnknownKeys` argument: `parseConfigFile` already DEFAULTS to writing
+  // the warning to stderr, which is exactly what this lane needs — unknown keys
+  // are a warning rather than a refusal, and stderr keeps the YAML document on
+  // stdout machine-readable. Passing a callback byte-identical to the default
+  // said "this command has an opinion here" while changing nothing, so a later
+  // reader would have to diff it against the default to learn it was dead.
   const config = await parseConfigFile(configPath);
   const configDir = dirname(configPath);
 

@@ -11,6 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### CLI
 
+- **An unrecognized key in `vibe-agent-toolkit.config.yaml` is now a warning on stderr, not
+  `exit 2`.** At the top level and under `skills:` and `claude:` a stray key used to fail every
+  `vat` command; it is now named, ignored and reported. **A script relying on `exit 2` for a stray
+  key must read stderr instead.** Every other validation failure — a wrong type, a missing required
+  field, a bad enum — still refuses.
+
+- **`vat audit` on a directory no longer exits 2 because one nested config cannot be loaded.** One
+  bad `vibe-agent-toolkit.config.yaml` anywhere under the scanned tree aborted the whole audit —
+  zero skills validated, no findings — while `vat audit <a SKILL.md under it>` exited 0 and
+  reported that skill as passing. The scan now warns once per config, names the file and the
+  reason, and validates the skills it governs config-free. **Scripts that read `vat audit`'s exit 2
+  as "config is broken" must now read stderr.**
+
+- **`vat claude org skills install` now exits non-zero when an upload fails.** A `--from-npm` run
+  in which **any** skill was rejected — a partial success included — reported `status: success` and
+  exit `0`; it now reports `status: error` and exits `1`, with the per-skill results still in the
+  document. Usage mistakes
+  (no `<source>`, or `<source>` together with `--from-npm`) exit `2` with a YAML document instead
+  of `1` with a raw Node stack trace. Update CI wrappers that branch on the old codes.
+
 - **The RAG backends are no longer installed for you — `npm install` no longer brings the RAG lane
   with it.** They were declared as `optionalDependencies`, which npm and pnpm
   **install by default** (there, "optional" means the install may fail without failing the build, not
@@ -188,6 +208,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`vat claude org skills versions add <skill-id> <source>` — publishing a change to an
+  already-published skill is now possible at all.** `install` only ever POSTs a create, and the API
+  rejects a reused `display_title`, so the first publish of a skill worked and every later one
+  failed — which is the normal case, since you publish because something changed. The new command
+  POSTs to `/v1/skills/{id}/versions`; the server assigns the version identifier and promotes it to
+  `latest_version`, so nothing is numbered locally. It takes a built skill **directory** (a ZIP is
+  `install`-only), and it fails loudly if the response does not carry the id, title, version and
+  timestamp it prints — rather than reporting `status: success` beside `version: null`, which is
+  the value `versions delete` later takes.
+
+  **It takes the skill id rather than resolving one, and `install` still only creates.** Neither
+  command inspects the workspace to decide which operation it "should" perform. A `display_title` is
+  *not* unique: the API enforces uniqueness only when the field is sent explicitly, and derives a
+  title from SKILL.md frontmatter otherwise — two skills with one title are reachable and were
+  observed. A title→id lookup therefore matches none, one, or several, and a wrong match appends
+  your version to somebody else's skill. Packaging is shared between the two commands (identical
+  exclusions and size ceiling); only the endpoint differs, and which endpoint is the command you
+  typed.
+
+- **`PACKAGED_SIZE_EXCEEDS_API_LIMIT` (warning, built phase) — the first byte measurement in VAT's
+  validators.** The two checks whose names suggest they already covered this could not:
+  `SKILL_TOTAL_SIZE_LARGE` counts *lines* of bundled markdown and `SKILL_TOO_MANY_FILES` counts
+  *files*, so the shape that actually blocks a publish — one large binary, which has no lines and is
+  one file — was invisible to both by construction. The reported instance is a 35.7 MB `.wasm`
+  runtime bundled by three skills in one adopter marketplace, over the ceiling on its own before a
+  byte of markdown counts. Unlike those two thresholds, which are VAT maintainability opinions the
+  vendor counter-signals, this one is the Skills API's own refusal, verified against the live API:
+  an over-ceiling upload returns `413 Request exceeds the maximum size`. So it catches a real
+  external gate at build time instead of at the end of an upload. The ceiling is **30 MiB
+  (31,457,280 bytes)**, established by measurement rather than by reading "30 MB" — a
+  30,700,000-byte bundle was accepted (refuting the decimal reading) while 31,500,000 was refused. The message names the largest files, which is usually the whole diagnosis.
+  `warning`, not `error`, because the ceiling is target-specific: a bundle over it still installs
+  fine as a Claude Code plugin, and VAT has no API publish target to condition on yet. The finding
+  carries the largest file as its `link`, so one skill that legitimately bundles a big runtime is
+  waivable with `validation.allow` instead of turning the check off project-wide. Any entry the
+  walk cannot weigh — an unreadable directory, a `stat` that threw, a symlink to a directory —
+  emits `SCAN_PATH_UNREADABLE` (warning) rather than counting as zero bytes, so a clean size result
+  is never built on a silent under-count.
+
+- **`MCP_TOOL_NAME_UNQUALIFIED` (warning) — promoted from a manual `vat skill review` checklist
+  line.** Anthropic's guidance is that a bare MCP tool name "may fail to locate the tool, especially
+  when multiple MCP servers are available", but VAT had held the rule back as a human checklist item
+  with the note that "a bare identifier in prose is only a defect when the skill actually drives
+  MCP". That reservation is now dissolved rather than argued with: the detector reports a bare tool
+  name **only when the same document also spells that tool fully-qualified** — as `mcp__server__tool`
+  or `ServerName:tool_name` — so a document that does not drive MCP has an empty vocabulary and
+  cannot produce a finding. Frontmatter is stripped first, so an `allowed-tools:` list is a manifest
+  and not the document contradicting itself, and a line that already spells the tool qualified is
+  exempt — a bare-to-qualified mapping table needs no waiver. Hyphens count on both halves, so
+  `mcp__claude-in-chrome__browser_batch` and `…__query-docs` are read correctly. Measured over 883
+  documents in two corpora: 7 firing, 11 occurrences, **0 false positives**, and the authoring
+  project itself fires 0. Each finding carries the bare tool name as its `link`, so one identifier
+  can be waived with `validation.allow` while a different bare tool name in the same document still
+  fires.
+
+- **Two skill-portability checks for hosts that are not Claude Code.** `NON_PORTABLE_ASSET_REFERENCE`
+  gained a `claude-skill-dir` variant (`${CLAUDE_SKILL_DIR}`, `$CLAUDE_SKILL_DIR`,
+  `$env:CLAUDE_SKILL_DIR`) and an `api-skill-mount` variant (a hardcoded `/skills/<name>/` path).
+  Both are host literals wearing portability's clothes: the variable is load-bearing in Claude Code
+  and expands to *empty* in the Anthropic API code-execution container, which mounts the skill at a
+  literal `/skills/<name>/` with cwd `/` and sets no equivalent variable; the mount path is the
+  mirror-image mistake and resolves nowhere else. The portable form is a bare relative path, which
+  every host resolves because the *model* resolves it against the skill directory — and when a
+  process genuinely needs an absolute path, the remedy text now says to `cd` into the skill
+  directory first, which is the fix authors do not guess. Reported by an adopter publishing 61
+  skills to the Messages API, where `vat skill review` had been silent on a skill whose every
+  command was `${CLAUDE_SKILL_DIR}`-anchored. The `$env:` form is newly matched for
+  `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PROJECT_DIR` too, which previously flagged a skill's bash line
+  and waved through the PowerShell line beneath it.
+
+- **`PACKAGED_REFERENCED_PATH_MISSING`** (warning) — the inverse of `PACKAGED_UNREFERENCED_FILE`.
+  That code asks whether every shipped file is mentioned; this one asks whether every mentioned
+  path is shipped, and it is the only check that can see a **build drop**: a reference that is
+  correct in the source repository whose target did not survive into the bundle. The source looks
+  right, so neither review nor an agent reading the source catches it. Runs at the built phase only
+  (a `files:` dest exists in the output and not in the source tree) and covers only the bare path
+  tokens the markdown parser did not claim — a path inside a code block, a code span, or prose —
+  since `PACKAGED_BROKEN_LINK` already reports a markdown link with a missing target, at `error`.
+  Warning rather than error on measured evidence: **2 misfires in 52 built skills (3.8%)** on a
+  live marketplace, the residual class being skills whose subject *is* skill authoring and which
+  cite example paths they do not ship. Each finding carries the missing path as its `link`, so one
+  illustrative path is waivable via `validation.allow` without silencing the document. See
+  [`docs/validation-codes.md`](docs/validation-codes.md#packaged_referenced_path_missing) for the
+  two filters and what each is worth.
+
 - **`vat resources query <sql> [path]`** — runs one read-only SQL statement against this tree's
   resource projection, so questions no command reports a field for get an answer (headings, link
   targets, what the parser refused). The statement must begin with `SELECT`, `WITH` or `VALUES`;
@@ -356,7 +461,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closure's `follow` default, so HTML references are reported but never traversed — projected
   membership still matches what `vat build` bundles. Each authored attribute yields exactly one row.
 
+- **(library) The Skills API upload ceiling and its message builder are public.**
+  `@vibe-agent-toolkit/agent-skills` exports `API_SKILL_MAX_UPLOAD_BYTES` (31,457,280),
+  `describeOversizeBundle()`, `formatBytes()` and the `SizedFile` type, so your own uploader can
+  refuse an over-ceiling bundle in the same words `PACKAGED_SIZE_EXCEEDS_API_LIMIT` uses at build
+  time. The same package also exports `declaredSkillNameIn()`,
+  `collectNonPortableAssetReferenceIssues()`, `collectNonPortableCommandIssues()` and
+  `collectUnqualifiedMcpToolIssues()`, so an uploader can run the portability checks itself.
+
 ### Changed
+
+- **`vat skill review` files five codes under named sections instead of `Other automated
+  findings`** — `SKILL_FRONTMATTER_EXTRA_FIELDS`, `SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE`,
+  `SKILL_CROSS_SKILL_AUTH_UNDECLARED`, `NON_PORTABLE_ASSET_REFERENCE` and `NON_PORTABLE_COMMAND`.
+
+- **`vat claude org skills install` now refuses an over-ceiling bundle before uploading it, and
+  reports sizes in the units it labels.** The Skills API's `413` is correct but arrives only after
+  the whole body has crossed the wire — 11 s for a 30 MB bundle, measured — and names no file, so
+  an author learns they have a problem and not where it is. The command now raises the same finding
+  `PACKAGED_SIZE_EXCEEDS_API_LIMIT` gives at build time, in the same words (one shared builder, so
+  the two cannot drift), naming the largest files, in 212–221 ms across three runs on a 29-file,
+  51.7 MB bundle. It measures the collected upload set,
+  so the exclusions it just reported (evals, `node_modules`, `.git`) are already accounted for, and
+  it applies to a `.zip` source as well as a directory — the one input that is by construction a
+  single large binary. A `.zip` faces a second, separate refusal: **the API weighs an archive
+  UNCOMPRESSED**, so VAT reads its central directory and refuses locally when the expanded total is
+  over the ceiling, however small the archive is on the wire. Separately, the progress line divided by 1024 and labelled the result "KB",
+  so a 35,900,338-byte bundle printed as `35058.9KB`; it now prints `34.2 MiB` — binary units,
+  because the ceiling it is read against is binary, and the label matches the divisor. Where a
+  size is compared to the ceiling the exact byte count is printed beside it, so a bundle one byte
+  over no longer reads `30.0 MiB … over the 30.0 MiB ceiling`.
 
 - **`eslint-plugin-sonarjs` upgraded 3.0.7 → 4.2.0, and its expanded rule set was adopted rather
   than switched off.** The bump was taken for a security reason (it retires three `minimatch`
@@ -426,6 +560,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--max-turns` is reported as unverifiable rather than confirmed.
 
 ### Security
+
+- **`vat claude org skills install <file>.zip` published your eval suite — answer keys included.**
+  The directory shape withholds `evals/`, `node_modules/` and `.git/` and reports the exclusion; the
+  ZIP shape never called that collector, so `zip -r my-skill.zip my-skill/` uploaded the whole tree
+  to a shared org workspace with no warning. VAT now reads the archive's entry names and **refuses**,
+  naming the offending entries. ⚠️ This lane sees only the conventional directory names — a suite at
+  a location declared in `skills.config.<name>.test.evals` is not visible inside an archive. **Check
+  what you already published with `vat claude org skills list`.**
+
+- **`vat claude org skills install` read symbolic links through to their targets and published the
+  result to a shared org workspace.** The collector refused only a link resolving to a *directory*;
+  a link to a *file* fell through both branches and `readFileSync` returned the target's bytes, so a
+  skill directory containing `notes.md -> /etc/passwd` uploaded 9,344 bytes of that file under the
+  in-bundle name `notes.md`, visible to every member of the workspace. Nothing in the run said a
+  link had been followed — the collector's "every withholding is reported" guarantee covers
+  exclusions, not dereferences. **Any symbolic link is now refused, whatever it resolves to**, and
+  the refusal names the path. A registry tarball could not plant one (node-tar 7 de-roots an
+  absolute linkpath, measured); the vector is a directory extracted with system `tar`, which does
+  recreate it, or cloned from an untrusted repo and handed to `install <dir>`. The build-time size
+  walk changed with it: it no longer weighs a linked file *through* the link, which its comment used
+  to defend as deliberate — "which matches the uploader". The two lanes did agree and both were
+  wrong. A link is now reported as an unweighed entry instead.
 
 - **Two supply-chain pins went stale and the dependency audit went red: `fast-uri` and `qs` are
   re-pinned to their patched releases.** New advisories landed against the exact versions the root
@@ -504,6 +660,123 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@vibe-validate/utils` and `yaml` to the installed tree.
 
 ### Fixed
+
+- **`vat claude org skills install` uploaded without running any of VAT's checks.** Skills that
+  reference paths outside their own directory published with a green tick and could not run — under
+  the Skills API a skill is its own top-level tree with no siblings. The bundle is now scanned for
+  non-portable references, non-portable commands and unqualified MCP tool names before upload, and
+  **warns without blocking**; `vat skills build` and `vat audit` remain the gates.
+
+- **`vat claude org skills delete` reported `status: success` and exited 0 when the API said the
+  skill was NOT deleted.** `deleted: false` was computed and printed, and nothing branched on it, so
+  a CI wrapper spelled `… delete X || fail` reported green while the skill still existed. It now
+  ends on the same `orgCommandFailure` path the `--from-npm` batch uses: the document is still
+  published, the run exits **1**. `delete --all` also no longer discards its own report — a failure
+  part-way through the version loop lists the versions it irreversibly destroyed under
+  `deletedVersions` and exits 1, instead of throwing into exit 2 ("the run could not happen") with
+  no record of what it deleted. The version-delete lane accepts both `skill_version_deleted` and the
+  measured `skill_deleted`, because only the second has ever been seen from the live API and a
+  single guessed string would have failed every run.
+
+- **A dropped connection part-way through `delete --all` aborted the loop and left the skill
+  half-deleted.** Retrying covered statuses only, while `send`'s docstring claimed it had closed the
+  class. Transport failures on idempotent methods are now replayed too. A deadline is never
+  replayed (it has already waited its full budget) and a POST is never replayed at all.
+
+- **`vat claude org skills install MySkill.ZIP` was refused as "not a directory or .zip file".**
+  `endsWith('.zip')` is case-sensitive, and the refusal gave an operator no way to read it as being
+  about capitalisation. Both the match and the title derivation are now case-insensitive.
+
+- **`--title` with `--from-npm`, and `--skill` without it, were accepted and silently ignored.** The
+  first can publish a skill under the wrong title, the second publishes every skill in a package
+  when the operator named one. Both are now refused with exit 2, like the two illegal combinations
+  that already were.
+
+- **A Windows operator's absolute `<source>` path was joined onto the working directory.**
+  `source.startsWith('/')` is false for `D:\builds\skill`, so the command reported
+  `Source not found: <cwd>/D:/builds/skill`. It now uses `isAbsoluteAnyPlatform`, which answers for
+  POSIX roots, drive letters and UNC paths on every host — so a POSIX-only CI can see the
+  drive-letter case at all.
+
+- **`vat claude org --help` told every reader that skills commands need two keys.** It said
+  `Requires ANTHROPIC_ADMIN_API_KEY` followed by `Skills commands also require ANTHROPIC_API_KEY`,
+  so "also" put an admin key in front of the skills family — the exact barrier this release removes.
+  Skills commands need only a regular workspace key and the admin key is never sent to those
+  endpoints. The help now groups commands under the one key each family actually requires. Two
+  neighbouring lines were stale in the same block: the group description named only the Admin API,
+  and the exit-code table still described `1` as "not-yet-implemented (stub commands)" while
+  `skills install --from-npm` documents `1` as "some skills failed".
+
+- **A skill upload refused for a duplicate title did not say what to do about it.** The API answers
+  `400 Skill cannot reuse an existing display_title`, which is precisely the moment the caller needs
+  `versions add` — `install` only ever creates. The refusal now appends how to recover: find the id
+  with `vat claude org skills list`, then `vat claude org skills versions add <skill-id> <source>`.
+  It states plainly that VAT will not turn the title into an id, because `display_title` is not
+  unique in general — the API enforces it only when the field is sent — so a title can match none,
+  one, or several skills. The remedy is appended, never substituted, and is matched narrowly enough
+  that an unrelated `400` keeps the API's own words and gains no misleading advice.
+
+- **`vat claude org skills delete` did not name the command that unblocks it.** The API refuses to
+  delete a skill that still has versions; the failure now points at `--all`, which deletes every
+  version and then the skill in one command, and at the by-hand `versions list`/`versions delete`
+  sequence. Suppressed when the run already used `--all`.
+
+- **`vat claude org skills install <file>.zip` takes its display title from the FILENAME**, not from
+  the `SKILL.md` inside the archive, so `my-skill-v2.zip` publishes a separate skill titled
+  `my-skill-v2` whose every version declares `name: my-skill`. That was silent; VAT now reads the
+  archive's `SKILL.md`, prints both spellings when they diverge, and names the `--title` that
+  reconciles them. Pass `--title` to set it explicitly.
+
+- **A `vibe-agent-toolkit.config.yaml` that could not be loaded silently voided every
+  `resources.exclude` it declared**, so a package that excludes its deliberately-broken fixtures had
+  them audited as production skills. The scan said so only at `--debug`; it now warns, names the
+  config, and says the excludes were dropped.
+
+- **`vat skill test configure` still refused a config the rest of VAT accepts, and printed a raw
+  Zod JSON dump when it did.** It was a third config reader that neither of the two fixes above
+  reached. It now shares them.
+
+- **`vat claude org` read any HTTP status below 400 as success.** A redirect or an informational
+  response with an empty body resolved as a completed exchange, so a proxy answering `302` to a
+  `DELETE` made the command print `status: success` and exit 0 with the skill still there. A missing
+  status did the same. Anything outside `200`–`299` is now a refusal that names the status.
+
+- **`vat claude org` reported the wrong reason for any HTTP failure whose body was not JSON.** A
+  `413` from an edge proxy and a `401` both surfaced as `Failed to parse API response`, so neither
+  "shrink the bundle" nor "get a key" was legible; a `2xx` with an empty body — a `204` from a
+  delete — was rejected as a parse failure. The status is now read first, and failures throw an
+  `ApiRequestError` carrying it.
+
+- **`vat claude org` could hang indefinitely on a stalled connection, and died with a raw stack on a
+  reset.** Requests now abort after 120 s of socket *inactivity* (a slow-but-progressing 30 MB
+  upload is never cut off), and a further 30 s connect deadline covers a DNS blackhole, where there
+  was no socket for the inactivity timer to watch. A reset arriving after the response headers is
+  now caught instead of becoming an unhandled `error` event. Rate-limit and gateway failures retry
+  up to three times honouring `Retry-After`, on idempotent methods only; a `POST` is never
+  replayed — it creates — and the error says so. **When an upload gets no status at all, check
+  `vat claude org skills list` before re-running: the skill may exist.**
+
+- **Multipart uploads now percent-encode `Content-Disposition` parameters (RFC 7578 §4.2).**
+  Filenames and field names reach the wire from a downloaded package's SKILL.md frontmatter on the
+  `--from-npm` path, so a value carrying CRLF could open a new header line inside the part. Field
+  *values* are deliberately unchanged: a value is a part body and must stay byte-exact.
+
+- **`vat claude org` no longer splices raw ids into URL paths.** User and workspace ids taken from
+  argv are percent-encoded, so one containing a `/` addresses the resource you named rather than a
+  different endpoint.
+
+- **`vat claude org skills *` demanded an admin key it never sends, locking every non-admin out of
+  the Skills API.** `OrgApiClient`'s constructor hard-required `ANTHROPIC_ADMIN_API_KEY`, so all four
+  skills commands (`list`, `install`, `delete`, `versions`) refused to start without it — while
+  `buildSkillsHeaders()` authenticates with `ANTHROPIC_API_KEY` alone and never reads the admin key
+  at all. The command's own `--help` said as much ("Requires ANTHROPIC_API_KEY (regular key, not
+  admin key)"), and `/v1/skills` is available to any workspace member, so upload was gated behind a
+  credential that neither the endpoint nor the code path uses. Each key is now required at the point
+  it is actually sent: a client built with only a regular key reaches the skills endpoints, and
+  `buildAdminHeaders()` raises the same clear error as before when an `/v1/organizations/*` call is
+  made without an admin key. Verified against the live API — `list` and `install` now succeed with a
+  regular workspace key. The existing tests could not have caught this: every one of them constructed
+  the client with an admin key, so none exercised the skills-only caller.
 
 - **The `vat-skill-distribution` skill taught a config key that does not exist.** It showed
   `skills.config.<name>.claudeWebTarget`, which the `.strict()` project-config schema refuses — so
