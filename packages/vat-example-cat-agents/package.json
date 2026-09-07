@@ -53,7 +53,7 @@
     "@vibe-agent-toolkit/runtime-openai": "workspace:*",
     "@vitest/coverage-v8": "^3.2.4",
     "ai": "^6.0.48",
-    "openai": "^4.77.3",
+    "openai": "^6.49.0",
     "typescript": "^5.7.3",
     "vitest": "^3.2.4"
   },
