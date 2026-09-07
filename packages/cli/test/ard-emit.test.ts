@@ -638,3 +638,66 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
     expect(help).toMatch(/--format/);
   });
 });
+
+/**
+ * A `--format json` run is a promise about a CHANNEL, not about the happy path.
+ *
+ * `handleCommandError` states the rule this suite enforces — "format is not
+ * decoration ... a caller that has a --format option MUST pass it" — because a
+ * CI wrapper reading stdout gets a parse error on top of whatever went wrong,
+ * and has to guess at the second failure to find the first. `ard emit` honoured
+ * it on the success path alone, and dropped it on every EXPECTED failure it
+ * has — the commonest being the one each repository that never opted into ARD
+ * hits on its first run.
+ *
+ * 🔑 The property is "no exit path is silent on stdout under `--format json`",
+ * asserted over every exit path the command has rather than over the one that
+ * prompted it, which would pin the instance.
+ *
+ * ⚠️ The third case was written as a CONTROL — an arm expected to pass already,
+ * because it exits 2 and exit 2 was believed to route through
+ * `handleCommandError`, which honours the format. It failed with the other two.
+ * Both `ArdConfigMissingError` codes leave through one inline `return`, so the
+ * "unexpected failure" handler was never on this path at all and the defect was
+ * a third wider than the reasoning that found it. The arm stays, now as a case
+ * rather than a control: a control that fails is telling you the model was
+ * wrong, and the assertion's own reachability is established by the success-path
+ * JSON tests above.
+ */
+describe('ardEmitCommand — every exit path honours --format json', () => {
+  const exitPaths = [
+    {
+      path: 'the project declares no `ard` block',
+      root: (): string => projectWith(workDir, 'json-no-ard-block', CONFIG_YAML_WITHOUT_ARD),
+      exitCode: 1,
+    },
+    {
+      path: 'a surface cannot be derived into a conformant entry',
+      root: (): string =>
+        projectWithSkill(workDir, 'json-derivation-fails', CONFIG_YAML_ARD_WITHOUT_BASE_URL),
+      exitCode: 1,
+    },
+    {
+      // The control: this path already routes through `handleCommandError`,
+      // which takes the format and honours it.
+      path: 'no config file is found at all',
+      root: (): string => {
+        const root = projectWith(workDir, 'json-no-config', CONFIG_YAML_WITHOUT_ARD);
+        removeConfigFile(root);
+        return root;
+      },
+      exitCode: 2,
+    },
+  ] as const;
+
+  it.each(exitPaths)('publishes a JSON document when $path', async ({ root, exitCode }) => {
+    const { stdout, exitCalls } = await captureEmit(root(), { format: 'json' });
+
+    expect(exitCalls).toEqual([[exitCode]]);
+    expect(stdout).not.toBe('');
+    // Parseable, not merely non-empty: the failure this closes is a consumer's
+    // `jq` choking, which an unparseable byte would reproduce exactly.
+    expect(() => JSON.parse(stdout) as unknown).not.toThrow();
+    expect(JSON.parse(stdout)).toMatchObject({ status: 'error' });
+  });
+});

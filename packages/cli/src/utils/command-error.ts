@@ -134,6 +134,56 @@ export function handleCommandError(
   process.exit(2);
 }
 
+/**
+ * Publish an EXPECTED failure in the format the operator asked for, then exit
+ * with the code the command's own contract assigns it.
+ *
+ * The third ending of one failure, beside {@link handleCommandError} (the
+ * UNEXPECTED failure, always exit 2) and {@link handleValidationGateFailure}
+ * (a validation gate, always exit 1, always YAML). This one covers the failure
+ * that is neither: the command ran, understood the project, and has a
+ * documented non-zero code for what it found — `vat ard emit` exiting 1 for
+ * "this project declares no `ard:` block" or 2 for "there is no config file
+ * here".
+ *
+ * 🔑 It exists because those endings were written inline, and an inline ending
+ * publishes nothing: `ard emit` honoured `--format json` on its success path
+ * and through `handleCommandError`, then wrote **zero bytes to stdout** on the
+ * two exits a repository actually reaches — the commonest being the first run
+ * of any repository that never opted into ARD. A CI wrapper reading stdout got
+ * an empty document and a bare non-zero code, which is the exact failure the
+ * `format` note on {@link handleCommandError} exists to forbid.
+ *
+ * The message goes to stderr as it always did — humans read it there — and the
+ * document goes to stdout, matching what both neighbours already do.
+ *
+ * @param message - What went wrong, in the command's own words
+ * @param exitCode - The code this command's `--help` assigns to this outcome
+ * @param startTime - Command start time (from Date.now()), so the document
+ *   reports the run's real duration rather than a fabricated zero
+ * @param format - What the operator asked for: `json`, or anything else (and
+ *   omitted) for YAML — the same two-branch switch the success path uses
+ */
+export function handleExpectedFailure(
+  message: string,
+  exitCode: number,
+  startTime: number,
+  format?: string | undefined,
+): never {
+  process.stderr.write(`${message}\n`);
+  const document: CommandErrorDocument = {
+    status: 'error',
+    error: message,
+    duration: formatDuration(Date.now() - startTime),
+  };
+  if (format === 'json') {
+    writeJsonOutput(document);
+  } else {
+    writeYamlOutput(document);
+  }
+  process.exit(exitCode);
+}
+
 /** The payload a command publishes when its own validation gate stops it. */
 export interface ValidationGateFailure {
   status: 'error';

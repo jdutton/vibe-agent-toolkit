@@ -19,7 +19,7 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { handleCommandError, handleExpectedFailure } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeJsonOutput } from '../../utils/output.js';
@@ -301,15 +301,27 @@ export async function ardEmitCommand(options: ArdEmitOptions): Promise<void> {
     // The old split had a missing config file exiting 1 and an invalid one
     // exiting 2 while the help called 2 "Unexpected internal failure" — so a CI
     // job reading 2 as a crash was paged for a typo.
+    //
+    // ⚠️ Both endings publish their document through `handleExpectedFailure`,
+    // in the format the operator asked for. Written inline they published
+    // NOTHING — a `--format json` run of the commonest case of all, a
+    // repository that never opted into ARD, wrote zero bytes to stdout and left
+    // a CI wrapper parsing stderr for a fact the report is supposed to carry.
+    //
+    // 🪤 `return` the call, though its type is `never`: under test `process.exit`
+    // is a spy that RETURNS, so a bare call falls through to the handler below
+    // and the run records a second exit — the same reason the inline endings
+    // this replaced each carried a `return`.
     if (error instanceof ArdConfigMissingError) {
-      process.stderr.write(`${error.message}\n`);
-      process.exit(error.absence === 'no-ard-block' ? 1 : 2);
-      return;
+      return handleExpectedFailure(
+        error.message,
+        error.absence === 'no-ard-block' ? 1 : 2,
+        startTime,
+        options.format
+      );
     }
     if (error instanceof ArdDerivationError) {
-      process.stderr.write(`${error.message}\n`);
-      process.exit(1);
-      return;
+      return handleExpectedFailure(error.message, 1, startTime, options.format);
     }
     handleCommandError(error, logger, startTime, 'ARD emit', options.format);
   }

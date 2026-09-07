@@ -408,7 +408,9 @@ with a regression test.
   so a pipeline can gate on a number instead of parsing stderr, and `--strict` turns "the manifest
   advertises nothing" or "a configured surface was skipped" into exit 1. The DEFAULT exit code is
   unchanged: an empty manifest is a legal artifact, so a plain run still exits 0 and says why on
-  stderr.
+  stderr. **Every non-zero exit publishes a document too** — `{status: 'error', error, duration}`,
+  in whichever format was asked for — so a wrapper reading stdout never has to fall back to parsing
+  stderr, including on the exit-1 case every repository that has not opted into ARD hits first.
   `trustManifest.identity` must carry an authority VAT can bind to `ard.publisher` — an HTTPS FQDN
   URI or a SPIFFE ID, with a DID the one exempt form because DID methods encode their authority
   per-method. A bare domain is none of the three, and it previously skipped publisher-authority
