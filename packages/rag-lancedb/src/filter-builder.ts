@@ -117,7 +117,7 @@ function buildMemberLike(fieldPath: string, member: string): string {
  * @returns A SQL fragment, or the always-false clause when nothing can satisfy it
  */
 function buildArrayFilter(fieldPath: string, value: unknown): string {
-  const members = (Array.isArray(value) ? value : [value]).map((member) => String(member));
+  const members = (Array.isArray(value) ? value : [value]).map(String);
 
   // An empty pattern is `LIKE '%%'`, which is every row. Nothing can satisfy a request for a
   // member that is the empty string, so the whole conjunction is unsatisfiable.

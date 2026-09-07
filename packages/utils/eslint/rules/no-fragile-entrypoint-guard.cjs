@@ -77,11 +77,7 @@
 /** `import.meta`, as the parser sees it. */
 function isImportMeta(node) {
   return (
-    node !== null &&
-    node !== undefined &&
-    node.type === 'MetaProperty' &&
-    node.meta?.name === 'import' &&
-    node.property?.name === 'meta'
+    node?.type === 'MetaProperty' && node.meta?.name === 'import' && node.property?.name === 'meta'
   );
 }
 
@@ -94,9 +90,7 @@ function isImportMeta(node) {
  */
 function isImportMetaMember(node, name) {
   return (
-    node !== null &&
-    node !== undefined &&
-    node.type === 'MemberExpression' &&
+    node?.type === 'MemberExpression' &&
     node.computed === false &&
     isImportMeta(node.object) &&
     node.property?.type === 'Identifier' &&
@@ -126,9 +120,7 @@ function calleeName(callee) {
 /** `pathToFileURL(…).href`, in either import style. */
 function isPathToFileUrlHref(node) {
   return (
-    node !== null &&
-    node !== undefined &&
-    node.type === 'MemberExpression' &&
+    node?.type === 'MemberExpression' &&
     node.computed === false &&
     node.property?.type === 'Identifier' &&
     node.property.name === 'href' &&
@@ -140,9 +132,7 @@ function isPathToFileUrlHref(node) {
 /** `fileURLToPath(import.meta.url)`, in either import style. */
 function isFileUrlToPathOfImportMetaUrl(node) {
   return (
-    node !== null &&
-    node !== undefined &&
-    node.type === 'CallExpression' &&
+    node?.type === 'CallExpression' &&
     calleeName(node.callee) === 'fileURLToPath' &&
     isImportMetaMember(node.arguments?.[0], 'url')
   );
