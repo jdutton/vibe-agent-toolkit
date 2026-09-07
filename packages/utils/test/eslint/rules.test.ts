@@ -116,6 +116,15 @@ const NO_FRAGILE_ENTRYPOINT_GUARD_CASES: RuleCases = {
     // `import.meta.url` compared against something that is not a file URL built
     // from argv — a cache key, a manifest entry.
     { code: 'if (import.meta.url === entry.href) { run(); }' },
+    // `fileURLToPath` of something that is NOT this module's own URL.
+    { code: 'if (fileURLToPath(specifier) === process.argv[1]) { run(); }' },
+    // An ordinary CLI argument. `argv[2]` and up are not the invoked script, so
+    // comparing one to anything is not this defect — the index is the whole
+    // difference and the rule has to keep it.
+    { code: 'if (fileURLToPath(import.meta.url) === process.argv[2]) { run(); }' },
+    // Reading argv[1] without comparing it to where this module lives.
+    { code: 'const entry = process.argv[1];' },
+    { code: "if (process.argv[1] === '--help') { run(); }" },
   ],
   invalid: [
     { code: 'if (import.meta.main) { run(); }', errors: [{ messageId: 'importMetaMain' }] },
@@ -145,6 +154,28 @@ const NO_FRAGILE_ENTRYPOINT_GUARD_CASES: RuleCases = {
     // matcher would miss.
     {
       code: 'if (import.meta.url === url.pathToFileURL(process.argv[1]).href) { run(); }',
+      errors: [{ messageId: 'rawEntrypointCompare' }],
+    },
+    // The PATH-space spelling of the identical defect. Same missing realpath
+    // pass, same silent false through a `.bin` shim — the comparison is simply
+    // performed after converting the module URL to a path instead of before
+    // converting the invoked path to a URL. A rule that only knew the URL-space
+    // form would be a mechanism with a hole in its own premise.
+    {
+      code: 'if (fileURLToPath(import.meta.url) === process.argv[1]) { run(); }',
+      errors: [{ messageId: 'rawEntrypointCompare' }],
+    },
+    {
+      code: 'if (process.argv[1] === fileURLToPath(import.meta.url)) { run(); }',
+      errors: [{ messageId: 'rawEntrypointCompare' }],
+    },
+    {
+      code: 'function m() { if (url.fileURLToPath(import.meta.url) !== process.argv[1]) { return; } }',
+      errors: [{ messageId: 'rawEntrypointCompare' }],
+    },
+    // `const { argv } = process` — the same operand, one destructure removed.
+    {
+      code: 'const isMain = fileURLToPath(import.meta.url) === argv[1];',
       errors: [{ messageId: 'rawEntrypointCompare' }],
     },
   ],

@@ -141,15 +141,15 @@ The member-call rules here check the **receiver**, not just the method name, so 
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
 |---|---|---|---|---|---|
-| `no-fragile-entrypoint-guard` | `import.meta.main`; `import.meta.url === pathToFileURL(process.argv[1]).href` | `isEntrypoint(import.meta.url)` | `/process` | | — |
+| `no-fragile-entrypoint-guard` | `import.meta.main`; `import.meta.url === pathToFileURL(process.argv[1]).href`; `fileURLToPath(import.meta.url) === process.argv[1]` | `isEntrypoint(import.meta.url)` | `/process` | | — |
 
-Both banned spellings fail the same way: the guard answers **false for the script it is guarding**, so the process exits 0 having run nothing — the quietest failure a CLI has.
+All three banned spellings fail the same way: the guard answers **false for the script it is guarding**, so the process exits 0 having run nothing — the quietest failure a CLI has.
 
 `import.meta.main` shipped in Node **24.2 / 22.18**. Below that it is `undefined`, measured on a real 22.13.0, and this package's own floor is `>=22`. A repository-structure gate guarded that way printed nothing and exited 0 on the exact Node its CI job installed.
 
-The `pathToFileURL` compare is a raw string comparison with no realpath pass. A `node_modules/.bin` entry is a **symlink**, so `process.argv[1]` is the link and `import.meta.url` is the resolved target: the strings differ and the guard is false. Measured false on Node 22.14.0 and 24.13.1 alike, where `isEntrypoint()` is true. `import.meta.url`, `import.meta.dirname` and `import.meta.filename` are untouched; only `.main` is banned.
+The other two are one defect wearing two spellings: a raw string comparison of where the module lives against `process.argv[1]`, with no realpath pass, written either in URL space (`pathToFileURL` the argv path) or in path space (`fileURLToPath` the module URL). A `node_modules/.bin` entry is a **symlink**, so `process.argv[1]` is the link and the module's own location is the resolved target: the strings differ and the guard is false, in either space. Measured false on Node 22.14.0 and 24.13.1 alike, where `isEntrypoint()` is true. Only `process.argv[1]` counts — `argv[2]` and up are ordinary CLI arguments. `import.meta.url`, `import.meta.dirname` and `import.meta.filename` are untouched; only `.main` is banned.
 
-Not in `recommended` because the first half depends on **your** Node floor — at or above 24.2 / 22.18, `import.meta.main` is correct. The second half depends on nothing and is a defect everywhere; the two share a rule id, so enable it explicitly if your floor is below 24.2 / 22.18 or you ship a `bin`.
+Not in `recommended` because the first half depends on **your** Node floor — at or above 24.2 / 22.18, `import.meta.main` is correct. The argv compares depend on nothing and are a defect everywhere; the two share a rule id, so enable it explicitly if your floor is below 24.2 / 22.18 or you ship a `bin`.
 
 ### Content decoding
 

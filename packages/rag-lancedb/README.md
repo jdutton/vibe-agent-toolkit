@@ -172,7 +172,7 @@ Some fields are declared on the query types but **no shipped provider reads them
 | Field | Declared in | Status |
 |---|---|---|
 | `filters.dateRange` | `RAGQuery` interface + `RAGQuerySchema` | Implemented nowhere. **Throws.** |
-| `hybridSearch.enabled: true` | `RAGQuery` interface + `RAGQuerySchema` | Implemented nowhere; search is always pure vector search. **Throws.** `enabled: false` and omitting the field are both fine. |
+| `hybridSearch.enabled: true` | `RAGQuery` interface + `RAGQuerySchema` | Implemented nowhere; search is always pure vector search. **Throws.** Omitting the field is fine, and so is `enabled: false` **on its own** — but a `keywordWeight` beside it throws too, because a weight reaches nothing either. |
 | `filters.tags`, `filters.type`, `filters.headingPath` | `RAGQuerySchema` only | **Throws at the top level of `filters`.** These are metadata fields — move them under `filters.metadata` and they are honoured. |
 
 **If you already wrote one of these into your code, it never had any effect — and now it will fail loudly.** To recover:
@@ -182,7 +182,7 @@ Some fields are declared on the query types but **no shipped provider reads them
   ```typescript
   // ❌ Throws (before this was a guard, it ran a full-recall search with no filtering at all):
   //
-  //   Unsupported RAG filter:
+  //   Unsupported RAG query field:
   //     - `filters.tags`: move it to `filters.metadata.tags` — it is a metadata field and is
   //       honoured only there.
   //
@@ -196,10 +196,10 @@ Some fields are declared on the query types but **no shipped provider reads them
   ```
 
   Every offending key present is reported in one error, so a query carrying two of them does not
-  have to be fixed twice (the heading reads `Unsupported RAG filters:` in that case).
+  have to be fixed twice (the heading reads `Unsupported RAG query fields:` in that case).
 
 - `dateRange` — no replacement. Model the date as a field on your own metadata schema and filter on it via `filters.metadata`, or filter the returned chunks yourself after the query.
-- `hybridSearch` — no replacement. Remove it, or set `enabled: false` to state that a pure vector search is what you want.
+- `hybridSearch` — no replacement. Remove it, or set `enabled: false` **and drop any `keywordWeight`** to state that a pure vector search is what you want. A weight is refused even when `enabled` is `false`: it reaches no keyword pass either way, and tuning it would produce results indistinguishable from not having tuned it.
 
 The refusal is deterministic and happens **before** the query does any work: it needs neither a database connection nor an embedding, so an unindexed provider reports the unsupported field rather than reporting that nothing is indexed yet.
 

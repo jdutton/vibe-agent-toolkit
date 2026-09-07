@@ -654,6 +654,17 @@ export function fileExistenceIssue(
 export interface FileVerification {
   /** Does the target resolve at all — on the machine running validation. */
   exists: boolean;
+  /**
+   * True when NO verdict could be reached: a directory on the path is
+   * traversable but could not be LISTED, so the target may well open.
+   *
+   * ⚠️ **Read it before reading anything else on this object.** With it set,
+   * `exists` is `false` only because nothing could be confirmed — not because
+   * anything was found missing — and every issue derived from that `false`
+   * (a broken file, a not-yet-materialized artifact) would be fabricated.
+   * {@link validateLocalFileLink} returns before any of them.
+   */
+  unverifiable: boolean;
   /** Absolute filesystem path the link resolved to. */
   resolvedPath: string;
   /** How the asked-for path matched disk, at its WORST-spelled component. */
@@ -949,6 +960,22 @@ function validateLocalFileLink(
 
   const fileResult = validateResolvedFile(sourceFilePath, resolved.resolvedPath, options.spellings);
 
+  // 🪤 Judging EVERY component means every ancestor below the walk root must be
+  // LISTABLE, where the basename-only judge this replaced only ever listed
+  // `dirname(target)`. A `--x` directory is traversable, so a link through one
+  // opens exactly as written while `readdir` is refused — and that refusal
+  // arrived here as absence, reported as `LINK_BROKEN_FILE: File not found`.
+  // Both halves were wrong: the verdict, and the diagnosis.
+  //
+  // Silence is the conservative answer and the correct one. A spelling that
+  // could not be verified is not a spelling that is wrong, and every downstream
+  // builder below would speak about a file this run never got to look at:
+  // `fileExistenceIssue` would call it missing, `deferredArtifactIssue` would
+  // call it an unbuilt artifact, and the anchor check would judge fragments it
+  // never read. Placed FIRST for that reason — a gate below any of them is a
+  // gate that fires second.
+  if (fileResult.unverifiable) return null;
+
   const deferred = deferredArtifactIssue(
     fileResult,
     link,
@@ -1065,8 +1092,14 @@ function validateAnchorLink(
  * @param sourceFilePath - The file holding the link, which is what says how much
  *   of the resolved path came out of the link TEXT and is therefore judged.
  * @param resolvedPath - Absolute filesystem path produced by {@link resolveLocalHref}.
+ * ⚠️ **`exists: false` is not the same claim as "the file is missing".** An
+ * ancestor directory that is traversable but unlistable produces `absent` with
+ * nothing learned about the target, which this reports as
+ * {@link FileVerification.unverifiable} — read that field before treating a
+ * `false` here as a finding.
+ *
  * @param spellings - Pass-1′ table, filled over exactly these referrer/target pairs.
- * @returns Object with exists flag, the path, the match kind, and the correction when one is needed.
+ * @returns Object with exists and unverifiable flags, the path, the match kind, and the correction when one is needed.
  */
 function validateResolvedFile(
   sourceFilePath: string,
@@ -1079,6 +1112,10 @@ function validateResolvedFile(
     // `exact` and `normalized` are the two verdicts under which the author's
     // own machine opens the file; `case_mismatch` and `absent` are not.
     exists: spelling.match === 'exact' || spelling.match === 'normalized',
+    // Absence has two causes and only one of them is evidence: `no_such_entry`
+    // is a directory that was listed and does not hold the name, while
+    // `directory_unreadable` is a listing the OS refused. See `AbsenceCause`.
+    unverifiable: spelling.match === 'absent' && spelling.because === 'directory_unreadable',
     resolvedPath,
     match: spelling.match,
   };

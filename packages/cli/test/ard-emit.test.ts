@@ -9,7 +9,12 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
-import { ArdConfigMissingError, ardEmitCommand, runArdEmit } from '../src/commands/ard/emit.js';
+import {
+  ArdConfigMissingError,
+  ardEmitCommand,
+  runArdEmit,
+  type ArdEmitOptions,
+} from '../src/commands/ard/emit.js';
 import { createArdCommand } from '../src/commands/ard/index.js';
 import { collectArdSurfaces } from '../src/commands/ard/surfaces.js';
 
@@ -20,6 +25,7 @@ import {
   CONFIG_YAML_WITHOUT_ARD,
   CONFIG_YAML_WITH_ARD,
   FIXTURE_MARKETPLACE,
+  FIXTURE_PUBLISHER,
   PUBLISHED_SKILL,
   QUALIFIED_MARKETPLACE_KEY,
   SKILLS_PROJECT,
@@ -39,6 +45,59 @@ const workDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-ard-cli-'));
 afterAll(() => {
   rmSync(workDir, { recursive: true, force: true });
 });
+
+/**
+ * Run the command with stdout, stderr and `process.exit` all captured.
+ *
+ * One helper rather than a spy dance per case: three cases already hand-rolled
+ * the same four steps, and a machine-readable report has to be asserted on the
+ * STREAM it reaches — a fact nobody prints is the same silence a report exists
+ * to end.
+ */
+async function captureEmit(
+  root: string,
+  options: Omit<ArdEmitOptions, 'projectRoot' | 'output'> = {}
+): Promise<{ stdout: string; stderr: string; exitCalls: unknown[][] }> {
+  const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+  const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+  let stdout = '';
+  let stderr = '';
+  let exitCalls: unknown[][] = [];
+  try {
+    await ardEmitCommand({
+      projectRoot: root,
+      output: safePath.join(root, 'out', 'ard.json'),
+      ...options,
+    });
+    // 🪤 Read the calls BEFORE restoring: `mockRestore()` resets the spy, which
+    // clears `mock.calls` — asserting afterwards sees zero calls and fails for a
+    // reason that has nothing to do with the code under test.
+    stdout = outSpy.mock.calls.map((call) => String(call[0])).join('');
+    stderr = errSpy.mock.calls.map((call) => String(call[0])).join('');
+    exitCalls = exitSpy.mock.calls;
+  } finally {
+    exitSpy.mockRestore();
+    errSpy.mockRestore();
+    outSpy.mockRestore();
+  }
+  return { stdout, stderr, exitCalls };
+}
+
+/** The rendered `emit` help, which is where the exit-code contract is published. */
+function emitHelpText(): string {
+  const emit = createArdCommand().commands.find((c) => c.name() === 'emit');
+  // `helpInformation()` renders only the generated body — the Exit Codes block
+  // lives in an `addHelpText('after')` hook, which only `outputHelp()` runs.
+  let help = '';
+  emit?.configureOutput({
+    writeOut: (chunk) => {
+      help += chunk;
+    },
+  });
+  emit?.outputHelp();
+  return help;
+}
 
 describe('collectArdSurfaces', () => {
   it('derives one surface per published skill', () => {
@@ -374,20 +433,8 @@ describe('runArdEmit — a bare override block that loses is NAMED, not dropped'
   // proves that it does.
   it('says so on stderr, and still exits 0', async () => {
     const root = projectWithSkill(workDir, 'shadowed-stderr', CONFIG_YAML_ARD_SHADOWED_KEYS);
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    let stderr = '';
-    let exitCalls: unknown[][] = [];
-    try {
-      await ardEmitCommand({ projectRoot: root, output: safePath.join(root, 'ard.json') });
-      stderr = errSpy.mock.calls.map((call) => String(call[0])).join('');
-      exitCalls = exitSpy.mock.calls;
-    } finally {
-      exitSpy.mockRestore();
-      errSpy.mockRestore();
-      outSpy.mockRestore();
-    }
+    const { stderr, exitCalls } = await captureEmit(root);
+
     expect(stderr).toContain(`ard.entries.${PUBLISHED_SKILL}`);
     expect(stderr).toContain(`ard.entries."skill:${PUBLISHED_SKILL}"`);
     expect(exitCalls).toEqual([]);
@@ -415,5 +462,179 @@ describe('createArdCommand', () => {
     const command = createArdCommand();
     expect(command.name()).toBe('ard');
     expect(command.commands.map((c) => c.name())).toContain('emit');
+  });
+});
+
+/**
+ * A run that advertises nothing has to be visible to a MACHINE.
+ *
+ * 🚨 `vat ard emit` over a config declaring `skills.config.ghost` with no
+ * `skills/` directory wrote `{"entries":[]}`, printed `Wrote 0 ARD entries`, put
+ * the reason on stderr and exited 0. A CI step that emits and publishes is
+ * therefore GREEN over a discovery document advertising nothing, and there was
+ * nothing on stdout to gate on: no `--format`, and the help's "Exit Codes"
+ * section listed only `0 - Manifest written`, so a reader could not learn that
+ * stderr may carry findings at exit 0.
+ *
+ * The empty manifest itself is a legal artifact and the default exit code stays
+ * 0 — changing it would break every adopter whose repository legitimately
+ * declares nothing yet. What is fixed is that the run now PUBLISHES what it
+ * skipped, and says so in its own help.
+ */
+describe('ardEmitCommand — a zero-entry run is machine-readable and documented', () => {
+  /** A config naming one skill that is on disk and one that is not. */
+  const CONFIG_YAML_ARD_ONE_GHOST = [
+    'version: 1',
+    'skills:',
+    '  include: ["skills/**/SKILL.md"]',
+    '  config:',
+    `    ${PUBLISHED_SKILL}: {}`,
+    '    ghost-skill: {}',
+    'ard:',
+    `  publisher: ${FIXTURE_PUBLISHER}`,
+    '  baseUrl: https://example.com/catalog',
+    '',
+  ].join('\n');
+
+  /**
+   * A project that opted into ARD and declares no surface at all.
+   *
+   * 🪤 Distinct from the ghost-skill fixture, and the distinction is what makes
+   * the EMPTY arm of `--strict` testable: every other zero-entry fixture here
+   * also skips a surface, so a case handed one of those exits 1 through the
+   * skip branch and proves nothing about the empty one.
+   */
+  const CONFIG_YAML_ARD_NO_SURFACES = [
+    'version: 1',
+    'ard:',
+    `  publisher: ${FIXTURE_PUBLISHER}`,
+    '  baseUrl: https://example.com/catalog',
+    '',
+  ].join('\n');
+
+  const reportFrom = (stdout: string): Record<string, unknown> =>
+    JSON.parse(stdout) as Record<string, unknown>;
+
+  it('publishes the skip count and the skipped surfaces as JSON', async () => {
+    const root = projectWith(workDir, 'json-empty', CONFIG_YAML_WITH_ARD);
+
+    const { stdout } = await captureEmit(root, { format: 'json' });
+
+    const report = reportFrom(stdout);
+    expect(report.entryCount).toBe(0);
+    expect(report.skippedCount).toBe(1);
+    expect(report.skipped).toEqual([
+      expect.objectContaining({ name: PUBLISHED_SKILL, kind: 'skill' }),
+    ]);
+  });
+
+  // The count is the thing a CI step reads; the LIST is the thing a human then
+  // acts on. Both, or the report answers "how many" and not "which".
+  it('separates a manifest that advertises nothing from one that advertises something', async () => {
+    const empty = projectWith(workDir, 'json-status-empty', CONFIG_YAML_WITH_ARD);
+    const full = projectWithSkill(workDir, 'json-status-written', CONFIG_YAML_WITH_ARD);
+
+    const emptyReport = reportFrom((await captureEmit(empty, { format: 'json' })).stdout);
+    const fullReport = reportFrom((await captureEmit(full, { format: 'json' })).stdout);
+
+    expect(emptyReport.status).toBe('empty');
+    expect(fullReport.status).toBe('written');
+    expect(fullReport.entryCount).toBe(1);
+    expect(fullReport.skippedCount).toBe(0);
+  });
+
+  it('keeps the default exit code at 0 over an empty manifest', async () => {
+    const root = projectWith(workDir, 'default-exit-empty', CONFIG_YAML_ARD_NO_SURFACES);
+
+    const { exitCalls, stdout } = await captureEmit(root, { format: 'json' });
+
+    expect(reportFrom(stdout)).toMatchObject({ status: 'empty', skippedCount: 0 });
+    expect(exitCalls).toEqual([]);
+  });
+
+  it('exits 1 under --strict when the manifest advertises nothing, skips or not', async () => {
+    const root = projectWith(workDir, 'strict-empty', CONFIG_YAML_ARD_NO_SURFACES);
+
+    const { exitCalls, stderr } = await captureEmit(root, { strict: true });
+
+    expect(exitCalls).toEqual([[1]]);
+    expect(stderr).toMatch(/--strict: the manifest advertises nothing/);
+  });
+
+  // The other half of the same gate, and a DIFFERENT run shape: entries were
+  // written, so an assertion that only knew the empty case would pass here
+  // while the surface nobody can reach went unreported.
+  it('exits 1 under --strict when a configured surface was skipped, entries or not', async () => {
+    const root = projectWithSkill(workDir, 'strict-skipped', CONFIG_YAML_ARD_ONE_GHOST);
+
+    const { exitCalls, stdout } = await captureEmit(root, { strict: true, format: 'json' });
+
+    const report = reportFrom(stdout);
+    expect(report.entryCount).toBe(1);
+    expect(report.skippedCount).toBe(1);
+    expect(exitCalls).toEqual([[1]]);
+  });
+
+  it('exits 0 under --strict when every configured surface was emitted', async () => {
+    const root = projectWithSkill(workDir, 'strict-clean', CONFIG_YAML_WITH_ARD);
+
+    expect((await captureEmit(root, { strict: true })).exitCalls).toEqual([]);
+  });
+
+  // 🪤 Every case above calls the handler directly, which cannot see whether
+  // Commander actually HANDS it the two new flags: an option declared
+  // `--strict` that the handler reads as `options.strict` is one rename away
+  // from a gate that is documented, tested and never reached. So this one
+  // drives the parser.
+  it('reaches the gate through the parsed command line, not just the handler', async () => {
+    const root = projectWith(workDir, 'parsed-strict', CONFIG_YAML_WITH_ARD);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    let exitCalls: unknown[][] = [];
+    let stdout = '';
+    let stderr = '';
+    try {
+      await createArdCommand().parseAsync(
+        ['emit', '--project-root', root, '--output', safePath.join(root, 'out', 'ard.json'),
+          '--format', 'json', '--strict'],
+        { from: 'user' }
+      );
+      exitCalls = exitSpy.mock.calls;
+      stdout = outSpy.mock.calls.map((call) => String(call[0])).join('');
+      stderr = errSpy.mock.calls.map((call) => String(call[0])).join('');
+    } finally {
+      exitSpy.mockRestore();
+      errSpy.mockRestore();
+      outSpy.mockRestore();
+    }
+    expect(reportFrom(stdout).status).toBe('empty');
+    // 🪤 The exit code ALONE cannot see this: `process.exit` is mocked, so
+    // Commander's own "unknown option" path exits 1 too — renaming the option
+    // in the parser left this case green until it asserted on the message only
+    // the gate writes.
+    expect(stderr).toMatch(/--strict: 1 configured surface was not advertised/);
+    expect(stderr).not.toMatch(/unknown option/i);
+    expect(exitCalls).toEqual([[1]]);
+  });
+
+  // 🪤 A gate nobody can find is the banner-addressed-to-a-human shape: the
+  // behaviour is only useful if the contract is READABLE from `--help`, which
+  // is where a CI author looks before writing the step.
+  it('publishes the zero-entry case and its gate in the exit-code contract', () => {
+    const help = emitHelpText();
+
+    // The whole exit-0 BLOCK, not its first line: the contract wraps, and an
+    // assertion scoped to one line would pass or fail on where the text breaks
+    // rather than on what it says.
+    const lines = help.split('\n');
+    const zeroAt = lines.findIndex((line) => line.includes('0 - '));
+    const oneAt = lines.findIndex((line) => line.includes('1 - '));
+    const exitZeroBlock = lines.slice(zeroAt, oneAt).join(' ');
+
+    expect(exitZeroBlock).toMatch(/skip/i);
+    expect(exitZeroBlock).toMatch(/advertises nothing/i);
+    expect(help).toMatch(/--strict/);
+    expect(help).toMatch(/--format/);
   });
 });

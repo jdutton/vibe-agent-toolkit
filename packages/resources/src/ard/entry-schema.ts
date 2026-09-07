@@ -193,6 +193,40 @@ export function isArdPublisherDomain(value: string): boolean {
   return labels.length >= 2 && labels.every((label) => label.length > 0);
 }
 
+/** The one identity form whose authority VAT deliberately does not parse. */
+const ARD_DID_IDENTITY_PREFIX = 'did:';
+
+/**
+ * Whether `trustManifest.identity` carries an authority VAT can bind to the
+ * publisher — the check ARD mandates and the only security-relevant one in this
+ * lane.
+ *
+ * 🚨 This exists so the CONFIG and the EMITTER cannot disagree. The emitter
+ * refused a scheme-less identity while `ArdTrustManifestConfigSchema` accepted
+ * any `z.string().min(1)`, so the refusal landed at emission for the one field
+ * where landing late matters most, while `publisher`, `baseUrl` and `namespace`
+ * are all refused at load. `isArdPublisherDomain` is shared by both gates for
+ * exactly this reason; so is this.
+ *
+ * The rule is stated POSITIVELY, because its negative form is what failed: the
+ * DID exemption read as "no `://`, no authority to parse", and a bare
+ * `attacker.com` has no `://` either — so it slipped past the binding entirely.
+ * Two ways past: the authority is IN the URI, or the identity is a DID and the
+ * deferral is deliberate. A scheme-less string is neither, and guessing which
+ * URI the author meant is the guess this lane refuses.
+ */
+export function isArdBindableIdentity(value: string): boolean {
+  if (value.toLowerCase().startsWith(ARD_DID_IDENTITY_PREFIX)) return true;
+  // Same `://` split the emitter's authority parse uses: a scheme, then a
+  // non-empty authority before any `/`, `?` or `#`.
+  const marker = value.indexOf('://');
+  if (marker <= 0) return false;
+  const rest = value.slice(marker + '://'.length);
+  const end = rest.search(/[/?#]/u);
+  const authority = end === -1 ? rest : rest.slice(0, end);
+  return authority.slice(authority.lastIndexOf('@') + 1) !== '';
+}
+
 /**
  * Whether a value can serve as the BASE that entry `url`s resolve against.
  *

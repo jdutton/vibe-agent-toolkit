@@ -41,6 +41,65 @@ export interface PathProbe {
   readonly isDirectory: boolean | null;
 }
 
+/**
+ * What one `readdir` answered: the entries, or which of the two ways it failed.
+ *
+ * ⛔ **The two failures are NOT one answer, and collapsing them is a wrong
+ * verdict rather than a lost nicety.** This used to be `string[] | null`, where
+ * one `null` meant both *"there is no such directory"* and *"I was refused"*.
+ * Only the first is absence. A POSIX `--x` directory (mode `0111`) is
+ * *traversable* — every file below it opens exactly as written — while
+ * `readdir` returns `EACCES`; a judge that walks a path component by component
+ * then declared a link that opens fine to be a missing file, and said so with
+ * the confident wrong diagnosis *"File not found"*. The condition to report is
+ * that a **directory could not be listed**, which is the caller's to decide, and
+ * it cannot decide what this type will not carry.
+ *
+ * The sibling proof that the distinction is real: `resources/src/okf/discovery.ts`
+ * already reports an unlistable subdirectory as its own `OKF_SUBDIRECTORY_UNREADABLE`
+ * finding rather than as a missing one.
+ */
+export type DirectoryListing =
+  /** The directory was read. `names` is exactly what `readdir` handed back. */
+  | { readonly outcome: 'listed'; readonly names: string[] }
+  /** There is no such directory (`ENOENT`), or a path component is a file (`ENOTDIR`). */
+  | { readonly outcome: 'absent' }
+  /**
+   * The directory may well hold the entry asked about; the OS refused the
+   * question. `code` is the errno, for a caller that reports the reason.
+   */
+  | { readonly outcome: 'unreadable'; readonly code: string };
+
+/**
+ * Turn a `readdir` rejection into the failure it actually is.
+ *
+ * ⚠️ **`isFilesystemAccessError` is deliberately NOT used here, and that is not
+ * an oversight.** It answers a different question — *"is this the environment's
+ * fault or a bug in our code?"* — and to answer it, it deliberately groups
+ * `ENOENT` together with `EACCES`. That grouping IS the conflation this function
+ * exists to undo, so reusing the predicate would reinstate the defect while
+ * looking like sharing.
+ *
+ * Anything that is not a recognised *absence* errno reads as unreadable,
+ * including an error carrying no errno at all: "I could not ask" is the answer
+ * that fabricates no finding, and an unrecognised failure has not established
+ * that the directory is missing.
+ *
+ * @param error - Whatever `fs.readdir` rejected with
+ * @returns The listing outcome that error stands for
+ */
+function listingFailure(error: unknown): DirectoryListing {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? (error as { code: unknown }).code
+      : undefined;
+
+  // `ENOTDIR` is absence too: a path component that is a file is a directory
+  // that does not exist, which is exactly what the caller has to report.
+  if (code === 'ENOENT' || code === 'ENOTDIR') return { outcome: 'absent' };
+  return { outcome: 'unreadable', code: typeof code === 'string' ? code : 'UNKNOWN' };
+}
+
 /** How many probes a {@link FsLookupCache} answered, and how many cost syscalls. */
 export interface PathProbeStats {
   /** Probe calls received. */
@@ -79,8 +138,8 @@ export interface PathProbeStats {
  * ```
  */
 export class FsLookupCache {
-  /** Directory path → its entry names, or `null` when the directory is unreadable. */
-  readonly #listings = new Map<string, Promise<string[] | null>>();
+  /** Directory path → its entry names, or why the listing has none. */
+  readonly #listings = new Map<string, Promise<DirectoryListing>>();
 
   /** Path → its canonical path, falling back to the resolved path. */
   readonly #realpaths = new Map<string, Promise<string>>();
@@ -288,19 +347,21 @@ export class FsLookupCache {
   }
 
   /**
-   * Entry names of `dirPath`, or `null` when it cannot be read (missing directory,
-   * no permission). The unreadable answer is cached too — re-asking is the same
-   * failed syscall.
+   * What `dirPath` holds, or which of the two ways the question went unanswered.
+   * The failed answers are cached too — re-asking is the same failed syscall.
    *
    * @param dirPath - Directory to list
-   * @returns Entry names, or `null` if the directory could not be read
+   * @returns The entry names, or why there are none to hand back
    */
-  readdir(dirPath: string): Promise<string[] | null> {
+  readdir(dirPath: string): Promise<DirectoryListing> {
     const cached = this.#listings.get(dirPath);
     if (cached !== undefined) return cached;
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-validated path
-    const pending = fs.readdir(dirPath).catch(() => null);
+    const listed = fs.readdir(dirPath);
+    const pending = listed
+      .then((names): DirectoryListing => ({ outcome: 'listed', names }))
+      .catch(listingFailure);
     this.#listings.set(dirPath, pending);
     return pending;
   }
@@ -419,10 +480,33 @@ export type FilenameMatch =
 // a lookup is a `Map.get`.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Why a name is not in a listing — the two are a different fact about the tree
+ * and a different thing to tell a human.
+ *
+ * ⛔ **Kept off {@link FilenameMatch} deliberately.** That union names the
+ * *spelling rules* a name can match under, and "the directory refused to be
+ * listed" is not a spelling rule — it is the reason no rule could be tried. It
+ * carries no rank in {@link SPELLING_RANK} and no corrected spelling, and
+ * folding it in as a fifth verdict would silently un-exhaust every switch over
+ * a spelling (the OKF cross-link lane has one) without moving what those
+ * switches actually decide.
+ */
+export type AbsenceCause =
+  /** The directory was listed and holds nothing matching, under any rule. */
+  | 'no_such_entry'
+  /**
+   * A directory on the path could not be listed, so the question was never
+   * asked. ⚠️ **This is not evidence of absence** — a `--x` directory is
+   * traversable, so the target may well open. A caller reporting it as a
+   * missing file is asserting something it has not learned.
+   */
+  | 'directory_unreadable';
+
 /** What one directory entry name matched, and how the directory spells it. */
 export type ComponentMatch =
   | { match: Exclude<FilenameMatch, 'absent'>; actualName: string }
-  | { match: 'absent' };
+  | { match: 'absent'; because: AbsenceCause };
 
 /**
  * How much worse each spelling is than the one above it.
@@ -456,6 +540,15 @@ interface DirectoryIndex {
   folded: Map<string, string>;
 }
 
+/**
+ * A directory's index, or why it has none — the same two-way distinction
+ * {@link DirectoryListing} draws, carried one layer up so a lookup against an
+ * unlistable directory cannot come back wearing the shape of absence.
+ */
+type IndexedDirectory =
+  | { readonly index: DirectoryIndex }
+  | { readonly index: null; readonly because: AbsenceCause };
+
 /** Record an entry under whichever of the three spellings it is first for. */
 function indexEntry(index: DirectoryIndex, entry: string): void {
   if (!index.exact.has(entry)) index.exact.set(entry, entry);
@@ -478,19 +571,37 @@ function lookupIn(index: DirectoryIndex, name: string): ComponentMatch {
 
   const insensitive = index.folded.get(folded.toLowerCase());
   return insensitive === undefined
-    ? { match: 'absent' }
+    ? { match: 'absent', because: 'no_such_entry' }
     : { match: 'case_mismatch', actualName: insensitive };
 }
 
-/** What judging a whole path said, and the two spellings a message quotes. */
-export interface PathSpelling {
-  /** The worst spelling defect on the path, or `absent` if a component is missing. */
-  match: FilenameMatch;
-  /** The path relative to the walk root, spelled as the caller asked for it. */
-  askedPath: string;
-  /** The same path as disk spells it. Empty when nothing matched. */
-  actualPath: string;
-}
+/**
+ * What judging a whole path said, and the two spellings a message quotes.
+ *
+ * A union rather than one interface with an optional field: {@link AbsenceCause}
+ * is required exactly when the verdict is `absent` and unreachable otherwise, so
+ * a caller cannot report a path as missing without having read *which* absence
+ * it is.
+ */
+export type PathSpelling =
+  | {
+      /** The worst spelling defect on the path. */
+      match: Exclude<FilenameMatch, 'absent'>;
+      /** The path relative to the walk root, spelled as the caller asked for it. */
+      askedPath: string;
+      /** The same path as disk spells it. */
+      actualPath: string;
+    }
+  | {
+      /** No component matched — see `because` before calling anything missing. */
+      match: 'absent';
+      /** The path relative to the walk root, spelled as the caller asked for it. */
+      askedPath: string;
+      /** Empty: nothing matched, so there is no disk spelling to quote. */
+      actualPath: string;
+      /** Whether the entry is really gone, or the listing was refused. */
+      because: AbsenceCause;
+    };
 
 /**
  * Every directory a run asks about, listed once and indexed once.
@@ -509,8 +620,8 @@ export interface PathSpelling {
  */
 export class DirectorySpellingIndex {
   readonly #fsCache: FsLookupCache;
-  /** Directory → its index, or null when the directory could not be listed. */
-  readonly #indexes = new Map<string, Promise<DirectoryIndex | null>>();
+  /** Directory → its index, or why it has none. */
+  readonly #indexes = new Map<string, Promise<IndexedDirectory>>();
   #directoriesIndexed = 0;
   #entriesIndexed = 0;
 
@@ -547,8 +658,10 @@ export class DirectorySpellingIndex {
    * @returns Which rule matched and the entry's own spelling, or `absent`
    */
   async lookup(directory: string, name: string): Promise<ComponentMatch> {
-    const index = await this.#indexFor(directory);
-    return index === null ? { match: 'absent' } : lookupIn(index, name);
+    const indexed = await this.#indexFor(directory);
+    return indexed.index === null
+      ? { match: 'absent', because: indexed.because }
+      : lookupIn(indexed.index, name);
   }
 
   /**
@@ -608,7 +721,13 @@ export class DirectorySpellingIndex {
       // depends on how this one is really spelled. Every listing is memoized,
       // so a run pays per DIRECTORY, not per path and not per component.
       const found = await this.lookup(directory, segment);
-      if (found.match === 'absent') return { match: 'absent', askedPath, actualPath: '' };
+      if (found.match === 'absent') {
+        // The cause travels with the verdict rather than being re-derived: by
+        // the time a caller reports this, the directory that refused is
+        // several frames gone and nothing else can tell the two absences
+        // apart.
+        return { match: 'absent', askedPath, actualPath: '', because: found.because };
+      }
 
       if (SPELLING_RANK[found.match] > SPELLING_RANK[worst]) worst = found.match;
       actual.push(found.actualName);
@@ -625,7 +744,7 @@ export class DirectorySpellingIndex {
    * resolving into the same directory concurrently share one listing and one
    * build rather than racing to do both twice.
    */
-  async #indexFor(directory: string): Promise<DirectoryIndex | null> {
+  async #indexFor(directory: string): Promise<IndexedDirectory> {
     const existing = this.#indexes.get(directory);
     if (existing !== undefined) return await existing;
 
@@ -635,17 +754,26 @@ export class DirectorySpellingIndex {
   }
 
   /** List one directory and index every entry it holds. */
-  async #build(directory: string): Promise<DirectoryIndex | null> {
+  async #build(directory: string): Promise<IndexedDirectory> {
     this.#directoriesIndexed += 1;
-    const names = await this.#fsCache.readdir(directory);
-    if (names === null) return null;
+    const listing = await this.#fsCache.readdir(directory);
+    if (listing.outcome !== 'listed') {
+      // Two failures, two answers: a directory that is not there is absence,
+      // and a directory that refused to be listed is a question nobody got to
+      // ask. Mapping both to `no_such_entry` here is what used to report a
+      // link that opens as a missing file.
+      return {
+        index: null,
+        because: listing.outcome === 'absent' ? 'no_such_entry' : 'directory_unreadable',
+      };
+    }
 
     const index: DirectoryIndex = { exact: new Map(), nfc: new Map(), folded: new Map() };
-    for (const name of names) {
+    for (const name of listing.names) {
       indexEntry(index, name);
       this.#entriesIndexed += 1;
     }
-    return index;
+    return { index };
   }
 }
 

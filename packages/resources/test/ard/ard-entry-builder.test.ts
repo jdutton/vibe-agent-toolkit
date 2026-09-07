@@ -198,21 +198,22 @@ describe('buildArdEntry — authored fields', () => {
   });
 });
 
+/** The two identity forms several trust-manifest cases hand in. */
+const HTTPS_IDENTITY = 'https://example.com/workload';
+const DID_IDENTITY = 'did:web:example.com';
+
 describe('buildArdEntry — trust manifest', () => {
   it('emits the member under the spec-prose spelling `trustManifest`', () => {
     const entry = buildArdEntry(MINIMAL_SKILL_SURFACE, {
       ...MINIMAL_ARD_CONFIG,
-      trustManifest: { identity: 'https://example.com/workload', identityType: 'https' },
+      trustManifest: { identity: HTTPS_IDENTITY, identityType: 'https' },
     });
     // 🚨 Upstream's JSON Schema declares this member as `TrustManifest`
     // (PascalCase) while the spec prose says `trustManifest` in all 11
     // occurrences. VAT follows the prose. See docs/external/ard/README.md.
     expect(Object.hasOwn(entry, 'trustManifest')).toBe(true);
     expect(Object.hasOwn(entry, 'TrustManifest')).toBe(false);
-    expect(entry.trustManifest).toEqual({
-      identity: 'https://example.com/workload',
-      identityType: 'https',
-    });
+    expect(entry.trustManifest).toEqual({ identity: HTTPS_IDENTITY, identityType: 'https' });
   });
 
   it('refuses an identity whose trust domain does not align with the publisher', () => {
@@ -227,10 +228,45 @@ describe('buildArdEntry — trust manifest', () => {
   it('accepts a hostless identity form (DID) without inventing an alignment check', () => {
     const entry = buildArdEntry(MINIMAL_SKILL_SURFACE, {
       ...MINIMAL_ARD_CONFIG,
-      trustManifest: { identity: 'did:web:example.com' },
+      trustManifest: { identity: DID_IDENTITY },
     });
-    expect(entry.trustManifest?.identity).toBe('did:web:example.com');
+    expect(entry.trustManifest?.identity).toBe(DID_IDENTITY);
   });
+
+  // 🚨 The DID carve-out was written as "no `://`, no authority to check", and
+  // a bare domain has no `://` either. `identity: attacker.com` therefore
+  // reached the manifest with the ONE binding ARD mandates never applied, at
+  // exit 0 — while the config schema's own description promises "SPIFFE ID,
+  // DID, or HTTPS FQDN URI", and a bare domain is none of the three.
+  //
+  // The property is *scheme*, not *domain*: `example.com` — the publisher's own
+  // host, spelled without a scheme — is refused for exactly the same reason, so
+  // nobody can satisfy this suite by string-matching a hostile-looking name.
+  it.each([
+    'example.com',
+    'attacker.com',
+    'sub.example.com',
+    'example.com/workload',
+    '//example.com/workload',
+  ])('refuses the scheme-less identity %s, which no binding check can read', (identity) => {
+    expect(() =>
+      buildArdEntry(MINIMAL_SKILL_SURFACE, { ...MINIMAL_ARD_CONFIG, trustManifest: { identity } })
+    ).toThrow(ArdDerivationError);
+  });
+
+  // The other side of the same rule: every form the schema's description names
+  // still passes, so the refusal above cannot have been bought by refusing
+  // everything.
+  it.each([HTTPS_IDENTITY, 'spiffe://example.com/workload', DID_IDENTITY])(
+    'still emits %s, which carries a scheme',
+    (identity) => {
+      const entry = buildArdEntry(MINIMAL_SKILL_SURFACE, {
+        ...MINIMAL_ARD_CONFIG,
+        trustManifest: { identity },
+      });
+      expect(entry.trustManifest?.identity).toBe(identity);
+    }
+  );
 });
 
 describe('buildArdEntry — override key spaces', () => {

@@ -34,6 +34,54 @@ export function escapeSQLString(value: string): string {
 }
 
 /**
+ * The character that turns a `LIKE` metacharacter back into the character the caller typed.
+ *
+ * Backslash is the conventional choice and is not special inside a standard SQL single-quoted
+ * literal, so `'%a\%b%'` reaches the engine with the backslash intact and the `ESCAPE` clause
+ * is the only thing that gives it meaning.
+ */
+const LIKE_ESCAPE_CHAR = '\\';
+
+/** `%` and `_` are `LIKE`'s wildcards; the escape character has to join them or it is unescapable. */
+const LIKE_METACHARACTERS = /[\\%_]/u;
+
+/**
+ * Neutralise `LIKE` metacharacters so a member matches ITSELF rather than a family of strings.
+ *
+ * 🚨 THE MIRROR OF THE STRINGIFY-TO-NOTHING GUARD, and it was the half left open. That guard
+ * closes "satisfiable by nothing"; this closes "satisfiable by EVERYTHING". Interpolating the
+ * member raw made `['%']` emit `tags LIKE '%%%'` — every row in the index — and `['_']` emit
+ * `tags LIKE '%_%'` — every non-empty one. Neither backstop can see it: `assertQuerySupported`
+ * sees a supported key, and `assertFiltersProducedConditions` counts one condition and is
+ * satisfied, because counting cannot tell a condition that discriminates from one that does not.
+ *
+ * The escape character is escaped FIRST by being a member of the same class, so `['\\']`
+ * cannot slip through as an escape of the pattern's own trailing `%`.
+ */
+function escapeLikePattern(value: string): string {
+  return value.replaceAll(/[\\%_]/gu, (char) => `${LIKE_ESCAPE_CHAR}${char}`);
+}
+
+/**
+ * One `LIKE` condition for one member.
+ *
+ * 🔑 The `ESCAPE` clause is appended ONLY when the member actually carries a metacharacter, so
+ * every member that works today — which is every member without a `%`, `_` or `\` — emits the
+ * exact fragment it has always emitted. The clause changes no meaning where it would be a no-op,
+ * and it appears only on the queries that are currently answered wrongly, which is also the
+ * blast radius if an engine ever rejects `ESCAPE`: a loud refusal on a query that today returns
+ * the whole index in silence.
+ */
+function buildMemberLike(fieldPath: string, member: string): string {
+  const pattern = `%${escapeLikePattern(member)}%`;
+  const clause = `${fieldPath} LIKE '${escapeSQLString(pattern)}'`;
+
+  return LIKE_METACHARACTERS.test(member)
+    ? `${clause} ESCAPE '${LIKE_ESCAPE_CHAR}'`
+    : clause;
+}
+
+/**
  * Build the SQL fragment for an array-typed metadata field.
  *
  * 🚨 THE MECHANISM IS STRINGIFICATION, NOT LENGTH, and the first fix here named it wrongly.
@@ -43,6 +91,11 @@ export function escapeSQLString(value: string): string {
  * closed the one reported instance and left `['']`, a bare `''` and `[[]]` live, each of
  * which reaches here without a type error because `filters.metadata` is deliberately open
  * (`z.record(z.string(), z.unknown())`). So the branch is on the STRINGIFIED result.
+ *
+ * ⚠️ That guard is only HALF the widening class — it answers "satisfiable by nothing". The
+ * mirror, "satisfiable by everything", lives in {@link escapeLikePattern}: a member that is
+ * itself a `LIKE` metacharacter was read as a wildcard and matched the whole index. Read both
+ * before touching either; closing one and declaring the class shut is how this reopened.
  *
  * "Filter to the tags I computed, and I computed none" is the ordinary way to arrive here,
  * and it is a request nothing satisfies — exactly as an empty `resourceId` array already
@@ -72,9 +125,7 @@ function buildArrayFilter(fieldPath: string, value: unknown): string {
     return ALWAYS_FALSE;
   }
 
-  const conditions = members
-    .map((member) => `${fieldPath} LIKE '%${escapeSQLString(member)}%'`)
-    .join(' AND ');
+  const conditions = members.map((member) => buildMemberLike(fieldPath, member)).join(' AND ');
 
   // Parenthesised only when there is more than one, so a single-member list keeps the exact
   // fragment it has always emitted and stays composable with the outer ` AND ` join.

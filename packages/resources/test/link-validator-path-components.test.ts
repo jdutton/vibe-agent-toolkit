@@ -72,6 +72,37 @@ async function judge(root: string, href: string, fsCache = new FsLookupCache()) 
   );
 }
 
+/**
+ * Whether a POSIX mode actually binds this process. Windows does not enforce
+ * mode bits, and **root ignores them** — a root process lists a `--x` directory
+ * happily, which would make the assertion below pass against the very bug it
+ * exists to catch.
+ */
+const PERMISSIONS_ENFORCED = process.platform !== 'win32' && process.getuid?.() !== 0;
+
+/**
+ * Owner `--x`: traversable, so the file below still opens — and NOT listable.
+ * Only the owner bits are set, which is all this process's own access depends
+ * on, and the restore is the matching owner-only `rwx`.
+ */
+const MODE_TRAVERSE_ONLY = 0o100;
+const MODE_RWX_OWNER = 0o700;
+
+/**
+ * Run `body` with `dir` traversable but unlistable, restoring the mode after.
+ *
+ * ⚠️ The `finally` is not tidiness: a directory left `--x` cannot be removed,
+ * so the temp-dir teardown fails and poisons every later test.
+ */
+async function withUnlistableDirectory<T>(dir: string, body: () => Promise<T>): Promise<T> {
+  await nodeFsPromises.chmod(dir, MODE_TRAVERSE_ONLY);
+  try {
+    return await body();
+  } finally {
+    await nodeFsPromises.chmod(dir, MODE_RWX_OWNER);
+  }
+}
+
 const DEEP_TARGET = 'one/two/three.md';
 const DEEP_BUNDLE = { 'a.md': '# a\n', [DEEP_TARGET]: '# three\n' };
 
@@ -182,6 +213,32 @@ describe('a link path is judged component by component', () => {
       expect(issue?.message).toContain('File not found');
       expect(issue?.suggestion).toBe('');
     });
+
+    /**
+     * 🪤 The regression judging every component introduced: every ancestor
+     * below the walk root must now be LISTABLE, where the basename-only judge
+     * only ever listed `dirname(target)`. A `0111` directory is traversable —
+     * `open()` on the file below it succeeds, so the link genuinely works —
+     * but `readdir` is refused. That refusal used to be recoded as absence and
+     * reported as `LINK_BROKEN_FILE`: both the verdict and the diagnosis wrong,
+     * about a link that opens.
+     *
+     * The conservative outcome is the correct one here: a spelling that could
+     * not be verified is not a spelling that is wrong.
+     */
+    it.skipIf(!PERMISSIONS_ENFORCED)(
+      'says nothing about a link whose ancestor directory cannot be listed',
+      async () => {
+        const root = await plant({ 'a.md': '# a\n', 'docs/open/inner/target.md': '# t\n' });
+
+        const issue = await withUnlistableDirectory(
+          safePath.join(root, 'docs', 'open'),
+          async () => await judge(root, './docs/open/inner/target.md'),
+        );
+
+        expect(issue).toBeNull();
+      },
+    );
 
     it('says nothing when every component matches byte for byte', async () => {
       // The negative control. A judge that reported every nested link would

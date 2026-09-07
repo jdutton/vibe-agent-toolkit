@@ -2,7 +2,12 @@ import { ValidationConfigSchema } from '@vibe-agent-toolkit/schema';
 import { globMagicRemainder, hasParentTraversalSegment, isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
-import { isArdBaseUrl, isArdNameSegment, isArdPublisherDomain } from '../ard/entry-schema.js';
+import {
+  isArdBaseUrl,
+  isArdBindableIdentity,
+  isArdNameSegment,
+  isArdPublisherDomain,
+} from '../ard/entry-schema.js';
 
 import { LinkAuthConfigSchema } from './link-auth.js';
 import { ReferenceSyntacticFormSchema } from './projection-blobs.js';
@@ -935,7 +940,16 @@ export type ArdEntryOverrides = z.infer<typeof ArdEntryOverridesSchema>;
  * open upstream issue (ards-project/ard-spec#27), not a fact.
  */
 export const ArdTrustManifestConfigSchema = z.object({
+  // 🚨 `.min(1)` accepted a bare `attacker.com`, which is none of the three
+  // forms this description advertises and carries no authority to bind — so the
+  // one security-relevant check in the ARD lane was the one refused LATEST, at
+  // emission, while publisher/baseUrl/namespace are all refused at load. Same
+  // predicate as the emitter, for the same reason `isArdPublisherDomain` is.
   identity: z.string().min(1)
+    .refine(
+      isArdBindableIdentity,
+      'trustManifest.identity must carry an authority VAT can bind to ard.publisher: an HTTPS FQDN URI ("https://example.com/workload") or a SPIFFE ID ("spiffe://example.com/workload"). A DID ("did:web:example.com") is the one exempt form, because DID methods encode their authority per-method. A bare domain is none of the three.'
+    )
     .describe('Cryptographic workload identifier (SPIFFE ID, DID, or HTTPS FQDN URI). Its trust domain MUST align with the publisher segment of every entry identifier.'),
   identityType: z.string().min(1).optional()
     .describe('Hint for the identity format (e.g. "spiffe", "did", "https")'),

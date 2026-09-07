@@ -8,7 +8,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { SettingsConflict } from '../types.js';
 
-import { matchesDenyRule } from './permission-matcher.js';
+import { matchesDenyRule, ruleConstrainsTool } from './permission-matcher.js';
 import type { EffectiveSettings, ProvenanceRule } from './settings-merger.js';
 
 interface SkillFrontmatter {
@@ -154,6 +154,24 @@ function extractToolInput(tool: string): string {
  * org policy actually blocks. `matchesDenyRule` is the entry point that asks the
  * right question; `matchesPermissionRule` takes the lane explicitly and has no
  * default, so this can never drift back by omission.
+ *
+ * 🚩 The `*` branch used to answer its own question, with
+ * `rule === toolName || rule.startsWith(`${toolName}(`)`, and that made this
+ * module contradict the matcher it depends on. The matcher rules that a
+ * `Write`/`Glob`/`NotebookRead`/`NotebookEdit` PATH rule blocks nothing —
+ * Claude Code accepts those rules and never consults them — but the string
+ * prefix knew nothing about that, so `Write(./secrets/**)` was reported as
+ * blocking a skill that spells the tool `Write` and NOT one that spells it
+ * `Write(./out/**)`. One deny rule, two answers about one tool, decided by
+ * nothing but the SKILL.md's spelling. `ruleConstrainsTool` is the matcher's
+ * own answer to the no-concrete-input question, off the same taxonomy that
+ * decides the concrete one, so there is exactly one answer now.
+ *
+ * That branch also CRASHED on the consulted half: it asked the path lane about
+ * an empty path, which node-ignore refuses with `path must not be empty`, so
+ * `vat audit` died on any plugin declaring a bare `Read`/`Edit` against an org
+ * path rule. It no longer asks that question at all, and the path lane answers
+ * `false` for an empty path rather than throwing.
  */
 function isToolBlocked(
   toolName: string,
@@ -161,13 +179,10 @@ function isToolBlocked(
   rule: string,
   pluginDir: string
 ): boolean {
-  if (toolInput === '*') {
-    return (
-      matchesDenyRule(toolName, '', rule, pluginDir) ||
-      rule === toolName ||
-      rule.startsWith(`${toolName}(`)
-    );
-  }
+  // A bare `Write` or a wildcarded `Write(*)` declares the tool UNRESTRICTED —
+  // there is no concrete input to match, so the question is whether the rule
+  // constrains the tool at all.
+  if (toolInput === '*') return ruleConstrainsTool(toolName, rule, 'deny');
   return matchesDenyRule(toolName, toolInput, rule, pluginDir);
 }
 

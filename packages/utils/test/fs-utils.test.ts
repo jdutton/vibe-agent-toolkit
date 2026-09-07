@@ -16,7 +16,7 @@ import {
   realpathFrom,
   spellingWalkRoot,
 } from '../src/fs-utils.js';
-import type { RealpathTable } from '../src/fs-utils.js';
+import type { DirectoryListing, RealpathTable } from '../src/fs-utils.js';
 import { toForwardSlash } from '../src/path-core.js';
 import type { SymlinkCapability } from '../src/test-helpers.js';
 import { createSymlinkAsync, setupAsyncTempDirSuite, symlinkCapability } from '../src/test-helpers.js';
@@ -28,6 +28,47 @@ const NO_SUCH_DIR = 'no-such-dir';
 
 /** The path `plantDeep` plants, spelled as a `pathSpellingFrom` correction is. */
 const PLANTED_PATH = 'one/two/three.md';
+
+/**
+ * Whether a POSIX mode actually binds this process.
+ *
+ * Windows does not enforce mode bits, and **root ignores them** — a root
+ * process lists a `--x` directory happily, which would make every assertion
+ * below pass against the very bug they exist to catch. Both halves are the
+ * guard; skipping only on Windows leaves the test vacuous where CI runs as root.
+ */
+const PERMISSIONS_ENFORCED = process.platform !== 'win32' && process.getuid?.() !== 0;
+
+/**
+ * Owner `--x`: traversable, so a file below still opens — and NOT listable.
+ * Only the owner bits are set, which is all this process's own access depends
+ * on, and the restore below is the matching owner-only `rwx`.
+ */
+const MODE_TRAVERSE_ONLY = 0o100;
+const MODE_RWX_OWNER = 0o700;
+
+/** The names out of a listing, failing loudly rather than reading a non-listing. */
+function namesOf(listing: DirectoryListing): readonly string[] {
+  if (listing.outcome !== 'listed') {
+    throw new Error(`Expected a listed directory, got "${listing.outcome}".`);
+  }
+  return listing.names;
+}
+
+/**
+ * Run `body` with `dir` traversable but unlistable, restoring the mode after.
+ *
+ * ⚠️ The `finally` is not tidiness: a directory left `--x` cannot be removed,
+ * so the temp-dir teardown fails and poisons every later test in the file.
+ */
+async function withUnlistableDirectory<T>(dir: string, body: () => Promise<T>): Promise<T> {
+  await fs.chmod(dir, MODE_TRAVERSE_ONLY);
+  try {
+    return await body();
+  } finally {
+    await fs.chmod(dir, MODE_RWX_OWNER);
+  }
+}
 
 /** Plant `one/two/three.md` under `dir`, beside a referring `a.md`. */
 async function plantDeep(dir: string): Promise<string> {
@@ -268,17 +309,41 @@ describe('fs-utils', () => {
       spy.mockRestore();
     });
 
-    it('caches the unreadable-directory answer as null without re-spawning the syscall', async () => {
+    it('caches the missing-directory answer without re-spawning the syscall', async () => {
       const cache = new FsLookupCache();
       const missing = safePath.join(tempDir, NO_SUCH_DIR);
       const spy = vi.spyOn(fs, 'readdir');
 
-      expect(await cache.readdir(missing)).toBeNull();
-      expect(await cache.readdir(missing)).toBeNull();
+      expect(await cache.readdir(missing)).toEqual({ outcome: 'absent' });
+      expect(await cache.readdir(missing)).toEqual({ outcome: 'absent' });
 
       expect(spy).toHaveBeenCalledTimes(1);
       spy.mockRestore();
     });
+
+    /**
+     * 🪤 The conflation this pins: one `null` used to mean both *"there is no
+     * such directory"* and *"I was refused"*. Only the first may read as
+     * absence — a caller that judges a path component by component turns the
+     * second into a confident "this file does not exist" about a file that
+     * opens fine, because `--x` is traversable and only `readdir` is refused.
+     */
+    it.skipIf(!PERMISSIONS_ENFORCED)(
+      'reports a directory it may traverse but not list as unreadable, not absent',
+      async () => {
+        const closed = safePath.join(tempDir, 'closed');
+        await fs.mkdir(closed, { recursive: true });
+        await fs.writeFile(safePath.join(closed, 'inside.md'), '');
+        const cache = new FsLookupCache();
+
+        const listing = await withUnlistableDirectory(
+          closed,
+          async () => await cache.readdir(closed),
+        );
+
+        expect(listing).toEqual({ outcome: 'unreadable', code: 'EACCES' });
+      },
+    );
 
     it('memoizes realpath and falls back to a resolved path when it fails', async () => {
       const cache = new FsLookupCache();
@@ -367,15 +432,15 @@ describe('fs-utils', () => {
       await fs.writeFile(safePath.join(dirPath, 'first.txt'), '');
 
       const firstRun = new FsLookupCache();
-      expect(await firstRun.readdir(dirPath)).toEqual(['first.txt']);
+      expect(await firstRun.readdir(dirPath)).toEqual({ outcome: 'listed', names: ['first.txt'] });
 
       await fs.writeFile(safePath.join(dirPath, 'second.txt'), '');
 
       // Same instance: still the snapshot it took (that is the point of a per-run cache).
-      expect(await firstRun.readdir(dirPath)).toEqual(['first.txt']);
+      expect(await firstRun.readdir(dirPath)).toEqual({ outcome: 'listed', names: ['first.txt'] });
       // A fresh instance — what a new validation run constructs — sees the new state.
       const secondRun = new FsLookupCache();
-      expect((await secondRun.readdir(dirPath))?.length).toBe(2);
+      expect(namesOf(await secondRun.readdir(dirPath))).toHaveLength(2);
     });
   });
 
@@ -847,12 +912,47 @@ describe('fs-utils', () => {
 
         const table = await fillPathSpellings([{ referrer, target: asked }], new FsLookupCache());
 
+        // 🪤 `because` is the half that must NOT move: a fix that reported every
+        // failed listing as unreadable would silence real missing files.
         expect(pathSpellingFrom(table, referrer, asked)).toEqual({
           match: 'absent',
           askedPath: 'one/two/nowhere.md',
           actualPath: '',
+          because: 'no_such_entry',
         });
       });
+
+      /**
+       * 🪤 The regression: judging EVERY component means every ancestor below
+       * the walk root must now be **listable**, where the basename-only judge
+       * this replaced only ever listed `dirname(target)`. A `--x` directory is
+       * traversable — the file below it opens — but `readdir` is refused, and
+       * that refusal used to arrive here as plain absence. The file is there;
+       * only the question could not be asked.
+       */
+      it.skipIf(!PERMISSIONS_ENFORCED)(
+        'says a path through an unlistable ancestor is unverified, not missing',
+        async () => {
+          const root = await plantDeep(tempDir);
+          const referrer = safePath.join(root, 'a.md');
+          const asked = safePath.join(root, 'one', 'two', 'three.md');
+
+          const spelling = await withUnlistableDirectory(safePath.join(root, 'one'), async () => {
+            const table = await fillPathSpellings(
+              [{ referrer, target: asked }],
+              new FsLookupCache(),
+            );
+            return pathSpellingFrom(table, referrer, asked);
+          });
+
+          expect(spelling).toEqual({
+            match: 'absent',
+            askedPath: PLANTED_PATH,
+            actualPath: '',
+            because: 'directory_unreadable',
+          });
+        },
+      );
 
       /**
        * The enumerated-vs-derived class over a real directory, both ways round.
@@ -1051,12 +1151,33 @@ describe('fs-utils', () => {
         expect(index.indexedDirectories).toEqual([]);
       });
 
-      it('answers `absent` for a directory it cannot list', async () => {
+      it('answers `absent` for a directory that is not there', async () => {
         const index = new DirectorySpellingIndex(new FsLookupCache());
         const missing = safePath.join(tempDir, NO_SUCH_DIR);
 
-        expect(await index.lookup(missing, 'anything.md')).toEqual({ match: 'absent' });
+        expect(await index.lookup(missing, 'anything.md')).toEqual({
+          match: 'absent',
+          because: 'no_such_entry',
+        });
       });
+
+      it.skipIf(!PERMISSIONS_ENFORCED)(
+        'separates a directory it was REFUSED from one that is not there',
+        async () => {
+          // Both are "no answer", and one `null` used to be both. Only the
+          // first is evidence that the entry does not exist.
+          const closed = safePath.join(tempDir, 'closed-lookup');
+          await fs.mkdir(closed, { recursive: true });
+          const index = new DirectorySpellingIndex(new FsLookupCache());
+
+          const found = await withUnlistableDirectory(
+            closed,
+            async () => await index.lookup(closed, 'anything.md'),
+          );
+
+          expect(found).toEqual({ match: 'absent', because: 'directory_unreadable' });
+        },
+      );
     });
   });
 });

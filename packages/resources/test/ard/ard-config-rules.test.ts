@@ -106,6 +106,38 @@ describe('an `ard:` block is judged at CONFIG LOAD, not only at emission', () =>
       ProjectConfigSchema.safeParse({ version: 1, ard: { publisher: PUBLISHER } }).success
     ).toBe(true);
   });
+
+  // 🚨 The emitter refuses a `trustManifest.identity` carrying no authority it
+  // can bind — a bare `attacker.com` is neither an authority-bearing URI nor a
+  // DID. The schema accepted it as `z.string().min(1)`, so the refusal landed at
+  // EMISSION while `publisher`/`baseUrl`/`namespace` are all refused at LOAD.
+  // That is the split this describe block exists to deny: the one
+  // security-relevant field in the lane must not be the one checked latest.
+  // Both gates now share `isArdBindableIdentity`, exactly as `publisher` shares
+  // `isArdPublisherDomain`.
+  it.each([
+    ['a bare domain', 'attacker.com'],
+    ["the publisher's OWN domain, scheme-less", PUBLISHER],
+    ['a display name', 'My Company'],
+  ])('refuses a trustManifest.identity carrying no bindable authority — %s', (_label, identity) => {
+    const result = ProjectConfigSchema.safeParse({
+      version: 1,
+      ard: { publisher: PUBLISHER, trustManifest: { identity } },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it.each([
+    ['an HTTPS FQDN URI', `https://${PUBLISHER}/workload`],
+    ['a SPIFFE ID', `spiffe://${PUBLISHER}/workload`],
+    ['a DID', `did:web:${PUBLISHER}`],
+  ])('still accepts the three forms the schema advertises — %s', (_label, identity) => {
+    const result = ProjectConfigSchema.safeParse({
+      version: 1,
+      ard: { publisher: PUBLISHER, trustManifest: { identity } },
+    });
+    expect(result.success).toBe(true);
+  });
 });
 
 describe('ArdEntrySchema.version', () => {

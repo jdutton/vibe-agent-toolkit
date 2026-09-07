@@ -65,6 +65,7 @@ const GIT_ONELINE_STAR = 'Bash(git * --oneline *)';
 // The wrapper form whose flag VALUE lands in the command position — two
 // admissible readings, so the allow lane must take neither.
 const WRAPPER_FLAG_VALUE_CMD = 'timeout -s ls 30 rm -rf /';
+const LS_PREFIX = 'Bash(ls:*)';
 const LS_GLUED = 'Bash(ls*)';
 const LS_LA = 'ls -la';
 const LSOF = 'lsof';
@@ -773,9 +774,9 @@ describe('published table — trailing wildcard', () => {
 
   it('treats ":*" as equivalent to a trailing " *"', () => {
     for (const command of ['ls', LS_LA]) {
-      expect(allowsBash(command, 'Bash(ls:*)')).toBe(allowsBash(command, LS_STAR));
+      expect(allowsBash(command, LS_PREFIX)).toBe(allowsBash(command, LS_STAR));
     }
-    expect(allowsBash(LSOF, 'Bash(ls:*)')).toBe(false);
+    expect(allowsBash(LSOF, LS_PREFIX)).toBe(false);
   });
 });
 
@@ -1273,5 +1274,110 @@ describe('published table — leading env assignment', () => {
     expect(
       matchesPermissionRule(BASH, `NODE_ENV=test FOO=bar ${NPM_TEST_X}`, NPM_TEST_STAR, 'deny'),
     ).toBe(true);
+  });
+});
+
+const NPM_RUN_BUILD_PREFIX = 'Bash(npm run build:*)';
+const NPM_RUN_BUILD = 'npm run build';
+const DEV_NULL = '/dev/null';
+
+/**
+ * Every spelling of a redirection whose operator CONTAINS an `&`. The `&` in
+ * each of these belongs to the redirection operator, not to a command
+ * separator, so none of them may end a subcommand.
+ */
+const AMPERSAND_REDIRECTIONS = [
+  '2>&1',
+  '1>&2',
+  '2>&-',
+  '>&2',
+  `&>${DEV_NULL}`,
+  '&>>build.log',
+  `>&${DEV_NULL}`,
+];
+
+/**
+ * The `&` spellings that ARE separators — a background job (spaced, trailing
+ * and glued) and the logical operator — so the fix cannot be "stop treating `&`
+ * as a separator".
+ */
+const AMPERSAND_SEPARATORS = [' & ', ' &', '&', ' && '];
+
+describe('published table — redirections vs the `&` separator', () => {
+  // The file's own `@vendor-claim` names *"redirections vs the `&` separator"*
+  // as a published clause with NO assertion behind it. This suite is that
+  // assertion.
+  //
+  // 🚩 `ONE_CHAR_SEPARATORS` held `&` with no redirection awareness, so `2>&1`
+  // split into `… 2>` and `1`, and the allow lane's every-subcommand
+  // requirement then failed on the subcommand `1`. Same class as the
+  // `grep -E "a|b"` quoting defect: an under-match, so the direction is safe,
+  // but it broke the single most common shell idiom.
+  it('does not split a command at the `&` inside a redirection', () => {
+    for (const redirection of AMPERSAND_REDIRECTIONS) {
+      expect(allowsBash(`${LS_LA} > ${DEV_NULL} ${redirection}`, LS_PREFIX)).toBe(true);
+      expect(allowsBash(`${NPM_RUN_BUILD} ${redirection}`, NPM_RUN_BUILD_PREFIX)).toBe(true);
+      expect(allowsBash(`${LS_LA} ${redirection}`, LS_STAR)).toBe(true);
+    }
+  });
+
+  // 🚩 The negative direction, without which the suite above would pass on a
+  // matcher that had simply stopped splitting on `&` altogether: a real
+  // background `&` and a real `&&` must still end a subcommand, and the allow
+  // lane must still refuse what follows one.
+  it('still splits at a genuine `&` separator', () => {
+    for (const separator of AMPERSAND_SEPARATORS) {
+      expect(allowsBash(`${NPM_TEST}${separator}${RM_RF_ROOT}`, NPM_STAR)).toBe(false);
+      expect(allowsBash(`${NPM_TEST}${separator}${NPM_RUN_LINT}`, NPM_STAR)).toBe(true);
+    }
+  });
+
+  // A redirection must not make a LATER separator invisible — the failure mode
+  // of every "just skip past it" fix in this file.
+  it('keeps a separator that follows a redirection', () => {
+    for (const redirection of AMPERSAND_REDIRECTIONS) {
+      expect(allowsBash(`${LS_LA} ${redirection}; ${RM_RF_ROOT}`, LS_PREFIX)).toBe(false);
+      expect(allowsBash(`${LS_LA} ${redirection} && ${RM_RF_ROOT}`, LS_PREFIX)).toBe(false);
+      expect(matchesBashRule(`${LS_LA} ${redirection} && ${RM_RF_ROOT}`, RM_STAR, 'deny')).toBe(
+        true,
+      );
+    }
+  });
+
+  // The deny lane reads the same separators, so a background `&` must not hide
+  // the denied program from it, and a redirection must not manufacture one.
+  it('the deny lane still reaches past a background `&`', () => {
+    expect(matchesBashRule(`${NPM_TEST} & ${RM_RF_ROOT}`, RM_STAR, 'deny')).toBe(true);
+    expect(matchesBashRule(`${NPM_TEST} 2>&1`, RM_STAR, 'deny')).toBe(false);
+  });
+});
+
+describe('matchesPathRule — an empty tool input', () => {
+  // 🚩 A live CRASH, not a wrong answer. `settings-compat-checker` asks the deny
+  // lane about a BARE tool spelling by handing it an empty tool input, and
+  // node-ignore throws `path must not be empty` on the relative path that
+  // produces. `vat audit` on a plugin whose SKILL.md declares a bare `Read` or
+  // `Edit` against an org `Read(…)`/`Edit(…)` deny rule terminated with an
+  // uncaught TypeError rather than reporting anything.
+  //
+  // An empty path is not a path, so the only answer it can have is `false`: a
+  // rule cannot match a file that was never named.
+  it('answers false rather than throwing', () => {
+    expect(() => matchesPathRule('', SECRETS_PATTERN, PLUGIN_DIR)).not.toThrow();
+    expect(matchesPathRule('', SECRETS_PATTERN, PLUGIN_DIR)).toBe(false);
+    for (const lane of LANES) {
+      expect(matchesPermissionRule('Read', '', `Read(${SECRETS_PATTERN})`, lane, PLUGIN_DIR)).toBe(
+        false,
+      );
+      expect(matchesPermissionRule('Edit', '', `Edit(${SECRETS_PATTERN})`, lane, PLUGIN_DIR)).toBe(
+        false,
+      );
+    }
+  });
+
+  // The control: the same rule and root still match a real path, so the guard
+  // is not a blanket `false` for the whole path lane.
+  it('still matches a real path under the same root', () => {
+    expect(matchesPathRule(SECRETS_KEY, SECRETS_PATTERN, PLUGIN_DIR)).toBe(true);
   });
 });

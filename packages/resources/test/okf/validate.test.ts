@@ -99,6 +99,39 @@ function wideBundle(count: number): { root: string; entries: number } {
   return { root: plantOkfBundle(files), entries: Object.keys(files).length };
 }
 
+/**
+ * An href written ABOVE the bundle root that canonicalizes back INSIDE it.
+ *
+ * The target does not exist, so the only thing deciding the verdict is the
+ * shape of the path — which is the point: a link above the root is an escape
+ * before existence is ever consulted.
+ */
+const ABOVE_ROOT_HREF = '../mirror/nope.md';
+
+/**
+ * Plant `<outer>/a` as the bundle root with `<outer>/mirror -> a` beside it,
+ * and `a/doc.md` linking through the mirror.
+ *
+ * The symlink lives OUTSIDE the bundle root on purpose: that is what makes
+ * `../mirror/nope.md` canonicalize to `<root>/nope.md` — inside by realpath,
+ * above the root as written — and what makes it absent from a tarball of the
+ * root.
+ *
+ * @param extra - Further bundle-relative files, planted beside `a/doc.md`
+ * @returns The outer directory (a prefix of the root, for no-leak assertions)
+ *   and the bundle root itself
+ */
+function plantMirroredBundle(
+  extra: Readonly<Record<string, string>> = {},
+): { outer: string; root: string } {
+  const outer = plantOkfBundle({
+    'a/doc.md': conceptDoc(REFERENCE_TYPE, `See [gone](${ABOVE_ROOT_HREF}).`),
+    ...extra,
+  });
+  plantSymlink(outer, 'mirror', 'a', 'dir');
+  return { outer, root: safePath.join(outer, 'a') };
+}
+
 describe('validateOkfBundle', () => {
   describe('a conformant bundle', () => {
     it('reports no findings for documents carrying only type', async () => {
@@ -540,6 +573,15 @@ describe('validateOkfBundle', () => {
       expect(message).toContain("okf.bundles.gone.root");
       expect(message).toContain("'./nowhere'");
       expect(message).not.toContain(root);
+
+      // The no-leak property is DOCUMENT-scoped, so assert it on the document.
+      // Asserting only `message` left `report.root` — whose own docstring calls
+      // itself "the only spelling of the root the report is allowed to publish"
+      // — free to carry the absolute path: reverting it to `options.root` kept
+      // all 94 OKF tests green. The clean-report sibling below makes exactly
+      // this assertion, and this failure path is the one it cannot reach.
+      expect(report.root).toBe('./nowhere');
+      expect(JSON.stringify(report)).not.toContain(root);
     });
 
     it('stays at error even when the bundle dial is lowered', async () => {
@@ -593,6 +635,92 @@ describe('validateOkfBundle', () => {
         'OKF_DOCUMENT_ESCAPES_BUNDLE',
       ]);
     });
+  });
+
+  describe('a link ABOVE the root that canonicalizes back INSIDE it', () => {
+    // 🪤 Two containment questions, two different predicates. `resolveOne`
+    // admitted a target on `isWithinProject` — REALPATH containment, which a
+    // `mirror -> a` symlink beside the root satisfies, because the missing file
+    // canonicalizes to `<root>/nope.md`. The judge then asked the LEXICAL
+    // question (`safePath.relative(root, target)` starts with `..`) and threw.
+    //
+    // Nothing caught it: `inspectDocument`'s only `try` wraps the parse. So the
+    // ordinary user data below — a link to a file that does not even exist,
+    // which is a plain broken cross-link — delivered all three things this
+    // module's docstrings claim to have eliminated: exit 2 ("the tool broke")
+    // instead of a finding, every OTHER bundle's findings discarded with it,
+    // and the absolute root printed into stdout and the CI log.
+    //
+    // The property pinned here is that the two gates agree. Which verdict they
+    // agree ON is §2's: a path written above the bundle root does not travel
+    // with the tarball, whatever a symlink OUTSIDE the root makes of it on the
+    // author's disk — so it is an escape, judged before existence.
+
+    it.skipIf(!SYMLINKS_AVAILABLE)(
+      'reports a finding, keeps judging the bundle, and leaks no absolute path',
+      async () => {
+        const { outer, root } = plantMirroredBundle({ 'a/other.md': NO_FRONTMATTER });
+
+        const report = await validateOkfBundle({
+          bundle: 'docs',
+          root,
+          rootSpecifier: ROOT_SPECIFIER,
+        });
+
+        // A finding, not a throw — and the document AFTER the offending one was
+        // still judged, which is what "the run continues" means inside a bundle.
+        expect(codesOf(report.findings)).toEqual([
+          'OKF_LINK_ESCAPES_BUNDLE',
+          'OKF_FRONTMATTER_MISSING',
+        ]);
+        expect(report.findings[0]?.document).toBe('doc.md');
+        expect(report.findings[0]?.link).toBe(ABOVE_ROOT_HREF);
+
+        // The report publishes the spelling the config wrote, and nothing else.
+        // `outer` is a prefix of `root`, so one assertion covers both.
+        expect(report.root).toBe(ROOT_SPECIFIER);
+        expect(JSON.stringify(report)).not.toContain(outer);
+      },
+    );
+
+    it.skipIf(!SYMLINKS_AVAILABLE)(
+      'leaves a SIBLING bundle validated after it fully intact',
+      async () => {
+        const { root } = plantMirroredBundle();
+
+        await validateOkfBundle({ bundle: 'docs', root, rootSpecifier: ROOT_SPECIFIER });
+
+        // The throw took the whole command down, so the sibling's findings were
+        // never computed at all. Ordering the sibling second is the point.
+        const sibling = await validateOkfBundle({
+          bundle: 'knowledge',
+          root: plantOkfBundle({ 'sibling.md': NO_FRONTMATTER }),
+          rootSpecifier: KNOWLEDGE_SPECIFIER,
+        });
+
+        expect(codesOf(sibling.findings)).toEqual(['OKF_FRONTMATTER_MISSING']);
+      },
+    );
+
+    it.skipIf(!SYMLINKS_AVAILABLE)(
+      'is a conformance finding, so the per-bundle dial reaches it',
+      async () => {
+        // The exit-code half of the property, asserted where this package can
+        // see it: a hard `error` that no dial reaches is how "the tool broke"
+        // is spelled here, and a conformance finding is not that.
+        const { root } = plantMirroredBundle();
+
+        const report = await validateOkfBundle({
+          bundle: 'docs',
+          root,
+          rootSpecifier: ROOT_SPECIFIER,
+          severity: 'warning',
+        });
+
+        expect(report.findings[0]?.severity).toBe('warning');
+        expect(report.hasErrors).toBe(false);
+      },
+    );
   });
 
   describe('an unreadable SUBdirectory is not an unreadable root', () => {

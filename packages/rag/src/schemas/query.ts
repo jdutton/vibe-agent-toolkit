@@ -60,7 +60,7 @@ export const RAGQuerySchema = z.object({
    * ⚠️ This schema validates STRUCTURE, not provider support: a query carrying one of
    * the four DECLARED-BUT-UNIMPLEMENTED keys parses successfully here and is refused at
    * `query()`. The refusal names the offending key and its remedy — see
-   * `assertQuerySupported` in `@vibe-agent-toolkit/rag-lancedb`.
+   * `assertQuerySupported`, which lives in and is exported from this package.
    *
    * A key this object does NOT declare is a different case and is refused right here, by
    * `.strict()`: it would otherwise be deleted before any provider could refuse it, which
@@ -146,7 +146,8 @@ export const RAGQuerySchema = z.object({
    * sharper form: the results of an ignored `enabled: true` are indistinguishable
    * from having omitted the field entirely, so nothing whatsoever would tell a caller
    * that the keyword pass never ran. Pass `enabled: false`, or omit the field, to run
-   * the vector search deliberately.
+   * the vector search deliberately — and drop any `keywordWeight` with it: a weight
+   * reaches no keyword pass either, so it is refused even when `enabled` is `false`.
    */
   hybridSearch: z.object({
     enabled: z.boolean().describe('Enable hybrid search (vector + keyword) — true is refused; no provider implements it'),

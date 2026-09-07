@@ -184,6 +184,38 @@ const PATH_TOOLS = new Set(['Read', 'Edit']);
 const UNCONSULTED_PATH_TOOLS = new Set(['Write', 'Glob', 'NotebookRead', 'NotebookEdit']);
 
 /**
+ * How a rule's CONTENT is read for a given tool — the one taxonomy behind both
+ * {@link matchesPermissionRule} (which content matcher decides a concrete tool
+ * input) and {@link ruleConstrainsTool} (whether the rule restricts the tool at
+ * all).
+ *
+ * 🚩 Those two questions used to have two implementations, and they
+ * contradicted each other. `settings-compat-checker` answered the second one
+ * itself with `rule.startsWith(`${toolName}(`)`, so `Write(./secrets/**)` was
+ * reported as blocking a skill that declares a bare `Write` while this module's
+ * own ruling — and its answer for `Write(./out/x)` — says that rule blocks
+ * nothing. One deny rule gave two answers for one tool, decided by nothing but
+ * how the SKILL.md spelled it. A second taxonomy is what let that happen, so
+ * there is one.
+ */
+type ContentLane = 'bash' | 'webfetch' | 'path' | 'unconsulted' | 'opaque';
+
+/**
+ * Which {@link ContentLane} reads a rule's content for `toolName`.
+ *
+ * `opaque` is everything else — MCP tools and any tool this module has no
+ * content matcher for. Their content is not interpreted, so only a `*` covers
+ * anything.
+ */
+function contentLaneFor(toolName: string): ContentLane {
+  if (toolName === 'Bash') return 'bash';
+  if (toolName === 'WebFetch') return 'webfetch';
+  if (PATH_TOOLS.has(toolName)) return 'path';
+  if (UNCONSULTED_PATH_TOOLS.has(toolName)) return 'unconsulted';
+  return 'opaque';
+}
+
+/**
  * Wrappers stripped before a Bash rule is matched, per the published table:
  * *"The stripped wrappers are `timeout`, `time`, `nice`, `nohup`, and `stdbuf`,
  * plus the shell builtins `command` and `builtin`, and zsh's `noglob`."*
@@ -263,6 +295,30 @@ const TWO_CHAR_SEPARATORS = new Set(['&&', '||', '|&']);
 
 /** The single-character compound separators. */
 const ONE_CHAR_SEPARATORS = new Set([';', '|', '&', '\n']);
+
+/**
+ * Whether the `&` at `index` belongs to a REDIRECTION operator rather than to
+ * the separator of the same character.
+ *
+ * 🚩 `&` was read as a top-level separator with no redirection awareness, so
+ * `2>&1` split into `… 2>` and `1`, and the allow lane's every-subcommand
+ * requirement then failed on the subcommand `1`. `Bash(ls:*)` stopped
+ * permitting `ls -la > /dev/null 2>&1` and `Bash(npm run build:*)` stopped
+ * permitting `npm run build 2>&1` — the same class as the `grep -E "a|b"`
+ * quoting defect, an under-match, and the single most common shell idiom there
+ * is. The file's own `@vendor-claim` names *"redirections vs the `&`
+ * separator"* as a published clause with no assertion behind it; there is one
+ * now.
+ *
+ * Adjacency is the whole test, and it is what keeps a genuine separator a
+ * separator. `>&` covers `2>&1`, `1>&2`, `>&2` and `2>&-`; `&>` covers `&>file`
+ * and `&>>file`. A background `&` with a space after it (`npm test & rm -rf /`)
+ * and one glued to the next command (`npm test &rm -rf /`) are untouched, and
+ * `&&` never reaches here because {@link TWO_CHAR_SEPARATORS} is checked first.
+ */
+function isRedirectionAmpersand(command: string, index: number): boolean {
+  return command[index - 1] === '>' || command[index + 1] === '>';
+}
 
 /**
  * The separators after which nothing may follow: *"When `&&` or `||` has nothing
@@ -460,13 +516,16 @@ function endOfQuoted(command: string, start: number): number | undefined {
 }
 
 /**
- * The separator at `index`, or `undefined` when the character there is not one.
+ * The separator at `index`, or `undefined` when the character there is not one —
+ * including when it is an `&` that belongs to a redirection operator, per
+ * {@link isRedirectionAmpersand}.
  */
 function separatorAt(command: string, index: number): string | undefined {
   const two = command.slice(index, index + 2);
   if (TWO_CHAR_SEPARATORS.has(two)) return two;
   const one = command[index];
-  return one !== undefined && ONE_CHAR_SEPARATORS.has(one) ? one : undefined;
+  if (one === undefined || !ONE_CHAR_SEPARATORS.has(one)) return undefined;
+  return one === '&' && isRedirectionAmpersand(command, index) ? undefined : one;
 }
 
 /**
@@ -1314,6 +1373,14 @@ export function matchesPathRule(
   // node-ignore can't match paths that go "up" (..)
   if (relative.startsWith('..')) return false;
 
+  // 🚩 An empty relative path THREW: node-ignore raises `path must not be
+  // empty`, and `settings-compat-checker` reaches this with an empty tool input
+  // whenever a SKILL.md declares a bare `Read`/`Edit` against an org path rule.
+  // `vat audit` died with an uncaught TypeError on that plugin rather than
+  // reporting anything about it. An empty path is not a path, and a rule cannot
+  // match a file that was never named, so the answer is `false`.
+  if (relative.length === 0) return false;
+
   return ig.ignores(relative);
 }
 
@@ -1350,27 +1417,71 @@ export function matchesPermissionRule(
   // Bare tool name — matches all calls to this tool
   if (content === undefined) return true;
 
-  if (toolName === 'Bash') {
-    return matchesBashRule(toolInput, rule, lane);
+  switch (contentLaneFor(toolName)) {
+    case 'bash':
+      return matchesBashRule(toolInput, rule, lane);
+    case 'webfetch':
+      return matchesStructuredContent(toolInput, content);
+    case 'path':
+      return matchesPathRule(toolInput, content, cwd);
+    // Accepted by Claude Code, never consulted — so it blocks nothing,
+    // including when the path is `*`.
+    case 'unconsulted':
+      return false;
+    // MCP tools and others: the content is not interpreted, so only a `*`
+    // covers this call. A bare rule was already answered above.
+    case 'opaque':
+      return content === '*';
   }
+}
 
-  if (toolName === 'WebFetch') {
-    return matchesStructuredContent(toolInput, content);
+/**
+ * Whether `rule` restricts `toolName` AT ALL — the question to ask about a tool
+ * declared without a specific input, where {@link matchesPermissionRule} needs
+ * one concrete input to answer.
+ *
+ * A SKILL.md `allowed-tools:` entry spelled bare (`Write`) or wildcarded
+ * (`Write(*)`) declares the tool UNRESTRICTED, so the conflict it can have with
+ * a permission rule is not "does this rule match that input" — there is no
+ * input — but "does this rule constrain the tool the skill wants unrestricted".
+ *
+ * ⛔ The answer comes from {@link contentLaneFor}, the same taxonomy
+ * {@link matchesPermissionRule} dispatches on, so the two can never disagree
+ * about a tool. Answering it any other way — a string prefix test on the rule,
+ * for one — is what made the checker contradict this module's own ruling that a
+ * `Write`/`Glob`/`NotebookRead`/`NotebookEdit` path rule blocks nothing.
+ *
+ * ⛔ `lane` is REQUIRED here for the same reason it is everywhere else in this
+ * module: the tool-name glob a rule may carry is accepted asymmetrically.
+ *
+ * @param toolName - The tool the caller is asking about
+ * @param rule - Full permission rule string
+ * @param lane - Which permission bucket the rule came from
+ */
+export function ruleConstrainsTool(
+  toolName: string,
+  rule: string,
+  lane: PermissionLane
+): boolean {
+  const { toolName: ruleTool, content } = parsePermissionRule(rule);
+
+  if (!matchesToolName(ruleTool, toolName, lane)) return false;
+
+  // A bare rule names the tool and nothing else: it covers every use of it.
+  if (content === undefined) return true;
+
+  switch (contentLaneFor(toolName)) {
+    case 'unconsulted':
+      return false;
+    case 'opaque':
+      return content === '*';
+    // Bash, WebFetch and the two consulted path tools: the content is read, so
+    // a rule carrying any restricts what the tool may do.
+    case 'bash':
+    case 'webfetch':
+    case 'path':
+      return true;
   }
-
-  if (PATH_TOOLS.has(toolName)) {
-    return matchesPathRule(toolInput, content, cwd);
-  }
-
-  // Accepted by Claude Code, never consulted — so it blocks nothing, including
-  // when the path is `*`. Must come BEFORE the `content === '*'` fallthrough.
-  if (UNCONSULTED_PATH_TOOLS.has(toolName)) return false;
-
-  // MCP tools and others: bare match only (already handled above)
-  // Any content match is treated as wildcard
-  if (content === '*') return true;
-
-  return false;
 }
 
 /**

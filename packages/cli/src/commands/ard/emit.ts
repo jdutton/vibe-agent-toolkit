@@ -22,6 +22,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { handleCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import { createLogger } from '../../utils/logger.js';
+import { writeJsonOutput } from '../../utils/output.js';
 import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
 
 import { collectArdSurfaces, type SkippedArdSurface } from './surfaces.js';
@@ -79,6 +80,15 @@ export interface ArdEmitOptions {
   projectRoot?: string | undefined;
   /** Destination path, absolute or relative to the project root. */
   output?: string | undefined;
+  /**
+   * How the run reports itself: a human line (default) or {@link ArdEmitReport}.
+   *
+   * `text` is the default because it is what the command already wrote, and
+   * this lane's stdout is a published contract.
+   */
+  format?: 'text' | 'json' | undefined;
+  /** Fail the run when it advertises nothing, or skipped a configured surface. */
+  strict?: boolean | undefined;
   debug?: boolean | undefined;
 }
 
@@ -170,25 +180,108 @@ export async function runArdEmit(options: ArdEmitOptions): Promise<ArdEmitResult
   };
 }
 
+/**
+ * Whether the manifest this run wrote advertises anything at all.
+ *
+ * `empty` is a separate word for the same reason `vat okf validate` spells
+ * `no-bundles` rather than `passed`: a run that wrote `{"entries":[]}` and one
+ * that wrote a full catalogue both ended at exit 0 with a cheerful line on
+ * stdout, and nothing a machine could read told them apart. A CI step that
+ * emits and publishes was therefore green over a discovery document advertising
+ * nothing.
+ */
+export type ArdEmitStatus = 'written' | 'empty';
+
+/** The document `--format json` publishes. */
+export interface ArdEmitReport {
+  readonly status: ArdEmitStatus;
+  readonly outputPath: string;
+  readonly entryCount: number;
+  /**
+   * Counts BESIDE the lists, as `vat okf validate` publishes `issueCounts`.
+   *
+   * The count is what a CI step gates on without a JSON path into an array;
+   * the list is what the human it pages then acts on. Publishing only one of
+   * them answers "how many" or "which", never both.
+   */
+  readonly skippedCount: number;
+  readonly shadowedCount: number;
+  readonly skipped: readonly SkippedArdSurface[];
+  readonly shadowed: readonly ShadowedArdOverrideKey[];
+}
+
+/** Pure: the report a result becomes, so the status rule is unit-testable. */
+export function buildArdEmitReport(result: ArdEmitResult): ArdEmitReport {
+  return {
+    status: result.entryCount > 0 ? 'written' : 'empty',
+    outputPath: result.outputPath,
+    entryCount: result.entryCount,
+    skippedCount: result.skipped.length,
+    shadowedCount: result.shadowed.length,
+    skipped: result.skipped,
+    shadowed: result.shadowed,
+  };
+}
+
+/**
+ * Why `--strict` fails this run, or `undefined` when it does not.
+ *
+ * ⚠️ A shadowed override key is deliberately NOT a strict failure: the
+ * precedence is deterministic and documented, the entry is still emitted, and
+ * nothing about the published manifest is wrong. What `--strict` gates is the
+ * manifest's CONTENT — a surface an author declared and a consumer will never
+ * see, and the empty document that is the limit case of that.
+ */
+function strictFailure(report: ArdEmitReport): string | undefined {
+  if (report.skippedCount > 0) {
+    const surfaces =
+      report.skippedCount === 1 ? '1 configured surface was' : `${report.skippedCount} configured surfaces were`;
+    // Not "see above": in `--format json` the reasons are IN the report, not on
+    // stderr, so a message naming a position would be wrong on one of the two
+    // channels.
+    return `--strict: ${surfaces} not advertised — each is named, with its reason, in this run's \`skipped\` report.`;
+  }
+  if (report.status === 'empty') {
+    return '--strict: the manifest advertises nothing. Nothing this project declares became an ARD entry.';
+  }
+  return undefined;
+}
+
+/** The human rendering: findings on stderr, the one summary line on stdout. */
+function writeArdEmitText(report: ArdEmitReport): void {
+  for (const item of report.skipped) {
+    process.stderr.write(`skipped ${item.kind} "${item.name}": ${item.reason}\n`);
+  }
+  for (const item of report.shadowed) {
+    process.stderr.write(
+      `ignored \`ard.entries.${item.shadowedKey}\`: the ${item.kind} "${item.name}" is also named ` +
+        `by \`ard.entries."${item.winningKey}"\`, and the kind-qualified key wins. Nothing in the ` +
+        'bare block was read — fold it into the qualified one or delete it.\n'
+    );
+  }
+  process.stdout.write(
+    `Wrote ${report.entryCount} ARD entr${report.entryCount === 1 ? 'y' : 'ies'} to ${report.outputPath}\n`
+  );
+}
+
 /** Action handler for `vat ard emit`. */
 export async function ardEmitCommand(options: ArdEmitOptions): Promise<void> {
   const logger = createLogger(options.debug === true ? { debug: true } : {});
   const startTime = Date.now();
   try {
-    const result = await runArdEmit(options);
-    for (const item of result.skipped) {
-      process.stderr.write(`skipped ${item.kind} "${item.name}": ${item.reason}\n`);
+    const report = buildArdEmitReport(await runArdEmit(options));
+    if (options.format === 'json') {
+      // The report carries every skipped and shadowed surface in full, so the
+      // stderr lines would be the same facts twice on two channels.
+      writeJsonOutput(report);
+    } else {
+      writeArdEmitText(report);
     }
-    for (const item of result.shadowed) {
-      process.stderr.write(
-        `ignored \`ard.entries.${item.shadowedKey}\`: the ${item.kind} "${item.name}" is also named ` +
-          `by \`ard.entries."${item.winningKey}"\`, and the kind-qualified key wins. Nothing in the ` +
-          'bare block was read — fold it into the qualified one or delete it.\n'
-      );
+    const failure = options.strict === true ? strictFailure(report) : undefined;
+    if (failure !== undefined) {
+      process.stderr.write(`${failure}\n`);
+      process.exit(1);
     }
-    process.stdout.write(
-      `Wrote ${result.entryCount} ARD entr${result.entryCount === 1 ? 'y' : 'ies'} to ${result.outputPath}\n`
-    );
   } catch (error) {
     // 🔑 THE RULE, in one sentence: **exit 1 means VAT read this project and
     // produced no manifest by its own rules — it declares no `ard:` block, or a
@@ -218,6 +311,6 @@ export async function ardEmitCommand(options: ArdEmitOptions): Promise<void> {
       process.exit(1);
       return;
     }
-    handleCommandError(error, logger, startTime, 'ARD emit');
+    handleCommandError(error, logger, startTime, 'ARD emit', options.format);
   }
 }

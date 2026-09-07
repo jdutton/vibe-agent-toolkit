@@ -132,7 +132,7 @@ If checks fail, doctor provides specific suggestions:
 ```
 ❌ Node.js version
    v22.4.0 does not satisfy the required range. Node.js >=22.13.0 required.
-   💡 Upgrade Node.js: https://nodejs.org/ or use nvm
+   💡 Install a Node.js version in that range: https://nodejs.org/ or use nvm
 ```
 
 ### Configuration

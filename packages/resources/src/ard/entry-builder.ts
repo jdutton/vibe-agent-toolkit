@@ -316,6 +316,11 @@ function resolveLocation(
  * `did:web:example.com` deliberately yields `undefined`: DID methods encode
  * their authority per-method, and inventing a parse for each one would turn a
  * check into a guess.
+ *
+ * ⚠️ `undefined` here means "this form has no authority *in the URI*", NOT "this
+ * identity is fine". A bare `example.com` also yields `undefined`, and
+ * {@link resolveTrustManifest} — not this function — is what decides which of
+ * the two absences is legitimate.
  */
 function identityAuthority(identity: string): string | undefined {
   // Split on the literal `://` rather than matching a scheme with a regex: the
@@ -334,6 +339,16 @@ function identityAuthority(identity: string): string | undefined {
 }
 
 /**
+ * The one identity form whose authority VAT deliberately does not parse.
+ *
+ * A DID's authority is defined by its METHOD — `did:web`, `did:key`, `did:ion`
+ * each answer "who is this" differently — so binding one would mean
+ * implementing a parse per method, and a wrong parse is worse than an absent
+ * one. This is the ONLY exemption; see {@link resolveTrustManifest}.
+ */
+const DID_IDENTITY_PREFIX = 'did:';
+
+/**
  * The trust manifest, with the one binding ARD actually mandates checked.
  *
  * §"publisher-authority binding": the identity's trust domain MUST align with
@@ -341,13 +356,38 @@ function identityAuthority(identity: string): string | undefined {
  * further, so VAT reads it as *the same host, or a subdomain of it* — tight
  * enough to catch a copy-paste from another org, loose enough for a workload
  * identity that lives under the publisher's domain.
+ *
+ * 🚨 An identity carrying no authority at all used to skip that check in
+ * silence. The DID exemption was written as "no `://`, no authority to parse",
+ * and a bare `attacker.com` has no `://` either — so it was emitted into the
+ * manifest with the one binding ARD mandates never applied, at exit 0. It is
+ * also not a form the config schema offers: its own description says "SPIFFE
+ * ID, DID, or HTTPS FQDN URI", and a bare domain is none of the three.
+ *
+ * So the rule is now stated positively, and there are exactly two ways past it:
+ * the authority is IN the URI and VAT binds it, or the identity is a DID and
+ * the deferral is deliberate. A scheme-less string is neither, and guessing
+ * which URI the author meant — `https://example.com`? `did:web:example.com`? a
+ * SPIFFE trust domain? — is the guess this lane exists to refuse.
  */
 function resolveTrustManifest(surface: ArdSurface, config: ArdConfig): ArdEntryDraft['trustManifest'] {
   const configured = config.trustManifest;
   if (configured === undefined) return undefined;
   const host = identityAuthority(configured.identity);
   const publisher = config.publisher.toLowerCase();
-  if (host !== undefined && host !== publisher && !host.endsWith(`.${publisher}`)) {
+  if (host === undefined) {
+    if (!configured.identity.toLowerCase().startsWith(DID_IDENTITY_PREFIX)) {
+      throw new ArdDerivationError(
+        surface,
+        `trustManifest.identity "${configured.identity}" carries no authority VAT can bind to the ` +
+          `publisher "${config.publisher}". ARD requires publisher-authority binding, and VAT can ` +
+          'only perform it when the authority is in the URI: write an HTTPS FQDN URI ' +
+          `("https://${config.publisher}/workload") or a SPIFFE ID ` +
+          `("spiffe://${config.publisher}/workload"). A DID ("did:web:${config.publisher}") is the ` +
+          'one exempt form, because DID methods encode their authority per-method.'
+      );
+    }
+  } else if (host !== publisher && !host.endsWith(`.${publisher}`)) {
     throw new ArdDerivationError(
       surface,
       `trustManifest.identity "${configured.identity}" is anchored at "${host}", which does not align ` +
@@ -382,7 +422,7 @@ function applyOptionalFields(
  * @throws {ArdDerivationError} when a field VAT refuses to guess is missing —
  *   a media type for a surface the spec names none for, an unusable URN
  *   segment, no `url` and no `data`, or a trust identity that does not align
- *   with the publisher.
+ *   with the publisher — including one carrying no authority to align at all.
  */
 export function buildArdEntry(surface: ArdSurface, config: ArdConfig): ArdEntry {
   const overrides = findOverrides(surface, config);

@@ -12,6 +12,9 @@
  * // ❌ BAD — raw string compare, no realpath: false through any `.bin` symlink
  * if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) { … }
  *
+ * // ❌ BAD — the same compare done in path space instead of URL space
+ * if (fileURLToPath(import.meta.url) === process.argv[1]) { … }
+ *
  * // ✅ GOOD
  * import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
  * if (isEntrypoint(import.meta.url)) { await main(); }
@@ -39,6 +42,15 @@
  *   SYMLINK and `import.meta.url` is the resolved target, the strings differ,
  *   and the guard is false. Measured false on Node 22.14.0 and 24.13.1 alike,
  *   where `isEntrypoint()` is true.
+ *
+ *   ⚠️ That defect is about the MISSING REALPATH, not about URLs, so it has a
+ *   second spelling that is just as common and just as wrong:
+ *   `fileURLToPath(import.meta.url) === process.argv[1]` converts the module URL
+ *   to a path instead of converting the invoked path to a URL, and then compares
+ *   the same two unresolved strings. A matcher that only knew the URL-space form
+ *   would be a mechanism with a hole in the middle of its own premise, which is
+ *   the thing this rule exists to refuse. Both directions of both spellings are
+ *   flagged, under one message, because they are one defect.
  *
  * The first of those was fixed once already and the fix was pinned by nothing:
  * reverting all three call sites to `if (import.meta.main)` left the entire test
@@ -125,6 +137,48 @@ function isPathToFileUrlHref(node) {
   );
 }
 
+/** `fileURLToPath(import.meta.url)`, in either import style. */
+function isFileUrlToPathOfImportMetaUrl(node) {
+  return (
+    node !== null &&
+    node !== undefined &&
+    node.type === 'CallExpression' &&
+    calleeName(node.callee) === 'fileURLToPath' &&
+    isImportMetaMember(node.arguments?.[0], 'url')
+  );
+}
+
+/**
+ * `process.argv[1]` — and the `const { argv } = process` spelling of it.
+ *
+ * The index is pinned to `1` on purpose: `argv[2]` and up are ordinary CLI
+ * arguments, and comparing one of those to anything is not this defect.
+ */
+function isArgvEntry(node) {
+  if (node === null || node === undefined) return false;
+  if (node.type !== 'MemberExpression' || node.computed !== true) return false;
+  if (node.property?.type !== 'Literal' || node.property.value !== 1) return false;
+
+  const target = node.object;
+  if (target?.type === 'Identifier') return target.name === 'argv';
+  return (
+    target?.type === 'MemberExpression' &&
+    target.computed === false &&
+    target.property?.type === 'Identifier' &&
+    target.property.name === 'argv'
+  );
+}
+
+/** Where THIS module lives, in whichever space the comparison is written in. */
+function isModuleLocation(node) {
+  return isImportMetaMember(node, 'url') || isFileUrlToPathOfImportMetaUrl(node);
+}
+
+/** The script Node was ASKED to run, in whichever space the comparison uses. */
+function isInvokedScript(node) {
+  return isArgvEntry(node) || isPathToFileUrlHref(node);
+}
+
 /** Identity comparisons; `==`/`!=` on these operands never occurs and is not the idiom. */
 const IDENTITY_OPERATORS = new Set(['===', '!==']);
 
@@ -133,7 +187,7 @@ module.exports = {
     type: 'problem',
     docs: {
       description:
-        'Ban entrypoint guards that silently answer false — `import.meta.main` (undefined before Node 24.2/22.18) and a raw `import.meta.url === pathToFileURL(argv[1]).href` compare (false through any symlink). Use `isEntrypoint()`.',
+        'Ban entrypoint guards that silently answer false — `import.meta.main` (undefined before Node 24.2/22.18) and any raw compare of where the module lives to `process.argv[1]`, in URL space or path space (false through any symlink). Use `isEntrypoint()`.',
       category: 'Cross-Platform',
       recommended: false,
     },
@@ -141,7 +195,7 @@ module.exports = {
       importMetaMain:
         '`import.meta.main` is undefined before Node 24.2 / 22.18, so this guard is FALSE on older supported Node and the script exits 0 having done nothing. Use `isEntrypoint(import.meta.url)` from `@vibe-agent-toolkit/utils/process`.',
       rawEntrypointCompare:
-        'Comparing `import.meta.url` to `pathToFileURL(process.argv[1]).href` is a raw string compare with no realpath, so it is FALSE whenever the script is reached through a symlink (any `node_modules/.bin` shim) and the script exits 0 having done nothing. Use `isEntrypoint(import.meta.url)` from `@vibe-agent-toolkit/utils/process`.',
+        'Comparing where this module lives to `process.argv[1]` (as `import.meta.url === pathToFileURL(argv[1]).href`, or as `fileURLToPath(import.meta.url) === argv[1]`) is a raw string compare with no realpath pass, so it is FALSE whenever the script is reached through a symlink (any `node_modules/.bin` shim) and the script exits 0 having done nothing. Use `isEntrypoint(import.meta.url)` from `@vibe-agent-toolkit/utils/process`.',
     },
     schema: [],
   },
@@ -157,9 +211,10 @@ module.exports = {
       BinaryExpression(node) {
         if (!IDENTITY_OPERATORS.has(node.operator)) return;
 
+        // Either operand order: a matcher keyed on side would be half blind.
         const compares =
-          (isImportMetaMember(node.left, 'url') && isPathToFileUrlHref(node.right)) ||
-          (isImportMetaMember(node.right, 'url') && isPathToFileUrlHref(node.left));
+          (isModuleLocation(node.left) && isInvokedScript(node.right)) ||
+          (isModuleLocation(node.right) && isInvokedScript(node.left));
 
         if (compares) {
           context.report({ node, messageId: 'rawEntrypointCompare' });

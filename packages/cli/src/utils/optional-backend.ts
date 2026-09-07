@@ -5,10 +5,11 @@
  * ## Why this exists rather than four `await import()` calls
  *
  * `@vibe-agent-toolkit/rag-lancedb` pulls a platform-native LanceDB binary
- * (119.6 MiB unpacked on `win32-x64`, 40.3 MiB compressed to download) plus
- * `onnxruntime-web` (133 MB) and `gpt-tokenizer` (44 MB). Measured on the
- * published `vibe-agent-toolkit@0.1.42`: **275 MB of a 351 MB install is the
- * RAG lane**, and a static import chain from `bin.ts` meant
+ * (97.8 MB unpacked on `darwin-arm64`, and larger still on `win32-x64`, where
+ * it measured 119.6 MiB) plus `onnxruntime-web` (137.5 MB) and `gpt-tokenizer`
+ * (42.2 MB). Summed over the RAG lane's third-party closure against this
+ * release's pins, on `darwin-arm64`: **~287 MB unpacked**, and a static import
+ * chain from `bin.ts` meant
  * `import('@lancedb/lancedb')` — **1,350 ms cold** — ran before `vat --version`
  * could print a string. It is a named seam rather than a one-off fix because
  * "optional backend" is a shape VAT keeps growing — a projection store is

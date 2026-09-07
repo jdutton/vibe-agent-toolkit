@@ -5,11 +5,19 @@
  * owned elsewhere, and this file only builds the command.
  */
 
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 
 import { ardEmitCommand, DEFAULT_ARD_OUTPUT } from './emit.js';
 
-export { ardEmitCommand, runArdEmit, ArdConfigMissingError, DEFAULT_ARD_OUTPUT } from './emit.js';
+export {
+  ardEmitCommand,
+  buildArdEmitReport,
+  runArdEmit,
+  ArdConfigMissingError,
+  DEFAULT_ARD_OUTPUT,
+  type ArdEmitReport,
+  type ArdEmitStatus,
+} from './emit.js';
 export { collectArdSurfaces, type ArdSurfaceCollection, type SkippedArdSurface } from './surfaces.js';
 
 /** Build the `vat ard` command group. */
@@ -33,6 +41,18 @@ Description:
     .description('Build the ARD manifest and write it to disk')
     .option('-o, --output <path>', `Output path (default: ${DEFAULT_ARD_OUTPUT})`)
     .option('--project-root <dir>', 'Project root to read the config from (default: cwd)')
+    .addOption(
+      // Rejected by Commander rather than falling through to `text`, as the
+      // sibling `vat okf validate` does: `--format Json` in a pipeline must
+      // fail HERE, where the mistake is, not downstream in `jq`.
+      new Option('--format <format>', 'Output format: text (default) or json')
+        .choices(['text', 'json'])
+        .default('text')
+    )
+    .option(
+      '--strict',
+      'Exit 1 when the manifest advertises nothing, or a configured surface was skipped'
+    )
     .option('--debug', 'Verbose logging to stderr')
     .action(ardEmitCommand)
     .addHelpText(
@@ -64,13 +84,18 @@ Requirements:
                  \`data\` and emission fails.
 
 Exit Codes:
-  0 - Manifest written
-  1 - No \`ard:\` block in the config, or a surface could not be derived
+  0 - Manifest written — INCLUDING one that advertises nothing. An empty
+      \`entries\` list is a legal ARD document, and skipped surfaces are reported
+      on stderr at this exit code. Gate on \`--format json\` (\`status\`,
+      \`entryCount\`, \`skippedCount\`), or make both conditions fail with
+      \`--strict\`
+  1 - No \`ard:\` block in the config, or a surface could not be derived. Under
+      \`--strict\`, also an empty manifest or a skipped surface
   2 - System error (no project root, no config file, invalid config, unexpected
       internal failure)
 
 Example:
-  $ vat ard emit --output dist/.well-known/ard.json
+  $ vat ard emit --format json --strict
 `
     );
 

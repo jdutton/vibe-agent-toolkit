@@ -85,6 +85,8 @@ import {
   DirectorySpellingIndex,
   type FsLookupCache,
   type PathSpelling,
+  safePath,
+  toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 
 import type { ResourceLink } from '../types.js';
@@ -249,6 +251,52 @@ function normalizationDraft(
   };
 }
 
+/**
+ * Whether the target is written ABOVE the bundle root — judged lexically, on
+ * the spelling, with no filesystem in it.
+ *
+ * 🪤 **This is the second half of a containment question that used to be asked
+ * with only its first half, and the two halves disagreed.** {@link resolveOne}
+ * admitted a target on {@link isWithinProject}, which is REALPATH containment;
+ * {@link DirectorySpellingIndex.judgePath} then computed
+ * `safePath.relative(root, target)` and **threw** when the first segment was
+ * `..`. A `mirror -> a` symlink beside the bundle root satisfies the first and
+ * fails the second — `a/doc.md` linking `../mirror/nope.md` canonicalizes to
+ * `<root>/nope.md`, so gate one let it through and gate two detonated on it.
+ * Nothing caught the throw (`inspectDocument`'s only `try` wraps the parse), so
+ * an ordinary broken link exited `vat okf validate` at 2, discarded every other
+ * bundle's findings, and printed the absolute root into the CI log.
+ *
+ * 🔑 **The repair is to make gate one at least as strict as gate two, not to
+ * catch what gate two throws.** That throw is a genuine programming-error
+ * signal — a caller walking from a root it did not enumerate — and it shares a
+ * `catch` with the fill/judge-divergence throws beside it. Muffling it would
+ * trade one silent class for another.
+ *
+ * ⛔ And the lexical answer is the CORRECT one for this lane, not merely the
+ * conservative one. §2 makes the bundle the unit of distribution: `tar` of the
+ * root contains no `../mirror`, so a link written above the root is broken for
+ * every consumer no matter what the author's disk makes of it. That is
+ * {@link escapeDraft}'s case exactly — "may well point at a real file on the
+ * author's disk, and will still be broken for everyone who receives the
+ * tarball" — and it is decided BEFORE existence, so the verdict does not depend
+ * on whether the target happens to be there today.
+ *
+ * @param resolvedPath - Absolute path the href resolved to
+ * @param root - Absolute bundle root
+ * @returns True when the target is above the root as written
+ */
+function leavesRootAsWritten(resolvedPath: string, root: string): boolean {
+  // Tested as a whole SEGMENT rather than as a prefix, for the reason
+  // `judgePath` states: `startsWith('..')` would refuse a directory named
+  // `..cache`. `safePath.relative` already answers in forward slashes, and
+  // saying so out loud is what makes the split safe on Windows — the same
+  // belt-and-braces the judge's own line carries, and the point here is to
+  // compute exactly what it computes.
+  const [first] = toForwardSlash(safePath.relative(root, resolvedPath)).split('/');
+  return first === '..';
+}
+
 /** A link that got past resolution, waiting on the listing pass to be judged. */
 interface ResolvedTarget {
   link: ResourceLink;
@@ -282,7 +330,16 @@ function resolveOne(
   // A relative href gets no containment check from `resolveLocalHref`, which
   // only guards the `/`-absolute form. `../elsewhere.md` leaves the bundle
   // just as completely.
-  if (!isWithinProject(resolution.resolvedPath, root)) {
+  //
+  // ⛔ BOTH predicates, and the cheap one first. A target must be inside the
+  // root as WRITTEN (or it does not travel in the tarball — see
+  // {@link leavesRootAsWritten}, which is also the exact question the judge
+  // refuses to be asked) *and* inside it once symlinks are resolved (or it is a
+  // link out of the bundle). Failing either is one verdict: an escape.
+  if (
+    leavesRootAsWritten(resolution.resolvedPath, root) ||
+    !isWithinProject(resolution.resolvedPath, root)
+  ) {
     return { draft: escapeDraft(document, link) };
   }
 

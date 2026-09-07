@@ -13,6 +13,106 @@ import {
   buildWhereClause,
 } from '../src/filter-builder.js';
 
+/**
+ * 🔑 A minimal SQL `LIKE` evaluator, so the metacharacter tests below can assert the PROPERTY
+ * — "this condition discriminates" — instead of a string shape.
+ *
+ * Asserting on the emitted text is what let the original defect through: the previous table
+ * checked `not.toContain("LIKE '%%'")`, a literal that `LIKE '%%%'` does not contain, so a
+ * pattern matching every row in the index passed a test written to forbid exactly that. Only
+ * something that INTERPRETS the pattern can tell a filter from a tautology.
+ */
+type LikeToken = { kind: 'literal'; char: string } | { kind: 'one' } | { kind: 'many' };
+
+const unquoteSQLLiteral = (literal: string): string => literal.replaceAll("''", "'");
+
+const LIKE_WITH_ESCAPE = /^\w+ LIKE '(?<pattern>.*)' ESCAPE '(?<escape>.)'$/u;
+const LIKE_BARE = /^\w+ LIKE '(?<pattern>.*)'$/u;
+
+function parseLikeClause(clause: string): { pattern: string; escapeChar: string | undefined } {
+  const withEscape = LIKE_WITH_ESCAPE.exec(clause);
+  if (withEscape?.groups) {
+    return {
+      pattern: unquoteSQLLiteral(withEscape.groups['pattern'] ?? ''),
+      escapeChar: withEscape.groups['escape'],
+    };
+  }
+
+  const bare = LIKE_BARE.exec(clause);
+  if (!bare?.groups) {
+    throw new Error(`Not a single LIKE clause, so it cannot be evaluated: ${clause}`);
+  }
+  return { pattern: unquoteSQLLiteral(bare.groups['pattern'] ?? ''), escapeChar: undefined };
+}
+
+function tokenizeLikePattern(pattern: string, escapeChar: string | undefined): LikeToken[] {
+  const tokens: LikeToken[] = [];
+  let index = 0;
+
+  while (index < pattern.length) {
+    const char = pattern.charAt(index);
+
+    if (escapeChar !== undefined && char === escapeChar) {
+      const next = pattern.charAt(index + 1);
+      if (next === '') {
+        throw new Error(`Dangling escape character in LIKE pattern: ${pattern}`);
+      }
+      tokens.push({ kind: 'literal', char: next });
+      index += 2;
+      continue;
+    }
+
+    if (char === '%') {
+      tokens.push({ kind: 'many' });
+    } else if (char === '_') {
+      tokens.push({ kind: 'one' });
+    } else {
+      tokens.push({ kind: 'literal', char });
+    }
+    index += 1;
+  }
+
+  return tokens;
+}
+
+/** Classic backtracking wildcard match: `%` is any run, `_` is exactly one character. */
+function matchLikeTokens(tokens: readonly LikeToken[], value: string): boolean {
+  let tokenIndex = 0;
+  let valueIndex = 0;
+  let lastManyToken = -1;
+  let lastManyValue = 0;
+
+  while (valueIndex < value.length) {
+    const token = tokens[tokenIndex];
+
+    if (token?.kind === 'many') {
+      lastManyToken = tokenIndex;
+      lastManyValue = valueIndex;
+      tokenIndex += 1;
+    } else if (token?.kind === 'one' || (token?.kind === 'literal' && token.char === value.charAt(valueIndex))) {
+      tokenIndex += 1;
+      valueIndex += 1;
+    } else if (lastManyToken === -1) {
+      return false;
+    } else {
+      lastManyValue += 1;
+      tokenIndex = lastManyToken + 1;
+      valueIndex = lastManyValue;
+    }
+  }
+
+  while (tokens[tokenIndex]?.kind === 'many') {
+    tokenIndex += 1;
+  }
+  return tokenIndex === tokens.length;
+}
+
+/** Does the emitted single-`LIKE` condition select a row whose column holds `value`? */
+function likeClauseSelects(clause: string, value: string): boolean {
+  const { pattern, escapeChar } = parseLikeClause(clause);
+  return matchLikeTokens(tokenizeLikePattern(pattern, escapeChar), value);
+}
+
 describe('Filter Builder', () => {
   const TEST_DOMAIN = 'security';
   const EXPECTED_DOMAIN_FILTER = "domain = 'security'";
@@ -133,6 +233,82 @@ describe('Filter Builder', () => {
       const zodType = z.array(z.string());
 
       expect(buildMetadataFilter('tags', ['auth', ''], zodType)).toBe('1 = 0');
+    });
+
+    // 🚨 THE MIRROR OF THE STRINGIFY-TO-NOTHING FAMILY, and it was left open. The guard above
+    // closes "satisfiable by NOTHING"; this closes "satisfiable by EVERYTHING". The array
+    // branch interpolates the member straight into a `LIKE` pattern, so a member that is
+    // itself a LIKE metacharacter is read as a wildcard rather than as the character the
+    // caller asked for: `['%']` emitted `tags LIKE '%%%'`, which matches every row in the
+    // index, and `['_']` emitted `tags LIKE '%_%'`, which matches every non-empty one. Both
+    // reach here without a type error because `filters.metadata` is deliberately open
+    // (`z.record(z.string(), z.unknown())`), so a `%` straight out of a JSON payload turned a
+    // request to be filtered into full-recall search.
+    //
+    // Neither new guard can see it: `assertQuerySupported` sees a supported key, and
+    // `assertFiltersProducedConditions` counts one condition and is satisfied. Counting cannot
+    // distinguish a condition that discriminates from one that does not — which is why the
+    // table below EVALUATES the emitted pattern instead of asserting on its text. `decoy` is a
+    // stored value that does NOT contain the member, chosen so the pre-fix pattern matched it.
+    const LIKE_METACHARACTER_MEMBERS: ReadonlyArray<{
+      label: string;
+      member: string;
+      decoy: string;
+    }> = [
+      { label: 'a bare percent', member: '%', decoy: 'auth' },
+      { label: 'a bare underscore', member: '_', decoy: 'auth' },
+      { label: 'a percent inside a word', member: 'a%b', decoy: 'axxxb' },
+      { label: 'an underscore inside a word', member: 'a_b', decoy: 'axb' },
+      // The escape character itself. Whatever scheme the builder chooses, escaping it must
+      // itself be escaped, or `['\\']` silently becomes an escape of the closing `%`.
+      { label: 'a bare backslash', member: '\\', decoy: 'auth' },
+      {
+        label: 'the escape character next to a wildcard',
+        member: String.raw`a\%b`,
+        decoy: String.raw`a\zzzb`,
+      },
+      { label: 'both wildcards at once', member: '%_%', decoy: 'auth' },
+      { label: 'a realistic tag ending in percent', member: '100%', decoy: '100 percent' },
+    ];
+
+    it.each(LIKE_METACHARACTER_MEMBERS)(
+      'treats $label as a literal, so the condition still discriminates',
+      ({ member, decoy }) => {
+        const zodType = z.array(z.string());
+
+        const clause = buildMetadataFilter('tags', [member], zodType);
+
+        // Not vacuously false: a row that really carries the member is still selected.
+        expect(likeClauseSelects(clause, `x-${member}-y`)).toBe(true);
+        expect(likeClauseSelects(clause, member)).toBe(true);
+        // Not vacuously true: a row that does not carry it is NOT selected. This is the whole
+        // defect — `LIKE '%%%'` answered `true` here for every value on earth.
+        expect(likeClauseSelects(clause, decoy)).toBe(false);
+        expect(likeClauseSelects(clause, '')).toBe(false);
+      },
+    );
+
+    it('gives a metacharacter member the same answer through the public buildWhereClause path', () => {
+      const schema = z.object({ tags: z.array(z.string()) });
+
+      const clause = buildWhereClause({ metadata: { tags: ['%'] } }, schema);
+
+      expect(clause).not.toBeNull();
+      expect(likeClauseSelects(clause ?? '', 'a%b')).toBe(true);
+      expect(likeClauseSelects(clause ?? '', 'auth')).toBe(false);
+    });
+
+    // 🔑 The other half of the fix: it must not be bought by changing what every working caller
+    // already gets. These are the exact fragments emitted today, pinned byte-for-byte.
+    it('leaves a metacharacter-free member byte-identical to the clause it emits today', () => {
+      const zodType = z.array(z.string());
+
+      expect(buildMetadataFilter('tags', ['auth'], zodType)).toBe(EXPECTED_AUTH_TAG_FILTER);
+      expect(buildMetadataFilter('tags', 'auth', zodType)).toBe(EXPECTED_AUTH_TAG_FILTER);
+      expect(buildMetadataFilter('tags', "user's-tag", zodType)).toBe("tags LIKE '%user''s-tag%'");
+      expect(buildMetadataFilter('tags', ['auth', 'security'], zodType)).toBe(
+        "(tags LIKE '%auth%' AND tags LIKE '%security%')",
+      );
     });
 
     it('should escape single quotes in array filter values', () => {
