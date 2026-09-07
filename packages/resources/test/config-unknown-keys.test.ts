@@ -20,10 +20,20 @@ import { z } from 'zod';
 
 import { parseConfigAllowingUnknownKeys } from '../src/config-issues.js';
 
-/** A nested strict schema, the shape the real project config has. */
+/**
+ * A nested strict schema, the shape the real project config has.
+ *
+ * `blocks` is a RECORD of strict objects so a fixture can produce an arbitrary
+ * number of independent `unrecognized_keys` issues — Zod reports one per object,
+ * not one per key — and `test` sits after it in shape order so a type error there
+ * lands past the render cap. That ordering is the whole point of the truncation
+ * test below; do not reorder the shape.
+ */
 const Schema = z.object({
   version: z.number(),
   resources: z.object({ include: z.array(z.string()).optional() }).strict().optional(),
+  blocks: z.record(z.object({ note: z.string().optional() }).strict()).optional(),
+  test: z.object({ concurrency: z.number() }).strict().optional(),
 }).strict();
 
 /** Collect warnings so a test can assert one was raised — or that none was. */
@@ -79,7 +89,84 @@ describe('parseConfigAllowingUnknownKeys', () => {
     const s = sink();
 
     // The unknown key must not buy forgiveness for the type error beside it.
-    expect(() => parseConfigAllowingUnknownKeys(Schema, { version: 'one', nope: 1 }, s.warn)).toThrow();
+    //
+    // ⚠️ The MATCHER is the test. This assertion used to be a bare `.toThrow()`
+    // with nothing to match, which is satisfied by any message at all — so it was
+    // green while the shipped message named only the unknown key and never
+    // mentioned the type error that caused the refusal. An unmatched `.toThrow()`
+    // pins that a throw happened, not that the throw said anything true.
+    expect(() => parseConfigAllowingUnknownKeys(Schema, { version: 'one', nope: 1 }, s.warn))
+      .toThrow(/Expected number/);
+    expect(s.messages).toEqual([]);
+  });
+
+  it('renders the FATAL issue even when 25 unknown keys are reported before it', () => {
+    // 🚨 The truncation hole. `formatConfigValidationError` slices to the first
+    // 20 issues while `onlyUnknownKeys` is computed over ALL of them, so a config
+    // whose one fatal issue sorts past position 20 was refused with a message
+    // containing nothing but unrecognized-key blocks — each ending "Delete it, or
+    // correct the spelling." — plus "… and N more issue(s)". The adopter is told
+    // the config is refused, shown only complaints about keys that are explicitly
+    // NO LONGER FATAL, and handed a remedy that cannot lift the refusal.
+    const s = sink();
+    const manyUnknownKeys = Object.fromEntries(
+      Array.from({ length: 25 }, (_, i) => [`block${String(i)}`, { note: 'x', stale: true }]),
+    );
+
+    let message = '';
+    try {
+      parseConfigAllowingUnknownKeys(
+        Schema,
+        { version: 1, blocks: manyUnknownKeys, test: { concurrency: 'four' } },
+        s.warn,
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    // The issue that DECIDED the outcome has to survive the cap.
+    expect(message).toContain('test.concurrency');
+    expect(message).toContain('Expected number');
+    // The cap itself is untouched — this is a reordering, not a raised limit.
+    expect(message).toContain('more issue(s)');
+    expect(s.messages).toEqual([]);
+  });
+
+  it('says so when dropping the refused keys does NOT make the config valid', () => {
+    // The belt-and-braces arm, reached through a STUB rather than a real schema,
+    // and the stub is the finding as much as the assertion is: no Zod schema can
+    // reach this branch. `.refine()` was the obvious candidate and Zod runs the
+    // effect even when the inner object refuses a key, so the first parse already
+    // carries a non-unknown-key issue and the function throws one branch earlier.
+    // The arm is therefore unreachable today — but its message was still wrong: a
+    // pure unknown-keys diagnosis whose every remedy reads "delete it", handed to
+    // an adopter after deleting has just been tried and failed. A stub is the only
+    // honest way to hold that message; writing a "realistic" fixture that quietly
+    // exercised a different branch would be worse than none.
+    const s = sink();
+    const alwaysRefusesTheSameKey = {
+      safeParse: () => ({
+        success: false as const,
+        error: new z.ZodError([
+          {
+            code: z.ZodIssueCode.unrecognized_keys,
+            keys: ['extra'],
+            path: [],
+            message: "Unrecognized key(s) in object: 'extra'",
+          },
+        ]),
+      }),
+    } as unknown as z.ZodTypeAny;
+
+    let message = '';
+    try {
+      parseConfigAllowingUnknownKeys(alwaysRefusesTheSameKey, { version: 1, extra: true }, s.warn);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain('unrecognized key "extra"');
+    expect(message).toContain('the diagnosis above is incomplete');
     expect(s.messages).toEqual([]);
   });
 

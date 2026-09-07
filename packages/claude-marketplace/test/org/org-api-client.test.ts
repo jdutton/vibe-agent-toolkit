@@ -33,28 +33,88 @@ const SKILLS_PATH = '/v1/skills';
 /**
  * One scripted outcome.
  *
- * The three `reset*` forms exist because a transport failure is not one thing,
- * and the client now has to tell them apart: bytes may or may not have left the
- * socket, and the failure may arrive on the REQUEST or on the RESPONSE stream.
+ * The `reset*` forms exist because a transport failure is not one thing, and the
+ * client has to tell them apart: bytes may or may not have left the socket, a
+ * socket may not exist yet, and the failure may arrive on the REQUEST or on the
+ * RESPONSE stream.
  */
 type Exchange =
   | 'stall'
+  /** A socket is assigned and reaches whatever readiness event is configured, then silence. */
+  | 'connected-stall'
   /** The connection drops after the body was written — the live `socket hang up`. */
   | 'reset'
+  /** It drops WITH a socket in hand, before a byte of THIS request was flushed. */
+  | 'reset-before-write'
   /** It fails before a socket exists at all — DNS, or a refused connection. */
   | 'reset-before-socket'
   /** It drops after the headers arrived, which emits on the RESPONSE stream. */
   | 'reset-after-headers'
-  | { statusCode?: number; headers?: Record<string, string>; body?: string };
+  | ResponseExchange;
+
+interface ResponseExchange {
+  statusCode?: number;
+  headers?: Record<string, string>;
+  body?: string;
+}
+
+/**
+ * Bytes the fake charges a request for its HEADERS.
+ *
+ * Non-zero on purpose. The old fake assigned a fresh socket per request reporting
+ * exactly `body.length`, so the byte assertion compared the fixture to itself and
+ * could not see that the client was reading a per-SOCKET counter. A real request
+ * always writes a header block, so `bytesSent` is never the body length.
+ */
+const FAKE_HEADER_BYTES = 140;
+
+/**
+ * A socket whose `bytesWritten` is CUMULATIVE, as Node's is — the property the
+ * fake previously could not express, and the whole reason the defect was
+ * invisible. An `EventEmitter` so `'connect'` / `'secureConnect'` are real events
+ * the client can wait on.
+ */
+type FakeSocket = EventEmitter & { bytesWritten: number; connecting: boolean };
+
+/** Which readiness event the fake socket fires; `'none'` is a handshake that never completes. */
+type ReadyEvent = 'connect' | 'secureConnect' | 'none';
+
+interface SocketOptions {
+  /**
+   * One socket shared by every request, as `https.globalAgent` does on Node >= 19
+   * (`keepAlive: true` by default). The counter then accumulates across requests.
+   */
+  keepAlive?: boolean;
+  /** What the socket's counter already stood at before the first request. */
+  startBytes?: number;
+  /** A TLS socket carries `encrypted` and signals readiness with `'secureConnect'`. */
+  tls?: boolean;
+  readyEvent?: ReadyEvent;
+}
+
+function createFakeSocket(startBytes: number, tls: boolean): FakeSocket {
+  const socket = Object.assign(new EventEmitter(), { bytesWritten: startBytes, connecting: true });
+  if (tls) Object.assign(socket, { encrypted: true });
+  return socket;
+}
 
 interface CapturedCall {
-  options: { method?: string; hostname?: string; path?: string; headers?: Record<string, string> };
+  options: {
+    method?: string;
+    hostname?: string;
+    port?: string;
+    protocol?: string;
+    path?: string;
+    headers?: Record<string, string>;
+  };
   body: Buffer;
   timeoutMs: number | undefined;
   destroyedWith: Error | undefined;
   fireTimeout: () => void;
-  /** What the fake socket reports as written, or `undefined` if none was assigned. */
-  socketBytesWritten: number | undefined;
+  /** What THIS request alone put on the wire: headers plus body. */
+  bytesThisRequestWrote: number | undefined;
+  /** The socket's CUMULATIVE counter once this request was done writing to it. */
+  socketBytesWrittenAtEnd: number | undefined;
   /** Run the connect deadline's callback, as an unanswered DNS query would. */
   fireConnectDeadline: () => void;
   connectDeadlineCleared: boolean;
@@ -66,6 +126,26 @@ const CONNECT_DEADLINE_HANDLE = Symbol('connect-deadline');
 
 /** The one exchange that fails on the RESPONSE stream rather than the request. */
 const RESET_AFTER_HEADERS = 'reset-after-headers';
+
+/** A socket is assigned and reaches its readiness event, then nothing more happens. */
+const CONNECTED_STALL = 'connected-stall';
+
+/** A socket is assigned, then the connection drops before this request writes a byte. */
+const RESET_BEFORE_WRITE = 'reset-before-write';
+
+/**
+ * Start a request and let the fake get as far as assigning its socket.
+ *
+ * A `connected-stall` request never settles, so it is raced against an immediate
+ * rather than awaited — awaiting it would hang, and a bare floating promise is a
+ * lint error and an unhandled rejection waiting to happen.
+ */
+async function settleSocketAssignment(pending: Promise<unknown>): Promise<void> {
+  await Promise.race([
+    pending.catch(() => undefined),
+    new Promise((done) => setImmediate(done)),
+  ]);
+}
 
 /**
  * Intercept ONLY the connect deadline's timer, so a test can fire it without
@@ -108,9 +188,64 @@ function interceptConnectDeadline(currentCall: () => CapturedCall | undefined): 
   }) as unknown as typeof clearTimeout);
 }
 
-function createFakeTransport(script: Exchange[]): { calls: CapturedCall[]; requester: HttpRequester } {
+/**
+ * Hand the request its socket the way Node does: emitted on the REQUEST, before a
+ * byte is written, and only then signalling readiness. The order is load-bearing —
+ * the client takes its byte baseline in the `'socket'` handler, so a fake that
+ * wrote first would make every delta zero and pass vacuously.
+ */
+function assignFakeSocket(
+  req: EventEmitter & Record<string, unknown>,
+  socket: FakeSocket,
+  readyEvent: ReadyEvent,
+): void {
+  req['socket'] = socket;
+  req.emit('socket', socket);
+  if (socket.connecting && readyEvent !== 'none') {
+    socket.connecting = false;
+    socket.emit(readyEvent);
+  }
+}
+
+/** Charge the socket for this request's headers plus body, cumulatively. */
+function chargeSocket(call: CapturedCall, socket: FakeSocket, wroteBody: boolean): void {
+  const written = wroteBody ? FAKE_HEADER_BYTES + call.body.length : 0;
+  socket.bytesWritten += written;
+  call.bytesThisRequestWrote = written;
+  call.socketBytesWrittenAtEnd = socket.bytesWritten;
+}
+
+function emitScriptedResponse(
+  callback: (res: unknown) => void,
+  exchange: ResponseExchange | typeof RESET_AFTER_HEADERS,
+): void {
+  if (exchange === RESET_AFTER_HEADERS) {
+    const aborted = Object.assign(new EventEmitter(), { statusCode: 200, headers: {} });
+    callback(aborted);
+    aborted.emit('error', new Error('aborted'));
+    return;
+  }
+  const res = Object.assign(new EventEmitter(), {
+    statusCode: exchange.statusCode ?? 200,
+    headers: exchange.headers ?? {},
+  });
+  callback(res);
+  res.emit('data', Buffer.from(exchange.body ?? ''));
+  res.emit('end');
+}
+
+function createFakeTransport(
+  script: Exchange[],
+  socketOptions: SocketOptions = {},
+): { calls: CapturedCall[]; requester: HttpRequester } {
   const calls: CapturedCall[] = [];
   const pending = [...script];
+  const tls = socketOptions.tls ?? true;
+  const readyEvent = socketOptions.readyEvent ?? 'secureConnect';
+  const startBytes = socketOptions.startBytes ?? 0;
+  // One socket for every request, or a fresh one each time — the difference the
+  // per-request delta has to survive.
+  const shared = socketOptions.keepAlive === true ? createFakeSocket(startBytes, tls) : undefined;
   interceptConnectDeadline(() => calls.at(-1));
 
   const requester = (options: unknown, callback: (res: unknown) => void): unknown => {
@@ -122,16 +257,29 @@ function createFakeTransport(script: Exchange[]): { calls: CapturedCall[]; reque
       timeoutMs: undefined,
       destroyedWith: undefined,
       fireTimeout: () => undefined,
-      socketBytesWritten: undefined,
+      bytesThisRequestWrote: undefined,
+      socketBytesWrittenAtEnd: undefined,
       fireConnectDeadline: () => undefined,
       connectDeadlineCleared: false,
       connectDeadlineUnrefed: false,
     };
 
-    /** Assign a socket the way Node does once the connection is established. */
-    const attachSocket = (bytesWritten: number): void => {
-      call.socketBytesWritten = bytesWritten;
-      req['socket'] = { bytesWritten, connecting: false, once: () => undefined };
+    const runExchange = (exchange: Exchange): void => {
+      if (exchange === 'reset-before-socket') {
+        req.emit('error', new Error('getaddrinfo ENOTFOUND api.anthropic.com'));
+        return;
+      }
+      // 'stall' is a DNS blackhole: the request never gets a socket at all.
+      if (exchange === 'stall') return;
+      const socket = shared ?? createFakeSocket(startBytes, tls);
+      assignFakeSocket(req, socket, readyEvent);
+      if (exchange === CONNECTED_STALL) return;
+      chargeSocket(call, socket, exchange !== RESET_BEFORE_WRITE);
+      if (exchange === 'reset' || exchange === RESET_BEFORE_WRITE) {
+        req.emit('error', new Error('socket hang up'));
+        return;
+      }
+      emitScriptedResponse(callback, exchange);
     };
 
     req['setTimeout'] = (ms: number, onTimeout: () => void): unknown => {
@@ -151,30 +299,7 @@ function createFakeTransport(script: Exchange[]): { calls: CapturedCall[]; reque
     req['end'] = (): unknown => {
       call.body = Buffer.concat(chunks);
       const exchange = pending.shift();
-      if (exchange === undefined || exchange === 'stall') return req;
-      if (exchange === 'reset-before-socket') {
-        setImmediate(() => req.emit('error', new Error('getaddrinfo ENOTFOUND api.anthropic.com')));
-        return req;
-      }
-      if (exchange === 'reset') {
-        attachSocket(call.body.length);
-        setImmediate(() => req.emit('error', new Error('socket hang up')));
-        return req;
-      }
-      attachSocket(call.body.length);
-      setImmediate(() => {
-        const res: EventEmitter & Record<string, unknown> = Object.assign(new EventEmitter(), {
-          statusCode: exchange === RESET_AFTER_HEADERS ? 200 : (exchange.statusCode ?? 200),
-          headers: exchange === RESET_AFTER_HEADERS ? {} : (exchange.headers ?? {}),
-        });
-        callback(res);
-        if (exchange === RESET_AFTER_HEADERS) {
-          res.emit('error', new Error('aborted'));
-          return;
-        }
-        res.emit('data', Buffer.from(exchange.body ?? ''));
-        res.emit('end');
-      });
+      if (exchange !== undefined) setImmediate(() => { runExchange(exchange); });
       return req;
     };
 
@@ -185,8 +310,11 @@ function createFakeTransport(script: Exchange[]): { calls: CapturedCall[]; reque
   return { calls, requester: requester as unknown as HttpRequester };
 }
 
-function clientWith(script: Exchange[]): { calls: CapturedCall[]; client: OrgApiClient } {
-  const { calls, requester } = createFakeTransport(script);
+function clientWith(
+  script: Exchange[],
+  socketOptions: SocketOptions = {},
+): { calls: CapturedCall[]; client: OrgApiClient } {
+  const { calls, requester } = createFakeTransport(script, socketOptions);
   return { calls, client: new OrgApiClient({ apiKey: API_KEY, httpRequest: requester }) };
 }
 
@@ -460,6 +588,43 @@ describe('interpretApiResponse', () => {
     expect(interpretApiResponse<{ id: string }>(200, '{"id":"skill_1"}'))
       .toEqual({ ok: true, value: { id: 'skill_1' } });
   });
+
+  /**
+   * Success is 2xx and ONLY 2xx. Refusing merely `>= 400` let a 1xx or 3xx through
+   * as `{ ok: true, value: undefined }`, and Node's HTTP client does not follow
+   * redirects, so a 3xx arrives here verbatim: a TLS-terminating proxy answering
+   * `DELETE /v1/skills/{id}` with `302 Found` and an empty body resolved
+   * `undefined`, which the delete reporter reads as "no error type, therefore
+   * deleted" — `status: success`, exit 0, skill still there.
+   */
+  describe('anything outside 2xx is a refusal, not a success', () => {
+    it('refuses a 302 with an empty body, which is what a proxy answers a DELETE with', () => {
+      const outcome = interpretApiResponse<unknown>(302, '');
+      expect(outcome.ok).toBe(false);
+      expect(outcome.ok ? '' : outcome.message).toBe('API error 302: (empty body)');
+    });
+
+    it('refuses a 304, naming the status rather than resolving undefined', () => {
+      const outcome = interpretApiResponse<unknown>(304, '');
+      expect(outcome.ok).toBe(false);
+      expect(outcome.ok ? '' : outcome.message).toContain('304');
+    });
+
+    it('refuses a 1xx', () => {
+      expect(interpretApiResponse<unknown>(100, '').ok).toBe(false);
+    });
+
+    it('refuses a response that never carried a status, instead of coercing it to 0', () => {
+      const outcome = interpretApiResponse<unknown>(undefined, '');
+      expect(outcome.ok).toBe(false);
+      expect(outcome.ok ? '' : outcome.message).toBe('API error no status: (empty body)');
+    });
+
+    it('still accepts the whole 2xx range', () => {
+      expect(interpretApiResponse<unknown>(200, '').ok).toBe(true);
+      expect(interpretApiResponse<unknown>(299, '').ok).toBe(true);
+    });
+  });
 });
 
 describe('request status handling, end to end through the transport', () => {
@@ -476,6 +641,33 @@ describe('request status handling, end to end through the transport', () => {
   it('rejects with an ApiRequestError, so a caller can branch on the status', async () => {
     const { client } = clientWith([{ statusCode: 404, body: 'nope' }]);
     await expect(client.getSkills(SKILLS_PATH)).rejects.toBeInstanceOf(ApiRequestError);
+  });
+
+  /**
+   * A DELETE answered `302 Found` with an empty body used to RESOLVE `undefined`,
+   * which the CLI's delete reporter reads as a successful delete. Exit 0, and the
+   * skill still there — the exact shape the reporter was added to eliminate.
+   */
+  it('rejects a redirect rather than resolving it as a completed DELETE', async () => {
+    const { client } = clientWith([{ statusCode: 302, headers: { location: '/elsewhere' }, body: '' }]);
+    await expect(client.deleteSkill('skill_1')).rejects.toThrow('API error 302');
+  });
+});
+
+/**
+ * The URL's port and protocol have to reach the transport. They are not reachable
+ * today — the base URL is a constant on 443 — but dropping them arms the trap for
+ * the first base-URL override, which would then be sent somewhere else in silence.
+ */
+describe('request options carry the whole URL, not just its host and path', () => {
+  it('passes the protocol through, and leaves an absent port undefined rather than empty', async () => {
+    const { calls, client } = clientWith([{ statusCode: 200, body: '{}' }]);
+    await client.getSkills(SKILLS_PATH);
+
+    expect(calls[0]?.options.protocol).toBe('https:');
+    expect(calls[0]?.options.hostname).toBe('api.anthropic.com');
+    // `new URL(...).port` is '' for a default port, and '' is not a port.
+    expect(calls[0]?.options.port).toBeUndefined();
   });
 });
 
@@ -610,11 +802,15 @@ describe('a transport failure carries what actually left the socket', () => {
   const everyAttempt = (exchange: Exchange): Exchange[] => [exchange, exchange, exchange];
 
   it('rejects with an ApiTransportError naming the bytes written', async () => {
-    const { calls, client } = clientWith(everyAttempt('reset'));
-    const failure = await client.getSkills(SKILLS_PATH).catch((error: unknown) => error);
+    const multipart = buildMultipartFormData({ display_title: 'x' }, []);
+    const { client } = clientWith(['reset']); // a POST is never replayed
+    const failure = await client.uploadSkill(multipart).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(ApiTransportError);
-    expect((failure as ApiTransportError).bytesSent).toBe(calls[0]?.socketBytesWritten);
+    // Headers plus body — computed here, not read back off the fixture. A request
+    // always writes a header block, so the count is never the body length.
+    expect((failure as ApiTransportError).bytesSent).toBe(FAKE_HEADER_BYTES + multipart.body.length);
+    expect((failure as ApiTransportError).bytesSent).not.toBe(multipart.body.length);
     expect((failure as ApiTransportError).deadlineExceeded).toBe(false);
   });
 
@@ -623,6 +819,47 @@ describe('a transport failure carries what actually left the socket', () => {
     const failure = await client.getSkills(SKILLS_PATH).catch((error: unknown) => error);
 
     expect((failure as ApiTransportError).bytesSent).toBe(0);
+  });
+
+  /**
+   * 🚨 `socket.bytesWritten` is a per-SOCKET cumulative counter, and this client
+   * passes no `agent`, so it gets `https.globalAgent` — `keepAlive: true` on Node
+   * >= 19. Sequential requests therefore share one socket and the raw counter is
+   * the running total: measured locally as 140, 280, 420, 560 across four
+   * header-only GETs. Reading it raw made every count after the first a sum of
+   * other requests' traffic.
+   */
+  describe('the byte count belongs to the REQUEST, not to the socket it borrowed', () => {
+    const REUSED = { keepAlive: true } as const;
+
+    it('reports only this attempt, on a socket three attempts have written to', async () => {
+      const { calls, client } = clientWith(everyAttempt('reset'), REUSED);
+      const failure = await client.getSkills(SKILLS_PATH).catch((error: unknown) => error);
+
+      // The fake really is expressing a reused socket: one connection, three
+      // requests, a counter that accumulated to their sum.
+      expect(calls).toHaveLength(3);
+      expect(calls[2]?.socketBytesWrittenAtEnd).toBe(3 * FAKE_HEADER_BYTES);
+      // …and the client reports one request's worth, not the socket's total.
+      expect((failure as ApiTransportError).bytesSent).toBe(FAKE_HEADER_BYTES);
+    });
+
+    /**
+     * The `bytesSent === 0` branch is what tells an operator that NOTHING was
+     * created. Read raw, it was unreachable after the first request on a
+     * keep-alive socket: a reset before a byte of the 4th DELETE was flushed
+     * reported the previous three requests' bytes as this one's.
+     */
+    it('reports zero when a reset beat the first byte out, on an already-written socket', async () => {
+      const { calls, client } = clientWith(everyAttempt(RESET_BEFORE_WRITE), {
+        keepAlive: true,
+        startBytes: 3 * FAKE_HEADER_BYTES,
+      });
+      const failure = await client.deleteSkill('skill_1').catch((error: unknown) => error);
+
+      expect(calls[0]?.socketBytesWrittenAtEnd).toBe(3 * FAKE_HEADER_BYTES);
+      expect((failure as ApiTransportError).bytesSent).toBe(0);
+    });
   });
 
   /**
@@ -685,6 +922,23 @@ describe('decideRetry', () => {
   it('stops replaying once the attempt budget is spent', () => {
     expect(decideRetry('DELETE', 99, reset())).toEqual({ rethrow: expect.any(ApiTransportError) });
   });
+
+  /**
+   * A retryable-looking status that is NOT retried gets rebuilt so the "not
+   * retried" note can be appended. The rebuild used to drop the original object
+   * and its stack — asymmetric with `ApiTransportError`, which has always plumbed
+   * a cause. Diagnosability only, but the asymmetry is the kind that gets copied.
+   */
+  it('keeps the original error as the cause when it rebuilds one to add a note', () => {
+    const original = new ApiRequestError('API error 429: rate', 429, '1');
+    const decision = decideRetry('POST', 0, original) as { rethrow: ApiRequestError };
+
+    expect(decision.rethrow).not.toBe(original);
+    expect(decision.rethrow.message).toContain('Not retried');
+    expect(decision.rethrow.cause).toBe(original);
+    expect(decision.rethrow.statusCode).toBe(429);
+    expect(decision.rethrow.retryAfterHeader).toBe('1');
+  });
 });
 
 // ── Getting a socket at all ────────────────────────────────────────────
@@ -723,6 +977,47 @@ describe('connect deadline', () => {
     await client.getSkills(SKILLS_PATH);
 
     expect(calls[0]?.connectDeadlineUnrefed).toBe(true);
+  });
+
+  /**
+   * The budget claims to cover "DNS plus TCP plus TLS". For `https` the socket is a
+   * `TLSSocket` whose `'connect'` fires when the TCP connection is up — BEFORE the
+   * handshake begins; `'secureConnect'` is the handshake-complete signal. Probed
+   * against a `net` server that accepts and never speaks TLS: `'connect'` fired at
+   * once, `'secureConnect'` never. Disarming on `'connect'` therefore retired the
+   * 30 s budget early and dropped the request into the 120 s inactivity budget —
+   * four times the documented wait, ending in a message about a connection that
+   * "moved no data", which misdescribes a handshake that never started.
+   */
+  describe('covers the TLS handshake, not just the TCP connect', () => {
+    it('stays armed when a TLS socket connects at TCP but never completes the handshake', async () => {
+      const { calls, client } = clientWith([CONNECTED_STALL], { tls: true, readyEvent: 'connect' });
+      const pending = client.getSkills(SKILLS_PATH).catch((error: unknown) => error);
+      // Let the fake assign the socket and fire its TCP 'connect'.
+      await settleSocketAssignment(pending);
+
+      expect(calls[0]?.connectDeadlineCleared).toBe(false);
+
+      // The budget is still the one that fires, and it says nothing was sent.
+      calls[0]?.fireConnectDeadline();
+      const failure = await pending;
+      expect(String(failure)).toContain('Could not connect');
+      expect((failure as ApiTransportError).bytesSent).toBe(0);
+    });
+
+    it('disarms on secureConnect, so a long upload over a live TLS session is never cut off', async () => {
+      const { calls, client } = clientWith([CONNECTED_STALL], { tls: true, readyEvent: 'secureConnect' });
+      await settleSocketAssignment(client.getSkills(SKILLS_PATH));
+
+      expect(calls[0]?.connectDeadlineCleared).toBe(true);
+    });
+
+    it('falls back to connect for a socket with no TLS layer', async () => {
+      const { calls, client } = clientWith([CONNECTED_STALL], { tls: false, readyEvent: 'connect' });
+      await settleSocketAssignment(client.getSkills(SKILLS_PATH));
+
+      expect(calls[0]?.connectDeadlineCleared).toBe(true);
+    });
   });
 });
 

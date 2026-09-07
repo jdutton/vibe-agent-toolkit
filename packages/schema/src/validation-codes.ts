@@ -182,14 +182,18 @@ export const CODE_REGISTRY = {
   // dist. No human review of the source can see that, which is why it is worth
   // a code despite the narrower precision.
   //
-  // Warning, not error, on measured evidence: 2 misfires in 52 built adopter
-  // skills — 3.8% — and the residual class is irreducible: a skill whose SUBJECT
-  // is skill authoring cites example paths it does not ship. VAT's own
-  // vat-skill-authoring is in that class.
+  // Warning, not error, on measured evidence from TWO corpora: 2 misfires in 52
+  // built adopter skills (3.8%) and 10.4% on a 632-skill installed corpus — the
+  // same shipped rule pair, a 2.7x spread. Neither corpus is privileged; quote
+  // both or name the one you mean. The residual class is irreducible: a skill
+  // whose SUBJECT is skill authoring cites example paths it does not ship. VAT's
+  // own vat-skill-authoring is in that class.
   //
-  // ⚠️ 3.8% is the rate that SHIPS, and it is the one to quote. Two filters run
-  // in production: literal paths only, and the first segment must be a bundled
-  // subdirectory. The validator's table records a 1.9% row for a deleted third rule
+  // ⚠️ Those are the rates that SHIP. Two filters run in production: literal
+  // paths only, and the first segment must be a bundled subdirectory (a
+  // candidate also resolves against its content-type-ROUTED spelling, because
+  // packaging relocates a file by extension and leaves code-fence tokens
+  // unrewritten). The validator's table records a 1.9%/8.9% row for a deleted third rule
   // that widens resolution to the whole plugin — it never had a production
   // caller, and the whole subsystem behind it has been DELETED, so the documented
   // rate and the shipped rate cannot drift apart again.

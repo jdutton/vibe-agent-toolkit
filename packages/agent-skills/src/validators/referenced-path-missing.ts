@@ -16,8 +16,6 @@
  * `references/<setup-guide>.md` four times, that file is present at the matching
  * path in the source repository, and it is absent from the published bundle.
  *
- * ## The three rules, and why each exists
- *
  * ## The two rules, and why each exists
  *
  * Fire rates measured over **684 skills across two corpora** (one of them a live
@@ -34,12 +32,20 @@
  * | + literal (rule 1) | 46.2% | 47.5% |
  * | + bundled-subdir prefix (rule 2) | **3.8%** | **10.4%** |
  *
- * Both rules ship, and the 3.8% row is what runs.
+ * Both rules ship, and the shipped rule pair is the bottom row: **3.8% on the
+ * 52-skill adopter marketplace and 10.4% on the 632-skill installed corpus**.
+ * ⚠️ QUOTE BOTH, ALWAYS. The headline here used to quote 3.8% alone — the lower
+ * of two numbers measured on the SAME shipped rule — which reads as a single
+ * measured misfire rate rather than as the flattering end of a 2.7x spread.
+ * Neither corpus is privileged: the marketplace is BUILT output (what this check
+ * actually runs on) and the install corpus is bigger and more varied, so a
+ * reader deciding whether to enable this needs the range, not the better half.
  *
  * 1. **Literal paths only.** A glob or a placeholder (`docs/**\/*.md`,
  *    `docs/product/<component>/prd.md`) is not a claim that a file exists.
  * 2. **First segment must be a bundled subdirectory.** This is the rule that
- *    earns the precision — a 17x reduction — and it is the only *semantic* one.
+ *    earns the precision — 17x on the marketplace corpus, 5x on the install
+ *    corpus (65.4%→3.8% and 52.1%→10.4%) — and it is the only *semantic* one.
  *    The lexer deliberately refuses this judgement: it emits `docs/product/prd.md`
  *    and `dist/bin/arc-cli.mjs` as equal candidates because whether a token refers
  *    to the skill's own bundle or to the USER'S repository is a lens's property,
@@ -47,8 +53,9 @@
  *    prefix test IS that lens, and its measured precision is recorded above so a
  *    future lens can be held to it.
  *
- * A third rule — a plugin-wide **sibling search root**, measured at 1.9% and
- * 8.9% — was built and then DELETED, because nothing could call it. The rejected
+ * A third rule — a plugin-wide **sibling search root**, measured at 1.9%
+ * (marketplace) and 8.9% (install corpus) — was built and then DELETED, because
+ * nothing could call it. The rejected
  * wiring and why a dead seam is not a head start are on
  * {@link detectMissingReferencedPaths}. The sibling population is real: one
  * measured skill points at a sibling's `resources/*.md`, another at a plugin-root
@@ -62,6 +69,14 @@
  * a measured skill ships no `scripts/` in source and gets `scripts/<cli>.mjs`
  * injected. Running this at source phase fired on it; running it at built phase
  * does not. Measured: 15.0% source vs 9.6% built for the same naive rule.
+ *
+ * ## A path VAT'S OWN PACKAGER moved is not a missing path
+ *
+ * Content-type routing relocates a bundled file by EXTENSION, so an authored
+ * `resources/setup.sh` ships as `scripts/setup.sh`. Markdown links are rewritten
+ * to follow it; bare tokens in fences and code spans — this check's only input —
+ * are not. A candidate is therefore only missing if it is absent under BOTH its
+ * authored spelling and its routed one. See {@link routedSpelling}.
  *
  * ## Deliberately NOT handled here
  *
@@ -91,7 +106,11 @@ import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
-import { CLAUDE_WEB_REFERENCES_SUBDIR, TARGET_SUBDIR_CATEGORIES } from '../content-type-routing.js';
+import {
+  CLAUDE_WEB_REFERENCES_SUBDIR,
+  getTargetSubdir,
+  TARGET_SUBDIR_CATEGORIES,
+} from '../content-type-routing.js';
 
 /**
  * Subdirectories a packaged skill may bundle resources into.
@@ -148,6 +167,15 @@ function bundleRelativeSegments(token: string): string[] | null {
  *
  * Exported for tests: these two predicates are the whole precision argument, and
  * pinning them directly is cheaper than reconstructing a corpus to observe them.
+ *
+ * ⚠️ It is also the SHIPPED rule, and that is load-bearing rather than tidiness.
+ * `bundledPathCandidates` used to re-derive the same two steps inline — a
+ * `bundleRelativeSegments` call followed by its own `BUNDLED_SUBDIRS.has(…)` —
+ * so every assertion in this module's `isBundledSubdirPath` describe block
+ * pinned a COPY of the rule. Lower-casing the lookup in the production line left
+ * all eight of them green. This lane has already shipped that exact defect once
+ * (a filter whose only caller was a unit test ran at double its documented
+ * misfire rate), so there is ONE definition and production calls it.
  */
 export function isBundledSubdirPath(token: string): boolean {
   const segments = bundleRelativeSegments(token);
@@ -183,11 +211,66 @@ export async function bundledPathCandidates(filePath: string): Promise<string[]>
     // not: it counts FORWARD slashes only, and `bundleRelativeSegments` already
     // refuses anything that does not split into at least two segments.
     if (!ref.hasExtension) continue;
+    // `bundleRelativeSegments` runs here for the NORMALIZATION it does
+    // (`./scripts/x.mjs` and `scripts\x.mjs` collapse onto one spelling, so one
+    // allow glob waives all of them). The bundled-subdir JUDGEMENT is
+    // `isBundledSubdirPath`'s and is CALLED, never re-derived — see that
+    // function for why re-deriving it made its whole test block vacuous.
     const segments = bundleRelativeSegments(ref.raw);
-    if (segments === null || !BUNDLED_SUBDIRS.has(segments[0] ?? '')) continue;
+    if (segments === null || !isBundledSubdirPath(ref.raw)) continue;
     out.add(segments.join('/'));
   }
   return [...out];
+}
+
+/**
+ * Existence-only probe for one bundle-relative path.
+ *
+ * `rel` IS document content — the least trusted input in this module — so it is
+ * constrained before it gets here rather than trusted: it reached this line only
+ * by passing `bundleRelativeSegments`, which admits a relative path with no
+ * empty, `.` or `..` segment and refuses every glob and placeholder character,
+ * and by being rooted at one of the five known bundled subdirectory names.
+ * `skillDir` is the caller's own directory. Nothing is read, nothing is written,
+ * and a `true` merely suppresses a warning.
+ *
+ * {@link routedSpelling}'s output is derived from the same constrained value —
+ * a basename of it, under a name from the routing table — so it inherits the
+ * argument rather than needing its own.
+ */
+function bundleHas(skillDir: string, rel: string): boolean {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- see above
+  return existsSync(safePath.join(skillDir, rel));
+}
+
+/**
+ * Where the packager would actually put a file with this basename.
+ *
+ * 🚨 **VAT's own packaging manufactures this finding, and this is the guard.**
+ * `getTargetSubdir` routes an auto-discovered bundled file by EXTENSION alone,
+ * discarding the subdirectory its author chose: source `resources/setup.sh`
+ * ships as `scripts/setup.sh`, `scripts/config.json` as `templates/config.json`,
+ * `assets/runtime.wasm` as `resources/runtime.wasm`. The packager rewrites
+ * markdown LINKS to the routed destination, so those stay correct — but a bare
+ * token in a code fence or code span is deliberately NOT rewritten, and bare
+ * tokens are precisely what {@link bundledPathCandidates} reads. So a skill that
+ * says ``bash resources/setup.sh`` in a fenced block, and links `resources/setup.sh`
+ * in prose, gets one rewritten reference that resolves and one unrewritten one
+ * that reports a file which DID ship.
+ *
+ * That misfire is unfixable by the author: the registered remedy ("Ship the
+ * file, correct the path…") names no action that resolves it, because writing
+ * the packaged spelling into the source breaks the source repo, where the file
+ * really is under the authored subdirectory.
+ *
+ * So a candidate is only missing if it is absent under BOTH its authored
+ * spelling and its routed one. The suppression is deliberately narrow — a
+ * basename-for-basename relocation, which is exactly the shape routing produces
+ * — and it costs one extra `existsSync` on a path that already failed one.
+ */
+function routedSpelling(rel: string): string {
+  const basename = rel.slice(rel.lastIndexOf('/') + 1);
+  return `${getTargetSubdir(basename)}/${basename}`;
 }
 
 /**
@@ -248,10 +331,11 @@ export async function bundledPathCandidates(filePath: string): Promise<string[]>
  *   So the subsystem was deleted rather than kept as a seam. `complete` was always
  *   `true`, the truncated-search caveat could never ship, and the tests that
  *   covered the walk covered a path production does not take — while attributing
- *   real coverage to it. The measured fire rate that ships is the skill-local
- *   **3.8%**, and the 1.9% figure describes a check VAT does not run. If a
- *   plugin-aware lens is ever built, it can grow its own resolution rule with its
- *   own measurement; a dead parameter is not a head start.
+ *   real coverage to it. The measured fire rates that ship are the skill-local
+ *   **3.8% (marketplace) / 10.4% (install corpus)**; the 1.9% / 8.9% pair
+ *   describes a check VAT does not run. If a plugin-aware lens is ever built, it
+ *   can grow its own resolution rule with its own measurement; a dead parameter
+ *   is not a head start.
  */
 export async function detectMissingReferencedPaths(
   docFiles: readonly string[],
@@ -262,17 +346,8 @@ export async function detectMissingReferencedPaths(
 
   for (const docFile of docFiles) {
     const candidates = await bundledPathCandidates(docFile);
-    const missing = candidates.filter(rel =>
-      // `rel` IS document content — the least trusted input in this module — so
-      // it is constrained before it gets here rather than trusted: it reached
-      // this line only by passing `bundleRelativeSegments`, which admits a
-      // relative path with no empty, `.` or `..` segment and refuses every glob
-      // and placeholder character, and by being rooted at one of the five known
-      // bundled subdirectory names. `skillDir` is the caller's own directory. The
-      // probe is existence only — nothing is read, nothing is written — and a
-      // `true` merely suppresses a warning.
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- see above
-      !existsSync(safePath.join(skillDir, rel)),
+    const missing = candidates.filter(
+      rel => !bundleHas(skillDir, rel) && !bundleHas(skillDir, routedSpelling(rel)),
     );
     if (missing.length === 0) continue;
 

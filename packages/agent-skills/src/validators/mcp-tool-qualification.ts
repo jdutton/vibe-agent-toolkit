@@ -46,8 +46,9 @@
  *
  * ## The uppercase rule in the API form, and why it is load-bearing
  *
- * The server half must carry an uppercase letter (`GitHub:create_issue`,
- * `BigQuery:bigquery_schema` — Anthropic's own examples). Without that rule the
+ * The server half must be spelled the way Anthropic's own examples spell one —
+ * uppercase FIRST, no underscore (`GitHub:create_issue`,
+ * `BigQuery:bigquery_schema`). Without that rule the
  * pattern also matches two things that are emphatically not MCP tools:
  *
  * - **Node builtin specifiers** — `node:child_process` yields a "tool" named
@@ -61,32 +62,48 @@
  * authoring project, which is precisely the population check
  * `docs/validation-rule-design.md` requires and the reason it requires it.
  *
- * ## Measured fire rate, 2026-09-06
+ * ## Measured fire rate, re-measured 2026-09-07
  *
  * Population = documents that spell at least one MCP tool fully-qualified.
  *
  * | Corpus | docs | population | firing | occurrences |
  * |---|---|---|---|---|
- * | VAT itself (`packages/**\/*.md`, dist + node_modules excluded) | 206 | 2 | **0** | 0 |
- * | installed skills (`SKILL.md` under `~/.claude/plugins`, `~/.claude/skills`) | 677 | 28 | 7 | 11 |
+ * | VAT itself (`packages/**\/*.md`, dist + node_modules excluded) | 206 | 3 | **0** | 0 |
+ * | installed skills (`SKILL.md` under `~/.claude/plugins`, `~/.claude/skills`) | 678 | 28 | 7 | 11 |
  *
- * Re-measured with THIS detector after the hyphen, per-match and frontmatter
- * fixes. The previous table's two adopter rows are gone rather than restated:
- * they were taken with the previous regexes, and neither corpus is reachable
- * from this worktree to re-run.
+ * ⛔ **Every number this table used to carry was taken by the camelCase-blind
+ * matcher, so re-taking them was not optional.** A corpus measured by a matcher
+ * that cannot see a whole family of names has already excluded that family from
+ * its own population count, and "zero false positives" over such a corpus is a
+ * statement about the blindness as much as about the rule. Both rows above were
+ * re-run with the fixed detector, driving the exported functions directly, over
+ * a corpus re-enumerated on the day.
+ *
+ * What moved, A/B on the same files with HEAD's module and this one:
+ *
+ * - **Authoring project: population 2 → 3.** One document newly enters the
+ *   population, because it spells two camelCase tools (`generateHaiku`,
+ *   `generateName`) that the old matcher could not see at all. Firing stays 0.
+ * - **Installed skills: nothing moved** — 28 / 7 / 11 before and after,
+ *   character for character, with no vocabulary entry gained or lost. The
+ *   installed corpus is snake_case throughout, which is Anthropic's own
+ *   convention and therefore exactly the population least able to expose this
+ *   defect. Its silence is not evidence the defect was small.
+ * - The corpus itself grew 677 → 678 `SKILL.md` between the two measurement
+ *   dates; the delta above is A/B on the SAME 678 files, so it is a property of
+ *   the detector rather than of the corpus.
  *
  * All 11 occurrences were read: every one names a tool bare that the same
  * document qualifies in its own prose. Zero false positives.
  *
- * ✅ **Re-measured after the multi-segment gate landed, and the table did not
- * move**: both rows are identical (0 and 11), because every tool in this
- * population is already multi-word. So the gate closes a structural hole without
- * costing recall on anything observed — which is the only honest way to report
- * it, since a precision change that nobody re-ran is a claim rather than a
- * measurement.
+ * The SHIPPED command was re-run on the same corpus rather than trusted to
+ * agree with the probe — `vat audit --user`, 852 skills scanned, reproducing
+ * the installed-skills row occurrence for occurrence and line for line (plus
+ * the 4 linked-file occurrences `docs/validation-codes.md` records, which the
+ * probe above does not traverse).
  *
- * The pre-fix detector, run over the SAME 677 documents, reported 19
- * occurrences from the same 7 documents. The extra 8 were four copies of one
+ * The frontmatter-including detector, run over the same 678 documents, reports
+ * 19 occurrences from the same 7 documents. The extra 8 are four copies of one
  * skill naming `create_repository` and `create_branch` bare, whose only
  * qualified spelling is its `allowed-tools:` frontmatter.
  *
@@ -135,8 +152,32 @@ import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema'
  *   there, so `mcp__plugin_context7_context7__resolve-library-id` put `resolve`
  *   into the vocabulary. Every later code span spelling that ordinary English
  *   word — or `query`, from `query-docs` — became a finding.
+ *
+ * ⛔ **The tool capture must NOT end on `\b`, and camelCase is why.** It used to,
+ * and the consequence was not truncation — it was total invisibility. `\b`
+ * asserts a word/non-word boundary; when the character after the captured run is
+ * an UPPERCASE letter, both sides are word characters and the assertion fails.
+ * The engine then backtracks the lowercase class one character at a time, and
+ * every interior position is word|word too, so the whole match is abandoned:
+ *
+ * ```
+ * mcp__linear__createIssue  →  []   (not ["create"] — nothing at all)
+ * mcp__x__get_userInfo      →  []
+ * ```
+ *
+ * camelCase tool names are the ordinary case for MCP servers written in
+ * TypeScript, so a document driving such a server had an EMPTY vocabulary and
+ * could report nothing — the exact defect this detector exists to catch, in the
+ * exact documents most likely to have it. The hyphen family survived only
+ * because `-` is a non-word character, which is why a fixture existed for
+ * `foo-Bar` and none for `fooBar`.
+ *
+ * The fix is `(?![\w-])` — "not followed by a name character" — with the capture
+ * class widened to admit uppercase so the whole camelCase name is taken. A
+ * lookahead cannot be satisfied by giving back characters the way `\b` was, so
+ * there is no silent-abandonment mode left.
  */
-const CLAUDE_CODE_QUALIFIED = /\bmcp__[\w-]+?__([a-z][a-z0-9_-]*)\b/gu;
+const CLAUDE_CODE_QUALIFIED = /\bmcp__[\w-]+?__([a-z][A-Za-z0-9_-]*)(?![\w-])/gu;
 
 /**
  * `ServerName:tool_name` — the API spelling. Deliberately shapeless: two flat
@@ -174,28 +215,70 @@ const CLAUDE_CODE_QUALIFIED = /\bmcp__[\w-]+?__([a-z][a-z0-9_-]*)\b/gu;
  * one input size, not a growth ratio: the two columns above are four orders of
  * magnitude apart, so an absolute gate separates them, whereas a ratio needs a
  * denominator too small to measure honestly on a fast machine.
+ *
+ * ⛔ The tool capture ends on `(?![\w-])`, not `\b`, and for the same reason
+ * {@link CLAUDE_CODE_QUALIFIED} does: `([a-z0-9_]+)\b` matched `GitHub:createIssue`
+ * NOT AT ALL — not as `create`, not at all — because `\b` fails between `e` and
+ * `I`, and every position the engine backtracks to is word|word as well. The
+ * capture also opens with `[a-z]` rather than `[a-z0-9_]`, which changes no
+ * outcome ({@link isMultiSegmentToolName} already demanded a lowercase first
+ * character) and lets the regex say what it means.
  */
-const API_QUALIFIED = /(?<![\w-])([\w-]+):([a-z0-9_]+)\b/gu;
+const API_QUALIFIED = /(?<![\w-])([\w-]+):([a-z]\w*)(?![\w-])/gu;
 
 /**
- * A server half is an MCP server name only if it carries an uppercase letter —
- * `GitHub:`, `BigQuery:`, per Anthropic's own examples. This one predicate is
- * what excludes `node:child_process` and `whiteboard:read:list_whiteboards`; see
- * the module docstring for where each was measured.
+ * A server half is an MCP server name only if it is spelled the way Anthropic's
+ * own examples spell one: it STARTS with an uppercase letter and carries no
+ * underscore — `GitHub:`, `BigQuery:`. This one predicate is what excludes
+ * `node:child_process` and `whiteboard:read:list_whiteboards`; see the module
+ * docstring for where each was measured.
+ *
+ * ⚠️ It used to be `/[A-Z]/` — an uppercase letter ANYWHERE — and a reviewer
+ * flagged that as too loose. Tightening to the documented shape was measured
+ * cost-free: over 884 documents (206 authoring-project `.md` + 678 installed
+ * `SKILL.md`) the loose rule accepted exactly three distinct server halves —
+ * `GitHub`, `BigQuery` and the literal `ServerName` of the guidance's own
+ * template — and the strict rule accepts all three. It rejects nothing that was
+ * ever observed.
+ *
+ * ⛔ Be honest about what it does NOT buy. The reviewer's own example,
+ * `Note:this_is_fine`, satisfies BOTH halves of the strict rule and still seeds
+ * the vocabulary. This is a narrowing toward the documented spelling, not a fix
+ * for that class — no cheap predicate separates a prose `Word:token` from a
+ * genuine `Server:tool`, and the reviewer could construct no realistic markdown
+ * instance because the pattern admits no whitespace after the colon, which rules
+ * out prose, YAML and JSON alike.
  */
-const SERVER_IS_NAMED = /[A-Z]/u;
+const SERVER_IS_NAMED = /^[A-Z][A-Za-z0-9-]*$/u;
 
 /** A lowercase letter opens every MCP tool name. */
 const TOOL_STARTS_LOWERCASE = /^[a-z]/u;
 
 /**
- * Separators the greedy tool capture can end on when the name is followed by an
- * uppercase letter (`mcp__x__foo-Bar` captures `foo-`).
+ * A camelCase hump — a lowercase-or-digit immediately followed by an uppercase
+ * letter. `addCaseLinks`, `createIssue` and `get_userInfo` all carry one; `find`
+ * and `resolve` do not. See {@link isMultiSegmentToolName} for why that matters.
+ */
+const TOOL_HAS_CASE_HUMP = /[a-z0-9][A-Z]/u;
+
+/**
+ * Separators the greedy tool capture can end on — when the character after the
+ * name is neither a word character nor a hyphen, so `` `mcp__x__do_thing_` ``
+ * captures `do_thing_`.
+ *
+ * ⚠️ This used to say "when the name is followed by an uppercase letter
+ * (`mcp__x__foo-Bar` captures `foo-`)". That was true only while the capture
+ * ended on `\b` and excluded uppercase, which is the same defect that made every
+ * camelCase tool name invisible; see {@link CLAUDE_CODE_QUALIFIED}. That name
+ * now captures whole, as `foo-Bar`.
  */
 const TOOL_SEPARATORS = new Set(['-', '_']);
 
 /**
  * The capture without those trailing separators.
+ *
+ * Still reachable after the camelCase fix, on a different shape: a trailing
+ * separator followed by a non-name character, as in `` `mcp__x__do_thing_` ``.
  *
  * Trimmed in code, twice over. Requiring a non-separator last character inside
  * {@link CLAUDE_CODE_QUALIFIED} costs a nested quantifier for a case handled here
@@ -212,7 +295,16 @@ function withoutTrailingSeparators(tool: string): string {
 
 /**
  * A tool half opens with a lowercase letter and is MULTI-SEGMENT — it carries an
- * underscore or a hyphen.
+ * underscore, a hyphen, or a camelCase hump.
+ *
+ * ⚠️ **The hump is not decoration; without it the camelCase fix buys nothing.**
+ * `addCaseLinks` and `createIssue` contain neither `_` nor `-`, so a gate written
+ * as "contains a separator" refuses every camelCase tool name — the vocabulary
+ * stays empty and the regex fix is inert. The predicate the gate is really
+ * asking is *"is this a NAME rather than an ordinary English word?"*, and a case
+ * boundary answers it exactly as well as a separator does: `find` is a word,
+ * `addCaseLinks` is a name. That the two families are spelled differently is a
+ * fact about the server's implementation language, not about ambiguity.
  *
  * Applied to BOTH spellings; see {@link qualifiedNamesIn}. Gating only the API
  * form let the `mcp__` form contribute ONE-WORD names to the vocabulary, so
@@ -226,8 +318,8 @@ function withoutTrailingSeparators(tool: string): string {
  * tools whose whole capture the hyphen fix exists to preserve. What earns a place
  * in the vocabulary is being multi-word, because that is what makes a bare
  * occurrence unambiguous; `find` is a word, `resolve-library-id` is a name. The
- * API lane's capture is `[a-z0-9_]+` and can hold no hyphen, so widening the
- * predicate leaves that lane exactly as it was.
+ * API lane's capture holds no hyphen, so widening the predicate to admit one
+ * leaves that lane exactly as it was.
  *
  * Written as a predicate rather than the obvious `^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$`
  * because that spelling nests a quantifier inside a quantifier, which
@@ -237,7 +329,8 @@ function withoutTrailingSeparators(tool: string): string {
  * decides that in linear time with nothing to backtrack.
  */
 function isMultiSegmentToolName(tool: string): boolean {
-  return TOOL_STARTS_LOWERCASE.test(tool) && (tool.includes('_') || tool.includes('-'));
+  if (!TOOL_STARTS_LOWERCASE.test(tool)) return false;
+  return tool.includes('_') || tool.includes('-') || TOOL_HAS_CASE_HUMP.test(tool);
 }
 
 /** Inline code spans. Newline-free so a runaway backtick cannot swallow a paragraph. */

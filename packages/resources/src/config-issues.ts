@@ -7,8 +7,8 @@
  * `ResourcesConfigSchema` is `.strict()`, which is the right call — a
  * passthrough object ACCEPTS `cheks:` and then STRIPS it, so an unenforced rule
  * reads as a config that declared no rules. But strictness is only worth having
- * if the refusal is legible, and it was not. The two config readers in the
- * toolkit each formatted the same `ZodError` differently and neither named the
+ * if the refusal is legible, and it was not. The **three** config readers in the
+ * toolkit each formatted the same `ZodError` differently and none named the
  * file:
  *
  * - `cli/utils/config-loader.ts` interpolated `error.message`, which in Zod 3 is
@@ -19,6 +19,13 @@
  *   the config path, never said the key had been removed, and offered no remedy.
  * - `resources/config-parser.ts` joined `path: message` pairs with commas, which
  *   is legible but says nothing more than Zod's own wording.
+ * - `cli/commands/skill/test/configure.ts` called `ProjectConfigSchema.safeParse`
+ *   directly and interpolated the same JSON dump. ⚠️ This sentence used to say
+ *   "the two config readers", and the count was the defect: the third reader was
+ *   invisible to whoever fixed the other two, so `vat skill test configure`
+ *   went on refusing an unknown key and printing the blob for a whole release
+ *   after both defects were declared dead. **Count the `safeParse` call sites
+ *   before trusting this list** — `git grep 'ProjectConfigSchema'` is the check.
  *
  * ⚠️ **NOT every block under it is strict, and this docstring used to say
  * otherwise.** `ResourceCheckSchema`, `ValidationConfigSchema` and
@@ -191,6 +198,33 @@ export function formatConfigValidationError(
 }
 
 /**
+ * Reorder issues so the ones that actually REFUSE the config are rendered first.
+ *
+ * 🚨 The defect this exists to stop. {@link formatConfigValidationError} caps the
+ * rendered list at {@link MAX_RENDERED_ISSUES}, while `onlyUnknownKeys` is
+ * computed over ALL of them. A config carrying 25 unknown keys and one
+ * `test.concurrency: "four"` produced 26 issues with the type error at position
+ * 26 — so the thrown message was 20 unrecognized-key blocks, each ending "Delete
+ * it, or correct the spelling.", plus "… and 6 more issue(s)". The adopter was
+ * told the config was refused, shown nothing but complaints about keys that are
+ * explicitly NO LONGER FATAL, and handed a remedy that could not lift the
+ * refusal. The word `concurrency` never appeared.
+ *
+ * Sorting is cheaper and safer than raising the cap: the cap exists so a
+ * thousand-issue config does not scroll the terminal, and raising it just moves
+ * the same hole further out. What the cap must never hide is the issue that
+ * decided the outcome.
+ *
+ * @param issues - The issues from a failed strict parse, in Zod's order
+ * @returns The same issues, every non-`unrecognized_keys` one first, each
+ *   group's relative order preserved
+ */
+function fatalIssuesFirst(issues: readonly z.ZodIssue[]): z.ZodIssue[] {
+  const isUnknownKey = (issue: z.ZodIssue): boolean => issue.code === z.ZodIssueCode.unrecognized_keys;
+  return [...issues.filter((issue) => !isUnknownKey(issue)), ...issues.filter(isUnknownKey)];
+}
+
+/**
  * Remove exactly the keys a strict schema refused, so the document can be
  * re-parsed as the adopter's config minus the parts VAT has no field for.
  *
@@ -264,19 +298,39 @@ export function parseConfigAllowingUnknownKeys<S extends z.ZodTypeAny>(
   if (strict.success) return strict.data;
 
   const { configPath } = options;
-  const formatted = formatConfigValidationError(strict.error, { ...options, schema });
   const onlyUnknownKeys = strict.error.issues.every(
     (issue) => issue.code === z.ZodIssueCode.unrecognized_keys,
   );
-  if (!onlyUnknownKeys) throw new Error(formatted);
+  if (!onlyUnknownKeys) {
+    // Rendered from a REORDERED issue list, so the issue that made the config
+    // fatal survives the cap — see {@link fatalIssuesFirst}.
+    throw new Error(
+      formatConfigValidationError(new z.ZodError(fatalIssuesFirst(strict.error.issues)), {
+        ...options,
+        schema,
+      }),
+    );
+  }
 
+  const formatted = formatConfigValidationError(strict.error, { ...options, schema });
   const relaxed = schema.safeParse(withoutUnrecognizedKeys(raw, strict.error.issues));
   // Belt and braces: if dropping the refused keys does not produce a valid
   // config, the original diagnosis was wrong and the refusal stands. Reached
   // only if a schema rejects a key AND depends on it, which no schema here
   // does — but guessing on that would be exactly the assumption this file was
   // written to stop making.
-  if (!relaxed.success) throw new Error(formatted);
+  //
+  // The extra sentence is not decoration: `formatted` is a pure unknown-keys
+  // message whose every remedy reads "delete it", and deleting is precisely what
+  // has just been TRIED and failed. Shipping it unqualified would hand an
+  // adopter a fix that provably does not work, with nothing to say the tool
+  // knows that.
+  if (!relaxed.success) {
+    throw new Error(
+      `${formatted}\n  Dropping those keys did not make the config valid; the diagnosis above is`
+      + ' incomplete.',
+    );
+  }
 
   const where = configPath === undefined ? '' : ` (${configPath})`;
   onUnknownKeys(

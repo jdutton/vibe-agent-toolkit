@@ -268,6 +268,43 @@ describe('loadConfigCached (Layer 2 cache — spec §8 / §13.5)', () => {
     expect(fresh?.version).toBe(1);
   });
 
+  it('warns ONCE per config path across calls, and again after a reset', () => {
+    // 🚨 The guard this pins had ZERO coverage. `setupSyncTempDirSuite` mints a
+    // fresh directory per test, so every existing test used a distinct
+    // `configPath` and none ever re-entered the ledger: deleting BOTH the
+    // `warnedConfigPaths` guard lines AND `warnedConfigPaths.clear()` from
+    // `resetLoadedConfigCache` left the whole suite green. In one real `vat audit`
+    // run `loadConfig` is reached from four places, so the missed mutation is four
+    // duplicate warning blocks — the "hundreds of identical lines" the ledger
+    // exists to prevent.
+    writeConfigToDir(tempDir, 'version: 1\nresources:\n  metadata:\n    frontmatter: true\n');
+
+    const warnings: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      warnings.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      // TWO loads of the SAME config. `loadConfigCached` short-circuits on the
+      // second, so `loadConfig` is called directly as well — the ledger, not the
+      // parse cache, has to be what silences the repeat.
+      loadConfigCached(tempDir);
+      loadConfig(tempDir);
+      loadConfig(tempDir);
+
+      expect(warnings).toHaveLength(1);
+
+      // The ledger is part of the cache's state: a reset must let the warning
+      // through again, or a test that edits a fixture between runs sees nothing.
+      resetLoadedConfigCache();
+      loadConfig(tempDir);
+      expect(warnings).toHaveLength(2);
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+  });
+
   it('throws ConfigLoadError for a broken config (not silently undefined) and caches the error', () => {
     // A present-but-broken config is a hard error, distinct from an absent one:
     // silently returning undefined here is what regressed `vat skill review` and

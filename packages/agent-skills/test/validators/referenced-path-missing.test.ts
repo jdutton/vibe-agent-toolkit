@@ -126,6 +126,29 @@ describe('isBundledSubdirPath — the rule that earns the precision', () => {
     'scripts/./run.mjs',
   ])('rejects a path that leaves or re-enters the bundle: %s', token =>
     expect(isBundledSubdirPath(token)).toBe(false));
+
+  // ⚠️ THE VACUITY GUARD for every assertion above.
+  //
+  // `bundledPathCandidates` used to re-derive this predicate's two steps inline
+  // instead of calling it, so the block above pinned a COPY of the rule and the
+  // shipped rule was unpinned: adding `.toLowerCase()` to the production lookup
+  // left all eight cases green while changing what actually fires. This case runs
+  // the SAME token through both, so any future re-inlining shows up as a
+  // divergence rather than as silence. `Scripts/` is the discriminating input —
+  // the two agree on it only while there is one rule.
+  it.each([
+    { token: 'scripts/build.mjs', admitted: true },
+    { token: 'references/index.md', admitted: true },
+    { token: 'Scripts/build.mjs', admitted: false },
+    { token: 'RESOURCES/index.md', admitted: false },
+    { token: 'docs/product/prd.md', admitted: false },
+  ])('the SHIPPED route agrees with the predicate on $token', async ({ token, admitted }) => {
+    const dir = writeSkill(`Open \`${token}\` first.`);
+
+    expect(isBundledSubdirPath(token)).toBe(admitted);
+    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md')))
+      .resolves.toEqual(admitted ? [token] : []);
+  });
 });
 
 describe('detectMissingReferencedPaths', () => {
@@ -242,6 +265,46 @@ describe('detectMissingReferencedPaths', () => {
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.link).toBe('scripts/setup.mjs');
+  });
+
+  // 🚨 VAT'S OWN PACKAGING used to manufacture this finding.
+  //
+  // `getTargetSubdir` routes a bundled file by EXTENSION, discarding the
+  // subdirectory its author chose — `resources/setup.sh` ships as
+  // `scripts/setup.sh`. The packager rewrites markdown LINKS to the routed
+  // destination, so the link below resolves; a bare token inside a fence is
+  // deliberately NOT rewritten, and bare tokens are exactly what this check
+  // reads. The file DID ship, and the registered remedy names no action that
+  // resolves it: writing the packaged spelling into the source breaks the source
+  // repo, where the file really is under `resources/`.
+  //
+  // The `bundledPathCandidates` assertion is the negative control — silence has
+  // to be the routed-path check clearing the candidate, not the lexer failing to
+  // produce one.
+  it.each([
+    ['a shell script routed resources/ -> scripts/', 'resources/setup.sh', 'scripts/setup.sh'],
+    ['a JSON file routed scripts/ -> templates/', 'scripts/config.json', 'templates/config.json'],
+    ['a wasm blob routed assets/ -> resources/', 'assets/runtime.wasm', 'resources/runtime.wasm'],
+    ['a markdown file routed templates/ -> resources/', 'templates/notes.md', 'resources/notes.md'],
+  ])('does not fire on %s that content-type routing relocated', async (_label, authored, routed) => {
+    const dir = writeSkill(
+      [`See [the file](${authored}).`, '', '```bash', `bash ${authored}`, '```'].join('\n'),
+      { [routed]: 'shipped\n' },
+    );
+
+    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual([authored]);
+    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir)).resolves.toEqual([]);
+  });
+
+  // …and the control that keeps the suppression above from being a blanket
+  // amnesty: nothing ships at EITHER spelling, so the finding still fires.
+  it('still fires when the routed spelling is absent too', async () => {
+    const authored = 'resources/setup.sh';
+    const dir = writeSkill(`\`\`\`bash\nbash ${authored}\n\`\`\``);
+
+    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual([authored]);
+    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir))
+      .resolves.toMatchObject([{ link: authored }]);
   });
 
   // The sibling population is REAL — a measured skill names a file only a

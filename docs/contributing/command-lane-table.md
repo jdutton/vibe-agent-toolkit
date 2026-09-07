@@ -4,10 +4,17 @@ Which of VAT's commands read the filesystem to build a resource population, and 
 entry point. This exists to replace the standing claim *"~70 commands, 5 examined"* with a bounded
 list, so the four-phase pipeline work knows exactly whose behaviour it must preserve.
 
-**Population: 69 commands** — 68 leaves plus `vat audit`, the only command group that is also
+**Population: 70 commands** — 69 leaves plus `vat audit`, the only command group that is also
 runnable in its own right (`vat audit [git-url-or-path]` alongside its `settings` subcommand).
 
-**27 enumerate. 42 do not.**
+**28 enumerate. 42 do not.**
+
+⚠️ It read *"69 commands — 68 leaves, 27 enumerate"* until 2026-09-07. The leaf added is
+`vat claude org skills versions add`, registered at `packages/cli/src/commands/claude/org/skills.ts ›
+createOrgSkillsCommand()`. It enumerates: it recursively walks a built skill directory and uploads
+those bytes as a new version of an existing skill — the same lane, and the same consequence, as
+`vat claude org skills install`, which until that command landed was the only org verb with a file
+population.
 
 ⚠️ It read *"67 commands — 66 leaves, 25 enumerate"* until 2026-09-01. Two leaves were added that
 day, both at `packages/cli/src/commands/resources/index.ts › createResourcesCommand()`:
@@ -125,6 +132,7 @@ process" — a cross-process cache is the only kind that can help them.
 | `vat claude org skills install` | `crawl` | `claude/org/skills.ts` |
 | `vat claude org skills delete` | `crawl` | `claude/org/skills.ts` |
 | `vat claude org skills versions list` | `crawl` | `claude/org/skills.ts` |
+| `vat claude org skills versions add` | `crawl` | `claude/org/skills.ts` — recursively walks the built skill directory named by `<source>` and **uploads those bytes** as a new version of an existing skill. Same population, same consequence and the same undeclared git-blindness as `vat claude org skills install`; the only difference is that the id is given rather than minted |
 | `vat claude org skills versions delete` | `crawl` | `claude/org/skills.ts` |
 
 `vat claude context` and `vat claude budget` each **populate** twice, and that doubling is
@@ -163,8 +171,8 @@ only through the plugin extractor it fans out to.
 
 ## Commands that do not enumerate
 
-The 42 remaining. The bulk are Admin-API calls over HTTPS — `claude org *` is 26 commands in all, of
-which 21 appear here once the five `skills` commands above are excluded — plus process-level commands
+The 42 remaining. The bulk are Admin-API calls over HTTPS — `claude org *` is 27 commands in all, of
+which 21 appear here once the six `skills` commands above are excluded — plus process-level commands
 that read JSON layers or a manifest rather than crawling.
 
 `agent`: `import`, `install`, `installed`, `list`, `run`, `uninstall`, `validate` ·

@@ -21,7 +21,7 @@
  * upload failed that still reported `status: success`.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
 import { API_SKILL_MAX_UPLOAD_BYTES } from '@vibe-agent-toolkit/agent-skills';
 import { ApiRequestError, ApiTransportError, buildMultipartFormData } from '@vibe-agent-toolkit/claude-marketplace';
@@ -51,6 +51,7 @@ import {
   readDeleteResponse,
   readSkillVersionResponse,
   reportDelete,
+  reportVersionDelete,
   resolveSourceArgument,
   SKILL_DELETED_TYPES,
   SKILL_VERSION_DELETED_TYPES,
@@ -58,6 +59,8 @@ import {
   VERSION_NAME_MISMATCH_REFUSAL,
   withRemedy,
 } from '../src/commands/claude/org/skills.js';
+
+import { skillMdBytes, writeZipFixture } from './helpers/zip-fixtures.js';
 
 let tempDir: string;
 
@@ -660,6 +663,175 @@ describe('installFromLocal ceiling enforcement', () => {
   });
 });
 
+/**
+ * 🚨 **Every ZIP fixture above is a STAND-IN, and that made a whole block of
+ * `installFromLocal` unreachable from this suite.**
+ *
+ * `ZIP_STAND_IN` and `Buffer.alloc(n)` are not archives, so `inspectZipArchive`
+ * returns `undefined` for all of them and everything guarded by
+ * `if (inspected !== undefined)` — the answer-key refusal, the expanded-size
+ * refusal, the title/name divergence warning — was skipped in every test that
+ * reached it. The operator-facing strings appeared ONLY in the source file. A
+ * suite can be green because it never ran the code, and this describe block is
+ * what makes that impossible: every fixture here is a REAL archive, written by
+ * the same library the command reads with.
+ *
+ * The directory case is here for the same reason: the portability check was
+ * called only by a unit test, never through the command, so deleting the call
+ * line from `prepareSkillUpload` broke nothing.
+ */
+/** The headline `warnUnportableReferences` prints; three tests turn on it. */
+const PORTABILITY_WARNING = 'portability warning';
+
+describe('what installFromLocal actually reads out of a REAL archive', () => {
+  /**
+   * The archive is a few KiB on the wire and expands past the ceiling, so it
+   * clears the request gate and only the UNCOMPRESSED gate can refuse it. The
+   * client must never be reached: the whole point is not spending the upload.
+   */
+  it('refuses a ZIP that expands past the ceiling, though its body is far under it', async () => {
+    const zipPath = writeZipFixture(tempDir, 'really-expands.zip', [
+      ['demo/SKILL.md', skillMdBytes('demo')],
+      ['demo/payload.bin', Buffer.alloc(API_SKILL_MAX_UPLOAD_BYTES + 1, 0x41)],
+    ]);
+    expect(statSync(zipPath).size).toBeLessThan(API_SKILL_MAX_UPLOAD_BYTES);
+
+    await expect(
+      installFromLocal(zipPath, undefined, clientThatMustNotBeCalled(), recordingLogger()),
+    ).rejects.toThrow(/ZIP expands to/);
+  });
+
+  /**
+   * `wiki-lint-v2.zip` publishes under the FILENAME while every version it ever
+   * gets carries the name its SKILL.md declares. VAT mints that divergence
+   * itself, so it is the one place it can be named as it happens.
+   */
+  it('warns when the archive\'s declared name differs from the title it will publish under', async () => {
+    const zipPath = writeZipFixture(tempDir, 'wiki-lint-v4.zip', [['wiki-lint/SKILL.md', skillMdBytes('wiki-lint')]]);
+    const logger = recordingLogger();
+
+    await installFromLocal(zipPath, undefined, clientReturningSkill(), logger);
+
+    const log = logger.lines.join('\n');
+    expect(log).toContain('Title/name divergence');
+    expect(log).toContain('"wiki-lint-v4"');
+    expect(log).toContain('--title "wiki-lint"');
+  });
+
+  it('says nothing about divergence when the filename and the declared name agree', async () => {
+    const zipPath = writeZipFixture(tempDir, 'agreeing.zip', [['agreeing/SKILL.md', skillMdBytes('agreeing')]]);
+    const logger = recordingLogger();
+
+    await installFromLocal(zipPath, undefined, clientReturningSkill(), logger);
+
+    expect(logger.lines.join('\n')).not.toContain('Title/name divergence');
+  });
+
+  /**
+   * 🚨 `zip -r my-skill.zip my-skill/` over a source tree, then
+   * `install my-skill.zip`, published the answer key to everyone in the
+   * organization with a green tick — while `install my-skill/` on the very same
+   * tree refused and reported the exclusion. Two lanes of one command cannot
+   * disagree about whether a skill's answer key may be published.
+   */
+  it('refuses a ZIP carrying an eval suite, the way the directory lane does', async () => {
+    const zipPath = writeZipFixture(tempDir, 'carries-answer-key.zip', [
+      ['my-skill/SKILL.md', skillMdBytes('my-skill')],
+      ['my-skill/evals/evals.json', Buffer.from(ANSWER_KEY, 'utf8')],
+    ]);
+
+    await expect(
+      installFromLocal(zipPath, undefined, clientThatMustNotBeCalled(), recordingLogger()),
+    ).rejects.toThrow(/my-skill\/evals\/evals\.json/);
+  });
+
+  it('sends a clean archive, so the refusal is about the answer key and not about ZIPs', async () => {
+    const zipPath = writeZipFixture(tempDir, 'clean-real.zip', [
+      ['my-clean/SKILL.md', skillMdBytes('my-clean')],
+      ['my-clean/resources/guide.md', Buffer.from('# Guide\n', 'utf8')],
+    ]);
+
+    await expect(installFromLocal(zipPath, undefined, clientReturningSkill(), recordingLogger()))
+      .resolves.toMatchObject({ id: 'skill_1' });
+  });
+
+  /**
+   * The portability family reaching the operator THROUGH the command, not
+   * through a direct call to the collector. An adopter published 10 of 54 skills
+   * that referenced paths outside their own tree; under the Skills API each
+   * skill is its own top-level tree with no siblings, so they uploaded green and
+   * could not run.
+   */
+  it('warns about an unportable reference in a DIRECTORY it is about to publish', async () => {
+    const dir = safePath.join(tempDir, 'unportable-skill');
+    mkdirSyncReal(dir, { recursive: true });
+    writeAt(
+      dir,
+      'SKILL.md',
+      '---\nname: unportable\ndescription: Sample.\n---\n\n'
+      + '# unportable\n\nRun `node "${CLAUDE_PLUGIN_ROOT}/../sibling/tool.mjs"` first.\n',
+    );
+    const logger = recordingLogger();
+
+    await installFromLocal(dir, undefined, clientReturningSkill(), logger);
+
+    const log = logger.lines.join('\n');
+    expect(log).toContain(PORTABILITY_WARNING);
+    expect(log).toContain('CLAUDE_PLUGIN_ROOT');
+    // Warned, never blocked — the upload still happened.
+    expect(log).toContain('uploading anyway');
+  });
+
+  it('says nothing about a portable DIRECTORY bundle', async () => {
+    const dir = safePath.join(tempDir, 'portable-skill');
+    writeSkillContent(dir, 'portable');
+    const logger = recordingLogger();
+
+    await installFromLocal(dir, undefined, clientReturningSkill(), logger);
+
+    expect(logger.lines.join('\n')).not.toContain(PORTABILITY_WARNING);
+  });
+
+  /**
+   * The adopter's `validation.allow` has to reach this lane, or VAT's own
+   * documented remedy for `MCP_TOOL_NAME_UNQUALIFIED` — "waive that one
+   * identifier with a `validation.allow` entry" — buys a green build and a
+   * warning on every publish. The config is resolved from the skill directory's
+   * nearest-ancestor project, so this pins the whole plumbing, not just the
+   * filter.
+   */
+  it('honours the governing config\'s validation.allow when publishing a directory', async () => {
+    const projectRoot = safePath.join(tempDir, 'waived-project');
+    mkdirSyncReal(projectRoot, { recursive: true });
+    writeAt(projectRoot, 'vibe-agent-toolkit.config.yaml', [
+      'version: 1',
+      'skills:',
+      '  include: ["skills/**/SKILL.md"]',
+      '  config:',
+      '    waived:',
+      '      validation:',
+      '        allow:',
+      '          NON_PORTABLE_ASSET_REFERENCE:',
+      '            - paths: ["SKILL.md"]',
+      '              reason: "Shipped alongside its sibling on purpose."',
+      '',
+    ].join('\n'));
+    const skillDir = safePath.join(projectRoot, 'skills', 'waived');
+    mkdirSyncReal(skillDir, { recursive: true });
+    writeAt(
+      skillDir,
+      'SKILL.md',
+      '---\nname: waived\ndescription: Sample.\n---\n\n'
+      + '# waived\n\nRun `node "${CLAUDE_PLUGIN_ROOT}/../sibling/tool.mjs"` first.\n',
+    );
+    const logger = recordingLogger();
+
+    await installFromLocal(skillDir, undefined, clientReturningSkill(), logger);
+
+    expect(logger.lines.join('\n')).not.toContain(PORTABILITY_WARNING);
+  });
+});
+
 // ── What the progress log claims, and when ─────────────────────────────
 
 describe('the upload progress log', () => {
@@ -667,10 +839,16 @@ describe('the upload progress log', () => {
    * A ZIP's display title is the FILENAME — nothing reads the SKILL.md inside
    * the archive — so `wiki-lint-v2.zip` publishes a skill titled `wiki-lint-v2`,
    * a different skill from `wiki-lint`, and the API does not refuse it because
-   * display_title uniqueness is enforced only when the field is sent. VAT cannot
-   * cheaply read the declared name out of the archive (Node ships no ZIP
-   * reader), so the provenance is DISCLOSED rather than fixed, and this pins the
-   * disclosure.
+   * display_title uniqueness is enforced only when the field is sent. The
+   * provenance is DISCLOSED rather than fixed — the filename really is where the
+   * title comes from — and this pins the disclosure.
+   *
+   * ⛔ This comment used to end "VAT cannot cheaply read the declared name out of
+   * the archive (Node ships no ZIP reader)". The premise was false: `adm-zip` is
+   * already a runtime dependency of this package, VAT now reads the archive, and
+   * a title that disagrees with the declared name earns a warning — pinned in
+   * "what installFromLocal actually reads out of a REAL archive" below. This
+   * fixture is a stand-in, not an archive, so it exercises only the disclosure.
    */
   it('says a ZIP took its display title from the filename', async () => {
     const zipPath = safePath.join(tempDir, 'wiki-lint-v2.zip');
@@ -1089,6 +1267,57 @@ describe('reportDelete', () => {
     expect(result.document['status']).toBe('error');
     // The document is still published: the verdict is what the operator needs.
     expect(result.document['id']).toBe('skill_abc');
+    expect(result.document['deleted']).toBe(false);
+  });
+});
+
+/**
+ * 🚨 The version-delete document named NO version, and its `id` meant two
+ * different things run to run.
+ *
+ * It went through `reportDelete(raw, skillId, …)`, and `readDeleteResponse`
+ * returns the API's echoed `id` when there is a body — the VERSION identifier —
+ * falling back to the requested id — the SKILL identifier — on a 204. So an
+ * audit trail of an irreversible operation could not say which version was
+ * destroyed, and the one field it did carry silently changed namespace depending
+ * on whether the vendor happened to send a body.
+ */
+describe('reportVersionDelete', () => {
+  it('names the version it destroyed, and keeps id meaning the skill', () => {
+    const result = ending(reportVersionDelete(
+      // The API echoing the VERSION id — the response shape that used to
+      // overwrite the document's `id` with a value from the other namespace.
+      { id: '1775007400733130', type: 'skill_version_deleted' },
+      'skill_abc',
+      '1775007400733130',
+    ));
+
+    expect(result.exitCode).toBe(0);
+    expect(result.document['id']).toBe('skill_abc');
+    expect(result.document['version']).toBe('1775007400733130');
+    expect(result.document['deleted']).toBe(true);
+  });
+
+  it('reports the same two fields on a 204 that echoes nothing', () => {
+    // The empty-body case, where the old code's `id` silently meant the SKILL.
+    // Both runs must publish the same shape or the document is unreadable.
+    const result = ending(reportVersionDelete(undefined, 'skill_abc', '1775007400733130'));
+
+    expect(result.document['id']).toBe('skill_abc');
+    expect(result.document['version']).toBe('1775007400733130');
+    expect(result.document['deleted']).toBe(true);
+  });
+
+  it('exits 1, still naming the version, when the API names a different outcome', () => {
+    const result = ending(reportVersionDelete(
+      { type: 'skill_version_archived' },
+      'skill_abc',
+      '1775007400733130',
+    ));
+
+    expect(result.exitCode).toBe(1);
+    expect(result.document['status']).toBe('error');
+    expect(result.document['version']).toBe('1775007400733130');
     expect(result.document['deleted']).toBe(false);
   });
 });

@@ -6,11 +6,12 @@
  * Mirrors review.ts error-handling conventions (handleCommandError / projectRootOrNull).
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 
 import { upsertTestConfig } from '@vibe-agent-toolkit/agent-skills';
-import { ProjectConfigSchema } from '@vibe-agent-toolkit/resources';
+import { parseConfigAllowingUnknownKeys, ProjectConfigSchema } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
 
@@ -101,6 +102,66 @@ export function buildKnobs(
   return knobs;
 }
 
+/**
+ * Read the config at `configPath`, apply `knobs` to `skillName`'s test block, and
+ * hand back the YAML to write — refusing only what VAT would otherwise MISREAD.
+ *
+ * Exported and separated from the command because the command's own shape made
+ * both of this lane's defects untestable: the read and the schema check were
+ * inlined between a `process.cwd()` walk-up and a `writeFileSync`, so reaching
+ * them from a test meant `process.chdir`, which the Unix unit pool (threads)
+ * cannot do at all. Two defects therefore shipped with a green suite.
+ *
+ * 🔑 **The schema check goes through the SHARED reader**, not
+ * `ProjectConfigSchema.safeParse`. This was the THIRD config reader in the
+ * toolkit and the only one still carrying both defects the other two had fixed:
+ *
+ * - An unrecognized key was a hard refusal. `vat skill test configure my-skill
+ *   --max-turns 20` exited 1 on a config carrying `resources.metadata` — a
+ *   section this command never reads — refusing to write a change that had
+ *   nothing to do with it. Unknown keys are a warning now; see
+ *   {@link parseConfigAllowingUnknownKeys} for why.
+ * - The message was `validation.error.message`, which in Zod 3 is a **JSON dump
+ *   of the issue array**: no file named, no key named in words, no remedy.
+ *
+ * 🔑 **The read goes through `readTextContent`**, never `readFileSync(path,
+ * 'utf-8')`. This is a read-modify-WRITE path, so a UTF-16LE or BOM-prefixed
+ * config (what PowerShell 5.1 writes by default) was decoded as mojibake and then
+ * serialized back over the original — destroying a config whose only fault was
+ * its encoding.
+ *
+ * @param configPath - Absolute path to `vibe-agent-toolkit.config.yaml`
+ * @param skillName - The key under `skills.config` to upsert
+ * @param knobs - The knobs the operator typed; only these are changed
+ * @param onWarn - Receives the unknown-key warning, if any
+ * @returns The updated YAML, comments and key ordering preserved
+ * @throws Error when the UPDATED config would fail validation for any reason
+ *   other than an unknown key
+ */
+export async function updateSkillTestConfig(
+  configPath: string,
+  skillName: string,
+  knobs: Parameters<typeof upsertTestConfig>[2],
+  onWarn: (message: string) => void,
+): Promise<string> {
+  const { text: yamlText } = await readTextContent(configPath);
+  const updatedYaml = upsertTestConfig(yamlText, skillName, knobs);
+
+  // Validate the FULL updated config before it can be written.
+  const parsed = yaml.parse(updatedYaml) as unknown;
+  try {
+    parseConfigAllowingUnknownKeys(ProjectConfigSchema, parsed, onWarn, { configPath });
+  } catch (validationError) {
+    // The prefix is kept because it carries information the shared formatter
+    // cannot know: what is being judged is the config AFTER this command's
+    // edit, so a reader has to be told the file on disk may still be fine.
+    const detail = validationError instanceof Error ? validationError.message : String(validationError);
+    throw new Error(`Updated config would fail schema validation.\n${detail}`);
+  }
+
+  return updatedYaml;
+}
+
 async function configureCommand(
   skillName: string,
   options: SkillTestConfigureOptions,
@@ -118,21 +179,12 @@ async function configureCommand(
     }
 
     const configPath = safePath.join(projectRoot, CONFIG_FILENAME);
-
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- configPath constructed from trusted projectRoot
-    const yamlText = readFileSync(configPath, 'utf-8');
-
-    const knobs = buildKnobs(options);
-    const updatedYaml = upsertTestConfig(yamlText, skillName, knobs);
-
-    // Validate the FULL updated config before writing.
-    const parsed = yaml.parse(updatedYaml) as unknown;
-    const validation = ProjectConfigSchema.safeParse(parsed);
-    if (!validation.success) {
-      throw new Error(
-        `Updated config would fail schema validation: ${validation.error.message}`,
-      );
-    }
+    const updatedYaml = await updateSkillTestConfig(
+      configPath,
+      skillName,
+      buildKnobs(options),
+      (message) => { logger.warn(message); },
+    );
 
     if (options.print) {
       process.stdout.write(updatedYaml);

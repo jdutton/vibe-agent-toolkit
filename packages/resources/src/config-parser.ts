@@ -54,11 +54,14 @@ export async function parseConfigFile(
     throw new Error(`Invalid YAML in config file: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  // Validate against schema. The message is built by the ONE formatter both
-  // config readers share — this one and the CLI's `utils/config-loader.ts`.
-  // They used to format the same `ZodError` two different ways and neither named
-  // the file, which is how a strict-schema refusal reached an adopter as a raw
-  // JSON dump with no remedy in it.
+  // Validate against schema. The message is built by the ONE formatter all THREE
+  // config readers share — this one, the CLI's `utils/config-loader.ts`, and
+  // `cli/commands/skill/test/configure.ts`. They used to format the same
+  // `ZodError` three different ways and none named the file, which is how a
+  // strict-schema refusal reached an adopter as a raw JSON dump with no remedy in
+  // it. ⚠️ This comment said "both … readers" while a third one was still
+  // printing the blob; count the `ProjectConfigSchema` call sites rather than
+  // trusting the number here.
   return parseConfigAllowingUnknownKeys(
     ProjectConfigSchema,
     parsed,

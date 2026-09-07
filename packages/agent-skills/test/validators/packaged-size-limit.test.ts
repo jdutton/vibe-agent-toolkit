@@ -1,7 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- fixture paths built from this test's own mkdtemp root, no external input */
 import * as fs from 'node:fs';
 
-import { applyAllowFilter } from '@vibe-agent-toolkit/schema';
+import { applyAllowFilter, CODE_REGISTRY } from '@vibe-agent-toolkit/schema';
 import { createSymlink, safePath, symlinkCapability, type SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -257,6 +257,16 @@ describe('checkPackagedSizeLimit', () => {
     expect(issues[0]?.severity).toBe('warning');
     expect(issues[0]?.location).toBe('.');
   });
+
+  // The control for the per-instance remedies below: a genuine readdir failure
+  // IS what `SCAN_PATH_UNREADABLE`'s registry `fix` describes, so it must keep
+  // carrying that text rather than drifting onto a policy remedy. Without this,
+  // "the fix is per instance" could be satisfied by never using the registry's
+  // at all — which would be a different defect, not a fix.
+  it('leaves a genuinely unreadable path on the registry remedy', () => {
+    const issues = checkPackagedSizeLimit(safePath.join(root, 'absent'), LIMIT);
+    expect(issues[0]?.fix).toBe(CODE_REGISTRY.SCAN_PATH_UNREADABLE.fix);
+  });
 });
 
 // Symlink creation needs privilege on Windows; the behaviours below are
@@ -295,6 +305,29 @@ describe.skipIf(cap === null)('checkPackagedSizeLimit — links in the packaged 
     // The finding names the real file, never the link, and its bytes are counted once.
     expect(issues.find(i => i.code === 'PACKAGED_SIZE_EXCEEDS_API_LIMIT')?.message)
       .toContain('assets/real.bin (9.4 KiB)');
+  });
+
+  // 🚨 The REMEDY, not just the receipt. `SCAN_PATH_UNREADABLE`'s registry `fix`
+  // is "Make the path readable — check its permissions and ownership — then
+  // re-run the audit, or pass `--exclude` to drop it from the scan deliberately".
+  // Both halves are wrong for a symlink: it is skipped by POLICY (the uploader
+  // refuses it), not because anything about it is unreadable, and this producer
+  // runs inside `packageSkill` — `vat build` / `vat skills package` — which have
+  // no `--exclude` flag at all. Carrying the registry text verbatim told an
+  // author with `resources/logo.png -> ../shared/logo.png` to fix permissions on
+  // a healthy file and then pass a flag the command rejects.
+  it('gives a symlink a remedy that fits it, not the registry permissions advice', () => {
+    const dir = writeBundle({ 'SKILL.md': 500, 'assets/real.bin': 100 });
+    createSymlink(requireSymlinks(), safePath.join(dir, 'assets/real.bin'), safePath.join(dir, 'link.bin'));
+
+    const receipt = checkPackagedSizeLimit(dir, LIMIT).find(i => i.code === 'SCAN_PATH_UNREADABLE');
+
+    expect(receipt?.fix).not.toBe(CODE_REGISTRY.SCAN_PATH_UNREADABLE.fix);
+    expect(receipt?.fix).toMatch(/replace the link|remove it from the packaged output/i);
+    // The two impossible instructions, named so a reworded remedy that quietly
+    // reintroduces either one goes red.
+    expect(receipt?.fix).not.toMatch(/check its permissions/i);
+    expect(receipt?.fix).not.toMatch(/pass `--exclude` to drop it/i);
   });
 
   it('reports a symlinked DIRECTORY it cannot weigh instead of scoring it zero', () => {

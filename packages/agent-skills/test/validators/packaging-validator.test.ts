@@ -644,6 +644,18 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 		expect(issue?.fix).toContain('targets');
 	});
 
+	// The PowerShell alternative must be what fired, not a POSIX alternative
+	// accidentally matching the tail — the message has to show the spelling the
+	// author actually wrote, or the finding sends them looking for `$CLAUDE_…`.
+	it('quotes the ${env:NAME} spelling it matched', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `node "${env:CLAUDE_PLUGIN_ROOT}/scripts/run.mjs"`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.message).toContain('${env:CLAUDE_PLUGIN_ROOT');
+	});
+
 	it('names the offending family variant in the message', async () => {
 		const issue = await findNonPortableAssetIssue(
 			getTempDir,
@@ -663,6 +675,15 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 		{ label: 'braced', body: 'Run: `node "${CLAUDE_SKILL_DIR}/scripts/run.mjs" go`' },
 		{ label: 'bare', body: 'Run: `node "$CLAUDE_SKILL_DIR/scripts/run.mjs" go`' },
 		{ label: 'powershell', body: 'Run: `node "$env:CLAUDE_SKILL_DIR/scripts/run.mjs" go`' },
+		// 🚨 PowerShell variable and drive names are case-INSENSITIVE, and
+		// `${env:NAME}` is as idiomatic as `$env:NAME`. A case-sensitive
+		// `\$env:NAME` alternative matched exactly one of these four spellings
+		// and waved the other three through — reintroducing the very asymmetry
+		// (bash line flagged, PowerShell line beside it clean) that the
+		// PowerShell alternative was added to remove.
+		{ label: 'powershell $Env: (mixed case)', body: 'Run: `node "$Env:CLAUDE_SKILL_DIR\\scripts\\run.mjs"`' },
+		{ label: 'powershell $ENV: (upper case)', body: 'Run: `node "$ENV:CLAUDE_SKILL_DIR\\scripts\\run.mjs"`' },
+		{ label: 'powershell ${env:NAME}', body: 'Run: `node "${env:CLAUDE_SKILL_DIR}/scripts/run.mjs"`' },
 	])('flags a $label CLAUDE_SKILL_DIR-anchored script path', async ({ body }) => {
 		const issue = await findNonPortableAssetIssue(getTempDir, `\n# Test Skill\n\n${body}`);
 		expect(issue).toBeDefined();
@@ -692,6 +713,22 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 		);
 		expect(issue).toBeDefined();
 		expect(issue?.severity).toBe('warning');
+		expect(issue?.message).toContain('api-skill-mount');
+	});
+
+	// 🚨 The mount POINT, with nothing after it — the most common spelling, and
+	// the pattern required a trailing `/` so it was invisible. It is also exactly
+	// what the sibling `claude-skill-dir` remedy tells authors to write ("cd into
+	// the skill directory first"), so the check was blind to the shape its own
+	// advice produces: `cd /skills/my-skill && …` passed while
+	// `node /skills/my-skill/scripts/run.mjs` on the next line fired.
+	it.each([
+		['the bare mount point in a cd', 'Run: `cd /skills/test-skill && node scripts/run.mjs`'],
+		['the mount point at end of line', 'The skill is mounted at /skills/test-skill'],
+		['the mount point in parentheses', 'Its container path (/skills/test-skill) is fixed.'],
+	])('flags %s', async (_label, body) => {
+		const issue = await findNonPortableAssetIssue(getTempDir, `\n# Test Skill\n\n${body}`);
+		expect(issue).toBeDefined();
 		expect(issue?.message).toContain('api-skill-mount');
 	});
 

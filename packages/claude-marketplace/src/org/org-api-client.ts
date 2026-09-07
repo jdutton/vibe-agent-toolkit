@@ -129,14 +129,22 @@ const RETRY_MAX_DELAY_MS = 60_000;
 const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE']);
 const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 
-/** A failed HTTP exchange, carrying the status so a caller can branch on it. */
+/**
+ * A failed HTTP exchange, carrying the status so a caller can branch on it.
+ *
+ * `options` exists so a re-wrapped failure can keep the one it was built from:
+ * {@link decideRetry} rebuilds this error to append a "not retried" note, and
+ * without a `cause` that rebuild dropped the original object and its stack —
+ * asymmetric with {@link ApiTransportError}, which has always plumbed one.
+ */
 export class ApiRequestError extends Error {
   constructor(
     message: string,
     readonly statusCode: number | undefined,
     readonly retryAfterHeader: string | undefined,
+    options?: { cause?: unknown },
   ) {
-    super(message);
+    super(message, options);
     this.name = 'ApiRequestError';
   }
 }
@@ -146,9 +154,12 @@ export class ApiRequestError extends Error {
  * describe it honestly: how many bytes actually left this process.
  *
  * 🔑 **The count is recorded, not inferred.** It is read off the socket
- * (`bytesWritten`) at the moment the failure surfaced, so `0` is a measurement
- * that nothing was sent — a DNS blackhole, a refused connection, a TLS handshake
- * that never completed — and not a guess. That distinction is the whole point of
+ * (`bytesWritten`) at the moment the failure surfaced, as a DELTA from where that
+ * socket's counter stood when this request was handed it (see
+ * {@link createSocketByteMeter} — the raw counter belongs to the SOCKET, not the
+ * request). So `0` is a measurement that nothing was sent — a DNS blackhole, a
+ * refused connection, a TLS handshake that never completed, or a reset with a
+ * socket in hand before a byte was flushed — and not a guess. That distinction is the whole point of
  * this class: a caller that annotated a failure with "the connection closed and
  * VAT sent N KiB" by testing `!(error instanceof ApiRequestError)` told a
  * first-time operator with no API key that a connection had closed and that a
@@ -220,14 +231,22 @@ function errorDetail(responseText: string): string {
  * `Failed to parse API response: …`, which tells the operator neither "shrink the
  * bundle" nor "get a key". A 2xx with no body is a success, not a parse failure: a
  * DELETE answering 204 has nothing to parse.
+ *
+ * ⚠️ Success is 2xx and ONLY 2xx. Refusing merely `>= 400` let every 1xx and 3xx
+ * through as a success, and Node's HTTP client does not follow redirects, so a 3xx
+ * arrives here verbatim: a TLS-terminating proxy answering `DELETE /v1/skills/{id}`
+ * with `302 Found` and an empty body resolved `undefined`, which the CLI's delete
+ * reporter reads as "no error type, therefore deleted" — `status: success`, exit 0,
+ * skill still there. A missing `statusCode` is refused for the same reason: it
+ * coerced to `0` and took the success path.
  */
 export function interpretApiResponse<T>(
   statusCode: number | undefined,
   responseText: string,
 ): ApiResponseOutcome<T> {
-  const status = statusCode ?? 0;
-  if (status >= 400) {
-    return { ok: false, message: `API error ${String(status)}: ${errorDetail(responseText)}` };
+  if (statusCode === undefined || statusCode < 200 || statusCode >= 300) {
+    const label = statusCode === undefined ? 'no status' : String(statusCode);
+    return { ok: false, message: `API error ${label}: ${errorDetail(responseText)}` };
   }
   if (responseText.trim() === '') {
     return { ok: true, value: undefined as T };
@@ -237,7 +256,7 @@ export function interpretApiResponse<T>(
   } catch {
     return {
       ok: false,
-      message: `Failed to parse API response (HTTP ${String(status)}): ${quoteBody(responseText)}`,
+      message: `Failed to parse API response (HTTP ${String(statusCode)}): ${quoteBody(responseText)}`,
     };
   }
 }
@@ -366,12 +385,35 @@ export function decideRetry(method: string, attempt: number, error: unknown): Re
       error.message + notRetriedNote(method, error.statusCode, attempt + 1),
       error.statusCode,
       error.retryAfterHeader,
+      // The rebuild exists only to append the note; without a cause it discarded the
+      // original object and the stack that says where the exchange actually failed.
+      { cause: error },
     ),
   };
 }
 
 /**
- * Start the connect deadline and clear it the moment a socket is connected.
+ * The event that means this socket can actually carry the request.
+ *
+ * ⚠️ For `https` the socket is a `TLSSocket`, and its `'connect'` fires when the TCP
+ * connection is established — BEFORE the handshake begins. `'secureConnect'` is the
+ * handshake-complete signal. Disarming on `'connect'` retired the connect budget
+ * early, so a middlebox that accepts TCP and never completes the handshake fell
+ * through to the 120 s inactivity budget: the operator waited four times the
+ * documented budget and was then told the connection "moved no data", which
+ * misdescribes a handshake that never started. Probed against a `net` server that
+ * accepts and never speaks TLS: `'connect'` fired at once, `'secureConnect'` never.
+ *
+ * A plain socket (an injected transport, or plain `http`) has no `encrypted` marker
+ * and never emits `'secureConnect'`, so it keeps `'connect'`.
+ */
+function readyEventOf(socket: object): 'connect' | 'secureConnect' {
+  return 'encrypted' in socket ? 'secureConnect' : 'connect';
+}
+
+/**
+ * Start the connect deadline and clear it the moment a socket is ready to carry
+ * the request — DNS plus TCP plus, for TLS, the handshake.
  *
  * Extracted from `request` because it is a self-contained lifecycle — arm, watch
  * for a connect, disarm — and inlining it pushed that method past the cognitive
@@ -391,16 +433,58 @@ function armConnectDeadline(
   // Never a reason for the process to stay alive; the request itself is.
   deadline.unref?.();
   req.on('socket', (socket) => {
-    if (socket.connecting) socket.once('connect', clear);
+    if (socket.connecting) socket.once(readyEventOf(socket), clear);
     else clear();
   });
   return deadline;
 }
 
-/** Bytes a request handed to its socket — 0 when no socket was ever assigned. */
-function bytesWrittenBy(req: ClientRequest): number {
-  const written: unknown = req.socket?.bytesWritten;
+/**
+ * Measures how many bytes THIS request wrote — the one fact
+ * {@link ApiTransportError} carries, and the one the CLI branches on to say
+ * whether anything could have been created.
+ *
+ * 🚨 `socket.bytesWritten` is cumulative PER SOCKET, not per request. This client
+ * passes no `agent`, so it uses `https.globalAgent`, which on Node >= 19 defaults
+ * to `keepAlive: true`: sequential requests share one socket and the counter
+ * accumulates (measured on this machine — four header-only GETs on one keep-alive
+ * agent reported 140, 280, 420, 560). Reading it raw made `skills delete --all`
+ * claim ~420 B "sent" for a 4th DELETE that had not flushed a byte, and made the
+ * `bytesSent === 0` branch — the one that tells an operator NOTHING was created —
+ * unreachable after the first request. It also includes the request HEADERS, so it
+ * is never the body length even on a fresh socket.
+ *
+ * 🔑 The fix is the delta, not a fresh socket per request. Keep-alive is worth
+ * having for a command that deletes every version of a skill in a loop, and Node
+ * unrefs an idle keep-alive socket so it cannot hold the CLI open; forcing
+ * `keepAlive: false` would buy a per-connection TLS handshake per delete and still
+ * leave the header bytes counted. The baseline is taken in the `'socket'` handler,
+ * which Node emits on socket ASSIGNMENT — writes are queued until then — so the
+ * delta is exactly this request's traffic.
+ */
+interface SocketByteMeter {
+  /** Register as the request's `'socket'` listener; records the baseline. */
+  readonly observeSocket: (socket: unknown) => void;
+  /** Bytes this request wrote — `0` when no socket was ever assigned. */
+  readonly bytesSent: () => number;
+}
+
+function readBytesWritten(socket: { bytesWritten?: unknown } | undefined): number {
+  const written: unknown = socket?.bytesWritten;
   return typeof written === 'number' ? written : 0;
+}
+
+function createSocketByteMeter(): SocketByteMeter {
+  let assigned: { bytesWritten?: unknown } | undefined;
+  let baseline = 0;
+  return {
+    observeSocket: (socket: unknown): void => {
+      assigned = socket as { bytesWritten?: unknown };
+      baseline = readBytesWritten(assigned);
+    },
+    bytesSent: (): number =>
+      assigned === undefined ? 0 : Math.max(0, readBytesWritten(assigned) - baseline),
+  };
 }
 
 /**
@@ -413,7 +497,7 @@ function bytesWrittenBy(req: ClientRequest): number {
  */
 function readResponse<T>(
   res: IncomingMessage,
-  req: ClientRequest,
+  meter: SocketByteMeter,
   resolve: (value: T) => void,
   reject: (error: Error) => void,
 ): void {
@@ -424,7 +508,7 @@ function readResponse<T>(
   // a thrown exception out of an emit, not a rejected promise — so the command
   // died with a raw stack instead of the annotated failure the CLI builds.
   res.on('error', (error: Error) => {
-    reject(new ApiTransportError(error.message, bytesWrittenBy(req), { cause: error }));
+    reject(new ApiTransportError(error.message, meter.bytesSent(), { cause: error }));
   });
   res.on('end', () => {
     const outcome = interpretApiResponse<T>(res.statusCode, Buffer.concat(chunks).toString('utf-8'));
@@ -602,13 +686,22 @@ export class OrgApiClient {
    * that never earned one is an {@link ApiTransportError} carrying the bytes
    * that left the socket. Every caller downstream reads the second to decide
    * what it may honestly SAY about the request, so the count is taken from the
-   * socket at failure time rather than from the buffer that was handed in.
+   * socket at failure time rather than from the buffer that was handed in — and
+   * as a delta against the socket's count at assignment, because the socket may
+   * be a keep-alive one that earlier requests already wrote to.
    */
   private request<T>(method: string, url: string, headers: Record<string, string>, body?: Buffer): Promise<T> {
     return new Promise((resolve, reject) => {
       const parsed = new URL(url);
       const options = {
         hostname: parsed.hostname,
+        // The port and protocol come from the URL rather than being defaulted by the
+        // transport: dropping them made every request implicitly `https:` on 443, a
+        // trap armed for the first base-URL override (a proxy, a test server) that
+        // would then have been silently sent somewhere else. `parsed.port` is `''`
+        // for a default port, which is not a port.
+        port: parsed.port || undefined,
+        protocol: parsed.protocol,
         path: parsed.pathname + parsed.search,
         method,
         headers,
@@ -621,11 +714,15 @@ export class OrgApiClient {
         if (connectDeadline !== undefined) clearTimeout(connectDeadline);
         connectDeadline = undefined;
       };
+      const meter = createSocketByteMeter();
 
       const req = this.httpRequest(options, (res) => {
         clearConnectDeadline();
-        readResponse<T>(res, req, resolve, reject);
+        readResponse<T>(res, meter, resolve, reject);
       });
+      // Before anything is written: the baseline has to be the socket's count at
+      // ASSIGNMENT, or the delta collapses to zero. See createSocketByteMeter.
+      req.on('socket', meter.observeSocket);
 
       // Node's request timeout is socket INACTIVITY, not total duration, so a slow but
       // progressing 30 MB upload is never cut off — only a connection that has stopped
@@ -643,7 +740,7 @@ export class OrgApiClient {
 
       req.on('error', (error: Error) => {
         clearConnectDeadline();
-        reject(new ApiTransportError(error.message, bytesWrittenBy(req), {
+        reject(new ApiTransportError(error.message, meter.bytesSent(), {
           cause: error,
           deadlineExceeded: error instanceof RequestDeadlineExceeded,
         }));

@@ -312,9 +312,31 @@ function packagingResultToValidationResult(
  *
  * Degrading beats destroying, and silence is not the alternative — the policy
  * `SCAN_PATH_UNREADABLE` states in its own registry docstring. So this warns
- * rather than logging at debug, and dedupes on `configLog` because a whole
- * plugin tree shares one config and a per-skill warning would be hundreds of
- * identical lines.
+ * rather than logging at debug, AND files a finding on the config path, because
+ * the warning goes to stderr while the report goes to stdout: a run that
+ * downgraded N skills to the much weaker config-free `validateSkill` and exited 0
+ * said nothing about it in the machine-readable artifact anyone actually diffs.
+ * That is the "detector silently disables itself" shape this code cites and was
+ * still doing.
+ *
+ * ⚠️ The filesystem question IS asked, and the answer changes what the operator
+ * is told. `config-loader.ts` preserves `cause` specifically so callers can ask
+ * `isFilesystemAccessError` and "decide whether to degrade or abort"; catching
+ * `ConfigLoadError` unconditionally never asked at all, so a `chmod 000` config
+ * and a typo produced the same sentence — and a permissions problem is not a
+ * broken config.
+ *
+ * 🔑 Asking it and still DEGRADING is deliberate, and was measured. Re-throwing
+ * so the per-entry guard anchors the finding is the obvious alternative and is
+ * worse: on a fixture with one unreadable config and one perfectly readable
+ * skill, the re-throw produced `filesScanned: 1, filesPassed: 0` with the finding
+ * anchored on `skills/demo/SKILL.md` and the skill never validated at all. On a
+ * real `--user` run that is hundreds of readable skills losing every check
+ * because one config is `chmod 000` — the exact "destroying" this lane exists to
+ * prevent, and a violation of the neighbouring promise that "a skill beside the
+ * unreadable path is validated exactly as if it were not there". The finding is
+ * filed on the CONFIG, which is the path that was actually refused, and the skill
+ * goes on to config-free validation.
  *
  * @returns the skill's display-safe packaging config, or `null` when there is
  *   no governing config OR when the one found could not be loaded.
@@ -322,23 +344,81 @@ function packagingResultToValidationResult(
 async function resolveGoverningConfig(
   skillPath: string,
   logger: ReturnType<typeof createLogger>,
-  configLog: Set<string>,
+  locationRoot: string,
 ): Promise<ReturnType<typeof stripValidationAllowForDisplay> | null> {
   let fullConfig: Awaited<ReturnType<typeof resolveSkillPackagingConfig>>;
   try {
     fullConfig = await resolveSkillPackagingConfig(skillPath);
   } catch (err) {
     if (!(err instanceof ConfigLoadError)) throw err;
-    // Keyed on the message, which names the offending config path, so the
-    // warning appears once however many skills that config governs.
-    const key = `unloadable:${err.message}`;
-    if (!configLog.has(key)) {
-      configLog.add(key);
-      logger.warn(`Ignoring unloadable config; these skills are validated config-free: ${err.message}`);
-    }
+    recordUnloadableConfig(err, logger, locationRoot);
     return null;
   }
   return fullConfig === null ? null : stripValidationAllowForDisplay(fullConfig);
+}
+
+/**
+ * Configs this run has already reported as unloadable, keyed by the config's own
+ * project root, each holding the synthetic result that carries its finding into
+ * the report.
+ *
+ * 🚨 MODULE-scoped, and cleared by {@link resetAuditCaches}, exactly like
+ * `config-loader.ts`'s `warnedConfigPaths`. It used to be a `Set` threaded as a
+ * parameter, and the threading had a hole: `handleFileEntry` passed the scan's
+ * real log, but `validateSingleSkill` constructed a fresh `new Set()` on EVERY
+ * call — and `validatePluginSkillsViaInventory` calls it in a loop over every
+ * skill in a plugin. A 40-skill plugin under one unloadable config printed 40
+ * identical warnings. The integration fixture was a bare directory, which routes
+ * through `handleFileEntry`, so the "warns once, not once per skill" test passed
+ * while the lane that actually repeated was never exercised. A run-scoped ledger
+ * cannot be re-created per call by mistake; a parameter can.
+ *
+ * ⚠️ Keyed on `ConfigLoadError.projectRoot`, NOT on `err.message`. The old key
+ * was the message with a comment claiming it "names the offending config path" —
+ * true only for a Zod failure, which is what the fixture happened to be. A YAML
+ * SYNTAX error is thrown out of `yaml.parse` and wrapped as `Failed to load
+ * config: ${message}`, and `YAMLParseError.message` carries no filename at all,
+ * so two nested projects with the same copy-pasted broken config collapsed to ONE
+ * warning naming NEITHER.
+ */
+const unloadableConfigResults: Map<string, ValidationResult> = new Map();
+
+/**
+ * Warn about — and file a finding for — a governing config this run could not
+ * load, once per config however many skills it governs.
+ *
+ * @param err - The load failure, carrying the project root that owns the config
+ * @param logger - Warnings go to stderr; the finding goes to the report
+ * @param locationRoot - The run's anchor base for the emitted location
+ */
+function recordUnloadableConfig(
+  err: ConfigLoadError,
+  logger: ReturnType<typeof createLogger>,
+  locationRoot: string,
+): void {
+  if (unloadableConfigResults.has(err.projectRoot)) return;
+  const configPath = safePath.join(err.projectRoot, VAT_CONFIG_FILENAME);
+  unloadableConfigResults.set(err.projectRoot, unreadablePathResult(configPath, err, locationRoot));
+  // The filesystem answer changes the NOUN, because the two conditions need
+  // different actions from the operator: `chmod`/ownership on one side, an edit
+  // to the file on the other. Collapsing them into one sentence was the whole
+  // cost of never asking.
+  const why = isFilesystemAccessError(err) ? 'unreadable' : 'unloadable';
+  logger.warn(
+    `Ignoring ${why} config at ${configPath}; skills it governs are validated`
+    + ` config-free: ${err.message}`,
+  );
+}
+
+/**
+ * The synthetic results for every config this run degraded past, so the report
+ * carries what the stderr warning says.
+ *
+ * Read, never drained: `resetAuditCaches()` owns the lifetime, and a drain would
+ * make the answer depend on which aggregation site ran first.
+ */
+function unloadableConfigFindings(): ValidationResult[] {
+  return [...unloadableConfigResults.values()];
 }
 
 async function validateSingleSkill(
@@ -353,8 +433,10 @@ async function validateSingleSkill(
   // vibe-agent-toolkit.config.yaml and apply the skill's packaging block. A
   // config that cannot be loaded is treated as absent — see
   // {@link resolveGoverningConfig}, which both audit lanes share so they cannot
-  // disagree about that again.
-  const skillConfig = await resolveGoverningConfig(skillPath, logger, new Set());
+  // disagree about that again. The warn-once ledger is run-scoped module state,
+  // NOT a set minted here — a fresh `new Set()` on this line is what made a
+  // 40-skill plugin print 40 identical warnings.
+  const skillConfig = await resolveGoverningConfig(skillPath, logger, locationRoot);
   if (skillConfig !== null) {
     logger.debug(`  Using config-aware validation for: ${skillPath}`);
     const { gitTracker } = await resolveScanContext(safePath.resolve(skillPath), locationRoot, logger);
@@ -664,6 +746,11 @@ async function auditUserDirectories(
     results.push(...await getValidationResults(target, recursive, options, logger, scanRoot));
   }
 
+  // The `--user` report is assembled here rather than by `buildAuditReport`, so
+  // it needs its own append or the config findings would reach stderr and not the
+  // document — see the same call in `buildAuditReport`.
+  results.push(...unloadableConfigFindings());
+
   // Run compatibility analysis if --compat flag is set
   const compatMap = options.compat
     ? await runCompatAnalysis(results, logger, scanRoot)  // --settings not supported in --user mode
@@ -924,7 +1011,15 @@ export async function buildAuditReport(
   logger.debug(`Auditing resources at: ${scanPath}`);
 
   const scanRoot = deriveScanRoot(scanPath);
-  const rawResults = await getValidationResults(scanPath, recursive, options, logger, scanRoot);
+  // Appended, not merged into a neighbour: a config the scan could not load has
+  // no host result to hang off, and attributing it to a skill would name a file
+  // that was read fine. Without this the ONLY record was a stderr warning, so a
+  // run that downgraded every skill under that config to the weaker config-free
+  // validator exited 0 with a report that said nothing about it.
+  const rawResults = [
+    ...await getValidationResults(scanPath, recursive, options, logger, scanRoot),
+    ...unloadableConfigFindings(),
+  ];
 
   // Load config for severity filtering (audit ignores allow; only severity matters).
   //
@@ -1983,7 +2078,6 @@ async function handleFileEntry(
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
   scanCtx: ScanContext,
-  configLog: Set<string>,
 ): Promise<ValidationResult | null> {
   const { locationRoot } = scanCtx;
 
@@ -2001,10 +2095,12 @@ async function handleFileEntry(
     // ONLY that skill's declared packaging rules. Configs do not compose
     // across VAT projects — audit does not merge rules across sibling configs.
     // Shared with the single-target lane, so one unloadable nested config
-    // cannot abort this whole scan while that lane shrugs it off. `configLog`
-    // is the scan's existing config-log set, so the warning is emitted once for
-    // a config however many skills it governs.
-    const skillConfig = await resolveGoverningConfig(fullPath, logger, configLog);
+    // cannot abort this whole scan while that lane shrugs it off. The warn-once
+    // ledger lives in `unloadableConfigResults` (module scope, cleared by
+    // `resetAuditCaches`) rather than being threaded here, so BOTH lanes dedupe
+    // against the same state — this one used to, the other minted a fresh set
+    // per skill.
+    const skillConfig = await resolveGoverningConfig(fullPath, logger, locationRoot);
     if (skillConfig !== null) {
       logger.debug(`  Using config-aware validation for: ${fullPath}`);
       // Thread the per-scan tracker into packaging validation so gitignore
@@ -2184,7 +2280,19 @@ function resolveProjectExcludes(
   } catch (err) {
     // Audit is a bulk linter over trees it does not own; a broken governing
     // config must not abort the scan. Say so rather than dropping it silently.
-    logger.debug(`Ignoring unreadable config at ${projectRoot}: ${String(err)}`);
+    //
+    // 🚨 `warn`, not `debug`. This comment already said "say so" while logging at
+    // a level nobody sees without `--debug`, so what actually happened was the
+    // silent drop it forbids — and the consequence is the one this function's own
+    // docstring spells out: EVERY `resources.exclude` the project declared is
+    // void, so a package that excludes its deliberately-broken eval fixtures has
+    // them audited as production skills. That is findings APPEARING, not findings
+    // disappearing, which is exactly the direction an operator will read as VAT
+    // being wrong rather than as their config being broken.
+    logger.warn(
+      `Config at ${projectRoot} could not be read; every resources.exclude it declares is`
+      + ` dropped for this run, so excluded trees are audited as ordinary source: ${String(err)}`,
+    );
     return null;
   }
   if (patterns.length === 0) return null;
@@ -2277,6 +2385,7 @@ export function resetAuditCaches(): void {
   resetGitTrackerCache();
   resetPackagingRegistryCache();
   inventoryRegistryCache.clear();
+  unloadableConfigResults.clear();
   resetProjectRootCaches();
   resetLoadedConfigCache();
   resetSkillDiscoveryCache();
@@ -2429,6 +2538,15 @@ interface ScanEntryContext {
   /** This level's own skill (if any) owns everything below — used for subdirectories. */
   descendCtx: ScanContext;
   baseDir: string;
+  /**
+   * Nested `vibe-agent-toolkit.config.yaml` paths already announced by the
+   * "configs do not compose" breadcrumb — its ONLY remaining purpose. It also
+   * used to carry the unloadable-config warn-once keys, and that second tenancy
+   * is what hid the defect: only the lane holding this set deduped, while
+   * `validateSingleSkill` minted a fresh one per skill. The ledger now lives at
+   * module scope; this stays a parameter because the breadcrumb is genuinely
+   * per-walk.
+   */
   nestedConfigLog: Set<string>;
 }
 
@@ -2454,7 +2572,7 @@ async function scanEntry(
 ): Promise<ValidationResult[]> {
   try {
     if (entry.isFile()) {
-      const result = await handleFileEntry(entry, fullPath, ctx.options, ctx.logger, ctx.scanCtx, ctx.nestedConfigLog);
+      const result = await handleFileEntry(entry, fullPath, ctx.options, ctx.logger, ctx.scanCtx);
       return result === null ? [] : [result];
     }
     if (entry.isDirectory()) {

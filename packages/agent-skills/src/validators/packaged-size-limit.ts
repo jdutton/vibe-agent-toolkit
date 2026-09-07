@@ -180,6 +180,25 @@ export interface UnweighedEntry {
   readonly path: string;
   /** Phrase completing "…, so its bytes were not counted": the cause, in the open. */
   readonly reason: string;
+  /**
+   * Remedy for THIS entry, when the registry's generic one does not apply.
+   *
+   * 🚨 `SCAN_PATH_UNREADABLE`'s registry `fix` says "Make the path readable —
+   * check its permissions and ownership — then re-run the audit, or pass
+   * `--exclude` to drop it from the scan deliberately". That is right for a
+   * readdir/stat FAILURE and wrong for every entry this walk skips by POLICY:
+   * a symlink is refused because the uploader refuses it, not because its
+   * permissions are wrong, and there is nothing to make readable. Worse, both
+   * halves name the wrong command — this producer runs inside `packageSkill`
+   * (`vat build`, `vat skills package`), and `--exclude` is an `audit` flag that
+   * neither of those accepts, so an author following the advice gets a usage
+   * error on a healthy file.
+   *
+   * Omitted for the genuine unreadable cases, which fall back to the registry
+   * entry — that text is accurate for them, and duplicating it here would be a
+   * second copy to drift.
+   */
+  readonly fix?: string;
 }
 
 /** What one walk of a packaged bundle establishes — and what it could not. */
@@ -243,6 +262,27 @@ function bundleRelative(root: string, target: string): string {
 }
 
 /**
+ * The half of `SCAN_PATH_UNREADABLE`'s registry `fix` that is FALSE for every
+ * entry this walk skips by policy, stated once so the two remedies below cannot
+ * drift from each other. See {@link UnweighedEntry.fix}.
+ */
+const NOT_A_PERMISSION_PROBLEM =
+  "Nothing about this entry's permissions is wrong, and `--exclude` is an `audit` flag "
+  + 'that the `vat build` / `vat skills package` lane this check runs in does not accept.';
+
+/** Remedy for a symlink: skipped because the UPLOADER refuses it, not because it is unreadable. */
+const SYMLINK_SKIPPED_FIX =
+  'Replace the link with a real copy of the file if the skill needs it, or remove it from the '
+  + 'packaged output — the uploader refuses symbolic links outright, so this entry can never '
+  + `contribute bytes to a published skill. ${NOT_A_PERMISSION_PROBLEM}`;
+
+/** Remedy for a device, socket or FIFO: nothing to weigh and nothing that can be uploaded. */
+const NOT_A_REGULAR_FILE_FIX =
+  'Remove it from the packaged output — a device, socket or FIFO has no bytes to weigh and '
+  + 'cannot be uploaded, and one reaching a build output almost always came from a source tree '
+  + `that should not have contained it. ${NOT_A_PERMISSION_PROBLEM}`;
+
+/**
  * Every regular file under `root` with its size, plus every entry whose size
  * could NOT be established.
  *
@@ -299,6 +339,7 @@ function walkBundle(root: string): BundleWalk {
           reason:
             'it is a symbolic link, which the uploader refuses rather than following — '
             + 'no byte of its target can be sent, so none is weighed here',
+          fix: SYMLINK_SKIPPED_FIX,
         });
         continue;
       }
@@ -341,6 +382,7 @@ function weighEntry(full: string, rel: string, acc: WalkAccumulator): void {
     // Symbolic links never reach here — they are caught by the walk, which does
     // not follow one. What is left is a device, a socket or a FIFO.
     reason: 'it is not a regular file (a device, a socket, or a FIFO)',
+    fix: NOT_A_REGULAR_FILE_FIX,
   });
 }
 
@@ -421,7 +463,16 @@ export function describeOversizeBundle(
   );
 }
 
-/** One receipt per entry the walk could not put on the scale. */
+/**
+ * One receipt per entry the walk could not put on the scale.
+ *
+ * The `fix` is PER INSTANCE, falling back to the registry's only for the entries
+ * the registry's text actually describes — a readdir or stat FAILURE. Everything
+ * else here is a deliberate skip, and the registry advice ("make the path
+ * readable… or pass `--exclude`") sends its author to fix permissions on a
+ * healthy file with a flag this command does not have. See
+ * {@link UnweighedEntry.fix}.
+ */
 function unweighedIssues(entries: readonly UnweighedEntry[]): ValidationIssue[] {
   const registryEntry = CODE_REGISTRY.SCAN_PATH_UNREADABLE;
   return entries.map(entry => ({
@@ -431,7 +482,7 @@ function unweighedIssues(entries: readonly UnweighedEntry[]): ValidationIssue[] 
       `Not weighed against the ${formatBytes(API_SKILL_MAX_UPLOAD_BYTES)} Anthropic Skills API upload ceiling: `
       + `${entry.reason}. The packaged size VAT measured is a LOWER BOUND.`,
     location: entry.path,
-    fix: registryEntry.fix,
+    fix: entry.fix ?? registryEntry.fix,
     reference: registryEntry.reference,
   }));
 }

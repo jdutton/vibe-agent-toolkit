@@ -561,6 +561,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **`vat claude org skills install <file>.zip` published your eval suite — answer keys included.**
+  The directory shape withholds `evals/`, `node_modules/` and `.git/` and reports the exclusion; the
+  ZIP shape never called that collector, so `zip -r my-skill.zip my-skill/` uploaded the whole tree
+  to a shared org workspace with no warning. VAT now reads the archive's entry names and **refuses**,
+  naming the offending entries. ⚠️ This lane sees only the conventional directory names — a suite at
+  a location declared in `skills.config.<name>.test.evals` is not visible inside an archive. **Check
+  what you already published with `vat claude org skills list`.**
+
 - **`vat claude org skills install` read symbolic links through to their targets and published the
   result to a shared org workspace.** The collector refused only a link resolving to a *directory*;
   a link to a *file* fell through both branches and `readFileSync` returned the target's bytes, so a
@@ -718,6 +726,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `my-skill-v2` whose every version declares `name: my-skill`. That was silent; VAT now reads the
   archive's `SKILL.md`, prints both spellings when they diverge, and names the `--title` that
   reconciles them. Pass `--title` to set it explicitly.
+
+- **A `vibe-agent-toolkit.config.yaml` that could not be loaded silently voided every
+  `resources.exclude` it declared**, so a package that excludes its deliberately-broken fixtures had
+  them audited as production skills. The scan said so only at `--debug`; it now warns, names the
+  config, and says the excludes were dropped.
+
+- **`vat skill test configure` still refused a config the rest of VAT accepts, and printed a raw
+  Zod JSON dump when it did.** It was a third config reader that neither of the two fixes above
+  reached. It now shares them.
+
+- **`vat claude org` read any HTTP status below 400 as success.** A redirect or an informational
+  response with an empty body resolved as a completed exchange, so a proxy answering `302` to a
+  `DELETE` made the command print `status: success` and exit 0 with the skill still there. A missing
+  status did the same. Anything outside `200`–`299` is now a refusal that names the status.
 
 - **`vat claude org` reported the wrong reason for any HTTP failure whose body was not JSON.** A
   `413` from an edge proxy and a `401` both surfaced as `Failed to parse API response`, so neither

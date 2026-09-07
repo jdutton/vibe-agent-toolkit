@@ -1118,14 +1118,23 @@ const RELATIVE_PATH_HINT =
  *     plain form; falling to (2) is what still flags the operator forms — a
  *     lone `\$\{NAME\}` alternative silently missed `${NAME:-default}`, an
  *     idiomatic non-portable reference.
- *  3. `\$env:NAME` — PowerShell's expansion. A skill that documents a Windows
- *     invocation writes `$env:CLAUDE_SKILL_DIR`, which neither of the two POSIX
- *     alternatives matches: after `$` comes `env:`, not the variable name. The
- *     forms are equally non-portable, so leaving this one out flagged the bash
- *     line of a skill and waved through the PowerShell line directly beneath it.
+ *  3. `\$\{?env:NAME\b` — PowerShell's expansion, BOTH spellings. A skill that
+ *     documents a Windows invocation writes `$env:CLAUDE_SKILL_DIR` or
+ *     `${env:CLAUDE_SKILL_DIR}`, neither of which the two POSIX alternatives
+ *     match: after `$`/`${` comes `env:`, not the variable name. The forms are
+ *     equally non-portable, so leaving them out flagged the bash line of a skill
+ *     and waved through the PowerShell line directly beneath it.
+ *
+ * ⚠️ Compiled with the `i` flag, and that is about alternative 3 specifically.
+ * PowerShell variable and drive names are case-INSENSITIVE, so `$Env:NAME` and
+ * `$ENV:NAME` are as valid — and as commonly authored — as `$env:NAME`. A
+ * case-SENSITIVE `\$env:` matched one of the three and silently passed the other
+ * two, reintroducing exactly the asymmetry this alternative was added to remove.
+ * The variable names themselves are uppercase literals passed in by the call
+ * sites below, so case-insensitivity costs nothing there.
  */
 // eslint-disable-next-line security/detect-non-literal-regexp -- composed from a compile-time constant name, no user input
-const envVarPattern = (name: string): RegExp => new RegExp(String.raw`\$\{${name}\}|\$env:${name}\b|\$\{?${name}\b`);
+const envVarPattern = (name: string): RegExp => new RegExp(String.raw`\$\{${name}\}|\$\{?env:${name}\b|\$\{?${name}\b`, 'i');
 
 const NON_PORTABLE_ASSET_VARIANTS: readonly PortabilityVariant[] = [
   {
@@ -1165,8 +1174,17 @@ const NON_PORTABLE_ASSET_VARIANTS: readonly PortabilityVariant[] = [
     // point hardcoded into a skill, which resolves nowhere in Claude Code. Anchored
     // at a path boundary so `~/.claude/skills/x/` and `.claude/skills/` in prose
     // (both preceded by a word character) are not flagged.
+    //
+    // ⚠️ The TRAILING separator is optional, and that is the common spelling —
+    // not an edge case. `/skills/<name>` with nothing after it is the mount
+    // POINT, which is what the sibling `claude-skill-dir` fix text tells authors
+    // to reach for ("cd into the skill directory first"). Requiring the trailing
+    // `/` made `cd /skills/my-skill && node scripts/run.mjs` invisible while
+    // firing on `node /skills/my-skill/scripts/run.mjs` on the next line. The
+    // `(?![\w.-])` branch keeps the name from being truncated mid-token, so a
+    // longer name is still matched whole rather than at a prefix.
     label: 'api-skill-mount',
-    pattern: /(?:^|[\s"'`(])\/skills\/[A-Za-z0-9._-]+\//,
+    pattern: /(?:^|[\s"'`(])\/skills\/[A-Za-z0-9._-]+(?:\/|(?![\w.-]))/,
     fix: `\`/skills/<name>/\` is the Anthropic API code-execution container's mount point and does not exist in Claude Code, a claude.ai upload, or any other host. ${RELATIVE_PATH_HINT} When a process genuinely needs an absolute path, instruct the agent to cd into the skill directory first.`,
   },
   {

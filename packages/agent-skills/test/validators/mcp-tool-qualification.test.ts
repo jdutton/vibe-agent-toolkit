@@ -84,6 +84,53 @@ describe('qualifiedMcpToolNames — the detector’s premise', () => {
     expect(sorted(vocabulary)).toEqual(['bigquery_schema', 'create_issue']);
   });
 
+  /**
+   * 🚨 camelCase tool names were INVISIBLE, on BOTH lanes — not truncated, gone.
+   *
+   * Both captures used to end on `\b`. When the character after the captured run
+   * is an UPPERCASE letter, both sides of that position are word characters, so
+   * `\b` fails; the engine then gives the lowercase class back one character at a
+   * time and every interior position is word|word too, so the WHOLE match is
+   * abandoned. `mcp__linear__createIssue` produced `[]` — not `['create']`.
+   *
+   * The consequence is the detector's own defect: a document that spells a
+   * camelCase tool qualified once and bare afterwards had an EMPTY vocabulary and
+   * reported nothing. camelCase is the ordinary spelling for TypeScript-authored
+   * MCP servers, so this was the common case, not a corner.
+   *
+   * The hyphen family survived only because `-` is a NON-word character — which
+   * is exactly why `foo-Bar` had a fixture and `fooBar` had none. An assertion
+   * that a name is captured WHOLE cannot see this class; only one that asserts
+   * the name is captured AT ALL can.
+   */
+  it.each([
+    ['a camelCase tool in the mcp__ spelling', 'mcp__linear__createIssue', 'createIssue'],
+    ['snake_case with a camelCase tail', 'mcp__x__get_userInfo', 'get_userInfo'],
+    ['a camelCase tool on a hyphenated server', 'mcp__claude-in-chrome__uploadImage', 'uploadImage'],
+  ])('reads %s', (_label, qualified, tool) => {
+    expect([...qualifiedMcpToolNames(`\`${qualified}\``)]).toEqual([tool]);
+  });
+
+  it('reads a camelCase tool in the API spelling', () => {
+    expect(sorted(qualifiedMcpToolNames('Call `GitHub:createIssue` then `GitHub:listIssues`.')))
+      .toEqual(['createIssue', 'listIssues']);
+  });
+
+  /**
+   * The camelCase HUMP is what admits these names, and without it the regex fix
+   * above buys nothing: `createIssue` carries neither `_` nor `-`, so the
+   * multi-segment gate — written as "contains a separator" — would refuse every
+   * one of them and leave the vocabulary empty exactly as `\b` did. A hump
+   * answers the gate's real question ("name, or ordinary English word?") as well
+   * as a separator does.
+   */
+  it('still refuses a ONE-WORD camelCase-free name from the same server', () => {
+    const vocabulary = qualifiedMcpToolNames(
+      'Use `mcp__claude-in-chrome__find` and `mcp__claude-in-chrome__uploadImage`.',
+    );
+    expect(sorted(vocabulary)).toEqual(['uploadImage']);
+  });
+
   // Both of these were MEASURED false-vocabulary sources: the first on VAT's own
   // packages/utils/README.md, the second in a partner-built plugin in the install
   // corpus. Neither is visible on a corpus of ordinary skills, which is exactly
@@ -92,6 +139,14 @@ describe('qualifiedMcpToolNames — the detector’s premise', () => {
     ['a node builtin specifier', 'Import from `node:child_process` for spawning.'],
     ['an OAuth scope string', 'Requires the `whiteboard:read:list_whiteboards` scope.'],
     ['a lowercase URI scheme', 'See `https://example.com/get_thing_x` for details.'],
+    // The server half must be spelled the way Anthropic's examples spell one:
+    // uppercase FIRST, and no underscore. Measured cost-free — over 884 documents
+    // (206 authoring-project `.md` + 678 installed `SKILL.md`) the looser
+    // "uppercase anywhere" rule accepted exactly three distinct server halves,
+    // `GitHub`, `BigQuery` and the guidance template's own `ServerName`, and the
+    // strict rule accepts all three.
+    ['a server half whose uppercase is not first', 'Set `xGitHub:create_issue` in the map.'],
+    ['a server half carrying an underscore', 'Set `My_Server:create_issue` in the map.'],
   ])('does not build vocabulary from %s', (_label, body) => {
     expect(qualifiedMcpToolNames(body).size).toBe(0);
   });
@@ -116,8 +171,9 @@ describe('qualifiedMcpToolNames — the detector’s premise', () => {
    * and every later code span spelling that ordinary English word became a
    * finding. Same family as `resolve-library-id` → `resolve`, but the opposite
    * mechanism: that one truncated a name, this one admits a name that is one
-   * word to begin with. Zero occurrences over 291 repo docs, so it is structural
-   * rather than observed.
+   * word to begin with. Zero occurrences over 291 repo docs (the whole tree's
+   * `.md`, `dist`/`node_modules`/`.claude/worktrees` excluded), re-measured after
+   * the camelCase fix — so it is structural rather than observed.
    */
   it('does not build vocabulary from a ONE-WORD tool name in the mcp__ spelling', () => {
     const vocabulary = qualifiedMcpToolNames(
@@ -136,13 +192,24 @@ describe('qualifiedMcpToolNames — the detector’s premise', () => {
 
   /**
    * `withoutTrailingSeparators` had no test of its own, and `return tool;`
-   * survived — the greedy tool capture ends on a separator when the next
-   * character is uppercase, so an unstripped capture puts `browser_` in the
-   * vocabulary and never matches the bare `browser_click` it was meant to.
+   * survived.
+   *
+   * ⚠️ This case used to be `mcp__x__browser_click-Beta` → `browser_click`, and
+   * that expectation was a symptom of the `\b` defect rather than a requirement:
+   * the capture stopped at the hyphen only because uppercase was excluded from
+   * the class. A tool actually spelled `browser_click-Beta` IS named
+   * `browser_click-Beta`, and it is now read whole — see the camelCase cases
+   * above. The reachable trailing-separator shape is a separator followed by a
+   * NON-name character, which the closing backtick supplies here.
    */
   it('strips a trailing separator the greedy capture leaves behind', () => {
-    expect(sorted(qualifiedMcpToolNames('`mcp__x__browser_click-Beta` in the beta server')))
+    expect(sorted(qualifiedMcpToolNames('Call `mcp__x__browser_click_` on the beta server.')))
       .toEqual(['browser_click']);
+  });
+
+  it('captures a hyphen-then-uppercase tool name whole', () => {
+    expect(sorted(qualifiedMcpToolNames('`mcp__x__browser_click-Beta` in the beta server')))
+      .toEqual(['browser_click-Beta']);
   });
 });
 
@@ -189,6 +256,37 @@ describe('collectUnqualifiedMcpToolIssues', () => {
     expect(issues[0]?.code).toBe('MCP_TOOL_NAME_UNQUALIFIED');
     expect(issues[0]?.severity).toBe('warning');
     expect(issues[0]?.link).toBe('get_me');
+    expect(issues[0]?.line).toBe(2);
+  });
+
+  /**
+   * The end-to-end consequence of the `\b` defect, on both lanes: these two
+   * documents are the exact shape the rule exists to report, and the shipped
+   * detector said nothing about either — the vocabulary was empty, so the loop
+   * that reports bare names never ran.
+   */
+  it.each([
+    [
+      'the mcp__ spelling',
+      'Link the records with `mcp__tracker__addCaseLinks`.\n' +
+      'Then call `addCaseLinks` for every sibling id.\n',
+      'addCaseLinks',
+    ],
+    [
+      'the API spelling',
+      'Open one with `GitHub:createIssue`.\n' +
+      'Then call `createIssue` once per finding.\n',
+      'createIssue',
+    ],
+    [
+      'a mixed snake_case + camelCase name',
+      'Fetch it via `mcp__x__get_userInfo`.\n' +
+      'Cache the `get_userInfo` result for the session.\n',
+      'get_userInfo',
+    ],
+  ])('reports a bare camelCase tool name qualified elsewhere in %s', (_label, body, tool) => {
+    const issues = issuesFor(body);
+    expect(links(issues)).toEqual([tool]);
     expect(issues[0]?.line).toBe(2);
   });
 
