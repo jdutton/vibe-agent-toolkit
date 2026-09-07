@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 
+import { RAGQueryJsonSchema } from '../../src/schemas/json-schema.js';
 import { RAGQuerySchema, RAGResultSchema } from '../../src/schemas/query.js';
 import type { RAGQuery, RAGResult } from '../../src/schemas/query.js';
 
@@ -112,6 +113,82 @@ describe('RAGQuerySchema', () => {
     const result = RAGQuerySchema.safeParse(query);
 
     expect(result.success).toBe(false);
+  });
+});
+
+/**
+ * A key this schema does not declare must be REFUSED, never stripped.
+ *
+ * 🚨 This is the widening defect, reached through VAT's own validation path rather than
+ * through a provider. A Zod object DELETES unknown keys, so `filters: { resourceID: 'x' }`
+ * — one capital letter off the one filter a provider reads — parsed successfully into
+ * `filters: {}`. The provider's allowlist never saw the key, `buildWhereClause` produced no
+ * condition, and `query()` applies a WHERE clause only when one was produced: the query ran
+ * as an unfiltered full-recall search over the entire index. The same typo handed straight
+ * to `buildWhereClause` throws — so validating against the schema that describes the surface
+ * was the way to LOSE the refusal.
+ */
+describe('RAGQuerySchema refuses unknown keys rather than erasing them', () => {
+  it('rejects a typo on the one filter key a provider reads', () => {
+    // One capital letter from `resourceId`. This used to parse to `filters: {}`.
+    const result = RAGQuerySchema.safeParse({ text: TEST_SEARCH_TERM, filters: { resourceID: 'abc-123' } });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('names the offending filter key, so the caller can fix the spelling', () => {
+    const result = RAGQuerySchema.safeParse({ text: TEST_SEARCH_TERM, filters: { resourceID: 'abc-123' } });
+    const issues = result.success ? [] : result.error.issues;
+
+    expect(JSON.stringify(issues)).toMatch(/resourceID/);
+  });
+
+  it('rejects a singular `filter`, which silently erased EVERY filter', () => {
+    // The top-level instance of the same defect, and the worst one: the entire filter
+    // object vanishes and the query searches the whole index.
+    const result = RAGQuerySchema.safeParse({ text: TEST_SEARCH_TERM, filter: { resourceId: 'abc-123' } });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a typo inside hybridSearch', () => {
+    const result = RAGQuerySchema.safeParse({
+      text: TEST_SEARCH_TERM,
+      hybridSearch: { enabled: false, keywordWieght: 0.3 },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("still accepts arbitrary keys under filters.metadata, which is the caller's own schema", () => {
+    // Strictness stops at `metadata`: its shape belongs to the caller's metadata schema,
+    // which this package cannot know. The provider validates it against that schema and
+    // throws on a field the schema does not declare.
+    const result = RAGQuerySchema.safeParse({
+      text: TEST_SEARCH_TERM,
+      filters: { metadata: { anythingTheCallerDeclared: 'value' } },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('agrees with the JSON Schema it publishes, which already refused this key', () => {
+    // 🔑 The two halves of one exported contract had opposite verdicts. `zod-to-json-schema`
+    // emits `additionalProperties: false` for a plain object, so an adopter validating
+    // against the published `RAGQueryJsonSchema` has always been TOLD the typo is invalid —
+    // while VAT's own `safeParse` accepted it and deleted the key. The strictness below is
+    // what makes the TypeScript path honour the contract the JSON path already published;
+    // the emitted JSON Schema is byte-identical either way.
+    const schema = RAGQueryJsonSchema as {
+      definitions: {
+        RAGQuery: { additionalProperties: boolean; properties: { filters: { additionalProperties: boolean } } };
+      };
+    };
+    const typo = { text: TEST_SEARCH_TERM, filters: { resourceID: 'abc-123' } };
+
+    expect(schema.definitions.RAGQuery.properties.filters.additionalProperties).toBe(false);
+    expect(schema.definitions.RAGQuery.additionalProperties).toBe(false);
+    expect(RAGQuerySchema.safeParse(typo).success).toBe(false);
   });
 });
 

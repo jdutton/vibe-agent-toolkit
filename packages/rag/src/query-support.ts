@@ -155,6 +155,16 @@ export function assertQuerySupported(
  *
  * A filter object with no keys at all is NOT a request, and returns normally.
  *
+ * ⚠️ KNOW WHAT THIS CANNOT SEE. It counts CONDITIONS, so a condition that matches every row
+ * satisfies it completely — `metadata: { tags: [] }` once became `tags LIKE '%%'` and passed
+ * this check while doing the exact thing the check exists to prevent. Counting cannot be
+ * strengthened into catching that: only the code that BUILT a clause knows what the clause
+ * means, and sniffing the emitted SQL for a tautology would be a guess about a string this
+ * module did not write, wrong for the next tautology shape that appears. So the obligation
+ * sits with the builder: a value satisfiable by nothing must emit an explicitly always-false
+ * condition (`1 = 0`), never a vacuous one. This function's job is the different, narrower
+ * one it can actually do — refusing a request that produced NO condition at all.
+ *
  * @param filters - The filter object the caller supplied
  * @param conditionCount - How many SQL conditions it produced
  * @throws Error if the caller asked for a filter and none survived

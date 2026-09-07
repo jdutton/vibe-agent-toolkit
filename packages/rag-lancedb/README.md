@@ -126,8 +126,8 @@ Filters are compiled into a SQL `WHERE` clause against the LanceDB table. **Two 
 
 | Filter | Behaviour |
 |---|---|
-| `filters.resourceId` | Exact match on the source resource. Accepts a string or an array (`resourceid IN (...)`). An empty array matches nothing. |
-| `filters.metadata` | Any field declared in your metadata schema — default or custom. ⚠️ A field **not** present in the schema is still skipped silently, and skipping widens the same way the refused filters above did. |
+| `filters.resourceId` | Exact match on the source resource. Accepts a string or an array (`resourceid IN (...)`). An empty array matches nothing (`1 = 0`). |
+| `filters.metadata` | Any field declared in your metadata schema — default or custom. A field **not** declared in that schema **throws**: it can never match, so skipping it would widen the search exactly as the refused filters above did. An empty array value matches nothing (`1 = 0`), the same as an empty `resourceId` — "filter to the set I computed, and the set is empty" is a request nothing satisfies, not a request to see everything. |
 
 All metadata fields (default or custom) are filterable:
 
@@ -190,7 +190,7 @@ Some fields are declared on the query types but **no shipped provider reads them
 
 The refusal is deterministic and happens **before** the query does any work: it needs neither a database connection nor an embedding, so an unindexed provider reports the unsupported field rather than reporting that nothing is indexed yet.
 
-> **Note on `RAGQuerySchema`.** The Zod schema exported from `@vibe-agent-toolkit/rag` now declares a `filters.metadata` key, so a query validated against that schema can express the filter path that works. It previously did not — and because a Zod object *strips* unknown keys rather than rejecting them, a `filters.metadata` passed through that schema was discarded before it reached a provider. The schema validates **structure, not provider support**: `dateRange` / `tags` / `type` / `headingPath` still parse successfully there and are refused at `query()`.
+> **Note on `RAGQuerySchema`.** The Zod schema exported from `@vibe-agent-toolkit/rag` declares a `filters.metadata` key, so a query validated against that schema can express the filter path that works, and every object in it is `.strict()`, so a key it does not declare is a parse ERROR rather than a silent deletion. Both were the same defect: a Zod object *strips* unknown keys, so a `filters.metadata` used to be discarded before it reached a provider, and a typo'd `resourceID` used to be erased before this package's allowlist could refuse it — leaving an unfiltered full-recall search. Validating a query was the way to LOSE the refusal. Strictness stops at `filters.metadata`, whose shape is your own metadata schema. The schema still validates **structure, not provider support**: `dateRange` / `tags` / `type` / `headingPath` are declared, parse successfully there, and are refused at `query()`.
 
 ## Quick Start
 

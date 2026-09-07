@@ -10,6 +10,17 @@ import { getZodTypeName, unwrapZodType, ZodTypeNames } from '@vibe-agent-toolkit
 import type { ZodObject, ZodRawShape, ZodTypeAny } from 'zod';
 
 /**
+ * The clause for "this filter is satisfiable by nothing".
+ *
+ * 🔑 Shared by every branch that can receive an empty list, so the branches cannot answer
+ * the same question differently. `resourceId: []` and `metadata: { tags: [] }` are the same
+ * request — filter to a set I have computed, and the set is empty — and an empty result is
+ * the only honest answer to it. The alternative that produced itself accidentally, an
+ * always-true `LIKE '%%'`, returns the entire index to a caller who asked to be filtered.
+ */
+const ALWAYS_FALSE = '1 = 0';
+
+/**
  * Escape single quotes for SQL string literals
  *
  * Used to prevent SQL injection in WHERE clauses.
@@ -73,6 +84,17 @@ export function buildMetadataFilter(key: string, value: unknown, zodType: ZodTyp
 
   // Handle array fields (stored as CSV strings)
   if (typeName === ZodTypeNames.ARRAY) {
+    // 🚨 An empty list matches NOTHING, and saying so takes an explicit branch. `String([])`
+    // is the empty string, so falling through produced `tags LIKE '%%'` — a tautology
+    // returning the whole index to a caller who asked to be filtered. It also defeated the
+    // `assertFiltersProducedConditions` backstop, which counts conditions and cannot tell a
+    // condition that matches everything from one that discriminates. "Filter to the tags I
+    // computed, and I computed none" is the ordinary way to arrive here, and it is a request
+    // nothing satisfies — exactly as an empty `resourceId` array already resolved.
+    if (Array.isArray(value) && value.length === 0) {
+      return ALWAYS_FALSE;
+    }
+
     const strValue = String(value);
     return `${fieldPath} LIKE '%${escapeSQLString(strValue)}%'`;
   }
@@ -183,7 +205,7 @@ export function buildWhereClause<TMetadata extends Record<string, unknown>>(
 
     // Handle empty array case - should match nothing
     if (ids.length === 0) {
-      conditions.push('1 = 0'); // Always false condition
+      conditions.push(ALWAYS_FALSE);
     } else {
       const idList = ids.map((id) => `'${escapeSQLString(id)}'`).join(', ');
       // Use lowercase (no backticks needed)

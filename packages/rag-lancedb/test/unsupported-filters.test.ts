@@ -143,6 +143,41 @@ describe('unsupported filters refuse rather than widen', () => {
     });
   });
 
+  describe('an empty list matches NOTHING, on every branch that accepts one', () => {
+    // 🚨 The backstop above counts CONDITIONS, so a condition that matches every row
+    // passes it. `String([])` is the empty string, so an empty tag list produced
+    // `tags LIKE '%%'` — a tautology returning the WHOLE index — and sailed through a
+    // guard whose whole purpose is to prevent exactly that outcome. The structurally
+    // identical `resourceId: []` has always emitted `1 = 0`.
+    //
+    // "Filter to the tags I computed, and I computed none" is the ordinary way to hit
+    // this: `metadata: { tags: selected }` with an empty `selected` is not a request to
+    // see everything, it is a request that nothing satisfies.
+    //
+    // Both branches are asserted together deliberately. Pinning only the metadata side
+    // would leave the two free to drift back apart, and an assertion loose enough to
+    // match its neighbour guards nothing — so each is pinned to the exact clause AND to
+    // the other.
+    it('emits an always-false clause for an empty metadata array, not a LIKE tautology', () => {
+      expect(buildWhereClause({ metadata: { tags: [] } }, schema)).toBe('1 = 0');
+    });
+
+    it('emits an always-false clause for an empty resourceId array', () => {
+      expect(buildWhereClause({ resourceId: [] }, schema)).toBe('1 = 0');
+    });
+
+    it('gives the two branches the same answer', () => {
+      expect(buildWhereClause({ metadata: { tags: [] } }, schema)).toBe(
+        buildWhereClause({ resourceId: [] }, schema),
+      );
+    });
+
+    it('does not turn a non-empty tag list into an always-false clause', () => {
+      // The neighbour case, so the fix cannot pass by refusing every array.
+      expect(buildWhereClause({ metadata: { tags: ['auth'] } }, schema)).toBe("tags LIKE '%auth%'");
+    });
+  });
+
   describe('the guard reports every offender at once', () => {
     it('names all present unsupported keys in one error', () => {
       let message = '';

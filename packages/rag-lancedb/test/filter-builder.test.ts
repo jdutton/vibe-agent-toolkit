@@ -48,6 +48,14 @@ describe('Filter Builder', () => {
       expect(result).toBe("tags LIKE '%auth%'");
     });
 
+    it('should build an always-false clause for an empty array, not a matches-everything LIKE', () => {
+      // `String([])` is the empty string, so this used to produce `tags LIKE '%%'` — a
+      // tautology matching every row in the index, from a caller who asked to be filtered.
+      const zodType = z.array(z.string());
+      const result = buildMetadataFilter('tags', [], zodType);
+      expect(result).toBe('1 = 0');
+    });
+
     it('should escape single quotes in array filter values', () => {
       const zodType = z.array(z.string());
       const result = buildMetadataFilter('tags', "user's-tag", zodType);

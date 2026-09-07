@@ -147,6 +147,18 @@ if (chunkResult.success) {
 }
 ```
 
+> **`RAGQuerySchema` rejects unknown keys; it does not drop them.** Every object in it is
+> `.strict()`, so `filters: { resourceID: 'x' }` — one capital letter off `resourceId` — is a
+> parse ERROR. A default Zod object would delete that key and report success, and for a query
+> a deleted filter is a widening one: no filter key means no SQL condition, and a provider
+> applies a WHERE clause only when one was produced, so the query would run as an unfiltered
+> search over the whole index. The exception is `filters.metadata`, whose shape is your own
+> metadata schema — the provider validates that against the schema you supplied.
+>
+> Structure is still not provider support: `dateRange`, `tags`, `type`, `headingPath` and
+> `hybridSearch.enabled: true` are all declared here, all parse, and are all refused by
+> `query()`.
+
 ### Using JSON Schemas
 
 ```typescript

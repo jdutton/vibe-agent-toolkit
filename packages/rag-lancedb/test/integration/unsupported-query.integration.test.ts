@@ -160,6 +160,24 @@ describe('unsupported queries are refused rather than widened', () => {
     expect(message).toMatch(/filters\.type/);
   });
 
+  it('returns NOTHING for an empty tag list, rather than the whole index', async () => {
+    // 🚨 The consequence a unit test states and only a real query can demonstrate. An
+    // empty array stringifies to the empty string, so `metadata: { tags: [] }` produced
+    // `tags LIKE '%%'` — a condition matching every row. It satisfied the "did any
+    // condition survive?" backstop while doing the exact thing the backstop exists to
+    // prevent, and the control case above proves both documents are reachable, so a
+    // full-recall result here is visible as such rather than hidden by an empty index.
+    suite.provider = await indexTwoDocuments();
+
+    const result = await suite.provider.query({
+      text: QUERY_TEXT,
+      limit: 10,
+      filters: { metadata: { tags: [] } },
+    });
+
+    expect(result.chunks).toHaveLength(0);
+  });
+
   it('allows hybridSearch when it is explicitly disabled', async () => {
     suite.provider = await indexTwoDocuments();
 

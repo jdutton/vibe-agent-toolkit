@@ -10,6 +10,27 @@ import { RAGChunkSchema } from './chunk.js';
  * RAGQuery Schema
  *
  * Defines the structure of a query to the RAG database.
+ *
+ * 🚨 Every object here is `.strict()`, and that is a correctness property rather than
+ * tidiness. A default Zod object DELETES an unknown key instead of rejecting it, and for a
+ * query object deletion is the widening failure: `filters: { resourceID: 'x' }` — one
+ * capital letter off the one filter a shipped provider reads — parsed successfully into
+ * `filters: {}`, the provider's allowlist never saw the key, no SQL condition was produced,
+ * and `query()` applies a WHERE clause only when one was produced. The result was an
+ * unfiltered full-recall search over the entire index. The same typo handed straight to
+ * `buildWhereClause` throws, so validating a query against the schema that describes it was
+ * the way to LOSE the refusal. `filter` for `filters` at the top level is the same defect
+ * one level up, and erases the filtering wholesale.
+ *
+ * 🔑 The one object left open is `filters.metadata`: its shape is the caller's own metadata
+ * schema, which this package cannot know. The provider validates it against that schema and
+ * refuses a field the schema does not declare.
+ *
+ * ⚠️ This changes nothing in the generated `RAGQueryJsonSchema`: `zod-to-json-schema`
+ * already emitted `additionalProperties: false` for these objects, so an adopter validating
+ * against the published JSON Schema was always told the typo was invalid while VAT's own
+ * `safeParse` quietly accepted it. The two halves of one exported contract disagreed; this
+ * makes the TypeScript half honour what the JSON half already published.
  */
 export const RAGQuerySchema = z.object({
   /** Search query text */
@@ -37,9 +58,13 @@ export const RAGQuerySchema = z.object({
    * defect than to a missing feature.
    *
    * ⚠️ This schema validates STRUCTURE, not provider support: a query carrying one of
-   * the four parses successfully here and is refused at `query()`. The refusal names
-   * the offending key and its remedy — see `assertFiltersAreSupported` in
-   * `@vibe-agent-toolkit/rag-lancedb`.
+   * the four DECLARED-BUT-UNIMPLEMENTED keys parses successfully here and is refused at
+   * `query()`. The refusal names the offending key and its remedy — see
+   * `assertQuerySupported` in `@vibe-agent-toolkit/rag-lancedb`.
+   *
+   * A key this object does NOT declare is a different case and is refused right here, by
+   * `.strict()`: it would otherwise be deleted before any provider could refuse it, which
+   * is the widening defect described on the schema above.
    */
   filters: z.object({
     /** Filter by resource ID(s) — one of the two filters a shipped provider reads. */
@@ -91,8 +116,8 @@ export const RAGQuerySchema = z.object({
     dateRange: z.object({
       start: z.date(),
       end: z.date(),
-    }).optional().describe('Filter by date range (unsupported by every provider)'),
-  }).optional().describe('Metadata filters'),
+    }).strict().optional().describe('Filter by date range (unsupported by every provider)'),
+  }).strict().optional().describe('Metadata filters'),
 
   /**
    * Hybrid search configuration
@@ -109,8 +134,8 @@ export const RAGQuerySchema = z.object({
   hybridSearch: z.object({
     enabled: z.boolean().describe('Enable hybrid search (vector + keyword) — true is refused; no provider implements it'),
     keywordWeight: z.number().optional().describe('Keyword weight (0-1, balance between semantic and keyword)'),
-  }).optional().describe('Hybrid search configuration'),
-});
+  }).strict().optional().describe('Hybrid search configuration'),
+}).strict();
 
 /**
  * RAGQuery TypeScript type
