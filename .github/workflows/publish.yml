@@ -27,6 +27,34 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
+      # Fails in seconds instead of ~13 minutes. npm masks write-authorization failures on
+      # `PUT` as a 404 that claims the package "is not in this registry", so a dead token
+      # surfaces at the publish step as a bogus missing-package error, after the whole build
+      # and pre-publish suite has already run. Check the credential before spending that.
+      #
+      # ⚠️ This catches an ABSENT or EXPIRED token, and nothing more. `whoami` is a READ, so
+      # a token that authenticates but cannot write — no publish grant, or 2FA enforced with
+      # no bypass, which is the `EOTP` that cost rc.5 its third attempt — passes this step and
+      # still fails at publish. A green preflight means "the credential exists", never "the
+      # publish will succeed". There is no cheap read that proves write access, so the gap is
+      # stated rather than papered over.
+      - name: Verify npm credentials
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if ! npm_user=$(npm whoami 2>&1); then
+            echo "::error::NPM_TOKEN did not authenticate. npm said: ${npm_user}"
+            echo "::error::Rotate the secret, then re-run: gh secret set NPM_TOKEN --repo ${{ github.repository }}"
+            echo "::error::Do NOT delete and re-push the tag — this failure is upstream of the npm push."
+            exit 1
+          fi
+          echo "Authenticated to npm as ${npm_user}"
+          # Informational only. A token can authenticate and still lack write access to a
+          # given package — note that `vibe-agent-toolkit` is unscoped, so a grant covering
+          # only the @vibe-agent-toolkit scope does not include it.
+          echo "Packages this token can reach:"
+          npm access list packages 2>&1 | head -40 || true
+
       - name: Install dependencies
         run: bun install
 

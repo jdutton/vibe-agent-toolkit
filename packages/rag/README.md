@@ -108,12 +108,18 @@ import type { RAGQueryProvider, RAGQuery } from '@vibe-agent-toolkit/rag';
 const rag: RAGQueryProvider = ...; // Implementation
 
 // Query the RAG database
+// `tags` and `type` are METADATA fields: they are honoured under `filters.metadata`
+// and only there. A shipped provider throws on them at the top level of `filters` —
+// it used to ignore them, which silently turned a filtered query into an unfiltered
+// full-recall search over the whole index.
 const result = await rag.query({
   text: 'How do I validate schemas?',
   limit: 5,
   filters: {
-    tags: ['validation'],
-    type: 'documentation'
+    metadata: {
+      tags: ['validation'],
+      type: 'documentation'
+    }
   }
 });
 
@@ -140,6 +146,26 @@ if (chunkResult.success) {
   const chunk = chunkResult.data; // Typed as RAGChunk
 }
 ```
+
+> **`RAGQuerySchema` rejects unknown keys; it does not drop them.** Every object in it is
+> `.strict()`, so `filters: { resourceID: 'x' }` — one capital letter off `resourceId` — is a
+> parse ERROR. A default Zod object would delete that key and report success, and for a query
+> a deleted filter is a widening one: no filter key means no SQL condition, and a provider
+> applies a WHERE clause only when one was produced, so the query would run as an unfiltered
+> search over the whole index. The exception is `filters.metadata`, whose shape is your own
+> metadata schema — the provider validates that against the schema you supplied.
+>
+> Structure is still not provider support: `dateRange`, `tags`, `type`, `headingPath` and
+> `hybridSearch.enabled: true` are all declared here, all parse, and are all refused by
+> `query()`.
+>
+> **`filters.dateRange` bounds accept an ISO-8601 date-time string as well as a `Date`, and
+> parse to a `Date` either way.** JSON carries no date type, so a string is the only value
+> that can cross a wire — and it is exactly what the published `RAGQueryJsonSchema` declares
+> (`{"type":"string","format":"date-time"}`). A bare `z.date()` rejected that string, so a
+> payload that validated against VAT's own published schema failed VAT's own `safeParse`:
+> the two halves of one exported contract disagreed on the only representation either could
+> receive. The emitted JSON Schema is unchanged; the TypeScript half now honours it.
 
 ### Using JSON Schemas
 

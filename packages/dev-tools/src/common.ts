@@ -66,6 +66,19 @@ export function getDirname(importMetaUrl: string): string {
 }
 
 /**
+ * Was this module invoked as the process entrypoint, rather than imported?
+ *
+ * Re-exported, not implemented here. It moved to `@vibe-agent-toolkit/utils` so
+ * the seven guards outside this package — `packages/cli`'s build-time help
+ * validator and `packages/lab`'s bin among them — can reach the SAME answer:
+ * `dev-tools` is `private: true`, so a published package importing it would
+ * ship a dependency npm cannot install. See that module for why neither
+ * `import.meta.main` nor a raw `pathToFileURL` compare is an acceptable
+ * spelling of this question.
+ */
+export { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
+
+/**
  * Project root directory (../../.. from packages/dev-tools/src/)
  */
 export const PROJECT_ROOT = safePath.join(getDirname(import.meta.url), '../../..');

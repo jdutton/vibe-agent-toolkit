@@ -1,0 +1,154 @@
+# Executes VAT's declared Node floor, rather than merely asserting it.
+#
+# The floor was raised to >=22.13.0 because `node:sqlite` loads unflagged only
+# from that release (it was added in 22.5.0 behind --experimental-sqlite). Before
+# this job existed the floor was a *claim*: the validation matrix runs Node 24
+# only, and every other workflow pins a floating '22' — which resolves to the
+# newest 22.x, never to the floor. So nothing anywhere executed the oldest Node
+# VAT says it supports, which is exactly how thirteen patch releases came to
+# advertise support for a range two commands could not run in.
+#
+# Kept out of the generated validation matrix on purpose. Adding a second
+# nodeVersions entry there would multiply the matrix by the Windows leg, whose
+# full validate has been measured at ~79 minutes, to re-run checks that are not
+# Node-version-sensitive. What is version-sensitive is small and lives here.
+name: Node Floor
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  floor:
+    name: Run the declared Node floor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Derived, never hardcoded. A literal '22.13.0' here would be a second
+      # place a human has to remember when the floor moves, and nothing would
+      # fail if they forgot — the job would keep testing a version VAT no longer
+      # claims. `validate-repo-structure.ts` enforces that every package agrees
+      # with this same root value, so there is one source and this reads it.
+      #
+      # ⚠️ The derived value must be a FULL x.y.z, and this step is where that is
+      # decided. The assertion further down compares it to `process.versions.node`
+      # for exact string equality, so a legal-but-partial floor — `>=22`, `22.x`,
+      # `>=22.13.0 <25` — derives to something setup-node happily resolves to a
+      # different patch release, and the assertion then fails saying the RUNNER is
+      # wrong. Fail-closed, so never a hole; but it sends the reader after the
+      # runner when the manifest is what needs changing. Refusing here is the only
+      # place the message can name the real cause.
+      #
+      # Both values are read out of the file by `node`, never interpolated into
+      # this script, so nothing a pull request writes in `engines.node` becomes
+      # shell source text.
+      - name: Derive the declared Node floor from the root manifest
+        id: floor
+        run: |
+          DECLARED=$(node -p "require('./package.json').engines?.node ?? ''")
+          FLOOR=$(node -p "(require('./package.json').engines?.node ?? '').replace(/^[^0-9]*/, '')")
+          if [ -z "$FLOOR" ]; then
+            echo "::error::Could not derive a Node floor from root package.json engines.node"
+            exit 1
+          fi
+          if [[ ! "$FLOOR" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            # ⛔ Collapse to ONE LINE before echoing. A runner reads stdout line
+            # by line and treats any line starting `::` as a workflow command,
+            # and these two values are the pull request's own `engines.node` —
+            # so a value carrying newlines does not merely appear in this
+            # message, its later lines ARE workflow commands. Executed payload:
+            # `>=22.13\n::add-mask::supersecret\n::error::attacker-controlled`
+            # reached the runner as a real mask and a real, attacker-authored
+            # error annotation. Not code execution (the regex above is
+            # fail-closed, so no bad floor escapes) — log and annotation forgery,
+            # which is enough to hide the output a maintainer came to read.
+            DECLARED_LINE=$(printf '%s' "$DECLARED" | head -1)
+            FLOOR_LINE=$(printf '%s' "$FLOOR" | head -1)
+            echo "::error::Root package.json declares engines.node \"$DECLARED_LINE\", which derives to \"$FLOOR_LINE\" — not a full x.y.z version. setup-node would resolve that to some other patch release and the assertion below would then fail while blaming the runner. Declare an exact floor, e.g. \">=22.13.0\"."
+            exit 1
+          fi
+          echo "Declared floor: $FLOOR"
+          echo "version=$FLOOR" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js at the floor
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ steps.floor.outputs.version }}
+
+      # setup-node accepts a semver range, so asking for the floor can quietly
+      # give you something newer. That would make every assertion below pass for
+      # the wrong reason.
+      #
+      # ⛔ The floor arrives through `env:`, NOT through `${{ }}` inside the
+      # script. A `${{ }}` expression is substituted as TEXT before bash parses
+      # the line, and this value's content is the pull request's own
+      # `engines.node` — so on this `pull_request` trigger a fork chose the shell
+      # this job ran. (Bounded: no secrets and a read-only token, and the job
+      # already runs PR code. Still not a shape to leave standing.) Through
+      # `env:` it is a shell variable, quoted at the point of use, and inert.
+      - name: Assert the runner is actually at the floor
+        env:
+          FLOOR: ${{ steps.floor.outputs.version }}
+        run: |
+          ACTUAL=$(node -p "process.versions.node")
+          echo "Running Node: $ACTUAL (floor: $FLOOR)"
+          if [ "$ACTUAL" != "$FLOOR" ]; then
+            echo "::error::Expected Node $FLOOR but got $ACTUAL — this job would have tested the wrong runtime."
+            exit 1
+          fi
+
+      # Pinned to a full commit SHA, not a moving `@v2` tag: a tag is mutable and
+      # this is a third-party action, so `@v2` is a standing agreement to run
+      # whatever that owner points it at next. The SHA is v2.2.0. `actions/*`
+      # above stay on tags — they are first-party and exempt from the same rule.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      # `--frozen-lockfile` so this job resolves the versions the lockfile names
+      # rather than re-resolving them — otherwise the answer to "does the floor
+      # hold" could drift with an upstream release rather than with this repo.
+      #
+      # `--ignore-scripts` blocks lifecycle scripts from DEPENDENCIES, which is
+      # the actual exposure: arbitrary code from the registry running at install
+      # time. It does not mean this job needs no lifecycle script — it needs
+      # exactly one, and the next step runs it explicitly instead.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      # ⚠️ Load-bearing, and NOT boilerplate to be dropped alongside the flag
+      # above. Bun's workspace resolution is internal and invisible to Node, so
+      # this repo's own postinstall symlinks the workspace packages into
+      # node_modules/@vibe-agent-toolkit/ for anything spawned with `node`.
+      # Every command below is spawned with `node`, so without this they fail to
+      # resolve their own imports. Run as its own step because `--ignore-scripts`
+      # suppresses it: first-party, visible in the log, and auditable — which is
+      # what the rule about install-time scripts is actually asking for.
+      - name: Link workspace packages for Node resolution
+        run: bun run postinstall
+
+      - name: Build packages
+        run: bun run build
+
+      # The load-bearing claim of the whole floor: on this Node, and without a
+      # flag, the builtin resolves.
+      - name: node:sqlite loads unflagged
+        run: node --input-type=module -e "import 'node:sqlite'; console.log('node:sqlite loaded unflagged');"
+
+      # Under `node`, never `bun`. Bun ships `bun:sqlite`, a different API with
+      # no version floor, so running these through the repo's bun-based script
+      # runner would answer a different question than the one being asked.
+      - name: vat doctor reports a healthy environment at the floor
+        run: node packages/cli/dist/bin.js doctor
+
+      # The command measured to require the backend on a default run. `resources
+      # check` is deliberately NOT here: with no checks declared it never opens a
+      # store, so it would pass without exercising anything.
+      - name: vat resources query runs at the floor
+        run: node packages/cli/dist/bin.js resources query "SELECT count(*) AS n FROM resources"

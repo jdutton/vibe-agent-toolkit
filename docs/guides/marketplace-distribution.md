@@ -24,8 +24,34 @@ Custom skills and plugins **do not sync across Claude surfaces**. Each surface i
 | **Cowork (claude.ai)** | Admin UI → GitHub App sync from private repo | Org-wide, admin-controlled | Yes (same format) |
 | **Skills API** | `POST /v1/skills` multipart upload | Workspace-wide | No (direct API upload) |
 | **Claude Code (managed)** | `managed-settings.json` via MDM | Per-machine, IT-managed | Yes (marketplace ref in settings) |
+| **ARD** | `/.well-known/ard.json` on your own domain | Any crawler that speaks ARD | No (a discovery manifest, not a marketplace) |
 
 Public and private GitHub marketplaces use the **same format**. The only difference is authentication (private repos require `GITHUB_TOKEN` or `GH_TOKEN` for auto-updates).
+
+### Announcing what you publish (ARD)
+
+Every row above is a **Claude-shaped** channel. [Agentic Resource
+Discovery](../concepts/knowledge-interop-formats.md) is the vendor-neutral one: instead of a
+consumer knowing where your marketplace branch is, you host a JSON-LD manifest at
+`https://{your-domain}/.well-known/ard.json` and registries crawl and federate from it. There is no
+registry to upload to and no account to create — the same emit-an-artifact-and-host-it-yourself
+model as `vat claude marketplace publish`.
+
+```bash
+vat ard emit --output dist/.well-known/ard.json
+```
+
+Published skills become entries automatically. **A marketplace does not**, and the reason is worth
+knowing before you go looking for the flag: the ARD specification names no media type for a plugin
+catalog. `application/ai-catalog+json` does not appear in it at all — `ai-catalog` survives only as
+ARD's *predecessor* well-known path, and upstream's `ai-catalog.schema.json` is the container
+manifest rather than a value for an entry's `type`. So VAT emits a marketplace, an OKF bundle or an
+MCP server only when you supply `ard.entries.<name>.type` yourself. It will not guess a media type
+that gets published under your domain.
+
+⚠️ ARD is **v0.91, status Proposal**. VAT emits against it and reads nothing back, which is the
+posture to keep: the document is cheap to regenerate, and anything that depended on its shape would
+not be.
 
 ## Marketplace Structure
 

@@ -176,7 +176,9 @@ if (IS_CI || skipGitChecks) {
 
   if (currentBranch !== allowedBranch) {
     log(`✗ Not on ${allowedBranch} branch (current: ${currentBranch})`, 'red');
-    console.log(`  Tip: Run 'git checkout ${allowedBranch}' or use --allow-branch flag`);
+    console.log(
+      `  Tip: Run 'git checkout ${allowedBranch}', or pass the branch explicitly: --allow-branch ${currentBranch}`,
+    );
     process.exit(1);
   }
 

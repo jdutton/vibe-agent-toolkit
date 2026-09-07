@@ -1,0 +1,120 @@
+# ARD (Agentic Resource Discovery) — vendored upstream schema
+
+> **Source:** <https://raw.githubusercontent.com/ards-project/ard-spec/main/spec/schemas/ard-entry.schema.json>
+> **Spec:** <https://github.com/ards-project/ard-spec> · rendered at <https://agenticresourcediscovery.org/spec/>
+> **Fetched:** 2026-09-06 (8,373 bytes)
+> **Spec declares:** v0.91, status **Proposal**, dated 2026-08-26
+> **License:** Apache-2.0 — © the ARD project / Linux Foundation working group. Reproduced verbatim.
+>
+> @vendor-claim reviewed=2026-09-06 verify=Re-fetch the Source URL and diff it against `ard-entry.schema.json` byte for byte. The `$id` is a `main`-branch URL on a Proposal-status spec, so it moves with no signal and no version in the path. Then re-check the casing divergence VAT's emitter works around FROM BOTH SIDES, because either side can move and only one of them is vendored here: (a) whether `EntryFields.properties.TrustManifest` in the schema has been corrected to `trustManifest`, and (b) re-count `trustManifest` versus `TrustManifest` in upstream `spec/ard.md` — VAT emits the camelCase spelling because the PROSE says so in all 11 occurrences, so if upstream instead corrects the prose to PascalCase, VAT is left emitting a term neither side defines and a schema-only diff reports nothing.
+>
+> **Refresh policy:** re-fetch when ARD publishes a version past v0.91, or every ~90 days,
+> whichever is sooner. `docs/external/` normally caches prose; this directory caches a machine
+> artifact, so the diff is mechanical — a byte diff of the JSON, not a reading.
+
+## Why this file is vendored and not fetched
+
+The schema self-identifies as:
+
+```
+$id: https://raw.githubusercontent.com/ards-project/ard-spec/main/spec/schemas/ard-entry.schema.json
+```
+
+That is a **`main`-branch URL** — unpinned, on a spec whose own status is *Proposal*. It will move,
+and nothing will signal that it has. So the `$id` is useful for *identifying which schema this is*
+and worthless as a live contract. VAT vendors it and **never fetches at runtime**.
+
+⛔ There is deliberately **no version constant** anywhere in the code that reads this file. Recording
+*"fetched from `<url>` on `<date>`; the spec declares v0.91"* is an external fact, the same category
+as an API version header. An `ARD_SCHEMA_VERSION` integer someone must remember to bump is the thing
+[CLAUDE.md](../../../CLAUDE.md) forbids outright.
+
+## How VAT uses it
+
+As an **oracle, not a source**. VAT constructs entries through a Zod schema (it must *build* entries,
+not merely check them, and JSON Schema yields no typed builder), then validates the emitted JSON
+against this vendored document with Ajv in the test suite.
+
+VAT does **not** diff its Zod schema against this one. JSON Schema subsumption is not decidable in
+general, and generated output differs from a hand-written document in `$defs` layout and `allOf`
+nesting in ways that mean nothing — such a check would alarm on style and stay silent on substance.
+Comparing *instances* against the authority is the stronger test.
+
+Ajv is reached through the shared `createAjvWithUriFormats` factory exported from
+`@vibe-agent-toolkit/resources`, which is exactly the case
+[`.claude/rules/schema-strictness.md`](../../../.claude/rules/schema-strictness.md) reserves it for:
+an externally-authored JSON Schema validated against data. VAT does not hand-write JSON Schema for
+anything Zod already models, and this file is not authored by VAT at all.
+
+## What was read from this schema, so a reader is not negotiating against a summary
+
+Verified by parsing the file on 2026-09-06, not by reading prose about it:
+
+- `$defs.ArdEntry.required` is **`["identifier", "displayName", "type"]`** — three fields. `url` XOR
+  `data` is expressed separately as a `oneOf`, and is **not** a fourth required field.
+- `identifier` carries a pattern: `^urn:air:[a-zA-Z0-9.-]+(:[a-zA-Z0-9._-]+)+$`.
+- `EntryFields.additionalProperties` is **`true`, deliberately** — the schema's own `$comment` says
+  constraining it "would defeat the namespace extension mechanism", since `@context`-declared terms
+  (e.g. `okf:taxonomy`) are valid entry members.
+- `representativeQueries` has **no** presence or count constraint in the schema. Its description
+  says so explicitly: absence, or a count outside 2–5, is flagged by the conformance tester as a
+  **warning** (§D.2), so an entry emitted without them still validates.
+- `ArdManifest` requires only `entries`; `@context` is **not** required at the manifest level, and
+  §4.1 confirms carrying `@context` in an entry is OPTIONAL.
+- `metadata` values are constrained to `string | number | boolean | null` — not arbitrary objects.
+- `TrustManifest.required` is `["identity"]`; everything else, `trustSchema` included, is
+  `additionalProperties: true` by design.
+
+## 🚨 Divergences between this schema and the spec prose
+
+**`TrustManifest` vs `trustManifest` — a casing mismatch, upstream.** The schema declares the entry
+member as `EntryFields.properties.TrustManifest` (PascalCase). The specification prose spells it
+`trustManifest` (camelCase) in **all 11** of its occurrences in `spec/ard.md`; `TrustManifest`
+appears in the prose **zero** times.
+
+Consequence, and why it matters to VAT: because `EntryFields.additionalProperties` is `true`, an
+entry emitting the spec-correct `trustManifest` **validates** against this schema — but it validates
+as an *unknown extension term*, so none of `TrustManifest`'s own constraints (the required
+`identity`, the shapes of `attestations` and `provenance`) are ever applied to it. A validator that
+passes here is therefore not evidence that a trust manifest is well-formed.
+
+VAT follows the **prose**, emitting `trustManifest`, because that is what the specification defines
+and what a consumer implementing the spec will read. The test suite asserts this explicitly rather
+than letting the permissive branch hide it.
+
+⚠️ **The refresh has to check BOTH sides, and only one of them is vendored here.** `spec/ard.md` is
+not in this directory, so a byte diff of `ard-entry.schema.json` can only ever see upstream moving
+the *schema*. The failure is asymmetric:
+
+| What upstream does | What a schema-only diff sees | Where that leaves VAT |
+|---|---|---|
+| Corrects the schema to `trustManifest` | The diff | Emitted entries start being genuinely validated; the workaround note can go |
+| Corrects the **prose** to `TrustManifest` | **Nothing** | VAT keeps emitting a term neither side defines, silently, forever |
+
+So the `verify=` procedure re-counts `trustManifest` versus `TrustManifest` in upstream
+`spec/ard.md` as well. Today's count — 11 camelCase, 0 PascalCase — is the whole basis for the
+follow-the-prose decision, and a refresh that does not re-read it is not a refresh of this claim.
+
+## Where VAT emits a STRICT SUBSET of what this schema accepts
+
+Both entries below are deliberate narrowings on the **producing** side, in line with
+[`.claude/rules/schema-strictness.md`](../../../.claude/rules/schema-strictness.md). Every document
+VAT emits still validates against this schema; the reverse does not hold, and that is the intent.
+Neither is a divergence to reconcile on refresh — but if upstream ever *tightens* to match, the
+corresponding note here can go.
+
+**`.` and `..` are refused as a `<namespace>` or `<name>` segment.** Upstream's identifier pattern
+(`^urn:air:[a-zA-Z0-9.-]+(:[a-zA-Z0-9._-]+)+$`) is a charset, and a charset admits both dot
+segments. A URN never resolves them — but an ARD entry carries a `url` beside its identifier, and
+VAT builds that `url` by resolving a path against the publisher's `ard.baseUrl`, where collapsing
+dot segments is the resolver's defining behaviour. `namespace: ".."` under
+`baseUrl: https://example.com/tenants/acme/catalog` produced entries addressing
+`https://example.com/tenants/acme/<name>` — one level above where the identifier says the resource
+lives, well-formed, and wrong in a way no `format: uri` check can see. A segment that merely
+*contains* dots (`v1.2`) is untouched.
+
+**An entry `url` is always inside `ard.baseUrl`.** The schema types `url` as `format: uri`, which
+accepts any absolute URI at any origin. VAT refuses a scheme, a `//host` prefix and any dot segment
+(encoded or not) in the path it appends, so an entry's `url` cannot point somewhere its
+`urn:air:<publisher>:…` identifier does not anchor. The publisher-authority binding the spec
+mandates for `trustManifest.identity` is worth little if the address beside it is unconstrained.

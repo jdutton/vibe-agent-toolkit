@@ -4,17 +4,24 @@ Which of VAT's commands read the filesystem to build a resource population, and 
 entry point. This exists to replace the standing claim *"~70 commands, 5 examined"* with a bounded
 list, so the four-phase pipeline work knows exactly whose behaviour it must preserve.
 
-**Population: 70 commands** — 69 leaves plus `vat audit`, the only command group that is also
+**Population: 72 commands** — 71 leaves plus `vat audit`, the only command group that is also
 runnable in its own right (`vat audit [git-url-or-path]` alongside its `settings` subcommand).
 
-**28 enumerate. 42 do not.**
+**29 enumerate. 43 do not.**
 
-⚠️ It read *"69 commands — 68 leaves, 27 enumerate"* until 2026-09-07. The leaf added is
-`vat claude org skills versions add`, registered at `packages/cli/src/commands/claude/org/skills.ts ›
-createOrgSkillsCommand()`. It enumerates: it recursively walks a built skill directory and uploads
-those bytes as a new version of an existing skill — the same lane, and the same consequence, as
-`vat claude org skills install`, which until that command landed was the only org verb with a file
-population.
+⚠️ It read *"69 commands — 68 leaves, 27 enumerate"* until 2026-09-06. Three leaves were added
+across two branches that landed together:
+
+- `vat okf validate` (`packages/cli/src/commands/okf/index.ts › createOkfCommand()`) —
+  **enumerates**, and does so through a **fourth** entry point, see below.
+- `vat ard emit` (`.../commands/ard/index.ts › createArdCommand()`) — does **not**: it reads
+  `vibe-agent-toolkit.config.yaml` plus the skill manifests that config already names, and never
+  walks a tree to discover a population.
+- `vat claude org skills versions add` (`.../commands/claude/org/skills.ts ›
+  createOrgSkillsCommand()`) — **enumerates**: it recursively walks a built skill directory and
+  uploads those bytes as a new version of an existing skill, the same lane and the same consequence
+  as `vat claude org skills install`, which until that command landed was the only org verb with a
+  file population.
 
 ⚠️ It read *"67 commands — 66 leaves, 25 enumerate"* until 2026-09-01. Two leaves were added that
 day, both at `packages/cli/src/commands/resources/index.ts › createResourcesCommand()`:
@@ -34,15 +41,29 @@ The population was re-derived by the method below on 2026-08-22 and had gone **s
 table was written and two revisions missed it. Nothing here re-derives itself, so the count is only
 as fresh as the last person who ran the recursion.
 
-## The three enumeration entry points
+## The four enumeration entry points
 
 | Lane | Entry point | Defined in |
 |---|---|---|
 | `crawl` | `crawlDirectory` / `crawlDirectorySync` | `packages/utils/src/file-crawler.ts` |
 | `registry-md` | `createProjectRegistry` (include `**/*.md`) | `packages/agent-skills/src/skill-packager.ts` |
 | `registry-md-html` | `crawlAndResolveRegistry` (include md **+ html**) | `packages/agent-skills/src/validators/packaging-validator.ts` |
+| `okf-bundle-walk` | `discoverOkfBundle` — bare recursive `readdir` | `packages/resources/src/okf/discovery.ts` |
 
-`scanDirectory` is not a fourth sink — the discovery package reaches `crawlDirectory` underneath.
+⚠️ **The fourth lane is deliberate, and the reason generalises.** It was added 2026-09-06 and does
+**not** route through `crawlDirectory`, because both of that function's narrowings are correctness
+holes inside an OKF bundle root: it answers from `git ls-files` by default, so an untracked concept
+document is invisible (the `git-route-hides-untracked` trap), and `NEVER_CRAWL_GLOBS` drops whole
+subtrees on a relevance judgement that has no standing there. OKF's conformance population is
+spec-defined and **maximal** — every non-reserved `.md` beneath the root — so a walk that sees fewer
+files lets VAT certify a bundle while a file it never opened breaks conformance.
+
+Read that before routing this lane into `crawl` for consistency: any future population that is
+defined by an external specification rather than by VAT's own relevance rules belongs here too, not
+in `crawl`.
+
+`scanDirectory` is still not an entry point of its own — the discovery package reaches
+`crawlDirectory` underneath.
 That the two registry builders crawl *different include sets* and observably disagree is a known
 defect, tracked separately; this table records which commands are exposed to it.
 

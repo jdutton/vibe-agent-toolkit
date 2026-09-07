@@ -128,6 +128,7 @@ export type {
   EffectivePermissions,
   EffectiveSettings,
   ParsedBashRule,
+  PermissionLane,
   ProvenanceRule,
   ProvenanceValue,
   ReadSettingsOptions,
@@ -145,6 +146,7 @@ export type {
   SettingsPathsResult,
   SettingsTypeConfidence,
   SettingsValidateResult,
+  WildcardPattern,
 } from './settings/index.js';
 export {
   analyzeRuleConflicts,
@@ -153,7 +155,9 @@ export {
   getSettingsFileFields,
   getSettingsPaths,
   isSubsumedBy,
+  matchesAllowRule,
   matchesBashRule,
+  matchesDenyRule,
   matchesPathRule,
   matchesPermissionRule,
   mergeSettingsLayers,

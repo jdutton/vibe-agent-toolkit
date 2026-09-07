@@ -27,11 +27,9 @@
  * target list entirely — pass one --cwd/--suite pair per target).
  * Exit 0 = clean, 1 = over budget or a measurement failure.
  */
-import { pathToFileURL } from 'node:url';
-
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-import { PROJECT_ROOT, log, safeExecResult } from './common.js';
+import { PROJECT_ROOT, isEntrypoint, log, safeExecResult } from './common.js';
 
 /** Default per-FILE heap ceiling, in MB. ~1.5x headroom over the heaviest
  * measured file (resource-compiler's transformer.integration.test.ts, up to
@@ -230,7 +228,8 @@ function main(): void {
 }
 
 // Only run the CLI when invoked directly, not when imported by the unit test.
-const argv1 = process.argv[1];
-if (argv1 && import.meta.url === pathToFileURL(argv1).href) {
+// `isEntrypoint`, not a raw `argv[1]` string compare: the compare has no
+// realpath pass and is false through any symlinked invocation.
+if (isEntrypoint(import.meta.url)) {
   main();
 }

@@ -22,6 +22,7 @@ import type {
 } from '@vibe-agent-toolkit/rag';
 import {
   ApproximateTokenCounter,
+  assertQuerySupported,
   chunkResource,
   DefaultRAGMetadataSchema,
   enrichChunks,
@@ -40,7 +41,7 @@ import type { ZodObject, ZodRawShape } from 'zod';
 
 import { resolveChunkingConfig } from './chunking-config.js';
 import { createDocumentRecord, overlayChunkMetadata, type DocumentRecord } from './document-helpers.js';
-import { buildWhereClause, escapeSQLString } from './filter-builder.js';
+import { buildWhereClause, escapeSQLString, LANCEDB_QUERY_SUPPORT } from './filter-builder.js';
 import {
   chunkToLanceRow,
   lanceRowToChunk,
@@ -320,6 +321,22 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * Query the RAG database
    */
   async query(query: RAGQuery<TMetadata>): Promise<RAGResult<TMetadata>> {
+    // Refuse a query this provider cannot honour BEFORE doing any work — the check is
+    // deterministic and needs neither a connection nor an embedding, so an unindexed
+    // provider reports the unsupported field rather than reporting that nothing is
+    // indexed yet.
+    //
+    // One call covers BOTH halves, so a query carrying an unsupported filter AND an
+    // unsupported `hybridSearch` reports all of them together. An earlier shape threw on
+    // `hybridSearch` first and reached the filter check only afterwards, which reported
+    // one offender out of three and made the caller fix the same query twice.
+    //
+    // The check lives in `@vibe-agent-toolkit/rag`, not here: the query surface it
+    // enforces is declared there, and a second provider (the RAG skill actively invites
+    // pgvector/Qdrant implementations) would otherwise inherit the declared fields and
+    // none of the enforcement. What THIS provider supports is data it declares.
+    assertQuerySupported(query as { filters?: Record<string, unknown> }, LANCEDB_QUERY_SUPPORT);
+
     // Workaround for the @lancedb/lancedb + Bun Arrow buffer lifecycle bug:
     // after table modifications we recreate the connection entirely before reading.
     await this.reconnectAndOpenTable();

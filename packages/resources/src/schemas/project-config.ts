@@ -2,6 +2,13 @@ import { ValidationConfigSchema } from '@vibe-agent-toolkit/schema';
 import { globMagicRemainder, hasParentTraversalSegment, isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
+import {
+  isArdBaseUrl,
+  isArdBindableIdentity,
+  isArdNameSegment,
+  isArdPublisherDomain,
+} from '../ard/entry-schema.js';
+
 import { LinkAuthConfigSchema } from './link-auth.js';
 import { ReferenceSyntacticFormSchema } from './projection-blobs.js';
 import { JsonValueSchema } from './projection-shared.js';
@@ -60,7 +67,7 @@ export type ExternalUrlValidation = z.infer<typeof ExternalUrlValidationSchema>;
  */
 export const CollectionValidationSchema = z.object({
   frontmatterSchema: z.string().optional()
-    .describe('Path to JSON Schema file for frontmatter validation (relative to config file or package reference like @vibe-agent-toolkit/schemas/skill.v1.json)'),
+    .describe('Path to JSON Schema file for frontmatter validation (relative to config file or package reference like @vibe-agent-toolkit/agent-skills/schemas/skill-frontmatter.json)'),
   mode: ValidationModeSchema.optional()
     .describe('Validation mode (default: strict)'),
   checkUrlLinks: z.boolean().optional()
@@ -97,6 +104,33 @@ export type CollectionValidation = z.infer<typeof CollectionValidationSchema>;
  * Parsing one file with two parsers was considered and rejected: a blob has one
  * content key and one set of derived facts, so "both" is not a representable
  * answer.
+ *
+ * ## `mimeType` is ONE of three axes — do not enrich it to carry the other two
+ *
+ * "Make the mime type more specific than `text/markdown`" is a recurring
+ * request, and the answer is no. Three different questions get collapsed into
+ * it, and only the first is this field's:
+ *
+ * | Question | Answered by | Scope |
+ * |---|---|---|
+ * | What parser reads these bytes? | `mimeType` | per FILE, and it is in the content key |
+ * | Is this frontmatter well-formed for its kind? | `validation.frontmatterSchema` | per FILE, at validation time |
+ * | What KIND of resource is this to a discovery consumer? | a publish-time media type | per PUBLISHED UNIT |
+ *
+ * The third is the one people are reaching for, and it does not fit here
+ * because **a published unit is not a file**. A skill is a directory —
+ * `SKILL.md` plus its resources — published as one thing; an OKF bundle is a
+ * directory with a root. A media type naming that unit (`application/ai-skill+md`)
+ * would be the right value at the wrong granularity, and it cannot be carried by
+ * an include glob either, since a glob never names a root.
+ *
+ * A list of mime types is likewise not the answer — see the paragraph above.
+ * Widening this field to a list would also invert the conflict rule, which
+ * exists precisely to keep the value single so a config mistake is caught.
+ *
+ * So: this field means exactly one thing, "which parser runs", forever. Kind
+ * belongs wherever the publishable unit is declared. See
+ * `docs/concepts/knowledge-interop-formats.md`.
  */
 export const CollectionConfigSchema = z.object({
   include: z.array(z.string()).min(1)
@@ -773,6 +807,228 @@ export const SkillTestGlobalConfigSchema = z.object({
 export type SkillTestGlobalConfig = z.infer<typeof SkillTestGlobalConfigSchema>;
 
 /**
+ * One declared OKF (Open Knowledge Format) bundle.
+ *
+ * ## Why a root, and not an include glob
+ *
+ * OKF-ness is a property of a **directory**, not of a file. The spec's
+ * conformance items make the population **maximal and spec-defined**: every
+ * non-reserved `.md` anywhere beneath the root is a concept document and needs
+ * parseable YAML frontmatter carrying a non-empty `type`. Only `index.md` and
+ * `log.md` are reserved — *"All other `.md` files are concept documents."*
+ *
+ * 🔑 So there is deliberately **no `include`/`exclude` here**, and adding one
+ * would be a defect rather than a convenience. A glob that matched fewer files
+ * than the spec's population would let VAT certify a bundle as conformant while
+ * a file it never read broke conformance — the same shape as the
+ * `exclude ≠ projection` gap. If a subtree must not be part of a bundle, it
+ * must not be under the bundle root.
+ *
+ * ## What a root may point at, in practice
+ *
+ * A root pointed at a pre-existing docs tree is almost never conformant on day
+ * one, and the number is not close. Measured on this repo's own tracked `docs/`
+ * on 2026-09-06: **75 concept documents, 18 with YAML frontmatter, 0 carrying a
+ * `type:`, and no reserved `index.md`/`log.md` anywhere** — a bundle root there
+ * is **0% conformant**. (Dated because it drifts as docs are added; re-measure
+ * rather than trusting it.) That is not an argument against the feature;
+ * it is the reason `root` names a purpose-built subtree in every case where the
+ * alternative is retrofitting frontmatter onto every file in a general docs
+ * directory. The spec offers no third option, and VAT does not invent one.
+ *
+ * ## The in-band version marker is a suspect, not an input
+ *
+ * A bundle-root `index.md` MAY carry `okf_version`. VAT **cross-checks** it and
+ * never reads configuration out of it, mirroring how `package.json`'s
+ * `vat.skills` is checked against config-driven discovery rather than driving
+ * it. Config is the source of truth; the artifact is the suspect.
+ *
+ * ## Gate posture
+ *
+ * OKF §11's forgiveness list (*"a consumer MUST NOT reject … broken
+ * cross-links"*) binds **consumers**. VAT is producer-side tooling for
+ * publishers, so it is free to gate, and does: findings default to `error`.
+ * An adopter may lower that per bundle. See
+ * `docs/concepts/knowledge-interop-formats.md`.
+ */
+export const OkfBundleConfigSchema = z.object({
+  root: z.string().min(1)
+    .describe('Bundle root directory, relative to the config file. Population is SPEC-DEFINED — every non-reserved .md beneath it — and is deliberately not narrowable by a glob.'),
+  severity: z.enum(['error', 'warning', 'info']).optional()
+    .describe('Severity for this bundle\'s conformance findings (default: "error"). VAT is producer-side, so it gates; §11\'s "MUST NOT reject" binds consumers, not publishers.'),
+}).strict().describe('One declared OKF bundle: a root directory whose population the spec defines');
+
+export type OkfBundleConfig = z.infer<typeof OkfBundleConfigSchema>;
+
+/**
+ * OKF section of project configuration.
+ */
+export const OkfConfigSchema = z.object({
+  bundles: z.record(z.string(), OkfBundleConfigSchema)
+    .describe('Named map of OKF bundles (never singleton, mirroring claude.marketplaces)'),
+}).strict().describe('Open Knowledge Format bundles this project publishes');
+
+export type OkfConfig = z.infer<typeof OkfConfigSchema>;
+
+/**
+ * Author-supplied fields for one emitted ARD entry.
+ *
+ * 🔑 Everything VAT can DERIVE is absent from this type on purpose. `identifier`,
+ * `displayName`, `type`, `url`, `version`, `updatedAt`, `description` and `tags`
+ * all come from surfaces VAT already holds, and asking an author to restate one
+ * creates a second source of truth that can disagree with the first.
+ *
+ * What remains is what cannot be derived without fabricating it.
+ *
+ * ⚠️ **`representativeQueries` is prompted, never generated.** The ARD spec says
+ * an entry without it *"cannot be found by search, which is what distinguishes
+ * an ARD entry from a bare catalog entry"* — so the temptation to synthesise a
+ * plausible set from a skill description is real. A wrong representative query
+ * is worse than a missing one: it makes a resource discoverable for the wrong
+ * task, and unlike a broken link nothing downstream ever reports it. ARD's own
+ * conformance tester treats absence as a **warning**, not an error, so emitting
+ * without them is exactly conformant and honest about what is missing. VAT may
+ * PROPOSE candidates for a human to confirm; it must never write them silently.
+ */
+export const ArdEntryOverridesSchema = z.object({
+  representativeQueries: z.array(z.string().min(1)).optional()
+    .describe('2-5 sample natural-language queries this resource serves. AUTHORED — VAT never generates these. Omitting them emits a conformance warning, which is the honest outcome.'),
+  capabilities: z.array(z.string().min(1)).optional()
+    .describe('Short skill/tool tokens enabling structured filtering without fetching the artifact'),
+  type: z.string().min(1).optional()
+    .describe('Override the media type derived from the declaring surface. Needed only for a surface VAT cannot derive a defensible type for.'),
+}).strict().describe('Author-supplied fields for one ARD entry; everything derivable is deliberately absent');
+
+export type ArdEntryOverrides = z.infer<typeof ArdEntryOverridesSchema>;
+
+/**
+ * ARD (Agentic Resource Discovery) emission configuration.
+ *
+ * ## Emit, never depend
+ *
+ * ARD is **v0.91, status Proposal**. Emitting a document is cheap and revisable;
+ * wiring internals to its shape is not. Nothing in VAT reads an ARD entry back,
+ * and nothing derives behaviour from one.
+ *
+ * ## The publisher domain is required, because two things are anchored to it
+ *
+ * An entry's `identifier` is a domain-anchored URN —
+ * `urn:air:<publisher>:<namespace>:<name>` — and `trustManifest.identity`'s trust
+ * domain MUST align with that same `<publisher>` segment. Nothing else in
+ * {@link ProjectConfigSchema} carries a domain, so it is asked for once here
+ * rather than guessed from a git remote, which is a different fact.
+ *
+ * ## Types are derived from the declaring surface, and one of them is COINED
+ *
+ * ⚠️ `application/ai-skill+md` occurs **exactly once** in the whole ARD
+ * specification, inside a JSON example, and is not among the two types the spec
+ * names as *"de-facto community standards tracking towards formal
+ * registration"*. VAT is **coining** it, not adopting a blessed type. Say so
+ * wherever it is emitted. What makes this sound anyway is that ARD's envelope is
+ * explicitly type-agnostic — §3.3 says the spec *"does not define or constrain"*
+ * types — so a skill entry is *expressible*; that is enough to build on and must
+ * not be sold as a vocabulary match.
+ *
+ * ⛔ There is no type for a Claude marketplace. `application/ai-catalog+json`
+ * appears **nowhere** in the specification: `ai-catalog` survives only as ARD's
+ * predecessor well-known path, and the vendored `ai-catalog.schema.json` is the
+ * *container* schema (`AICatalogManifest`, requiring `specVersion` + `entries`),
+ * not a value for an entry's `type`. A marketplace therefore emits only with an
+ * explicit {@link ArdEntryOverridesSchema.shape.type}, and never by derivation.
+ *
+ * ⛔ An OKF bundle likewise has no blessed type — `application/okf-bundle` is an
+ * open upstream issue (ards-project/ard-spec#27), not a fact.
+ */
+export const ArdTrustManifestConfigSchema = z.object({
+  // 🚨 `.min(1)` accepted a bare `attacker.com`, which is none of the three
+  // forms this description advertises and carries no authority to bind — so the
+  // one security-relevant check in the ARD lane was the one refused LATEST, at
+  // emission, while publisher/baseUrl/namespace are all refused at load. Same
+  // predicate as the emitter, for the same reason `isArdPublisherDomain` is.
+  identity: z.string().min(1)
+    .refine(
+      isArdBindableIdentity,
+      'trustManifest.identity must carry an authority VAT can bind to ard.publisher: an HTTPS FQDN URI ("https://example.com/workload") or a SPIFFE ID ("spiffe://example.com/workload"). A DID ("did:web:example.com") is the one exempt form, because DID methods encode their authority per-method. A bare domain is none of the three.'
+    )
+    .describe('Cryptographic workload identifier (SPIFFE ID, DID, or HTTPS FQDN URI). Its trust domain MUST align with the publisher segment of every entry identifier.'),
+  identityType: z.string().min(1).optional()
+    .describe('Hint for the identity format (e.g. "spiffe", "did", "https")'),
+}).strict().describe('Org-level trust identity attached to emitted entries');
+
+export type ArdTrustManifestConfig = z.infer<typeof ArdTrustManifestConfigSchema>;
+
+export const ArdConfigSchema = z.object({
+  // The message spells out DOMAIN, because the field name alone reads as a
+  // display name and the bare regex failure says only "Invalid". An adopter's
+  // first attempt here is their organisation's name, spaces and capitals
+  // included, and the error has to be the thing that redirects them.
+  //
+  // 🚨 The charset regex alone accepted a SINGLE LABEL, so the message said
+  // DOMAIN while the check did not enforce one. `publisher: com` was accepted,
+  // and publisher-authority binding — the one security-relevant check in this
+  // lane — reads as "the identity's host equals the publisher or is a subdomain
+  // of it". Under `com`, `https://totally-unrelated.com/w` binds, because every
+  // `.com` is a subdomain of `com`. `isArdPublisherDomain` adds the missing half
+  // (at least one dot, no empty label) and is the SAME predicate the emitter
+  // checks, so the config gate and the last gate cannot disagree.
+  publisher: z.string().refine(
+    isArdPublisherDomain,
+    'ard.publisher must be a DOMAIN, not a display name — e.g. "example.com". Letters, digits, dots and hyphens only, with at least one dot and no empty label. It becomes the <publisher> segment of every entry URN, and the authority trustManifest.identity is bound to.',
+  )
+    .describe('Publisher domain, e.g. "example.com". Becomes the <publisher> segment of every entry URN and the anchor trustManifest.identity must align with.'),
+  // 🚨 The charset alone admitted `.` and `..`, and collapsing those is a URL
+  // resolver's defining behaviour. `namespace: ".."` under `baseUrl:
+  // https://example.com/tenants/acme/catalog` emitted
+  // `https://example.com/tenants/acme/<name>` at exit 0 — one level above where
+  // the identifier says the resource lives, wrong in a way nothing downstream
+  // reports. `isArdNameSegment` is the SAME predicate the emitter checks, so the
+  // config gate and the last gate cannot disagree; a segment that merely
+  // contains dots is untouched.
+  namespace: z.string().refine(
+    isArdNameSegment,
+    'ard.namespace must be a single URN segment: letters, digits, dots, underscores and hyphens only (regex: ^[a-z0-9._-]+$), and never "." or ".." alone — a URL resolver collapses those, so every entry would advertise an address other than the one its identifier names.',
+  ).optional()
+    .describe('URN namespace segment between publisher and name (default: "skills" for skills, "bundles" for OKF bundles)'),
+  // Optional in the SCHEMA, required in PRACTICE, and the gap is worth stating.
+  // ARD requires exactly one of `url` or `data` on every entry. `data` is the
+  // complete artifact document inline, and VAT has no inline document to give
+  // for a skill, a marketplace or a bundle — those are directories, not JSON
+  // objects. So emission without a `baseUrl` produces entries that satisfy
+  // neither arm of that XOR, and fails rather than emitting something invalid.
+  // Kept optional here so the failure is a legible emission error naming the
+  // missing key, not a schema rejection of a config whose other ARD settings
+  // are fine.
+  //
+  // 🚨 `.url()` answers "is this a URL", which is a different question from
+  // "can entry paths RESOLVE against this". It admitted `mailto:` and it
+  // admitted a query or a fragment — and a base's query and fragment do not
+  // survive relative resolution, so `https://example.com/base?t=a#frag` made
+  // every entry in the manifest resolve to `https://example.com/base`. Those
+  // URLs address nothing and are indistinguishable from each other, which is a
+  // different class from the ruled-out baseUrl-doubling case (wrong, but
+  // well-formed and legible). Same predicate as the emitter's last gate.
+  baseUrl: z.string().refine(
+    isArdBaseUrl,
+    'ard.baseUrl must be an http(s) URL with no query and no fragment — e.g. "https://example.com/catalog". Entry paths are RESOLVED against it, and a base\'s query and fragment do not survive resolution, so every entry would resolve to the same address.',
+  ).optional()
+    .describe('Base URL that entry `url` values resolve against. Required in practice: ARD demands `url` XOR `data`, and VAT has no inline artifact document to emit as `data`, so emission fails without it.'),
+  trustManifest: ArdTrustManifestConfigSchema.optional()
+    .describe('Org-level trust identity. ARD mandates only domain binding; everything else defers to the named trust framework.'),
+  // 🚨 Keyed by `<kind>:<name>` — `skill:expenses`, `okf-bundle:handbook`,
+  // `marketplace:vat` — because `skills.config`, `claude.marketplaces` and
+  // `okf.bundles` are INDEPENDENT key spaces and a bare name is therefore not
+  // an identity. A config declaring a skill and an OKF bundle both called
+  // `knowledge` had one `ard.entries.knowledge` block that reached both, and
+  // the skill was published typed as an OKF bundle at exit 0. A bare name stays
+  // legal for the ordinary case where it names one surface; emission REFUSES it
+  // the moment it names two.
+  entries: z.record(z.string(), ArdEntryOverridesSchema).optional()
+    .describe('Author-supplied fields, keyed by "<kind>:<name>" (e.g. "skill:expenses", "okf-bundle:handbook") or by a bare name when only one surface carries it. Everything derivable is derived and must not appear here.'),
+}).strict().describe('ARD entry emission configuration (emit, never depend — ARD is v0.91 Proposal)');
+
+export type ArdConfig = z.infer<typeof ArdConfigSchema>;
+
+/**
  * Complete project configuration schema.
  */
 export const ProjectConfigSchema = z.object({
@@ -788,6 +1044,10 @@ export const ProjectConfigSchema = z.object({
     .describe('Closure-defined extents (zones.md §7.3), keyed by extent name'),
   test: SkillTestGlobalConfigSchema.optional()
     .describe('Global vat skill test configuration (graderModel, concurrency)'),
+  okf: OkfConfigSchema.optional()
+    .describe('Open Knowledge Format bundles this project publishes'),
+  ard: ArdConfigSchema.optional()
+    .describe('Agentic Resource Discovery emission configuration'),
 }).strict().describe('vibe-agent-toolkit project configuration');
 
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;

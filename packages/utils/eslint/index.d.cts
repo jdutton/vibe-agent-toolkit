@@ -47,17 +47,20 @@ declare namespace plugin {
     rules: Record<string, RuleModule>;
     configs: {
       /**
-       * The cross-platform safety core: 18 of the 25 rules, 15 `error` / 3 `warn`.
+       * The cross-platform safety core: 18 of the 26 rules, 15 `error` / 3 `warn`.
        *
-       * Seven are excluded, for four reasons. `no-test-scoped-functions`,
+       * Eight are excluded, for five reasons. `no-test-scoped-functions`,
        * `require-justified-skip` and `no-bare-symlink-in-tests` are positions on
        * TEST STYLE rather than portability facts. `no-unsafe-root-join` and
        * `no-process-exit-in-phase` key on NAMING rather than on the property they
        * care about (taint, and an orchestrated call site). `no-raw-text-decode`
-       * names a decoding SEAM that only exists in the consuming repo. And
+       * names a decoding SEAM that only exists in the consuming repo.
        * `no-self-package-import` REQUIRES an option this config cannot supply.
+       * And `no-fragile-entrypoint-guard` half-depends on the CONSUMER's Node
+       * floor — `import.meta.main` is correct at or above 24.2 / 22.18 and
+       * `undefined` below it.
        *
-       * All seven still ship in `rules` and are enabled by naming them — which is
+       * All eight still ship in `rules` and are enabled by naming them — which is
        * what this repo's own `eslint.config.js` does. The count above is asserted
        * by `packages/utils/test/eslint/rules.test.ts`, so it cannot drift
        * unnoticed the way it did when this comment said "four".

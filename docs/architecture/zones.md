@@ -124,6 +124,36 @@ four-facet definition. A collection's `frontmatterSchema` determines which front
 skipped). Two files with byte-identical frontmatter in different collections yield different
 reference sets.
 
+### The `wiki` lens — evidence, and two constraints it must satisfy
+
+The `wiki` row above is modelled and unbuilt. Two facts about real corpora constrain what building
+it may assume.
+
+**Wikilinks are not captured at all today.** `isCandidate()` in
+`packages/resources/src/reference-lexer.ts` admits a bare token only when it contains a `/` **and**
+ends in an extension, so `[[foo]]` never becomes a `blob_references` row, and
+`ReferenceSyntacticForm` has no member for it. No check can fire on a reference no producer emits.
+
+**Measured (a private multi-package adopter monorepo, canonical tree, 2026-09-06):** 47 distinct
+wikilink targets over 99 occurrences in 1,945 markdown files; **7 targets (15%) resolve to nothing,
+accounting for 27 of the 99 occurrences**, two of them inside `packages/*/CLAUDE.md` — files an
+agent loads. ⚠️ Pruning `.claude/worktrees` is load-bearing for that measurement: an unpruned scan
+sees 55,203 markdown files and inflates every occurrence count by roughly 32×, because each worktree
+duplicates the corpus.
+
+**Constraint 1 — a wikilink's namespace is declared, never inferred.** That corpus uses one syntax
+for two unrelated target spaces: `[[UXD-057]]` is an anchor inside a single backlog file, and
+`[[a-name-is-not-an-identity]]` is a file *outside the repository entirely*. Nothing in the token
+distinguishes them; only the lens can. Inferring a namespace from shape is the mistake
+[content routing](../contributing/content-routing.md) and the packaging rules both name — a pattern
+that matches is not a declaration.
+
+**Constraint 2 — resolution has three outcomes, not two.** A lens must distinguish *resolved*, from
+*unresolved* (shaped like a reference in this lens's space and naming nothing — a finding), from
+*not-applicable* (not in this lens's space at all — silent). Collapsing the last two makes a broken
+reference and an ordinary sentence containing a slash indistinguishable, which is precisely the
+noisy-signal failure `reference-lexer.ts` documents when it trades recall for precision.
+
 ## 4. Identity and realizations
 
 A resource has **one identity and many realizations**:

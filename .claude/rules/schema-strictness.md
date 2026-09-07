@@ -29,9 +29,18 @@ const OurSchema = z.object({ model: z.string() }).strict();
 - **Zod** defines every schema in TypeScript — single source of truth, `zod-to-json-schema`
   generates the JSON Schema from it. Never write JSON Schema by hand for something Zod
   already models.
-- **AJV** is reserved for validating arbitrary *user-supplied* JSON Schema files (e.g.
-  `--frontmatter-schema`) against user data — `packages/resources/src/frontmatter-validator.ts`
-  is the only place using it. Zod covers everything else.
+- **AJV** is reserved for validating JSON Schema **we did not author** against data: an
+  adopter's `--frontmatter-schema`, or a vendored upstream schema used as an oracle. Zod
+  covers everything else, and the ban on hand-writing JSON Schema for something Zod already
+  models is unaffected — a schema someone else wrote is not one we authored.
+
+  Current call sites, so a reader is not negotiating against a false premise:
+  `packages/resources/src/ajv-factory.ts` (the shared `createAjvWithUriFormats`, **exported**
+  from the `@vibe-agent-toolkit/resources` barrel), its caller
+  `packages/resources/src/frontmatter-validator.ts`, and
+  `packages/agent-skills/test/schema-export.test.ts`, which validates VAT's exported schemas.
+  Route a new use through the exported factory rather than constructing Ajv again — that is
+  what keeps this a reservation rather than a headcount.
 
 ## Schema organization
 

@@ -14,7 +14,7 @@
   "author": "Jeff Dutton",
   "license": "MIT",
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.13.0"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

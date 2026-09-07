@@ -97,7 +97,7 @@ import { createMarkdownProcessor } from '@vibe-agent-toolkit/resources/markdown-
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecResult } from '@vibe-agent-toolkit/utils/process';
 
-import { getFilename, log, PROJECT_ROOT } from './common.js';
+import { getFilename, isEntrypoint, log, PROJECT_ROOT } from './common.js';
 // The rival arm's configuration lives with the rival's adapter, exactly as the
 // remark arm's lives with remark's. Importing it is what makes the speed verdict
 // and the fidelity verdict statements about the same parser.
@@ -467,7 +467,10 @@ async function main(): Promise<void> {
 // Guarded, because this module is also imported: a unit test asserting on the
 // refusal guards must not spawn a bake-off, and unguarded it would read
 // vitest's own argv as a corpus path.
-if (import.meta.main) {
+//
+// ⛔ NOT `import.meta.main` — undefined before Node 24.2 / 22.18, and this
+// repo's floor is 22.13.0, so that form is silently always-false there.
+if (isEntrypoint(import.meta.url)) {
   try {
     await main();
   } catch (error: unknown) {

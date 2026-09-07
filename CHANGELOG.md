@@ -7,15 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+This release was driven by extensive adopter testing and QA. Every bug below was fixed test-first,
+with a regression test.
+
 ### Breaking
 
 #### CLI
 
+- **VAT now requires Node >= 22.13.0**, raised from >= 22.0.0 across every package. `vat resources
+  query` and `vat resources check` build their projection through `node:sqlite`, which loads
+  unflagged only from 22.13.0. If you are on Node 22.0–22.12, upgrade. `vat doctor` compared the
+  major version only, against `20`, and so green-lit environments VAT cannot run in; it now reads
+  `engines.node` and checks the interpreter actually running VAT rather than a spawned `node` from
+  `PATH`.
+
 - **An unrecognized key in `vibe-agent-toolkit.config.yaml` is now a warning on stderr, not
-  `exit 2`.** At the top level and under `skills:` and `claude:` a stray key used to fail every
-  `vat` command; it is now named, ignored and reported. **A script relying on `exit 2` for a stray
-  key must read stderr instead.** Every other validation failure — a wrong type, a missing required
-  field, a bad enum — still refuses.
+  `exit 2`.** The downgrade is path-agnostic — it applies at the top level and under every section
+  (`skills:`, `claude:`, `resources:`, `extents:`, `test:`, `okf:`, `ard:`), at any depth. A stray
+  key under a strict section used to fail every `vat` command; it is now named, ignored and
+  reported. **A script relying on `exit 2` for a stray key must read stderr instead.** Every other
+  validation failure — a wrong type, a missing required field, a bad enum — still refuses.
 
 - **`vat audit` on a directory no longer exits 2 because one nested config cannot be loaded.** One
   bad `vibe-agent-toolkit.config.yaml` anywhere under the scanned tree aborted the whole audit —
@@ -31,169 +42,174 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (no `<source>`, or `<source>` together with `--from-npm`) exit `2` with a YAML document instead
   of `1` with a raw Node stack trace. Update CI wrappers that branch on the old codes.
 
-- **The RAG backends are no longer installed for you — `npm install` no longer brings the RAG lane
-  with it.** They were declared as `optionalDependencies`, which npm and pnpm
-  **install by default** (there, "optional" means the install may fail without failing the build, not
-  that it is skipped), so every adopter downloaded `onnxruntime-web`, a LanceDB platform binary,
-  `apache-arrow` and `protobufjs` whether or not they ever ran a `rag` command. Measured on a real
-  adopter upgrade: **~300 MB of `node_modules` and ~23 s of install time**. Reproduced directly
-  against the published rc.4 tarballs on 2026-09-04: `pnpm add @vibe-agent-toolkit/cli@0.2.0-rc.4`
-  installs **389 MB**, and the same install with those optional entries skipped — which is exactly
-  what an optional *peer* achieves — installs **92 MB**. The **297 MB** difference is
-  `onnxruntime-web` (137 MB), the LanceDB platform binary (94 MB), `gpt-tokenizer` (44 MB) and
-  `apache-arrow` (8 MB); none of those four appear in the tree at all afterwards. They are now **optional
-  peer dependencies**, which are not auto-installed. **If you use `vat rag` or opt into the projection
-  store, install the backend explicitly:**
+- **The RAG backends are no longer installed for you.** They were declared as
+  `optionalDependencies`, which npm and pnpm install by default, so every adopter downloaded
+  `onnxruntime-web`, a LanceDB platform binary and `apache-arrow` whether or not they ever ran a
+  `rag` command — **~287 MB unpacked** (onnxruntime-web 137.5 MB, the LanceDB platform binary
+  97.8 MB, gpt-tokenizer 42.2 MB, apache-arrow 5.3 MB, protobufjs 3.0 MB), measured on
+  `darwin-arm64` against this release's pins; the platform binary is larger on `win32-x64`. They
+  are now optional *peer* dependencies. **If you use `vat rag`, install the backend explicitly:**
+  `npm install @vibe-agent-toolkit/rag-lancedb`. The projection store is unaffected and needs no
+  install.
 
-  ```bash
-  npm install @vibe-agent-toolkit/rag-lancedb    # vat rag
-  ```
+- **`@vibe-agent-toolkit/runtime-langchain` now requires `@langchain/core` 1.x, not 0.3.x.** Upgrade
+  `@langchain/core` to `^1.2.9` and `@langchain/openai` to `^1.5.11`. Done for a security reason:
+  core 0.3.x declared a `langsmith` range that excluded every published fix, holding five advisories
+  open that no override or dedupe could reach.
 
-  **The projection store is not affected and needs no install** — `@vibe-agent-toolkit/projection-sqlite`
-  ships as an ordinary dependency. It has no third-party dependencies at all (only `node:sqlite`,
-  built into Node) and a **118 KB unpacked** dist as published in rc.4, so the platform-binary cost
-  this change is about simply does not apply to it.
-
-  Every other command is unaffected, and an absent backend was already a legible error naming the
-  package to install — the CLI has always deferred loading these. Only the download changed.
-
-- **`@vibe-agent-toolkit/runtime-langchain` now requires `@langchain/core` 1.x, not 0.3.x.** If you
-  use the LangChain adapter, upgrade `@langchain/core` to `^1.2.9` and `@langchain/openai` to
-  `^1.5.11` alongside it. VAT's own adapter code needed one change to follow: `DynamicStructuredTool`
-  widened its generic defaults, so `convertPureFunctionToTool`'s declared return type is now
-  parameterised (`DynamicStructuredTool<z.ZodType<TInput>>`) instead of bare. Every symbol the
-  adapter imports — `BaseChatModel`, `HumanMessage`/`SystemMessage`/`AIMessage`,
-  `DynamicStructuredTool` — exists unchanged in 1.x, and all 21 adapter tests pass against it.
-
-  **This was done for a security reason, not for currency.** Five of the six advisories still on the
-  accepted-risk register had a single root cause: `@langchain/core@0.3.80` declared
-  `langsmith: "^0.3.67"`, and every published fix (0.4.6 / 0.5.18 / 0.5.19 / 0.6.0) fell outside that
-  range, so no override, pin or dedupe could reach it. Moving to core 1.x resolves `langsmith`
-  **0.10.1** and drops `uuid@10` from the tree entirely. **The accepted-risk register is now a single
-  entry** — a CVSS 2.5 `esbuild` dev-server advisory in build-time-only tooling — down from ten.
-
-- **VAT routes files to a parser by MIME type, and only `text/markdown`, `text/plain` and `text/html`
-  reach one.** Every file that was not `.html` used to be parsed as Markdown — `.ts`, `.json`,
-  `.csv`, `.tf`, `.py` and everything else. Three things change for you: **every content key changes**
-  for a file that stopped being Markdown, so stale parse-cache and projection entries become
-  unreachable rather than being served; **`resource_realizations` gains a `mime` column** at index 8,
-  after `ext`, so anything reading that table positionally must be updated; and **non-Markdown files
-  are no longer closure *doors*** — they remain members, but a path named only from inside a bundled
-  script is no longer followed, so **a data file reachable only that way is in no skill's closure and
-  will not be packaged** (a known gap, recorded in
-  `docs/architecture/command-population-open-questions.md`).
+- **VAT routes files to a parser by MIME type, and only `text/markdown`, `text/plain` and
+  `text/html` reach one.** Every file that was not `.html` used to be parsed as Markdown. Three
+  things change: **every content key changes** for a file that stopped being Markdown, so stale
+  parse and projection entries become unreachable; **`resource_realizations` gains a `mime` column
+  at index 8**, so anything reading that table positionally must be updated; and **a data file
+  reachable only from inside a bundled script is now in no skill's closure and will not be
+  packaged**.
 
 - **Resource scanning now uses the projection lane with the git enumerator by default.** Set
   `VAT_RESOURCES_CRAWL=walk` for the old link walk, or `VAT_EXTENT_SOURCE=filesystem` to keep the
   projection and enumerate without git. ⚠️ A broken symlink is no longer reported as
   `LINK_BROKEN_FILE` — use `walk` if you rely on it.
 
-- **Every resource crawl now sees uncommitted files.** Inside a git working tree the population is
-  `tracked ∪ (untracked ∧ ¬ignored)` rather than `git ls-files`; gitignored files stay out. **Expect
-  new findings on trees with uncommitted work** — that is the fix, not a regression.
+- **Every resource crawl now sees uncommitted files.** The population is `tracked ∪ (untracked ∧
+  ¬ignored)`; gitignored files stay out. **Expect new findings on trees with uncommitted work** —
+  that is the fix, not a regression.
 
-- **`vat rag index` now exits 1 and reports `status: partial` when a resource fails to index.** It
-  used to hardcode `status: success` and exit 0 whatever happened. **A pipeline can now fail where it
-  previously passed, and that failure is real:** the named resources are absent from the index and
+- **`vat rag index` now exits 1 and reports `status: partial` when a resource fails to index**,
+  instead of hardcoding `status: success` and exit 0. **A pipeline can now fail where it previously
+  passed, and that failure is real:** the named resources are absent from the index and
   unsearchable. Exit 2 remains the system-error code.
 
-- **`vat rag index` chunks are now sized from the provider's real token limit — re-index existing
-  databases, and CLEAR them first: `vat rag clear && vat rag index`.** The budget was a hardcoded
-  8191-token OpenAI figure applied to every provider, including the default local
-  `Xenova/all-MiniLM-L6-v2`, which reads **256** — everything past the real limit was cut at
-  inference time with nothing said. `vat rag index` alone is not enough: change detection is a
-  content hash, so unchanged files keep their stale, truncated vectors. There is no `--force`.
+- **`vat rag index` chunks are now sized from the provider's real token limit — clear and re-index:
+  `vat rag clear && vat rag index`.** The budget was a hardcoded 8191-token OpenAI figure applied to
+  every provider, including the default local model, which reads **256**; everything past the real
+  limit was cut at inference time with nothing said. `vat rag index` alone is not enough — change
+  detection is a content hash, so unchanged files keep their stale, truncated vectors.
 
-- **Every hand-maintained version constant and version label is gone.** `INVENTORY_SCHEMA_VERSION`
-  (from `@vibe-agent-toolkit/agent-skills`), `CONTENT_KEY_SCHEMA_VERSION` and
-  `PARSE_CACHE_SCHEMA_VERSION` (from `@vibe-agent-toolkit/resources`), and 15 more across `utils`,
-  `resources` and `cli`. **Scripts reading `schema == "vat.inventory/v1alpha"` must drop the check and
-  switch on `kind` instead.** A strict schema now decides whether a stored artifact is readable, and
-  `vatCacheNamespace()` / `vatCacheNamespaceRoot()` are new exports. ⚠️ Stored QA snapshots are
-  invalidated and must be re-captured.
+- **Every hand-maintained version constant and version label is gone**, including
+  `INVENTORY_SCHEMA_VERSION`, `CONTENT_KEY_SCHEMA_VERSION` and `PARSE_CACHE_SCHEMA_VERSION`.
+  **Scripts reading `schema == "vat.inventory/v1alpha"` must drop the check and switch on `kind`
+  instead.** A strict schema now decides whether a stored artifact is readable. ⚠️ Stored QA
+  snapshots are invalidated and must be re-captured.
 
-- **Per-eval workspaces moved out of the harness root** to a random directory under OS tmp, reported
-  as `workspacesPath` on `RunHarnessResult` — breaking for anything assuming `<out>/workspaces/<id>`.
-  **`--keep` is now the only flag that retains them**; `--out` and `--workdir` no longer do.
-
-- **`vat skill test` now spawns with `--no-session-persistence`, and preflight refuses to run without
-  it.** A `claude` too old for the flag now exits 2. Earlier runs left every headless session — the
-  grading nonce and the eval's answer key in it — under `$CLAUDE_CONFIG_DIR/projects/`, readable by
-  the skill under test; delete those transcripts if you tested a skill you do not trust.
-
-- **`vat skill test run --baseline`'s control arm is now genuinely denied the skill** — it used to
-  reach the skill through the prompt, the environment and its own working directory. **Re-run any
-  `--baseline` numbers taken before this release**: a zero may have been a contaminated control, not
-  a skill with no effect.
-
-- **`--out` and `--workdir` are now mutually exclusive** (exit 2). Passing both silently discarded
-  `--workdir`, so the path you named was never created.
+- **`vat skill test`: five changes, four of which need action.** Per-eval workspaces moved out of
+  the harness root to a random OS-tmp directory, reported as `workspacesPath`, and **`--keep` is now
+  the only flag that retains them** — `--out` and `--workdir` no longer do. Runs now spawn with
+  `--no-session-persistence` and preflight refuses to run without it, so a `claude` too old for the
+  flag exits 2; **delete any transcripts under `$CLAUDE_CONFIG_DIR/projects/` for a skill you do not
+  trust**, because earlier runs left the grading nonce and the eval's answer key there.
+  **Re-run any `--baseline` numbers taken before this release** — the control arm used to reach the
+  skill through the prompt, the environment and its own working directory, so a zero may have been a
+  contaminated control rather than a skill with no effect. `--out` and `--workdir` are now mutually
+  exclusive (exit 2); passing both silently discarded `--workdir`.
 
 - **`HarnessLockBusyError` and `UnresolvableEnvTokenError` now exit 2, not 1.** Both are
-  user-correctable, and CI recipes reading 1 as "the harness broke" used to fire on them. The lock
-  message now names the lock path.
+  user-correctable, and CI recipes reading 1 as "the harness broke" used to fire on them.
 
-- **A duplicate expectation string within one eval is now rejected at parse time** (exit 2), instead
+- **A duplicate expectation string within one eval is now rejected at parse time** (exit 2) instead
   of throwing mid-run and destroying a fully-billed run over a suite typo. Two *different* evals may
   still share expectation text.
 
-- **`vat skills validate` and `vat skills build` now write their stdout summary AFTER their stderr
-  findings** rather than before, which is what every other command already did.
+- **`vat skills validate` and `vat skills build` now write their stdout summary after their stderr
+  findings**, which is what every other command already did.
 
-- **The `resources:` section of `vibe-agent-toolkit.config.yaml` is now strict — an unrecognized key
-  there fails config loading instead of being silently discarded.** A typo used to be stripped and the
-  parse still succeeded, so anything declared under it quietly stopped existing. **Remove or correct
-  any key that is not `include`, `exclude`, `collections`, `validation`, `linkAuth` or `checks`**; the
-  error surfaces on every `vat` command, not only the affected lane.
+#### RAG (library)
 
-  ⚠️ **This breaks configs that work today, and the most likely offender is `resources.metadata`.**
-  That key was removed from the schema several releases ago and has been *accepted and silently
-  thrown away* ever since, so a config carrying it upgrades from "quietly ignored" to "every verb
-  exits 2". Verified against a real adopter: `resources scan`, `resources validate`,
-  `resources query`, `resources check` and `audit` all exited 2 in under a second. **Delete the
-  key** — nothing has read it since it was removed.
+- **A RAG filter no provider implements now throws instead of being silently ignored.** Ignoring one
+  *widened* your search: a query filtered only by an unimplemented field ran unfiltered over the
+  whole index. Move `filters.tags` / `type` / `headingPath` under `filters.metadata` — which works
+  only where your metadata schema **declares** those fields. The default metadata schema does; a
+  custom one that does not gets `Unknown metadata filter field`, by design, because an undeclared
+  field would contribute no condition. Replace `filters.dateRange` with a date field on your own
+  metadata schema. Omit `hybridSearch` entirely: `keywordWeight` is refused independently of
+  `enabled`, so `{enabled: false, keywordWeight: 0.3}` still throws — `{enabled: false}` on its own
+  is accepted. Any unrecognised filter key throws for the same reason.
 
-  The refusal now names the file, names the key, says it may have been *removed* rather than
-  merely misspelled, and lists the keys that ARE accepted at that path (derived from the schema, so
-  it cannot go stale). It used to be a raw Zod JSON dump with none of that in it.
+- **`RAGQuerySchema.safeParse` now rejects an unknown key instead of stripping it.** A misspelled
+  filter (`resourceID`) parsed clean and was deleted, and a deleted filter widens the search rather
+  than narrowing it — the same failure the refusal above exists to close, reached through VAT's own
+  validation path. `filters.metadata` stays open, because it is your schema. The published
+  `RAGQueryJsonSchema` already declared `additionalProperties: false`, so this closes a
+  disagreement between the two halves of one contract rather than tightening the JSON half — but
+  the emitted schema does move, because `filters.metadata` is a new property and the filter
+  descriptions are rewritten.
 
-  🪤 **Only the `resources:` object itself and the blocks under `checks`, `validation` and
-  `linkAuth` are strict.** `resources.collections.<name>` is still permissive, so a misspelled key
-  inside a collection is *still* accepted and stripped. That gap is left open deliberately rather
-  than by oversight — closing it is a second breaking change and gets its own release note.
+- **RAG providers should call the new `assertQuerySupported(query, support)` and declare their own
+  `QuerySupport`.** Without it a provider inherits the declared query fields and none of the
+  refusals.
+
+- **`EmbeddingProvider` implementations must expose `maxInputTokens`** — the model's real
+  input-token limit, which chunk budgets and the over-length guard now read instead of a hardcoded
+  constant.
 
 #### Library
+
+- **`matchesPermissionRule` and `matchesBashRule` now require a `lane` argument** (`'allow' | 'deny'
+  | 'ask'`), with no default — a default would have left every existing caller on the old behaviour.
+  Pass `'allow'` to keep today's semantics, or use the new `matchesAllowRule` / `matchesDenyRule`
+  wrappers. `PermissionLane` is exported alongside them.
+
+- **Deny and ask rules now match the way Claude Code publishes them, which is not how allow rules
+  match.** A deny rule applies when **any** subcommand matches (allow needs every one), reaches
+  commands nested in a subshell or command substitution, and matches past any leading environment
+  assignment, a `case` arm, or a function body. On a command it cannot parse it now reaches a denied
+  program anywhere in the string, not only at the front. A command nested inside another — a
+  subshell, a command substitution, a backtick — is now matched against **the text the command
+  actually has**, where an earlier build substituted a placeholder for the nested part and so missed
+  any rule whose literal spanned it: `Bash(rm -rf $(pwd))` did not match `(rm -rf $(pwd))`. Across a
+  200-shape probe that restores **178** deny/ask matches and removes **11** conflicts the placeholder
+  had manufactured (it was read as a `case` arm pattern the command never had). **Re-run any saved
+  permission-conflict report** — it will flag things it previously missed, and drop a few it should
+  never have raised.
+
+  Allow-lane answers are unchanged **against the previous release** apart from `NODE_ENV=` now being
+  stripped — measured over 2,501,040 rule/command pairs, zero divergences. That is not the same
+  claim as agreeing with Claude Code's published table: VAT's allow lane has 40 known widenings
+  against that table, all pre-dating this release, and all reachable only in a shape where no
+  command runs (confirmed by exhaustively enumerating 597,870 token lists). `vat audit` is the tool
+  that reports where your settings and Claude Code disagree; this note is about what changed in VAT.
+
+- **`ParsedBashRule.regex?: RegExp` is now `pattern?: WildcardPattern`.** Wildcard rules no longer
+  compile to a regular expression at all (see Security), so anything reading `.regex` must read
+  `.pattern`. `WildcardPattern` is exported alongside it.
+
+- **⚠️ `vat resources validate` now checks the case and Unicode normalization of EVERY path
+  component, not just the filename — which can turn a green repo red on a Mac or Windows box.** A
+  link written `Docs/readme.md` against a directory named `docs` resolved silently on a
+  case-insensitive filesystem and was reported as valid; it 404s on case-sensitive Linux. Those links
+  were **already broken in CI** — this reports them where you can fix them. The finding codes are
+  unchanged (`LINK_BROKEN_FILE` for case, `LINK_NORMALIZATION_MISMATCH` for normalization), and the
+  suggestion now names the whole corrected path (`Use "docs/readme.md" instead of "Docs/Readme.md"`)
+  rather than only its last segment, which was a remedy that still 404d when followed. Text is
+  byte-identical to before when only the basename is wrong.
+
+  It is also **~105× faster on a wide directory**: the judge used to scan a whole directory listing
+  up to three times per link, so cost scaled with directory width. Measured on 4,000 documents ×
+  10 links in one directory, identical findings both arms: **23.16 s → 0.22 s**.
 
 - **`@vibe-agent-toolkit/agent-schema` is now `@vibe-agent-toolkit/schema`.** Rename the dependency
   and every import specifier; nothing else about the package changed.
 
-- **`@vibe-agent-toolkit/resources` replaces `collectCodeContextRanges(tree)` with
-  `codeContextRangesFrom(spans)`.** It takes the flat `SourceSpan[]` a parse reports rather than an
-  mdast `Root`. Get one from the new `./remark-parser` subpath:
-  `openRemarkSession(content).spansAndKinds().spans`. `parseMarkdownContent` additionally accepts an
-  optional third `parser` argument; the default is unchanged. CLI users are unaffected.
+- **`@vibe-agent-toolkit/resource-compiler`'s `parseMarkdown` is now `toMarkdownResource`.**
+  `@vibe-agent-toolkit/resources`' own `parseMarkdown`, which takes a path rather than content,
+  keeps its name.
 
 - **`safeExecSync()` and `safeExecResult()` throw when asked to run `git`.** Use `runGit()` /
   `runGitOrThrow()` from `@vibe-agent-toolkit/utils`, which pin the repository explicitly instead of
   inheriting whichever one the ambient environment names.
 
 - **The four inventory extractors take an options object with a REQUIRED `gitTrackerSource`**; the
-  install root moves into it, and `NO_GIT_TRACKER` restores the old tracker-less walk. Behaviour
-  changes too: gitignore questions are answered from a tracker's active set, so a skill's
-  `files.linked` can change under a symlinked ancestor, in a submodule, or `.git/`.
-
-- **`@vibe-agent-toolkit/resource-compiler`'s `parseMarkdown` is now `toMarkdownResource`.** Rename
-  the binding. `@vibe-agent-toolkit/resources`' own `parseMarkdown`, which takes a path rather than
-  content, keeps its name.
+  install root moves into it, and `NO_GIT_TRACKER` restores the old tracker-less walk. Gitignore
+  questions are now answered from a tracker's active set, so a skill's `files.linked` can change
+  under a symlinked ancestor, in a submodule, or `.git/`.
 
 - **`@vibe-agent-toolkit/utils` no longer exports `verifyCaseSensitiveFilename`.** Use
-  `fillSiblingNames(paths, fsCache)` to build a table once, then `classifyFilenameCaseFrom(table, path)`
-  to judge. A single ad-hoc check migrates as
-  `classifyFilenameCaseFrom(await fillSiblingNames([p], cache), p)`.
-
-- **`EmbeddingProvider` implementations must expose `maxInputTokens`.** Report the model's real
-  input-token limit: chunk budgets and the over-length guard now read it instead of a hardcoded
-  constant.
+  `fillPathSpellings(requests, fsCache)` to build a table once, then
+  `pathSpellingFrom(table, referrer, target)` to judge. The removed function judged only the
+  **basename**, which left every directory component of a path to the host filesystem's own
+  case-folding — the defect the whole-path judge exists to close, so it is deleted rather than
+  deprecated. (`fillSiblingNames`, `classifyFilenameCaseFrom`, `SiblingNamesTable` and
+  `FilenameCaseVerdict` went with it; they were introduced and removed inside this release series
+  and never appeared in a stable one, so there is nothing to migrate.)
 
 - **`assertGraderPromptInvariants`'s second parameter is now the run nonce, not the transcript, and
   it is required.** Pass the same nonce you passed to `buildGraderPrompt`.
@@ -202,11 +218,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   had no reader and pinned the whole source string alive — 29 MB of retained heap on a 27 MB
   transcript. `mergeFragmentsToGrading` also no longer carries `runNonce` onto the merged report.
 
-- **A closure extent declaration now carries `referenceDialect`**, defaulting to `'href'` so every
-  existing declaration behaves as before. Code that compares a parsed `ExtentDeclaration`
-  structurally must account for it.
-
 ### Added
+
+- **`ruleConstrainsTool(toolName, rule, lane)`** is exported from
+  `@vibe-agent-toolkit/claude-marketplace`'s settings module. It answers "does this rule restrict
+  this tool at all?" off the same content-lane taxonomy `matchesPermissionRule` dispatches on, so a
+  caller summarising rules and a caller matching a concrete input cannot give different answers.
+
+- **The path-spelling result now says WHY a component is absent.** `PathSpelling` and
+  `ComponentMatch` carry `because: 'no_such_entry' | 'directory_unreadable'` on their absent arm,
+  and `FsLookupCache.readdir` returns a `DirectoryListing` union (`listed` / `absent` /
+  `unreadable`) rather than `string[] | null`. A single `null` previously meant both "no such
+  directory" and "I was refused", and only the first may read as absence.
 
 - **`vat claude org skills versions add <skill-id> <source>` — publishing a change to an
   already-published skill is now possible at all.** `install` only ever POSTs a create, and the API
@@ -292,174 +315,175 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   illustrative path is waivable via `validation.allow` without silencing the document. See
   [`docs/validation-codes.md`](docs/validation-codes.md#packaged_referenced_path_missing) for the
   two filters and what each is worth.
-
-- **`vat resources query <sql> [path]`** — runs one read-only SQL statement against this tree's
-  resource projection, so questions no command reports a field for get an answer (headings, link
-  targets, what the parser refused). The statement must begin with `SELECT`, `WITH` or `VALUES`;
-  writes and multi-statement text are refused, and values come back as SQLite holds them, undecoded. Read `population: derived | store` in the output: it says
-  whether the rows came from the projection store or were built by this run, and
-  `populationSecs` beside it says what that cost.
-
-- **`vat resources check [path]`** — runs the SQL assertions a project declares under
-  `resources.checks`, and exits 1 when one is violated. Each check is a `description` plus one `sql`
-  statement selecting the rows that VIOLATE it, so zero rows is a pass; findings carry the code
-  `CUSTOM:<name>`, which `resources.validation.severity` can downgrade or ignore. A check that could
-  not run, and a run whose corpus enumerated nothing, are both reported as `RESOURCE_CHECK_BROKEN` —
-  which no `severity` entry can silence — and `membersEnumerated` in the output says how many members
-  the checks actually ran over. A `checks` entry per rule reports what it cost — its own
-  `durationSecs` and the `rows` it selected — with the shared population cost stated separately as
-  `populationSecs`. An unknown `--check` name exits 2.
-
-  **`--budget <seconds>` bounds the run, so a runaway statement is killed and reported instead of
-  hanging the build (default 300).** A check's SQL is adopter-authored and unbounded — an accidental
-  cross join or an unterminated `WITH RECURSIVE` runs forever, and nothing inside the process can
-  stop it: the query is synchronous, it holds the event loop, and `node:sqlite` exposes no interrupt.
-  The work therefore runs in a child process that the parent kills when it stops making progress. The
-  budget is time **without progress**, not total runtime — the clock resets each time the run
-  finishes a unit (the population, then each check, then once more when the checks are done and the
-  document is being built) — so a large repository with many rules is never at risk while its rules
-  keep finishing. ⚠️ That per-unit property holds for the **checks**; the **population** reports
-  progress only when it finishes, so for that one unit the budget is a total bound (a cold population
-  is ~33-35s on VAT's own repository and 16.5s on a measured 9,992-file adopter tree, and the default
-  is set well above both rather than pretending to instrument it — raise the bound on a tree much
-  larger than that with a cold parse cache).
-
-  ⚠️ **Checks run over the TRACKED TREE, not over your configured resource set.**
-  `resources.include` / `resources.exclude` scope `vat resources scan` and `vat resources validate`;
-  they do **not** scope the projection, so they do not scope a check or a query. `.gitignore` **is**
-  honoured, so nothing under `node_modules` reaches the corpus — but a path you excluded in config
-  is still there and a check will fire on it. Measured on one adopter: `scan` reported 1,473 files
-  while the same tree's projection held 11,685 members, 142 of them under a config-excluded archive
-  directory, and a correct "every ADR carries frontmatter" check produced a real false finding on a
-  frozen historical file. Narrow the check's own SQL with a `WHERE path NOT LIKE …` predicate — it
-  is the only scope a check has. The `--help` for both verbs now says so.
-
-  **An interrupted run never exits 0 and never looks like a pass**, and there are two ways to be
-  interrupted. **Killed by the budget** exits 1 with `status: error` and a `RESOURCE_CHECK_BROKEN`
-  finding naming the check that was in flight. **Died** — the child process was terminated by a
-  signal, most often Node aborting on its own heap limit (`SIGABRT`) while a statement materialised
-  an unbounded result set, or a runner's OOM killer (`SIGKILL`) — also exits 1 with `status: error`
-  and `RESOURCE_CHECK_BROKEN`, naming the **signal** and saying plainly that raising `--budget` is
-  not the remedy. Either way the checks that completed keep their `checks` entry and `rows`, but
-  their individual violations are **not** in `issues`, and the finding says so. Interrupted before
-  the population finished, there is no projection and no honest document, so that exits 2.
-  `--budget 0` removes the bound and runs everything in one process, where a runaway statement can
-  hang forever. Only the literal `0` does that: any other value that merely *evaluates* to zero — an
-  empty or blank string, `1e-400`, `-0` — is refused (exit 2) rather than read as `0`, so an unset
-  shell variable cannot silently remove the bound. `--budget` combined with the internal
-  `--cost-log` is refused rather than silently ignored.
-
-- **`VAT_PROJECTION_STORE_DIR`** — sets where the projection store's database lives. Without it the
-  store is one database per VAT release shared by every root on the machine, so concurrent CI jobs
-  write into one file; set it per job to isolate them.
-
-- **`vat claude context [paths...]`** — reports which `CLAUDE.md` files, `.claude/rules` files and
-  `@`-imported files load into an agent's context at a path, why each is there, and its estimated
-  token cost. `--discoverable` adds, separately, what those files link to in one hop that the harness
-  does not load. `--all` reports a cost map: the always-loaded cost once per distinct instruction
-  chain, the on-demand cost per directory. `--format json`/`yaml` emit `{ root, answers: [...] }`.
-  The command reads the nearest ancestor `vibe-agent-toolkit.config.yaml` — that is what decides
-  which parser runs — and exits 2 on one that will not parse or validate; a tree with *no* config is
-  unaffected. The report publishes its own limits: the number is neither a floor nor a ceiling.
-
-- **`vat claude budget [paths...]` — checks the always-loaded context a working location pays.**
-  Reports `ALWAYS_LOADED_CONTEXT_BUDGET` at `info` for any instruction chain over
-  `resources.validation.thresholds.alwaysLoadedContextTokens` (default 12,000, applied whether or not
-  the project has a config); set `resources.validation.severity.ALWAYS_LOADED_CONTEXT_BUDGET: ignore`
-  to silence it, or promote the code to `error` to make the command exit 1. One finding per distinct
-  context chain rather than per directory, so one oversized root file produces one finding. Gitignored
-  files are not counted at all, and the total is a stated lower bound — a global `~/.claude/CLAUDE.md`
-  and the enabled skill index are real cost a tree-only projection cannot see.
-
-- **A collection can declare the MIME type of the files it matches, and that declaration reaches the
-  parser.** `resources.collections.<name>.mimeType` overrides the built-in extension tables, so a
-  project whose `.ts` files really are prose, or whose `.md` files really are data, can say so. Two
-  collections declaring **different** types for one file is reported as a `COLLECTION_MIME_CONFLICT`
-  row naming both, and the run completes with the built-in table's answer, rather than killing a
-  9,000-file run on file 400.
-
 - **The resource projection** — a populated, queryable model of a project's documents, blobs, links
   and membership, replacing ad-hoc crawling as the substrate for the resource commands.
-  `vat resources scan` gains `--format json` and two new fields, `lane` and `extentSource`, naming
-  which crawler and which enumerator actually ran.
+  `vat resources scan` gains `--format json` and two new fields, `lane` and `extentSource`. Optional
+  SQLite persistence comes from the new `@vibe-agent-toolkit/projection-sqlite` package, enabled
+  with `VAT_PROJECTION_STORE=sqlite`; `VAT_PROJECTION_STORE_DIR` sets where that database lives —
+  set it per CI job, or concurrent jobs write into one file.
 
-- **Optional SQLite persistence for the projection** — the new `@vibe-agent-toolkit/projection-sqlite`
-  package, enabled with `VAT_PROJECTION_STORE=sqlite`, lets a population survive between runs.
+- **`vat resources query <sql> [path]`** — runs one read-only SQL statement against this tree's
+  resource projection, so questions no command reports a field for (headings, link targets, what the
+  parser refused) get an answer. The statement must begin with `SELECT`, `WITH` or `VALUES`; writes
+  and multi-statement text are refused.
 
-- **A cross-process parse cache, on by default.** Parsing dominated `vat resources validate`; results
-  are now reused across runs and across processes, namespaced per build of VAT under
-  `<tmpdir>/.vat-cache/<namespace>/parse/`. `vat cache clear` removes VAT's on-disk caches, and
-  `--no-cache` on the root command disables them for one run.
+- **`vat resources check [path]`** — runs the SQL assertions a project declares under
+  `resources.checks` and exits 1 when one is violated. Each check is a `description` plus one `sql`
+  statement selecting the rows that VIOLATE it, so zero rows is a pass; findings carry
+  `CUSTOM:<name>`, which `resources.validation.severity` can downgrade or ignore. A check that could
+  not run is reported as `RESOURCE_CHECK_BROKEN`, which no `severity` entry can silence.
+  `--budget <seconds>` (default 300) bounds time without progress, so a runaway statement is killed
+  and reported rather than hanging the build; `--budget 0` removes the bound.
+  ⚠️ **Checks run over the TRACKED TREE, not over your configured resource set.**
+  `resources.include` / `resources.exclude` scope `vat resources scan` and `vat resources validate`;
+  they do **not** scope the projection, so a path you excluded in config is still there and a check
+  will fire on it. Narrow the check's own SQL with a `WHERE path NOT LIKE …` predicate — it is the
+  only scope a check has.
+
+- **A cross-process parse cache, on by default.** Parsing dominated `vat resources validate`;
+  results are now reused across runs and across processes. `vat cache clear` removes VAT's on-disk
+  caches, and `--no-cache` on the root command disables them for one run.
 
 - **Markdown parsing can optionally run on worker threads during projection population.** Off by
   default; set `VAT_PARSE_POOL=1` to opt in. It starts only after enough parse-cache misses to prove
-  the work is real, so a fully warm run never starts a thread, and output is byte-identical either
-  way. `vat resources validate` — the parse-heaviest command VAT ships — now participates;
-  `ResourceRegistryOptions.parsePool` accepts the same policy the projection lane takes.
-  `VAT_PARSE_POOL_SIZE`, `VAT_PARSE_POOL_MIN_MISSES` and `VAT_PARSE_LOOK_AHEAD` tune it; an explicit
-  policy value beats the environment, and a value that is not a positive whole number is ignored
-  rather than coerced.
+  the work is real, and output is byte-identical either way. `VAT_PARSE_POOL_SIZE`,
+  `VAT_PARSE_POOL_MIN_MISSES` and `VAT_PARSE_LOOK_AHEAD` tune it.
+
+- **`vat claude context [paths...]`** — reports which `CLAUDE.md` files, `.claude/rules` files and
+  `@`-imported files load into an agent's context at a path, why each is there, and its estimated
+  token cost. `--discoverable` adds what those files link to in one hop that the harness does not
+  load; `--all` reports a cost map. `--format json`/`yaml` emit `{ root, answers: [...] }`.
+
+- **`vat claude budget [paths...]` — checks the always-loaded context a working location pays.**
+  Reports `ALWAYS_LOADED_CONTEXT_BUDGET` at `info` for any instruction chain over
+  `resources.validation.thresholds.alwaysLoadedContextTokens` (default 12,000); set that code to
+  `ignore` to silence it, or promote it to `error` to make the command exit 1. The total is a stated
+  lower bound — a global `~/.claude/CLAUDE.md` is real cost a tree-only projection cannot see.
+
+- **`vat okf validate` — conformance checking for Open Knowledge Format bundles.** Declare one with
+  `okf.bundles.<name>.root`; every non-reserved `.md` beneath it is checked for parseable
+  frontmatter with a non-empty `type`, and cross-links are resolved against the bundle root. There
+  is no `include`/`exclude` on purpose — the population is the specification's, and a narrower one
+  would let VAT report a clean bundle it never fully read. Read a clean report precisely: §11.1 and
+  §11.2 in full, §11.3 only in part — and wikilinks are not read at all.
+  Cross-links are checked for case (`OKF_LINK_CASE_MISMATCH`) and Unicode normalization
+  (`OKF_LINK_NORMALIZATION_MISMATCH`) on **every path component, not just the filename**, so a
+  bundle that resolves on the author's Mac is not certified when it 404s on a case-sensitive
+  filesystem — a link written `Docs/guide.md` against a directory named `docs` is caught, and the
+  remedy names the whole corrected path rather than only its last segment. `OKF_BROKEN_CROSS_LINK`
+  now means only "not in the bundle". An unreadable subdirectory
+  (`OKF_SUBDIRECTORY_UNREADABLE`) and an unreadable document (`OKF_DOCUMENT_UNREADABLE`) are each
+  their own finding naming what could not be read, and the rest of the bundle is still judged — both
+  used to abort the whole run and exit 2. A bundle member is a file whose bytes live under the root,
+  judged by the same containment rule the link lane uses, so a symlink escaping the bundle is left
+  out of the population and reported as `OKF_DOCUMENT_ESCAPES_BUNDLE` instead of being judged as a
+  member and refused as a link target. A `/`-anchored link whose target exists at the repo root but
+  not under the bundle root gets its own code, `OKF_ROOT_RELATIVE_LINK_UNRESOLVED`, because the
+  remedy is to re-anchor rather than to write a missing document. An unreadable bundle root is that
+  bundle's own `OKF_BUNDLE_ROOT_UNREADABLE` finding at hard `error` — the per-bundle severity dial
+  cannot lower it, since an unreadable root means conformance was never assessed — and the other
+  bundles still run.
+  `ValidateOkfBundleOptions.rootSpecifier` is required and `OkfBundleReport.root` carries it rather
+  than the resolved absolute path, so a report does not embed the developer's home directory in
+  every bundle entry and carry it into CI logs.
+
+- **`vat ard emit` — writes a `.well-known/ard.json` discovery manifest.** Set `ard.publisher` and
+  `ard.baseUrl`; published skills become entries automatically. Marketplaces, OKF bundles and MCP
+  servers are emitted only if you supply `ard.entries.<name>.type`, because the ARD specification
+  names no media type for any of them and VAT will not guess one under your domain.
+  Overrides are keyed `ard.entries."<kind>:<name>"`; a bare key matching surfaces of more than one
+  kind is refused, naming both qualified forms, rather than retyping whichever it reached first. A
+  duplicate emitted `identifier`, a `skills.config` key naming a skill that does not exist, a
+  `publisher` that is not a real domain, and a `baseUrl` carrying a query, a fragment or a
+  non-`http(s)` scheme are all refused too. A qualified key that displaces a bare one now says so on
+  stderr, naming both, instead of discarding the loser silently.
+  `.` and `..` are refused as a `ard.namespace` or a surface name, and as any segment of a
+  library-supplied `urlPath`: URLs are joined with `new URL`, which **collapses dot segments**, so
+  such a name silently relocated the entry — a namespace of `..` moved every entry above its
+  `baseUrl` and still exited 0. A segment that merely contains dots (`v1.2`) is unaffected.
+  `findArdEntryOverride`, `findShadowedArdOverrideKeys`, `isArdNameSegment` and `isArdUrlPath` are
+  exported for callers building entries directly.
+  `--format json` publishes a machine-readable report — `status` (`written` | `empty`),
+  `outputPath`, `entryCount`, `skippedCount`, `shadowedCount` and the full skipped/shadowed lists —
+  so a pipeline can gate on a number instead of parsing stderr, and `--strict` turns "the manifest
+  advertises nothing" or "a configured surface was skipped" into exit 1. The DEFAULT exit code is
+  unchanged: an empty manifest is a legal artifact, so a plain run still exits 0 and says why on
+  stderr. **Every non-zero exit publishes a document too** — `{status: 'error', error, duration}`,
+  in whichever format was asked for — so a wrapper reading stdout never has to fall back to parsing
+  stderr, including on the exit-1 case every repository that has not opted into ARD hits first.
+  `trustManifest.identity` must carry an authority VAT can bind to `ard.publisher` — an HTTPS FQDN
+  URI or a SPIFFE ID, with a DID the one exempt form because DID methods encode their authority
+  per-method. A bare domain is none of the three, and it previously skipped publisher-authority
+  binding — the one check ARD mandates — in silence, at exit 0: the DID exemption was written as
+  "no `://`, no authority to parse", and `attacker.com` has no `://` either. The refusal is enforced
+  at CONFIG LOAD as well as at emission, sharing one predicate, so it fails every command that reads
+  the config rather than only this one.
+  The exit codes distinguish the project from the invocation: **exit 1** means VAT read this project
+  and produced no manifest by its own rules — it declares no `ard:` block, or a surface could not be
+  derived into a conformant entry — while **exit 2** means VAT never got that far (no project root,
+  no config file, a config it cannot parse, an unexpected internal failure). A CI job that tolerates
+  repositories which never opted into ARD depends on exactly that split, so branch on it rather than
+  on "non-zero".
+
+- **A collection can declare the MIME type of the files it matches, and that declaration reaches the
+  parser.** `resources.collections.<name>.mimeType` overrides the built-in extension tables, so a
+  project whose `.ts` files really are prose can say so. Two collections declaring **different**
+  types for one file is reported as `COLLECTION_MIME_CONFLICT` naming both, and the run completes
+  with the built-in table's answer rather than dying mid-way.
 
 - **`vat inventory` answers skill membership from the projection** for a plugin-directory subject,
-  instead of the markdown link walk. The walk remains reachable as `VAT_INVENTORY_CRAWL=walker`, and
-  the other three subject shapes (`--user`, a marketplace root, a single `SKILL.md`) still use it.
+  instead of the markdown link walk. The walk remains reachable as `VAT_INVENTORY_CRAWL=walker`.
 
 - **Four new `@vibe-agent-toolkit/resources` subpaths: `./parse-conformance`, `./link-parser`,
   `./remark-parser` and `./markdown-processor`.** All four reach the markdown parser, so they are
-  deliberately absent from the `.` barrel — import them directly. `./parse-conformance` diffs any two
-  parser implementations field by field over `ParseFacts` and reports six kinds of disagreement;
-  `./remark-parser` exposes `openRemarkSession` and the `remarkParser` reference implementation.
+  deliberately absent from the `.` barrel — import them directly. `./parse-conformance` diffs any
+  two parser implementations field by field over `ParseFacts`.
 
-- **`vat skill test configure --no-baseline` and `vat skill test run --no-baseline`.** `--baseline`
-  runs every eval twice and `--max-budget-usd` is a *per-spawn* cap, so a committed
-  `skills.config.<skill>.test.baseline: true` silently doubled your spend. A stderr note now names
-  the config key, and `--help` says both.
+- **`vat skill test` now reports the delta `--baseline` always claimed.** `--no-baseline` on
+  `configure` and `run` (a committed `test.baseline: true` silently doubled spend, because
+  `--max-budget-usd` is a *per-spawn* cap); `baselineDelta` run-level and per eval;
+  `baselineIntegrity` plus a warning when a control arm reached the skill anyway — read `signals`,
+  `degraded`, `comparable` and `contaminated`, because a clean verdict and a blind one are different
+  things. `results/` is now kept after a default run and its path returned as `resultsPath`.
 
-- **`--baseline` now reports the delta it always claimed to**, as `baselineDelta` in `baseline.json`
-  and on stderr, run-level and per eval — `null` where the arms were graded against different
-  expectation counts. `grading.json` and `baseline.json` also gain `arm` and per-expectation `evalId`.
-
-- **`baselineIntegrity` in `baseline.json`, plus a stderr warning when a `--baseline` control arm
-  reached the skill anyway.** An ambient copy of the skill in your `dist/` or plugin cache is not
-  vat's to remove, and a control arm that finds one gives a silently wrong delta. Read `signals`,
-  `degraded`, `comparable` and `contaminated` — a clean verdict and a blind one are different things.
-
-- **`vat skill test run` keeps `results/` after a default run.** Cleanup used to remove
-  `grading.json`, `friction.json`, `tool-eval.json` and `baseline.json`. The path is printed as
-  `Results: <path>` and returned as `resultsPath`.
+- **The Node floor is enforced across every manifest and executed in CI.** A repo-structure rule
+  derives the floor from the root `package.json` and fails when any package disagrees. Nothing to do
+  unless you add a package — give it `engines.node` matching the root, or mark it `private`.
 
 - **`externalSource` on a marketplace plugin entry** — reference a plugin published elsewhere rather
   than vendoring it.
 
-- **Four new rules in the published ESLint pack** — `@vibe-agent-toolkit/no-raw-text-decode`,
-  `no-self-package-import`, `no-bare-symlink-in-tests` and `no-process-exit-in-phase`. The last is
-  not in `configs.recommended`, because it keys on VAT's `…Phase` naming convention.
+- **Five new rules in the published ESLint pack** — `@vibe-agent-toolkit/no-raw-text-decode`,
+  `no-self-package-import`, `no-bare-symlink-in-tests`, `no-process-exit-in-phase` and
+  `no-fragile-entrypoint-guard`. **None of the five is in `configs.recommended`**: each keys on
+  something that is VAT's rather than portable — a naming convention, a required option, a seam a
+  consumer may not have, or a claim about the consumer's own Node floor. All five ship in `rules`,
+  and this repo enables each one explicitly, scoped to where it holds.
 
-- **New validation code `LINK_FROM_NON_ROUTABLE_FILE` (warning)** — a link out of a bundled HTML page
-  that VAT did not follow.
+- **New validation code `LINK_FROM_NON_ROUTABLE_FILE` (warning)** — a link out of a bundled HTML
+  page that VAT did not follow.
 
 - **(library) `decodeTextContent()` on the new `@vibe-agent-toolkit/utils/text` subpath**, plus
-  `runGit()`, `runGitOrThrow()`, `isFilesystemAccessError(err)` and `removeScratchDir()` on the
-  barrel. `setupAsyncTempDirSuite` and `setupSyncTempDirSuite` use the last of these and take an
-  optional second argument to raise the budget; `setupSyncTempDirSuite`'s `afterAll` is consequently
-  `async`.
+  `runGit()`, `runGitOrThrow()`, `isFilesystemAccessError(err)`, `removeScratchDir()`,
+  `vatCacheNamespace()` and `vatCacheNamespaceRoot()` on the barrel.
 
 - **(library) Claude `@`-import closures are now projected.** `ClaudeImportExtentContributor`
   registers one closure extent per `CLAUDE.md` / `CLAUDE.local.md` / `.claude/rules` file to the
-  vendor's four-hop bound; `buildClaudeContextPopulation()` assembles the lane. Dangling `@` imports
-  surface as `CLOSURE_REFERENCE_UNRESOLVED`, escaping `@~/…` as `CLOSURE_REFERENCE_OUTSIDE_ROOT`.
-  `closureProvenance()` reports which member of a closure pulled in which, and at what depth.
+  vendor's four-hop bound. Dangling `@` imports surface as `CLOSURE_REFERENCE_UNRESOLVED`, escaping
+  `@~/…` as `CLOSURE_REFERENCE_OUTSIDE_ROOT`.
 
-- **(library) `resource_tags` is now populated.** `AgenticConventionContributor`, `classifyPath()`
-  and `pluginRootsFrom()` are exported from `@vibe-agent-toolkit/resources`; each resource is tagged
-  with the harness convention its path carries (`claude-md`, `skill-md`, `subagent`, …) plus a
-  `loading` row valued `always` or `selected`, and `.claude/rules` files carry a `rule-scope` tag.
-  `vat claude budget` reads them, so the tag vocabulary and the budget share one definition.
+- **(library) `resource_tags` is now populated**, tagging each resource with the harness convention
+  its path carries (`claude-md`, `skill-md`, `subagent`, …) plus a `loading` row valued `always` or
+  `selected`. `vat claude budget` reads them, so the tag vocabulary and the budget share one
+  definition.
 
 - **(library) HTML files now contribute `blob_references` rows.** `<a href>` and `<img src>` are
-  projected with a source span under a `html-link` syntactic form of their own. `html-link` is in no
-  closure's `follow` default, so HTML references are reported but never traversed — projected
-  membership still matches what `vat build` bundles. Each authored attribute yields exactly one row.
+  projected under an `html-link` syntactic form of their own. `html-link` is in no closure's
+  `follow` default, so HTML references are reported but never traversed.
+
+- **New concept guide: [Knowledge interop formats](docs/concepts/knowledge-interop-formats.md)** —
+  what the Open Knowledge Format and Agentic Resource Discovery each are, how they differ, and VAT's
+  producer-side stance toward both.
 
 - **(library) The Skills API upload ceiling and its message builder are public.**
   `@vibe-agent-toolkit/agent-skills` exports `API_SKILL_MAX_UPLOAD_BYTES` (31,457,280),
@@ -469,7 +493,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `collectNonPortableAssetReferenceIssues()`, `collectNonPortableCommandIssues()` and
   `collectUnqualifiedMcpToolIssues()`, so an uploader can run the portability checks itself.
 
+- **(library) `RAGQuerySchema` gained a `filters.metadata` key.** Without it a schema-validated
+  `filters.metadata` was stripped — the one filter path that works could not be expressed. The
+  generated `RAGQueryJsonSchema` moves with it.
+
+- **(library) `codeContextRangesFrom(spans)` in `@vibe-agent-toolkit/resources`**, replacing
+  `collectCodeContextRanges(tree)`: it takes the flat `SourceSpan[]` a parse reports rather than an
+  mdast `Root`. Get one from the new `./remark-parser` subpath. `parseMarkdownContent` additionally
+  accepts an optional third `parser` argument; the default is unchanged. CLI users are unaffected.
+
+- **(library) A closure extent declaration carries `referenceDialect`**, defaulting to `'href'` so
+  every existing declaration behaves as before. Code that compares a parsed `ExtentDeclaration`
+  structurally must account for it.
+
+- **(library) `isEntrypoint(importMetaUrl, entryPath?)` on
+  `@vibe-agent-toolkit/utils/process`** — one answer to "am I the script Node was asked to run?".
+  `import.meta.main` is `undefined` below Node 22.18 and 24.2, and a raw compare against
+  `pathToFileURL(process.argv[1]).href` is false through a `node_modules/.bin` symlink; both
+  spellings silently guard nothing. The new `no-fragile-entrypoint-guard` ESLint rule keeps them
+  from coming back.
+
+- **(library) `assertFiltersProducedConditions` is exported from `@vibe-agent-toolkit/rag`, and
+  `LANCEDB_QUERY_SUPPORT` from `@vibe-agent-toolkit/rag-lancedb`** — the backstop that refuses a
+  filter set which produced no condition, and the shipped provider's declared `QuerySupport`.
+
+- **(library) The path-spelling surface is exported from `@vibe-agent-toolkit/utils`** —
+  `DirectorySpellingIndex` and `spellingWalkRoot`, plus the `PathSpelling`, `PathSpellingRequest`,
+  `PathSpellingTable` and `ComponentMatch` types, alongside `fillPathSpellings` /
+  `pathSpellingFrom`.
+
 ### Changed
+
+- **A stray key under `resources:` is now named on stderr instead of being silently discarded.**
+  The section declares its keys — `include`, `exclude`, `collections`, `validation`, `linkAuth` and
+  `checks` — and anything else is reported and ignored, exactly like an unknown key anywhere else in
+  the config (see Breaking). **Nothing fails to load**: a config carrying `resources.metadata`,
+  removed from the schema several releases ago and silently thrown away ever since, keeps working
+  and now says so once per run.
+  🪤 `resources.collections.<name>` is still permissive, so a misspelled key inside a collection is
+  accepted and stripped with nothing said.
+
+- **The CLI suppresses the one `ExperimentalWarning` `node:sqlite` emits at load.**
+  `vat resources query` builds its ephemeral store through `node:sqlite`, which Node loads unflagged
+  from 22.13.0 but still announces once per process — on an ordinary run, with no way to silence it
+  short of silencing everything. A process-wide filter matches that warning by **both** its
+  `ExperimentalWarning` type and SQLite's own message text, and passes every other warning through;
+  `@vibe-agent-toolkit/projection-sqlite` deliberately does not suppress it itself, leaving the
+  filtering to whichever caller turns the backend on by default.
+
+- **(internal) Link-fact table renames in `@vibe-agent-toolkit/resources`.** `linkTargetPaths` is
+  now `linkTargets` and returns `{referrer, target}[]` (the judge needs the referrer to bound its
+  walk); `LinkFactTables.siblingNames` is now `spellings`; `FileVerification.actualName` is now
+  `correction: {asked, actual}`. Not a breaking change: the barrel states that link-validator
+  internals are not exported, and the package's `exports` map declares no `./link-validator`
+  subpath, so no consumer could import any of them.
 
 - **`vat skill review` files five codes under named sections instead of `Other automated
   findings`** — `SKILL_FRONTMATTER_EXTRA_FIELDS`, `SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE`,
@@ -491,75 +568,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because the ceiling it is read against is binary, and the label matches the divisor. Where a
   size is compared to the ceiling the exact byte count is printed beside it, so a bundle one byte
   over no longer reads `30.0 MiB … over the 30.0 MiB ceiling`.
-
-- **`eslint-plugin-sonarjs` upgraded 3.0.7 → 4.2.0, and its expanded rule set was adopted rather
-  than switched off.** The bump was taken for a security reason (it retires three `minimatch`
-  advisories — see Security), and it reported 98 new errors and 23 new warnings across 54 files.
-  All are fixed: nine genuine ReDoS findings in production regexes, and the rest test hygiene —
-  51 assertions moved to specific matchers, 19 float comparisons to `toBeCloseTo`, 10 sibling cases
-  collapsed into `it.each`, one hook ordering, plus 10 stale `eslint-disable` directives deleted
-  because the rules they named no longer fire. Nothing was suppressed.
-
-- **Three test assertions were found to be structurally blind and were strengthened.** All three
-  were the same premise guard written three times — `expect(NFD_FORM).not.toBe(NFC_FORM)` over two
-  string literals, a comparison settled at authoring time that could never fail — while their own
-  docstrings described a runtime failure mode (an editor silently re-composing the fixture) that the
-  assertion did not catch. A fourth, in the Vercel AI SDK adapter's session-isolation test, asserted
-  only that two histories were non-empty and so passed even if both agents shared one array, which
-  is the exact bug the test is named for. All four now assert something that can fail.
-
-- Patch bumps folded in from Dependabot: `vitest` 3.2.6 → 3.2.7, `turbo` 2.10.11 → 2.10.12,
-  `apache-arrow` 15.0.0 → 15.0.2.
-
 - **`vat validate`, `vat verify` and `vat build` no longer spawn a child process per phase.** Their
   phases run in the orchestrator's own process, so each no longer pays a full Node startup, a second
   copy of the module graph and a cold parse cache. `MAX_PHASE_STDOUT_BYTES` went with the process
-  boundary, along with three failure modes it existed to handle.
+  boundary.
 
-- **A `vat` invocation no longer imports every command before running one.** Fourteen of the fifteen
-  top-level commands sit behind per-command loaders — `doctor` is the exception, because it is the
-  command that checks the others load. On a 4-CPU Windows box `vat --version` goes from 2,477 ms to
-  370 ms. Help, a bare `vat`, an unknown command and any unrecognised option still load the whole
-  tree, because they have to render or search it.
-
-- **A warm resource scan no longer loads the markdown parser or the external-link validator it never
-  calls.** A warm `vat resources scan` drops from 4,000 ms to 2,969 ms over 184 documents, and from
-  7,459 ms to 6,486 ms over 1,289. Cold scans are parse-bound and unchanged. `parseMarkdown` /
-  `parseHtml` keep their signatures but now load their parser on call.
+- **A `vat` invocation no longer imports every command before running one.** On a 4-CPU Windows box
+  `vat --version` goes from **2,477 ms to 370 ms**. Help, a bare `vat`, an unknown command and any
+  unrecognised option still load the whole tree, because they have to render or search it.
 
 - **`vat audit` and `vat inventory` no longer spawn a `git check-ignore` process per link target.**
-  On a 1,484-document monorepo the whole command goes from 12.5 s to 2.5 s. Reports are unchanged.
-
-- **The RAG backend is no longer loaded by every `vat` command, and can be omitted from an install**
-  — it moved to `optionalDependencies`, and the four `vat rag` subcommands load it on demand.
+  On a 1,484-document monorepo the whole command goes from **12.5 s to 2.5 s**. Reports are
+  unchanged.
 
 - **`vat resources validate` no longer re-asks the filesystem the same question once per skill, per
-  skill.** Measured on a 103-skill project: **21,648 → 10,936 filesystem calls (−49.5%)**, with the
-  quadratic site down from 10,815 calls over 103 distinct paths to 103. `vat skills build` and
-  `vat claude plugin build` share the helper and get the same fix.
+  skill.** Measured on a 103-skill project: **21,648 → 10,936 filesystem calls**. `vat skills build`
+  and `vat claude plugin build` share the helper and get the same fix.
+
+- **A warm resource scan no longer loads the markdown parser or the external-link validator it never
+  calls** — **4,000 ms → 2,969 ms** over 184 documents. Cold scans are parse-bound and unchanged.
+
+- **Markdown parsing walks the syntax tree twice per document instead of fifteen times**, and
+  scanning a tree with large ignored directories does one filesystem probe per ignored path instead
+  of one per contained file. No output change.
 
 - **A markdown link whose target exists but cannot be read is now reported instead of silently
   dropped** — new `LINK_TARGET_UNREADABLE` (error), configurable like any other code.
 
-- **A frontmatter link-validation failure is no longer reported as a frontmatter *schema* error.** It
-  used to surface as `FRONTMATTER_SCHEMA_ERROR` once per resource in the collection, against a schema
-  that had loaded fine.
+- **A frontmatter link-validation failure is no longer reported as a frontmatter *schema* error.**
+  It used to surface as `FRONTMATTER_SCHEMA_ERROR` once per resource, against a schema that had
+  loaded fine.
 
 - **`vat inventory` lists a skill's linked files in sorted order** rather than discovery order.
 
-- **Markdown parsing walks the syntax tree twice per document instead of fifteen times**, and
-  `ResourceRegistry.addResource` reads and stats each file once instead of twice each. No output
-  change.
+- **`vat skill test` preflight's `flag <name>` checks now verify something.** All six passed
+  unconditionally before, because `claude --help` exits 0 for a flag that does not exist. Preflight
+  can now fail (exit 2) on a `claude` that used to pass it — which means the spawn would have failed
+  later anyway. `--max-turns` is reported as unverifiable rather than confirmed.
 
-- **Scanning a tree with large ignored directories does one filesystem probe per ignored path
-  instead of one per contained file.**
-
-- **Preflight's `flag <name>` checks now verify something.** All six passed unconditionally before,
-  because `claude --help` exits 0 for a flag that does not exist. Preflight can now fail (exit 2) on
-  a `claude` that used to pass it — which means the spawn would have failed later anyway.
-  `--max-turns` is reported as unverifiable rather than confirmed.
+- **`eslint-plugin-sonarjs` upgraded 3.0.7 → 4.2.0**, taken for a security reason (see below). Patch
+  bumps folded in from Dependabot: `vitest` 3.2.6 → 3.2.7, `turbo` 2.10.11 → 2.10.12, `apache-arrow`
+  15.0.0 → 15.0.2.
 
 ### Security
+
+- **The settings checker reported an unparseable Bash command as permitted.** An odd quote or an
+  unclosed `(` switched off separator detection for the rest of the command, so `Bash(echo *)`
+  approved `echo hi # don't` + newline + `rm -rf /`. **Re-run any saved permission report** —
+  verdicts can flip from permitted to refused.
 
 - **`vat claude org skills install <file>.zip` published your eval suite — answer keys included.**
   The directory shape withholds `evals/`, `node_modules/` and `.git/` and reports the exclusion; the
@@ -583,83 +639,143 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to defend as deliberate — "which matches the uploader". The two lanes did agree and both were
   wrong. A link is now reported as an unweighed entry instead.
 
-- **Two supply-chain pins went stale and the dependency audit went red: `fast-uri` and `qs` are
-  re-pinned to their patched releases.** New advisories landed against the exact versions the root
-  `overrides` block was holding — `fast-uri` 3.1.5 (four advisories, CVSS 7.5) and `qs` 6.15.2 (two,
-  CVSS 6.3). Both are transitive-only and both had an in-range fix, so they are pinned forward
-  (`fast-uri` 3.1.6, `qs` 6.16.0) rather than added to the accepted-risk register, per that
-  register's own rule 1. Nothing in VAT's own code changed.
+- **A wrapper flag's value was treated as the wrapped command**, so `Bash(ls *)` reported
+  `timeout -s ls 30 rm -rf /` as permitted. A wrapper carrying a flag with a non-numeric value is
+  now left unstripped and reported as not matching.
 
-- **Four more accepted risks were retired by real fixes, because two of the register's stated
-  blockers had quietly expired.** The `@hono/node-server` entry said the fix needed a 2.x major
-  outside `@modelcontextprotocol/sdk`'s declared `^1.19.9`; the fix had since been backported to
-  1.19.15, inside that range, so the pin moved to 1.19.17. The three `minimatch` entries — one of
-  them **CVSS 8.7** — were held by a single **exact** `minimatch: "10.1.2"` pin inside
-  `eslint-plugin-sonarjs@3.0.7` that no dedupe could move; `eslint-plugin-sonarjs@4.2.0` widened it
-  to `^10.2.5`, so the bump drops the vulnerable copy entirely. Accepted risks are now **6, down
-  from 10**, and the register gained a rule 4: a reason that names a blocker is a claim with an
-  expiry date, and nothing in the tooling tells you when it goes stale.
+- **A backslash in a permission rule compiled as a regex escape instead of as itself.**
+  `Bash(a\b *)` reported `a b` as permitted, and any rule holding a Windows path matched something
+  other than what it said. **Re-check any rule containing a backslash.**
+
+- **`Bash(x:*)` and `Bash(x *)` gave different answers** despite being documented as equivalent, and
+  `:*` granted a bare-command permit the ` *` spelling refuses. **Re-check reports for rules using
+  the `:*` spelling.**
+
+- **The settings auditor advised deleting rules that were not redundant.** A rule appearing at two
+  settings levels had BOTH copies reported redundant, and `Bash(npm test *)` was reported redundant
+  under `Bash(npm * *)`. **Re-read any rule you deleted on that advice** — deleting either revokes a
+  permission. Relatedly, `isSubsumedBy` contradicted `matchesBashRule`: a `:*` broad rule subsumed
+  **nothing**, and `settings-conflict-analyzer` is built entirely on that function, so it silently
+  under-reported.
+
+- **Path deny rules were checked for six tools and matched none of them in practice.** Claude Code
+  consults `Read(path)` and `Edit(path)` only, so `Write(…)`, `Glob(…)` and the Notebook rules now
+  report as blocking nothing; separately, relative paths resolved against the process's own
+  directory rather than the plugin's, so the path lane never matched.
+
+- **The Bash permission matcher now follows Claude Code's published behavior table.** A trailing
+  ` *` matches the bare command when it is the rule's only wildcard; compound commands split on
+  `&&`, `||`, `;`, `|`, `|&`, `&` and newlines with an allow rule required to match **every**
+  subcommand, so `Bash(safe-cmd *)` no longer reports `safe-cmd && other-cmd` as permitted; a
+  dangling `&&` is treated as unparseable and approves nothing; and the documented wrappers
+  (`timeout`, `time`, `nice`, `nohup`, `stdbuf`, `command`, `builtin`, `noglob`, bare `xargs`) are
+  stripped before matching. Seven of the eight divergences found against that table are now fixed
+  and pinned — including per-lane environment-assignment stripping, `PATH_TOOLS` narrowed to `Read`
+  and `Edit`, and MCP tool-name globs. The one still open is not a divergence but a hole **in** the
+  table: whether the ALLOW lane descends into `$(…)`, backticks and control-flow bodies is
+  undetermined, so only the documented deny/ask nesting is implemented and the allow half is left
+  where it was rather than guessed at in either direction.
+
+- **A permission rule with wildcards separated by literals could hang the process, and `vat audit`
+  on an untrusted plugin was the way in.** Every `*` became `.*` in a compiled regular expression, so
+  `Bash(ab*b*b*b*b*b*b*b*z)` — a 24-character rule — took **26 seconds** against a 61-character
+  command, growing ~9x per added `b*`; an ordinary-looking
+  `Bash(npm * --registry * --registry * --registry * publish)` took 10 s on a 4 KB command. A
+  plugin's `SKILL.md` `allowed-tools:` and an adopter's `settings.json` are both attacker-reachable
+  inputs to that path. Wildcard rules are no longer compiled to a regular expression: matching is now
+  a linear two-pointer scan. **26,273 ms → 0.3 ms**, same answers. The tool-name and
+  `WebFetch(domain:…)` lanes shared the compiler and are fixed with it.
 
 - **Nine regexes in production code could be driven into quadratic backtracking, and are now
-  linear.** These were previously triaged behind `sonarjs/slow-regex` disable comments whose stated
-  reasoning ("negated character classes are non-backtracking") was wrong. Measured on hostile input:
-  the inline-link scanner took **2,632 ms on 40k unclosed brackets**, and the cat-agent age parser
-  **13.6 s on 80k digits**. Both are now **≤1.1 ms** on the same input, with identical output on
-  every case tested. The fixes are real rather than cosmetic: a negative lookbehind stops the scan
-  restarting at every character of a run, and adjacent quantifiers that could both claim the same
-  space (`\s+` beside `[^\n]+`) were made disjoint. ⚠️ Worth recording for whoever meets this next:
-  the obvious atomic-group rewrite `(?=(X))\1` **satisfies the linter while remaining quadratic**
-  (measured: 17.4× growth for 4× input, versus 22.9× before) — it silences the rule without fixing
-  the defect, which is worse than a disable comment.
+  linear.** Measured on hostile input, the inline-link scanner took **2,632 ms on 40k unclosed
+  brackets** and is now ≤1.1 ms, with identical output on every case tested. They had been triaged
+  behind `sonarjs/slow-regex` disable comments whose stated reasoning was wrong.
 
-- **Seven dead entries were deleted from the OSV accepted-risk register, and the `minimatch` reason
-  was corrected because it had stopped being true.** `osv-scanner` had been reporting the
-  brace-expansion, `picomatch` and `ajv` entries as *unused ignores* — every coexisting copy of those
-  three had independently floated onto a patched version — but an unused ignore does not fail the
-  build, so the list went unread and the register kept claiming to be suppressing risks that no
-  longer existed. The register's rule 3 now names that list as its delete queue. The three surviving
-  `minimatch` entries said the fix was blocked by "3.x/9.x/10.x coexisting"; that is no longer the
-  mechanism. The tree already carries a patched `minimatch` 10.2.6 that every `^10.2.2` consumer
-  resolves to, and the one vulnerable copy (10.1.2) is held by a single **exact** pin inside
-  `eslint-plugin-sonarjs@3.0.7` that no dedupe can move. The reasons now say that, and name the
-  condition that retires them.
+- **The OSV accepted-risk register is down from ten entries to one** — a CVSS 2.5 `esbuild`
+  dev-server advisory in build-time-only tooling. `fast-uri` (four advisories, CVSS 7.5) and `qs`
+  (two, CVSS 6.3) went stale at their pinned versions and are re-pinned forward to 3.1.6 and 6.16.0;
+  `@hono/node-server` moved to 1.19.17, whose fix was backported inside
+  `@modelcontextprotocol/sdk`'s declared range; three `minimatch` advisories (one **CVSS 8.7**) were
+  held by an exact pin inside `eslint-plugin-sonarjs@3.0.7`, which 4.2.0 widens; and five
+  `langsmith` advisories are resolved by the `@langchain/core` 1.x move above. Nothing in VAT's own
+  code changed.
 
 - **An eval suite could inject instructions into the grader prompt on the arm that decides the
   primary verdict.** `toolExpectations.mustRun` / `mustNotRun` / `mustSucceed` / `sequence` went raw
   into the grader's instruction region, and also defeated `assertGraderPromptInvariants`. It is now
-  nonce-fenced, and fence markers are compared byte-exactly against the run's nonce.
+  nonce-fenced.
+
+- **A grader's tool verdict must now name the checks the eval actually declared.** Omitting one made
+  that expectation vacuously pass; inventing one added a check the eval never declared.
 
 - **Untrusted text can no longer write its own lines on your terminal.** Grader
   `friction[].message`, the contamination scan's degradation detail and `parseGradingJson`'s error
   message all echoed attacker-influenced bytes, so a grader could print a green line in vat's own
-  voice. All three are now escape-stripped and capped.
+  voice.
 
-- **The run nonce no longer reaches disk.** The merged report carried it into `grading.json` and
-  `baseline.json`, which `--out` and `--keep` can put in a repo-local, committable path.
+- **The run nonce no longer reaches the run's artifacts**, and **`baseline.json` evidence no longer
+  leaks your login name** or bypasses its excerpt bound for any tool input containing a newline,
+  quote or backslash. A grader still writes its nonce-bearing fragment to a file, but under an owner-only
+  (`0700`) directory, and it is consumed and unlinked on read.
 
-- **`baseline.json` evidence no longer leaks your login name, and its excerpt bound is no longer
-  bypassable.** A `match` of the ordinary `--out ~/something` shape is `…/<username>/<dir>` and was
-  emitted untruncated, and the ±60-character excerpt bound was skipped for any tool input containing
-  a newline, quote or backslash.
+- **`vat skill test` no longer copies your eval suite — `expected_output` answer keys included —
+  into the OS temp dir when it does not need to.** The copy is now made only when the suite exists
+  nowhere else.
 
-- **`vat skill test` no longer copies your eval suite — `expected_output` answer keys included — into
-  the OS temp dir when it does not need to.** The copy is now made only when the suite exists nowhere
-  else (a fetched npm or url artifact), which is the case it was added for.
+- **VAT's on-disk cache directory is now created owner-only (`0700`) on POSIX.** It sits in a
+  world-readable location shared by every user on the host and holds the set of external URLs a
+  project links to, including private hostnames. On Windows the mode bits reduce to the read-only
+  flag.
 
-- **A grader's tool verdict must now name the checks the eval actually declared.** Omitting a
-  `mustRun` / `mustNotRun` / `mustSucceed` / `sequence` check made that expectation vacuously pass,
-  and inventing one added a check the eval never declared. A mismatch either way now fails the run.
-
-- **VAT's on-disk cache directory is now created owner-only (`0700`) on POSIX.**
-  `<tmpdir>/.vat-cache/` is a world-readable location shared by every user on the host, and it holds
-  the set of external URLs a project links to — including private hostnames. On Windows the mode bits
-  reduce to the read-only flag, so this is a mitigation on Linux and macOS only.
-
-- **`@vibe-agent-toolkit/utils` now depends on `@vibe-validate/git` (0.20.1).** It replaces this
-  package's own copy of the git-environment scrub and tree-snapshot machinery, and adds
+- **`@vibe-agent-toolkit/utils` now depends on `@vibe-validate/git` (0.20.1)**, replacing this
+  package's own copy of the git-environment scrub and tree-snapshot machinery; it adds
   `@vibe-validate/utils` and `yaml` to the installed tree.
 
 ### Fixed
+
+- **`vat audit` no longer dies with an uncaught `TypeError` on a bare `Read`/`Edit` declaration.**
+  The settings checker asked the path matcher whether a deny rule blocked a tool whose input was the
+  empty string, and the underlying ignore matcher throws on an empty path (`path must not be empty`).
+  Any plugin whose `SKILL.md` declared a bare `Read` or `Edit` while org settings carried a
+  `Read(…)`/`Edit(…)` deny rule crashed the command outright. Fixed on both sides: the checker now
+  asks `ruleConstrainsTool`, and `matchesPathRule` answers `false` for an empty relative path rather
+  than throwing. Pre-existing — before `PATH_TOOLS` was narrowed it also fired for `Write`, `Glob`
+  and `NotebookRead`/`NotebookEdit`.
+
+- **A link through a directory VAT may traverse but not list is no longer reported as a missing
+  file.** Judging every path component made every ancestor directory need to be *listable*, not
+  merely traversable, so a POSIX `--x` directory (mode `0111`) — whose files open perfectly well —
+  turned a valid link into `LINK_BROKEN_FILE`. The listing result now distinguishes "no such
+  directory" (`ENOENT`/`ENOTDIR`) from "could not be read", and a link whose spelling could not be
+  verified produces no finding at any severity rather than a fabricated one. An unrecognised
+  listing failure is treated as unreadable, never as absence.
+
+- **The settings checker and the permission matcher can no longer disagree about the same rule.**
+  The checker string-prefixed rule names (`Write(`) while the matcher had just ruled that a
+  `Write(…)` path rule constrains nothing, so one deny rule produced opposite answers depending only
+  on whether a skill spelled the tool `Write` or `Write(./out/**)`. Both now dispatch on one shared
+  content-lane taxonomy. A tool VAT cannot introspect (an MCP tool with non-`*` content, e.g.
+  `mcp__srv__tool(foo)`) is no longer reported as conflicting with a bare declaration — matching the
+  answer the matcher already gave for every concrete input.
+
+- **A redirection is no longer mistaken for a command separator.** `&` was treated as a top-level
+  separator with no redirection awareness, so `2>&1` split into `… 2>` and `1`; the allow lane then
+  required a rule for `1` and refused the whole command. `ls -la > /dev/null 2>&1` against
+  `Bash(ls:*)` now matches. A genuine `&` — backgrounding or `&&` — still separates.
+
+- **A metadata filter value containing `%` or `_` no longer widens the search it was meant to
+  narrow.** Array and string metadata filters interpolate into a SQL `LIKE` pattern, and only quotes
+  were escaped, so `tags: ['%']` compiled to `tags LIKE '%%%'` — a clause matching every row, handed
+  back to a caller who had asked to be filtered. Wildcards and the escape character are now escaped
+  and the pattern carries an explicit `ESCAPE`, emitted only for values that need it so every
+  currently-working query is byte-identical.
+
+- **A usage mistake no longer reports itself as a failed check.** An unknown option and an unknown
+  command fell through to Commander's default `exit(1)` — which, against the three-way exit contract
+  every `--help` publishes, asserts that at least one check was violated. So
+  `vat resources check --json` exited **1** having run nothing, and a CI wrapper reading `$?`
+  reported findings that were never computed. Usage mistakes now exit **2** across all 69 commands;
+  `--help` and `--version` still exit 0.
 
 - **`vat claude org skills install` uploaded without running any of VAT's checks.** Skills that
   reference paths outside their own directory published with a green tick and could not run — under
@@ -751,10 +867,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reset.** Requests now abort after 120 s of socket *inactivity* (a slow-but-progressing 30 MB
   upload is never cut off), and a further 30 s connect deadline covers a DNS blackhole, where there
   was no socket for the inactivity timer to watch. A reset arriving after the response headers is
-  now caught instead of becoming an unhandled `error` event. Rate-limit and gateway failures retry
-  up to three times honouring `Retry-After`, on idempotent methods only; a `POST` is never
-  replayed — it creates — and the error says so. **When an upload gets no status at all, check
-  `vat claude org skills list` before re-running: the skill may exist.**
+  now caught instead of becoming an unhandled `error` event. Rate-limit and gateway failures are
+  retried honouring `Retry-After`, on idempotent methods only, up to a maximum of three attempts
+  (two retries); a `POST` is never replayed — it creates — and the error says so. **When an upload
+  gets no status at all, check `vat claude org skills list` before re-running: the skill may
+  exist.**
 
 - **Multipart uploads now percent-encode `Content-Disposition` parameters (RFC 7578 §4.2).**
   Filenames and field names reach the wire from a downloaded package's SKILL.md frontmatter on the
@@ -778,236 +895,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regular workspace key. The existing tests could not have caught this: every one of them constructed
   the client with an admin key, so none exercised the skills-only caller.
 
-- **The `vat-skill-distribution` skill taught a config key that does not exist.** It showed
-  `skills.config.<name>.claudeWebTarget`, which the `.strict()` project-config schema refuses — so
-  an agent following the published skill produced a config that failed to load on **every** vat
-  command. Replaced with `files:` source→dest mappings, the real mechanism. The same section also
-  claimed `--target claude-web` sorts files into `scripts/` and `assets/`; it flattens everything
-  into `references/`.
-
-- **Every `rag:` config block in the RAG usage guide was unparseable.** There is no top-level `rag:`
-  key — RAG is configured through `resources.include`/`exclude`, the `--db` flag, and
-  `LanceDBRAGProvider.create()` in library code. Copying an example broke every vat command, not
-  just RAG ones. All eight blocks in that guide are now validated against the shipped schemas.
-
-- **`dateRange` and `hybridSearch` were documented as working RAG filters and are implemented
-  nowhere.** So are top-level `filters.tags`, `filters.type` and `filters.headingPath` — only
-  `filters.resourceId` and `filters.metadata` reach the query. An unimplemented filter does not
-  narrow your results, it **widens** them: the query degrades to an unfiltered full-recall search
-  with no error. Move `tags`/`type`/`headingPath` under `filters.metadata`; `dateRange` and
-  `hybridSearch` have no replacement. Documented, not yet guarded.
-
-- **A usage mistake no longer reports itself as a failed check.** Every command's `--help` publishes
-  the same three-way exit contract — `0` no error-severity findings, `1` at least one, `2` a system
-  error — and VAT's own refusals honoured it: an unknown `--check` name and an unusable `--budget`
-  both exit 2. But an unknown OPTION and an unknown COMMAND fell through to Commander's default of
-  `process.exit(1)`. So `vat resources check --json` (the option is `--format json`) exited **1**,
-  which against the contract the command itself prints asserts that at least one check was violated.
-  Nothing had run. A CI wrapper spelled `if [ $? -ne 0 ]; then report_findings` therefore reported
-  findings that were never computed, and the same hole swallowed a mistyped verb
-  (`vat resources chekc`) and every unknown option across all 69 commands. Usage mistakes now exit
-  **2** everywhere. `--help` and `--version` are unaffected and still exit 0 — Commander reports a
-  successful termination through the same channel as a failing one, so only a non-zero ending is
-  remapped.
-
-- **Two `NON_PORTABLE_*` waivers applied when validating and were ignored when building.** An
-  `allow` glob matches an issue's `location`, and the two lanes report different locations for the
-  same document: `vat skills validate` names the authored source
-  (`resources/skills/vat-skill-review.md`) while `vat build` names the packaged artifact
-  (`dist/skills/vat-skill-review/SKILL.md`). VAT's own config named only the source, so
-  `NON_PORTABLE_ASSET_REFERENCE` and `NON_PORTABLE_COMMAND` were silenced in one lane and warned in
-  the other on files this config had already ruled on. Both entries now carry both spellings. If you
-  have a waiver that works under `vat skills validate` and not under `vat build`, this is why.
-
-_The six items below came out of an independent adversarial review of this release._
-
-- **A `resources.validation.severity` entry naming a check you do not declare now says so, instead
-  of silently overriding nothing.** `CUSTOM:<name>` keys are validated for their SHAPE by the config
-  schema, which cannot see `resources.checks` — so `CUSTOM:orphan-skills` left behind after that
-  check was renamed parsed cleanly, applied to no finding, and reported nothing. In one direction
-  the adopter believes a check is stood down and it keeps failing their build; in the other a stale
-  entry hides a rename. `vat resources check` now warns on stderr, before the crawl, naming every
-  stale key and the checks that ARE declared. It is a **warning, not a refusal** — unlike an unknown
-  `--check` name, which is typed for one run and still exits 2, a `severity` entry lives in a
-  committed config that may be shared across repositories or outlive a check through a rename in
-  flight.
-
-- **The refusal for a bad `severity` key no longer sends half its readers to the wrong place.** Every
-  rejected key got one sentence: *"a custom severity key must be `CUSTOM:<name>`, naming a check
-  declared under resources.checks"*. An adopter who wrote `RESOURCE_CHECK_BROKEN: ignore` — after
-  reading three docs that describe that code at length — was told they had misspelled a *custom*
-  key. A registry-shaped key now gets its own message saying it is either a misspelled registry code
-  or one deliberately kept unsilenceable, and points at `CUSTOM:<name>` for what they CAN override.
-  The message also **no longer claims the custom name must be declared**, because nothing enforced
-  that — see the warning above for where the check actually lives now.
-
-- **The publish step refuses any `workspace:` specifier that survived its rewrite.** Only the exact
-  string `workspace:*` is rewritten; `workspace:^`, `workspace:~` and `workspace:0.2.0` passed
-  straight through, and nothing downstream looked — the pre-publish workspace step *counts*
-  specifiers and never fails on one. npm rejects a published `workspace:` with
-  `EUNSUPPORTEDPROTOCOL`, and bun accepts it silently, so this repo's own tooling could not see it.
-  That is how `@vibe-agent-toolkit/cli@0.2.0-rc.3` shipped uninstallable; the fix for that closed the
-  axis of *which fields are scanned* and left the axis of *which specifier forms are matched* wide
-  open. `workspace:^` is the realistic way in, because it is what a person writes for a **peer**
-  range — the field this release introduces. The guard is now on the outcome: after the rewrite, no
-  `workspace:` may remain, whoever declared it.
-
-- **The pre-publish workspace check read three of the four dependency fields.** It omitted
-  `optionalDependencies` — the exact omission that shipped rc.3 — while sitting beside the shared
-  field list written to make that impossible. It now iterates that list.
-
-- **`config-issues.ts` claimed every block under `resources:` is `.strict()`.** It is not:
-  `collections`, its `validation` and `externalUrls` are still permissive, so a misspelled key inside
-  a collection is accepted and stripped. The claim was corrected in the schema itself earlier in this
-  release — whose docstring now ends *"Do not 'restore' the old sentence"* — but survived in this
-  second copy, which is the module a maintainer working on strictness actually opens.
-
-- **The ReDoS-hardened link regexes are now pinned, including one behaviour that had already moved.**
-  The `(?<!\[)` rewrite is genuinely linear (measured 549.6 ms → 0.1 ms on 40,000 unclosed brackets,
-  where the old pattern grew ×4 per doubling) and loses no match — but `rewriter-helpers.test.ts` had
-  not changed since v0.1.38, so nothing said so. The sibling edit to the reference-definition pattern
-  silently stopped matching a definition whose destination is only whitespace (`[a]:` followed by
-  spaces). That is malformed input either way and leaving it alone is the better answer; it is now a
-  pinned decision rather than a side effect, alongside a linearity bound expressed as a ratio between
-  two input sizes rather than a wall-clock floor.
-
-- **The agent-facing skills documented a field that no longer exists, and did not document
-  `vat resources check` at all.** `vat-knowledge-resources` described an `engine: sqlite |
-  ephemeral` output field, and an inference rule built on combining it with `population` — that
-  field was removed before release (the statement now always runs against an in-memory database
-  holding this tree's projection, so the value was constant). It also had no mention of
-  `vat resources check`, `--budget`, `populationMs`, or the fact that `resources.include` /
-  `resources.exclude` do **not** scope the projection — the last of which produced a genuine false
-  finding on a real adopter (`scan` reported 1,473 files where the projection held 11,685). All four
-  are now documented, and the router skill and CLI cheat-sheet route to `query` and `check` instead
-  of only `validate`.
-
-- **The RAG docs told adopters no install was needed, without saying the RAG packages are now
-  opt-in.** `onnxruntime-web` is still an ordinary dependency of `@vibe-agent-toolkit/rag`, so
-  "batteries-included" was true of the embedding runtime — but the CLI no longer installs
-  `@vibe-agent-toolkit/rag` at all, so an adopter following those docs from a bare CLI install would
-  hit a missing-backend error at the first `vat rag` command. `vat-rag`, `docs/embedding-providers.md`
-  and `docs/architecture/rag.md` now state the prerequisite (`npm install
-  @vibe-agent-toolkit/rag-lancedb`) and scope the no-extra-install claim to what it actually covers.
-
-- **On Windows, a `vat resources check` whose child died of memory published NOTHING — the other
-  half of the signal-death defect, which the signal fix could not reach.** A child that exhausts its
-  heap is reported by `close` as `(null, 'SIGABRT')` on macOS and Linux, and the supervisor turns
-  that into a `RESOURCE_CHECK_BROKEN` document naming the statement and exiting 1. Windows has no
-  signals, so the identical abort arrives as `(134, null)` — indistinguishable from an ordinary
-  non-zero exit — and the parent forwarded **zero bytes of stdout and exit 134**. It did not fail
-  open, so a gate still went red, but the operator got a number and no report at all, on precisely
-  the runaway the `--budget` bound exists to catch. Reproduced on `windows-latest` for six
-  consecutive CI runs while both Unix matrix legs stayed green.
-
-  The fix does not test for the platform. Every path through `vat resources check` ends by writing a
-  document, so a child that exited with a code and published nothing did not complete, whatever its
-  exit code says; that ending now reaches the same fail-closed document a watchdog kill does. The
-  abort is then recognised by its exit code — **134 on every platform**, because it comes from
-  Node's own abort path — so a Windows operator hitting the heap limit gets the identical "narrow
-  the statement or add a `LIMIT`" advice a Linux one gets. Any other code gets a deliberately
-  non-committal sentence: this command cannot tell an external termination it has no name for from a
-  bug of its own, and claiming either would send half its readers to the wrong place.
-
-  ⚠️ Do **not** re-derive 134 from `os.constants.signals`. On macOS and Linux it is `128 + SIGABRT`
-  with `SIGABRT` = 6; on Windows MSVC numbers `SIGABRT` **22**, so that derivation yields 150 and
-  matches nothing Node emits. A first attempt at this fix derived it that way in both the production
-  code and its unit test, so the two agreed with each other, the round-trip passed on every machine,
-  and the pair was wrong together on the one platform the branch exists for.
-
-- **A typo'd column in `vat resources query` cost a full projection population before it was
-  reported.** SQLite resolves table and column names when a statement is *prepared*, so the answer
-  was knowable before a single row existed — but the only place a statement met the schema was after
-  the projection had been built. Measured on a real adopter tree: `SELECT contentKey,
-  no_such_column FROM blobs` took **8.3 s**, all of it building rows the statement could never have
-  read. The statement is now compiled against the empty schema first, so the same typo — and a
-  refused `ATTACH`, `PRAGMA` or second statement — comes back in milliseconds with the identical
-  message. It is compiled and discarded, never stepped: `vat resources check` deliberately keeps its
-  full population, because a check that cannot run is a `RESOURCE_CHECK_BROKEN` finding in a document
-  that reports the corpus size, not a bare throw.
-
-- **`--format json` was ignored on every command's failure path**, which emitted YAML. The one
-  document a CI wrapper most needs to read — the one saying why the command failed — arrived in a
-  format its parser rejects, so the consumer got a parse error stacked on the real error. `vat
-  resources scan / query / check` and `vat inventory` now honour the flag on the error path too.
-
-- **`vat audit` printed `AgentAudit failed:` for an unexpected error**, naming a command that does
-  not exist (copy-paste from the agent command family). It now reads `Audit failed:`.
+- **`--format json` was ignored on every command's failure path**, which emitted YAML — so the one
+  document a CI wrapper most needs to read arrived in a format its parser rejects.
 
 - **`vat audit` printed "Audit failed" while exiting 0.** Audit is advisory by design and its exit
-  code is deliberately 0, but the stderr line said failure, the document said `status: error`, and
-  the exit code said success — so an adopter wiring it into CI read a failure and got a green step.
-  The line now reads "Audit found N file(s) with errors — advisory, exit 0; use `vat validate` to
-  gate on this", and both summary lanes share one wording. **No exit code changed.**
-
-- **The budget-kill message quoted VAT's own repository timings as if they were universal.** It said
-  population is "~1.2s warm here but 33-35s" with a cold parse cache; a measured adopter tree is
-  ~5s warm and 16.5s cold, so an operator who tripped the budget read that their tree was 3-8x slower
-  than it should be and went looking for a fault that was not there. Both numbers are now given, both
-  labelled with the tree they came from, and the message says plainly that the reader's tree is a
-  third number.
-
-- **A namespaced `xlink:href` lost its source span in the link rewriter, silently dropping the
-  rewrite.** parse5 records a namespaced attribute's span under the source spelling `xlink:href`, so
-  a lookup keyed on the bare `href` missed and the rewrite was discarded as `no-source-location`.
-  Reproduced with `<svg>`, `<math>`, and the uppercase `XLINK:HREF` spelling.
-
-- **The chunker rejected a whole document rather than splitting its longest line**, so a single wide
-  markdown table row or unwrapped bullet produced zero chunks for the entire file. The chunker now
-  never throws: it descends paragraphs → lines → sentences → words → a character window, and every
-  emitted chunk fits the budget with no content dropped.
-
-- **`splitBySentences` discarded sentence-terminating punctuation.** Its regex matched the text
-  *between* `.`/`!`/`?` and threw the delimiters away. `splitByLines` and `splitByWords` join it on
-  the public API.
-
-- **A protocol-relative URL was classified as a local file.** `classifyLink('//cdn.example.com/x.js')`
-  returned `local_file`, so `vat resources validate` reported a broken link for a reference that
-  resolves over the network. Both the markdown and the HTML parser share one classifier, so the two
-  lanes can no longer disagree.
-
-- **`vat skill test run --dry-run` destroyed the previous run's artifacts.** The free "what would this
-  cost?" invocation — and any failure before the run proper, such as a bad `--env` token — deleted
-  `grading.json`, `baseline.json`, `friction.json` and `tool-eval.json` from the `results/` of the
-  expensive real run you were about to read. A dry run now writes nothing under `results/`.
-
-- **An exhausted control-arm rate limit annihilated a fully-billed treatment run.** Both treatment
-  executors and both treatment graders had run and been paid for, and `results/` was left holding
-  `provenance.json` and nothing else.
-
-- **A transcript line could be silently corrupted and then dropped.** Executor stdout was decoded per
-  chunk, so any multi-byte character straddling a 64 KiB boundary damaged a line, and the parser
-  discarded unparseable lines without reporting it. `malformedLineCount` now counts what is dropped.
-
-- **`Harness:` printed a path cleanup had already removed** on any run returning early before the
-  pipeline, and a failure while releasing the harness lock could replace a good run's result with an
-  exit-1 error.
-
-- **The shipped exit-code table said the opposite of what the code does**, and the CI recipe built on
-  it silently greened runs whose comparison did not exist: a stall, timeout, spawn error or missing
-  grader fragment on the *control* arm exits 0 with `PASS`. A `--baseline` gate must read
-  `baselineDelta.delta`, `controlArmFailures`, `degraded`, `comparable` and `contaminated` instead.
-
-- **The published `GradingReportJsonSchema` dropped `summary.passed <= summary.total`.**
-  `zod-to-json-schema` discards every `.refine()`, so external tooling accepted
-  `{"passed": 9, "total": 3}`. No JSON Schema draft can express a cross-field comparison; it is now
-  stated in the emitted `description` as not machine-enforced.
-
-- **`vat skill test run --help` no longer promises cleanup that `--out`/`--workdir` never perform.**
-  Under a location you chose, the staged *untrusted* skill bytes are retained whether or not you pass
-  `--keep`. Behaviour is unchanged; the documentation was wrong.
-
-- **`vat agent install --force` could not replace a broken dev-mode symlink**, such as one left
-  dangling by a rebuild that removed `dist/`. `--force` now clears the link whether or not its target
-  still exists.
-
-- **A failed `vat claude plugin install --dev` no longer denies the state it leaves behind.** A
-  partial install now says the install is incomplete and to re-run.
-
-- **`vat inventory` now names which of two things went wrong when its projection lane degrades.** The
-  warning used to blame "the projection membership lane" for what was a config parse error, sending
-  the reader to VAT's code instead of to their own YAML. `vat inventory` deliberately keeps running
-  on an unparseable config — its subject is routinely someone else's plugin.
+  code is deliberately 0, but the stderr line said failure and the document said `status: error`, so
+  an adopter wiring it into CI read a failure and got a green step. The line now names the count and
+  says it is advisory. **No exit code changed.**
 
 - **Git commands run from inside a git hook could read — or write — the wrong repository.** Worst
   case, `vat claude marketplace publish` switched a branch and landed a commit in the repository you
@@ -1015,54 +909,136 @@ _The six items below came out of an independent adversarial review of this relea
 
 - **VAT could not read a UTF-16 document at all.** A file written by PowerShell's `>` or `Out-File`
   decoded to mojibake and yielded no headings, links or sections. Content is now decoded from its
-  byte-order mark (UTF-8, UTF-16LE/BE, UTF-32LE/BE), and a UTF-8 BOM no longer stops a config file,
-  JSON schema or `.gitignore` from parsing. BOM-less encodings remain undecidable from bytes alone.
+  byte-order mark, and a UTF-8 BOM no longer stops a config file, JSON schema or `.gitignore` from
+  parsing.
 
-- **A tracked file with a non-ASCII filename vanished from every git-aware command**, and a link to a
-  file whose name carries an accent was reported broken even though the file was there.
+- **A tracked file with a non-ASCII filename vanished from every git-aware command**, and a link to
+  a file whose name carries an accent was reported broken even though the file was there.
 
 - **`vat doctor` reported "Git is not installed" when git was installed and working.** Also affected
   `getToolVersion('git')` and `isToolAvailable('git')`.
 
-- **`vat` ignored git configuration supplied through `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_*`/
+- **`vat` ignored git configuration supplied through `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_*` /
   `GIT_CONFIG_VALUE_*`**, so a clone that CI had pointed at an internal mirror went to the network
-  instead. `GIT_CONFIG_PARAMETERS` is still ignored inside a hook.
+  instead.
 
 - **A `linkAuth` token command that invokes `git` was refused.** Commands such as
   `git credential fill` work again.
 
 - **`vat` now runs the version your lockfile pinned when you install with pnpm.**
 
+- **Two `NON_PORTABLE_*` waivers applied when validating and were ignored when building.** An
+  `allow` glob matches an issue's `location`, and the two lanes report different locations for the
+  same document: `vat skills validate` names the authored source, `vat build` names the packaged
+  artifact. If you have a waiver that works under one and not the other, name both spellings.
+
+- **A list filter that nothing can satisfy matched everything instead of nothing.**
+  `filters.metadata.tags: []` — the ordinary "filter to the tags I computed, and I computed none"
+  case — compiled to `tags LIKE '%%'` and returned the whole index, while the structurally identical
+  `filters.resourceId: []` correctly matched nothing. The mechanism is **stringification**, not
+  length: `String([])`, `String([''])` and `String('')` are all the empty string, so `tags: ['']` —
+  what you get from `tags: [selectedTag]` when the selection is blank — hit the same tautology. Any
+  value that stringifies to nothing now emits the same always-false condition.
+
+- **A multi-value list filter required the stored order.** `filters.metadata.tags: ['a','b']`
+  compiled to a single `tags LIKE '%a,b%'` against the comma-joined stored value, so a document
+  tagged `b,a` did not match and nothing said why. Each element now gets its own condition, ANDed
+  together. **A query relying on the old adjacency behaviour will return more rows than before.**
+
+- **`filters.dateRange` could not be expressed on the wire.** The published `RAGQueryJsonSchema`
+  declared `start`/`end` as `date-time` strings while the Zod half accepted only a `Date`, so a query
+  that validated against the published schema failed to parse. The Zod half now accepts what the
+  JSON half always advertised; the emitted JSON Schema is byte-identical.
+
+- **The chunker rejected a whole document rather than splitting its longest line**, so a single wide
+  markdown table row or unwrapped bullet produced zero chunks for the entire file. It now never
+  throws, and no content is dropped.
+
+- **`splitBySentences` discarded sentence-terminating punctuation.**
+
+- **A protocol-relative URL was classified as a local file**, so `//cdn.example.com/x.js` was
+  reported as a broken link. Both the markdown and the HTML parser now share one classifier.
+
+- **A namespaced `xlink:href` lost its source span in the link rewriter, silently dropping the
+  rewrite.** Reproduced with `<svg>`, `<math>` and the uppercase `XLINK:HREF` spelling.
+
+- **A markdown document that declares the same reference-definition label twice** resolved every use
+  to the wrong target.
+
+- **A merely broken root-absolute link was reported as escaping the project**, and
+  **`directFileCount` counted link occurrences rather than files**, so it could exceed the bundle's
+  own file count.
+
 - **A corrupt ONNX embedding model could be cached permanently**, surfacing as `protobuf parsing
   failed`. Downloads now publish atomically and a short body is never cached.
 
-- **A corrupted cache entry could report a reachable link as broken, or return a fetched page with no
-  status.** Entries written by earlier versions are discarded, so external links are re-checked once
-  on the first run after upgrading.
+- **A corrupted cache entry could report a reachable link as broken, or return a fetched page with
+  no status.** Entries written by earlier versions are discarded, so external links are re-checked
+  once on the first run after upgrading.
 
 - **Three CLI options were silently doing nothing** — Commander represents `--no-x` as the positive
-  key, and three flags read the wrong one.
-
-- **`--debug` produced no debug output from any command**, and an unexpected failure printed no stack.
+  key, and three flags read the wrong one. Separately, **`--debug` produced no debug output from any
+  command**, and an unexpected failure printed no stack.
 
 - **`vat skills build` no longer dies on a `files:` glob that matches a symlink to a directory** —
   anything a glob matches that cannot be packaged is skipped and reported as
   `FILES_GLOB_SKIPPED_NON_REGULAR_FILE` (a warning), and the rest of the entry ships.
 
-- **`vat audit` no longer aborts when its own config cannot be read**, and no longer throws away every
-  finding when it hits one unreadable file or directory.
-
-- **A file that cannot be read no longer kills the command** in `vat resources scan`/`validate`.
+- **A file that cannot be read no longer kills `vat resources scan` / `validate`**, and **`vat
+  audit` no longer aborts when its own config cannot be read** or throws away every finding when it
+  hits one unreadable file.
 
 - **`crawlDirectory({ followSymlinks: true })` no longer enumerates a file once per symlink level.**
 
-- **A markdown document that declares the same reference-definition label twice** resolved every use
-  to the wrong target.
+- **`vat agent install --force` could not replace a broken dev-mode symlink**, such as one left
+  dangling by a rebuild that removed `dist/`, and **a failed `vat claude plugin install --dev` no
+  longer denies the partial state it leaves behind.**
 
-- **A merely broken root-absolute link was reported as escaping the project.**
+- **`vat inventory` blamed "the projection membership lane" for what was a config parse error**,
+  sending the reader to VAT's code instead of to their own YAML.
 
-- **`directFileCount` counted link occurrences, not files**, and could exceed the bundle's own file
-  count.
+- **`vat skill test run --dry-run` destroyed the previous run's artifacts.** The free "what would
+  this cost?" invocation — and any failure before the run proper — deleted `grading.json`,
+  `baseline.json`, `friction.json` and `tool-eval.json` from the expensive real run you were about
+  to read. A dry run now writes nothing under `results/`.
+
+- **An exhausted control-arm rate limit annihilated a fully-billed treatment run.** Both treatment
+  executors and both treatment graders had run and been paid for.
+
+- **A transcript line could be silently corrupted and then dropped.** Executor stdout was decoded
+  per chunk, so any multi-byte character straddling a 64 KiB boundary damaged a line, and the parser
+  discarded unparseable lines without reporting it. `malformedLineCount` now counts what is dropped.
+
+- **The shipped exit-code table said the opposite of what the code does**, and the CI recipe built
+  on it silently greened runs whose comparison did not exist: a stall, timeout, spawn error or
+  missing grader fragment on the *control* arm exits 0 with `PASS`. A `--baseline` gate must instead
+  read `baselineDelta.delta`, `controlArmFailures`, `degraded`, `comparable` and `contaminated`.
+
+- **The published `GradingReportJsonSchema` dropped `summary.passed <= summary.total`.**
+  `zod-to-json-schema` discards every `.refine()`, so external tooling accepted
+  `{"passed": 9, "total": 3}`. It is now stated in the emitted `description` as not
+  machine-enforced.
+
+- **`vat skill test run --help` no longer promises cleanup that `--out`/`--workdir` never perform.**
+  Under a location you chose, staged untrusted skill bytes are retained whether or not you pass
+  `--keep`. Behaviour is unchanged; the documentation was wrong.
+
+- **`Harness:` printed a path cleanup had already removed** on any run returning early, and a
+  failure while releasing the harness lock could replace a good run's result with an exit-1 error.
+
+- **The `vat-skill-distribution` skill taught a config key that does not exist**
+  (`skills.config.<name>.claudeWebTarget`), which the strict schema refuses — so an agent following
+  the published skill produced a config that failed to load on **every** vat command. It also
+  claimed `--target claude-web` sorts files into `scripts/` and `assets/`; it flattens everything
+  into `references/`.
+
+- **Every `rag:` config block in the RAG usage guide was unparseable.** There is no top-level `rag:`
+  key, so copying an example broke every vat command, not just RAG ones. All eight blocks are now
+  validated against the shipped schemas, and the RAG docs state the
+  `npm install @vibe-agent-toolkit/rag-lancedb` prerequisite the opt-in change above introduces.
+
+- **The `vat-knowledge-resources` skill documented an output field that no longer exists**, and did
+  not mention `vat resources check` at all.
 
 - **Two published ESLint autofixers could rewrite or delete code that had nothing to do with the
   rule**, and `prefer-startswith-over-regex` missed some patterns ending in an escaped backslash.
@@ -1120,7 +1096,29 @@ _The six items below came out of an independent adversarial review of this relea
 
 ### Added
 
-- **A `@vibe-agent-toolkit/utils/eslint` subpath — 21 ESLint rules that enforce the safety helpers
+- **A whole-path spelling judge on `@vibe-agent-toolkit/utils`** — `DirectorySpellingIndex`,
+  `fillPathSpellings`, `pathSpellingFrom` and `spellingWalkRoot`, with `ComponentMatch`,
+  `PathSpelling`, `PathSpellingRequest` and `PathSpellingTable`. It lists each directory once into
+  exact / NFC / NFC-lowercased maps and walks a path from a root downwards, descending into the
+  **corrected** spelling so a wrong directory cannot hide a wrong filename. `spellingWalkRoot` picks
+  that root as the deepest directory a referring file and its target share — everything above it was
+  enumerated off disk, so judging it would compare disk against disk and report normalization nobody
+  wrote. Both the OKF lane and `vat resources validate` are built on it, so the two cannot drift.
+
+- **`isEntrypoint()` on `@vibe-agent-toolkit/utils/process`, and a
+  `local/no-fragile-entrypoint-guard` ESLint rule that makes the two broken spellings unwritable.**
+  "Am I being run directly?" had two failing idioms in circulation. `import.meta.main` is `undefined`
+  below Node 22.18/24.2, so a guard using it silently never fires on the floor a package declares —
+  a gate that does nothing on the one runtime it exists to police. The other,
+  `import.meta.url === pathToFileURL(process.argv[1]).href`, is a raw string compare with no
+  `realpath`, so it is **false** whenever the script is reached through a `node_modules/.bin`
+  symlink — the normal way an installed CLI runs — and the program exits 0 having done nothing.
+  `isEntrypoint(import.meta.url)` answers correctly through symlinked scripts and directories, paths
+  containing spaces, and `tsx`. The rule is **not** in `configs.recommended`: whether
+  `import.meta.main` is safe depends on the consumer's own Node floor, so it is opt-in rather than a
+  portable claim.
+
+- **A `@vibe-agent-toolkit/utils/eslint` subpath — 26 ESLint rules that enforce the safety helpers
   in the rest of the package.** The helpers exist because `path.join()`, `os.tmpdir()`,
   `fs.realpathSync()`, `child_process.execSync()` and `await import(absolutePath)` each have a
   platform pothole; until now nothing stopped a call to the raw primitive, so the API shipped

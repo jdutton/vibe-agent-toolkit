@@ -28,14 +28,13 @@
 // File paths derived from PROJECT_ROOT (controlled, not user input)
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { CommandExecutionError, safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import * as yaml from 'yaml';
 import { z } from 'zod';
 
-import { PROJECT_ROOT, log } from './common.js';
+import { PROJECT_ROOT, isEntrypoint, log } from './common.js';
 
 // ---------------------------------------------------------------------------
 // Catalog config — both upstream catalogs use `main` as their default branch.
@@ -681,10 +680,10 @@ function countMunged(entries: UpstreamEntry[], prefix: string): number {
 // Only run when invoked directly (e.g. `bun run import-marketplace`). When
 // imported by unit tests, this top-level branch is skipped so importing the
 // module doesn't fetch from gh or rewrite seed.yaml.
-const invokedDirectly =
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (invokedDirectly) {
+// `isEntrypoint`, not a raw `argv[1]` string compare: the compare has no
+// realpath pass and is false through any symlinked invocation, which would make
+// `bun run import-marketplace` a silent no-op that exits 0.
+if (isEntrypoint(import.meta.url)) {
   try {
     run();
   } catch (err) {

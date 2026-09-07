@@ -120,10 +120,9 @@
  */
 
 import { copyFileSync, existsSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
+import { isEntrypoint, safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import { rimrafSync } from 'rimraf';
 
 /* eslint-disable security/detect-non-literal-fs-filename -- every path is derived from the package root this script was invoked in */
@@ -399,8 +398,10 @@ export function parseArgs(argv: string[]): { compiler: string; compilerArgs: str
   return { compiler, compilerArgs };
 }
 
-// CLI entry point
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// CLI entry point. `isEntrypoint`, not a raw `argv[1]` string compare: every
+// package's `build` script reaches this file through a path that may be a
+// symlink, and the string compare is false there.
+if (isEntrypoint(import.meta.url)) {
   const packageRoot = process.cwd();
   const { compiler, compilerArgs } = parseArgs(process.argv.slice(2));
   buildPackage(packageRoot, compiler, compilerArgs);

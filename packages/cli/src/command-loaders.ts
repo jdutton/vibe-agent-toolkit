@@ -5,12 +5,12 @@
  *
  * Each one transitively pulls `@vibe-agent-toolkit/resources` (~1.6s of module
  * load on Windows, dominated by the markdown toolchain), so importing all
- * fourteen made every invocation — `vat --version` included — pay for the whole
+ * sixteen made every invocation — `vat --version` included — pay for the whole
  * CLI surface. Only the command named on the command line is loaded.
  *
  * ## Why `doctor` is not in the table
  *
- * It is the fifteenth top-level command and the only one outside this table, on
+ * It is the seventeenth top-level command and the only one outside this table, on
  * purpose. `doctorCommand(program)` registers itself ONTO the program instead of
  * returning a `Command`, so it does not fit the `() => Promise<Command>` shape —
  * `bin.ts` special-cases it — and it is the command that READS this table, in
@@ -57,4 +57,6 @@ export const COMMAND_LOADERS: Record<string, () => Promise<Command>> = {
   build: async () => (await import('./commands/build.js')).createBuildTopLevelCommand(),
   validate: async () => (await import('./commands/validate.js')).createValidateTopLevelCommand(),
   verify: async () => (await import('./commands/verify.js')).createVerifyTopLevelCommand(),
+  okf: async () => (await import('./commands/okf/index.js')).createOkfCommand(),
+  ard: async () => (await import('./commands/ard/index.js')).createArdCommand(),
 };

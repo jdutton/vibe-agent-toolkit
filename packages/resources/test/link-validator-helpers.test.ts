@@ -167,7 +167,7 @@ describe('normalizationMismatchIssue', () => {
     // code existed the run was silent, because the folded judge answered
     // "exists, exact match".
     const issue = normalizationMismatchIssue(
-      { match: 'normalized', resolvedPath: NFC_TARGET, actualName: NFD_NAME },
+      { match: 'normalized', resolvedPath: NFC_TARGET, correction: { asked: NFC_NAME, actual: NFD_NAME } },
       makeLink(NFC_NAME),
       SOURCE,
     );
@@ -178,7 +178,7 @@ describe('normalizationMismatchIssue', () => {
 
   it('escapes both spellings so the difference is visible at all', () => {
     const issue = normalizationMismatchIssue(
-      { match: 'normalized', resolvedPath: NFC_TARGET, actualName: NFD_NAME },
+      { match: 'normalized', resolvedPath: NFC_TARGET, correction: { asked: NFC_NAME, actual: NFD_NAME } },
       makeLink(NFC_NAME),
       SOURCE,
     );
@@ -196,7 +196,7 @@ describe('normalizationMismatchIssue', () => {
     // that an editor or a git checkout is liable to renormalize straight back.
     // The stable fix renames the file.
     const issue = normalizationMismatchIssue(
-      { match: 'normalized', resolvedPath: NFC_TARGET, actualName: NFD_NAME },
+      { match: 'normalized', resolvedPath: NFC_TARGET, correction: { asked: NFC_NAME, actual: NFD_NAME } },
       makeLink(NFC_NAME),
       SOURCE,
     );
@@ -209,14 +209,14 @@ describe('normalizationMismatchIssue', () => {
     // The healthy case. A byte-identical accented filename is not a finding —
     // without this row the warning could fire on every accented name and the
     // suite would not notice.
-    { label: 'a byte-exact match', match: 'exact' as const, actualName: NFC_NAME },
+    { label: 'a byte-exact match', match: 'exact' as const, actual: NFC_NAME },
     // Already reported, as an error, by fileExistenceIssue — which runs first.
-    { label: 'a case mismatch', match: 'case_mismatch' as const, actualName: 'CAFE.md' },
-    { label: 'an absent target', match: 'absent' as const, actualName: undefined },
-  ])('stays silent for $label', ({ match, actualName }) => {
-    const fileResult = actualName === undefined
+    { label: 'a case mismatch', match: 'case_mismatch' as const, actual: 'CAFE.md' },
+    { label: 'an absent target', match: 'absent' as const, actual: undefined },
+  ])('stays silent for $label', ({ match, actual }) => {
+    const fileResult = actual === undefined
       ? { match, resolvedPath: NFC_TARGET }
-      : { match, resolvedPath: NFC_TARGET, actualName };
+      : { match, resolvedPath: NFC_TARGET, correction: { asked: NFC_NAME, actual } };
 
     expect(normalizationMismatchIssue(fileResult, makeLink(NFC_NAME), SOURCE)).toBeNull();
   });
@@ -270,9 +270,13 @@ describe('fileExistenceIssue', () => {
     expect(issue?.message).toBe('File not found: docs/missing.md');
   });
 
-  it('returns broken_file with case-mismatch hint when actualName differs', () => {
+  it('returns broken_file with case-mismatch hint when the spelling differs', () => {
     const issue = fileExistenceIssue(
-      { exists: false, resolvedPath: '/project/readme.md', actualName: 'README.md' },
+      {
+        exists: false,
+        resolvedPath: '/project/readme.md',
+        correction: { asked: 'readme.md', actual: 'README.md' },
+      },
       makeLink('readme.md'),
       SOURCE,
     );
@@ -281,6 +285,21 @@ describe('fileExistenceIssue', () => {
     expect(issue?.message).toContain('"readme.md"');
     expect(issue?.message).toContain('"README.md"');
     expect(issue?.suggestion).toBe('Use "README.md" instead of "readme.md"');
+  });
+
+  it('quotes EVERY wrong component, so following the suggestion opens the file', () => {
+    // 🪤 The correction used to be a basename, and with a directory component
+    // misspelled too an author who followed it verbatim still had a 404.
+    const issue = fileExistenceIssue(
+      {
+        exists: false,
+        resolvedPath: '/project/Docs/Readme.md',
+        correction: { asked: 'Docs/Readme.md', actual: 'docs/readme.md' },
+      },
+      makeLink('Docs/Readme.md'),
+      SOURCE,
+    );
+    expect(issue?.suggestion).toBe('Use "docs/readme.md" instead of "Docs/Readme.md"');
   });
 });
 

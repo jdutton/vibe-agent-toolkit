@@ -31,9 +31,9 @@ describe('./fs subpath entry', () => {
     expect(typeof mod.dynamicImportPath).toBe('function');
     expect(typeof mod.copyDirectory).toBe('function');
     expect(typeof mod.fillRealpaths).toBe('function');
-    expect(typeof mod.fillSiblingNames).toBe('function');
     expect(typeof mod.realpathFrom).toBe('function');
-    expect(typeof mod.classifyFilenameCaseFrom).toBe('function');
+    expect(typeof mod.fillPathSpellings).toBe('function');
+    expect(typeof mod.pathSpellingFrom).toBe('function');
     expect(typeof mod.FsLookupCache).toBe('function');
     // The CHANGELOG advertises this on `./fs` specifically, not only on the `.`
     // barrel, so the subpath is what has to be pinned — the barrel guard would

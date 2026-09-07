@@ -2,7 +2,7 @@
 
 ESLint rules that enforce the cross-platform and agentic-code safety helpers in the rest of [`@vibe-agent-toolkit/utils`](https://www.npmjs.com/package/@vibe-agent-toolkit/utils).
 
-Twenty-one rules, all of them derived from a bug that actually shipped: `os.tmpdir()` returning an 8.3 short path on a Windows CI runner, `path.join()` producing backslashes that then failed a string comparison, `await import(absolutePath)` throwing on Windows without a `file://` URL, `execSync()` interpolating a caller-controlled string into a shell. Most auto-fix.
+Twenty-six rules, all of them derived from a bug that actually shipped: `os.tmpdir()` returning an 8.3 short path on a Windows CI runner, `path.join()` producing backslashes that then failed a string comparison, `await import(absolutePath)` throwing on Windows without a `file://` URL, `execSync()` interpolating a caller-controlled string into a shell. Most auto-fix.
 
 ## Installation
 
@@ -25,7 +25,7 @@ export default [
 ];
 ```
 
-`configs.recommended` registers the plugin under the `@vibe-agent-toolkit` namespace and enables the **cross-platform safety core** — 18 of the 22 rules, most at `error` and three at `warn` (see [Severities](#severities)). The other four are opt-in; the [rule tables](#rules) mark each rule's `recommended` severity, and `—` means not in `recommended`.
+`configs.recommended` registers the plugin under the `@vibe-agent-toolkit` namespace and enables the **cross-platform safety core** — 18 of the 26 rules, most at `error` and three at `warn` (see [Severities](#severities)). The other eight are opt-in; the [rule tables](#rules) mark each rule's `recommended` severity, and `—` means not in `recommended`.
 
 To pick rules yourself, register the plugin and name them:
 
@@ -136,6 +136,20 @@ The member-call rules here check the **receiver**, not just the method name, so 
 | `no-url-pathname-for-fs` | `new URL(x, import.meta.url).pathname` as a filesystem path | `resolveFromImportMeta()` / `fileURLToPath()` | `/fs` | | `error` |
 | `no-bare-dynamic-import-path` | `await import(absolutePath)` | `dynamicImportPath()` / `pathToFileURL(p).href` | `/fs` | | `error` |
 | `no-file-url-string-concat` | `` `file://${p}` `` | `pathToFileURL(p).href` | — | | `error` |
+
+### Entrypoint guards
+
+| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
+|---|---|---|---|---|---|
+| `no-fragile-entrypoint-guard` | `import.meta.main`; `import.meta.url === pathToFileURL(process.argv[1]).href`; `fileURLToPath(import.meta.url) === process.argv[1]` | `isEntrypoint(import.meta.url)` | `/process` | | — |
+
+All three banned spellings fail the same way: the guard answers **false for the script it is guarding**, so the process exits 0 having run nothing — the quietest failure a CLI has.
+
+`import.meta.main` shipped in Node **24.2 / 22.18**. Below that it is `undefined`, measured on a real 22.13.0, and this package's own floor is `>=22`. A repository-structure gate guarded that way printed nothing and exited 0 on the exact Node its CI job installed.
+
+The other two are one defect wearing two spellings: a raw string comparison of where the module lives against `process.argv[1]`, with no realpath pass, written either in URL space (`pathToFileURL` the argv path) or in path space (`fileURLToPath` the module URL). A `node_modules/.bin` entry is a **symlink**, so `process.argv[1]` is the link and the module's own location is the resolved target: the strings differ and the guard is false, in either space. Measured false on Node 22.14.0 and 24.13.1 alike, where `isEntrypoint()` is true. Only `process.argv[1]` counts — `argv[2]` and up are ordinary CLI arguments. `import.meta.url`, `import.meta.dirname` and `import.meta.filename` are untouched; only `.main` is banned.
+
+Not in `recommended` because the first half depends on **your** Node floor — at or above 24.2 / 22.18, `import.meta.main` is correct. The argv compares depend on nothing and are a defect everywhere; the two share a rule id, so enable it explicitly if your floor is below 24.2 / 22.18 or you ship a `bin`.
 
 ### Content decoding
 
