@@ -35,8 +35,16 @@ import { runAuditCli } from '../test-helpers.js';
 let tempDir: string;
 let skillPath: string;
 
-/** A config VAT can read but not accept: a real key with an unknown child. */
-const UNLOADABLE_CONFIG = 'version: 1\nresources:\n  totallyUnknownKey: true\n';
+/**
+ * A config VAT can read but not accept: a real key holding the WRONG TYPE.
+ *
+ * ⚠️ Not an unknown key. An unrecognized key is deliberately no longer fatal —
+ * `parseConfigAllowingUnknownKeys` warns and drops it — so a fixture built that
+ * way would load cleanly and this file would exercise nothing. A wrong type is
+ * the case that still refuses, because it means VAT would otherwise act on a
+ * config it misread.
+ */
+const UNLOADABLE_CONFIG = 'version: 1\nresources:\n  exclude: not-an-array\n';
 
 function writeSkill(dir: string, name: string): string {
   mkdirSyncReal(dir, { recursive: true });
@@ -71,8 +79,9 @@ describe('vat audit with an unloadable governing config', () => {
     expect(result.stderr).toContain('Ignoring unloadable config');
     // The message must name the file, or it cannot be acted on.
     expect(result.stderr).toContain('vibe-agent-toolkit.config.yaml');
-    // And it must not be silent about WHY the config was rejected.
-    expect(result.stderr).toContain('totallyUnknownKey');
+    // And it must not be silent about WHY the config was rejected — the
+    // offending path, not just the fact that something was wrong.
+    expect(result.stderr).toContain('resources.exclude');
   });
 
   it('warns once for the config, not once per skill it governs', () => {

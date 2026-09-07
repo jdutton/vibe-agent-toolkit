@@ -7,6 +7,10 @@ import {   basename } from 'node:path';
 
 import {
   API_SKILL_MAX_UPLOAD_BYTES,
+  collectNonPortableAssetReferenceIssues,
+  collectNonPortableCommandIssues,
+  collectUnqualifiedMcpToolIssues,
+  declaredSkillNameIn,
   describeOversizeBundle,
   evalSuiteUnitPath,
   formatBytes,
@@ -24,6 +28,7 @@ import type {
   MultipartResult,
   OrgApiClient,
 } from '@vibe-agent-toolkit/claude-marketplace';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   isAbsoluteAnyPlatform,
   normalizedTmpdir,
@@ -53,6 +58,13 @@ export interface SkillUploadResult {
 
 interface UploadLogger {
 	info: (msg: string) => void;
+	/**
+	 * REQUIRED, not optional. An optional `warn` invites `logger.warn?.(…)`,
+	 * which drops the message wherever a caller supplied only `info` — and a
+	 * warning that vanishes depending on its caller is the exact shape this
+	 * command keeps being audited for.
+	 */
+	warn: (msg: string) => void;
 }
 
 /** Which response key supplies each field of a {@link SkillUploadResult}. */
@@ -572,6 +584,72 @@ export function resolveSourceArgument(source: string): string {
  * The body is built through the ceiling gate, so every create — a directory or a
  * ZIP — is weighed as the request it will become before a byte is sent.
  */
+/**
+ * What a ZIP will weigh AFTER the API expands it, read from the archive's own
+ * central directory — plus the name its inner SKILL.md declares.
+ *
+ * 🔑 **The API expands a ZIP and applies the ceiling to the UNCOMPRESSED total,
+ * not to the archive.** Measured against the live API by an adopter: a
+ * 10,707,463-byte archive of a 47.85 MiB tree — comfortably inside the request
+ * ceiling as bytes on the wire — came back
+ * `400: Zip file uncompressed size exceeds 30MB`. So the body check every other
+ * shape passes through is structurally blind here: compression is exactly the
+ * thing that makes the measured quantity stop predicting the enforced one. A
+ * ZIP is therefore the one input that could pass every local gate and still be
+ * refused remotely, which is the same defect class as the ZIP path once
+ * skipping the size check altogether.
+ *
+ * ⚠️ **The boundary itself is UNMEASURED on this lane.** One refusal at 47.85
+ * MiB is all the evidence there is; nobody has bracketed where the uncompressed
+ * rule actually cuts, or confirmed it is the same constant as the request lane.
+ * So this refuses only on `>` — strictly the looser choice — and a bundle near
+ * the line is still sent for the API to judge. Do not tighten this to `>=`, or
+ * quote it as a measured ceiling, without bracketing it the way
+ * {@link API_SKILL_MAX_UPLOAD_BYTES} was bracketed.
+ *
+ * ⛔ Sizes come from entry HEADERS, which an archive can lie about. That is
+ * fine: a lie can only change whether VAT refuses early, never whether the API
+ * does. Nothing is extracted here, so no zip-slip or zip-bomb surface is
+ * opened — the entries are read, not written.
+ */
+export async function inspectZipArchive(zipPath: string): Promise<{
+	uncompressedBytes: number;
+	declaredName: string | undefined;
+} | undefined> {
+	// `adm-zip` is already a runtime dependency of this package (the packager and
+	// the url skill-source both use it). An earlier comment here reasoned that
+	// reading the archive would mean "adding a dependency … for a log line" and
+	// declined on that basis; the premise was false, and the payoff is not a log
+	// line but a refusal that saves a doomed upload of up to 30 MiB.
+	const AdmZip = (await import('adm-zip')).default;
+	let entries: ReturnType<InstanceType<typeof AdmZip>['getEntries']>;
+	try {
+		entries = new AdmZip(zipPath).getEntries();
+	} catch {
+		// An archive VAT cannot parse is not an archive VAT should block. The API
+		// is the authority on the upload either way, and refusing here would turn
+		// "our reader disagrees with your zip tool" into a failed publish.
+		return undefined;
+	}
+	let uncompressedBytes = 0;
+	let declaredName: string | undefined;
+	// The SKILL.md nearest the archive root wins, so a bundled fixture named
+	// SKILL.md deeper in the tree cannot supply the name. Compared on entry-name
+	// LENGTH rather than by splitting on '/': these are ZIP entry names, whose
+	// separator the format fixes as '/' on every platform, but a shortest-path
+	// comparison needs no separator at all and cannot be read as path handling.
+	let shallowestSkillMd: string | undefined;
+	for (const entry of entries) {
+		if (entry.isDirectory) continue;
+		uncompressedBytes += entry.header.size;
+		if (basename(entry.entryName) !== 'SKILL.md') continue;
+		if (shallowestSkillMd !== undefined && entry.entryName.length >= shallowestSkillMd.length) continue;
+		shallowestSkillMd = entry.entryName;
+		declaredName = declaredSkillNameIn(entry.getData().toString('utf8')) ?? declaredName;
+	}
+	return { uncompressedBytes, declaredName };
+}
+
 async function sendSkillUpload(
 	client: OrgApiClient,
 	displayTitle: string,
@@ -851,8 +929,53 @@ async function prepareSkillUpload(
 	for (const excluded of collected.excluded) {
 		logger.info(`   Excluded from upload: ${excluded} (never published with a skill)`);
 	}
+	warnUnportableReferences(files, logger);
 
 	return { displayTitle, files, dirName };
+}
+
+/**
+ * Warn about references in the bundle that cannot resolve once it is published.
+ *
+ * 🚨 **Until this existed, `install` validated NOTHING.** It weighed the request
+ * and sent it; every check VAT owns — the non-portable reference family, the
+ * unqualified MCP tool names, the non-portable command family — ran in
+ * `vat audit` and `vat skills build` and never on the one path where content
+ * leaves the machine. An adopter found the consequence directly: of 54 built
+ * skills, 10 referenced paths outside their own directory, one of them exec'ing
+ * a script under a SIBLING skill. Under the Skills API each skill is its own
+ * top-level tree with no siblings, so those uploaded with a green tick and could
+ * not possibly run. "It uploaded" is not "it works", and the publish command was
+ * the only lane in a position to say so before the bytes left.
+ *
+ * ⚠️ **Warns, never refuses.** These are `warning`-severity codes and the
+ * operator may have reasons VAT cannot see; turning a publish into an exit 2 on
+ * a heuristic is a worse failure than the one being reported. Blocking belongs
+ * to `vat skills build` and `vat audit`, which run before this and can gate CI.
+ *
+ * Costs nothing extra: it reads the buffers already collected for the upload, so
+ * no file is opened twice and nothing is walked again.
+ */
+export function warnUnportableReferences(files: readonly MultipartFile[], logger: UploadLogger): void {
+	const issues: ValidationIssue[] = [];
+	for (const file of files) {
+		// Skill DOCUMENTS only. These detectors read prose and code spans; running
+		// them over a `.png` or a bundled `.mjs` would report on bytes no agent
+		// reads as instructions.
+		if (!file.filename.toLowerCase().endsWith('.md')) continue;
+		const content = file.content.toString('utf8');
+		collectNonPortableAssetReferenceIssues(content, file.filename, issues);
+		collectNonPortableCommandIssues(content, file.filename, issues);
+		collectUnqualifiedMcpToolIssues(content, file.filename, issues);
+	}
+	if (issues.length === 0) return;
+	logger.warn(
+		`   ${issues.length} portability ${issues.length === 1 ? 'warning' : 'warnings'} in this bundle `
+		+ '(uploading anyway; run `vat audit <dir>` for the full report):',
+	);
+	for (const issue of issues) {
+		logger.warn(`     ${issue.location ?? ''}: ${issue.message}`);
+	}
 }
 
 /**
@@ -1125,13 +1248,46 @@ export async function installFromLocal(
 		// which is a DIFFERENT skill from `wiki-lint` and is not refused, because
 		// display_title uniqueness is enforced only when the field is sent. A
 		// directory takes its title from SKILL.md instead, so the same tree zipped
-		// and unzipped can publish under two names. VAT cannot read the SKILL.md
-		// inside the archive: Node ships no ZIP reader, and adding a dependency to
-		// parse one here would mean owning central-directory, zip64 and zip-slip
-		// handling for a log line. So the provenance is DISCLOSED instead.
+		// and unzipped can publish under two names.
+		//
+		// ⛔ This comment used to end "VAT cannot read the SKILL.md inside the
+		// archive: Node ships no ZIP reader, and adding a dependency to parse one
+		// here would mean owning central-directory, zip64 and zip-slip handling for
+		// a log line." The PREMISE was false — `adm-zip` is already a runtime
+		// dependency of this package — and the cost/benefit was weighed against the
+		// wrong benefit: the same read also answers whether the archive EXPANDS
+		// past the ceiling, which is a refusal, not a log line. So the archive is
+		// now read (see {@link inspectZipArchive}) and the divergence is reported
+		// as a fact below, in addition to this provenance line.
 		logger.info(`Display title: "${displayTitle}" (${titleOverride === undefined
 			? 'from the ZIP filename — NOT from the SKILL.md inside it; pass --title to set it'
 			: 'from --title'})`);
+
+		const inspected = await inspectZipArchive(sourcePath);
+		if (inspected !== undefined) {
+			if (inspected.uncompressedBytes > API_SKILL_MAX_UPLOAD_BYTES) {
+				throw new Error(
+					`ZIP expands to ${formatBytes(inspected.uncompressedBytes)}, over the `
+					+ `${formatBytes(API_SKILL_MAX_UPLOAD_BYTES)} ceiling. The API expands the archive and `
+					+ `weighs the UNCOMPRESSED total, so ${formatBytes(zipContent.length)} on the wire does not `
+					+ `get this under the limit — it will refuse with "Zip file uncompressed size exceeds 30MB". `
+					+ `Remove files from the bundle; compressing harder cannot help.`,
+				);
+			}
+			// The title/name divergence this branch discloses above, now stated as a
+			// FACT rather than as a caveat, because the archive can be read after
+			// all. A ZIP whose inner SKILL.md declares a different name publishes a
+			// skill whose title and versions disagree — and that divergence is what
+			// makes a title-keyed lookup unsafe, so it is worth naming at the moment
+			// it is minted rather than diagnosing later.
+			if (inspected.declaredName !== undefined && inspected.declaredName !== displayTitle) {
+				logger.warn(
+					`Title/name divergence: this uploads with display title "${displayTitle}", but the `
+					+ `SKILL.md inside declares name "${inspected.declaredName}". Every version will carry `
+					+ `the declared name. Pass --title "${inspected.declaredName}" to make them agree.`,
+				);
+			}
+		}
 
 		return sendSkillUpload(client, displayTitle, files);
 	}
@@ -1448,7 +1604,16 @@ Example:
 				if (!existsSync(resolved)) throw new Error(`Source not found: ${resolved}`);
 				// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg
 				if (!statSync(resolved).isDirectory()) {
-					throw new Error(`Source must be a skill directory: ${resolved}`);
+					// Name the asymmetry IN the refusal, not only in --help. `install`
+					// accepts a ZIP and this verb does not, so the operator most likely to
+					// hit this is the one who just read that `install` takes one — and a
+					// refusal that says only "must be a directory" reads as a bug in their
+					// path, not as a difference between two verbs.
+					const zipHint = resolved.toLowerCase().endsWith('.zip')
+						? ' A ZIP is accepted by `vat claude org skills install`, not here:'
+							+ ' publish a new version from the built skill directory instead.'
+						: '';
+					throw new Error(`Source must be a skill directory: ${resolved}.${zipHint}`);
 				}
 				// "Packaging", not "Publishing" — see `installFromLocal`. Measured: this
 				// line printed, then `Failed to load config: …`, and nothing had been

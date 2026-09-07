@@ -1315,7 +1315,7 @@ function collectPortabilityFamilyIssues(
  * Collect NON_PORTABLE_ASSET_REFERENCE issues — scan one skill document for any
  * member of the non-portable asset-reference family.
  */
-function collectNonPortableAssetReferenceIssues(
+export function collectNonPortableAssetReferenceIssues(
   content: string,
   docLocation: string,
   issues: ValidationIssue[],
@@ -1335,7 +1335,7 @@ function collectNonPortableAssetReferenceIssues(
  * Collect NON_PORTABLE_COMMAND issues — scan one skill document for any member of
  * the non-portable shell-command family.
  */
-function collectNonPortableCommandIssues(
+export function collectNonPortableCommandIssues(
   content: string,
   docLocation: string,
   issues: ValidationIssue[],

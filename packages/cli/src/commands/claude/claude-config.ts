@@ -29,7 +29,11 @@ export async function loadClaudeProjectConfig(): Promise<{
     throw new Error('No vibe-agent-toolkit.config.yaml found. Run from a project directory.');
   }
 
-  const config = await parseConfigFile(configPath);
+  // Unknown keys are a warning, not a refusal; this surfaces it on stderr so the
+  // YAML document on stdout stays machine-readable.
+  const config = await parseConfigFile(configPath, (message) => {
+    process.stderr.write(`${message}\n`);
+  });
   const configDir = dirname(configPath);
 
   return { configPath, configDir, claudeConfig: config.claude };

@@ -30,7 +30,19 @@ export function readDeclaredSkillName(skillMdPath: string): string | undefined {
   } catch {
     return undefined;
   }
+  return declaredSkillNameIn(content);
+}
 
+/**
+ * The same answer, for a SKILL.md whose BYTES a caller already holds and whose
+ * path may not exist on disk at all — an entry read out of a ZIP's central
+ * directory being the case this was split out for.
+ *
+ * Deliberately the same function as the path-taking reader above rather than a
+ * second parse beside it: two spellings of "what name does this declare" is
+ * exactly how one lane starts answering differently from another.
+ */
+export function declaredSkillNameIn(content: string): string | undefined {
   const parsed = parseFrontmatter(content);
   if (!parsed.success) return undefined;
 

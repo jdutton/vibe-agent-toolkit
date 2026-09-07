@@ -189,3 +189,100 @@ export function formatConfigValidationError(
   if (hidden > 0) lines.push(`  … and ${hidden} more issue(s)`);
   return `${subject}:\n${lines.join('\n')}`;
 }
+
+/**
+ * Remove exactly the keys a strict schema refused, so the document can be
+ * re-parsed as the adopter's config minus the parts VAT has no field for.
+ *
+ * Driven by the ISSUES themselves rather than by a hand-kept list of retired
+ * key names: whatever the schema rejected is what gets dropped, so this cannot
+ * drift away from the schema the way a list would.
+ *
+ * @param raw - The parsed YAML document (not mutated)
+ * @param issues - The issues from the failed strict parse
+ * @returns A copy with every unrecognized key deleted
+ */
+function withoutUnrecognizedKeys(raw: unknown, issues: readonly z.ZodIssue[]): unknown {
+  const copy = structuredClone(raw);
+  for (const issue of issues) {
+    if (issue.code !== z.ZodIssueCode.unrecognized_keys) continue;
+    let node: unknown = copy;
+    for (const segment of issue.path) {
+      if (node === null || typeof node !== 'object') break;
+      node = (node as Record<string | number, unknown>)[segment];
+    }
+    if (node === null || typeof node !== 'object') continue;
+    for (const key of issue.keys) {
+      delete (node as Record<string, unknown>)[key];
+    }
+  }
+  return copy;
+}
+
+/**
+ * Parse a config, treating an UNKNOWN KEY as a warning and anything else as a
+ * refusal.
+ *
+ * ## Why unknown keys stopped being fatal
+ *
+ * A key VAT does not have is a key VAT was **already ignoring**. Before the
+ * schema went strict it was silently stripped; going strict turned years of
+ * silent acceptance into a hard exit for a field that never did anything. That
+ * lands on commands which do not even read the section involved — a real
+ * adopter's `resources.metadata` blocked `vat claude org skills install`, which
+ * loads config only to decide which eval suites to withhold, and blocked it in
+ * every worktree at once. The refusal was legible (see
+ * {@link formatConfigValidationError}) and still wrong: legibility is not the
+ * same as proportionality.
+ *
+ * ⚠️ **Only unrecognized keys are downgraded.** A missing required field, a
+ * wrong type, a bad enum — anything that means VAT would act on a config it
+ * misread — still throws. The distinction is exactly the one the old behaviour
+ * collapsed: "I do not know this word" is not "I misunderstood your
+ * instruction".
+ *
+ * 🔑 The warning is a REQUIRED callback, not an optional one. An optional sink
+ * invites callers to omit it, and a config silently losing keys is the failure
+ * the strictness was introduced to end — this keeps the message while dropping
+ * the exit code.
+ *
+ * @param schema - The strict schema to parse against
+ * @param raw - The parsed YAML document
+ * @param onUnknownKeys - Receives the rendered warning when keys were dropped
+ * @param options - Rendering context for any message produced
+ * @param options.configPath - Absolute path, named in every message
+ * @returns The validated config, with unrecognized keys removed
+ * @throws Error when the config fails for any reason other than unknown keys
+ */
+export function parseConfigAllowingUnknownKeys<S extends z.ZodTypeAny>(
+  schema: S,
+  raw: unknown,
+  onUnknownKeys: (message: string) => void,
+  options: { configPath?: string } = {},
+): z.infer<S> {
+  const strict = schema.safeParse(raw);
+  if (strict.success) return strict.data;
+
+  const { configPath } = options;
+  const formatted = formatConfigValidationError(strict.error, { ...options, schema });
+  const onlyUnknownKeys = strict.error.issues.every(
+    (issue) => issue.code === z.ZodIssueCode.unrecognized_keys,
+  );
+  if (!onlyUnknownKeys) throw new Error(formatted);
+
+  const relaxed = schema.safeParse(withoutUnrecognizedKeys(raw, strict.error.issues));
+  // Belt and braces: if dropping the refused keys does not produce a valid
+  // config, the original diagnosis was wrong and the refusal stands. Reached
+  // only if a schema rejects a key AND depends on it, which no schema here
+  // does — but guessing on that would be exactly the assumption this file was
+  // written to stop making.
+  if (!relaxed.success) throw new Error(formatted);
+
+  const where = configPath === undefined ? '' : ` (${configPath})`;
+  onUnknownKeys(
+    `${formatted}\n  Ignoring the unknown key(s) and continuing: VAT was already`
+    + ' discarding them, so this is a warning rather than a refusal. Delete them to'
+    + ` silence this${where}.`,
+  );
+  return relaxed.data;
+}

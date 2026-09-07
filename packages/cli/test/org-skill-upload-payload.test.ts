@@ -397,10 +397,15 @@ function sizedFile(filename: string, bytes: number): MultipartFile {
 }
 
 /** An upload logger that keeps every line, so a test can assert on them. */
-function recordingLogger(): { info: (msg: string) => void; lines: string[] } {
+function recordingLogger(): { info: (msg: string) => void; warn: (msg: string) => void; lines: string[] } {
   const lines: string[] = [];
   return {
     info: (msg: string) => {
+      lines.push(msg);
+    },
+    // Same sink as `info`: these tests assert on WHAT was said, and splitting
+    // the streams here would let a warning pass a "line not present" assertion.
+    warn: (msg: string) => {
       lines.push(msg);
     },
     lines,

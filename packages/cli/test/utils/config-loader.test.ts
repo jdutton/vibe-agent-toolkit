@@ -56,28 +56,59 @@ resources:
     expect(() => loadConfig(tempDir)).toThrow();
   });
 
-  it('refuses a key VAT removed, and says so in words the adopter can act on', () => {
+  it('WARNS about a key VAT removed, in words the adopter can act on, and loads anyway', () => {
     // The BLOCKER the crucible found: `resources.metadata` was accepted and
     // silently stripped for releases, then became a hard config-load failure
     // that took out all five verbs on a real adopter tree — reported as a raw
     // JSON dump naming neither the file nor a remedy.
+    //
+    // ⚠️ This test used to assert the REFUSAL, and so defended it. The diagnosis
+    // was always right and the exit code never was: a key VAT has no field for
+    // is a key VAT was already discarding, and it blocked commands that never
+    // read the section it sat in. Every assertion about the MESSAGE is kept —
+    // that half was the point — and only the outcome changed.
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, 'version: 1\nresources:\n  metadata:\n    frontmatter: true\n');
 
-    let message = '';
+    const warnings: string[] = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    // The loader writes its warning straight to stderr, so that is where it has
+    // to be caught; asserting on a return value would pass with nothing printed.
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      warnings.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+      return true;
+    }) as typeof process.stderr.write;
+    let config: ReturnType<typeof loadConfig>;
     try {
-      loadConfig(tempDir);
-    } catch (error) {
-      message = error instanceof Error ? error.message : String(error);
+      config = loadConfig(tempDir);
+    } finally {
+      process.stderr.write = originalWrite;
     }
 
+    // It LOADED, and the unknown key is gone from what VAT will act on.
+    expect(config?.version).toBe(1);
+    expect((config?.resources as Record<string, unknown> | undefined)?.['metadata']).toBeUndefined();
+
+    const message = warnings.join('');
     expect(message).toContain(configPath);
     expect(message).toContain('resources: unrecognized key "metadata"');
     expect(message).toContain('removed from VAT\'s schema');
     expect(message).toContain('Accepted here:');
+    expect(message).toContain('warning rather than a refusal');
     // The regression guard: `ZodError.message` is the issue array, serialized.
     expect(message).not.toContain('"code":');
+  });
+
+  it('still REFUSES a config it would otherwise misread', () => {
+    // The boundary the downgrade must not cross: a wrong type means VAT would
+    // act on a config it misunderstood, which is a different thing from a word
+    // it does not know.
+    const configPath = safePath.join(tempDir, CONFIG_FILENAME);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
+    fs.writeFileSync(configPath, 'version: 1\nskills:\n  include: not-an-array\n');
+
+    expect(() => loadConfig(tempDir)).toThrow(/Expected array/);
   });
 
   it('should throw on invalid YAML syntax', () => {

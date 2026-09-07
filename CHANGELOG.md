@@ -11,6 +11,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### CLI
 
+- **An unknown key in `vibe-agent-toolkit.config.yaml` now WARNS instead of refusing.** A key VAT
+  has no field for is a key VAT was already discarding — before the schema went strict it was
+  silently stripped, so going strict turned years of silent acceptance into `exit 2` for a field
+  that never did anything. It landed on commands that do not read the section involved: a real
+  adopter's `resources.metadata` blocked `vat claude org skills install`, which loads config only
+  to decide which eval suites to withhold, and blocked it in every worktree at once. The refusal
+  was already legible; legibility is not proportionality. The full diagnosis — the key, why it may
+  have been accepted before, and the accepted-key list — is still printed, now as a warning on
+  stderr, once per config path. **Only unrecognized keys are downgraded**: a missing required
+  field, a wrong type, a bad enum, or an unknown key *alongside* any of those still throws, because
+  those mean VAT would act on a config it misread. Scripts relying on `exit 2` for a stray key must
+  now read stderr. `parseConfigFile` takes a required `onUnknownKeys` callback (pre-1.0 API change).
+
 - **`vat audit` on a directory no longer exits 2 because one nested config is unloadable.** A
   single unrecognized key in one `vibe-agent-toolkit.config.yaml` anywhere under the scanned tree
   aborted the entire audit — exit `2`, zero skills validated, no findings reported — while
@@ -655,6 +668,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@vibe-validate/utils` and `yaml` to the installed tree.
 
 ### Fixed
+
+- **A ZIP could pass every local check and still be refused: the API weighs it UNCOMPRESSED.** The
+  request-body gate every upload shape passes through weighs the bytes on the wire, and compression
+  is exactly what makes that stop predicting what the API enforces. Measured against the live API:
+  a **10,707,463-byte** archive of a 47.85 MiB tree — comfortably inside the ceiling as sent — came
+  back `400: Zip file uncompressed size exceeds 30MB`. `vat claude org skills install <x>.zip` now
+  reads the archive's central directory and refuses locally when the expanded total is over the
+  ceiling, naming the API's own wording and saying plainly that compressing harder cannot help.
+  ⚠️ The boundary on this lane is **unmeasured** — one refusal at 47.85 MiB is all the evidence
+  there is — so it refuses only on `>`, and a bundle near the line is still sent for the API to
+  judge. This is the same defect class as the ZIP path once skipping the size check entirely.
+
+- **`vat claude org skills install` ran none of the checks VAT owns.** It weighed the request and
+  sent it. The non-portable reference family, the non-portable command family and the unqualified
+  MCP tool names all ran in `vat audit` and `vat skills build`, and never on the one path where
+  content leaves the machine — so an adopter published 10 of 54 skills that referenced paths
+  outside their own directory, one exec'ing a script under a *sibling* skill. Under the Skills API
+  each skill is its own top-level tree with no siblings: those uploaded with a green tick and could
+  not possibly run. The bundle is now scanned before upload and every finding printed. It **warns
+  and uploads anyway** — these are warning-severity codes, and blocking a publish on a heuristic is
+  a worse failure than the one being reported; `vat skills build` and `vat audit` remain the
+  gates. Costs nothing extra: it reads the buffers already collected for the request.
+
+- **A ZIP's display title comes from its filename, and VAT now says so when that diverges.**
+  `wiki-lint-v2.zip` publishes a skill titled `wiki-lint-v2` whose every version declares
+  `name: wiki-lint` — a title/name divergence VAT itself mints, and the mechanism that makes any
+  title-keyed lookup unsafe. VAT now reads the SKILL.md inside the archive and names both spellings
+  with the `--title` that would reconcile them. (The previous comment here reasoned that reading the
+  archive would mean "adding a dependency … for a log line"; the premise was false — `adm-zip` is
+  already a runtime dependency — and the payoff is the refusal above, not a log line.)
+
+- **`vat claude org skills versions add <id> <x>.zip` now says where a ZIP belongs.** `install`
+  accepts a ZIP and this verb does not, so the operator most likely to hit the refusal is the one
+  who just read that `install` takes one. `Source must be a skill directory` alone reads as a bug
+  in their path rather than a difference between two verbs; the refusal now names `install`.
 
 - **`MCP_TOOL_NAME_UNQUALIFIED` could not fire on an installed skill, which is the corpus its
   precision was measured on.** The detector's only call sites were inside

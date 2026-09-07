@@ -86,7 +86,7 @@ export {
   type FrontmatterResult,
 } from './parsers/frontmatter-parser.js';
 
-export { readDeclaredSkillName } from './skill-identity.js';
+export { declaredSkillNameIn, readDeclaredSkillName } from './skill-identity.js';
 
 export { type AnchorRootOptions, resolveAnchorRoot } from './validators/anchor-root.js';
 export { generateFixSuggestion } from './validators/validation-utils.js';
@@ -131,7 +131,11 @@ export {
   type PackagingValidationResult,
   type SkillPackagingConfig,
   type SkillValidationSharedContext,
+  collectNonPortableAssetReferenceIssues,
+  collectNonPortableCommandIssues,
 } from './validators/packaging-validator.js';
+
+export { collectUnqualifiedMcpToolIssues } from './validators/mcp-tool-qualification.js';
 export {
   AGENT_INSTRUCTION_FILE_PATTERNS,
   createIssue,

@@ -279,7 +279,11 @@ claude:
     expect(config.claude?.marketplaces?.['second']?.owner?.name).toBe('My Org');
   });
 
-  it('should reject unknown fields in claude: section (strict schema)', async () => {
+  it('should WARN about unknown fields in claude: section and load anyway', async () => {
+    // Was `rejects.toThrow`, and so defended the refusal. An unknown key is one
+    // VAT has no field for and was already discarding; refusing over it blocked
+    // commands that never read the section. The diagnosis is kept and asserted
+    // below — only the exit changed. See `parseConfigAllowingUnknownKeys`.
     const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     const content = `
 version: 1
@@ -288,7 +292,12 @@ claude:
 `;
     await writeFile(configPath, content);
 
-    await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid configuration in');
+    const warnings: string[] = [];
+    const config = await parseConfigFile(configPath, (m) => warnings.push(m));
+
+    expect(config.version).toBe(1);
+    expect(warnings.join('')).toContain('unrecognized key "unknownField"');
+    expect((config.claude as Record<string, unknown> | undefined)?.['unknownField']).toBeUndefined();
   });
 
   it('should reject unknown fields in marketplace plugin entry (strict schema)', async () => {
@@ -308,7 +317,22 @@ claude:
 `;
     await writeFile(configPath, content);
 
-    await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid configuration in');
+    const warnings: string[] = [];
+    const config = await parseConfigFile(configPath, (m) => warnings.push(m));
+
+    // Deep inside an array element, which is where a stripped key is hardest to
+    // notice — so naming it matters more here, not less.
+    expect(warnings.join('')).toContain('unrecognized key "unknownField"');
+    expect(config.claude?.marketplaces?.['acme-tools']?.plugins?.[0]?.name).toBe('acme-tools');
+  });
+
+  it('still rejects a claude: section it would otherwise misread', async () => {
+    const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
+    // `marketplaces` must be a mapping. That is not a word VAT does not know,
+    // it is an instruction VAT cannot follow — the boundary of the downgrade.
+    await writeFile(configPath, '\nversion: 1\nclaude:\n  marketplaces: nope\n');
+
+    await expect(parseConfigFile(configPath, () => undefined)).rejects.toThrow('Invalid configuration in');
   });
 });
 
