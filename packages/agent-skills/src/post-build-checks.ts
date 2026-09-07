@@ -14,6 +14,7 @@ import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { normalizeRelPath } from './files-config.js';
+import { detectMissingReferencedPaths } from './validators/referenced-path-missing.js';
 import { evaluate, makeRuleContext, materializeIssue } from './validators/rule-engine/index.js';
 
 /**
@@ -365,6 +366,39 @@ export async function checkUnreferencedFiles(
   }
 
   return issues;
+}
+
+/**
+ * Check that every bundled-subdirectory path the packaged docs NAME is present in
+ * the packaged output — the inverse of {@link checkUnreferencedFiles}.
+ *
+ * Markdown links are deliberately out of scope here; {@link checkBrokenPackagedLinks}
+ * already covers a link with a missing target, at error severity. This lane sees
+ * only the bare tokens the markdown AST did not claim — a path inside a code
+ * block, a code span, or prose — which is the population nothing else can reach.
+ *
+ * See `validators/referenced-path-missing.ts` for the measured precision argument
+ * behind each filter, and for why this is a warning rather than an error.
+ *
+ * SKILL-LOCAL, and there is nothing wider to be local to. `detectMissingReferencedPaths`
+ * once took a `siblingSearchRoot` that measured better (1.9% vs 3.8% on a 52-skill
+ * corpus) and had no caller able to supply one — the packager knows its own output
+ * directory, not the plugin the skill will be installed into. That parameter and its
+ * ~90-line walk are now deleted rather than kept as a seam; the shipped rate is 3.8%.
+ *
+ * ⚠️ This walk has NO exclusions, unlike `checkPackagedSizeLimit`'s, and the two are
+ * asking different questions rather than disagreeing. The size check asks what the
+ * Skills API will WEIGH, so it drops `evals/`, `node_modules/` and `.git/` because the
+ * uploader does. This one asks whether the packaged BUNDLE is self-consistent, and the
+ * bundle is what installs as a Claude Code plugin — `evals/` and all. A `.md` inside a
+ * bundled `evals/` really is shipped to a plugin user, so a path it names really is
+ * missing from what they get.
+ *
+ * @param outputDir Absolute path to the packaged skill output.
+ */
+export async function checkMissingReferencedPaths(outputDir: string): Promise<ValidationIssue[]> {
+  const docFiles = walkDir(outputDir).filter(f => f.endsWith('.md'));
+  return detectMissingReferencedPaths(docFiles, outputDir);
 }
 
 /**

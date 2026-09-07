@@ -105,6 +105,13 @@ const multipart = buildMultipartFormData(
 );
 const created = await client.uploadSkill<{ id: string; latest_version: string }>(multipart);
 
+// Add a NEW VERSION to an existing skill — send NO display_title (sending one
+// would be a rename by side effect); the server assigns the version identifier.
+const versionBody = buildMultipartFormData({}, files);
+const version = await client.uploadSkillVersion<{ id: string; latest_version: string }>(
+  created.id, versionBody,
+);
+
 // Delete a skill
 const deleted = await client.deleteSkill<{ id: string; type: string }>(skillId);
 ```
@@ -251,7 +258,9 @@ console.log(`${pending.length} pending invites:`, pending.map(i => i.email));
 
 ## CLI Reference
 
-All commands require `ANTHROPIC_ADMIN_API_KEY` unless noted.
+Each family takes its OWN key and never the other one. Everything except `skills` needs
+`ANTHROPIC_ADMIN_API_KEY`; the whole `skills` family needs a regular workspace `ANTHROPIC_API_KEY`
+and the admin key is never sent to those endpoints, so it is not needed to run them.
 
 ```
 vat claude org info                              Org identity (id, name)
@@ -266,16 +275,34 @@ vat claude org usage [--from DT] [--to DT]       Token usage report
 vat claude org cost [--from DT] [--group-by F]   USD cost report
 vat claude org code-analytics [--from DATE]      Claude Code metrics (YYYY-MM-DD)
 vat claude org skills list                       Workspace skills (needs ANTHROPIC_API_KEY)
-vat claude org skills install <source>           Upload skill dir or ZIP to org
-vat claude org skills delete <skill-id>          Delete a skill (versions first)
+vat claude org skills install <source>           Upload skill dir or ZIP as a NEW skill
+vat claude org skills delete <skill-id> [--all]  Delete a skill (--all drops its versions first)
 vat claude org skills versions list <skill-id>   List skill versions
+vat claude org skills versions add <id> <dir>    Publish a new version of an existing skill
 vat claude org skills versions delete <id> <ver> Delete a skill version
 ```
 
-Exit codes: `0` success, `1` expected failure (stubs), `2` system error (missing key, API error).
+Exit codes:
 
-**Skill deletion lifecycle:** The API requires all versions to be deleted before the skill itself.
-Use `versions list` to find versions, `versions delete` each one, then `delete` the skill.
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | The run happened and the outcome was not clean (e.g. `skills install --from-npm` uploaded some skills and failed others), or a stub command |
+| `2` | The run could not happen: missing key, API failure, unusable input |
+
+**Skill deletion lifecycle:** The API refuses to delete a skill that still has versions (400).
+`vat claude org skills delete <skill-id> --all` deletes every version and then the skill in one
+step — that is the one-step path, and the refusal's own remedy names it. To do it by hand instead,
+use `versions list` to find versions, `versions delete` each one, then `delete` the skill. `--all`
+deletes irreversibly and in a loop: if it fails part-way, the versions it already destroyed are
+listed under `deletedVersions` in the output and are not recoverable.
+
+**Publishing a change to a skill you already shipped:** `install` always CREATES; use
+`vat claude org skills versions add <skill-id> <built-skill-dir>` to add a version to an existing
+skill. Find the id with `vat claude org skills list` — the API assigns the version identifier and
+makes it the latest. `versions add` takes a built skill DIRECTORY only (a ZIP is `install`-only),
+and the API enforces that the tree's SKILL.md `name` matches the one the skill already has, so
+publishing from a renamed tree earns a 400 rather than silently re-rooting the version's files.
 
 ## Enterprise Skill Distribution
 
@@ -297,8 +324,17 @@ vat claude org skills install --from-npm @scope/my-skills-package@1.0.0 --skill 
 The package must contain `dist/skills/<name>/SKILL.md` (produced by `vat skills build`).
 If skills are in a sub-dependency, the command searches `node_modules/*/dist/skills/` too.
 
-**Duplicate titles are rejected** — the API enforces unique `display_title` per workspace.
-When uploading multiple skills, failures are non-fatal; partial results are reported.
+**`display_title` is NOT unique in a workspace.** The API enforces uniqueness only when the field
+is sent explicitly; a title derived from SKILL.md frontmatter is not checked, so two skills can
+share one title — observed live. **Never resolve a title to an id** — such a lookup returns 0, 1 or
+N matches, and a wrong match would append your version to somebody else's skill. Get the id from
+`vat claude org skills list`. This is why `install` only ever creates, and why `versions add` takes
+an id rather than a title.
+
+When uploading multiple skills, each failure is reported and the run continues, but **a partial
+failure is still a failure**: `install --from-npm` exits `1` whenever any skill failed — some-
+succeeded is tagged the same way as none-succeeded, deliberately, because the workspace is left in
+a mixed state a human has to look at. What did land stays in the printed document.
 
 ### Managed Settings (Claude Code plugins)
 

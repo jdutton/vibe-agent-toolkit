@@ -86,13 +86,24 @@ export {
   type FrontmatterResult,
 } from './parsers/frontmatter-parser.js';
 
-export { readDeclaredSkillName } from './skill-identity.js';
+export { declaredSkillNameIn, readDeclaredSkillName } from './skill-identity.js';
 
 export { type AnchorRootOptions, resolveAnchorRoot } from './validators/anchor-root.js';
 export { generateFixSuggestion } from './validators/validation-utils.js';
 export { detectKebabCaseViolation, type KebabCaseSurface } from './validators/kebab-case-detection.js';
 export { detectMissingRecommendedFields } from './validators/plugin-recommended-fields.js';
 export { detectPackagedAgentInstructionFiles } from './validators/agent-instruction-presence.js';
+export {
+  API_SKILL_MAX_UPLOAD_BYTES,
+  describeOversizeBundle,
+  formatBytes,
+  // The uploader applies this same set, so both lanes weigh and send the same
+  // file set. It lived here and as a matching literal in the CLI's uploader,
+  // agreeing only by coincidence — which is the drift the constant's own doc
+  // comment exists to prevent.
+  NEVER_UPLOADED_DIR_NAMES,
+  type SizedFile,
+} from './validators/packaged-size-limit.js';
 // The single construction site for a coded finding. Exported so a CLI lane that
 // discovers a finding of its own builds it from CODE_REGISTRY like every other
 // producer — a hand-rolled `{severity, code, message, fix, reference}` literal is
@@ -120,7 +131,11 @@ export {
   type PackagingValidationResult,
   type SkillPackagingConfig,
   type SkillValidationSharedContext,
+  collectNonPortableAssetReferenceIssues,
+  collectNonPortableCommandIssues,
 } from './validators/packaging-validator.js';
+
+export { collectUnqualifiedMcpToolIssues } from './validators/mcp-tool-qualification.js';
 export {
   AGENT_INSTRUCTION_FILE_PATTERNS,
   createIssue,

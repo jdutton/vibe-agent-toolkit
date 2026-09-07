@@ -101,7 +101,26 @@ export { listLocalPlugins } from './install/plugin-list.js';
 
 // Org API client
 export type { OrgApiClientOptions, PaginationParams, ReportPaginationParams, MultipartFile, MultipartResult } from './org/org-api-client.js';
-export { createOrgApiClientFromEnv, OrgApiClient, buildMultipartFormData } from './org/org-api-client.js';
+export {
+  // Every client method rejects with this, and only this, on a failed exchange.
+  // Unexported, a caller outside the package could not name it and had to match
+  // on message TEXT to tell a 429 from a 400 — which is exactly the brittleness
+  // the typed error was added to remove.
+  ApiRequestError,
+  // Its counterpart for a failure that never earned a status. It carries the
+  // bytes that actually left the socket, which is the only fact a caller may
+  // build a claim about the request on — the CLI previously inferred one from
+  // `!(error instanceof ApiRequestError)` and told an operator with no API key
+  // that a connection had closed mid-upload.
+  ApiTransportError,
+  buildMultipartFormData,
+  createOrgApiClientFromEnv,
+  OrgApiClient,
+  // The one spelling of a skill's versions path, so the CLI's `versions list`
+  // and `delete --all` address the same resource the client's POST and DELETE
+  // do, with the same id encoding.
+  skillVersionsPath,
+} from './org/org-api-client.js';
 
 // Settings
 export type {

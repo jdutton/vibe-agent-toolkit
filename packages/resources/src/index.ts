@@ -534,6 +534,7 @@ export {
 
 export {
   formatConfigValidationError,
+  parseConfigAllowingUnknownKeys,
 } from './config-issues.js';
 
 export {

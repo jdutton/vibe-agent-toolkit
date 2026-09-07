@@ -6,6 +6,12 @@
  * to control statSync return values so we can test size thresholds without
  * creating real multi-megabyte ZIP files.
  *
+ * The fake is scoped to the `.zip` artifact by {@link fakeZipSize}. A blanket
+ * `mockReturnValue` fakes EVERY stat the packager takes, which silently couples
+ * this file to every other validator that stats the output — the packaged-size
+ * walk asks `stats.isFile()`, and a stub carrying only `size` made five tests
+ * here fail with `stats.isFile is not a function` when that walk was added.
+ *
  * Separated from skill-packager.test.ts because vi.mock() must be at the
  * module level in ESM — mixing with real-fs tests would break both.
  */
@@ -21,6 +27,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ZipSizeLimitError, packageSkill } from '../src/skill-packager.js';
 
 import { createFrontmatter } from './test-helpers.js';
+
+/**
+ * The real `statSync`, captured before the module mock replaces it, so
+ * {@link fakeZipSize} can delegate every non-ZIP stat to the filesystem.
+ */
+const { statSync: realStatSync } = await vi.importActual<typeof nodeFs>('node:fs');
+
+/**
+ * Fake the size of the packaged ZIP and nothing else.
+ *
+ * Every other path — including the packaged bundle the size walk weighs — is
+ * answered by the real filesystem, so this file tests the ZIP threshold without
+ * standing in for validators it knows nothing about.
+ */
+function fakeZipSize(bytes: number): void {
+  vi.mocked(nodeFs.statSync).mockImplementation(((target: nodeFs.PathLike, options?: unknown) =>
+    (typeof target === 'string' && target.endsWith('.zip'))
+      ? ({ size: bytes, isFile: () => true, isDirectory: () => false } as nodeFs.Stats)
+      : (realStatSync as unknown as (t: nodeFs.PathLike, o?: unknown) => nodeFs.Stats)(target, options)
+  ) as unknown as typeof nodeFs.statSync);
+}
 
 // vi.mock is hoisted by vitest above all imports, so this runs before any
 // module loads node:fs — preserving all real operations except statSync.
@@ -87,7 +114,7 @@ async function runClaudeWebZipWithSize(
   const outDir = safePath.join(tempDir, `${scenario}-out`);
   const sp = writeSkillMd(tempDir, `# ${scenario}`);
 
-  vi.mocked(nodeFs.statSync).mockReturnValue({ size: fakeZipBytes } as nodeFs.Stats);
+  fakeZipSize(fakeZipBytes);
   const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 
   const result = await packageSkill(sp, {
@@ -137,7 +164,7 @@ describe('validateZipSize (via packageSkill, target: claude-web)', () => {
     const outDir = safePath.join(tempDir, 'zip-error-out');
     const sp = writeSkillMd(tempDir, '# Zip Error Test');
 
-    vi.mocked(nodeFs.statSync).mockReturnValue({ size: ZIP_ERROR_BYTES } as nodeFs.Stats);
+    fakeZipSize(ZIP_ERROR_BYTES);
 
     await expect(
       packageSkill(sp, {
@@ -152,9 +179,7 @@ describe('validateZipSize (via packageSkill, target: claude-web)', () => {
     const outDir = safePath.join(tempDir, 'zip-over-out');
     const sp = writeSkillMd(tempDir, '# Zip Over Test');
 
-    vi.mocked(nodeFs.statSync).mockReturnValue({
-      size: ZIP_ERROR_BYTES + 1024,
-    } as nodeFs.Stats);
+    fakeZipSize(ZIP_ERROR_BYTES + 1024);
 
     await expect(
       packageSkill(sp, {
@@ -189,7 +214,7 @@ describe('validateZipSize (via packageSkill, target: claude-web)', () => {
     const sp = writeSkillMd(tempDir, '# Claude Code Target');
 
     // Even with a huge fake size, claude-code should never call validateZipSize
-    vi.mocked(nodeFs.statSync).mockReturnValue({ size: ZIP_ERROR_BYTES + 1024 } as nodeFs.Stats);
+    fakeZipSize(ZIP_ERROR_BYTES + 1024);
 
     const result = await packageSkill(sp, {
       outputPath: outDir,
