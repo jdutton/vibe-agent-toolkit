@@ -158,9 +158,56 @@ with a regression test.
   match.** A deny rule applies when **any** subcommand matches (allow needs every one), reaches
   commands nested in a subshell or command substitution, and matches past any leading environment
   assignment, a `case` arm, or a function body. On a command it cannot parse it now reaches a denied
-  program anywhere in the string, not only at the front. **Re-run any saved permission-conflict
-  report** — it will flag things it previously missed. Allow-lane answers are unchanged apart from
-  `NODE_ENV=` now being stripped.
+  program anywhere in the string, not only at the front. A command nested inside another — a
+  subshell, a command substitution, a backtick — is now matched against **the text the command
+  actually has**, where an earlier build substituted a placeholder for the nested part and so missed
+  any rule whose literal spanned it: `Bash(rm -rf $(pwd))` did not match `(rm -rf $(pwd))`. Across a
+  200-shape probe that restores **178** deny/ask matches and removes **11** conflicts the placeholder
+  had manufactured (it was read as a `case` arm pattern the command never had). **Re-run any saved
+  permission-conflict report** — it will flag things it previously missed, and drop a few it should
+  never have raised.
+
+  Allow-lane answers are unchanged **against the previous release** apart from `NODE_ENV=` now being
+  stripped — measured over 2,501,040 rule/command pairs, zero divergences. That is not the same
+  claim as agreeing with Claude Code's published table: VAT's allow lane has 40 known widenings
+  against that table, all pre-dating this release, and all reachable only in a shape where no
+  command runs (confirmed by exhaustively enumerating 597,870 token lists). `vat audit` is the tool
+  that reports where your settings and Claude Code disagree; this note is about what changed in VAT.
+
+- **`ParsedBashRule.regex?: RegExp` is now `pattern?: WildcardPattern`, and `escapeRegexLiteral` is
+  removed.** Wildcard rules no longer compile to a regular expression at all (see Security), so
+  anything reading `.regex` must read `.pattern`. `WildcardPattern` is exported alongside it.
+
+- **`vat ard emit`'s exit codes distinguish the project from the invocation.** **Exit 1** means VAT
+  read this project and produced no manifest by its own rules — it declares no `ard:` block, or a
+  surface could not be derived into a conformant entry. **Exit 2** means VAT never got that far — no
+  project root, no config file, a config it cannot parse, or an unexpected internal failure. A CI job
+  that tolerates repositories which never opted into ARD depends on exactly that split, so branch on
+  it rather than on "non-zero".
+
+- **`ValidateOkfBundleOptions.rootSpecifier` is now required, and `OkfBundleReport.root` carries it
+  instead of the resolved absolute path.** The report used to embed the developer's home directory
+  in every bundle entry, which then travelled into CI logs. A property a caller can opt out of is not
+  a property, so the option lost its default.
+
+- **⚠️ `vat resources validate` now checks the case and Unicode normalization of EVERY path
+  component, not just the filename — which can turn a green repo red on a Mac or Windows box.** A
+  link written `Docs/readme.md` against a directory named `docs` resolved silently on a
+  case-insensitive filesystem and was reported as valid; it 404s on case-sensitive Linux. Those links
+  were **already broken in CI** — this reports them where you can fix them. The finding codes are
+  unchanged (`LINK_BROKEN_FILE` for case, `LINK_NORMALIZATION_MISMATCH` for normalization), and the
+  suggestion now names the whole corrected path (`Use "docs/readme.md" instead of "Docs/Readme.md"`)
+  rather than only its last segment, which was a remedy that still 404d when followed. Text is
+  byte-identical to before when only the basename is wrong.
+
+  It is also **~105× faster on a wide directory**: the judge used to scan a whole directory listing
+  up to three times per link, so cost scaled with directory width. Measured on 4,000 documents ×
+  10 links in one directory, identical findings both arms: **23.16 s → 0.22 s**.
+
+- **Link-fact table renames in `@vibe-agent-toolkit/resources`.** `linkTargetPaths` is now
+  `linkTargets` and returns `{referrer, target}[]` (the judge needs the referrer to bound its walk);
+  `LinkFactTables.siblingNames` is now `spellings`; `FileVerification.actualName` is now
+  `correction: {asked, actual}`. `pathCorrection` and `PathCorrection` are exported alongside them.
 
 - **`ParsedBashRule.regex?: RegExp` is now `pattern?: WildcardPattern`, and `escapeRegexLiteral` is
   removed.** Wildcard rules no longer compile to a regular expression at all (see Security), so
@@ -187,9 +234,13 @@ with a regression test.
   questions are now answered from a tracker's active set, so a skill's `files.linked` can change
   under a symlinked ancestor, in a submodule, or `.git/`.
 
-- **`@vibe-agent-toolkit/utils` no longer exports `verifyCaseSensitiveFilename`.** Use
-  `fillSiblingNames(paths, fsCache)` to build a table once, then
-  `classifyFilenameCaseFrom(table, path)` to judge.
+- **`@vibe-agent-toolkit/utils` no longer exports `verifyCaseSensitiveFilename`,
+  `fillSiblingNames`, `classifyFilenameCaseFrom`, `SiblingNamesTable` or `FilenameCaseVerdict`.**
+  Use `fillPathSpellings(requests, fsCache)` to build a table once, then
+  `pathSpellingFrom(table, referrer, target)` to judge. The removed pair judged only the
+  **basename**, which left every directory component of a path to the host filesystem's own
+  case-folding — the defect the whole-path judge exists to close, so it is deleted rather than
+  deprecated.
 
 - **`assertGraderPromptInvariants`'s second parameter is now the run nonce, not the transcript, and
   it is required.** Pass the same nonce you passed to `buildGraderPrompt`.
@@ -339,9 +390,18 @@ with a regression test.
   is no `include`/`exclude` on purpose — the population is the specification's, and a narrower one
   would let VAT report a clean bundle it never fully read. Read a clean report precisely: §11.1 and
   §11.2 in full, §11.3 only in part — and wikilinks are not read at all.
-  Cross-links are checked for case and Unicode normalization, so a bundle that resolves on the
-  author's Mac is not certified when it 404s on a case-sensitive filesystem
-  (`OKF_LINK_NORMALIZATION_MISMATCH`). A `/`-anchored link whose target exists at the repo root but
+  Cross-links are checked for case (`OKF_LINK_CASE_MISMATCH`) and Unicode normalization
+  (`OKF_LINK_NORMALIZATION_MISMATCH`) on **every path component, not just the filename**, so a
+  bundle that resolves on the author's Mac is not certified when it 404s on a case-sensitive
+  filesystem — a link written `Docs/guide.md` against a directory named `docs` is caught, and the
+  remedy names the whole corrected path rather than only its last segment. `OKF_BROKEN_CROSS_LINK`
+  now means only "not in the bundle". An unreadable subdirectory
+  (`OKF_SUBDIRECTORY_UNREADABLE`) and an unreadable document (`OKF_DOCUMENT_UNREADABLE`) are each
+  their own finding naming what could not be read, and the rest of the bundle is still judged — both
+  used to abort the whole run and exit 2. A bundle member is a file whose bytes live under the root,
+  judged by the same containment rule the link lane uses, so a symlink escaping the bundle is left
+  out of the population and reported as `OKF_DOCUMENT_ESCAPES_BUNDLE` instead of being judged as a
+  member and refused as a link target. A `/`-anchored link whose target exists at the repo root but
   not under the bundle root gets its own code, `OKF_ROOT_RELATIVE_LINK_UNRESOLVED`, because the
   remedy is to re-anchor rather than to write a missing document. An unreadable bundle root is that
   bundle's own `OKF_BUNDLE_ROOT_UNREADABLE` finding at hard `error` — the per-bundle severity dial
@@ -356,7 +416,14 @@ with a regression test.
   kind is refused, naming both qualified forms, rather than retyping whichever it reached first. A
   duplicate emitted `identifier`, a `skills.config` key naming a skill that does not exist, a
   `publisher` that is not a real domain, and a `baseUrl` carrying a query, a fragment or a
-  non-`http(s)` scheme are all refused too.
+  non-`http(s)` scheme are all refused too. A qualified key that displaces a bare one now says so on
+  stderr, naming both, instead of discarding the loser silently.
+  `.` and `..` are refused as a `ard.namespace` or a surface name, and as any segment of a
+  library-supplied `urlPath`: URLs are joined with `new URL`, which **collapses dot segments**, so
+  such a name silently relocated the entry — a namespace of `..` moved every entry above its
+  `baseUrl` and still exited 0. A segment that merely contains dots (`v1.2`) is unaffected.
+  `findArdEntryOverride`, `findShadowedArdOverrideKeys`, `isArdNameSegment` and `isArdUrlPath` are
+  exported for callers building entries directly.
 
 - **A collection can declare the MIME type of the files it matches, and that declaration reaches the
   parser.** `resources.collections.<name>.mimeType` overrides the built-in extension tables, so a
@@ -766,10 +833,23 @@ with a regression test.
   same document: `vat skills validate` names the authored source, `vat build` names the packaged
   artifact. If you have a waiver that works under one and not the other, name both spellings.
 
-- **An empty list filter matched everything instead of nothing.** `filters.metadata.tags: []` — the
-  ordinary "filter to the tags I computed, and I computed none" case — compiled to `tags LIKE '%%'`
-  and returned the whole index, while the structurally identical `filters.resourceId: []` correctly
-  matched nothing. Both branches now emit the same always-false condition.
+- **A list filter that nothing can satisfy matched everything instead of nothing.**
+  `filters.metadata.tags: []` — the ordinary "filter to the tags I computed, and I computed none"
+  case — compiled to `tags LIKE '%%'` and returned the whole index, while the structurally identical
+  `filters.resourceId: []` correctly matched nothing. The mechanism is **stringification**, not
+  length: `String([])`, `String([''])` and `String('')` are all the empty string, so `tags: ['']` —
+  what you get from `tags: [selectedTag]` when the selection is blank — hit the same tautology. Any
+  value that stringifies to nothing now emits the same always-false condition.
+
+- **A multi-value list filter required the stored order.** `filters.metadata.tags: ['a','b']`
+  compiled to a single `tags LIKE '%a,b%'` against the comma-joined stored value, so a document
+  tagged `b,a` did not match and nothing said why. Each element now gets its own condition, ANDed
+  together. **A query relying on the old adjacency behaviour will return more rows than before.**
+
+- **`filters.dateRange` could not be expressed on the wire.** The published `RAGQueryJsonSchema`
+  declared `start`/`end` as `date-time` strings while the Zod half accepted only a `Date`, so a query
+  that validated against the published schema failed to parse. The Zod half now accepts what the
+  JSON half always advertised; the emitted JSON Schema is byte-identical.
 
 - **The chunker rejected a whole document rather than splitting its longest line**, so a single wide
   markdown table row or unwrapped bullet produced zero chunks for the entire file. It now never
@@ -917,7 +997,29 @@ with a regression test.
 
 ### Added
 
-- **A `@vibe-agent-toolkit/utils/eslint` subpath — 21 ESLint rules that enforce the safety helpers
+- **A whole-path spelling judge on `@vibe-agent-toolkit/utils`** — `DirectorySpellingIndex`,
+  `fillPathSpellings`, `pathSpellingFrom` and `spellingWalkRoot`, with `ComponentMatch`,
+  `PathSpelling`, `PathSpellingRequest` and `PathSpellingTable`. It lists each directory once into
+  exact / NFC / NFC-lowercased maps and walks a path from a root downwards, descending into the
+  **corrected** spelling so a wrong directory cannot hide a wrong filename. `spellingWalkRoot` picks
+  that root as the deepest directory a referring file and its target share — everything above it was
+  enumerated off disk, so judging it would compare disk against disk and report normalization nobody
+  wrote. Both the OKF lane and `vat resources validate` are built on it, so the two cannot drift.
+
+- **`isEntrypoint()` on `@vibe-agent-toolkit/utils/process`, and a
+  `local/no-fragile-entrypoint-guard` ESLint rule that makes the two broken spellings unwritable.**
+  "Am I being run directly?" had two failing idioms in circulation. `import.meta.main` is `undefined`
+  below Node 22.18/24.2, so a guard using it silently never fires on the floor a package declares —
+  a gate that does nothing on the one runtime it exists to police. The other,
+  `import.meta.url === pathToFileURL(process.argv[1]).href`, is a raw string compare with no
+  `realpath`, so it is **false** whenever the script is reached through a `node_modules/.bin`
+  symlink — the normal way an installed CLI runs — and the program exits 0 having done nothing.
+  `isEntrypoint(import.meta.url)` answers correctly through symlinked scripts and directories, paths
+  containing spaces, and `tsx`. The rule is **not** in `configs.recommended`: whether
+  `import.meta.main` is safe depends on the consumer's own Node floor, so it is opt-in rather than a
+  portable claim.
+
+- **A `@vibe-agent-toolkit/utils/eslint` subpath — 26 ESLint rules that enforce the safety helpers
   in the rest of the package.** The helpers exist because `path.join()`, `os.tmpdir()`,
   `fs.realpathSync()`, `child_process.execSync()` and `await import(absolutePath)` each have a
   platform pothole; until now nothing stopped a call to the raw primitive, so the API shipped
