@@ -8,20 +8,35 @@
  * to `error`. See `docs/concepts/knowledge-interop-formats.md`.
  */
 
+import { chmodSync } from 'node:fs';
+
+import { FsLookupCache, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { BundleDirectoryIndex, linkFindings } from '../../src/okf/links.js';
 import { validateOkfBundle } from '../../src/okf/validate.js';
+import type { ResourceLink } from '../../src/types.js';
 
 import {
+  NFC_CAFE_DIR,
   NFC_CAFE_DOC,
+  NFD_CAFE_DIR,
   NFD_CAFE_DOC,
   NO_FRONTMATTER,
   REFERENCE_TYPE,
+  SYMLINKS_AVAILABLE,
   TABLE_TYPE,
   codesOf,
   conceptDoc,
   plantOkfBundle,
+  plantSymlink,
 } from './bundle-fixture.js';
+
+/** The `root:` string a test bundle pretends its config file wrote. */
+const ROOT_SPECIFIER = './docs';
+
+/** A second one, for the report-shape suite's differently-named bundle. */
+const KNOWLEDGE_SPECIFIER = './knowledge';
 
 /** Validate a planted literal as a bundle named `docs`, with the defaults. */
 async function reportFor(
@@ -29,7 +44,59 @@ async function reportFor(
   options: { severity?: 'error' | 'warning' | 'info'; specVersion?: string } = {},
 ) {
   const root = plantOkfBundle(files);
-  return await validateOkfBundle({ bundle: 'docs', root, ...options });
+  return await validateOkfBundle({
+    bundle: 'docs',
+    root,
+    rootSpecifier: ROOT_SPECIFIER,
+    ...options,
+  });
+}
+
+/**
+ * Run `body` with `path` unreadable, restoring its mode whatever happens.
+ *
+ * The restore is mandatory rather than tidy: the fixture's teardown removes the
+ * planted tree recursively, and `rm -r` cannot descend into a 0o000 directory —
+ * a test that skipped it would leak the tree and fail the NEXT run's teardown.
+ */
+async function withUnreadable(path: string, body: () => Promise<void>): Promise<void> {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path inside a bundle this test just planted under mkdtemp
+  chmodSync(path, 0o000);
+  try {
+    await body();
+  } finally {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- the same literal-derived path, restored so teardown can descend
+    chmodSync(path, 0o755);
+  }
+}
+
+/** Whether this host enforces POSIX permission bits at all. */
+const PERMISSIONS_ENFORCED = process.platform !== 'win32';
+
+/**
+ * Judge a set of hrefs from one document, and hand back the index they used.
+ *
+ * Reaches `linkFindings` directly rather than going through `validateOkfBundle`,
+ * because the property under test is the WORK the judge does, and only the index
+ * instance can report that.
+ */
+async function judgeHrefs(root: string, hrefs: readonly string[]) {
+  const index = new BundleDirectoryIndex(root, new FsLookupCache());
+  const links: ResourceLink[] = hrefs.map((href, offset) => ({
+    text: 'link',
+    href,
+    type: 'local_file',
+    line: offset + 1,
+  }));
+  const drafts = await linkFindings('a.md', safePath.join(root, 'a.md'), links, root, index);
+  return { drafts, index };
+}
+
+/** A root holding one linking document and `count` neighbours beside it. */
+function wideBundle(count: number): { root: string; entries: number } {
+  const files: Record<string, string> = { 'a.md': conceptDoc(REFERENCE_TYPE) };
+  for (let n = 0; n < count; n += 1) files[`neighbour-${n}.md`] = conceptDoc(TABLE_TYPE);
+  return { root: plantOkfBundle(files), entries: Object.keys(files).length };
 }
 
 describe('validateOkfBundle', () => {
@@ -222,8 +289,12 @@ describe('validateOkfBundle', () => {
         'k/beta.md': conceptDoc(REFERENCE_TYPE),
       });
 
-      expect(codesOf(report.findings)).toEqual(['OKF_BROKEN_CROSS_LINK']);
-      // The remedy is the actual filename, so the message has to carry it.
+      // 🔑 Its OWN code, not OKF_BROKEN_CROSS_LINK. The stated reason for
+      // splitting OKF_ROOT_RELATIVE_LINK_UNRESOLVED out was that the remedies
+      // differ in KIND — and *write the file* differs from *fix the spelling*
+      // exactly that way. Under one code a dashboard cannot separate them.
+      expect(codesOf(report.findings)).toEqual(['OKF_LINK_CASE_MISMATCH']);
+      // The remedy is the actual path, so the message has to carry it.
       expect(report.findings[0]?.message).toContain('beta.md');
       expect(report.findings[0]?.link).toBe('./Beta.md');
     });
@@ -246,6 +317,164 @@ describe('validateOkfBundle', () => {
       });
 
       expect(report.findings).toEqual([]);
+    });
+  });
+
+  describe('cross-link SPELLING is judged on EVERY path component', () => {
+    // 🪤 The headline hole this block exists for: the judge classified only
+    // `basename(resolvedPath)` against a listing of `dirname(resolvedPath)`,
+    // so every DIRECTORY component was resolved by the HOST filesystem's own
+    // folding. On macOS `readdir('<root>/Docs')` succeeds when the directory is
+    // really `docs`, the basename then matched exactly, and VAT reported
+    // nothing — while the same bundle on a case-sensitive volume produced the
+    // finding. Proved by mounting one: 4 findings against 5.
+    //
+    // These cases must therefore hold on a case-FOLDING host (the publisher's
+    // Mac) — which is exactly where the old shape was silent.
+
+    it('reports a directory component whose case does not match disk', async () => {
+      const report = await reportFor({
+        'a.md': conceptDoc(REFERENCE_TYPE, 'See [guide](/Docs/guide.md).'),
+        'docs/guide.md': conceptDoc(REFERENCE_TYPE),
+      });
+
+      expect(codesOf(report.findings)).toEqual(['OKF_LINK_CASE_MISMATCH']);
+      expect(report.findings[0]?.link).toBe('/Docs/guide.md');
+    });
+
+    it('reports a directory component in the wrong normalization form', async () => {
+      // The same hole in the other dimension, and the one that 404s on Linux
+      // rather than merely on a case-sensitive volume.
+      const report = await reportFor({
+        'a.md': conceptDoc(REFERENCE_TYPE, `See [guide](/${NFC_CAFE_DIR}/guide.md).`),
+        [`${NFD_CAFE_DIR}/guide.md`]: conceptDoc(REFERENCE_TYPE),
+      });
+
+      expect(codesOf(report.findings)).toEqual(['OKF_LINK_NORMALIZATION_MISMATCH']);
+    });
+
+    it('judges a component at every depth, not just the last two', async () => {
+      const report = await reportFor({
+        'a.md': conceptDoc(REFERENCE_TYPE, 'See [deep](/One/two/three.md).'),
+        'one/two/three.md': conceptDoc(REFERENCE_TYPE),
+      });
+
+      expect(codesOf(report.findings)).toEqual(['OKF_LINK_CASE_MISMATCH']);
+    });
+
+    it('judges components of a RELATIVE href too, not only a root-anchored one', async () => {
+      const report = await reportFor({
+        'sub/a.md': conceptDoc(REFERENCE_TYPE, 'See [guide](../Docs/guide.md).'),
+        'docs/guide.md': conceptDoc(REFERENCE_TYPE),
+      });
+
+      expect(codesOf(report.findings)).toEqual(['OKF_LINK_CASE_MISMATCH']);
+    });
+
+    it('suggests the FULL corrected path when more than one component is wrong', async () => {
+      // ⚠️ The remedy was WRONG, not merely incomplete: with both components
+      // misspelled the message said `Spell the link "guide.md"`, and a publisher
+      // who followed it verbatim still had a link that 404s. A suggestion is
+      // only a remedy if writing it down fixes the link.
+      const report = await reportFor({
+        'a.md': conceptDoc(REFERENCE_TYPE, 'See [guide](/Docs/Guide.md).'),
+        'docs/guide.md': conceptDoc(REFERENCE_TYPE),
+      });
+
+      const message = report.findings[0]?.message ?? '';
+      expect(message).toContain('docs/guide.md');
+      expect(message).toContain('Docs/Guide.md');
+    });
+
+    it('judges components inside a directory whose NAME begins with dots', async () => {
+      // The guard that keeps the judge inside the bundle tests for a `..`
+      // SEGMENT, not for a `..` prefix — a real directory called `..cache` is
+      // inside the bundle and its contents have to be judged like any other.
+      const report = await reportFor({
+        'a.md': conceptDoc(REFERENCE_TYPE, 'See [x](/..cache/Note.md).'),
+        '..cache/note.md': conceptDoc(REFERENCE_TYPE),
+      });
+
+      expect(codesOf(report.findings)).toEqual(['OKF_LINK_CASE_MISMATCH']);
+    });
+
+    it('says nothing when every component matches byte for byte', async () => {
+      // The negative control. A judge that reported every nested link would
+      // satisfy all five assertions above.
+      const report = await reportFor({
+        'a.md': conceptDoc(REFERENCE_TYPE, 'See [deep](/one/two/three.md).'),
+        'one/two/three.md': conceptDoc(REFERENCE_TYPE),
+      });
+
+      expect(report.findings).toEqual([]);
+    });
+
+    it('says nothing about a link to the bundle root itself', async () => {
+      // The bundle root was walked successfully, so a link to it resolves. The
+      // judge must not need to look ABOVE the root to say so — see the
+      // directory-index suite for the structural pin.
+      const report = await reportFor({
+        'a.md': conceptDoc(REFERENCE_TYPE, 'See [home](/).'),
+      });
+
+      expect(report.findings).toEqual([]);
+    });
+  });
+
+  describe('the directory index — the cost of judging, and how far it reaches', () => {
+    // 🪤 The judge this pins replaced an `fs.stat` per link with up to THREE
+    // linear scans of the parent listing per link, each folding every entry to
+    // NFC and lower case. Cost was O(links × entries-in-that-directory), and
+    // splitting the same files over more directories was what identified
+    // directory WIDTH as the multiplier: 8,000 documents with 80,000 broken
+    // links cost 32.1 s in one directory and 20.1 s across eight, against
+    // 14.9 s for both layouts once the listing was indexed.
+    //
+    // ⛔ Deliberately NOT a wall-clock budget. A literal number of milliseconds
+    // makes the machine a silent second requirement, and the assertion then
+    // passes or fails on load rather than on the code. What is asserted is the
+    // WORK: each directory is listed and indexed once, whatever the link count.
+
+    it('indexes a directory ONCE however many links point into it', async () => {
+      const { root, entries } = wideBundle(200);
+      const hrefs = Array.from({ length: 200 }, (_, n) => `./missing-${n}.md`);
+
+      const { drafts, index } = await judgeHrefs(root, hrefs);
+
+      // Every link misses, so all three lookup rules are exercised — the exact
+      // path the old shape paid a full folded scan for, per link.
+      expect(drafts).toHaveLength(200);
+      expect(index.directoriesIndexed).toBe(1);
+      expect(index.entriesIndexed).toBe(entries);
+    });
+
+    it('shares one index across the components of a nested path', async () => {
+      const root = plantOkfBundle({
+        'a.md': conceptDoc(REFERENCE_TYPE),
+        'one/two/three.md': conceptDoc(TABLE_TYPE),
+        'one/two/four.md': conceptDoc(TABLE_TYPE),
+      });
+
+      const { index } = await judgeHrefs(root, ['/one/two/three.md', '/one/two/four.md']);
+
+      // root, one, one/two — three directories for two links of depth three,
+      // not one listing per component per link.
+      expect(index.directoriesIndexed).toBe(3);
+    });
+
+    it('never lists a directory above the bundle root', async () => {
+      // 🪤 `[home](/)` resolves to the root itself. The judge this replaced
+      // derived `dirname(resolvedPath)` and listed the root's PARENT — a
+      // directory the tarball does not carry, whose name changes when the
+      // bundle is unpacked elsewhere, and which made VAT report
+      // OKF_ROOT_RELATIVE_LINK_UNRESOLVED for a root it had just walked
+      // whenever that parent was not listable.
+      const root = plantOkfBundle({ 'a.md': conceptDoc(REFERENCE_TYPE) });
+
+      const { drafts, index } = await judgeHrefs(root, ['/', '/a.md']);
+
+      expect(drafts).toEqual([]);
+      expect(index.indexedDirectories).toEqual([root]);
     });
   });
 
@@ -329,6 +558,139 @@ describe('validateOkfBundle', () => {
 
       expect(report.findings[0]?.severity).toBe('error');
       expect(report.hasErrors).toBe(true);
+    });
+  });
+
+  describe('one file, one verdict — discovery and link resolution agree', () => {
+    // 🪤 The incoherence, stated as a test: discovery admitted a symlinked `.md`
+    // whose target is outside the root into the population, while `isWithinProject`
+    // in the link lane called a LINK to that same file an escape. Both lanes now
+    // ask the same predicate, so the file is outside for both — and the defect
+    // that was never reported at all (a bundle member that does not travel with
+    // the tarball) is reported.
+
+    it.skipIf(!SYMLINKS_AVAILABLE)('calls an escaping symlink outside in BOTH lanes', async () => {
+      const outside = plantOkfBundle({ 'target.md': conceptDoc(TABLE_TYPE) });
+      const root = plantOkfBundle({
+        'a.md': conceptDoc(REFERENCE_TYPE, 'See [escapee](./escapee.md).'),
+      });
+      plantSymlink(root, 'escapee.md', safePath.join(outside, 'target.md'), 'file');
+
+      const report = await validateOkfBundle({
+        bundle: 'docs',
+        root,
+        rootSpecifier: ROOT_SPECIFIER,
+      });
+
+      // Not a member of the population…
+      expect(report.conceptDocuments).toEqual(['a.md']);
+      // …and both lanes say so, each in its own vocabulary.
+      // Report order, not a sorted copy: findings are ordered by document, so
+      // `a.md`'s link finding precedes `escapee.md`'s own — and asserting the
+      // order also pins that the two lanes each spoke once.
+      expect(codesOf(report.findings)).toEqual([
+        'OKF_LINK_ESCAPES_BUNDLE',
+        'OKF_DOCUMENT_ESCAPES_BUNDLE',
+      ]);
+    });
+  });
+
+  describe('an unreadable SUBdirectory is not an unreadable root', () => {
+    // 🪤 The `try` used to wrap the entire recursive walk, so a `readdir`
+    // failure anywhere in the tree came back as "okf.bundles.<name>.root is not
+    // a readable directory … so this bundle was not checked at all" — about a
+    // root that was perfectly readable, and whose documents were never judged.
+    // It told the adopter to point their config somewhere else to fix a
+    // permission problem three levels down.
+
+    it.skipIf(!PERMISSIONS_ENFORCED)(
+      'names the subdirectory and still checks the rest of the bundle',
+      async () => {
+        const root = plantOkfBundle({
+          'a.md': conceptDoc(TABLE_TYPE),
+          'sub/hidden.md': conceptDoc(TABLE_TYPE),
+        });
+
+        await withUnreadable(safePath.join(root, 'sub'), async () => {
+          const report = await validateOkfBundle({
+            bundle: 'docs',
+            root,
+            rootSpecifier: ROOT_SPECIFIER,
+          });
+
+          expect(codesOf(report.findings)).toEqual(['OKF_SUBDIRECTORY_UNREADABLE']);
+          expect(report.findings[0]?.document).toBe('sub');
+          // The half of the bundle that WAS readable is still judged.
+          expect(report.conceptDocuments).toEqual(['a.md']);
+        });
+      },
+    );
+
+    it.skipIf(!PERMISSIONS_ENFORCED)('stays at error even when the dial is lowered', async () => {
+      // Same argument as the unreadable root: the dial answers "how hard do you
+      // gate on this bundle's conformance", and a subtree nobody could open was
+      // never assessed. Lowering it would be green-without-running for that
+      // subtree.
+      const root = plantOkfBundle({ 'a.md': conceptDoc(TABLE_TYPE), 'sub/h.md': conceptDoc(TABLE_TYPE) });
+
+      await withUnreadable(safePath.join(root, 'sub'), async () => {
+        const report = await validateOkfBundle({
+          bundle: 'docs',
+          root,
+          rootSpecifier: ROOT_SPECIFIER,
+          severity: 'warning',
+        });
+
+        expect(report.findings[0]?.severity).toBe('error');
+        expect(report.hasErrors).toBe(true);
+      });
+    });
+  });
+
+  describe('an unreadable DOCUMENT is that document own finding', () => {
+    // 🪤 `parseOkfDocument` was in no `try` at all, so one unreadable file
+    // aborted the whole command at exit 2 — discarding every other bundle's
+    // findings and printing `EACCES: permission denied, open '/Users/…'`, which
+    // is both the wrong exit code and the home-directory leak two docstrings in
+    // this module claim to have eliminated. The root-listing throw was closed;
+    // the per-document read throw is the more common one.
+
+    it.skipIf(!PERMISSIONS_ENFORCED)('reports it and keeps going', async () => {
+      const root = plantOkfBundle({
+        'ok.md': conceptDoc(TABLE_TYPE),
+        'locked.md': conceptDoc(TABLE_TYPE),
+      });
+
+      await withUnreadable(safePath.join(root, 'locked.md'), async () => {
+        const report = await validateOkfBundle({
+          bundle: 'docs',
+          root,
+          rootSpecifier: ROOT_SPECIFIER,
+        });
+
+        expect(codesOf(report.findings)).toEqual(['OKF_DOCUMENT_UNREADABLE']);
+        expect(report.findings[0]?.document).toBe('locked.md');
+        expect(report.findings[0]?.severity).toBe('error');
+        // The readable document was still opened and judged.
+        expect(report.conceptDocuments).toEqual(['locked.md', 'ok.md']);
+      });
+    });
+
+    it.skipIf(!PERMISSIONS_ENFORCED)('leaks no absolute path while doing it', async () => {
+      const root = plantOkfBundle({ 'locked.md': conceptDoc(TABLE_TYPE) });
+
+      await withUnreadable(safePath.join(root, 'locked.md'), async () => {
+        const report = await validateOkfBundle({
+          bundle: 'docs',
+          root,
+          rootSpecifier: ROOT_SPECIFIER,
+        });
+
+        // Node writes the full path into the Error.message; the errno is the
+        // only part of it that says anything a reader needs.
+        expect(JSON.stringify(report)).not.toContain(root);
+        expect(report.findings[0]?.message).toContain('EACCES');
+      });
     });
   });
 
@@ -462,12 +824,39 @@ describe('validateOkfBundle', () => {
       ]);
     });
 
-    it('names the bundle and root it was asked about', async () => {
+    it('names the bundle, and the root AS THE CONFIG WROTE IT', async () => {
+      // 🪤 `root` used to carry the resolved ABSOLUTE path, and it is emitted
+      // for every bundle — so `grep -c "/Users/<name>" report.json` returned 3
+      // on a clean run. The finding MESSAGES were scrubbed and pinned; the
+      // artifact called "the report" was not, which made the property false at
+      // exactly the level a CI log reads.
       const root = plantOkfBundle({ 'concept.md': conceptDoc('Metric') });
-      const report = await validateOkfBundle({ bundle: 'knowledge', root });
+      const report = await validateOkfBundle({
+        bundle: 'knowledge',
+        root,
+        rootSpecifier: KNOWLEDGE_SPECIFIER,
+      });
 
       expect(report.bundle).toBe('knowledge');
-      expect(report.root).toBe(root);
+      expect(report.root).toBe(KNOWLEDGE_SPECIFIER);
+    });
+
+    it('leaks no absolute path anywhere in a clean report', async () => {
+      // The whole document, not one field: the property is about the artifact a
+      // CI job publishes, and a field-by-field assertion goes stale the moment
+      // a field is added.
+      const root = plantOkfBundle({
+        'index.md': '# Bundle\n\n* [Gone](/tables/gone.md)\n',
+        'concept.md': conceptDoc('Metric'),
+      });
+      const report = await validateOkfBundle({
+        bundle: 'knowledge',
+        root,
+        rootSpecifier: KNOWLEDGE_SPECIFIER,
+      });
+
+      expect(report.findings).not.toEqual([]);
+      expect(JSON.stringify(report)).not.toContain(root);
     });
   });
 });

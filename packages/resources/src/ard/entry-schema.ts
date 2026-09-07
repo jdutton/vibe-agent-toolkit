@@ -40,6 +40,99 @@ export const ARD_PUBLISHER_SEGMENT_PATTERN = /^[a-zA-Z0-9.-]+$/;
 /** Charset for the `<namespace>` and `<name>` segments. */
 export const ARD_NAME_SEGMENT_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
+/**
+ * The two segments a URL resolver reads as an INSTRUCTION rather than a name.
+ *
+ * Kept beside the charset they are carved out of, because the charset is where
+ * a reader looks to learn what a segment may be.
+ */
+const URL_DOT_SEGMENTS: ReadonlySet<string> = new Set(['.', '..']);
+
+/**
+ * Whether a string may be a `<namespace>` or `<name>` segment VAT emits.
+ *
+ * 🚨 {@link ARD_NAME_SEGMENT_PATTERN} is a *charset*, and a charset admits `.`
+ * and `..`. Those are not names — collapsing them is a URL resolver's DEFINING
+ * behaviour — so `ard.namespace: ".."` under `baseUrl:
+ * https://example.com/tenants/acme/catalog` emitted
+ * `https://example.com/tenants/acme/<name>`: one level above where the
+ * identifier says the resource lives, and plausible enough that nothing
+ * downstream reports it. A skill NAMED `.` addressed the namespace directory
+ * rather than the skill.
+ *
+ * Only the two dot segments are refused. A segment that merely CONTAINS dots
+ * (`v1.2`, `.hidden`) is the ordinary shape of a versioned or dotted name and
+ * survives resolution untouched, so banning the character would be a fix wider
+ * than the fault.
+ */
+export function isArdNameSegment(value: string): boolean {
+  return ARD_NAME_SEGMENT_PATTERN.test(value) && !URL_DOT_SEGMENTS.has(value);
+}
+
+/**
+ * Whether a relative path may be appended to `ard.baseUrl`.
+ *
+ * 🚨 `ArdSurface.urlPath` is documented as "path appended to `ard.baseUrl`", and
+ * `buildArdEntry` is exported from this package. An absolute URL handed to it
+ * resolved to ITSELF, producing an entry whose `identifier` is anchored at the
+ * publisher while its `url` points at another origin — which defeats the
+ * publisher-authority binding the trust manifest exists to carry. Dot segments
+ * walk out of the base's path, and `%2e%2e` decodes during resolution, so the
+ * encoded form has to be judged on its decoded value.
+ *
+ * Not reachable from `vat ard emit` today — `urlPathFor` composes segments this
+ * module has already constrained — so this is the API contract, checked where
+ * the path is actually consumed rather than trusted from a comment.
+ */
+export function isArdUrlPath(value: string): boolean {
+  // A scheme, or a protocol-relative prefix, both relocate the entry: `//host/x`
+  // keeps only the base's protocol, and a scheme keeps nothing at all.
+  if (SCHEME_PREFIX_PATTERN.test(value)) return false;
+  if (value.startsWith('//')) return false;
+  return !hasDotSegment(value);
+}
+
+/**
+ * Whether any `/`-delimited segment of a URL path is `.` or `..`.
+ *
+ * Walked by index rather than `split('/')`: this is a URL path, not a file path,
+ * and the repo's `local/no-hardcoded-path-split` rule refuses the split outright
+ * — correctly, since the two are separated only by convention at a call site.
+ * The walk is linear and reads the same.
+ */
+function hasDotSegment(path: string): boolean {
+  let start = 0;
+  for (let index = 0; index <= path.length; index += 1) {
+    if (index < path.length && path[index] !== '/') continue;
+    if (URL_DOT_SEGMENTS.has(decodePathSegment(path.slice(start, index)))) return true;
+    start = index + 1;
+  }
+  return false;
+}
+
+/**
+ * A single path segment's decoded value, or the segment itself when the escape
+ * is malformed.
+ *
+ * A malformed escape is not a dot segment, and it is not this predicate's job to
+ * refuse it — `new URL` preserves it verbatim.
+ */
+function decodePathSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+/**
+ * A URI scheme at the start of a string, per RFC 3986 §3.1.
+ *
+ * One quantifier over one character class: linear, and no star height for a
+ * linter to score (the trap {@link ARD_IDENTIFIER_PATTERN_SOURCE} documents).
+ */
+const SCHEME_PREFIX_PATTERN = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+
 /** The URN prefix every ARD identifier carries. */
 const ARD_URN_PREFIX = 'urn:air:';
 

@@ -547,63 +547,100 @@ function literalRunAt(command: string, index: number): string | undefined {
 }
 
 /**
- * What an enclosing region keeps in place of a region emitted on its own — an
- * empty group, so the enclosing text stays PARSEABLE and no invented word
- * appears where a command could be read.
+ * How much region text one command may yield, as a multiple of its own length.
+ *
+ * ⚠️ NOT a schema or format number — nothing stored is judged valid or invalid
+ * by it. It is a work bound, and it exists because full correctness here is
+ * provably incompatible with a linear one: see {@link closeRegion}.
+ *
+ * 8 is the nesting depth at which a command stops having every one of its
+ * regions materialised in full. Real commands nest one to three deep — the
+ * deepest shape in this module's own suite, `echo "$(sh -c "rm $(x)")"`, is
+ * two — so the factor is never reached by a command anybody wrote on purpose.
  */
-const NESTED_REGION_PLACEHOLDER = '()';
+const NESTED_REGION_TEXT_BUDGET_FACTOR = 8;
 
 /** Accumulator for {@link nestedRegions}. */
 interface NestedScan {
   readonly found: string[];
   /**
-   * The text of each currently-open region, outermost first. Index 0 is the
-   * text outside every region, which the caller already has as `command` and
-   * which is therefore never emitted.
+   * Where each currently-open region's INTERIOR begins, outermost first. Text
+   * outside every region is not a region: the caller already has it as
+   * `command`, so nothing sits at the bottom of this stack.
    */
-  readonly open: string[];
+  readonly open: number[];
+  /** How many more characters of region text this command may still yield. */
+  budget: number;
   inBacktick: boolean;
 }
 
-/** Append literal text to the innermost open region. */
-function appendToRegion(scan: NestedScan, text: string): void {
-  scan.open[scan.open.length - 1] += text;
-}
-
 /**
- * Close the innermost open region, emitting it, and leave a
- * {@link NESTED_REGION_PLACEHOLDER} in the enclosing one.
+ * Close the innermost open region, emitting the command's own text for it —
+ * children and all.
  *
- * 🚩 The placeholder is what makes the scan LINEAR. Every enclosing region used
- * to be re-emitted whole and then re-split, so `'('×k + 'echo x' + ')'×k` cost
- * O(k²): measured on the shipped module, k=25,000 took 4,487 ms and 4× the
- * length cost ~11× the time — from the same attacker-reachable input as the
- * wildcard blowup. A region that has already been emitted on its own does not
- * need to appear inside its parent as well.
+ * 🚩 Children and all is the point, and the shape this replaces got it exactly
+ * backwards. A parent used to carry a two-character `()` placeholder wherever
+ * one of its own children sat, justified as *"a region that has already been
+ * emitted on its own does not need to appear inside its parent as well."* That
+ * sentence is FALSE for every rule whose literal SPANS a child: the parent of
+ * `(rm -rf $(pwd))` came out as `rm -rf $()`, so `Bash(rm -rf $(pwd))` answered
+ * `false` for a command that is literally itself. 10 of 10 hand-built shapes
+ * regressed that way on BOTH deny and ask, and a 1,118,566-pair differential
+ * found 29 more. The direction is UNDER-REPORT — `vat audit` reporting no
+ * conflict about a command Claude Code blocks — which is the same class the
+ * unparseable-command fallback below exists to close.
+ *
+ * 🚩 The placeholder's other stated virtue — *"no invented word appears where a
+ * command could be read"* — was false too, and in the opposite direction: `()`
+ * is a whitespace-free group, so {@link caseArmBodyStartAt} read it as a `case`
+ * ARM PATTERN and `()rm` reduced to a reading of `rm`. A 500,000-pair
+ * differential against this implementation found 11 deny/ask answers that flip
+ * to `false`, and every one of them lost only segments carrying that invented
+ * `()`. Those were conflicts reported over a pattern the command never had.
+ *
+ * ⚠️ So the bound is a BUDGET now, not a placeholder, because the two cannot
+ * both be had. The correct region set is inherently Θ(length × depth):
+ * `'('×k + 'rm -rf /' + ')'×k` has k regions whose lengths sum to ~k², and no
+ * representation of "every region's own text" escapes that — the placeholder
+ * bought its linearity by not answering the question. The budget caps the TOTAL
+ * emitted characters at {@link NESTED_REGION_TEXT_BUDGET_FACTOR} × the command's
+ * length, which keeps the whole scan linear, and it is spent INNERMOST-FIRST
+ * because regions close from the inside out. So an adversarially deep nest keeps
+ * the inner regions, where a command can actually sit, and drops the outer ones —
+ * which at that depth are that same command wrapped in parentheses, and are the
+ * regions a rule is least able to match anyway.
+ *
+ * Measured on Node 24 against `Bash(rm *)` and `'('×k + 'echo x' + ')'×k`, with
+ * the budget: k=48,000 in 8.47 ms and ~1.9× per 2× input across k=1,500…48,000.
+ * WITHOUT it, on the same machine and the same code: ~3.75× per 2× input, and
+ * k=6,000 alone costs 374.89 ms. The suite pins the ratio, not those numbers.
  */
-function closeRegion(scan: NestedScan): void {
-  if (scan.open.length === 1) return; // A closer with nothing open.
-  scan.found.push(scan.open.pop() as string);
-  appendToRegion(scan, NESTED_REGION_PLACEHOLDER);
+function closeRegion(scan: NestedScan, command: string, end: number): void {
+  const start = scan.open.pop();
+  if (start === undefined) return; // A closer with nothing open.
+  const length = end - start;
+  if (length > scan.budget) return; // Budget spent — see above for what that costs.
+  scan.budget -= length;
+  scan.found.push(command.slice(start, end));
 }
 
 /**
- * Record the grouping character `char`, opening or closing a region — or report
- * that it is not a grouping character at all.
+ * Record the grouping character at `index`, opening or closing a region — or
+ * report that it is not a grouping character at all.
  */
-function recordGrouping(char: string, scan: NestedScan): boolean {
+function recordGrouping(char: string, scan: NestedScan, command: string, index: number): boolean {
   if (char === '`') {
-    if (scan.inBacktick) closeRegion(scan);
-    else scan.open.push('');
+    if (scan.inBacktick) closeRegion(scan, command, index);
+    else scan.open.push(index + 1);
     scan.inBacktick = !scan.inBacktick;
     return true;
   }
   if (char === '(') {
-    scan.open.push('');
+    scan.open.push(index + 1);
     return true;
   }
   if (char === ')') {
-    closeRegion(scan);
+    closeRegion(scan, command, index);
     return true;
   }
   return false;
@@ -639,13 +676,18 @@ function skipQuoting(command: string, index: number, inDouble: boolean): number 
  * once. The allow lane is unchanged and its behaviour stays annotated
  * ⛔ UNSOURCED in the suite.
  *
- * A region carries a {@link NESTED_REGION_PLACEHOLDER} where each of its own
- * nested regions sat, because those are emitted separately — see
- * {@link closeRegion} for why that, and not a whole re-emission, is the shape
- * this has to take.
+ * Each region is the command's OWN text between its delimiters, its nested
+ * regions included verbatim, so a rule literal that crosses a child's boundary
+ * still matches. That is not free — see {@link closeRegion} for the budget that
+ * pays for it and for what an adversarially deep nest gives up.
  */
 function nestedRegions(command: string): string[] {
-  const scan: NestedScan = { found: [], open: [''], inBacktick: false };
+  const scan: NestedScan = {
+    found: [],
+    open: [],
+    budget: command.length * NESTED_REGION_TEXT_BUDGET_FACTOR,
+    inBacktick: false,
+  };
   let inDouble = false;
   let index = 0;
 
@@ -653,18 +695,16 @@ function nestedRegions(command: string): string[] {
     const char = command[index] as string;
     if (char === '"') {
       inDouble = !inDouble;
-      appendToRegion(scan, char);
       index += 1;
       continue;
     }
     const skipped = skipQuoting(command, index, inDouble);
     if (skipped === undefined) break; // Unterminated quote: nothing more to learn.
     if (skipped > index) {
-      appendToRegion(scan, command.slice(index, skipped));
       index = skipped;
       continue;
     }
-    if (!recordGrouping(char, scan)) appendToRegion(scan, char);
+    recordGrouping(char, scan, command, index);
     index += 1;
   }
 

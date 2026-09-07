@@ -8,9 +8,10 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
 
 /**
  * Files `loadVerboseHelp()` is actually asked for by a command.
@@ -107,8 +108,14 @@ export function validateHelpFiles(): void {
 /**
  * Run validation if this file is executed directly
  * (via tsx or node during build process)
+ *
+ * ⛔ NOT `import.meta.url === pathToFileURL(process.argv[1]).href`, which is what
+ * this used to be. That compare has no realpath pass, so it is false whenever
+ * the build reaches this script through a symlink — and a build-time validator
+ * whose guard is false does not fail the build, it exits 0 having validated
+ * nothing, which is the exact opposite of the "fail fast" this file exists for.
  */
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isEntrypoint(import.meta.url)) {
   try {
     validateHelpFiles();
     console.log('✓ All required help documentation files exist');

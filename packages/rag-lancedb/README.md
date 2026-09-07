@@ -127,7 +127,7 @@ Filters are compiled into a SQL `WHERE` clause against the LanceDB table. **Two 
 | Filter | Behaviour |
 |---|---|
 | `filters.resourceId` | Exact match on the source resource. Accepts a string or an array (`resourceid IN (...)`). An empty array matches nothing (`1 = 0`). |
-| `filters.metadata` | Any field declared in your metadata schema — default or custom. A field **not** declared in that schema **throws**: it can never match, so skipping it would widen the search exactly as the refused filters above did. An empty array value matches nothing (`1 = 0`), the same as an empty `resourceId` — "filter to the set I computed, and the set is empty" is a request nothing satisfies, not a request to see everything. |
+| `filters.metadata` | Any field declared in your metadata schema — default or custom. A field **not** declared in that schema **throws**: it can never match, so skipping it would widen the search exactly as the refused filters above did. A value that **stringifies to nothing** matches nothing (`1 = 0`), the same as an empty `resourceId` — that covers `[]`, `['']`, a bare `''` and `[[]]`, and it is the emptiness of the *pattern*, not the length of the array, that decides. "Filter to the set I computed, and the set is empty" is a request nothing satisfies, not a request to see everything. |
 
 All metadata fields (default or custom) are filterable:
 
@@ -143,12 +143,25 @@ const result = await provider.query({
       domain: 'security',
       priority: 1,
       keywords: 'oauth', // Array field (substring match)
+      tags: ['auth', 'oauth'], // Every member must be present, in any stored order
     },
   },
 });
 ```
 
-Array fields use substring matching (SQL `LIKE`). Other fields use exact matching.
+Array fields use substring matching (SQL `LIKE`); other fields use exact matching.
+
+**A list is matched member by member.** `tags: ['auth', 'oauth']` compiles to
+`(tags LIKE '%auth%' AND tags LIKE '%oauth%')` — one condition per member — so a document
+tagged `oauth,auth` matches just as one tagged `auth,oauth` does. Arrays are stored as a
+comma-joined string, so matching the list as a single substring would have required you to
+guess the stored ORDER, and a list given in the other order returned zero rows with nothing
+to say why.
+
+**A member that is the empty string makes the whole filter unsatisfiable** (`1 = 0`), for the
+same reason an empty list is: `LIKE '%%'` matches every row, which is the exact inverse of
+what a filter means. The rule is about the emitted pattern, not about array length — see the
+`filters.metadata` row above.
 
 ### Declared but not implemented — these now throw
 

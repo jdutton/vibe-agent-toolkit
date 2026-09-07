@@ -178,6 +178,29 @@ describe('unsupported queries are refused rather than widened', () => {
     expect(result.chunks).toHaveLength(0);
   });
 
+  it.each([
+    { label: 'a list holding one empty tag', value: [''] },
+    { label: 'a bare empty string', value: '' },
+    { label: 'a list holding an empty list', value: [[]] },
+  ])('returns NOTHING for $label either, because the mechanism is stringification', async ({ value }) => {
+    // 🚨 The case above fixed `[]` by testing `value.length === 0`, but the clause is
+    // built from `String(value)` — so every value that stringifies to nothing kept
+    // producing `tags LIKE '%%'` and kept returning BOTH documents. Proved by execution:
+    // before the fix this assertion read `expected length 0, got 2`, the whole index.
+    //
+    // None of these needs a cast to arrive. `filters.metadata` is deliberately open, so a
+    // JSON payload reaches this path with no type check anywhere in between.
+    suite.provider = await indexTwoDocuments();
+
+    const result = await suite.provider.query({
+      text: QUERY_TEXT,
+      limit: 10,
+      filters: { metadata: { tags: value } },
+    });
+
+    expect(result.chunks).toHaveLength(0);
+  });
+
   it('allows hybridSearch when it is explicitly disabled', async () => {
     suite.provider = await indexTwoDocuments();
 

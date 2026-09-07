@@ -55,6 +55,7 @@ const rules = {
   'require-justified-skip': require('./rules/require-justified-skip.cjs'),
   'no-bare-symlink-in-tests': require('./rules/no-bare-symlink-in-tests.cjs'),
   'no-process-exit-in-phase': require('./rules/no-process-exit-in-phase.cjs'),
+  'no-fragile-entrypoint-guard': require('./rules/no-fragile-entrypoint-guard.cjs'),
 };
 
 /**
@@ -145,6 +146,20 @@ const RECOMMENDED_EXCLUDE = new Set([
   // that legitimately exits would get a finding they cannot act on. It ships in
   // `rules` and VAT enables it explicitly, scoped to its own orchestrators.
   'no-process-exit-in-phase',
+  // Excluded because ONE of its two halves is a claim about the CONSUMER's Node
+  // floor rather than a portable fact. `import.meta.main` shipped in Node 24.2 /
+  // 22.18; an adopter whose floor is at or above that writes it correctly and
+  // would get a finding they cannot act on. This package's own floor is `>=22`,
+  // which spans 22.13–22.17 where the property is `undefined` — so the hazard is
+  // real for some adopters and absent for others, and only they know which.
+  //
+  // The rule's OTHER half (`rawEntrypointCompare`) has no such dependency: a raw
+  // string compare against `pathToFileURL(argv[1]).href` misses a symlinked
+  // entry on every Node there has ever been. The two share one rule id and
+  // cannot be enabled separately, and the floor-dependent half is what keeps the
+  // pair out — the same trade already recorded for `no-bare-symlink-in-tests`.
+  // VAT enables the whole rule explicitly, because VAT's floor is 22.13.0.
+  'no-fragile-entrypoint-guard',
 ]);
 
 /**

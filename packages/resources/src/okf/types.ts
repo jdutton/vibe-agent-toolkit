@@ -17,13 +17,19 @@
 /**
  * The dial an adopter sets per bundle. Defaults to `error` — VAT is producer-side.
  *
- * ⛔ **It does not reach `OKF_BUNDLE_ROOT_UNREADABLE`, and that is not an
- * exception carved for convenience.** The dial answers *how hard do you gate on
- * this bundle's conformance*, and an unreadable root means conformance was never
- * assessed — nothing was opened, nothing was judged. A conformance dial cannot
- * downgrade "I could not look" without producing the green-without-running
- * report this repo keeps rediscovering: a bundle lowered to `warning` whose root
- * is a typo would otherwise pass, silently, forever.
+ * ⛔ **It does not reach the three "could not look" codes, and that is not an
+ * exception carved for convenience.** `OKF_BUNDLE_ROOT_UNREADABLE`,
+ * `OKF_SUBDIRECTORY_UNREADABLE` and `OKF_DOCUMENT_UNREADABLE` all say that
+ * conformance was never assessed for some part of the bundle — nothing was
+ * opened there, nothing was judged. A conformance dial cannot downgrade "I
+ * could not look" without producing the green-without-running report this repo
+ * keeps rediscovering: a bundle lowered to `warning` whose root is a typo, or
+ * whose one interesting subtree is unreadable, would otherwise pass silently and
+ * forever.
+ *
+ * Every other code IS a judgement about content that VAT did read, including
+ * `OKF_DOCUMENT_ESCAPES_BUNDLE` — the entry was seen and found not to be a
+ * distributable member — so the dial reaches all of them.
  */
 export type OkfSeverity = 'error' | 'warning' | 'info';
 
@@ -42,12 +48,21 @@ export const OKF_FINDING_CODES = [
   'OKF_TYPE_MISSING',
   /** §11.2 — a `type` that is present but not a non-empty string. */
   'OKF_TYPE_INVALID',
-  /**
-   * §6.1 — a markdown cross-link whose target is not in the bundle, or is there
-   * under a different case. Both are the same remedy shape: the link and the
-   * tree disagree, and only the publisher can reconcile them.
-   */
+  /** §6.1 — a markdown cross-link whose target is not in the bundle at all. */
   'OKF_BROKEN_CROSS_LINK',
+  /**
+   * §6.1 — the target IS in the bundle, spelled with different letter case in
+   * one or more path components.
+   *
+   * 🔑 Split out of {@link OKF_BROKEN_CROSS_LINK} on the same argument that
+   * split {@link OKF_ROOT_RELATIVE_LINK_UNRESOLVED} out of it: the remedies
+   * differ in KIND, not in degree. *Write the missing document* and *fix the
+   * spelling* are different work, done by different people at different times,
+   * and a dashboard grouping by code could not separate them while both wore
+   * one code — the exact failure that made six root-relative links invisible
+   * among 452.
+   */
+  'OKF_LINK_CASE_MISMATCH',
   /**
    * §6.1, §2 — a `/`-anchored link that did not resolve.
    *
@@ -82,6 +97,38 @@ export const OKF_FINDING_CODES = [
    * {@link OkfSeverity}.
    */
   'OKF_BUNDLE_ROOT_UNREADABLE',
+  /**
+   * A directory BENEATH a readable root could not be listed.
+   *
+   * 🪤 Its own code because the root's code was being used for it: the whole
+   * recursive walk sat inside one `try`, so a permission problem three levels
+   * down was reported as `okf.bundles.<name>.root` being unreadable and told
+   * the adopter to point their config elsewhere. The rest of the bundle IS
+   * checked; this names the one subtree that was not.
+   */
+  'OKF_SUBDIRECTORY_UNREADABLE',
+  /**
+   * A document that was enumerated and then could not be opened.
+   *
+   * 🪤 This used to be an uncaught throw — exit 2, every other bundle's findings
+   * discarded, and Node's `EACCES: … open '/Users/…'` printed as the error,
+   * which is the home-directory leak two docstrings in this lane claim to have
+   * eliminated. Like the two above, it says conformance was NOT assessed for
+   * this document rather than that the document is non-conformant.
+   */
+  'OKF_DOCUMENT_UNREADABLE',
+  /**
+   * §2 — a `.md` entry under the root whose BYTES do not live under the root: a
+   * symlink pointing outside it, or one pointing at nothing.
+   *
+   * 🪤 The lane used to admit such a file into the population (via `stat`) while
+   * the link judge reported a link to that same file as escaping the bundle —
+   * VAT calling one file both inside and outside at once. The justification for
+   * admitting it was also false: default `tar -cf` stores a symlink AS a
+   * symlink, so only `-h`/`--dereference` copies the bytes, and the file whose
+   * conformance VAT was reporting arrives at the consumer dangling.
+   */
+  'OKF_DOCUMENT_ESCAPES_BUNDLE',
   /** §8, §12 — frontmatter in an `index.md` beyond the one permitted root key. */
   'OKF_INDEX_FRONTMATTER_NOT_PERMITTED',
   /** §12 — a root `okf_version` that is not a `<major>.<minor>` string. */
@@ -116,7 +163,18 @@ export interface OkfFinding {
 export interface OkfBundleReport {
   /** The `okf.bundles.<name>` key this report answers for. */
   bundle: string;
-  /** Absolute, forward-slashed bundle root. */
+  /**
+   * The bundle root **as the config file wrote it** — never the resolved
+   * absolute path.
+   *
+   * 🪤 It used to be the absolute path, and this field is emitted for every
+   * bundle, so a clean report published the developer's home directory into
+   * every CI log: `grep -c "/Users/<name>" report.json` returned 3. The finding
+   * messages had been scrubbed and pinned, which made the leak invisible —
+   * "no absolute path is leaked" was true of the sentences and false of the
+   * artifact. The specifier is also the more useful value: it is the string an
+   * adopter would search their repository for.
+   */
   root: string;
   /** Every non-reserved `.md` beneath the root, bundle-relative and sorted. */
   conceptDocuments: string[];

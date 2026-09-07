@@ -28,7 +28,7 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 | `./text` | `decodeTextContent` — the one bytes-to-text seam: BOM-announced UTF-8/UTF-16LE/UTF-16BE/UTF-32LE/UTF-32BE, BOM stripped, UTF-8 assumed otherwise; reports the encoding, whether it was a BOM fact or an assumption, and how many U+FFFD the decode substituted | **none** | — | **yes** |
 | `./zod` | `ZodTypeNames`, `getZodTypeName`, `isZodType`, `unwrapZodType`, `isZodOptional`, `isZodNullable` | **none** | — | **yes** |
 | `./glob` | `isGlob`, static base extraction, magic remainder | `path` only | — | **yes** |
-| `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `fillSiblingNames`, `classifyFilenameCaseFrom`, `FsLookupCache`, `readTextContent`, `readTextContentSync` | `fs`, `fs/promises`, `os`, `path`, `url`, `util` | — | **yes** |
+| `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `fillPathSpellings`, `pathSpellingFrom`, `DirectorySpellingIndex`, `spellingWalkRoot`, `fillRealpaths`, `realpathFrom`, `FsLookupCache`, `readTextContent`, `readTextContentSync` | `fs`, `fs/promises`, `os`, `path`, `url`, `util` | — | **yes** |
 | `./testing` | `getTestOutputDir`, `getTestOutputBase`, `setupAsyncTempDirSuite`, `setupSyncTempDirSuite`, `removeScratchDir`, `symlinkCapability`, `createSymlink`, `createSymlinkAsync` | `crypto`, `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./asset` | `resolveAssetReference` — paths and npm bare specifiers | `fs`, `module`, `os`, `path`, `url` | — | **yes** |
 | `./yaml` | `updateYamlIn`, `verifyConfinedYamlEdit` — byte-surgical YAML edits | **none** | `yaml` | no — needs `yaml` |
@@ -159,11 +159,19 @@ These return **OS-native** separators, because they resolve real filesystem iden
 - `resolveFromImportMeta()` - resolve paths relative to an `import.meta.url`
 - `dynamicImportPath()` - `import()` an absolute path (works on Windows, which rejects bare absolute paths)
 - `copyDirectory()`
-- `fillSiblingNames(filePaths, fsCache)` - pass 1 of the case-exact existence check: list the parent
-  directory of every path, de-duplicated by directory and issued concurrently. The only I/O in the pair
-- `classifyFilenameCaseFrom(table, filePath)` - pass 2: pure judgement against the table pass 1 returned,
-  reporting the entry actually on disk when only the case differs. Fill **once** over the whole set and
-  then judge each path — a fill per path reinstates the serialized `readdir` this shape removes
+- `fillPathSpellings(requests, fsCache)` - pass 1 of the case-exact existence check: walk each
+  `{ referrer, target }` from the deepest directory the two share, listing every directory on the way
+  down exactly once. The only I/O in the pair
+- `pathSpellingFrom(table, referrer, target)` - pass 2: pure judgement against the table pass 1
+  returned, reporting the path as disk spells it when the asked-for spelling differs only by case or
+  by Unicode normalization. Fill **once** over the whole set and then judge each reference — a fill
+  per reference reinstates the serialized `readdir` this shape removes.
+  ⚠️ It judges **every component**, not just the basename: judging only the last one hands each
+  directory component back to the host filesystem's own folding, so a link that resolves on
+  macOS/APFS 404s on a case-sensitive filesystem — and a basename-only correction still leaves the
+  author with a broken path
+- `DirectorySpellingIndex` / `spellingWalkRoot(referrer, target)` - the index the pair walks over, and
+  the root it walks from, for a caller that cannot enumerate its targets up front
 - `FsLookupCache` - per-run memo for `realpath`/`readdir`, sharing in-flight promises. Construct one per
   validation run and let it die with the run — never a module-level singleton, or a long-lived process
   answers from a stale directory listing.

@@ -23,11 +23,10 @@
  */
 
 import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-import { log } from './common.js';
+import { isEntrypoint, log } from './common.js';
 
 const PACKAGES_DIR = safePath.join(import.meta.dirname, '../../../packages');
 const SCOPE = '@vibe-agent-toolkit';
@@ -193,7 +192,9 @@ function main(): void {
 // `process.exit(1)`d on the missing version argument, so the module could not be
 // unit tested at all — which is why the `optionalDependencies` hole shipped
 // untested. A test that cannot import the thing it tests is not a test.
-const entrypoint = process.argv[1];
-if (entrypoint !== undefined && import.meta.url === pathToFileURL(entrypoint).href) {
+// `isEntrypoint`, not a raw `argv[1]` string compare: the compare has no
+// realpath pass, so it is false whenever this script is reached through a
+// symlink and `main()` never runs.
+if (isEntrypoint(import.meta.url)) {
   main();
 }

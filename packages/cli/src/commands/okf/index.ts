@@ -74,10 +74,13 @@ Description:
     §11.2  every one of those blocks carries a non-empty \`type\`
     §6.1   every markdown LINK and IMAGE — the [text](target) form — resolves
            inside the bundle. A leading "/" resolves against the BUNDLE ROOT,
-           not the filesystem root, and spelling is judged against the bytes on
-           disk, so a link that opens only because the author's filesystem folds
-           letter case or Unicode normalization form is reported: the bundle is
-           unpacked somewhere that does not fold.
+           not the filesystem root, and EVERY path component is judged against
+           the bytes on disk, so a link that opens only because the author's
+           filesystem folds letter case or Unicode normalization form is
+           reported: the bundle is unpacked somewhere that does not fold.
+    §2     every .md under the root is a file whose bytes are under the root. A
+           symlink out of the bundle, or one pointing at nothing, is reported —
+           tar stores a symlink as a symlink, so it arrives dangling.
     §8/§12 an index.md carries no frontmatter, except a bundle-root index.md,
            which may carry okf_version and nothing else
 
@@ -98,9 +101,10 @@ Description:
 
 Exit Codes:
   0 - No error-severity findings
-  1 - At least one error-severity finding, an unreadable bundle root among them
-      (it is reported as that bundle's own finding, so the other bundles in the
-      run are still checked and still reported)
+  1 - At least one error-severity finding. Anything unreadable — the bundle
+      root, one subdirectory, or one document — is reported as a finding naming
+      exactly what could not be read, so the rest of that bundle and every other
+      bundle in the run are still checked and still reported
   2 - System error (no config file, unknown bundle name)
 
 Example:

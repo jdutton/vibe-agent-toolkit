@@ -34,12 +34,60 @@ export function escapeSQLString(value: string): string {
 }
 
 /**
+ * Build the SQL fragment for an array-typed metadata field.
+ *
+ * 🚨 THE MECHANISM IS STRINGIFICATION, NOT LENGTH, and the first fix here named it wrongly.
+ * The pattern is built from `String(member)`, so the tautology `tags LIKE '%%'` — a condition
+ * matching EVERY row, handed to a caller who asked to be filtered — appears for every value
+ * that stringifies to nothing, not only for `[]`. A guard phrased as `value.length === 0`
+ * closed the one reported instance and left `['']`, a bare `''` and `[[]]` live, each of
+ * which reaches here without a type error because `filters.metadata` is deliberately open
+ * (`z.record(z.string(), z.unknown())`). So the branch is on the STRINGIFIED result.
+ *
+ * "Filter to the tags I computed, and I computed none" is the ordinary way to arrive here,
+ * and it is a request nothing satisfies — exactly as an empty `resourceId` array already
+ * resolved, via the shared {@link ALWAYS_FALSE}.
+ *
+ * This also matters more than a normal tautology would: `assertFiltersProducedConditions`
+ * counts conditions and cannot tell one that matches everything from one that discriminates,
+ * so a vacuous clause sails through the backstop that exists to prevent exactly this.
+ *
+ * 🔑 Each member gets its OWN `LIKE`. Arrays are stored as `value.join(',')`
+ * (`serializeArray` in `schema.ts`), so matching the whole list as one substring —
+ * `tags LIKE '%auth,security%'` — required the caller to guess the stored ORDER: a document
+ * tagged `security,auth` did not match `['auth','security']`, and the caller got zero rows
+ * with nothing to say why. That direction is narrowing rather than widening, so it was never
+ * a safety bug, but it is silently wrong and there is no reason to keep it.
+ *
+ * @param fieldPath - The lowercased column name
+ * @param value - The filter value: a list of members, or a single member
+ * @returns A SQL fragment, or the always-false clause when nothing can satisfy it
+ */
+function buildArrayFilter(fieldPath: string, value: unknown): string {
+  const members = (Array.isArray(value) ? value : [value]).map((member) => String(member));
+
+  // An empty pattern is `LIKE '%%'`, which is every row. Nothing can satisfy a request for a
+  // member that is the empty string, so the whole conjunction is unsatisfiable.
+  if (members.length === 0 || members.includes('')) {
+    return ALWAYS_FALSE;
+  }
+
+  const conditions = members
+    .map((member) => `${fieldPath} LIKE '%${escapeSQLString(member)}%'`)
+    .join(' AND ');
+
+  // Parenthesised only when there is more than one, so a single-member list keeps the exact
+  // fragment it has always emitted and stays composable with the outer ` AND ` join.
+  return members.length > 1 ? `(${conditions})` : conditions;
+}
+
+/**
  * Build SQL filter expression for a single metadata field
  *
  * Strategy:
  * - Strings: Exact match with SQL escaping (`domain = 'security'`)
  * - Numbers: Exact match (`priority = 1`)
- * - Arrays (stored as CSV): LIKE query for substring match (`tags LIKE '%auth%'`)
+ * - Arrays (stored as CSV): one LIKE per member, ANDed (`(tags LIKE '%a%' AND tags LIKE '%b%')`)
  * - Booleans: Exact match (`active = true`)
  *
  * BREAKING CHANGE: Metadata fields are now stored as top-level columns.
@@ -84,19 +132,7 @@ export function buildMetadataFilter(key: string, value: unknown, zodType: ZodTyp
 
   // Handle array fields (stored as CSV strings)
   if (typeName === ZodTypeNames.ARRAY) {
-    // 🚨 An empty list matches NOTHING, and saying so takes an explicit branch. `String([])`
-    // is the empty string, so falling through produced `tags LIKE '%%'` — a tautology
-    // returning the whole index to a caller who asked to be filtered. It also defeated the
-    // `assertFiltersProducedConditions` backstop, which counts conditions and cannot tell a
-    // condition that matches everything from one that discriminates. "Filter to the tags I
-    // computed, and I computed none" is the ordinary way to arrive here, and it is a request
-    // nothing satisfies — exactly as an empty `resourceId` array already resolved.
-    if (Array.isArray(value) && value.length === 0) {
-      return ALWAYS_FALSE;
-    }
-
-    const strValue = String(value);
-    return `${fieldPath} LIKE '%${escapeSQLString(strValue)}%'`;
+    return buildArrayFilter(fieldPath, value);
   }
 
   // Fallback: string comparison

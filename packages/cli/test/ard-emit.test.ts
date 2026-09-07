@@ -3,7 +3,7 @@
  * to invent the parts the ARD specification does not define.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
@@ -14,16 +14,25 @@ import { createArdCommand } from '../src/commands/ard/index.js';
 import { collectArdSurfaces } from '../src/commands/ard/surfaces.js';
 
 import {
+  CONFIG_YAML_ARD_DOT_NAMESPACE,
+  CONFIG_YAML_ARD_SHADOWED_KEYS,
+  CONFIG_YAML_ARD_WITHOUT_BASE_URL,
   CONFIG_YAML_WITHOUT_ARD,
   CONFIG_YAML_WITH_ARD,
+  FIXTURE_MARKETPLACE,
   PUBLISHED_SKILL,
+  QUALIFIED_MARKETPLACE_KEY,
   SKILLS_PROJECT,
   UNPUBLISHED_SKILL,
   projectWith,
   projectWithMarketplace,
+  projectWithMarketplaceOverrides,
   projectWithSkill,
   removeConfigFile,
 } from './ard-test-helpers.js';
+
+/** The author-supplied media type the marketplace cases hand in. */
+const VENDOR_CATALOG_TYPE = 'application/x-vendor-catalog+json';
 
 const workDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-ard-cli-'));
 
@@ -58,7 +67,7 @@ describe('collectArdSurfaces', () => {
 
   it('emits a marketplace once an explicit type is configured', () => {
     const { surfaces } = collectArdSurfaces(
-      projectWithMarketplace('application/x-vendor-catalog+json'),
+      projectWithMarketplace(VENDOR_CATALOG_TYPE),
       {}
     );
     expect(surfaces.map((s) => s.kind).sort((a, b) => a.localeCompare(b))).toEqual([
@@ -126,22 +135,30 @@ describe('runArdEmit', () => {
 });
 
 describe('ardEmitCommand exit behaviour', () => {
-  it('exits non-zero when derivation fails', async () => {
-    const root = projectWith(workDir, 'exit-one', CONFIG_YAML_WITHOUT_ARD);
+  // 🚨 This case was named "when derivation fails" and handed a config with no
+  // `ard:` block at all — the OTHER arm of exit 1, and one three cases below
+  // already cover. The derivation arm, which is the half a CI author is most
+  // likely to hit, was never executed: `ard.baseUrl` absent means no surface can
+  // satisfy ARD's `url` XOR `data`, and that is a refusal, not a system error.
+  it('exits 1 when a surface cannot be derived into a conformant entry', async () => {
+    const root = projectWithSkill(workDir, 'exit-one-derivation', CONFIG_YAML_ARD_WITHOUT_BASE_URL);
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     let exitCalls: unknown[][] = [];
+    let stderr = '';
     try {
       await ardEmitCommand({ projectRoot: root, output: safePath.join(root, 'ard.json') });
       // 🪤 Read the calls BEFORE restoring: `mockRestore()` resets the spy,
       // which clears `mock.calls` — asserting afterwards sees zero calls and
       // fails for a reason that has nothing to do with the code under test.
       exitCalls = exitSpy.mock.calls;
+      stderr = errSpy.mock.calls.map((call) => String(call[0])).join('');
     } finally {
       exitSpy.mockRestore();
       errSpy.mockRestore();
     }
     expect(exitCalls).toEqual([[1]]);
+    expect(stderr).toMatch(/ard\.baseUrl/);
   });
 });
 
@@ -268,6 +285,24 @@ describe('ardEmitCommand exit codes agree with the help text', () => {
     expect(await exitCodeFor(root)).toEqual([[1]]);
   });
 
+  it('exits 1 for BOTH arms the help puts under 1, and publishes both', () => {
+    // 🚨 The commit footer said "a missing ARD config now exits 2", which is
+    // false for the commonest case — a config file that exists with no `ard:`
+    // block still exits 1. The RULE the code implements: exit 1 means VAT read
+    // this project and produced no manifest by its own rules (no `ard:` block,
+    // or a surface it could not derive); exit 2 means it never got that far (no
+    // root, no config file, a config it cannot parse, an internal failure).
+    // Pinned against the HELP, so the two cannot drift apart again.
+    const emit = createArdCommand().commands.find((c) => c.name() === 'emit');
+    let help = '';
+    emit?.configureOutput({ writeOut: (chunk) => { help += chunk; } });
+    emit?.outputHelp();
+
+    const exitOneLine = help.split('\n').find((line) => line.includes('1 - ')) ?? '';
+    expect(exitOneLine).toMatch(/`ard:` block/);
+    expect(exitOneLine).toMatch(/derived/);
+  });
+
   it('publishes exit 2 as a system error, not an internal failure', () => {
     const emit = createArdCommand().commands.find((c) => c.name() === 'emit');
     // `helpInformation()` renders only the generated body — the Exit Codes
@@ -279,6 +314,99 @@ describe('ardEmitCommand exit codes agree with the help text', () => {
 
     expect(help).toMatch(/2 - System error/);
     expect(help).not.toMatch(/Unexpected internal failure/);
+  });
+});
+
+describe('collectArdSurfaces — the QUALIFIED override key outranks the bare one', () => {
+  // 🚨 This site carried its own copy of the precedence rule, and neither copy
+  // was pinned: two mutations reversing them to bare-first stayed green across
+  // the whole suite. Here the rule decides EMITTABILITY — a marketplace is
+  // advertised only if the block that wins carries a `type` — so a reversal
+  // publishes, or hides, a surface with nothing on stderr to say so.
+  const marketplaceOf = (config: ReturnType<typeof projectWithMarketplaceOverrides>) =>
+    collectArdSurfaces(config, { discoveredSkills: [PUBLISHED_SKILL] });
+
+  it('emits the marketplace when only the QUALIFIED block carries a type', () => {
+    const { surfaces } = marketplaceOf(
+      projectWithMarketplaceOverrides({
+        [FIXTURE_MARKETPLACE]: { capabilities: ['FromBareKey'] },
+        [QUALIFIED_MARKETPLACE_KEY]: { type: VENDOR_CATALOG_TYPE },
+      })
+    );
+    expect(surfaces.map((s) => s.kind)).toContain('marketplace');
+  });
+
+  it('skips the marketplace when the QUALIFIED block carries none, whatever the bare one says', () => {
+    const { surfaces, skipped } = marketplaceOf(
+      projectWithMarketplaceOverrides({
+        [FIXTURE_MARKETPLACE]: { type: VENDOR_CATALOG_TYPE },
+        [QUALIFIED_MARKETPLACE_KEY]: { capabilities: ['FromQualifiedKey'] },
+      })
+    );
+    expect(surfaces.map((s) => s.kind)).not.toContain('marketplace');
+    expect(skipped.find((s) => s.kind === 'marketplace')?.reason).toMatch(/ard\.entries/);
+  });
+});
+
+describe('runArdEmit — a bare override block that loses is NAMED, not dropped', () => {
+  // The precedence rule is deterministic and documented, so this is not an
+  // error. But the losing block is dead config the author cannot see is dead —
+  // the same silence the ambiguity refusal exists to end.
+  it('reports the shadowed bare key beside the qualified one that won', async () => {
+    const root = projectWithSkill(workDir, 'shadowed', CONFIG_YAML_ARD_SHADOWED_KEYS);
+
+    const { result, manifest } = await emitAndRead(root);
+
+    expect(manifest.entries[0]?.capabilities).toEqual(['FromQualifiedKey']);
+
+    expect(result.shadowed).toEqual([
+      {
+        kind: 'skill',
+        name: PUBLISHED_SKILL,
+        shadowedKey: PUBLISHED_SKILL,
+        winningKey: `skill:${PUBLISHED_SKILL}`,
+      },
+    ]);
+  });
+
+  // 🪤 A fact on the result object nobody prints is the same silence in a new
+  // place — the report has to reach the terminal, and only running the COMMAND
+  // proves that it does.
+  it('says so on stderr, and still exits 0', async () => {
+    const root = projectWithSkill(workDir, 'shadowed-stderr', CONFIG_YAML_ARD_SHADOWED_KEYS);
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const outSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    let stderr = '';
+    let exitCalls: unknown[][] = [];
+    try {
+      await ardEmitCommand({ projectRoot: root, output: safePath.join(root, 'ard.json') });
+      stderr = errSpy.mock.calls.map((call) => String(call[0])).join('');
+      exitCalls = exitSpy.mock.calls;
+    } finally {
+      exitSpy.mockRestore();
+      errSpy.mockRestore();
+      outSpy.mockRestore();
+    }
+    expect(stderr).toContain(`ard.entries.${PUBLISHED_SKILL}`);
+    expect(stderr).toContain(`ard.entries."skill:${PUBLISHED_SKILL}"`);
+    expect(exitCalls).toEqual([]);
+  });
+});
+
+describe('runArdEmit — a dot segment never reaches a published address', () => {
+  // 🚨 `ard.namespace: ".."` emitted `https://example.com/tenants/acme/<name>`
+  // for a base of `…/acme/catalog` at exit 0: the manifest addressed one level
+  // above where its own identifiers say the resources live.
+  it('refuses a config whose namespace is a dot segment, and writes nothing', async () => {
+    const root = projectWithSkill(workDir, 'dot-namespace', CONFIG_YAML_ARD_DOT_NAMESPACE);
+    const outputPath = safePath.join(root, 'out', 'ard.json');
+
+    await expect(runArdEmit({ projectRoot: root, output: outputPath })).rejects.toThrow(
+      /namespace/i
+    );
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is built from a test temp dir
+    expect(existsSync(outputPath)).toBe(false);
   });
 });
 

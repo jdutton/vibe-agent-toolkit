@@ -59,7 +59,19 @@ jobs:
             exit 1
           fi
           if [[ ! "$FLOOR" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Root package.json declares engines.node \"$DECLARED\", which derives to \"$FLOOR\" — not a full x.y.z version. setup-node would resolve that to some other patch release and the assertion below would then fail while blaming the runner. Declare an exact floor, e.g. \">=22.13.0\"."
+            # ⛔ Collapse to ONE LINE before echoing. A runner reads stdout line
+            # by line and treats any line starting `::` as a workflow command,
+            # and these two values are the pull request's own `engines.node` —
+            # so a value carrying newlines does not merely appear in this
+            # message, its later lines ARE workflow commands. Executed payload:
+            # `>=22.13\n::add-mask::supersecret\n::error::attacker-controlled`
+            # reached the runner as a real mask and a real, attacker-authored
+            # error annotation. Not code execution (the regex above is
+            # fail-closed, so no bad floor escapes) — log and annotation forgery,
+            # which is enough to hide the output a maintainer came to read.
+            DECLARED_LINE=$(printf '%s' "$DECLARED" | head -1)
+            FLOOR_LINE=$(printf '%s' "$FLOOR" | head -1)
+            echo "::error::Root package.json declares engines.node \"$DECLARED_LINE\", which derives to \"$FLOOR_LINE\" — not a full x.y.z version. setup-node would resolve that to some other patch release and the assertion below would then fail while blaming the runner. Declare an exact floor, e.g. \">=22.13.0\"."
             exit 1
           fi
           echo "Declared floor: $FLOOR"

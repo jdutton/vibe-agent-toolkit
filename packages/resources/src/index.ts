@@ -973,15 +973,20 @@ export {
   buildArdManifest,
   defaultArdNamespace,
   deriveArdMediaType,
+  findArdEntryOverride,
+  findShadowedArdOverrideKeys,
   isArdBaseUrl,
   isArdIdentifier,
+  isArdNameSegment,
   isArdPublisherDomain,
+  isArdUrlPath,
   writeArdManifest,
   type ArdEntry,
   type ArdManifest,
   type ArdSurface,
   type ArdSurfaceKind,
   type ArdTrustManifest,
+  type ShadowedArdOverrideKey,
 } from './ard/index.js';
 
 // The `ard:` config block itself. Exported beside the emitter because a caller

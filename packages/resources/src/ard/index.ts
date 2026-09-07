@@ -19,7 +19,9 @@ export {
   ArdTrustManifestSchema,
   isArdBaseUrl,
   isArdIdentifier,
+  isArdNameSegment,
   isArdPublisherDomain,
+  isArdUrlPath,
   type ArdEntry,
   type ArdManifest,
   type ArdTrustManifest,
@@ -30,7 +32,10 @@ export {
   ardEntryOverrideKey,
   buildArdEntries,
   buildArdEntry,
+  findArdEntryOverride,
+  findShadowedArdOverrideKeys,
   type ArdSurface,
+  type ShadowedArdOverrideKey,
 } from './entry-builder.js';
 
 export {

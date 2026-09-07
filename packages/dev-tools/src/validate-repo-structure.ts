@@ -1568,12 +1568,26 @@ function describeFailure(error: unknown): string {
 }
 
 /**
- * Gate: the Node engine floor is declared once and agreed everywhere.
+ * Read every manifest under `repoRoot` and apply the engine-floor rule to them.
+ *
+ * 🔑 **Takes the root as a parameter on purpose.** {@link readManifest} is what
+ * turns "this file is corrupt" into a reported finding rather than the silence
+ * an absent manifest earns, and while this function closed over the module-level
+ * `REPO_ROOT` there was no way to reach that decision from a test: every
+ * assertion hand-fed `findEngineFloorDisagreements` an `unreadable[]` array it
+ * had built itself, so reverting `readManifest` to its pre-fix swallow-all left
+ * the suite green. The parameter is the seam that lets a fixture tree carry a
+ * genuinely corrupt manifest.
+ *
+ * @param repoRoot - Absolute path of the tree to check
+ * @returns Findings, in the same shape the gate pushes onto `errors`
  */
-async function validateEngineFloorAgreement(): Promise<void> {
+export async function collectEngineFloorFindings(
+  repoRoot: string,
+): Promise<ValidationError[]> {
   const unreadable: ManifestReadFailure[] = [];
 
-  const rootRead = await readManifest(safePath.join(REPO_ROOT, PACKAGE_MANIFEST_FILENAME));
+  const rootRead = await readManifest(safePath.join(repoRoot, PACKAGE_MANIFEST_FILENAME));
   if (rootRead.kind === 'unreadable' || rootRead.kind === 'absent') {
     unreadable.push({
       path: PACKAGE_MANIFEST_FILENAME,
@@ -1581,20 +1595,24 @@ async function validateEngineFloorAgreement(): Promise<void> {
     });
   }
 
-  const packagesDir = safePath.join(REPO_ROOT, 'packages');
+  // Computed before the enumeration so the failure path below can carry the
+  // floor it actually read. Passing `undefined` there reported "root declares no
+  // engines.node" against a root that declares one perfectly well — a second,
+  // invented finding that sends the reader to edit the wrong file.
+  const rootFloor = rootRead.kind === 'ok' ? rootRead.manifest.engines?.node : undefined;
+
+  const packagesDir = safePath.join(repoRoot, 'packages');
   let entries;
   try {
     entries = await readdir(packagesDir, { withFileTypes: true });
   } catch (error) {
-    // ⛔ Not a `return`. Bailing out here made the entire gate pass with no
-    // finding, which is the loudest possible failure reported as silence.
-    errors.push(
-      ...findEngineFloorDisagreements(undefined, [], [
-        ...unreadable,
-        { path: 'packages', reason: describeFailure(error) },
-      ]),
-    );
-    return;
+    // ⛔ Not a silent bail. Returning nothing here made the entire gate pass
+    // with no finding, which is the loudest possible failure reported as
+    // silence.
+    return findEngineFloorDisagreements(rootFloor, [], [
+      ...unreadable,
+      { path: 'packages', reason: describeFailure(error) },
+    ]);
   }
 
   const summaries: PackageManifestSummary[] = [];
@@ -1620,8 +1638,14 @@ async function validateEngineFloorAgreement(): Promise<void> {
     });
   }
 
-  const rootFloor = rootRead.kind === 'ok' ? rootRead.manifest.engines?.node : undefined;
-  errors.push(...findEngineFloorDisagreements(rootFloor, summaries, unreadable));
+  return findEngineFloorDisagreements(rootFloor, summaries, unreadable);
+}
+
+/**
+ * Gate: the Node engine floor is declared once and agreed everywhere.
+ */
+async function validateEngineFloorAgreement(): Promise<void> {
+  errors.push(...(await collectEngineFloorFindings(REPO_ROOT)));
 }
 
 /**

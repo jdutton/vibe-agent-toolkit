@@ -10,7 +10,7 @@
  * failure and must not be relabelled as one.
  *
  * The throw that matters is the one the link fact tables raise on purpose:
- * `realpathFrom`/`siblingNamesFrom` crash on a missing row so that a fill/judge
+ * `realpathFrom`/`pathSpellingFrom` crash on a missing row so that a fill/judge
  * divergence names its own remedy. These tests pin that the crash reaches the
  * caller intact rather than being reworded into a schema complaint — the fix is
  * the propagation, not a new finding code.

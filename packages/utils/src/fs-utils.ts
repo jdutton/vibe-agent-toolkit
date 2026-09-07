@@ -7,10 +7,10 @@
 // snapshots a builtin's named ESM exports at import time, so `vi.spyOn(fs,
 // 'existsSync')` cannot see a call made through a named binding — the spy
 // attaches and counts zero, which reads exactly like "this function performs no
-// I/O". `classifyFilenameCaseFrom` is guarded by precisely that assertion (it
-// must reach neither `readdir` nor this pair), so a "tidy-up" back to named
-// imports would silently disarm the guard. The async half below already uses the
-// default object for the same reason.
+// I/O". `pathSpellingFrom` and `realpathFrom` are guarded by precisely that
+// assertion (they must reach neither `readdir` nor this pair), so a "tidy-up"
+// back to named imports would silently disarm the guard. The async half below
+// already uses the default object for the same reason.
 import nodeFs from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -71,10 +71,10 @@ export interface PathProbeStats {
  * @example
  * ```typescript
  * const fsCache = new FsLookupCache();          // one per run
- * const targets = links.map((link) => link.target);
- * const siblingNames = await fillSiblingNames(targets, fsCache);  // all the I/O, once
- * for (const target of targets) {
- *   classifyFilenameCaseFrom(siblingNames, target);               // pure — no syscall
+ * const requests = links.map((link) => ({ referrer: link.from, target: link.target }));
+ * const spellings = await fillPathSpellings(requests, fsCache);   // all the I/O, once
+ * for (const { referrer, target } of requests) {
+ *   pathSpellingFrom(spellings, referrer, target);                // pure — no syscall
  * }
  * ```
  */
@@ -91,6 +91,28 @@ export class FsLookupCache {
   /** Probe calls received, and how many of them reached the filesystem. */
   #probeCount = 0;
   #probeMisses = 0;
+
+  /** The listings turned into spelling indexes, built on first use. */
+  #spellingIndex: DirectorySpellingIndex | undefined;
+
+  /**
+   * The three-way spelling index over this cache's listings — one per run, for
+   * the same reason the listings themselves are.
+   *
+   * ⚠️ **It hangs off the cache rather than off a fill, and that is what makes
+   * the index pay.** A caller that judges its paths in one `fillPathSpellings`
+   * would be fine either way; a caller that judges them one at a time — which
+   * `validateLink` exists to serve — would otherwise re-index the same listing
+   * per path, and the cost would go straight back to
+   * O(paths × entries-in-that-directory) with the listing memo hiding the
+   * syscalls but not the work.
+   *
+   * Lazily built: a run that never judges a path allocates nothing.
+   */
+  get spellingIndex(): DirectorySpellingIndex {
+    this.#spellingIndex ??= new DirectorySpellingIndex(this);
+    return this.#spellingIndex;
+  }
 
   /**
    * Probe counters, for tests and `--debug` output.
@@ -312,149 +334,42 @@ export async function copyDirectory(src: string, dest: string): Promise<void> {
 }
 
 /**
- * The one fact on disk that a case-sensitivity question turns on: what the
- * parent directory actually contains, paired with the name being asked about.
+ * Which spelling rule matched a name, and therefore how faithfully the
+ * asked-for spelling matches disk.
  *
- * A row, not an answer — {@link classifyFilenameCase} turns it into a verdict.
- * Splitting the two is what lets the verdict be tested against listings that no
- * filesystem will hand you on demand, entry ORDER in particular.
- */
-export interface SiblingNames {
-  /**
-   * Basename being asked about, i.e. `path.basename(filePath)` — **verbatim, in
-   * whatever Unicode normalization form the path carries**. Nothing folds it on
-   * the way in; {@link classifyFilenameCase} owns every comparison rule there is.
-   */
-  readonly expectedName: string;
-  /**
-   * The parent directory's entry names **exactly as `readdir` returned them**,
-   * or `null` when it could not be read. Raw, unfolded bytes — which is what
-   * makes "this link only resolves after normalization" a question the judge can
-   * still answer. See {@link classifyFilenameCase}.
-   *
-   * `null` is not `[]` — an unreadable or absent directory versus a readable
-   * empty one. {@link classifyFilenameCase} deliberately collapses them (both
-   * are "no such entry"), but the distinction is kept in the row because it is
-   * a *fact*, and the judge that wants it — a check that says "the directory
-   * itself is missing" rather than "the file is missing" — cannot recover it
-   * once the fill has thrown it away.
-   */
-  readonly names: readonly string[] | null;
-}
-
-/**
- * The materialized listing column: parent directory → that directory's entry
- * names, or `null` when it could not be read.
+ * The three that are not `absent` are ordered from most to least faithful, and
+ * every consumer that reports to a human needs the distinction: only `exact`
+ * opens on every filesystem.
  *
- * `null` carries exactly the meaning {@link SiblingNames.names} documents — an
- * unreadable or absent directory, which is *not* the same fact as a readable
- * empty one (`[]`), even though {@link classifyFilenameCase} collapses the two
- * into one verdict.
+ * **The three rules are tried strictly in the order below, first match wins —
+ * the order IS the contract**, because each accepts a strictly weaker notion of
+ * sameness and a weaker rule reached first would mislabel a file that is
+ * genuinely there. {@link DirectorySpellingIndex} implements them as three
+ * lookups over one pre-built index (`indexEntry`/`lookupIn`); it is the only
+ * judge, so nothing upstream can disagree with it about what "the same
+ * filename" means.
  *
- * A *missing key* is a third thing again, and never a legal input to judgement:
- * see {@link siblingNamesFrom}.
- */
-export type SiblingNamesTable = ReadonlyMap<string, readonly string[] | null>;
-
-/**
- * List the parent directory of every path in `filePaths` — the only place I/O is
- * legal for this fact, and the pass that must run *before* any judging.
+ * ⚠️ **`exact` and `normalized` are not the same verdict, and collapsing them
+ * is a silently-wrong answer rather than a lost nicety.** Folding both sides
+ * *before* comparing repairs the false "missing" on macOS/APFS — `é` has two
+ * encodings (NFC `U+00E9` vs NFD `e` + `U+0301`) that are `!==` and that
+ * case-folding does not reconcile, so an accented file that plainly exists was
+ * once reported flatly *missing* — and over-corrects into the opposite error on
+ * Linux/ext4, where the filesystem is byte-exact: a markdown link spelling a
+ * filename NFD while disk holds NFC genuinely 404s there, and a folded judge
+ * answers "exists, exact match, no issue". Keeping both facts is the point —
+ * the link resolves (so it must not be reported broken), *and* it resolves only
+ * by folding (so a caller can warn). `@vibe-agent-toolkit/resources` turns
+ * `'normalized'` into `LINK_NORMALIZATION_MISMATCH`. This is one of three sites
+ * on that seam; the class is collected in
+ * `docs/architecture/resource-scanning-and-caching.md` §3.6 (ledger entry D7).
  *
- * ⚠️ **It takes FILE paths, not directory paths, deliberately.** It derives each
- * parent with `path.dirname` itself, so exactly one function in the system owns
- * the key derivation and a caller cannot construct a key that
- * {@link siblingNamesFrom} then misses. Do not "simplify" this to take
- * directories: that hands the derivation back to every call site and reopens the
- * silent-miss class this shape closes.
- *
- * Distinct parents are listed **concurrently**: the shape this replaced asked one
- * link at a time at judgement time, which serialised every `readdir` behind the
- * previous link's `await`. De-duplication is by parent, so N files in one
- * directory cost one listing; the listing itself goes through
- * {@link FsLookupCache.readdir}, which memoizes and shares in-flight promises
- * across fills.
- *
- * @param filePaths - File paths whose parent directories should be listed
- * @param fsCache - Per-run lookup cache (one instance per validation run)
- * @returns The filled table; empty input yields an empty table with no syscalls
- */
-export async function fillSiblingNames(
-  filePaths: Iterable<string>,
-  fsCache: FsLookupCache
-): Promise<SiblingNamesTable> {
-  const parentDirs = new Set<string>();
-  for (const filePath of filePaths) {
-    parentDirs.add(path.dirname(filePath));
-  }
-
-  const table = new Map<string, readonly string[] | null>();
-  await Promise.all(
-    [...parentDirs].map(async (parentDir) => {
-      // Stored EXACTLY as `readdir` returned it — no Unicode folding, no copy.
-      //
-      // The fill used to fold every entry to NFC here (and `siblingNamesFrom`
-      // folded `expectedName` to match), which left the judge a pure `===` over
-      // pre-reconciled strings. It also destroyed the only evidence that could
-      // distinguish "these two spellings are the same bytes" from "these two
-      // spellings are equal only after folding" — and those are different facts
-      // on a byte-exact filesystem. Comparison semantics now live entirely in
-      // {@link classifyFilenameCase}, so the fill has no opinion to disagree
-      // with, and a hand-written row is raw `readdir` output rather than a form
-      // only the fill knew how to produce.
-      //
-      // The array is the cache's own and is deliberately not copied: the table
-      // type is `readonly string[]`, several tables may share one listing, and
-      // copying every listing per fill is exactly the per-run cost this pair
-      // exists to avoid. Treat it as immutable.
-      table.set(parentDir, await fsCache.readdir(parentDir));
-    })
-  );
-
-  return table;
-}
-
-/**
- * Read the row for `filePath` out of an already-filled table. Pure.
- *
- * **A miss throws rather than degrading to `names: null`.** The fill set is
- * derived from exactly the paths the judge will be asked about, so a missing
- * parent is a programming error — a path judged that nobody filled. The `null`
- * fallback would answer it as "the directory is unreadable", which reports every
- * file under that directory as *missing*: a wrong answer wearing the shape of a
- * graceful degradation, and one no test of the verdict would catch.
- *
- * Internal on purpose — {@link classifyFilenameCaseFrom} is the public judge.
- *
- * @param table - Table filled by {@link fillSiblingNames}
- * @param filePath - Path being asked about
- * @returns The row: the expected basename plus the parent's entries
- * @throws If `table` holds no entry for the path's parent directory
- */
-export function siblingNamesFrom(table: SiblingNamesTable, filePath: string): SiblingNames {
-  const parentDir = path.dirname(filePath);
-  // `undefined` can only mean "absent key": a filled entry is an array or an
-  // explicit `null`, never `undefined`.
-  const names = table.get(parentDir);
-  if (names === undefined) {
-    throw new Error(
-      `No sibling listing for directory "${parentDir}" (asked about "${filePath}"). ` +
-        `Fill it with fillSiblingNames() before judging.`
-    );
-  }
-
-  // Raw on this side too. This lookup reads a row; it does not judge, and
-  // folding here would be judging — see {@link classifyFilenameCase}, which
-  // needs the spelling the caller actually asked for in order to tell a
-  // byte-exact hit from a fold-only one.
-  return { expectedName: path.basename(filePath), names };
-}
-
-/**
- * Which pass of {@link classifyFilenameCase} produced the answer.
- *
- * The three that are not `absent` are ordered by how faithfully the asked-for
- * spelling matches disk, and every consumer that reports to a human needs the
- * distinction: only `exact` opens on every filesystem.
+ * ⚠️ **Case-folding is applied to the NFC-folded form, not to raw bytes.**
+ * `toLowerCase()` does not reconcile NFC against NFD, so a name that differs in
+ * *both* case and normalization would fall out as `absent` and the author would
+ * lose the suggestion. The prohibition that bounds every fold — it yields a
+ * comparison key, never a path to open — is stated once at {@link toNfc}, which
+ * is also where the reason it is not folded into `safePath.resolve` lives.
  */
 export type FilenameMatch =
   /** The asked-for name and a directory entry are the same bytes. Opens anywhere. */
@@ -471,153 +386,397 @@ export type FilenameMatch =
   /** Nothing in the listing matches, or the directory could not be read. */
   | 'absent';
 
-/** What {@link classifyFilenameCase} decided about one asked-for filename. */
-export interface FilenameCaseVerdict {
-  /**
-   * Whether the name resolves to an entry at all — `true` for both `exact` and
-   * `normalized`, i.e. exactly where the author's own machine opens the file.
-   * Derivable from {@link FilenameCaseVerdict.match}; kept because "does this
-   * path resolve" is the question most callers are actually asking.
-   */
-  exists: boolean;
-  /**
-   * The entry actually on disk, **verbatim as `readdir` returned it**, or
-   * `null` when nothing matched. Raw rather than folded on purpose: this is the
-   * string a caller suggests writing, and a folded reconstruction of an NFD
-   * entry is a spelling that does not open the file on Linux.
-   */
-  actualName: string | null;
-  /** Which pass matched. See {@link FilenameMatch}. */
+// ─────────────────────────────────────────────────────────────────────────────
+// Judging a whole PATH, component by component.
+//
+// ## ⛔ Why a basename is not a path
+//
+// A basename-only judge — the shape this replaced — answers about ONE name in
+// ONE directory, and a caller that asks it only about `basename(target)` has
+// handed every DIRECTORY component of that path straight back to the host
+// filesystem's own folding: the exact oracle the whole classifier exists to
+// replace.
+// `readdir('<root>/Docs')` succeeds on macOS/APFS when the directory is really
+// `docs`, the basename then matches byte for byte, and the caller reports
+// nothing for a link that 404s on every case-sensitive filesystem. The Unicode
+// half is silent the same way, and that one 404s on Linux.
+//
+// Worse than incomplete, the *remedy* is wrong: with two components misspelled,
+// a basename-only correction names only the last one, and an author who follows
+// it verbatim still has a broken path. {@link DirectorySpellingIndex.judgePath}
+// walks from a trusted root DOWN, judges each component against the directory
+// that actually holds it, and descends into the CORRECTED spelling — so a wrong
+// directory cannot hide a wrong filename beneath it.
+//
+// ## ⛔ Why the listing is INDEXED rather than scanned
+//
+// The judge this replaced ran up to three linear scans over the parent listing
+// **per name**, folding each entry to NFC and lower case on the way, so a
+// caller judging many paths paid O(paths × entries-in-that-directory). Judging
+// every component multiplies that by the path depth, which is why it had to
+// stop being a scan first. {@link DirectorySpellingIndex} lists each directory
+// once and indexes it once, under all three spellings the judge can ask for, so
+// a lookup is a `Map.get`.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** What one directory entry name matched, and how the directory spells it. */
+export type ComponentMatch =
+  | { match: Exclude<FilenameMatch, 'absent'>; actualName: string }
+  | { match: 'absent' };
+
+/**
+ * How much worse each spelling is than the one above it.
+ *
+ * A path can be wrong in more than one way at once (`Café/Guide.md` against
+ * `café/guide.md`), and a report has to pick one verdict. The worst component
+ * wins: a case mismatch is broken on more machines than a normalization
+ * mismatch is, so reporting the milder one would understate what the author has
+ * to fix. The corrected path is carried either way, so nothing is lost.
+ */
+const SPELLING_RANK: Readonly<Record<Exclude<FilenameMatch, 'absent'>, number>> = {
+  exact: 0,
+  normalized: 1,
+  case_mismatch: 2,
+};
+
+/**
+ * One directory listing, pre-indexed under every spelling rule the judge asks.
+ *
+ * The three maps are the three rules of {@link FilenameMatch}, in the same
+ * order and with the same meaning — byte-exact, then equal after NFC folding,
+ * then equal after folding and case-folding — turned from a scan into a
+ * lookup. First entry wins in each map, which is what preserves "first match
+ * wins" from the scan it replaces: a case-insensitive filesystem can hold both
+ * `readme.md` and `README.md`, and the answer must not depend on `readdir`
+ * order.
+ */
+interface DirectoryIndex {
+  exact: Map<string, string>;
+  nfc: Map<string, string>;
+  folded: Map<string, string>;
+}
+
+/** Record an entry under whichever of the three spellings it is first for. */
+function indexEntry(index: DirectoryIndex, entry: string): void {
+  if (!index.exact.has(entry)) index.exact.set(entry, entry);
+
+  const folded = toNfc(entry);
+  if (!index.nfc.has(folded)) index.nfc.set(folded, entry);
+
+  const lowered = folded.toLowerCase();
+  if (!index.folded.has(lowered)) index.folded.set(lowered, entry);
+}
+
+/** Ask one indexed listing for a name, under each rule in turn. */
+function lookupIn(index: DirectoryIndex, name: string): ComponentMatch {
+  const exact = index.exact.get(name);
+  if (exact !== undefined) return { match: 'exact', actualName: exact };
+
+  const folded = toNfc(name);
+  const normalized = index.nfc.get(folded);
+  if (normalized !== undefined) return { match: 'normalized', actualName: normalized };
+
+  const insensitive = index.folded.get(folded.toLowerCase());
+  return insensitive === undefined
+    ? { match: 'absent' }
+    : { match: 'case_mismatch', actualName: insensitive };
+}
+
+/** What judging a whole path said, and the two spellings a message quotes. */
+export interface PathSpelling {
+  /** The worst spelling defect on the path, or `absent` if a component is missing. */
   match: FilenameMatch;
+  /** The path relative to the walk root, spelled as the caller asked for it. */
+  askedPath: string;
+  /** The same path as disk spells it. Empty when nothing matched. */
+  actualPath: string;
 }
 
 /**
- * Decide whether `row.expectedName` names a real entry, and how faithfully.
+ * Every directory a run asks about, listed once and indexed once.
  *
- * Pure: no filesystem, no cache, no path parsing — it reads only the columns it
- * is handed, which is what makes hand-written listings a legitimate test input.
- * Both columns arrive **raw**, exactly as `readdir` and `path.basename` produced
- * them; this function owns every comparison rule, so nothing upstream can
- * disagree with it about what "the same filename" means.
+ * ⚠️ **It owns the listings and never hands one out.** That is deliberate: the
+ * defect it replaced was a per-path scan over a shared raw array, and an
+ * implementation that cannot reach the array cannot scan it. The only ways to
+ * ask a question are {@link DirectorySpellingIndex.lookup} and
+ * {@link DirectorySpellingIndex.judgePath}, both `Map.get` over an index built
+ * at most once per directory — {@link DirectorySpellingIndex.directoriesIndexed}
+ * and {@link DirectorySpellingIndex.entriesIndexed} are what a test counts to
+ * prove the work did not go back to being per-path.
  *
- * **Three passes, strictly in this order, first match wins — the order IS the
- * contract**, because each pass accepts a strictly weaker notion of sameness and
- * a weaker pass reached first would mislabel a file that is genuinely there:
- *
- * 1. **byte-exact** `entry === expectedName`. On a case-insensitive filesystem a
- *    listing can hold both `readme.md` and `README.md`, in either order; asking
- *    for `README.md` must report it present regardless of which one `readdir`
- *    happened to return first. Same argument, one form weaker, for pass 2.
- * 2. **NFC-folded** `toNfc(entry) === toNfc(expectedName)`. The two columns are
- *    different kinds of value and routinely disagree about one file: `entry` is
- *    an *enumerated* path (`readdir` hands back whatever is on disk, commonly
- *    decomposed) while `expectedName` is a path *derived from markdown link
- *    text* (composed, as an editor writes it). `é` has two encodings (NFC
- *    `U+00E9` vs NFD `e` + `U+0301`) that are `!==` and that case-folding does
- *    not reconcile, so without this pass an accented file that plainly exists
- *    was reported flatly *missing* — not even a case-mismatch hint, since that
- *    needs pass 3 to match. This is one of three sites on that seam; the class
- *    is collected in `docs/architecture/resource-scanning-and-caching.md` §3.6
- *    (ledger entry D7).
- * 3. **case-insensitive, on the folded forms.** Folding first is required, not
- *    tidy: `toLowerCase()` does not reconcile NFC against NFD, so a name that
- *    differs in *both* case and normalization falls out as `absent` and the
- *    author loses the suggestion.
- *
- * ⚠️ **Passes 1 and 2 are not the same verdict, and collapsing them is a
- * silently-wrong answer rather than a lost nicety.** The fix for D7 originally
- * folded both sides *before* comparing, which repaired the false "missing" on
- * macOS/APFS — and over-corrected into the opposite error on Linux/ext4, where
- * the filesystem is byte-exact: a markdown link spelling a filename NFD while
- * disk holds NFC genuinely 404s there, and the folded judge answered "exists,
- * exact match, no issue". `match` is what keeps both facts: the link resolves
- * (so it must not be reported broken), *and* it resolves only by folding (so a
- * caller can warn). {@link classifyFilenameCaseFrom}'s consumer in
- * `@vibe-agent-toolkit/resources` turns `'normalized'` into
- * `LINK_NORMALIZATION_MISMATCH`. The prohibition that bounds every fold reached
- * from here — it yields a comparison key, never a path to open — is stated once
- * at {@link toNfc}, which is also where the reason it is not folded into
- * `safePath.resolve` lives.
- *
- * **Folding is deferred to the miss path, and that is a real saving.** Pass 1
- * calls `toNfc` zero times, so a corpus whose links all resolve byte-exactly —
- * every pure-ASCII corpus, i.e. nearly all of them — normalizes nothing at all.
- * The older shape folded every entry of every directory in the fill,
- * unconditionally.
- *
- * @param row - The listing row, read out of a filled table by {@link siblingNamesFrom}
- * @returns The verdict: whether it resolves, the entry really on disk, and which pass matched
+ * **Instance-per-run, like the {@link FsLookupCache} it borrows** — it holds a
+ * snapshot of directory contents and must not outlive the run that took it.
  */
-export function classifyFilenameCase(row: SiblingNames): FilenameCaseVerdict {
-  const { expectedName, names } = row;
+export class DirectorySpellingIndex {
+  readonly #fsCache: FsLookupCache;
+  /** Directory → its index, or null when the directory could not be listed. */
+  readonly #indexes = new Map<string, Promise<DirectoryIndex | null>>();
+  #directoriesIndexed = 0;
+  #entriesIndexed = 0;
 
-  if (names === null) {
-    // Parent directory doesn't exist (or can't be read).
-    return { exists: false, actualName: null, match: 'absent' };
+  constructor(fsCache: FsLookupCache) {
+    this.#fsCache = fsCache;
   }
 
-  // Pass 1 — byte-exact.
-  // Tested against `undefined` rather than for truthiness: `readdir` never
-  // yields an empty entry name, but hand-written rows are this function's
-  // advertised input now that it is pure, and `''` is falsy — it would fall
-  // through to a later pass and come back as `actualName: ''` with the wrong
-  // `match`.
-  const exactMatch = names.find(entry => entry === expectedName);
-  if (exactMatch !== undefined) {
-    return { exists: true, actualName: exactMatch, match: 'exact' };
+  /**
+   * How many times a listing was turned into an index.
+   *
+   * Counted at the BUILD, not as `#indexes.size`: the size is the number of
+   * distinct directories asked about, which stays put even if every lookup
+   * rebuilds — the exact regression this number exists to catch.
+   */
+  get directoriesIndexed(): number {
+    return this.#directoriesIndexed;
   }
 
-  // Pass 2 — equal only after NFC folding. Reached only when pass 1 missed, so
-  // an all-ASCII corpus never pays for it.
-  const foldedExpected = toNfc(expectedName);
-  const normalizedMatch = names.find(entry => toNfc(entry) === foldedExpected);
-  if (normalizedMatch !== undefined) {
-    return { exists: true, actualName: normalizedMatch, match: 'normalized' };
+  /** How many directory entries were examined, across every index built. */
+  get entriesIndexed(): number {
+    return this.#entriesIndexed;
   }
 
-  // Pass 3 — case-insensitive over the folded forms.
-  const loweredExpected = foldedExpected.toLowerCase();
-  const caseInsensitiveMatch = names.find(
-    entry => toNfc(entry).toLowerCase() === loweredExpected
+  /** Every directory that has been listed, for never-reached-above-the-root pins. */
+  get indexedDirectories(): string[] {
+    return [...this.#indexes.keys()];
+  }
+
+  /**
+   * Ask what `directory` really calls `name`.
+   *
+   * @param directory - Absolute path of the directory to ask about
+   * @param name - One path component, spelled as the caller asked for it
+   * @returns Which rule matched and the entry's own spelling, or `absent`
+   */
+  async lookup(directory: string, name: string): Promise<ComponentMatch> {
+    const index = await this.#indexFor(directory);
+    return index === null ? { match: 'absent' } : lookupIn(index, name);
+  }
+
+  /**
+   * Judge every component of `resolvedPath`, from `root` down.
+   *
+   * Each component is judged against the directory that actually holds it —
+   * which is the corrected spelling of the previous component, not the
+   * asked-for one, so a wrong directory name does not hide a wrong filename
+   * beneath it.
+   *
+   * ⛔ **It never looks above `root`.** The walk starts there and only
+   * descends, and a path that does not live under `root` is refused outright
+   * rather than walked from somewhere else: a verdict that depends on a
+   * directory above the root is a verdict that changes when the tree is moved.
+   * Pick a root the caller has already enumerated, and every component below it
+   * is one the *reference text* contributed — exactly the ones worth judging.
+   *
+   * @param root - Absolute path of a directory known to exist, and an ancestor
+   *   of `resolvedPath` (or `resolvedPath` itself)
+   * @param resolvedPath - Absolute path to judge
+   * @returns The worst spelling defect on the path, plus both spellings of it
+   * @throws If `resolvedPath` does not live at or under `root`
+   */
+  async judgePath(root: string, resolvedPath: string): Promise<PathSpelling> {
+    // `safePath.relative` already answers in forward slashes; saying so out loud
+    // is what makes both the traversal test and the split below safe on Windows.
+    const askedPath = toForwardSlash(safePath.relative(root, resolvedPath));
+    // The root itself: the caller enumerated it to get here, so it resolves,
+    // and there is no component to judge. Asking would mean listing its PARENT.
+    if (askedPath === '') return { match: 'exact', askedPath, actualPath: askedPath };
+
+    // Tested as a whole SEGMENT rather than as a prefix: `startsWith('..')`
+    // would refuse a real directory named `..cache`.
+    const segments = toForwardSlash(askedPath).split('/');
+    if (segments[0] === '..') {
+      throw new Error(
+        `Path spelling asked about "${askedPath}", which is above the walk root "${root}". ` +
+          `A verdict that depends on a directory above the root changes when the tree moves.`
+      );
+    }
+
+    return await this.#walk(root, askedPath, segments);
+  }
+
+  /** The component-by-component descent behind {@link judgePath}. */
+  async #walk(
+    root: string,
+    askedPath: string,
+    segments: readonly string[]
+  ): Promise<PathSpelling> {
+    const actual: string[] = [];
+    let worst: Exclude<FilenameMatch, 'absent'> = 'exact';
+    let directory = root;
+
+    for (const segment of segments) {
+      // Sequential by necessity: which directory holds the next component
+      // depends on how this one is really spelled. Every listing is memoized,
+      // so a run pays per DIRECTORY, not per path and not per component.
+      const found = await this.lookup(directory, segment);
+      if (found.match === 'absent') return { match: 'absent', askedPath, actualPath: '' };
+
+      if (SPELLING_RANK[found.match] > SPELLING_RANK[worst]) worst = found.match;
+      actual.push(found.actualName);
+      directory = safePath.join(directory, found.actualName);
+    }
+
+    return { match: worst, askedPath, actualPath: actual.join('/') };
+  }
+
+  /**
+   * The index for one directory, built at most once.
+   *
+   * The promise — not the resolved value — is memoized, so two components
+   * resolving into the same directory concurrently share one listing and one
+   * build rather than racing to do both twice.
+   */
+  async #indexFor(directory: string): Promise<DirectoryIndex | null> {
+    const existing = this.#indexes.get(directory);
+    if (existing !== undefined) return await existing;
+
+    const building = this.#build(directory);
+    this.#indexes.set(directory, building);
+    return await building;
+  }
+
+  /** List one directory and index every entry it holds. */
+  async #build(directory: string): Promise<DirectoryIndex | null> {
+    this.#directoriesIndexed += 1;
+    const names = await this.#fsCache.readdir(directory);
+    if (names === null) return null;
+
+    const index: DirectoryIndex = { exact: new Map(), nfc: new Map(), folded: new Map() };
+    for (const name of names) {
+      indexEntry(index, name);
+      this.#entriesIndexed += 1;
+    }
+    return index;
+  }
+}
+
+/** One path to judge, paired with the file whose text asked for it. */
+export interface PathSpellingRequest {
+  /** The referring file, whose own path was enumerated and is therefore trusted. */
+  referrer: string;
+  /** The absolute path the reference resolved to. */
+  target: string;
+}
+
+/**
+ * Where to start judging `target`, given that `referrer`'s own path came off
+ * the filesystem rather than out of a document.
+ *
+ * ⚠️ **The root is the deepest directory the two paths share, and that choice
+ * is doing real work in both directions.** Everything *above* it was enumerated
+ * (so judging it would compare disk against disk, and on a macOS crawl that
+ * routinely means reporting an NFD component nobody wrote); everything *below*
+ * it is what the reference text contributed, and is precisely what a
+ * misspelling can hide in.
+ *
+ * Falls back to the target's own parent — i.e. judging the basename alone, the
+ * weakest useful answer — when the two paths share no meaningful ancestor
+ * (different drives on Windows, or a relative path).
+ *
+ * @param referrer - Path of the file holding the reference
+ * @param target - Absolute path the reference resolved to
+ * @returns The directory to walk down from
+ */
+export function spellingWalkRoot(referrer: string, target: string): string {
+  const referrerDir = toForwardSlash(path.dirname(referrer)).split('/');
+  const targetDir = toForwardSlash(path.dirname(target)).split('/');
+
+  let shared = 0;
+  while (
+    shared < referrerDir.length &&
+    shared < targetDir.length &&
+    referrerDir[shared] === targetDir[shared]
+  ) {
+    shared += 1;
+  }
+
+  // `< 2` rather than `=== 0`: a single shared segment is the filesystem root
+  // (`''` on POSIX) or the drive (`C:` on Windows), and walking down from there
+  // would list directories no caller owns.
+  return shared < 2 ? path.dirname(target) : targetDir.slice(0, shared).join('/');
+}
+
+/**
+ * The materialized spelling column: one judged path per distinct
+ * (walk root, target) pair.
+ *
+ * A *missing key* is never a legal input to judgement: see
+ * {@link pathSpellingFrom}.
+ */
+export type PathSpellingTable = ReadonlyMap<string, PathSpelling>;
+
+/**
+ * The table key — derived in exactly one place so a filler and a judge cannot
+ * construct different ones for the same question.
+ */
+function spellingKey(referrer: string, target: string): string {
+  return `${spellingWalkRoot(referrer, target)}\0${target}`;
+}
+
+/**
+ * Judge every request's whole path — the only place I/O is legal for this fact,
+ * and the pass that must run *before* any judging.
+ *
+ * Distinct (root, target) pairs are walked **concurrently**, and every listing
+ * they need goes through the cache's own {@link DirectorySpellingIndex}
+ * ({@link FsLookupCache.spellingIndex}), so a directory holding N referenced
+ * targets is listed once, not N times, a directory on the path to M of them is
+ * listed once, not M times, and a caller that fills once per path still indexes
+ * each directory only once for the whole run.
+ *
+ * @param requests - Targets to judge, each paired with its referring file
+ * @param fsCache - Per-run lookup cache (one instance per validation run)
+ * @returns The filled table; empty input yields an empty table with no syscalls
+ */
+export async function fillPathSpellings(
+  requests: Iterable<PathSpellingRequest>,
+  fsCache: FsLookupCache
+): Promise<PathSpellingTable> {
+  const distinct = new Map<string, PathSpellingRequest>();
+  for (const request of requests) {
+    const key = spellingKey(request.referrer, request.target);
+    if (!distinct.has(key)) distinct.set(key, request);
+  }
+
+  const index = fsCache.spellingIndex;
+  const table = new Map<string, PathSpelling>();
+  await Promise.all(
+    [...distinct].map(async ([key, request]) => {
+      const root = spellingWalkRoot(request.referrer, request.target);
+      table.set(key, await index.judgePath(root, request.target));
+    })
   );
 
-  return caseInsensitiveMatch === undefined
-    ? { exists: false, actualName: null, match: 'absent' }
-    : { exists: false, actualName: caseInsensitiveMatch, match: 'case_mismatch' };
+  return table;
 }
 
 /**
- * Judge `filePath` against an already-filled {@link SiblingNamesTable}.
+ * Read the verdict for one reference out of an already-filled table. Pure.
  *
- * This is the judging half of the two-pass shape: {@link fillSiblingNames} does
- * every listing first, then this runs over as many paths as you like with no
- * interleaved I/O.
+ * **A miss throws rather than degrading to `absent`.** The fill set is derived
+ * from exactly the references the judge will be asked about, so a missing row
+ * is a programming error — a path judged that nobody filled. Degrading would
+ * report every such reference as *missing*: a wrong answer wearing the shape of
+ * a graceful degradation, and one no test of the verdict would catch.
  *
- * **The signature is not what keeps this free of I/O — a test is.** `fs-utils.ts`
- * imports `node:fs` and `node:fs/promises` at module scope, so this function's
- * module reaches the filesystem freely; taking no {@link FsLookupCache} and no
- * `fs` parameter constrains a future edit not at all, which could call
- * `nodeFs.statSync` on the next line and still typecheck. What actually holds the
- * property is `packages/utils/test/fs-utils.test.ts` →
- * *"judges from a filled table, reaching neither readdir nor the sync stat pair"*:
- * it spies `fs.readdir`, `nodeFs.existsSync` and `nodeFs.statSync` on the very
- * default objects this module imports, drives a positive control through each so
- * a zero cannot mean "the instrument never attached", and asserts the counts do
- * not move across judgement. If a future check needs another fact about the parent
- * directory, widen the *table* rather than reaching for `fs` here — and expect
- * that test, not this signature, to be what stops you.
- *
- * @param table - Table filled by {@link fillSiblingNames}
- * @param filePath - Absolute path to judge
- * @returns The verdict — see {@link FilenameCaseVerdict}
- * @throws If `table` holds no entry for the path's parent directory — see
- *   {@link siblingNamesFrom}
+ * @param table - Table filled by {@link fillPathSpellings}
+ * @param referrer - The file holding the reference
+ * @param target - The absolute path it resolved to
+ * @returns How faithfully the whole path is spelled
+ * @throws If `table` holds no row for this (referrer, target) pair
  */
-export function classifyFilenameCaseFrom(
-  table: SiblingNamesTable,
-  filePath: string
-): FilenameCaseVerdict {
-  return classifyFilenameCase(siblingNamesFrom(table, filePath));
+export function pathSpellingFrom(
+  table: PathSpellingTable,
+  referrer: string,
+  target: string
+): PathSpelling {
+  const spelling = table.get(spellingKey(referrer, target));
+  if (spelling === undefined) {
+    throw new Error(
+      `No path spelling for "${target}" (referenced from "${referrer}"). ` +
+        `Fill it with fillPathSpellings() before judging.`
+    );
+  }
+  return spelling;
 }
 
 /**
@@ -639,9 +798,9 @@ export type RealpathTable = ReadonlyMap<string, string>;
  * ⚠️ **Rows are keyed by the input path string exactly as given** — not a
  * dirname, not a re-resolved form. {@link realpathFrom} looks that same string
  * up, so any normalization applied here and not there is a silent miss (a loud
- * one, in fact: the judge throws). Contrast {@link fillSiblingNames}, which keys
- * by `path.dirname` *because* many files share one listing; here the answer is
- * per path, so the path is the key.
+ * one, in fact: the judge throws). Contrast {@link fillPathSpellings}, which
+ * keys by (walk root, target) *because* many references share one walk; here the
+ * answer is per path, so the path is the key.
  *
  * Distinct paths are canonicalized **concurrently**: the shape this replaces
  * asked one path at a time at judgement time, which serialised every `realpath`
@@ -680,13 +839,11 @@ export async function fillRealpaths(
  * column exists to remove: a regression no test of the verdict could catch,
  * because the verdict would be identical, only slower.
  *
- * Public, unlike {@link siblingNamesFrom}: a sibling-names row is not yet an
- * answer (it still needs {@link classifyFilenameCase}), whereas here the row IS
- * the answer — so this lookup is itself the judge for this column, and there is
- * nothing left to keep internal.
+ * The row IS the answer here — nothing further has to judge it — so this lookup
+ * is itself the judge for this column.
  *
  * **The signature is not what keeps this free of I/O — a test is.** As with
- * {@link classifyFilenameCaseFrom}, this module imports `node:fs` and
+ * {@link pathSpellingFrom}, this module imports `node:fs` and
  * `node:fs/promises` at module scope, so withholding a {@link FsLookupCache} from
  * the parameter list prevents nothing. The guard is
  * `packages/utils/test/fs-utils.test.ts` → *"judges from a filled table, reaching

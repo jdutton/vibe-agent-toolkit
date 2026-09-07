@@ -60,6 +60,7 @@ const GIT_PUSH_ORIGIN_MAIN = 'git push origin main';
 const LS_STAR = 'Bash(ls *)';
 const RM_STAR = 'Bash(rm *)';
 const A_STAR_B_STAR_Z = 'Bash(a*b*z)';
+const A_STAR_Z = 'Bash(a*z)';
 const GIT_ONELINE_STAR = 'Bash(git * --oneline *)';
 // The wrapper form whose flag VALUE lands in the command position — two
 // admissible readings, so the allow lane must take neither.
@@ -361,14 +362,25 @@ describe('parseBashRuleContent', () => {
     expect(allowsBash('ax c', String.raw`Bash(a\* *)`)).toBe(false);
   });
 
-  // A run of wildcards permits exactly what one wildcard permits. Asserted on
-  // the ANSWERS, not on a compiled shape — see the cost suite below for why the
-  // shape assertion that used to live here was worthless.
-  it('treats a run of wildcards as one wildcard', () => {
-    const parsed = parseBashRuleContent('a**********z');
-    expect(parsed.type).toBe(WILDCARD);
-    expect(allowsBash('a' + 'b'.repeat(28) + 'z', 'Bash(a**********z)')).toBe(true);
-    expect(allowsBash('a' + 'b'.repeat(28), 'Bash(a**********z)')).toBe(false);
+  // 🚩 This case was called "treats a run of wildcards as one wildcard", and it
+  // cannot see that. Deleting the run-collapse in `compileWildcardPattern`
+  // leaves every answer identical — measured at 0 divergences over 1.5M random
+  // pairs — because an uncollapsed run only inserts EMPTY middle segments and
+  // `indexOf('', position)` returns `position`. The collapse is an optimisation,
+  // not a behaviour, and no test can pin it as one. What this case can assert,
+  // and now says out loud, is the EQUIVALENCE: the two spellings answer alike.
+  // Asserted on the answers, not on a compiled shape — see the cost suite below
+  // for why the shape assertion that used to live here was worthless.
+  it('answers a run of wildcards exactly as it answers a single wildcard', () => {
+    expect(parseBashRuleContent('a**********z').type).toBe(WILDCARD);
+    const runOfStars = 'Bash(a**********z)';
+    const long = 'a' + 'b'.repeat(28);
+    for (const command of ['az', `${long}z`, long, 'z', 'a z', 'zaz', 'a']) {
+      expect(allowsBash(command, runOfStars)).toBe(allowsBash(command, A_STAR_Z));
+    }
+    // ...and the equivalence is not vacuous: both spellings answer both ways.
+    expect(allowsBash(`${long}z`, runOfStars)).toBe(true);
+    expect(allowsBash(long, runOfStars)).toBe(false);
   });
 });
 
@@ -444,35 +456,92 @@ function costRatio(small: () => void, large: () => void): number {
 // replaced were 300×–1,800× over on the same pair.
 const MAX_COST_RATIO_FOR_4X_INPUT = 8;
 
+/** 4× the input must cost under {@link MAX_COST_RATIO_FOR_4X_INPUT}× the time. */
+function expectLinearCost(small: () => void, large: () => void): void {
+  expect(costRatio(small, large)).toBeLessThan(MAX_COST_RATIO_FOR_4X_INPUT);
+}
+
+/**
+ * Both halves of one rule's cost claim: that 4× the command costs under
+ * {@link MAX_COST_RATIO_FOR_4X_INPUT}× the time, AND that the command being
+ * timed is still the SHAPE the caller says it is.
+ *
+ * 🚩 `answer` is the half that was missing, and its absence made both ratios
+ * below vacuous. A command the matcher refuses on `startsWith`/`endsWith`
+ * returns before the segment scan, so its ratio bounds two string comparisons
+ * and nothing else — measured: injecting `for (let q = 0; q < text.length * 200;
+ * q += 1)` into the segment loop left the whole suite green. Pinning the answer
+ * pins which side of that short-circuit the timed call lands on, so a shape that
+ * silently stops reaching the scan fails here instead of passing a ratio that
+ * measures the wrong code.
+ */
+function expectLinearInCommand(
+  rule: string,
+  command: (n: number) => string,
+  sizes: readonly [number, number],
+  answer: boolean,
+): void {
+  const [small, large] = sizes;
+  expect(allowsBash(command(large), rule)).toBe(answer);
+  expectLinearCost(
+    () => {
+      matchesBashRule(command(small), rule, 'allow');
+    },
+    () => {
+      matchesBashRule(command(large), rule, 'allow');
+    },
+  );
+}
+
 describe('wildcard matching cost is linear in the input', () => {
   it('does not blow up on wildcards separated by literals', () => {
     const rule = 'Bash(ab*b*b*b*b*b*b*b*z)';
-    // 9 characters and 36: exactly 4×.
-    const command = (n: number): string => 'ab' + 'b'.repeat(n) + 'c';
-    const ratio = costRatio(
-      () => {
-        matchesBashRule(command(6), rule, 'allow');
-      },
-      () => {
-        matchesBashRule(command(33), rule, 'allow');
-      },
-    );
-    expect(ratio).toBeLessThan(MAX_COST_RATIO_FOR_4X_INPUT);
+    // 8 and 32 filler characters — 4× the part that grows.
+    const sizes = [8, 32] as const;
+    // REFUSED on the suffix, so the scan short-circuits. This is the input that
+    // took the regex 26,273 ms, and it is the half that reds a regex
+    // reintroduction — which is why it stays even though it stops early.
+    expectLinearInCommand(rule, (n) => 'ab' + 'b'.repeat(n) + 'c', sizes, false);
+    // PERMITTED, so all seven middle segments go through the scan. Without this
+    // half the ratio above bounds `startsWith` and `endsWith` only.
+    expectLinearInCommand(rule, (n) => 'ab' + 'b'.repeat(n) + 'z', sizes, true);
   });
 
   it('does not blow up on an ordinary rule carrying four wildcards', () => {
     const rule = 'Bash(npm * --registry * --registry * --registry * publish)';
     // 420 characters and 1,668: ~4×.
-    const command = (n: number): string => 'npm ' + ' --registry a'.repeat(n);
-    const ratio = costRatio(
+    const sizes = [32, 128] as const;
+    const flags = (n: number): string => 'npm ' + ' --registry a'.repeat(n);
+    expectLinearInCommand(rule, flags, sizes, false);
+    // The same command with the suffix the rule wants, so the three middle
+    // segments are searched for rather than skipped.
+    expectLinearInCommand(rule, (n) => `${flags(n)} publish`, sizes, true);
+  });
+
+  // 🚩 Neither ratio above can see work done INSIDE the segment loop, and no
+  // choice of sizes would let them: both rules carry a FIXED number of segments,
+  // so per-segment work proportional to the command is still LINEAR in the
+  // command, and a ratio is blind to a constant factor by construction.
+  //
+  // The rule is attacker-supplied too — a `settings.json` entry, a `SKILL.md`
+  // `allowed-tools:` entry — so the honest input is one where the rule and the
+  // command grow together. There the same injected loop is quadratic, and this
+  // ratio does see it: measured at 15.9× against a bound of 8.
+  it('stays linear when the rule and the command grow together', () => {
+    const rule = (n: number): string => `Bash(a${'*b'.repeat(n)}*z)`;
+    const command = (n: number): string => 'a' + 'b'.repeat(n) + 'z';
+    // The blindness guard: every one of the n middle segments has to be found,
+    // and one character short of enough is still refused.
+    expect(matchesBashRule(command(1000), rule(1000), 'allow')).toBe(true);
+    expect(matchesBashRule(command(999), rule(1000), 'allow')).toBe(false);
+    expectLinearCost(
       () => {
-        matchesBashRule(command(32), rule, 'allow');
+        matchesBashRule(command(250), rule(250), 'allow');
       },
       () => {
-        matchesBashRule(command(128), rule, 'allow');
+        matchesBashRule(command(1000), rule(1000), 'allow');
       },
     );
-    expect(ratio).toBeLessThan(MAX_COST_RATIO_FOR_4X_INPUT);
   });
 
   // 🚩 The blindness guard for the two above: a matcher that answered `false`
@@ -522,6 +591,113 @@ describe('wildcard matching cost is linear in the input', () => {
     expect(matchesDenyRule(BASH, '('.repeat(3000) + 'echo x' + ')'.repeat(3000), RM_STAR)).toBe(
       false,
     );
+  });
+});
+
+// ============================================================================
+// The greedy scan's own invariants
+// ============================================================================
+//
+// The two-pointer scan in `matchesWildcardPattern` makes two decisions that no
+// conformance case above can see, because the published table never puts a rule
+// of either shape in front of it. Both were provably deletable: removing either
+// left the whole suite green, and both deletions are WIDER or WRONGER answers.
+
+/**
+ * The shortest string that both starts with `prefix` and ends with `suffix`.
+ *
+ * Shorter than the two laid end to end exactly when they overlap, which is the
+ * whole point: it is the witness a rule `prefix*suffix` must refuse, and the one
+ * a matcher that forgets the prefix and the suffix may not share characters
+ * wrongly permits.
+ */
+function maximalOverlapJoin(prefix: string, suffix: string): string {
+  for (let overlap = Math.min(prefix.length, suffix.length); overlap > 0; overlap -= 1) {
+    if (prefix.endsWith(suffix.slice(0, overlap))) return prefix + suffix.slice(overlap);
+  }
+  return prefix + suffix;
+}
+
+describe('wildcard matching — the greedy scan', () => {
+  // 🚩 `if (limit < position) return false` is the ONLY thing standing between
+  // `Bash(rm*rm)` and a permit for the bare command `rm`. Deleting that one line
+  // left 87/87 green while widening every overlapping rule in the allow lane:
+  // `Bash(a*a)` permitted `a`, `Bash(echo*echo)` permitted `echo`. Direction =
+  // WIDER = false permit, so this is the one place a reintroduction is a
+  // security defect rather than a wrong answer.
+  //
+  // Pinned as the PROPERTY — a command too short to contain both anchors is
+  // refused — over six shapes, not as the `a*a` example that found it.
+  it('refuses a command too short to hold both the prefix and the suffix', () => {
+    const overlapping = [
+      ['a', 'a'],
+      ['rm', 'rm'],
+      ['echo', 'echo'],
+      ['abc', 'bcd'],
+      ['ls -l', '-la'],
+      ['npm run', 'run publish'],
+    ] as const;
+
+    for (const [prefix, suffix] of overlapping) {
+      const rule = `Bash(${prefix}*${suffix})`;
+      const tooShort = maximalOverlapJoin(prefix, suffix);
+      // The witness is only a witness while it is genuinely too short and still
+      // carries both anchors — otherwise the refusal below proves nothing.
+      expect(tooShort.length).toBeLessThan(prefix.length + suffix.length);
+      expect(tooShort.startsWith(prefix) && tooShort.endsWith(suffix)).toBe(true);
+      expect(allowsBash(tooShort, rule)).toBe(false);
+      // ...and the same rule still permits what it does express, so the refusal
+      // above is not a matcher that answers `false` to everything.
+      expect(allowsBash(prefix + suffix, rule)).toBe(true);
+      expect(allowsBash(`${prefix}x${suffix}`, rule)).toBe(true);
+    }
+  });
+
+  // 🚩 The scan's DIRECTION was untested: swapping `indexOf(segment, position)`
+  // for `lastIndexOf(segment)` left 87/87 green and is defective — taking a
+  // middle segment later than it has to can only leave less room for the
+  // segments after it, so the earliest occurrence is the only correct choice.
+  //
+  // Every case here is `prefix*middle*suffix` with a suffix that STARTS with the
+  // middle segment, so the middle segment occurs twice and only its earlier
+  // occurrence leaves room for the suffix.
+  it('takes a middle segment at its earliest admissible occurrence, not its latest', () => {
+    const shapes = [
+      ['a', 'b', 'bz'],
+      ['npm run', ' build', ' build --x'],
+      ['x', 'yz', 'yzw'],
+    ] as const;
+
+    for (const [prefix, middle, suffix] of shapes) {
+      const rule = `Bash(${prefix}*${middle}*${suffix})`;
+      expect(suffix.startsWith(middle)).toBe(true); // The witness is a witness.
+      expect(allowsBash(prefix + middle + suffix, rule)).toBe(true);
+      // ...and a command carrying only ONE occurrence still has nowhere to put
+      // the middle segment, so the permit above is not a blanket `true`.
+      expect(allowsBash(prefix + suffix, rule)).toBe(false);
+    }
+  });
+
+  // The other half of the same line: the search starts at `position`, never at
+  // 0. Dropping the position argument from `indexOf` also left 87/87 green, and
+  // it lets a middle segment be "found" inside the PREFIX it must follow —
+  // `Bash(git log*log* --oneline)` would permit `git log --oneline`, which
+  // contains the word `log` exactly once.
+  it('will not satisfy a middle segment from inside the prefix', () => {
+    const shapes = [
+      ['a', 'a', 'z'],
+      ['rm ', 'rm', '-rf'],
+      ['git log', 'log', ' --oneline'],
+    ] as const;
+
+    for (const [prefix, middle, suffix] of shapes) {
+      const rule = `Bash(${prefix}*${middle}*${suffix})`;
+      expect(prefix.includes(middle)).toBe(true); // The witness is a witness.
+      expect(allowsBash(prefix + suffix, rule)).toBe(false);
+      // ...and a command that really does carry the middle segment after the
+      // prefix is still permitted.
+      expect(allowsBash(prefix + middle + suffix, rule)).toBe(true);
+    }
   });
 });
 
@@ -801,6 +977,10 @@ const DOMAIN_EVIL = 'domain:evil.com';
 const WEBFETCH = 'WebFetch';
 const WEBFETCH_EVIL = 'WebFetch(domain:evil.com)';
 const RM_RF_ROOT = 'rm -rf /';
+// A subshell whose own child region sits INSIDE the rule literal — the shape the
+// nested-region placeholder used to erase. See the case that pins it.
+const SUBSHELL_RM_PWD = '(rm -rf $(pwd))';
+const BASH_RM_PWD = 'Bash(rm -rf $(pwd))';
 
 describe('published table — the deny/ask lane', () => {
   // "Deny and ask rules apply when any subcommand matches them" — where an
@@ -829,6 +1009,49 @@ describe('published table — the deny/ask lane', () => {
       'for f in a; do gitx clean -f; done',
     ]) {
       expect(matchesPermissionRule(BASH, command, GITX_CLEAN_STAR, 'deny')).toBe(true);
+    }
+  });
+
+  // 🚩 An enclosing region used to carry a two-character placeholder in place of
+  // each of its own nested regions, justified as *"a region that has already
+  // been emitted on its own does not need to appear inside its parent as well."*
+  // That justification is FALSE for every rule whose literal SPANS the child:
+  // `Bash(rm -rf $(pwd))` saw `rm -rf $()` and answered `false` for
+  // `(rm -rf $(pwd))`. Direction = UNDER-REPORT — `vat audit` says "no conflict"
+  // about a command Claude Code blocks — which is the same class the
+  // unparseable-command fallback two hunks away exists to close.
+  //
+  // Pinned as the PROPERTY: a region is the command's own text, so a rule
+  // literal that crosses a nested region's boundary still matches.
+  it('reaches a rule literal that spans a nested region', () => {
+    const backtick = String.fromCodePoint(0x60);
+    const cases: Array<[string, string]> = [
+      [SUBSHELL_RM_PWD, BASH_RM_PWD],
+      ['(sh -c "rm $(x)")', 'Bash(sh -c "rm $(x)")'],
+      [`${backtick}echo $(x) done${backtick}`, 'Bash(echo $(x) done)'],
+      [`$(rm -rf ${backtick}pwd${backtick})`, `Bash(rm -rf ${backtick}pwd${backtick})`],
+      [`if true; then ${SUBSHELL_RM_PWD}; fi`, BASH_RM_PWD],
+      ['echo "$(sh -c "rm $(x)")"', 'Bash(sh -c "rm $(x)")'],
+      // Three deep, so the region-text budget has to cover more than one
+      // generation of children before it binds.
+      ['(rm -rf $(dirname $(pwd)))', 'Bash(rm -rf $(dirname $(pwd)))'],
+    ];
+    for (const [command, rule] of cases) {
+      expect(matchesPermissionRule(BASH, command, rule, 'deny')).toBe(true);
+      expect(matchesPermissionRule(BASH, command, rule, 'ask')).toBe(true);
+      // ⛔ And the ALLOW lane does not widen with it: the table's only nesting
+      // sentence is the deny/ask one.
+      expect(matchesPermissionRule(BASH, command, rule, 'allow')).toBe(false);
+    }
+  });
+
+  // 🚩 The blindness guard for the case above: a region carrying its children's
+  // text verbatim must not start matching rules the command does not contain.
+  it('does not invent a match from a nested region it now carries', () => {
+    for (const lane of LANES) {
+      expect(matchesPermissionRule(BASH, '(echo $(pwd))', BASH_RM_PWD, lane)).toBe(false);
+      expect(matchesPermissionRule(BASH, SUBSHELL_RM_PWD, 'Bash(rm -rf $(cwd))', lane)).toBe(false);
+      expect(matchesPermissionRule(BASH, SUBSHELL_RM_PWD, ECHO_STAR, lane)).toBe(false);
     }
   });
 
@@ -992,6 +1215,33 @@ describe('published table — tool-name globs', () => {
     for (const lane of LANES) {
       expect(matchesPermissionRule('mcp__other__tool', 'x', MCP_SRV_GLOB, lane)).toBe(false);
       expect(matchesPermissionRule(BASH, RM_RF_ROOT, 'Edit*', lane)).toBe(false);
+    }
+  });
+
+  // ⚖️ A DECISION, pinned so it stops being an accident. `*` in the tool-name
+  // position spans EVERY character, newline included. The regex this lane used
+  // to compile built `.*` with no `s` flag, so `.` silently excluded `\n` and
+  // `mcp__srv__*` did NOT match `mcp__srv__a⏎b`; the glob scan has no such
+  // exclusion and `matchesToolName` does not normalise whitespace, so the
+  // behaviour changed without anyone choosing it.
+  //
+  // Keeping the new behaviour, because the exclusion is unsafe in the lane that
+  // matters: `matchesToolName` serves all three lanes, so a newline-excluding
+  // `*` would make a DENY rule covering a whole server report as not covering a
+  // name plainly under it — the same under-report class this module has already
+  // had to fix twice. On the allow side nothing widens that an operator did not
+  // already grant, since the name is under a server they allow-listed by name.
+  // Unreachable on the Bash lane either way: that lane normalises whitespace
+  // before a tool name ever gets here.
+  it('spans a newline in the tool-name position, in every lane', () => {
+    const newline = String.fromCodePoint(0x0a);
+    for (const lane of LANES) {
+      expect(matchesPermissionRule(`mcp__srv__a${newline}b`, 'x', MCP_SRV_GLOB, lane)).toBe(true);
+      // ...and the glob is still anchored on the literal before the `*`: a
+      // newline does not smuggle a different server past the prefix.
+      expect(matchesPermissionRule(`mcp__other__a${newline}b`, 'x', MCP_SRV_GLOB, lane)).toBe(
+        false,
+      );
     }
   });
 });

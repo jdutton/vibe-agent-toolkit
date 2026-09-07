@@ -4,8 +4,8 @@
  *
  * Link validation runs in two passes: {@link resolveLinkEntries} resolves every
  * link exactly once, {@link fillLinkFacts} reads the local targets off those
- * resolutions ({@link linkTargetPaths}) and materialises both judge columns over
- * them — the parent-directory listings and the canonical paths, the latter
+ * resolutions ({@link linkTargets}) and materialises both judge columns over
+ * them — the whole-path spellings and the canonical paths, the latter
  * including the project root — and {@link judgeLink} decides every link
  * synchronously against those tables.
  *
@@ -45,7 +45,12 @@
 import nodeFs from 'node:fs';
 import fs from 'node:fs/promises';
 
-import { FsLookupCache, safePath, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import {
+  FsLookupCache,
+  type PathSpelling,
+  safePath,
+  setupAsyncTempDirSuite,
+} from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -53,7 +58,7 @@ import {
   fragmentIndex,
   judgeLink,
   judgeOptionsFrom,
-  linkTargetPaths,
+  linkTargets,
   needsRealpathColumn,
   resolveLinkEntries,
   validateLink,
@@ -148,7 +153,7 @@ const COUNTED_SOURCES: readonly { source: string; hrefs: readonly string[] }[] =
  * `docs/` — **declared, not derived.** The expected syscall count is
  * `length + 1` (the project root), so computing this list with the code under
  * test would pin nothing; the test cross-checks the declaration against
- * `linkTargetPaths` instead, and both the count and the fixture move together.
+ * `linkTargets` instead, and both the count and the fixture move together.
  */
 const COUNTED_DISTINCT_TARGETS: readonly string[] = [
   TARGET_ENTRY,
@@ -180,7 +185,9 @@ function targetsOf(
   sourceFile: string,
   projectRoot?: string,
 ): string[] {
-  return linkTargetPaths(resolveLinkEntries(toEntries(cases, sourceFile), projectRoot));
+  return linkTargets(resolveLinkEntries(toEntries(cases, sourceFile), projectRoot)).map(
+    ({ target }) => target,
+  );
 }
 
 /** The judge's options for a group, carrying `projectRoot` only when there is one. */
@@ -474,7 +481,9 @@ describe('link validation fill/judge split', () => {
     const expectedTargets = COUNTED_DISTINCT_TARGETS.map((rel) => safePath.join(docsDir, rel));
     const sorted = (paths: readonly string[]) =>
       [...paths].sort((a, b) => a.localeCompare(b));
-    expect(sorted([...new Set(linkTargetPaths(resolved))])).toEqual(sorted(expectedTargets));
+    expect(
+      sorted([...new Set(linkTargets(resolved).map(({ target }) => target))]),
+    ).toEqual(sorted(expectedTargets));
     const expectedCalls = expectedTargets.length + 1;
 
     const wave = await traceRealpathWave(async () => {
@@ -510,7 +519,7 @@ describe('link validation fill/judge split', () => {
       });
       expect(tables.realpaths.size).toBe(0);
       // The gate is per column: the listing column is filled either way.
-      expect(tables.siblingNames.size).toBeGreaterThan(0);
+      expect(tables.spellings.size).toBeGreaterThan(0);
     });
     expect(skipped.sync + skipped.async).toBe(0);
 
@@ -555,7 +564,7 @@ describe('link validation fill/judge split', () => {
 
     expect(() =>
       judgeLink(unresolved, fragments, {
-        siblingNames: new Map<string, readonly string[] | null>(),
+        spellings: new Map<string, PathSpelling>(),
         realpaths: new Map<string, string>(),
         skipGitIgnoreCheck: true,
       }),
@@ -577,7 +586,7 @@ describe('link validation fill/judge split', () => {
     };
 
     const carried = judgeOptionsFrom(everyField, {
-      siblingNames: new Map<string, readonly string[] | null>(),
+      spellings: new Map<string, PathSpelling>(),
       realpaths: new Map<string, string>(),
     });
 
@@ -587,15 +596,15 @@ describe('link validation fill/judge split', () => {
       'gitTracker',
       'projectRoot',
       'realpaths',
-      'siblingNames',
       'skipGitIgnoreCheck',
+      'spellings',
     ]);
     // `fsCache` must not travel — JudgeLinkOptions exists to withhold the
     // handle, and a `{ ...options }` spread would smuggle it past the type.
     expect(Object.keys(carried)).not.toContain('fsCache');
   });
 
-  describe('linkTargetPaths', () => {
+  describe('linkTargets', () => {
     it('returns exactly the resolved local targets', () => {
       expect(
         targetsOf(

@@ -129,6 +129,26 @@ const INJECTION = '>=22.13.0"; echo "INJECTED-COMMAND-RAN-$((6*7))"; : "';
 /** Present in the output only if {@link INJECTION} was executed as shell. */
 const EXECUTED_MARKER = 'INJECTED-COMMAND-RAN-42';
 
+/**
+ * The OTHER injection, which {@link INJECTION} cannot reach: it contains no
+ * newline, and a newline is the whole mechanism here.
+ *
+ * The refusal path echoes the PR's own `engines.node` verbatim into a
+ * `::error::` line. A runner reads its stdout LINE BY LINE and treats any line
+ * beginning `::` as a workflow command, so a value carrying newlines does not
+ * merely appear in an error message — its later lines ARE workflow commands.
+ * Executed against the unfixed step, this payload reached the runner as a real
+ * `::add-mask::` and a real, attacker-authored `::error::`.
+ *
+ * Not code execution — the derive regex is fail-closed, so no bad floor escapes.
+ * It is log and annotation forgery: masking output the maintainer needs to read,
+ * and posting an arbitrary error annotation on the PR under CI's name.
+ */
+const NEWLINE_INJECTION = '>=22.13\n::add-mask::supersecret\n::error::attacker-controlled';
+
+/** Workflow-command fragments that must never survive into the step's output. */
+const FORGED_COMMANDS = ['::add-mask::', 'attacker-controlled'];
+
 describe.skipIf(process.platform === 'win32')('node-floor.yml', () => {
   let tempDir: string;
   let githubOutput: string;
@@ -230,6 +250,21 @@ describe.skipIf(process.platform === 'win32')('node-floor.yml', () => {
       expect(output).not.toContain(EXECUTED_MARKER);
       expect(status).not.toBe(0);
       expect(derived).not.toContain('version=');
+    });
+
+    it('does not let the REFUSAL message carry workflow commands out of the value', () => {
+      const { status, output, derived } = derive(NEWLINE_INJECTION);
+
+      // Still fail-closed on the floor itself.
+      expect(status).not.toBe(0);
+      expect(derived).not.toContain('version=');
+
+      // And the refusal names the value without republishing its later lines.
+      for (const forged of FORGED_COMMANDS) {
+        expect(output).not.toContain(forged);
+      }
+      // Not vacuous: the message still tells the reader what it refused.
+      expect(output).toContain('22.13');
     });
   });
 });

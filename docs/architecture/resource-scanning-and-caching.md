@@ -584,7 +584,7 @@ index, so the class is navigable from any one of them:
 |---|---|---|
 | `ResourceRegistry.resourcesByPath` — `packages/resources/src/resource-registry.ts` | index filled from enumerated paths, queried with a link-derived path | no `resolvedId`, and then order-dependent bundling at packaging time |
 | `fragmentIndex()` / `checkAnchor()` — `packages/resources/src/link-validator.ts` | index filled from enumerated paths, queried from link text | a miss answers `'skip'`, so the anchor is silently never checked |
-| `classifyFilenameCase()` — `packages/utils/src/fs-utils.ts` | a `readdir` listing judged against a basename taken from link text | an accented file that plainly exists reported flatly missing |
+| `DirectorySpellingIndex` — `packages/utils/src/fs-utils.ts` | a `readdir` listing, indexed, judged against every component of a path taken from link text | an accented file that plainly exists reported flatly missing |
 
 **The prohibition that bounds all three is stated once, at `toNfc` in
 `packages/utils/src/path-core.ts`:** folding produces a comparison key and never a path to open,

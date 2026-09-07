@@ -13,13 +13,14 @@
  * the root manifest rather than restated here: a literal in this file would be a
  * second place to remember, which is the defect it is meant to catch.
  */
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { afterAll, describe, expect, it } from 'vitest';
 
 import { PROJECT_ROOT } from '../src/common.js';
 import {
+  collectEngineFloorFindings,
   findEngineFloorDisagreements,
   type PackageManifestSummary,
 } from '../src/validate-repo-structure.js';
@@ -222,5 +223,155 @@ describe('findEngineFloorDisagreements', () => {
     ]);
 
     expect(findings.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * The WIRING, against a real tree — because every case above hand-feeds the pure
+ * decision function an `unreadable[]` array it built itself.
+ *
+ * 🪤 That is the gap this block closes. `readManifest` is what decides whether a
+ * corrupt manifest ever *becomes* an `unreadable[]` entry, and it was reachable
+ * from no test at all: replacing its three-outcome body with the pre-fix
+ * swallow-all (`catch { return { kind: 'absent' } }`) left the whole suite green
+ * — the fix the branch exists for was pinned only by the assertions that assume
+ * it already happened.
+ *
+ * So these drive `collectEngineFloorFindings` at a fixture root and assert the
+ * three outcomes stay APART on a real filesystem:
+ *
+ * | on disk                          | expected |
+ * |----------------------------------|----------|
+ * | agreeing manifest                | silence  |
+ * | directory with NO `package.json` | silence  |
+ * | unparseable `package.json`       | FINDING  |
+ * | `package.json` that cannot be opened at all | FINDING |
+ *
+ * The last row is a `package.json` that is a DIRECTORY rather than a file: it
+ * yields `EISDIR`, an error that is neither `ENOENT` nor a JSON parse failure,
+ * on every platform and without depending on chmod semantics that differ (and
+ * on Windows, largely do not exist).
+ */
+
+/** Every fixture tree this file creates, torn down together. */
+const fixtureRoots: string[] = [];
+
+const FIXTURE_PREFIX = 'vat-floor-wiring-';
+
+afterAll(() => {
+  for (const root of fixtureRoots) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** An empty scratch tree, registered for cleanup. */
+function emptyRoot(): string {
+  const root = mkdtempSync(safePath.join(normalizedTmpdir(), FIXTURE_PREFIX));
+  fixtureRoots.push(root);
+  return root;
+}
+
+function write(path: string, contents: string): void {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path under this file's own mkdtemp root
+  writeFileSync(path, contents, 'utf8');
+}
+
+/** A minimal monorepo whose root declares the real floor. */
+function fixtureRoot(): string {
+  const root = emptyRoot();
+  write(safePath.join(root, ROOT_MANIFEST), JSON.stringify({ engines: { node: ROOT_FLOOR } }));
+  mkdirSyncReal(safePath.join(root, 'packages'), { recursive: true });
+  return root;
+}
+
+/** Create `packages/<name>/`, then whatever the case needs inside it. */
+function packageDir(root: string, name: string): string {
+  const dir = safePath.join(root, 'packages', name);
+  mkdirSyncReal(dir, { recursive: true });
+  return dir;
+}
+
+function pathsOf(findings: readonly { path: string }[]): string[] {
+  return findings.map((f) => f.path).sort((a, b) => a.localeCompare(b));
+}
+
+describe('collectEngineFloorFindings, wired to a real tree', () => {
+  it('reports an unparseable manifest instead of skipping it like an absent one', async () => {
+    const root = fixtureRoot();
+    write(
+      safePath.join(packageDir(root, 'agrees'), ROOT_MANIFEST),
+      JSON.stringify({ engines: { node: ROOT_FLOOR } }),
+    );
+    // A directory that simply has no manifest — a legitimate pass, and the
+    // outcome the swallow-all collapsed the corrupt case INTO.
+    packageDir(root, 'no-manifest');
+    write(safePath.join(packageDir(root, 'corrupt'), ROOT_MANIFEST), '{ "engines": { "node"');
+
+    const findings = await collectEngineFloorFindings(root);
+
+    expect(pathsOf(findings)).toEqual(['packages/corrupt/package.json']);
+    expect(findings[0]?.severity).toBe('error');
+    // The underlying cause is carried through, not flattened to "unreadable".
+    expect(findings[0]?.message).toMatch(/JSON/u);
+  });
+
+  it('reports a manifest it cannot open at all', async () => {
+    const root = fixtureRoot();
+    // `package.json` as a DIRECTORY: readFile fails with EISDIR, which is
+    // neither "not found" nor a parse error.
+    mkdirSyncReal(safePath.join(packageDir(root, 'blocked'), ROOT_MANIFEST), { recursive: true });
+
+    const findings = await collectEngineFloorFindings(root);
+
+    expect(pathsOf(findings)).toEqual(['packages/blocked/package.json']);
+    expect(findings[0]?.severity).toBe('error');
+  });
+
+  it('reports an unparseable ROOT manifest rather than "declares no floor"', async () => {
+    const root = emptyRoot();
+    write(safePath.join(root, ROOT_MANIFEST), 'not json at all');
+    mkdirSyncReal(safePath.join(root, 'packages'), { recursive: true });
+
+    const findings = await collectEngineFloorFindings(root);
+
+    expect(pathsOf(findings)).toEqual([ROOT_MANIFEST]);
+    expect(findings[0]?.message).not.toContain('declares no engines.node');
+  });
+
+  it('is silent on a tree where every manifest agrees', async () => {
+    const root = fixtureRoot();
+    write(
+      safePath.join(packageDir(root, 'agrees'), ROOT_MANIFEST),
+      JSON.stringify({ engines: { node: ROOT_FLOOR } }),
+    );
+    write(
+      safePath.join(packageDir(root, 'private-no-floor'), ROOT_MANIFEST),
+      JSON.stringify({ private: true }),
+    );
+    packageDir(root, 'no-manifest');
+
+    expect(await collectEngineFloorFindings(root)).toEqual([]);
+  });
+
+  it('reports a real disagreement read off disk, so the read path is not inert', async () => {
+    const root = fixtureRoot();
+    write(
+      safePath.join(packageDir(root, 'disagrees'), ROOT_MANIFEST),
+      JSON.stringify({ engines: { node: '>=18.0.0' } }),
+    );
+
+    const findings = await collectEngineFloorFindings(root);
+
+    expect(pathsOf(findings)).toEqual(['packages/disagrees/package.json']);
+    expect(findings[0]?.message).toContain('>=18.0.0');
+  });
+
+  it('reports a missing packages/ directory rather than passing the whole gate', async () => {
+    const root = emptyRoot();
+    write(safePath.join(root, ROOT_MANIFEST), JSON.stringify({ engines: { node: ROOT_FLOOR } }));
+
+    const findings = await collectEngineFloorFindings(root);
+
+    expect(pathsOf(findings)).toEqual(['packages']);
   });
 });

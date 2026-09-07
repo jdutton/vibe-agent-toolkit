@@ -7,9 +7,8 @@
  * vat config at all.
  */
 
-import { pathToFileURL } from 'node:url';
-
 import { parseWholeNumberAtLeast, safePath } from '@vibe-agent-toolkit/utils';
+import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
 import { Command, InvalidArgumentError } from 'commander';
 
 import type { ReportEnvelope } from '../envelope/envelope.js';
@@ -862,10 +861,16 @@ export function createProgram(): Command {
     );
 }
 
-// Run only when this is the invoked script, not merely imported — the same
-// guard `packages/dev-tools/src/tsc-clean-build.ts` uses. Without it, a test
-// that imports `createProgram` for its own argv would also trigger this
-// module's own `process.argv`-driven run as an import side effect.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Run only when this is the invoked script, not merely imported. Without the
+// guard, a test that imports `createProgram` for its own argv would also
+// trigger this module's own `process.argv`-driven run as an import side effect.
+//
+// ⛔ NOT `import.meta.url === pathToFileURL(process.argv[1]).href`, which is
+// what this used to be. This package declares a `vat-lab` bin, so the normal way
+// to run it is through `node_modules/.bin/vat-lab` — a SYMLINK. `argv[1]` is
+// then the link and `import.meta.url` the resolved target, the strings differ,
+// and the guard is false: `vat-lab` prints nothing and exits 0. Measured on Node
+// 22.14.0 and 24.13.1 alike.
+if (isEntrypoint(import.meta.url)) {
   await createProgram().parseAsync(process.argv);
 }

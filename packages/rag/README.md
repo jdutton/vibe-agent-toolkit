@@ -158,6 +158,14 @@ if (chunkResult.success) {
 > Structure is still not provider support: `dateRange`, `tags`, `type`, `headingPath` and
 > `hybridSearch.enabled: true` are all declared here, all parse, and are all refused by
 > `query()`.
+>
+> **`filters.dateRange` bounds accept an ISO-8601 date-time string as well as a `Date`, and
+> parse to a `Date` either way.** JSON carries no date type, so a string is the only value
+> that can cross a wire — and it is exactly what the published `RAGQueryJsonSchema` declares
+> (`{"type":"string","format":"date-time"}`). A bare `z.date()` rejected that string, so a
+> payload that validated against VAT's own published schema failed VAT's own `safeParse`:
+> the two halves of one exported contract disagreed on the only representation either could
+> receive. The emitted JSON Schema is unchanged; the TypeScript half now honours it.
 
 ### Using JSON Schemas
 

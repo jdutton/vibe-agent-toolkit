@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ArdEntrySchema } from '../../src/ard/index.js';
-import { ArdConfigSchema } from '../../src/schemas/project-config.js';
+import { ArdConfigSchema, ProjectConfigSchema } from '../../src/schemas/project-config.js';
 
 /** The one publisher every case that is not about the publisher uses. */
 const PUBLISHER = 'example.com';
@@ -62,6 +62,49 @@ describe('ard.baseUrl must be a base entry URLs can RESOLVE against', () => {
     'http://localhost:8080/catalog',
   ])('accepts %s', (baseUrl) => {
     expect(ArdConfigSchema.safeParse({ publisher: PUBLISHER, baseUrl }).success).toBe(true);
+  });
+});
+
+describe('ard.namespace must be a segment URL resolution cannot reinterpret', () => {
+  // 🚨 The charset `^[a-z0-9._-]+$/i` admits `.` and `..`, and dot-segment
+  // collapsing is what a URL resolver DOES. `namespace: ".."` under `baseUrl:
+  // https://example.com/tenants/acme/catalog` emitted
+  // `https://example.com/tenants/acme/<name>` at exit 0 — an address one level
+  // above where the identifier says the resource lives, and plausible enough
+  // that nothing downstream reports it.
+  it.each(['.', '..'])('refuses %s', (namespace) => {
+    expect(ArdConfigSchema.safeParse({ publisher: PUBLISHER, namespace }).success).toBe(false);
+  });
+
+  it.each(['skills', 'v1.2', '.hidden', 'a..b'])(
+    'accepts %s, which merely contains dots',
+    (namespace) => {
+      expect(ArdConfigSchema.safeParse({ publisher: PUBLISHER, namespace }).success).toBe(true);
+    }
+  );
+});
+
+describe('an `ard:` block is judged at CONFIG LOAD, not only at emission', () => {
+  // 🔑 DECIDED, not inherited: `ard.publisher`/`ard.baseUrl` validation lives in
+  // `ProjectConfigSchema`, so a malformed ARD block fails EVERY command that
+  // loads the config — `vat audit` included — not just `vat ard emit`. That is
+  // the wider blast radius, and it is the intended one: the alternative reports
+  // a good message at the wrong moment, after the author has already published
+  // the config, and it would make `ard:` the one block in the file that is not
+  // checked where every other block is. The emitter keeps the same predicates as
+  // a last gate for configs assembled in process.
+  it('refuses a whole project config over its ard block alone', () => {
+    const result = ProjectConfigSchema.safeParse({
+      version: 1,
+      ard: { publisher: 'My Company' },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts the same project config once the ard block is well-formed', () => {
+    expect(
+      ProjectConfigSchema.safeParse({ version: 1, ard: { publisher: PUBLISHER } }).success
+    ).toBe(true);
   });
 });
 

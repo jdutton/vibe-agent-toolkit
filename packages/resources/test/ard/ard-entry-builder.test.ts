@@ -16,6 +16,7 @@ import {
   buildArdEntries,
   buildArdEntry,
   deriveArdMediaType,
+  findShadowedArdOverrideKeys,
   type ArdSurface,
 } from '../../src/ard/index.js';
 
@@ -374,6 +375,162 @@ describe('buildArdEntry — url is RESOLVED, not concatenated', () => {
     );
     expect(entry.url).toBe('https://example.com/skills/skills/expenses');
   });
+});
+
+describe('buildArdEntry — a URN segment is never a DOT segment', () => {
+  // 🚨 `ARD_NAME_SEGMENT_PATTERN` is a charset, and a charset admits `.` and
+  // `..`. Dot-segment collapsing is `new URL`'s defining behaviour, so
+  // `namespace: ".."` against `baseUrl: https://example.com/tenants/acme/catalog`
+  // emitted `https://example.com/tenants/acme/alpha` at exit 0 — an address that
+  // is plausibly wrong rather than legibly wrong, one segment above where the
+  // identifier says the resource lives. A skill NAMED `.` resolved to the
+  // namespace DIRECTORY rather than to the skill.
+  //
+  // The property is per-segment, not per-example: a segment that IS a dot
+  // segment is refused in either position; a segment that merely CONTAINS dots
+  // is untouched, since that is the ordinary shape of a versioned name.
+  //
+  // ⚠️ Every refusal case here builds an entry with NO baseUrl, so the only gate
+  // that can fire is the identifier's. Handing these a `urlPath` instead would
+  // let the path check refuse them and leave the segment rule vacuous — the two
+  // guards are independent and each is pinned alone.
+  const DOT_SEGMENTS = ['.', '..'] as const;
+
+  it.each(DOT_SEGMENTS)('refuses ard.namespace "%s"', (namespace) => {
+    expect(() =>
+      buildArdEntry(MINIMAL_SKILL_SURFACE, { ...MINIMAL_ARD_CONFIG, namespace })
+    ).toThrow(ArdDerivationError);
+  });
+
+  it.each(DOT_SEGMENTS)('refuses a surface name "%s"', (name) => {
+    expect(() => buildArdEntry({ ...MINIMAL_SKILL_SURFACE, name }, MINIMAL_ARD_CONFIG)).toThrow(
+      ArdDerivationError
+    );
+  });
+
+  it.each(DOT_SEGMENTS)('names the segment it refused, for "%s"', (namespace) => {
+    expect(() =>
+      buildArdEntry(MINIMAL_SKILL_SURFACE, { ...MINIMAL_ARD_CONFIG, namespace })
+    ).toThrow(/ard\.namespace/);
+  });
+
+  it.each(['v1.2', '.hidden', 'a..b', '...'])(
+    'still accepts "%s", which merely contains dots',
+    (name) => {
+      const entry = buildArdEntry(
+        { ...MINIMAL_SKILL_SURFACE, name, urlPath: `skills/${name}` },
+        URL_ARD_CONFIG
+      );
+      expect(entry.identifier).toBe(`urn:air:example.com:skills:${name}`);
+      expect(entry.url).toBe(`https://example.com/catalog/skills/${name}`);
+    }
+  );
+});
+
+describe('buildArdEntry — urlPath is a PATH, never a relocation', () => {
+  // 🚨 `ArdSurface.urlPath` is documented as "path appended to `ard.baseUrl`",
+  // and `buildArdEntry` is exported from the package. An absolute URL handed to
+  // it resolved to ITSELF: the entry kept `urn:air:example.com:…` while its
+  // `url` pointed at another origin, which is exactly the binding
+  // `resolveTrustManifest` exists to protect. Encoded dot segments decode during
+  // resolution, so `%2e%2e` walks the base's path just as `..` does.
+  it.each([
+    'https://evil.com/x',
+    // Any scheme, not just the web ones — the check is on the SHAPE. (A plain
+    // `http://` literal here trips `sonarjs/no-clear-text-protocols`, which is
+    // reading a refusal fixture as a connection.)
+    'x-vat://evil.com/x',
+    '//evil.com/x',
+    'mailto:ops@evil.com',
+    'javascript:alert(1)',
+    'skills/../x',
+    'skills/%2e%2e/x',
+    'skills/%2E%2E/x',
+    '../x',
+    './x',
+    'skills/./x',
+  ])('refuses urlPath %s', (urlPath) => {
+    expect(() => buildArdEntry({ ...MINIMAL_SKILL_SURFACE, urlPath }, URL_ARD_CONFIG)).toThrow(
+      ArdDerivationError
+    );
+  });
+
+  it.each(['skills/a.md', '/skills/a.md', 'skills/v1.2/a.md', 'skills/a%20b.md'])(
+    'accepts urlPath %s, which addresses inside the base',
+    (urlPath) => {
+      const entry = buildArdEntry({ ...MINIMAL_SKILL_SURFACE, urlPath }, URL_ARD_CONFIG);
+      expect(entry.url?.startsWith('https://example.com/catalog/')).toBe(true);
+    }
+  );
+});
+
+describe('buildArdEntry — the QUALIFIED override key outranks the bare one', () => {
+  // 🚨 Nothing decided this. Two mutations reversing the lookup to bare-first
+  // stayed green across the whole suite, because no case ever put both keys on
+  // one surface — so a refactor could publish the wrong block in silence.
+  //
+  // Pinned as a property over both DECLARATION ORDERS: a lookup that walked the
+  // record instead of asking for the key it wants would pass one and fail the
+  // other.
+  const BARE = { capabilities: ['FromBareKey'], type: 'text/BARE' };
+  const QUALIFIED = { capabilities: ['FromQualifiedKey'], type: 'text/QUALIFIED' };
+  const NAME = MINIMAL_SKILL_SURFACE.name;
+  const QUALIFIED_KEY = `skill:${NAME}`;
+
+  it.each([
+    ['bare declared first', { [NAME]: BARE, [QUALIFIED_KEY]: QUALIFIED }],
+    ['qualified declared first', { [QUALIFIED_KEY]: QUALIFIED, [NAME]: BARE }],
+  ])('takes the qualified block when %s', (_label, entries) => {
+    const entry = buildArdEntry(MINIMAL_SKILL_SURFACE, { ...MINIMAL_ARD_CONFIG, entries });
+    expect(entry.type).toBe(QUALIFIED.type);
+    expect(entry.capabilities).toEqual(QUALIFIED.capabilities);
+  });
+
+  it('reports the bare block it discarded, rather than dropping it in silence', () => {
+    const shadowed = findShadowedArdOverrideKeys([MINIMAL_SKILL_SURFACE], {
+      ...MINIMAL_ARD_CONFIG,
+      entries: { [NAME]: BARE, [QUALIFIED_KEY]: QUALIFIED },
+    });
+    expect(shadowed).toEqual([
+      { kind: 'skill', name: NAME, shadowedKey: NAME, winningKey: QUALIFIED_KEY },
+    ]);
+  });
+
+  it('reports nothing when only one of the two keys is declared', () => {
+    for (const entries of [{ [NAME]: BARE }, { [QUALIFIED_KEY]: QUALIFIED }]) {
+      expect(
+        findShadowedArdOverrideKeys([MINIMAL_SKILL_SURFACE], { ...MINIMAL_ARD_CONFIG, entries })
+      ).toEqual([]);
+    }
+  });
+});
+
+describe('buildArdEntries — an inherited Object.prototype key is not a config key', () => {
+  // 🚨 `entries[surface.name] === undefined` reads through the prototype, and
+  // `z.record` yields a plain-prototype object — so a skill and a marketplace
+  // both named `toString` hit the ambiguity refusal and exited 1 naming
+  // `ard.entries.toString`, a key the config does not contain.
+  it.each(['toString', 'constructor', 'valueOf', 'hasOwnProperty'])(
+    'emits both surfaces named %s, since no bare key was declared',
+    (name) => {
+      const entries = buildArdEntries(
+        [
+          { kind: 'skill', name, displayName: name, data: {} },
+          { kind: 'marketplace', name, displayName: name, data: {} },
+        ],
+        {
+          ...MINIMAL_ARD_CONFIG,
+          entries: { [`marketplace:${name}`]: { type: VENDOR_CATALOG_TYPE } },
+        }
+      );
+      expect(entries.map((e) => e.identifier)).toEqual([
+        `urn:air:example.com:skills:${name}`,
+        `urn:air:example.com:marketplaces:${name}`,
+      ]);
+      // The inherited value must not have been read as an override either.
+      expect(entries[0]?.type).toBe(ARD_SKILL_MEDIA_TYPE);
+    }
+  );
 });
 
 describe('buildArdEntries', () => {

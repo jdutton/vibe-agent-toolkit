@@ -203,6 +203,60 @@ describe('installSqliteWarningFilter', () => {
       expect((original.mock.calls[0]?.[0] as Error).message).toContain('Fetch API');
     });
 
+    /**
+     * The case the chain walk CANNOT splice: a foreign wrapper installed above
+     * us that delegates rather than replaces.
+     *
+     * An APM shim, another library's warning filter, an unrestored test spy —
+     * none of them carry `FILTER_BRAND`, so the walk stops at the first one and
+     * finds nothing to splice. Splicing through it is not possible: the foreign
+     * wrapper holds its reference to the emitter beneath it in a closure, which
+     * nothing outside it can rewrite.
+     *
+     * So `restore()` cannot remove the node — and must therefore make it inert.
+     * The harm is not "the node is still in the chain"; it is that a filter
+     * nobody can reach goes on eating the warning it was installed to hide, for
+     * the life of the process. The docstring used to justify the no-op with a
+     * host whose emitter was "replaced wholesale", which is a genuinely
+     * different case (nothing reaches our filter at all, so it eats nothing).
+     */
+    it('stops filtering when a foreign delegating wrapper blocks the splice', () => {
+      const { host, original } = trackedHost();
+
+      const restore = installSqliteWarningFilter(host);
+      const ours = host.emitWarning;
+
+      // Installed AFTER us, delegating, unbranded — the shape the walk cannot
+      // see past, and whose link to `ours` lives in a closure nothing can rewrite.
+      const foreign = vi.fn((...args: unknown[]) => {
+        Reflect.apply(ours, host, args);
+      });
+      host.emitWarning = foreign as unknown as NodeJS.Process['emitWarning'];
+
+      restore();
+
+      host.emitWarning(experimental(REAL_SQLITE_WARNING));
+
+      expect(foreign).toHaveBeenCalledTimes(1);
+      expect(original).toHaveBeenCalledTimes(1);
+    });
+
+    it('still filters while installed under a foreign delegating wrapper', () => {
+      // The negative control for the case above: neutering must happen on
+      // `restore()`, not on merely being wrapped.
+      const { host, original } = trackedHost();
+
+      installSqliteWarningFilter(host);
+      const ours = host.emitWarning;
+      host.emitWarning = ((...args: unknown[]) => {
+        Reflect.apply(ours, host, args);
+      }) as unknown as NodeJS.Process['emitWarning'];
+
+      host.emitWarning(experimental(REAL_SQLITE_WARNING));
+
+      expect(original).not.toHaveBeenCalled();
+    });
+
     it('is safe to call a restore twice', () => {
       const { host, original } = trackedHost();
 

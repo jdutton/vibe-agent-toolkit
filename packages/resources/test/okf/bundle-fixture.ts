@@ -17,6 +17,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import {
   createSymlink,
+  isAbsolutePath,
   mkdirSyncReal,
   normalizedTmpdir,
   safePath,
@@ -75,7 +76,13 @@ export const REFERENCE_TYPE = 'Reference';
 export const NO_FRONTMATTER = '# No frontmatter\n';
 
 /**
- * One visible filename, `café.md`, in the two Unicode normalization forms.
+ * One visible name, `café`, in the two Unicode normalization forms — as a
+ * DIRECTORY component and as a filename.
+ *
+ * The directory pair is not decoration: a link's normalization form is a
+ * property of every path component, and a judge that only inspected the last
+ * one reported nothing at all for `café/guide.md` written NFD against an NFC
+ * directory on disk.
  *
  * Built with `String.fromCodePoint` rather than typed as `\u` escapes: an
  * escape typed into a source file is normalized into real bytes on the way in,
@@ -86,8 +93,10 @@ export const NO_FRONTMATTER = '# No frontmatter\n';
  * direction that breaks: the bundle is authored on a Mac, where both forms open,
  * and 404s on the byte-exact filesystem every consumer unpacks it onto.
  */
-export const NFD_CAFE_DOC = `caf${String.fromCodePoint(0x65, 0x301)}.md`;
-export const NFC_CAFE_DOC = `caf${String.fromCodePoint(0xe9)}.md`;
+export const NFD_CAFE_DIR = `caf${String.fromCodePoint(0x65, 0x301)}`;
+export const NFC_CAFE_DIR = `caf${String.fromCodePoint(0xe9)}`;
+export const NFD_CAFE_DOC = `${NFD_CAFE_DIR}.md`;
+export const NFC_CAFE_DOC = `${NFC_CAFE_DIR}.md`;
 
 /** The finding codes a report carries, in report order. */
 export function codesOf(findings: ReadonlyArray<{ code: string }>): string[] {
@@ -137,9 +146,19 @@ function symlinkType(kind: SymlinkKind): 'file' | 'dir' | 'junction' {
  * content: it is an entry whose `Dirent` answers `isFile()` with `false`, which
  * is precisely the fact the discovery suite is pinning.
  *
+ * ⚠️ **The target is not required to exist, and is not required to be inside
+ * the root.** It used to be resolved with `safePath.joinUnderRoot`, which meant
+ * the fixture could express neither a DANGLING link nor one that ESCAPES the
+ * bundle — the two cases that decide whether a `.md` entry travels with the
+ * tarball at all. That is why the coherence defect between discovery and link
+ * resolution had no test: the corpus could not state it. An absolute
+ * `targetPath` is used verbatim; a relative one is still resolved under the
+ * root, so the containment guarantee is only relaxed where a caller says so.
+ *
  * @param root - Absolute bundle root returned by {@link plantOkfBundle}
  * @param linkPath - Bundle-relative path the link is created at
- * @param targetPath - Bundle-relative path the link points at
+ * @param targetPath - Where the link points: bundle-relative, or absolute to
+ *   point outside the bundle. Neither form has to exist
  * @param kind - Whether the target is a file or a directory
  * @throws If the platform refuses the link, naming the privilege that is missing
  */
@@ -159,10 +178,8 @@ export function plantSymlink(
 
   const link = safePath.joinUnderRoot(root, linkPath);
   mkdirSyncReal(safePath.join(link, '..'), { recursive: true });
-  createSymlink(
-    SYMLINK_CAPABILITY,
-    safePath.joinUnderRoot(root, targetPath),
-    link,
-    symlinkType(kind),
-  );
+  const target = isAbsolutePath(targetPath)
+    ? targetPath
+    : safePath.joinUnderRoot(root, targetPath);
+  createSymlink(SYMLINK_CAPABILITY, target, link, symlinkType(kind));
 }

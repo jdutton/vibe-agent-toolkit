@@ -88,6 +88,16 @@ interface FilterEmitter {
   (...args: unknown[]): void;
   /** The emitter this filter delegates to. */
   previous: EmitWarning;
+  /**
+   * Set by `restore()`, and read on every emit.
+   *
+   * 🪤 A restore cannot always take the node OUT of the chain — see
+   * {@link removeFromChain} — so it must always be able to take the FILTERING
+   * out of the node. Without this flag a filter that could not be spliced went
+   * on swallowing SQLite warnings for the life of the process, unreachable by
+   * any caller, which is the precise harm restoring exists to prevent.
+   */
+  retired: boolean;
   readonly [FILTER_BRAND]: true;
 }
 
@@ -113,7 +123,7 @@ export function installSqliteWarningFilter(
   host: Pick<NodeJS.Process, 'emitWarning'> = process,
 ): RestoreWarningEmitter {
   const filtered = ((...args: unknown[]): void => {
-    if (isSqliteExperimentalWarning(args[0], args[1])) return;
+    if (!filtered.retired && isSqliteExperimentalWarning(args[0], args[1])) return;
     // Read through the node, not through a captured local: `previous` is
     // rewritten when a filter below this one is spliced out.
     Reflect.apply(filtered.previous, host, args);
@@ -123,11 +133,16 @@ export function installSqliteWarningFilter(
   // filter delegate to a fresh wrapper, and no restore could then recognise the
   // node it needs to splice out.
   filtered.previous = host.emitWarning as EmitWarning;
+  filtered.retired = false;
   Object.defineProperty(filtered, FILTER_BRAND, { value: true });
 
   host.emitWarning = filtered as unknown as NodeJS.Process['emitWarning'];
 
   return () => {
+    // Retire FIRST, and unconditionally. Splicing is the tidy outcome; ceasing
+    // to filter is the one the caller actually asked for, and it is the only one
+    // that can always be delivered.
+    filtered.retired = true;
     removeFromChain(host, filtered);
   };
 }
@@ -138,7 +153,23 @@ export function installSqliteWarningFilter(
  * Doing nothing when the filter is already gone is the correct answer, not a
  * swallowed failure: a second `restore()` call, or a host whose emitter was
  * replaced wholesale by something else, both mean this filter is no longer
- * installed — which is exactly what the caller asked for.
+ * reached at all — which is exactly what the caller asked for.
+ *
+ * ⚠️ **There is a third case, and it is NOT covered here.** The walk can only
+ * step through nodes carrying {@link FILTER_BRAND}, so any *delegating* wrapper
+ * installed above us — an APM shim, another library's warning filter, an
+ * unrestored spy — ends the walk with our node still in the chain. That is not
+ * an oversight that can be fixed: the foreign wrapper holds its link to the
+ * emitter beneath it in a closure, and nothing outside it can rewrite that link.
+ * Splicing through it is genuinely impossible, not merely unimplemented.
+ *
+ * So the leak is closed at the other end: `restore()` sets `retired` before
+ * calling this, and a retired node forwards everything. The chain may keep a
+ * dead link in it — harmless — but no unreachable filter goes on eating the
+ * warning it was installed to hide, which was the real defect (a
+ * `vat resources query` run under an APM agent would have lost SQLite's
+ * experimental warning permanently, with no way to get it back short of
+ * restarting the process).
  */
 function removeFromChain(host: Pick<NodeJS.Process, 'emitWarning'>, filter: FilterEmitter): void {
   if ((host.emitWarning as unknown) === filter) {

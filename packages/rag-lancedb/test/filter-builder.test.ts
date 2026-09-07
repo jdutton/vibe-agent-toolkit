@@ -16,6 +16,7 @@ import {
 describe('Filter Builder', () => {
   const TEST_DOMAIN = 'security';
   const EXPECTED_DOMAIN_FILTER = "domain = 'security'";
+  const EXPECTED_AUTH_TAG_FILTER = "tags LIKE '%auth%'";
 
   describe('buildMetadataFilter', () => {
     it('should build string filter with exact match', () => {
@@ -45,15 +46,93 @@ describe('Filter Builder', () => {
     it('should build array filter with LIKE query', () => {
       const zodType = z.array(z.string());
       const result = buildMetadataFilter('tags', 'auth', zodType);
-      expect(result).toBe("tags LIKE '%auth%'");
+      expect(result).toBe(EXPECTED_AUTH_TAG_FILTER);
     });
 
-    it('should build an always-false clause for an empty array, not a matches-everything LIKE', () => {
-      // `String([])` is the empty string, so this used to produce `tags LIKE '%%'` — a
-      // tautology matching every row in the index, from a caller who asked to be filtered.
+    // 🚨 THE MECHANISM IS STRINGIFICATION, NOT LENGTH — and the difference is the whole
+    // defect. The array branch builds its LIKE pattern from `String(value)`, so EVERY
+    // value that stringifies to the empty string produces `tags LIKE '%%'`: a pattern
+    // matching every row in the index, returned to a caller who asked to be filtered.
+    //
+    // A guard written as `Array.isArray(value) && value.length === 0` closes the one
+    // reported instance and leaves the mechanism wide open — `['']`, a bare `''` and
+    // `[[]]` all still stringify to nothing and all still emitted the tautology. None of
+    // them needs a type error to arrive: `filters.metadata` is deliberately open
+    // (`z.record(z.string(), z.unknown())`), so each reaches here straight from a JSON
+    // payload.
+    //
+    // So this table pins the PROPERTY — a value satisfiable by nothing emits the shared
+    // always-false condition — rather than the example that was reported.
+    const UNSATISFIABLE_ARRAY_VALUES: ReadonlyArray<{ label: string; value: unknown }> = [
+      { label: 'an empty array', value: [] },
+      { label: 'an array holding one empty string', value: [''] },
+      { label: 'a bare empty string', value: '' },
+      { label: 'an array holding an empty array', value: [[]] },
+    ];
+
+    it.each(UNSATISFIABLE_ARRAY_VALUES)(
+      'emits an always-false clause for $label, never a matches-everything LIKE',
+      ({ value }) => {
+        const zodType = z.array(z.string());
+
+        const result = buildMetadataFilter('tags', value, zodType);
+
+        expect(result).toBe('1 = 0');
+        // Stated twice on purpose: `1 = 0` is what it MUST be, `LIKE '%%'` is what it must
+        // never be. An assertion on the clause alone would still pass a future rewrite that
+        // reintroduced the tautology under a different always-false spelling.
+        expect(result).not.toContain("LIKE '%%'");
+      },
+    );
+
+    it.each(UNSATISFIABLE_ARRAY_VALUES)(
+      'gives $label the same answer through the public buildWhereClause path',
+      ({ value }) => {
+        const schema = z.object({ tags: z.array(z.string()) });
+
+        expect(buildWhereClause({ metadata: { tags: value } }, schema)).toBe('1 = 0');
+      },
+    );
+
+    it('does not turn a non-empty list into an always-false clause', () => {
+      // The neighbour case, so the fix cannot pass by refusing every array.
       const zodType = z.array(z.string());
-      const result = buildMetadataFilter('tags', [], zodType);
-      expect(result).toBe('1 = 0');
+      const result = buildMetadataFilter('tags', ['auth'], zodType);
+      expect(result).toBe(EXPECTED_AUTH_TAG_FILTER);
+    });
+
+    // 🔑 FINDING 4 — a multi-element list is matched ELEMENT BY ELEMENT, not as one CSV
+    // substring. Arrays are stored by `serializeArray` in `schema.ts` as `value.join(',')`,
+    // so the single-pattern form `tags LIKE '%auth,security%'` demanded that the caller
+    // guess the STORED ORDER: a document tagged `security,auth` did not match, and the
+    // caller got zero rows with nothing to say why.
+    it('emits one LIKE per element, so a stored order the caller did not guess still matches', () => {
+      const zodType = z.array(z.string());
+
+      const result = buildMetadataFilter('tags', ['auth', 'security'], zodType);
+
+      expect(result).toContain(EXPECTED_AUTH_TAG_FILTER);
+      expect(result).toContain("tags LIKE '%security%'");
+      // The pre-fix pattern, spelled out: no condition may embed the CSV separator and so
+      // depend on adjacency in stored order.
+      expect(result).not.toContain('auth,security');
+    });
+
+    it('ANDs the per-element conditions into one parenthesised fragment', () => {
+      const zodType = z.array(z.string());
+
+      const result = buildMetadataFilter('tags', ['auth', 'security'], zodType);
+
+      expect(result).toBe("(tags LIKE '%auth%' AND tags LIKE '%security%')");
+    });
+
+    it('is unsatisfiable when ANY element of a multi-element list is empty', () => {
+      // `['auth', '']` asks for a tag that is the empty string, which nothing has. Emitting
+      // `LIKE '%auth%' AND LIKE '%%'` would silently drop the second half and answer a
+      // question the caller did not ask.
+      const zodType = z.array(z.string());
+
+      expect(buildMetadataFilter('tags', ['auth', ''], zodType)).toBe('1 = 0');
     });
 
     it('should escape single quotes in array filter values', () => {
@@ -119,7 +198,7 @@ describe('Filter Builder', () => {
       const schema = z.object({ tags: z.array(z.string()) });
       const filters = { tags: 'auth' };
       const result = buildMetadataWhereClause(filters, schema);
-      expect(result).toBe("tags LIKE '%auth%'");
+      expect(result).toBe(EXPECTED_AUTH_TAG_FILTER);
     });
 
     it('should combine multiple filters with AND', () => {

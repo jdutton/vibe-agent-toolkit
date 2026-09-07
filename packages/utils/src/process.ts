@@ -28,6 +28,14 @@ export {
 
 export { spawnHardened } from './spawn-hardened.js';
 
+/**
+ * On `./process` because "is this process running me as its entry script?" is a
+ * question about the process, and because every package that has a bin or a
+ * build script needs it — including ones that must not depend on the private
+ * `dev-tools` package, which is where it used to live.
+ */
+export { isEntrypoint } from './entrypoint.js';
+
 export {
   shouldUseShell,
   windowsShellQuote,

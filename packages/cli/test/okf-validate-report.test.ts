@@ -34,7 +34,9 @@ function finding(severity: OkfFinding['severity']): OkfFinding {
 function report(bundle: string, findings: OkfFinding[] = []): OkfBundleReport {
   return {
     bundle,
-    root: `/bundles/${bundle}`,
+    // The specifier, as the config wrote it — the report never carries the
+    // resolved absolute path (that leak is pinned in the resources suite).
+    root: `./bundles/${bundle}`,
     conceptDocuments: ['concepts/a.md'],
     reservedDocuments: [],
     findings,
@@ -46,7 +48,7 @@ function report(bundle: string, findings: OkfFinding[] = []): OkfBundleReport {
 function emptyReport(bundle: string): OkfBundleReport {
   return {
     bundle,
-    root: `/bundles/${bundle}`,
+    root: `./bundles/${bundle}`,
     conceptDocuments: [],
     reservedDocuments: [],
     findings: [],
@@ -203,6 +205,14 @@ describe('createOkfCommand', () => {
     // bundle". Wikilinks (`[[other-concept]]`) are invisible to the parser, so
     // the sentence over-claimed. The parser gap is pre-existing; the CLAIM is
     // what is fixed here.
+    //
+    // 🪤 This test used to assert only `toContain('§6.1')` and
+    // `toContain('[[')` — both of which the ORIGINAL over-claiming text
+    // satisfied. Rewriting the section to "Also covered: wikilinks.
+    // `[[other-concept]]` resolves like any other link", i.e. restoring the
+    // exact defect, left it green while four sibling mutations in this file went
+    // red. What matters is the NEGATION, so that is what is asserted: the two
+    // brackets have to appear inside a sentence that disclaims them.
     const { validate } = validateSubcommand();
     // `outputHelp()`, not `helpInformation()`: the latter renders only the
     // generated usage/options block, so an assertion against it would be blind
@@ -213,6 +223,9 @@ describe('createOkfCommand', () => {
     validate.outputHelp();
 
     expect(help).toContain('§6.1');
-    expect(help).toContain('[[');
+    // `[^]` rather than `.` with the `s` flag: the disclaimer and the example
+    // are on different lines, and the order is the claim — "NOT covered" has to
+    // come first, or the sentence says the opposite.
+    expect(help).toMatch(/NOT covered[^]*\[\[/);
   });
 });

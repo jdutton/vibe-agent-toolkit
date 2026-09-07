@@ -2,7 +2,7 @@ import { ValidationConfigSchema } from '@vibe-agent-toolkit/schema';
 import { globMagicRemainder, hasParentTraversalSegment, isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
-import { isArdBaseUrl, isArdPublisherDomain } from '../ard/entry-schema.js';
+import { isArdBaseUrl, isArdNameSegment, isArdPublisherDomain } from '../ard/entry-schema.js';
 
 import { LinkAuthConfigSchema } from './link-auth.js';
 import { ReferenceSyntacticFormSchema } from './projection-blobs.js';
@@ -962,9 +962,17 @@ export const ArdConfigSchema = z.object({
     'ard.publisher must be a DOMAIN, not a display name — e.g. "example.com". Letters, digits, dots and hyphens only, with at least one dot and no empty label. It becomes the <publisher> segment of every entry URN, and the authority trustManifest.identity is bound to.',
   )
     .describe('Publisher domain, e.g. "example.com". Becomes the <publisher> segment of every entry URN and the anchor trustManifest.identity must align with.'),
-  namespace: z.string().regex(
-    /^[a-z0-9._-]+$/i,
-    'ard.namespace must be a single URN segment: letters, digits, dots, underscores and hyphens only (regex: ^[a-z0-9._-]+$).',
+  // 🚨 The charset alone admitted `.` and `..`, and collapsing those is a URL
+  // resolver's defining behaviour. `namespace: ".."` under `baseUrl:
+  // https://example.com/tenants/acme/catalog` emitted
+  // `https://example.com/tenants/acme/<name>` at exit 0 — one level above where
+  // the identifier says the resource lives, wrong in a way nothing downstream
+  // reports. `isArdNameSegment` is the SAME predicate the emitter checks, so the
+  // config gate and the last gate cannot disagree; a segment that merely
+  // contains dots is untouched.
+  namespace: z.string().refine(
+    isArdNameSegment,
+    'ard.namespace must be a single URN segment: letters, digits, dots, underscores and hyphens only (regex: ^[a-z0-9._-]+$), and never "." or ".." alone — a URL resolver collapses those, so every entry would advertise an address other than the one its identifier names.',
   ).optional()
     .describe('URN namespace segment between publisher and name (default: "skills" for skills, "bundles" for OKF bundles)'),
   // Optional in the SCHEMA, required in PRACTICE, and the gap is worth stating.

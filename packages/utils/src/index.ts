@@ -41,55 +41,63 @@ export * from './asset-reference.js';
 
 // Filesystem utilities.
 //
-// Named rather than `export *` on purpose: `classifyFilenameCase` (the pure
-// judge over a hand-held row) and `siblingNamesFrom` (the table lookup that
-// throws on a miss) are internal members of the fill+judge pairs below, and a
-// star re-export would publish them on this barrel the moment they were written.
-// (The `./fs` subpath was already an explicit list and was never at risk.) The
-// public surface is a decision, not a side effect of module layout.
+// Named rather than `export *` on purpose: `fs-utils.ts` holds internal members
+// of the fill+judge pairs below — the per-directory index build, the table-key
+// derivation — and a star re-export would publish each of them on this barrel
+// the moment it was written. (The `./fs` subpath was already an explicit list
+// and was never at risk.) The public surface is a decision, not a side effect of
+// module layout.
 //
 // TWO materialized columns are published, both shaped fill-first-then-judge:
 //
-//   - sibling names — `fillSiblingNames` (every listing, once, up front) plus
-//     `classifyFilenameCaseFrom` (pure judgement over the filled table). Its row
-//     lookup `siblingNamesFrom` stays internal because a row there is not yet an
-//     answer: it still needs a judge, and that judge is what we export.
+//   - path spellings — `fillPathSpellings` plus `pathSpellingFrom`. It judges a
+//     WHOLE path, which is what a caller validating references needs: judging
+//     only the basename hands every directory component back to the host
+//     filesystem's own folding, so a link that resolves on macOS 404s on a
+//     case-sensitive filesystem. The `DirectorySpellingIndex` underneath is
+//     published too, for the lazy caller that cannot enumerate its targets up
+//     front.
 //   - realpaths — `fillRealpaths` (every canonicalization, once, up front) plus
-//     `realpathFrom`. Here the row lookup IS the judge: the canonical path is the
-//     answer, so there is nothing left to keep internal.
+//     `realpathFrom`.
+//
+// In both, the row lookup IS the judge: the row is the answer, so there is
+// nothing left to keep internal.
 //
 // There is deliberately no one-call wrapper composing either pair: handed one, a
 // caller with many paths loops over it, which reinstates the per-path `await` the
 // pairs exist to remove.
 //
-// The `SiblingNames` row type is withheld for the same reason its judge is: it is
-// only ever that judge's parameter, so publishing it would advertise a shape no
-// consumer can hand anywhere. `SiblingNamesTable` and `RealpathTable` — what the
-// fills return and the judges consume — are the ones a caller can name, as are
-// `FilenameCaseVerdict`/`FilenameMatch`, which a consumer does not hand in but
-// does receive and branch on.
+// `PathSpellingTable` and `RealpathTable` — what the fills return and the judges
+// consume — are the types a caller can name, as are `PathSpelling`,
+// `PathSpellingRequest`, `ComponentMatch` and `FilenameMatch`, which a consumer
+// receives and branches on.
 //
 // The cost of that decision, stated so it is not a surprise: a new *type* added
 // to `fs-utils.ts` no longer reaches consumers automatically, and
 // `barrel-exports.test.ts` pins runtime names only, so nothing will fail. The
 // symptom is a type that cannot be imported, which surfaces the first time
 // someone tries — not a silent break in existing code.
+// The lookups themselves, plus the memo every fill shares.
+export { copyDirectory, FsLookupCache, isFilesystemAccessError } from './fs-utils.js';
+// The two fill+judge pairs, in the order the note above lists them, plus the
+// lazy index a caller that cannot enumerate its targets up front reaches for.
 export {
-  classifyFilenameCaseFrom,
-  copyDirectory,
+  DirectorySpellingIndex,
+  fillPathSpellings,
   fillRealpaths,
-  fillSiblingNames,
-  FsLookupCache,
-  isFilesystemAccessError,
+  pathSpellingFrom,
   realpathFrom,
+  spellingWalkRoot,
 } from './fs-utils.js';
 export type {
-  FilenameCaseVerdict,
+  ComponentMatch,
   FilenameMatch,
   PathProbe,
   PathProbeStats,
+  PathSpelling,
+  PathSpellingRequest,
+  PathSpellingTable,
   RealpathTable,
-  SiblingNamesTable,
 } from './fs-utils.js';
 
 // Project root discovery (canonical: config → git → null).

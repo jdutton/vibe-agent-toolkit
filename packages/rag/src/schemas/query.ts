@@ -114,8 +114,25 @@ export const RAGQuerySchema = z.object({
      * yourself.
      */
     dateRange: z.object({
-      start: z.date(),
-      end: z.date(),
+      /**
+       * 🚨 `z.coerce.date()`, not `z.date()`, and the coercion IS the contract.
+       *
+       * `zod-to-json-schema` emits `{"type":"string","format":"date-time"}` for a Zod date,
+       * so the published `RAGQueryJsonSchema` tells every adopter that an ISO-8601 string is
+       * the correct value — and since JSON carries no date type, a string is the only value
+       * that CAN cross a wire. A bare `z.date()` then rejected exactly that string with
+       * `invalid_type`, so a payload validating against VAT's own published schema failed
+       * VAT's own `safeParse`: the two halves of one exported contract disagreed on the only
+       * representation either of them could actually receive, and the adopter who followed
+       * the published schema was the one who got the error.
+       *
+       * Coercing keeps the emitted JSON Schema byte-identical while making the TypeScript
+       * half accept what the JSON half publishes, and a consumer reads a `Date` either way
+       * rather than branching on how the query arrived. A string that is not a date still
+       * fails: `new Date('last Tuesday')` is `Invalid Date`, which `ZodDate` refuses.
+       */
+      start: z.coerce.date(),
+      end: z.coerce.date(),
     }).strict().optional().describe('Filter by date range (unsupported by every provider)'),
   }).strict().optional().describe('Metadata filters'),
 

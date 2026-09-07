@@ -165,6 +165,13 @@ export function assertQuerySupported(
  * condition (`1 = 0`), never a vacuous one. This function's job is the different, narrower
  * one it can actually do — refusing a request that produced NO condition at all.
  *
+ * 🔑 STATE THE OBLIGATION AS THE BUILDER MUST IMPLEMENT IT, because the first attempt
+ * implemented the example instead of the property. `[]` is not the condition — STRINGIFYING TO
+ * NOTHING is, and `['']`, a bare `''` and `[[]]` all do, so a builder guarding on
+ * `value.length === 0` still emitted the tautology for three of the four and still satisfied
+ * this count. The rule the builder owes is about the pattern it is about to emit, never about
+ * the shape of the value it received.
+ *
  * @param filters - The filter object the caller supplied
  * @param conditionCount - How many SQL conditions it produced
  * @throws Error if the caller asked for a filter and none survived

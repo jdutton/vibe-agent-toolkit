@@ -94,3 +94,27 @@ the *schema*. The failure is asymmetric:
 So the `verify=` procedure re-counts `trustManifest` versus `TrustManifest` in upstream
 `spec/ard.md` as well. Today's count — 11 camelCase, 0 PascalCase — is the whole basis for the
 follow-the-prose decision, and a refresh that does not re-read it is not a refresh of this claim.
+
+## Where VAT emits a STRICT SUBSET of what this schema accepts
+
+Both entries below are deliberate narrowings on the **producing** side, in line with
+[`.claude/rules/schema-strictness.md`](../../../.claude/rules/schema-strictness.md). Every document
+VAT emits still validates against this schema; the reverse does not hold, and that is the intent.
+Neither is a divergence to reconcile on refresh — but if upstream ever *tightens* to match, the
+corresponding note here can go.
+
+**`.` and `..` are refused as a `<namespace>` or `<name>` segment.** Upstream's identifier pattern
+(`^urn:air:[a-zA-Z0-9.-]+(:[a-zA-Z0-9._-]+)+$`) is a charset, and a charset admits both dot
+segments. A URN never resolves them — but an ARD entry carries a `url` beside its identifier, and
+VAT builds that `url` by resolving a path against the publisher's `ard.baseUrl`, where collapsing
+dot segments is the resolver's defining behaviour. `namespace: ".."` under
+`baseUrl: https://example.com/tenants/acme/catalog` produced entries addressing
+`https://example.com/tenants/acme/<name>` — one level above where the identifier says the resource
+lives, well-formed, and wrong in a way no `format: uri` check can see. A segment that merely
+*contains* dots (`v1.2`) is untouched.
+
+**An entry `url` is always inside `ard.baseUrl`.** The schema types `url` as `format: uri`, which
+accepts any absolute URI at any origin. VAT refuses a scheme, a `//host` prefix and any dot segment
+(encoded or not) in the path it appends, so an entry's `url` cannot point somewhere its
+`urn:air:<publisher>:…` identifier does not anchor. The publisher-authority binding the spec
+mandates for `trustManifest.identity` is worth little if the address beside it is unconstrained.

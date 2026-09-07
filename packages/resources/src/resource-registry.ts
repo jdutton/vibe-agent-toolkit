@@ -1698,7 +1698,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // false statement about it. The same reasoning applies more sharply to
     // `validateFrontmatterLinks` below: it is link validation, not schema
     // handling, and the fact tables it reads throw ON PURPOSE
-    // (`realpathFrom`/`siblingNamesFrom` crash on a missing row so that a
+    // (`realpathFrom`/`pathSpellingFrom` crash on a missing row so that a
     // fill/judge divergence names its own remedy). That crash must reach the
     // operator intact rather than be reworded into a schema complaint — do not
     // re-wrap either call.

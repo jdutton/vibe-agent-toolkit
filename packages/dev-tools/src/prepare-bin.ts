@@ -4,9 +4,10 @@
  */
 
 import { copyFileSync, chmodSync, existsSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+
+import { isEntrypoint } from './common.js';
 
 export function prepareBinaries(packageRoot: string): void {
   const distBinDir = safePath.join(packageRoot, 'dist', 'bin');
@@ -41,8 +42,10 @@ export function prepareBinaries(packageRoot: string): void {
   console.log(`✓ Prepared binary: ${targetPath}`);
 }
 
-// CLI entry point
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// CLI entry point. `isEntrypoint`, not a raw `argv[1]` string compare: this
+// script is reached through `node_modules/.bin`, which is a symlink, and the
+// string compare is false there.
+if (isEntrypoint(import.meta.url)) {
   const packageRoot = process.cwd();
   prepareBinaries(packageRoot);
 }

@@ -24,10 +24,11 @@ import type { z } from 'zod';
 import type { ArdConfig, ArdEntryOverrides } from '../schemas/project-config.js';
 
 import {
-  ARD_NAME_SEGMENT_PATTERN,
   ArdEntrySchema,
   isArdBaseUrl,
+  isArdNameSegment,
   isArdPublisherDomain,
+  isArdUrlPath,
   type ArdEntry,
 } from './entry-schema.js';
 import { defaultArdNamespace, deriveArdMediaType, type ArdSurfaceKind } from './surface.js';
@@ -97,13 +98,89 @@ export function ardEntryOverrideKey(kind: ArdSurfaceKind, name: string): string 
   return `${kind}:${name}`;
 }
 
+/**
+ * One `ard.entries` key, read as a config key rather than as a property.
+ *
+ * 🚨 `entries[name]` reads through the prototype. `z.record` yields a
+ * plain-prototype object, so `entries.toString` is a FUNCTION rather than
+ * `undefined` — and the ambiguity gate, which asked exactly that question,
+ * exited 1 on two surfaces named `toString` while naming a config key the file
+ * does not contain. Every lookup in this lane goes through here so the class
+ * cannot come back one call site at a time.
+ */
+function readOverride(
+  entries: Readonly<Record<string, ArdEntryOverrides>>,
+  key: string
+): ArdEntryOverrides | undefined {
+  return Object.hasOwn(entries, key) ? entries[key] : undefined;
+}
+
+/**
+ * The override block that applies to one surface, qualified key first.
+ *
+ * 🔑 The precedence is the whole point and it lives HERE, once: the CLI's
+ * surface collector used to carry its own copy of the same `??`, and neither
+ * copy was pinned — two mutations reversing the order to bare-first stayed
+ * green. A single definition means one test can decide it for every caller.
+ *
+ * Qualified-first, because `<kind>:<name>` names exactly one surface while a
+ * bare name names a *name* across three independent key spaces. The bare block
+ * that loses is reported by {@link findShadowedArdOverrideKeys} rather than
+ * discarded in silence.
+ */
+export function findArdEntryOverride(
+  config: ArdConfig,
+  kind: ArdSurfaceKind,
+  name: string
+): ArdEntryOverrides | undefined {
+  const entries = config.entries;
+  if (entries === undefined) return undefined;
+  return readOverride(entries, ardEntryOverrideKey(kind, name)) ?? readOverride(entries, name);
+}
+
 function findOverrides(
   surface: Pick<ArdSurface, 'kind' | 'name'>,
   config: ArdConfig
 ): ArdEntryOverrides | undefined {
+  return findArdEntryOverride(config, surface.kind, surface.name);
+}
+
+/** A bare `ard.entries` key that a qualified key for the same surface outranks. */
+export interface ShadowedArdOverrideKey {
+  readonly kind: ArdSurfaceKind;
+  readonly name: string;
+  /** The `ard.entries` key whose block is never read. */
+  readonly shadowedKey: string;
+  /** The `ard.entries` key that supplied the block instead. */
+  readonly winningKey: string;
+}
+
+/**
+ * Bare override blocks that a qualified key for the same surface displaces.
+ *
+ * Not an error: the precedence rule is deterministic and documented, and a
+ * config carrying both keys has one obvious reading. But the block that loses
+ * is dead config the author cannot see is dead — the same silence
+ * {@link assertUnambiguousOverrideKeys} exists to end — so the caller is handed
+ * the fact and decides how to say it.
+ */
+export function findShadowedArdOverrideKeys(
+  surfaces: readonly ArdSurface[],
+  config: ArdConfig
+): ShadowedArdOverrideKey[] {
   const entries = config.entries;
-  if (entries === undefined) return undefined;
-  return entries[ardEntryOverrideKey(surface.kind, surface.name)] ?? entries[surface.name];
+  if (entries === undefined) return [];
+  const shadowed: ShadowedArdOverrideKey[] = [];
+  const reported = new Set<string>();
+  for (const { kind, name } of surfaces) {
+    const winningKey = ardEntryOverrideKey(kind, name);
+    if (reported.has(winningKey)) continue;
+    if (readOverride(entries, winningKey) === undefined) continue;
+    if (readOverride(entries, name) === undefined) continue;
+    reported.add(winningKey);
+    shadowed.push({ kind, name, shadowedKey: name, winningKey });
+  }
+  return shadowed;
 }
 
 function resolveIdentifier(surface: ArdSurface, config: ArdConfig): string {
@@ -119,10 +196,12 @@ function resolveIdentifier(surface: ArdSurface, config: ArdConfig): string {
     ['ard.namespace', namespace],
     ['the surface name', surface.name],
   ] as const) {
-    if (!ARD_NAME_SEGMENT_PATTERN.test(segment)) {
+    if (!isArdNameSegment(segment)) {
       throw new ArdDerivationError(
         surface,
-        `${label} "${segment}" is not a valid URN segment (allowed: letters, digits, ".", "_" and "-").`
+        `${label} "${segment}" is not a valid URN segment (allowed: letters, digits, ".", "_" and ` +
+          '"-", and never "." or ".." alone — those are dot segments a URL resolver collapses, so ' +
+          'the entry would advertise an address other than the one its identifier names).'
       );
     }
   }
@@ -170,8 +249,24 @@ function resolveType(surface: ArdSurface, overrides: ArdEntryOverrides | undefin
  * The leading-slash strip on `urlPath` is likewise kept: without it a caller's
  * `/skills/a.md` would resolve against the ORIGIN and throw the base's path
  * away.
+ *
+ * ⚠️ Resolution is also what makes a `urlPath` DANGEROUS, which the docstring
+ * above anticipated for the base and not for the path: an absolute URL relocates
+ * the entry to another origin while its identifier stays anchored at the
+ * publisher, and a dot segment — `..`, or `%2e%2e`, which decodes here — walks
+ * out of the base's subtree. {@link isArdUrlPath} refuses both, so the address
+ * an entry advertises is always inside the base its publisher chose.
  */
 function joinArdUrl(surface: ArdSurface, baseUrl: string, urlPath: string): string {
+  if (!isArdUrlPath(urlPath)) {
+    throw new ArdDerivationError(
+      surface,
+      `the entry path "${urlPath}" is not a path under \`ard.baseUrl\`. It must carry no scheme, no ` +
+        '"//" prefix and no "." or ".." segment (encoded or not) — each of those RESOLVES to an ' +
+        'address outside the base, so the entry would advertise a resource its identifier does not ' +
+        'anchor.'
+    );
+  }
   if (!isArdBaseUrl(baseUrl)) {
     throw new ArdDerivationError(
       surface,
@@ -340,7 +435,10 @@ function assertUnambiguousOverrideKeys(
     const kinds = kindsByName.get(surface.name) ?? new Set<ArdSurfaceKind>();
     kinds.add(surface.kind);
     kindsByName.set(surface.name, kinds);
-    if (kinds.size < 2 || entries[surface.name] === undefined) continue;
+    // `readOverride`, never `entries[name]`: the bare form reads through the
+    // prototype, and two surfaces named `toString` were refused with a message
+    // naming `ard.entries.toString`, a key no config contains.
+    if (kinds.size < 2 || readOverride(entries, surface.name) === undefined) continue;
     const qualified = [...kinds]
       .map((kind) => `\`ard.entries."${ardEntryOverrideKey(kind, surface.name)}"\``)
       .join(' and ');

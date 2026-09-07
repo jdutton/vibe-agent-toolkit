@@ -29,9 +29,12 @@
  * and an exemption inferred from a case fold is an exemption VAT invented.
  */
 
+import type { Dirent } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 
 import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
+
+import { isWithinProject } from '../utils.js';
 
 /**
  * The filenames §3.1 reserves, at any level of the hierarchy.
@@ -40,6 +43,41 @@ import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
  * concept is not an OKF bundle, so there is nothing to make adjustable.
  */
 const RESERVED_FILENAMES: ReadonlySet<string> = new Set(['index.md', 'log.md']);
+
+/**
+ * The errno of a filesystem failure, and nothing else.
+ *
+ * ⚠️ The `Error.message` is deliberately NOT used: Node writes the full absolute
+ * path into it (`ENOENT: … scandir '/Users/…/nowhere'`), which is the
+ * home-directory leak the findings that quote this exist to avoid. The code says
+ * what went wrong — absent, not a directory, not permitted — and the
+ * bundle-relative path says where.
+ *
+ * @param error - Whatever the filesystem threw
+ * @returns The errno string, or a neutral word when there is none
+ */
+export function fsErrorCode(error: unknown): string {
+  if (error instanceof Error && 'code' in error && typeof error.code === 'string') {
+    return error.code;
+  }
+  return 'unreadable';
+}
+
+/** A `.md` entry whose bytes do not travel with the bundle, and why. */
+export interface OkfUnpackableDocument {
+  /** Bundle-relative, forward-slashed path of the entry. */
+  document: string;
+  /** `outside` — a symlink out of the root; `dangling` — a symlink to nothing. */
+  reason: 'outside' | 'dangling';
+}
+
+/** A directory beneath the root that could not be listed. */
+export interface OkfUnreadableDirectory {
+  /** Bundle-relative, forward-slashed path of the directory. */
+  directory: string;
+  /** The errno, for the finding to quote without a path in it. */
+  code: string;
+}
 
 /** The documents beneath a bundle root, split by what the spec makes of them. */
 export interface OkfBundleFiles {
@@ -54,6 +92,23 @@ export interface OkfBundleFiles {
    * `index.md` is still read, for the `okf_version` cross-check (§12).
    */
   reservedDocuments: string[];
+  /**
+   * Every `.md` entry that is NOT a bundle member, with the reason.
+   *
+   * Reported rather than silently dropped: a symlink out of the bundle is the
+   * real defect (a member that does not travel), and silence about it is what
+   * let the two lanes disagree in the first place.
+   */
+  unpackableDocuments: OkfUnpackableDocument[];
+  /**
+   * Every directory beneath the root that could not be listed.
+   *
+   * ⚠️ Collected rather than thrown, and that distinction is the whole fix for
+   * the root-vs-subdirectory confusion: a throw from three levels down is
+   * indistinguishable, at the caller, from a throw on the root itself. Only the
+   * ROOT's own listing failure still propagates.
+   */
+  unreadableDirectories: OkfUnreadableDirectory[];
 }
 
 /** Whether a filename is markdown, judged case-insensitively (widens). */
@@ -61,24 +116,92 @@ function isMarkdownFilename(name: string): boolean {
   return name.toLowerCase().endsWith('.md');
 }
 
+/** What a `.md` symlink is, once followed. */
+type SymlinkVerdict = 'member' | 'outside' | 'dangling' | 'not-a-file';
+
 /**
- * Whether a symlinked entry resolves to a regular file whose bytes exist.
+ * Classify a symlinked `.md` entry: is it a bundle member, and if not, why not?
  *
- * `stat`, not `lstat`: the question is what the link *points at*, which is the
- * thing `tar` dereferences into the bundle. A dangling link and a link to a
- * directory both answer no — the first has no bytes to travel, the second is the
- * doorway {@link walkInto} deliberately does not walk through.
+ * ⛔ **A bundle member is a file whose BYTES live under the root**, judged by
+ * the very predicate the link lane judges with (`isWithinProject`, which
+ * realpaths). One predicate, so the two lanes cannot disagree — before this,
+ * discovery admitted a symlinked `.md` into the population while `links.ts`
+ * reported a link to that same file as escaping the bundle, and VAT called one
+ * file both inside and outside at once.
  *
+ * ⚠️ **The justification this replaced was false.** It said `stat` was right
+ * because it is "the thing `tar` dereferences into the bundle" — but default
+ * `tar -cf` stores a symlink AS a symlink; only `-h`/`--dereference` copies the
+ * bytes. So the file whose conformance VAT reported arrives at the consumer as a
+ * dangling link, and the real defect — a member that does not travel — was the
+ * one thing never reported.
+ *
+ * @param root - Absolute bundle root
  * @param candidate - Absolute path of the symlink
- * @returns True when following it lands on a regular file
+ * @returns Whether it is a member, and the reason when it is not
  */
-async function pointsAtRegularFile(candidate: string): Promise<boolean> {
+async function classifySymlink(root: string, candidate: string): Promise<SymlinkVerdict> {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- an entry name read from a bundle root the adopter's own config named
-    return (await stat(candidate)).isFile();
+    if (!(await stat(candidate)).isFile()) return 'not-a-file';
   } catch {
-    return false;
+    // No target at all: nothing to pack, and nothing to parse either.
+    return 'dangling';
   }
+
+  return isWithinProject(candidate, root) ? 'member' : 'outside';
+}
+
+/** File this entry into the population it belongs to, by name. */
+function record(root: string, absolute: string, name: string, found: OkfBundleFiles): void {
+  const relative = safePath.relative(root, absolute);
+  if (RESERVED_FILENAMES.has(name)) {
+    found.reservedDocuments.push(relative);
+  } else {
+    found.conceptDocuments.push(relative);
+  }
+}
+
+/**
+ * Decide what one `.md` entry is, and record it.
+ *
+ * ⚠️ `isFile()` alone is FALSE for a symlink, because `readdir`'s Dirent is
+ * built from `lstat`. Testing only that silently dropped every symlinked
+ * concept document from the population — a §11.1 violation inside the root
+ * reported as a conformant bundle.
+ *
+ * @param root - Absolute bundle root
+ * @param absolute - Absolute path of the entry
+ * @param entry - The Dirent `readdir` returned
+ * @param found - Accumulators, mutated in place
+ */
+async function recordMarkdownEntry(
+  root: string,
+  absolute: string,
+  entry: Dirent,
+  found: OkfBundleFiles,
+): Promise<void> {
+  if (entry.isFile()) {
+    record(root, absolute, entry.name, found);
+    return;
+  }
+
+  // A socket, a fifo, a device: not a document and not a link to one.
+  if (!entry.isSymbolicLink()) return;
+
+  const verdict = await classifySymlink(root, absolute);
+  if (verdict === 'member') {
+    record(root, absolute, entry.name, found);
+    return;
+  }
+
+  // A `.md` name pointing at a DIRECTORY is not a document by any reading, and
+  // nothing downstream would know what to do with it. It is the doorway
+  // {@link walkInto} deliberately does not walk through, wearing a markdown
+  // extension, so it is dropped rather than reported.
+  if (verdict === 'not-a-file') return;
+
+  found.unpackableDocuments.push({ document: safePath.relative(root, absolute), reason: verdict });
 }
 
 /**
@@ -86,45 +209,43 @@ async function pointsAtRegularFile(candidate: string): Promise<boolean> {
  *
  * Symlinked directories are not followed: a bundle is a distributable tree, and
  * a link out of it does not travel with the tarball. A symlinked *file* is read
- * like any other, because its bytes do travel when the bundle is packed — which
- * costs a `stat` per symlinked entry and nothing at all for a regular file.
+ * like any other **when its bytes are under the root** — see
+ * {@link classifySymlink} for why that qualifier is load-bearing.
+ *
+ * ⚠️ **A failure to list a SUBdirectory is recorded, not thrown.** Only the
+ * root's own listing failure propagates, because that is the one a caller can
+ * honestly report as "the configured root is unreadable". A throw from three
+ * levels down is indistinguishable from it at the caller, and was reported as
+ * one: an adopter was told to re-point `okf.bundles.<name>.root` at a root that
+ * was perfectly readable, while the documents beside the bad subtree went
+ * unjudged.
  *
  * @param root - Absolute bundle root, for computing relative paths
  * @param dir - Absolute directory to walk
  * @param found - Accumulators, mutated in place
+ * @throws Only when `dir` IS the root and cannot be listed
  */
 async function walkInto(root: string, dir: string, found: OkfBundleFiles): Promise<void> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- a bundle root the adopter's own config named, plus directory names read from it
-  const entries = await readdir(dir, { withFileTypes: true });
+  let entries: Dirent[];
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a bundle root the adopter's own config named, plus directory names read from it
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    if (dir === root) throw error;
+    found.unreadableDirectories.push({
+      directory: safePath.relative(root, dir),
+      code: fsErrorCode(error),
+    });
+    return;
+  }
 
   for (const entry of entries) {
     const absolute = safePath.join(dir, entry.name);
 
     if (entry.isDirectory()) {
       await walkInto(root, absolute, found);
-      continue;
-    }
-
-    if (!isMarkdownFilename(entry.name)) {
-      continue;
-    }
-
-    // ⚠️ `isFile()` alone is FALSE for a symlink, because `readdir`'s Dirent is
-    // built from `lstat`. Testing only that silently dropped every symlinked
-    // concept document from the population — the exact opposite of what this
-    // module's header promises, and a §11.1 violation inside the root reported
-    // as a conformant bundle. The lane was incoherent with itself too: a LINK to
-    // that same file was resolved and judged, so one half saw the file and the
-    // other did not.
-    if (!entry.isFile() && !(entry.isSymbolicLink() && await pointsAtRegularFile(absolute))) {
-      continue;
-    }
-
-    const relative = safePath.relative(root, absolute);
-    if (RESERVED_FILENAMES.has(entry.name)) {
-      found.reservedDocuments.push(relative);
-    } else {
-      found.conceptDocuments.push(relative);
+    } else if (isMarkdownFilename(entry.name)) {
+      await recordMarkdownEntry(root, absolute, entry, found);
     }
   }
 }
@@ -133,13 +254,19 @@ async function walkInto(root: string, dir: string, found: OkfBundleFiles): Promi
  * Enumerate every markdown document beneath a bundle root.
  *
  * @param root - Absolute path to the bundle root
- * @returns Concept and reserved documents, bundle-relative and sorted
- * @throws If the root cannot be read — an unreadable root is a finding about
- *   the configuration, never an empty (and therefore trivially conformant)
- *   bundle
+ * @returns Concept and reserved documents, bundle-relative and sorted, plus the
+ *   entries that are not members and the subdirectories that could not be read
+ * @throws If the ROOT itself cannot be read — an unreadable root is a finding
+ *   about the configuration, never an empty (and therefore trivially
+ *   conformant) bundle. A subdirectory failure is returned, not thrown
  */
 export async function discoverOkfBundle(root: string): Promise<OkfBundleFiles> {
-  const found: OkfBundleFiles = { conceptDocuments: [], reservedDocuments: [] };
+  const found: OkfBundleFiles = {
+    conceptDocuments: [],
+    reservedDocuments: [],
+    unpackableDocuments: [],
+    unreadableDirectories: [],
+  };
   await walkInto(root, root, found);
 
   // `compareCodeUnits`, never a bare `.sort()`: order here is machine order, and

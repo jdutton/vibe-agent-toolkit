@@ -24,11 +24,17 @@
 import { FsLookupCache, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ParseResult } from '../link-parser.js';
-import { importParserModule } from '../parse-cache.js';
+import { importParserModule, isParserUnavailable } from '../parse-cache.js';
 
-import { discoverOkfBundle, type OkfBundleFiles } from './discovery.js';
+import {
+  discoverOkfBundle,
+  fsErrorCode,
+  type OkfBundleFiles,
+  type OkfUnpackableDocument,
+  type OkfUnreadableDirectory,
+} from './discovery.js';
 import { conceptFindings, indexFindings, type OkfFindingDraft } from './findings.js';
-import { linkFindings } from './links.js';
+import { BundleDirectoryIndex, linkFindings } from './links.js';
 import type { OkfBundleReport, OkfFinding, OkfSeverity } from './types.js';
 
 /** What a bundle validation run needs to know. */
@@ -38,17 +44,17 @@ export interface ValidateOkfBundleOptions {
   /** Absolute path to the bundle root, already resolved against the config file. */
   root: string;
   /**
-   * The `root` value **as the config file wrote it**, for the unreadable-root
-   * finding to quote.
+   * The `root` value **as the config file wrote it**, and the only spelling of
+   * the root the report is allowed to publish.
    *
-   * Carried separately rather than derived, for two reasons. It is the string
-   * the adopter has to go and edit, so quoting the resolved absolute path would
-   * name a location that appears nowhere in their repository; and an absolute
-   * path in a finding message leaks the developer's home directory into every CI
-   * log, which `link-validator.ts` already refuses to do for the same reason.
-   * Absent, the message falls back to {@link ValidateOkfBundleOptions.root}.
+   * ⛔ **Required, not optional.** It was optional, defaulting to the resolved
+   * absolute path — which meant the "no absolute path is leaked" property held
+   * only for callers who happened to pass it, and {@link OkfBundleReport.root}
+   * published `/Users/<name>/…` into every CI log for the ones who did not. A
+   * property that a caller can silently opt out of is not a property. Callers
+   * with nothing better to name pass the string a human would have typed.
    */
-  rootSpecifier?: string;
+  rootSpecifier: string;
   /** Severity for this bundle's findings. Defaults to `error`. */
   severity?: OkfSeverity;
   /**
@@ -121,7 +127,32 @@ async function parseOkfDocument(absolutePath: string): Promise<ParseResult> {
 /** One document's contribution to the report. */
 interface DocumentInspection {
   drafts: OkfFindingDraft[];
+  /** Findings whose severity the per-bundle dial does not reach. */
+  hardFindings: OkfFinding[];
   declaredOkfVersion?: string;
+}
+
+/**
+ * The finding a document that was enumerated and then would not open earns.
+ *
+ * 🪤 This used to be an uncaught throw, and it is the more common one of the
+ * pair: the root-listing throw was closed and this was left, so a single
+ * unreadable file still exited the command at **2**, discarded every other
+ * bundle's findings, and printed Node's `EACCES: … open '/Users/…'` — the exit
+ * code and the home-directory leak that two docstrings in this module claim to
+ * have eliminated.
+ *
+ * @param document - Bundle-relative path of the document
+ * @param error - Whatever the read threw
+ * @returns A hard-error finding naming the document and the errno, no path
+ */
+function unreadableDocumentFinding(document: string, error: unknown): OkfFinding {
+  return {
+    code: 'OKF_DOCUMENT_UNREADABLE',
+    severity: 'error',
+    document,
+    message: `This document is inside the bundle and could not be read (${fsErrorCode(error)}), so its conformance was not assessed. Every other document in the bundle still was. Fix its permissions, or remove it from the bundle root.`,
+  };
 }
 
 /** Read one document and judge it, by whichever rules its filename selects. */
@@ -130,19 +161,29 @@ async function inspectDocument(
   document: string,
   reserved: boolean,
   specVersion: string | undefined,
-  fsCache: FsLookupCache,
+  index: BundleDirectoryIndex,
 ): Promise<DocumentInspection> {
   const absolutePath = safePath.join(root, document);
-  const parsed: ParseResult = await parseOkfDocument(absolutePath);
+
+  let parsed: ParseResult;
+  try {
+    parsed = await parseOkfDocument(absolutePath);
+  } catch (error) {
+    // ⛔ A broken parser install is NOT a bad document, and reporting it as one
+    // would send an adopter editing a file that is fine. `importParserModule`
+    // owns that failure and it is rethrown untouched.
+    if (isParserUnavailable(error)) throw error;
+    return { drafts: [], hardFindings: [unreadableDocumentFinding(document, error)] };
+  }
 
   // Links are resolved in every document, reserved or not: an index.md is
   // precisely where a link to a deleted concept accumulates, since §8 has it
   // enumerate the directory's contents.
-  const drafts = await linkFindings(document, absolutePath, parsed.links, root, fsCache);
+  const drafts = await linkFindings(document, absolutePath, parsed.links, root, index);
 
   if (!reserved) {
     drafts.push(...conceptFindings(document, parsed));
-    return { drafts };
+    return { drafts, hardFindings: [] };
   }
 
   // Bundle-relative and forward-slashed, so the root index.md — and only it —
@@ -151,33 +192,15 @@ async function inspectDocument(
     const inspection = indexFindings(document, parsed, true, specVersion);
     drafts.push(...inspection.drafts);
     return inspection.declaredOkfVersion === undefined
-      ? { drafts }
-      : { drafts, declaredOkfVersion: inspection.declaredOkfVersion };
+      ? { drafts, hardFindings: [] }
+      : { drafts, hardFindings: [], declaredOkfVersion: inspection.declaredOkfVersion };
   }
 
   if (document.endsWith('/index.md')) {
     drafts.push(...indexFindings(document, parsed, false, specVersion).drafts);
   }
 
-  return { drafts };
-}
-
-/**
- * The errno of a filesystem failure, and nothing else.
- *
- * ⚠️ The `Error.message` is deliberately NOT used: Node writes the full absolute
- * path into it (`ENOENT: … scandir '/Users/…/nowhere'`), which is the home-directory
- * leak the finding exists to avoid. The code says what went wrong — absent,
- * not a directory, not permitted — and the specifier says where.
- *
- * @param error - Whatever the walk threw
- * @returns The errno string, or a neutral word when there is none
- */
-function fsErrorCode(error: unknown): string {
-  if (error instanceof Error && 'code' in error && typeof error.code === 'string') {
-    return error.code;
-  }
-  return 'unreadable';
+  return { drafts, hardFindings: [] };
 }
 
 /**
@@ -193,29 +216,74 @@ function fsErrorCode(error: unknown): string {
  * conformance dial has no standing over a bundle whose conformance was never
  * assessed.
  *
+ * ⚠️ **Only the ROOT's own listing failure reaches here.** The `try` used to
+ * wrap the entire recursive walk, so any `readdir` failure anywhere in the tree
+ * came back as this — an adopter told to re-point a config key that was correct,
+ * about a root that was readable, while the documents beside the bad subtree
+ * went unjudged. `discoverOkfBundle` now returns subdirectory failures instead
+ * of throwing them; see {@link unreadableDirectoryFinding}.
+ *
  * @param options - The run that failed, for the bundle name and the specifier
- * @param root - The resolved absolute root, carried into the report as usual
  * @param error - Whatever the walk threw
  * @returns A one-finding report with an empty population
  */
 function unreadableRootReport(
   options: ValidateOkfBundleOptions,
-  root: string,
   error: unknown,
 ): OkfBundleReport {
-  const specifier = options.rootSpecifier ?? options.root;
   return {
     bundle: options.bundle,
-    root,
+    root: options.rootSpecifier,
     conceptDocuments: [],
     reservedDocuments: [],
     findings: [{
       code: 'OKF_BUNDLE_ROOT_UNREADABLE',
       severity: 'error',
       document: '.',
-      message: `okf.bundles.${options.bundle}.root ('${specifier}') is not a readable directory (${fsErrorCode(error)}), so this bundle was not checked at all. Point it at the directory holding the bundle's concept documents, relative to vibe-agent-toolkit.config.yaml.`,
+      message: `okf.bundles.${options.bundle}.root ('${options.rootSpecifier}') is not a readable directory (${fsErrorCode(error)}), so this bundle was not checked at all. Point it at the directory holding the bundle's concept documents, relative to vibe-agent-toolkit.config.yaml.`,
     }],
     hasErrors: true,
+  };
+}
+
+/**
+ * The finding one unreadable SUBdirectory earns.
+ *
+ * Hard `error` for the same reason the root's is: a subtree nobody could open
+ * was never assessed, and a conformance dial has no standing over "I could not
+ * look" (see {@link OkfSeverity}).
+ *
+ * @param entry - The directory and the errno discovery recorded
+ * @returns A finding naming that subdirectory, not the bundle root
+ */
+function unreadableDirectoryFinding(entry: OkfUnreadableDirectory): OkfFinding {
+  return {
+    code: 'OKF_SUBDIRECTORY_UNREADABLE',
+    severity: 'error',
+    document: entry.directory,
+    message: `This directory is inside the bundle root and could not be listed (${entry.code}), so no document beneath it was checked. The rest of the bundle was. Fix its permissions, or move it outside the bundle root.`,
+  };
+}
+
+/**
+ * The finding a `.md` entry whose bytes do not travel with the bundle earns.
+ *
+ * §2 makes the bundle the unit of distribution, and default `tar -cf` stores a
+ * symlink AS a symlink — so a link out of the root, or a link to nothing, is a
+ * member that arrives dangling at every consumer. It is reported at the bundle's
+ * own severity because the entry WAS seen and judged.
+ *
+ * @param entry - The document and why it is not a member
+ * @returns A draft naming the entry and the remedy for its reason
+ */
+function unpackableDocumentDraft(entry: OkfUnpackableDocument): OkfFindingDraft {
+  const cause = entry.reason === 'outside'
+    ? 'it is a symlink whose target is outside the bundle root'
+    : 'it is a symlink whose target does not exist';
+  return {
+    code: 'OKF_DOCUMENT_ESCAPES_BUNDLE',
+    document: entry.document,
+    message: `This .md entry is not a bundle member: ${cause}. A bundle is the unit of distribution (§2) and \`tar\` stores a symlink as a symlink unless it is given --dereference, so this arrives at every consumer as a dangling link. It is excluded from the conformance population for the same reason a LINK to it is reported as escaping the bundle. Copy the file into the root, or remove the link.`,
   };
 }
 
@@ -244,14 +312,15 @@ export async function validateOkfBundle(
   try {
     files = await discoverOkfBundle(root);
   } catch (error) {
-    return unreadableRootReport(options, root, error);
+    return unreadableRootReport(options, error);
   }
 
   // One cache for the whole bundle: link targets cluster into far fewer
   // directories than there are links, so a per-document cache would re-list the
   // same directory once per document that points into it.
-  const fsCache = new FsLookupCache();
-  const drafts: OkfFindingDraft[] = [];
+  const index = new BundleDirectoryIndex(root, new FsLookupCache());
+  const drafts: OkfFindingDraft[] = files.unpackableDocuments.map(unpackableDocumentDraft);
+  const hardFindings: OkfFinding[] = files.unreadableDirectories.map(unreadableDirectoryFinding);
   let declaredOkfVersion: string | undefined;
 
   const documents: ReadonlyArray<readonly [string, boolean]> = [
@@ -260,17 +329,23 @@ export async function validateOkfBundle(
   ];
 
   for (const [document, reserved] of documents) {
-    const inspection = await inspectDocument(root, document, reserved, options.specVersion, fsCache);
+    const inspection = await inspectDocument(root, document, reserved, options.specVersion, index);
     drafts.push(...inspection.drafts);
+    hardFindings.push(...inspection.hardFindings);
     declaredOkfVersion ??= inspection.declaredOkfVersion;
   }
 
-  drafts.sort(byDocumentThenCode);
-  const findings: OkfFinding[] = drafts.map((draft) => ({ ...draft, severity }));
+  // The dial is stamped on the drafts only. The hard findings carry their own
+  // `error` because they say conformance was never ASSESSED — see OkfSeverity.
+  const findings: OkfFinding[] = [
+    ...drafts.map((draft) => ({ ...draft, severity })),
+    ...hardFindings,
+  ];
+  findings.sort(byDocumentThenCode);
 
   return {
     bundle: options.bundle,
-    root,
+    root: options.rootSpecifier,
     conceptDocuments: files.conceptDocuments,
     reservedDocuments: files.reservedDocuments,
     ...(declaredOkfVersion !== undefined && { declaredOkfVersion }),

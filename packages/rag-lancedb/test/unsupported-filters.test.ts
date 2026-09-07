@@ -176,6 +176,23 @@ describe('unsupported filters refuse rather than widen', () => {
       // The neighbour case, so the fix cannot pass by refusing every array.
       expect(buildWhereClause({ metadata: { tags: ['auth'] } }, schema)).toBe("tags LIKE '%auth%'");
     });
+
+    // 🚨 "EMPTY LIST" WAS THE WRONG NAME FOR THE MECHANISM, and naming it wrongly is how
+    // the first fix stopped one instance and left the class open. The clause is built from
+    // `String(value)`, so the question is not "is this an empty ARRAY" but "does this
+    // stringify to nothing" — and `['']`, a bare `''` and `[[]]` all do. Each of them still
+    // emitted `tags LIKE '%%'` after `[]` was fixed, and each arrives without a type error,
+    // because `filters.metadata` is `z.record(z.string(), z.unknown())` by design.
+    //
+    // A guard phrased as `value.length === 0` reads as if it covers this. It does not.
+    it.each([
+      { label: 'an array holding one empty string', value: [''] },
+      { label: 'a bare empty string', value: '' },
+      { label: 'an array holding an empty array', value: [[]] },
+      { label: 'a list whose second element is empty', value: ['auth', ''] },
+    ])('emits an always-false clause for $label, like the empty array beside it', ({ value }) => {
+      expect(buildWhereClause({ metadata: { tags: value } }, schema)).toBe('1 = 0');
+    });
   });
 
   describe('the guard reports every offender at once', () => {

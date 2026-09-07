@@ -28,13 +28,49 @@
  * the bundle the unit of distribution: "it resolves on the author's laptop" is
  * not merely a weak oracle here, it is the wrong question.
  *
- * So the same two-pass judge VAT's own link validator uses answers it instead:
- * {@link fillSiblingNames} lists each target's parent directory once, and
- * {@link classifyFilenameCaseFrom} compares the asked-for basename against the
- * entries actually on disk. That yields three distinguishable verdicts where
- * `stat()` yielded one boolean — and `link-validator.ts` already reports two of
- * them at error severity over the identical corpus, so before this the two lanes
- * of one product disagreed about whether the same bundle was broken.
+ * ## ⛔ Why EVERY path component is judged, not just the basename
+ *
+ * 🪤 The first version of that answer classified `basename(resolvedPath)`
+ * against a listing of `dirname(resolvedPath)` — which handed every DIRECTORY
+ * component straight back to the host filesystem's folding, the exact oracle
+ * the paragraph above rejects. `readdir('<root>/Docs')` succeeds on macOS when
+ * the directory is really `docs`, the basename then matched byte for byte, and
+ * VAT reported nothing; the same bundle on a case-sensitive volume produced the
+ * finding. Measured on one fixture: 4 findings against 5. The Unicode half was
+ * silent the same way, and that one 404s on Linux.
+ *
+ * Worse than incomplete, the *remedy* was wrong: with two components misspelled
+ * the message said `Spell the link "guide.md"`, and a publisher who wrote that
+ * down still had a link that 404s. So {@link BundleDirectoryIndex.judge} walks
+ * the path from the bundle root down, judges each component against the
+ * directory that actually holds it, and reports the whole corrected path.
+ *
+ * ## ⛔ Why the listing is INDEXED rather than scanned
+ *
+ * The judge this replaced ran up to three linear `find()` scans over the parent
+ * listing **per link**, folding each entry to NFC and lower-case on the way — so
+ * the cost was O(links × entries-in-that-directory), and it was measured. 8,000
+ * documents holding 80,000 broken links, end to end:
+ *
+ * | layout | before | after |
+ * |---|---|---|
+ * | one directory of 8,000 | 32.1 s | 14.9 s |
+ * | eight directories of 1,000 | 20.1 s | 14.9 s |
+ *
+ * The width term is gone: the two layouts now cost the same, and what remains is
+ * parsing 8,000 documents, which both arms pay. Verdicts are identical (80,000
+ * findings in every cell).
+ *
+ * `DirectorySpellingIndex` lists each directory once and indexes it once, under
+ * all three spellings the judge can ask for, so a lookup is a `Map.get`. Judging
+ * every component (above) multiplies the number of lookups by the path depth,
+ * which is exactly why it had to stop being a scan first.
+ *
+ * ⚠️ **Both of those defects were live in `vat resources validate` too**, which
+ * is a shipped command rather than this unreleased one, so the machinery moved
+ * to `@vibe-agent-toolkit/utils` and both lanes now share one implementation.
+ * What is left here is the bundle-specific policy: which root, and which finding
+ * code each verdict earns.
  *
  * ## ⛔ Why there is no is-it-a-directory check
  *
@@ -45,19 +81,55 @@
  * VAT calls broken in one command and fine in the other.
  */
 
-import { basename } from 'node:path';
-
 import {
-  classifyFilenameCaseFrom,
-  fillSiblingNames,
+  DirectorySpellingIndex,
   type FsLookupCache,
-  type SiblingNamesTable,
+  type PathSpelling,
 } from '@vibe-agent-toolkit/utils';
 
 import type { ResourceLink } from '../types.js';
 import { isWithinProject, resolveLocalHref, splitHrefAnchor } from '../utils.js';
 
 import type { OkfFindingDraft } from './findings.js';
+
+/**
+ * Every directory inside one bundle root, listed once and indexed once.
+ *
+ * A {@link DirectorySpellingIndex} bound to one root: the machinery — the
+ * three-way listing index, the component-by-component walk, and the refusal to
+ * look above the root — lives in `@vibe-agent-toolkit/utils`, shared with
+ * `vat resources validate`, which had both of the same defects. All this adds is
+ * the bundle root, so no caller in this lane has to carry it to every call.
+ *
+ * ⛔ **The root is the BUNDLE root, and that is a correctness claim.** A bundle
+ * is the unit of distribution (§2), so a verdict that depends on a directory
+ * above the root is a verdict that changes when the tarball is unpacked
+ * somewhere else. {@link DirectorySpellingIndex.judgePath} refuses to walk from
+ * anywhere but here.
+ */
+export class BundleDirectoryIndex extends DirectorySpellingIndex {
+  readonly #root: string;
+
+  constructor(root: string, fsCache: FsLookupCache) {
+    super(fsCache);
+    this.#root = root;
+  }
+
+  /** The bundle root every lookup is confined to. */
+  get root(): string {
+    return this.#root;
+  }
+
+  /**
+   * Judge one resolved path against this bundle.
+   *
+   * @param resolvedPath - Absolute path at or under the bundle root
+   * @returns The worst spelling defect on the path, plus both spellings of it
+   */
+  async judge(resolvedPath: string): Promise<PathSpelling> {
+    return await this.judgePath(this.#root, resolvedPath);
+  }
+}
 
 /** Link types with a local target worth resolving. */
 function hasLocalTarget(link: ResourceLink): boolean {
@@ -73,7 +145,7 @@ function hasLocalTarget(link: ResourceLink): boolean {
  * Quoting both verbatim shows a reader two identical-looking names and asserts
  * they differ, which reads as a VAT bug rather than as a finding.
  *
- * @param name - A filename, in whatever form it was asked for or found
+ * @param name - A path, in whatever form it was asked for or found
  * @returns The same text with every non-printable-ASCII code point escaped
  */
 function showBytes(name: string): string {
@@ -139,17 +211,27 @@ function missingDraft(document: string, link: ResourceLink): OkfFindingDraft {
   };
 }
 
-/** The finding a link that differs from disk only in letter case earns. */
+/**
+ * The finding a link that differs from disk only in letter case earns.
+ *
+ * 🔑 Its own code rather than {@link missingDraft}'s. The argument that split
+ * `OKF_ROOT_RELATIVE_LINK_UNRESOLVED` out was that the remedies differ in KIND,
+ * and *write the missing document* differs from *fix the spelling* exactly that
+ * way — a dashboard grouping by code cannot separate them under one.
+ *
+ * @param askedPath - Bundle-relative path the link resolves to, as written
+ * @param actualPath - Bundle-relative path the bundle actually holds
+ */
 function caseDraft(
   document: string,
   link: ResourceLink,
-  askedName: string,
-  actualName: string,
+  askedPath: string,
+  actualPath: string,
 ): OkfFindingDraft {
   return {
     ...anchorOf(document, link),
-    code: 'OKF_BROKEN_CROSS_LINK',
-    message: `Cross-link target is in the bundle under a different case: the link asks for "${askedName}" and the bundle holds "${actualName}". This opens on the publisher's machine and 404s on every case-sensitive filesystem the bundle is unpacked onto. Spell the link "${actualName}", or rename the file.`,
+    code: 'OKF_LINK_CASE_MISMATCH',
+    message: `Cross-link target is in the bundle under a different case: the link resolves to "${askedPath}" and the bundle holds "${actualPath}" (both relative to the bundle root). This opens on the publisher's machine and 404s on every case-sensitive filesystem the bundle is unpacked onto. Re-spell the link so it resolves to "${actualPath}", or rename what is on disk. Every component is checked, so the path quoted here is the whole correction.`,
   };
 }
 
@@ -157,13 +239,13 @@ function caseDraft(
 function normalizationDraft(
   document: string,
   link: ResourceLink,
-  askedName: string,
-  actualName: string,
+  askedPath: string,
+  actualPath: string,
 ): OkfFindingDraft {
   return {
     ...anchorOf(document, link),
     code: 'OKF_LINK_NORMALIZATION_MISMATCH',
-    message: `Cross-link resolves only after Unicode normalization: the link spells the filename "${showBytes(askedName)}" and the file on disk is named "${showBytes(actualName)}". Same visible name, different bytes — it opens on macOS and Windows and 404s on a byte-exact filesystem (Linux), which is where most consumers unpack the bundle. Normalize both to NFC.`,
+    message: `Cross-link resolves only after Unicode normalization: the link resolves to "${showBytes(askedPath)}" and the bundle holds "${showBytes(actualPath)}" (both relative to the bundle root). Same visible name, different bytes — it opens on macOS and Windows and 404s on a byte-exact filesystem (Linux), which is where most consumers unpack the bundle. Normalize both to NFC.`,
   };
 }
 
@@ -207,31 +289,23 @@ function resolveOne(
   return { target: { link, resolvedPath: resolution.resolvedPath } };
 }
 
-/** Turn one classified target into a finding, or nothing when it is clean. */
-function judgeTarget(
+/** Turn one resolved target into a finding, or nothing when it is clean. */
+async function judgeTarget(
   document: string,
   target: ResolvedTarget,
-  siblingNames: SiblingNamesTable,
-): OkfFindingDraft | null {
-  const verdict = classifyFilenameCaseFrom(siblingNames, target.resolvedPath);
-  // The DECODED basename: `%20`-escaped hrefs are already unescaped by
-  // `resolveLocalHref`, and the reader needs the name to compare against disk,
-  // not the transport encoding of it.
-  const askedName = basename(target.resolvedPath);
+  index: BundleDirectoryIndex,
+): Promise<OkfFindingDraft | null> {
+  const verdict = await index.judge(target.resolvedPath);
 
   switch (verdict.match) {
     case 'exact': {
       return null;
     }
     case 'normalized': {
-      return verdict.actualName === null
-        ? null
-        : normalizationDraft(document, target.link, askedName, verdict.actualName);
+      return normalizationDraft(document, target.link, verdict.askedPath, verdict.actualPath);
     }
     case 'case_mismatch': {
-      return verdict.actualName === null
-        ? missingDraft(document, target.link)
-        : caseDraft(document, target.link, askedName, verdict.actualName);
+      return caseDraft(document, target.link, verdict.askedPath, verdict.actualPath);
     }
     case 'absent': {
       return missingDraft(document, target.link);
@@ -242,23 +316,23 @@ function judgeTarget(
 /**
  * Resolve every cross-link in one document and report the ones that fail.
  *
- * Two passes, in the order the fill/judge pair requires: every target is
- * resolved first, then their parent directories are listed once each, then the
- * spellings are judged against those listings with no further I/O.
+ * Two passes: every target is resolved first (pure path work), then the
+ * spellings are judged against the bundle's directory index, which does the
+ * listings once each and shares them across every document in the bundle.
  *
  * @param document - Bundle-relative path of the document holding the links
  * @param absolutePath - That document's absolute path, for relative resolution
  * @param links - Links the parser found
  * @param root - Absolute bundle root; `/`-prefixed hrefs resolve against it
- * @param fsCache - Per-run lookup cache, shared across the bundle's documents so
- *   a directory holding N link targets is listed once, not N times
+ * @param index - The bundle's directory index, shared across its documents so a
+ *   directory holding N link targets is listed once, not N times
  */
 export async function linkFindings(
   document: string,
   absolutePath: string,
   links: readonly ResourceLink[],
   root: string,
-  fsCache: FsLookupCache,
+  index: BundleDirectoryIndex,
 ): Promise<OkfFindingDraft[]> {
   const drafts: OkfFindingDraft[] = [];
   const targets: ResolvedTarget[] = [];
@@ -275,13 +349,10 @@ export async function linkFindings(
     }
   }
 
-  const siblingNames = await fillSiblingNames(
-    targets.map((target) => target.resolvedPath),
-    fsCache,
+  const judged = await Promise.all(
+    targets.map(async (target) => await judgeTarget(document, target, index)),
   );
-
-  for (const target of targets) {
-    const draft = judgeTarget(document, target, siblingNames);
+  for (const draft of judged) {
     if (draft !== null) drafts.push(draft);
   }
 

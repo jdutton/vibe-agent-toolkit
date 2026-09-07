@@ -17,6 +17,7 @@
 import {
   ardEntryOverrideKey,
   defaultArdNamespace,
+  findArdEntryOverride,
   type ArdConfig,
   type ArdSurface,
   type ArdSurfaceKind,
@@ -172,12 +173,14 @@ function collectOverrideOnlySurfaces(
   skipped: SkippedArdSurface[]
 ): void {
   for (const name of names) {
-    // Looked up through the same two-key rule the builder uses: the qualified
-    // `<kind>:<name>` first, the bare name as the unambiguous shorthand. A
-    // lookup that read only the bare key here would decide a marketplace was
-    // emittable on the strength of a SKILL's override.
-    const entries = ard.entries;
-    const overrides = entries?.[ardEntryOverrideKey(kind, name)] ?? entries?.[name];
+    // Looked up through the builder's OWN function, not a second copy of the
+    // rule. 🚨 This site used to restate `qualified ?? bare` inline, and neither
+    // copy was pinned — two mutations reversing them to bare-first stayed green
+    // — so the two could disagree about which block a surface gets while every
+    // test passed. Here the answer decides EMITTABILITY: a lookup that read the
+    // bare key first would advertise a marketplace on the strength of a SKILL's
+    // override.
+    const overrides = findArdEntryOverride(ard, kind, name);
     if (overrides?.type === undefined) {
       skipped.push({
         name,

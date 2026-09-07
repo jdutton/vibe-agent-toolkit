@@ -8,6 +8,7 @@
  * opened broke conformance.
  */
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { discoverOkfBundle } from '../../src/okf/discovery.js';
@@ -146,6 +147,74 @@ describe('discoverOkfBundle', () => {
     const found = await discoverOkfBundle(root);
 
     expect(found.conceptDocuments).not.toContain('doorway/hidden.md');
+  });
+
+  describe('a bundle member is a file whose BYTES live under the root', () => {
+    // 🪤 Two lanes of one product disagreed about one file: discovery admitted a
+    // symlinked `.md` into the population while `links.ts` reported a LINK to
+    // that same file as escaping the bundle. VAT judged it inside and outside at
+    // once. The justification was false as well — it said `stat` was right
+    // because it is "the thing `tar` dereferences into the bundle", but default
+    // `tar -cf` stores a symlink AS a symlink and only `--dereference` copies
+    // the bytes, so the file whose conformance VAT reported arrives dangling.
+    //
+    // ⚠️ These cases were untestable before: the fixture resolved every symlink
+    // target with `joinUnderRoot`, so it could express neither an escaping nor a
+    // dangling link. The corpus is why the defect had no test.
+
+    it.skipIf(!SYMLINKS_AVAILABLE)('excludes a symlink pointing OUTSIDE the root', async () => {
+      const outside = plantOkfBundle({ 'target.md': conceptDoc(TABLE_TYPE) });
+      const root = plantOkfBundle({ 'real.md': conceptDoc(TABLE_TYPE) });
+      plantSymlink(root, 'escapee.md', safePath.join(outside, 'target.md'), 'file');
+
+      const found = await discoverOkfBundle(root);
+
+      expect(found.conceptDocuments).toEqual(['real.md']);
+      expect(found.unpackableDocuments).toEqual([{ document: 'escapee.md', reason: 'outside' }]);
+    });
+
+    it.skipIf(!SYMLINKS_AVAILABLE)('excludes a DANGLING .md symlink', async () => {
+      // 🪤 With the guard gone this reaches the parser, which cannot open it.
+      // Before the read was wrapped, that killed the whole command at exit 2.
+      const root = plantOkfBundle({ 'real.md': conceptDoc(TABLE_TYPE) });
+      plantSymlink(root, 'ghost.md', 'never-written.md', 'file');
+
+      const found = await discoverOkfBundle(root);
+
+      expect(found.conceptDocuments).toEqual(['real.md']);
+      expect(found.unpackableDocuments).toEqual([{ document: 'ghost.md', reason: 'dangling' }]);
+    });
+
+    it.skipIf(!SYMLINKS_AVAILABLE)('ignores a symlink to a DIRECTORY named like markdown', async () => {
+      // Not a document by any reading, and nothing downstream could parse it —
+      // so it is dropped rather than reported. Silence is the verdict here, and
+      // it is asserted so that admitting it would go red.
+      const root = plantOkfBundle({
+        'real.md': conceptDoc(TABLE_TYPE),
+        'somewhere/inner.md': conceptDoc(TABLE_TYPE),
+      });
+      plantSymlink(root, 'trap.md', 'somewhere', 'dir');
+
+      const found = await discoverOkfBundle(root);
+
+      expect(found.conceptDocuments).toEqual(['real.md', 'somewhere/inner.md']);
+      expect(found.unpackableDocuments).toEqual([]);
+    });
+
+    it.skipIf(!SYMLINKS_AVAILABLE)('keeps a symlink whose target is INSIDE the root', async () => {
+      // The negative control for all three: a rule that excluded every symlink
+      // would satisfy them and would drop conformant documents on the floor.
+      const root = plantOkfBundle({
+        'real.md': conceptDoc(TABLE_TYPE),
+        'elsewhere/target.md': conceptDoc(TABLE_TYPE),
+      });
+      plantSymlink(root, 'linked.md', 'elsewhere/target.md', 'file');
+
+      const found = await discoverOkfBundle(root);
+
+      expect(found.conceptDocuments).toContain('linked.md');
+      expect(found.unpackableDocuments).toEqual([]);
+    });
   });
 
   it('reports a filename in the normalization form disk holds, unfolded', async () => {

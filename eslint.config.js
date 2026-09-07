@@ -133,6 +133,18 @@ const localRulesConfig = {
   'local/no-bare-symlink-in-tests': ['error', {
     exemptFiles: ['packages/utils/src/test-helpers.ts'],
   }],
+  // ⛔ The mechanism behind `isEntrypoint()`. Enabled here rather than inherited
+  // from `configs.recommended` because it is excluded there: `import.meta.main`
+  // is only wrong below Node 24.2 / 22.18, which is a fact about the CONSUMER's
+  // floor. It is a fact about OURS — this repo declares `>=22.13.0`, where the
+  // property is `undefined` — so every such guard here is dead code that exits 0.
+  //
+  // This is the half of the fix that is not a comment. Three prose
+  // `⛔ NOT import.meta.main` banners stood over the three call sites and
+  // reverting all three to the bug left the whole suite green; a banner
+  // addressed to a human is not a mechanism, and this repo has watched one
+  // survive 24 days and a green CI before.
+  'local/no-fragile-entrypoint-guard': 'error',
 };
 
 // Import organization. Apply to both TS and JS source.

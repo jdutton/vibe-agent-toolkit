@@ -18,13 +18,13 @@
  *
  * The fill pass ({@link fillLinkFacts}) resolves every link once
  * ({@link resolveLinkEntries}), names the local targets
- * ({@link linkTargetPaths}), and materialises two columns over them
- * concurrently: their parent directories' listings (`fillSiblingNames`) and
- * their canonical paths (`fillRealpaths`, together with the project root). The
- * judge pass ({@link judgeLink}) is synchronous and does **no directory
- * listing, no href resolution and no realpath** — every one of those facts
- * travels to it, the two columns in {@link LinkFactTables} and the resolution on
- * the entry.
+ * ({@link linkTargets}), and materialises two columns over them concurrently:
+ * how every component of each resolved path is spelled on disk
+ * (`fillPathSpellings`) and their canonical paths (`fillRealpaths`, together
+ * with the project root). The judge pass ({@link judgeLink}) is synchronous and
+ * does **no directory listing, no href resolution and no realpath** — every one
+ * of those facts travels to it, the two columns in {@link LinkFactTables} and
+ * the resolution on the entry.
  *
  * ⚠️ **The judge is still not I/O-free, and no comment in this file may claim it
  * is.** One fact judgement needs remains unfilled, and it is read at judgement
@@ -44,18 +44,18 @@
  * link.
  */
 
-import path from 'node:path';
-
 import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
-  classifyFilenameCaseFrom,
   type FilenameMatch,
+  fillPathSpellings,
   fillRealpaths,
-  fillSiblingNames,
   FsLookupCache,
   issueLocation,
+  pathSpellingFrom,
+  type PathSpellingRequest,
+  type PathSpellingTable,
   type RealpathTable,
-  type SiblingNamesTable,
+  toForwardSlash,
   toNfc,
 } from '@vibe-agent-toolkit/utils';
 import {
@@ -156,8 +156,14 @@ export function resolveLinkEntries(
 }
 
 /**
- * Pass 1′, step 2: the local target paths whose parent directories the fill must
- * list — the exact input for `fillSiblingNames`.
+ * Pass 1′, step 2: the local targets the fill must judge, each paired with the
+ * file that referenced it — the exact input for `fillPathSpellings`.
+ *
+ * ⚠️ **The referrer is not decoration.** It is what tells the fill where to
+ * start judging: everything the two paths share was enumerated off disk, and
+ * everything below that is what the link TEXT contributed. See
+ * `spellingWalkRoot`. A fill handed only the target path can judge nothing but
+ * the basename — which is the defect this pass exists to close.
  *
  * **Pure.** It reads the resolutions {@link resolveLinkEntries} already
  * computed; it resolves nothing and touches no filesystem.
@@ -178,14 +184,14 @@ export function resolveLinkEntries(
  * a path the fill never listed. Identity closes that TOCTOU window outright.
  *
  * @param resolved - Entries already carrying their resolutions
- * @returns Resolved target paths, in entry order; duplicates are left in (the fill de-dupes by parent directory)
+ * @returns Referrer/target pairs, in entry order; duplicates are left in (the fill de-dupes)
  */
-export function linkTargetPaths(resolved: Iterable<ResolvedLinkEntry>): string[] {
-  const targets: string[] = [];
+export function linkTargets(resolved: Iterable<ResolvedLinkEntry>): PathSpellingRequest[] {
+  const targets: PathSpellingRequest[] = [];
 
-  for (const { resolution } of resolved) {
+  for (const { resolution, sourceFilePath } of resolved) {
     if (resolution?.kind === 'resolved') {
-      targets.push(resolution.resolvedPath);
+      targets.push({ referrer: sourceFilePath, target: resolution.resolvedPath });
     }
   }
 
@@ -195,7 +201,7 @@ export function linkTargetPaths(resolved: Iterable<ResolvedLinkEntry>): string[]
 /**
  * The pass-1′ columns the judge reads. Fill both with {@link fillLinkFacts}.
  *
- * ⚠️ **A missing row in either table THROWS**, by design (`siblingNamesFrom`,
+ * ⚠️ **A missing row in either table THROWS**, by design (`pathSpellingFrom`,
  * `realpathFrom`): a divergence between the filled set and the judged set is a
  * programming error, and a crash names it — where a silent recompute would only
  * make the run slower and a `null` degradation would answer wrongly. The
@@ -217,11 +223,12 @@ export function linkTargetPaths(resolved: Iterable<ResolvedLinkEntry>): string[]
  */
 export interface LinkFactTables {
   /**
-   * The listing column, covering every local target the judged links resolve
-   * to. Keyed by parent directory — `fillSiblingNames` derives that key itself,
-   * so pass it the target *file* paths.
+   * The spelling column: how faithfully each judged link's WHOLE resolved path
+   * is spelled, every component of it. Keyed by the (referrer, target) pair —
+   * `fillPathSpellings` derives that key itself, so pass it the pairs
+   * {@link linkTargets} produced.
    */
-  siblingNames: SiblingNamesTable;
+  spellings: PathSpellingTable;
   /**
    * The realpath column: every local target **plus the project root**, keyed by
    * the path string exactly as the fill was handed it.
@@ -345,7 +352,8 @@ export function needsRealpathColumn<
  *
  * ⚠️ **"Concurrently" here is a change in KIND, not just an ordering.** The two
  * waves now overlap, and they are bounded by different things:
- * `fillSiblingNames` by distinct *directories* (hundreds on a large corpus),
+ * `fillPathSpellings` by distinct *directories* on the walked paths (hundreds on
+ * a large corpus),
  * `fillRealpaths` by distinct *files* — ~770 on VAT itself and several thousand
  * on the 1,484-document adopter. Both are issued as a single `Promise.all` each,
  * so the peak in-flight request count is the sum, landing on libuv's 4-thread
@@ -366,7 +374,7 @@ export function needsRealpathColumn<
  * which case the existence check returns first and the row is simply never read.
  * This is **accepted, not closed**: closing it needs a filesystem snapshot that
  * does not exist. It differs from the resolution TOCTOU argued on
- * {@link linkTargetPaths}, which *is* closed outright, by identity — that one
+ * {@link linkTargets}, which *is* closed outright, by identity — that one
  * could be, this one cannot.
  *
  * ⚠️ **With the gate open, this always costs at least one syscall — even with
@@ -381,7 +389,7 @@ export function needsRealpathColumn<
  * *exist* — the deferred-artifact and existence checks return first — whereas
  * this canonicalizes every resolved target. Narrowing it to "targets that exist"
  * would mean recomputing the existence verdict here, i.e. two computations kept
- * in step: precisely the drift hazard {@link linkTargetPaths} exists to close. A
+ * in step: precisely the drift hazard {@link linkTargets} exists to close. A
  * superset is always safe (`realpathFrom` throws only on a *missing* row), and
  * it costs one failed `realpath` per broken link — which a green corpus does not
  * pay at all. Do not "optimize" this into a bug.
@@ -400,16 +408,16 @@ export async function fillLinkFacts(
   fsCache: FsLookupCache,
   policy: { projectRoot?: string | undefined; skipGitIgnoreCheck?: boolean | undefined },
 ): Promise<LinkFactTables> {
-  const targets = linkTargetPaths(resolved);
+  const targets = linkTargets(resolved);
 
-  const [siblingNames, realpaths] = await Promise.all([
-    fillSiblingNames(targets, fsCache),
+  const [spellings, realpaths] = await Promise.all([
+    fillPathSpellings(targets, fsCache),
     needsRealpathColumn(policy)
-      ? fillRealpaths([...targets, policy.projectRoot], fsCache)
+      ? fillRealpaths([...targets.map(({ target }) => target), policy.projectRoot], fsCache)
       : Promise.resolve<RealpathTable>(new Map()),
   ]);
 
-  return { siblingNames, realpaths };
+  return { spellings, realpaths };
 }
 
 /**
@@ -417,7 +425,7 @@ export async function fillLinkFacts(
  * filled with for the columns it filled.
  *
  * **Copied field by field rather than spread, so `fsCache` cannot travel.** A
- * `{ ...options, siblingNames }` would hand the judge the very filesystem handle
+ * `{ ...options, spellings }` would hand the judge the very filesystem handle
  * {@link JudgeLinkOptions} exists to withhold — the property would survive in the
  * object even though the type never mentions it. The per-field
  * `...(x !== undefined && { x })` idiom is what `exactOptionalPropertyTypes`
@@ -432,7 +440,7 @@ export function judgeOptionsFrom(
   tables: LinkFactTables,
 ): JudgeLinkOptions {
   return {
-    siblingNames: tables.siblingNames,
+    spellings: tables.spellings,
     realpaths: tables.realpaths,
     ...(options?.projectRoot !== undefined && { projectRoot: options.projectRoot }),
     ...(options?.skipGitIgnoreCheck !== undefined && {
@@ -469,7 +477,7 @@ export function judgeOptionsFrom(
  * @param options - Judge options, carrying the filled table
  * @returns ValidationIssue if link is broken, null if valid
  * @throws If a local entry carries no resolution, or if the table has no row for
- *   a local target's parent directory — see {@link linkTargetPaths}
+ *   a local target — see {@link linkTargets}
  */
 export function judgeLink(
   entry: ResolvedLinkEntry,
@@ -607,24 +615,19 @@ export function resolutionFailureIssue(
  * Returns null when the file exists.
  */
 export function fileExistenceIssue(
-  fileResult: { exists: boolean; resolvedPath: string; actualName?: string },
+  fileResult: { exists: boolean; resolvedPath: string; correction?: PathCorrection },
   link: ResourceLink,
   sourceFilePath: string,
   projectRoot?: string,
 ): ValidationIssue | null {
   if (fileResult.exists) return null;
 
-  if (fileResult.actualName) {
-    const expectedName = path.basename(fileResult.resolvedPath);
+  if (fileResult.correction) {
+    const { asked, actual } = fileResult.correction;
     return createRegistryIssue(
       'LINK_BROKEN_FILE',
-      `File found but case mismatch: expected "${expectedName}" but found "${fileResult.actualName}". This will fail on case-sensitive filesystems (Linux). Update the link to match the actual filename.`,
-      linkExtras(
-        link,
-        sourceFilePath,
-        projectRoot,
-        `Use "${fileResult.actualName}" instead of "${expectedName}"`,
-      ),
+      `File found but case mismatch: expected "${asked}" but found "${actual}". This will fail on case-sensitive filesystems (Linux). Update the link to match what is on disk. Every path component is checked, so the spelling quoted here is the whole correction.`,
+      linkExtras(link, sourceFilePath, projectRoot, `Use "${actual}" instead of "${asked}"`),
     );
   }
 
@@ -653,10 +656,62 @@ export interface FileVerification {
   exists: boolean;
   /** Absolute filesystem path the link resolved to. */
   resolvedPath: string;
-  /** How the asked-for basename matched a directory entry. */
+  /** How the asked-for path matched disk, at its WORST-spelled component. */
   match: FilenameMatch;
-  /** The entry really on disk, verbatim, when it differs from what was asked for. */
-  actualName?: string;
+  /**
+   * The smallest correction that makes the whole path open, or absent when
+   * nothing needs correcting (`exact`) or nothing matched at all (`absent`).
+   *
+   * ⚠️ **A path, not a name — and that is the fix, not a flourish.** When only
+   * the basename is misspelled this holds exactly the two basenames, and every
+   * message reads as it always did. When a DIRECTORY component is misspelled
+   * too, a basename-only correction is one a reader can follow verbatim and
+   * still land on a 404. See {@link pathCorrection}.
+   */
+  correction?: PathCorrection;
+}
+
+/** Two spellings of the same path suffix: what was asked for, and what disk holds. */
+export interface PathCorrection {
+  /** The suffix as the link spelled it, from the first wrong component down. */
+  asked: string;
+  /** The same suffix as disk spells it. */
+  actual: string;
+}
+
+/**
+ * The smallest suffix of a path that differs between the two spellings.
+ *
+ * Leading components that match byte for byte are trimmed, so a message quotes
+ * every component the author has to change and no component they do not. When
+ * only the last component differs, that is one basename against another — which
+ * is why this reports identically to the basename-only judge it replaced in the
+ * case that judge got right.
+ *
+ * @param asked - The path as the link spelled it, relative to the walk root
+ * @param actual - The same path as disk spells it, component for component
+ * @returns The differing suffix in both spellings, or undefined when identical
+ */
+export function pathCorrection(asked: string, actual: string): PathCorrection | undefined {
+  // Both arrive from `safePath.relative`, i.e. already forward-slashed; saying
+  // so out loud is what makes the split safe on Windows.
+  const askedParts = toForwardSlash(asked).split('/');
+  const actualParts = toForwardSlash(actual).split('/');
+
+  let differs = 0;
+  while (
+    differs < askedParts.length &&
+    differs < actualParts.length &&
+    askedParts[differs] === actualParts[differs]
+  ) {
+    differs += 1;
+  }
+
+  if (differs >= askedParts.length || differs >= actualParts.length) return undefined;
+  return {
+    asked: askedParts.slice(differs).join('/'),
+    actual: actualParts.slice(differs).join('/'),
+  };
 }
 
 /**
@@ -709,27 +764,27 @@ export function escapeNonAscii(name: string): string {
  * stable end of the pair.
  */
 export function normalizationMismatchIssue(
-  fileResult: Pick<FileVerification, 'match' | 'resolvedPath' | 'actualName'>,
+  fileResult: Pick<FileVerification, 'match' | 'resolvedPath' | 'correction'>,
   link: ResourceLink,
   sourceFilePath: string,
   projectRoot?: string,
 ): ValidationIssue | null {
-  if (fileResult.match !== 'normalized' || fileResult.actualName === undefined) return null;
+  if (fileResult.match !== 'normalized' || fileResult.correction === undefined) return null;
 
-  const askedName = path.basename(fileResult.resolvedPath);
-  const nfcName = toNfc(fileResult.actualName);
+  const { asked, actual } = fileResult.correction;
+  const nfcPath = toNfc(actual);
 
   return createRegistryIssue(
     'LINK_NORMALIZATION_MISMATCH',
-    `Link resolves only after Unicode normalization: the link spells the filename ` +
-      `"${escapeNonAscii(askedName)}" but the file on disk is named ` +
-      `"${escapeNonAscii(fileResult.actualName)}". Same visible name, different bytes — ` +
+    `Link resolves only after Unicode normalization: the link spells it ` +
+      `"${escapeNonAscii(asked)}" but what is on disk is named ` +
+      `"${escapeNonAscii(actual)}". Same visible name, different bytes — ` +
       `this resolves on macOS and Windows and fails on a byte-exact filesystem (Linux).`,
     linkExtras(
       link,
       sourceFilePath,
       projectRoot,
-      `Normalize both to NFC: name the file "${escapeNonAscii(nfcName)}" on disk and ` +
+      `Normalize both to NFC: name it "${escapeNonAscii(nfcPath)}" on disk and ` +
         `write the link with that same spelling.`,
     ),
   );
@@ -744,18 +799,18 @@ export function normalizationMismatchIssue(
  * - the file actually exists (`fileResult.exists`) — the existence gate: an
  *   existing covered target must keep its normal anchor/gitignore treatment,
  *   never a deferred downgrade purely from `covers()`;
- * - the file exists under a different case (`fileResult.actualName` set) — a
- *   real, if mis-cased, materialized file, not a not-yet-built one;
+ * - the file exists under a different case (`fileResult.correction` set) — a
+ *   real, if mis-spelled, materialized file, not a not-yet-built one;
  * - no `deferredArtifacts` model was supplied, or it doesn't cover this path.
  */
 export function deferredArtifactIssue(
-  fileResult: { exists: boolean; resolvedPath: string; actualName?: string },
+  fileResult: { exists: boolean; resolvedPath: string; correction?: PathCorrection },
   link: ResourceLink,
   sourceFilePath: string,
   deferredArtifacts: DeferredArtifacts | undefined,
   projectRoot?: string,
 ): ValidationIssue | null {
-  if (fileResult.exists || fileResult.actualName || !deferredArtifacts?.covers(fileResult.resolvedPath)) {
+  if (fileResult.exists || fileResult.correction || !deferredArtifacts?.covers(fileResult.resolvedPath)) {
     return null;
   }
 
@@ -861,8 +916,8 @@ export function gitIgnoreSafetyIssue(
  * Validate a local file link (with optional anchor).
  *
  * Synchronous, and it resolves nothing, lists nothing and realpaths nothing: the
- * resolution comes off the entry (the identity {@link linkTargetPaths} depends
- * on), the existence/case fact out of `options.siblingNames`, and the
+ * resolution comes off the entry (the identity {@link linkTargets} depends
+ * on), the existence/spelling fact out of `options.spellings`, and the
  * containment fact out of `options.realpaths`.
  *
  * It can still reach the filesystem, through {@link gitIgnoreSafetyIssue} —
@@ -892,7 +947,7 @@ function validateLocalFileLink(
     return resolutionFailureIssue(resolved, link, sourceFilePath, options.projectRoot);
   }
 
-  const fileResult = validateResolvedFile(resolved.resolvedPath, options.siblingNames);
+  const fileResult = validateResolvedFile(sourceFilePath, resolved.resolvedPath, options.spellings);
 
   const deferred = deferredArtifactIssue(
     fileResult,
@@ -973,8 +1028,22 @@ function validateAnchorLink(
 
 
 /**
- * Verify that the resolved filesystem path exists with the correct case, by
- * reading the pass-1′ listing column rather than touching the filesystem.
+ * Verify that the resolved filesystem path exists, spelled the way disk spells
+ * it, by reading the pass-1′ spelling column rather than touching the
+ * filesystem.
+ *
+ * ⛔ **EVERY component of the path is judged, not just the basename — and that
+ * is a correctness rule, not thoroughness.** This used to classify
+ * `basename(resolvedPath)` against a listing of `dirname(resolvedPath)`, which
+ * handed every DIRECTORY component straight back to the host filesystem's own
+ * folding: `readdir('<root>/Docs')` succeeds on macOS when the directory is
+ * really `docs`, the basename then matched byte for byte, and VAT reported
+ * nothing — for a link that 404s on every case-sensitive filesystem the
+ * repository is cloned onto. The Unicode half was silent the same way, and that
+ * one 404s on Linux. The walk lives in `DirectorySpellingIndex.judgePath`; what
+ * arrives here is its verdict.
+ *
+ * @see pathCorrection for why the remedy is a path rather than a name.
  *
  * **Deliberately does not report whether the target is a directory.** It used
  * to, at the cost of an `fs.stat` for every link target that exists — and no
@@ -982,7 +1051,7 @@ function validateAnchorLink(
  * at five sites ({@link deferredArtifactIssue}, {@link fileExistenceIssue},
  * {@link gitIgnoreSafetyIssue}, the anchor check and
  * {@link normalizationMismatchIssue}), and every one of them takes only
- * `exists`, `resolvedPath`, `actualName` or `match`. A future
+ * `exists`, `resolvedPath`, `correction` or `match`. A future
  * link-points-at-a-directory check belongs in the same pass-1′ table this now
  * reads — widen the table with a directory-kind column filled over the paths it
  * needs, never re-stat one target at judgement time.
@@ -993,24 +1062,38 @@ function validateAnchorLink(
  * byte-exact filesystem — see {@link normalizationMismatchIssue}. Dropping the
  * field is how the Linux-only breakage became invisible in the first place.
  *
+ * @param sourceFilePath - The file holding the link, which is what says how much
+ *   of the resolved path came out of the link TEXT and is therefore judged.
  * @param resolvedPath - Absolute filesystem path produced by {@link resolveLocalHref}.
- * @param siblingNames - Pass-1′ table, filled over exactly these target paths.
- * @returns Object with exists flag, the path, the match kind, and optional case-mismatch info.
+ * @param spellings - Pass-1′ table, filled over exactly these referrer/target pairs.
+ * @returns Object with exists flag, the path, the match kind, and the correction when one is needed.
  */
 function validateResolvedFile(
+  sourceFilePath: string,
   resolvedPath: string,
-  siblingNames: SiblingNamesTable,
+  spellings: PathSpellingTable,
 ): FileVerification {
-  const verification = classifyFilenameCaseFrom(siblingNames, resolvedPath);
+  const spelling = pathSpellingFrom(spellings, sourceFilePath, resolvedPath);
 
   const result: FileVerification = {
-    exists: verification.exists,
+    // `exact` and `normalized` are the two verdicts under which the author's
+    // own machine opens the file; `case_mismatch` and `absent` are not.
+    exists: spelling.match === 'exact' || spelling.match === 'normalized',
     resolvedPath,
-    match: verification.match,
+    match: spelling.match,
   };
 
-  if (verification.actualName) {
-    result.actualName = verification.actualName;
+  // 🪤 Guarded on `absent`, not merely on emptiness. A path nothing matched
+  // carries an EMPTY `actualPath`, and a correction derived from that quotes a
+  // file with no name — which turns every genuinely missing target into a
+  // case-mismatch report, and makes `deferredArtifactIssue` read a
+  // not-yet-built artifact as an already-materialized mis-spelled one.
+  const correction =
+    spelling.match === 'absent'
+      ? undefined
+      : pathCorrection(spelling.askedPath, spelling.actualPath);
+  if (correction) {
+    result.correction = correction;
   }
 
   return result;

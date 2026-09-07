@@ -13,7 +13,9 @@ import {
   ArdDerivationError,
   buildArdEntries,
   buildArdManifest,
+  findShadowedArdOverrideKeys,
   writeArdManifest,
+  type ShadowedArdOverrideKey,
 } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -84,6 +86,13 @@ export interface ArdEmitResult {
   readonly outputPath: string;
   readonly entryCount: number;
   readonly skipped: readonly SkippedArdSurface[];
+  /**
+   * Bare `ard.entries` keys a qualified key for the same surface outranked.
+   *
+   * Not a failure — the precedence is deterministic and documented — but the
+   * losing block is dead config, and an author cannot see that from the file.
+   */
+  readonly shadowed: readonly ShadowedArdOverrideKey[];
 }
 
 /**
@@ -153,7 +162,12 @@ export async function runArdEmit(options: ArdEmitOptions): Promise<ArdEmitResult
   const manifest = buildArdManifest(buildArdEntries(surfaces, ard));
   const outputPath = safePath.resolve(projectRoot, options.output ?? DEFAULT_ARD_OUTPUT);
   await writeArdManifest(manifest, outputPath);
-  return { outputPath, entryCount: manifest.entries.length, skipped };
+  return {
+    outputPath,
+    entryCount: manifest.entries.length,
+    skipped,
+    shadowed: findShadowedArdOverrideKeys(surfaces, ard),
+  };
 }
 
 /** Action handler for `vat ard emit`. */
@@ -165,18 +179,35 @@ export async function ardEmitCommand(options: ArdEmitOptions): Promise<void> {
     for (const item of result.skipped) {
       process.stderr.write(`skipped ${item.kind} "${item.name}": ${item.reason}\n`);
     }
+    for (const item of result.shadowed) {
+      process.stderr.write(
+        `ignored \`ard.entries.${item.shadowedKey}\`: the ${item.kind} "${item.name}" is also named ` +
+          `by \`ard.entries."${item.winningKey}"\`, and the kind-qualified key wins. Nothing in the ` +
+          'bare block was read — fold it into the qualified one or delete it.\n'
+      );
+    }
     process.stdout.write(
       `Wrote ${result.entryCount} ARD entr${result.entryCount === 1 ? 'y' : 'ies'} to ${result.outputPath}\n`
     );
   } catch (error) {
-    // 🔑 Exit 1 is "VAT read your project and refused to emit"; exit 2 is a
-    // SYSTEM error — the run never got as far as a judgement. A project that
-    // declares no `ard:` block is the first; a missing root or a missing config
-    // file is the second, which is also what `vat okf validate` documents for
-    // the same conditions, and what an invalid config already did here through
-    // `handleCommandError`. The old split had a missing config file exiting 1
-    // and an invalid one exiting 2 while the help called 2 "Unexpected internal
-    // failure" — so a CI job reading 2 as a crash was paged for a typo.
+    // 🔑 THE RULE, in one sentence: **exit 1 means VAT read this project and
+    // produced no manifest by its own rules — it declares no `ard:` block, or a
+    // surface could not be derived into a conformant entry; exit 2 means VAT
+    // never got that far — no project root, no config file, a config it cannot
+    // parse, or an unexpected internal failure.**
+    //
+    // ⚠️ Not "1 is reserved for a check that ran and failed": `ard emit` is not
+    // a check, and "no `ard:` block" is not a failed one. The distinction that
+    // matters to a caller is whether the PROJECT is the subject (1) or the
+    // INVOCATION is (2) — the first is fixed by editing config, the second by
+    // fixing the command line or the file itself. A CI job that tolerates
+    // repositories which have not opted into ARD keys on exactly that split.
+    //
+    // Exit 2 is also what `vat okf validate` documents for the same conditions,
+    // and what an invalid config already did here through `handleCommandError`.
+    // The old split had a missing config file exiting 1 and an invalid one
+    // exiting 2 while the help called 2 "Unexpected internal failure" — so a CI
+    // job reading 2 as a crash was paged for a typo.
     if (error instanceof ArdConfigMissingError) {
       process.stderr.write(`${error.message}\n`);
       process.exit(error.absence === 'no-ard-block' ? 1 : 2);
