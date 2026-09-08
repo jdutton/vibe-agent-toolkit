@@ -175,10 +175,12 @@ export {
 } from './schemas/projection-resources.js';
 
 export {
+  EdgeDestinationKindSchema,
   EdgeKindSchema,
   EdgeOriginSchema,
   EdgeResolutionRowSchema,
   EdgeRowSchema,
+  type EdgeDestinationKind,
   type EdgeOrigin,
   type EdgeResolutionRow,
   type EdgeRow,

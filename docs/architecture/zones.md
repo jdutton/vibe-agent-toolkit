@@ -245,9 +245,9 @@ because an `@` token means import only in a file named `CLAUDE.md`, `CLAUDE.loca
 ### Edges and resolutions are separate tables
 
 ```
-edges            (src, refOrdinal, contextId, kind, origin, resolution)
+edges            (src, refOrdinal, contextId, kind, origin)
 edge_resolutions (src, refOrdinal, contextId, candidateOrdinal,
-                  dstResource, dstAnchor, score)
+                  dstKind, dstKey, dstResource, dstAnchor, tier, score)
 ```
 
 A single scalar target cannot express what the model requires. Wiki title resolution is
@@ -276,17 +276,33 @@ Edge properties:
 | auth-required | reachable only with credentials |
 | nonexistent | dead |
 
-⚠️ **The tier above grades a CANDIDATE, not an edge — and the shipped schema puts it on the wrong
-table.** Every tier in that list is a statement about a *target*: whether **it** is co-bundled,
-installable, or dead. An edge with two candidates — one in the same plugin, one in an uninstalled
-marketplace — has no single tier, so one string on `edges` cannot describe it. What genuinely
-belongs on the edge is the *verdict over the candidate set* (`resolved` / `ambiguous` /
-`nonexistent`), which is derivable from the candidates rather than authored beside them.
+✅ **The tier grades a CANDIDATE, not an edge, and it now lives on `edge_resolutions.tier`.** Every
+tier in that list is a statement about a *target*: whether **it** is co-bundled, installable, or
+dead. An edge with two candidates — one in the same plugin, one in an uninstalled marketplace — has
+no single tier, so one string on `edges` could not describe it.
 
-The current `EdgeRowSchema.resolution` mixes both vocabularies in one column. Fix it by moving the
-tier to `edge_resolutions` and either deriving the edge verdict or dropping the column. **Do this
-while the tables are still empty**: the schema makes exactly this argument about `origin` — a
-discriminator added after rows exist changes the meaning of every row written before it.
+`EdgeRowSchema.resolution` used to mix two vocabularies in one column — that tier, and an edge
+*verdict* (`resolved` / `ambiguous` / `nonexistent`). Both were wrong there, for different reasons,
+and the column is gone:
+
+- The **tier** moved to `edge_resolutions`, once per candidate, and is **nullable**. A lens with no
+  reachability model has no honest value to write, and a fabricated `resolved` would make "has a
+  tier" stop meaning "reachability was assessed" — the identical argument `score` already makes
+  about a fabricated `1.0`.
+- The **verdict** was not moved anywhere, because it is *derived*: it is a count over an edge's
+  candidate rows, one `GROUP BY (src, refOrdinal, contextId)`. A stored copy is a second source of
+  truth nothing keeps in step with the first — the same objection this repository raises against a
+  hand-maintained version integer, and the same remedy: derive it from the shape.
+
+⭐ Two absences a consumer can now read that the single column conflated: an edge with **zero**
+candidate rows is one the lens looked at and found nothing for, while an edge whose candidate has
+`dstKind` `external` or `out-of-corpus` has a real, identifiable destination the corpus does not
+contain.
+
+This was done **while the tables were still empty**, which is what made it cheap — the schema makes
+exactly this argument about `origin`: a discriminator added after rows exist changes the meaning of
+every row written before it. Cheap, not free: both row shapes are npm-published JSON Schemas, so the
+change landed a diff under `packages/resources/schemas/` and a CHANGELOG entry.
 
 ### A destination is not always a resource
 
@@ -317,11 +333,13 @@ external destination has no key to group on — its identity survives only as un
 `blob_references.rawRef`, where `https://x/y`, `https://x/y#frag` and `https://X/y` are three
 different strings for one destination.
 
-⇒ **Carry a canonical `dstKey` on `edge_resolutions`**: the resource id for an internal target, a
-normalized URI for an external one, and a normalized out-of-corpus path for the third class. Then
-every reverse-index and dedupe query is one `GROUP BY dstKey` regardless of destination class, and
-`dstResource` stays a true foreign key that is null exactly when the target is not in the corpus —
-a fact, rather than an absence standing in for four different ones.
+✅ **`edge_resolutions` now carries `dstKind` and `dstKey`**: the resource id for an internal target,
+a normalized URI for an external one, and a normalized out-of-corpus path for the third class. Every
+reverse-index and dedupe query is one `GROUP BY (dstKind, dstKey)` regardless of destination class,
+and `dstResource` is a true foreign key that is null exactly when the target is not in the corpus —
+a fact, rather than an absence standing in for four different ones. Both invariants are enforced in
+`EdgeResolutionRowSchema`'s `superRefine`, not left to producer convention: `dstResource` is non-null
+**iff** `dstKind` is `resource`, and in that class `dstKey` must equal `dstResource`.
 
 🚨 **`dstKey` does NOT deliver the dangling-count requirement this section opens with, and must not
 be sold as if it did.** It is a *grouping* key, not an *existence verdict*. Nothing in the
@@ -333,25 +351,37 @@ out-of-corpus path, both get `dstResource: null`, and `dstKey` does not tell the
 which is a second decision this section has not taken. `dstKey` fixes grouping; it is not the
 defect-count fix.
 
-Three things `dstKey` must specify before anyone builds it, none of which are settled here:
+Three things `dstKey` had to specify before anyone built it. All three are now ruled, and the
+rulings are stated here because two of them are *accepted properties* rather than fixes:
 
-- **A `dstKind` discriminator.** Three namespaces in one column — an opaque `hash(rootId,
-  canonicalPath)`, a normalized URI, a normalized out-of-corpus path — means a `GROUP BY dstKey`
-  result cannot say what class it grouped without re-parsing the key string. That is the same
-  "identity survives only as text" failure this section objects to, moved one column over.
-- **Stability across extent widening, which the next paragraph recommends.** Widening moves a
-  destination from the out-of-corpus class (a path) into the resource class (a hash): the key
-  changes *class*, not merely value. Anything comparing `dstKey` across runs — a dedupe cache, a
-  run-to-run diff, a lab cross-version compare — is invalidated by precisely the action we endorse.
-  Case-only renames, symlinks, and one relative link resolved from two bundle roots have the same
-  problem on the out-of-corpus branch, which has no identity service the way the resource branch has
+- ✅ **A `dstKind` discriminator, and it is a CLOSED enum** — `resource` | `external` |
+  `out-of-corpus`. Three namespaces in one column would mean a `GROUP BY dstKey` result could not
+  say what class it grouped without re-parsing the key string: the same "identity survives only as
+  text" failure this section objects to, moved one column over. ⇒ **The grouping key is the pair,
+  never `dstKey` alone.** Closed where `kind` and `tier` are open strings, because this is not a
+  lens's to extend — a fourth namespace changes what a `GROUP BY` means for every existing row, so
+  it must arrive as a failed parse rather than as a silently mis-grouped result.
+- ⚠️ **Stability across extent widening: `dstKey` is NOT stable, by design, and this is recorded
+  rather than engineered away.** Widening moves a destination from `out-of-corpus` (a path) into
+  `resource` (a hash): the key changes *class*, not merely value — and widening is the answer the
+  next paragraph endorses. The alternative to accepting this is a key that lies about which class a
+  destination is in, which is worse. `dstKind` is what makes the change *legible*: a comparator that
+  keys on the pair sees a class change as a change, instead of silently mis-grouping. ⇒ **Anything
+  comparing destinations across runs — a dedupe cache, a run-to-run diff, a lab cross-version
+  compare — must key on `(dstKind, dstKey)` and treat a class change as a change.** Case-only
+  renames, symlinks, and one relative link resolved from two bundle roots have the same property on
+  the `out-of-corpus` branch, which has no identity service the way the `resource` branch has
   `identity.ts`.
-- **What "normalized URI" means, exactly.** Host case is insensitive; **path case is not** — a
-  blanket case-fold merges genuinely distinct targets on any case-sensitive server, so the
-  `https://X/y` example above licenses a wrong normalization if read literally. Fragments and query
-  strings need rulings too: `dstAnchor` is documented as joining `blob_sections.slug`, which an
-  external `#frag` can never do, so it is either dropped in normalization or parked in a column
-  whose documented meaning does not apply to it.
+- ✅ **"Normalized URI" means:** scheme and host lowercased (RFC 3986 §3.2.2 makes both
+  case-insensitive), the scheme's default port removed, and **path, query and fragment left exactly
+  as authored**. Path case is significant on any case-sensitive server, so the `https://X/y` example
+  above licenses a *wrong* normalization if read literally — only the host may be folded. The
+  **fragment is removed from the key**, since it names a location within a destination and two links
+  to `#a` and `#b` of one page cite the same page; the query string is **kept**, since it commonly
+  identifies a distinct resource. ⇒ The fragment is carried on `dstAnchor`, whose documented meaning
+  is widened rather than stretched: for `dstKind` `resource` it joins `blob_sections.slug`, and for
+  the other two classes it is the raw fragment, **which nothing in the projection can resolve**.
+  Dropping it instead would lose the fact that the author cited a specific section.
 
 ⚠️ Widening the extent is the *better* answer wherever it is available — an out-of-corpus target
 that the reader can genuinely reach is evidence the extent is drawn too small, and extents are
@@ -820,8 +850,10 @@ Two shipped behaviours are zone facts written as bespoke rules, and become deriv
 
 ## 9. Open, not resolved
 
-Four questions the built seam rests on, none of which is settled. They are recorded as open rather
-than folded into the prose above, because each has a shipped consequence.
+Four questions the built seam rests on. **One (3) is now settled; the other three are not.** They
+are recorded here rather than folded into the prose above, because each has a shipped consequence —
+and the settled one keeps its number, because what makes it useful is the record of *when* the
+window to answer it cheaply was open, and that it has since shut.
 
 1. **`canonicalPath` on case-insensitive filesystems, and on Windows** (§4). The rule is stated and
    the symlink half is tested on macOS; the case-insensitivity half and Windows are not covered at
@@ -830,10 +862,11 @@ than folded into the prose above, because each has a shipped consequence.
 2. **Does Claude Code set `CLAUDE_PLUGIN_ROOT` at skill-invocation time?** (§8, and
    `packages/agent-skills/src/skill-test/plugin-env.ts:10`.) The plugin extent's resolution rule
    assumes it does. Unverified against the vendor, so no check may depend on it yet.
-3. **Where the resolution tier lives, and whether `dstKey` is carried** (§5). Both are corrections
-   to the shipped edge schema rather than new capability, and both are **cheap only while `edges`
-   and `edge_resolutions` hold no rows** — which is true today, because nothing populates them.
-   Once a producer exists, either change rewrites the meaning of existing rows.
+3. ✅ **CLOSED — where the resolution tier lives, and whether `dstKey` is carried** (§5). Both
+   corrections are made: the tier moved to `edge_resolutions.tier` (nullable), `edges.resolution` is
+   gone with the edge verdict left derived, and `edge_resolutions` gained `dstKind` + `dstKey` with
+   the three rulings §5 demanded. Taken **while the tables still held no rows**, which is what made
+   it cheap — a producer would have made either change rewrite the meaning of existing rows.
 
    🚨 **Cheap is not free, and this item used to say "free" — which was wrong.** An empty table is
    not an absent consumer. Both row shapes have committed, npm-**published** JSON Schemas:
@@ -841,12 +874,20 @@ than folded into the prose above, because each has a shipped consequence.
    tracked, shipped by `package.json` `files` + `exports: { "./schemas/*": … }`, and have been
    readable by any consumer since v0.2.0-rc.6. `generate-resources-json-schemas.ts` states the
    intent outright — a schema in `NON_TABLE_ROW_SCHEMAS` is a claim that *this row shape is
-   published but no projection table holds it*. And `test/projection-edges.test.ts` pins the shape
-   across 17 assertions. Pre-1.0 policy makes the change **permitted**; it does not make it
-   invisible. Changing either shape regenerates a published artifact, lands a diff under
-   `schemas/`, and owes a CHANGELOG entry.
+   published but no projection table holds it*. So the change did exactly what that paragraph said
+   it owed: it regenerated both published artifacts, landed a diff under `schemas/`, and carries a
+   CHANGELOG entry. ⇒ **The window this item was guarding is now shut for any FURTHER edge-schema
+   correction** — the next one costs a migration, so it is no longer a free-swing item.
 4. **Whether an image is a reference kind** (§5). It decides whether packaging can see the files it
-   must copy, and a defect is shipping on the rewriter path today because it cannot.
+   must copy.
+
+   ⚠️ **This item used to add "and a defect is shipping on the rewriter path today because it
+   cannot" — that half is retired.** The packaging rewriter no longer no-ops on `[![alt](img)](url)`:
+   it splices each parsed link at its own `[startOffset, endOffset)` span instead of replaying a
+   regex and correlating on `href`, so it never needed to *see* the inner image. The edge-model
+   question is untouched and still open — packaging must still be able to enumerate an image it has
+   to copy, and `![solo](solo.png)` remains invisible to both markdown producers — but nothing
+   shipped is now blocked on it.
 
 ## 10. Related
 

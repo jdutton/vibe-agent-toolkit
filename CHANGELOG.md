@@ -143,6 +143,41 @@ with a regression test.
 
 #### Library
 
+- **The published `edges` and `edge_resolutions` row schemas changed shape.** Both are npm-published
+  JSON Schemas (`@vibe-agent-toolkit/resources/schemas/projection-edges.json` and
+  `projection-edge-resolutions.json`), so this lands a diff a consumer can read. It was taken now
+  because these two tables have **zero producers** — nothing populates them — and a correction after
+  a producer exists rewrites the meaning of every row already written. That window is now shut: the
+  next edge-schema correction costs a migration.
+
+  - **`edges.resolution` is REMOVED.** One open string was carrying two different vocabularies. The
+    *reachability tier* (`same-plugin`, `auth-required`, `nonexistent`) grades a **candidate**, not
+    an edge — an edge with one co-bundled and one uninstalled candidate has no single tier — so it
+    moved to `edge_resolutions.tier`. The *edge verdict* (`resolved` / `ambiguous` / `nonexistent`)
+    was not moved anywhere, because it is derived: it is a `GROUP BY (src, refOrdinal, contextId)`
+    over the candidate rows, and a stored copy is a second source of truth nothing keeps in step.
+  - **`edge_resolutions` gains `tier`** — the reachability tier, open vocabulary, and **nullable**.
+    Null means the lens has no reachability model, so that "has a tier" keeps meaning "reachability
+    was assessed" — the same argument `score` already makes about a fabricated `1.0`.
+  - **`edge_resolutions` gains `dstKind` + `dstKey`.** External URLs, out-of-corpus targets and
+    declared-but-unwritten targets all used to collapse into `dstResource: null`, which reads as
+    "resolves to nothing" — so a dangling-link count could not separate *dead* from *outside the
+    corpus*, and an external destination had no key to `GROUP BY` at all. `dstKind` is a **closed**
+    enum (`resource` | `external` | `out-of-corpus`); `dstKey` is the canonical key within that
+    class. ⚠️ **Group by the PAIR, never `dstKey` alone** — three namespaces share the column.
+    Two invariants are enforced by the schema rather than left to producers: `dstResource` is
+    non-null **iff** `dstKind` is `resource`, and in that class `dstKey` must equal `dstResource`.
+  - **`dstAnchor`'s documented meaning is widened** (same name, same type). For `dstKind`
+    `resource` it still joins `blob_sections.slug`; for the other two classes it now carries the raw
+    fragment, which nothing in the projection can resolve.
+  - ⚠️ **`dstKey` is deliberately NOT stable across extent widening.** Widening moves a destination
+    from `out-of-corpus` (a path) into `resource` (a hash) — the key changes *class*, not just
+    value. Anything comparing destinations across runs must key on `(dstKind, dstKey)` and treat a
+    class change as a change.
+  - ⛔ **No existence verdict was added.** `out-of-corpus` is a class, not "dead": nothing in the
+    projection stats a path outside the population. Separating dead from out-of-corpus still needs a
+    verdict column fed by something that actually looked, and that decision is still open.
+
 - **`matchesPermissionRule` and `matchesBashRule` now require a `lane` argument** (`'allow' | 'deny'
   | 'ask'`), with no default — a default would have left every existing caller on the old behaviour.
   Pass `'allow'` to keep today's semantics, or use the new `matchesAllowRule` / `matchesDenyRule`
