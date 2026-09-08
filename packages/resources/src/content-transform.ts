@@ -336,6 +336,12 @@ function findMatchingRule(
 /**
  * Regex pattern matching inline markdown links: `[text](href)`
  *
+ * ⚠️ **This is the FALLBACK path, not the primary one.** Pass 1 splices links at
+ * the spans the parser reported (see {@link SplicableLink}); this regex now runs
+ * only over the stretches between those spans, and only on behalf of links the
+ * parser could not locate. Its grammar quirks below are therefore about not
+ * corrupting prose, not about identifying links correctly — the parser does that.
+ *
  * Captures:
  * - Group 0: Full match including brackets and parentheses
  * - Group 1: Link text
@@ -363,14 +369,18 @@ const FENCE_LINE_REGEX = /^ {0,3}(`{3,}|~{3,})/;
  * Byte ranges of `content` that are CODE, not prose — link syntax inside them is
  * an EXAMPLE and must survive packaging verbatim.
  *
- * The rewrite pass replays a raw regex over the whole document, while the parsed
- * link list comes from mdast, which never yields a link node for fenced or inline
- * code. Those two views agree only by accident: a fenced ``[Guide](refs/guide.md)``
- * is skipped merely because no parsed link claims that href. Let a REAL link
- * elsewhere in the file point at the same target and the href lookup hits, so a
- * skill teaching authored link syntax shipped the packaged path instead of the one
- * a reader must type — or, for a target that does not ship, stripped the example to
- * bare text. Masking the ranges makes the skip intentional.
+ * These exist for the FALLBACK replay only, and are kept rather than deleted.
+ * Pass 1 splices at parser-reported spans, and mdast never yields a link node for
+ * fenced or inline code, so an example is not a splice target at all — the primary
+ * path is safe structurally and needs no mask. {@link replayUnsplicable} still
+ * replays a raw regex over the gaps on behalf of links the parser could not locate,
+ * and that replay has the original exposure: a fenced ``[Guide](refs/guide.md)``
+ * would be skipped merely because no parsed link claims that href, so a REAL link
+ * elsewhere in the file pointing at the same target makes the lookup HIT — and a
+ * skill teaching authored link syntax ships the packaged path instead of the one a
+ * reader must type, or, for a target that does not ship, gets stripped to bare
+ * text. Masking the ranges keeps that skip intentional on the path that still
+ * needs it.
  *
  * Deliberately a LINEAR scan rather than one regex over the whole document. The
  * obvious pattern for "fence, lazily anything, matching fence" nests quantifiers
@@ -471,6 +481,212 @@ function isInsideCode(offset: number, ranges: ReadonlyArray<readonly [number, nu
 const MARKDOWN_DEFINITION_REGEX = /^\[([^\]]*)\]:\s*(\S[^\n]*)$/gm;
 
 /**
+ * A parsed link the source locates precisely enough to rewrite by SPLICING its
+ * own span, rather than by replaying a regex and correlating on href.
+ *
+ * ## Why splicing, and not the href correlation this module used to do
+ *
+ * `MARKDOWN_LINK_REGEX` and mdast do not agree on what a link is. On
+ * `[![alt](img.png)](url)` the regex matches the INNER image href while mdast
+ * reports only the OUTER link — so the href lookup missed, the rewriter took its
+ * "not in the parsed links array, leave untouched" branch, and **a link the
+ * registry had fully resolved was silently never rewritten**, shipping a wrong
+ * link in the packaged skill. Correlating two grammars by a value they disagree
+ * about cannot be made correct; the parsed view's own `[startOffset, endOffset)`
+ * is the only thing that names the construct unambiguously.
+ *
+ * Splicing also removes a latent hazard rather than merely working around it: a
+ * fenced or code-span EXAMPLE that happens to share an href with a real link used
+ * to be spared only because {@link codeSpanRanges} masked it. mdast yields no link
+ * node inside code at all, so a spliced pass never sees the example in the first
+ * place. The masking is retained for the fallback path below, which still replays
+ * the regex.
+ */
+interface SplicableLink {
+  readonly link: ResourceLink;
+  readonly start: number;
+  readonly end: number;
+  /** Raw markdown between the construct's outer `[` and its matching `]`. */
+  readonly rawText: string;
+}
+
+/**
+ * Index of the `]` that closes the `[` at `start`, or undefined if unbalanced.
+ *
+ * Counts nesting depth and honours backslash escapes, so it handles both
+ * `[a [b] c](x)` and an image inside a link — the two constructs the flat regexes
+ * in this repository get wrong in opposite directions.
+ */
+function matchingBracketEnd(content: string, start: number): number | undefined {
+  let depth = 0;
+  for (let i = start; i < content.length; i += 1) {
+    const ch = content.charAt(i);
+    if (ch === '\\') {
+      i += 1;
+      continue;
+    }
+    if (ch === '[') {
+      depth += 1;
+    } else if (ch === ']') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Promote a parsed link to a {@link SplicableLink}, or decline it.
+ *
+ * Declining is deliberate and conservative — a declined link falls back to the
+ * regex replay, i.e. to exactly the behaviour that shipped before. We decline:
+ *
+ * - **a link with no span** — `startOffset`/`endOffset` are optional, and the
+ *   HTML producer really does emit a link carrying a line and no offsets;
+ * - **a construct that does not start with `[`** — an autolink or an `<a href>`,
+ *   neither of which the inline-link template vocabulary describes;
+ * - **a construct that is not `[...](...)`** — most importantly a reference-style
+ *   USE (`[t][id]`), where splicing an inline template over the span would
+ *   silently convert a reference link into an inline one. That is a change to the
+ *   document's link FORM, not to its target, and no caller asked for it.
+ */
+function splicableFrom(content: string, link: ResourceLink): SplicableLink | undefined {
+  const { startOffset: start, endOffset: end } = link;
+  if (start === undefined || end === undefined) return undefined;
+  if (start >= end || end > content.length) return undefined;
+  if (content.charAt(start) !== '[') return undefined;
+
+  const close = matchingBracketEnd(content, start);
+  if (close === undefined || close >= end) return undefined;
+  if (content.charAt(close + 1) !== '(' || content.charAt(end - 1) !== ')') return undefined;
+
+  return { link, start, end, rawText: content.slice(start + 1, close) };
+}
+
+/**
+ * Every splice candidate, in source order, and the outermost survivor of any
+ * overlap.
+ *
+ * Overlap is not expected from mdast, which does not nest link nodes, but the
+ * link list is a merge of more than one producer and a nested pair would
+ * otherwise be spliced twice — the second splice landing inside text the first
+ * already replaced. Sorting by `(start asc, end desc)` puts the outermost first,
+ * and the sweep keeps it.
+ */
+function splicableLinks(content: string, links: ResourceLink[]): {
+  spliced: SplicableLink[];
+  candidates: ReadonlySet<ResourceLink>;
+} {
+  const found: SplicableLink[] = [];
+  for (const link of links) {
+    if (link.nodeType === 'definition') continue; // Definitions are handled in pass 2
+    const splicable = splicableFrom(content, link);
+    if (splicable !== undefined) found.push(splicable);
+  }
+  found.sort((a, b) => (a.start - b.start) || (b.end - a.end));
+
+  const spliced: SplicableLink[] = [];
+  let lastEnd = -1;
+  for (const candidate of found) {
+    if (candidate.start < lastEnd) continue;
+    spliced.push(candidate);
+    lastEnd = candidate.end;
+  }
+  return { spliced, candidates: new Set(found.map((f) => f.link)) };
+}
+
+/**
+ * Render one link through its first matching rule, or through `defaultTemplate`.
+ * Returns undefined when nothing matches, meaning "leave the source untouched".
+ *
+ * `rawText` preserves any inline formatting the author wrote (backticks, bold,
+ * a nested image) so a template can re-emit the link with its original styling.
+ */
+function renderLink(
+  link: ResourceLink,
+  rawText: string,
+  options: ContentTransformOptions,
+): string | undefined {
+  const { linkRewriteRules, resourceRegistry, context, sourceFilePath, defaultTemplate } = options;
+
+  const resource = link.resolvedId === undefined || resourceRegistry === undefined
+    ? undefined
+    : resourceRegistry.getResourceById(link.resolvedId);
+
+  const template = findMatchingRule(link, resource, linkRewriteRules)?.template ?? defaultTemplate;
+  if (template === undefined) return undefined;
+
+  const [hrefWithoutFragment, anchor] = splitHrefAnchor(link.href);
+  const fragment = anchor === undefined ? '' : `#${anchor}`;
+  const templateContext = buildTemplateContext(
+    link, hrefWithoutFragment, fragment, resource, context, sourceFilePath, rawText,
+  );
+  return renderHandlebarsTemplate(template, templateContext);
+}
+
+/**
+ * The pre-span behaviour, applied ONLY to the stretches between spliced links and
+ * ONLY on behalf of links that could not be spliced (see {@link splicableFrom}).
+ *
+ * `base` is the segment's offset in the whole document, because `codeRanges` is
+ * measured there.
+ */
+function replayUnsplicable(
+  segment: string,
+  base: number,
+  fallbackByHref: ReadonlyMap<string, ResourceLink>,
+  codeRanges: ReadonlyArray<readonly [number, number]>,
+  options: ContentTransformOptions,
+): string {
+  if (fallbackByHref.size === 0) return segment;
+  return segment.replaceAll(
+    MARKDOWN_LINK_REGEX,
+    (fullMatch, rawText: string, href: string, offset: number) => {
+      if (isInsideCode(base + offset, codeRanges)) return fullMatch;
+      const link = fallbackByHref.get(href);
+      if (link === undefined) return fullMatch;
+      return renderLink(link, rawText, options) ?? fullMatch;
+    },
+  );
+}
+
+/**
+ * Pass 1 — rewrite inline links, span-first.
+ *
+ * Walks the spliced links in source order, replaying the legacy regex only over
+ * the gaps between them and only for links that had no splice candidate. A link
+ * that WAS a candidate is excluded from the fallback map even if the overlap
+ * sweep dropped it, so a nested pair can never be rewritten twice or reintroduce
+ * the href-correlation defect through the back door.
+ */
+function rewriteInlineLinks(
+  content: string,
+  links: ResourceLink[],
+  options: ContentTransformOptions,
+): string {
+  const { spliced, candidates } = splicableLinks(content, links);
+
+  const fallbackByHref = new Map<string, ResourceLink>();
+  for (const link of links) {
+    if (link.nodeType === 'definition' || candidates.has(link)) continue;
+    if (!fallbackByHref.has(link.href)) fallbackByHref.set(link.href, link);
+  }
+
+  // Ranges to leave alone: link syntax inside code is an example, not a link.
+  // Only the fallback replay needs them — mdast yields no link node inside code.
+  const codeRanges = codeSpanRanges(content);
+
+  let out = '';
+  let cursor = 0;
+  for (const s of spliced) {
+    out += replayUnsplicable(content.slice(cursor, s.start), cursor, fallbackByHref, codeRanges, options);
+    out += renderLink(s.link, s.rawText, options) ?? content.slice(s.start, s.end);
+    cursor = s.end;
+  }
+  return out + replayUnsplicable(content.slice(cursor), cursor, fallbackByHref, codeRanges, options);
+}
+
+/**
  * Transform markdown content by rewriting links according to rules.
  *
  * This is a pure function that takes content, its parsed links, and transform options,
@@ -482,6 +698,12 @@ const MARKDOWN_DEFINITION_REGEX = /^\[([^\]]*)\]:\s*(\S[^\n]*)$/gm;
  *    or removed if orphaned (target not in registry)
  *
  * Links matching no rule are left untouched unless a `defaultTemplate` is provided.
+ *
+ * Pass 1 identifies each link by the SPAN the parser gave it, not by matching a
+ * regex and correlating on href — see {@link SplicableLink} for why that
+ * correlation could not be made correct. `links` must therefore come from the same
+ * bytes as `content`; passing links parsed from a different revision of the
+ * document would splice at stale offsets.
  *
  * @param content - The markdown content to transform
  * @param links - Parsed links from the content (from ResourceMetadata.links)
@@ -512,7 +734,7 @@ export function transformContent(
   links: ResourceLink[],
   options: ContentTransformOptions,
 ): string {
-  const { linkRewriteRules, resourceRegistry, context, sourceFilePath, defaultTemplate } = options;
+  const { linkRewriteRules, resourceRegistry, sourceFilePath, defaultTemplate } = options;
 
   // If there are no rules, no default template, or no links, return content unchanged
   if ((linkRewriteRules.length === 0 && defaultTemplate === undefined) || links.length === 0) {
@@ -521,63 +743,7 @@ export function transformContent(
 
   // === Pass 1: Inline links [text](href) ===
 
-  // Build a lookup map keyed by href → ResourceLink. We intentionally key by href
-  // rather than "[text](href)" because the regex below captures the RAW markdown
-  // text (including backticks, emphasis markers, etc.), while `link.text` is
-  // already rendered (formatting stripped). Keying by text causes a signature
-  // mismatch for any formatted link text; keying by href avoids that class of
-  // bug entirely. When multiple inline links share an href, the first wins —
-  // their match criteria (type, resolvedId) are identical for lookup purposes.
-  const linkByHref = new Map<string, ResourceLink>();
-  for (const link of links) {
-    if (link.nodeType === 'definition') {
-      continue; // Definitions are handled in pass 2
-    }
-    if (!linkByHref.has(link.href)) {
-      linkByHref.set(link.href, link);
-    }
-  }
-
-  // Ranges to leave alone: link syntax inside code is an example, not a link.
-  const codeRanges = codeSpanRanges(content);
-
-  // Replace inline markdown links in content
-  let result = content.replaceAll(MARKDOWN_LINK_REGEX, (fullMatch, rawText: string, href: string, offset: number) => {
-    if (isInsideCode(offset, codeRanges)) return fullMatch;
-
-    // Find the corresponding ResourceLink by href
-    const link = linkByHref.get(href);
-
-    if (!link) {
-      // Link not in the parsed links array - leave untouched
-      return fullMatch;
-    }
-
-    // Resolve the target resource if available
-    const resource = link.resolvedId === undefined || resourceRegistry === undefined
-      ? undefined
-      : resourceRegistry.getResourceById(link.resolvedId);
-
-    // Find the first matching rule
-    const rule = findMatchingRule(link, resource, linkRewriteRules);
-
-    // Determine which template to use: matched rule, defaultTemplate, or leave untouched
-    const template = rule?.template ?? defaultTemplate;
-    if (template === undefined) {
-      // No rule matches and no default template - leave untouched
-      return fullMatch;
-    }
-
-    // Parse fragment from href
-    const [hrefWithoutFragment, anchor] = splitHrefAnchor(href);
-    const fragment = anchor === undefined ? '' : `#${anchor}`;
-
-    // Build template context and render. rawText preserves any inline
-    // formatting the author wrote (backticks, bold, italics) so templates
-    // targeting bundled links can render the link with original styling.
-    const templateContext = buildTemplateContext(link, hrefWithoutFragment, fragment, resource, context, sourceFilePath, rawText);
-    return renderHandlebarsTemplate(template, templateContext);
-  });
+  let result = rewriteInlineLinks(content, links, options);
 
   // === Pass 2: Reference-style definitions [ref]: url ===
 
@@ -594,10 +760,14 @@ export function transformContent(
   }
 
   if (definitionByKey.size > 0) {
+    // Recomputed against `result`, NOT reused from pass 1. Pass 1 rewrites change
+    // the string's length, so a range measured on `content` names the wrong bytes
+    // here — which would mask a real definition or spare an example at random.
+    const definitionCodeRanges = codeSpanRanges(result);
     result = result.replaceAll(
       MARKDOWN_DEFINITION_REGEX,
       (fullMatch, ref: string, href: string, offset: number) => {
-        if (isInsideCode(offset, codeRanges)) return fullMatch;
+        if (isInsideCode(offset, definitionCodeRanges)) return fullMatch;
         const trimmedHref = href.trim();
 
         // Look up the corresponding definition ResourceLink

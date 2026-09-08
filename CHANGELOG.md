@@ -733,6 +733,38 @@ with a regression test.
 
 ### Fixed
 
+- **Skill packaging no longer ships a wrong link when an image sits inside a link.** On
+  `[![alt](img.png)](url)` — an ordinary badge — the rewriter silently did nothing at all, so a link
+  the registry had *fully resolved* went out of the bundle still pointing at its source location.
+  The cause was a grammar disagreement being papered over by a value both grammars disagree about:
+  `transformContent` replayed a raw regex, which matches the INNER image href, then looked that href
+  up in a map built from the PARSED links, which holds only the OUTER one — a miss, and a miss took
+  the "leave untouched" branch. It now splices each parsed link at its own
+  `[startOffset, endOffset)` span instead of correlating on href, so the construct it rewrites is
+  the construct the parser identified.
+
+  Three consequences beyond the reported defect:
+
+  - **Link text containing balanced brackets is now rewritten.** `[a [b] c](x.md)` was never matched
+    by the regex (which excludes `[` from link text, deliberately) and so was never repointed.
+  - **A code-span or fenced EXAMPLE is now structurally safe**, not merely masked. It used to be
+    spared only because code ranges were masked before replacement; mdast yields no link node inside
+    code, so an example is no longer a rewrite target even when a real link shares its href.
+  - **Reference-style uses, autolinks and `<a href>` are explicitly declined** and fall back to the
+    previous behaviour, so nothing silently changes a document's link *form*.
+
+  Links the parser cannot locate — `startOffset`/`endOffset` are optional, and the HTML producer does
+  emit a link with a line and no offsets — still go through the old regex replay, over the gaps
+  between spliced links only. `rewriteBodyLinks` is **unchanged and still diverges**: it takes no
+  parsed links, so it cannot be span-driven without an API change, and which grammar is right there
+  is a product question. Both answers stay pinned in
+  `packages/resources/test/link-grammar-divergence.test.ts`.
+
+- **A reference definition inside a code block could be mis-skipped after a link rewrite.** The
+  definition pass tested its offsets against code ranges measured on the *pre-rewrite* string, so any
+  length change in pass 1 shifted every range out from under it. Ranges are now recomputed against
+  the rewritten text.
+
 - **`vat audit` no longer dies with an uncaught `TypeError` on a bare `Read`/`Edit` declaration.**
   The settings checker asked the path matcher whether a deny rule blocked a tool whose input was the
   empty string, and the underlying ignore matcher throws on an empty path (`path must not be empty`).

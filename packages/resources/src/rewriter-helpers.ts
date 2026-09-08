@@ -136,16 +136,25 @@ export function rewriteFrontmatterFieldsAtPaths(
 /**
  * Inline + reference-style link patterns.
  *
- * ⚠️ These do NOT match `transformContent`'s contract, though this comment used
- * to claim they did. `content-transform.ts`'s `MARKDOWN_LINK_REGEX` excludes `[`
- * from the link text (`[^[\]]`); this one does not (`[^\]]`). The two therefore
- * disagree on nested brackets, and an image inside a link is the common case:
- * given `[![alt](img.png)](url)`, `transformContent` rewrites the INNER image
- * (text `alt`, href `img.png`) while `rewriteBodyLinks` rewrites the OUTER
- * (text `![alt`, href `img.png`). Pre-existing, unresolved, and recorded here
- * rather than silently reconciled: deciding which grammar is correct is a
- * product call about what a link IS, not a cleanup — and this regex is on the
- * parse hot path.
+ * ⚠️ These do NOT match `transformContent`'s contract, and the gap has WIDENED.
+ * `transformContent` no longer replays a regex at all: it splices each parsed
+ * link at its own `[startOffset, endOffset)` span, so on `[![alt](img.png)](url)`
+ * it now rewrites the OUTER href `url` and re-emits the nested image verbatim.
+ * `rewriteBodyLinks` still matches the INNER image href and rewrites that.
+ *
+ * ⛔ **Do not "fix" this by copying the span approach.** This function's whole
+ * signature is `(body, rewriteHref)` — it receives no parsed links, so it has no
+ * spans to splice and cannot acquire any without an API change. Which grammar is
+ * correct here stays a product call about what a link IS, not a cleanup, and this
+ * regex is on the parse hot path. The divergence is pinned by
+ * `packages/resources/test/link-grammar-divergence.test.ts`, which asserts both
+ * answers so neither can drift unnoticed.
+ *
+ * (For the record of what changed: `content-transform.ts`'s `MARKDOWN_LINK_REGEX`
+ * excludes `[` from the link text (`[^[\]]`) and this one does not (`[^\]]`), so
+ * the two regexes disagreed on nested brackets. Before the span rewrite,
+ * `transformContent` did not rewrite the construct at ALL — it looked up the
+ * inner href, missed, and left the link untouched.)
  */
 // The `(?<!\[)` is load-bearing, not cosmetic. Without it a run of `[` with no
 // closing bracket makes the engine restart the `[^\]]*` scan at EVERY bracket,
