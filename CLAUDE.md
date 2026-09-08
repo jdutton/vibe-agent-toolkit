@@ -225,6 +225,8 @@ vibe-agent-toolkit/
 - **Test Coverage**: Currently enforced at 70% (statements, branches, functions, lines). Goal: 80%+. See [Test Pyramid and Coverage](#test-pyramid-and-coverage) for details.
 - **Code Duplication**: **ZERO TOLERANCE** - See Critical Duplication Policy below
 - **SonarQube**: Automatic analysis on SonarWay — **fix every smell it reports. NEVER `NOSONAR`, never argue one away.** Suppression does not work under automatic analysis. If ESLint can catch the same class, add that rule too so it fails at the desk instead.
+  - **Read the counts in SonarCloud's PR comment, not the badge.** "Quality Gate passed" is not "zero smells" — the comment itself breaks out *New issues*, *Accepted issues* and *Security Hotspots*, and an **Accepted** issue is still an open smell that the gate ignores. Zero means all three lines read zero.
+  - ⛔ **Ignore SonarCloud's "Coverage on New Code" — it is ALWAYS 0.0% here, and that is not a coverage regression.** Automatic analysis never runs the tests, and nothing uploads a report to it: there is no `sonar-project.properties` and no sonar step in any workflow. Coverage goes to **Codecov** only (`.github/workflows/coverage.yml` → `coverage/lcov.info`). Codecov is the coverage authority; Sonar's coverage number is an artifact of a mode that cannot measure it.
 
 ### **CRITICAL: Code Duplication Policy**
 
