@@ -245,8 +245,8 @@ because an `@` token means import only in a file named `CLAUDE.md`, `CLAUDE.loca
 ### Edges and resolutions are separate tables
 
 ```
-edges            (src, refOrdinal, resolutionContextId, kind, origin, resolution)
-edge_resolutions (src, refOrdinal, resolutionContextId, candidateOrdinal,
+edges            (src, refOrdinal, contextId, kind, origin, resolution)
+edge_resolutions (src, refOrdinal, contextId, candidateOrdinal,
                   dstResource, dstAnchor, score)
 ```
 
@@ -296,9 +296,14 @@ contains. Three real destination classes do not satisfy that, and today all thre
 
 - **External URLs.** `https://example.com/x` is a real, identifiable destination that must never be
   a resource — projecting it would mean projecting the web.
-- **Targets outside the corpus boundary.** Measured on the primary adopter: 13 wiki-links resolve
-  to memory files **outside the repository**. They resolve perfectly well; the corpus simply stops
-  short of them.
+- **Targets outside the corpus boundary.** On the primary adopter, 13 wiki-links resolve to memory
+  files **outside the repository**. They resolve perfectly well; the corpus simply stops short of
+  them. ⚠️ **Provenance: NOT the shipped projection.** Wiki links are not lexed at all — see "a
+  wiki alias" under *What the model must survive* below — so `blob_references` cannot hold this
+  number and no SQL produced it. The only wiki-link scanner on record is the prototype cited in that
+  same subsection, the one whose fence defect produced three wrong numbers. Whether 13 came from it
+  is unrecorded, which is itself the point: treat 13 as indicative of the *class*, never as a count,
+  and re-measure once wiki-link recall lands.
 - **Declared-but-unwritten targets**, which `resources.observed` already anticipates on the node
   side but which have no edge-side expression.
 
@@ -318,6 +323,36 @@ every reverse-index and dedupe query is one `GROUP BY dstKey` regardless of dest
 `dstResource` stays a true foreign key that is null exactly when the target is not in the corpus —
 a fact, rather than an absence standing in for four different ones.
 
+🚨 **`dstKey` does NOT deliver the dangling-count requirement this section opens with, and must not
+be sold as if it did.** It is a *grouping* key, not an *existence verdict*. Nothing in the
+projection stats a path outside the population — `RealizationConditionRowSchema.observed` is
+explicitly null for `CLOSURE_REFERENCE_OUTSIDE_ROOT`, "the target lies outside the population
+entirely" — so a genuinely dead target and a live out-of-corpus target both normalize to an
+out-of-corpus path, both get `dstResource: null`, and `dstKey` does not tell them apart. Separating
+"dead" from "outside the corpus" needs a **verdict column fed by something that actually looked**,
+which is a second decision this section has not taken. `dstKey` fixes grouping; it is not the
+defect-count fix.
+
+Three things `dstKey` must specify before anyone builds it, none of which are settled here:
+
+- **A `dstKind` discriminator.** Three namespaces in one column — an opaque `hash(rootId,
+  canonicalPath)`, a normalized URI, a normalized out-of-corpus path — means a `GROUP BY dstKey`
+  result cannot say what class it grouped without re-parsing the key string. That is the same
+  "identity survives only as text" failure this section objects to, moved one column over.
+- **Stability across extent widening, which the next paragraph recommends.** Widening moves a
+  destination from the out-of-corpus class (a path) into the resource class (a hash): the key
+  changes *class*, not merely value. Anything comparing `dstKey` across runs — a dedupe cache, a
+  run-to-run diff, a lab cross-version compare — is invalidated by precisely the action we endorse.
+  Case-only renames, symlinks, and one relative link resolved from two bundle roots have the same
+  problem on the out-of-corpus branch, which has no identity service the way the resource branch has
+  `identity.ts`.
+- **What "normalized URI" means, exactly.** Host case is insensitive; **path case is not** — a
+  blanket case-fold merges genuinely distinct targets on any case-sensitive server, so the
+  `https://X/y` example above licenses a wrong normalization if read literally. Fragments and query
+  strings need rulings too: `dstAnchor` is documented as joining `blob_sections.slug`, which an
+  external `#frag` can never do, so it is either dropped in normalization or parked in a column
+  whose documented meaning does not apply to it.
+
 ⚠️ Widening the extent is the *better* answer wherever it is available — an out-of-corpus target
 that the reader can genuinely reach is evidence the extent is drawn too small, and extents are
 data. `dstKey` is for the destinations no extent should ever contain.
@@ -329,9 +364,15 @@ changed it.
 
 **Two that changed it:**
 
-- **An image is a reference with a destination.** `LinkNodeType` is `link | linkReference |
-  definition | htmlAttribute` — no image — and `![solo](solo.png)` parses to **zero** links. So an
-  image's destination is invisible to the reference layer, while *packaging must copy that file*.
+- **A markdown image is a reference with a destination, and it is invisible.** `LinkNodeType` is
+  `link | linkReference | definition | htmlAttribute` — no image — and `![solo](solo.png)` parses to
+  **zero** links. Both producers are blind to it independently: mdast yields no link node, and
+  `reference-lexer.ts` excludes `image` spans. So a markdown image's destination never reaches the
+  reference layer, while *packaging must copy that file*.
+  ⚠️ **The blindness is markdown-only — do not generalise it to every blob.** `<img src>` **is**
+  captured (`html-link-parser.ts:453`), arrives as `nodeType: htmlAttribute`, and gets its own
+  `syntacticForm` of `html-link`. A producer that adds an `image` reference kind must not
+  double-handle the HTML rows that already exist.
   The blind spot is already shipping a defect: on `[![alt](img.png)](url)` the packaging rewriter
   silently no-ops, because a regex replay matches the inner image href while mdast reports only the
   outer link, and the lookup misses. An image must be a reference kind, not a masked span.
@@ -343,14 +384,36 @@ changed it.
 
 **Three the model already handles, so nobody re-litigates them:**
 
-- **A link inside a fence.** `inCodeSpan` and `inFence` are stored columns, and whether to traverse
-  is lens policy — a renderer creates no edge, a "what does this mention" lens may. The exclusion
-  belongs in the query, never in the scanner: a prototype wiki-link scanner that dropped fenced
-  links at scan time produced three wrong numbers, and that is why the columns exist.
-- **A wiki alias.** `[[Target|shown text]]` separates display from destination, and `text` and
-  `rawRef` are already distinct columns.
-- **Anchor existence.** `dstAnchor` joins `blob_sections.slug`, with `slugOccurrence` disambiguating
-  repeated headings.
+- 🚨 **A link inside a fence — HANDLED FOR TOKENS, NOT FOR LINKS. This bullet used to claim the
+  whole case and was wrong.** The *principle* holds and is why the columns exist: a prototype
+  wiki-link scanner that dropped fenced links at scan time produced three wrong numbers, so
+  `inCodeSpan` and `inFence` are stored rather than filtered, and whether to traverse is lens
+  policy. But the principle is only implemented for **lexer-derived tokens**. For a markdown link
+  the exclusion *is* in the scanner, on both producers: mdast yields a `code` node so
+  `astCandidates` never sees the link (and AST rows hardcode `inCodeSpan: false, inFence: false`
+  besides), while the lexer's `isCandidate` admits a bare token only with a slash *and* an
+  extension. ⇒ `[a](b.md)` in a fence yields **no row at all**, and a slashed path yields a
+  `bare-token` row that has lost the link grammar entirely — its text, its form, the fact anyone
+  authored it as a link. A "what does this mention" lens cannot recover from the table what the
+  scanner declined to put there. Measured below: every markdown form is 0/0 across both columns.
+- 🚨 **A wiki alias — the TABLE handles it, the PRODUCER cannot. This bullet used to claim the
+  whole case and was wrong.** `text` and `rawRef` are indeed distinct columns, so the *shape* is
+  right. But nothing lexes `[[…]]` at all — there is no wiki branch in `reference-lexer.ts`, and
+  the bare-token slash rule rejects `[[Target|shown]]` — and when one is built the only producer
+  that could emit it is the lexer, whose row builder hardcodes `text: null` because a lexer token
+  has no markup to carry link text. `LexicalReferenceSchema` has no `text` field and
+  `ExactLexicalColumns` is a compile-time guard that stops the file building if the two key sets
+  diverge. ⇒ carrying the display half of an alias is a **parse-cache shape change**
+  (`ParseFactsSchema` is `.strict()`), not a lens change. Cheap, but not free, and not done.
+- ⚠️ **Anchor existence — one join short.** `dstAnchor` does resolve against `blob_sections.slug`,
+  with `slugOccurrence` disambiguating repeated headings, but it is not one hop and the last hop is
+  not single-valued: `dstResource` is a resource id while `blob_sections` is keyed on `contentKey`,
+  so the route runs `edge_resolutions → resources → resource_realizations.contentKey →
+  blob_sections`. A resource may have **zero** realizations (a config-declared target), and the
+  packager rewrites content, so a resource's source and dist realizations have **different bytes** —
+  which is exactly why `resources.contentKey` was removed. Whether an anchor exists therefore
+  depends on *which realization you ask*, and a consumer must say which. Handled at the level of
+  shape; under-specified at the level of query.
 
 **One the model admits but the lexer does not.** An embed (`![[foo]]`) *inlines* its target, so the
 target's tokens are charged to the referrer, while a link (`[[foo]]`) only points. `EdgeKindSchema`
@@ -360,38 +423,94 @@ token-accounting question depends on this one.
 
 ### Edge volume is a policy choice, not a corpus property
 
-Measured 2026-09-08 on the primary adopter (9,840 blobs, 12,002 realizations, 127 MB of text,
-31,615,948 estimated tokens), by SQL over the shipped projection:
+Measured 2026-09-08, in two sessions the same day, by SQL over the shipped projection
+(`vat resources query`).
 
-| syntactic form | references | share |
-|---|---|---|
-| `bare-token` | 50,935 | 44% |
-| `env-anchored` | 12,651 | 11% |
-| `markdown-link` | 11,002 | 9.6% |
-| `markdown-link-reference` | 32 | — |
-| `html-link` | 14 | — |
-| `markdown-definition` | 11 | — |
-| **total** | **114,763** | |
+**The corpus, stated because a measurement without one is not reproducible:** the primary adopter,
+9,840 blobs / 12,002 realizations / 127 MB of text / 31,615,948 estimated tokens. The projection's
+corpus is the **tracked tree** — `resources.include`/`exclude` do not scope it — and `.gitignore`
+*is* honoured. Verified for this run rather than assumed, because this repository has been bitten
+by the opposite: the adopter carries **35 git worktrees on disk**, `.gitignore:145` ignores
+`.claude/worktrees`, and `git ls-files` returns **0** tracked files beneath them. None of the counts
+below are worktree-inflated.
 
-A producer does not face "114,763 edges". It faces whatever its lens policy admits, and two
-policies move the number by an order of magnitude: whether a **scoring lens promotes bare tokens**
-(the `inferred` origin — 44% of all references), and whether a lens **traverses into code spans**
-(24,606 references, 21%). One context is therefore ~11k edges or ~115k depending on decisions taken
-before any code runs.
+| syntactic form | references | share | in code span | in fence | plain |
+|---|---|---|---|---|---|
+| `bare-token` | 50,935 | 44.4% | 14,839 | 1,172 | 34,924 |
+| `at-prefixed` | 40,118 | 35.0% | 8,636 | 712 | 30,770 |
+| `env-anchored` | 12,651 | 11.0% | 1,131 | 489 | 11,031 |
+| `markdown-link` | 11,002 | 9.6% | **0** | **0** | 11,002 |
+| `markdown-link-reference` | 32 | — | **0** | **0** | 32 |
+| `html-link` | 14 | — | **0** | **0** | 14 |
+| `markdown-definition` | 11 | — | **0** | **0** | 11 |
+| **total** | **114,763** | | **24,606** | **2,373** | **87,784** |
 
-⇒ **Size the producer against a declared policy, never against the reference count.** A benchmark
-that does not state which policy it assumed is measuring an arbitrary point in a 10× range.
+> ⚠️ This table previously omitted `at-prefixed` — **40,118 references, 35% of the corpus** — and so
+> summed to 74,645 against its own stated total. The omitted row is the `@`-import form that §5 uses
+> as its own worked example of lens policy, i.e. the single form a producer must decide about first.
+> Any sizing taken from the old table under-counted by a third.
+
+A producer does not face "114,763 edges". It faces whatever its lens policy admits, and the range
+is genuinely an order of magnitude: **authored forms alone are 11,059 (9.6%)**, while admitting
+every lexer-derived token as an `inferred` edge is 114,763. That is the ~11k-vs-~115k span, and it
+is decided before any code runs.
+
+⚠️ **The two policies are NOT independent axes, and the doc used to present them as if they were.**
+Every reference inside a code span is a lexer-derived token — the markdown forms are 0/0 across both
+columns, because an AST link in a code context yields no link node at all (see "a link inside a
+fence" above). So "traverse code spans" is a **sub-lever of "promote bare tokens"**, not a second
+dimension: under an authored-only policy it changes the count by exactly zero, and under
+full promotion it moves the ceiling by 21% (114,763 → 90,157), not by 10×.
+
+⇒ **Size the producer against a declared policy, never against the reference count**, and state
+the policy as *which origins*, with code-span traversal named underneath the `inferred` one. A
+benchmark that does not state which policy it assumed is measuring an arbitrary point in a 10×
+range.
+
+### ⭐ A token in backticks is the PRECISE half, not the noisy one
+
+The intuition that code spans hold examples and placeholders, and prose holds real references, is
+**backwards on this corpus by 3.4×**. Measured over `bare-token` references outside fences with at
+least one slash, counting a reference as a hit when its raw text is a path-suffix of some
+`resource_realizations.path`:
+
+| where the token sits | references | resolve to a real corpus path | rate |
+|---|---|---|---|
+| inside an inline code span | 14,839 | 11,060 | **74.5%** |
+| plain prose | 34,924 | 7,565 | **21.7%** |
+
+Backticks are the convention an author uses to *name a real file*; a path-shaped token loose in
+prose is more often a package name, a glob, a URL fragment or an illustration. ⇒ **if bare-token
+promotion is ever turned on, turn it on for in-code-span tokens first** — that is the high-precision
+third of the population, and excluding code spans discards the best evidence while keeping the
+worst.
+
+⚠️ This is a **path-suffix proxy, not resolution.** It ignores the referrer's directory, so it
+over-counts wherever a suffix matches a file the author did not mean, and it under-counts a target
+outside the corpus that resolves perfectly well. It is sound for *comparing the two populations*,
+which is what the policy decision needs, and unsound as an absolute link-health figure. The real
+answer needs the producer this section exists to size.
+
+⚠️ The costs that survive are narrow and real: negative examples ("never write `dist/foo`"),
+placeholders (`path/to/file.md`), and quoted paths belonging to *another* repository all become
+edges asserting a relation nobody declared. They are a minority, and they are the same minority
+bare-token promotion carries everywhere.
 
 ### ⛔ Rewriting link syntax is not a token-economy lever — measured, not argued
 
 The same measurement sized three transforms that a token-economy rewriter would perform, against
 the 31,615,948-token corpus above:
 
-| transform | saving | share of corpus |
-|---|---|---|
-| trim naked-path link text to basename (715 of 11,002 live links) | ~11 KB | **0.009%** |
-| reference-style `[id]` dedupe (1,785 repeated pairs, 3,193 redundant uses) | ~142 KB | **0.11%** |
-| delete every byte-identical duplicate file (98 content keys) | ~312k tokens | **0.99%** |
+| transform | saving | basis | share of corpus |
+|---|---|---|---|
+| trim naked-path link text to basename (715 of 11,002 live links) | 11,410 B | bytes / 127,236,626 B | **0.009%** |
+| reference-style `[id]` dedupe (1,785 repeated pairs, 3,193 redundant uses) | 142,176 B | bytes / 127,236,626 B | **0.11%** |
+| delete every byte-identical duplicate file (98 content keys) | 312,098 tok | tokens / 31,615,948 tok | **0.99%** |
+
+The first two rows are measured in **bytes** and the third in **tokens**; the shares are therefore
+against different denominators and are only comparable because bytes-per-token is a near-uniform
+~4.0 across this corpus. Stated explicitly so nobody recomputes row 1 against the token count and
+gets a different intermediate.
 
 Two further facts make the first transform worse than its 0.009% suggests: **606 of 8,635 basenames
 are ambiguous corpus-wide (7%)**, so the trim needs per-target verification against a scope rather
@@ -701,8 +820,8 @@ Two shipped behaviours are zone facts written as bespoke rules, and become deriv
 
 ## 9. Open, not resolved
 
-Two questions the built seam rests on and neither of which is settled. Both are recorded as open
-rather than folded into the prose above, because each has a shipped consequence:
+Four questions the built seam rests on, none of which is settled. They are recorded as open rather
+than folded into the prose above, because each has a shipped consequence.
 
 1. **`canonicalPath` on case-insensitive filesystems, and on Windows** (§4). The rule is stated and
    the symlink half is tested on macOS; the case-insensitivity half and Windows are not covered at
@@ -712,9 +831,20 @@ rather than folded into the prose above, because each has a shipped consequence:
    `packages/agent-skills/src/skill-test/plugin-env.ts:10`.) The plugin extent's resolution rule
    assumes it does. Unverified against the vendor, so no check may depend on it yet.
 3. **Where the resolution tier lives, and whether `dstKey` is carried** (§5). Both are corrections
-   to the shipped edge schema rather than new capability, and both are **free to make only while
-   `edges` and `edge_resolutions` hold no rows** — which is true today, because nothing populates
-   them. Once a producer exists, either change rewrites the meaning of existing rows.
+   to the shipped edge schema rather than new capability, and both are **cheap only while `edges`
+   and `edge_resolutions` hold no rows** — which is true today, because nothing populates them.
+   Once a producer exists, either change rewrites the meaning of existing rows.
+
+   🚨 **Cheap is not free, and this item used to say "free" — which was wrong.** An empty table is
+   not an absent consumer. Both row shapes have committed, npm-**published** JSON Schemas:
+   `packages/resources/schemas/projection-edges.json` and `projection-edge-resolutions.json` are
+   tracked, shipped by `package.json` `files` + `exports: { "./schemas/*": … }`, and have been
+   readable by any consumer since v0.2.0-rc.6. `generate-resources-json-schemas.ts` states the
+   intent outright — a schema in `NON_TABLE_ROW_SCHEMAS` is a claim that *this row shape is
+   published but no projection table holds it*. And `test/projection-edges.test.ts` pins the shape
+   across 17 assertions. Pre-1.0 policy makes the change **permitted**; it does not make it
+   invisible. Changing either shape regenerates a published artifact, lands a diff under
+   `schemas/`, and owes a CHANGELOG entry.
 4. **Whether an image is a reference kind** (§5). It decides whether packaging can see the files it
    must copy, and a defect is shipping on the rewriter path today because it cannot.
 

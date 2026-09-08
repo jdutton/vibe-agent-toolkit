@@ -52,8 +52,10 @@ row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the p
 is still 🔷
 proposed** for all ten tables: nothing yet derives real rows from `ParseFacts` or
 `ResourceRegistry` at runtime. Four tables (`blobs`, `blob_references`, `blob_sections`,
-`blob_conditions`) and three (`roots`, `resources`, `edges`) have a partial source to populate
-from already — several columns (e.g. `wordCount`, `proseCodeUnits`, `codeBlockCodeUnits`, `sectionCount`,
+`blob_conditions`) and two (`roots`, `resources`) have a partial source to populate
+from already — ⚠️ `edges` was listed here and does **not** belong: it has **zero producers and zero
+consumers**, and `edge_resolutions` alongside it (see [zones.md §5](zones.md#5-references-and-edges)
+and §9 item 3) — several columns (e.g. `wordCount`, `proseCodeUnits`, `codeBlockCodeUnits`, `sectionCount`,
 `slugOccurrence`, `column`, `inCodeSpan`, `inFence`) require new parser output that `ParseFacts`
 does not yet carry; `resource_realizations`, `resource_zones` beyond a single default "tree" zone, and
 zone-sourced `resource_tags` additionally depend on zone modeling (skill/plugin/marketplace
@@ -525,7 +527,9 @@ which a bare commit key cannot express.
 >   flatten to one dist slug, and that diagnostic currently survives only inside a `catch`.
 > - **`edges` splits into `edges` + `edge_resolutions`** with a candidate ordinal and a score. A scalar
 >   target cannot express ambiguous resolution or scored inference, and collapsing candidates to one
->   winner is the last-write-wins behaviour per-zone resolution exists to remove.
+>   winner is the last-write-wins behaviour per-**resolution-context** resolution exists to remove.
+>   (This line said "per-zone" and contradicted the corrected §3 row above; the shipped key is
+>   `contextId`, not a zone id.)
 > - **`edges` gains `origin`** (`authored` / `implicit` / `inferred`) and a nullable reference ordinal,
 >   because implicit edges have no blob row; `kind` opens.
 > - **`ZoneKindSchema` and `resource_tags.source` open**; `role` moves to the zone entity and loses its
