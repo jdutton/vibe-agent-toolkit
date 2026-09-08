@@ -358,6 +358,50 @@ is an open vocabulary and takes `embed` without a migration — but the distinct
 lexer that does not separate the two forms makes the difference unrecoverable downstream. Any
 token-accounting question depends on this one.
 
+### Edge volume is a policy choice, not a corpus property
+
+Measured 2026-09-08 on the primary adopter (9,840 blobs, 12,002 realizations, 127 MB of text,
+31,615,948 estimated tokens), by SQL over the shipped projection:
+
+| syntactic form | references | share |
+|---|---|---|
+| `bare-token` | 50,935 | 44% |
+| `env-anchored` | 12,651 | 11% |
+| `markdown-link` | 11,002 | 9.6% |
+| `markdown-link-reference` | 32 | — |
+| `html-link` | 14 | — |
+| `markdown-definition` | 11 | — |
+| **total** | **114,763** | |
+
+A producer does not face "114,763 edges". It faces whatever its lens policy admits, and two
+policies move the number by an order of magnitude: whether a **scoring lens promotes bare tokens**
+(the `inferred` origin — 44% of all references), and whether a lens **traverses into code spans**
+(24,606 references, 21%). One context is therefore ~11k edges or ~115k depending on decisions taken
+before any code runs.
+
+⇒ **Size the producer against a declared policy, never against the reference count.** A benchmark
+that does not state which policy it assumed is measuring an arbitrary point in a 10× range.
+
+### ⛔ Rewriting link syntax is not a token-economy lever — measured, not argued
+
+The same measurement sized three transforms that a token-economy rewriter would perform, against
+the 31,615,948-token corpus above:
+
+| transform | saving | share of corpus |
+|---|---|---|
+| trim naked-path link text to basename (715 of 11,002 live links) | ~11 KB | **0.009%** |
+| reference-style `[id]` dedupe (1,785 repeated pairs, 3,193 redundant uses) | ~142 KB | **0.11%** |
+| delete every byte-identical duplicate file (98 content keys) | ~312k tokens | **0.99%** |
+
+Two further facts make the first transform worse than its 0.009% suggests: **606 of 8,635 basenames
+are ambiguous corpus-wide (7%)**, so the trim needs per-target verification against a scope rather
+than being a blanket rewrite; and link text is the *routing signal* a reader uses to decide whether
+to spend a read, so shortening it trades comprehension for nothing measurable.
+
+🔑 **The cost is the documents, not their link syntax, and the lever is therefore selection rather
+than spelling** — what an entry point pulls in, which is `lens_entry_points` plus reachability over
+the edge relation. That is the same graph, applied to *what to load* instead of *how to write it*.
+
 ## 6. Contributors and resolvers
 
 `resources` coordinates observation. It must not hold business knowledge — what a skill is, what an
