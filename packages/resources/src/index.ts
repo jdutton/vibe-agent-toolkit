@@ -196,6 +196,23 @@ export {
   type EdgeDestination,
 } from './projection/edge-destination.js';
 
+// The edge relation, COMPUTED per lens and never stored — `projection.ts` places
+// `edges`/`edge_resolutions` in the derived-per-lens column, so this returns rows
+// rather than adding a table. Same shape `claude-context-query.ts` already ships.
+export {
+  AUTHORED_EDGE_FORMS,
+  resolveEdges,
+  type EdgeLens,
+  type EdgeRelation,
+} from './projection/edge-lens.js';
+
+// Where one reference points, as a path. Shared with the closure walk so the
+// corpus has ONE answer to that question.
+export {
+  resolveReferencePath,
+  type ReferencePathResolution,
+} from './projection/reference-resolution.js';
+
 // Projection substrate — population, not schema. `resource_realizations` rows
 // for one path in one extent, plus the two path primitives every population
 // pass and every enumeration instrument shares.

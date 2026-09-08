@@ -141,8 +141,8 @@ export function outOfCorpusDestination(relativePath: string, anchor: string | nu
  * @returns The destination columns, with `dstResource` always null
  */
 export function externalDestination(rawRef: string): EdgeDestination {
-  const [withoutFragment, rawAnchor] = splitHrefAnchor(rawRef);
-  const anchor = rawAnchor === undefined || rawAnchor === '' ? null : rawAnchor;
+  const [withoutFragment] = splitHrefAnchor(rawRef);
+  const anchor = fragmentOf(rawRef);
   return {
     dstKind: 'external',
     // Never empty: `splitHrefAnchor('#f')` yields `''`, and a zero-length key
@@ -152,6 +152,28 @@ export function externalDestination(rawRef: string): EdgeDestination {
     dstResource: null,
     dstAnchor: anchor,
   };
+}
+
+/**
+ * The fragment an authored token carries, or null.
+ *
+ * Exported because the edge lens needs the same answer for its two
+ * *non*-external classes, where the destination is a path rather than a URI:
+ * `resolveLocalHref` reports an anchor only on its `resolved` branch, so an
+ * out-of-corpus target would otherwise silently lose the section its author
+ * named. One definition, so "what fragment did this reference carry" cannot be
+ * answered two ways.
+ *
+ * An empty fragment (`x.md#`) is null rather than `''`: the author named no
+ * section, and `''` would make "has an anchor" true for a reference that has
+ * none.
+ *
+ * @param rawRef - The reference exactly as authored
+ * @returns The fragment without its `#`, or null when there is none
+ */
+export function fragmentOf(rawRef: string): string | null {
+  const [, anchor] = splitHrefAnchor(rawRef);
+  return anchor === undefined || anchor === '' ? null : anchor;
 }
 
 /**

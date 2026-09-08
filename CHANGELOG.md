@@ -178,6 +178,24 @@ with a regression test.
     projection stats a path outside the population. Separating dead from out-of-corpus still needs a
     verdict column fed by something that actually looked, and that decision is still open.
 
+  **`resolveEdges(projection, lens)` evaluates the edge relation** and is exported from
+  `@vibe-agent-toolkit/resources`. It returns `{ edges, edgeResolutions }` and **adds no projection
+  table**: `projection.ts` places `edges`/`edge_resolutions` in the derived-per-lens column, so they
+  are computed per lens and held by the caller, the same shape `whatLoadsAt` already ships. An
+  `EdgeLens` declares its own policy — `AUTHORED_EDGE_FORMS` (`markdown-link`,
+  `markdown-link-reference`, `html-link`) is the conservative floor, because admitting every
+  lexer-derived token is a ten-fold larger relation and that is a decision, not a default.
+  `markdown-definition` is deliberately excluded: the edge belongs to the *use*, and counting the
+  definition too double-counts every inbound reference-style link.
+
+  An edge with **zero** candidate rows is a real state — the lens looked and the token named no file
+  at all — and is distinct from an edge whose candidate lies outside the corpus. One scalar
+  destination column could not tell those apart, which is why the two relations are separate.
+
+  **`resolveReferencePath` is exported alongside it**, and `closure-extent.ts` now calls it rather
+  than carrying its own copy. "Where does this reference point" has one answer whoever asks; the
+  caller still does its own realization lookup, which is the part that genuinely differs.
+
   Three builders ship alongside it — `resourceDestination`, `outOfCorpusDestination` and
   `externalDestination`, exported from `@vibe-agent-toolkit/resources` — each returning the four
   destination columns. They exist so the two invariants above become *unconstructible* rather than
