@@ -276,6 +276,88 @@ Edge properties:
 | auth-required | reachable only with credentials |
 | nonexistent | dead |
 
+⚠️ **The tier above grades a CANDIDATE, not an edge — and the shipped schema puts it on the wrong
+table.** Every tier in that list is a statement about a *target*: whether **it** is co-bundled,
+installable, or dead. An edge with two candidates — one in the same plugin, one in an uninstalled
+marketplace — has no single tier, so one string on `edges` cannot describe it. What genuinely
+belongs on the edge is the *verdict over the candidate set* (`resolved` / `ambiguous` /
+`nonexistent`), which is derivable from the candidates rather than authored beside them.
+
+The current `EdgeRowSchema.resolution` mixes both vocabularies in one column. Fix it by moving the
+tier to `edge_resolutions` and either deriving the edge verdict or dropping the column. **Do this
+while the tables are still empty**: the schema makes exactly this argument about `origin` — a
+discriminator added after rows exist changes the meaning of every row written before it.
+
+### A destination is not always a resource
+
+`dstResource` is a foreign key into `resources`, so it can only name something the projection
+contains. Three real destination classes do not satisfy that, and today all three collapse into
+`dstResource: null`, which reads as *"resolves to nothing"*:
+
+- **External URLs.** `https://example.com/x` is a real, identifiable destination that must never be
+  a resource — projecting it would mean projecting the web.
+- **Targets outside the corpus boundary.** Measured on the primary adopter: 13 wiki-links resolve
+  to memory files **outside the repository**. They resolve perfectly well; the corpus simply stops
+  short of them.
+- **Declared-but-unwritten targets**, which `resources.observed` already anticipates on the node
+  side but which have no edge-side expression.
+
+The collapse has teeth beyond tidiness. **A dangling-link count that cannot separate "dead" from
+"outside the corpus" is not a defect count**, and any measurement of link health must report the
+two separately or it reports a fiction.
+
+It also defeats grouping. *"Which document is cited most often?"* and *"which references can be
+deduplicated into one reference-style definition?"* are both `GROUP BY destination`, and an
+external destination has no key to group on — its identity survives only as unnormalized text in
+`blob_references.rawRef`, where `https://x/y`, `https://x/y#frag` and `https://X/y` are three
+different strings for one destination.
+
+⇒ **Carry a canonical `dstKey` on `edge_resolutions`**: the resource id for an internal target, a
+normalized URI for an external one, and a normalized out-of-corpus path for the third class. Then
+every reverse-index and dedupe query is one `GROUP BY dstKey` regardless of destination class, and
+`dstResource` stays a true foreign key that is null exactly when the target is not in the corpus —
+a fact, rather than an absence standing in for four different ones.
+
+⚠️ Widening the extent is the *better* answer wherever it is available — an out-of-corpus target
+that the reader can genuinely reach is evidence the extent is drawn too small, and extents are
+data. `dstKey` is for the destinations no extent should ever contain.
+
+### What the model must survive
+
+Recorded because each of these was tested against the design rather than assumed, and two of them
+changed it.
+
+**Two that changed it:**
+
+- **An image is a reference with a destination.** `LinkNodeType` is `link | linkReference |
+  definition | htmlAttribute` — no image — and `![solo](solo.png)` parses to **zero** links. So an
+  image's destination is invisible to the reference layer, while *packaging must copy that file*.
+  The blind spot is already shipping a defect: on `[![alt](img.png)](url)` the packaging rewriter
+  silently no-ops, because a regex replay matches the inner image href while mdast reports only the
+  outer link, and the lookup misses. An image must be a reference kind, not a masked span.
+- **A reference definition is not an edge.** `[a]: /url` is a `markdown-definition`; the edge
+  belongs to the *use* (`[text][a]`), with the definition as resolution machinery. Counting both
+  double-counts every inbound link and inflates every reachability walk — and it is not
+  hypothetical, because rewriting repeated links into reference form (a token-economy transform)
+  *creates* these rows. A transform that improves a document must not change its link graph.
+
+**Three the model already handles, so nobody re-litigates them:**
+
+- **A link inside a fence.** `inCodeSpan` and `inFence` are stored columns, and whether to traverse
+  is lens policy — a renderer creates no edge, a "what does this mention" lens may. The exclusion
+  belongs in the query, never in the scanner: a prototype wiki-link scanner that dropped fenced
+  links at scan time produced three wrong numbers, and that is why the columns exist.
+- **A wiki alias.** `[[Target|shown text]]` separates display from destination, and `text` and
+  `rawRef` are already distinct columns.
+- **Anchor existence.** `dstAnchor` joins `blob_sections.slug`, with `slugOccurrence` disambiguating
+  repeated headings.
+
+**One the model admits but the lexer does not.** An embed (`![[foo]]`) *inlines* its target, so the
+target's tokens are charged to the referrer, while a link (`[[foo]]`) only points. `EdgeKindSchema`
+is an open vocabulary and takes `embed` without a migration — but the distinction is lexical, and a
+lexer that does not separate the two forms makes the difference unrecoverable downstream. Any
+token-accounting question depends on this one.
+
 ## 6. Contributors and resolvers
 
 `resources` coordinates observation. It must not hold business knowledge — what a skill is, what an
@@ -585,6 +667,12 @@ rather than folded into the prose above, because each has a shipped consequence:
 2. **Does Claude Code set `CLAUDE_PLUGIN_ROOT` at skill-invocation time?** (§8, and
    `packages/agent-skills/src/skill-test/plugin-env.ts:10`.) The plugin extent's resolution rule
    assumes it does. Unverified against the vendor, so no check may depend on it yet.
+3. **Where the resolution tier lives, and whether `dstKey` is carried** (§5). Both are corrections
+   to the shipped edge schema rather than new capability, and both are **free to make only while
+   `edges` and `edge_resolutions` hold no rows** — which is true today, because nothing populates
+   them. Once a producer exists, either change rewrites the meaning of existing rows.
+4. **Whether an image is a reference kind** (§5). It decides whether packaging can see the files it
+   must copy, and a defect is shipping on the rewriter path today because it cannot.
 
 ## 10. Related
 

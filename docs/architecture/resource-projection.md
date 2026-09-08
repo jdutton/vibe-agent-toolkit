@@ -132,7 +132,7 @@ their own.
 | `resource_realizations` | `(resource_id, zone_id, path)` — one resource id can have many paths (e.g. a source registry and a build-output registry sharing node identity) |
 | `resource_zones` | `(resource_id, zone_kind, zone_id, role)`; `zone_kind ∈ {skill, plugin, marketplace, collection, package, tree}`; tree `role ∈ {source, dist, vendored}` |
 | `resource_tags` | `(resource_id, tag, value, source)`; `source ∈ {filename, config, frontmatter, zone, harness-convention}` |
-| `edges` | `(src, link_ordinal, zone_id, dst_resource, dst_anchor, kind, resolution)` — `zone_id` is part of the key, because link resolution is per-zone: the same link can resolve differently depending on which skill/plugin/collection is doing the resolving. |
+| `edges` + `edge_resolutions` | ⚠️ **This row previously described `edges` as carrying `dst_resource` / `dst_anchor` directly. That shape is wrong and the shipped schema rejects it** — a scalar destination cannot hold a many-candidate resolution, and choosing one winner *is* the last-write-wins defect per-lens resolution exists to remove. The destination lives on a separate `edge_resolutions` table, one row per candidate. See [zones.md §5](zones.md#5-references-and-edges), which is authoritative for this model; `packages/resources/src/schemas/projection-edges.ts` is the shipped shape. Resolution is per **resolution context**, not per zone id. |
 
 **`roots` is a table, so `path` alone is never an identifier.** Any SQL check's column contract must
 return a root (or a resource id), never a bare `path`, or a federated corpus with two roots sharing a
