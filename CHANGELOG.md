@@ -178,6 +178,13 @@ with a regression test.
     projection stats a path outside the population. Separating dead from out-of-corpus still needs a
     verdict column fed by something that actually looked, and that decision is still open.
 
+  Three builders ship alongside it — `resourceDestination`, `outOfCorpusDestination` and
+  `externalDestination`, exported from `@vibe-agent-toolkit/resources` — each returning the four
+  destination columns. They exist so the two invariants above become *unconstructible* rather than
+  merely validated: a `superRefine` catches a bad row at the boundary, a builder means a producer
+  cannot express the mistake. They are pure, take an already-resolved outcome, and do no I/O — path
+  resolution stays in `closure-extent.ts` so the corpus keeps one answer to that question.
+
 - **`matchesPermissionRule` and `matchesBashRule` now require a `lane` argument** (`'allow' | 'deny'
   | 'ask'`), with no default — a default would have left every existing caller on the old behaviour.
   Pass `'allow'` to keep today's semantics, or use the new `matchesAllowRule` / `matchesDenyRule`

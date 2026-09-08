@@ -186,6 +186,16 @@ export {
   type EdgeRow,
 } from './schemas/projection-edges.js';
 
+// The three destination classes as builders. `EdgeResolutionRowSchema` enforces
+// the dstKind/dstResource/dstKey invariants at the boundary; these make them
+// unconstructible, which is what a producer should be reaching for.
+export {
+  externalDestination,
+  outOfCorpusDestination,
+  resourceDestination,
+  type EdgeDestination,
+} from './projection/edge-destination.js';
+
 // Projection substrate — population, not schema. `resource_realizations` rows
 // for one path in one extent, plus the two path primitives every population
 // pass and every enumeration instrument shares.
