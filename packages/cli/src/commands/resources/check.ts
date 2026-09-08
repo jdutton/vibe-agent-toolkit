@@ -303,6 +303,12 @@ export function buildCheckOutputData(input: CheckPayloadInput): Record<string, u
     // Beside the origin, because a `population: store` a reader cannot price is
     // a label taken on faith. Charged to no check — see {@link CheckCost}.
     populationSecs: formatDurationSecs(input.populationMs),
+    // Published here too, and not only by `query`, because this verb pays it
+    // identically — the lens is evaluated before the first statement runs. A
+    // document that priced the population but not the lens would attribute the
+    // lens's cost to whichever rule the reader happened to be looking at, which
+    // is the same defect `populationSecs` exists to prevent.
+    lensSecs: formatDurationSecs(input.lensMs),
     // The denominator. See above: without it an empty findings list is
     // ambiguous. Derived from `checks`, never carried beside it.
     checksRun: input.costs.length,
@@ -1095,6 +1101,7 @@ export function buildInterruptedCheckInput(options: {
     durationMs,
     population: population.population,
     populationMs: population.populationMs,
+    lensMs: population.lensMs,
     membersEnumerated: population.membersEnumerated,
     issues: [interruptedRunFinding(unitInFlight(entries), ending)],
     // 🪤 Rebuilt field by field rather than passed through. The log's check
@@ -1454,6 +1461,7 @@ async function runOutcome(options: {
       kind: 'population',
       population: provenance.population,
       populationMs: provenance.populationMs,
+      lensMs: provenance.lensMs,
       membersEnumerated: extent.membersEnumerated,
     });
     // 🪤 `checks-complete` is NOT emitted here. It used to be, and that put

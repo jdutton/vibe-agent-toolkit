@@ -100,6 +100,11 @@ export function buildProjectionQueryOutputData(input: ProjectionQueryPayloadInpu
     // or derived, and what that was worth. Separated they read as two unrelated
     // numbers in a list.
     populationSecs: formatDurationSecs(input.populationMs),
+    // Beside the population it is NOT part of. The lens is evaluated on every
+    // run whether or not the statement mentions `edges`, and a store hit does
+    // not make it cheaper, so folding it into `populationSecs` would read as
+    // the store having got worse. See `ProjectionProvenance.lensMs`.
+    lensSecs: formatDurationSecs(input.lensMs),
     rowCount: input.rows.length,
     durationSecs: formatDurationSecs(input.durationMs),
     rows: input.rows,

@@ -109,7 +109,11 @@ function projectionWith(
     roots: [{ id: 'root:1', path: ROOT, label: null }],
     resources: [],
     resourceRealizations: paths.map((path) => queryRealization(path)),
-    resourceExtents: [],
+    // 🚨 Membership, not the realization's `extentId`, is what puts an identity
+    // in a lens's extent — and a fixture that left this empty would make every
+    // assertion below vacuous rather than failing loudly. A closure extent has
+    // memberships and NO realizations of its own; see `sourceRealizations`.
+    resourceExtents: paths.map((path) => ({ resourceId: `id:${path}`, extentId: LENS.extentContextId })),
     resourceTags: [],
     realizationConditions: [],
     resolutionContexts: [],
@@ -270,6 +274,73 @@ describe('resolveEdges — the authored-only policy', () => {
     const otherExtent = { ...LENS, extentContextId: 'extent:dist' };
 
     expect(resolveEdges(projection, otherExtent).edges).toHaveLength(0);
+  });
+
+  it('emits ONE edge when two paths in an extent realize the same identity', () => {
+    // 🪤 `resource_realizations` is keyed on `(extentId, path)` while `resources`
+    // is one identity per file, so one extent can hold two paths for one
+    // `resourceId` — a symlink and its target both canonicalize there. Both
+    // realizations carry the same references, so emitting both would put two
+    // rows under `edges`' own `(src, refOrdinal, contextId)` key, differing only
+    // in the path resolution ran from. The FIRST in projection order wins.
+    // ⚠️ The `contentKey` must match too, and a version of this test that
+    // overrode only `resourceId` was VACUOUS: the second realization then found
+    // no references under its own key, contributed no edge, and the assertion
+    // passed with the dedup deleted. A symlink and its target ARE the same
+    // bytes, so sharing the key is also what makes the fixture honest.
+    const symlinked = {
+      ...queryRealization('link.md'),
+      resourceId: `id:${SOURCE}`,
+      contentKey: `key:${SOURCE}`,
+    };
+    const projection = {
+      ...projectionWith([SOURCE], [reference(SOURCE, 0, EXTERNAL_URL)]),
+      resourceRealizations: [queryRealization(SOURCE), symlinked],
+    } as unknown as Projection;
+
+    const { edges } = resolveEdges(projection, LENS);
+
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.src).toBe(`id:${SOURCE}`);
+  });
+
+  it('reads an extent whose members are REALIZED BY ANOTHER PASS', () => {
+    // 🚨 The regression this exists for. A closure extent contributes
+    // memberships over identities the filesystem extent already realized, so
+    // its realizations carry someone else's `extentId`. Sourcing by
+    // `realization.extentId` returned ZERO edges for it — measured on this
+    // repository, 160 members and no rows — an empty relation shaped exactly
+    // like a valid answer.
+    const projection = {
+      ...projectionWith([SOURCE, TARGET], [reference(SOURCE, 0, TARGET)]),
+      resourceRealizations: [SOURCE, TARGET].map((path) => ({
+        ...queryRealization(path),
+        extentId: 'extent:filesystem',
+      })),
+      resourceExtents: [SOURCE, TARGET].map((path) => ({
+        resourceId: `id:${path}`,
+        extentId: LENS.extentContextId,
+      })),
+    } as unknown as Projection;
+
+    const { edges, edgeResolutions } = resolveEdges(projection, LENS);
+
+    expect(edges).toHaveLength(1);
+    // And it RESOLVES: the target is a member, so it is a resource rather than
+    // being misreported as out-of-corpus.
+    expect(edgeResolutions[0]?.dstKind).toBe('resource');
+    expect(edgeResolutions[0]?.dstResource).toBe(`id:${TARGET}`);
+  });
+
+  it('treats a realized NON-member as out-of-corpus, since the extent is the corpus', () => {
+    // The other half of the same rule: membership decides scope, so a file the
+    // tree realizes but this lens's extent does not claim is outside it.
+    const projection = {
+      ...projectionWith([SOURCE, TARGET], [reference(SOURCE, 0, TARGET)]),
+      resourceExtents: [{ resourceId: `id:${SOURCE}`, extentId: LENS.extentContextId }],
+    } as unknown as Projection;
+
+    expect(resolveEdges(projection, LENS).edgeResolutions[0]?.dstKind).toBe('out-of-corpus');
   });
 
   it('returns nothing for a projection with no root, rather than guessing one', () => {

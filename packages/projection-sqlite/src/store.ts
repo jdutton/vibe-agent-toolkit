@@ -100,12 +100,16 @@ import { DatabaseSync, type StatementSync } from 'node:sqlite';
 
 import {
   type BlobScopedRows,
+  type DerivedTableName,
+  type DerivedTableSpec,
   type ExtentKey,
   type ExtentScopedRows,
   type ProjectionColumnType,
   type ProjectionStore,
+  allDerivedSpecs,
   projectionColumnTypes,
   projectionShapeDigest,
+  quoteIdentifier,
   vatCacheNamespaceRoot,
 } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -118,11 +122,13 @@ import {
   type StoredTableSpec,
   allSpecs,
   blobKeyColumn,
+  createDerivedTableSql,
   createTableSql,
   deleteBlobFactsSql,
   deleteExtentContextSql,
   deleteExtentSql,
   deleteRowByKeySql,
+  insertDerivedSql,
   insertSql,
   selectBlobFactsSql,
   selectExtentSql,
@@ -437,6 +443,25 @@ interface TablePlan {
 }
 
 /**
+ * One derived relation's prepared statements.
+ *
+ * Deliberately not a {@link TablePlan} with the extent fields left absent: six
+ * of that type's seven optional members exist to serve the extent partition,
+ * which a derived relation does not have, and reusing it would invite a reader
+ * to look for a `selectExtent` that is missing for a reason no comment states.
+ * The statement-reuse requirement in {@link TablePlan}'s header applies here
+ * identically, which is why these are memoized rather than prepared per write.
+ */
+interface DerivedPlan {
+  readonly spec: DerivedTableSpec;
+  /** Each declared column paired with what it holds, in registry order. */
+  readonly columns: readonly (readonly [column: string, type: ProjectionColumnType])[];
+  readonly insert: StatementSync;
+  /** Empty the relation, so one evaluation replaces another rather than joining it. */
+  readonly clear: StatementSync;
+}
+
+/**
  * Open a SQLite-backed projection store.
  *
  * The directory is created if absent, the schema is created if absent, and the
@@ -527,7 +552,47 @@ export interface SqlQueryableStore extends ProjectionStore {
    *   query, is more than one statement, or names something the schema lacks
    */
   assertCompiles(sql: string): void;
+
+  /**
+   * Write the rows one lens evaluation produced, so SQL can ask about them.
+   *
+   * ## 🔑 Why this is on the QUERYABLE store and not on `ProjectionStore`
+   *
+   * It is the type system carrying the rule *"a lens's output never reaches the
+   * shared on-disk store"*. `openSqliteProjectionStore` returns a
+   * `ProjectionStore` — the file-backed path deliberately narrows `query` away
+   * so it cannot grow one — while `openEphemeralProjectionStore` returns this
+   * wider type. Declaring the derived write here therefore makes it reachable
+   * from the in-memory store and unreachable from the on-disk one, without a
+   * runtime guard anyone could forget or a comment anyone could ignore.
+   *
+   * The rule matters because the on-disk store is **one database per VAT
+   * release, shared by every root on the machine**, retaining three tree hashes
+   * per root. A lens's rows are a function of bytes AND of the lens, and a
+   * question asked once — so persisting them would mean a later run reading one
+   * lens's answers under another lens's question, across repositories.
+   *
+   * ⚠️ **Replaces the relation's contents.** Two evaluations in one process are
+   * two answers to two questions, not an accumulation; appending would silently
+   * union them and make every `GROUP BY` double-count.
+   *
+   * @param rows - Each derived relation's rows, keyed by
+   *   `DERIVED_TABLES`'s own keys. A relation the caller omits is left empty
+   * @throws If a row carries a value no column type can store
+   */
+  writeDerived(rows: DerivedRows): Promise<void>;
 }
+
+/**
+ * The rows of one lens evaluation, keyed by {@link DERIVED_TABLES}'s own keys.
+ *
+ * Every relation is optional: a caller that evaluated edges but has no entry
+ * points states that by omitting the field, which is a different thing from
+ * passing an empty array and reads the same to SQL.
+ */
+export type DerivedRows = {
+  readonly [Name in DerivedTableName]?: readonly Record<string, unknown>[];
+};
 
 /**
  * Open a projection store that lives only in this process's memory.
@@ -568,6 +633,15 @@ export interface SqlQueryableStore extends ProjectionStore {
 export function openEphemeralProjectionStore(): SqlQueryableStore {
   const database = new DatabaseSync(':memory:');
   createSchema(database);
+  // ⛔ HERE AND NOWHERE ELSE. `createSchema` is shared with the file-backed
+  // store, and a lens's rows must never enter it — that database is one per VAT
+  // release, shared by every root on the machine, so a persisted lens answer
+  // would be read back under a different lens's question in a different
+  // repository. Creating the relations only on this path means the on-disk
+  // schema has no table for them to land in even if a future caller tried.
+  for (const spec of allDerivedSpecs()) {
+    database.exec(createDerivedTableSql(spec));
+  }
   return new SqliteProjectionStore(database, DEFAULT_RETAINED_EXTENTS_PER_ROOT);
 }
 
@@ -790,6 +864,8 @@ class SqliteProjectionStore implements SqlQueryableStore {
   readonly #retainedExtentsPerRoot: number;
   /** Blob-fact statements memoized by table and placeholder count — see {@link TablePlan}. */
   readonly #blobStatements = new Map<string, StatementSync>();
+  /** Derived-relation statements, prepared on first use — see {@link SqliteProjectionStore.writeDerived}. */
+  #derivedPlanCache: readonly DerivedPlan[] | undefined;
   #closed = false;
 
   /**
@@ -904,6 +980,52 @@ class SqliteProjectionStore implements SqlQueryableStore {
     // inside one, and only when something was actually freed — an ordinary
     // steady-state write evicts nothing and must pay nothing.
     if (evicted > 0) this.#database.exec('PRAGMA incremental_vacuum');
+  }
+
+  /**
+   * @inheritdoc
+   *
+   * Prepared lazily rather than in the constructor, because the constructor is
+   * shared with the file-backed store whose schema has no derived relations to
+   * prepare against. The type keeps that store from reaching this method; the
+   * laziness keeps it from paying for statements it could never run.
+   */
+  async writeDerived(rows: DerivedRows): Promise<void> {
+    this.#assertOpen();
+    const bundle = rows as Record<string, readonly Record<string, unknown>[] | undefined>;
+    this.#transaction(() => {
+      for (const plan of this.#derivedPlans()) {
+        const supplied = bundle[plan.spec.key];
+        // Omitted is not the same as empty: an omitted relation is one this
+        // evaluation has nothing to say about, and clearing it would be this
+        // method inventing a claim. An empty ARRAY does mean "no rows", and
+        // clears — which is why the two are distinguished here rather than
+        // collapsed with `?? []`.
+        if (supplied === undefined) continue;
+        plan.clear.run();
+        for (const row of supplied) {
+          plan.insert.run(...plan.columns.map(([column, { kind }]) => encodeValue(kind, row[column])));
+        }
+      }
+    });
+  }
+
+  /**
+   * The derived relations' statements, prepared once and memoized.
+   *
+   * @returns One plan per derived relation, in registry order
+   */
+  #derivedPlans(): readonly DerivedPlan[] {
+    const cached = this.#derivedPlanCache;
+    if (cached !== undefined) return cached;
+    const plans: readonly DerivedPlan[] = allDerivedSpecs().map((spec) => ({
+      spec,
+      columns: projectionColumnTypes(spec),
+      insert: this.#database.prepare(insertDerivedSql(spec)),
+      clear: this.#database.prepare(`DELETE FROM ${quoteIdentifier(spec.name)}`),
+    }));
+    this.#derivedPlanCache = plans;
+    return plans;
   }
 
   /** @inheritdoc */

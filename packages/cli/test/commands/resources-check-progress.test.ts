@@ -38,6 +38,7 @@ const POPULATION: ProgressEntry = {
   kind: 'population',
   population: 'derived',
   populationMs: 1234.5,
+  lensMs: 12.5,
   membersEnumerated: 12,
 };
 

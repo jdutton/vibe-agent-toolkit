@@ -279,6 +279,16 @@ export {
   type ProjectionTableSpec,
 } from './projection/table-registry.js';
 
+// The relations a lens PRODUCES, shaped for a store without being registered as
+// tables — a derived relation has no scope, and never adds a row to a
+// materialised table. See the module header for why both are load-bearing.
+export {
+  allDerivedSpecs,
+  DERIVED_TABLES,
+  type DerivedTableName,
+  type DerivedTableSpec,
+} from './projection/derived-table-registry.js';
+
 // What each column holds, read out of the row schema. Every storage backend
 // needs it — Arrow needs a type per vector, SQL needs one per column — so the
 // classification lives beside the registry rather than once per backend.

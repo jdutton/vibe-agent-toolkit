@@ -121,6 +121,22 @@ export interface EdgeRelation {
  * scalar destination column could not tell them apart. Neither is an existence
  * verdict: nothing here stats anything outside the population.
  *
+ * ## 🚨 `out-of-corpus` is relative to THIS LENS'S EXTENT, not to the tree
+ *
+ * The corpus a destination is judged against is the lens's extent, so the same
+ * link yields a different class under two lenses, and reading the count as
+ * "broken" is only sound for a lens whose extent IS the tree. Measured on the
+ * primary adopter: the filesystem lens reports **51** out-of-corpus against
+ * 10,317 resources, and those 51 really are dangling; the agentic-convention
+ * lens over the same tree reports **1,430** against 511, and essentially none
+ * of those are broken — they are documents the always-loaded context links to
+ * that the closure does not itself contain, which is the normal and correct
+ * shape of a CLAUDE.md tree.
+ *
+ * ⇒ **Never quote an out-of-corpus count without naming the lens.** The number
+ * moves 28-fold between two lenses over one corpus, and only one of the two
+ * readings is a defect count.
+ *
  * @param projection - A populated projection; every input read is a materialised
  *   column, so a rehydrated projection answers identically to a derived one
  * @param lens - What this lens admits and how it reads a token
@@ -132,19 +148,23 @@ export function resolveEdges(projection: Projection, lens: EdgeLens): EdgeRelati
   if (root === undefined) return { edges: [], edgeResolutions: [] };
 
   const referencesByBlob = groupReferencesByBlob(projection.blobReferences);
+  const members = extentMembers(projection, lens);
   // One map, not a Set beside it: "is this path realized" and "which identity
   // realizes it" are the same lookup, and two structures built from one filter
   // is two things to keep in step for no gain.
+  //
+  // Keyed on MEMBERSHIP, so a link out of the lens's extent is `out-of-corpus`
+  // — correct, because this lens's corpus is its extent and not the tree.
   const resourceByPath = new Map(
     projection.resourceRealizations
-      .filter((row) => row.extentId === lens.extentContextId)
+      .filter((row) => members.has(row.resourceId))
       .map((row) => [row.path, row.resourceId] as const),
   );
 
   const edges: EdgeRow[] = [];
   const edgeResolutions: EdgeResolutionRow[] = [];
 
-  for (const realization of sourceRealizations(projection, lens)) {
+  for (const realization of sourceRealizations(projection, members)) {
     const references = referencesByBlob.get(realization.contentKey ?? '') ?? [];
     for (const reference of references) {
       if (!lens.forms.has(reference.syntacticForm)) continue;
@@ -186,30 +206,67 @@ export function resolveEdges(projection: Projection, lens: EdgeLens): EdgeRelati
  * bytes: a `contentKey` of null means nothing was parsed, so there are no
  * references to read and an edge from it would be invented rather than observed.
  *
- * 🪤 **Deduplicated on `(resourceId, contentKey)`.** `resource_realizations` is
- * keyed on `(extentId, path)` while `resources` is one identity per file, so ONE
- * extent can hold two paths for one identity — a symlink and its target both
- * canonicalize to the same `resourceId`. Both realizations carry the same
- * references, and emitting both would violate `edges`' own
- * `(src, refOrdinal, contextId)` key with two rows that differ only in the path
- * resolution ran from. The FIRST in projection order wins, which is the same
- * tie-break `closure-extent.ts` applies when it takes `byPath.get(p)?.[0]`.
+ * 🚨 **Membership decides the extent, NOT `resource_realizations.extentId` —
+ * and getting this wrong produced a silently EMPTY relation.** A realization
+ * says "this identity was found at this path by the pass that enumerated the
+ * tree"; membership (`resource_extents`) says "this identity is in this
+ * extent". For the filesystem extent the two coincide, so filtering
+ * realizations by `extentId` looked right. It is not: measured on this
+ * repository, the `agentic-convention` extent has **160 members and ZERO
+ * realizations of its own**, because a closure extent contributes memberships
+ * over identities the filesystem extent already realized. The lens over it
+ * returned no edges at all — an empty answer shaped exactly like a valid one,
+ * which is the failure mode a count with no denominator cannot expose.
+ *
+ * ⇒ Members come from `resource_extents`; realizations are only how a member's
+ * bytes and path are found, whichever pass recorded them.
+ *
+ * 🪤 **Deduplicated on `resourceId`.** `resource_realizations` is keyed on
+ * `(extentId, path)` while `resources` is one identity per file, so one identity
+ * can have several realizations — a symlink and its target canonicalize
+ * together, and now that the extent filter is gone, one identity realized by two
+ * passes reaches here twice as well. Both carry the same references, and
+ * emitting both would violate `edges`' own `(src, refOrdinal, contextId)` key
+ * with two rows differing only in the path resolution ran from. The FIRST in
+ * projection order wins, the same tie-break `closure-extent.ts` applies when it
+ * takes `byPath.get(p)?.[0]`.
  *
  * @param projection - The projection being evaluated
  * @param lens - The lens, for its extent
- * @returns One realization per identity, in projection order
+ * @param members - Identities belonging to the lens's extent
+ * @returns One realization per member identity, in projection order
  */
-function sourceRealizations(projection: Projection, lens: EdgeLens): ResourceRealizationRow[] {
+function sourceRealizations(
+  projection: Projection,
+  members: ReadonlySet<string>,
+): ResourceRealizationRow[] {
   const seen = new Set<string>();
   const chosen: ResourceRealizationRow[] = [];
   for (const row of projection.resourceRealizations) {
-    if (row.extentId !== lens.extentContextId) continue;
+    if (!members.has(row.resourceId)) continue;
+    // Nothing was parsed, so there are no references to read and an edge from
+    // it would be invented rather than observed.
     if (row.contentKey === null) continue;
     if (seen.has(row.resourceId)) continue;
     seen.add(row.resourceId);
     chosen.push(row);
   }
   return chosen;
+}
+
+/**
+ * The identities belonging to the lens's extent.
+ *
+ * @param projection - The projection being evaluated
+ * @param lens - The lens, for its extent
+ * @returns Every `resourceId` the extent claims
+ */
+function extentMembers(projection: Projection, lens: EdgeLens): ReadonlySet<string> {
+  const members = new Set<string>();
+  for (const row of projection.resourceExtents) {
+    if (row.extentId === lens.extentContextId) members.add(row.resourceId);
+  }
+  return members;
 }
 
 /**

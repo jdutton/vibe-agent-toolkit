@@ -196,6 +196,45 @@ with a regression test.
   than carrying its own copy. "Where does this reference point" has one answer whoever asks; the
   caller still does its own realization lookup, which is the part that genuinely differs.
 
+  **`vat resources query` and `vat resources check` can now ask about the link graph.** Three
+  relations join the queryable surface — `lens_contexts`, `edges` and `edge_resolutions` — evaluated
+  once per run over every extent and written into the same per-run in-memory database the projection
+  goes into. They are **not projection tables** and are not in `PROJECTION_TABLES`: `DerivedTableSpec`
+  has no `scope` field, because a lens's output is honestly neither blob-scoped nor extent-scoped, and
+  `writeDerived` is declared on the *queryable* store rather than on `ProjectionStore` — so the shared
+  on-disk store, which is one database per VAT release across every root on the machine, cannot
+  receive them. A derived relation likewise never adds a row to a materialised table, which is why an
+  invented lens lands in `lens_contexts` rather than in `resolution_contexts`.
+
+  A new `lensSecs` sits beside `populationSecs` in the query document, stated separately because a
+  store hit does not make the lens cheaper and folding the two together would read as the store
+  getting worse. Measured on the primary adopter — 9,876 blobs — the lens costs **0.07-0.14 s** against
+  a 4-5 s population, which is why it is unconditional rather than behind a flag.
+
+  Measured on that corpus, the authored-only lens yields **11,053 edges** and **10,802 candidates**:
+  10,317 resolving to a resource, 434 external, and **51 out-of-corpus**. ⭐ That last number is the
+  point of the whole model: a naive dangling count (`dstResource IS NULL`) reports **485 broken
+  links**, of which 434 are external URLs that are not broken at all. Separating the classes is a
+  9.5x correction, not a refinement. A further 251 edges carry no candidate at all — the token named
+  no file — which is a third state one scalar column could not have expressed.
+
+  🚨 **An out-of-corpus count is meaningless without naming its lens.** The corpus a destination is
+  judged against is the *lens's extent*, not the tree. On that same adopter the filesystem lens
+  reports 51 out-of-corpus against 10,317 resources — genuinely dangling — while an
+  agentic-convention lens over the identical tree reports **1,430 against 511**, almost none of which
+  are broken: they are documents the always-loaded context links to that the closure does not itself
+  contain. The number moves 28x between two lenses over one corpus and only one reading is a defect
+  count.
+
+  Fixed en route, and it had shipped in the evaluator: `resolveEdges` sourced its files by filtering
+  `resource_realizations` on `extentId`, which is **not** what puts an identity in an extent —
+  `resource_extents` is. A closure extent contributes memberships over identities the filesystem
+  extent already realized, so it has members and no realizations of its own; measured here, 160
+  members and zero rows. Every lens over such an extent returned an empty relation — an empty answer
+  shaped exactly like a valid one. Membership now decides the extent and realizations only supply a
+  member's path and bytes; the agentic-convention lens went from 0 edges to 310 on this repository.
+  The filesystem lens is unchanged, which is why the figures above still hold.
+
   Three builders ship alongside it — `resourceDestination`, `outOfCorpusDestination` and
   `externalDestination`, exported from `@vibe-agent-toolkit/resources` — each returning the four
   destination columns. They exist so the two invariants above become *unconstructible* rather than
