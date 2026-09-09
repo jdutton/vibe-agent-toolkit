@@ -613,6 +613,8 @@ session — and a wrong one reports a confident number, which is worse than no n
 ([[measurement-that-did-not-run]], [[fixtures-that-cannot-distinguish]]). Extend the instrument, or
 say plainly that the code is unreachable from it. Code no instrument can reach is code whose
 regressions nobody will catch — that is a merge concern, not a tooling inconvenience.
+- [vat-linkauth-contributing.md](docs/contributing/vat-linkauth-contributing.md) — working on the linkAuth engine itself (not on configuring `resources.linkAuth`, which is adopter documentation); read before touching authenticated external-link resolution
+- [baseline-control-adopter-response.md](docs/contributing/baseline-control-adopter-response.md) — the written record of the `vat skill test --baseline` control-arm contamination: what an adopter's defect report got right, and the two causes it missed that were worse — VAT handed the control arm the staged subject's path and parked its working directory inside it, so the measurement was not degraded but undefined. Read before trusting or re-deriving any pre-fix `--baseline` number
 - [plugin-distribution-findings.md](docs/contributing/plugin-distribution-findings.md) — running evidence log behind VAT's plugin-shape rules (what's DOCUMENTED vs merely OBSERVED), the silent hosted-sync divergence class, and a "rules NOT to add" list; read before proposing or promoting any plugin-shape rule
 
 ## External Documentation Cache

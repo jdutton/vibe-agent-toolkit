@@ -126,7 +126,10 @@ resources:
       description: >-
         A file under docs/ is reachable by no link and by no auto-load convention,
         so a reader arrives at it only by already knowing the path.
-      severity: warning
+      # A HARD gate. `vat resources check` exits non-zero only on `error`, so the
+      # `warning` this shipped with for one commit was not a gate at all -- it
+      # reported seven orphans and passed. The seven are indexed; this keeps them so.
+      severity: error
       sql: |-
         -- Scoped to docs/ deliberately. Repo-wide, this question has 173 answers and
         -- almost all are fixtures, vendored trees or package CHANGELOGs that nothing

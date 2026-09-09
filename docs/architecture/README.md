@@ -461,4 +461,10 @@ When using `--user` flag:
 - [Command Population — Open Questions](./command-population-open-questions.md) — the backlog behind that matrix: every population question nothing has declared an answer to, and every claim a document makes that the code does not support.
 - [Resource Projection](./resource-projection.md) — the shipped parse-cache output shape, the proposed blob-keyed and path-dependent schema targeted for stage 3, tree-shape caching, and the parse cache's threat model.
 - [Zones](./zones.md) — the proposed lens model the projection is read through: storage vs. viewer zones, visibility as extent, per-zone reference resolution, resource identity and realizations, and the contributor seam that lets higher packages contribute facts `resources` must not interpret.
+- [Agent Specification Compatibility](./compatibility.md) — how VAT's agent specification lines up
+  against other industry agent formats, what interoperates, and which opinionated features
+  (resources, RAG, composition) have no counterpart elsewhere.
+- [Conversational Agents (Archetype 3)](./conversational-agents.md) — the multi-turn archetype:
+  session state, context accumulation across turns, and where the conversational shape diverges
+  from the single-shot archetypes.
 - [Parsers and Load Boundaries](./parsers-and-load-boundaries.md) — half shipped, half intended, and the document says which per section. ✅ Built: the three parse capabilities (spans-and-kinds, structure, faithful edit) as interfaces, the `ParseFacts` conformance suite the parse cache's own seam made possible, and `markdown-it` run through it as a test-only second implementation — which places five spans covering three of the seven span-bearing constructs in the probe, all of them block ones, and none of the four inline ones. 🔷 Intended: the rule that no parser, store or runtime may sit in a barrel's static module graph — with the measured cold cost of every barrel that currently violates it, which of the two load instruments answers which question, the current per-surface state, and the parse5 blocker. ⛔ The capability split buys swappability, never speed.
