@@ -5,7 +5,10 @@ import {
   outOfCorpusDestination,
   resourceDestination,
 } from '../src/projection/edge-destination.js';
-import { EdgeResolutionRowSchema } from '../src/schemas/projection-edges.js';
+import { EdgeDestinationKindSchema, EdgeResolutionRowSchema } from '../src/schemas/projection-edges.js';
+
+/** The destination class for a target the evaluating lens's extent does not hold. */
+const OUT_OF_CORPUS = 'out-of-corpus';
 
 /** An opaque resource id, as `identity.ts` mints them. */
 const GUIDE_ID = 'res-0123456789abcdef0123456789abcdef';
@@ -53,7 +56,7 @@ describe('resourceDestination', () => {
 describe('outOfCorpusDestination', () => {
   it('is not a resource, so it names no foreign key', () => {
     expect(outOfCorpusDestination('../memory/MEMORY.md', null)).toEqual({
-      dstKind: 'out-of-corpus',
+      dstKind: OUT_OF_CORPUS,
       dstKey: '../memory/MEMORY.md',
       dstResource: null,
       dstAnchor: null,
@@ -267,5 +270,48 @@ describe('every builder satisfies the shipped row schema by construction', () =>
 
   it('covers all three destination classes, so no class is silently untested', () => {
     expect(new Set(built.map((destination) => destination.dstKind)).size).toBe(3);
+  });
+});
+
+describe('the destination vocabulary cannot express a DEFERRED BUILD ARTIFACT', () => {
+  // Backfilled from a crucible run against a large adopter tree, per the standing
+  // rule that a defect only an adopter can see is a hole in THIS suite. VAT's own
+  // tree generates no documentation, so the check below scored a clean 0 here and
+  // proved nothing — the textbook fixture that cannot distinguish.
+  //
+  // THE GAP: `vat resources validate` downgrades a link whose target is a declared
+  // but not-yet-built `files:` artifact to an info-severity LINK_DEFERRED_ARTIFACT
+  // (link-validator.ts, `deferredArtifacts`). That judgement needs the SKILL'S
+  // CONFIG. The projection has no config, so the same link lands in
+  // `out-of-corpus` — the identical class a genuinely broken link lands in, with
+  // nothing on the row to separate the two.
+  //
+  // CONSEQUENCE, measured: a `resources.checks` SQL check keyed on
+  // `dstKind = 'out-of-corpus'` called 21 links broken on one adopter that
+  // `vat resources validate` correctly reported as `info` over the same tree. Such
+  // a check is unsound on any tree that generates documentation — and
+  // `EdgeResolutionRowSchema.dstResource` already warns, in its own `.describe()`,
+  // that an out-of-corpus count "is not a defect count". The check believed the
+  // column anyway.
+  //
+  // 🔑 A TRIPWIRE, not an endorsement of the gap. If someone teaches the projection
+  // this distinction — a fourth kind, or a column — these assertions fail and point
+  // at the checks that must be updated in the same change.
+
+  it('has exactly three classes, and none of them means "generated later"', () => {
+    expect(EdgeDestinationKindSchema.options).toEqual(['resource', 'external', OUT_OF_CORPUS]);
+  });
+
+  it('puts a not-yet-built artifact in the SAME class as a genuinely broken link', () => {
+    // Left: a skill links `cli-reference.md`, which its `files:` config declares
+    // and the build generates. Right: a plain typo naming a file nobody creates.
+    const deferredArtifact = outOfCorpusDestination('skills/x/cli-reference.md', null);
+    const genuinelyBroken = outOfCorpusDestination('skills/x/no-such-file.md', null);
+
+    expect(deferredArtifact.dstKind).toBe(OUT_OF_CORPUS);
+    expect(deferredArtifact.dstKind).toBe(genuinelyBroken.dstKind);
+    // …and the two rows differ ONLY in the path, so no predicate over the
+    // destination can separate the false positive from the real defect.
+    expect({ ...deferredArtifact, dstKey: '' }).toEqual({ ...genuinelyBroken, dstKey: '' });
   });
 });
