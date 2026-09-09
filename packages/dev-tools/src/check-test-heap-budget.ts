@@ -200,7 +200,28 @@ function measureSuite(pkgDir: string, suite: TestSuite): string {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     env: process.env,
+    // 🚨 EXPLICIT, because `--reporter=verbose` made the old default dangerous.
+    // `spawnSync`'s default `maxBuffer` is 1 MiB, and exceeding it TRUNCATES
+    // stdout while still handing back the bytes it did capture. Under vitest 3
+    // this guard read one line per FILE and could not get near that; verbose
+    // prints one line per TEST, measured at ~183 bytes each on this tree
+    // (2.14 MB for 11,680 tests), so the limit lands around 5,700 tests. A
+    // truncated stream still parses SOME heap lines, so it would sail past the
+    // "no lines parsed" check below and silently under-measure — the suite would
+    // grow past the budget and this guard would report it as fine.
+    maxBuffer: 256 * 1024 * 1024,
   });
+  // Fail closed on a spawn-level failure — ENOBUFS above all, but any of them.
+  // `spawnSync` reports these on `error` and NOT through the exit status, and
+  // this function deliberately ignores the exit status (a suite may legitimately
+  // fail while still printing usable heap lines). Without this the two get
+  // conflated and a truncated read looks like a clean one.
+  if (result.error) {
+    throw new Error(
+      `check-test-heap-budget: could not capture vitest output for ${cwd} (${configFile}): `
+      + `${result.error.message}. Refusing to measure a partial stream.`,
+    );
+  }
   const stdout = typeof result.stdout === 'string' ? result.stdout : '';
   const stderr = typeof result.stderr === 'string' ? result.stderr : '';
   return `${stdout}\n${stderr}`;
