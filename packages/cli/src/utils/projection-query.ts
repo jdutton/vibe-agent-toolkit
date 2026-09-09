@@ -171,6 +171,14 @@ export interface ProjectionProvenance {
    * as over derived ones. Folded into `populationMs` it would look like the
    * store getting worse.
    *
+   * ⚠️ **DISJOINT from `populationMs`, and that is enforced by where the
+   * population clock stops, not by convention.** It shipped overlapping: the
+   * population span ended after the lens write, so this value was contained in
+   * that one while all three docstrings said otherwise, and anyone adding the
+   * two over-counted wall time. If you move either clock, keep them disjoint —
+   * a reader comparing a served run against a derived one is the whole reason
+   * they are two fields.
+   *
    * ⚠️ Published rather than merely measured, because an unconditional cost
    * that is invisible is the one nobody can argue with. If this ever grows
    * large enough to be worth a flag, this field is the evidence that says so.
@@ -362,6 +370,17 @@ export async function withQueriedProjection<T>(
       const { blobs, extent } = splitProjectionByScope(projection);
       await store.writeBlobFacts(blobs);
       await store.writeExtent({ rootId, treeHash: EPHEMERAL_TREE_HASH }, extent);
+      // 🚨 The population clock STOPS HERE, before the lens runs. It used to
+      // stop after, which made `populationSecs` silently CONTAIN `lensSecs`
+      // while this comment and both payloads said it did not. The two numbers
+      // are published side by side precisely so a reader can compare a served
+      // population against a derived one — and folding the lens into the
+      // population put its cost on the arm the store's value is argued from,
+      // which is the "store got worse" reading the separation exists to
+      // prevent. Overlapping spans also made `populationSecs + lensSecs`
+      // over-count wall time for anyone who added them.
+      const populationMs = performance.now() - populationStart;
+
       // The lens's output, alongside the tree's facts. Unconditional rather
       // than behind a flag: the relations are the answer to questions the
       // projection was built to support, and a surface that exists only when
@@ -373,7 +392,6 @@ export async function withQueriedProjection<T>(
       await store.writeDerived(evaluateAuthoredLenses(projection));
       const lensMs = performance.now() - lensStart;
       // The shared setup is done. Everything after this line is the caller's.
-      const populationMs = performance.now() - populationStart;
 
       const ask: AskProjection = (sql, ...parameters) => {
         try {

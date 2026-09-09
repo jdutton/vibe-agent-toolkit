@@ -907,6 +907,10 @@ class SqliteProjectionStore implements SqlQueryableStore {
    * @param database - An open, configured connection whose schema exists
    * @param retainedExtentsPerRoot - How many of a root's newest trees survive a
    *   write. Already clamped to at least one by {@link openSqliteProjectionStore}
+   * @param hasDerivedTables - Whether this connection's schema carries the
+   *   derived relations, which is the ONLY thing permitting `writeDerived`.
+   *   Defaults to false so a new factory has to opt in deliberately; pass true
+   *   only where the derived DDL was actually issued
    */
   constructor(database: DatabaseSync, retainedExtentsPerRoot: number, hasDerivedTables = false) {
     this.#database = database;
@@ -1023,8 +1027,17 @@ class SqliteProjectionStore implements SqlQueryableStore {
    *
    * Prepared lazily rather than in the constructor, because the constructor is
    * shared with the file-backed store whose schema has no derived relations to
-   * prepare against. The type keeps that store from reaching this method; the
-   * laziness keeps it from paying for statements it could never run.
+   * prepare against. The RUNTIME REFUSAL below keeps that store from reaching
+   * the write; the laziness keeps it from paying for statements it could never
+   * run.
+   *
+   * ⛔ Not "the type keeps that store from reaching this method" — that was the
+   * claim this PR shipped in four places and it was false in all of them:
+   * `openSqliteProjectionStore` returns `SqlQueryableStore`, so the method is
+   * right there on a file-backed handle. Three copies were corrected and this
+   * one, the closest to the code, was missed — which is the narrow-to-the-
+   * instance fix the review keeps finding. See {@link SqliteProjectionStore.
+   * #hasDerivedTables}.
    */
   async writeDerived(rows: DerivedRows): Promise<void> {
     this.#assertOpen();

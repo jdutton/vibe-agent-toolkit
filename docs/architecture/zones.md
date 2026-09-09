@@ -2,12 +2,15 @@
 
 **Status markers used throughout:** ✅ shipped — 🔷 proposed, not yet built.
 
-**Partly built as of 2026-08-13.** The projection schema, resource identity and realizations, the
+**Partly built as of 2026-09-08.** The projection schema, resource identity and realizations, the
 blob layer, and the **contributor seam with its stratified fixpoint** (§6) are ✅ in code — six extent
-contributors ship and a whole-corpus population of this repository runs end to end. Everything on the
-*lens* side is still 🔷 proposed: `edges`, `edge_resolutions`, `lens_entry_points`, resolution tiers
-and the resolvers that grade them are the derived-per-lens column of §2's table and nothing populates
-them yet. The model is recorded here because it changes the shape of the
+contributors ship and a whole-corpus population of this repository runs end to end. The *lens* side
+is now ✅ partly built: `resolveEdges()` COMPUTES `edges` and `edge_resolutions` per lens, and
+`vat resources query` / `vat resources check` expose them — with `lens_contexts` — as derived
+relations over a per-run in-memory database. ⚠️ They are computed, never materialised: nothing
+*populates* them and nothing persists them, which is a different statement from "nothing implements
+them". Still 🔷 proposed: `lens_entry_points`, resolution tiers, and the resolvers that grade them.
+The model is recorded here because it changes the shape of the
 [resource projection](./resource-projection.md), and because several shipped behaviours turn out to
 be special-cased instances of it.
 
@@ -312,9 +315,10 @@ contains. Three real destination classes do not satisfy that, and today all thre
 
 - **External URLs.** `https://example.com/x` is a real, identifiable destination that must never be
   a resource — projecting it would mean projecting the web.
-- **Targets outside the corpus boundary.** On the primary adopter, 13 wiki-links resolve to memory
-  files **outside the repository**. They resolve perfectly well; the corpus simply stops short of
-  them. ⚠️ **Provenance: NOT the shipped projection.** Wiki links are not lexed at all — see "a
+- **Targets outside the corpus boundary.** On the primary adopter, under a filesystem-extent
+  reading, 13 wiki-links resolve to memory files **outside the repository**. They resolve perfectly
+  well; the corpus simply stops short of them. (The lens is named because the rule above applies
+  here too: outside-the-corpus is relative to an extent.) ⚠️ **Provenance: NOT the shipped projection.** Wiki links are not lexed at all — see "a
   wiki alias" under *What the model must survive* below — so `blob_references` cannot hold this
   number and no SQL produced it. The only wiki-link scanner on record is the prototype cited in that
   same subsection, the one whose fence defect produced three wrong numbers. Whether 13 came from it
@@ -336,8 +340,23 @@ different strings for one destination.
 ✅ **`edge_resolutions` now carries `dstKind` and `dstKey`**: the resource id for an internal target,
 a normalized URI for an external one, and a normalized out-of-corpus path for the third class. Every
 reverse-index and dedupe query is one `GROUP BY (dstKind, dstKey)` regardless of destination class,
-and `dstResource` is null exactly when the target is not in **this lens's extent** — the corpus *for that lens*, not the tree. 🚨 **Never quote an out-of-corpus count without naming the lens**: on the primary adopter a filesystem lens reports 51 out-of-corpus against 10,317 resources (genuinely dangling), while an agentic-convention lens over the identical tree reports 1,430 against 511, of which essentially none are broken. ⚠️ A foreign key by construction and by `superRefine`, not by a SQL `FOREIGN KEY` — nothing emits one —
-a fact, rather than an absence standing in for four different ones. Both invariants are enforced in
+and `dstResource` is null exactly when the target is not in **this lens's extent** — the corpus *for
+that lens*, not the tree — a fact, rather than an absence standing in for four different ones.
+
+⚠️ It is a foreign key by construction and by `superRefine`, not by a SQL `FOREIGN KEY`; nothing
+emits one.
+
+🚨 **Never quote an out-of-corpus count without naming the lens.** On the primary adopter a
+filesystem lens reports **51** out-of-corpus against **10,317 resolutions that landed on a resource**
+(not 10,317 documents — many edges point at the same file, so a rate computed against it is wrong).
+An agentic-convention lens over the identical tree reports **1,430** against 511. Of those 1,430,
+almost none are broken: they are documents the always-loaded context links to that the closure does
+not itself contain. ⛔ Neither figure is a dangling-link verdict — see the `dstKey` caveat below,
+which is explicit that nothing here stats a path outside the population, so a dead target and a live
+out-of-corpus one are indistinguishable. The filesystem lens's 51 is the closest thing to a dangling
+count only because that lens's extent is the whole tree.
+
+Both invariants are enforced in
 `EdgeResolutionRowSchema`'s `superRefine`, not left to producer convention: `dstResource` is non-null
 **iff** `dstKind` is `resource`, and in that class `dstKey` must equal `dstResource`.
 
@@ -403,9 +422,18 @@ changed it.
   captured (`html-link-parser.ts:453`), arrives as `nodeType: htmlAttribute`, and gets its own
   `syntacticForm` of `html-link`. A producer that adds an `image` reference kind must not
   double-handle the HTML rows that already exist.
-  ✅ **The packaging-rewriter half is FIXED — see §9 item 4**, so read the next sentence as history. `transformContent` now splices each parsed link at its own span, rewriting the outer href and re-emitting the inner image verbatim, so it never needed to SEE the image. What survives is `rewriteBodyLinks`, whose symptom is the OPPOSITE (it rewrites the INNER href). The blind spot itself is still real for the edge model: packaging must be able to ENUMERATE an image it has to copy. Historically, the blind spot was shipping a defect: on `[![alt](img.png)](url)` the packaging rewriter
-  silently no-ops, because a regex replay matches the inner image href while mdast reports only the
-  outer link, and the lookup misses. An image must be a reference kind, not a masked span.
+  ✅ **The packaging-rewriter half is FIXED — see §9 item 4.** `transformContent` now splices each
+  parsed link at its own span, rewriting the outer href and re-emitting the inner image verbatim, so
+  it never needed to SEE the image. ⚠️ One caveat, because the claim over-reaches by a clause
+  without it: the span path needs a span, and a link whose `startOffset`/`endOffset` the parser did
+  not supply still goes through the old regex replay. For `[![alt](img.png)](url)` specifically
+  mdast does supply them, so the named construct is genuinely fixed. What survives is
+  `rewriteBodyLinks`, whose symptom is the OPPOSITE (it rewrites the INNER href). The blind spot
+  itself is still real for the edge model: packaging must be able to ENUMERATE an image it has to
+  copy. **The account that follows is history.** The blind spot *was* shipping a defect: on
+  `[![alt](img.png)](url)` the packaging rewriter silently no-op**ped**, because a regex replay
+  **matched** the inner image href while mdast **reported** only the outer link, and the lookup
+  **missed**. An image must be a reference kind, not a masked span.
 - **A reference definition is not an edge.** `[a]: /url` is a `markdown-definition`; the edge
   belongs to the *use* (`[text][a]`), with the definition as resolution machinery. Counting both
   double-counts every inbound link and inflates every reachability walk — and it is not
@@ -483,9 +511,14 @@ below are worktree-inflated.
 > Any sizing taken from the old table under-counted by a third.
 
 A producer does not face "114,763 edges". It faces whatever its lens policy admits, and the range
-is genuinely an order of magnitude: **authored forms alone are 11,059 — ⚠️ which INCLUDES the 11 `markdown-definition` rows this same section rules are not edges, so the authored-EDGE floor is **11,048** (9.6%)**, while admitting
-every lexer-derived token as an `inferred` edge is 114,763. That is the ~11k-vs-~115k span, and it
-is decided before any code runs.
+is genuinely an order of magnitude: **authored forms alone are 11,059**, which includes the 11
+`markdown-definition` rows this same section rules are not edges — so the authored-*edge* floor is
+**11,048** (9.6%), while admitting every lexer-derived token as an `inferred` edge is 114,763. That
+is the ~11k-vs-~115k span, and it is decided before any code runs.
+
+⚠️ A third figure exists and is not a discrepancy: the CHANGELOG measures the shipped authored-only
+lens at **11,053 edges** — the same quantity on a later **9,876-blob** snapshot, where the table
+above is **9,840 blobs**.
 
 ⚠️ **The two policies are NOT independent axes, and the doc used to present them as if they were.**
 Every reference inside a code span is a lexer-derived token — the markdown forms are 0/0 across both
@@ -662,8 +695,9 @@ describes different bytes is not more truthful, it is inconsistent. The guard re
 `populateBlobs` call whose builder carries no cache, where the derivation-time read is genuinely a
 second read of the file.
 
-`edges`, `edge_resolutions` and `lens_entry_points` are **0** because nothing populates them — they
-are the derived-per-lens output of §2, not rows a contributor emits. §17 risk 4's naive pre-factoring
+`edges`, `edge_resolutions` and `lens_entry_points` are **0** because no *contributor* emits them —
+they are the derived-per-lens output of §2. ⚠️ Not because nothing implements them: `resolveEdges()`
+computes the first two per lens. This table counts contributor output, which is a different question. §17 risk 4's naive pre-factoring
 estimate was ~4 × 10⁵ edge rows for a whole-corpus context lens; after the resolution-context
 factoring the *materialised* substrate that a lens is evaluated over is the 44,585 reference
 candidates above, and the per-directory duplication the naive figure came from (§2's 468 instances)

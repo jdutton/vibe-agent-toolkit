@@ -48,16 +48,19 @@ across two adopters — would produce one row, computed once, reused everywhere.
 generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` and
 `projection-resources.ts`. There is deliberately **no** contract-version constant: the hand-bumped
 `PROJECTION_SCHEMA_VERSION` is removed, and a *stored* projection would take a derived digest of the
-row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the pattern). **Population
-is still 🔷
-proposed** for all ten tables: nothing yet derives real rows from `ParseFacts` or
-`ResourceRegistry` at runtime. Four tables (`blobs`, `blob_references`, `blob_sections`,
-`blob_conditions`) and two (`roots`, `resources`) have a partial source to populate
-from already — ⚠️ `edges` was listed here and does **not** belong: it has **zero producers as a
-MATERIALISED TABLE**, and `edge_resolutions` alongside it. ⚠️ **They are not unimplemented.**
-`resolveEdges()` COMPUTES both per lens, and `vat resources query` / `vat resources check` expose
-them as derived relations beside `lens_contexts` — nothing populates them, something evaluates them (see [zones.md §5](zones.md#5-references-and-edges)
-and §9 item 3) — several columns (e.g. `wordCount`, `proseCodeUnits`, `codeBlockCodeUnits`, `sectionCount`,
+row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the pattern).
+
+**Population is ✅ real for the twelve shipped tables.** `populate()` derives rows from `ParseFacts`
+and `ResourceRegistry` at runtime, and `vat resources query` writes them into a per-run in-memory
+store. What remains 🔷 proposed is the REMAINDER described below: columns the parser does not yet
+carry, and the zone modeling several tables depend on.
+
+⚠️ `edges` was listed among the tables with a partial source and does **not** belong: it has **zero
+producers as a MATERIALISED TABLE**, and `edge_resolutions` alongside it. ⚠️ **They are not
+unimplemented.** `resolveEdges()` COMPUTES both per lens, and `vat resources query` /
+`vat resources check` expose them as derived relations beside `lens_contexts` — nothing *stores*
+them, something *evaluates* them (see [zones.md §5](zones.md#5-references-and-edges)
+and §9 item 3). Several columns (e.g. `wordCount`, `proseCodeUnits`, `codeBlockCodeUnits`, `sectionCount`,
 `slugOccurrence`, `column`, `inCodeSpan`, `inFence`) require new parser output that `ParseFacts`
 does not yet carry; `resource_realizations`, `resource_zones` beyond a single default "tree" zone, and
 zone-sourced `resource_tags` additionally depend on zone modeling (skill/plugin/marketplace
@@ -124,7 +127,11 @@ by default rather than skipped, so the gate does not hold and the bytes reach ad
 
 ## 3. Path-dependent tables (🔷 proposed) — rebuilt by joining, cheap, disposable
 
-None of the tables in this section exist in code today — continuing the proposed schema from §2. They
+Most of the tables in this section are 🔷 proposed, continuing the schema from §2 — with two
+exceptions, because saying "none" here contradicts §2. `roots`, `resources`, `resource_realizations`
+and `resource_tags` ship as real `PROJECTION_TABLES` entries and are populated at runtime; `edges`
+and `edge_resolutions` exist as **derived relations** (`DERIVED_TABLES`), computed per lens by
+`resolveEdges()` and never materialised. They
 carry everything that depends on *where* content lives, not what it is, and are designed to be cheap
 to rebuild by joining against the blob-keyed tables above, so they'd carry no durability promise of
 their own.

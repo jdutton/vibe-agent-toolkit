@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AUTHORED_EDGE_FORMS,
+  buildReferenceIndex,
   resolveEdges,
   type EdgeLens,
 } from '../src/projection/edge-lens.js';
@@ -46,6 +47,8 @@ const OUT_OF_CORPUS = 'out-of-corpus';
 const EXTERNAL_URL = 'https://example.com/x';
 /** A relative href naming a file the fixture corpus deliberately does not realize. */
 const MISSING_HREF = './missing.md';
+/** A sibling-relative href, whose resolution depends on the referring file's directory. */
+const SIBLING_TARGET_HREF = './target.md';
 
 const LENS: EdgeLens = {
   contextId: 'lens:links',
@@ -143,7 +146,7 @@ describe('resolveEdges — an edge per admitted reference', () => {
   it('emits one edge and one candidate for a link that resolves in the corpus', () => {
     const projection = projectionWith(
       [GUIDE, DOCS_TARGET],
-      [reference(GUIDE, 0, './target.md')],
+      [reference(GUIDE, 0, SIBLING_TARGET_HREF)],
     );
 
     const { edges, edgeResolutions } = resolveEdges(projection, LENS);
@@ -301,7 +304,7 @@ describe('resolveEdges — the authored-only policy', () => {
     // assertion discriminating — if either base failed to resolve, the row would
     // be out-of-corpus and the test could not say which base was used.
     const projection = {
-      ...projectionWith([SOURCE, ROOT_TARGET, DOCS_TARGET], [reference(SOURCE, 0, './target.md')]),
+      ...projectionWith([SOURCE, ROOT_TARGET, DOCS_TARGET], [reference(SOURCE, 0, SIBLING_TARGET_HREF)]),
       // The symlink row FIRST, so "first wins" would resolve from `docs/`.
       resourceRealizations: [
         symlinked,
@@ -431,6 +434,133 @@ describe('resolveEdges — the authored-only policy', () => {
     expect(edges).toHaveLength(1);
     expect(edgeResolutions[0]?.dstKind).toBe('resource');
     expect(edgeResolutions[0]?.dstResource).toBe('id:img/diagram.png');
+  });
+
+  it('gives the SAME answer when every input table arrives in a different order', () => {
+    // 🚨 The property the determinism fix exists for, and the one nothing
+    // pinned. The tests around this one refute "first in projection order
+    // wins" — but reverting `rows.sort(byPath)` to `rows.reverse()` passed all
+    // of them, because last-wins is just as projection-order-dependent as
+    // first-wins and they only ever saw one order. The assertion has to be a
+    // COMPARISON OF TWO ORDERS, not a claim about one.
+    //
+    // It covers three separate order dependencies at once: the realization
+    // sort, the member-key sort, and `groupReferencesByBlob`, which did not
+    // sort at all while its docstring said it returned ordinal order.
+    const paths = [SOURCE, TARGET, ROOT_TARGET, DOCS_TARGET, GUIDE];
+    const references = [
+      reference(SOURCE, 0, './b.md'),
+      reference(SOURCE, 1, EXTERNAL_URL),
+      reference(SOURCE, 2, MISSING_HREF),
+      reference(GUIDE, 0, SIBLING_TARGET_HREF),
+      reference(GUIDE, 1, '../b.md'),
+    ];
+    // A second realization for one identity, so the base CHOICE is exercised
+    // rather than merely the row order.
+    // 🪤 It must sit in a DIFFERENT DIRECTORY from `a.md`, or the test is
+    // vacuous: an alias beside the source resolves every relative href to the
+    // same file, so the two orders agree no matter which base is picked. The
+    // first version of this test used `zz-alias.md` at the root and PASSED with
+    // `rows.sort(byPath)` reverted to `rows.reverse()`. From `docs/` the two
+    // bases disagree — `./b.md` is `b.md` from the root and out-of-corpus from
+    // `docs/` — which is what makes the comparison discriminating.
+    const alias = { ...queryRealization('docs/zz-alias.md'), resourceId: `id:${SOURCE}`, contentKey: `key:${SOURCE}` };
+
+    const build = (flip: boolean): Projection => {
+      const base = projectionWith(
+        flip ? [...paths].reverse() : paths,
+        flip ? [...references].reverse() : references,
+      );
+      const realizations = [...base.resourceRealizations, alias];
+      return {
+        ...base,
+        resourceRealizations: flip ? [...realizations].reverse() : realizations,
+      } as unknown as Projection;
+    };
+
+    const forward = resolveEdges(build(false), LENS);
+    const reversed = resolveEdges(build(true), LENS);
+
+    // Non-vacuity: the fixture must actually produce rows, or two empty
+    // relations would compare equal and prove nothing.
+    expect(forward.edges.length).toBeGreaterThan(0);
+    expect(forward.edgeResolutions.length).toBeGreaterThan(0);
+    expect(reversed.edges).toEqual(forward.edges);
+    expect(reversed.edgeResolutions).toEqual(forward.edgeResolutions);
+  });
+
+  it('breaks a tie that `localeCompare` would not, so the comparator itself is pinned', () => {
+    // 🚨 The test that makes the choice of comparator load-bearing. Swapping
+    // code-point order back to `localeCompare` passes every other test in this
+    // file, because the two agree on ASCII — so nothing constrained a
+    // comparator whose answer depends on `LANG` and on the JS runtime.
+    //
+    // These two directory names are canonically equivalent (NFC `é` versus NFD
+    // `e` + combining acute), which `localeCompare` reports as EQUAL. A tie
+    // falls through to `Array#sort`'s stability, i.e. to projection order —
+    // the exact dependence the sort exists to remove. Code-point order has no
+    // ties between distinct strings.
+    //
+    // 🪤 Built with `String.fromCodePoint`, never typed as an escape: a `\u`
+    // escape written into a source file becomes a real byte on the way in,
+    // which makes the file read as binary and the two spellings visually
+    // identical in review.
+    const nfc = `caf${String.fromCodePoint(0xe9)}`;
+    const nfd = `cafe${String.fromCodePoint(0x301)}`;
+    expect(nfc.localeCompare(nfd)).toBe(0);
+    expect(nfc).not.toBe(nfd);
+
+    const build = (flip: boolean): Projection => {
+      const base = projectionWith([SOURCE, `${nfc}/target.md`, `${nfd}/target.md`], [
+        reference(SOURCE, 0, SIBLING_TARGET_HREF),
+      ]);
+      // One identity, realized in both directories — so which one wins decides
+      // which `target.md` the reference resolves to.
+      const aliases = [`${nfc}/link.md`, `${nfd}/link.md`].map((path) => ({
+        ...queryRealization(path),
+        resourceId: `id:${SOURCE}`,
+        contentKey: `key:${SOURCE}`,
+      }));
+      return {
+        ...base,
+        resourceRealizations: [
+          ...base.resourceRealizations.filter((row) => row.path !== SOURCE),
+          ...(flip ? [...aliases].reverse() : aliases),
+        ],
+      } as unknown as Projection;
+    };
+
+    const forward = resolveEdges(build(false), LENS).edgeResolutions;
+    const reversed = resolveEdges(build(true), LENS).edgeResolutions;
+
+    expect(forward).toHaveLength(1);
+    // NFD sorts below NFC by code point ('e' < 'é'), the same way every time.
+    expect(forward[0]?.dstResource).toBe(`id:${nfd}/target.md`);
+    expect(reversed).toEqual(forward);
+  });
+
+  it('answers identically whether or not a caller supplies the shared index', () => {
+    // 🪤 `options.referencesByBlob` is a defaulted parameter — `?? group(...)`
+    // — which is this repo's classic silent no-op: deleting the argument at the
+    // only call site produced byte-identical output and moved nothing but wall
+    // time. Nothing passed the option anywhere, so the shared-index path was
+    // entirely unexecuted by the suite.
+    //
+    // This does not measure the saving (that is the lab's job); it pins that
+    // the shared path and the private one are the SAME answer, which is the
+    // property that makes the optimisation safe to keep.
+    const projection = projectionWith(
+      [SOURCE, TARGET],
+      [reference(SOURCE, 0, './b.md'), reference(SOURCE, 1, EXTERNAL_URL)],
+    );
+
+    const shared = resolveEdges(projection, LENS, {
+      referencesByBlob: buildReferenceIndex(projection),
+    });
+    const private_ = resolveEdges(projection, LENS);
+
+    expect(shared.edges.length).toBeGreaterThan(0);
+    expect(shared).toEqual(private_);
   });
 
   it('returns nothing for a projection with no root, rather than guessing one', () => {

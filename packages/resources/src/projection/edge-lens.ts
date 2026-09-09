@@ -111,7 +111,7 @@ export interface EdgeLens {
  */
 export interface EdgeEvaluationOptions {
   /** Shared across lenses — see {@link buildReferenceIndex}. */
-  readonly referencesByBlob?: ReadonlyMap<string, BlobReferenceRow[]>;
+  readonly referencesByBlob?: ReadonlyMap<string, readonly BlobReferenceRow[]>;
 }
 
 /**
@@ -122,7 +122,7 @@ export interface EdgeEvaluationOptions {
  */
 export function buildReferenceIndex(
   projection: Projection,
-): ReadonlyMap<string, BlobReferenceRow[]> {
+): ReadonlyMap<string, readonly BlobReferenceRow[]> {
   return groupReferencesByBlob(projection.blobReferences);
 }
 
@@ -190,10 +190,19 @@ export function resolveEdges(
   // realizes it" are the same lookup, and two structures built from one filter
   // is two things to keep in step for no gain.
   //
-  // EVERY visible path, not just the chosen one: a symlink and its target are
-  // two paths for one identity, and a link written to either resolves to it.
-  // Built from the same `visible` set the sources come from, so "which
-  // realizations does this lens see" is answered once.
+  // EVERY visible path, not just the chosen one: an identity can be realized at
+  // more than one path, and a link written to either resolves to it. Built from
+  // the same `visible` set the sources come from, so "which realizations does
+  // this lens see" is answered once.
+  //
+  // ⚠️ WHERE that premise holds, because it is narrower than "symlinks": inside
+  // a git repository `identity.ts` asks `GitTracker.indexPathFor` FIRST, so a
+  // symlink and its target hash two different spellings and mint two SEPARATE
+  // ids (pinned by `projection-git-extent-symlink.test.ts`). One identity with
+  // several paths is the case OUTSIDE a repo, under an ignored path, with no
+  // usable tracker, or via git-vs-disk casing on a case-insensitive
+  // filesystem. The multi-path handling here is insurance for those regimes,
+  // not the common one — do not cite symlinks-in-a-repo as its motivation.
   const resourceByPath = new Map<string, string>();
   for (const rows of visible.values()) {
     for (const row of rows) resourceByPath.set(row.path, row.resourceId);
@@ -344,10 +353,16 @@ function visibleRealizations(
  * contributor-emission order. "The first row wins" would therefore give one
  * corpus two answers depending on whether a store happened to hit.
  *
- * ⇒ The lowest path wins, which is total, stable, and independent of how the
- * rows arrived. ⚠️ It is still arbitrary in the sense that no path is *more*
- * correct than another for a symlinked identity — but it is arbitrary the same
- * way every time, which is the property a reader comparing two runs needs.
+ * ⇒ The lowest KEYED path wins, by code point — see {@link compareCodepoints}
+ * for why not `localeCompare`. ⚠️ "Keyed" is the qualification, not a detail:
+ * a member whose lowest path carries no `contentKey` has no references to read
+ * there, so the base is the lowest path that HAS bytes, which may not be the
+ * lowest path. Stating the rule without that word made it false for any
+ * identity realized first at an unparsed path.
+ *
+ * ⚠️ It is still arbitrary in the sense that no path is *more* correct than
+ * another for an identity with several — but it is arbitrary the same way
+ * every time, which is the property a reader comparing two runs needs.
  *
  * Deduplication is required, not merely tidy: `edges` keys on
  * `(src, refOrdinal, contextId)`, and two realizations of one identity carry the
@@ -361,7 +376,7 @@ function sourceRealizations(
   visible: ReadonlyMap<string, readonly ResourceRealizationRow[]>,
 ): ResourceRealizationRow[] {
   const chosen: ResourceRealizationRow[] = [];
-  for (const resourceId of [...visible.keys()].sort((left, right) => left.localeCompare(right))) {
+  for (const resourceId of [...visible.keys()].sort(compareCodepoints)) {
     // ⚠️ The `contentKey` filter belongs HERE and not in `visibleRealizations`:
     // a member with no parsed bytes has no references to read, so an edge FROM
     // it would be invented rather than observed — but it remains a legitimate
@@ -373,6 +388,39 @@ function sourceRealizations(
 }
 
 /**
+ * Order two strings by code point.
+ *
+ * ## 🚨 NOT `localeCompare`, which is the environment's opinion rather than an order
+ *
+ * This decides a resolution BASE, so it has to be the same order on every
+ * machine that reads the same corpus. `localeCompare` with no `locales`
+ * argument resolves against the HOST DEFAULT LOCALE, which Node takes from
+ * `LANG`/`LC_ALL`. Measured: `'skäll/link.md'.localeCompare('skzll/link.md')`
+ * is −1 under `LANG=en_US.UTF-8` and +1 under `LANG=sv_SE.UTF-8`, and Bun
+ * pins en-US and ignores `LANG` entirely — so one corpus answered differently
+ * depending on the operator's shell and on whether the CLI ran under Node or
+ * Bun. ICU data also moves between Node minor versions.
+ *
+ * ⚠️ It is also not a TOTAL order: NFC/NFD pairs, U+00AD, U+200D, U+FEFF and
+ * U+0000 all compare equal while being distinct strings, and `Array#sort` is
+ * stable, so a tie fell through to projection order — precisely the dependence
+ * this comparator exists to remove.
+ *
+ * ⇒ Code-point order is total, environment-independent, and is also what
+ * SQLite's default `BINARY` collation gives, so the derived and rehydrated
+ * lanes agree by construction rather than by both happening to run the same
+ * JavaScript.
+ *
+ * @param left - One string
+ * @param right - The other
+ * @returns Negative when `left` sorts first, 0 only when they are equal
+ */
+function compareCodepoints(left: string, right: string): number {
+  if (left < right) return -1;
+  return left > right ? 1 : 0;
+}
+
+/**
  * Order two realizations by path, so a member's chosen row is deterministic.
  *
  * @param left - One realization
@@ -380,7 +428,7 @@ function sourceRealizations(
  * @returns Negative when `left` sorts first
  */
 function byPath(left: ResourceRealizationRow, right: ResourceRealizationRow): number {
-  return left.path.localeCompare(right.path);
+  return compareCodepoints(left.path, right.path);
 }
 
 /**
@@ -401,8 +449,23 @@ function extentMembers(projection: Projection, lens: EdgeLens): ReadonlySet<stri
 /**
  * Group every reference by the blob that holds it, so the walk is one pass.
  *
+ * 🚨 **Sorted rather than trusted, and the docstring used to claim the order it
+ * did not impose.** `ordinal` is the documented order of a blob's references,
+ * but the table's row order is whatever the parse layer happened to insert —
+ * and, once a projection round-trips a store, whatever the SELECT returns.
+ * This is the round-1 `selectExtentSql` argument (no `ORDER BY`, so a
+ * rehydrated projection and a derived one disagree) applied to
+ * `blob_references` instead of `resource_realizations`: measured, the same rows
+ * yielded `refOrdinal` `[0,1,2]` derived and `[2,0,1]` rehydrated. The emitted
+ * relation's CONTENT was unaffected, but its row order was — and a caller
+ * reading positionally, as this package's own tests do, would see one corpus
+ * give two answers.
+ *
+ * `closure-extent.ts`'s sibling index already sorts for exactly this reason;
+ * this one said it was sorted and was not.
+ *
  * @param references - `blob_references`, whole
- * @returns Content key → its references, in ordinal order as stored
+ * @returns Content key → its references, in ascending `ordinal` order
  */
 function groupReferencesByBlob(
   references: readonly BlobReferenceRow[],
@@ -413,6 +476,7 @@ function groupReferencesByBlob(
     if (existing === undefined) byBlob.set(reference.blob, [reference]);
     else existing.push(reference);
   }
+  for (const rows of byBlob.values()) rows.sort((left, right) => left.ordinal - right.ordinal);
   return byBlob;
 }
 

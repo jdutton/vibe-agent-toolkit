@@ -55,6 +55,7 @@ import {
   toForwardSlash,
   safePath,
 } from '@vibe-agent-toolkit/utils';
+import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import {
   type GitTracker,
 } from '@vibe-agent-toolkit/utils/git';
@@ -2047,11 +2048,25 @@ async function copyAndRewriteFile(
     return;
   }
 
-  // Read source file
-  const content = await withFsAttribution(
+  // Read source file.
+  //
+  // 🚨 `readTextContent`, never `readFile(path, 'utf-8')` — and here the reason
+  // is sharper than the general one `link-parser.ts:149` gives. THE LINKS WERE
+  // PARSED FROM THIS FILE BY THAT READER, and `bodyRelativeLinks` below
+  // re-bases their offsets by differencing two string lengths. Two different
+  // readers make that subtraction meaningless: `readTextContent` strips a BOM
+  // and decodes UTF-16/32, so on a BOM-bearing file `readFile` returned a
+  // string one character longer, `OPENING_FENCE` (`/^---\r?\n/`) then failed to
+  // match, `openFrontmatter` reported no frontmatter, the offset came out 0,
+  // and every span stayed whole-file — silently reverting the fix this call
+  // site exists to deliver. It failed CLOSED rather than corrupting, only
+  // because `splicableFrom` compares the destination to the href.
+  //
+  // It also stops a UTF-16 source being written back as mojibake, which the
+  // `utf-8` read did on the copy as well as the rewrite.
+  const { text: content } = await withFsAttribution(
     subject,
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- sourcePath is validated
-    () => readFile(sourcePath, 'utf-8'),
+    () => readTextContent(sourcePath),
     // Not "copied": the read is the step that failed, and this lane reads before
     // it rewrites, so naming the copy would point past the actual failure.
     'read for link rewriting',

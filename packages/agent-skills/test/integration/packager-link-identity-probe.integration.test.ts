@@ -117,9 +117,14 @@ describe('link identity probe (integration)', () => {
     // The OUTER destination is repointed at the flattened location, and the
     // inner image is re-emitted verbatim inside the link text.
     expect(body).toContain('[![alt](refs/guide.md)](resources/guide.md)');
-    // And the construct is not left pointing at the authored path, which is the
-    // shipped defect this closes.
-    expect(body).not.toContain('[![alt](refs/guide.md)](refs/guide.md)');
+    // 🪤 The exact shape the OLD regex path produced, which is what this pins.
+    // An earlier version of this line excluded `[![alt](refs/guide.md)](refs/guide.md)`
+    // — the wholly-unrewritten construct — and was VACUOUS: that string never
+    // appears either way, because without the fix the regex replay matches the
+    // INNER image href and rewrites THAT, leaving the outer href authored.
+    // Simulated with and without the re-base, this assertion is the one that
+    // separates them.
+    expect(body).not.toContain('[![alt](resources/guide.md)](refs/guide.md)');
   });
 
   it('does not orphan the bang when an image target does not ship', async () => {

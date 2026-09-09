@@ -136,8 +136,9 @@ describe('externalDestination', () => {
     // '//#frag' — and was VACUOUS: that input yields '//' even with the fallback
     // deleted, because `normalizeUri` returns it unchanged and '//' is truthy.
     // The inputs that actually reach the fallback are '#f', '#' and '' — none
-    // was tested, and two of them produced the empty key the schema rejects,
-    // which is the hole in this module's "unconstructible" claim.
+    // was tested, and '' produced the empty key the schema rejects, which is
+    // the hole in this module's "unconstructible" claim. ('#f' keys on '#f' and
+    // '#' on '#'; only the empty token has nothing to key.)
     expect(() => externalDestination('')).toThrow(/names something/u);
     expect(() => resourceDestination('', null)).toThrow(/non-empty/u);
     // A bare '#' is NOT refused: its key is '#', which is non-empty and is the
@@ -157,11 +158,23 @@ describe('externalDestination', () => {
     expect(() => outOfCorpusDestination('a.md', '')).toThrow(/empty anchor/u);
   });
 
-  it('refuses a fragment folded into an out-of-corpus PATH key', () => {
-    // The external branch strips fragments so `#a` and `#b` of one page share a
-    // key. The same argument applies to a path, and this builder used to split
-    // them.
-    expect(() => outOfCorpusDestination('a.md#s', null)).toThrow(/fragment/u);
+  it('keys a path whose FILENAME contains a hash, rather than refusing it', () => {
+    // 🚨 The regression test for a crash a guard introduced. A `#` here is a
+    // legal POSIX filename character, not an unsplit fragment: `splitHrefAnchor`
+    // cuts the raw href at its first `#` BEFORE `resolveLocalHref`
+    // percent-decodes what remains, so `[t](./release%23notes.md)` — the RFC
+    // 3986 spelling of a file named `release#notes.md` — reaches this builder
+    // with a `#` that was never a delimiter.
+    //
+    // A guard that refused it made `vat resources query` exit 2 on a two-file
+    // corpus whose only link was that one, once per extent.
+    expect(outOfCorpusDestination('release#notes.md', null).dstKey)
+      .toBe('release#notes.md');
+    // And the anchor still arrives separately, so nothing is folded into the
+    // key — which is what the refusal was trying to protect.
+    const withAnchor = outOfCorpusDestination('docs/a#b.md', 'sec');
+    expect(withAnchor.dstKey).toBe('docs/a#b.md');
+    expect(withAnchor.dstAnchor).toBe('sec');
   });
 });
 

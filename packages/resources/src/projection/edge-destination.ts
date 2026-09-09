@@ -91,13 +91,28 @@ export function resourceDestination(resourceId: string, anchor: string | null): 
  * `dstKey: ''`, which the shipped schema then rejects. Validation was still the
  * last line of defence, exactly as the docstring said it no longer was.
  *
- * ⚠️ **Every input here is a PROJECTION value, never raw document text.**
- * `resourceId` is minted by `identity.ts`; the path comes from
- * `resolveReferencePath`, already fragment-free; and the external branch is
- * reached only when `NON_LOCAL_REF` matched, which requires a scheme or `//`.
- * So a throw here reports a programming error and cannot be reached by an
- * author writing a strange link — which is the distinction that makes throwing
- * correct rather than a crash waiting for a bad document.
+ * ⚠️ **These two assertions are reachable only from a PROGRAMMING error, and
+ * that is a narrower claim than it first looks — a third assertion written
+ * beside them was NOT, and it crashed the command on valid markdown.**
+ * `resourceId` is minted by `identity.ts`, and the external branch is reached
+ * only when `NON_LOCAL_REF` matched, which requires a scheme or `//`; an empty
+ * string satisfies neither, so neither `assertNonEmpty` call can fire on
+ * author-written input. `assertNamedAnchor` is likewise unreachable: every
+ * production caller passes `fragmentOf()`, which returns null and never `''`.
+ *
+ * 🚨 The refusal that DID fire is the cautionary case, and it is why the
+ * paragraph above is stated per-assertion rather than as a blanket property of
+ * the module. It rejected a path containing `#`, reasoning that the caller
+ * splits the fragment off beforehand — true, but the split happens BEFORE
+ * percent-decoding, so a file named `release#notes.md`, linked as
+ * `./release%23notes.md`, reaches the builder with a `#` that was never a
+ * fragment. `vat resources query` exited 2 on it. See
+ * {@link outOfCorpusDestination}.
+ *
+ * ⇒ Before adding a refusal here, name the decoding step your reachability
+ * argument depends on. "The caller already handled it" is not an argument
+ * until you have said WHERE, and checked that nothing downstream re-creates
+ * the character the caller removed.
  *
  * @param value - The candidate key
  * @param builder - Which builder is refusing, for the message
@@ -157,21 +172,27 @@ function assertNamedAnchor(anchor: string | null, builder: string): void {
  */
 export function outOfCorpusDestination(relativePath: string, anchor: string | null): EdgeDestination {
   assertNamedAnchor(anchor, 'outOfCorpusDestination');
-  // 🪤 A fragment must NOT reach the path key. The external branch is meticulous
-  // about stripping it — "two links to `#a` and `#b` of one page cite the same
-  // page, and a reverse index that splits them is wrong" — and the argument
-  // applies verbatim to `../notes/x.md#a` versus `../notes/x.md#b`. The caller
-  // already separates the two halves (`resolution.path` is fragment-free and the
-  // fragment arrives as `anchor`), so a `#` here means the caller stopped doing
-  // that, which is worth a loud error rather than a silently split key.
-  if (relativePath.includes('#')) {
-    throw new TypeError(
-      'outOfCorpusDestination() was given a path carrying a fragment. Split it first —'
-      + ' `resolveReferencePath()` returns the path and `fragmentOf()` the fragment — or the key'
-      + ' splits one destination into one row per section, which is the grouping error the'
-      + ' external branch strips fragments to avoid.',
-    );
-  }
+  // 🚨 A `#` in this path is a FILENAME CHARACTER, not an unsplit fragment, and
+  // a guard that refused it CRASHED the command on valid markdown.
+  //
+  // The refusal read: "the caller already separates the two halves, so a `#`
+  // here means the caller stopped doing that". The premise is false, because
+  // the two halves are separated at a point where the character cannot yet be
+  // told apart. `splitHrefAnchor` cuts the RAW href at its first `#`, and only
+  // then does `resolveLocalHref` percent-DECODE what is left
+  // (`utils.ts:152`). So `[t](./release%23notes.md)` — the RFC 3986-correct
+  // spelling of a file literally named `release#notes.md`, and `#` is a legal
+  // POSIX filename character — arrives here as `release#notes.md` with a null
+  // anchor. Nothing was left unsplit; the fragment delimiter and the literal
+  // are simply the same byte after decoding.
+  //
+  // Measured: with the target absent, `vat resources query` exited 2 on a
+  // two-file corpus whose only link was that one. It fires once per extent, so
+  // a single such link anywhere in a tree could take the whole command down.
+  //
+  // ⇒ Key it as-is. That splits nothing: `release#notes.md` is ONE destination,
+  // and the `#a`-versus-`#b` grouping error the external branch guards against
+  // needs an anchor, which this class receives separately and never folds in.
   return {
     dstKind: 'out-of-corpus',
     // One-argument `join` normalizes: it collapses `.`/`..` lexically, so
@@ -217,11 +238,18 @@ export function outOfCorpusDestination(relativePath: string, anchor: string | nu
 export function externalDestination(rawRef: string): EdgeDestination {
   const [withoutFragment] = splitHrefAnchor(rawRef);
   const anchor = fragmentOf(rawRef);
-  // ⚠️ The fallback covers `'#f'`, whose fragment-free half is `''` — but NOT a
-  // rawRef that is itself empty or bare `'#'`, where the fallback yields `''`
-  // too and the row then fails the schema's `min(1)`. That was the hole in the
-  // "unconstructible" claim; a reference that names nothing has no destination,
-  // so it is refused rather than keyed on emptiness.
+  // ⚠️ The fallback covers `'#f'`, whose fragment-free half is `''` — it keys on
+  // `'#f'`. A bare `'#'` likewise keys on `'#'`, which is non-empty and gets the
+  // same treatment. The ONLY input the fallback cannot rescue is a rawRef that
+  // is itself empty, which yields `''` and fails the schema's `min(1)`: a
+  // reference that names nothing has no destination, so it is refused rather
+  // than keyed on emptiness. (An earlier version of this comment claimed `'#'`
+  // produced `''` too; it does not, and the test three lines from here says so.)
+  //
+  // ⚠️ Consequently this assertion is UNREACHABLE from production: the only
+  // caller gates on `NON_LOCAL_REF`, which no empty string matches. It stays as
+  // a guard on a future caller, not as a live check — do not cite it as
+  // evidence that the empty-key hole is closed at runtime.
   const key = normalizeUri(withoutFragment) || rawRef;
   assertNonEmpty(key, 'externalDestination', 'a reference that names something');
   return {

@@ -146,8 +146,10 @@ with a regression test.
 - **The published `edges` and `edge_resolutions` row schemas changed shape.** Both are npm-published
   JSON Schemas (`@vibe-agent-toolkit/resources/schemas/projection-edges.json` and
   `projection-edge-resolutions.json`), so this lands a diff a consumer can read. It was taken now
-  because these two tables have **zero producers** — nothing populates them, and nothing does now
-  either: the relations added later in this entry are COMPUTED per lens, not materialised — and a correction after
+  because these two tables have **zero producers** — nothing *stores* them, and nothing does now
+  either: the relations added later in this entry are computed per lens into a per-run in-memory
+  database and never persisted. (Rows are written there, so "nothing populates them" would be the
+  wrong word; what nothing does is keep them.) A correction after
   a producer exists rewrites the meaning of every row already written. That window is now shut: the
   next edge-schema correction costs a migration.
 
@@ -221,7 +223,8 @@ with a regression test.
 
   🚨 **An out-of-corpus count is meaningless without naming its lens.** The corpus a destination is
   judged against is the *lens's extent*, not the tree. On that same adopter the filesystem lens
-  reports 51 out-of-corpus against 10,317 resources — genuinely dangling — while an
+  reports 51 out-of-corpus against 10,317 resolutions that landed on a resource — NOT 10,317
+  documents, since many edges point at the same file, so a rate computed against it is wrong — while an
   agentic-convention lens over the identical tree reports **1,430 against 511**, almost none of which
   are broken: they are documents the always-loaded context links to that the closure does not itself
   contain. The number moves 28x between two lenses over one corpus and only one reading is a defect
@@ -832,6 +835,45 @@ with a regression test.
   `@vibe-validate/utils` and `yaml` to the installed tree.
 
 ### Fixed
+
+- **`vat resources query` and `vat resources check` no longer fail on a link to a filename
+  containing `#`.** `[t](./release%23notes.md)` — the RFC 3986 spelling of a file named
+  `release#notes.md`, and `#` is a legal POSIX filename character — made both commands exit 2 with
+  `outOfCorpusDestination() was given a path carrying a fragment` whenever the target was outside
+  the evaluating lens's extent. A guard assumed any `#` in a resolved path meant the caller had
+  forgotten to split the fragment off; in fact the split happens *before* percent-decoding, so the
+  two are indistinguishable by the time the builder sees them. It fired once per extent, so one such
+  link anywhere in a tree took the whole command down.
+
+- **A link the packaging rewriter declines to rewrite no longer damages its neighbours.** A link
+  whose destination carries a title (`[a](x.md "T")`) or angle brackets (`[a](<my x.md>)`) is
+  deliberately left alone, but declining routed it to the legacy regex replay, which is keyed on
+  href alone and rewrote every *other* construct sharing that href. Measured: a titled link beside
+  an image with the same target left the link unrewritten and reduced
+  `![diagram](evals/diagram.png)` to `!diagram` — the image destroyed, the bang orphaned. "I will
+  not re-emit this" and "the regex replay owns this" are now different answers.
+
+- **Edge resolution is deterministic across machines, shells and runtimes.** The realization chosen
+  as a link's resolution base was ordered with `localeCompare`, which resolves against the host
+  locale: `LANG=sv_SE` reversed the order that `LANG=en_US` produced, and Bun ignored `LANG`
+  altogether — so the same corpus resolved a relative link to different files depending on the
+  operator's shell. It is also not a total order (NFC/NFD pairs, soft hyphens and zero-width joiners
+  all compare equal), and a tie fell through to projection order, which is the dependence the sort
+  existed to remove. Now code-point order, which is what SQLite's `BINARY` collation gives, so the
+  derived and rehydrated lanes agree by construction. Separately, the reference index did not sort
+  at all while documenting that it returned ordinal order, so a rehydrated projection emitted rows
+  in a different order from a derived one.
+
+- **Skill packaging reads a corpus document with the same reader that parsed it.** The link-rewrite
+  lane used `readFile(path, 'utf-8')` while the links were parsed by `readTextContent`, which strips
+  a BOM and decodes UTF-16/32. On a BOM-bearing file the two strings differed in length, the
+  frontmatter offset came out zero, and the span rewrite silently reverted to the old path. It also
+  wrote a UTF-16 source back as mojibake.
+
+- **`populationSecs` no longer contains `lensSecs`.** The population clock stopped after the lens
+  evaluation, so the two published durations overlapped while three docstrings and both payloads
+  said they were separate — attributing the lens's cost to the store on exactly the arm the store's
+  value is argued from, and over-counting wall time for anyone who added them.
 
 - **Skill packaging no longer ships a wrong link when an image sits inside a link.** On
   `[![alt](img.png)](url)` — an ordinary badge — the rewriter silently did nothing at all, so a link

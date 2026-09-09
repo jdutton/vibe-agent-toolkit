@@ -34,6 +34,7 @@ import {
   AUTHORED_EDGE_FORMS,
   buildReferenceIndex,
   resolveEdges,
+  type DerivedTableName,
   type Projection,
   type ResolutionContextRow,
 } from '@vibe-agent-toolkit/resources';
@@ -49,12 +50,36 @@ import {
  */
 const AUTHORED_LENS_KIND = 'authored-link';
 
-/** The rows one sweep of the corpus produced, ready for `writeDerived`. */
+/**
+ * The rows one sweep of the corpus produced, ready for `writeDerived`.
+ *
+ * 🪤 **The three field names must be `DERIVED_TABLES`' own keys, and nothing
+ * used to check that.** `writeDerived` looks each relation up by
+ * `bundle[spec.key]`, and every member of `DerivedRows` is optional — so
+ * renaming a derived relation left this interface spelling the OLD name, which
+ * type-checked cleanly as a tolerated excess property while the renamed
+ * relation was silently never written. Verified: the rename compiled with zero
+ * errors under `--strict`.
+ *
+ * The `satisfies` below is what makes the correspondence real rather than a
+ * coincidence of spelling — a renamed relation now fails to compile here.
+ */
 export interface EvaluatedLenses {
   readonly lensContexts: readonly ResolutionContextRow[];
   readonly edges: readonly Record<string, unknown>[];
   readonly edgeResolutions: readonly Record<string, unknown>[];
 }
+
+/**
+ * Every key of {@link EvaluatedLenses} names a real derived relation.
+ *
+ * A compile-time assertion with no runtime cost beyond one frozen object: it
+ * pins the field names of `EvaluatedLenses` to `DerivedTableName`, which is
+ * the correspondence `writeDerived` depends on and cannot express itself.
+ */
+export const EVALUATED_LENS_RELATIONS = {
+  lensContexts: true, edges: true, edgeResolutions: true,
+} as const satisfies Record<keyof EvaluatedLenses, true> satisfies Partial<Record<DerivedTableName, true>>;
 
 /**
  * Evaluate the authored-link lens over every extent in a projection.

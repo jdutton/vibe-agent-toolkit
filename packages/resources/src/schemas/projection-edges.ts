@@ -229,7 +229,7 @@ export const EdgeResolutionRowSchema = z.object({
   dstKey: z.string().min(1)
     .describe('Canonical destination key within dstKind\'s namespace — GROUP BY the PAIR (dstKind, dstKey), never this column alone. Equals dstResource when dstKind is "resource"; a normalized fragment-less URI for "external"; a normalized root-relative path for "out-of-corpus". NOT stable across extent widening: widening moves a destination between classes'),
   dstResource: z.string().min(1).nullable()
-    .describe('Resolved target resource id — non-null exactly when dstKind is "resource", so null is the FACT that the target is not in the corpus rather than an absence standing in for several. Which destination class it is instead is dstKind'),
+    .describe('Resolved target resource id — non-null exactly when dstKind is "resource", so null is the FACT that the target is not in THE EVALUATING LENS\'S EXTENT — the corpus for that lens, not the tree — rather than an absence standing in for several. Which destination class it is instead is dstKind. A count of nulls is therefore lens-relative and is NOT a dangling-link count: on one adopter a filesystem lens yields 51 and a closure lens over the identical tree yields 1,430, of which almost none are broken'),
   // `.min(1)` because an empty anchor is not "an anchor that is empty" — it is
   // the ABSENCE of one, which is spelled null. Every sibling string column
   // carries the same floor; this one did not, so `resourceDestination(id, '')`

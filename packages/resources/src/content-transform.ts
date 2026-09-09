@@ -511,6 +511,25 @@ interface SplicableLink {
 }
 
 /**
+ * What {@link splicableFrom} concluded about one link's span.
+ *
+ * 🚨 Three outcomes, not two, because "I will not splice this" and "the regex
+ * replay should handle this" are different statements and treating them as one
+ * corrupted documents. Only `unrecognised` may reach the fallback.
+ */
+type SpliceVerdict =
+  /** An inline link this can re-emit faithfully. */
+  | { readonly outcome: 'splice'; readonly splicable: SplicableLink }
+  /** An inline link it will NOT re-emit — leave the source bytes alone. */
+  | { readonly outcome: 'refuse' }
+  /** Not an inline link at all — the regex replay owns it. */
+  | { readonly outcome: 'unrecognised' };
+
+/** Shared singletons, so the hot path allocates nothing for a "no". */
+const UNRECOGNISED: SpliceVerdict = { outcome: 'unrecognised' };
+const REFUSED: SpliceVerdict = { outcome: 'refuse' };
+
+/**
  * Index of the `]` that closes the `[` at `start`, or undefined if unbalanced.
  *
  * Counts nesting depth and honours backslash escapes, so it handles both
@@ -549,16 +568,22 @@ function matchingBracketEnd(content: string, start: number): number | undefined 
  *   USE (`[t][id]`), where splicing an inline template over the span would
  *   silently convert a reference link into an inline one. That is a change to the
  *   document's link FORM, not to its target, and no caller asked for it.
+ *
+ * ⛔ Those three are `UNRECOGNISED` — the regex replay is the right owner of
+ * them. A `REFUSED` verdict is a DIFFERENT answer: the span is an inline link
+ * and this function will not re-emit it, so the caller must leave it alone and
+ * must NOT hand it to the replay. Collapsing the two is what let a refusal
+ * corrupt a neighbouring image; see the note on the destination check.
  */
-function splicableFrom(content: string, link: ResourceLink): SplicableLink | undefined {
+function splicableFrom(content: string, link: ResourceLink): SpliceVerdict {
   const { startOffset: start, endOffset: end } = link;
-  if (start === undefined || end === undefined) return undefined;
-  if (start >= end || end > content.length) return undefined;
-  if (content.charAt(start) !== '[') return undefined;
+  if (start === undefined || end === undefined) return UNRECOGNISED;
+  if (start >= end || end > content.length) return UNRECOGNISED;
+  if (content.charAt(start) !== '[') return UNRECOGNISED;
 
   const close = matchingBracketEnd(content, start);
-  if (close === undefined || close >= end) return undefined;
-  if (content.charAt(close + 1) !== '(' || content.charAt(end - 1) !== ')') return undefined;
+  if (close === undefined || close >= end) return UNRECOGNISED;
+  if (content.charAt(close + 1) !== '(' || content.charAt(end - 1) !== ')') return UNRECOGNISED;
 
   // 🚨 The destination the SPAN points at must be EXACTLY the href the parser
   // reported. This one check carries three separate hazards, and each of them
@@ -586,9 +611,26 @@ function splicableFrom(content: string, link: ResourceLink): SplicableLink | und
   //
   // ⚠️ Equality, not `includes`: a destination that merely CONTAINS the href is
   // exactly the title/angle-bracket case, which is the one this must refuse.
-  if (content.slice(close + 2, end - 1) !== link.href) return undefined;
+  //
+  // 🚨 REFUSED, not UNRECOGNISED, and the difference is destructive. A refusal
+  // here means "this really is an inline link, and I will not re-emit it" —
+  // the caller must then leave it verbatim. Returning the same "no" as a
+  // reference-style use put it into `fallbackByHref` instead, which turned the
+  // regex replay back on for its href. Measured: a titled link sharing an href
+  // with an image (`[Spec](evals/d.png "Spec")` beside `![d](evals/d.png)`)
+  // left the link unrewritten AND rewrote the IMAGE to `!d` — an orphaned bang
+  // and a destroyed image, which is the very defect this file's probe test is
+  // named after. The guard added to stop one corruption switched another back
+  // on.
+  //
+  // ⚠️ `.trim()` because surrounding whitespace is legal CommonMark and
+  // `renderLink` reproduces such a destination exactly. Escaped (`x\_y.md`) and
+  // character-reference (`caf&eacute;.md`) destinations still refuse: mdast
+  // decodes them, so the region does not match, and rather than re-implement
+  // its decoder those keep the untouched behaviour they already had.
+  if (content.slice(close + 2, end - 1).trim() !== link.href) return REFUSED;
 
-  return { link, start, end, rawText: content.slice(start + 1, close) };
+  return { outcome: 'splice', splicable: { link, start, end, rawText: content.slice(start + 1, close) } };
 }
 
 /**
@@ -604,12 +646,18 @@ function splicableFrom(content: string, link: ResourceLink): SplicableLink | und
 function splicableLinks(content: string, links: ResourceLink[]): {
   spliced: SplicableLink[];
   candidates: ReadonlySet<ResourceLink>;
+  refused: ReadonlySet<ResourceLink>;
 } {
   const found: SplicableLink[] = [];
+  // Links this recognised as inline and declined to re-emit. They are NOT
+  // fallback material: replaying the regex for one rewrites whatever else in
+  // the document shares its href — measured, an image next to a titled link.
+  const refused = new Set<ResourceLink>();
   for (const link of links) {
     if (link.nodeType === 'definition') continue; // Definitions are handled in pass 2
-    const splicable = splicableFrom(content, link);
-    if (splicable !== undefined) found.push(splicable);
+    const verdict = splicableFrom(content, link);
+    if (verdict.outcome === 'splice') found.push(verdict.splicable);
+    else if (verdict.outcome === 'refuse') refused.add(link);
   }
   found.sort((a, b) => (a.start - b.start) || (b.end - a.end));
 
@@ -620,7 +668,7 @@ function splicableLinks(content: string, links: ResourceLink[]): {
     spliced.push(candidate);
     lastEnd = candidate.end;
   }
-  return { spliced, candidates: new Set(found.map((f) => f.link)) };
+  return { spliced, candidates: new Set(found.map((f) => f.link)), refused };
 }
 
 /**
@@ -692,11 +740,18 @@ function rewriteInlineLinks(
   links: ResourceLink[],
   options: ContentTransformOptions,
 ): string {
-  const { spliced, candidates } = splicableLinks(content, links);
+  const { spliced, candidates, refused } = splicableLinks(content, links);
 
   const fallbackByHref = new Map<string, ResourceLink>();
   for (const link of links) {
-    if (link.nodeType === 'definition' || candidates.has(link)) continue;
+    // 🚨 `refused` is excluded for a different reason than `candidates`, and
+    // omitting it was destructive. A candidate is excluded so a nested pair is
+    // not rewritten twice. A REFUSED link is excluded because the replay is
+    // keyed on href alone and would rewrite every OTHER construct sharing that
+    // href — an image beside a titled link was measured losing its `[...]` and
+    // keeping an orphaned `!`. A link this declined to re-emit must leave the
+    // document exactly as it found it, neighbours included.
+    if (link.nodeType === 'definition' || candidates.has(link) || refused.has(link)) continue;
     if (!fallbackByHref.has(link.href)) fallbackByHref.set(link.href, link);
   }
 

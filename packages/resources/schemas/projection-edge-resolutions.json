@@ -55,7 +55,7 @@
               "type": "null"
             }
           ],
-          "description": "Resolved target resource id — non-null exactly when dstKind is \"resource\", so null is the FACT that the target is not in the corpus rather than an absence standing in for several. Which destination class it is instead is dstKind"
+          "description": "Resolved target resource id — non-null exactly when dstKind is \"resource\", so null is the FACT that the target is not in THE EVALUATING LENS'S EXTENT — the corpus for that lens, not the tree — rather than an absence standing in for several. Which destination class it is instead is dstKind. A count of nulls is therefore lens-relative and is NOT a dangling-link count: on one adopter a filesystem lens yields 51 and a closure lens over the identical tree yields 1,430, of which almost none are broken"
         },
         "dstAnchor": {
           "anyOf": [

@@ -1312,6 +1312,74 @@ describe('transformContent', () => {
   });
 });
 
+/** The packager's own strip template, which re-emits only the link text. */
+const STRIP_TEMPLATE = '{{link.rawText}}';
+/** One href shared by a link and an image, which is what makes the replay reach the image. */
+const SHARED_IMG_HREF = 'evals/diagram.png';
+
+/**
+ * A link and an image sharing one href, with the link's real span.
+ *
+ * @param destination - What the link's span actually contains
+ * @returns The content and the link carrying offsets into it
+ */
+function neighbourFixture(destination: string): { content: string; links: ResourceLink[] } {
+  const content = `Spec: [Diagram spec](${destination})\nImage: ![diagram](${SHARED_IMG_HREF})`;
+  const start = content.indexOf('[Diagram');
+  const end = content.indexOf(')', start) + 1;
+  return {
+    content,
+    links: [createTestLink({
+      text: 'Diagram spec', href: SHARED_IMG_HREF, startOffset: start, endOffset: end,
+    })],
+  };
+}
+
+describe('a link this refuses to re-emit must not disturb its NEIGHBOURS', () => {
+  it('leaves the whole document alone when the destination carries a title', () => {
+    // 🚨 The regression this pins. The destination guard was added so a titled
+    // link would decline instead of losing its title — but declining put it in
+    // `fallbackByHref`, which turned the href-keyed regex replay back on. The
+    // replay then matched the IMAGE, whose href is the same, and rewrote it
+    // through the strip template: `![diagram](evals/diagram.png)` became
+    // `!diagram` — the image destroyed and the bang orphaned, which is exactly
+    // the defect this file's sibling probe test is named for. The link itself
+    // was left unrewritten either way, so the guard's only observable effect
+    // was to damage a neighbour.
+    const { content, links } = neighbourFixture(`${SHARED_IMG_HREF} "Spec"`);
+
+    const result = transformContent(content, links, {
+      linkRewriteRules: [createTypeRule(LOCAL_FILE, STRIP_TEMPLATE)],
+    });
+
+    expect(result).toBe(content);
+  });
+
+  it('still splices, and still spares the image, when the destination is bare', () => {
+    // The positive control. Without it the assertion above would also pass if
+    // the splice path had simply stopped working altogether.
+    const { content, links } = neighbourFixture(SHARED_IMG_HREF);
+
+    const result = transformContent(content, links, {
+      linkRewriteRules: [createTypeRule(LOCAL_FILE, STRIP_TEMPLATE)],
+    });
+
+    expect(result).toBe(`Spec: Diagram spec\nImage: ![diagram](${SHARED_IMG_HREF})`);
+  });
+
+  it('splices a destination padded with whitespace, which is legal CommonMark', () => {
+    // `renderLink` reproduces this destination exactly, so refusing it would
+    // cost a correct rewrite for nothing.
+    const { content, links } = neighbourFixture(` ${SHARED_IMG_HREF} `);
+
+    const result = transformContent(content, links, {
+      linkRewriteRules: [createTypeRule(LOCAL_FILE, STRIP_TEMPLATE)],
+    });
+
+    expect(result).toBe(`Spec: Diagram spec\nImage: ![diagram](${SHARED_IMG_HREF})`);
+  });
+});
+
 describe('stray unpaired "[" in prose', () => {
   it('does not swallow the text between a stray "[" and the next real link', () => {
     // A sentence listing glob metacharacters ends up with an unpaired `[` inside
