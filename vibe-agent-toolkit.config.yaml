@@ -100,6 +100,19 @@ resources:
         Fixtures are excluded because several are deliberately broken.
       severity: error
       sql: |-
+        -- ⚠️ KNOWN LIMITATION, measured on a large adopter tree and stated here
+        -- because this check is the template others copy. `edge_resolutions`
+        -- carries exactly three dstKinds -- resource, out-of-corpus, external --
+        -- so SQL CANNOT see the distinction `vat resources validate` draws with
+        -- LINK_DEFERRED_ARTIFACT: a link to a doc the build GENERATES. On a tree
+        -- with generated documentation this check reports every such link as
+        -- broken. One adopter measured 21 of them, all correctly `info` under
+        -- `vat resources validate` and all false positives here.
+        -- This tree scores 0 because it generates no documentation -- i.e. our
+        -- own corpus cannot distinguish a sound check from an unsound one, which
+        -- is why the number is stated rather than trusted. Before copying this
+        -- into a project that generates docs, exclude those paths explicitly.
+        --
         -- `out-of-corpus` is a CLASS, not a verdict of "dead": nothing in the
         -- projection stats a path outside the population. On the FILESYSTEM lens,
         -- whose extent is the tracked tree, it is nevertheless the closest thing

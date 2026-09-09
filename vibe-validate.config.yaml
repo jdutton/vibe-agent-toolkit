@@ -49,6 +49,10 @@ validation:
           command: 'bun run vat resources check'
           description: 'Runs the SQL assertions under resources.checks (dogfoods vat resources check)'
 
+        - name: 'VAT dogfood: audit quality gate'
+          command: 'bun run guard:audit-quality'
+          description: 'Turns advisory `vat audit` into a hard gate over this repo (see audit-quality-gate.ts)'
+
         - name: 'Code duplication check'
           command: 'bun run duplication-check'
 
