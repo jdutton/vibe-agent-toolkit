@@ -57,3 +57,46 @@
 [[IgnoredVulns]]
 id = "GHSA-g7r4-m6w7-qqqr"
 reason = "esbuild advisory affects the `esbuild serve` dev server, which VAT never runs. Build-time-only, not shipped in any published package. Fix (0.28.1) is outside vite's declared range; re-check whether vite has widened it."
+
+# --- adm-zip (symlink-following extraction overwrite) -------------------------
+# CVE-2026-76845 / CWE-59, CVSS 6.8. adm-zip 0.5.9–0.6.0 opens each extracted
+# entry with `fs.openSync(path, "w")`, which FOLLOWS symbolic links and carries
+# neither O_NOFOLLOW nor an lstat pre-check. If a path component AT THE
+# DESTINATION already exists as a symlink pointing outside the extraction root,
+# the entry is written through it. Rule 1 was tried and there is no fix to take:
+# the advisory has NO fixed version (`--`), upstream PR cthackers/adm-zip#575 is
+# still open, and adm-zip is a production dependency of agent-skills and cli
+# (Node ships no ZIP reader, so this is not a one-line swap).
+#
+# The advisory's precondition is a PRE-EXISTING symlink at the destination, and
+# it cannot be met at any of VAT's three production extraction sites. This is a
+# property of the call sites, not a judgement about likelihood, so it is stated
+# per site to be re-checked rather than believed:
+#
+#   1. agent-skills url-source.ts -> the dir is `mkdtempSync()` inside the fetch
+#      cache root, which `withCachedFetch` creates 0700 and REFUSES unless it is
+#      owned by the current uid. Freshly created, randomly named, ours.
+#   2. cli skills/install.ts -> `mkdtemp()` under tmpdir. Freshly created and
+#      randomly named, so nothing can be pre-planted inside it.
+#   3. cli claude/plugin/install.ts -> the only PREDICTABLE destination, and the
+#      one the advisory's "shared, reused or predictable directory" wording is
+#      about. `prepareInstallation` probes it with `lstatSync`, which does NOT
+#      follow symlinks: without `--force` an existing path is refused outright,
+#      and with `--force` it is `rm`'d (which unlinks a symlink rather than
+#      following it) before extraction. So the destination is absent or freshly
+#      removed, and starts empty.
+#
+# 🔑 A malicious ARCHIVE cannot supply the symlink itself: `extractAllTo` only
+# calls `makeDir` for directory entries and `writeFileTo` for file entries and
+# never materializes a symlink from an entry, so the link has to be on disk
+# beforehand. Verified against the vendored adm-zip 0.6.0 in this tree
+# (`adm-zip.js` extractAllTo). VAT additionally requires a mandatory sha256 on
+# every url zip source, so the bytes are pinned by the config author.
+#
+# BLOCKER TO RE-CHECK (rule 4): adm-zip PR #575. When a release carrying it
+# lands, bump and DELETE this entry. Re-check the three call sites above too —
+# this reason expires the moment any of them starts extracting into a
+# directory it did not just create.
+[[IgnoredVulns]]
+id = "GHSA-vwc7-r8mq-g2x9"
+reason = "adm-zip has NO fixed version (upstream PR #575 still open) and is a production dependency; Node ships no ZIP reader. The advisory needs a PRE-EXISTING symlink at the extraction destination, which none of VAT's three extraction sites can have: two extract into a freshly-created mkdtemp dir (one of them inside a 0700 uid-verified cache root), and the third probes with lstatSync (which does not follow symlinks) and rm's before extracting. A malicious archive cannot supply the symlink either — extractAllTo never materializes a symlink from an entry."

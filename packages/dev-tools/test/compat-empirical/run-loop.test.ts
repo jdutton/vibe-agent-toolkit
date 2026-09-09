@@ -15,8 +15,9 @@
 import { mkdtempSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 
+import type { StagedSkill } from '../../src/compat-empirical/corpus/fetch-sources.js';
 import { runMatrix } from '../../src/compat-empirical/run/run-matrix.js';
 import { ClaudeCodeDriver } from '../../src/compat-empirical/runtimes/claude-code.js';
 import * as tempProfile from '../../src/compat-empirical/runtimes/shared/temp-profile.js';
@@ -40,10 +41,21 @@ const PROMPT_NEG_1 = 'neg-1';
 interface FakeDriver {
   target: Target;
   driverMode: DriverMode;
-  setup: ReturnType<typeof vi.fn>;
-  teardown: ReturnType<typeof vi.fn>;
-  install: ReturnType<typeof vi.fn>;
-  invoke: ReturnType<typeof vi.fn>;
+  // 🪤 Each mock SPELLS OUT the method it stands in for, because a bare
+  // `ReturnType<typeof vi.fn>` no longer describes one. In vitest 3 an
+  // un-parameterised `vi.fn()` typed as `Mock<any[], any>`, which satisfied both
+  // `RuntimeDriver` and an async `mockImplementation`; vitest 4 defaults it to a
+  // VOID-returning signature, so all four went wrong at once and in two different
+  // ways — `invoke` tripped `@typescript-eslint/no-misused-promises` ("Promise
+  // returned where a void return was expected") on its async body, and the whole
+  // `FakeDriver` stopped being assignable to `RuntimeDriver` because `setup`
+  // "provides no match for the signature `(): Promise<void>`". The lint was the
+  // half CI could see; the assignability break was invisible because test files
+  // are not in the `bun run typecheck` program.
+  setup: Mock<() => Promise<void>>;
+  teardown: Mock<() => Promise<void>>;
+  install: Mock<(skill: StagedSkill) => Promise<{ ok: boolean; notes: string }>>;
+  invoke: Mock<(args: InvokeArgs) => Promise<RuntimeObservation>>;
 }
 
 interface InvokeArgs {

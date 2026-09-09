@@ -627,6 +627,52 @@ with a regression test.
 
 ### Changed
 
+- **The test runner is vitest 4** (from 3.2.7), taken to close GHSA-82fw-gwwq-j7x9, whose only fix
+  is 4.1.11 — there is no 3.x backport. This is a dev-tooling change with no effect on any published
+  package's runtime, but it moved four things worth naming, because each was a SILENT change rather
+  than a build error:
+
+  - **`test.poolOptions` was removed, and vitest 4 ignores the old shape with only a `DEPRECATED`
+    line.** Every worker cap in `vitest.shared.ts` lived under `poolOptions.forks.maxForks` /
+    `poolOptions.threads.maxThreads` / `poolOptions.forks.execArgv`. Carried across the bump
+    verbatim, they would have gone inert — silently uncapping every pool and removing the 1024MB
+    heap ceiling, which is precisely the unbounded-worker OOM commit 9f7ad9c9 exists to prevent.
+    They are now the top-level `maxWorkers` and `execArgv`. One `maxWorkers` also replaces the
+    two-knob `maxForks`/`maxThreads` split, so the old failure of setting one and leaving the other
+    unbounded is no longer expressible.
+  - **`vi.restoreAllMocks()` no longer clears the call history of `vi.fn()` mocks** — it only
+    restores originals for `vi.spyOn` spies. Three suites went red on accumulated counts. Fixed once
+    with `clearMocks: true` in the shared config (it clears calls without touching implementations)
+    rather than at the 55 individual `restoreAllMocks()` sites.
+  - **`vi.spyOn` on an already-mocked method now returns the EXISTING mock** instead of installing a
+    fresh one, so a helper that re-spied mid-test and read `mock.calls[0]` was reading the *first*
+    run's arguments. That one silently asserted against the wrong call.
+  - **A mock used as a constructor must have a constructible implementation.** Five
+    `vi.fn().mockImplementation(() => ({ ... }))` module mocks threw `is not a constructor` under
+    `new`; arrow functions cannot be constructed.
+
+- **`sharp` is declared only where it is used.** The bump landed it in the ROOT `package.json`
+  `dependencies`, where nothing imports it; `knip` caught it as an unused dependency. It is a
+  `dev-tools` dependency and is now pinned there at `^0.35.4`.
+
+- **The vitest heap-budget guard was failing closed and is taught vitest 4's output shape.** Vitest
+  4's default reporter prints no line for a passing file, so `--logHeapUsage` had nothing to attach
+  to and the parser matched zero lines — which the guard correctly treats as a measurement failure,
+  not a pass. It now runs `--reporter=verbose` and reduces the per-TEST readings to each file's
+  peak, which is the quantity the budget always meant.
+
+- **Unit-test workers now carry a heap ceiling, which only integration and system had.** A unit fork
+  inherited Node's default old-space size, which scales with host RAM and so never binds on a 16GB
+  CI runner; the unit tier is also the one whose worker deaths are hardest to read, because a dying
+  fork takes the run's exit code to 1 while printing no test-level failure, which vibe-validate's
+  extractor then reports as `0 test failure(s)` with an empty error list. The cap is 512MB, ~3.1x
+  the heaviest unit file measured across all 635 of them (166MB,
+  `dev-tools/test/local-eslint-rule-enablement.test.ts`).
+  🪤 It applies to the fork pool only — that is Windows, where the opaque failures were seen.
+  `worker_threads` REJECTS `--max-old-space-size` outright (`ERR_WORKER_INVALID_EXEC_ARGV`), because
+  a thread shares the host process's heap, so setting it unconditionally took every Unix unit file
+  to "no tests, 1 error".
+
 - **A stray key under `resources:` is now named on stderr instead of being silently discarded.**
   The section declares its keys — `include`, `exclude`, `collections`, `validation`, `linkAuth` and
   `checks` — and anything else is reported and ignored, exactly like an unknown key anywhere else in
@@ -714,6 +760,25 @@ with a regression test.
   15.0.0 → 15.0.2.
 
 ### Security
+
+- **Every open dependency advisory is closed, and the two that survive are triaged rather than
+  ignored.** `osv-scanner` reported 8 advisories across 6 packages (2 High). Fixed by bumping,
+  under the register's rule 1 (prefer a real fix): `sharp` 0.35.3 -> 0.35.4 (GHSA-rgj7-g3m4-5g8c,
+  CVSS 8.9), `js-yaml` 4.3.1 -> 4.3.2 (GHSA-2883-xcg3-v3hh, 7.5), `hono` 4.12.34 -> 4.13.5 (three
+  advisories), and `vitest` / `@vitest/mocker` 3.2.7 -> 4.1.11 (GHSA-82fw-gwwq-j7x9) — see
+  *Changed* for what that major bump entailed. The scan now reports `No issues found`.
+
+  `adm-zip` is the one advisory added to the accepted-risk register (GHSA-vwc7-r8mq-g2x9 /
+  CVE-2026-76845, CVSS 6.8), because it has **no fixed version** — upstream PR cthackers/adm-zip#575
+  is still open — and it is a production dependency that Node's standard library cannot replace
+  (there is no built-in ZIP reader). The advisory requires a **pre-existing symlink at the
+  extraction destination**, and the register entry names, per call site, why none of VAT's three
+  extraction points can have one: two extract into a freshly-created `mkdtemp` directory (one of
+  them inside the fetch cache's 0700, uid-verified root), and the third probes with `lstatSync`,
+  which does not follow symlinks, and `rm`s before extracting. A malicious archive cannot supply
+  the link either — `extractAllTo` only creates directories and writes files, and never
+  materializes a symlink from an archive entry. **This reason expires the moment any of those three
+  sites starts extracting into a directory it did not just create.**
 
 - **The settings checker reported an unparseable Bash command as permitted.** An odd quote or an
   unclosed `(` switched off separator detection for the rest of the command, so `Bash(echo *)`

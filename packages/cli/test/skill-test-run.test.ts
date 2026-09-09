@@ -476,7 +476,16 @@ async function runAndCaptureOpts(
 ): Promise<Record<string, unknown>> {
   const { harnessSpy } = installRunSpies();
   await runSkillTestRun(subject, options);
-  return harnessSpy.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+  // 🪤 The LAST call, not the first. `installRunSpies` may have already run in
+  // this test — the `--no-baseline` case installs spies, runs once, then calls
+  // this helper for a second run — and under vitest 4 `vi.spyOn` on an
+  // already-mocked method RETURNS THE EXISTING MOCK rather than a fresh one
+  // (vitest 3 replaced it, which is why `calls[0]` used to be this run's).
+  // Reading `calls[0]` therefore handed back the FIRST run's options, so the
+  // override assertion silently examined the un-overridden call and read
+  // `baseline: true`. `.at(-1)` is this run's call whether the spy was fresh
+  // or reused.
+  return harnessSpy.mock.calls.at(-1)?.[0] as unknown as Record<string, unknown>;
 }
 
 const ENV_TEST_SKILL = './acme-skill';

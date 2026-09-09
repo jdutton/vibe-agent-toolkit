@@ -11,11 +11,11 @@ import {
 // Mock Anthropic SDK
 vi.mock('@anthropic-ai/sdk', () => {
   const mockCreate = vi.fn();
-  const MockAnthropic = vi.fn().mockImplementation(() => ({
+  const MockAnthropic = vi.fn().mockImplementation(function () { return {
     messages: {
       create: mockCreate,
     },
-  }));
+  }; });
   MockAnthropic.mockCreate = mockCreate;
   return {
     default: MockAnthropic,

@@ -22,7 +22,47 @@ const SAMPLE_STDOUT = `
       Tests  30 passed (30)
 `;
 
+/**
+ * What vitest 4 actually prints under `--logHeapUsage --reporter=verbose`:
+ * one line per TEST, with no `(N tests)` group, several of them per file.
+ *
+ * Captured from a real `packages/resource-compiler` integration run — the two
+ * files interleave because they run in parallel forks, which is why grouping
+ * cannot assume a file's lines are contiguous.
+ */
+const V4_VERBOSE_STDOUT = `
+ RUN  v4.1.11 /repo/packages/resource-compiler
+
+ ✓ test/integration/transformer.integration.test.ts > transformer > default import 310ms 182 MB heap used
+ ✓ test/integration/language-service.integration.test.ts > LSP > fragment completions 174ms 113 MB heap used
+ ✓ test/integration/transformer.integration.test.ts > transformer > namespace import 200ms 244 MB heap used
+ ✓ test/integration/language-service.integration.test.ts > LSP > go-to-definition 141ms 116 MB heap used
+ ✓ test/integration/transformer.integration.test.ts > transformer > named imports 181ms 162 MB heap used
+
+ Test Files  2 passed (2)
+`;
+
 describe('parseHeapUsage', () => {
+  it('keeps each file PEAK from vitest 4 verbose per-test lines', () => {
+    // 🚨 The regression this exists for. Vitest 4's DEFAULT reporter prints no
+    // line at all for a passing file, so the v3 parser — which required a
+    // `(N tests)` group — matched nothing and the guard failed closed on every
+    // run. `--reporter=verbose` restores the lines as one per TEST, so a file
+    // now contributes SEVERAL readings and the guard must reduce them.
+    //
+    // 🪤 The fixture interleaves two files and puts each file's maximum in a
+    // DIFFERENT position (transformer's peak 244 is in the middle, LSP's peak
+    // 116 is last). A "keep the first" or "keep the last" reduction gets one of
+    // them wrong, so the two candidate bugs produce different answers here
+    // rather than both passing.
+    const entries = parseHeapUsage(V4_VERBOSE_STDOUT);
+
+    expect(entries).toEqual([
+      { file: 'test/integration/transformer.integration.test.ts', heapMB: 244 },
+      { file: 'test/integration/language-service.integration.test.ts', heapMB: 116 },
+    ]);
+  });
+
   it('parses per-file heap entries from vitest --logHeapUsage output', () => {
     const entries = parseHeapUsage(SAMPLE_STDOUT);
 

@@ -43,9 +43,9 @@
     "@types/semver": "^7.5.0",
     "@types/which": "^3.0.4",
     "rimraf": "^6.0.1",
-    "sharp": "^0.35.3",
+    "sharp": "^0.35.4",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.11"
   },
   "repository": {
     "type": "git",

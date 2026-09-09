@@ -60,7 +60,7 @@ function createMockAgent() {
 
 // Mock OpenAI SDK
 vi.mock('openai', () => ({
-  default: vi.fn().mockImplementation(() => ({
+  default: vi.fn().mockImplementation(function OpenAIMock() { return {
     chat: {
       completions: {
         create: vi.fn().mockResolvedValue({
@@ -68,7 +68,7 @@ vi.mock('openai', () => ({
         }),
       },
     },
-  })),
+  }; }),
 }));
 
 // Mock the breed advisor agent with realistic extraction

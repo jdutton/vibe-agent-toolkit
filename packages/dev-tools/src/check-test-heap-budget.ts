@@ -72,30 +72,47 @@ function extractHeapEntry(match: RegExpExecArray): HeapEntry | null {
 }
 
 /**
- * Parse `vitest run --logHeapUsage` output into per-file heap entries. The
- * default reporter prints one summary line per spec FILE, e.g.:
+ * Parse `vitest run --logHeapUsage --reporter=verbose` output into per-file
+ * heap entries, keeping each file's PEAK reading.
+ *
+ * 🚨 **The line shape changed in vitest 4 and this guard failed closed until it
+ * was taught the new one.** Vitest 3's default reporter printed one summary
+ * line per spec FILE and `--logHeapUsage` appended a heap column to it:
  *   ` ✓ test/integration/foo.integration.test.ts (11 tests) 4886ms 660 MB heap used`
- * (status glyph ✓/×/❯, integer ms and MB). Pure + exported so the unit test
- * exercises it against captured fixtures without a real vitest run.
+ * Vitest 4's default reporter does not list passing files at all, so there was
+ * nothing for the heap column to attach to and the parse returned ZERO entries
+ * — which the caller correctly treats as a measurement failure rather than as a
+ * pass. `--reporter=verbose` brings the lines back, but one per TEST:
+ *   ` ✓ test/integration/foo.integration.test.ts > suite > case 310ms 182 MB heap used`
+ *
+ * ⇒ Group by file and keep the MAX. That is what "this file's heap" always
+ * meant — the v3 line was itself a reading taken as the file finished, and a
+ * per-test maximum is a strictly tighter measurement of the same quantity, so
+ * the budget keeps its meaning instead of quietly acquiring a new one.
+ *
+ * Pure + exported so the unit test exercises it against captured fixtures
+ * without a real vitest run.
+ *
+ * @param stdout - Combined vitest output
+ * @returns One entry per spec file, carrying that file's peak heap reading
  */
 export function parseHeapUsage(stdout: string): HeapEntry[] {
-  const entries: HeapEntry[] = [];
-  // Anchored to the "<heap> MB heap used" tail so prose mentioning "MB" can't
-  // match; captures the file path (first whitespace-delimited token after the
-  // glyph) and the heap number. The `(N tests …)` group tolerates extra
-  // content before the close paren — a FAILED file prints `(2 tests | 1 failed)`,
-  // not just `(2 tests)`.
-  const lineRe = /[✓×❯]\s+(\S+\.test\.[cm]?tsx?)\b.*?\(\d+\s+tests?\b[^)]*\).*?\b(\d+)\s*MB heap used/;
+  // Anchored to the "<heap> MB heap used" tail so prose mentioning "MB" cannot
+  // match, and to a `.test.ts`-shaped first token so the glyph alone is not
+  // enough. Deliberately does NOT require the v3 `(N tests)` group: that group
+  // is absent from every verbose per-test line, and requiring it is precisely
+  // what made this parser silently see nothing under vitest 4.
+  const lineRe = /[✓×❯]\s+(\S+\.test\.[cm]?tsx?)\b.*?\b(\d+)\s*MB heap used/;
+  const peakByFile = new Map<string, number>();
   for (const rawLine of stdout.split('\n')) {
     const match = lineRe.exec(rawLine);
-    if (match) {
-      const entry = extractHeapEntry(match);
-      if (entry) {
-        entries.push(entry);
-      }
-    }
+    if (!match) continue;
+    const entry = extractHeapEntry(match);
+    if (!entry) continue;
+    const seen = peakByFile.get(entry.file);
+    if (seen === undefined || entry.heapMB > seen) peakByFile.set(entry.file, entry.heapMB);
   }
-  return entries;
+  return [...peakByFile].map(([file, heapMB]) => ({ file, heapMB }));
 }
 
 /** The entries that exceed the budget (strictly greater). Pure + exported. */
@@ -178,7 +195,7 @@ function measureSuite(pkgDir: string, suite: TestSuite): string {
   // safeExecResult resolves npx via which.sync + spawns shell-free (no S4036
   // search-path risk) and returns a result object rather than throwing,
   // matching how this guard reads stdout+stderr regardless of exit code.
-  const result = safeExecResult('npx', ['vitest', 'run', '--config', configFile, '--logHeapUsage', '--no-color'], {
+  const result = safeExecResult('npx', ['vitest', 'run', '--config', configFile, '--logHeapUsage', '--no-color', '--reporter=verbose'], {
     cwd,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
