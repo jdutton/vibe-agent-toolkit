@@ -18,7 +18,7 @@
  * Scoped deliberately: rag-lancedb's real memory risk (LanceDB's Arrow
  * engine, onnxruntime models) lives in native addon memory, entirely
  * invisible to --logHeapUsage / --max-old-space-size — that risk is already
- * bounded by maxForks in vitest.shared.ts, not by this guard. This guard
+ * bounded by maxWorkers in vitest.shared.ts, not by this guard. This guard
  * covers the JS-heap risk (e.g. resource-compiler's TS Language Service).
  *
  * Run: `bun run guard:test-heap` (or `tsx packages/dev-tools/src/check-test-heap-budget.ts`).
@@ -34,7 +34,7 @@ import { PROJECT_ROOT, isEntrypoint, log, safeExecResult } from './common.js';
 /** Default per-FILE heap ceiling, in MB. ~1.5x headroom over the heaviest
  * measured file (resource-compiler's transformer.integration.test.ts, up to
  * 382MB across repeated runs — forks are reused across files under
- * maxForks:2, so heap varies with what ran earlier in the same fork; budget
+ * maxWorkers:2, so heap varies with what ran earlier in the same fork; budget
  * headroom must cover that variance, not just one sample). Well under the
  * 1024MB per-fork execArgv cap in vitest.shared.ts. */
 export const DEFAULT_BUDGET_MB = 600;
@@ -115,6 +115,115 @@ export function parseHeapUsage(stdout: string): HeapEntry[] {
   return [...peakByFile].map(([file, heapMB]) => ({ file, heapMB }));
 }
 
+/** vitest's end-of-run spec-FILE tally, as printed on the `Test Files` line. */
+export interface TestFileSummary {
+  /** Files SCHEDULED for this run — the number inside the trailing parens. */
+  readonly total: number;
+  /** Files whose every test was skipped; these print no heap line at all. */
+  readonly skipped: number;
+  /** Files vitest tallies as unimplemented — its fourth file category, spelled
+   * `to`+`do` on the line; likewise no heap line. */
+  readonly todo: number;
+}
+
+// `Test Files  1 failed | 2 passed | 1 skipped (4)`. Split in two on purpose:
+// one regex claims the LINE (anchored to `Test Files` so the `Tests  N passed
+// (N)` row one line below cannot match), a second pulls the SCHEDULED total off
+// its tail. A single pattern spanning both needs a lazy group followed by
+// optional whitespace, which backtracks — sonarjs/super-linear-regex reds it,
+// and rightly: this parser is fed unbounded subprocess output.
+const TEST_FILES_LINE_RE = /^[ \t]*Test Files(.*)$/gm;
+const SCHEDULED_TOTAL_RE = /\((\d+)\)$/;
+const WHITESPACE_RUN_RE = /\s+/;
+
+/**
+ * Read one `<count> <category>` pair out of the breakdown before the parens.
+ * Tokenised rather than pattern-matched, so it is linear by construction.
+ */
+function readCategoryCount(breakdown: string, category: string): number {
+  for (const part of breakdown.split('|')) {
+    const [count, name] = part.trim().split(WHITESPACE_RUN_RE);
+    if (name === category && count) return Number(count);
+  }
+  return 0;
+}
+
+/**
+ * Parse vitest's `Test Files … (N)` line, or null when the run never printed one.
+ *
+ * ⭐ **This is the completeness signal, and it was sitting unread in the output
+ * the guard already captured.** `N` is the number of spec files vitest
+ * SCHEDULED, so comparing it against the number of files that actually produced
+ * a heap reading answers "did I measure the whole suite?" directly — strictly
+ * better than trusting an exit code, which a killed worker and a failing
+ * assertion set identically.
+ *
+ * Pure + exported so the unit test drives it from captured output.
+ */
+export function parseTestFileSummary(stdout: string): TestFileSummary | null {
+  // LAST match: a run that reprints the summary (watch mode, a retried batch)
+  // ends with the tally that describes the output we just parsed. `.trim()`
+  // takes the column padding the line regex deliberately does not consume (a
+  // `[ \t]+` next to a `(.*)` overlaps and backtracks) and the `\r` of a CRLF
+  // line ending, which `.` matches.
+  const tail = [...stdout.matchAll(TEST_FILES_LINE_RE)].at(-1)?.[1]?.trim();
+  if (!tail) return null;
+  const totalMatch = SCHEDULED_TOTAL_RE.exec(tail);
+  const totalStr = totalMatch?.[1];
+  if (!totalStr) return null;
+  const breakdown = tail.slice(0, totalMatch?.index);
+  return {
+    total: Number(totalStr),
+    skipped: readCategoryCount(breakdown, 'skipped'),
+    todo: readCategoryCount(breakdown, 'todo'),
+  };
+}
+
+/**
+ * Why this suite's measurement cannot be trusted, or null when every file that
+ * was supposed to report a heap reading did.
+ *
+ * 🚨 **The scenario this exists for: a worker killed mid-file exits 1 through
+ * `status`, not through `error`, and the files that already finished still
+ * print their heap lines.** So `entries.length === 0` is false, no entry is over
+ * budget, and the guard reported GREEN on exactly the run it exists to catch —
+ * the unmeasured file being, by construction, the one that blew the memory.
+ * The same shape covers a `maxBuffer` truncation, which likewise leaves SOME
+ * heap lines parseable.
+ *
+ * ⚠️ A fully-skipped file prints `↓ file > name` with no heap column and is
+ * absent from the measured set by design, so it is subtracted out of the
+ * expectation rather than red-flagged — vitest counts it under `skipped` (and
+ * an entirely-unimplemented file under its own category) on the very line this
+ * reads.
+ *
+ * Pure + exported: the fail-closed branch is the whole point of the guard and
+ * must be testable without spawning vitest.
+ *
+ * @param stdout - Combined vitest output
+ * @param measuredFileCount - How many files `parseHeapUsage` produced entries for
+ * @param exitStatus - vitest's exit status (-1 when it could not be determined)
+ * @returns A human-readable reason, or null when the measurement is complete
+ */
+export function findIncompleteMeasurement(
+  stdout: string,
+  measuredFileCount: number,
+  exitStatus: number,
+): string | null {
+  if (measuredFileCount === 0) {
+    return `no per-file heap lines parsed (vitest exit ${exitStatus}) — did vitest run, or did a fork OOM above the 1024MB cap before printing its heap line?`;
+  }
+  const summary = parseTestFileSummary(stdout);
+  if (!summary) {
+    return `vitest printed no "Test Files … (N)" summary line (exit ${exitStatus}), so there is no way to tell whether the ${measuredFileCount} measured file(s) were all of them.`;
+  }
+  const expected = summary.total - summary.skipped - summary.todo;
+  if (measuredFileCount < expected) {
+    return `measured ${measuredFileCount} of ${expected} spec file(s) that should have reported heap (vitest exit ${exitStatus}; "Test Files … (${summary.total})" with ${summary.skipped} skipped, ${summary.todo} todo). A worker killed mid-file still prints heap lines for the files that finished, so the UNMEASURED file is the likeliest one over budget.`;
+  }
+  return null;
+}
+
 /** The entries that exceed the budget (strictly greater). Pure + exported. */
 export function findHeapBudgetViolations(entries: readonly HeapEntry[], budgetMB: number): HeapEntry[] {
   return entries.filter((e) => e.heapMB > budgetMB);
@@ -186,8 +295,21 @@ export function parseArgs(argv: readonly string[]): CliOptions {
   return { budgetMB, targets: customTargets.length > 0 ? customTargets : [...DEFAULT_TARGETS] };
 }
 
-/** Run vitest with heap logging for one package+suite and return its combined output. */
-function measureSuite(pkgDir: string, suite: TestSuite): string {
+/** One suite's raw measurement: everything vitest printed, plus how it exited. */
+export interface SuiteRun {
+  readonly output: string;
+  /** vitest's exit status. -1 when spawnSync could not determine one. */
+  readonly status: number;
+}
+
+/**
+ * Run vitest with heap logging for one package+suite.
+ *
+ * Exported so a caller can drive a real run; the DECISION this feeds —
+ * `findIncompleteMeasurement` — is pure and unit-tested separately, because a
+ * function that spawns vitest can only ever be covered by an integration test.
+ */
+export function measureSuite(pkgDir: string, suite: TestSuite): SuiteRun {
   const cwd = safePath.join(PROJECT_ROOT, pkgDir);
   const configFile = suite === 'integration' ? 'vitest.integration.config.ts' : 'vitest.system.config.ts';
   // `--logHeapUsage` only ADDS the heap column to the default reporter — it
@@ -206,16 +328,16 @@ function measureSuite(pkgDir: string, suite: TestSuite): string {
     // this guard read one line per FILE and could not get near that; verbose
     // prints one line per TEST, measured at ~183 bytes each on this tree
     // (2.14 MB for 11,680 tests), so the limit lands around 5,700 tests. A
-    // truncated stream still parses SOME heap lines, so it would sail past the
-    // "no lines parsed" check below and silently under-measure — the suite would
-    // grow past the budget and this guard would report it as fine.
+    // truncated stream still parses SOME heap lines, so it would sail past a
+    // "no lines parsed" check and silently under-measure — the suite would
+    // grow past the budget and this guard would report it as fine. (The
+    // `Test Files … (N)` completeness check in `findIncompleteMeasurement` now
+    // also catches that shape; this limit stops it arising in the first place.)
     maxBuffer: 256 * 1024 * 1024,
   });
   // Fail closed on a spawn-level failure — ENOBUFS above all, but any of them.
-  // `spawnSync` reports these on `error` and NOT through the exit status, and
-  // this function deliberately ignores the exit status (a suite may legitimately
-  // fail while still printing usable heap lines). Without this the two get
-  // conflated and a truncated read looks like a clean one.
+  // `spawnSync` reports these on `error` and NOT through the exit status, which
+  // is why the status is carried out separately rather than conflated with it.
   if (result.error) {
     throw new Error(
       `check-test-heap-budget: could not capture vitest output for ${cwd} (${configFile}): `
@@ -224,7 +346,7 @@ function measureSuite(pkgDir: string, suite: TestSuite): string {
   }
   const stdout = typeof result.stdout === 'string' ? result.stdout : '';
   const stderr = typeof result.stderr === 'string' ? result.stderr : '';
-  return `${stdout}\n${stderr}`;
+  return { output: `${stdout}\n${stderr}`, status: result.status };
 }
 
 function main(): void {
@@ -234,13 +356,17 @@ function main(): void {
 
   for (const target of targets) {
     for (const suite of target.suites) {
-      const output = measureSuite(target.dir, suite);
-      const entries = parseHeapUsage(output).map((e) => ({ ...e, file: `${target.dir}/${e.file}` }));
-      if (entries.length === 0) {
-        log(`check-test-heap-budget: no per-file heap lines parsed for ${target.dir} (${suite}) — did vitest run, or did a fork OOM above the 1024MB cap before printing its heap line? Failing closed.`, 'red');
+      const { output, status } = measureSuite(target.dir, suite);
+      const parsed = parseHeapUsage(output);
+      // Completeness BEFORE budget: a partial run's violations list is a
+      // statement about the files that survived, not about the suite.
+      const incomplete = findIncompleteMeasurement(output, parsed.length, status);
+      if (incomplete) {
+        log(`check-test-heap-budget: ${target.dir} (${suite}): ${incomplete} Failing closed.`, 'red');
         process.exitCode = 1;
         return;
       }
+      const entries = parsed.map((e) => ({ ...e, file: `${target.dir}/${e.file}` }));
       measuredFiles += entries.length;
       allViolations.push(...findHeapBudgetViolations(entries, budgetMB));
     }

@@ -170,6 +170,13 @@ with a regression test.
     class. ⚠️ **Group by the PAIR, never `dstKey` alone** — three namespaces share the column.
     Two invariants are enforced by the schema rather than left to producers: `dstResource` is
     non-null **iff** `dstKind` is `resource`, and in that class `dstKey` must equal `dstResource`.
+    🔒 An `external` key is normalized with **any `user:pw@` userinfo cleared** — `vat resources
+    query` prints the column verbatim, so a credential authored into a URL would be republished in
+    query output.
+  - **`edges.kind` emits `anchor` for a fragment-only reference** (`#section`), which had no
+    producer even though `anchor` was already in the documented vocabulary. They were classed
+    `local_file`, which made `COUNT(*) WHERE kind = 'local_file'` a fiction: 159 of 988
+    filesystem-lens edges on this repository — 16% — name no file at all.
   - **`dstAnchor`'s documented meaning is widened** (same name, same type). For `dstKind`
     `resource` it still joins `blob_sections.slug`; for the other two classes it now carries the raw
     fragment, which nothing in the projection can resolve.
@@ -191,9 +198,12 @@ with a regression test.
   `markdown-definition` is deliberately excluded: the edge belongs to the *use*, and counting the
   definition too double-counts every inbound reference-style link.
 
-  An edge with **zero** candidate rows is a real state — the lens looked and the token named no file
-  at all — and is distinct from an edge whose candidate lies outside the corpus. One scalar
-  destination column could not tell those apart, which is why the two relations are separate.
+  An edge with **zero** candidate rows is a real state — the lens looked and produced no candidate
+  for an authored reference — and is distinct from an edge whose candidate lies outside the corpus.
+  One scalar destination column could not tell those apart, which is why the two relations are
+  separate. In practice today every such edge is a same-document `#fragment` anchor, which the lens
+  does not yet resolve; resolving them against `blob_sections.slug` in the containing blob is a
+  known follow-up.
 
   **`resolveReferencePath` is exported alongside it**, and `closure-extent.ts` now calls it rather
   than carrying its own copy. "Where does this reference point" has one answer whoever asks; the
@@ -203,11 +213,13 @@ with a regression test.
   relations join the queryable surface — `lens_contexts`, `edges` and `edge_resolutions` — evaluated
   once per run over every extent and written into the same per-run in-memory database the projection
   goes into. They are **not projection tables** and are not in `PROJECTION_TABLES`: `DerivedTableSpec`
-  has no `scope` field, because a lens's output is honestly neither blob-scoped nor extent-scoped, and
-  `writeDerived` is declared on the *queryable* store rather than on `ProjectionStore` — so the shared
-  on-disk store, which is one database per VAT release across every root on the machine, cannot
-  receive them. A derived relation likewise never adds a row to a materialised table, which is why an
-  invented lens lands in `lens_contexts` rather than in `resolution_contexts`.
+  has no `scope` field, because a lens's output is honestly neither blob-scoped nor extent-scoped.
+  Keeping them out of the shared on-disk store — one database per VAT release across every root on
+  the machine — is a **runtime refusal, not a structural guarantee**: `openSqliteProjectionStore`
+  returns the queryable handle, so `writeDerived` is right there on a file-backed store, and a store
+  whose schema carries no derived tables throws when asked to write them. Only the per-run in-memory
+  store is built with that DDL. A derived relation likewise never adds a row to a materialised table,
+  which is why an invented lens lands in `lens_contexts` rather than in `resolution_contexts`.
 
   A new `lensSecs` sits beside `populationSecs` in the query document, stated separately because a
   store hit does not make the lens cheaper and folding the two together would read as the store
@@ -218,8 +230,10 @@ with a regression test.
   10,317 resolving to a resource, 434 external, and **51 out-of-corpus**. ⭐ That last number is the
   point of the whole model: a naive dangling count (`dstResource IS NULL`) reports **485 broken
   links**, of which 434 are external URLs that are not broken at all. Separating the classes is a
-  9.5x correction, not a refinement. A further 251 edges carry no candidate at all — the token named
-  no file — which is a third state one scalar column could not have expressed.
+  9.5x correction, not a refinement. A further 251 edges carry no candidate at all — every one of
+  them a same-document `#fragment` anchor the lens does not yet resolve, 250 of which do have a
+  matching `blob_sections.slug` in their own blob — which is a third state one scalar column could
+  not have expressed.
 
   🚨 **An out-of-corpus count is meaningless without naming its lens.** The corpus a destination is
   judged against is the *lens's extent*, not the tree. On that same adopter the filesystem lens
@@ -640,6 +654,14 @@ with a regression test.
     They are now the top-level `maxWorkers` and `execArgv`. One `maxWorkers` also replaces the
     two-knob `maxForks`/`maxThreads` split, so the old failure of setting one and leaving the other
     unbounded is no longer expressible.
+    🔒 **That regression is now mechanically guarded**, by
+    `dev-tools/test/vitest-config-surface.test.ts`. Until it existed the only defence was a banner
+    addressed to a human, and every mechanical route is blind to these files: ESLint ignores every
+    `vitest.*.ts` by pattern, and no tsconfig puts one in a program — nor would that help, because
+    `defineConfig`'s excess-property check fires on object LITERALS and all 41 package configs pass
+    a call expression (`test: createUnitTestConfig()`). The test therefore asserts on the EVALUATED
+    factory output and separately scans every `vitest.*.ts` found by name, so a config added to a
+    new package is covered without anyone remembering to add it.
   - **`vi.restoreAllMocks()` no longer clears the call history of `vi.fn()` mocks** — it only
     restores originals for `vi.spyOn` spies. Three suites went red on accumulated counts. Fixed once
     with `clearMocks: true` in the shared config (it clears calls without touching implementations)
@@ -659,14 +681,28 @@ with a regression test.
   4's default reporter prints no line for a passing file, so `--logHeapUsage` had nothing to attach
   to and the parser matched zero lines — which the guard correctly treats as a measurement failure,
   not a pass. It now runs `--reporter=verbose` and reduces the per-TEST readings to each file's
-  peak, which is the quantity the budget always meant.
+  peak, which is the quantity the budget always meant. Verbose output is ~3 orders of magnitude
+  larger, so it also raises `spawnSync`'s 1 MiB `maxBuffer` and fails closed on a truncated or
+  incomplete stream — a partial capture still parses *some* heap lines, and would have passed the
+  old "zero lines parsed" check while silently under-measuring every file it never saw.
+  ⭐ **And it now reads the completeness signal vitest was already printing and the guard was
+  discarding**: `Test Files … (N)`, where N is the number of spec files SCHEDULED. Comparing that —
+  less the skipped and todo files, which by design print no heap line — against the number of files
+  that actually produced a reading answers "did I measure the whole suite?" directly. An exit code
+  cannot: a worker killed mid-file exits non-zero through `status` while the files that already
+  finished still print their heap lines, so the run had entries, none over budget, and the guard
+  reported GREEN on precisely the scenario it exists to catch — the unmeasured file being, by
+  construction, the one that blew the memory. Completeness is now checked BEFORE the budget, since a
+  partial run's violation list is a statement about the files that survived, not about the suite.
 
-- **Unit-test workers now carry a heap ceiling, which only integration and system had.** A unit fork
-  inherited Node's default old-space size, which scales with host RAM and so never binds on a 16GB
-  CI runner; the unit tier is also the one whose worker deaths are hardest to read, because a dying
-  fork takes the run's exit code to 1 while printing no test-level failure, which vibe-validate's
-  extractor then reports as `0 test failure(s)` with an empty error list. The cap is 512MB, ~3.1x
-  the heaviest unit file measured across all 635 of them (166MB,
+- **Unit-test workers now carry a heap ceiling on Windows, which only integration and system had.**
+  Every other platform runs the unit tier on `threads`, which cannot take the flag (below), so a
+  unit worker there still inherits Node's RAM-scaled default and is uncapped — measured at 4288 MB
+  on a 24 GB host. A unit fork inherited that same default, which scales with host RAM and so never
+  binds on a 16GB CI runner; the unit tier is also the one whose worker deaths are hardest to read,
+  because a dying fork takes the run's exit code to 1 while printing no test-level failure, which
+  vibe-validate's extractor then reports as `0 test failure(s)` with an empty error list. The cap is
+  512MB, ~3.1x the heaviest unit file measured across all 635 of them (166MB,
   `dev-tools/test/local-eslint-rule-enablement.test.ts`).
   🪤 It applies to the fork pool only — that is Windows, where the opaque failures were seen.
   `worker_threads` REJECTS `--max-old-space-size` outright (`ERR_WORKER_INVALID_EXEC_ARGV`), because
@@ -916,7 +952,15 @@ with a regression test.
   href alone and rewrote every *other* construct sharing that href. Measured: a titled link beside
   an image with the same target left the link unrewritten and reduced
   `![diagram](evals/diagram.png)` to `!diagram` — the image destroyed, the bang orphaned. "I will
-  not re-emit this" and "the regex replay owns this" are now different answers.
+  not re-emit this" and "the regex replay owns this" are now different answers — and the line
+  between them is whether the parser LOCATED the construct, not what form the construct takes.
+  Anything carrying a usable span that this pass declines is REFUSED and left byte-for-byte:
+  an autolink, an `<a href>`, and a reference-style use `[t][id]`, none of which the replay's
+  `[text](href)` pattern can re-derive from the source anyway. Measured: `[t][id]` beside
+  `![alt](y.md)` sharing that target left the use unrewritten and rewrote the IMAGE, shipping a dead
+  link whose definition had been removed. Only a link the parser could not place at all — the HTML
+  producer really does emit one carrying a line and no offsets — still reaches the href-keyed
+  replay, which is then the only thing able to find it.
 
 - **Edge resolution is deterministic across machines, shells and runtimes.** The realization chosen
   as a link's resolution base was ordered with `localeCompare`, which resolves against the host

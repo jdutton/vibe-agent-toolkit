@@ -7,8 +7,10 @@ import {
   DEFAULT_BUDGET_MB,
   DEFAULT_TARGETS,
   findHeapBudgetViolations,
+  findIncompleteMeasurement,
   parseArgs,
   parseHeapUsage,
+  parseTestFileSummary,
 } from '../src/check-test-heap-budget.js';
 
 const SAMPLE_STDOUT = `
@@ -87,6 +89,122 @@ describe('parseHeapUsage', () => {
   it('does not match prose that merely mentions "MB" without the exact heap-used tail', () => {
     const stdout = ' ✓ test/integration/foo.integration.test.ts (1 test) 10ms uploaded 5 MB of fixtures\n';
     expect(parseHeapUsage(stdout)).toEqual([]);
+  });
+});
+
+/**
+ * The VERIFIED green-on-a-broken-run scenario, derived from the clean fixture
+ * above rather than retyped: the same two-file run with one worker SIGKILLed
+ * mid-file. Everything language-service printed is gone, and vitest's tally
+ * drops to `1 passed` while the SCHEDULED total in parens stays at 2.
+ *
+ * 🚨 Deriving it is the point. A hand-written second fixture could drift from
+ * the first and then "prove" the guard against output no vitest ever emits;
+ * this one is provably the clean run minus a worker.
+ */
+const ONE_OF_TWO_FILES_TALLY = 'Test Files  1 passed (2)';
+const KILLED_WORKER_STDOUT = V4_VERBOSE_STDOUT.split('\n')
+  .filter((line) => !line.includes('language-service'))
+  .join('\n')
+  .replace('Test Files  2 passed (2)', ONE_OF_TWO_FILES_TALLY);
+
+/**
+ * The same one-of-two shortfall, but vitest itself accounts for the missing
+ * file: it was fully SKIPPED, so it printed `↓ file > name` with no heap column
+ * and is absent from the measured set by design, not by dying.
+ *
+ * Two variants because the exit status must NOT be the completeness signal:
+ * the clean one exits 0, and the second has a genuinely failing sibling file so
+ * the run exits 1 while still measuring everything it could.
+ */
+const SKIPPED_FILE_STDOUT = KILLED_WORKER_STDOUT.replace(
+  ONE_OF_TWO_FILES_TALLY,
+  'Test Files  1 passed | 1 skipped (2)',
+);
+const SKIPPED_WITH_FAILING_SIBLING_STDOUT = KILLED_WORKER_STDOUT.replace(
+  ONE_OF_TWO_FILES_TALLY,
+  'Test Files  1 failed | 1 skipped (2)',
+);
+
+describe('parseTestFileSummary', () => {
+  it('reads the scheduled total and the categories that print no heap line', () => {
+    const stdout = ' Test Files  1 failed | 2 passed | 3 skipped | 1 todo (7)\n      Tests  9 passed (9)\n';
+
+    expect(parseTestFileSummary(stdout)).toEqual({ total: 7, skipped: 3, todo: 1 });
+  });
+
+  it('reads a summary with no breakdown categories beyond passed', () => {
+    expect(parseTestFileSummary(V4_VERBOSE_STDOUT)).toEqual({ total: 2, skipped: 0, todo: 0 });
+  });
+
+  it('returns null when the run printed no Test Files line at all', () => {
+    expect(parseTestFileSummary(' ✓ test/a.test.ts > x 1ms 5 MB heap used\n')).toBeNull();
+  });
+
+  it('does not mistake the Tests line for the Test Files line', () => {
+    // 🪤 `Tests  30 passed (30)` is one row below and matches the same shape
+    // apart from the anchor. Reading it would report 30 scheduled FILES.
+    expect(parseTestFileSummary('      Tests  30 passed (30)\n')).toBeNull();
+  });
+});
+
+describe('findIncompleteMeasurement', () => {
+  it('FAILS CLOSED when a worker died mid-file: one heap line, two files scheduled', () => {
+    // 🚨 The verified defect. Exit is 1 via `status` (not `error`), the file
+    // that finished still printed its heap lines, so `entries.length === 0` is
+    // false and no surviving entry is over budget — the guard reported GREEN on
+    // exactly the run it exists to catch, and the unmeasured file is the one
+    // that blew the memory.
+    // Pin the fixture's SHAPE first, so this can never quietly become a test of
+    // some other output: exactly one file measured, two files scheduled.
+    expect(parseHeapUsage(KILLED_WORKER_STDOUT)).toHaveLength(1);
+    expect(KILLED_WORKER_STDOUT).toContain(ONE_OF_TWO_FILES_TALLY);
+
+    const reason = findIncompleteMeasurement(KILLED_WORKER_STDOUT, parseHeapUsage(KILLED_WORKER_STDOUT).length, 1);
+
+    expect(reason, 'the guard reported GREEN on a run that measured 1 of 2 files').not.toBeNull();
+    expect(reason).toContain('measured 1 of 2');
+  });
+
+  it('passes a complete run', () => {
+    expect(findIncompleteMeasurement(V4_VERBOSE_STDOUT, parseHeapUsage(V4_VERBOSE_STDOUT).length, 0)).toBeNull();
+  });
+
+  it('passes a run whose TESTS failed but whose files were all measured', () => {
+    // 🪤 A non-zero exit is not by itself incompleteness — a suite may fail
+    // loudly while printing every heap line. Reading the exit code alone would
+    // red this, which is why the file COUNT is the signal and the status is
+    // only reported alongside it.
+    const failed = V4_VERBOSE_STDOUT.replace('Test Files  2 passed (2)', 'Test Files  1 failed | 1 passed (2)');
+
+    expect(findIncompleteMeasurement(failed, parseHeapUsage(failed).length, 1)).toBeNull();
+  });
+
+  it.each([
+    ['a clean run', SKIPPED_FILE_STDOUT, 0],
+    ['a run whose other file FAILED (exit 1)', SKIPPED_WITH_FAILING_SIBLING_STDOUT, 1],
+  ])('does not red on a legitimately SKIPPED file in %s', (_label, stdout, status) => {
+    // 🪤 This is the guard's other failure direction, and the expensive one: a
+    // gate that fires on healthy runs gets suppressed. A skipped file prints
+    // `↓ file > name` with NO heap column, so it is missing from the measured
+    // set exactly like a file whose worker died — only the `Test Files` line
+    // tells them apart. The exit-1 row additionally pins that "fail closed on
+    // any non-zero exit" is NOT an acceptable implementation of this fix.
+    expect(findIncompleteMeasurement(stdout, parseHeapUsage(stdout).length, status)).toBeNull();
+  });
+
+  it('fails closed when nothing at all was measured', () => {
+    expect(findIncompleteMeasurement(' Test Files  no tests\n', 0, 0)).toContain('no per-file heap lines parsed');
+  });
+
+  it('fails closed when the run printed no Test Files summary to check against', () => {
+    // A run killed before it could tally is unverifiable, not clean.
+    const truncated = KILLED_WORKER_STDOUT.split('\n').filter((line) => !line.includes('Test Files')).join('\n');
+
+    const reason = findIncompleteMeasurement(truncated, parseHeapUsage(truncated).length, 1);
+
+    expect(reason, 'an unverifiable run reported GREEN').not.toBeNull();
+    expect(reason).toContain('no "Test Files');
   });
 });
 

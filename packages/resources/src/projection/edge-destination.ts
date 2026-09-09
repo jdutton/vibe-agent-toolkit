@@ -52,6 +52,67 @@ export interface EdgeDestination {
  * safe direction. Dropping an unknown port would merge two genuinely different
  * origins; keeping a redundant one only splits a group that could have been one.
  */
+/** An RFC 3986 scheme, matched against an already-isolated prefix. */
+const SCHEME = /^[a-z][\w+.-]*$/iu;
+
+/**
+ * Where the authority begins, or -1 when the token has no authority at all.
+ *
+ * The scheme is accepted as well as absent, not merely the protocol-relative
+ * `//`: `new URL` throws on a fully-spelled URL with an out-of-range port
+ * (measured: `ERR_INVALID_URL` on `https://user:pw@example.com:99999/x`), so a
+ * credentialled https token really does reach the fallback. A `//`-only test
+ * would redact the protocol-relative shape while publishing that one — the same
+ * half-fix, one level down.
+ *
+ * The scheme is verified against {@link SCHEME} rather than trusting the first
+ * `://` found anywhere, so a `://` inside a query (`mailto:x?u=http://a@b/c`)
+ * does not open an authority two thirds of the way through a token.
+ *
+ * @param token - The reference with any fragment already removed
+ * @returns Index of the first character after `//`, or -1
+ */
+function authorityStartOf(token: string): number {
+  if (token.startsWith('//')) return 2;
+  const schemeEnd = token.indexOf('://');
+  return schemeEnd > 0 && SCHEME.test(token.slice(0, schemeEnd)) ? schemeEnd + 3 : -1;
+}
+
+/**
+ * Delete the `user:pw@` half of an authority, leaving every other byte in place.
+ *
+ * ## Why this is a string scan and not a regex
+ *
+ * `/^((?:[a-z][\w+.-]*:)?\/\/)[^/]*@/` expresses the same rule and is what this
+ * started as. `security/detect-unsafe-regex` refuses it — a starred group inside
+ * an optional group reads as star height 2 to safe-regex's heuristic — and this
+ * repository's answer to a linter smell is to remove it, not to argue it away.
+ * ⚠️ The rewrite is only worth anything if it is ACTUALLY linear, which a regex
+ * rewrite that merely satisfies the checker often is not: this one is two
+ * `indexOf`/`lastIndexOf` scans and one bounded `test`, with no backtracking
+ * anywhere.
+ *
+ * It also states the two boundary rules instead of implying them:
+ *
+ * - `lastIndexOf('@', ...)` **is** "the last `@` wins", where the regex got the
+ *   same answer only as a side effect of greedy backtracking. `//a@b@host/x`
+ *   redacts to `//host/x`; the near-miss `//b@host/x` still LOOKS redacted while
+ *   carrying a credential, which is why a test pins it.
+ * - The search stops at the first `/` after the authority, so an `@` in a PATH
+ *   (`//host/path@thing`) is not userinfo and survives untouched.
+ *
+ * @param token - The reference with any fragment already removed
+ * @returns The token with any authority userinfo removed
+ */
+function redactAuthorityUserinfo(token: string): string {
+  const authorityStart = authorityStartOf(token);
+  if (authorityStart === -1) return token;
+  const pathStart = token.indexOf('/', authorityStart);
+  const authorityEnd = pathStart === -1 ? token.length : pathStart;
+  const at = token.lastIndexOf('@', authorityEnd - 1);
+  return at < authorityStart ? token : token.slice(0, authorityStart) + token.slice(at + 1);
+}
+
 const DEFAULT_PORTS = new Map([
   ['http:', '80'],
   ['https:', '443'],
@@ -216,6 +277,10 @@ export function outOfCorpusDestination(relativePath: string, anchor: string | nu
  *
  * - **scheme and host lowercased** (RFC 3986 §3.2.2 makes both
  *   case-insensitive), and the scheme's **default port dropped**;
+ * - **userinfo removed** — `dstKey` is printed verbatim by `vat resources
+ *   query`, so a `user:pw@` half retained here is a credential republished into
+ *   a CI log. It is also not part of the destination's identity: two links to
+ *   one origin, one credentialled and one not, cite the same page;
  * - **path, query and fragment left exactly as authored** — path case is
  *   significant on any case-sensitive server, so folding it would merge
  *   genuinely distinct targets;
@@ -231,6 +296,14 @@ export function outOfCorpusDestination(relativePath: string, anchor: string | nu
  * is keyed on itself, minus its fragment: two spellings that `URL` would have
  * unified may stay two keys. That under-groups, which is the safe direction —
  * the alternative merges destinations that are not the same.
+ *
+ * ⭐ **Userinfo is redacted on that branch too, and that is not a
+ * canonicalization.** "Honest, not canonical" is a refusal to assert an
+ * EQUIVALENCE the parser did not establish; deleting a credential asserts
+ * nothing and invents nothing. Both branches redact, so "this key carries no
+ * secret" is a property of the function rather than of which branch an input
+ * happened to take — a half-redacting function is worse than a non-redacting
+ * one, because its output reads as safe.
  *
  * @param rawRef - The reference exactly as authored
  * @returns The destination columns, with `dstResource` always null
@@ -297,7 +370,21 @@ function normalizeUri(withoutFragment: string): string {
   try {
     url = new URL(withoutFragment);
   } catch {
-    return withoutFragment;
+    // ⭐ The ONE mutation this branch makes, and it is deliberate: REDACTION,
+    // not canonicalization. The two are different acts and only the second is
+    // what "honest, not canonical" refuses. Canonicalizing asserts an
+    // EQUIVALENCE — that two spellings are one destination — and can be wrong,
+    // which is why this branch will not invent a scheme or fold a host. Deleting
+    // a credential asserts nothing: it removes bytes that were never part of the
+    // destination's identity, and that this column would otherwise republish
+    // verbatim into a CI log (`dstKey` is printed as plain YAML by
+    // `vat resources query`).
+    //
+    // 🚨 It is here because the success branch's `url.username = ''` alone was a
+    // HALF-fix, which is worse than none: the redacted half reads as the whole,
+    // so a credential surviving in a token `URL` refused would be trusted as
+    // absent. See {@link redactAuthorityUserinfo} for exactly what it removes.
+    return redactAuthorityUserinfo(withoutFragment);
   }
   // `URL` lowercases the scheme and host and drops a default port on
   // construction, and leaves path and query case alone — which is exactly the
@@ -306,5 +393,19 @@ function normalizeUri(withoutFragment: string): string {
   // special: it keeps `:80` on such a scheme, and so do we.
   const defaultPort = DEFAULT_PORTS.get(url.protocol);
   if (defaultPort !== undefined && url.port === defaultPort) url.port = '';
+  // 🚨 `href` RETAINS userinfo, and `dstKey` is a PUBLISHED column — `vat
+  // resources query` prints it as plain YAML, so `https://user:pw@host/a` put
+  // the credential straight into a CI log. Cleared here, beside the port, for
+  // the same reason the port is: this is where the parsed URL is edited into
+  // the key. Clearing both halves is a no-op on a URI that carries neither, and
+  // on a scheme whose URLs cannot hold them at all (`mailto:`), so the branch
+  // needs no guard.
+  //
+  // ⚠️ Success branch ONLY. The fallback above returns the token untouched, so
+  // a credential in a protocol-relative reference is still keyed — parsing that
+  // would require inventing a scheme the author did not write, which is the
+  // trade the fallback's docstring already refuses.
+  url.username = '';
+  url.password = '';
   return url.href;
 }

@@ -516,13 +516,22 @@ interface SplicableLink {
  * 🚨 Three outcomes, not two, because "I will not splice this" and "the regex
  * replay should handle this" are different statements and treating them as one
  * corrupted documents. Only `unrecognised` may reach the fallback.
+ *
+ * 🔑 The line between the two "no"s is **whether the parser LOCATED the
+ * construct**, not whether the construct is an inline link. The replay is keyed
+ * on href alone, so handing it a link it cannot re-derive from the source does
+ * not rewrite that link — it rewrites whatever OTHER construct in the document
+ * happens to share the href. A construct with a usable span is therefore never
+ * fallback material, whatever its form: if this pass will not re-emit it, the
+ * bytes stay as written. Only a link with no usable span — the parser could not
+ * say where it is — leaves the replay as the sole thing able to find it.
  */
 type SpliceVerdict =
   /** An inline link this can re-emit faithfully. */
   | { readonly outcome: 'splice'; readonly splicable: SplicableLink }
-  /** An inline link it will NOT re-emit — leave the source bytes alone. */
+  /** A LOCATED construct it will NOT re-emit — leave the source bytes alone. */
   | { readonly outcome: 'refuse' }
-  /** Not an inline link at all — the regex replay owns it. */
+  /** A link with no usable span — the regex replay is the only thing that can find it. */
   | { readonly outcome: 'unrecognised' };
 
 /** Shared singletons, so the hot path allocates nothing for a "no". */
@@ -557,11 +566,13 @@ function matchingBracketEnd(content: string, start: number): number | undefined 
 /**
  * Promote a parsed link to a {@link SplicableLink}, or decline it.
  *
- * Declining is deliberate and conservative — a declined link falls back to the
- * regex replay, i.e. to exactly the behaviour that shipped before. We decline:
+ * Declining is deliberate and conservative. We decline:
  *
- * - **a link with no span** — `startOffset`/`endOffset` are optional, and the
- *   HTML producer really does emit a link carrying a line and no offsets;
+ * - **a link with no usable span** — `startOffset`/`endOffset` are optional, and
+ *   the HTML producer really does emit a link carrying a line and no offsets.
+ *   This is `UNRECOGNISED`: nothing here knows where the construct is, so the
+ *   regex replay is the only thing that can find it, and dropping the link
+ *   instead would silently stop rewriting it;
  * - **a construct that does not start with `[`** — an autolink or an `<a href>`,
  *   neither of which the inline-link template vocabulary describes;
  * - **a construct that is not `[...](...)`** — most importantly a reference-style
@@ -569,21 +580,37 @@ function matchingBracketEnd(content: string, start: number): number | undefined 
  *   silently convert a reference link into an inline one. That is a change to the
  *   document's link FORM, not to its target, and no caller asked for it.
  *
- * ⛔ Those three are `UNRECOGNISED` — the regex replay is the right owner of
- * them. A `REFUSED` verdict is a DIFFERENT answer: the span is an inline link
- * and this function will not re-emit it, so the caller must leave it alone and
- * must NOT hand it to the replay. Collapsing the two is what let a refusal
- * corrupt a neighbouring image; see the note on the destination check.
+ * 🚨 The last two are `REFUSED`, not `UNRECOGNISED`, and calling them
+ * `UNRECOGNISED` shipped a live corruption. They HAVE a span — the parser found
+ * them — they are merely forms this pass will not re-emit. `MARKDOWN_LINK_REGEX`
+ * matches only `[text](href)`, so it can never re-derive an autolink, an
+ * `<a href>` or a `[t][id]` from the source; putting one into `fallbackByHref`
+ * therefore cannot rewrite that link at all. What it CAN do is fire on some
+ * other construct that happens to share the href — and a markdown image is never
+ * a `ResourceLink` (pinned by `link-grammar-divergence.test.ts`), so an image is
+ * never a splice candidate, never refused, and is pure prey. Measured:
+ * `[t][id]` beside `![alt](y.md)` sharing `y.md` left the use unrewritten and
+ * rewrote the IMAGE. The `REFUSED` fix that closed this for the destination
+ * check below was never applied to these two, so the defect stayed live.
+ *
+ * ⛔ The discriminator is the SPAN, not the form. Do not "improve" this by
+ * enumerating node types: `nodeType` is `link` for both an inline link and an
+ * autolink, so it cannot answer the question, and a form nobody has enumerated
+ * yet must fail closed rather than reach an href-keyed replay.
  */
 function splicableFrom(content: string, link: ResourceLink): SpliceVerdict {
   const { startOffset: start, endOffset: end } = link;
   if (start === undefined || end === undefined) return UNRECOGNISED;
+  // A span that does not address this string is not a location either: `links`
+  // and `content` disagree, so nothing here knows where the construct is.
   if (start >= end || end > content.length) return UNRECOGNISED;
-  if (content.charAt(start) !== '[') return UNRECOGNISED;
+
+  // ⬇️ Past this point the construct is LOCATED, so every "no" below is REFUSED.
+  if (content.charAt(start) !== '[') return REFUSED;
 
   const close = matchingBracketEnd(content, start);
-  if (close === undefined || close >= end) return UNRECOGNISED;
-  if (content.charAt(close + 1) !== '(' || content.charAt(end - 1) !== ')') return UNRECOGNISED;
+  if (close === undefined || close >= end) return REFUSED;
+  if (content.charAt(close + 1) !== '(' || content.charAt(end - 1) !== ')') return REFUSED;
 
   // 🚨 The destination the SPAN points at must be EXACTLY the href the parser
   // reported. This one check carries three separate hazards, and each of them
@@ -649,9 +676,10 @@ function splicableLinks(content: string, links: ResourceLink[]): {
   refused: ReadonlySet<ResourceLink>;
 } {
   const found: SplicableLink[] = [];
-  // Links this recognised as inline and declined to re-emit. They are NOT
-  // fallback material: replaying the regex for one rewrites whatever else in
-  // the document shares its href — measured, an image next to a titled link.
+  // Links this LOCATED and declined to re-emit. They are NOT fallback material:
+  // replaying the regex for one rewrites whatever else in the document shares
+  // its href — measured, an image next to a titled link, and an image next to a
+  // reference-style use.
   const refused = new Set<ResourceLink>();
   for (const link of links) {
     if (link.nodeType === 'definition') continue; // Definitions are handled in pass 2
@@ -749,8 +777,13 @@ function rewriteInlineLinks(
     // not rewritten twice. A REFUSED link is excluded because the replay is
     // keyed on href alone and would rewrite every OTHER construct sharing that
     // href — an image beside a titled link was measured losing its `[...]` and
-    // keeping an orphaned `!`. A link this declined to re-emit must leave the
-    // document exactly as it found it, neighbours included.
+    // keeping an orphaned `!`, and an image beside a reference-style `[t][id]`
+    // the same way. A construct this located and declined to re-emit must leave
+    // the document exactly as it found it, neighbours included.
+    //
+    // What remains in the map is exactly the links with no usable span. Those
+    // are the only ones the replay can be right about, because they are the only
+    // ones for which finding the construct in the raw text is the whole job.
     if (link.nodeType === 'definition' || candidates.has(link) || refused.has(link)) continue;
     if (!fallbackByHref.has(link.href)) fallbackByHref.set(link.href, link);
   }

@@ -1399,3 +1399,143 @@ describe('stray unpaired "[" in prose', () => {
     expect(result).toBe('A glob may use (`*`, `**`, `?`, `[`) — see guide for details.');
   });
 });
+
+/** An external href, so an autolink over it is a construct CommonMark really produces. */
+const AUTOLINK_HREF = 'https://example.com/d.png';
+
+/**
+ * A construct the parser LOCATED but `MARKDOWN_LINK_REGEX` cannot express, an
+ * inline link, and an image — the construct and the image sharing one href.
+ *
+ * The construct carries a real span, so the parser found it; it simply is not an
+ * inline `[...](...)`. The `[Guide]` link is the positive control that keeps the
+ * assertions below from passing merely because the whole pass stopped working.
+ *
+ * @param construct - The located non-inline construct, verbatim
+ * @param href - The href it and the image share
+ * @param overrides - Fields distinguishing the construct's kind (nodeType, type)
+ */
+function locatedNonInlineFixture(
+  construct: string,
+  href: string,
+  overrides: Partial<ResourceLink>,
+): { content: string; links: ResourceLink[] } {
+  const content =
+    `Spec: ${construct}\nAlso: [${GUIDE_TEXT}](${GUIDE_HREF})\nImage: ![diagram](${href})`;
+  const start = content.indexOf(construct);
+  const guideStart = content.indexOf(`[${GUIDE_TEXT}]`);
+  return {
+    content,
+    links: [
+      createTestLink({
+        text: 'Diagram spec',
+        href,
+        startOffset: start,
+        endOffset: start + construct.length,
+        ...overrides,
+      }),
+      createTestLink({
+        text: GUIDE_TEXT,
+        href: GUIDE_HREF,
+        nodeType: 'link',
+        startOffset: guideStart,
+        endOffset: content.indexOf(')', guideStart) + 1,
+      }),
+    ],
+  };
+}
+
+/** Strip both kinds, so the external autolink case has a rule to match. */
+const STRIP_LOCAL_AND_EXTERNAL = createTypeRule([LOCAL_FILE, EXTERNAL], STRIP_TEMPLATE);
+
+describe('a LOCATED construct the replay cannot express must not disturb its NEIGHBOURS', () => {
+  it('spares an image sharing an href with a reference-style USE', () => {
+    // 🚨 The same corruption the titled-link case above pins, reached through the
+    // other verdict. A reference-style use `[t][id]` HAS a span, so the parser
+    // located it — but it is not `[...](...)`, so the splice pass declined it as
+    // UNRECOGNISED, which put it into `fallbackByHref`. `MARKDOWN_LINK_REGEX` can
+    // never match `[t][id]`, so that map entry could only ever fire on a DIFFERENT
+    // construct sharing the href — and images are never `ResourceLink`s (pinned in
+    // `link-grammar-divergence.test.ts`), so they are never candidates and never
+    // refused: pure prey. Measured against `dist` before the fix,
+    // `![diagram](evals/diagram.png)` was rewritten through the strip template
+    // while the use itself shipped unrewritten either way.
+    const { content, links } = locatedNonInlineFixture(
+      '[Diagram spec][id]',
+      SHARED_IMG_HREF,
+      { nodeType: 'linkReference' },
+    );
+
+    const result = transformContent(content, links, {
+      linkRewriteRules: [STRIP_LOCAL_AND_EXTERNAL],
+    });
+
+    expect(result).toBe(
+      `Spec: [Diagram spec][id]\nAlso: ${GUIDE_TEXT}\nImage: ![diagram](${SHARED_IMG_HREF})`,
+    );
+  });
+
+  it('spares an image sharing an href with an AUTOLINK', () => {
+    // The other located-but-inexpressible shape, and the reason the discriminator
+    // is the span rather than `nodeType`: mdast reports an autolink as a `link`
+    // node, indistinguishable by type from an inline link, and only the bytes at
+    // the span say `<…>`. An `<a href>` reaches the same branch — its span is the
+    // ATTRIBUTE (`html-link-parser.ts › makeLink`), which also does not open `[`.
+    const { content, links } = locatedNonInlineFixture(
+      `<${AUTOLINK_HREF}>`,
+      AUTOLINK_HREF,
+      { type: EXTERNAL, nodeType: 'link' },
+    );
+
+    const result = transformContent(content, links, {
+      linkRewriteRules: [STRIP_LOCAL_AND_EXTERNAL],
+    });
+
+    expect(result).toBe(
+      `Spec: <${AUTOLINK_HREF}>\nAlso: ${GUIDE_TEXT}\nImage: ![diagram](${AUTOLINK_HREF})`,
+    );
+  });
+
+  it('spares an image when a located span has no closing bracket', () => {
+    // The span is in bounds and opens `[`, so the parser placed it, but the
+    // brackets never balance — this is `content` and `links` disagreeing, e.g.
+    // a span measured against different bytes. Failing CLOSED (leave it alone)
+    // is the only safe answer: handing the href to the replay would again reach
+    // for whatever else carries it, and here that is the image.
+    const { content, links } = locatedNonInlineFixture(
+      '[Diagram spec (unclosed',
+      SHARED_IMG_HREF,
+      { nodeType: 'link' },
+    );
+
+    const result = transformContent(content, links, {
+      linkRewriteRules: [STRIP_LOCAL_AND_EXTERNAL],
+    });
+
+    expect(result).toBe(
+      `Spec: [Diagram spec (unclosed\nAlso: ${GUIDE_TEXT}\nImage: ![diagram](${SHARED_IMG_HREF})`,
+    );
+  });
+});
+
+describe('a link with NO usable span must still reach the regex replay', () => {
+  it('rewrites a link whose span runs past the end of the content', () => {
+    // ⚠️ The guard against fixing the neighbour-corruption too broadly. Excluding
+    // every declined link from `fallbackByHref` would silently stop rewriting the
+    // links the fallback exists FOR — and this is the second such shape, beside
+    // the offset-less link pinned in `link-grammar-divergence.test.ts`. A span
+    // that does not address these bytes is not a location, so the parser has told
+    // us nothing about where the construct is and the replay is the only thing
+    // that can find it.
+    const content = `See [${GUIDE_TEXT}](${GUIDE_HREF}).`;
+    const links = [createTestLink({
+      text: GUIDE_TEXT, href: GUIDE_HREF, nodeType: 'link', startOffset: 4, endOffset: 9999,
+    })];
+
+    const result = transformContent(content, links, {
+      linkRewriteRules: [createTypeRule(LOCAL_FILE, STRIP_TEMPLATE)],
+    });
+
+    expect(result).toBe(`See ${GUIDE_TEXT}.`);
+  });
+});

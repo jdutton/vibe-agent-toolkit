@@ -187,7 +187,9 @@ export type EdgeRow = z.infer<typeof EdgeRowSchema>;
  *   `GROUP BY` is a fact about the data instead of a hope about its producers.
  * - **`external`** — the normalized URI: scheme and host lowercased (RFC 3986
  *   §3.2.2 makes both case-insensitive), a default port for the scheme
- *   removed, and **path, query and fragment left exactly as authored**. Path
+ *   removed, **any `user:pw@` userinfo cleared** — this column is printed
+ *   verbatim by `vat resources query`, so retaining it republishes a credential
+ *   — and **path, query and fragment left exactly as authored**. Path
  *   case is significant on any case-sensitive server, so a blanket case-fold
  *   would merge genuinely distinct targets. The fragment is *removed* from the
  *   key — it names a location within a destination, and two links to `#a` and
@@ -229,7 +231,7 @@ export const EdgeResolutionRowSchema = z.object({
   dstKey: z.string().min(1)
     .describe('Canonical destination key within dstKind\'s namespace — GROUP BY the PAIR (dstKind, dstKey), never this column alone. Equals dstResource when dstKind is "resource"; a normalized fragment-less URI for "external"; a normalized root-relative path for "out-of-corpus". NOT stable across extent widening: widening moves a destination between classes'),
   dstResource: z.string().min(1).nullable()
-    .describe('Resolved target resource id — non-null exactly when dstKind is "resource", so null is the FACT that the target is not in THE EVALUATING LENS\'S EXTENT — the corpus for that lens, not the tree — rather than an absence standing in for several. Which destination class it is instead is dstKind. A count of nulls is therefore lens-relative and is NOT a dangling-link count: on one adopter a filesystem lens yields 51 and a closure lens over the identical tree yields 1,430, of which almost none are broken'),
+    .describe('Resolved target resource id — non-null exactly when dstKind is "resource", so null is the FACT that the target is not in THE EVALUATING LENS\'S EXTENT — the corpus for that lens, not the tree — rather than an absence standing in for several. Which destination class it is instead is dstKind. A count of nulls is therefore NOT a dangling-link count: it sums the external and out-of-corpus classes, and an external URL is not broken at all — `SELECT dstKind, COUNT(*) FROM edge_resolutions WHERE dstResource IS NULL GROUP BY dstKind` shows that split on your own corpus. The out-of-corpus half is lens-relative on top of that, varying by an order of magnitude between two lenses over the identical tree, so it is not a defect count either unless the lens\'s extent IS the tree'),
   // `.min(1)` because an empty anchor is not "an anchor that is empty" — it is
   // the ABSENCE of one, which is spelled null. Every sibling string column
   // carries the same floor; this one did not, so `resourceDestination(id, '')`

@@ -158,11 +158,23 @@ export interface EdgeRelation {
  * link yields a different class under two lenses, and reading the count as
  * "broken" is only sound for a lens whose extent IS the tree. Measured on the
  * primary adopter: the filesystem lens reports **51** out-of-corpus against
- * 10,317 resources, and those 51 really are dangling; the agentic-convention
- * lens over the same tree reports **1,430** against 511, and essentially none
- * of those are broken — they are documents the always-loaded context links to
- * that the closure does not itself contain, which is the normal and correct
- * shape of a CLAUDE.md tree.
+ * **10,317 resolutions that landed on a resource** — ⛔ not 10,317 *documents*,
+ * which is an invalid denominator: many edges point at the same file, so a rate
+ * computed against a document count is wrong. The agentic-convention lens over
+ * the same tree reports **1,430** against 511, and essentially none of those are
+ * broken — they are documents the always-loaded context links to that the
+ * closure does not itself contain, which is the normal and correct shape of a
+ * CLAUDE.md tree.
+ *
+ * ⛔ **Neither figure is a dangling-link verdict.** The filesystem lens's 51 is
+ * the closest thing to a dangling count — only because that lens's extent is the
+ * whole tree — but it is still a CLASS, not an existence verdict: nothing in the
+ * projection stats a path outside the population (`RealizationConditionRowSchema.observed`
+ * is explicitly null for `CLOSURE_REFERENCE_OUTSIDE_ROOT`), so a genuinely dead
+ * target and a live out-of-corpus one are not told apart. An earlier version of
+ * this paragraph asserted those 51 were genuinely dead — an existence verdict no
+ * lens here is entitled to make, and this file's own `dstKind` docstring
+ * contradicted two hundred lines later.
  *
  * ⇒ **Never quote an out-of-corpus count without naming the lens.** The number
  * moves 28-fold between two lenses over one corpus, and only one of the two
@@ -248,7 +260,7 @@ function emitEdge(
     src: realization.resourceId,
     refOrdinal: reference.ordinal,
     contextId: lens.contextId,
-    kind: NON_LOCAL_REF.test(reference.rawRef) ? 'external' : 'local_file',
+    kind: edgeKindFor(reference.rawRef),
     origin: 'authored',
   });
 
@@ -271,6 +283,30 @@ function emitEdge(
     tier: null,
     score: null,
   });
+}
+
+/**
+ * Which kind of thing this reference names, from the token alone.
+ *
+ * 🚨 **A fragment-only token names NO FILE**, and classing it `local_file` made
+ * `COUNT(*) WHERE kind = 'local_file'` a fiction: measured on this repository,
+ * 159 of 988 filesystem-lens edges — 16% — are `#fragment` references, and
+ * every one of them was counted as a file. `anchor` was already a documented
+ * member of `EdgeKindSchema`'s open vocabulary (it is one of the
+ * `LinkType` members the schema promises stay valid) and simply had no
+ * producer.
+ *
+ * ⛔ This decides the `kind` COLUMN only. An anchor edge still resolves to no
+ * candidate — whether a same-document `#section` should key on its own source
+ * resource is a deferred design decision, and answering it here would change
+ * the candidate count of every corpus.
+ *
+ * @param rawRef - The reference exactly as authored
+ * @returns The edge kind
+ */
+function edgeKindFor(rawRef: string): string {
+  if (rawRef.startsWith('#')) return 'anchor';
+  return NON_LOCAL_REF.test(rawRef) ? 'external' : 'local_file';
 }
 
 /**

@@ -370,6 +370,28 @@ describe('resolveEdges — the authored-only policy', () => {
       .toEqual(['external', 'local_file']);
   });
 
+  it('classes a fragment-only reference as an ANCHOR, not as a local_file', () => {
+    // `#section-only` names no file, so counting it under `local_file` inflates
+    // every `COUNT(*) WHERE kind = 'local_file'`. Measured on this repository,
+    // 159 of 988 filesystem-lens edges — 16% — are fragment-only, and all of
+    // them classed as files. `anchor` is already a documented member of
+    // `EdgeKindSchema`'s open vocabulary and had no producer.
+    const projection = projectionWith(
+      [SOURCE],
+      [reference(SOURCE, 0, '#section-only'), reference(SOURCE, 1, SOURCE)],
+    );
+
+    const { edges, edgeResolutions } = resolveEdges(projection, LENS);
+
+    expect(edges.map((edge) => edge.kind)).toEqual(['anchor', 'local_file']);
+    // ⛔ SCOPE: an anchor edge still produces NO candidate. Whether a
+    // same-document anchor should resolve to its own source is a DEFERRED
+    // design decision, and a `kind` change must not smuggle it in — only the
+    // `a.md` reference contributes a candidate here.
+    expect(edgeResolutions).toHaveLength(1);
+    expect(edgeResolutions[0]?.refOrdinal).toBe(1);
+  });
+
   it('reads an extent whose members are REALIZED BY ANOTHER PASS', () => {
     // 🚨 The regression this exists for. A closure extent contributes
     // memberships over identities the filesystem extent already realized, so

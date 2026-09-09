@@ -16,6 +16,12 @@ const GUIDE_PATH = 'docs/guide.md';
 /** The origin the scheme/host/port assertions vary around. */
 const EXAMPLE_DOC = 'https://example.com/x';
 
+/** The protocol-relative token every fallback-branch assertion is built from. */
+const PROTOCOL_RELATIVE_JS = '//cdn.example.com/lib.js';
+
+/** A URI whose query is load-bearing, shared by the keep-query assertions. */
+const EXAMPLE_QUERY_DOC = 'https://example.com/m?project=a&metric=b';
+
 /**
  * The columns a builder does NOT decide, so a built destination can be checked
  * against the shipped row schema rather than against a restatement of it.
@@ -89,8 +95,73 @@ describe('externalDestination', () => {
     expect(externalDestination('https://example.com:8443/x').dstKey).toContain(':8443');
   });
 
+  it('STRIPS a username, because dstKey is a published column', () => {
+    // 🚨 `vat resources query` prints `dstKey` as plain YAML, so whatever is in
+    // it lands in a CI log. `url.href` retains userinfo, so a credential the
+    // author wrote into a link was republished verbatim.
+    expect(externalDestination('https://user@example.com/x').dstKey).toBe(EXAMPLE_DOC);
+  });
+
+  it('STRIPS a password too, which is the half that is actually a secret', () => {
+    const built = externalDestination('https://user:pw@example.com/x');
+
+    expect(built.dstKey).toBe(EXAMPLE_DOC);
+    expect(built.dstKey).not.toContain('pw');
+    expect(built.dstKey).not.toContain('user');
+    // The strip must not take the host with it: two references to one origin,
+    // one credentialled and one not, are the same destination and must group.
+    expect(built.dstKey).toBe(externalDestination(EXAMPLE_DOC).dstKey);
+  });
+
+  it('leaves a URI carrying NO userinfo byte-identical, so this is not a rewrite', () => {
+    // The no-regression half. Clearing two properties on a parsed `URL` is a
+    // no-op when they are already empty — asserted rather than assumed, because
+    // `href` is re-serialized from the parse either way.
+    expect(externalDestination(EXAMPLE_DOC).dstKey).toBe(EXAMPLE_DOC);
+    expect(externalDestination(EXAMPLE_QUERY_DOC).dstKey).toBe(EXAMPLE_QUERY_DOC);
+    expect(externalDestination('https://example.com:8443/Path/To/Doc').dstKey)
+      .toBe('https://example.com:8443/Path/To/Doc');
+  });
+
+  it('REDACTS userinfo on the fallback branch too — a leak fixed by half reads as fixed', () => {
+    // ⭐ Redaction is NOT canonicalization, which is why this one mutation is
+    // allowed on a branch whose whole point is to canonicalize nothing. A
+    // canonicalization asserts an EQUIVALENCE (`X` and `Y` are one destination)
+    // and can therefore be wrong; deleting a credential asserts nothing and
+    // invents nothing — it removes bytes that were never part of the
+    // destination's identity and that this column republishes into a CI log.
+    expect(externalDestination('//user:pw@cdn.example.com/lib.js').dstKey)
+      .toBe(PROTOCOL_RELATIVE_JS);
+    // And nothing ELSE moves: host case is not folded and no scheme is invented,
+    // so the branch is still honest rather than canonical.
+    expect(externalDestination('//User:pw@CDN.Example.COM/Lib.js').dstKey)
+      .toBe('//CDN.Example.COM/Lib.js');
+  });
+
+  it('takes the LAST @ of the authority, and leaves an @ in the PATH alone', () => {
+    // 🪤 The wrong answer here still LOOKS redacted: taking the FIRST `@`
+    // yields `//b@host/x`, which has visibly lost a credential while still
+    // carrying one. Asserted, not reasoned about — and it stays asserted
+    // whatever the implementation is, which is what caught the regex rewrite.
+    expect(externalDestination('//a@b@host/x').dstKey).toBe('//host/x');
+    // An `@` after the first `/` is PATH, not userinfo. The search is bounded
+    // by the authority's end, so the distinction is a property of the code
+    // rather than a hope about inputs.
+    expect(externalDestination('//host/path@thing').dstKey).toBe('//host/path@thing');
+  });
+
+  it('redacts an authority whose scheme IS spelled but which URL still refused', () => {
+    // 🚨 Reachable, and `^//` alone would miss it: a port above 65535 makes
+    // `new URL` throw (measured: ERR_INVALID_URL), so a fully-spelled
+    // credentialled https URL lands on the fallback with its secret intact.
+    // Redacting only the protocol-relative shape would have been the same
+    // half-fix one level down.
+    expect(externalDestination('https://user:pw@example.com:99999/x').dstKey)
+      .toBe('https://example.com:99999/x');
+  });
+
   it('keeps the query string, which commonly identifies a distinct resource', () => {
-    const key = externalDestination('https://example.com/m?project=a&metric=b').dstKey;
+    const key = externalDestination(EXAMPLE_QUERY_DOC).dstKey;
     expect(key).toContain('project=a');
     expect(key).toContain('metric=b');
   });
@@ -125,9 +196,9 @@ describe('externalDestination', () => {
   it('falls back to the raw token, minus any fragment, when the URI will not parse', () => {
     // Protocol-relative: `isNonLocalRef` treats it as external, and `new URL`
     // cannot parse it without a base. Keyed as far as it can honestly be.
-    const relative = externalDestination('//cdn.example.com/lib.js#top');
+    const relative = externalDestination(`${PROTOCOL_RELATIVE_JS}#top`);
     expect(relative.dstKind).toBe('external');
-    expect(relative.dstKey).toBe('//cdn.example.com/lib.js');
+    expect(relative.dstKey).toBe(PROTOCOL_RELATIVE_JS);
     expect(relative.dstAnchor).toBe('top');
   });
 
@@ -183,7 +254,7 @@ describe('every builder satisfies the shipped row schema by construction', () =>
     resourceDestination(GUIDE_ID, 'anchor'),
     outOfCorpusDestination('../outside.md', null),
     externalDestination(`${EXAMPLE_DOC}#f`),
-    externalDestination('//cdn.example.com/lib.js'),
+    externalDestination(PROTOCOL_RELATIVE_JS),
   ];
 
   it.each(built.map((destination) => [destination.dstKind, destination] as const))(
