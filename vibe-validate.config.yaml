@@ -45,6 +45,10 @@ validation:
           command: 'bun run vat resources validate'
           description: 'Validates markdown link integrity across entire project'
 
+        - name: 'VAT dogfood: resource projection checks'
+          command: 'bun run vat resources check'
+          description: 'Runs the SQL assertions under resources.checks (dogfoods vat resources check)'
+
         - name: 'Code duplication check'
           command: 'bun run duplication-check'
 
