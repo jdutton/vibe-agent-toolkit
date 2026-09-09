@@ -556,15 +556,26 @@ export interface SqlQueryableStore extends ProjectionStore {
   /**
    * Write the rows one lens evaluation produced, so SQL can ask about them.
    *
-   * ## 🔑 Why this is on the QUERYABLE store and not on `ProjectionStore`
+   * ## 🚨 "A lens's output never reaches the shared on-disk store" is enforced
+   * at RUNTIME. Do not re-read it as a type guarantee — it was one, wrongly.
    *
-   * It is the type system carrying the rule *"a lens's output never reaches the
-   * shared on-disk store"*. `openSqliteProjectionStore` returns a
-   * `ProjectionStore` — the file-backed path deliberately narrows `query` away
-   * so it cannot grow one — while `openEphemeralProjectionStore` returns this
-   * wider type. Declaring the derived write here therefore makes it reachable
-   * from the in-memory store and unreachable from the on-disk one, without a
-   * runtime guard anyone could forget or a comment anyone could ignore.
+   * An earlier version of this docstring claimed `openSqliteProjectionStore`
+   * returned the narrower `ProjectionStore`, so declaring the write here made
+   * it unreachable on disk "without a runtime guard anyone could forget".
+   * **That was false.** The factory returns `SqlQueryableStore`, so every
+   * consumer of this package sees `writeDerived` on a shared on-disk handle
+   * with no type friction whatsoever. The wide type is correct — the
+   * file-backed store is legitimately queryable — so the guarantee is a
+   * refusal instead: a store built without the derived DDL throws, and only
+   * `openEphemeralProjectionStore` builds one with it.
+   *
+   * ⛔ Do not "simplify" by moving `allDerivedSpecs()` into `createSchema`.
+   * That is the obvious "why are these two loops different?" cleanup, and it
+   * would make the write succeed silently on a database shared by every
+   * repository on the machine — where the rows are also **unevictable** (they
+   * carry no extent key, and eviction goes by the extent manifest) and where
+   * this method's per-relation `DELETE` has **no root predicate**, so one
+   * repository's evaluation would empty another's.
    *
    * The rule matters because the on-disk store is **one database per VAT
    * release, shared by every root on the machine**, retaining three tree hashes
@@ -576,8 +587,8 @@ export interface SqlQueryableStore extends ProjectionStore {
    * two answers to two questions, not an accumulation; appending would silently
    * union them and make every `GROUP BY` double-count.
    *
-   * @param rows - Each derived relation's rows, keyed by
-   *   `DERIVED_TABLES`'s own keys. A relation the caller omits is left empty
+   * @param rows - Each derived relation's rows, keyed by `DERIVED_TABLES`'s own
+   *   keys. A relation the caller omits is left UNTOUCHED — not emptied
    * @throws If a row carries a value no column type can store
    */
   writeDerived(rows: DerivedRows): Promise<void>;
@@ -586,9 +597,17 @@ export interface SqlQueryableStore extends ProjectionStore {
 /**
  * The rows of one lens evaluation, keyed by {@link DERIVED_TABLES}'s own keys.
  *
- * Every relation is optional: a caller that evaluated edges but has no entry
- * points states that by omitting the field, which is a different thing from
- * passing an empty array and reads the same to SQL.
+ * Every relation is optional, and omitting one leaves it UNTOUCHED while passing
+ * an empty array CLEARS it.
+ *
+ * 🪤 **Omitting is not equivalent to passing empty, and the difference is a
+ * hazard rather than a convenience.** An earlier docstring said the two "read
+ * the same to SQL" — true only on a virgin store. Write `{lensContexts, edges}`
+ * and then `{edges}`, and `edges` describes the second evaluation while
+ * `lens_contexts` still describes the first: a join across two answers to two
+ * questions, which is the exact double-count `writeDerived` clears each relation
+ * to prevent. ⇒ **A caller should pass every relation it evaluated, every time.**
+ * `EvaluatedLenses` makes all three fields required for precisely this reason.
  */
 export type DerivedRows = {
   readonly [Name in DerivedTableName]?: readonly Record<string, unknown>[];
@@ -642,7 +661,9 @@ export function openEphemeralProjectionStore(): SqlQueryableStore {
   for (const spec of allDerivedSpecs()) {
     database.exec(createDerivedTableSql(spec));
   }
-  return new SqliteProjectionStore(database, DEFAULT_RETAINED_EXTENTS_PER_ROOT);
+  // The `true` and the loop above are ONE decision: this is the only store that
+  // has the relations, so it is the only one permitted to write them.
+  return new SqliteProjectionStore(database, DEFAULT_RETAINED_EXTENTS_PER_ROOT, true);
 }
 
 /**
@@ -866,6 +887,20 @@ class SqliteProjectionStore implements SqlQueryableStore {
   readonly #blobStatements = new Map<string, StatementSync>();
   /** Derived-relation statements, prepared on first use — see {@link SqliteProjectionStore.writeDerived}. */
   #derivedPlanCache: readonly DerivedPlan[] | undefined;
+  /**
+   * Whether this connection's schema HAS the derived relations.
+   *
+   * 🚨 The one thing standing between a lens's rows and the shared on-disk
+   * database, and it has to be a runtime flag rather than a type. An earlier
+   * version of this file claimed `openSqliteProjectionStore` returned the
+   * narrower `ProjectionStore`, so `writeDerived` was unreachable on disk —
+   * **that was false**. The factory returns `SqlQueryableStore`, and it should:
+   * the file-backed store is legitimately queryable, and `query.test.ts`
+   * compares its rows against the in-memory store's precisely to keep "one
+   * tree, one answer" honest. So the wide type is right and the guarantee had
+   * to move here.
+   */
+  readonly #hasDerivedTables: boolean;
   #closed = false;
 
   /**
@@ -873,9 +908,10 @@ class SqliteProjectionStore implements SqlQueryableStore {
    * @param retainedExtentsPerRoot - How many of a root's newest trees survive a
    *   write. Already clamped to at least one by {@link openSqliteProjectionStore}
    */
-  constructor(database: DatabaseSync, retainedExtentsPerRoot: number) {
+  constructor(database: DatabaseSync, retainedExtentsPerRoot: number, hasDerivedTables = false) {
     this.#database = database;
     this.#retainedExtentsPerRoot = retainedExtentsPerRoot;
+    this.#hasDerivedTables = hasDerivedTables;
     this.#plans = allSpecs().map((spec) => ({
       spec,
       columns: projectionColumnTypes(spec),
@@ -992,6 +1028,17 @@ class SqliteProjectionStore implements SqlQueryableStore {
    */
   async writeDerived(rows: DerivedRows): Promise<void> {
     this.#assertOpen();
+    if (!this.#hasDerivedTables) {
+      throw new Error(
+        'This store has no derived relations, so a lens evaluation cannot be written to it.'
+        + ' They exist only on the per-run in-memory store from `openEphemeralProjectionStore()`.'
+        + ' The file-backed store is ONE database per VAT release, shared by every root on the'
+        + " machine — a lens's rows are a function of the lens as well as the bytes, and a question"
+        + " asked once, so persisting them there would answer one lens's question with another"
+        + " lens's rows, across repositories. Populate from the file-backed store, then query the"
+        + ' in-memory one.',
+      );
+    }
     const bundle = rows as Record<string, readonly Record<string, unknown>[] | undefined>;
     this.#transaction(() => {
       for (const plan of this.#derivedPlans()) {

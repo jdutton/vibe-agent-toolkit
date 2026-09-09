@@ -114,7 +114,12 @@ describe('externalDestination', () => {
   });
 
   it('handles a non-http scheme', () => {
-    expect(externalDestination('mailto:Someone@Example.com').dstKind).toBe('external');
+    // ⚠️ Asserting only `dstKind === 'external'` was vacuous: that field is a
+    // hardcoded literal in the builder, so the assertion held for EVERY input,
+    // including ones that throw today. Assert the KEY, which is what the
+    // normalization actually decides.
+    expect(externalDestination('mailto:Someone@Example.com').dstKey)
+      .toBe('mailto:Someone@Example.com');
   });
 
   it('falls back to the raw token, minus any fragment, when the URI will not parse', () => {
@@ -126,8 +131,37 @@ describe('externalDestination', () => {
     expect(relative.dstAnchor).toBe('top');
   });
 
-  it('never returns an empty key, even for a degenerate token', () => {
-    expect(externalDestination('//#frag').dstKey.length).toBeGreaterThan(0);
+  it('REFUSES a reference that names nothing, rather than keying it on emptiness', () => {
+    // 🪤 The previous version of this test asserted `dstKey.length > 0` for
+    // '//#frag' — and was VACUOUS: that input yields '//' even with the fallback
+    // deleted, because `normalizeUri` returns it unchanged and '//' is truthy.
+    // The inputs that actually reach the fallback are '#f', '#' and '' — none
+    // was tested, and two of them produced the empty key the schema rejects,
+    // which is the hole in this module's "unconstructible" claim.
+    expect(() => externalDestination('')).toThrow(/names something/u);
+    expect(() => resourceDestination('', null)).toThrow(/non-empty/u);
+    // A bare '#' is NOT refused: its key is '#', which is non-empty and is the
+    // same treatment '#frag' gets. Only a token with nothing at all in it has no
+    // destination to key.
+    expect(externalDestination('#').dstKey).toBe('#');
+  });
+
+  it('still keys a fragment-only reference on its raw token', () => {
+    // The case the fallback was written for, and which must keep working: the
+    // fragment-free half is empty but the token itself is not.
+    expect(externalDestination('#frag').dstKey).toBe('#frag');
+  });
+
+  it('refuses an empty anchor, because that is the ABSENCE of one', () => {
+    expect(() => resourceDestination('res-1', '')).toThrow(/empty anchor/u);
+    expect(() => outOfCorpusDestination('a.md', '')).toThrow(/empty anchor/u);
+  });
+
+  it('refuses a fragment folded into an out-of-corpus PATH key', () => {
+    // The external branch strips fragments so `#a` and `#b` of one page share a
+    // key. The same argument applies to a path, and this builder used to split
+    // them.
+    expect(() => outOfCorpusDestination('a.md#s', null)).toThrow(/fragment/u);
   });
 });
 

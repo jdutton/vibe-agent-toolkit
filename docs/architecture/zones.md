@@ -336,7 +336,7 @@ different strings for one destination.
 ✅ **`edge_resolutions` now carries `dstKind` and `dstKey`**: the resource id for an internal target,
 a normalized URI for an external one, and a normalized out-of-corpus path for the third class. Every
 reverse-index and dedupe query is one `GROUP BY (dstKind, dstKey)` regardless of destination class,
-and `dstResource` is a true foreign key that is null exactly when the target is not in the corpus —
+and `dstResource` is null exactly when the target is not in **this lens's extent** — the corpus *for that lens*, not the tree. 🚨 **Never quote an out-of-corpus count without naming the lens**: on the primary adopter a filesystem lens reports 51 out-of-corpus against 10,317 resources (genuinely dangling), while an agentic-convention lens over the identical tree reports 1,430 against 511, of which essentially none are broken. ⚠️ A foreign key by construction and by `superRefine`, not by a SQL `FOREIGN KEY` — nothing emits one —
 a fact, rather than an absence standing in for four different ones. Both invariants are enforced in
 `EdgeResolutionRowSchema`'s `superRefine`, not left to producer convention: `dstResource` is non-null
 **iff** `dstKind` is `resource`, and in that class `dstKey` must equal `dstResource`.
@@ -403,7 +403,7 @@ changed it.
   captured (`html-link-parser.ts:453`), arrives as `nodeType: htmlAttribute`, and gets its own
   `syntacticForm` of `html-link`. A producer that adds an `image` reference kind must not
   double-handle the HTML rows that already exist.
-  The blind spot is already shipping a defect: on `[![alt](img.png)](url)` the packaging rewriter
+  ✅ **The packaging-rewriter half is FIXED — see §9 item 4**, so read the next sentence as history. `transformContent` now splices each parsed link at its own span, rewriting the outer href and re-emitting the inner image verbatim, so it never needed to SEE the image. What survives is `rewriteBodyLinks`, whose symptom is the OPPOSITE (it rewrites the INNER href). The blind spot itself is still real for the edge model: packaging must be able to ENUMERATE an image it has to copy. Historically, the blind spot was shipping a defect: on `[![alt](img.png)](url)` the packaging rewriter
   silently no-ops, because a regex replay matches the inner image href while mdast reports only the
   outer link, and the lookup misses. An image must be a reference kind, not a masked span.
 - **A reference definition is not an edge.** `[a]: /url` is a `markdown-definition`; the edge
@@ -421,8 +421,10 @@ changed it.
   policy. But the principle is only implemented for **lexer-derived tokens**. For a markdown link
   the exclusion *is* in the scanner, on both producers: mdast yields a `code` node so
   `astCandidates` never sees the link (and AST rows hardcode `inCodeSpan: false, inFence: false`
-  besides), while the lexer's `isCandidate` admits a bare token only with a slash *and* an
-  extension. ⇒ `[a](b.md)` in a fence yields **no row at all**, and a slashed path yields a
+  besides), while the lexer's `isCandidate` admits a bare token with a slash *and* an
+  extension — ⚠️ **or, by an earlier branch, any explicitly-relative token (`./x`, `../x`) with no
+  extension requirement at all**, so a sizing done from the slash-and-extension rule alone
+  under-counts. ⇒ `[a](b.md)` in a fence yields **no row at all**, and a slashed path yields a
   `bare-token` row that has lost the link grammar entirely — its text, its form, the fact anyone
   authored it as a link. A "what does this mention" lens cannot recover from the table what the
   scanner declined to put there. Measured below: every markdown form is 0/0 across both columns.
@@ -481,7 +483,7 @@ below are worktree-inflated.
 > Any sizing taken from the old table under-counted by a third.
 
 A producer does not face "114,763 edges". It faces whatever its lens policy admits, and the range
-is genuinely an order of magnitude: **authored forms alone are 11,059 (9.6%)**, while admitting
+is genuinely an order of magnitude: **authored forms alone are 11,059 — ⚠️ which INCLUDES the 11 `markdown-definition` rows this same section rules are not edges, so the authored-EDGE floor is **11,048** (9.6%)**, while admitting
 every lexer-derived token as an `inferred` edge is 114,763. That is the ~11k-vs-~115k span, and it
 is decided before any code runs.
 

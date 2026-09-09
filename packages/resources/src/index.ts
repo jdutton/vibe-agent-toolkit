@@ -201,7 +201,9 @@ export {
 // rather than adding a table. Same shape `claude-context-query.ts` already ships.
 export {
   AUTHORED_EDGE_FORMS,
+  buildReferenceIndex,
   resolveEdges,
+  type EdgeEvaluationOptions,
   type EdgeLens,
   type EdgeRelation,
 } from './projection/edge-lens.js';

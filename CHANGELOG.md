@@ -146,7 +146,8 @@ with a regression test.
 - **The published `edges` and `edge_resolutions` row schemas changed shape.** Both are npm-published
   JSON Schemas (`@vibe-agent-toolkit/resources/schemas/projection-edges.json` and
   `projection-edge-resolutions.json`), so this lands a diff a consumer can read. It was taken now
-  because these two tables have **zero producers** — nothing populates them — and a correction after
+  because these two tables have **zero producers** — nothing populates them, and nothing does now
+  either: the relations added later in this entry are COMPUTED per lens, not materialised — and a correction after
   a producer exists rewrites the meaning of every row already written. That window is now shut: the
   next edge-schema correction costs a migration.
 

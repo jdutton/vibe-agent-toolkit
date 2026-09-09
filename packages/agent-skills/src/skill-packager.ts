@@ -33,6 +33,7 @@ import {
   type LinkRewriteRule,
   type ParseResult,
   type ProjectConfig,
+  type ResourceLink,
   type ResourceMetadata,
   type ResourcePopulationSource,
   parseFileCached,
@@ -1967,6 +1968,56 @@ async function copyAndRewriteFiles(
  *
  * For non-markdown files, performs a plain binary copy.
  */
+/**
+ * Re-base a resource's link spans onto the frontmatter-stripped body.
+ *
+ * ## 🚨 Why this exists: the span rewrite was INERT here, and could mis-splice
+ *
+ * `transformContent` identifies each link by its parsed `[startOffset,
+ * endOffset)` span rather than by replaying a regex and correlating on href —
+ * which is the whole point, because the two grammars disagree about what the
+ * href IS. Its docstring states the precondition outright: *links must come from
+ * the same bytes as content*.
+ *
+ * This call site violated it. `resource.links` are parsed from the WHOLE FILE,
+ * and `editor.body` has the frontmatter block removed — so every offset was off
+ * by the frontmatter's length. Measured on a four-line skill: span `[45, 77)`
+ * against a body shifted by 40, where `body.slice(45, 81)` is `"ails.\n"`. Every
+ * splice declined and every link fell back to the pre-fix regex path, so the
+ * headline defect (`[![alt](img)](url)` silently not rewritten) was still
+ * shipping. Worse, a stale span can land on a *different*, structurally valid
+ * link and rewrite ITS href to the first link's target.
+ *
+ * ⚠️ The re-base is exact rather than approximate: `openFrontmatter` yields a
+ * body that is a literal SUFFIX of the input — verified across CRLF, a
+ * commented block, an absent block and empty input — so one subtraction moves
+ * every offset correctly.
+ *
+ * ⚠️ It is also not the only defence, and must not become one. `splicableFrom`
+ * refuses any span whose destination is not exactly the parser's href, so a
+ * misalignment that survives this degrades to "no rewrite" rather than to a
+ * wrong one. Belt and braces, because the failure mode of the braces alone is
+ * silent.
+ *
+ * @param content - The file as read, which the links were parsed from
+ * @param body - The frontmatter-stripped body the rewrite will run over
+ * @param links - The resource's links, carrying whole-file offsets
+ * @returns The same links with offsets stated against `body`
+ */
+function bodyRelativeLinks(
+  content: string,
+  body: string,
+  links: readonly ResourceLink[],
+): ResourceLink[] {
+  const offset = content.length - body.length;
+  if (offset === 0) return [...links];
+  return links.map((link) => ({
+    ...link,
+    ...(link.startOffset === undefined ? {} : { startOffset: link.startOffset - offset }),
+    ...(link.endOffset === undefined ? {} : { endOffset: link.endOffset - offset }),
+  }));
+}
+
 async function copyAndRewriteFile(
   sourcePath: string,
   targetPath: string,
@@ -2066,7 +2117,7 @@ async function copyAndRewriteFile(
   const editor = openFrontmatter(content);
 
   // Body rewrite (existing behavior, unchanged contract).
-  editor.body = transformContent(editor.body, resource.links, {
+  editor.body = transformContent(editor.body, bodyRelativeLinks(content, editor.body, resource.links), {
     linkRewriteRules: ctx.rewriteRules,
     resourceRegistry: ctx.toRegistry,
     sourceFilePath: targetPath, // Output path so relativePath is computed from output location

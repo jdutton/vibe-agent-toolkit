@@ -74,7 +74,65 @@ const DEFAULT_PORTS = new Map([
  * @returns The destination columns
  */
 export function resourceDestination(resourceId: string, anchor: string | null): EdgeDestination {
+  assertNonEmpty(resourceId, 'resourceDestination', 'a resource id');
+  assertNamedAnchor(anchor, 'resourceDestination');
   return { dstKind: 'resource', dstKey: resourceId, dstResource: resourceId, dstAnchor: anchor };
+}
+
+/**
+ * Refuse a value that cannot denote a destination.
+ *
+ * ## 🚨 Why these builders THROW, and why that is not a hazard on user data
+ *
+ * This module claims the three rulings are *unconstructible*, not merely
+ * validated — "the difference between a producer that fails validation and a
+ * producer that cannot express the mistake". That claim was FALSE:
+ * `resourceDestination('')` and `externalDestination('')` both returned
+ * `dstKey: ''`, which the shipped schema then rejects. Validation was still the
+ * last line of defence, exactly as the docstring said it no longer was.
+ *
+ * ⚠️ **Every input here is a PROJECTION value, never raw document text.**
+ * `resourceId` is minted by `identity.ts`; the path comes from
+ * `resolveReferencePath`, already fragment-free; and the external branch is
+ * reached only when `NON_LOCAL_REF` matched, which requires a scheme or `//`.
+ * So a throw here reports a programming error and cannot be reached by an
+ * author writing a strange link — which is the distinction that makes throwing
+ * correct rather than a crash waiting for a bad document.
+ *
+ * @param value - The candidate key
+ * @param builder - Which builder is refusing, for the message
+ * @param what - What the value was supposed to be
+ * @throws TypeError When the value is empty
+ */
+function assertNonEmpty(value: string, builder: string, what: string): void {
+  if (value.length > 0) return;
+  throw new TypeError(
+    `${builder}() was given an empty string where it needs ${what}. A destination must have a`
+    + ' non-empty `dstKey` — it is the grouping key every reverse-index query joins on — and an'
+    + ' empty one fails `EdgeResolutionRowSchema`. This is a programming error: every caller'
+    + ' supplies a value the projection minted, never raw document text.',
+  );
+}
+
+/**
+ * Refuse an anchor that is present but names nothing.
+ *
+ * `null` is "no fragment" and is the only correct spelling of it. `''` would
+ * make "has an anchor" true for a reference that has none — the rule
+ * {@link fragmentOf} already applies, and which the builders accepted as a bare
+ * parameter and so did not enforce.
+ *
+ * @param anchor - The anchor to check
+ * @param builder - Which builder is refusing, for the message
+ * @throws TypeError When the anchor is an empty string
+ */
+function assertNamedAnchor(anchor: string | null, builder: string): void {
+  if (anchor !== '') return;
+  throw new TypeError(
+    `${builder}() was given an empty anchor. Use null for "no fragment": an empty string makes`
+    + ' "has an anchor" true for a reference that names no section. `fragmentOf()` already'
+    + ' returns null for `x.md#`, so pass its result through unchanged.',
+  );
 }
 
 /**
@@ -98,6 +156,22 @@ export function resourceDestination(resourceId: string, anchor: string | null): 
  * @returns The destination columns
  */
 export function outOfCorpusDestination(relativePath: string, anchor: string | null): EdgeDestination {
+  assertNamedAnchor(anchor, 'outOfCorpusDestination');
+  // 🪤 A fragment must NOT reach the path key. The external branch is meticulous
+  // about stripping it — "two links to `#a` and `#b` of one page cite the same
+  // page, and a reverse index that splits them is wrong" — and the argument
+  // applies verbatim to `../notes/x.md#a` versus `../notes/x.md#b`. The caller
+  // already separates the two halves (`resolution.path` is fragment-free and the
+  // fragment arrives as `anchor`), so a `#` here means the caller stopped doing
+  // that, which is worth a loud error rather than a silently split key.
+  if (relativePath.includes('#')) {
+    throw new TypeError(
+      'outOfCorpusDestination() was given a path carrying a fragment. Split it first —'
+      + ' `resolveReferencePath()` returns the path and `fragmentOf()` the fragment — or the key'
+      + ' splits one destination into one row per section, which is the grouping error the'
+      + ' external branch strips fragments to avoid.',
+    );
+  }
   return {
     dstKind: 'out-of-corpus',
     // One-argument `join` normalizes: it collapses `.`/`..` lexically, so
@@ -143,12 +217,16 @@ export function outOfCorpusDestination(relativePath: string, anchor: string | nu
 export function externalDestination(rawRef: string): EdgeDestination {
   const [withoutFragment] = splitHrefAnchor(rawRef);
   const anchor = fragmentOf(rawRef);
+  // ⚠️ The fallback covers `'#f'`, whose fragment-free half is `''` — but NOT a
+  // rawRef that is itself empty or bare `'#'`, where the fallback yields `''`
+  // too and the row then fails the schema's `min(1)`. That was the hole in the
+  // "unconstructible" claim; a reference that names nothing has no destination,
+  // so it is refused rather than keyed on emptiness.
+  const key = normalizeUri(withoutFragment) || rawRef;
+  assertNonEmpty(key, 'externalDestination', 'a reference that names something');
   return {
     dstKind: 'external',
-    // Never empty: `splitHrefAnchor('#f')` yields `''`, and a zero-length key
-    // would fail the schema's `min(1)`. Falling back to the raw token keeps a
-    // degenerate reference expressible rather than unrepresentable.
-    dstKey: normalizeUri(withoutFragment) || rawRef,
+    dstKey: key,
     dstResource: null,
     dstAnchor: anchor,
   };

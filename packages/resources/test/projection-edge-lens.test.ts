@@ -36,6 +36,8 @@ const SOURCE = 'a.md';
 const TARGET = 'b.md';
 /** The referring file in the nested fixtures. */
 const GUIDE = 'docs/guide.md';
+/** A target at the corpus root, sharing a basename with {@link DOCS_TARGET}. */
+const ROOT_TARGET = 'target.md';
 /** A target beside {@link GUIDE}. */
 const DOCS_TARGET = 'docs/target.md';
 /** The destination class for anything the corpus does not contain but that is a path. */
@@ -276,32 +278,93 @@ describe('resolveEdges — the authored-only policy', () => {
     expect(resolveEdges(projection, otherExtent).edges).toHaveLength(0);
   });
 
-  it('emits ONE edge when two paths in an extent realize the same identity', () => {
-    // 🪤 `resource_realizations` is keyed on `(extentId, path)` while `resources`
-    // is one identity per file, so one extent can hold two paths for one
-    // `resourceId` — a symlink and its target both canonicalize there. Both
-    // realizations carry the same references, so emitting both would put two
-    // rows under `edges`' own `(src, refOrdinal, contextId)` key, differing only
-    // in the path resolution ran from. The FIRST in projection order wins.
-    // ⚠️ The `contentKey` must match too, and a version of this test that
-    // overrode only `resourceId` was VACUOUS: the second realization then found
-    // no references under its own key, contributed no edge, and the assertion
-    // passed with the dedup deleted. A symlink and its target ARE the same
-    // bytes, so sharing the key is also what makes the fixture honest.
+  it('picks the LOWEST PATH as the resolution base, not whichever row came first', () => {
+    // The choice is a resolution BASE, not a cosmetic tie-break. An identity
+    // realized at both `a.md` and `docs/link.md` resolves `./target.md` to
+    // `target.md` or `docs/target.md` depending purely on the row picked — two
+    // different destinations, one of them wrong. And projection order is
+    // genuinely unstable: `selectExtentSql` carries no ORDER BY, so a rehydrated
+    // projection returns primary-key order while a derived one returns emission
+    // order. "First wins" would give one corpus two answers.
+    //
+    // An earlier version of this test used an EXTERNAL href and asserted only
+    // the edge COUNT. It was vacuous along this axis: an external destination
+    // does not depend on the referring path, so it held under first-wins,
+    // last-wins, or any-wins.
     const symlinked = {
-      ...queryRealization('link.md'),
+      ...queryRealization('docs/link.md'),
       resourceId: `id:${SOURCE}`,
       contentKey: `key:${SOURCE}`,
     };
+    // BOTH bases resolve, to DIFFERENT files: `./target.md` is `target.md` from
+    // the root and `docs/target.md` from `docs/`. That is what makes the
+    // assertion discriminating — if either base failed to resolve, the row would
+    // be out-of-corpus and the test could not say which base was used.
     const projection = {
-      ...projectionWith([SOURCE], [reference(SOURCE, 0, EXTERNAL_URL)]),
-      resourceRealizations: [queryRealization(SOURCE), symlinked],
+      ...projectionWith([SOURCE, ROOT_TARGET, DOCS_TARGET], [reference(SOURCE, 0, './target.md')]),
+      // The symlink row FIRST, so "first wins" would resolve from `docs/`.
+      resourceRealizations: [
+        symlinked,
+        queryRealization(SOURCE),
+        queryRealization(ROOT_TARGET),
+        queryRealization(DOCS_TARGET),
+      ],
     } as unknown as Projection;
 
-    const { edges } = resolveEdges(projection, LENS);
+    const { edges, edgeResolutions } = resolveEdges(projection, LENS);
 
     expect(edges).toHaveLength(1);
-    expect(edges[0]?.src).toBe(`id:${SOURCE}`);
+    // `a.md` sorts below `docs/link.md`, so the root is the base and the target
+    // is `target.md` — NOT `docs/target.md`, which is what first-wins gives.
+    expect(edgeResolutions[0]?.dstResource).toBe(`id:${ROOT_TARGET}`);
+  });
+
+  it("reads a member through its OWN extent, not another extent's bytes", () => {
+    // zones.md section 4: one identity has several realizations, and the
+    // packager REWRITES content — a `dist` realization has different bytes and a
+    // different path. A filesystem lens reading those would resolve links from
+    // `dist/skills/x/` and report out-of-corpus for links that are fine in
+    // source, manufacturing exactly the divergence section 2 says a lens exists
+    // to expose. Dropping the extent filter entirely (rather than replacing it
+    // with a preference) is what made that reachable.
+    // 🪤 The packaged path must sort BELOW `a.md`, or the path tie-break alone
+    // picks the source row and the extent preference is never consulted — which
+    // is exactly how the first version of this test passed with the preference
+    // deleted. `0-dist/...` sorts before `a.md`; `dist/...` does NOT.
+    const packaged = {
+      ...queryRealization('0-dist/skills/x/a.md'),
+      resourceId: `id:${SOURCE}`,
+      contentKey: 'key:packaged',
+      extentId: 'extent:dist',
+    };
+    const projection = {
+      ...projectionWith([SOURCE, TARGET], [reference(SOURCE, 0, './b.md')]),
+      // First in order AND lowest by path, so ONLY the extent preference can
+      // stop the packaged row winning.
+      resourceRealizations: [packaged, queryRealization(SOURCE), queryRealization(TARGET)],
+    } as unknown as Projection;
+
+    const { edges, edgeResolutions } = resolveEdges(projection, LENS);
+
+    expect(edges).toHaveLength(1);
+    // Read through `a.md`, so `./b.md` is the corpus's own `b.md`.
+    expect(edgeResolutions[0]?.dstResource).toBe(`id:${TARGET}`);
+  });
+
+  it('classes each edge external or local_file by its own token', () => {
+    // Reverting `kind` to the constant `'local_file'` left EVERY test passing:
+    // no assertion named the column, and `EdgeKindSchema` is an OPEN string, so
+    // schema validation accepts `local_file` for an https URL. An
+    // open-vocabulary column cannot be guarded by schema validation — it needs a
+    // value assertion. The `dstKind` tests guard a different call site of the
+    // same regex.
+    const projection = projectionWith(
+      [SOURCE],
+      [reference(SOURCE, 0, EXTERNAL_URL), reference(SOURCE, 1, SOURCE)],
+    );
+
+    expect(resolveEdges(projection, LENS).edges.map((edge) => edge.kind))
+      .toEqual(['external', 'local_file']);
   });
 
   it('reads an extent whose members are REALIZED BY ANOTHER PASS', () => {
@@ -341,6 +404,33 @@ describe('resolveEdges — the authored-only policy', () => {
     } as unknown as Projection;
 
     expect(resolveEdges(projection, LENS).edgeResolutions[0]?.dstKind).toBe('out-of-corpus');
+  });
+
+  it('RESOLVES a link to a member with no parsed bytes — an image is a real target', () => {
+    // 🚨 The regression this pins, which only re-running the corpus analytics
+    // caught. Excluding `contentKey === null` rows from the path index reported
+    // every link to an image, a PDF or any other unparsed member as
+    // out-of-corpus. On the primary adopter that moved the out-of-corpus count
+    // from 51 to 119 — a number that looks plausible and is wrong.
+    //
+    // 🔑 "Can I read references OUT of this?" needs bytes. "Can a reference
+    // point AT this?" does not. Only the first filter belongs on the source set.
+    const image = { ...queryRealization('img/diagram.png'), contentKey: null };
+    const projection = {
+      ...projectionWith([SOURCE], [reference(SOURCE, 0, './img/diagram.png')]),
+      resourceRealizations: [queryRealization(SOURCE), image],
+      resourceExtents: [SOURCE, 'img/diagram.png'].map((path) => ({
+        resourceId: `id:${path}`,
+        extentId: LENS.extentContextId,
+      })),
+    } as unknown as Projection;
+
+    const { edges, edgeResolutions } = resolveEdges(projection, LENS);
+
+    // One edge, from the only member that HAS bytes to read.
+    expect(edges).toHaveLength(1);
+    expect(edgeResolutions[0]?.dstKind).toBe('resource');
+    expect(edgeResolutions[0]?.dstResource).toBe('id:img/diagram.png');
   });
 
   it('returns nothing for a projection with no root, rather than guessing one', () => {

@@ -10,23 +10,85 @@
  */
 
 import { ResolutionContextRowSchema, type Projection } from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { describe, expect, it } from 'vitest';
 
 import { authoredLensId, evaluateAuthoredLenses } from '../src/utils/edge-lens-evaluation.js';
 
-/** An empty projection with the contexts a case needs, and nothing else. */
+/** A corpus root that need not exist on disk — resolution reads columns, not files. */
+const ROOT = safePath.join(normalizedTmpdir(), 'edge-lens-eval-corpus');
+
+/**
+ * One realization per extent, so each lens has something to read.
+ *
+ * @param contextId - The extent whose member this is
+ * @returns A realization row carrying bytes
+ */
+function realization(contextId: string): Record<string, unknown> {
+  return {
+    resourceId: `id:${contextId}`,
+    extentId: contextId,
+    path: `${contextId}.md`,
+    pathLower: `${contextId}.md`.toLowerCase(),
+    basenameLower: `${contextId}.md`.toLowerCase(),
+    dir: '',
+    depth: 0,
+    ext: '.md',
+    contentKey: `key:${contextId}`,
+    contentState: 'keyed',
+    mtime: null,
+    exists: true,
+    isDirectory: false,
+    gitignored: false,
+    isSymlink: false,
+    symlinkResolves: null,
+  };
+}
+
+/**
+ * A projection with the contexts a case needs, and one member to read.
+ *
+ * 🚨 **`roots` MUST be non-empty.** `resolveEdges` returns `{edges: [], …}` on
+ * its first two lines for a rootless projection, so an earlier version of this
+ * fixture — `roots: []` — made EVERY test in this file vacuous: not one of them
+ * executed a single line of edge code, while the file's own header claimed to
+ * guard that a lens's rows carry its own id. Deleting the `resolveEdges` call
+ * from the module under test left all six green.
+ */
 function projectionWith(contexts: Projection['resolutionContexts']): Projection {
   return {
-    roots: [],
+    roots: [{ id: 'root-x', path: ROOT, label: null }],
     resources: [],
-    resourceRealizations: [],
-    resourceExtents: [],
+    resourceRealizations: contexts.map((context) => ({
+      ...realization(context.contextId),
+    })),
+    resourceExtents: contexts.map((context) => ({
+      resourceId: `id:${context.contextId}`,
+      extentId: context.contextId,
+    })),
     resourceTags: [],
     realizationConditions: [],
     resolutionContexts: contexts,
     zoneProvenance: [],
     blobs: [],
-    blobReferences: [],
+    blobReferences: contexts.map((context) => ({
+      blob: `key:${context.contextId}`,
+      ordinal: 0,
+      rawRef: 'https://example.com/x',
+      text: null,
+      line: 1,
+      column: 1,
+      startOffset: 0,
+      endOffset: 1,
+      syntacticForm: 'markdown-link',
+      hasExtension: false,
+      leadingAt: false,
+      slashCount: 2,
+      variableExpansion: null,
+      inCodeSpan: false,
+      inFence: false,
+    })),
     blobSections: [],
     blobConditions: [],
   };
@@ -89,5 +151,21 @@ describe('evaluateAuthoredLenses', () => {
       edges: [],
       edgeResolutions: [],
     });
+  });
+
+  it('actually PRODUCES edge rows, each carrying its own lens id', () => {
+    // 🚨 The property the file's header always claimed and never tested. Without
+    // a non-empty `roots`, `resolveEdges` short-circuits and this file asserts
+    // nothing about edges at all — which is what it did.
+    const { edges, edgeResolutions } = evaluateAuthoredLenses(
+      projectionWith([extent('ctx-a'), extent('ctx-b', 'agentic-convention')]),
+    );
+
+    expect(edges).toHaveLength(2);
+    // One edge per lens, each keyed on THAT lens — without which a GROUP BY over
+    // two extents silently sums two different populations.
+    expect(edges.map((edge) => edge['contextId']))
+      .toEqual([authoredLensId('ctx-a'), authoredLensId('ctx-b')]);
+    expect(edgeResolutions).toHaveLength(2);
   });
 });

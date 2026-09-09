@@ -53,8 +53,10 @@ is still 🔷
 proposed** for all ten tables: nothing yet derives real rows from `ParseFacts` or
 `ResourceRegistry` at runtime. Four tables (`blobs`, `blob_references`, `blob_sections`,
 `blob_conditions`) and two (`roots`, `resources`) have a partial source to populate
-from already — ⚠️ `edges` was listed here and does **not** belong: it has **zero producers and zero
-consumers**, and `edge_resolutions` alongside it (see [zones.md §5](zones.md#5-references-and-edges)
+from already — ⚠️ `edges` was listed here and does **not** belong: it has **zero producers as a
+MATERIALISED TABLE**, and `edge_resolutions` alongside it. ⚠️ **They are not unimplemented.**
+`resolveEdges()` COMPUTES both per lens, and `vat resources query` / `vat resources check` expose
+them as derived relations beside `lens_contexts` — nothing populates them, something evaluates them (see [zones.md §5](zones.md#5-references-and-edges)
 and §9 item 3) — several columns (e.g. `wordCount`, `proseCodeUnits`, `codeBlockCodeUnits`, `sectionCount`,
 `slugOccurrence`, `column`, `inCodeSpan`, `inFence`) require new parser output that `ParseFacts`
 does not yet carry; `resource_realizations`, `resource_zones` beyond a single default "tree" zone, and

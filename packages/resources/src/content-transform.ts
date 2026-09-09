@@ -560,6 +560,34 @@ function splicableFrom(content: string, link: ResourceLink): SplicableLink | und
   if (close === undefined || close >= end) return undefined;
   if (content.charAt(close + 1) !== '(' || content.charAt(end - 1) !== ')') return undefined;
 
+  // 🚨 The destination the SPAN points at must be EXACTLY the href the parser
+  // reported. This one check carries three separate hazards, and each of them
+  // shipped:
+  //
+  // 1. **A span measured against different bytes.** `links` and `content` must
+  //    come from the same string, and the only production caller passed a
+  //    frontmatter-STRIPPED body with full-document offsets — every span off by
+  //    the frontmatter length. Most declined harmlessly, but a stale span can
+  //    also land on a *different*, structurally valid link and rewrite ITS href
+  //    to the first link's target. Comparing the destination to the href makes
+  //    that unconstructible rather than merely unlikely.
+  // 2. **A destination this template cannot re-emit.** The splice replaces
+  //    `[start, end)` while `renderLink` re-emits only text and href, so
+  //    anything else in the span is DESTROYED: `[a](x.md "Title")` loses its
+  //    title, and `[Guide](<my guide.md>)` loses the angle brackets that made
+  //    the space legal — emitting markdown that no longer parses as a link. All
+  //    of those have a destination region that is not the bare href, so all of
+  //    them now decline and keep their old, untouched behaviour.
+  // 3. **A closing bracket found inside a code span.** `matchingBracketEnd`
+  //    counts raw brackets and cannot see code spans, so `[see `](` here](x.md)`
+  //    reports a `close` in the middle of the construct. The region that follows
+  //    is not the href, so the truncating splice — which deleted prose and left
+  //    an unbalanced backtick — declines instead.
+  //
+  // ⚠️ Equality, not `includes`: a destination that merely CONTAINS the href is
+  // exactly the title/angle-bracket case, which is the one this must refuse.
+  if (content.slice(close + 2, end - 1) !== link.href) return undefined;
+
   return { link, start, end, rawText: content.slice(start + 1, close) };
 }
 

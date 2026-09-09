@@ -95,6 +95,37 @@ export interface EdgeLens {
   readonly dialect: ReferenceDialect;
 }
 
+/**
+ * Work a caller evaluating SEVERAL lenses over one projection can share.
+ *
+ * 🪤 The reference index is a pure function of `blob_references` and reads
+ * nothing from the lens, so rebuilding it per lens is duplicated work that a
+ * one-member extent pays in full — and the number of extents is config-driven
+ * and unbounded (`package-extent.ts` mints one per declared spec). Measured on
+ * this repository (2,300 files, 31,496 references) with overlapping full-tree
+ * extents: **43 ms at one extent, 713 ms at ten**, before the write.
+ *
+ * Optional rather than required, because a single-lens caller should not have to
+ * know the index exists. {@link buildReferenceIndex} is how a multi-lens caller
+ * builds one.
+ */
+export interface EdgeEvaluationOptions {
+  /** Shared across lenses — see {@link buildReferenceIndex}. */
+  readonly referencesByBlob?: ReadonlyMap<string, BlobReferenceRow[]>;
+}
+
+/**
+ * Build the reference index once, for a caller evaluating several lenses.
+ *
+ * @param projection - The projection every lens will be evaluated over
+ * @returns The index to pass as `options.referencesByBlob`
+ */
+export function buildReferenceIndex(
+  projection: Projection,
+): ReadonlyMap<string, BlobReferenceRow[]> {
+  return groupReferencesByBlob(projection.blobReferences);
+}
+
 /** One evaluation's output — the two relations, in step with each other. */
 export interface EdgeRelation {
   readonly edges: readonly EdgeRow[];
@@ -140,59 +171,41 @@ export interface EdgeRelation {
  * @param projection - A populated projection; every input read is a materialised
  *   column, so a rehydrated projection answers identically to a derived one
  * @param lens - What this lens admits and how it reads a token
+ * @param options - Work shareable across lenses over one projection
  * @returns The two relations. Empty when the projection has no root, because a
  *   reference resolves against one and there is nothing to resolve against
  */
-export function resolveEdges(projection: Projection, lens: EdgeLens): EdgeRelation {
+export function resolveEdges(
+  projection: Projection,
+  lens: EdgeLens,
+  options?: EdgeEvaluationOptions,
+): EdgeRelation {
   const root = projection.roots[0]?.path;
   if (root === undefined) return { edges: [], edgeResolutions: [] };
 
-  const referencesByBlob = groupReferencesByBlob(projection.blobReferences);
-  const members = extentMembers(projection, lens);
+  const referencesByBlob = options?.referencesByBlob ?? groupReferencesByBlob(projection.blobReferences);
+  const visible = visibleRealizations(projection, lens);
+
   // One map, not a Set beside it: "is this path realized" and "which identity
   // realizes it" are the same lookup, and two structures built from one filter
   // is two things to keep in step for no gain.
   //
-  // Keyed on MEMBERSHIP, so a link out of the lens's extent is `out-of-corpus`
-  // — correct, because this lens's corpus is its extent and not the tree.
-  const resourceByPath = new Map(
-    projection.resourceRealizations
-      .filter((row) => members.has(row.resourceId))
-      .map((row) => [row.path, row.resourceId] as const),
-  );
+  // EVERY visible path, not just the chosen one: a symlink and its target are
+  // two paths for one identity, and a link written to either resolves to it.
+  // Built from the same `visible` set the sources come from, so "which
+  // realizations does this lens see" is answered once.
+  const resourceByPath = new Map<string, string>();
+  for (const rows of visible.values()) {
+    for (const row of rows) resourceByPath.set(row.path, row.resourceId);
+  }
 
   const edges: EdgeRow[] = [];
   const edgeResolutions: EdgeResolutionRow[] = [];
 
-  for (const realization of sourceRealizations(projection, members)) {
-    const references = referencesByBlob.get(realization.contentKey ?? '') ?? [];
-    for (const reference of references) {
+  for (const realization of sourceRealizations(visible)) {
+    for (const reference of referencesByBlob.get(realization.contentKey ?? '') ?? []) {
       if (!lens.forms.has(reference.syntacticForm)) continue;
-      edges.push({
-        src: realization.resourceId,
-        refOrdinal: reference.ordinal,
-        contextId: lens.contextId,
-        kind: NON_LOCAL_REF.test(reference.rawRef) ? 'external' : 'local_file',
-        origin: 'authored',
-      });
-      const destination = destinationFor(reference, realization.path, root, lens, resourceByPath);
-      if (destination === undefined) continue;
-      edgeResolutions.push({
-        src: realization.resourceId,
-        refOrdinal: reference.ordinal,
-        contextId: lens.contextId,
-        // 0 for every row today: authored resolution is single-candidate by
-        // construction. The column exists for wiki title resolution, which is
-        // many-candidate by nature — N=1 is that case, not a separate shape.
-        candidateOrdinal: 0,
-        ...destination,
-        // Null, and deliberately not a fabricated tier or a fabricated 1.0.
-        // This lens has no reachability model and did not infer anything, so
-        // "has a tier" keeps meaning "reachability was assessed" and "has a
-        // score" keeps meaning "was inferred".
-        tier: null,
-        score: null,
-      });
+      emitEdge({ edges, edgeResolutions }, { reference, realization, root, lens, resourceByPath });
     }
   }
 
@@ -200,58 +213,174 @@ export function resolveEdges(projection: Projection, lens: EdgeLens): EdgeRelati
 }
 
 /**
- * Which realizations this lens reads references OUT of.
+ * Append one reference's edge, and its candidate when it has one.
  *
- * Restricted to the lens's extent, and to realizations that actually carry
- * bytes: a `contentKey` of null means nothing was parsed, so there are no
- * references to read and an edge from it would be invented rather than observed.
+ * Split out of {@link resolveEdges} to keep that function under the cognitive
+ * complexity ceiling — the two loops, the form filter and the destination
+ * branch together crossed it — and because "what one reference contributes" is
+ * a complete thought on its own.
  *
- * 🚨 **Membership decides the extent, NOT `resource_realizations.extentId` —
- * and getting this wrong produced a silently EMPTY relation.** A realization
- * says "this identity was found at this path by the pass that enumerated the
- * tree"; membership (`resource_extents`) says "this identity is in this
+ * @param into - The two relations being built, appended in step
+ * @param what - The reference, the realization it was read from, and the lens
+ *   context needed to resolve it
+ */
+function emitEdge(
+  into: { edges: EdgeRow[]; edgeResolutions: EdgeResolutionRow[] },
+  what: {
+    reference: BlobReferenceRow;
+    realization: ResourceRealizationRow;
+    root: string;
+    lens: EdgeLens;
+    resourceByPath: ReadonlyMap<string, string>;
+  },
+): void {
+  const { reference, realization, root, lens, resourceByPath } = what;
+  into.edges.push({
+    src: realization.resourceId,
+    refOrdinal: reference.ordinal,
+    contextId: lens.contextId,
+    kind: NON_LOCAL_REF.test(reference.rawRef) ? 'external' : 'local_file',
+    origin: 'authored',
+  });
+
+  const destination = destinationFor(reference, realization.path, root, lens, resourceByPath);
+  if (destination === undefined) return;
+
+  into.edgeResolutions.push({
+    src: realization.resourceId,
+    refOrdinal: reference.ordinal,
+    contextId: lens.contextId,
+    // 0 for every row today: authored resolution is single-candidate by
+    // construction. The column exists for wiki title resolution, which is
+    // many-candidate by nature — N=1 is that case, not a separate shape.
+    candidateOrdinal: 0,
+    ...destination,
+    // Null, and deliberately not a fabricated tier or a fabricated 1.0. This
+    // lens has no reachability model and did not infer anything, so "has a
+    // tier" keeps meaning "reachability was assessed" and "has a score" keeps
+    // meaning "was inferred".
+    tier: null,
+    score: null,
+  });
+}
+
+/**
+ * The realizations this lens can SEE, per member identity.
+ *
+ * ## 🚨 Membership decides the extent; the realization's own `extentId` decides
+ * which BYTES those members are read as. Both halves are load-bearing.
+ *
+ * A realization says "this identity was found at this path by the pass that
+ * recorded it"; membership (`resource_extents`) says "this identity is in this
  * extent". For the filesystem extent the two coincide, so filtering
  * realizations by `extentId` looked right. It is not: measured on this
  * repository, the `agentic-convention` extent has **160 members and ZERO
  * realizations of its own**, because a closure extent contributes memberships
- * over identities the filesystem extent already realized. The lens over it
- * returned no edges at all — an empty answer shaped exactly like a valid one,
- * which is the failure mode a count with no denominator cannot expose.
+ * over identities the filesystem extent already realized. A lens over it
+ * returned no edges at all — an empty answer shaped exactly like a valid one.
  *
- * ⇒ Members come from `resource_extents`; realizations are only how a member's
- * bytes and path are found, whichever pass recorded them.
+ * ⛔ **But dropping the extent filter outright is the OPPOSITE error, and it is
+ * worse because it emits wrong rows rather than none.** zones.md §4: one source
+ * file bundled into skills is *one identity with several realizations*, and the
+ * packager REWRITES content, so a `dist` realization has a different path,
+ * different bytes and a different content key. With no preference at all, a
+ * filesystem lens could read a member's *packaged* bytes and resolve its links
+ * from `dist/skills/x/` — reporting `out-of-corpus` for links that are fine in
+ * source, under a lens whose extent is the filesystem. zones.md §2 says
+ * per-lens resolution exists to EXPOSE that divergence, not to manufacture it.
  *
- * 🪤 **Deduplicated on `resourceId`.** `resource_realizations` is keyed on
- * `(extentId, path)` while `resources` is one identity per file, so one identity
- * can have several realizations — a symlink and its target canonicalize
- * together, and now that the extent filter is gone, one identity realized by two
- * passes reaches here twice as well. Both carry the same references, and
- * emitting both would violate `edges`' own `(src, refOrdinal, contextId)` key
- * with two rows differing only in the path resolution ran from. The FIRST in
- * projection order wins, the same tie-break `closure-extent.ts` applies when it
- * takes `byPath.get(p)?.[0]`.
+ * ⇒ The rule is **prefer the lens's own extent, and fall back to any other only
+ * when the member has no realization there.** That serves both cases: an
+ * ordinary extent reads its own bytes, and a closure extent — which owns none —
+ * still reads its members.
  *
  * @param projection - The projection being evaluated
  * @param lens - The lens, for its extent
- * @param members - Identities belonging to the lens's extent
- * @returns One realization per member identity, in projection order
+ * @returns Member identity → the realizations this lens reads it through,
+ *   sorted by path so the choice does not depend on projection order
  */
-function sourceRealizations(
+function visibleRealizations(
   projection: Projection,
-  members: ReadonlySet<string>,
-): ResourceRealizationRow[] {
-  const seen = new Set<string>();
-  const chosen: ResourceRealizationRow[] = [];
+  lens: EdgeLens,
+): ReadonlyMap<string, readonly ResourceRealizationRow[]> {
+  const members = extentMembers(projection, lens);
+  const own = new Map<string, ResourceRealizationRow[]>();
+  const foreign = new Map<string, ResourceRealizationRow[]>();
   for (const row of projection.resourceRealizations) {
     if (!members.has(row.resourceId)) continue;
-    // Nothing was parsed, so there are no references to read and an edge from
-    // it would be invented rather than observed.
-    if (row.contentKey === null) continue;
-    if (seen.has(row.resourceId)) continue;
-    seen.add(row.resourceId);
-    chosen.push(row);
+    // 🚨 A row with no `contentKey` STAYS. It is excluded as a SOURCE — see
+    // `sourceRealizations` — but it is a perfectly real link TARGET, and
+    // dropping it here reported every link to an image, a PDF or any other
+    // unparsed member as `out-of-corpus`. Measured on the primary adopter, that
+    // single conflation moved the out-of-corpus count from 51 to 119 and was
+    // caught only by re-running the analytics after the fix.
+    //
+    // 🔑 "Can I read references OUT of this?" and "can a reference point AT
+    // this?" are different questions, and only the first needs bytes.
+    const bucket = row.extentId === lens.extentContextId ? own : foreign;
+    const existing = bucket.get(row.resourceId);
+    if (existing === undefined) bucket.set(row.resourceId, [row]);
+    else existing.push(row);
+  }
+  // The fallback is per MEMBER, not global: a corpus where some members are
+  // realized in this extent and others only elsewhere must serve both.
+  for (const [resourceId, rows] of foreign) {
+    if (!own.has(resourceId)) own.set(resourceId, rows);
+  }
+  for (const rows of own.values()) rows.sort(byPath);
+  return own;
+}
+
+/**
+ * Which realization each member is READ from — one per identity.
+ *
+ * 🚨 **The choice is a resolution BASE, not a cosmetic tie-break, so it must not
+ * depend on projection order.** An identity realized at both `guide.md` and
+ * `docs/link.md` resolves `[t](./target.md)` to `target.md` or `docs/target.md`
+ * purely by which row is picked — two different destinations, one of them
+ * wrong. And projection order is genuinely unstable: `selectExtentSql` carries
+ * no `ORDER BY`, so a rehydrated projection returns rows in primary-key order
+ * (`extentId`, then `path`) while a freshly derived one returns them in
+ * contributor-emission order. "The first row wins" would therefore give one
+ * corpus two answers depending on whether a store happened to hit.
+ *
+ * ⇒ The lowest path wins, which is total, stable, and independent of how the
+ * rows arrived. ⚠️ It is still arbitrary in the sense that no path is *more*
+ * correct than another for a symlinked identity — but it is arbitrary the same
+ * way every time, which is the property a reader comparing two runs needs.
+ *
+ * Deduplication is required, not merely tidy: `edges` keys on
+ * `(src, refOrdinal, contextId)`, and two realizations of one identity carry the
+ * same references, so emitting both would put two rows under one key.
+ *
+ * @param visible - What each member is visible as, already sorted by path
+ * @returns One realization per member, ordered by identity so the emitted rows
+ *   do not depend on projection order either
+ */
+function sourceRealizations(
+  visible: ReadonlyMap<string, readonly ResourceRealizationRow[]>,
+): ResourceRealizationRow[] {
+  const chosen: ResourceRealizationRow[] = [];
+  for (const resourceId of [...visible.keys()].sort((left, right) => left.localeCompare(right))) {
+    // ⚠️ The `contentKey` filter belongs HERE and not in `visibleRealizations`:
+    // a member with no parsed bytes has no references to read, so an edge FROM
+    // it would be invented rather than observed — but it remains a legitimate
+    // destination, which is why the path index keeps it.
+    const first = visible.get(resourceId)?.find((row) => row.contentKey !== null);
+    if (first !== undefined) chosen.push(first);
   }
   return chosen;
+}
+
+/**
+ * Order two realizations by path, so a member's chosen row is deterministic.
+ *
+ * @param left - One realization
+ * @param right - The other
+ * @returns Negative when `left` sorts first
+ */
+function byPath(left: ResourceRealizationRow, right: ResourceRealizationRow): number {
+  return left.path.localeCompare(right.path);
 }
 
 /**

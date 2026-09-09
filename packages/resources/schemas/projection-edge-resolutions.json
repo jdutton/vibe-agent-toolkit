@@ -58,9 +58,14 @@
           "description": "Resolved target resource id — non-null exactly when dstKind is \"resource\", so null is the FACT that the target is not in the corpus rather than an absence standing in for several. Which destination class it is instead is dstKind"
         },
         "dstAnchor": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
           ],
           "description": "Fragment target, or null. For dstKind \"resource\" it joins blob_sections.slug (via resources → resource_realizations.contentKey, and a consumer must say WHICH realization: a packaged resource's source and dist bytes differ). For \"external\" and \"out-of-corpus\" it is the raw fragment, which nothing in the projection can resolve"
         },
@@ -103,7 +108,7 @@
         "score"
       ],
       "additionalProperties": false,
-      "description": "A row of the path-dependent `edge_resolutions` table"
+      "description": "A row of the path-dependent `edge_resolutions` table. Note: the dstKind/dstResource correspondence and the dstKey-equals-dstResource rule for the resource class are enforced by the Zod schema but NOT encoded in the generated JSON Schema — a consumer validating against the published artifact alone must treat both as producer convention."
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#"

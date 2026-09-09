@@ -230,13 +230,18 @@ export const EdgeResolutionRowSchema = z.object({
     .describe('Canonical destination key within dstKind\'s namespace — GROUP BY the PAIR (dstKind, dstKey), never this column alone. Equals dstResource when dstKind is "resource"; a normalized fragment-less URI for "external"; a normalized root-relative path for "out-of-corpus". NOT stable across extent widening: widening moves a destination between classes'),
   dstResource: z.string().min(1).nullable()
     .describe('Resolved target resource id — non-null exactly when dstKind is "resource", so null is the FACT that the target is not in the corpus rather than an absence standing in for several. Which destination class it is instead is dstKind'),
-  dstAnchor: z.string().nullable()
+  // `.min(1)` because an empty anchor is not "an anchor that is empty" — it is
+  // the ABSENCE of one, which is spelled null. Every sibling string column
+  // carries the same floor; this one did not, so `resourceDestination(id, '')`
+  // produced a row that parsed while making "has an anchor" true for a
+  // reference naming no section.
+  dstAnchor: z.string().min(1).nullable()
     .describe('Fragment target, or null. For dstKind "resource" it joins blob_sections.slug (via resources → resource_realizations.contentKey, and a consumer must say WHICH realization: a packaged resource\'s source and dist bytes differ). For "external" and "out-of-corpus" it is the raw fragment, which nothing in the projection can resolve'),
   tier: z.string().min(1).nullable()
     .describe('Reachability tier for THIS candidate — open vocabulary, e.g. "same-plugin", "same-marketplace", "known-other-marketplace", "auth-required", "nonexistent". Null when the lens has no reachability model, so that "has a tier" keeps meaning "reachability was assessed"'),
   score: z.number().min(0).max(1).nullable()
     .describe('Confidence for an inferred candidate, or null for a certain resolution'),
-}).strict().describe('A row of the path-dependent `edge_resolutions` table')
+}).strict().describe('A row of the path-dependent `edge_resolutions` table. Note: the dstKind/dstResource correspondence and the dstKey-equals-dstResource rule for the resource class are enforced by the Zod schema but NOT encoded in the generated JSON Schema — a consumer validating against the published artifact alone must treat both as producer convention.')
   .superRefine((row, ctx) => {
     const isResource = row.dstKind === 'resource';
     if (isResource !== (row.dstResource !== null)) {

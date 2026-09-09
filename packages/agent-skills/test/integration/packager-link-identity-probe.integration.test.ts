@@ -40,6 +40,8 @@ Teaching the syntax, which must survive VERBATIM:
 \`\`\`
 
 Image whose target does not ship: ![diagram](evals/diagram.png)
+
+Image inside a link, which must repoint the OUTER href: [![alt](refs/guide.md)](refs/guide.md)
 `;
 
 async function packageFixture(tempDir: string): Promise<string> {
@@ -92,6 +94,32 @@ describe('link identity probe (integration)', () => {
 
     // The fenced example teaches authored syntax. Rewriting it corrupts the lesson.
     expect(body).toContain('```markdown\n[Guide](refs/guide.md)\n```');
+  });
+
+  /**
+   * 🚨 The test that would have caught the span rewrite being INERT HERE.
+   *
+   * `transformContent` splices each link at its parsed span instead of replaying
+   * a regex and correlating on href — the fix for `[![alt](img)](url)`, where the
+   * regex matches the INNER image's href and the lookup misses. Every unit test
+   * of that fix passed while the packager, the only production caller, still
+   * shipped the bug: it passed the frontmatter-STRIPPED body together with
+   * WHOLE-FILE offsets, so every span was off by the frontmatter length and every
+   * splice quietly declined to the old path.
+   *
+   * ⇒ A unit test of a fix is not a test that the fix REACHES the caller. This
+   * one runs the real packager end to end.
+   */
+  it('repoints the outer href when an image sits inside a link', async () => {
+    tempDir = createTestTempDir('vat-packager-link-identity-nested-');
+    const body = await packageFixture(tempDir);
+
+    // The OUTER destination is repointed at the flattened location, and the
+    // inner image is re-emitted verbatim inside the link text.
+    expect(body).toContain('[![alt](refs/guide.md)](resources/guide.md)');
+    // And the construct is not left pointing at the authored path, which is the
+    // shipped defect this closes.
+    expect(body).not.toContain('[![alt](refs/guide.md)](refs/guide.md)');
   });
 
   it('does not orphan the bang when an image target does not ship', async () => {
