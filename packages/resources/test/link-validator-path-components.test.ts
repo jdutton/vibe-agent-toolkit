@@ -369,6 +369,28 @@ describe('a link path is judged component by component', () => {
 
         expect(issue?.code).toBe('LINK_BROKEN_FILE');
       });
+
+      it('keeps a case mismatch it found ABOVE the refusing directory instead of calling the spelling unverified', async () => {
+        // 🪤 `docs/Open/inner/target.md` against a disk `docs/open` that then
+        // refuses to list: component 1 WAS judged, and found wrong — that link
+        // 404s on Linux whatever the mode bit below says. The message used to
+        // say "Its existence, spelling and anchor are all unverified", which is
+        // false of the component VAT verified; the verdict had thrown it away.
+        const root = await plant(REFUSAL_TREE);
+
+        const issue = await withReaddirRefused(
+          safePath.join(root, 'docs', 'open'),
+          'EACCES',
+          async () => await judge(root, './docs/Open/inner/target.md'),
+        );
+
+        expect(issue?.code).toBe('LINK_TARGET_UNREADABLE');
+        expect(issue?.message).toContain('"docs/Open" is spelled "docs/open" on disk');
+        expect(issue?.message).toContain('case');
+        expect(issue?.message).not.toContain('spelling and anchor are all unverified');
+        // The half that IS still unverified is still said to be.
+        expect(issue?.message).toContain('existence and anchor');
+      });
     });
 
     it('says nothing when every component matches byte for byte', async () => {

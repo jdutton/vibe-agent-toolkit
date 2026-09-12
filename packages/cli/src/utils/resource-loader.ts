@@ -2,8 +2,6 @@
  * Utilities for loading and crawling resources
  */
 
-import { existsSync, statSync } from 'node:fs';
-
 import {
   buildResourcePopulation,
   DEFAULT_RESOURCE_INCLUDE,
@@ -22,6 +20,7 @@ import { GitTracker, gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
+import { assertDirectoryArgument } from './project-root-policy.js';
 import { withPopulationCache } from './projection-store.js';
 
 /**
@@ -119,7 +118,11 @@ function crawlOptionsForPath(
     return { baseDir: resolved };
   }
 
-  assertCrawlableDirectory(resolved);
+  // The crawler used to perform this check itself, because it received the path
+  // argument as its `baseDir`. Now that `baseDir` is the project root, a bad path
+  // argument would otherwise degrade into a glob that matches nothing — a green
+  // run reporting `filesScanned: 0`.
+  assertDirectoryArgument(resolved);
 
   return {
     baseDir: projectRoot,
@@ -322,25 +325,6 @@ export async function withResourcePopulationSource<T>(
 }
 
 /**
- * Fail loudly on a path argument that cannot be crawled.
- *
- * The crawler used to perform this check itself, because it received the path
- * argument as its `baseDir`. Now that `baseDir` is the project root, a bad path
- * argument would otherwise degrade into a glob that matches nothing — a green
- * run reporting `filesScanned: 0`.
- */
-function assertCrawlableDirectory(resolved: string): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- CLI path argument, resolved above
-  if (!existsSync(resolved)) {
-    throw new Error(`Path does not exist: ${resolved}`);
-  }
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- CLI path argument, existence checked above
-  if (!statSync(resolved).isDirectory()) {
-    throw new Error(`Path is not a directory: ${resolved}`);
-  }
-}
-
-/**
  * Load resources from a path with config support
  *
  * Common pattern for CLI commands that need to:
@@ -386,14 +370,22 @@ export async function loadResourcesWithConfig(
   const gitTracker = new GitTracker(projectRoot);
 
   // Create registry and crawl
-  // Build options conditionally to satisfy exactOptionalPropertyTypes
+  // Build options conditionally to satisfy exactOptionalPropertyTypes.
+  //
+  // 🚨 The config is handed over WHENEVER one was loaded — never gated on one of
+  // its keys. This used to read `if (config?.resources?.collections)`, written
+  // when collections were the only thing the registry read from it. The registry
+  // has since grown a second consumer, `resources.linkAuth`, and the gate made
+  // it silently inert for every adopter who declared `linkAuth` without
+  // `collections`: no rewrite, no token, no `LINK_AUTH_*` code — the anonymous
+  // lane ran and the run reported success. Every read inside the registry is
+  // already `this.config?.resources?.<key>`-guarded, so an undeclared key costs
+  // nothing; a key-gate here can only ever hide the next consumer the same way.
   const registryOptions: ResourceRegistryOptions = {
     baseDir: projectRoot,
     gitTracker,
+    ...(config === undefined ? {} : { config }),
   };
-  if (config?.resources?.collections) {
-    registryOptions.config = config;
-  }
   const registry = new ResourceRegistry(registryOptions);
 
   let crawlOptions: CrawlOptions;

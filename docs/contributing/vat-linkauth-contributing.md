@@ -31,9 +31,13 @@ Adopter YAML config
 | `rewrite.ts` | URL rewrite rules (regex `when` + `to` with `${var}` substitution) |
 | `resolve-token.ts` | Token source resolution (`env:` + `command:` sources, GIT_* scrubbing, `VAT_LINKAUTH_ALLOW_COMMAND` opt-out) |
 | `build-headers.ts` | Build request headers, substitute `${token}` into templates; `sensitiveHeaderValues` + `redactSecretsInText` — the §8 token-redaction pair |
-| `env-flag.ts` | `parseEnvBoolean` — env values read as booleans, `undefined` when unrecognized (the caller picks the safe side) |
-| `template.ts` | Generic `${…}` template substitution with allowlist enforcement |
+| `template.ts` | Generic `${…}` template substitution with allowlist enforcement; `templateReferences` checks a template without rendering it |
 | `transforms.ts` | Transform functions callable inside templates (e.g. `base64url`) — the safety allowlist for template calls |
+| `compile-check.ts` | Config-time compilation of one provider (`assertProviderCompiles`, `LinkAuthConfigError`) — every statically knowable defect refuses the run here, by name, before any URL is seen |
+
+Not in this directory but load-bearing for it: `parseEnvBoolean` (`packages/utils/src/env-flag.ts`,
+imported from `@vibe-agent-toolkit/utils`) — env values read as booleans, `undefined` when
+unrecognized, so the caller picks the safe side.
 
 ### Validator wiring (packages/resources/src/)
 
@@ -149,7 +153,7 @@ to skip all `{ command: ... }` sources at runtime. Only `{ env: ... }` sources a
 Useful in security-sensitive environments or when the CI policy prohibits arbitrary
 child-process execution from the validator.
 
-The value is parsed by `parseEnvBoolean` (`link-auth/env-flag.ts`), case-insensitively and
+The value is parsed by `parseEnvBoolean` (`packages/utils/src/env-flag.ts`), case-insensitively and
 with surrounding whitespace trimmed:
 
 | Value | Effect |
@@ -178,11 +182,25 @@ try/catch**. Anything that escapes the engine therefore ends `vat resources vali
 `vat audit` over the whole tree, for every adopter with `resources.linkAuth` configured, on
 account of one link.
 
-`resolveAuthenticatedUrl` owns that boundary: a provider whose config throws (uncompilable
-`when`, malformed template, unknown transform, `vars`/capture collision) comes back as
-`{ outcome: 'unverified', reason }`. When adding an engine step, put it inside that
-try/catch, and keep the internal error types throwing — the boundary translates them, the
-producers should stay precise.
+`resolveAuthenticatedUrl` owns that boundary: a provider that throws while building the
+request for one URL comes back as `{ outcome: 'provider-error', reason }`, which the
+validator reports as `LINK_AUTH_PROVIDER_ERROR` (default `error`, never cached). When adding
+an engine step, put it inside that try/catch, and keep the internal error types throwing —
+the boundary translates them, the producers should stay precise.
+
+🔑 **`provider-error` is not `unverified`, and the statically knowable defects never reach
+it from `resources.linkAuth`.** `unverified` means "no token source resolved", and its
+registry remedy invites a token-less CI lane to set `LINK_AUTH_UNVERIFIED` to `ignore`; a
+provider-config error used to ride under that same outcome, so with the override in place a
+mistyped `when` produced a green run over links nothing had fetched. Now
+`buildLinkAuthEngineConfig` runs `assertProviderCompiles` (`link-auth/compile-check.ts`)
+over every expanded provider — `match.host` globs, `when` regexes, every template's syntax
+and transform names, `vars`/capture collisions, and every name a template reads against
+what its rule declares — and throws `LinkAuthConfigError` naming `providers[<n>]`, the host
+and the field; the CLI turns that into exit 2. What is left for the runtime outcome is
+per-URL: a declared capture group that did not participate in this match, or a transform
+refusing a particular value. When adding a check to the engine, add its static half to
+`compile-check.ts` in the same change, calling the same function the runtime lane calls.
 
 Two rules follow for anything under `link-auth/`:
 
@@ -196,7 +214,7 @@ Two rules follow for anything under `link-auth/`:
 ## Token redaction (§8 "tokens never leak")
 
 The mechanism is `sensitiveHeaderValues(headers)` + `redactSecretsInText(text, secrets)` in
-`link-auth/build-headers.ts`. Two live call sites:
+`link-auth/build-headers.ts`. One live call site:
 
 - `link-auth-transport.ts` — everything `fetchImpl` throws. **MEASURED on Node 24.13:** undici
   embeds the header VALUE verbatim in its TypeError —
@@ -204,7 +222,14 @@ The mechanism is `sensitiveHeaderValues(headers)` + `redactSecretsInText(text, s
   value carrying a NUL or an interior newline triggers it. `command: git credential fill`
   produces exactly that, because `resolveToken` only trims the ends of stdout. That message
   reached `vat resources validate`'s stdout through the validator's `safeSerializeError`.
-- `link-auth/resolve.ts` — the `unverified` reason built from a provider-config throw.
+  The probe covers `message`, the `cause` chain, `AggregateError.errors` and the error's own
+  enumerable properties, and the redaction matches the JSON-escaped, percent-encoded,
+  base64/base64url and case-folded forms of each secret as well as the verbatim bytes.
+
+`link-auth/resolve.ts` deliberately has NO scrub. Every error its catch can see quotes the
+template, the pattern or a name — never a substituted value — so its reason text cannot
+carry a token, and `test/link-auth/resolve.test.ts` pins that property. A scrub there had
+no input that could contain a token, and its guard test passed with the call deleted.
 
 Two design notes worth keeping:
 

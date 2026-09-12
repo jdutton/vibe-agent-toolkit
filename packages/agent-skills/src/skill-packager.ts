@@ -260,8 +260,10 @@ export interface PackageSkillOptions {
   /**
    * Packaging target — controls the ZIP directory structure produced.
    *
-   * - 'claude-code' (default): Standard VAT layout with resources/ subdirectory
-   * - 'claude-web': Claude.ai web upload layout with references/, scripts/, assets/ subdirectories
+   * - 'claude-code' (default): Standard VAT layout, routed by extension into
+   *   resources/, scripts/, templates/, assets/
+   * - 'claude-web': Claude.ai web upload layout — every resource flattened into
+   *   references/, extensions ignored (see `PackagingTarget`)
    *
    * Default: 'claude-code'
    */

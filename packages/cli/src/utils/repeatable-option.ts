@@ -12,11 +12,17 @@
  * The variadic spelling is unusable on a command that also has a positional
  * argument, and every command here has one. It ate the positional:
  * `vat resources query 'SELECT ? AS x, ? AS y' --param a docs/` bound `docs/`
- * as the second SQL parameter, ran against the repository root instead of
- * `docs/`, and reported `status: success` at exit 0 — the user asked about one
- * directory and was confidently answered about the whole tree. On
+ * as the SECOND SQL VALUE, left the `[path]` positional unread, and reported
+ * `status: success` at exit 0 with `y: 'docs/'` in its rows — a token the
+ * operator typed as a location, silently reinterpreted as data. On
  * `vat skill test run <skill>` the same shape consumed the subject and the run
  * died claiming the subject was missing.
+ *
+ * ⚠️ What the swallowed token would have DONE is a separate question, and on
+ * `query` the answer is "located the project": `[path]` there is a root
+ * locator, not a scope — see `queryCommand` — so an earlier reading of this
+ * incident as "answered about the whole tree instead of `docs/`" claimed a
+ * scoping the verb never had. The defect this module fixes is the swallow.
  *
  * So: no variadic options. `test/commands/no-variadic-cli-options.test.ts`
  * enforces that against the source, because the defect is a declaration shape

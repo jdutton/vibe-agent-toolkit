@@ -293,7 +293,17 @@ describe('authTransport — signal pass-through', () => {
 
 /** What `authTransport` throws for these headers against the undici-faithful fetch. */
 async function thrownFor(headers: Record<string, string>): Promise<Error> {
-  const error: unknown = await authTransport(ORIGIN_URL, headers, undiciHeaderValidatingFetch).then(
+  return await thrownBy(headers, undiciHeaderValidatingFetch);
+}
+
+/** What `authTransport` throws for these headers when `fetchImpl` rejects with `rejection`. */
+async function thrownByRejection(headers: Record<string, string>, rejection: unknown): Promise<Error> {
+  return await thrownBy(headers, (() => Promise.reject(rejection)) as typeof fetch);
+}
+
+/** What `authTransport` throws for these headers against `impl` — asserted to be an Error. */
+async function thrownBy(headers: Record<string, string>, impl: typeof fetch): Promise<Error> {
+  const error: unknown = await authTransport(ORIGIN_URL, headers, impl).then(
     () => undefined,
     (e: unknown) => e,
   );
@@ -368,21 +378,52 @@ describe('authTransport — a throwing fetch never carries the token out', () =>
     // undici's own "fetch failed" nests the real error as `cause`, and
     // util.inspect prints it — a probe that read only `.message` would pass
     // this leak straight through.
-    const impl = (() => {
-      const inner = new Error(`upstream rejected Bearer ${LEAK_CANARY}`);
-      return Promise.reject(new TypeError('fetch failed', { cause: inner }));
-    }) as typeof fetch;
-    const error = (await authTransport(
-      ORIGIN_URL,
+    const inner = new Error(`upstream rejected Bearer ${LEAK_CANARY}`);
+    const error = await thrownByRejection(
       { Authorization: `Bearer ${LEAK_CANARY}` },
-      impl,
-    ).then(
-      () => undefined,
-      (e: unknown) => e,
-    )) as Error;
+      new TypeError('fetch failed', { cause: inner }),
+    );
     expect(error.message).not.toContain(LEAK_CANARY);
     expect(error.message).toContain('fetch failed');
     expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
+  });
+
+  /**
+   * `describeThrown` used to probe `.message` and the `cause` chain only, so a
+   * value riding anywhere else on the object — `AggregateError.errors`, an own
+   * enumerable property such as a `.headers` a client library attaches — was
+   * judged "exposes nothing" and the SAME object was rethrown, value intact,
+   * for `util.inspect` or a debug logger to print.
+   */
+  it('redacts a token carried in `AggregateError.errors`', async () => {
+    const error = await thrownByRejection(
+      { Authorization: `Bearer ${LEAK_CANARY}` },
+      new AggregateError([new Error(`inner has Bearer ${LEAK_CANARY}`)], 'all addresses failed'),
+    );
+    expect(error.message).not.toContain(LEAK_CANARY);
+    expect(error.message).toContain('all addresses failed');
+    expect(JSON.stringify(error, Object.getOwnPropertyNames(error))).not.toContain(LEAK_CANARY);
+    expect((error as Error & { errors?: unknown }).errors).toBeUndefined();
+  });
+
+  it('redacts a token carried on an own enumerable property of the error', async () => {
+    const error = await thrownByRejection(
+      { Authorization: `Bearer ${LEAK_CANARY}` },
+      Object.assign(new Error('request failed'), { headers: { Authorization: `Bearer ${LEAK_CANARY}` } }),
+    );
+    expect(JSON.stringify(error, Object.getOwnPropertyNames(error))).not.toContain(LEAK_CANARY);
+    expect(error.message).toContain('request failed');
+    expect((error as Error & { headers?: unknown }).headers).toBeUndefined();
+  });
+
+  it('redacts a token whose surrounding value was JSON-escaped on the way into the message', async () => {
+    // The header value carries a NUL; a wrapper that `JSON.stringify`s the
+    // value embeds the NUL as `\u0000` and the token verbatim beside it — so
+    // the exact header value is nowhere in the text and the token is.
+    const value = `Bearer ${LEAK_CANARY}${NUL}`;
+    const error = await thrownByRejection({ Authorization: value }, new Error(`boom ${JSON.stringify(value)}`));
+    expect(error.message).not.toContain(LEAK_CANARY);
+    expect(error.message).toContain('boom');
   });
 
   it('redacts a throw on a LATER hop, not only the first', async () => {

@@ -96,6 +96,16 @@ export function sensitiveHeaderValues(headers: Record<string, string>): readonly
  * the token verbatim in `.message` and `.stack`, on its way to stdout via the
  * validator's `safeSerializeError`.
  *
+ * 🔑 **A secret is matched in every form it commonly arrives in, not only
+ * verbatim.** The JSON-escaped form matters most: a value carrying a NUL is
+ * embedded by `JSON.stringify` as `\u0000`, so the exact header value no
+ * longer occurs in the text while the token beside it does — and an exact
+ * match let it through, measured. Percent-encoded, base64 and base64url
+ * copies are one decode away from the credential, and a case-folded copy is
+ * the same credential on a case-insensitive host. Each form is derived from
+ * the secret, never from the text, so widening the net cannot shred unrelated
+ * prose (see {@link secretForms}).
+ *
  * Secrets are applied longest-first so an overlapping pair (`Bearer <tok>` and
  * `<tok>`) leaves one marker rather than `Bearer <redacted>`. Blank and
  * `undefined` entries are skipped — see {@link sensitiveHeaderValues}.
@@ -106,11 +116,57 @@ export function redactSecretsInText(
 ): string {
   const usable = secrets
     .filter((s): s is string => s !== undefined && s.trim() !== '')
+    .flatMap((secret) => secretForms(secret))
     .sort((a, b) => b.length - a.length);
 
   let out = text;
   for (const secret of usable) {
-    out = out.replaceAll(secret, REDACTED_VALUE);
+    out = replaceAllIgnoringCase(out, secret, REDACTED_VALUE);
   }
   return out;
+}
+
+/**
+ * The spellings under which one secret can appear in a string: itself, its
+ * JSON-escaped body, and its percent-, base64- and base64url-encoded forms.
+ * Distinct, non-blank, and never shorter than four characters — a
+ * three-character encoding of a short value would match ordinary prose.
+ */
+function secretForms(secret: string): string[] {
+  const forms = new Set<string>([secret, JSON.stringify(secret).slice(1, -1)]);
+  try {
+    forms.add(encodeURIComponent(secret));
+  } catch {
+    // A lone surrogate cannot be percent-encoded; the other forms still apply.
+  }
+  const bytes = Buffer.from(secret, 'utf8');
+  forms.add(bytes.toString('base64'));
+  forms.add(bytes.toString('base64url'));
+  return [...forms].filter((form) => form.trim().length >= MIN_FORM_LENGTH);
+}
+
+/** Below this an encoded form is too short to be a credential and long enough to shred prose. */
+const MIN_FORM_LENGTH = 4;
+
+/**
+ * `text.replaceAll(needle, replacement)`, matching `needle` case-insensitively.
+ *
+ * Both sides are compared lower-cased; where lower-casing changes a length
+ * (a handful of Unicode letters do) the offsets could not be trusted, so the
+ * exact-case replacement is used instead — safe, if narrower.
+ */
+function replaceAllIgnoringCase(text: string, needle: string, replacement: string): string {
+  const lowerText = text.toLowerCase();
+  const lowerNeedle = needle.toLowerCase();
+  if (lowerText.length !== text.length || lowerNeedle.length !== needle.length) {
+    return text.replaceAll(needle, replacement);
+  }
+
+  let out = '';
+  let from = 0;
+  for (let at = lowerText.indexOf(lowerNeedle); at !== -1; at = lowerText.indexOf(lowerNeedle, from)) {
+    out += text.slice(from, at) + replacement;
+    from = at + needle.length;
+  }
+  return out + text.slice(from);
 }

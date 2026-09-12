@@ -115,6 +115,7 @@ const BARREL_EXPORTS = [
   'unwrapZodType',
   'withContributorStratum',
   'withOuterBracket',
+  'withReaddirSyncRefused',
   'writeTimingDump',
   'ZodTypeNames',
 ];

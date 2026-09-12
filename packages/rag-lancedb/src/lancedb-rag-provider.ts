@@ -44,8 +44,10 @@ import { createDocumentRecord, overlayChunkMetadata, type DocumentRecord } from 
 import { buildWhereClause, escapeSQLString, LANCEDB_QUERY_SUPPORT } from './filter-builder.js';
 import {
   chunkToLanceRow,
+  deserializeMetadata,
   lanceRowToChunk,
   type LanceDBRow,
+  type SerializedMetadata,
 } from './schema.js';
 
 /**
@@ -171,6 +173,7 @@ function progressAfter(
     resourcesIndexed: result.resourcesIndexed,
     resourcesSkipped: result.resourcesSkipped,
     resourcesUpdated: result.resourcesUpdated,
+    resourcesEmpty: result.resourcesEmpty,
     chunksCreated: result.chunksCreated,
     elapsedMs: at.elapsedMs,
     // Extrapolated from the average so far, and zero once nothing is left —
@@ -183,6 +186,21 @@ function progressAfter(
 
 const TABLE_NAME = 'rag_chunks';
 const DOCUMENTS_TABLE_NAME = 'rag_documents';
+
+/**
+ * What the documents table remembers about a resource, minus its content.
+ *
+ * `contenthash` and `totalchunks` together say "seen at this hash, and it
+ * chunked to this many" — which is the whole record a zero-chunk resource
+ * leaves, since it has no chunk rows to be recognised by.
+ */
+interface DocumentedResource {
+  contenthash: string;
+  totalchunks: number;
+}
+
+/** Per-batch view of the documents table, or null when document storage is off. */
+type DocumentedResources = ReadonlyMap<string, DocumentedResource> | null;
 
 /**
  * Required configuration after defaults applied
@@ -463,15 +481,6 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
     const row = JSON.parse(JSON.stringify(rows[0])) as DocumentRecord;
 
-    // Extract metadata fields from the row using the metadata schema
-    const metadata: Record<string, unknown> = {};
-    for (const key of Object.keys(this.metadataSchema.shape)) {
-      const lowercaseKey = key.toLowerCase();
-      if (lowercaseKey in row) {
-        metadata[key] = row[lowercaseKey];
-      }
-    }
-
     return {
       resourceId: row.resourceid,
       filePath: row.filepath,
@@ -480,7 +489,9 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       tokenCount: row.tokencount,
       totalChunks: row.totalchunks,
       indexedAt: new Date(row.indexedat),
-      metadata,
+      // The inverse of what `createDocumentRecord` wrote: every metadata column
+      // is present on every row, so a sentinel has to read back as "absent".
+      metadata: deserializeMetadata(row as SerializedMetadata<Record<string, unknown>>, this.metadataSchema),
     };
   }
 
@@ -504,11 +515,13 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // resource whose chunks are present and whose document row is not — the
     // state an interrupted run under an older build left behind, which is
     // otherwise unreachable forever because the surviving chunks carry a
-    // matching content hash. `null` when document storage is off: there is no
-    // documents table then, and an empty set would re-index the whole corpus on
-    // every run.
+    // matching content hash. `recordEmptyResource` needs the hash and chunk
+    // count behind each id, to leave a zero-chunk resource's row alone when it
+    // already says what this run would write. `null` when document storage is
+    // off: there is no documents table then, and an empty map would re-index
+    // the whole corpus on every run.
     const documented = this.config.storeDocuments
-      ? await this.readDocumentedResourceIds()
+      ? await this.readDocumentedResources()
       : null;
 
     const startTime = Date.now();
@@ -517,6 +530,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       resourcesIndexed: 0,
       resourcesSkipped: 0,
       resourcesUpdated: 0,
+      resourcesEmpty: 0,
       chunksCreated: 0,
       chunksDeleted: 0,
       durationMs: 0,
@@ -574,24 +588,33 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   }
 
   /**
-   * The resource ids that currently have a document record.
+   * What the documents table currently records, keyed by resource id.
    *
-   * Projected to the id column alone: the documents table stores every
-   * document's full text, and this question needs none of it.
+   * Projected to three columns: the documents table stores every document's
+   * full text, and neither question asked of this map needs any of it.
    *
-   * @returns Every `resourceid` in the documents table, empty if there is none
+   * @returns Every `resourceid` in the documents table with its hash and chunk
+   *   count, empty if there is no table
    */
-  private async readDocumentedResourceIds(): Promise<Set<string>> {
+  private async readDocumentedResources(): Promise<ReadonlyMap<string, DocumentedResource>> {
     const table = await this.openDocumentsTable();
     if (!table) {
-      return new Set();
+      return new Map();
     }
 
-    const rows = await table.query().select(['resourceid']).where('1 = 1').toArray();
+    const rows = await table.query()
+      .select(['resourceid', 'contenthash', 'totalchunks'])
+      .where('1 = 1')
+      .toArray();
     // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
-    const materialized = JSON.parse(JSON.stringify(rows)) as { resourceid: string }[];
+    const materialized = JSON.parse(JSON.stringify(rows)) as ({ resourceid: string } & DocumentedResource)[];
 
-    return new Set(materialized.map((row) => row.resourceid));
+    return new Map(
+      materialized.map((row) => [
+        row.resourceid,
+        { contenthash: row.contenthash, totalchunks: row.totalchunks },
+      ]),
+    );
   }
 
   /**
@@ -661,14 +684,14 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    *
    * @param resourceId - Resource to inspect
    * @param contentHash - Hash of the content this run would index
-   * @param documented - Resource ids that already have a document record, or
+   * @param documented - Resources that already have a document record, or
    *   null when document storage is off and there is nothing to be missing
    * @returns Object with `action` ('skip' | 'update' | 'new') and `deleteCount` (chunks to remove on update)
    */
   private async detectResourceChangeStatus(
     resourceId: string,
     contentHash: string,
-    documented: ReadonlySet<string> | null,
+    documented: DocumentedResources,
   ): Promise<{ action: 'skip' | 'update' | 'new'; deleteCount: number }> {
     if (!this.table) {
       return { action: 'new', deleteCount: 0 };
@@ -698,12 +721,64 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   }
 
   /**
+   * Account for a resource that chunked to nothing.
+   *
+   * A frontmatter-only or blank document has no prose to retrieve, so nothing
+   * is embedded and no chunk row is written. Two things that used to happen
+   * here are deliberately absent:
+   *
+   * - **No chunk table is created for it.** The table used to be created from
+   *   the first resource's rows, and LanceDB refuses to create a table from an
+   *   empty list — so a zero-chunk resource that happened to be enumerated
+   *   first failed the run, and succeeded on the next run once a neighbour had
+   *   created the table. Creation is deferred to the first resource that has
+   *   rows, rather than done up front from a hand-written Arrow schema: the
+   *   table's shape (vector width from the embedder, one column per metadata
+   *   field) is already declared once, by `chunkToLanceRow`, and a second
+   *   declaration would have to be kept in step with it by hand. A table that
+   *   holds no rows answers no query, and `query()` already reports a missing
+   *   table as "nothing indexed yet".
+   * - **It is not counted as indexed.** Change detection reads chunk rows, and
+   *   a zero-chunk resource leaves none, so it can never be recognised as
+   *   "already done" the way a chunked resource is. Rather than invent a
+   *   marker row, the outcome is its own counter, `resourcesEmpty`, reported on
+   *   every run: the answer is the same on every run, and giving it costs
+   *   nothing.
+   *
+   * With document storage on, the resource still gets its `rag_documents` row
+   * (with `totalchunks: 0`), so `getDocument` can return it — but the row is
+   * rewritten only when it does not already say exactly this, which is what
+   * keeps a steady-state run from churning the documents table.
+   *
+   * @param record - The document record this run would store
+   * @param result - The batch counters to move
+   * @param documented - What the documents table already holds, or null when
+   *   document storage is off
+   */
+  private async recordEmptyResource(
+    record: DocumentRecord,
+    result: IndexResult,
+    documented: DocumentedResources,
+  ): Promise<void> {
+    if (this.config.storeDocuments) {
+      const existing = documented?.get(record.resourceid);
+      const alreadyRecorded =
+        existing?.contenthash === record.contenthash && existing.totalchunks === 0;
+      if (!alreadyRecorded) {
+        await this.upsertDocumentRecord(record);
+      }
+    }
+
+    result.resourcesEmpty++;
+  }
+
+  /**
    * Index a single resource
    */
   private async indexResource(
     resource: ResourceMetadata,
     result: IndexResult,
-    documented: ReadonlySet<string> | null,
+    documented: DocumentedResources,
   ): Promise<void> {
     // Read + parse, served from the disk parse cache when one is filed under
     // these bytes. 'markdown' is stated rather than derived from the extension:
@@ -748,6 +823,16 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       this.getChunkingConfig()
     );
 
+    // Nothing to embed and nothing to write — see `recordEmptyResource`.
+    if (chunkingResult.chunks.length === 0) {
+      await this.recordEmptyResource(
+        createDocumentRecord(resource, content, resourceContentHash, 0, this.tokenCounter, this.metadataSchema),
+        result,
+        documented,
+      );
+      return;
+    }
+
     // Embed chunks
     const embeddings = await this.config.embeddingProvider.embedBatch(
       chunkingResult.chunks.map((c) => c.content)
@@ -779,7 +864,10 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       );
     }
 
-    // INSERT into LanceDB
+    // INSERT into LanceDB. `rows` is non-empty here — the zero-chunk return
+    // above guarantees it — which is what lets the table be created from the
+    // rows themselves: LanceDB infers the schema from them and refuses an
+    // empty list.
     if (!this.table && this.connection) {
       this.table = await this.connection.createTable(TABLE_NAME, rows);
     } else if (this.table) {

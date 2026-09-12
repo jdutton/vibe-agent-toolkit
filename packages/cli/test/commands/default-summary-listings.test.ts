@@ -208,6 +208,7 @@ const MARKETPLACE_INPUT = {
   root: '/testroot-dsl/mp',
   marketplace: { name: 'mp', version: '1.0.0' },
   pluginResults: [],
+  undeclared: [],
   issues: MARKETPLACE_ISSUES,
   duration: '7ms',
 };

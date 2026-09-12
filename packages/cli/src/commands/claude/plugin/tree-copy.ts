@@ -19,7 +19,7 @@ import { dirname } from 'node:path';
 
 import { AGENT_INSTRUCTION_FILE_PATTERNS, toAnyDepthGlobs } from '@vibe-agent-toolkit/agent-skills';
 import { isGlob, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
+import { crawlDirectory, refuseListing } from '@vibe-agent-toolkit/utils/crawl';
 import picomatch from 'picomatch';
 
 export interface TreeCopyOptions {
@@ -216,6 +216,14 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
     ...excludeSkillDirs.flatMap((name) => expandExcludePattern(`skills/${name}`)),
   ];
 
+  // A directory the crawl cannot LIST stops the copy, by name. The alternative —
+  // enumerate around it and copy what was seen — ships a plugin missing every
+  // file beneath that directory while the build reports success, which is the
+  // silent-drop shape this whole function is built to refuse (see the
+  // zero-match report below). Refusing here also runs BEFORE the first copy,
+  // so a build that fails leaves no half-written bundle to be mistaken for one.
+  // Only the walk route lists directories; inside a repository `git ls-files`
+  // answers and a refusal surfaces on the file copy instead.
   const files = await crawlDirectory({
     baseDir: sourceDir,
     include: ['**/*'],
@@ -223,6 +231,11 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
     absolute: true,
     filesOnly: true,
     respectGitignore: true,
+    onUnreadable: refuseListing({
+      root: sourceDir,
+      remedy:
+        'Fix the permissions on that directory, or name it in the plugin\'s `exclude:` list to leave it out of the bundle deliberately.',
+    }),
   });
 
   // Caller `exclude:` patterns are applied HERE rather than handed to the crawl,

@@ -113,8 +113,16 @@ export function getTargetSubdir(filePath: string): TargetSubdirCategory {
 
 /**
  * Packaging target: determines ZIP directory structure
- * - 'claude-code': Standard VAT format with resources/ subdirectory (default)
- * - 'claude-web': Claude.ai web upload format with references/, scripts/, assets/ subdirectories
+ * - 'claude-code': Standard VAT format, routed by extension into `resources/`,
+ *   `scripts/`, `templates/`, `assets/` ({@link getTargetSubdir}) (default)
+ * - 'claude-web': Claude.ai web upload format — extensions are ignored and
+ *   EVERY resource is flattened into `references/`
+ *   ({@link CLAUDE_WEB_REFERENCES_SUBDIR}); `scripts/setup.sh` ships as
+ *   `references/setup.sh`
+ *
+ * {@link getResourceSubdirForFile} is the routing answer for both; this doc used
+ * to say claude-web kept `scripts/` and `assets/`, which the function beneath
+ * it never did.
  */
 export type PackagingTarget = 'claude-code' | 'claude-web';
 

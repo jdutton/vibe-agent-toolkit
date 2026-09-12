@@ -749,13 +749,47 @@ export function buildPackagedContentPhase(
  * there must be exactly ONE issues→status/counts collapse in the codebase, and
  * it lives in `@vibe-agent-toolkit/schema`.
  */
-function asValidationIssues(issues: readonly ConsistencyIssue[]): ValidationIssue[] {
+function asValidationIssues(issues: readonly PublishedIssue[]): ValidationIssue[] {
   return issues.map((issue) => ({
     code: issue.code as ValidationIssue['code'],
     severity: issue.severity,
     message: issue.message,
     fix: issue.fix,
+    ...(issue.location === undefined ? {} : { location: issue.location }),
+    ...(issue.line === undefined ? {} : { line: issue.line }),
   }));
+}
+
+/**
+ * Run the `packaged-content` phase: crawl, derive the phase document, and
+ * report THAT document's issues on stderr.
+ *
+ * 🚨 **The stderr report used to be gated on the crawl, one line before the
+ * refusal was derived.** `if (crawl.issues.length > 0) report(crawl.issues)`
+ * ran ahead of {@link buildPackagedContentPhase}, which is where the
+ * zero-bundle refusal is added — so on an unbuilt project the crawl found
+ * nothing, nothing was logged, the skills phase's `✅ All validations passed`
+ * stayed the last line on stderr, and the process exited 1 on a refusal that
+ * existed only in the YAML. Reporting from the phase result makes what stderr
+ * says and what the exit code is computed from one list, which is
+ * `run-integrity.ts` invariant 6.
+ *
+ * The round trip through `asValidationIssues` is deliberate rather than
+ * reporting the crawl's list plus a second derivation of the refusal: the
+ * document is the artifact of record, and stderr should render exactly what it
+ * carries, not a parallel computation that can drift from it.
+ */
+export function runPackagedContentPhase(
+  projectRoot: string,
+  discoveredSkills: readonly DiscoveredSkill[],
+  logger: ReturnType<typeof createLogger>,
+): PackagedContentPhaseResult {
+  const crawl = checkPackagedAgentInstructionFiles(projectRoot, discoveredSkills);
+  const phase = buildPackagedContentPhase(crawl.bundlesInspected, crawl.issues);
+  if (phase.issues.length > 0) {
+    reportPackagedContentIssues(asValidationIssues(phase.issues), logger);
+  }
+  return phase;
 }
 
 /**
@@ -883,14 +917,10 @@ async function verifyTopLevelCommand(
     // than only logging them — a file that must not ship has to be visible in
     // `issueCounts`, or a CI consumer reads a clean report for a bundle carrying
     // one. Warnings do not fail the run; the exit code still comes from errors.
+    // The zero-bundle refusal is derived inside the builder and logged from the
+    // built phase, so stderr, the document and the exit code carry one list.
     if (inProcess.includes(PACKAGED_CONTENT)) {
-      const crawl = checkPackagedAgentInstructionFiles(projectRoot, discoveredSkills);
-      if (crawl.issues.length > 0) {
-        reportPackagedContentIssues(crawl.issues, logger);
-      }
-      // The zero-bundle refusal is derived inside the builder, so it reaches the
-      // document and the exit code whether or not stderr said anything.
-      phaseResults.push(buildPackagedContentPhase(crawl.bundlesInspected, crawl.issues));
+      phaseResults.push(runPackagedContentPhase(projectRoot, discoveredSkills, logger));
     }
 
     // Consistency check: cross-reference discovered skills vs package.json and plugin assignments

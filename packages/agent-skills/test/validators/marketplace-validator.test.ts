@@ -92,10 +92,11 @@ describe('validateMarketplace', () => {
 
   it('publishes how many entries the manifest declares, and how many are local', async () => {
     // A string `source` is a relative path into the marketplace's own tree; an
-    // object `source` names a remote. The two counts are what lets a consumer
-    // tell "validated no plugin because none is local" from "validated none of
-    // the ones that are" — the denominator `vat claude marketplace validate`
-    // was missing when it reported success over an absent `plugins/`.
+    // object `source` names a remote. The count and the source list are what
+    // let a consumer tell "validated no plugin because none is local" from
+    // "validated none of the ones that are" — the denominator `vat claude
+    // marketplace validate` was missing when it reported success over an absent
+    // `plugins/`.
     const tempDir = getTempDir();
     const marketplacePath = createTestMarketplace(tempDir, {
       ...validMarketplaceData,
@@ -110,6 +111,13 @@ describe('validateMarketplace', () => {
 
     assertValidationSuccess(result);
     expect(result.metadata?.pluginEntries).toBe(3);
-    expect(result.metadata?.localPluginEntries).toBe(2);
+    // The SOURCES, not a count: a count lets a walk of the wrong directories
+    // satisfy the denominator by number (`vat claude marketplace validate`
+    // shipped that — an undeclared `plugins/b` counted for a declared `a`).
+    // Verbatim, so the consumer resolves them against the root it chose.
+    expect(result.metadata?.localPluginSources).toEqual([
+      { name: 'local-a', source: './plugins/local-a' },
+      { name: 'local-b', source: './plugins/local-b' },
+    ]);
   });
 });

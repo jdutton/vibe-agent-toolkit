@@ -41,12 +41,22 @@ the output proves what happened, and an A/B whose two arms silently ran the same
 result that means nothing.
 
 That reading is not `population`'s alone. Every row of an `io` report carries the same two fields,
-`lane` and `extentSource`, read by the same reader (`src/harness/lane.ts`) out of the same
+`lane` and `extentSource`, read by the same reader (`src/harness/lane.ts`) out of the same kind of
 document — because a call count is a measurement of *some* enumerator, and a row that does not
 say which one leaves the reader inferring it from a call-site signature, which is what the
 2026-09-11 git-vs-filesystem A/B had to do (`realizations.js:51` at 0 calls versus 12,003). The
 rendered row names its arm (`projection via git`), and `io compare` says out loud when both sides
 report the same arm — *this compares one enumerator with itself* — or when neither reports one.
+
+The reader is shared; the repeat it is pointed at is not, and neither is what it does with a
+malformed field. `io` reads the arm off the **last** repeat's stdout — the repeat whose dumps the
+row reports — and never off repeat 0, the warm-up. `population` discards no repeat and reads the
+arm, the root and the file list off its **first**. A subject whose warm-up prints a different arm
+from its steady state would therefore be named differently by the two facets for one command. And
+a `lane` of the wrong type is `null` on an `io` row (a qualifier on counts that are real either
+way) but a **refusal** on a `population` row, whose schema extends the shared one: a population is
+nothing but the subject's own claim, and `null` is the label an old-but-honest build gets, so a
+subject that printed a corrupt lane must not read the same as one that printed none.
 
 ⚠️ **On the default `io` spec the lane is honestly `null`.** `resources-scan` — what a bare `io run`
 measures — prints YAML, and the lab reads a lane out of JSON only: it carries no YAML parser, and a

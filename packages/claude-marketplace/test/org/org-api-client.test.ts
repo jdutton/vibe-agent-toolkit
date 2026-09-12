@@ -9,6 +9,7 @@ import {
   CONNECT_TIMEOUT_MS,
   OrgApiClient,
   REQUEST_INACTIVITY_TIMEOUT_MS,
+  attemptMayHaveActed,
   buildMultipartFormData,
   createOrgApiClientFromEnv,
   decideRetry,
@@ -28,6 +29,8 @@ const SKILLS_PATH = '/v1/skills';
 const RATE_LIMITED_BODY = '{"error":{"message":"rate"}}';
 /** The message an absent resource's 404 carries in these fixtures. */
 const NOT_FOUND_MESSAGE = 'API error 404: not found';
+/** What a rethrown 404 reads as, whatever body the fixture gave it. */
+const NOT_FOUND_PREFIX = 'API error 404';
 
 // ── Transport test double ──────────────────────────────────────────────
 // `https.request` is injected, so the response/timeout/retry handling is exercised
@@ -933,18 +936,45 @@ describe('a DELETE replayed after a lost response', () => {
   it('still refuses a 404 on the FIRST attempt, which nothing here deleted', async () => {
     const { calls, client } = clientWith([GONE]);
 
-    await expect(client.deleteSkillVersion('skill_1', 'v1')).rejects.toThrow('API error 404');
+    await expect(client.deleteSkillVersion('skill_1', 'v1')).rejects.toThrow(NOT_FOUND_PREFIX);
     expect(calls).toHaveLength(1);
   });
 
-  /** A 404 that answers a rate-limit retry is the same fact: it is gone. */
-  it('reads a 404 after a 429 replay the same way', async () => {
-    const { client } = clientWith([
+  /**
+   * 🚩 A 404 that answers a rate-limit retry is NOT the same fact, and this test
+   * used to pin that it was. `isRetryableFailure` replays a 429 precisely
+   * because it is a status that means the origin did NOT act — so after one,
+   * nothing this client did removed the resource, and the 404 on the replay is
+   * a version that was never there, or that another actor removed. Resolving it
+   * reported a delete that never happened: `deleteSkillVersion('skill', 'typo')`
+   * under rate limiting resolved, and `delete --all` recorded the version as
+   * deleted. The discriminating fact is whether the PRIOR attempt may have
+   * reached the origin, not the attempt number.
+   */
+  it('still refuses a 404 after a 429 replay, because the 429 attempt did not act', async () => {
+    const { calls, client } = clientWith([
       { statusCode: 429, headers: { 'retry-after': '0' }, body: RATE_LIMITED_BODY },
       GONE,
     ]);
 
-    await expect(client.deleteSkill('skill_1')).resolves.toBeUndefined();
+    await expect(client.deleteSkill('skill_1')).rejects.toThrow(NOT_FOUND_PREFIX);
+    // It did replay — the 404 came from the second exchange — and still refused.
+    expect(calls).toHaveLength(2);
+  });
+
+  /**
+   * The lost-response replay keeps its reading through a rate limit that
+   * FOLLOWS it: once an attempt may have acted, that fact does not expire.
+   */
+  it('reads a 404 as its own delete when a transport loss preceded a 429', async () => {
+    const { calls, client } = clientWith([
+      'reset',
+      { statusCode: 429, headers: { 'retry-after': '0' }, body: RATE_LIMITED_BODY },
+      GONE,
+    ]);
+
+    await expect(client.deleteSkillVersion('skill_1', 'v1')).resolves.toBeUndefined();
+    expect(calls).toHaveLength(3);
   });
 
   /**
@@ -958,7 +988,7 @@ describe('a DELETE replayed after a lost response', () => {
       { statusCode: 404, body: '{}' },
     ]);
 
-    await expect(client.getSkills(SKILLS_PATH)).rejects.toThrow('API error 404');
+    await expect(client.getSkills(SKILLS_PATH)).rejects.toThrow(NOT_FOUND_PREFIX);
   });
 });
 
@@ -968,11 +998,11 @@ describe('decideRetry', () => {
     new ApiTransportError('timed out', 1024, { deadlineExceeded: true });
 
   it('replays a dropped connection on an idempotent method', () => {
-    expect(decideRetry('DELETE', 0, reset())).toEqual({ delayMs: expect.any(Number) });
+    expect(decideRetry('DELETE', 0, reset(), false)).toEqual({ delayMs: expect.any(Number) });
   });
 
   it('never replays a dropped connection on a POST', () => {
-    expect(decideRetry('POST', 0, reset())).toEqual({ rethrow: expect.any(ApiTransportError) });
+    expect(decideRetry('POST', 0, reset(), false)).toEqual({ rethrow: expect.any(ApiTransportError) });
   });
 
   /**
@@ -982,36 +1012,52 @@ describe('decideRetry', () => {
    * timeout was added for.
    */
   it('never replays a deadline, even on an idempotent method', () => {
-    expect(decideRetry('DELETE', 0, deadline())).toEqual({ rethrow: expect.any(ApiTransportError) });
+    expect(decideRetry('DELETE', 0, deadline(), false)).toEqual({ rethrow: expect.any(ApiTransportError) });
   });
 
   it('passes through an error that never reached the transport', () => {
     const noKey = new Error('ANTHROPIC_API_KEY is required');
-    expect(decideRetry('GET', 0, noKey)).toEqual({ rethrow: noKey });
+    expect(decideRetry('GET', 0, noKey, false)).toEqual({ rethrow: noKey });
   });
 
   it('stops replaying once the attempt budget is spent', () => {
-    expect(decideRetry('DELETE', 99, reset())).toEqual({ rethrow: expect.any(ApiTransportError) });
+    expect(decideRetry('DELETE', 99, reset(), true)).toEqual({ rethrow: expect.any(ApiTransportError) });
   });
 
   /**
-   * The policy in one place: a 404 answering a REPLAYED delete is the end state
-   * the caller asked for, so it resolves rather than rethrowing. Attempt 0 is a
-   * resource that was never there, and a replayed GET deleted nothing.
+   * The policy in one place: a 404 answering a DELETE replayed after an attempt
+   * that MAY HAVE ACTED is the end state the caller asked for, so it resolves
+   * rather than rethrowing. A prior attempt that certainly did not act — a 429,
+   * the statuses the retry policy exists for — leaves the 404 a genuine one,
+   * and a replayed GET deleted nothing whatever preceded it.
    */
-  it('resolves a 404 that answers a replayed DELETE', () => {
+  it('resolves a 404 that answers a DELETE replayed after a possible act', () => {
     const gone = new ApiRequestError(NOT_FOUND_MESSAGE, 404, undefined);
-    expect(decideRetry('DELETE', 1, gone)).toEqual({ alreadyGone: true });
+    expect(decideRetry('DELETE', 1, gone, true)).toEqual({ alreadyGone: true });
+  });
+
+  it('rethrows a 404 on a DELETE replayed after an attempt that did not act', () => {
+    const gone = new ApiRequestError(NOT_FOUND_MESSAGE, 404, undefined);
+    expect(decideRetry('DELETE', 1, gone, false)).toEqual({ rethrow: expect.any(ApiRequestError) });
   });
 
   it('rethrows a 404 on the FIRST delete attempt', () => {
     const gone = new ApiRequestError(NOT_FOUND_MESSAGE, 404, undefined);
-    expect(decideRetry('DELETE', 0, gone)).toEqual({ rethrow: expect.any(ApiRequestError) });
+    expect(decideRetry('DELETE', 0, gone, false)).toEqual({ rethrow: expect.any(ApiRequestError) });
   });
 
   it('rethrows a 404 on a replayed GET, which changed nothing', () => {
     const gone = new ApiRequestError(NOT_FOUND_MESSAGE, 404, undefined);
-    expect(decideRetry('GET', 1, gone)).toEqual({ rethrow: expect.any(ApiRequestError) });
+    expect(decideRetry('GET', 1, gone, true)).toEqual({ rethrow: expect.any(ApiRequestError) });
+  });
+
+  /** The fact the loop carries: only a lost response can have acted. */
+  it('says which failures may have reached the origin', () => {
+    expect(attemptMayHaveActed(reset())).toBe(true);
+    expect(attemptMayHaveActed(deadline())).toBe(true);
+    expect(attemptMayHaveActed(new ApiRequestError('API error 429', 429, '0'))).toBe(false);
+    expect(attemptMayHaveActed(new ApiRequestError('API error 503', 503, undefined))).toBe(false);
+    expect(attemptMayHaveActed(new Error('no key'))).toBe(false);
   });
 
   /**
@@ -1022,7 +1068,7 @@ describe('decideRetry', () => {
    */
   it('keeps the original error as the cause when it rebuilds one to add a note', () => {
     const original = new ApiRequestError('API error 429: rate', 429, '1');
-    const decision = decideRetry('POST', 0, original) as { rethrow: ApiRequestError };
+    const decision = decideRetry('POST', 0, original, false) as { rethrow: ApiRequestError };
 
     expect(decision.rethrow).not.toBe(original);
     expect(decision.rethrow.message).toContain('Not retried');

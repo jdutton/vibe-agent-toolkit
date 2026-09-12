@@ -88,10 +88,29 @@ describe('readLaneFromOutput', () => {
 
   it('reads a lane of the wrong type as unreported, never as a string', () => {
     // A number where a lane name should be is a document this build cannot
-    // read a lane from. Coercing it would print `42` as an arm.
-    expect(readLaneFromOutput(document({ lane: 42 }))).toEqual({
-      lane: null,
+    // read a lane from. Coercing it would print `42` as an arm. This lenience
+    // is io's contract alone — there the arm qualifies counts that are real
+    // either way. `population` refuses the same document through its own
+    // schema before this reader sees it (see population-document.test.ts).
+    expect(readLaneFromOutput(document({ lane: 42 })).lane).toBeNull();
+  });
+
+  it('reads the two fields independently, so a bad extent source cannot erase a good lane', () => {
+    // The subject DID report its lane. Discarding it because the qualifier
+    // beside it is unreadable would render a run that named its arm as one
+    // that named none.
+    expect(readLaneFromOutput(document({ lane: 'projection', extentSource: 42 }))).toEqual({
+      lane: 'projection',
       extentSource: null,
+    });
+  });
+
+  it('reads the two fields independently the other way round as well', () => {
+    // No lane, but an extent source: the extent source is still what the
+    // output said, and `armOf` decides what to make of a lane-less row.
+    expect(readLaneFromOutput(document({ lane: 42, extentSource: 'git' }))).toEqual({
+      lane: null,
+      extentSource: 'git',
     });
   });
 });

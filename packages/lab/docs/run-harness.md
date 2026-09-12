@@ -129,8 +129,11 @@ every stored `perf` and `io` report was taken over. Overriding the default never
 `--command` can ask for.
 
 The same split decides whether an `io` row can name its arm. `io` reads `lane` / `extentSource`
-out of the measured command's stdout exactly as `population` does (one shared reader,
-`src/harness/lane.ts`), and JSON is the only shape it reads — so a row over the default
+out of the measured command's stdout with the reader `population` uses (one shared module,
+`src/harness/lane.ts`) — pointed at the **last** repeat, the one whose dumps the row reports,
+where `population` reads its **first**; and lenient where `population` refuses, a lane of the
+wrong type being `null` on an `io` row (see [Facets](facets.md)). JSON is the only shape either
+reads — so a row over the default
 `resources-scan` (YAML out) carries `lane: null`, honestly, and a row over `resources-population`
 carries whatever the subject printed. An `io` A/B that needs to prove its two arms differ measures
 `--command resources-population`; one over the default spec is reported as `arm UNPROVEN on both

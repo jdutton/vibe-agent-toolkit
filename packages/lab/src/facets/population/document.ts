@@ -20,7 +20,7 @@
 
 import { z } from 'zod';
 
-import { laneOfDocument, type ReportedLane } from '../../harness/lane.js';
+import { LaneFieldsSchema, laneOfDocument, type ReportedLane } from '../../harness/lane.js';
 
 import type { PopulationEntry } from './types.js';
 
@@ -32,15 +32,22 @@ import type { PopulationEntry } from './types.js';
  * are this facet's business. Modelling them would make an unrelated addition to
  * the subject's output a refusal here.
  *
- * `lane` and `extentSource` are deliberately NOT here: they are read by the
- * shared `harness/lane.ts` reader over the same parsed value, so this facet and
- * `io` cannot disagree about what a document said its arm was.
+ * `lane` and `extentSource` are here by EXTENDING the shared `harness/lane.ts`
+ * schema rather than by restating it, and the distinction is load-bearing in
+ * both directions. Extending keeps one definition of what the two fields may
+ * hold, so this facet and `io` cannot disagree about what a document said its
+ * arm was. Having them in THIS schema at all is what makes a malformed arm a
+ * refusal here: `io` reads a lane of the wrong type as `null` (a qualifier on
+ * counts that are real either way), but a population is nothing but the
+ * subject's own claim, and `null` is the label an old-but-honest build gets.
+ * A subject that printed a corrupt lane must not be indistinguishable from one
+ * that printed none.
  *
  * `files` is optional because the command omits it without `--verbose`, and that
  * case needs its own sentence rather than a schema error — see
  * {@link readPopulationDocument}.
  */
-const ScanDocumentSchema = z.object({
+const ScanDocumentSchema = LaneFieldsSchema.extend({
   root: z.string().min(1),
   filesScanned: z.number().int().nonnegative(),
   files: z
@@ -116,10 +123,13 @@ export function readPopulationDocument(stdout: string): PopulationDocumentResult
     };
   }
 
-  // Read off the same parsed value rather than off `stdout` again: the lane
-  // reader and this schema must be looking at one document, and parsing twice
-  // is a second chance for them not to be.
-  const arm = laneOfDocument(raw);
+  // Read off the VALIDATED document, never off `raw` or off `stdout` again. The
+  // schema above has already refused every malformed arm, so the shared
+  // reader's lenient "unreadable ⇒ null" path is unreachable from here: what it
+  // does for this facet is the one normalisation both facets share (an omitted
+  // key becomes `null`), and it does it off a value the schema already vouched
+  // for.
+  const arm = laneOfDocument(document);
   return {
     ok: true,
     document: {

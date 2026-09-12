@@ -37,6 +37,13 @@ export interface ChunkableResource extends ResourceMetadata {
  * An unterminated opening fence is not frontmatter: the document simply starts
  * with a thematic break, and its first line is content.
  *
+ * The closing fence is `---` and nothing else. What counts as frontmatter is
+ * decided by the parser that produced the heading line numbers this chunker
+ * slices by — remark-frontmatter — and it closes a YAML block on `---` only. A
+ * YAML document-end marker (`...`) is prose to it, and so is everything above
+ * it; accepting it here too made the chunker drop lines the parser had already
+ * classified as content.
+ *
  * @param lines - Document content split on newlines
  * @returns 0-based index of the first line that is not frontmatter
  */
@@ -44,8 +51,7 @@ function contentStartIndex(lines: string[]): number {
   if (lines[0]?.trim() !== '---') return 0;
 
   for (let i = 1; i < lines.length; i++) {
-    const trimmed = lines[i]?.trim();
-    if (trimmed === '---' || trimmed === '...') return i + 1;
+    if (lines[i]?.trim() === '---') return i + 1;
   }
 
   return 0;
@@ -102,7 +108,10 @@ function chunkUnheadedRegion(
 
   // `start`/`end` are already trimmed to real content, so the 1-based line
   // numbers below are the prose's own — not the frontmatter's or a blank's.
-  return chunkByTokens(lines.slice(start, end).join('\n'), config, {
+  // The `.trim()` matches the section path beside this one: it removes the
+  // `\r` a CRLF document leaves on the last line, and cannot move a line
+  // number, because both boundary lines are known to hold non-blank text.
+  return chunkByTokens(lines.slice(start, end).join('\n').trim(), config, {
     startLine: start + 1,
     endLine: end,
   });

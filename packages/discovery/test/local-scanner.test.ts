@@ -2,7 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 
-import { setupSyncTempDirSuite, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite, safePath, toForwardSlash, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 
@@ -112,6 +112,35 @@ describe('scan', () => {
     expect(result.sourceFiles.map((f) => f.relativePath).sort((a, b) => a.localeCompare(b))).toEqual(
       ['.gitignore', 'SKILL.md']
     );
+  });
+
+  // A directory the crawl cannot list is a gap in what this scan says exists —
+  // every skill beneath it is absent from `results` — and the summary must carry
+  // the gap beside the results rather than answer with fewer skills (the old
+  // shape) or abort the whole listing (a `vat skills list --user` over one
+  // root-owned plugin dir). The refusal is a `readdirSync` spy so it runs on
+  // every platform and as root.
+  it('reports a directory it could not list beside the skills it could', async () => {
+    fs.mkdirSync(safePath.join(tempDir, 'open'), { recursive: true });
+    fs.writeFileSync(safePath.join(tempDir, 'open', 'SKILL.md'), '# Open');
+    const locked = safePath.join(tempDir, 'locked');
+    fs.mkdirSync(locked, { recursive: true });
+    fs.writeFileSync(safePath.join(locked, 'SKILL.md'), '# Locked');
+
+    const result = await withReaddirSyncRefused(locked, 'EACCES', () =>
+      scan({ path: tempDir, recursive: true, include: ['**/SKILL.md'] }),
+    );
+
+    expect(result.results.map((r) => toForwardSlash(r.relativePath))).toEqual(['open/SKILL.md']);
+    expect(result.unreadable).toEqual([
+      { kind: 'directory_unreadable', code: 'EACCES', directory: toForwardSlash(locked), transient: false },
+    ]);
+  });
+
+  it('reports no unreadable directories when every listing succeeds', async () => {
+    fs.writeFileSync(safePath.join(tempDir, 'SKILL.md'), '# Test');
+    const result = await scan({ path: tempDir, recursive: true });
+    expect(result.unreadable).toEqual([]);
   });
 
   it('discovers a skill inside a dot-directory', async () => {

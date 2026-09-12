@@ -72,10 +72,12 @@ import {
   readTextContentSync,
   safePath,
   toForwardSlash,
+  transientRefusalClause,
 } from '@vibe-agent-toolkit/utils';
 import {
   crawlDirectory,
   crawlPathFilter,
+  type DirectoryRefusal,
   NEVER_CRAWL_GLOBS,
 } from '@vibe-agent-toolkit/utils/crawl';
 import {
@@ -88,6 +90,57 @@ import type { PathShape } from './realizations.js';
 
 /** The key a `.git` pointer file uses to name the real gitdir. */
 const GITDIR_PREFIX = 'gitdir:';
+
+/**
+ * Thrown when a projection enumeration met a directory it could not list.
+ *
+ * 🚨 **The projection lane STOPS on a refused listing; the incumbent walk
+ * degrades and reports.** Both are honest; only silence is not. The walk lane
+ * can degrade because the registry records the refusal and `validate()` emits
+ * `SCAN_PATH_UNREADABLE` beside the readable siblings. This lane cannot yet:
+ * its population is built by contributors, merged, and — when a store is
+ * open — CACHED, and a cached population enumerated around a gap would answer
+ * every later run with the narrowed list and no finding (the marker the
+ * detector reads would be written by a run that never saw the gap). Until the
+ * population carries its refusals as a column the store persists with it, the
+ * only answer that cannot be mistaken for a complete one is to refuse the run.
+ *
+ * The message is adopter-facing: the directory is re-expressed against the
+ * corpus root (an absolute path in an error is the developer's `$HOME` in every
+ * CI log) and the remedy names `resources.exclude`, this lane's deliberate-drop
+ * mechanism — not the crawler's `onUnreadable`, which is a library seam.
+ */
+export class PopulationListingRefusedError extends Error {
+  readonly refusal: DirectoryRefusal;
+
+  constructor(refusal: DirectoryRefusal, root: string) {
+    const relative = toForwardSlash(safePath.relative(root, refusal.directory));
+    const where = relative === '' ? 'the scan root itself' : `the directory '${relative}'`;
+    const remedy = refusal.transient
+      ? `${transientRefusalClause(refusal.code)}, so nothing is wrong with the tree — re-run before investigating anything.`
+      : `Fix the permissions on that directory, or add it to resources.exclude to drop it from the scan deliberately.`;
+    super(
+      `Listing ${where} was refused (${refusal.code}), so the population could not be enumerated: ` +
+        `every file beneath it is in the declared scan and would be absent from every count. ${remedy}`,
+    );
+    this.name = 'PopulationListingRefusedError';
+    this.refusal = refusal;
+  }
+}
+
+/**
+ * The `onUnreadable` every projection crawl passes: refuse the run, by name,
+ * against `root` — see {@link PopulationListingRefusedError} for why this lane
+ * stops rather than degrades.
+ *
+ * @param root - The corpus root the message is expressed against
+ * @returns A handler that throws for every refusal it is handed
+ */
+export function refuseListingAgainst(root: string): (refusal: DirectoryRefusal) => never {
+  return (refusal) => {
+    throw new PopulationListingRefusedError(refusal, root);
+  };
+}
 
 /**
  * One path an enumeration source found, with whatever that source knew for free.
@@ -192,6 +245,7 @@ export class FilesystemCrawlSource implements CrawlSource {
       filesOnly: false,
       // The whole point of the extent this feeds: build output git cannot see.
       respectGitignore: false,
+      onUnreadable: refuseListingAgainst(this.#root),
     });
 
     // `shape: null` even though `crawlDirectory` walked with `readdir`, which
@@ -462,7 +516,7 @@ export class GitCrawlSource implements CrawlSource {
     for (const submodule of submodules) {
       candidates.push(
         walkedCandidate(submodule),
-        ...(await expandDirectory(submodule, admits)).map(walkedCandidate),
+        ...(await expandDirectory(submodule, admits, this.#root)).map(walkedCandidate),
       );
     }
 
@@ -489,7 +543,7 @@ export class GitCrawlSource implements CrawlSource {
       // rather than a second copy of the drop.
       if (collapsed.isDirectory && collapsed.shape !== 'symlink') {
         candidates.push(
-          ...(await expandDirectory(collapsed.absolutePath, admits)).map(walkedCandidate),
+          ...(await expandDirectory(collapsed.absolutePath, admits, this.#root)).map(walkedCandidate),
         );
       }
     }
@@ -559,11 +613,13 @@ export class GitCrawlSource implements CrawlSource {
  *
  * @param directory - Absolute path to descend into
  * @param admits - The shipped include/exclude decision, applied per path
+ * @param root - The corpus root, for the refusal a listing may raise
  * @returns Every admitted path beneath it, files and directories
  */
 async function expandDirectory(
   directory: string,
   admits: (absolutePath: string) => boolean,
+  root: string,
 ): Promise<string[]> {
   const found = await crawlDirectory({
     baseDir: directory,
@@ -581,6 +637,7 @@ async function expandDirectory(
     // Already inside ignored territory by construction, so consulting git again
     // would return nothing and cost a spawn.
     respectGitignore: false,
+    onUnreadable: refuseListingAgainst(root),
   });
   // Still applied: `admits` evaluates against the CORPUS root, and it is the
   // single authority on membership for both sources.

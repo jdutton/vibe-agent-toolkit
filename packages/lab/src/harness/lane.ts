@@ -79,14 +79,20 @@ export interface ReportedLane {
 const UNREPORTED: ReportedLane = Object.freeze({ lane: null, extentSource: null });
 
 /**
- * The part of any vat document this module reads.
+ * The part of any vat document this module reads — and the ONE definition of
+ * what the two fields may hold.
  *
  * Deliberately NOT strict and deliberately narrow: the document carries a root,
  * totals, per-collection counts, a duration — none of them this module's
  * business, and modelling them would make an unrelated addition to the
  * subject's output an unreadable lane.
+ *
+ * Exported so `population`'s own document schema can EXTEND it rather than
+ * restate it: that facet refuses a malformed arm, and the refusal has to be a
+ * verdict on the same field shapes {@link laneOfDocument} reads, or the two
+ * facets disagree about what a document said.
  */
-const LaneFieldsSchema = z.object({
+export const LaneFieldsSchema = z.object({
   // A free string, matching the body's own field: an unknown lane name must
   // survive verbatim rather than be folded into a value this build recognises.
   lane: z.string().min(1).optional(),
@@ -98,22 +104,46 @@ const LaneFieldsSchema = z.object({
 });
 
 /**
+ * Read one of the two fields, leniently.
+ *
+ * @param schema - The field's own shape, taken off {@link LaneFieldsSchema}
+ * @param value - Whatever the document holds under that key
+ * @returns The field, or `null` when absent or not readable as that shape
+ */
+function readField<T extends string | null | undefined>(
+  schema: z.ZodType<T>,
+  value: unknown,
+): string | null {
+  const parsed = schema.safeParse(value);
+  return parsed.success ? (parsed.data ?? null) : null;
+}
+
+/**
  * Read the arm out of an already-parsed document.
  *
  * For a caller that has parsed the subject's JSON for its own reasons — the
  * population reader validates a wider schema over the same value — so the
  * output is not parsed twice.
  *
+ * The two fields are read INDEPENDENTLY, never as one object: a document that
+ * names its lane and carries an unreadable extent source did report a lane,
+ * and reading the pair as one would render that run as if it had named no arm
+ * at all. Reading is lenient — an unreadable field is `null`, the same as an
+ * absent one — and that lenience is `io`'s contract: there the arm is a
+ * qualifier on counts that are real whatever the qualifier says. `population`
+ * does not inherit it: its schema extends {@link LaneFieldsSchema}, so a
+ * malformed field is refused there before this function ever sees it.
+ *
  * @param value - A parsed document, or anything else
- * @returns The reported arm, with both fields `null` when the value does not
- *   carry one this build can read
+ * @returns The reported arm, each field `null` when the value does not carry
+ *   one this build can read
  */
 export function laneOfDocument(value: unknown): ReportedLane {
-  const parsed = LaneFieldsSchema.safeParse(value);
-  if (!parsed.success) return UNREPORTED;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return UNREPORTED;
+  const record = value as Record<string, unknown>;
   return {
-    lane: parsed.data.lane ?? null,
-    extentSource: parsed.data.extentSource ?? null,
+    lane: readField(LaneFieldsSchema.shape.lane, record['lane']),
+    extentSource: readField(LaneFieldsSchema.shape.extentSource, record['extentSource']),
   };
 }
 
@@ -122,8 +152,14 @@ export function laneOfDocument(value: unknown): ReportedLane {
  *
  * Never throws and never refuses: a lane is a qualifier on a measurement, not
  * the measurement, so output that carries none leaves the row's numbers
- * standing with both fields `null`. Whether a facet can tolerate that is the
- * facet's call — `population` cannot, and refuses before it gets here.
+ * standing with both fields `null`. Every facet tolerates that null — an
+ * `io` row and a `population` row both carry `lane: null` through to the
+ * report, spelled {@link LANE_UNREPORTED}. What the facets do NOT share is the
+ * handling of a field that is present and malformed: `io` reads it as `null`
+ * through this function, while `population` refuses the whole document through
+ * its own schema (which extends {@link LaneFieldsSchema}) and reads the arm off
+ * the validated value with {@link laneOfDocument}, so the lenient path is
+ * unreachable for it.
  *
  * @param stdout - Everything the subject wrote to stdout
  * @returns The reported arm, or both `null` when the output is not a JSON

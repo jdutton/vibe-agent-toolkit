@@ -90,11 +90,13 @@ import {
   formatIssueLines,
   formatSeverityBreakdown,
   issuesToRenderAtVerbosity,
+  sumSeverityCounts,
 } from '../utils/issue-rendering.js';
 import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { relativizePathEntries } from '../utils/relativize-paths.js';
+import { nothingCheckedFinding } from '../utils/run-integrity.js';
 import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';
 import { computeConfigVerdicts } from '../utils/verdict-helpers.js';
@@ -653,6 +655,11 @@ Output — two verdicts, and they answer different questions:
   where it moves with the exit code. Gate CI on the report — 'status' and
   'issueCounts' — never on this command's exit code.
 
+  A run that audited ZERO files is refused, not passed: 'status: error' with one
+  non-overridable RESOURCE_CHECK_BROKEN under a top-level 'issues:' (the claim is
+  about the run, so it is not a files[] row), still beside exit 0 — the run
+  completed; it just is not a verdict.
+
 Validation Behavior:
   Advisory only: audit surfaces all validation issues for inspection.
   Unlike 'vat skills validate', audit:
@@ -829,7 +836,7 @@ async function auditUserDirectories(
   if (verbose) {
     renderVerboseEvidence(results, scanRoot, logger);
   }
-  logHierarchicalSummary(results, logger);
+  logHierarchicalSummary(results, summary.issues, logger);
 }
 
 /** Skill resource types that can have per-skill validation config. */
@@ -1437,7 +1444,9 @@ export async function getValidationResults(
 	locationRoot: string,
 ): Promise<ValidationResult[]> {
 	try {
-		return await validateAuditSubject(scanPath, recursive, options, logger, locationRoot);
+		return dedupeUnreadablePathResults(
+			await validateAuditSubject(scanPath, recursive, options, logger, locationRoot),
+		);
 	} catch (error) {
 		// Only the filesystem refusing the subject degrades; a defect in a validator
 		// must still fail loudly rather than be reported as a permissions problem.
@@ -1445,6 +1454,66 @@ export async function getValidationResults(
 		logger.debug(`Unreadable audit subject: ${scanPath}`);
 		return [unreadablePathResult(scanPath, error, locationRoot)];
 	}
+}
+
+/**
+ * One refused path, one `SCAN_PATH_UNREADABLE` — however many lanes met it.
+ *
+ * Two lanes can reach the same unreadable directory in one run: the directory
+ * walk (`scanDirectory`, which files the synthetic {@link unreadablePathResult})
+ * and the distributed-tree detector, which crawls a skill's own directory at any
+ * depth and reports what it could not list as an issue ON the skill's result.
+ * Their populations overlap, but neither contains the other: the walk skips
+ * what `--exclude`, the project's `resources.exclude` and gitignore skip, and
+ * does not descend at all under `--no-recursive` or when the SKILL.md is named
+ * directly — the detector enters all of those. So "the walk already reports
+ * everything under the scan root" is false in both directions, and a rule that
+ * silenced one lane by geography would drop the refusal in exactly the cases
+ * where it is the only report. The rule is instead keyed on the FACT: the
+ * code and the location, which both lanes derive from the same directory and
+ * the same anchor root.
+ *
+ * The hosted issue wins and the synthetic result is dropped, not the reverse:
+ * the detector's copy says which SKILL's crawl was cut short, which the
+ * synthetic result cannot, and it is the only copy the direct-target lane ever
+ * produces — so keeping it makes the two lanes' reports the same shape. A
+ * synthetic result that carried nothing but the duplicate is removed whole; one
+ * that somehow carried more keeps its other issues (it cannot today, but the
+ * filter says what it means rather than assuming).
+ */
+function dedupeUnreadablePathResults(results: ValidationResult[]): ValidationResult[] {
+	const hosted = new Set<string>();
+	for (const result of results) {
+		if (result.type === 'unknown') continue;
+		for (const issue of result.issues) {
+			if (issue.code === 'SCAN_PATH_UNREADABLE') hosted.add(issue.location ?? '');
+		}
+	}
+	if (hosted.size === 0) return results;
+	return results.flatMap((result) =>
+		result.type === 'unknown' ? withoutHostedRefusals(result, hosted) : [result],
+	);
+}
+
+/**
+ * A synthetic result minus the refusals some hosted result already carries —
+ * as an empty array when nothing is left, so {@link dedupeUnreadablePathResults}
+ * can `flatMap` it away.
+ */
+function withoutHostedRefusals(result: ValidationResult, hosted: ReadonlySet<string>): ValidationResult[] {
+	const issues = result.issues.filter(
+		(issue) => !(issue.code === 'SCAN_PATH_UNREADABLE' && hosted.has(issue.location ?? '')),
+	);
+	if (issues.length === 0) return [];
+	if (issues.length === result.issues.length) return [result];
+	const issueCounts = countBySeverity(issues);
+	return [{
+		...result,
+		status: calculateValidationStatus(issues),
+		summary: formatCountsSummary(issueCounts),
+		issues,
+		issueCounts,
+	}];
 }
 
 async function validateAuditSubject(
@@ -1916,9 +1985,36 @@ function renderVerboseEvidence(
   }
 }
 
+/**
+ * The stderr half of a run-level refusal, so the human channel says what the
+ * document says. The document is derived in `buildBaseSummary`; this only
+ * RENDERS it. Both stderr lanes call it first, because "Audit successful: 0
+ * file(s) passed" over `status: error` is the exact disagreement the refusal
+ * exists to end (invariant 6 of `run-integrity.ts`). Exit stays 0 — the run
+ * completed — and the note says which command gates.
+ *
+ * @returns Whether a refusal was rendered, so the caller skips its verdict line
+ */
+function logRunIntegrity(
+  runIssues: readonly ValidationIssue[] | undefined,
+  logger: ReturnType<typeof createLogger>,
+): boolean {
+  if (runIssues === undefined || runIssues.length === 0) return false;
+  logger.error(`Audit is not a verdict: it audited 0 files ${ADVISORY_EXIT_NOTE}`);
+  for (const issue of runIssues) {
+    for (const line of formatIssueLines(issue, '  ')) logger.error(line);
+  }
+  return true;
+}
+
 function handleAuditResults(
   results: ValidationResult[],
-  summary: { root: string; summary: FileStatusCounts; files?: Array<{ compatibility?: CompatibilityResult }> },
+  summary: {
+    root: string;
+    summary: FileStatusCounts;
+    issues?: readonly ValidationIssue[];
+    files?: Array<{ compatibility?: CompatibilityResult }>;
+  },
   logger: ReturnType<typeof createLogger>,
   verbose: boolean,
 ): void {
@@ -1951,7 +2047,9 @@ function handleAuditResults(
   // had, and the third is not a signal to reconcile. Where a reader is told
   // which is which is {@link createAuditCommand}'s help — see its `Output`
   // section, and `docs/audit.md`.
-  if (errorCount > 0) {
+  if (logRunIntegrity(summary.issues, logger)) {
+    // Rendered above; there is no file verdict to print over zero files.
+  } else if (errorCount > 0) {
     logger.error(`Audit found ${errorCount} file(s) with errors ${ADVISORY_EXIT_NOTE}`);
     logFindingsForStatus(results, 'error', summary.root, logger.error.bind(logger), verbose);
   } else if (warningCount > 0) {
@@ -2856,6 +2954,24 @@ function countFilesByStatus(results: ValidationResult[]): FileStatusCounts {
  * also present in its owner's `issues`, so the nested list is a VIEW of records
  * already counted, not extra records. `audit-report-coherence.integration.test.ts`
  * pins that subset relation, because counting once is only correct while it holds.
+ *
+ * 🚨 **Zero files audited is an ERROR, not "an empty tree audits cleanly".**
+ * `calculateOverallStatus([])` is `success`, so an existing directory holding
+ * nothing auditable — moved plugins, a wrong subdirectory, an excluded tree, a
+ * tree of files no lane recognises — published `status: success` beside
+ * `filesScanned: 0`, and this command's own documentation tells CI to gate on
+ * that `status`. Derived HERE, in the one builder both the directory lane
+ * (`calculateSummary`) and the `--user` lane (`calculateHierarchicalSummary`)
+ * pass through, so neither can publish a clean status over a zero denominator.
+ * Through the shared mechanism in `run-integrity.ts`: one non-overridable
+ * `RESOURCE_CHECK_BROKEN` at `error`, published under a top-level `issues` —
+ * the claim is about the RUN, so it is not a `files[]` row and does not count
+ * toward `filesScanned` — and counted in the header `issueCounts`, so the
+ * identity becomes `issueCounts === Σ files[].issueCounts + Σ issues`.
+ *
+ * The exit code is NOT touched by this: `status` describes the findings and the
+ * exit code describes whether the run completed, and this run completed. See
+ * {@link createAuditCommand}.
  */
 function buildBaseSummary<T extends ValidationResult>(
   results: T[],
@@ -2865,6 +2981,7 @@ function buildBaseSummary<T extends ValidationResult>(
   status: string;
   summary: FileStatusCounts;
   issueCounts: SeverityCounts;
+  issues?: ValidationIssue[];
   duration: string;
 } {
   const issueCounts: SeverityCounts = { errors: 0, warnings: 0, info: 0 };
@@ -2876,11 +2993,23 @@ function buildBaseSummary<T extends ValidationResult>(
     return { ...result, issueCounts: counts };
   });
 
+  const runIssues = nothingCheckedFinding(entries.length, entries.flatMap((entry) => entry.issues), () =>
+    'The audit ran over 0 files, so this report is not a verdict: a tree with nothing'
+    + ' to audit produces the same counts as a clean one. The path resolved to a tree'
+    + ' holding no auditable file — usually a wrong subdirectory, plugins or skills that'
+    + ' have moved, an excluded tree, files no audit lane recognises, or `--no-recursive`'
+    + ' over a tree whose resources sit deeper. Point the command at the plugin,'
+    + ' marketplace, registry or SKILL.md tree it should read.');
+
   return {
     entries,
-    status: calculateOverallStatus(entries),
+    // Every run-integrity finding is `error` by construction (invariant 2 of
+    // `run-integrity.ts`), so a non-empty refusal IS the status; otherwise the
+    // files decide it, as before.
+    status: runIssues.length > 0 ? 'error' : calculateOverallStatus(entries),
     summary: countFilesByStatus(entries),
-    issueCounts,
+    issueCounts: sumSeverityCounts([issueCounts, countBySeverity(runIssues)]),
+    ...(runIssues.length === 0 ? {} : { issues: [...runIssues] }),
     duration: `${Date.now() - startTime}ms`,
   };
 }
@@ -2919,6 +3048,7 @@ function calculateHierarchicalSummary(
  */
 function logHierarchicalSummary(
   results: ValidationResult[],
+  runIssues: readonly ValidationIssue[] | undefined,
   logger: ReturnType<typeof createLogger>
 ): void {
   const status = calculateOverallStatus(results);
@@ -2927,7 +3057,9 @@ function logHierarchicalSummary(
 
   // Audit is advisory only — always exit 0 for validation results.
   // Use vat skills validate for gated validation (exit 1 on errors).
-  if (status === 'error') {
+  if (logRunIntegrity(runIssues, logger)) {
+    // Rendered above; there is no skill verdict to print over zero skills.
+  } else if (status === 'error') {
     const errorCount = results.filter((r: ValidationResult) => r.status === 'error').length;
     logger.error(`Audit found ${errorCount} skill(s) with errors (${totalSkills} scanned, ${skillsWithIssues} with issues) ${ADVISORY_EXIT_NOTE}`);
   } else if (status === 'warning') {

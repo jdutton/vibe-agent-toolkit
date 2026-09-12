@@ -66,18 +66,23 @@ import {
  */
 const store = vi.hoisted(() => ({ tables: new Map<string, Record<string, unknown>[]>() }));
 
-/**
- * A write the fake refuses, so a test can fail one half of a two-table write.
- *
- * Holds the `resourceid` whose DOCUMENT record cannot be stored. Nothing else
- * is injectable: this is the one failure that tells the two possible write
- * orders apart.
- */
-const injected = vi.hoisted(() => ({ documentWriteFailsFor: undefined as string | undefined }));
-
 /** The chunk table and the document table, named as the provider names them. */
 const CHUNKS_TABLE = 'rag_chunks';
 const DOCUMENTS_TABLE = 'rag_documents';
+
+/**
+ * A write the fake refuses, so a test can fail one half of a two-table write.
+ *
+ * Names the table and the `resourceid` whose row cannot be stored there. The
+ * two tables answer two different questions: refusing the DOCUMENT write is
+ * the one failure that tells the two possible write orders apart, and refusing
+ * the CHUNK write is the one that creates the state the order is chosen FOR —
+ * a document row with no chunks behind it — so the repair of that state can be
+ * exercised rather than asserted from the docstring.
+ */
+const injected = vi.hoisted(() => ({
+  refuse: undefined as { table: string; resourceId: string } | undefined,
+}));
 
 /**
  * An in-memory stand-in for LanceDB that actually remembers what it was given.
@@ -102,10 +107,10 @@ vi.mock('@lancedb/lancedb', () => {
   const rowsOf = (name: string): Record<string, unknown>[] => store.tables.get(name) ?? [];
 
   const refuseInjected = (name: string, rows: Record<string, unknown>[]): void => {
-    const target = injected.documentWriteFailsFor;
-    if (name !== 'rag_documents' || target === undefined) return;
-    if (rows.some((row) => row['resourceid'] === target)) {
-      throw new Error(`fake lancedb: refusing document write for ${target}`);
+    const target = injected.refuse;
+    if (target?.table !== name) return;
+    if (rows.some((row) => row['resourceid'] === target.resourceId)) {
+      throw new Error(`fake lancedb: refusing ${name} write for ${target.resourceId}`);
     }
   };
 
@@ -191,14 +196,14 @@ const INTERRUPT_AFTER = 2;
 
 beforeEach(async () => {
   store.tables.clear();
-  injected.documentWriteFailsFor = undefined;
+  injected.refuse = undefined;
   await suite.beforeEach();
 });
 
 afterEach(async () => {
   await suite.afterEach();
   store.tables.clear();
-  injected.documentWriteFailsFor = undefined;
+  injected.refuse = undefined;
 });
 
 /**
@@ -356,7 +361,7 @@ describe('a resource whose document record cannot be stored', () => {
     const resources = await writeCorpus();
     // doc-2, not doc-1: the very first record CREATES the table, and this test
     // is about the steady-state write, not about table creation.
-    injected.documentWriteFailsFor = 'doc-2';
+    injected.refuse = { table: DOCUMENTS_TABLE, resourceId: 'doc-2' };
 
     const run = await newRun();
     const result = await run.indexResources(resources);
@@ -373,7 +378,7 @@ describe('a resource whose document record cannot be stored', () => {
 
     // And the resource is not lost: with its chunks absent, the next run reads
     // it as new and indexes it.
-    injected.documentWriteFailsFor = undefined;
+    injected.refuse = undefined;
     const retry = await newRun();
     await retry.indexResources(resources);
     await retry.close();
@@ -381,6 +386,54 @@ describe('a resource whose document record cannot be stored', () => {
     const expected = new Set(resources.map((r) => r.id));
     expect(chunkedResourceIds()).toEqual(expected);
     expect(documentedResourceIds()).toEqual(expected);
+  });
+});
+
+/**
+ * The state the write order is chosen FOR: a document row with no chunks.
+ *
+ * Step 1's whole argument is that an interruption between the two writes leaves
+ * the resource looking UNFINISHED, and that the next run finishes it. That is
+ * two claims — the resource is redone, and the redo REPLACES its document row
+ * rather than appending a second one — and neither is reachable through
+ * `onProgress`, which fires after both writes. Only a refused chunk write puts
+ * the index in this state, so this is the arm that exercises the repair.
+ */
+describe('a resource whose chunk write fails after its document row was written', () => {
+  it('is redone on the next run with exactly one document row', async () => {
+    const resources = await writeCorpus();
+    // doc-2 again, for the same reason as above: doc-1's chunks CREATE the
+    // chunk table, and this is about the steady-state write.
+    injected.refuse = { table: CHUNKS_TABLE, resourceId: 'doc-2' };
+
+    const run = await newRun();
+    const result = await run.indexResources(resources);
+    await run.close();
+
+    expect(result.errors?.map((entry) => entry.resourceId)).toEqual(['doc-2']);
+
+    // The vacuity control: the state under test actually exists. Under the
+    // reversed write order there would be no document row to duplicate.
+    expect(documentedResourceIds()).toContain('doc-2');
+    expect(chunkedResourceIds()).not.toContain('doc-2');
+
+    injected.refuse = undefined;
+    const repaired = await newRun();
+    const repair = await repaired.indexResources(resources);
+    await repaired.close();
+
+    // Redone, and only it: the three that finished are skipped.
+    expect(repair.errors).toEqual([]);
+    expect(repair.resourcesSkipped).toBe(CORPUS_SIZE - 1);
+    expect(chunkedResourceIds()).toContain('doc-2');
+
+    // REPLACED, not appended. The repair run writes doc-2's document record
+    // again; without the delete that precedes every steady-state document
+    // write, the table holds two rows for doc-2 and `getDocument` answers
+    // with whichever one it reads first.
+    const doc2Rows = (store.tables.get(DOCUMENTS_TABLE) ?? []).filter((row) => row['resourceid'] === 'doc-2');
+    expect(doc2Rows).toHaveLength(1);
+    expect(store.tables.get(DOCUMENTS_TABLE)).toHaveLength(CORPUS_SIZE);
   });
 });
 

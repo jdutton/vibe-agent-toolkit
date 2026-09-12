@@ -117,7 +117,8 @@ for the loud-cwd fallback policy and the projectRoot discovery ladder.
 - `1` - Validation errors found — including a run that scanned no file at all
   (`filesScanned: 0`), which is reported as one non-overridable
   `RESOURCE_CHECK_BROKEN` error rather than as a pass: a `--collection` that
-  matched nothing or a path with no markdown is not a verdict about anything
+  matched nothing or a path with no markdown is not a verdict about anything.
+  The reason and the remedy are also printed on stderr as a warning
 - `2` - System error
 
 **Output:**

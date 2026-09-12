@@ -617,6 +617,9 @@ export {
 // `LinkAuthConfig` (fully-expanded providers). Adopters carrying a parsed
 // config can hand it directly to `fetchAuthenticated` via this bridge.
 export { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
+// The refusal `buildLinkAuthEngineConfig` throws for a provider that cannot
+// compile — named, so a caller can tell a config error from an engine bug.
+export { LinkAuthConfigError } from './link-auth/compile-check.js';
 
 // linkAuth pure engine — public API only (issue #113).
 // Internal helpers (rewrite, build-headers, etc.) stay module-private.

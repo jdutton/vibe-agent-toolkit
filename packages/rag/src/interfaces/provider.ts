@@ -131,6 +131,8 @@ export interface IndexProgress {
   resourcesSkipped: number;
   /** Resources updated so far */
   resourcesUpdated: number;
+  /** Resources that chunked to nothing so far (see {@link IndexResult.resourcesEmpty}) */
+  resourcesEmpty: number;
   /** Chunks created so far */
   chunksCreated: number;
   /** Elapsed time in milliseconds */
@@ -149,15 +151,37 @@ export interface IndexProgress {
 export type ProgressCallback = (progress: IndexProgress) => void;
 
 /**
- * Result from indexing operation
+ * Result from indexing operation.
+ *
+ * Every resource in the batch lands in exactly one of `resourcesIndexed`,
+ * `resourcesSkipped`, `resourcesEmpty` or `errors`. `resourcesUpdated` is not a
+ * fifth bucket: it counts resources whose previous chunks were deleted because
+ * their content changed, and each of those is ALSO indexed (new chunks written)
+ * or empty (the new content has no prose).
  */
 export interface IndexResult {
+  /** Resources that had chunks written this run (new or changed content) */
   resourcesIndexed: number;
+  /** Resources left untouched because their content hash matched the index */
   resourcesSkipped: number;
+  /** Resources whose previous chunks were deleted because their content changed */
   resourcesUpdated: number;
+  /**
+   * Resources that chunked to nothing — a frontmatter-only or blank document.
+   *
+   * Not an error, not "indexed", and not "skipped": there is no prose to
+   * retrieve, so no chunk is written and none is looked for on the next run.
+   * Counted on every run, because the answer is the same on every run and costs
+   * nothing to give — no embedding is computed and nothing is written.
+   */
+  resourcesEmpty: number;
+  /** Chunks written this run */
   chunksCreated: number;
+  /** Chunks removed this run, all belonging to `resourcesUpdated` */
   chunksDeleted: number;
+  /** Wall-clock time for the whole batch */
   durationMs: number;
+  /** Resources that could not be indexed, with the reason for each */
   errors?: Array<{ resourceId: string; error: string }>;
 }
 

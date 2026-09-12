@@ -18,8 +18,8 @@
 import { existsSync } from 'node:fs';
 
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
-import { crawlDirectorySync } from '@vibe-agent-toolkit/utils/crawl';
+import { issueLocation, safePath, transientRefusalClause } from '@vibe-agent-toolkit/utils';
+import { crawlDirectorySync, type DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 
 import { normalizeRelPath } from '../files-config.js';
 
@@ -68,6 +68,15 @@ export function detectPackagedAgentInstructionFiles(
   // subject is BUILT output, which normally lives under a gitignored `dist/`
   // that the crawler's defaults would skip entirely — the scan would pass by
   // scanning nothing.
+  //
+  // `onUnreadable` DEGRADES rather than stops: this detector is a backstop
+  // appended to a larger report (audit, verify, build), and one directory it
+  // cannot list must not destroy every finding beside it. The gap is not
+  // dropped either — each refusal becomes a `SCAN_PATH_UNREADABLE` finding
+  // below, anchored like the others, so a reader sees exactly which subtree
+  // this pass never saw. The crawler used to hand back the shorter list here
+  // with nothing said; that was the defect, not the throw.
+  const refusals: DirectoryRefusal[] = [];
   const files = crawlDirectorySync({
     baseDir: rootDir,
     include: INCLUDE_GLOBS,
@@ -75,6 +84,7 @@ export function detectPackagedAgentInstructionFiles(
     absolute: true,
     filesOnly: true,
     respectGitignore: false,
+    onUnreadable: (refusal) => refusals.push(refusal),
   });
 
   const issues: ValidationIssue[] = [];
@@ -87,5 +97,39 @@ export function detectPackagedAgentInstructionFiles(
     const location = issueLocation(file, locationRoot);
     issues.push(materializeIssue('PACKAGED_AGENT_INSTRUCTION_FILE', { location, detail: location }));
   }
+  for (const refusal of refusals) {
+    issues.push(unlistableDirectoryIssue(refusal, locationRoot));
+  }
   return issues;
+}
+
+/**
+ * The finding for one directory this pass could not list.
+ *
+ * `SCAN_PATH_UNREADABLE` is the registry's existing code for exactly this shape
+ * ("was not scanned; findings from every readable sibling are still reported"),
+ * kept at its default `warning` — a second code for the same gap on a second
+ * lane would only split the count a reader greps for. The detail names the
+ * errno, which is what distinguishes a permissions problem from a descriptor
+ * shortage, and the location is anchored against `locationRoot` like every
+ * other finding here — `.` rather than `''` when the scanned tree itself
+ * refused, for the same reason `unreadablePathResult` in the audit command
+ * gives: an empty location reached the report as `location: ""` and rendered
+ * the detail as a bare `": EACCES …"`.
+ *
+ * ⚠️ Callers that ALSO walk this tree themselves (the audit command's
+ * directory scan) will meet the same refusal twice. That overlap is theirs to
+ * collapse, keyed on what this issue carries — code and location — because
+ * only the caller knows which of its lanes reached the directory; see
+ * `dedupeUnreadablePathResults` in the audit command.
+ */
+function unlistableDirectoryIssue(refusal: DirectoryRefusal, locationRoot: string): ValidationIssue {
+  const location = issueLocation(refusal.directory, locationRoot) || '.';
+  const clause = refusal.transient
+    ? `${transientRefusalClause(refusal.code)} — re-run before investigating anything`
+    : `listing was refused with ${refusal.code}`;
+  return materializeIssue('SCAN_PATH_UNREADABLE', {
+    location,
+    detail: `${location}: ${clause}; every agent-instruction file beneath it is unreported`,
+  });
 }

@@ -1038,6 +1038,7 @@ describe('fs-utils', () => {
           askedPath: 'one/two/nowhere.md',
           actualPath: '',
           because: { kind: 'no_such_entry' },
+          verified: { match: 'exact', askedPath: 'one/two', actualPath: 'one/two' },
         });
       });
 
@@ -1074,6 +1075,7 @@ describe('fs-utils', () => {
               directory: safePath.join(root, 'one'),
               transient: false,
             },
+            verified: { match: 'exact', askedPath: 'one', actualPath: 'one' },
           });
         },
       );
@@ -1428,9 +1430,49 @@ describe('fs-utils', () => {
               directory: refused,
               transient: false,
             },
+            verified: { match: 'exact', askedPath: 'one', actualPath: 'one' },
           });
         },
       );
+
+      /**
+       * 🪤 A refusal must not DISCARD what the walk had already learned. The
+       * components above the refusing directory WERE listed and judged, and a
+       * case mismatch found there is a defect on its own — that link 404s on a
+       * case-sensitive filesystem whatever the mode bit below says. Returning
+       * bare `absent` threw the verdict away, and the message downstream then
+       * called the spelling "unverified" about a component VAT had verified
+       * and found wrong.
+       */
+      it.skipIf(!PERMISSIONS_ENFORCED)(
+        'carries the spelling defect it found ABOVE the directory that refused',
+        async () => {
+          const root = await plantDeep(tempDir);
+          const index = new DirectorySpellingIndex(new FsLookupCache());
+          const refused = safePath.join(root, 'one');
+
+          const spelling = await withUnlistableDirectory(
+            refused,
+            async () => await index.judgePath(root, safePath.join(root, 'One', 'two', 'three.md')),
+          );
+
+          expect(spelling.match).toBe('absent');
+          if (spelling.match !== 'absent') return;
+          expect(spelling.because.kind).toBe('directory_unreadable');
+          expect(spelling.verified).toEqual({ match: 'case_mismatch', askedPath: 'One', actualPath: 'one' });
+        },
+      );
+
+      it('reports an empty verified prefix when the FIRST component is what is missing', async () => {
+        const root = await plantDeep(tempDir);
+        const index = new DirectorySpellingIndex(new FsLookupCache());
+
+        const spelling = await index.judgePath(root, safePath.join(root, 'nowhere', 'x.md'));
+
+        expect(spelling.match).toBe('absent');
+        if (spelling.match !== 'absent') return;
+        expect(spelling.verified).toEqual({ match: 'exact', askedPath: '', actualPath: '' });
+      });
     });
   });
 });

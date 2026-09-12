@@ -17,6 +17,15 @@
  * agreed, in which case any of them is the answer, or they did not, in which case
  * `stable` is `false` and no single repeat is *the* population. Picking a middle
  * one would suggest a spread that a set does not have.
+ *
+ * The arm travels with the repeat: `lane`, `extentSource`, `root` and `files`
+ * are all read off that FIRST document. ⚠️ This is NOT the repeat `io` reads —
+ * `io` discards repeat 0 as a warm-up and takes its arm from the LAST repeat's
+ * stdout, the one whose dumps it reports. The two facets share one reader
+ * (`harness/lane.ts`) but point it at different repeats, so a subject whose
+ * warm-up prints a different arm from its steady state would be named
+ * differently by the two facets for one command. `stable` compares file sets,
+ * not arms, so a lane that changed between repeats is not what it detects.
  */
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
@@ -165,6 +174,8 @@ function rowFor(measurement: SpecMeasurement): PopulationCommandStats {
   const documents = readEveryRepeat(measurement);
   if ('refusal' in documents) return failedRow(base, results.length, documents.refusal);
 
+  // The FIRST repeat, arm included — see the module header for why, and for
+  // how this differs from `io`, which reads its arm off the LAST repeat.
   const reported = documents[0];
   if (reported === undefined) {
     return failedRow(base, results.length, 'no repeat produced a population document');

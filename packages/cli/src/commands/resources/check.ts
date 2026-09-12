@@ -180,7 +180,7 @@ import { formatDurationSecs } from '../../utils/duration.js';
 import { resolveIssueSeverity, type SeverityOverrides } from '../../utils/issue-severity.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { writeJsonOutput, writeStdoutSync, writeYamlOutput } from '../../utils/output.js';
-import { projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
+import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
 import {
   withQueriedProjection,
   type AskProjection,
@@ -1044,8 +1044,9 @@ const INCOMPLETE_NOTICE
  * 🔑 **This is the MORE SPECIFIC of two claims that can be true at once.** A run
  * killed before its first statement completed recovers zero costs, which
  * {@link noCheckRanFinding} also refuses — so that one stands down when this
- * one is present. Keep this finding first in the issue list of an interrupted
- * document, or the dedupe there has nothing to see.
+ * one is present. The dedupe there is order-independent (`issues.some(code ===
+ * RUN_INTEGRITY_CODE)`), so this finding only has to be IN the issue list of an
+ * interrupted document, not first in it.
  *
  * @param inFlight - What the run was doing when the log stopped growing
  * @param ending - Which way the run ended, and what the operator can do
@@ -1399,7 +1400,16 @@ async function superviseCheckRun(options: {
  * bound enforced from outside itself, and a hang becomes a bounded failure
  * instead of a job that burns its runner minutes and reports nothing.
  *
- * @param pathArg - The corpus root, or omitted for the current directory
+ * ## `[path]` locates the project; a `WHERE` clause is the only scope a check has
+ *
+ * Same contract as `vat resources query`, for the same reason (see
+ * `queryCommand`): the projection is the whole tracked tree, so the argument is
+ * where root discovery starts and nothing more. A locator that names no
+ * directory is refused HERE, before the fork below — the parent would otherwise
+ * resolve it silently to the cwd's project and spawn a child to run every check
+ * over a tree the operator did not name, at exit 0.
+ *
+ * @param pathArg - Where to look for the project, or omitted for the current directory
  * @param options - Parsed command-line options
  */
 export async function checkCommand(
@@ -1410,6 +1420,7 @@ export async function checkCommand(
   const startTime = Date.now();
 
   try {
+    if (pathArg !== undefined) assertDirectoryArgument(pathArg);
     const budgetSecs = parseBudgetSeconds(options.budget);
     // Before anything is spawned: a budget the fork below would silently ignore
     // is an operator error, not a bound.

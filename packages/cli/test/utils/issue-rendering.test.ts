@@ -38,9 +38,10 @@ import {
   formatSkillValidationLines,
 } from '../../src/commands/skills/package.js';
 import {
-  buildValidateSummary,
+  buildValidateSummary as buildValidateSummaryFor,
   formatSkillProgressLine,
-  formatValidationReportLines,
+  formatValidationReportLines as formatValidationReportLinesFor,
+  type SkillDiscoveryPatterns,
 } from '../../src/commands/skills/validate.js';
 import {
   collectPostBuildIssues,
@@ -59,6 +60,21 @@ import {
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
+
+/**
+ * The discovery globs every batch below was "found" by. The two `vat skills
+ * validate` renderers take them so a ZERO-skill run can name what matched
+ * nothing; every batch in this file has at least one skill, so the value is
+ * never read — the zero-denominator refusal is pinned in
+ * `commands/skills/validate-nothing-checked.test.ts`.
+ */
+const PATTERNS: SkillDiscoveryPatterns = { include: ['skills/*/SKILL.md'] };
+const buildValidateSummary = (
+  ...args: Parameters<typeof buildValidateSummaryFor> extends [...infer Head, SkillDiscoveryPatterns] ? Head : never
+) => buildValidateSummaryFor(...args, PATTERNS);
+const formatValidationReportLines = (
+  ...args: Parameters<typeof formatValidationReportLinesFor> extends [...infer Head, SkillDiscoveryPatterns] ? Head : never
+) => formatValidationReportLinesFor(...args, PATTERNS);
 
 function issue(
   severity: ValidationIssue['severity'],

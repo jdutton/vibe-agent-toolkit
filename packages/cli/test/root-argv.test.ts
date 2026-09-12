@@ -87,6 +87,15 @@ describe('wantsGroupVerboseHelp', () => {
     // Root flags before the group are commander's business, not a disqualifier.
     { argv: '--debug resources --verbose', group: 'resources' },
     { argv: 'resources --help --verbose', group: 'resources' },
+    // Root flags AFTER the group are the same grammar: commander accepts a root
+    // option on either side of the command name, so `--cwd`'s VALUE is no more a
+    // subcommand here than it was before the group. The scan read `docs` as one
+    // and handed the line to commander, which died on `unknown option
+    // '--verbose'` at exit 2 while the reordered line printed the page.
+    { argv: 'resources --verbose --cwd docs', group: 'resources' },
+    { argv: 'resources --cwd docs --verbose', group: 'resources' },
+    { argv: 'resources --cwd=docs --verbose', group: 'resources' },
+    { argv: 'resources --debug --verbose --no-cache', group: 'resources' },
   ])('accepts $argv for $group', ({ argv, group }) => {
     expect(rootGrammar().wantsGroupVerboseHelp(line(argv), group)).toBe(true);
   });
@@ -104,6 +113,13 @@ describe('wantsGroupVerboseHelp', () => {
     // The group is there and IS the command, but nobody asked for verbose help.
     { argv: 'resources --help', group: 'resources' },
     { argv: 'resources validate --verbose', group: 'resources' },
+    // A subcommand AFTER a root flag's value is still a subcommand.
+    { argv: 'resources --cwd docs validate --verbose', group: 'resources' },
+    // An UNDECLARED option after the group gets the same treatment it gets
+    // before it: it is commander's to refuse, not ours to skip. Rendering the
+    // page here printed it at exit 0 with `--nonsense` silently dropped — the
+    // "wrong page at exit 0" shape this module exists to prevent.
+    { argv: 'resources --verbose --nonsense', group: 'resources' },
     // A different group entirely.
     { argv: 'rag --verbose', group: 'resources' },
   ])('refuses $argv for $group', ({ argv, group }) => {

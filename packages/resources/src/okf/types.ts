@@ -46,10 +46,17 @@ export const OKF_FINDING_CODES = [
   'OKF_FRONTMATTER_UNPARSEABLE',
   /**
    * §4.1, §11.1 — a frontmatter block whose YAML parses to something that is not
-   * a mapping: a sequence, a bare scalar, or `null`.
+   * a mapping: a sequence or a bare scalar.
+   *
+   * **Not `null`, deliberately.** YAML reads `---\n---`, a comment-only block
+   * and the literal `null` to exactly the same value, so a null block cannot be
+   * told from an empty one — and an empty block IS a mapping with no keys, which
+   * §11.2 already judges as `OKF_TYPE_MISSING`. Treating null here once reported
+   * the common comment-only block as "not a mapping" with a remedy to remove
+   * dashes that were never there. See `isNotAMapping` in findings.ts.
    *
    * 🪤 Its own code because it used to have none, and the absence was SILENT.
-   * `parseFrontmatterSource` returns a bare `{}` for all three shapes — no
+   * `parseFrontmatterSource` returns a bare `{}` for every non-mapping shape — no
    * `frontmatter`, no `frontmatterError` — so such a document arrived at the
    * judges looking exactly like one carrying no keys. `indexFindings` returned no
    * drafts at all and VAT certified the bundle clean; `conceptFindings` reported

@@ -68,6 +68,7 @@ vat rag index docs/
 # status: success
 # resourcesIndexed: 12
 # resourcesSkipped: 0
+# resourcesEmpty: 0      # frontmatter-only or blank files: recorded, not searchable
 # resourcesUpdated: 0
 # chunksCreated: 48
 # chunksDeleted: 0

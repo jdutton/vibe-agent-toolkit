@@ -183,8 +183,12 @@ export interface IoCommandStats {
    * the 2026-09-11 git-vs-filesystem A/B had to infer which arm each side ran
    * from a call-site signature (`realizations.js:51` at 0 calls versus 12,003)
    * — a call count is a measurement of *some* arm, and nothing on the row said
-   * which. Read by the shared `harness/lane.ts` reader, exactly as `population`
-   * reads it, so the two facets cannot disagree about a document.
+   * which. Read by the shared `harness/lane.ts` reader, so the two facets
+   * cannot disagree about what one document said — but NOT off the same
+   * repeat: this is the LAST repeat's arm (the one whose dumps the row
+   * reports), where `population` reads its FIRST. And not with the same
+   * tolerance: a lane of the wrong type is `null` here, a qualifier on counts
+   * that are real either way, where `population` refuses the document.
    *
    * A free string and not an enum of the lanes this build knows, for the reason
    * `population`'s own `lane` field gives: a vat that grows a third lane must

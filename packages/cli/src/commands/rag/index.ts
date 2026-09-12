@@ -77,6 +77,8 @@ Output Structure (YAML):
   status: success (every resource indexed) / partial (some failed) / error
   resourcesIndexed: new/updated files
   resourcesSkipped: unchanged files (content hash match)
+  resourcesEmpty: files that chunked to nothing (frontmatter-only or blank);
+          recorded, not searchable, not an error
   resourcesUpdated: files with new content
   chunksCreated: total chunks added
   chunksDeleted: chunks removed from updated files

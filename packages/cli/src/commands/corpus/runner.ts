@@ -18,7 +18,8 @@ import { dirname } from 'node:path';
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { scan } from '@vibe-agent-toolkit/discovery';
 import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
+import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 import { isGitUrl, parseGitUrl } from '@vibe-agent-toolkit/utils/git';
 import * as yaml from 'yaml';
 
@@ -247,6 +248,37 @@ function summarizeReview(sections: readonly SkillReviewSection[]): ReviewSummary
 }
 
 /**
+ * One failed section per directory the review scan could not list.
+ *
+ * The review lane's population is what `scan` enumerates; a directory it could
+ * not enter is a set of skills that were never reviewed, and a review.md that
+ * omits them reads as one that covered the plugin. Filing the gap on the
+ * existing per-skill channel — `ok: false`, keyed by the directory — is what
+ * makes `buildReviewOutcome` grade the run `error` and the aggregate name the
+ * subtree, without inventing a second channel the report would have to learn.
+ *
+ * @param unreadable - What `ScanSummary.unreadable` carried
+ * @param scanPath - The plugin root every section is keyed relative to
+ * @returns Sections in the order the refusals were met
+ */
+export function unlistedDirectorySections(
+  unreadable: readonly DirectoryRefusal[],
+  scanPath: string,
+): SkillReviewSection[] {
+  return unreadable.map((refusal) => {
+    const relativePath = toForwardSlash(safePath.relative(scanPath, refusal.directory)) || '.';
+    const cause = refusal.transient
+      ? `${transientRefusalClause(refusal.code)} — re-run before investigating anything`
+      : `listing was refused with ${refusal.code}`;
+    return {
+      relativePath,
+      ok: false,
+      body: `Directory could not be listed (${cause}); every skill beneath it was not reviewed.`,
+    };
+  });
+}
+
+/**
  * Derive one plugin's `ReviewOutcome` from its per-skill sections.
  *
  * `status: 'ok'` requires `failed === 0` — every discovered skill reviewed to
@@ -304,8 +336,13 @@ async function runSkillReview(
   const skills = summary.results.filter(
     (r) => r.format === 'agent-skill' && !r.isGitIgnored
   );
+  // Directories the scan could not list hold skills this review never saw. They
+  // enter the aggregate as failed sections — see `unlistedDirectorySections` —
+  // so the outcome is `error` and the review names the gap, while every skill
+  // that WAS found is still reviewed below.
+  const unlisted = unlistedDirectorySections(summary.unreadable, scanPath);
 
-  if (skills.length === 0) {
+  if (skills.length === 0 && unlisted.length === 0) {
     return {
       status: 'error',
       duration_ms: Date.now() - start,
@@ -314,7 +351,7 @@ async function runSkillReview(
     };
   }
 
-  const sections: SkillReviewSection[] = [];
+  const sections: SkillReviewSection[] = [...unlisted];
   for (const skill of skills) {
     const skillDir = dirname(skill.path);
     sections.push(reviewOneSkill(bin, skillDir, skill.relativePath));

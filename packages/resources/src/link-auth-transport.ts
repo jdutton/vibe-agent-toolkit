@@ -204,8 +204,9 @@ async function fetchRedacting(
  * degrade every diagnosis to pay for one. So the swap happens only when the
  * redaction actually changed the text.
  *
- * The probe walks the `cause` chain, not just `.message`, because `util.inspect`
- * prints causes and undici nests its real error one level down.
+ * The probe covers everything `util.inspect` or a debug logger would print —
+ * see {@link describeThrown} — and the redaction matches every encoded form
+ * of the secret, not only the verbatim bytes (see `redactSecretsInText`).
  */
 function redactThrownValue(error: unknown, secrets: readonly string[]): unknown {
   if (secrets.length === 0) return error;
@@ -214,19 +215,38 @@ function redactThrownValue(error: unknown, secrets: readonly string[]): unknown 
   return redacted === exposed ? error : new AuthTransportError(redacted);
 }
 
-/** Flatten a thrown value — and its `cause` chain — into one probe string. */
+/**
+ * Flatten a thrown value into one probe string covering every place a value
+ * can ride on it: `name` and `message`, the `cause` chain, an
+ * `AggregateError`'s `errors`, and the object's own enumerable properties.
+ *
+ * 🪤 It used to walk `message` and `cause` only, and judged "exposes nothing"
+ * on that — so an error whose `.headers` own property held the token, or an
+ * `AggregateError` whose `errors[0].message` did (undici's multi-address
+ * connect failure is that shape), was rethrown as the SAME object with the
+ * value intact for `util.inspect` to print. Own properties are read through
+ * `JSON.stringify`, which is what a logger does with them.
+ */
 function describeThrown(error: unknown): string {
-  if (!(error instanceof Error)) return safeJson(error);
-
   const parts: string[] = [];
   const seen = new Set<unknown>();
-  let current: unknown = error;
-  while (current instanceof Error && !seen.has(current)) {
-    seen.add(current);
-    parts.push(`${current.name}: ${current.message}`);
-    current = current.cause;
-  }
-  if (current !== undefined && current !== null) parts.push(safeJson(current));
+  const visit = (value: unknown): void => {
+    if (value === undefined || value === null) return;
+    if (!(value instanceof Error)) {
+      parts.push(safeJson(value));
+      return;
+    }
+    if (seen.has(value)) return;
+    seen.add(value);
+    parts.push(`${value.name}: ${value.message}`);
+    // Own enumerable properties — `.headers`, `.response`, `.code` — are what
+    // `JSON.stringify(error)` prints; `message`, `cause` and `errors` are not
+    // enumerable on a standard error and are walked explicitly below.
+    parts.push(safeJson(value));
+    visit(value.cause);
+    if (value instanceof AggregateError) for (const inner of value.errors as unknown[]) visit(inner);
+  };
+  visit(error);
   return parts.join(' | ');
 }
 

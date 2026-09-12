@@ -9,6 +9,8 @@ import type { CoreRAGChunk, TokenCounter } from '@vibe-agent-toolkit/rag';
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import type { ZodObject, ZodRawShape } from 'zod';
 
+import { serializeMetadata } from './schema.js';
+
 /**
  * Accumulated document record collected during indexing.
  * Stored to rag_documents table when storeDocuments is enabled.
@@ -58,8 +60,13 @@ export function overlayChunkMetadata<TMetadata extends Record<string, unknown>>(
 /**
  * Create a DocumentRecord for the rag_documents table.
  *
- * Builds the record from resource metadata, transformed content,
- * and overlays frontmatter fields using the metadata schema.
+ * Builds the record from resource metadata, transformed content, and every
+ * metadata field the schema declares — serialized exactly as chunk rows
+ * serialize theirs, sentinel included when the document's frontmatter lacks
+ * the field. The documents table's columns are inferred from the FIRST row
+ * written, so a record that carried only the keys its own document had gave
+ * the table the first document's shape, and any later document with a key the
+ * first lacked was refused at insert time.
  *
  * @param resource - Resource metadata (id, filePath, frontmatter)
  * @param content - Transformed content to store
@@ -77,7 +84,10 @@ export function createDocumentRecord(
   tokenCounter: TokenCounter,
   metadataSchema: ZodObject<ZodRawShape>,
 ): DocumentRecord {
-  const documentRecord: DocumentRecord = {
+  // Metadata first, core fields after, so a metadata schema that reuses a core
+  // column name cannot overwrite the core value — the same order chunk rows use.
+  return {
+    ...serializeMetadata(resource.frontmatter ?? {}, metadataSchema),
     resourceid: resource.id,
     filepath: resource.filePath,
     content,
@@ -86,17 +96,4 @@ export function createDocumentRecord(
     totalchunks: totalChunks,
     indexedat: Date.now(),
   };
-
-  if (resource.frontmatter) {
-    for (const key of Object.keys(metadataSchema.shape)) {
-      if (key in resource.frontmatter) {
-        const value = resource.frontmatter[key];
-        documentRecord[key.toLowerCase()] = typeof value === 'string' || typeof value === 'number'
-          ? value
-          : JSON.stringify(value);
-      }
-    }
-  }
-
-  return documentRecord;
 }

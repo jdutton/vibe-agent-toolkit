@@ -130,6 +130,39 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with an unreadable subdirectory', 
     expect(issue?.message).toMatch(/EACCES|permission denied/i);
   });
 
+  // Two lanes meet this directory: the audit's own walk (`scanDirectory` reads it
+  // and files the synthetic result) and the distributed-tree detector, which crawls
+  // the skill's own directory at any depth and now reports what it could not list
+  // rather than throwing or shortening. One fact, one finding.
+  it('reports the unreadable directory exactly once, though two lanes reach it', async () => {
+    fs.chmodSync(unreadableDir, UNREADABLE);
+    const results = await auditSkillDir();
+
+    const unreadable = results.flatMap(r => r.issues).filter(i => i.code === 'SCAN_PATH_UNREADABLE');
+    expect(unreadable.map(i => i.location)).toEqual([UNREADABLE_SUBDIR]);
+  });
+
+  // The lane the walk never covers: naming the SKILL.md directly. There is no
+  // directory scan at all, so the ONLY pass that meets `sub` is the detector's
+  // crawl of the skill's own directory. Dropping its refusal because "the walk
+  // already reports directories under the scan root" would be exactly wrong here —
+  // nothing else reports it — and the same is true whenever the walk skips a
+  // subtree the detector enters (`--no-recursive`, an ignored or excluded dir).
+  it('reports the unreadable sibling exactly once when the SKILL.md is named directly', async () => {
+    fs.chmodSync(unreadableDir, UNREADABLE);
+    resetAuditCaches();
+    const skillMd = safePath.join(skillDir, 'SKILL.md');
+
+    const results = await getValidationResults(skillMd, true, {}, silentLogger, deriveScanRoot(skillMd));
+
+    const codes = results.flatMap(r => r.issues.map(i => i.code));
+    expect(codes).toContain('PACKAGED_AGENT_INSTRUCTION_FILE');
+    expect(results.some(r => r.status === 'error')).toBe(false);
+    const unreadable = results.flatMap(r => r.issues).filter(i => i.code === 'SCAN_PATH_UNREADABLE');
+    expect(unreadable.map(i => i.location)).toEqual([UNREADABLE_SUBDIR]);
+    expect(unreadable[0]?.message).toMatch(/EACCES/);
+  });
+
   it('loses only the findings that were under the unreadable directory', async () => {
     fs.chmodSync(unreadableDir, UNREADABLE);
     const results = await auditSkillDir();

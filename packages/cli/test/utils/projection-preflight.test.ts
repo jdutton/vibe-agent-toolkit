@@ -30,23 +30,42 @@ const logger = createLogger({ debug: false });
  */
 const TYPO_STATEMENT = 'SELECT contentHash FROM blobs';
 
+/** A statement with a placeholder and nothing to bind to it. */
+const UNBOUND_STATEMENT = 'SELECT path FROM resource_realizations WHERE ext = ?';
+
+/** One preflight entry that binds nothing, which is what a `resources.checks` statement is. */
+function unbound(sql: string): { sql: string; parameters: readonly string[] } {
+  return { sql, parameters: [] };
+}
+
 describe('assertQueriesCompile', () => {
   it('accepts a statement the schema can answer, with no corpus anywhere in sight', async () => {
     // The function takes no root, which is the point: nothing has been
     // populated, and the schema alone decides.
-    await expect(assertQueriesCompile(['SELECT path FROM resource_realizations'])).resolves.toBeUndefined();
+    await expect(assertQueriesCompile([unbound('SELECT path FROM resource_realizations')])).resolves.toBeUndefined();
   });
 
   it('refuses an unknown column and lists the columns the table DOES have', async () => {
-    await expect(assertQueriesCompile([TYPO_STATEMENT])).rejects.toThrow(/contentKey/);
+    await expect(assertQueriesCompile([unbound(TYPO_STATEMENT)])).rejects.toThrow(/contentKey/);
   });
 
   it('refuses the FIRST bad statement when given several', async () => {
     await expect(assertQueriesCompile([
-      'SELECT path FROM resource_realizations',
-      'SELECT * FROM no_such_table',
-      TYPO_STATEMENT,
+      unbound('SELECT path FROM resource_realizations'),
+      unbound('SELECT * FROM no_such_table'),
+      unbound(TYPO_STATEMENT),
     ])).rejects.toThrow(/no such table: no_such_table/);
+  });
+
+  it('refuses an UNDER-bound statement here, before any population is paid for', async () => {
+    // 🚨 The engine would not: a `?` with no value binds NULL and the statement
+    // answers "nothing matched" at exit 0. Through `vat resources query` that
+    // was `n: 0, status: success` for a forgotten `--param`. The refusal names
+    // both counts so the operator can see which side is short.
+    await expect(assertQueriesCompile([unbound(UNBOUND_STATEMENT)]))
+      .rejects.toThrow(/1 placeholder and 0 values were bound/);
+    await expect(assertQueriesCompile([{ sql: UNBOUND_STATEMENT, parameters: ['.md'] }]))
+      .resolves.toBeUndefined();
   });
 
   it('does nothing at all for an empty list, so a verb that declares none pays nothing', async () => {
@@ -74,7 +93,7 @@ describe('withQueriedProjection preflight', () => {
 
     await expect(
       withQueriedProjection(
-        { root: missingRoot, logger, preflight: [TYPO_STATEMENT] },
+        { root: missingRoot, logger, preflight: [unbound(TYPO_STATEMENT)] },
         () => undefined,
       ),
     ).rejects.toThrow(/contentKey/);

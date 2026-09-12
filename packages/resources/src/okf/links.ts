@@ -89,6 +89,7 @@ import {
   safePath,
   toForwardSlash,
   transientRefusalClause,
+  type VerifiedPrefix,
 } from '@vibe-agent-toolkit/utils';
 
 import type { ResourceLink } from '../types.js';
@@ -266,6 +267,7 @@ function unlistableDraft(
   link: ResourceLink,
   askedPath: string,
   refusal: UnreadableDirectory,
+  verified: VerifiedPrefix,
   root: string,
 ): OkfFindingDraft {
   const relative = toForwardSlash(safePath.relative(root, refusal.directory));
@@ -277,11 +279,17 @@ function unlistableDraft(
   const remedy = refusal.transient
     ? `${transientRefusalClause(refusal.code)} — nothing in the bundle is wrong, so re-run before investigating anything.`
     : `Fix the permissions on that directory inside the bundle root, then validate again.`;
+  // What the walk learned ABOVE the refusal is reported, not discarded: a case
+  // mismatch there is a defect whatever the mode bit below says. The judge
+  // walks from the bundle root, so the prefix is already bundle-relative.
+  const unchecked = verified.match === 'exact'
+    ? `Until then this link's spelling, existence and anchor are all unchecked.`
+    : `Until then this link's existence and anchor are unchecked — but its spelling above that directory was judged and is wrong: "${verified.askedPath}" is spelled "${verified.actualPath}" on disk, which breaks the link on a byte-exact filesystem whatever lies beneath.`;
 
   return {
     ...anchorOf(document, link),
     code: 'OKF_SUBDIRECTORY_UNREADABLE',
-    message: `Cross-link to "${askedPath}" was NOT judged: listing ${where} was refused (${refusal.code}). This is not a report that the link is broken — a directory can be traversable while refusing a listing (POSIX \`--x\`), in which case the target opens exactly as written and VAT simply never got to look. ${remedy} Until then this link's spelling, existence and anchor are all unchecked.`,
+    message: `Cross-link to "${askedPath}" was NOT judged: listing ${where} was refused (${refusal.code}). This is not a report that the link is broken — a directory can be traversable while refusing a listing (POSIX \`--x\`), in which case the target opens exactly as written and VAT simply never got to look. ${remedy} ${unchecked}`,
   };
 }
 
@@ -443,7 +451,7 @@ async function judgeTarget(
       // just its kind: the errno and the refusing directory are what let the
       // message say something a publisher can act on.
       return verdict.because.kind === 'directory_unreadable'
-        ? unlistableDraft(document, target.link, verdict.askedPath, verdict.because, index.root)
+        ? unlistableDraft(document, target.link, verdict.askedPath, verdict.because, verdict.verified, index.root)
         : missingDraft(document, target.link);
     }
   }

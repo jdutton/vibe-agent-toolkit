@@ -414,6 +414,21 @@ export class ExternalLinkValidator {
 					code: 'LINK_AUTH_UNVERIFIED',
 				};
 			}
+			if (plan.outcome === 'provider-error') {
+				// Its own code, deliberately not LINK_AUTH_UNVERIFIED: that one's
+				// registry remedy invites `ignore` for token-less lanes, and a
+				// provider that could not build a request must not ride under it —
+				// see resolve.ts. Not cached either: the answer is about the
+				// provider, not the URL, and flips when the config is fixed.
+				return {
+					url,
+					status: 'error',
+					statusCode: 0,
+					error: plan.reason,
+					cached: false,
+					code: 'LINK_AUTH_PROVIDER_ERROR',
+				};
+			}
 			// 'unsupported' → fall through to anonymous markdown-link-check path
 		}
 
@@ -421,6 +436,14 @@ export class ExternalLinkValidator {
 		// miss, not a hit: the write-side guard repairs no row an earlier build
 		// already left on disk, and reading one keeps a blip answering for
 		// the rest of its TTL.
+		//
+		// ⚠️ Repairs only the HEADER-FREE arms. The cache stores `statusCode`
+		// and `statusMessage`, so the read side asks `isTransientRefusal` with
+		// `headers: undefined` and can recognise `0` and `429` — not a
+		// throttled 403, which is only distinguishable from a permission denial
+		// by the rate-limit headers the row never kept. On this lane that is no
+		// loss: markdown-link-check hands back no headers either, so the write
+		// side never had them and never wrote a 403 it could have refused.
 		const cached = await this.cache.get(url);
 		if (cached && !isTransientRefusal(cached.statusCode, undefined)) {
 			// Same predicate the fresh-fetch path hands to markdown-link-check.
@@ -496,8 +519,18 @@ export class ExternalLinkValidator {
 		// (warning). Cache-hit semantics must match cache-miss semantics for
 		// the same (url, provider) pair.
 		//
-		// A row the write below would refuse today is a miss, whatever build
-		// wrote it — see the anonymous lane's cache read for why.
+		// A row the write below would refuse on `statusCode` alone is a miss,
+		// whatever build wrote it — see the anonymous lane's cache read for why.
+		//
+		// ⚠️ That is narrower than the write side, and the gap is real on THIS
+		// lane. The write refuses a 403 whose headers say "rate limited" (GitHub
+		// primary/secondary limits), but the row keeps no headers, so a
+		// throttled 403 a pre-guard build wrote answers here as
+		// `LINK_AUTH_FORBIDDEN` for the rest of its TTL — and a cheap honest
+		// check does not exist: `statusMessage` is the classifier's own text,
+		// identical for both kinds of 403, and refusing EVERY cached 403 would
+		// refetch every genuinely private link on every run. The remedy for such
+		// a row is `--no-cache` once (`VAT_CACHE` off); the guard cannot see it.
 		const cached = await this.authCache.get(plan.fetchUrl);
 		if (cached && !isTransientRefusal(cached.statusCode, undefined)) {
 			return buildAuthResult(originalUrl, cached.statusCode, plan, true, cached.statusMessage);

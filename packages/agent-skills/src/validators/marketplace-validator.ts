@@ -105,10 +105,14 @@ export async function validateMarketplace(
 			name: result.data.name,
 			...(result.data.description !== undefined && { description: result.data.description }),
 			...(result.data.version !== undefined && { version: result.data.version }),
-			// The denominators a consumer needs to judge a plugin walk: a string
-			// `source` is a relative path into this marketplace's own tree.
+			// The denominator a consumer needs to judge a plugin walk: a string
+			// `source` is a relative path into this marketplace's own tree, and the
+			// consumer resolves it against the root it chose. Sources, not a count —
+			// a count is satisfied by walking the WRONG directories.
 			pluginEntries: result.data.plugins.length,
-			localPluginEntries: result.data.plugins.filter((entry) => typeof entry.source === 'string').length,
+			localPluginSources: result.data.plugins.flatMap((entry) =>
+				typeof entry.source === 'string' ? [{ name: entry.name, source: entry.source }] : [],
+			),
 		};
 	}
 

@@ -169,8 +169,19 @@ Output Fields:
               0/1, a date and a JSON column as text. Values are NOT decoded,
               because decoding needs a table spec and arbitrary SQL has none
 
+Path Argument:
+  [path] says where to LOOK FOR the project -- root discovery walks up from
+  it -- and never narrows the corpus. The projection is always the whole
+  tracked tree, so \`vat resources query <sql> docs/\` answers about the same
+  tree as \`vat resources query <sql>\` (root in the document names it); a
+  WHERE clause on path is the only scope a statement has. This differs from
+  scan and validate, whose [path] restricts the crawl. A path that does not
+  exist, or is not a directory, is refused (exit 2).
+
 Exit Codes:
-  0 - The statement ran  |  2 - The statement was refused, or the crawl failed
+  0 - The statement ran
+  2 - The statement was refused (not a query, a second statement, a placeholder
+      with no --param behind it), [path] names no directory, or the crawl failed
 
 Requirements:
   projectRoot: optional (falls back to cwd with a warning)
@@ -257,7 +268,11 @@ Checks run over the TRACKED TREE, not your configured resource set:
   directory. A correct "every ADR carries frontmatter" check produced a real
   false finding on a frozen historical file nobody intends to fix.
 
-  Narrow the check itself -- a WHERE clause is the only scope it has:
+  Narrow the check itself -- a WHERE clause is the only scope it has. The
+  [path] argument does not narrow it either: it says where to LOOK FOR the
+  project (root discovery walks up from it), and a path that does not exist
+  or is not a directory is refused at exit 2 rather than resolved to
+  whatever project the current directory is in.
 
     sql: |
       SELECT path FROM resource_realizations
@@ -363,9 +378,10 @@ Exit Codes:
   1 - At least one (a violation, a broken check, an empty corpus, no check
       having run at all, a run killed for making no progress within --budget,
       or a run whose child DIED)
-  2 - System error, an unknown --check name, an unusable --budget (an empty
-      one, one that means zero without being written 0, or one passed with
-      --cost-log), or a run interrupted before its population completed
+  2 - System error, an unknown --check name, a [path] that names no directory,
+      an unusable --budget (an empty one, one that means zero without being
+      written 0, or one passed with --cost-log), or a run interrupted before
+      its population completed
 
 Examples:
   $ vat resources check

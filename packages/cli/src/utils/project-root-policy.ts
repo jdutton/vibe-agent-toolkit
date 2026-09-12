@@ -13,6 +13,8 @@
  * root as a parameter — never call `findProjectRoot` themselves.
  */
 
+import { existsSync, statSync } from 'node:fs';
+
 import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { Logger } from './logger.js';
@@ -54,4 +56,36 @@ export function projectRootOrLoudCwd(startDir: string, logger: Logger): string {
  */
 export function projectRootOrNull(startDir: string): string | null {
   return findProjectRoot(startDir);
+}
+
+/**
+ * Fail loudly on a `[path]` argument that names no directory.
+ *
+ * Every `resources` verb takes an optional `[path]`, and two things can be
+ * meant by it: a SCOPE (`scan`, `validate` — crawl this subtree) or a LOCATOR
+ * (`query`, `check` — find the project from here; the projection is always the
+ * whole tree). Both start by resolving the argument, and both must refuse one
+ * that resolves to nothing — the scoping verbs would otherwise degrade into a
+ * glob matching nothing (`filesScanned: 0`, green), and the locating verbs
+ * walked UP from the missing path to whatever project the cwd is in and
+ * answered about THAT tree at exit 0, byte-identical to a correct run.
+ *
+ * One function so the two families refuse with one message; a reader who saw
+ * `validate` say "Path does not exist" should get the same words from `query`.
+ *
+ * @param pathArg - The argument as typed, relative to cwd or absolute
+ * @returns The resolved absolute path
+ * @throws When it does not exist or is not a directory
+ */
+export function assertDirectoryArgument(pathArg: string): string {
+  const resolved = safePath.resolve(pathArg);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- CLI path argument, resolved above
+  if (!existsSync(resolved)) {
+    throw new Error(`Path does not exist: ${resolved}`);
+  }
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- CLI path argument, existence checked above
+  if (!statSync(resolved).isDirectory()) {
+    throw new Error(`Path is not a directory: ${resolved}`);
+  }
+  return resolved;
 }

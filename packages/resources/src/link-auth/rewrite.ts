@@ -86,7 +86,13 @@ function stripFragmentAndQuery(url: string): string {
   return idx === -1 ? url : url.slice(0, idx);
 }
 
-function compileWhen(pattern: string): RegExp {
+/**
+ * Compile a rule's `when` pattern — exported so the config-time check can ask
+ * the same question the pipeline asks, with the same error.
+ *
+ * @throws {InvalidRewriteRuleError} if the pattern does not compile
+ */
+export function compileWhen(pattern: string): RegExp {
   try {
     // Rule patterns originate in trusted config (see design §8); runtime
     // compilation is intentional, not user-input regex injection.
@@ -96,6 +102,37 @@ function compileWhen(pattern: string): RegExp {
     throw new InvalidRewriteRuleError(pattern, e);
   }
 }
+
+/**
+ * The named capture groups a `when` pattern DECLARES — the names its captures
+ * can contribute to a template context, read off the source without matching.
+ *
+ * `(?<name>` is a declaration unless the paren is escaped: `\(?<x>y` is an
+ * optional literal paren followed by literal `<x>y`, and declares nothing.
+ * Lookbehinds (`(?<=`, `(?<!`) never match because `=` and `!` cannot start
+ * a group name. A group that is declared may still not PARTICIPATE in a given
+ * match (`(?<q>\?.*)?`), which is why the runtime lane keeps its own check.
+ *
+ * @param pattern - A `when` source that {@link compileWhen} accepts
+ * @returns The distinct group names, in declaration order
+ */
+export function namedGroupsOf(pattern: string): string[] {
+  const names = new Set<string>();
+  const opener = '(?<';
+  for (let at = pattern.indexOf(opener); at !== -1; at = pattern.indexOf(opener, at + 1)) {
+    // An odd run of backslashes before the paren escapes it.
+    let slashes = 0;
+    while (at - slashes - 1 >= 0 && pattern[at - slashes - 1] === '\\') slashes += 1;
+    if (slashes % 2 === 1) continue;
+
+    const name = GROUP_NAME.exec(pattern.slice(at + opener.length))?.[0];
+    if (name !== undefined) names.add(name);
+  }
+  return [...names];
+}
+
+/** A group name at the start of the text, followed by its closing `>`. */
+const GROUP_NAME = /^[A-Za-z_$][\w$]*(?=>)/;
 
 function collectCaptures(match: RegExpExecArray): Record<string, string> {
   const captures = Object.create(null) as Record<string, string>;

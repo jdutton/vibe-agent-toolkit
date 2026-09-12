@@ -24,10 +24,12 @@ import {
   safePath,
   toForwardSlash,
   toNfc,
+  transientRefusalClause,
   withOuterBracket,
 } from '@vibe-agent-toolkit/utils';
 import {
   crawlDirectory,
+  type DirectoryRefusal,
   type CrawlOptions as UtilsCrawlOptions,
   crawlPathFilter,
 } from '@vibe-agent-toolkit/utils/crawl';
@@ -655,6 +657,19 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private unreadableResources: UnreadableResource[] = [];
 
   /**
+   * Directories the crawl asked to list and was refused — so nothing beneath
+   * them was enumerated at all. Cleared by clear(). Surfaced as
+   * SCAN_PATH_UNREADABLE issues in validate().
+   *
+   * 🚨 A different gap from {@link unreadableResources}, one level up: those
+   * are files the walk SAW and could not open; these are subtrees the walk
+   * never saw into. Every file under one is in the declared population and in
+   * none of the counts — the same green-without-running shape the link judge
+   * refuses with `LINK_TARGET_UNREADABLE`, and the crawl used to swallow it.
+   */
+  private unlistableDirectories: DirectoryRefusal[] = [];
+
+  /**
    * Reads that failed, in the order `addResources` attempted them.
    *
    * Same rationale as {@link getDuplicateIdCollisions}: this is a population
@@ -666,6 +681,19 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   getUnreadableResources(): UnreadableResource[] {
     return [...this.unreadableResources];
+  }
+
+  /**
+   * Directories the crawl could not list, in the order the walk met them.
+   *
+   * A population fact like the two logs above: a caller reconciling "declared"
+   * against "admitted" needs to know which subtrees were never enumerated, and
+   * an issue list alone cannot say how many files that cost.
+   *
+   * @returns A copy of the refusal log, oldest first
+   */
+  getUnlistableDirectories(): DirectoryRefusal[] {
+    return [...this.unlistableDirectories];
   }
 
   /**
@@ -1263,6 +1291,13 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       // fast path and it keeps ignored files out, which is the half of the
       // universe that must NOT widen (see {@link CrawlOptions.includeUntracked}).
       includeUntracked: true,
+      // Degrade, don't destroy — but never silently. Without this the walk
+      // THROWS on a refused listing (the crawler's only other honest answer);
+      // with it the refusal is recorded here and reported by `validate()` as
+      // SCAN_PATH_UNREADABLE, while every readable sibling is still admitted.
+      onUnreadable: (refusal) => {
+        this.unlistableDirectories.push(refusal);
+      },
     };
 
     // The enumeration ALONE is charged here, not the whole method: `addResources`
@@ -1458,6 +1493,34 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         `Two files resolve to the same resource id '${id}': '${issueLocation(existingPath, locationRoot(this.baseDir))}' and '${issueLocation(conflictingPath, locationRoot(this.baseDir))}'. Rename one of the files so they produce distinct resource ids.`,
       ),
     );
+  }
+
+  /**
+   * Emit SCAN_PATH_UNREADABLE for every directory the crawl could not list.
+   *
+   * The registry's own code for this shape (its description already reads "a
+   * directory the scan could not enter … so it was not scanned; findings from
+   * every readable sibling are still reported"), rather than a second code
+   * for the same fact on a second lane. The remedy names `resources.exclude`,
+   * which is this lane's deliberate-drop mechanism; the registry `fix` text
+   * names `--exclude`, which is `vat audit`'s.
+   * @private
+   */
+  private collectUnlistableDirectoryIssues(): ValidationIssue[] {
+    return this.unlistableDirectories.map((refusal) => {
+      // Project-relative, for the same reason every other location is: the
+      // refusal carries an absolute path, and an absolute path in a finding is
+      // the developer's home directory in every CI log.
+      const where = issueLocation(refusal.directory, locationRoot(this.baseDir));
+      const remedy = refusal.transient
+        ? `${transientRefusalClause(refusal.code)}, so nothing is wrong with the tree — re-run before investigating anything.`
+        : `Fix the permissions on that directory, or add it to resources.exclude to drop it from the scan deliberately.`;
+      return createRegistryIssue(
+        'SCAN_PATH_UNREADABLE',
+        `Listing the directory '${where}' was refused (${refusal.code}), so nothing beneath it was scanned: every file there is in the declared population and absent from every count in this report. ${remedy}`,
+        { location: where },
+      );
+    });
   }
 
   /**
@@ -1853,6 +1916,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       ...this.collectUnresolvedReferenceIssues(),
       ...this.collectDuplicateIdErrors(),
       ...this.collectUnreadableResourceErrors(),
+      ...this.collectUnlistableDirectoryIssues(),
     );
 
     // Validate each link in each resource
@@ -2291,6 +2355,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     this.resourcesByChecksum.clear();
     this.duplicateIdCollisions = [];
     this.unreadableResources = [];
+    this.unlistableDirectories = [];
     // Compiled schemas are snapshots of files on disk: a registry being reused
     // for a fresh crawl must re-read them rather than trust a prior compile.
     this.compiledCollectionSchemas.clear();

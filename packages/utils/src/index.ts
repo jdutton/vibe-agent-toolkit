@@ -104,6 +104,7 @@ export type {
   PathSpellingRequest,
   PathSpellingTable,
   RealpathTable,
+  VerifiedPrefix,
 } from './fs-utils.js';
 
 // Project root discovery (canonical: config → git → null).

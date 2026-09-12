@@ -11,7 +11,7 @@ import { basename } from 'node:path';
 import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
+import { crawlDirectory, refuseListing } from '@vibe-agent-toolkit/utils/crawl';
 import picomatch from 'picomatch';
 
 import type { DiscoveredSkill } from './command-helpers.js';
@@ -97,7 +97,7 @@ function groupIncludePatternsByBase(
  * the root does not exist (mirrors audit's filesystem-first tolerance for
  * patterns pointing at nothing).
  */
-async function crawlOneBase(base: string, globs: string[]): Promise<string[]> {
+async function crawlOneBase(base: string, globs: string[], projectRoot: string): Promise<string[]> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- base derived from validated config
   if (!existsSync(base)) {
     return [];
@@ -115,6 +115,20 @@ async function crawlOneBase(base: string, globs: string[]): Promise<string[]> {
     // this and keeps the fast path (unlike `respectGitignore: false`, which costs
     // a full walk); the inventory lane already used it for the same reason.
     includeUntracked: true,
+    // A directory the crawl cannot LIST stops discovery, by name. The alternative
+    // — enumerate around it — is the same tell-less drop described above, from
+    // the other direction: one fewer skill, exit 0, and every command downstream
+    // (build, validate, verify, audit's config-aware lane) confidently working
+    // from the shorter list. The remedy names `skills.include` rather than
+    // `skills.exclude`, because `exclude` is applied to the crawl's RESULT and
+    // cannot stop the crawl from entering the directory; only a narrower
+    // include base can. Expressed against the project root — the coordinates
+    // the include pattern itself is written in, `..` and all.
+    onUnreadable: refuseListing({
+      root: projectRoot,
+      remedy:
+        'Fix the permissions on that directory, or narrow the `skills.include` pattern so its base no longer reaches into it.',
+    }),
   });
 }
 
@@ -148,7 +162,7 @@ export async function discoverSkillsFromConfig(
 
   const foundAbsPaths = new Set<string>();
   for (const [base, globs] of patternsByBase) {
-    const crawled = await crawlOneBase(base, globs);
+    const crawled = await crawlOneBase(base, globs, projectRoot);
     for (const absPath of crawled) {
       if (userExcludeMatcher) {
         const relFromProject = toForwardSlash(safePath.relative(projectRoot, absPath));

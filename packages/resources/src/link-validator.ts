@@ -56,9 +56,12 @@ import {
   type PathSpellingRequest,
   type PathSpellingTable,
   type RealpathTable,
+  safePath,
+  spellingWalkRoot,
   toForwardSlash,
   toNfc,
   transientRefusalClause,
+  type VerifiedPrefix,
 } from '@vibe-agent-toolkit/utils';
 import {
   isGitIgnored,
@@ -670,6 +673,16 @@ export function fileExistenceIssue(
 type UnreadableDirectory = Extract<AbsenceCause, { kind: 'directory_unreadable' }>;
 
 /**
+ * A refused listing together with what the walk established ABOVE it — the
+ * verdict on the components it did get to judge, which a report must not
+ * discard (see {@link VerifiedPrefix}).
+ */
+export interface UnreadableTarget {
+  readonly refusal: UnreadableDirectory;
+  readonly verified: VerifiedPrefix;
+}
+
+/**
  * What {@link validateResolvedFile} learned about one link target, read by every
  * downstream issue builder. The helpers below each take the narrowest slice of
  * it they actually use, so a unit test hands only the fields under test.
@@ -698,8 +711,12 @@ export interface FileVerification {
    * 🔑 **A cause rather than a boolean, and that is the third fix.** A flag
    * could say only "a directory on that path refused", which on a five-segment
    * path names three candidates and no errno — a remedy a reader cannot aim.
+   *
+   * 🪤 **And the verdict on the components above the refusal, which is the
+   * fourth.** Those WERE listed and judged; a case mismatch found there is a
+   * finding on its own, and the message must not call it unverified.
    */
-  unreadable: UnreadableDirectory | null;
+  unreadable: UnreadableTarget | null;
   /** Absolute filesystem path the link resolved to. */
   resolvedPath: string;
   /** How the asked-for path matched disk, at its WORST-spelled component. */
@@ -1055,8 +1072,8 @@ function unreadableTargetIssue(
   sourceFilePath: string,
   projectRoot?: string,
 ): ValidationIssue | null {
-  const refusal = fileResult.unreadable;
-  if (refusal === null) return null;
+  if (fileResult.unreadable === null) return null;
+  const { refusal, verified } = fileResult.unreadable;
 
   // Both paths are spelled against the root `location` uses, for the same
   // reason `fileExistenceIssue`'s is: an absolute path here is the developer's
@@ -1070,12 +1087,25 @@ function unreadableTargetIssue(
   const remedy = refusal.transient
     ? `${transientRefusalClause(refusal.code)}, so nothing is wrong with the tree — re-run before investigating anything.`
     : `Fix the permissions on that directory, or find out what changed mid-walk, then validate again.`;
+  // What the walk learned above the refusal is reported, not discarded — the
+  // spelling clause depends on it. The judged prefix is relative to the walk
+  // root `fillPathSpellings` chose for this pair, so it is re-anchored from
+  // the same root before it is spelled against the project.
+  const walkRoot = spellingWalkRoot(sourceFilePath, fileResult.resolvedPath);
+  const unverified = verified.match === 'exact'
+    ? 'Its existence, spelling and anchor are all unverified'
+    : `Its existence and anchor are unverified — but its spelling above that directory was judged and is wrong: "${messagePath(safePath.join(walkRoot, verified.askedPath), projectRoot)}" is spelled "${messagePath(safePath.join(walkRoot, verified.actualPath), projectRoot)}" on disk (${describeSpellingDefect(verified.match)}), which breaks the link on a byte-exact filesystem whatever lies beneath`;
 
   return createRegistryIssue(
     'LINK_TARGET_UNREADABLE',
-    `Link target ${target} was NOT checked: listing the directory "${directory}" was refused (${refusal.code}). This is not a report that the link is broken — a directory can be traversable while refusing a listing (POSIX \`--x\`), in which case the target opens exactly as written. Its existence, spelling and anchor are all unverified, so treat this as a gap in the run rather than as a clean result. ${remedy}`,
+    `Link target ${target} was NOT checked: listing the directory "${directory}" was refused (${refusal.code}). This is not a report that the link is broken — a directory can be traversable while refusing a listing (POSIX \`--x\`), in which case the target opens exactly as written. ${unverified}, so treat this as a gap in the run rather than as a clean result. ${remedy}`,
     linkExtras(link, sourceFilePath, projectRoot),
   );
+}
+
+/** The one-phrase name of a non-exact spelling verdict, for a message. */
+function describeSpellingDefect(match: Exclude<FilenameMatch, 'absent' | 'exact'>): string {
+  return match === 'case_mismatch' ? 'a case mismatch' : 'a Unicode normalization mismatch';
 }
 
 /**
@@ -1236,7 +1266,7 @@ function validateResolvedFile(
     // reports this has to name the directory and the errno.
     unreadable:
       spelling.match === 'absent' && spelling.because.kind === 'directory_unreadable'
-        ? spelling.because
+        ? { refusal: spelling.because, verified: spelling.verified }
         : null,
     resolvedPath,
     match: spelling.match,

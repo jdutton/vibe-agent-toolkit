@@ -11,6 +11,7 @@ import {
   buildAuditOutcome,
   buildReviewOutcome,
   type SkillReviewSection,
+  unlistedDirectorySections,
 } from '../../../src/commands/corpus/runner.js';
 import type { PluginEntry } from '../../../src/commands/corpus/seed.js';
 
@@ -316,6 +317,37 @@ function makeSections(oks: readonly boolean[]): SkillReviewSection[] {
 }
 
 const TEN_SKILLS = 10;
+
+describe('unlistedDirectorySections', () => {
+  // A directory the review scan could not list holds skills that were never
+  // reviewed. It enters the aggregate on the existing per-skill channel — a
+  // failed section, keyed by the directory — so `buildReviewOutcome` reports
+  // the run as error and the review.md says which subtree is missing, while
+  // every skill that WAS reviewed keeps its section. Never a shorter review.
+  it('turns each refused directory into a failed section anchored at the directory', () => {
+    const scanPath = safePath.resolve('/corpus/plugin');
+    const sections = unlistedDirectorySections(
+      [
+        { kind: 'directory_unreadable', code: 'EACCES', directory: `${scanPath}/skills/locked`, transient: false },
+        { kind: 'directory_unreadable', code: 'EMFILE', directory: scanPath, transient: true },
+      ],
+      scanPath,
+    );
+
+    expect(sections.map((s) => [s.relativePath, s.ok])).toEqual([
+      ['skills/locked', false],
+      ['.', false],
+    ]);
+    expect(sections[0]?.body).toContain('EACCES');
+    expect(sections[0]?.body).toContain('not reviewed');
+    expect(sections[1]?.body).toContain('transient');
+    expect(buildReviewOutcome(sections, 'r.md', 1).status).toBe('error');
+  });
+
+  it('adds nothing when every directory was listed', () => {
+    expect(unlistedDirectorySections([], '/corpus/plugin')).toEqual([]);
+  });
+});
 
 describe('buildReviewOutcome', () => {
   it('reports the failure count and a non-success status when 9 of 10 reviews failed', () => {

@@ -88,7 +88,7 @@ export type DirectoryListing =
  * @param error - Whatever `fs.readdir` rejected with
  * @returns The listing outcome that error stands for
  */
-function listingFailure(error: unknown): DirectoryListing {
+export function listingFailure(error: unknown): DirectoryListing {
   const code =
     typeof error === 'object' && error !== null && 'code' in error
       ? (error as { code: unknown }).code
@@ -626,6 +626,33 @@ export type AbsenceCause =
       readonly transient: boolean;
     };
 
+/** The refusal half of {@link AbsenceCause}: a directory that would not be listed. */
+export type DirectoryRefusal = Extract<AbsenceCause, { kind: 'directory_unreadable' }>;
+
+/**
+ * The refusal a `readdir` that was refused stands for — errno, directory and
+ * whether a re-ask could answer differently, derived ONCE beside the errno list.
+ *
+ * Shared by the spelling judge (through {@link absenceCauseFor}) and the crawl
+ * that defines the population (`file-crawler.ts`), so the two lanes cannot
+ * disagree about which refusals are transient.
+ *
+ * @param listing - A `readdir` outcome that was refused
+ * @param directory - The directory that was asked about
+ * @returns The refusal, with `directory` forward-slashed
+ */
+export function directoryRefusalFor(
+  listing: Extract<DirectoryListing, { outcome: 'unreadable' }>,
+  directory: string
+): DirectoryRefusal {
+  return {
+    kind: 'directory_unreadable',
+    code: listing.code,
+    directory: toForwardSlash(directory),
+    transient: TRANSIENT_LISTING_ERRNOS.has(listing.code),
+  };
+}
+
 /**
  * The cause for a listing that produced no index.
  *
@@ -638,13 +665,7 @@ function absenceCauseFor(
   directory: string
 ): AbsenceCause {
   if (listing.outcome === 'absent') return { kind: 'no_such_entry' };
-
-  return {
-    kind: 'directory_unreadable',
-    code: listing.code,
-    directory: toForwardSlash(directory),
-    transient: TRANSIENT_LISTING_ERRNOS.has(listing.code),
-  };
+  return directoryRefusalFor(listing, directory);
 }
 
 /** What one directory entry name matched, and how the directory spells it. */
@@ -754,7 +775,35 @@ export type PathSpelling =
       actualPath: string;
       /** Whether the entry is really gone, or the listing was refused. */
       because: AbsenceCause;
+      /**
+       * What the walk DID establish before it stopped: the components above
+       * the one it could not find or could not ask about.
+       *
+       * 🪤 Carried because dropping it discarded a verdict. `Locked/t.md`
+       * against a disk `locked/` that then refuses to list: component 1 was
+       * judged and found a case mismatch — a defect that 404s on a
+       * case-sensitive filesystem whatever the mode bit below says — and a
+       * bare `absent` threw it away, so the report called the spelling
+       * "unverified" about a component VAT had verified and found wrong.
+       */
+      verified: VerifiedPrefix;
     };
+
+/**
+ * The components of a path a walk judged before it stopped, and their verdict.
+ *
+ * Both paths are `/`-joined and relative to the walk root, like the
+ * {@link PathSpelling} they ride on; both are empty when the FIRST component
+ * is the one that could not be judged.
+ */
+export interface VerifiedPrefix {
+  /** The worst spelling defect among the judged components. */
+  readonly match: Exclude<FilenameMatch, 'absent'>;
+  /** The judged components as the caller spelled them. */
+  readonly askedPath: string;
+  /** The same components as disk spells them. */
+  readonly actualPath: string;
+}
 
 /**
  * Every directory a run asks about, listed once and indexed once.
@@ -878,8 +927,18 @@ export class DirectorySpellingIndex {
         // The cause travels with the verdict rather than being re-derived: by
         // the time a caller reports this, the directory that refused is
         // several frames gone and nothing else can tell the two absences
-        // apart.
-        return { match: 'absent', askedPath, actualPath: '', because: found.because };
+        // apart. So does what was learned ABOVE it — see `verified`.
+        return {
+          match: 'absent',
+          askedPath,
+          actualPath: '',
+          because: found.because,
+          verified: {
+            match: worst,
+            askedPath: segments.slice(0, actual.length).join('/'),
+            actualPath: actual.join('/'),
+          },
+        };
       }
 
       if (SPELLING_RANK[found.match] > SPELLING_RANK[worst]) worst = found.match;

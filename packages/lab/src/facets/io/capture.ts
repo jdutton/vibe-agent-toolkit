@@ -20,7 +20,11 @@
  * differs from every repeat after it. It is a warm-up: excluded from the
  * stability comparison, and reported only when it is also the last repeat
  * (`runs: 1`). Everything else compares repeats `1 … runs-1` and reports the
- * last of them.
+ * last of them — its dumps AND its arm: `lane` / `extentSource` are read out
+ * of that LAST repeat's stdout, so the arm on the row is the arm of the counts
+ * on the row. ⚠️ `population` points the same reader (`harness/lane.ts`) at
+ * its FIRST repeat, because it discards none; the reader is shared, the repeat
+ * it reads is not.
  *
  * Below two compared repeats nothing can disagree, so `stable` is `null` rather
  * than `true` — see {@link IoCommandStats.stable}. A boolean there would report

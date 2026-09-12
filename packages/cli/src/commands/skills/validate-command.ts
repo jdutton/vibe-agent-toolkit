@@ -114,9 +114,15 @@ Output:
   Run-level findings (validation.allow entries no skill matched) are printed
   in full in both forms; they belong to the project config, not to any skill.
 
+  A run that validated ZERO skills — skills.include globs that matched no
+  SKILL.md — is refused, not passed: one non-overridable RESOURCE_CHECK_BROKEN
+  at error naming the globs, status: error, exit 1. A config with no skills:
+  block at all is "nothing to validate": no document, exit 0.
+
 Exit Codes:
   0 - All validations passed (or all errors allowed by valid config)
-  1 - Validation errors found (severity=error, not allowed)
+  1 - Validation errors found (severity=error, not allowed), or the run
+      validated no skill (skills.include matched nothing)
   2 - System error (config invalid, skill path not found)
 
 Requirements:

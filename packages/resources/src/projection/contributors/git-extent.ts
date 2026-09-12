@@ -51,6 +51,7 @@ import type {
 import type { JsonValue } from '../../schemas/projection-shared.js';
 import type { ResolutionContextRow } from '../../schemas/projection-zones.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../contributor.js';
+import { refuseListingAgainst } from '../crawl-source.js';
 import type { ProjectionBase } from '../projection.js';
 import { collectRealization } from '../realizations.js';
 
@@ -143,6 +144,10 @@ export class GitExtentContributor implements ExtentContributor {
       respectGitignore: true,
       includeUntracked: true,
       exclude: [...NEVER_CRAWL_GLOBS],
+      // Only reachable when `git ls-files` declines and the walk answers
+      // instead — git itself never lists a directory. Same stop-not-degrade
+      // answer as the filesystem extent, for the same caching reason.
+      onUnreadable: refuseListingAgainst(base.root),
     });
 
     const resources = new Map<string, ResourceRow>();

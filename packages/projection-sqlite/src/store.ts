@@ -306,6 +306,140 @@ function indexOfStatementSeparator(sql: string): number {
   return -1;
 }
 
+/** The characters SQLite's tokenizer admits in a parameter name after a sigil. */
+const PARAMETER_NAME_CHAR = /[\w\u0080-\uFFFF]/;
+
+/** The sigils that open a NAMED parameter, which positional values never reach. */
+const NAMED_PARAMETER_SIGILS: ReadonlySet<string> = new Set([':', '@', '$']);
+
+/** One decimal digit, for the `?NNN` form. */
+const DIGIT = /\d/;
+
+/**
+ * How many values SQLite expects bound to `sql`, and whether any of its
+ * placeholders is one positional values can never reach.
+ *
+ * 🚨 **Derived, because the driver does not say.** `StatementSync` exposes no
+ * `sqlite3_bind_parameter_count` (verified on Node 24.13.1 — the prototype has
+ * nothing between `columns` and the setters), and the engine only refuses ONE
+ * direction: a value with no slot throws `column index out of range`, while a
+ * slot with no value is silently bound to NULL. On this surface that second
+ * case is not an error but a wrong answer at exit 0 — every comparison against
+ * NULL is false, so the statement selects nothing, and "selected nothing" is
+ * what a passing `resources.checks` entry looks like.
+ *
+ * So the count is read off the statement with the SAME scanner the separator
+ * gate uses, and follows SQLite's own numbering: a bare `?` is the largest index
+ * so far plus one; `?NNN` is NNN, which also declares every lower slot (`?3`
+ * alone is three slots — measured, one value fills slot 1 and `?3` reads NULL).
+ * A `:x`, `@x` or `$x` name is reported rather than numbered: the driver binds
+ * positional values only into anonymous and `?NNN` slots, so a named slot is one
+ * this surface cannot fill however many values arrive.
+ *
+ * @param sql - The statement text
+ * @returns The slot count, and the first named parameter if there is one
+ */
+function countBoundParameters(sql: string): { readonly slots: number; readonly named: string | undefined } {
+  let slots = 0;
+  let named: string | undefined;
+  let index = 0;
+  while (index < sql.length) {
+    const skipped = skipLiteralOrComment(sql, index);
+    if (skipped > index) {
+      index = skipped;
+      continue;
+    }
+    const placeholder = placeholderAt(sql, index);
+    if (placeholder === undefined) {
+      index += 1;
+      continue;
+    }
+    if (placeholder.name === undefined) {
+      slots = placeholder.slot === undefined ? slots + 1 : Math.max(slots, placeholder.slot);
+    } else {
+      named ??= placeholder.name;
+    }
+    index = placeholder.end;
+  }
+  return { slots, named };
+}
+
+/** What one placeholder token is: where it ends, and its `?NNN` slot or its `:name`. */
+interface PlaceholderToken {
+  readonly end: number;
+  readonly slot?: number;
+  readonly name?: string;
+}
+
+/**
+ * The placeholder token beginning at `index`, or `undefined` when none does.
+ *
+ * Outside literals and comments only — the caller has already stepped past
+ * those, and a `?` inside one is text.
+ *
+ * @param sql - The statement text
+ * @param index - Where to look
+ * @returns The token, or `undefined`
+ */
+function placeholderAt(sql: string, index: number): PlaceholderToken | undefined {
+  const char = sql[index] ?? '';
+  if (char === '?') {
+    const end = indexPastRun(sql, index + 1, DIGIT);
+    return end > index + 1 ? { end, slot: Number(sql.slice(index + 1, end)) } : { end };
+  }
+  if (NAMED_PARAMETER_SIGILS.has(char) && PARAMETER_NAME_CHAR.test(sql[index + 1] ?? '')) {
+    const end = indexPastRun(sql, index + 1, PARAMETER_NAME_CHAR);
+    return { end, name: sql.slice(index, end) };
+  }
+  return undefined;
+}
+
+/**
+ * Index just past the run of characters matching `pattern` that starts at `from`.
+ *
+ * @param sql - The statement text
+ * @param from - Where the run may start
+ * @param pattern - A single-character test
+ * @returns `from` itself when the run is empty
+ */
+function indexPastRun(sql: string, from: number, pattern: RegExp): number {
+  let end = from;
+  while (end < sql.length && pattern.test(sql[end] ?? '')) end += 1;
+  return end;
+}
+
+/**
+ * Refuse a statement whose placeholders and values do not pair off exactly.
+ *
+ * Both directions, in one message that names both counts — the engine's own
+ * over-bind refusal says `column index out of range`, which is about a column
+ * in a statement that has no column problem. See {@link countBoundParameters}
+ * for why the under-bound direction is the one that matters.
+ *
+ * @param sql - The statement text
+ * @param parameters - What the caller is binding, positionally
+ * @throws If a placeholder is named, or the counts differ
+ */
+function assertParametersBound(sql: string, parameters: readonly SqliteValue[]): void {
+  const { slots, named } = countBoundParameters(sql);
+  if (named !== undefined) {
+    throw new Error(
+      `This statement has a named parameter (\`${named}\`), and this surface binds values`
+      + ' positionally, so nothing can ever fill it — write `?` instead.',
+    );
+  }
+  if (slots === parameters.length) return;
+  const placeholders = `${slots} placeholder${slots === 1 ? '' : 's'}`;
+  const values = `${parameters.length} value${parameters.length === 1 ? ' was' : 's were'} bound`;
+  const consequence = parameters.length < slots
+    ? 'SQLite binds a missing value as NULL, so an under-bound statement compares against nothing'
+      + ' and reports that it succeeded'
+    : 'there is no placeholder for the extra value';
+  throw new Error(
+    `This statement has ${placeholders} and ${values}; ${consequence}. Bind exactly one value per placeholder.`,
+  );
+}
+
 /**
  * How long a blocked connection waits for a lock before giving up.
  *
@@ -516,11 +650,16 @@ export interface SqlQueryableStore extends ProjectionStore {
    * underlying row depending on how the caller phrased the question.
    *
    * @param sql - One `SELECT`, `WITH` or `VALUES` statement
-   * @param parameters - Bound in order, for every `?` in the statement
+   * @param parameters - Bound in order, for every `?` in the statement — and
+   *   exactly one per `?`. The engine refuses a value with no slot but binds a
+   *   slot with no value to NULL, which on this surface is a wrong answer that
+   *   reports success; both directions are refused here, naming the counts
    * @returns The rows, in the order SQLite produced them
    * @throws If the statement is not a query (`SELECT`, `WITH` or `VALUES`), if
-   *   it is not read-only, if it is more than one statement, or if SQLite
-   *   rejects it — an unknown column included
+   *   it is not read-only, if it is more than one statement, if its
+   *   placeholders and `parameters` do not pair off exactly, if it names a
+   *   parameter (`:x`) positional values cannot reach, or if SQLite rejects it
+   *   — an unknown column included
    */
   query(sql: string, ...parameters: readonly SqliteValue[]): readonly Record<string, unknown>[];
 
@@ -543,15 +682,21 @@ export interface SqlQueryableStore extends ProjectionStore {
    * design, because admitting a prefix means deciding safety past the first
    * token.
    *
-   * Runs the same kind and single-statement gates as {@link query}, so a
-   * statement refused for what it IS is refused just as early as one refused
-   * for what it names.
+   * Runs the same kind, single-statement and placeholder-count gates as
+   * {@link query}, so a statement refused for what it IS — or for what the
+   * caller forgot to bind — is refused just as early as one refused for what
+   * it names.
    *
    * @param sql - One `SELECT`, `WITH` or `VALUES` statement
+   * @param parameters - What the caller WILL bind when it runs the statement.
+   *   Required rather than defaulted, because an omitted argument would read as
+   *   "no values" and silently pass every under-bound statement through the
+   *   very preflight meant to catch it early
    * @throws The same errors {@link query} throws for a statement that is not a
-   *   query, is more than one statement, or names something the schema lacks
+   *   query, is more than one statement, does not pair its placeholders with
+   *   `parameters`, or names something the schema lacks
    */
-  assertCompiles(sql: string): void;
+  assertCompiles(sql: string, parameters: readonly SqliteValue[]): void;
 
   /**
    * Write the rows one lens evaluation produced, so SQL can ask about them.
@@ -1113,6 +1258,7 @@ class SqliteProjectionStore implements SqlQueryableStore {
     this.#assertOpen();
     assertSingleStatement(sql);
     assertIsQuery(sql);
+    assertParametersBound(sql, parameters);
 
     // 🪤 Read-only-ness is `PRAGMA query_only` and NOT an inspection of the
     // statement, because there is nothing useful to inspect: `StatementSync`
@@ -1168,10 +1314,11 @@ class SqliteProjectionStore implements SqlQueryableStore {
   }
 
   /** @inheritdoc */
-  assertCompiles(sql: string): void {
+  assertCompiles(sql: string, parameters: readonly SqliteValue[]): void {
     this.#assertOpen();
     assertSingleStatement(sql);
     assertIsQuery(sql);
+    assertParametersBound(sql, parameters);
 
     // `query_only` is set for the same reason {@link query} sets it, and NOT as
     // ceremony: `prepare` is where SQLite decides a statement is legal, and a

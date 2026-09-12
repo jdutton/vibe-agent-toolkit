@@ -226,6 +226,13 @@ export interface PopulationExtent {
   readonly membersEnumerated: number;
 }
 
+/** One statement a run intends to ask, with the values it will bind to it. */
+export interface PreflightStatement {
+  readonly sql: string;
+  /** Bound in order, one per `?`. Empty for a statement that binds nothing. */
+  readonly parameters: readonly string[];
+}
+
 /** Run one read-only statement against the populated projection. */
 export type AskProjection = (
   sql: string,
@@ -262,17 +269,24 @@ export type AskProjection = (
  * unbounded cost lives, and a preflight that ran `WITH RECURSIVE …` would hang
  * before the run it exists to make cheap had begun.
  *
- * @param statements - Every statement the run will ask, in any order
+ * ⚠️ Each statement comes WITH the values it will be bound to, because the
+ * placeholder count is part of what compiles: a `?` the caller forgot to bind is
+ * SQL NULL at run time, and the statement then selects nothing and reports
+ * success — the same silent class as a typo'd column, and worth the same early
+ * refusal. The backend does the counting; this only has to hand it the values.
+ *
+ * @param statements - Every statement the run will ask, in any order, each with
+ *   the values it will bind
  * @throws The same legible failure `ask` throws, for the first statement that
- *   does not compile
+ *   does not compile or does not pair its placeholders with its values
  */
-export async function assertQueriesCompile(statements: readonly string[]): Promise<void> {
+export async function assertQueriesCompile(statements: readonly PreflightStatement[]): Promise<void> {
   if (statements.length === 0) return;
   const probe = await openEphemeralQueryStore();
   try {
-    for (const sql of statements) {
+    for (const { sql, parameters } of statements) {
       try {
-        probe.assertCompiles(sql);
+        probe.assertCompiles(sql, parameters);
       } catch (error) {
         throw new Error(
           describeQueryFailure(sql, error instanceof Error ? error.message : String(error)),
@@ -301,7 +315,7 @@ export async function assertQueriesCompile(statements: readonly string[]): Promi
  * @returns Whatever `work` returned
  */
 export async function withQueriedProjection<T>(
-  options: { root: string; logger: Logger; preflight?: readonly string[] },
+  options: { root: string; logger: Logger; preflight?: readonly PreflightStatement[] },
   work: (
     ask: AskProjection,
     provenance: ProjectionProvenance,

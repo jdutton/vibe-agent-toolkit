@@ -49,7 +49,7 @@ import { handleCommandError } from '../../utils/command-error.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { writeJsonOutput, writeYamlOutput } from '../../utils/output.js';
-import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
+import { assertDirectoryArgument, projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import {
   withQueriedProjection,
   type ProjectionProvenance,
@@ -135,8 +135,9 @@ async function runProjectionQuery(options: {
 }): Promise<QueryOutcome> {
   const { root, sql, parameters, logger } = options;
   // The statement is compiled against the empty schema first, so a typo'd
-  // column costs milliseconds instead of a full population.
-  return withQueriedProjection({ root, logger, preflight: [sql] }, (ask, provenance) => ({
+  // column — or a `?` with no `--param` behind it — costs milliseconds instead
+  // of a full population.
+  return withQueriedProjection({ root, logger, preflight: [{ sql, parameters }] }, (ask, provenance) => ({
     rows: ask(sql, ...parameters),
     ...provenance,
   }));
@@ -145,8 +146,25 @@ async function runProjectionQuery(options: {
 /**
  * Run one read-only SQL statement against this tree's resource projection.
  *
+ * ## 🔑 `[path]` LOCATES the project. It never narrows the corpus.
+ *
+ * `vat resources scan docs/` scopes its crawl to `docs/`; this verb cannot offer
+ * the same, and says so rather than pretending. The projection is the whole
+ * tracked tree by construction — one population per `(root, treeHash)`, and a
+ * subtree population would be filed in the shared store under the whole tree's
+ * key, which is the cross-tree class `utils/projection-query.ts` documents —
+ * and arbitrary SQL cannot be post-filtered by path (blobs carry none). So the
+ * argument is where root discovery STARTS, the answer is about the tree it
+ * finds, and `root` in the document names that tree. A `WHERE path LIKE …` is
+ * the only scope a statement has, exactly as `vat resources check` documents.
+ *
+ * 🚨 Which is why a locator that locates nothing has to be refused: `nope`
+ * walked up to the cwd's project and answered about the whole tree at exit 0,
+ * byte-identical to a correct run. `assertDirectoryArgument` is the same refusal
+ * `validate` gives, in the same words.
+ *
  * @param sql - The statement
- * @param pathArg - The corpus root, or omitted for the current directory
+ * @param pathArg - Where to look for the project, or omitted for the current directory
  * @param options - Parsed command-line options
  */
 export async function queryCommand(
@@ -158,6 +176,7 @@ export async function queryCommand(
   const startTime = Date.now();
 
   try {
+    if (pathArg !== undefined) assertDirectoryArgument(pathArg);
     // Resolved at the CLI boundary, like every other command — the loud-cwd
     // policy is where root discovery belongs.
     const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);

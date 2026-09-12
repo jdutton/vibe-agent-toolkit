@@ -19,6 +19,7 @@ import {
   countBySeverity,
   type IssueSeverity,
   type SeverityCounts,
+  type ValidationIssue,
   type ValidationIssueCode,
 } from '@vibe-agent-toolkit/schema';
 import { resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
@@ -722,13 +723,16 @@ export async function runResourcesValidatePhase(
       options.verbose === true,
     );
     if ((options.format ?? 'yaml') === 'text') {
+      // Prints every reported row, refusal included, so it needs no warning.
       emitTextResult(issueData, context);
+    } else {
+      warnRunIntegrity(issueData, context, logger);
     }
     logGitTrackerStats(gitTracker, logger);
-    // The library's severity-based `hasErrors` is the WHOLE decision: every
-    // finding this command reports came from `registry.validate()`, which
-    // already allow-filtered and severity-resolved them. Nothing is reported
-    // here that the library never saw, so there is no second clause to OR in.
+    // Two verdicts, OR'd: the library's severity-based `hasErrors` over the
+    // whole project, and the document's own `status`, which is where the
+    // run-integrity refusal lands and which `hasErrors` cannot see — see
+    // {@link exitCodeForValidateRun}.
     return { document, exitCode: exitCodeForValidateRun(hasErrors, document) };
   } catch (error) {
     return {
@@ -854,10 +858,8 @@ function nothingScannedMessage(collection: string | undefined): string {
  * takes through {@link flattenIssuesForDisplay}.
  */
 function withRunIntegrity(issueData: ErrorData[], context: ValidationContext): ErrorData[] {
-  const refusal = nothingCheckedFinding(context.stats.totalResources, issueData, () =>
-    nothingScannedMessage(context.collection));
   return [
-    ...refusal.map((issue): ErrorData => ({
+    ...runIntegrityRefusal(issueData, context).map((issue): ErrorData => ({
       file: '',
       absPath: '',
       line: 1,
@@ -868,6 +870,38 @@ function withRunIntegrity(issueData: ErrorData[], context: ValidationContext): E
     })),
     ...issueData,
   ];
+}
+
+/** The refusal itself, before it is shaped into a row — the one derivation both channels read. */
+function runIntegrityRefusal(
+  issueData: readonly ErrorData[],
+  context: ValidationContext,
+): readonly ValidationIssue[] {
+  return nothingCheckedFinding(context.stats.totalResources, issueData, () =>
+    nothingScannedMessage(context.collection));
+}
+
+/**
+ * The human half of {@link withRunIntegrity}: the same message, on stderr.
+ *
+ * 🚨 **The message never reached the operator.** The refusal is a row with
+ * `file: ''`, and the default listing projects a row to `{file, errors,
+ * codes}` — so the document read `RESOURCE_CHECK_BROKEN: 1` beside an empty
+ * file name and nothing said which collection matched nothing or what to do.
+ * The remedy text existed only under `--verbose`; through `vat validate` it was
+ * nested under `phases[].report` with stderr reading `▶ Surface: resources`.
+ * `vat resources check` and `vat claude budget` already warn on stderr beside
+ * their document refusal; this is the same statement for the same reason. It
+ * decides nothing — the document is what gates.
+ */
+function warnRunIntegrity(
+  issueData: readonly ErrorData[],
+  context: ValidationContext,
+  logger: Logger,
+): void {
+  for (const issue of runIntegrityRefusal(issueData, context)) {
+    logger.warn(`Warning: ${issue.message}`);
+  }
 }
 
 /**

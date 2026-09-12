@@ -7,11 +7,16 @@
  *
  *     vat resources query 'SELECT ? AS x, ? AS y' --param a docs/
  *
- * reported `status: success`, bound `docs/` as the SECOND SQL parameter, and ran
- * against the repository root instead of `docs/`. The user asked about one
- * directory, got an answer about the whole tree, and was told it succeeded.
- * Nothing in the document says which corpus was really read except `root`, which
- * a reader has no reason to re-check.
+ * reported `status: success` with `y: 'docs/'` in its rows: the token the
+ * operator typed as the `[path]` positional was bound as the SECOND SQL VALUE,
+ * and the positional itself was never read. Nothing in the document says a
+ * location was reinterpreted as data.
+ *
+ * ⚠️ These tests pin the PARSE — that commander hands the token to the operand
+ * slot and not to the option — and nothing more. What `query` does with a
+ * `[path]` (locates the project; never scopes) is `queryCommand`'s contract and
+ * is pinned by `test/system/resources-query.system.test.ts` through the real
+ * command. Do not read "the corpus the user named" below as a scoping claim.
  *
  * The fix is the repeatable single-value form (`--param a --param b`), which is
  * what every one of these flags' help text already CLAIMED to be. The source
@@ -30,8 +35,8 @@ import { createSkillTestRunCommand } from '../../src/commands/skill/test/run.js'
 
 /** A statement with two placeholders, so a swallowed path binds instead of erroring. */
 const TWO_PARAM_SQL = 'SELECT ? AS x, ? AS y';
-/** The corpus the operator is asking about — the token the variadic ate. */
-const SCOPED_PATH = 'docs/';
+/** The `[path]` the operator typed — a project locator on `query` — and the token the variadic ate. */
+const LOCATOR_PATH = 'docs/';
 
 /** What a displaced action handler saw: the operands, then Commander's option bag. */
 interface Invocation {
@@ -77,10 +82,10 @@ function invokeQuery(argv: readonly string[]): Invocation {
 
 describe('vat resources query --param', () => {
   it('leaves the [path] positional alone', () => {
-    const { operands, options } = invokeQuery([TWO_PARAM_SQL, '--param', 'a', SCOPED_PATH]);
+    const { operands, options } = invokeQuery([TWO_PARAM_SQL, '--param', 'a', LOCATOR_PATH]);
 
-    // The whole defect in one assertion: the corpus the user named.
-    expect(operands[1]).toBe(SCOPED_PATH);
+    // The whole defect in one assertion: the token reaches the positional.
+    expect(operands[1]).toBe(LOCATOR_PATH);
     // ...and it must not ALSO have been bound to the second `?`.
     expect(options['param']).toEqual(['a']);
   });

@@ -11,12 +11,15 @@
  * parsed findings), then `vat resources validate` (a `--collection` matching
  * nothing → `filesScanned: 0`, exit 0), `vat claude marketplace validate` (no
  * `plugins/` to walk, no count published), `vat corpus scan` (an empty tree
- * "audits cleanly") and `vat verify`'s `packaged-content` phase (a typo'd glob
- * discovers no bundle and the phase reports `success`). Seven instances of one
- * shape, and each was first fixed by hand at its own site. This module is where
- * that hand-fixing stops: every site derives its refusal through the same three
- * functions, so the invariants below are properties of the mechanism rather than
- * of each author's memory.
+ * "audits cleanly"), `vat verify`'s `packaged-content` phase (a typo'd glob
+ * discovers no bundle and the phase reports `success`), then `vat skills
+ * validate` (the same typo'd glob: one info line, no document, exit 0 — and
+ * `vat validate` folded that into `success`) and `vat audit` (an existing tree
+ * with nothing auditable: `status: success` over `filesScanned: 0`). Nine
+ * instances of one shape, and each was first fixed by hand at its own site.
+ * This module is where that hand-fixing stops: every site derives its refusal
+ * through the same three functions, so the invariants below are properties of
+ * the mechanism rather than of each author's memory.
  *
  * ## The invariants
  *

@@ -525,6 +525,18 @@ skills:
     warning: Non-standard filename (should be SKILL.md)
 ```
 
+When the scan could not list a directory (a root-owned or quarantined directory under
+`~/.claude/plugins`, say), `status` is `warning` and the document names each such directory,
+root-relative, with the errno — `skillsFound` is then a floor, not the answer:
+
+```yaml
+status: warning
+...
+unreadable:
+  - path: plugins/locked
+    code: EACCES
+```
+
 **Examples:**
 ```bash
 # List project skills (default)

@@ -412,9 +412,17 @@ Codes that fire when `vat resources validate` checks external links whose host i
 ### `LINK_AUTH_UNVERIFIED`
 
 - **Default:** `warning`
-- **What:** A provider in `resources.linkAuth` claims this host, but no token source resolved — none of the configured env vars or argv commands produced a non-empty value, so no authenticated request was attempted.
+- **What:** A provider in `resources.linkAuth` claims this host, but no token source resolved — none of the configured env vars or argv commands produced a non-empty value, so no authenticated request was attempted. This is the **only** condition that carries this code: a provider that could not build the request at all is [`LINK_AUTH_PROVIDER_ERROR`](#link_auth_provider_error), and a provider that does not compile refuses the run before any link is looked at (below).
 - **Why it matters:** External-URL checking is opt-in, so silently skipping links the project asked to check would be misleading. But `unverified` is not link rot — the link may be fine; the validator just couldn't authenticate. The fix is configuration, not link editing. (`unverified` outcomes are never cached, because the result flips the moment a token appears.)
 - **Fix:** Configure a `token` source (env var or argv command); log in to the underlying CLI (e.g. `gh auth login`, `az login`); or set `severity.LINK_AUTH_UNVERIFIED` to `ignore` if running without auth is intentional.
+
+### `LINK_AUTH_PROVIDER_ERROR`
+
+- **Default:** `error`
+- **What:** A provider in `resources.linkAuth` claims this host but could not build the authenticated request for this URL — a template read a capture the matching rule did not produce, or a transform refused the value — so the link was neither authenticated nor checked anonymously.
+- **Why it matters:** This used to be reported as `LINK_AUTH_UNVERIFIED`, whose remedy invites a token-less CI lane to set that code to `ignore`. With the override in place, a broken provider produced a green run whose `linksChecked` counted links nothing had fetched. A provider that fails is a defect in the config, not a missing credential, so it carries its own code at `error` and no remedy here suggests silencing it.
+- **What never reaches this code:** a `when` regex that does not compile, a template with an unterminated `${` or an unknown transform, a `vars` name colliding with a capture, a template naming a capture no rule declares, or a `match.host` glob picomatch refuses. Those are knowable from the config alone, so `vat resources validate` (and every other command that loads `resources.linkAuth`) refuses the run for them at config load — exit 2, with a message naming `providers[<n>]`, the host and the field, e.g. `resources.linkAuth providers[0] (host "github.example"): rewrite[0].when — Invalid rewrite rule "when" regex: …`. What is left for this code is per-URL: a declared capture group such as `(?<query>\?.*)?` that did not participate in this particular match.
+- **Fix:** Fix the provider: make every capture the template reads mandatory in that rule's `when` (or give the rule a `to` that does not read it), then re-run. The message names the host, the template and the missing name.
 
 ## Packaging-Only Codes
 

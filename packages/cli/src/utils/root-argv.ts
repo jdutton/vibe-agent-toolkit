@@ -15,8 +15,12 @@
 
 import type { Option } from 'commander';
 
-/** How the argv scan must treat one option-shaped token. */
-type OptionTokenKind = 'undeclared' | 'consumes-next' | 'self-contained';
+/**
+ * How the argv scan must treat one option-shaped token: a `flag` occupies its
+ * own slot, a `pair` also consumes the next token as its value, and `unknown`
+ * is one commander itself would reject.
+ */
+type OptionTokenKind = 'unknown' | 'flag' | 'pair';
 
 /** The argv questions `bin.ts` asks, bound to what the root program declares. */
 export interface RootArgvGrammar {
@@ -41,7 +45,7 @@ export interface RootArgvGrammar {
  * ⚠️ ORDERING MATTERS at the call site: this must be built AFTER
  * `registerCacheControl(program)`, which is what puts `--no-cache` into
  * `program.options`. Built before that call, `--no-cache` would read as
- * undeclared and every `vat --no-cache <verb>` would silently give up the lazy
+ * unknown and every `vat --no-cache <verb>` would silently give up the lazy
  * load and register the whole tree — a quiet perf regression with no failing
  * test to announce it.
  *
@@ -77,18 +81,36 @@ export function createRootArgvGrammar(rootOptions: readonly Option[]): RootArgvG
    * requires `option.required || option.optional` — so `--debug=1` is an unknown
    * option even though `--debug` is declared.
    *
-   * Anything unrecognised is reported as `undeclared` rather than guessed at.
-   * The cost of being wrong is asymmetric: a false `undeclared` only forfeits
+   * Anything unrecognised is reported as `unknown` rather than guessed at.
+   * The cost of being wrong is asymmetric: a false `unknown` only forfeits
    * the lazy-load saving, while a false "declared" ships a wrong help page at
    * exit 0.
    */
   function classifyOptionToken(arg: string): OptionTokenKind {
     const equalsIndex = arg.indexOf('=');
     if (equalsIndex !== -1) {
-      return valueTakingRootFlags.has(arg.slice(0, equalsIndex)) ? 'self-contained' : 'undeclared';
+      return valueTakingRootFlags.has(arg.slice(0, equalsIndex)) ? 'flag' : 'unknown';
     }
-    if (!declaredRootFlags.has(arg)) return 'undeclared';
-    return valueTakingRootFlags.has(arg) ? 'consumes-next' : 'self-contained';
+    if (!declaredRootFlags.has(arg)) return 'unknown';
+    return valueTakingRootFlags.has(arg) ? 'pair' : 'flag';
+  }
+
+  /**
+   * How the scan steps over one token: an operand, or one of the option kinds.
+   *
+   * A lone `-` is an OPERAND — commander's `maybeOption` requires
+   * `arg.length > 1` — and so is anything not option-shaped. Shared by both
+   * scans below so the grammar cannot be modelled on one side of the command
+   * name and pattern-matched on the other, which is how `wantsGroupVerboseHelp`
+   * shipped.
+   */
+  function stepOver(arg: string): 'operand' | OptionTokenKind {
+    return arg.length > 1 && arg.startsWith('-') ? classifyOptionToken(arg) : 'operand';
+  }
+
+  /** How many argv slots a step occupies: a `pair` takes its value with it. */
+  function widthOf(step: OptionTokenKind): number {
+    return step === 'pair' ? 2 : 1;
   }
 
   /**
@@ -132,18 +154,14 @@ export function createRootArgvGrammar(rootOptions: readonly Option[]): RootArgvG
    * behaviourally correct — the scan only ever trades away startup time.
    */
   function commandIndex(argv: readonly string[]): number | undefined {
-    for (let index = 0; index < argv.length; index++) {
-      const arg = argv[index];
-      /* c8 ignore next -- index is bounded by argv.length */
-      if (arg === undefined) continue;
+    let index = 0;
+    while (index < argv.length) {
+      const arg = argv[index] ?? '';
       if (arg === '--help' || arg === '-h') return undefined;
-      if (arg.length > 1 && arg.startsWith('-')) {
-        const kind = classifyOptionToken(arg);
-        if (kind === 'undeclared') return undefined;
-        if (kind === 'consumes-next') index++;
-        continue;
-      }
-      return index;
+      const step = stepOver(arg);
+      if (step === 'operand') return index;
+      if (step === 'unknown') return undefined;
+      index += widthOf(step);
     }
     return undefined;
   }
@@ -169,15 +187,37 @@ export function createRootArgvGrammar(rootOptions: readonly Option[]): RootArgvG
      * directory `rag`. So the group has to be the token commander itself would
      * read as the command name — the same question the lazy loader asks — and
      * `--verbose` has to follow it with no subcommand in between.
+     *
+     * 🪤 "No subcommand in between" is the SAME grammar as `commandIndex`, applied
+     * to the tokens after the group. Commander accepts a root option on either
+     * side of the command name, so `--cwd`'s value is no more a subcommand after
+     * the group than before it — but this branch read `after.some(!startsWith('-'))`,
+     * which is the naive scan the rest of this module replaced, and
+     * `vat resources --verbose --cwd docs` died on `unknown option '--verbose'`
+     * while `vat --cwd docs resources --verbose` printed the page. An undeclared
+     * option after the group is likewise commander's to refuse, not ours to skip:
+     * `vat resources --verbose --nonsense` printed the page at exit 0 with the
+     * typo silently dropped.
      */
     wantsGroupVerboseHelp(argv, group) {
       const index = commandIndex(argv);
       if (index === undefined || argv[index] !== group) return false;
-      const after = argv.slice(index + 1);
-      // A subcommand of its own is commander's to run; only the bare group has
-      // no page but the hand-written one.
-      if (after.some((arg) => !arg.startsWith('-'))) return false;
-      return after.includes('--verbose');
+      let verbose = false;
+      let cursor = index + 1;
+      while (cursor < argv.length) {
+        const arg = argv[cursor] ?? '';
+        if (arg === '--verbose') {
+          verbose = true;
+          cursor += 1;
+          continue;
+        }
+        // A subcommand of its own is commander's to run, and so is an option
+        // nobody declared; only the bare group has no page but the hand-written one.
+        const step = stepOver(arg);
+        if (step === 'operand' || step === 'unknown') return false;
+        cursor += widthOf(step);
+      }
+      return verbose;
     },
 
     /**

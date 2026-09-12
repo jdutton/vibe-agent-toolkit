@@ -35,11 +35,13 @@ export interface ValidationResult {
     pluginEntries?: number;
     /**
      * Marketplace only: the entries whose `source` is a relative path — plugins
-     * the marketplace ships itself, which a walk of its own tree is expected to
-     * find. Published so a consumer can tell "validated none because none are
-     * local" from "validated none of the ones that are".
+     * the marketplace ships itself, each as the manifest wrote it. Published so
+     * a consumer can resolve each one against the marketplace root and validate
+     * THAT directory: a count in its place let a walk of `plugins/*` satisfy the
+     * denominator by number while the declared plugin went unlooked-at, and
+     * refused the co-located `source: "./"` shape, which lives in no `plugins/`.
      */
-    localPluginEntries?: number;
+    localPluginSources?: Array<{ name: string; source: string }>;
   };
   /** Raw evidence records collected during validation. Rendered in --verbose. */
   evidence?: EvidenceRecord[];

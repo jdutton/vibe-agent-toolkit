@@ -13,7 +13,7 @@ import { dirname } from 'node:path';
 
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { crawlDirectorySync } from '@vibe-agent-toolkit/utils/crawl';
+import { crawlDirectorySync, refuseListing } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot, isGitIgnored } from '@vibe-agent-toolkit/utils/git';
 
 /**
@@ -133,6 +133,13 @@ function crawlSkillDirs(pluginSourceDir: string, respectGitignore: boolean): str
 
   // `exclude: []` (not the crawler's default) so this sees exactly what
   // treeCopyPlugin sees — the only filter either applies is git visibility.
+  //
+  // A directory this crawl cannot LIST stops the build, by name, for the same
+  // reason the tree-copy stops: this listing decides which skills get packaged,
+  // and a shorter answer ships a plugin missing every skill beneath the refused
+  // directory while the build reports success — the one silent drop property 3
+  // above exists to prevent. Expressed against the plugin source dir so the
+  // message reads `skills/<group>`, the path the author sees.
   const skillFiles = crawlDirectorySync({
     baseDir: skillsDir,
     include: ['**/SKILL.md'],
@@ -140,6 +147,11 @@ function crawlSkillDirs(pluginSourceDir: string, respectGitignore: boolean): str
     absolute: false,
     filesOnly: true,
     respectGitignore,
+    onUnreadable: refuseListing({
+      root: pluginSourceDir,
+      remedy:
+        'Fix the permissions on that directory, or move it out of the plugin\'s `skills/` tree so the build no longer has to list it.',
+    }),
   });
 
   const dirs = skillFiles

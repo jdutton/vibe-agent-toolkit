@@ -17,6 +17,7 @@ import {
 } from './auth-fetch-mocks.js';
 
 const TEST_TOKEN = 'gh_test_token_abc';
+const GITHUB_HOST = 'github.com';
 const HOST = 'https://github.com/owner/repo/blob/main/file.md';
 const REWRITTEN = 'https://api.github.com/repos/owner/repo/contents/file.md?ref=main';
 const CACHE_FILE = 'external-links.json';
@@ -33,7 +34,7 @@ function fsExists(p: string): boolean {
 
 function buildProvider(notFoundMeaning: 'ambiguous' | 'dead' = 'ambiguous'): Provider {
   return {
-    match: { host: 'github.com' },
+    match: { host: GITHUB_HOST },
     rewrite: [
       {
         when: String.raw`^https://github\.com/(?<owner>[^/]+)/(?<repo>[^/]+)/blob/(?<ref>[^/]+)/(?<path>.+)$`,
@@ -145,6 +146,57 @@ describe('ExternalLinkValidator — authenticated branch (unverified, no token)'
     expect(result.code).toBe('LINK_AUTH_UNVERIFIED');
     expect(result.status).toBe('error');
     expect(calls()).toBe(0);
+  });
+});
+
+/**
+ * A provider that cannot build a request for THIS url is not "no token": it
+ * is reported under its own code, at error severity, and never cached.
+ *
+ * 🪤 It used to come back as `LINK_AUTH_UNVERIFIED` — the warning whose
+ * registry remedy is "set to ignore if running without auth is intentional".
+ * With that override in place a broken provider produced `status: success`
+ * over links nothing had fetched.
+ */
+function providerFailingOnThisUrl(): LinkAuthConfig {
+  const provider = buildProvider();
+  return {
+    providers: [
+      {
+        ...provider,
+        rewrite: [
+          {
+            // `query` is optional and HOST has no query string, so the group
+            // does not participate and `${query}` has nothing to read —
+            // knowable only per URL, which is why it reaches the validator.
+            when: String.raw`^https://github\.com/(?<path>[^?]+)(?<query>\?.*)?$`,
+            to: 'https://api.github.com/${path}${query}',
+          },
+        ],
+      },
+    ],
+  };
+}
+
+describe('ExternalLinkValidator — authenticated branch (provider failed on this link)', () => {
+  it('returns LINK_AUTH_PROVIDER_ERROR without calling fetch, and does not cache it', async () => {
+    const { fetchImpl, calls } = countingFetch();
+    const validator = new ExternalLinkValidator(tempDir, {
+      linkAuthConfig: providerFailingOnThisUrl(),
+      linkAuthDeps: { env: ENV_WITH_TOKEN },
+      fetchImpl,
+      osUser: 'testuser',
+    });
+    const result = await validator.validateLink(HOST);
+    expect(result.code).toBe('LINK_AUTH_PROVIDER_ERROR');
+    expect(result.status).toBe('error');
+    expect(result.error).toContain(GITHUB_HOST);
+    expect(result.cached).toBe(false);
+    expect(calls()).toBe(0);
+    // Nothing written under either cache: the answer is about the provider,
+    // not the URL, and flips the moment the config is fixed.
+    expect(fsExists(safePath.join(tempDir, CACHE_FILE))).toBe(false);
+    expect(fsExists(safePath.join(tempDir, 'auth-testuser', CACHE_FILE))).toBe(false);
   });
 });
 

@@ -213,12 +213,13 @@ function projectWithMarketplace(
 async function marketplaceOutcome(
   marketplace: string,
 ): Promise<{ findings: { location: string; severity: string }[]; status: string }> {
-  const { marketplaceResult, pluginResults, issues } =
+  const { marketplaceResult, pluginResults, undeclared, issues } =
     await collectMarketplaceFindings(marketplace, silentLogger);
   const { status } = buildMarketplaceValidateReport({
     root: marketplace,
     marketplace: marketplaceResult.metadata,
     pluginResults,
+    undeclared,
     issues,
     duration: '0ms',
   });
@@ -388,9 +389,9 @@ describe('severity escape hatch: PACKAGED_AGENT_INSTRUCTION_FILE (integration)',
       // contradicting the run's.
       const { marketplace } = projectWithMarketplace('defaults');
       const { pluginResults } = await collectMarketplaceFindings(marketplace, silentLogger);
-      expect(pluginResults.map((r) => ({
-        status: r.status,
-        codes: r.issues.filter((i) => i.code === CODE).length,
+      expect(pluginResults.map(({ result }) => ({
+        status: result.status,
+        codes: result.issues.filter((i) => i.code === CODE).length,
       }))).toEqual([{ status: 'success', codes: 0 }]);
     });
   });

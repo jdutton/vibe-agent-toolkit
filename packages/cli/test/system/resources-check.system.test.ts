@@ -328,6 +328,36 @@ describe('vat resources check', () => {
     expect(doc['error']).toContain('declared-one');
   });
 
+  it('refuses a [path] that does not exist rather than running the checks it walked up to', () => {
+    // 🚨 `vat resources check nope` located nothing, fell through to the cwd's
+    // project, ran every check over the whole tree and reported success — the
+    // same document a correct run produces, for a path the operator mistyped.
+    // `[path]` is a project locator on this verb (a WHERE clause is the only
+    // scope a check has), and a locator that locates nothing is an operator
+    // error: exit 2, the same message `validate` gives.
+    writeChecks(checkBlock('any-check', NO_TXT, TXT_ROWS));
+
+    const { status, stderr, doc } = check('nope');
+
+    expect(status).toBe(2);
+    expect(stderr).toContain('Path does not exist');
+    expect(doc['checksRun']).toBeUndefined();
+  });
+
+  it('FAILS a check whose SQL carries a placeholder nothing can bind', () => {
+    // 🚨 A `?` in a `resources.checks` statement bound NULL, selected nothing,
+    // and PASSED — `checksRun: 1`, no findings, exit 0 — which is a gate that
+    // asserts nothing while looking like one that ran. A check binds no values,
+    // so a placeholder is a statement that can never run honestly, and it is
+    // reported under the same non-overridable code as a renamed column.
+    writeChecks(checkBlock('placeholder', 'has a ?', "SELECT path FROM resource_realizations WHERE ext = ?"));
+
+    const issue = expectRunIntegrityFailure();
+
+    expect(issue.message).toContain('placeholder');
+    expect(issue.message).toContain('1 placeholder and 0 values were bound');
+  });
+
   it('FAILS when the project declares no checks at all', () => {
     // 🚨 This exited 0 with `checksRun: 0` and a stderr warning, which means
     // deleting the `checks:` block silently deleted the gate: a gate that checked

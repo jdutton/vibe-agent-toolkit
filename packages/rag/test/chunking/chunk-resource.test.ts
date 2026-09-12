@@ -257,6 +257,7 @@ describe('chunkResource preamble (content above the first heading)', () => {
     expect(preamble?.headingPath).toBeUndefined();
     expect(preamble?.headingLevel).toBeUndefined();
     expect(preamble?.startLine).toBe(1);
+    expect(preamble?.endLine).toBe(1);
   });
 
   it('keeps the lead paragraph and drops the frontmatter that precedes it', () => {
@@ -266,6 +267,39 @@ describe('chunkResource preamble (content above the first heading)', () => {
     const preamble = result.chunks[0];
     expect(preamble?.content).toBe(LEAD);
     expect(preamble?.startLine).toBe(6);
+    expect(preamble?.endLine).toBe(6);
+  });
+
+  /**
+   * `endLine` is the preamble's LAST prose line, not the blank below it and not
+   * the line before the heading. A two-line lead makes the two ends differ, so
+   * an `endLine` that merely echoed `startLine` — or was never set — fails here.
+   */
+  it('reports the line span of a multi-line preamble as its own first and last prose lines', () => {
+    const content = `---\ntitle: Test Doc\n---\n\n${LEAD}\nAnd a second lead line.\n\n\n${HEADED_BODY}`;
+    const result = chunkResource(resourceOf(content, firstHeadingAt(9)), config);
+
+    const preamble = result.chunks[0];
+    expect(preamble?.content).toBe(`${LEAD}\nAnd a second lead line.`);
+    expect(preamble?.startLine).toBe(5);
+    expect(preamble?.endLine).toBe(6);
+  });
+
+  /**
+   * The section path `.trim()`s its content; the preamble path only trimmed
+   * blank LINES, so a CRLF document's lead paragraph carried a trailing `\r`
+   * into the embedded text — the one place the new path was less tidy than the
+   * one beside it.
+   */
+  it('strips the carriage return a CRLF document leaves on the preamble', () => {
+    const content = `---\r\ntitle: x\r\n---\r\n\r\n${LEAD}\r\n\r\n${HEADED_BODY.replaceAll('\n', '\r\n')}\r\n`;
+    const result = chunkResource(resourceOf(content, firstHeadingAt(7)), config);
+
+    const preamble = result.chunks[0];
+    expect(preamble?.content).toBe(LEAD);
+    expect(preamble?.content).not.toMatch(/\r/u);
+    expect(preamble?.startLine).toBe(5);
+    expect(preamble?.endLine).toBe(5);
   });
 
   it('emits no preamble chunk for a document that is only frontmatter and headings', () => {
@@ -497,6 +531,35 @@ describe('chunkResource frontmatter handling without headings', () => {
 
     expect(result.chunks).toHaveLength(1);
     expect(result.chunks[0]?.content).toContain('---');
+  });
+
+  /**
+   * What counts as frontmatter is the PARSER's call, not the chunker's. The
+   * heading lines the chunker slices by come from remark-frontmatter, which
+   * closes a YAML block on `---` only; a YAML document-end marker (`...`) is
+   * prose to it, and so is everything above it. A chunker that also closed on
+   * `...` silently dropped three lines the parser had classified as content.
+   */
+  it('does not close frontmatter on a YAML document-end marker, because the parser does not', () => {
+    const content = `---\ntitle: x\n...\n\n${HEADLESS_BODY}`;
+    const result = chunkResource(resourceOf(content, []), config);
+
+    expect(result.chunks).toHaveLength(1);
+    expect(result.chunks[0]?.content).toBe(content);
+    expect(result.chunks[0]?.startLine).toBe(1);
+    expect(result.chunks[0]?.endLine).toBe(5);
+  });
+
+  it('strips the carriage return a CRLF document leaves on headless prose', () => {
+    const result = chunkResource(
+      resourceOf(`---\r\ntitle: x\r\n---\r\n\r\n${HEADLESS_BODY}\r\n`, []),
+      config,
+    );
+
+    expect(result.chunks).toHaveLength(1);
+    expect(result.chunks[0]?.content).toBe(HEADLESS_BODY);
+    expect(result.chunks[0]?.startLine).toBe(5);
+    expect(result.chunks[0]?.endLine).toBe(5);
   });
 });
 

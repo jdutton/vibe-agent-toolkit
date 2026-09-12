@@ -308,6 +308,21 @@ export function isRetryableTransportFailure(method: string, attempt: number): bo
 }
 
 /**
+ * Whether a failed attempt may have reached the origin and ACTED before its
+ * answer was lost — the one fact that decides what a later 404 means.
+ *
+ * A transport failure says nothing about whether the origin acted (a deadline
+ * included: the request may have landed and the answer stalled). A failure
+ * that EARNED a status did not act, by {@link isRetryableFailure}'s own
+ * rationale: 429/502/503/504 are retried precisely because the origin refused
+ * or never saw the request. An error that never reached the transport acted on
+ * nothing.
+ */
+export function attemptMayHaveActed(error: unknown): boolean {
+  return error instanceof ApiTransportError;
+}
+
+/**
  * Whether a 404 is this client reading its OWN completed delete.
  *
  * 🚨 The retry policy above is justified by "replaying a DELETE reaches the same
@@ -318,10 +333,15 @@ export function isRetryableTransportFailure(method: string, attempt: number): bo
  * `delete --all` report a failure for a version it had definitely destroyed,
  * abandon every version after it, and leave the destroyed one out of the record.
  *
- * 🔑 The distinguishing fact is the ATTEMPT NUMBER, and nothing but this client
- * holds it. On attempt 0 a 404 is a resource that was never there and must stay
- * an error; on a replay it is the answer to a request this client already made,
- * and the end state is the one that was asked for.
+ * 🔑 The distinguishing fact is whether an EARLIER ATTEMPT MAY HAVE ACTED, and
+ * nothing but this client holds it. 🚩 It used to be the attempt number, and
+ * that was the wrong fact: a 429 is replayed because the origin did NOT act on
+ * it, so a 404 answering that replay is a resource that was never there, or
+ * that another actor removed — and it resolved as "deleted".
+ * `deleteSkillVersion('skill', 'typo')` under rate limiting resolved, and
+ * `delete --all` recorded the version as deleted. Only a replay owed to a LOST
+ * RESPONSE ({@link attemptMayHaveActed}) can be reading its own effect; a 404
+ * after nothing but did-not-act failures is a genuine 404 and stays an error.
  *
  * ⚠️ DELETE only, not every idempotent method. A replayed GET changed nothing,
  * so its 404 is a genuine 404. The rule is about the method's EFFECT having
@@ -330,9 +350,9 @@ export function isRetryableTransportFailure(method: string, attempt: number): bo
 function isReplayedDeleteOfAbsentResource(
   method: string,
   statusCode: number | undefined,
-  attempt: number,
+  priorAttemptMayHaveActed: boolean,
 ): boolean {
-  return method.toUpperCase() === 'DELETE' && attempt > 0 && statusCode === 404;
+  return method.toUpperCase() === 'DELETE' && priorAttemptMayHaveActed && statusCode === 404;
 }
 
 /** Delay before the next attempt: the server's `Retry-After` if it sent one, else backoff. */
@@ -398,13 +418,21 @@ export type RetryDecision =
  * whether the origin acted — and is rethrown untouched, because the CLI annotates
  * it from the bytes it carries.
  *
- * There is a third outcome, and it is a SUCCESS: a 404 answering a replayed
- * DELETE is this client reading the effect of its own earlier attempt. See
- * {@link isReplayedDeleteOfAbsentResource} — checked before the retry question,
- * because 404 is not a retryable status and would otherwise fall straight
- * through to the rethrow.
+ * There is a third outcome, and it is a SUCCESS: a 404 answering a DELETE
+ * replayed after an attempt that MAY HAVE ACTED is this client reading the
+ * effect of its own earlier attempt. See {@link isReplayedDeleteOfAbsentResource}
+ * — checked before the retry question, because 404 is not a retryable status
+ * and would otherwise fall straight through to the rethrow. The loop carries
+ * `priorAttemptMayHaveActed` across attempts ({@link attemptMayHaveActed}); it
+ * is a REQUIRED argument with no default, because the default would be the
+ * old attempt-number reading.
  */
-export function decideRetry(method: string, attempt: number, error: unknown): RetryDecision {
+export function decideRetry(
+  method: string,
+  attempt: number,
+  error: unknown,
+  priorAttemptMayHaveActed: boolean,
+): RetryDecision {
   if (error instanceof ApiTransportError) {
     // A deadline is never replayed, whatever the method: it already waited its
     // full budget, so a retry only spends it again — three attempts on the 120 s
@@ -413,7 +441,9 @@ export function decideRetry(method: string, attempt: number, error: unknown): Re
     return replayable ? { delayMs: nextRetryDelayMs(attempt) } : { rethrow: error };
   }
   if (!(error instanceof ApiRequestError)) return { rethrow: error };
-  if (isReplayedDeleteOfAbsentResource(method, error.statusCode, attempt)) return { alreadyGone: true };
+  if (isReplayedDeleteOfAbsentResource(method, error.statusCode, priorAttemptMayHaveActed)) {
+    return { alreadyGone: true };
+  }
   if (isRetryableFailure(method, error.statusCode, attempt)) {
     return { delayMs: nextRetryDelayMs(attempt, parseRetryAfterMs(error.retryAfterHeader, Date.now())) };
   }
@@ -697,10 +727,11 @@ export class OrgApiClient {
    * instead of silently doing nothing, and when one fails with no status the caller
    * is told exactly how far it got.
    *
-   * A replayed DELETE answered 404 RESOLVES: it is this client reading the effect
-   * of the attempt whose response was lost. Rethrowing it turned a completed
-   * delete into a reported failure and abandoned the rest of the loop — see
-   * {@link isReplayedDeleteOfAbsentResource}.
+   * A DELETE replayed after a LOST RESPONSE and answered 404 RESOLVES: it is this
+   * client reading the effect of the attempt whose response was lost. Rethrowing
+   * it turned a completed delete into a reported failure and abandoned the rest
+   * of the loop — see {@link isReplayedDeleteOfAbsentResource}. A 404 after a
+   * replay owed only to a rate limit stays an error: that attempt did not act.
    */
   private async send<T>(
     method: string,
@@ -708,16 +739,20 @@ export class OrgApiClient {
     headers: Record<string, string>,
     body?: Buffer,
   ): Promise<T> {
+    // Whether any attempt so far may have reached the origin and acted. Once
+    // true it stays true: the fact does not expire on a later rate limit.
+    let priorAttemptMayHaveActed = false;
     for (let attempt = 0; ; attempt += 1) {
       try {
         return await this.request<T>(method, url, headers, body);
       } catch (error) {
-        const decision = decideRetry(method, attempt, error);
+        const decision = decideRetry(method, attempt, error, priorAttemptMayHaveActed);
         if ('rethrow' in decision) throw decision.rethrow;
         // The resource is gone because the attempt whose response was lost
         // removed it. Same body a 204 resolves — the API sends none either way,
         // and the caller's report is built from the request, not from an echo.
         if ('alreadyGone' in decision) return undefined as T;
+        priorAttemptMayHaveActed ||= attemptMayHaveActed(error);
         await sleep(decision.delayMs);
       }
     }

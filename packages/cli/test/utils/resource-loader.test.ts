@@ -234,14 +234,30 @@ describe('loadResourcesWithConfig', () => {
     expect(lastCrawlOptions).toBeUndefined();
   });
 
-  it('omits config from registry options when no collections', async () => {
-    loadConfigMock.mockReturnValue({ resources: { include: ['**/*.md'] } });
+  it('passes config to registry options even when no collections are declared', async () => {
+    // 🪤 This used to assert the OPPOSITE — that the config was withheld unless
+    // `collections` was present — and that pin was the defect: the registry
+    // also reads `resources.linkAuth` from its config, so a project declaring
+    // `linkAuth` without `collections` got the anonymous URL lane for every
+    // link, with no `LINK_AUTH_*` code and nothing said. The registry guards
+    // every read with `?.`, so a key it does not find costs nothing.
+    const config = { resources: { include: ['**/*.md'], linkAuth: { providers: [] } } };
+    loadConfigMock.mockReturnValue(config);
+    const { logger } = createTestLogger();
+
+    await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
+
+    expect(lastRegistryOptions?.config).toBe(config);
+    expect(lastRegistryOptions?.baseDir).toBe(PROJECT_ROOT);
+  });
+
+  it('omits config from registry options only when no config file was loaded', async () => {
+    loadConfigMock.mockReturnValue(undefined);
     const { logger } = createTestLogger();
 
     await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
     expect(lastRegistryOptions).not.toHaveProperty('config');
-    expect(lastRegistryOptions?.baseDir).toBe(PROJECT_ROOT);
   });
 
   it('passes config to registry options when collections present', async () => {

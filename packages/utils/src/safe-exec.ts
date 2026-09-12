@@ -116,7 +116,7 @@ function refuseGit(command: string): void {
   if (!isGitCommand(command)) return;
 
   throw new Error(
-    'Use runGit() from @vibe-agent-toolkit/utils to run git, not safeExecSync/safeExecResult.\n' +
+    'Use runGit() from @vibe-agent-toolkit/utils/git to run git, not safeExecSync/safeExecResult.\n' +
       "  runGit(args, { cwd })                 — about a path you were handed (scrubs the inherited\n" +
       '                                          GIT_DIR/GIT_INDEX_FILE that would override cwd)\n' +
       '  runGit(args, { ambient: true })       — about the repository this process stands in\n' +

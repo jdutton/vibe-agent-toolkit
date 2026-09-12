@@ -10,8 +10,7 @@
  * - CHANGELOG.md should exist (warning)
  */
 
-import { existsSync, readdirSync } from 'node:fs';
-
+import { existsSync, readdirSync, statSync } from 'node:fs';
 
 import {
   validateMarketplace,
@@ -95,8 +94,53 @@ async function validatePluginSkills(pluginDir: string, marketplacePath: string):
   return issues;
 }
 
+/** One manifest entry with a relative-path `source`, as the manifest wrote it. */
+export interface LocalPluginSource {
+  name: string;
+  source: string;
+}
+
+/** One declared local plugin the run validated, keyed by the entry it satisfies. */
+export interface LocalPluginResult extends LocalPluginSource {
+  result: ValidationResult;
+}
+
 /**
- * Validate all plugins under the plugins/ directory.
+ * Whether `dir` is a directory. `false` for a file, for nothing, and for a path
+ * the process cannot stat — all three are "no plugin directory here".
+ */
+function isDirectory(dir: string): boolean {
+  try {
+    return statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate the plugins the manifest DECLARES with a local source.
+ *
+ * 🚨 **This walked `plugins/*` and shipped both defects that has.** The
+ * denominator was a count of directories under `plugins/`, so a co-located
+ * marketplace (`source: "./"` — the shape `detectResourceFormat` recognises on
+ * purpose and `vat audit` recurses into) declared 1, walked 0, and was refused
+ * at exit 1 on a code no override can lower; and a manifest declaring
+ * `./plugins/a` over a `plugins/` holding only an undeclared `b` validated
+ * "1 of 1" and passed with `a` never looked at. Each declared `source` is now
+ * resolved against the marketplace root and THAT directory is validated —
+ * the same resolution `extractClaudeMarketplaceInventory` performs for
+ * `vat audit`. A source that does not resolve to a directory is simply absent
+ * from the results; the builder derives the refusal from that absence, so it
+ * lands on the document whatever this function's caller does.
+ *
+ * Directories under `plugins/` that no entry names come back as `undeclared`,
+ * relative to the root: listed, not validated, not a failure. The manifest is
+ * the marketplace's contract with its installer — Claude Code installs only
+ * what `plugins[]` names — so an undeclared directory cannot ship and grading
+ * it would grade something no consumer can receive; failing on it would turn a
+ * publishing gate into a tree-hygiene gate. Naming it costs nothing and is what
+ * lets a reader tell "the plugin you meant is under another name" from "it is
+ * not there at all" when a declared source did not resolve.
  *
  * `validation` is the governing project's severity map (see
  * {@link resolveProjectValidationConfig}). It is applied to each plugin result
@@ -107,21 +151,20 @@ async function validatePluginSkills(pluginDir: string, marketplacePath: string):
  * `plugins[]`, or a plugin `status: warning` above an issue list that no longer
  * contains a warning.
  */
-async function validatePlugins(
+async function validateDeclaredPlugins(
   marketplacePath: string,
+  declared: readonly LocalPluginSource[],
   validation: ValidationConfig | undefined,
-): Promise<{ pluginResults: ValidationResult[]; issues: ValidationIssue[] }> {
-  const pluginsDir = safePath.join(marketplacePath, 'plugins');
-  if (!existsSync(pluginsDir)) return { pluginResults: [], issues: [] };
-
-  const pluginResults: ValidationResult[] = [];
+): Promise<{ pluginResults: LocalPluginResult[]; undeclared: string[]; issues: ValidationIssue[] }> {
+  const pluginResults: LocalPluginResult[] = [];
   const issues: ValidationIssue[] = [];
-  const entries = readdirSync(pluginsDir, { withFileTypes: true });
+  const resolvedDirs = new Set<string>();
 
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+  for (const entry of declared) {
+    const pluginDir = safePath.resolve(marketplacePath, entry.source);
+    if (!isDirectory(pluginDir)) continue;
+    resolvedDirs.add(pluginDir);
 
-    const pluginDir = safePath.join(pluginsDir, entry.name);
     // `locationRoot` is not optional here even though the parameter is: omitted,
     // `validatePlugin` anchors at the plugin's own discovered project root, so
     // its findings land in a different coordinate system than the marketplace
@@ -129,20 +172,37 @@ async function validatePlugins(
     // the same `.claude-plugin/plugin.json`.
     const rawResult = await validatePlugin(pluginDir, { strict: true, locationRoot: marketplacePath });
     const pluginIssues = resolveIssueSeverity(rawResult.issues, validation);
-    const pluginResult: ValidationResult = {
-      ...rawResult,
-      issues: pluginIssues,
-      status: calculateValidationStatus(pluginIssues),
-      issueCounts: countBySeverity(pluginIssues),
-    };
-    pluginResults.push(pluginResult);
+    pluginResults.push({
+      ...entry,
+      result: {
+        ...rawResult,
+        issues: pluginIssues,
+        status: calculateValidationStatus(pluginIssues),
+        issueCounts: countBySeverity(pluginIssues),
+      },
+    });
     issues.push(...pluginIssues);
 
     const skillIssues = await validatePluginSkills(pluginDir, marketplacePath);
     issues.push(...resolveIssueSeverity(skillIssues, validation));
   }
 
-  return { pluginResults, issues };
+  return { pluginResults, undeclared: undeclaredPluginDirs(marketplacePath, resolvedDirs), issues };
+}
+
+/**
+ * Directories under `<root>/plugins/` that no declared source resolved to,
+ * relative to the root. The conventional location is the only one walked: an
+ * undeclared plugin anywhere else is indistinguishable from any other directory.
+ */
+function undeclaredPluginDirs(marketplacePath: string, resolvedDirs: ReadonlySet<string>): string[] {
+  const pluginsDir = safePath.join(marketplacePath, 'plugins');
+  if (!existsSync(pluginsDir)) return [];
+  return readdirSync(pluginsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => safePath.join(pluginsDir, entry.name))
+    .filter((dir) => !resolvedDirs.has(dir))
+    .map((dir) => issueLocation(dir, marketplacePath));
 }
 
 /**
@@ -199,7 +259,9 @@ function resolveProjectValidationConfig(
 export interface MarketplaceFindings {
   marketplaceResult: ValidationResult;
   /** Empty when the manifest failed: the run bails before reaching plugins. */
-  pluginResults: ValidationResult[];
+  pluginResults: LocalPluginResult[];
+  /** `plugins/*` directories no declared source resolved to, relative to the root. */
+  undeclared: string[];
   /**
    * Manifest, required-file, plugin and skill issues, in report order, with
    * every severity already resolved against the governing project's
@@ -260,13 +322,18 @@ export async function collectMarketplaceFindings(
     return {
       marketplaceResult,
       pluginResults: [],
+      undeclared: [],
       issues: [...marketplaceResult.issues],
     };
   }
 
   const validation = resolveProjectValidationConfig(marketplacePath, logger);
   const fileIssues = checkMarketplaceFiles(marketplacePath);
-  const { pluginResults, issues: pluginIssues } = await validatePlugins(marketplacePath, validation);
+  const { pluginResults, undeclared, issues: pluginIssues } = await validateDeclaredPlugins(
+    marketplacePath,
+    marketplaceResult.metadata?.localPluginSources ?? [],
+    validation,
+  );
 
   const issues = [
     ...resolveIssueSeverity(marketplaceResult.issues, validation),
@@ -274,7 +341,7 @@ export async function collectMarketplaceFindings(
     ...pluginIssues,
   ];
 
-  return { marketplaceResult, pluginResults, issues };
+  return { marketplaceResult, pluginResults, undeclared, issues };
 }
 
 /** Everything the emitted report is built from. */
@@ -293,8 +360,14 @@ export interface MarketplaceValidateReportInput {
    */
   root: string;
   marketplace: ValidationResult['metadata'];
-  /** One entry per plugin directory the run inspected; its length is the denominator. */
-  pluginResults: readonly ValidationResult[];
+  /**
+   * One entry per DECLARED local plugin the run validated, each naming the
+   * manifest entry it satisfies. Compared against `marketplace.localPluginSources`
+   * by the builder: a declared source with no entry here did not resolve.
+   */
+  pluginResults: readonly LocalPluginResult[];
+  /** `plugins/*` directories no declared source resolved to; listed, never graded. */
+  undeclared: readonly string[];
   issues: readonly ValidationIssue[];
   /**
    * The manifest's own summary, present iff the run bailed on the manifest. A
@@ -386,19 +459,21 @@ export function summarizeIssuesByLocation(
 export function buildMarketplaceValidateReport(
   input: MarketplaceValidateReportInput,
 ): MarketplaceValidateReport {
-  const { root, marketplace, pluginResults, bailSummary, duration, verbose } = input;
+  const { root, marketplace, pluginResults, undeclared, bailSummary, duration, verbose } = input;
 
   const issues = [
-    ...unvalidatedLocalPluginsFinding(marketplace, pluginResults.length),
+    ...unresolvedLocalPluginsFinding(marketplace, pluginResults),
     ...input.issues,
   ];
   const issueCounts = countBySeverity(issues);
 
-  const plugins = pluginResults.map(r => ({
-    path: r.path,
-    status: r.status,
-    metadata: r.metadata,
-    issues: r.issues,
+  const plugins = pluginResults.map(({ name, source, result }) => ({
+    name,
+    source,
+    path: result.path,
+    status: result.status,
+    metadata: result.metadata,
+    issues: result.issues,
   }));
 
   return {
@@ -409,12 +484,14 @@ export function buildMarketplaceValidateReport(
     // Stated once, and the only absolute path in the document.
     root,
     ...(marketplace ? { marketplace } : {}),
-    // The denominator. Beside `marketplace.localPluginEntries` it says whether
-    // the walk found what the manifest declares; without it "three local
-    // plugins, all clean" and "three local plugins, none looked at" are the
-    // same document.
+    // The numerator. Beside `marketplace.localPluginSources` it says whether
+    // every declared source resolved; without it "three local plugins, all
+    // clean" and "three local plugins, none looked at" are the same document.
     pluginsValidated: pluginResults.length,
     plugins: relativizePathEntries(plugins, root),
+    // Named, not graded — see `validateDeclaredPlugins`. Always present, so an
+    // empty list is a statement that `plugins/` was looked at.
+    undeclared: [...undeclared],
     // One row per inspected asset by default; the flat per-issue list under
     // `--verbose`. Either way every `location` stays relative to `root` above.
     issues: verbose === true ? issues : summarizeIssuesByLocation(issues),
@@ -435,32 +512,29 @@ export interface MarketplaceValidateReport extends Record<string, unknown> {
 }
 
 /**
- * The refusal for a run that validated FEWER plugins than the manifest ships.
+ * The refusal for a run in which a declared local source did not resolve.
  *
- * 🚨 **This shipped.** {@link validatePlugins} walks `plugins/` and returns
- * nothing when the directory is absent, and the document carried no count, so a
+ * 🚨 **Two shapes of this shipped.** First, the plugin walk returned nothing
+ * when `plugins/` was absent, and the document carried no count, so a
  * marketplace declaring three relative-path plugins over a missing `plugins/`
- * reported `status: success`, exit 0 — a gate that had looked at no plugin.
+ * reported `status: success`, exit 0. Then the count that fixed it —
+ * `validated < declared` by NUMBER — was wrong in both directions: a co-located
+ * `source: "./"` marketplace walked 0 against declared 1 and was refused, and
+ * an undeclared `plugins/b` counted for a declared `a` that did not exist.
  *
- * 🔑 **What the condition is, and why it is `validated < declared` rather than
- * `validated === 0`.** The manifest itself is validated on every run, so the run
- * never literally checks nothing once the manifest parses; and an absent
- * `plugins/` is NORMAL for a marketplace whose entries are all git/npm-sourced.
- * So the denominator is the number of plugins the manifest declares with a
- * LOCAL source (a relative path — `localPluginEntries` on the marketplace
- * result), and the refusal fires whenever the walk validated fewer than that.
- * Zero is the shape that shipped; partial is the same class one step in —
- * nothing in `@vibe-agent-toolkit/claude-marketplace` checks that a declared
- * local source directory exists, so "declares 3, validated 1" was two plugins
- * silently unvalidated at exit 0. All-remote stays green (declared 0); no
- * entries stays green; a walk that finds MORE directories than declared is a
- * different question (an undeclared plugin) and stays green here; a bailed
- * manifest carries no counts and stays a manifest error alone.
+ * 🔑 **The condition is by IDENTITY, not by count.** `marketplace.localPluginSources`
+ * is the manifest's own list of local entries; `pluginResults` names the entry
+ * each validated plugin satisfies. A declared entry with no result is a source
+ * that did not resolve to a directory, and that is what is refused — whatever
+ * else the tree holds. Both halves are in the document, so the refusal is
+ * derivable from the document alone. All-remote stays green (nothing local
+ * declared); no entries stays green; an undeclared directory is listed under
+ * `undeclared` and stays green here — it cannot ship, so it is not a plugin
+ * that went unvalidated; a bailed manifest carries no sources and stays a
+ * manifest error alone.
  *
- * The message carries both numbers and no names: the metadata publishes counts
- * only, and widening it to carry the declared sources would be a second copy of
- * the manifest for one message. The reader who needs the names has the
- * manifest and the listed `plugins[]`.
+ * The message names the unresolved sources: the reader's next move is to fix
+ * the `source` or build the tree, and either needs the name.
  *
  * Derived here in the builder, not in {@link collectMarketplaceFindings}, so
  * the status the document publishes — and the exit code taken from it — cannot
@@ -468,24 +542,28 @@ export interface MarketplaceValidateReport extends Record<string, unknown> {
  * `run-integrity.ts`.
  *
  * @param marketplace - The manifest's metadata; `undefined` when the run bailed
- * @param validated - How many plugin directories the walk inspected
+ * @param validated - The declared local plugins the run validated
  * @returns The one finding, or nothing
  */
-function unvalidatedLocalPluginsFinding(
+function unresolvedLocalPluginsFinding(
   marketplace: ValidationResult['metadata'],
-  validated: number,
+  validated: readonly LocalPluginResult[],
 ): readonly ValidationIssue[] {
-  const declared = marketplace?.localPluginEntries ?? 0;
-  if (validated >= declared) return [];
+  const declared = marketplace?.localPluginSources ?? [];
+  const unresolved = declared.filter(
+    (entry) => !validated.some((v) => v.name === entry.name && v.source === entry.source),
+  );
+  if (unresolved.length === 0) return [];
+  const named = unresolved.map((entry) => `\`${entry.name}\` (${entry.source})`).join(', ');
   return [runIntegrityFinding(
-    `The manifest declares ${declared} plugin(s) with a local source and this run validated ${validated}`
-    + ' of them, so this document is not a verdict about the rest: it reads the same as a run'
-    + ' over a marketplace whose plugins are all clean.'
-    + ' Local plugins are validated by walking the `plugins/` directory under the marketplace'
-    + ' root, so a declared plugin the walk did not reach is absent from that directory — usually'
-    + ' the marketplace was not built, was built somewhere else, or ships that plugin under'
-    + ' another directory. Compare the manifest\'s local entries against `plugins[]` above;'
-    + ' run `vat build` first, or point this command at the built marketplace.',
+    `The manifest declares ${declared.length} plugin(s) with a local source and this run validated`
+    + ` ${validated.length} of them, so this document is not a verdict about the rest: it reads the`
+    + ' same as a run over a marketplace whose plugins are all clean.'
+    + ` Declared source(s) that did not resolve to a directory under the marketplace root: ${named}.`
+    + ' Usually the marketplace was not built, was built somewhere else, or the entry\'s `source`'
+    + ' names the wrong directory — `undeclared` above lists the `plugins/` directories the'
+    + ' manifest does not name. Fix the `source`, run `vat build` first, or point this command at'
+    + ' the built marketplace.',
   )];
 }
 
@@ -510,7 +588,7 @@ export async function runMarketplaceValidatePhase(
     const marketplacePath = safePath.resolve(targetPath ?? '.');
     logger.info(`Validating marketplace: ${marketplacePath}`);
 
-    const { marketplaceResult, pluginResults, issues } =
+    const { marketplaceResult, pluginResults, undeclared, issues } =
       await collectMarketplaceFindings(marketplacePath, logger);
 
     // A bailed run reports WHY it stopped; a completed run reports what it
@@ -521,6 +599,7 @@ export async function runMarketplaceValidatePhase(
       root: marketplacePath,
       marketplace: marketplaceResult.metadata,
       pluginResults,
+      undeclared,
       issues,
       ...(bailed ? { bailSummary: marketplaceResult.summary } : {}),
       duration: formatDuration(Date.now() - startTime),
@@ -568,13 +647,18 @@ Description:
 Output (YAML on stdout):
   root: the marketplace directory — every location below is relative to it
   status, issueCounts, summary, duration, marketplace, plugins
-  pluginsValidated: how many plugin directories under plugins/ were inspected.
-          marketplace.localPluginEntries says how many the manifest declares
-          with a relative-path source; when pluginsValidated is below it,
-          the run is reported as RESOURCE_CHECK_BROKEN at error (exit 1)
-          rather than as a pass — zero or partial coverage is not a verdict.
-          An all-remote marketplace has nothing local to inspect and stays
+  pluginsValidated: how many of the manifest's relative-path sources
+          (marketplace.localPluginSources) resolved to a directory and were
+          validated — each plugins[] row names the entry it satisfies. A
+          declared source that does not resolve is reported as
+          RESOURCE_CHECK_BROKEN at error (exit 1), naming it, rather than as
+          a pass — a plugin the manifest ships and this run never saw is not
+          a verdict. Co-located marketplaces (source: "./") are validated at
+          the root. An all-remote marketplace has nothing local and stays
           green.
+  undeclared: directories under plugins/ that no manifest entry names.
+          Listed only — they cannot be installed, so they are neither
+          validated nor a failure.
 
   issues: one row per inspected location, carrying only that location's counts
           ({location, errors?, warnings?, info?, codes}). A zero bucket is

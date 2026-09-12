@@ -219,10 +219,21 @@ correct. That pair surprises people because `status` means something wider
 everywhere else in this CLI, where it moves with the exit code. Here it does not,
 because this command is a report rather than a gate.
 
+A run that audited **zero files** is refused, not passed. An existing directory
+with nothing auditable in it — plugins that moved, a wrong subdirectory, an
+excluded tree, files no lane recognises — used to publish `status: success`
+beside `filesScanned: 0`, which is the same document a clean tree produces. It
+now publishes `status: error` with one non-overridable `RESOURCE_CHECK_BROKEN`
+finding under a top-level `issues:` key (the claim is about the run, so it is
+not a `files[]` row and does not count toward `filesScanned`). The exit code is
+still `0`: the run completed; it just is not a verdict.
+
 **Gate CI on the report, never on this command's exit code** — read `status` and
 `issueCounts` out of the YAML (see [CI/CD Integration](#cicd-integration) for a
 worked example), or reach for a command whose exit code *is* the verdict:
-`vat skills validate` and `vat skills build` exit `1` on validation errors.
+`vat skills validate` and `vat skills build` exit `1` on validation errors, and
+`vat skills validate` also exits `1` when its `skills.include` globs discover no
+skill — so a typo'd glob fails the gate there instead of passing it.
 
 ## Exit Codes
 
@@ -353,9 +364,13 @@ summary:
   filesWithWarnings: number   # Files whose worst actionable severity is warning
   filesWithErrors: number     # Files carrying at least one error
 issueCounts:                  # FINDINGS, not files — same field name and meaning
-  errors: number              #   as the `issueCounts` on each entry below
-  warnings: number
+  errors: number              #   as the `issueCounts` on each entry below,
+  warnings: number            #   plus the run-level `issues` when present
   info: number
+issues:                       # Only when the RUN itself is refused — a run over
+  - code: RESOURCE_CHECK_BROKEN   # zero files. Not a file, so not in `files[]`.
+    severity: error
+    message: ...
 duration: "123ms"
 files:
   - path: plugins/my-plugin            # relative to `root`

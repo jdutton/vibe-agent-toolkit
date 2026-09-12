@@ -31,6 +31,7 @@ export const IndexResultSchema = z.object({
   resourcesIndexed: z.number().describe('Number of resources newly indexed'),
   resourcesSkipped: z.number().describe('Number of resources skipped (unchanged)'),
   resourcesUpdated: z.number().describe('Number of resources updated (changed)'),
+  resourcesEmpty: z.number().describe('Number of resources that chunked to nothing (frontmatter-only or blank); not an error'),
   chunksCreated: z.number().describe('Number of chunks created'),
   chunksDeleted: z.number().describe('Number of chunks deleted'),
   durationMs: z.number().describe('Indexing duration in milliseconds'),

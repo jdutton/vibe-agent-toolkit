@@ -818,9 +818,25 @@ export const CODE_REGISTRY = {
   ),
   LINK_AUTH_UNVERIFIED: entry(
     'warning',
-    'A provider in resources.linkAuth claims this host, but no token source resolved (none of the configured env/command sources produced a value).',
+    'A provider in resources.linkAuth claims this host, but no token source resolved (none of the configured env/command sources produced a value), so no authenticated request was attempted.',
     "Configure a `token` source (env var or argv command); log in to the underlying CLI (e.g. `gh auth login`, `az login`); or set severity.LINK_AUTH_UNVERIFIED to ignore if running without auth is intentional.",
     'link_auth_unverified',
+  ),
+  // `error`, and its own code rather than LINK_AUTH_UNVERIFIED, because the two
+  // used to be one and the merge was a defect: UNVERIFIED's remedy tells a
+  // token-less lane to set it to `ignore`, and with that override in place a
+  // provider that could not build a request produced a green run over links
+  // nothing had fetched. A provider that fails is a config defect on the
+  // adopter's side of the line, which is what `error` is for. The statically
+  // knowable defects (an uncompilable regex, an unknown transform, a template
+  // naming an undeclared capture) never reach this code — `vat resources
+  // validate` refuses the run for them at config load, exit 2 — so what carries
+  // it is per-URL: a declared capture that did not participate in this match.
+  LINK_AUTH_PROVIDER_ERROR: entry(
+    'error',
+    'A provider in resources.linkAuth claims this host but could not build the authenticated request for this URL — a template read a capture the matching rule did not produce, or a transform refused the value — so the link was neither authenticated nor checked anonymously.',
+    "Fix the provider: make every capture the template reads mandatory in that rule's `when` (or give the rule a `to` that does not read it), then re-run. The message names the host, the template and the missing name.",
+    'link_auth_provider_error',
   ),
 
   // Projection path — always-loaded context budget

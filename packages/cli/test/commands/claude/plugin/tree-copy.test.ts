@@ -2,7 +2,8 @@
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils';
+import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -285,5 +286,39 @@ describe('treeCopyPlugin', () => {
     });
 
     expect(warnings).toEqual([]);
+  });
+
+  /**
+   * A copy over a tree it cannot fully list must STOP, not ship a partial plugin:
+   * every file under the refused directory is in the declared source and would
+   * be silently absent from the published bundle. The crawler used to hand back
+   * the shorter list and the build said "success". The refusal is a
+   * `readdirSync` spy so it runs on every platform and as root; the fixture has
+   * no repository, so the walk route (the one that lists directories) is taken.
+   */
+  it('refuses the copy by name when a source directory cannot be listed, before copying anything', async () => {
+    await mkdir(safePath.join(src, 'commands'), { recursive: true });
+    await writeFile(safePath.join(src, 'commands', 'hello.md'), '# hello');
+    const locked = safePath.join(src, 'hooks');
+    await mkdir(locked, { recursive: true });
+    await writeFile(safePath.join(locked, 'hooks.json'), '{"events":{}}');
+
+    let thrown: unknown;
+    try {
+      await withReaddirSyncRefused(locked, 'EACCES', () => treeCopyPlugin({ sourceDir: src, destDir: dest }));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(DirectoryListingRefusedError);
+    const message = (thrown as Error).message;
+    expect(message).toContain("'hooks'");
+    expect(message).toContain('EACCES');
+    expect(message).toContain('exclude');
+    // Adopter-facing: no absolute path, no library seam.
+    expect(message).not.toContain(src);
+    expect(message).not.toContain('onUnreadable');
+    // Nothing shipped: the crawl decides before the first copy.
+    expect(existsSync(safePath.join(dest, 'commands', 'hello.md'))).toBe(false);
   });
 });

@@ -201,6 +201,11 @@ function fingerprintFiles(
   root: string,
   scope: FingerprintScope,
 ): { fingerprint: string; fileCount: number } {
+  // No `onUnreadable`, deliberately: a fingerprint over a tree the walk could
+  // not fully list is not a fingerprint of that tree — it would match the same
+  // tree with the directory readable and its contents changed, which is the
+  // one thing a fingerprint exists to catch. The crawler throws
+  // `DirectoryListingRefusedError`, and the subject cannot be resolved.
   const relativePaths = crawlDirectorySync({
     baseDir: root,
     include: ['**/*'],

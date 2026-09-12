@@ -104,7 +104,7 @@ with a regression test.
   "(repeatable)". Passing one value per flag was always correct and is unchanged.
 
 - **A run that checked nothing is now refused — `status: error`, one `RESOURCE_CHECK_BROKEN`
-  finding, exit 1 — instead of reported as a pass.** Six gates produced a clean document over an
+  finding, exit 1 — instead of reported as a pass.** Eight gates produced a clean document over an
   empty denominator, which is the same document a gate that was deleted produces, and nothing said
   which had happened. Every one now publishes what it counted and refuses zero with a message naming
   the likely cause. **Any CI step below that previously went green having done no work goes red:**
@@ -117,15 +117,25 @@ with a regression test.
   - `vat resources validate` with a `--collection` or path filter matching nothing (was
     `filesScanned: 0`, exit 0). `filesWithErrors` now counts only issues that carry a file, so the
     location-less refusal cannot make it read `1` beside `filesScanned: 0`.
-  - `vat claude marketplace validate` publishes `pluginsValidated` beside the manifest's new
-    `localPluginEntries` count, and refuses when FEWER local plugins were validated than the
-    manifest declares — a missing `plugins/<name>` directory was invisible at exit 0. All-remote
-    manifests and `plugins: []` stay green.
+  - `vat claude marketplace validate` validates the plugins the manifest DECLARES and refuses,
+    naming the entry, when a declared `source` does not resolve — a missing `plugins/<name>` was
+    invisible at exit 0. A co-located marketplace (`source: "./"`) now validates; a `plugins/*`
+    directory no entry names is listed under `undeclared`, not counted. Metadata publishes
+    `localPluginSources` (replaces the `localPluginEntries` count).
   - `vat verify`'s `packaged-content` phase publishes `bundlesInspected` and refuses zero: a
     project with a `skills:` block and no built `dist/`, or a `skills.include` glob matching no
     `SKILL.md`, now fails the phase. **Run `vat build` before `vat verify`.**
   - The corpus runner's `summary.yaml` reports an audit over zero files as `error`, not `success`,
     and no longer carries a `schema_version` field.
+  - `vat skills validate` (and the `skills` phase of `vat validate` / `vat verify`) with a
+    `skills.include` glob matching no `SKILL.md` — was one info line, no document, exit 0. The
+    refusal names the globs; fix them, or remove the `skills:` block if the project ships no skills
+    (no `skills:` block is still "nothing to validate", exit 0).
+  - `vat audit <path>` over a tree with nothing auditable — was `status: success` beside
+    `filesScanned: 0`. Now `status: error` with the finding under a new top-level `issues:` key;
+    the exit code stays 0 by contract (it reports whether the run completed), so a CI step that
+    gates on the report's `status` — as the docs instruct — goes red; point the command at the
+    tree that holds the plugins or skills.
 
   The code is deliberately the one `vat resources check` already used for a statement that would
   not compile, and no `severity` entry can lower it.
@@ -183,9 +193,12 @@ with a regression test.
   `@vibe-agent-toolkit/resources`' own `parseMarkdown`, which takes a path rather than content,
   keeps its name.
 
+- **(library) `IndexResult` and `IndexProgress` gain a required `resourcesEmpty` counter** — resources
+  that chunked to nothing (frontmatter-only or blank). A custom `RAGAdminProvider` must return it.
+
 - **`safeExecSync()` and `safeExecResult()` throw when asked to run `git`.** Use `runGit()` /
-  `runGitOrThrow()` from `@vibe-agent-toolkit/utils`, which pin the repository explicitly instead of
-  inheriting whichever one the ambient environment names.
+  `runGitOrThrow()` from `@vibe-agent-toolkit/utils/git` (the `/git` subpath, not the root barrel),
+  which pin the repository explicitly instead of inheriting whichever one the ambient environment names.
 
 - **The four inventory extractors take an options object with a REQUIRED `gitTrackerSource`**; the
   install root moves into it, and `NO_GIT_TRACKER` restores the old tracker-less walk. A skill's
@@ -211,17 +224,6 @@ with a regression test.
   SQLite persistence comes from the new `@vibe-agent-toolkit/projection-sqlite` package, enabled
   with `VAT_PROJECTION_STORE=sqlite`; `VAT_PROJECTION_STORE_DIR` sets where that database lives —
   set it per CI job, or concurrent jobs write into one file.
-
-- **The quality lab's `io` facet now reports the arm it measured.** Every `io` row carries `lane` and
-  `extentSource`, read back out of the subject's own stdout the way `population` already did — never
-  from the environment variable the caller set, which proves only what was asked for. `vat-lab io
-  compare` prints the pair (`[projection via git → projection via filesystem]`) and says plainly
-  when both sides ran the same arm — *"this compares one enumerator with itself"* — or when neither
-  side reported one. Before this, an A/B of the git-vs-filesystem extent source had to infer which
-  arm each side ran from a call-site signature. The reader is one shared module for both facets. The
-  default `resources-scan` spec prints YAML, so its rows honestly read `lane: null`; measure
-  `--command resources-population` to have the arm carried. (`IoBodySchema` is strict, so an io
-  report stored by an earlier build is refused rather than misread.)
 
 - **`vat resources query <sql> [path]`** — runs one read-only SQL statement against this tree's
   resource projection, so questions no command reports a field for (headings, link targets, what the
@@ -369,10 +371,11 @@ with a regression test.
   producer-side stance toward both.
 
 - **(library) New exports.** `decodeTextContent()` on the new `@vibe-agent-toolkit/utils/text`
-  subpath, plus `runGit()`, `runGitOrThrow()`, `isFilesystemAccessError(err)`, `removeScratchDir()`,
-  `vatCacheNamespace()`, `vatCacheNamespaceRoot()`, `isEntrypoint(importMetaUrl, entryPath?)` on
-  `./process`, and the path-spelling surface (`DirectorySpellingIndex`, `spellingWalkRoot`,
-  `fillPathSpellings`, `pathSpellingFrom` and their types) on the barrel.
+  subpath, `runGit()` / `runGitOrThrow()` on `./git`, `isEntrypoint(importMetaUrl, entryPath?)` on
+  `./process`, and `isFilesystemAccessError(err)`, `removeScratchDir()` plus the path-spelling
+  surface (`DirectorySpellingIndex`, `spellingWalkRoot`, `fillPathSpellings`, `pathSpellingFrom` and
+  their types) on the barrel. `@vibe-agent-toolkit/resources` exports `vatCacheNamespace()` and
+  `vatCacheNamespaceRoot()`.
   `@vibe-agent-toolkit/agent-skills` exports `API_SKILL_MAX_UPLOAD_BYTES` (31,457,280),
   `describeOversizeBundle()`, `formatBytes()`, `SizedFile`, `declaredSkillNameIn()` and the three
   portability collectors, so your own uploader can refuse an over-ceiling bundle and run the
@@ -479,6 +482,10 @@ with a regression test.
 
 ### Security
 
+- **`vat audit --compat --settings` can no longer be stalled by a crafted `allowed-tools` path
+  entry.** A `Read(…)`/`Edit(…)` declaration with a handful of wildcards took seconds to minutes
+  against an ordinary `.claude/settings.json` deny rule (11 s measured at 21 + 44 characters); the
+  path lane now matches in linear time. Fixed, no adopter action.
 - **Every open dependency advisory is closed, and the one that survives is triaged rather than
   ignored.** `osv-scanner` reported 8 advisories across 6 packages (2 High). Fixed by bumping:
   `sharp` 0.35.3 → 0.35.4 (GHSA-rgj7-g3m4-5g8c, CVSS 8.9), `js-yaml` 4.3.1 → 4.3.2
@@ -632,6 +639,38 @@ with a regression test.
   `@vibe-validate/utils` and `yaml` to the installed tree.
 
 ### Fixed
+
+- **`resources.linkAuth` now applies whenever it is declared — it was silently inert unless
+  `resources.collections` was also declared, so every link on a claimed host was checked anonymously.**
+  Adopters with `linkAuth` and no `collections`: expect new `LINK_AUTH_*` findings in CI output.
+- **A `resources.linkAuth` provider that cannot compile (bad `when` regex, malformed template, unknown
+  transform, undeclared capture) refuses the run at config load — exit 2, naming `providers[<n>]` and the
+  field — instead of a per-link `LINK_AUTH_UNVERIFIED` warning that `severity: ignore` turned into a green run.**
+  A provider failing on one URL now reports `LINK_AUTH_PROVIDER_ERROR` (error); `LINK_AUTH_UNVERIFIED` means only "no token".
+- **A directory the resource crawl could not list is reported instead of silently narrowing the population.**
+  `vat resources validate` now emits `SCAN_PATH_UNREADABLE` for it on the walk lane and refuses the run by name
+  on the default lane; `crawlDirectory` throws `DirectoryListingRefusedError` unless given `onUnreadable`.
+- **Every other crawl caller now states what a refused listing means for it, instead of inheriting the throw.**
+  `vat audit` keeps degrading (issue #180): the packaged-file detector reports the directory it could not enter as
+  `SCAN_PATH_UNREADABLE` on the skill, deduplicated against the walk's own finding so one refusal is one finding —
+  including when a `SKILL.md` is named directly, where the walk never runs. `vat skills list` carries
+  `unreadable:` in its YAML and reports `status: warning` (`ScanSummary.unreadable` is new and required). The
+  corpus review lane files a failed section per refused directory. `vat claude plugin build` (tree-copy and the
+  `skills/` listing), `skills.include` discovery and the inventory link walk refuse by name — root-relative
+  directory, errno, and the adopter's own remedy — rather than shipping or reporting a shorter set.
+- **`vat audit --compat` now reports a settings conflict on `~/`-prefixed path declarations
+  (`Read(~/.ssh/**)` vs the identical or a narrower deny rule) and on tool-name glob declarations
+  (`mcp__srv__*` vs a deny naming one member); both answered "no conflict".**
+- **`vat claude org skills delete` no longer reports a version as deleted when a rate-limited
+  DELETE is replayed and answered 404** — that 404 is the error it is.
+- **`vat resources query` and `vat resources check` refuse a `[path]` that names no directory
+  (exit 2) instead of walking up to whatever project the cwd is in and answering about that tree
+  at exit 0.** `[path]` on both verbs locates the project and never narrows the corpus — a `WHERE`
+  clause is the only scope — and both help texts now say so; use `scan`/`validate` to crawl a subtree.
+
+- **A SQL placeholder with nothing bound to it is refused, naming both counts, instead of binding
+  NULL and reporting `status: success` with zero rows.** `vat resources query … WHERE x = ?` with no
+  `--param`, and a `?` inside a `resources.checks` statement (which passed vacuously), both fail now.
 
 - **A command that merely mentions `resources`, `rag` or `agent` no longer prints that group's
   verbose help instead of running.** The three `--verbose` help pages were selected by testing
@@ -947,15 +986,10 @@ with a regression test.
   throws, and no content is dropped. Separately, **`splitBySentences` discarded sentence-terminating
   punctuation.**
 
-- **The chunker dropped every byte before the first heading.** The section walk began AT the first
-  heading, so a document opening with an abstract, a TL;DR or a lead paragraph indexed that prose
-  at zero chunks — no error, no warning, no counter. The preamble is now chunked like any other
-  unheaded prose, with no `headingPath` (labelling it with the heading it sits above would make it
-  retrievable under a heading that does not describe it). A document with no headings at all no
-  longer embeds its YAML frontmatter as prose either, and a frontmatter-only document yields zero
-  chunks and a `0` average rather than `NaN`. The chunk shape is unchanged. ⚠️ **Already-indexed
-  documents are not re-chunked** — their content hash has not moved — so run
-  `vat rag clear && vat rag index` to pick up preambles.
+- **Prose above the first heading was never indexed, and a heading-less file's YAML frontmatter was
+  indexed as prose.** Both fixed. A frontmatter-only file now indexes as zero chunks, counted under
+  the new `resourcesEmpty` — never an error, whatever position or run it is in. ⚠️ **Already-indexed
+  documents are not re-chunked** — run `vat rag clear && vat rag index` to pick up preambles.
 
 - **A parser-load failure mid-index left chunks that could never be re-indexed.** Document records
   were buffered and written once at the end of `indexResources`, so a throw part-way through left

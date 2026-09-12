@@ -143,4 +143,48 @@ describe('redactSecretsInText', () => {
     expect(out).not.toContain(LEAK_CANARY);
     expect(out).toContain('is an invalid header value');
   });
+
+  /**
+   * 🪤 A secret does not have to arrive VERBATIM to be a secret. A value that
+   * carries a NUL is embedded by `JSON.stringify` as `\u0000`, so the literal
+   * header value no longer occurs in the text while the token beside it does;
+   * a logger may percent-encode, base64 or case-fold a value on its way out.
+   * Each of those is one decode away from the credential, and a scrub that
+   * matched only the exact bytes let all of them through.
+   */
+  describe('encoded forms of a secret', () => {
+    const NUL = String.fromCodePoint(0);
+    const value = `Bearer ${LEAK_CANARY}${NUL}`;
+    const secrets = sensitiveHeaderValues({ Authorization: value });
+
+    it('redacts the JSON-escaped form (the NUL is `\\u0000`, the token is verbatim beside it)', () => {
+      const out = redactSecretsInText(`boom ${JSON.stringify(value)}`, secrets);
+      expect(out).not.toContain(LEAK_CANARY);
+      expect(out).toContain('boom');
+    });
+
+    it('redacts the percent-encoded form', () => {
+      const out = redactSecretsInText(`url ?t=${encodeURIComponent(value)}`, secrets);
+      expect(out).not.toContain(encodeURIComponent(LEAK_CANARY));
+      expect(out).toContain('url ?t=');
+    });
+
+    it.each([
+      ['base64', Buffer.from(value, 'utf8').toString('base64')],
+      ['base64url', Buffer.from(value, 'utf8').toString('base64url')],
+    ])('redacts the %s form', (_label, encoded) => {
+      const out = redactSecretsInText(`blob ${encoded} end`, secrets);
+      expect(out).not.toContain(encoded);
+      expect(out).toBe(`blob ${REDACTED_VALUE} end`);
+    });
+
+    it('redacts a case-folded copy of the secret', () => {
+      const out = redactSecretsInText(`saw ${LEAK_CANARY.toUpperCase()} here`, [LEAK_CANARY]);
+      expect(out).toBe(`saw ${REDACTED_VALUE} here`);
+    });
+
+    it('still leaves unrelated text intact (encoded forms widen the net, not the shred)', () => {
+      expect(redactSecretsInText('nothing to see', secrets)).toBe('nothing to see');
+    });
+  });
 });

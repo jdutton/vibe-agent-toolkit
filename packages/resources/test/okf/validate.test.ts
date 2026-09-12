@@ -916,6 +916,25 @@ describe('validateOkfBundle', () => {
       expect(drafts[0]?.message).not.toContain('descriptor exhaustion');
     });
 
+    it('keeps a case mismatch it found ABOVE the refusing directory', async () => {
+      // 🪤 `./Sub/target.md` against a disk `sub` that then refuses: the first
+      // component was judged and found wrong, and the draft used to say the
+      // spelling was "unchecked" about it. The verdict now carries what the walk
+      // learned before it stopped, and the draft says so.
+      const root = plantOkfBundle(LINKED);
+
+      const { drafts } = await withReaddirRefused(
+        safePath.join(root, 'sub'),
+        'EACCES',
+        async () => await judgeHrefs(root, ['./Sub/target.md']),
+      );
+
+      expect(codesOf(drafts)).toEqual(['OKF_SUBDIRECTORY_UNREADABLE']);
+      expect(drafts[0]?.message).toContain('"Sub" is spelled "sub" on disk');
+      expect(drafts[0]?.message).not.toContain('spelling, existence and anchor are all unchecked');
+      expect(drafts[0]?.message).toContain('existence and anchor');
+    });
+
     it('still calls a target under a directory that is genuinely absent broken', async () => {
       // The negative control for the DISTINCTION, not for the finding. A fix
       // that reported every absence as a refusal would satisfy the four rows
