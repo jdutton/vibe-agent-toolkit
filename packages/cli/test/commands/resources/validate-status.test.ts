@@ -16,7 +16,11 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { buildIssuesOutputData } from '../../../src/commands/resources/validate.js';
+import {
+  buildIssuesOutputData,
+  buildValidationDocument,
+  exitCodeForValidateRun,
+} from '../../../src/commands/resources/validate.js';
 
 /** Registry stub: no resource belongs to a collection, so collection stats stay empty. */
 const NO_COLLECTIONS = { getResource: () => undefined };
@@ -101,5 +105,105 @@ describe('buildIssuesOutputData — reported status vocabulary', () => {
       report('ignore').status,
     ];
     expect(statuses).not.toContain('failed');
+  });
+});
+
+/**
+ * The run-integrity refusal: a run that scanned NO file must never answer
+ * `success`.
+ *
+ * ## The defect
+ *
+ * `vat resources validate --collection no-such-collection` reported
+ * `status: success`, `filesScanned: 0`, exit 0. A `--collection` name that
+ * matches nothing (a typo, a renamed collection) filters every resource out,
+ * and zero issues over zero files serializes identically to "every file in the
+ * collection is clean". A path argument naming a tree with no markdown does the
+ * same through the other builder. Neither the registry nor the CLI had a
+ * zero-resource refusal, and no test covered the zero case.
+ *
+ * ## Why the assertion is on the document builder
+ *
+ * Both outcomes — clean and with-issues — go through `buildValidationDocument`,
+ * so deriving the refusal there makes "filesScanned: 0, status: success"
+ * unrepresentable by construction rather than merely unwritten. The precedent is
+ * `vat resources check` and `vat claude budget`: a non-overridable
+ * `RESOURCE_CHECK_BROKEN` at `error`, ONE per run, shared through
+ * `run-integrity.ts`.
+ */
+describe('buildValidationDocument — a run that scanned nothing is not a verdict', () => {
+  /** The code the run-integrity refusal carries, shared with `vat resources check`. */
+  const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
+
+  /** A context whose scan matched no resource — what a stray `--collection` produces. */
+  const NOTHING_SCANNED = {
+    ...CONTEXT,
+    stats: { totalResources: 0, totalLinks: 0, linksByType: {} },
+    collection: 'no-such-collection',
+  };
+
+  it('refuses a clean run over zero files with ONE RESOURCE_CHECK_BROKEN at error', () => {
+    // 🔑 The reproduced defect. Delete the guard and this reds: no issue was
+    // flattened, so the success builder answers `success` over `filesScanned: 0`.
+    const data = buildValidationDocument([], NOTHING_SCANNED, NO_COLLECTIONS, false);
+
+    expect(data.status).toBe('error');
+    expect(data.filesScanned).toBe(0);
+    expect(data.issueCounts).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(data.issueSummary).toEqual({ [RUN_INTEGRITY_CODE]: 1 });
+    // ONE row, and it is not a file: the claim is about the run.
+    expect(data.issues).toHaveLength(1);
+    expect(data.issues?.[0]).toMatchObject({ errors: 1, codes: { [RUN_INTEGRITY_CODE]: 1 } });
+    // No file carried the error, so no file is counted as carrying one.
+    expect(data.filesWithErrors).toBe(0);
+  });
+
+  it('names the filter that matched nothing and what to do about it', () => {
+    const data = buildValidationDocument([], NOTHING_SCANNED, NO_COLLECTIONS, true);
+    const row = data.issues?.[0] as { issues: Array<{ code: string; message: string }> };
+    const [finding] = row.issues;
+
+    expect(finding?.code).toBe(RUN_INTEGRITY_CODE);
+    expect(finding?.message).toContain('no-such-collection');
+    expect(finding?.message).toContain('vat resources scan');
+    // It claims the RUN is not a verdict — never that the corpus is broken.
+    expect(finding?.message).not.toMatch(/broken link|invalid/i);
+  });
+
+  it('stays silent over a populated corpus, however clean', () => {
+    // 🔑 The over-correction guard: an ordinary clean run must not start
+    // reporting an error.
+    const data = buildValidationDocument([], CONTEXT, NO_COLLECTIONS, false);
+
+    expect(data.status).toBe('success');
+    expect(data.filesScanned).toBe(3);
+    expect(data.issues).toBeUndefined();
+  });
+
+  it('adds the refusal beside real findings when those came from a zero-file scan', () => {
+    // A location-less library finding (a config-level error, say) over a
+    // filter that matched nothing: the run is still not a verdict about files.
+    const data = buildValidationDocument([issue('warning')], NOTHING_SCANNED, NO_COLLECTIONS, false);
+
+    expect(data.status).toBe('error');
+    expect(data.issueSummary?.[RUN_INTEGRITY_CODE]).toBe(1);
+    expect(data.issueCounts).toEqual({ errors: 1, warnings: 1, info: 0 });
+  });
+});
+
+describe('exitCodeForValidateRun — the exit code agrees with the document', () => {
+  it('exits 1 when the document refused the run, even though the library found no error', () => {
+    // The library's `hasErrors` is computed over the WHOLE project; the refusal
+    // is derived over what was REPORTED. Both must fail the run.
+    expect(exitCodeForValidateRun(false, { status: 'error' })).toBe(1);
+  });
+
+  it('still exits 1 on a library error the --collection filter hid from the document', () => {
+    expect(exitCodeForValidateRun(true, { status: 'success' })).toBe(1);
+  });
+
+  it('exits 0 only when both agree the run is clean', () => {
+    expect(exitCodeForValidateRun(false, { status: 'success' })).toBe(0);
+    expect(exitCodeForValidateRun(false, { status: 'warning' })).toBe(0);
   });
 });

@@ -32,6 +32,7 @@ import { createLogger, type Logger } from '../../utils/logger.js';
 import { writeTestFormatError } from '../../utils/output.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
+import { nothingCheckedFinding } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { finishCommand, type PhaseOutcome } from '../phase-utils.js';
 import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
@@ -243,6 +244,13 @@ interface ValidationContext {
   validationMetadata: Pick<ValidationOutputData, 'validationMode' | 'frontmatterSchema'>;
   collectionStats: CollectionStats | undefined;
   duration: number;
+  /**
+   * The `--collection` filter, when one was passed. Carried so the
+   * run-integrity refusal can name the filter that matched nothing — the builder
+   * asks the denominator, not the config, but the MESSAGE should say what the
+   * operator most likely typed wrong.
+   */
+  collection?: string;
 }
 
 /** The only thing the output layer needs from the registry: collection lookup by ABSOLUTE path. */
@@ -384,8 +392,11 @@ function buildIssueSummary(
   // 2. Every remaining count in this function is named `error*`, so every one of
   //    them is computed over ERROR-severity issues only. A file carrying nothing
   //    but info notes is not a file with errors.
+  //    And a FILE: a finding that names none (the run-integrity refusal, a
+  //    config-level error) is counted in `issueCounts`, never as a file — else
+  //    `filesWithErrors: 1` would sit beside `filesScanned: 0`.
   const errorIssues = issues.filter((i) => i.severity === 'error');
-  const filesWithErrorsSet = new Set(errorIssues.map(i => i.file));
+  const filesWithErrorsSet = new Set(errorIssues.map(i => i.file).filter((file) => file !== ''));
 
   // 3. Map files to collections and count errors per collection.
   //    registry.getResource keys on the ABSOLUTE path, so look up via absPath.
@@ -701,6 +712,7 @@ export async function runResourcesValidatePhase(
       validationMetadata,
       collectionStats,
       duration,
+      ...(options.collection === undefined ? {} : { collection: options.collection }),
     };
 
     const document = buildValidationDocument(
@@ -717,7 +729,7 @@ export async function runResourcesValidatePhase(
     // finding this command reports came from `registry.validate()`, which
     // already allow-filtered and severity-resolved them. Nothing is reported
     // here that the library never saw, so there is no second clause to OR in.
-    return { document, exitCode: hasErrors ? 1 : 0 };
+    return { document, exitCode: exitCodeForValidateRun(hasErrors, document) };
   } catch (error) {
     return {
       document: reportCommandError(error, logger, startTime, 'Validation'),
@@ -725,6 +737,24 @@ export async function runResourcesValidatePhase(
       failed: true,
     };
   }
+}
+
+/**
+ * The exit code for a run, from the two verdicts that can each fail it.
+ *
+ * `hasErrors` is the library's, computed over the WHOLE project before any
+ * `--collection` filter, so an error the filter hid from the document still
+ * fails the run. The document's `status` is computed over what was REPORTED —
+ * which is where the run-integrity refusal lands (see
+ * {@link buildValidationDocument}), and it has no counterpart in `hasErrors`
+ * because the library never sees the filter. Either alone lets one of those two
+ * failures through; the run fails on both.
+ */
+export function exitCodeForValidateRun(
+  hasErrors: boolean,
+  document: Pick<ValidationOutputData, 'status'>,
+): 0 | 1 {
+  return hasErrors || document.status === 'error' ? 1 : 0;
 }
 
 export async function validateCommand(
@@ -738,7 +768,7 @@ export async function validateCommand(
     if (format !== 'text') {
       writeStructuredOutput(document as ValidationOutputData, format);
     }
-  });
+  }, format);
 }
 
 /**
@@ -772,15 +802,72 @@ function narrowCollectionStats(
  * process. Deriving it twice — once to print, once to hand back — is how the two
  * lanes come to disagree about what this command reported.
  */
-function buildValidationDocument(
+export function buildValidationDocument(
   issueData: ErrorData[],
   context: ValidationContext,
   registry: RegistryLookup,
   verbose: boolean
 ): ValidationOutputData {
-  return issueData.length === 0
+  const reported = withRunIntegrity(issueData, context);
+  return reported.length === 0
     ? buildSuccessOutputData(context)
-    : buildIssuesOutputData(issueData, context, registry, verbose);
+    : buildIssuesOutputData(reported, context, registry, verbose);
+}
+
+/** What did not run and what to do, for the two ways a scan comes back empty. */
+function nothingScannedMessage(collection: string | undefined): string {
+  const scope = collection === undefined ? '' : ` for --collection ${collection}`;
+  const cause = collection === undefined
+    ? ' The path names no markdown, or `resources.include`/`resources.exclude` enumerate'
+      + ' nothing — a broad exclude, a shallow or sparse checkout, or a root that resolved'
+      + ' somewhere else.'
+    : ' The collection name is usually a typo or a collection that was renamed; if it is'
+      + ' meant to be empty, drop the filter rather than leaving a step that can only pass.';
+  return `No resource was scanned${scope},`
+    + ' so this document is not a verdict: a run over zero files produces the same report'
+    + ' as a clean run, and this one cannot tell you which it was.'
+    + cause
+    + ' `vat resources scan` over the same path lists what an enumeration finds.';
+}
+
+/**
+ * The refusal for a run that scanned NO file, ahead of whatever it found.
+ *
+ * 🚨 **This shipped.** `vat resources validate --collection <typo>` reported
+ * `status: success`, `filesScanned: 0`, exit 0: the filter matched no resource,
+ * zero issues over zero files serialized as "every file is clean", and the exit
+ * code came from the library's `hasErrors`, which never sees the filter. A path
+ * naming a tree with no markdown reached the same document through
+ * {@link buildSuccessOutputData}. Nothing refused the zero denominator at either
+ * layer, and no test covered it.
+ *
+ * 🔑 Derived here — the one seam both the document builder and the `--format
+ * text` renderer read — and not in the handler, so no lane can build a clean
+ * document over `filesScanned: 0`. The registry's own `validate()` is left
+ * unchanged on purpose: it is a library, and a caller validating an
+ * intentionally empty registry is asking a legitimate question. The CLI is the
+ * gate, and a gate is what must not answer `success` for a run that checked
+ * nothing.
+ *
+ * Published as a row with no `file` — the claim is about the run, not a file —
+ * at line 1, the same coordinates every location-less library finding already
+ * takes through {@link flattenIssuesForDisplay}.
+ */
+function withRunIntegrity(issueData: ErrorData[], context: ValidationContext): ErrorData[] {
+  const refusal = nothingCheckedFinding(context.stats.totalResources, issueData, () =>
+    nothingScannedMessage(context.collection));
+  return [
+    ...refusal.map((issue): ErrorData => ({
+      file: '',
+      absPath: '',
+      line: 1,
+      column: 1,
+      code: issue.code,
+      severity: issue.severity,
+      message: issue.message,
+    })),
+    ...issueData,
+  ];
 }
 
 /**
@@ -795,7 +882,10 @@ function buildValidationDocument(
  * which is what `--verbose` restores in the structured formats.
  */
 function emitTextResult(issueData: ErrorData[], context: ValidationContext): void {
-  if (issueData.length === 0) {
+  // The same derivation the document goes through, so the human channel cannot
+  // print "All validations passed" over a run the document refused.
+  const reported = withRunIntegrity(issueData, context);
+  if (reported.length === 0) {
     printTextSuccess(context);
     return;
   }
@@ -804,7 +894,7 @@ function emitTextResult(issueData: ErrorData[], context: ValidationContext): voi
   // severity is what tells a reader which lines are fatal — the text renderer
   // prints no verdict word of its own, so it cannot contradict the `status` the
   // structured renderer reports.
-  for (const issue of issueData) {
+  for (const issue of reported) {
     writeTestFormatError(issue.file, issue.line, issue.column, issue.severity, issue.message);
   }
 }

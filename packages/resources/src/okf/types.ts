@@ -44,6 +44,20 @@ export const OKF_FINDING_CODES = [
   'OKF_FRONTMATTER_MISSING',
   /** §11.1 — a frontmatter block whose YAML does not parse. */
   'OKF_FRONTMATTER_UNPARSEABLE',
+  /**
+   * §4.1, §11.1 — a frontmatter block whose YAML parses to something that is not
+   * a mapping: a sequence, a bare scalar, or `null`.
+   *
+   * 🪤 Its own code because it used to have none, and the absence was SILENT.
+   * `parseFrontmatterSource` returns a bare `{}` for all three shapes — no
+   * `frontmatter`, no `frontmatterError` — so such a document arrived at the
+   * judges looking exactly like one carrying no keys. `indexFindings` returned no
+   * drafts at all and VAT certified the bundle clean; `conceptFindings` reported
+   * `OKF_TYPE_MISSING`, which sends the author to add a `type` key to a block
+   * that cannot hold one. A document VAT could not understand must produce a
+   * finding with a path on it, not a skip and not a misdiagnosis.
+   */
+  'OKF_FRONTMATTER_NOT_A_MAPPING',
   /** §11.2 — parseable frontmatter carrying no `type` key. */
   'OKF_TYPE_MISSING',
   /** §11.2 — a `type` that is present but not a non-empty string. */
@@ -93,8 +107,9 @@ export const OKF_FINDING_CODES = [
    * this lane that is NOT about the bundle's content, because there was no
    * content to be about. It is reported as a finding rather than thrown so that
    * one mistyped root cannot discard every other bundle's real findings, and it
-   * is the one code the per-bundle severity dial does not reach: see
-   * {@link OkfSeverity}.
+   * is one of the three "could not look" codes the per-bundle severity dial does
+   * not reach (with `OKF_SUBDIRECTORY_UNREADABLE` and `OKF_DOCUMENT_UNREADABLE`):
+   * see {@link OkfSeverity}.
    */
   'OKF_BUNDLE_ROOT_UNREADABLE',
   /**

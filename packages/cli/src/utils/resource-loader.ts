@@ -166,9 +166,10 @@ export const RESOURCES_CRAWL_WALK = 'walk';
  *
  * ⚠️⚠️ **ONE DISAGREEMENT SURVIVES, AND IT DROPS FINDINGS: SYMLINKS.** The
  * `filesystem` extent crawls with `followSymlinks: false` and records no link's
- * own path, and `GitCrawlSource` skips mode `120000` deliberately to match it —
- * so BOTH projection extents omit a committed symlink that the incumbent walk
- * includes. For an out-of-tree target those bytes have no other path into the
+ * own path, and `GitCrawlSource` drops one at a single seam to match it (git's
+ * mode `120000` for the paths the tree snapshot described, an `lstat` for the
+ * collapsed `ls-files --others` entries that carry no mode) — so BOTH projection
+ * extents omit a symlink, committed or not, that the incumbent walk includes. For an out-of-tree target those bytes have no other path into the
  * population, which means **a broken symlink the walk reports as
  * `LINK_BROKEN_FILE` is not reported on this lane.** That is a real loss, it is
  * known, and it is the cost this default was accepted at; closing it is its own

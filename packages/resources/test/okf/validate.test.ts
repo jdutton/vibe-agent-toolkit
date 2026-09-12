@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest';
 import { BundleDirectoryIndex, linkFindings } from '../../src/okf/links.js';
 import { validateOkfBundle } from '../../src/okf/validate.js';
 import type { ResourceLink } from '../../src/types.js';
+import { REFUSAL_ERRNOS, withReaddirRefused } from '../helpers/refused-listing.js';
 
 import {
   NFC_CAFE_DIR,
@@ -59,9 +60,13 @@ async function reportFor(
  * planted tree recursively, and `rm -r` cannot descend into a 0o000 directory —
  * a test that skipped it would leak the tree and fail the NEXT run's teardown.
  */
-async function withUnreadable(path: string, body: () => Promise<void>): Promise<void> {
+async function withUnreadable(
+  path: string,
+  body: () => Promise<void>,
+  mode = 0o000,
+): Promise<void> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path inside a bundle this test just planted under mkdtemp
-  chmodSync(path, 0o000);
+  chmodSync(path, mode);
   try {
     await body();
   } finally {
@@ -69,6 +74,19 @@ async function withUnreadable(path: string, body: () => Promise<void>): Promise<
     chmodSync(path, 0o755);
   }
 }
+
+/**
+ * Owner `--x`: traversable, so everything below it still OPENS, and not
+ * listable, so `readdir` is refused.
+ *
+ * ⛔ Not interchangeable with {@link withUnreadable}'s default `0o000`. A `0o000`
+ * directory is genuinely closed and a link through it genuinely breaks; `0o111`
+ * is the case where the link works perfectly and VAT merely cannot see that it
+ * does — which is the only mode under which "refused" and "absent" have
+ * different right answers.
+ */
+const MODE_TRAVERSE_ONLY = 0o111;
+
 
 /** Whether this host enforces POSIX permission bits at all. */
 const PERMISSIONS_ENFORCED = process.platform !== 'win32';
@@ -820,6 +838,140 @@ describe('validateOkfBundle', () => {
         expect(report.findings[0]?.message).toContain('EACCES');
       });
     });
+  });
+
+  describe('a directory on a LINK target path that refuses to be listed', () => {
+    // 🪤 `judgeTarget` switched on `verdict.match` and threw `verdict.because`
+    // away. `PathSpelling` draws the distinction deliberately — a `readdir` null
+    // means BOTH "there is no such directory" and "I was refused", and only the
+    // first is absence — and this lane collapsed it back. A POSIX `--x`
+    // directory is traversable, so every file below it opens exactly as
+    // written; VAT reported the link as a broken cross-link and told the author
+    // to write a document that is already there.
+    //
+    // The condition is a real one and this lane already has a word for it:
+    // `OKF_SUBDIRECTORY_UNREADABLE`, which discovery emits for the same refusal
+    // met from the other direction. Like discovery's, it says conformance was
+    // NOT ASSESSED — so the per-bundle dial does not reach it.
+
+    const LINKED = { 'a.md': conceptDoc(REFERENCE_TYPE), 'sub/target.md': conceptDoc(TABLE_TYPE) };
+    const HREF = './sub/target.md';
+
+    it.each(REFUSAL_ERRNOS)(
+      'reports %s as a listing that was refused, not as a broken link',
+      async (code) => {
+        const root = plantOkfBundle(LINKED);
+
+        const { drafts } = await withReaddirRefused(
+          safePath.join(root, 'sub'),
+          code,
+          async () => await judgeHrefs(root, [HREF]),
+        );
+
+        expect(codesOf(drafts)).toEqual(['OKF_SUBDIRECTORY_UNREADABLE']);
+        expect(drafts[0]?.document).toBe('a.md');
+        expect(drafts[0]?.link).toBe(HREF);
+        // The bundle-relative target, so the author knows which link, and no
+        // absolute path — the same no-leak property the rest of the lane holds.
+        expect(drafts[0]?.message).toContain('sub/target.md');
+        expect(drafts[0]?.message).not.toContain(root);
+        // 🪤 And WHICH directory refused, with WHAT errno. "A directory on that
+        // path" is not a remedy an author can act on; `sub` and `EACCES` are.
+        // Bundle-relative, for the same no-leak reason as the line above.
+        expect(drafts[0]?.message).toContain('directory "sub"');
+        expect(drafts[0]?.message).toContain(code);
+      },
+    );
+
+    it('tells the author to re-run only when the refusal was a transient shortage', async () => {
+      // The remedies genuinely differ: a mode bit inside the bundle is the
+      // publisher's to fix, while descriptor exhaustion is a moment a second
+      // run walks past. The message this replaced offered both to everyone.
+      const root = plantOkfBundle(LINKED);
+      const refused = safePath.join(root, 'sub');
+      const judgeRefusedWith = async (code: string) =>
+        await withReaddirRefused(refused, code, async () => await judgeHrefs(root, [HREF]));
+
+      const transient = await judgeRefusedWith('ENFILE');
+      const stable = await judgeRefusedWith('EACCES');
+
+      expect(transient.drafts[0]?.message).toContain('re-run');
+      expect(stable.drafts[0]?.message).not.toContain('re-run');
+    });
+
+    it('does not call EAGAIN descriptor exhaustion', async () => {
+      // The same second-copy-of-a-fact as the link lane: `EAGAIN` is in the
+      // transient set and is not a descriptor shortage. Both lanes print the
+      // clause `fs-utils` owns, so they cannot disagree with it or each other.
+      const root = plantOkfBundle(LINKED);
+
+      const { drafts } = await withReaddirRefused(
+        safePath.join(root, 'sub'),
+        'EAGAIN',
+        async () => await judgeHrefs(root, [HREF]),
+      );
+
+      expect(drafts[0]?.message).toContain('re-run');
+      expect(drafts[0]?.message).toContain('EAGAIN');
+      expect(drafts[0]?.message).not.toContain('descriptor exhaustion');
+    });
+
+    it('still calls a target under a directory that is genuinely absent broken', async () => {
+      // The negative control for the DISTINCTION, not for the finding. A fix
+      // that reported every absence as a refusal would satisfy the four rows
+      // above and destroy the code that matters most in this lane.
+      const root = plantOkfBundle(LINKED);
+
+      const { drafts } = await judgeHrefs(root, ['./nowhere/target.md']);
+
+      expect(codesOf(drafts)).toEqual(['OKF_BROKEN_CROSS_LINK']);
+    });
+
+    it('says nothing when the listing is not refused', async () => {
+      // The other negative control: the same fixture, unmocked.
+      const root = plantOkfBundle(LINKED);
+
+      const { drafts } = await judgeHrefs(root, [HREF]);
+
+      expect(drafts).toEqual([]);
+    });
+
+    it.skipIf(!PERMISSIONS_ENFORCED)(
+      'stays at error even when the bundle dial is lowered',
+      async () => {
+        // A conformance dial cannot downgrade "I could not look" — the same
+        // ruling the unreadable root and the unreadable subdirectory already
+        // carry. Both findings here are that: discovery met the refusal walking
+        // the tree, and the link judge met it walking a target's path.
+        const root = plantOkfBundle({
+          'a.md': conceptDoc(REFERENCE_TYPE, `See [t](${HREF}).`),
+          'sub/target.md': conceptDoc(TABLE_TYPE),
+        });
+
+        await withUnreadable(
+          safePath.join(root, 'sub'),
+          async () => {
+            const report = await validateOkfBundle({
+              bundle: 'docs',
+              root,
+              rootSpecifier: ROOT_SPECIFIER,
+              severity: 'warning',
+            });
+
+            expect(codesOf(report.findings)).toEqual([
+              'OKF_SUBDIRECTORY_UNREADABLE',
+              'OKF_SUBDIRECTORY_UNREADABLE',
+            ]);
+            expect(report.findings.map((finding) => finding.severity)).toEqual([
+              'error',
+              'error',
+            ]);
+            expect(report.hasErrors).toBe(true);
+          },
+          MODE_TRAVERSE_ONLY,
+        );
+      },
+    );
   });
 
   describe('the okf_version cross-check (§8, §12)', () => {

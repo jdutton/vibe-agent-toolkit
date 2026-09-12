@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
+import { escapeRegExpLiteral } from './regexp-escape.js';
 import { IssueCodeSchema, type IssueCode } from './validation-codes.js';
-import { isCustomCheckCode, type CustomCheckCode } from './validation-issue.js';
+import { CUSTOM_CHECK_CODE_PATTERN_SOURCE, type CustomCheckCode } from './validation-issue.js';
 
 export const SeverityLevelSchema = z.enum(['error', 'warning', 'info', 'ignore']);
 export type SeverityLevel = z.infer<typeof SeverityLevelSchema>;
@@ -88,7 +89,7 @@ export interface ValidationConfig {
  * The key space of `validation.severity`: every shipped registry code, **plus**
  * the `CUSTOM:<name>` namespace `resources.checks` mints.
  *
- * ## Why this is a union and not the enum, and not `z.string()` either
+ * ## Why this is not the enum, and not a bare `z.string()` either
  *
  * The enum alone was a shipped defect of the worst kind — following our own
  * documentation bricked every command. `vat resources check --help`, the
@@ -100,12 +101,33 @@ export interface ValidationConfig {
  * three docs told them was `exit 2` and a dump of the ~150-entry registry enum,
  * on `vat resources scan` as readily as on `check`.
  *
- * `z.string()` would fix that and give back a worse thing: the enum branch is
- * why a misspelled registry code (`LNIK_OUTSIDE_PROJECT`) is refused instead of
- * silently overriding nothing, and it is what `zod-to-json-schema` emits as an
- * `enum` for editor completion. So the accept set widens by exactly one closed
- * namespace, and {@link isCustomCheckCode} — the acceptor that lives beside the
- * minter — is the only thing that decides membership in it.
+ * `z.string()` would fix that and give back a worse thing: enumerating the
+ * registry codes is why a misspelled one (`LNIK_OUTSIDE_PROJECT`) is refused
+ * instead of silently overriding nothing. So the accept set widens by exactly
+ * one closed namespace — {@link CUSTOM_CHECK_CODE_PATTERN_SOURCE}, the rule that
+ * lives beside the minter, is the only thing that decides membership in it.
+ *
+ * ## Why one PATTERN and not a `z.union([enum, custom])`
+ *
+ * 🪤 **A union key emits nothing.** This was a union for one release, and
+ * `zod-to-json-schema`'s record parser has cases for a `ZodEnum` key and for a
+ * `ZodString` key carrying checks — and none for a `ZodUnion`. So the shipped
+ * `schemas/validation-config.json` lost its `severity` key constraint entirely
+ * while `allow`, in the same file, kept its full enum: an adopter's editor
+ * accepted `LNIK_OUTSIDE_PROJECT: ignore`, offered no completion, and
+ * `loadConfig` then refused it. The runtime was never wrong, which is exactly
+ * why nothing caught it — see `test/emitted-json-schemas.test.ts`, which now
+ * asserts on the generated artifact.
+ *
+ * One `z.string().regex(...)` over an alternation of the registry codes and the
+ * `CUSTOM:` namespace is a shape that parser CAN emit, so both contracts say the
+ * same thing. The alternation is composed from `IssueCodeSchema.options`, so a
+ * new code joins it with no human action.
+ *
+ * The cost, stated plainly: `propertyNames` is now a `pattern` rather than an
+ * `enum`, so an editor can flag a bad key but cannot complete a good one. That
+ * is strictly better than today's nothing, and completion comes back the moment
+ * the emitter learns union keys.
  *
  * ⚠️ `ValidationConfigSchema` is mounted at `resources.validation` **and** at
  * `skills.config.<name>.validation`, so a `CUSTOM:` key parses under the skills
@@ -120,7 +142,7 @@ export interface ValidationConfig {
  * Derived from the SHAPE rather than listed, so it cannot fall behind the
  * registry or behind `NonOverridableCode`. It exists only to tell two refusals
  * apart in the MESSAGE; membership decisions still belong to `IssueCodeSchema`
- * and {@link isCustomCheckCode}.
+ * and {@link CUSTOM_CHECK_CODE_PATTERN_SOURCE}.
  */
 const REGISTRY_SHAPED_KEY = /^[A-Z][\dA-Z_]*$/;
 
@@ -139,7 +161,7 @@ const REGISTRY_SHAPED_KEY = /^[A-Z][\dA-Z_]*$/;
  *
  * ⛔ **It no longer claims the name must be DECLARED.** The old wording ended
  * "naming a check declared under resources.checks" and nothing enforced it —
- * {@link isCustomCheckCode} tests the prefix and nothing else, so
+ * `isCustomCheckCode` tests the prefix and nothing else, so
  * `CUSTOM:a-check-that-does-not-exist` parsed, overrode nothing, and said
  * nothing. Enforcing it here is impossible (this schema cannot see
  * `resources.checks`) and enforcing it at the parent would be a new breaking
@@ -164,13 +186,34 @@ function severityKeyRefusal(code: string): string {
     + ' under resources.checks';
 }
 
-export const SeverityOverrideCodeSchema = z.union([
-  IssueCodeSchema,
-  z.string().superRefine((code, ctx) => {
-    if (isCustomCheckCode(code)) return;
-    ctx.addIssue({ code: z.ZodIssueCode.custom, message: severityKeyRefusal(code) });
+/**
+ * The accept set, as one pattern: every registry code, or a `CUSTOM:` name.
+ *
+ * Derived on both halves — the codes from the registry enum, the namespace from
+ * its definition site — so neither half can fall behind what it describes.
+ */
+// eslint-disable-next-line security/detect-non-literal-regexp -- composed from the registry's own code names and a module constant; no input reaches it
+const SEVERITY_KEY_PATTERN = new RegExp(
+  `^(?:${[
+    ...IssueCodeSchema.options.map((code) => escapeRegExpLiteral(code)),
+    CUSTOM_CHECK_CODE_PATTERN_SOURCE,
+  ].join('|')})$`,
+);
+
+/**
+ * 🪤 The tailored refusal is carried by an `errorMap` rather than by the
+ * `.regex()` check, and that placement is load-bearing. A message on the check
+ * is one static string, so the two refusals {@link severityKeyRefusal} exists to
+ * tell apart would collapse back into one — the thing that "sent half the
+ * readers to the wrong place". The map sees `ctx.data`, so it can still read the
+ * key and answer about THAT key. A non-string key cannot reach a record's key
+ * schema, so the type-error fallback is defensive only.
+ */
+export const SeverityOverrideCodeSchema = z.string({
+  errorMap: (_issue, ctx) => ({
+    message: typeof ctx.data === 'string' ? severityKeyRefusal(ctx.data) : ctx.defaultError,
   }),
-]);
+}).regex(SEVERITY_KEY_PATTERN);
 
 // The `unknown` INPUT parameter is deliberate, not a leftover from satisfying the
 // compiler. This schema's job is to validate a `validation:` block parsed out of a

@@ -102,13 +102,16 @@ export function splitHrefAnchor(href: string): [string, string | undefined] {
  *   reference (starts with `/`) but no `projectRoot` was supplied.
  * - `absolute_escapes_root` — the absolute-path reference resolved to a
  *   location outside `projectRoot` (e.g., via `..` traversal or a symlink
- *   pointing outside the project).
+ *   pointing outside the project). Carries `resolvedPath` — the candidate
+ *   this function already computed — so a consumer that reports WHERE the
+ *   reference went (the edge lens's `outside-root`) can say so without
+ *   resolving the href a second time against a rule it does not own.
  */
 export type ResolveLocalHrefResult =
   | { kind: 'anchor_only' }
   | { kind: 'resolved'; resolvedPath: string; anchor: string | undefined }
   | { kind: 'absolute_no_root'; href: string; anchor: string | undefined }
-  | { kind: 'absolute_escapes_root'; href: string; anchor: string | undefined };
+  | { kind: 'absolute_escapes_root'; href: string; resolvedPath: string; anchor: string | undefined };
 
 /**
  * Resolve a markdown link href to a filesystem path or a typed failure.
@@ -162,7 +165,7 @@ export function resolveLocalHref(
     }
     const candidate = safePath.resolve(projectRoot, decodedHref.slice(1));
     if (!isWithinProject(candidate, projectRoot)) {
-      return { kind: 'absolute_escapes_root', href: fileHref, anchor };
+      return { kind: 'absolute_escapes_root', href: fileHref, resolvedPath: candidate, anchor };
     }
     return { kind: 'resolved', resolvedPath: candidate, anchor };
   }

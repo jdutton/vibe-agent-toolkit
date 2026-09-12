@@ -59,8 +59,9 @@ export const EdgeKindSchema = z.string().min(1)
  * legitimately invent a kind or a tier. This one is not a lens's to extend: it
  * says which namespace `dstKey` is drawn from, and a fourth namespace changes
  * what a `GROUP BY (dstKind, dstKey)` means for every existing row. That is a
- * design change, and `.strict()` on a closed enum is what makes it arrive as a
- * failed parse rather than as a silently mis-grouped result.
+ * design change, and a closed `z.enum` is what makes it arrive as a failed
+ * parse rather than as a silently mis-grouped result — the enum itself refuses
+ * a fourth value; `.strict()` belongs to the row object, not to this.
  *
  * ## 🚨 This is a *class*, not an existence verdict
  *

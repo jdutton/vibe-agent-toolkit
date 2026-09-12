@@ -120,11 +120,22 @@ export interface CanonicalPathContext {
  *
  * For the shipped extents the question mostly does not arise, because no
  * enumerator offers a link's own path except the git one: `FilesystemCrawlSource`
- * walks with `followSymlinks: false` and `GitCrawlSource` drops the mode-`120000`
- * entry (`crawl-source.ts`, *"A SYMLINK IS NOT A MEMBER HERE"*). Pinned
- * per-enumerator, each source injected rather than selected by `crawlSourceFor`
- * and with a regular file planted alongside as the positive control, by
+ * walks with `followSymlinks: false`, and `GitCrawlSource` drops one at a single
+ * seam that serves both the half git described and the half it walked
+ * (`crawl-source.ts`, *"A SYMLINK IS NOT A MEMBER"*). Pinned per-enumerator, each
+ * source injected rather than selected by `crawlSourceFor` and with a regular
+ * file planted alongside as the positive control, by
  * `packages/resources/test/projection-filesystem-extent-symlink.test.ts`.
+ *
+ * 🪤 **That sentence was false for an UNTRACKED link until the seam was made
+ * one.** The mode-`120000` drop lived in the tree-snapshot half alone, so a
+ * committed link was excluded while `ls-files --others` re-offered an untracked
+ * one — and this function then minted it its own id over its TARGET's
+ * `contentKey`, which is one set of bytes charged twice by `vat claude budget`.
+ * Every fixture that could have caught it was committed, i.e. tracked.
+ * `packages/resources/test/projection-untracked-symlink-extent.test.ts` plants
+ * the untracked case in both lanes and asserts that no `contentKey` carries two
+ * identities.
  *
  * ⚠️ **Open, and deliberately not settled here:** whether this function *should*
  * realpath a symlink instead of taking git's spelling. Answering it changes the

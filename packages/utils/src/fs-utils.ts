@@ -100,6 +100,53 @@ function listingFailure(error: unknown): DirectoryListing {
   return { outcome: 'unreadable', code: typeof code === 'string' ? code : 'UNKNOWN' };
 }
 
+/**
+ * Refusal errnos that a *re-ask* can legitimately answer differently.
+ *
+ * ⚠️ **This set decides what may be MEMOIZED, which makes it a correctness
+ * boundary rather than a taxonomy.** `EACCES` (a mode bit) and `ELOOP` (a
+ * committed symlink cycle) are facts about the tree: they hold for the whole
+ * run, re-asking buys the same refusal, and caching them is exactly what
+ * {@link FsLookupCache} is for. Descriptor exhaustion is not a fact about the
+ * tree at all — it is a fact about this process at one instant — and a memo
+ * that keeps one un-verifies every path under that directory for the rest of
+ * the run, producing a burst of findings that a re-run does not reproduce.
+ *
+ * **Deliberately short, and everything unlisted is treated as stable.** The two
+ * mistakes are not symmetric: memoizing a transient refusal costs a burst of
+ * wrong answers *within one run*, while re-asking a stable one costs an
+ * unbounded number of syscalls on a `--x` directory that will refuse every one
+ * of them — and on a dead network mount, each of those blocks. `EAGAIN` is
+ * included because it is literally "try again"; `ETIMEDOUT`/`ESTALE`/`EBUSY`
+ * are not, because a re-ask against failing hardware or a hung mount is the
+ * storm this set exists to avoid.
+ */
+const TRANSIENT_LISTING_ERRNOS: ReadonlySet<string> = new Set(['EMFILE', 'ENFILE', 'EAGAIN']);
+
+/**
+ * The clause a finding prints about a refusal {@link TRANSIENT_LISTING_ERRNOS}
+ * calls transient — owned here, beside the list, so it describes every member.
+ *
+ * 🪤 Both consumers of `AbsenceCause.transient` used to write their own: "`X`
+ * is descriptor exhaustion" — true of `EMFILE`/`ENFILE` and false of `EAGAIN`,
+ * which is a retryable shortage of some other resource. Two lanes each carrying
+ * the wording for a fact this module was made the single owner of is exactly
+ * how the lanes come to disagree with it; the errno list and the sentence about
+ * it move together only if they live together.
+ *
+ * @param code - The errno the listing was refused with
+ * @returns A clause naming the errno and what kind of condition it is, with no
+ *   trailing punctuation so a caller can continue the sentence
+ */
+export function transientRefusalClause(code: string): string {
+  return `${code} is a transient shortage (a descriptor or other resource this process ran out of for a moment), not a permission`;
+}
+
+/** Whether this listing failed in a way a later ask could get past. */
+function isTransientRefusal(listing: DirectoryListing): boolean {
+  return listing.outcome === 'unreadable' && TRANSIENT_LISTING_ERRNOS.has(listing.code);
+}
+
 /** How many probes a {@link FsLookupCache} answered, and how many cost syscalls. */
 export interface PathProbeStats {
   /** Probe calls received. */
@@ -348,7 +395,26 @@ export class FsLookupCache {
 
   /**
    * What `dirPath` holds, or which of the two ways the question went unanswered.
-   * The failed answers are cached too — re-asking is the same failed syscall.
+   *
+   * A *stable* failure is cached like a success: re-asking a directory whose
+   * mode bits refuse us, or whose path is a symlink cycle, is the same failed
+   * syscall. A **transient** one is not — see {@link TRANSIENT_LISTING_ERRNOS}.
+   *
+   * ⚠️ **The transient entry is dropped only once the promise has SETTLED, and
+   * that timing is the whole design.** Deleting the row up front, or refusing to
+   * store it, would make every concurrent caller start its own `readdir` —
+   * turning the descriptor shortage `EMFILE` reports into a descriptor storm,
+   * i.e. answering the failure with more of its cause. Storing the in-flight
+   * promise keeps the collapse-N-callers-to-one-syscall property intact through
+   * the failure; evicting after it settles is what stops the *next* wave from
+   * inheriting a verdict about a moment that has passed.
+   *
+   * The alternative considered and rejected was a bounded retry inside this
+   * method. It re-issues the syscall *while the shortage is still in progress*
+   * (which is the storm again, only self-inflicted), it needs a backoff timer to
+   * be worth anything, and it hides latency inside a call every caller reads as
+   * a memo lookup. Letting the next ask pay one syscall is the same cost the
+   * cache already bounds: one per directory, per wave.
    *
    * @param dirPath - Directory to list
    * @returns The entry names, or why there are none to hand back
@@ -363,7 +429,32 @@ export class FsLookupCache {
       .then((names): DirectoryListing => ({ outcome: 'listed', names }))
       .catch(listingFailure);
     this.#listings.set(dirPath, pending);
-    return pending;
+    return this.#forgetIfTransient(dirPath, pending);
+  }
+
+  /**
+   * Hand back `pending`'s answer, dropping the memo row first when the answer is
+   * a *transient* refusal.
+   *
+   * The row is stored by the caller before this is reached, so the wave that
+   * provoked the shortage shares that one syscall; this only decides whether a
+   * LATER wave inherits its verdict. Identity-guarded because a later ask may
+   * already have installed a fresh row, and deleting that one would discard a
+   * listing somebody is awaiting.
+   *
+   * @param dirPath - Directory the row is filed under
+   * @param pending - The row itself, already stored
+   * @returns The same listing `pending` settles to
+   */
+  async #forgetIfTransient(
+    dirPath: string,
+    pending: Promise<DirectoryListing>
+  ): Promise<DirectoryListing> {
+    const listing = await pending;
+    if (isTransientRefusal(listing) && this.#listings.get(dirPath) === pending) {
+      this.#listings.delete(dirPath);
+    }
+    return listing;
   }
 }
 
@@ -494,14 +585,67 @@ export type FilenameMatch =
  */
 export type AbsenceCause =
   /** The directory was listed and holds nothing matching, under any rule. */
-  | 'no_such_entry'
+  | { readonly kind: 'no_such_entry' }
   /**
    * A directory on the path could not be listed, so the question was never
    * asked. ⚠️ **This is not evidence of absence** — a `--x` directory is
    * traversable, so the target may well open. A caller reporting it as a
    * missing file is asserting something it has not learned.
+   *
+   * 🔑 **It carries WHICH directory and WHICH errno because the alternative was
+   * a remedy nobody can aim.** Collapsing every refusal to the bare word left
+   * each consumer able to say only "a directory on that path refused" — useless
+   * to a reader staring at a five-segment path, and identical whether the cause
+   * was a mode bit they can fix or a descriptor shortage they should just
+   * re-run past.
    */
-  | 'directory_unreadable';
+  | {
+      readonly kind: 'directory_unreadable';
+      /** The errno `readdir` refused with: `EACCES`, `EMFILE`, `ENFILE`, `ELOOP`, … */
+      readonly code: string;
+      /**
+       * The directory that refused — **absolute**, forward-slashed.
+       *
+       * 🔒 **Sanitize before quoting it to a human.** An absolute path in a
+       * finding is the developer's `$HOME` in every CI log, and both consumers
+       * of this field re-express it against a root they own
+       * (`issueLocation(dir, projectRoot)` in the link lane,
+       * `safePath.relative(bundleRoot, dir)` in the OKF lane) before it reaches
+       * a message. It is absolute *here* because those two roots differ and the
+       * walk root this was found under is neither of them.
+       */
+      readonly directory: string;
+      /**
+       * Whether re-running could get a different answer — see
+       * {@link TRANSIENT_LISTING_ERRNOS}.
+       *
+       * Derived once, here, rather than by each consumer: two lanes write a
+       * "re-run before investigating" remedy off this fact, and a second errno
+       * list is exactly how those two come to disagree about it.
+       */
+      readonly transient: boolean;
+    };
+
+/**
+ * The cause for a listing that produced no index.
+ *
+ * @param listing - A `readdir` outcome that is not `listed`
+ * @param directory - The directory that was asked about
+ * @returns Which absence this is, and — when it is a refusal — its detail
+ */
+function absenceCauseFor(
+  listing: Exclude<DirectoryListing, { outcome: 'listed' }>,
+  directory: string
+): AbsenceCause {
+  if (listing.outcome === 'absent') return { kind: 'no_such_entry' };
+
+  return {
+    kind: 'directory_unreadable',
+    code: listing.code,
+    directory: toForwardSlash(directory),
+    transient: TRANSIENT_LISTING_ERRNOS.has(listing.code),
+  };
+}
 
 /** What one directory entry name matched, and how the directory spells it. */
 export type ComponentMatch =
@@ -549,6 +693,15 @@ type IndexedDirectory =
   | { readonly index: DirectoryIndex }
   | { readonly index: null; readonly because: AbsenceCause };
 
+/** Whether this build failed in a way a later build could get past. */
+function isTransientlyUnreadable(indexed: IndexedDirectory): boolean {
+  return (
+    indexed.index === null &&
+    indexed.because.kind === 'directory_unreadable' &&
+    indexed.because.transient
+  );
+}
+
 /** Record an entry under whichever of the three spellings it is first for. */
 function indexEntry(index: DirectoryIndex, entry: string): void {
   if (!index.exact.has(entry)) index.exact.set(entry, entry);
@@ -571,7 +724,7 @@ function lookupIn(index: DirectoryIndex, name: string): ComponentMatch {
 
   const insensitive = index.folded.get(folded.toLowerCase());
   return insensitive === undefined
-    ? { match: 'absent', because: 'no_such_entry' }
+    ? { match: 'absent', because: { kind: 'no_such_entry' } }
     : { match: 'case_mismatch', actualName: insensitive };
 }
 
@@ -743,6 +896,13 @@ export class DirectorySpellingIndex {
    * The promise — not the resolved value — is memoized, so two components
    * resolving into the same directory concurrently share one listing and one
    * build rather than racing to do both twice.
+   *
+   * ⚠️ **A transient refusal is dropped here as well as in the listing memo
+   * underneath, and both evictions are load-bearing.** This map caches the
+   * built INDEX, so evicting only `FsLookupCache`'s listing would leave the
+   * moment-in-time refusal pinned at precisely the layer every consumer reads —
+   * a fix that is real and invisible. Same settle-then-evict timing, and the
+   * same identity guard, for the same reason: see {@link FsLookupCache.readdir}.
    */
   async #indexFor(directory: string): Promise<IndexedDirectory> {
     const existing = this.#indexes.get(directory);
@@ -750,7 +910,11 @@ export class DirectorySpellingIndex {
 
     const building = this.#build(directory);
     this.#indexes.set(directory, building);
-    return await building;
+    const indexed = await building;
+    if (isTransientlyUnreadable(indexed) && this.#indexes.get(directory) === building) {
+      this.#indexes.delete(directory);
+    }
+    return indexed;
   }
 
   /** List one directory and index every entry it holds. */
@@ -762,10 +926,7 @@ export class DirectorySpellingIndex {
       // and a directory that refused to be listed is a question nobody got to
       // ask. Mapping both to `no_such_entry` here is what used to report a
       // link that opens as a missing file.
-      return {
-        index: null,
-        because: listing.outcome === 'absent' ? 'no_such_entry' : 'directory_unreadable',
-      };
+      return { index: null, because: absenceCauseFor(listing, directory) };
     }
 
     const index: DirectoryIndex = { exact: new Map(), nfc: new Map(), folded: new Map() };

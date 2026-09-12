@@ -30,7 +30,8 @@ Adopter YAML config
 | `select-provider.ts` | Match a URL against configured providers (host + `excludeHost` rules) |
 | `rewrite.ts` | URL rewrite rules (regex `when` + `to` with `${var}` substitution) |
 | `resolve-token.ts` | Token source resolution (`env:` + `command:` sources, GIT_* scrubbing, `VAT_LINKAUTH_ALLOW_COMMAND` opt-out) |
-| `build-headers.ts` | Build request headers, substitute `${token}` into templates |
+| `build-headers.ts` | Build request headers, substitute `${token}` into templates; `sensitiveHeaderValues` + `redactSecretsInText` — the §8 token-redaction pair |
+| `env-flag.ts` | `parseEnvBoolean` — env values read as booleans, `undefined` when unrecognized (the caller picks the safe side) |
 | `template.ts` | Generic `${…}` template substitution with allowlist enforcement |
 | `transforms.ts` | Transform functions callable inside templates (e.g. `base64url`) — the safety allowlist for template calls |
 
@@ -48,10 +49,20 @@ Adopter YAML config
 ### Content cache
 
 `ExternalLinkCache` (packages/resources/src/external-link-cache.ts) stores auth results
-under `<cacheDir>/auth-${sanitizedOsUser}/external-links.json`. Cache entries carry
-`version: 1`; a version mismatch triggers a re-fetch. Do not cache derived LINK_AUTH_*
+under `<cacheDir>/auth-${sanitizedOsUser}/external-links.json`. An entry is three scalars —
+`statusCode`, `statusMessage`, `timestamp` — and carries **no version field**; whether a
+stored entry is readable is decided by the `.strict()` `ExternalLinkCacheEntrySchema` at the
+load boundary, not by a number (see *Code style* below). Do not cache derived LINK_AUTH_*
 codes — only the raw `statusCode`; re-classify on every cache hit under the current
 provider's `check` block.
+
+A **transient** refusal is not cached at all: `isTransientRefusal` in
+`external-link-validator.ts` keeps 429s, 403s and 503s carrying a rate-limit or `Retry-After`
+signal, and no-response results (`statusCode: 0` — DNS, connect, timeout) out of a store whose
+TTL is 24 hours. Both lanes — anonymous and authenticated — read that ONE predicate, on the
+write side and on the read side, so a row an older build already wrote for a transient status is
+a miss rather than an answer. A durable refusal — a plain 403, a 401, a 404 — is cached as
+before.
 
 ## Adding a new built-in provider macro
 
@@ -131,15 +142,89 @@ tool that internally shells out to git (most notably `gh auth token`). Without s
 If you add a new default command runner or wrap `defaultRunCommand`, preserve the
 scrubbing.
 
-### VAT_LINKAUTH_ALLOW_COMMAND=0
+### VAT_LINKAUTH_ALLOW_COMMAND
 
-Set this env var (or pass `allowCommand: false` in `TokenResolutionDeps`) to skip all
-`{ command: ... }` sources at runtime. Only `{ env: ... }` sources are tried. Useful in
-security-sensitive environments or when the CI policy prohibits arbitrary child-process
-execution from the validator.
+Set this env var to a false value (or pass `allowCommand: false` in `TokenResolutionDeps`)
+to skip all `{ command: ... }` sources at runtime. Only `{ env: ... }` sources are tried.
+Useful in security-sensitive environments or when the CI policy prohibits arbitrary
+child-process execution from the validator.
 
-This is an escape hatch, not a security boundary. Operators who need a hard block should
-not configure `command:` sources in the first place.
+The value is parsed by `parseEnvBoolean` (`link-auth/env-flag.ts`), case-insensitively and
+with surrounding whitespace trimmed:
+
+| Value | Effect |
+|---|---|
+| unset | commands allowed (shipped default) |
+| `1` `true` `yes` `y` `on` | commands allowed |
+| `0` `false` `no` `n` `off` | commands **denied** |
+| anything else, including `""` | commands **denied** — see below |
+
+🚨 **A value we cannot parse denies.** This used to be a comparison against the literal
+string `'0'`, under which `VAT_LINKAUTH_ALLOW_COMMAND=false` *still spawned subprocesses* —
+measured. Every spelling a human reaches for failed open. The only reason to touch this
+variable is to turn command execution off, so an unintelligible value is read as the
+operator saying no; the cost of getting that wrong is a `LINK_AUTH_UNVERIFIED` finding,
+which is visible, rather than a subprocess they thought they had forbidden, which is not.
+
+An explicit `allowCommand` in deps always wins over the env var, in both directions.
+
+This is still an escape hatch, not a security boundary. Operators who need a hard block
+should not configure `command:` sources in the first place.
+
+### Nothing in the engine may throw at the validator
+
+`ExternalLinkValidator.validateLink` calls `resolveAuthenticatedUrl` **outside any
+try/catch**. Anything that escapes the engine therefore ends `vat resources validate` and
+`vat audit` over the whole tree, for every adopter with `resources.linkAuth` configured, on
+account of one link.
+
+`resolveAuthenticatedUrl` owns that boundary: a provider whose config throws (uncompilable
+`when`, malformed template, unknown transform, `vars`/capture collision) comes back as
+`{ outcome: 'unverified', reason }`. When adding an engine step, put it inside that
+try/catch, and keep the internal error types throwing — the boundary translates them, the
+producers should stay precise.
+
+Two rules follow for anything under `link-auth/`:
+
+- **Adopter DATA must never reach a `throw`.** Only the adopter's *config* may be judged
+  malformed. The worked example is `template.ts`: its unterminated-`${` guard asks the
+  question of the template, never of the rendered output, because a URL path segment like
+  `skeleton/${{values.name}}/README.md` is ordinary data and used to crash the run.
+- **Substituted values are inert.** They are never re-scanned, so a value may contain `${`,
+  `${{…}}`, or something that looks like a transform call, and it stays literal.
+
+## Token redaction (§8 "tokens never leak")
+
+The mechanism is `sensitiveHeaderValues(headers)` + `redactSecretsInText(text, secrets)` in
+`link-auth/build-headers.ts`. Two live call sites:
+
+- `link-auth-transport.ts` — everything `fetchImpl` throws. **MEASURED on Node 24.13:** undici
+  embeds the header VALUE verbatim in its TypeError —
+  `Headers.append: "Bearer <tok>\0" is an invalid header value.` — and an `Authorization`
+  value carrying a NUL or an interior newline triggers it. `command: git credential fill`
+  produces exactly that, because `resolveToken` only trims the ends of stdout. That message
+  reached `vat resources validate`'s stdout through the validator's `safeSerializeError`.
+- `link-auth/resolve.ts` — the `unverified` reason built from a provider-config throw.
+
+Two design notes worth keeping:
+
+- **An error is replaced only when redaction actually changed its text.** An ordinary network
+  failure keeps its original `Error` — exact message, real stack, real class. Rewrapping every
+  failure to guard the rare one would trade every diagnosis for one.
+- **A `redactHeaders(map) → map` helper used to be documented as this mechanism and had ZERO
+  production callers** — its only caller was its own test. It was deleted rather than wired
+  up: it is the wrong shape for the leak that was actually happening (it cannot touch a value
+  another library has already pasted into a string), and printing a header map is the shape
+  under which a name allowlist becomes an unconditional leak. There is no name allowlist any
+  more: redaction keys on every rendered header VALUE, because every `auth.headers` /
+  `fetch.headers` value is secret-bearing by contract (`PRIVATE-TOKEN`, `X-API-Key` and
+  `Authorization` are all just names). The same premise governs cross-origin redirects, which
+  are re-fetched bare — every adopter header dropped, not the one named `authorization`. If a
+  real map-serializing caller appears, reinstate a helper *with* that caller, keyed the same way.
+
+Any new site that can serialize a header, an error carrying one, or a token must route
+through the redaction pair, and must be pinned by a test asserting a literal token string is
+absent from the emitted output.
 
 ## Testing requirements
 
@@ -188,6 +273,19 @@ Follow the project-wide conventions in `CLAUDE.md`. A few linkAuth-specific note
   cache I/O failure propagate to the adopter as a hard error.
 - **Re-classify on cache hit.** Never cache the derived `LINK_AUTH_*` code; cache only
   `statusCode`. The adopter's `check` block may be updated between runs.
-- **No adopter-visible field renames without a version bump.** The cache `version: 1`
-  field gates reads. If you change the cache entry shape, bump the version constant and
-  update the cache-miss path.
+- **⛔ No version constant gates the cache — and none may be added.** The cache entry once
+  carried a hand-bumped `version: 1` that was checked *instead of* the entry's own fields, so
+  it certified a shape it had never looked at: an entry with `version: 1` and a `statusCode`
+  of `"200"` was returned as a hit, and the string then reached `isAliveStatus` — a
+  `Set<number>.has`, which no string is ever a member of — reporting a live link broken at
+  full confidence, from a check that passed. It is gone. What decides whether a stored entry
+  is readable is `ExternalLinkCacheEntrySchema` (`packages/resources/src/schemas/external-link-cache.ts`),
+  a `.strict()` Zod schema applied at the load boundary in `external-link-cache.ts`.
+
+  **If you change the cache entry shape, change the schema — that is the whole migration.** An
+  entry written by the old shape carries a key this build has no field for, `.strict()` makes it
+  a miss, and it costs exactly one refetch. Do not add an integer, a `SCHEMA_VERSION`, or any
+  other number a human must remember to bump; see the "🚫🚫 NO VERSIONS" section of the repo's
+  `CLAUDE.md`, which admits no exception. The one change the schema cannot see is an added
+  *optional* field, and the answer there is the TTL (bounded, not immediate) or an explicit
+  `vat cache clear` — never a constant.

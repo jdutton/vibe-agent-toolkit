@@ -2,11 +2,14 @@
  * The relations a LENS produces, described the way the store describes a table
  * — and deliberately not registered as tables.
  *
- * ## Why these are a separate registry rather than four more `PROJECTION_TABLES`
+ * ## Why these are a separate registry rather than three more `PROJECTION_TABLES`
  *
- * `projection.ts` places `edges`, `edge_resolutions` and `lens_entry_points` in
- * the derived-per-lens column: they are *the output of evaluating a lens*, not
- * rows anything populates. Three shipped rulings refuse to materialise them —
+ * `projection.ts` places the per-lens relations in the derived column: they are
+ * *the output of evaluating a lens*, not rows anything populates. This registry
+ * declares three of them — `lens_contexts`, `edges` and `edge_resolutions`;
+ * `lens_entry_points` is also derived-per-lens but has no spec here yet, so a
+ * query cannot reach it until one is added. Three shipped rulings refuse to
+ * materialise any of them —
  * `closure-extent.ts` declined an `extent_edges` table, `claude-context-query.ts`
  * re-runs a traversal rather than storing its result, and `ExtentContribution`
  * carries no edge field at all, so a contributor literally cannot emit one.

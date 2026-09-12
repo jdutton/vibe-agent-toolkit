@@ -233,12 +233,22 @@ function declinesIgnored(parameters: JsonValue): boolean {
  * `existsSync`, so the row builder falls back to `git check-ignore` where this
  * predicate would decline outright. **That set is empty by construction, not by
  * luck: no crawl source emits a symlink's own path** — the walk runs
- * `followSymlinks: false` and `GitCrawlSource` drops mode `120000` explicitly
- * (`crawl-source.ts`, "A SYMLINK IS NOT A MEMBER HERE"). A symlink therefore
- * never reaches this predicate, and `projection-filesystem-extent.test.ts` pins
- * that precondition rather than leaving the safety argued: if a source ever
- * starts emitting them, the test reddens here rather than the divergence
- * arriving silently.
+ * `followSymlinks: false`, and `GitCrawlSource` drops one at a single seam
+ * covering both the paths git described (mode `120000`) and the collapsed
+ * `ls-files --others` entries it did not (`lstat`); see "A SYMLINK IS NOT A
+ * MEMBER" in `crawl-source.ts`. A symlink therefore never reaches this
+ * predicate, and `projection-filesystem-extent.test.ts` pins that precondition
+ * rather than leaving the safety argued: if a source ever starts emitting them,
+ * the test reddens here rather than the divergence arriving silently.
+ *
+ * 🪤 **"By construction" was an over-claim while the two halves each decided for
+ * themselves.** An UNTRACKED symlink was a member — the snapshot dropped it and
+ * the prune list handed it straight back — so this predicate's
+ * `knownToExist: true` really could meet a dangling link. Nothing caught it,
+ * because every symlink fixture in the suite was committed and a committed link
+ * is exactly the one the snapshot half did drop.
+ * `projection-untracked-symlink-extent.test.ts` is the untracked case, in both
+ * untracked lanes.
  *
  * @param tracker - The run's ignore oracle, or absent outside a repository
  * @param parameters - This contributor's parameter set

@@ -127,7 +127,7 @@ import type { JsonValue } from '../../schemas/projection-shared.js';
 import type { ResolutionContextRow } from '../../schemas/projection-zones.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../contributor.js';
 import type { Projection, ProjectionBase } from '../projection.js';
-import { resolveReferencePath } from '../reference-resolution.js';
+import { isNonLocalRef, resolveReferencePath } from '../reference-resolution.js';
 
 import { extentContextId } from './context-id.js';
 
@@ -756,27 +756,6 @@ function shouldFollow(reference: BlobReferenceRow, declaration: ExtentDeclaratio
 }
 
 /**
- * A scheme-bearing or protocol-relative reference, matched on the raw token.
- *
- * `//host/path` is protocol-relative and equally not a local file. A bare
- * `mailto:`, `https:` or any other scheme is caught by the scheme production of
- * RFC 3986 — a letter followed by letters, digits, `+`, `-` or `.`, then `:`.
- * A Windows drive letter (`C:\…`) also matches, and excluding it is correct
- * here: an absolute drive path is not a corpus-relative reference either.
- */
-const NON_LOCAL_REF = /^(?:\/\/|[a-z][\w+.-]*:)/iu;
-
-/**
- * Is this reference something other than a path into the corpus?
- *
- * @param rawRef - The reference exactly as authored
- * @returns True when the token names an external or non-filesystem target
- */
-function isNonLocalRef(rawRef: string): boolean {
-  return NON_LOCAL_REF.test(rawRef);
-}
-
-/**
  * What one `rawRef` resolved to — three outcomes the closure must keep apart,
  * because each is a different report.
  *
@@ -816,10 +795,12 @@ type ReferenceResolution =
  * `relativize` already settle between them, which is exactly the split that once
  * bundled a de-linked file.
  *
- * ⚠️ `resolveLocalHref`'s own `absolute_escapes_root` verdict is deliberately
- * NOT reported as `outside-root`: that branch returns the href and no path, so
- * naming a target would mean resolving the href a second time, here, against a
- * rule this module does not own. It stays `unrealized`, which is what it was.
+ * `resolveLocalHref`'s own `absolute_escapes_root` verdict IS reported as
+ * `outside-root`: that branch carries the candidate it resolved, so
+ * `reference-resolution.ts` spells the target from it without resolving the
+ * href a second time against a rule this module does not own. (It used to stay
+ * `unrealized` because the verdict carried the href and no path; the verdict
+ * now carries the path.)
  *
  * ⚠️ **Resolution is DIALECT-dependent.** `declaration.referenceDialect` decides
  * whether a leading `/` means root-relative or filesystem-absolute, whether `~/`

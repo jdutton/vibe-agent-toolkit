@@ -43,6 +43,7 @@ import {
 } from '../../src/commands/phase-utils.js';
 import { selectValidateSurfaces } from '../../src/commands/validate.js';
 import {
+  buildPackagedContentPhase,
   checkFilesConfigDests,
   formatVerifyAnnouncement,
   selectVerifyPhases,
@@ -396,6 +397,11 @@ describe('rejectRetiredOnly', () => {
   });
 });
 
+/** The one code the packaged-content phase emits of its own accord. */
+const PACKAGED_CODE = 'PACKAGED_AGENT_INSTRUCTION_FILE';
+/** Where such a finding lands in a built bundle. */
+const PACKAGED_LOCATION = 'dist/skills/demo/CLAUDE.md';
+
 describe('toPublishedIssue', () => {
   // The archived YAML is what a CI consumer parses; stderr is not. A finding that
   // reaches the document without its anchor names no file at all — the same defect
@@ -403,18 +409,18 @@ describe('toPublishedIssue', () => {
   // `PublishedIssue` shape that declared only {severity, code, message, fix}.
   it('carries the whole anchor into the document', () => {
     expect(toPublishedIssue({
-      code: 'PACKAGED_AGENT_INSTRUCTION_FILE',
+      code: PACKAGED_CODE,
       severity: 'warning',
       message: 'A repo-internal agent-instruction file is packaged in this bundle.',
-      location: 'dist/skills/demo/CLAUDE.md',
+      location: PACKAGED_LOCATION,
       line: 3,
       fix: 'Remove it from the bundle.',
       reference: 'docs/validation-codes.md',
     })).toEqual({
-      code: 'PACKAGED_AGENT_INSTRUCTION_FILE',
+      code: PACKAGED_CODE,
       severity: 'warning',
       message: 'A repo-internal agent-instruction file is packaged in this bundle.',
-      location: 'dist/skills/demo/CLAUDE.md',
+      location: PACKAGED_LOCATION,
       line: 3,
       fix: 'Remove it from the bundle.',
       reference: 'docs/validation-codes.md',
@@ -434,5 +440,63 @@ describe('toPublishedIssue', () => {
     expect(Object.keys(published).toSorted((a, b) => a.localeCompare(b)))
       .toEqual(['code', 'fix', 'message', 'severity']);
     expect(published.fix).toBe('');
+  });
+});
+
+/**
+ * The `packaged-content` phase must never report `success` over zero bundles.
+ *
+ * The phase is pushed unconditionally whenever `skills:` exists, and it feeds
+ * the real exit code. `discoverSkillsFromConfig` returning `[]` on a typo'd
+ * glob — or `dist/` simply not having been built — gave it nothing to crawl,
+ * and nothing crawled is zero findings is `success`, with no count in the
+ * document to say so. The phase now publishes `bundlesInspected` and refuses a
+ * zero through the shared run-integrity mechanism, ONE non-overridable
+ * `RESOURCE_CHECK_BROKEN` at `error`.
+ */
+describe('buildPackagedContentPhase — a phase over zero bundles is not a verdict', () => {
+  const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
+
+  it('refuses zero bundles as error with ONE run-integrity finding', () => {
+    // 🔑 The reproduced case. Delete the guard and this reds: no issue, so the
+    // status collapses to `success` beside a count nobody published.
+    const phase = buildPackagedContentPhase(0, []);
+
+    expect(phase.name).toBe('packaged-content');
+    expect(phase.status).toBe('error');
+    expect(phase.bundlesInspected).toBe(0);
+    expect(phase.issueCounts).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(phase.issues.map((i) => [i.code, i.severity])).toEqual([[RUN_INTEGRITY_CODE, 'error']]);
+    expect(phase.issues[0]?.message).toContain('vat build');
+    expect(phase.issues[0]?.message).toContain('skills.include');
+  });
+
+  it('publishes the count and stays silent once a bundle was inspected', () => {
+    // 🔑 The over-correction guard.
+    const phase = buildPackagedContentPhase(2, []);
+
+    expect(phase.status).toBe('success');
+    expect(phase.bundlesInspected).toBe(2);
+    expect(phase.issueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
+    expect(phase.issues).toEqual([]);
+  });
+
+  it('carries real findings through unchanged, count beside them', () => {
+    const phase = buildPackagedContentPhase(1, [{
+      code: PACKAGED_CODE,
+      severity: 'warning',
+      message: 'shipped',
+      location: PACKAGED_LOCATION,
+    }]);
+
+    expect(phase.status).toBe('warning');
+    expect(phase.bundlesInspected).toBe(1);
+    expect(phase.issues).toEqual([{
+      code: PACKAGED_CODE,
+      severity: 'warning',
+      message: 'shipped',
+      fix: '',
+      location: PACKAGED_LOCATION,
+    }]);
   });
 });

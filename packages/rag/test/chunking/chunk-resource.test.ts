@@ -2,6 +2,7 @@
  * Tests for resource chunking
  */
 
+import type { HeadingNode } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
 import type { ChunkableResource } from '../../src/chunking/chunk-resource.js';
@@ -182,6 +183,107 @@ describe('chunkResource', () => {
   });
 });
 
+const FIRST_HEADING_TEXT = 'First Heading';
+const LEAD = 'This lead paragraph is the whole reason the document exists.';
+const HEADED_BODY = `# ${FIRST_HEADING_TEXT}\n\nBody under the first heading.`;
+
+/**
+ * @param content - Markdown body, frontmatter included
+ * @param headings - Heading nodes carrying 1-based lines into `content`
+ * @returns A chunkable resource over that content
+ */
+function resourceOf(content: string, headings: HeadingNode[]): ChunkableResource {
+  return {
+    id: 'preamble-resource',
+    filePath: '/preamble.md',
+    content,
+    contentHash: 'abc123',
+    estimatedTokenCount: 20,
+    links: [],
+    headings,
+    frontmatter: {},
+  };
+}
+
+/**
+ * @param line - 1-based line of the document's `# First Heading`
+ * @returns The single-heading list every preamble case uses
+ */
+function firstHeadingAt(line: number): HeadingNode[] {
+  return [{ level: 1, text: FIRST_HEADING_TEXT, slug: 'first-heading', line }];
+}
+
+/**
+ * Everything above the first heading.
+ *
+ * A document that opens with an abstract, a TL;DR or a lead paragraph used to
+ * index that prose at ZERO chunks: the section walk started AT the first
+ * heading, so every byte above it was dropped with no error, no warning and no
+ * counter. A retrieval index that silently omits a document's opening is worse
+ * than one that refuses the document outright — nothing distinguishes "not in
+ * this corpus" from "in this corpus and unfindable".
+ *
+ * The preamble carries NO heading metadata: not the first heading's, and not an
+ * empty-string path that reads like one. It genuinely belongs to no section, and
+ * a chunk labelled with a heading it sits ABOVE would be a worse lie than the
+ * omission it replaces.
+ */
+describe('chunkResource preamble (content above the first heading)', () => {
+  const config = {
+    targetChunkSize: 512,
+    modelTokenLimit: 8191,
+    paddingFactor: 0.9,
+    tokenCounter: new ApproximateTokenCounter(),
+  };
+
+  it('chunks a lead paragraph that sits above the first heading', () => {
+    const result = chunkResource(
+      resourceOf(`${LEAD}\n\n${HEADED_BODY}`, firstHeadingAt(3)),
+      config,
+    );
+
+    expect(result.chunks.map((c) => c.content)).toContain(LEAD);
+    expect(result.chunks).toHaveLength(2);
+  });
+
+  it('gives the preamble no heading path, so it cannot be read as the first section', () => {
+    const result = chunkResource(
+      resourceOf(`${LEAD}\n\n${HEADED_BODY}`, firstHeadingAt(3)),
+      config,
+    );
+
+    const preamble = result.chunks[0];
+    expect(preamble?.content).toBe(LEAD);
+    expect(preamble?.headingPath).toBeUndefined();
+    expect(preamble?.headingLevel).toBeUndefined();
+    expect(preamble?.startLine).toBe(1);
+  });
+
+  it('keeps the lead paragraph and drops the frontmatter that precedes it', () => {
+    const content = `---\ntitle: Test Doc\ntags: [a]\n---\n\n${LEAD}\n\n${HEADED_BODY}`;
+    const result = chunkResource(resourceOf(content, firstHeadingAt(8)), config);
+
+    const preamble = result.chunks[0];
+    expect(preamble?.content).toBe(LEAD);
+    expect(preamble?.startLine).toBe(6);
+  });
+
+  it('emits no preamble chunk for a document that is only frontmatter and headings', () => {
+    const content = `---\ntitle: Test Doc\n---\n\n${HEADED_BODY}`;
+    const result = chunkResource(resourceOf(content, firstHeadingAt(5)), config);
+
+    expect(result.chunks).toHaveLength(1);
+    expect(result.chunks[0]?.headingPath).toBe(FIRST_HEADING_TEXT);
+  });
+
+  it('emits no preamble chunk when the first heading is line 1', () => {
+    const result = chunkResource(resourceOf(HEADED_BODY, firstHeadingAt(1)), config);
+
+    expect(result.chunks).toHaveLength(1);
+    expect(result.chunks[0]?.headingPath).toBe(FIRST_HEADING_TEXT);
+  });
+});
+
 /** Create a minimal ChunkableResource for enrichChunks tests */
 function createResource(
   resourceId: string,
@@ -312,5 +414,145 @@ describe('enrichChunks', () => {
     expect(enriched[0]?.nextChunkId).toBeUndefined();
     expect(enriched[0]?.chunkIndex).toBe(0);
     expect(enriched[0]?.totalChunks).toBe(1);
+  });
+});
+
+/**
+ * Frontmatter is metadata, and it is metadata whether or not a heading follows it.
+ *
+ * The preamble path above strips a leading YAML fence before chunking. The
+ * no-headings path did not — it handed `chunkByTokens` the whole file, fence
+ * included. So the SAME body indexed differently depending on whether someone
+ * had written a `#` into it: with a heading, the YAML was dropped; without one,
+ * the YAML became retrievable prose that outweighed the two lines of real
+ * content around it. Nobody chose that; it fell out of two code paths that had
+ * only one of them taught about frontmatter.
+ *
+ * Making them consistent has a consequence worth stating out loud: a document
+ * that is ONLY frontmatter now produces ZERO chunks. That is the right answer —
+ * there is no prose to retrieve, and an index entry whose content is a YAML
+ * fence answers no query anyone will ask — but it puts a zero-chunk document on
+ * a path that must be honest rather than arithmetically broken, which is what
+ * the statistics suite below pins.
+ */
+describe('chunkResource frontmatter handling without headings', () => {
+  const config = {
+    targetChunkSize: 512,
+    modelTokenLimit: 8191,
+    paddingFactor: 0.9,
+    tokenCounter: new ApproximateTokenCounter(),
+  };
+
+  const HEADLESS_BODY = 'Plain prose with no heading anywhere in it.';
+  const FRONTMATTER = '---\ntitle: Test Doc\ntags: [a]\n---';
+
+  it('drops a leading frontmatter fence from a document that has no headings', () => {
+    const result = chunkResource(
+      resourceOf(`${FRONTMATTER}\n\n${HEADLESS_BODY}`, []),
+      config,
+    );
+
+    expect(result.chunks).toHaveLength(1);
+    expect(result.chunks[0]?.content).toBe(HEADLESS_BODY);
+    // 1-based: the fence occupies lines 1-4, line 5 is blank.
+    expect(result.chunks[0]?.startLine).toBe(6);
+  });
+
+  /**
+   * The consistency property itself, rather than one side of it.
+   *
+   * Same frontmatter, same prose; the only difference is a heading underneath.
+   * Before the fix the headless arm carried the YAML and the headed arm did not,
+   * so this comparison failed on the first chunk's content.
+   */
+  it('indexes the same lead prose identically with and without a following heading', () => {
+    const headless = chunkResource(
+      resourceOf(`${FRONTMATTER}\n\n${HEADLESS_BODY}`, []),
+      config,
+    );
+    const headed = chunkResource(
+      resourceOf(`${FRONTMATTER}\n\n${HEADLESS_BODY}\n\n${HEADED_BODY}`, firstHeadingAt(8)),
+      config,
+    );
+
+    expect(headless.chunks[0]?.content).toBe(HEADLESS_BODY);
+    expect(headed.chunks[0]?.content).toBe(headless.chunks[0]?.content);
+  });
+
+  it('produces no chunks at all for a document that is only frontmatter', () => {
+    const result = chunkResource(resourceOf(FRONTMATTER, []), config);
+
+    expect(result.chunks).toHaveLength(0);
+  });
+
+  /**
+   * An unterminated opening fence is a thematic break, not frontmatter — the
+   * discriminator the preamble path already applies. Without this control, a
+   * "fix" that simply skipped any leading `---` line would pass everything above
+   * while silently eating the first line of every document that opens with a
+   * horizontal rule.
+   */
+  it('keeps a leading thematic break that never closes, because it is not frontmatter', () => {
+    const result = chunkResource(resourceOf(`---\n\n${HEADLESS_BODY}`, []), config);
+
+    expect(result.chunks).toHaveLength(1);
+    expect(result.chunks[0]?.content).toContain('---');
+  });
+});
+
+/**
+ * A zero-chunk document must report zero, not `NaN` and not `-Infinity`.
+ *
+ * `averageTokens` divided by `rawChunks.length`, and `Math.max(...[])` is
+ * `-Infinity` (`Math.min(...[])` is `+Infinity`). An empty document reached that
+ * arithmetic before this change, and a frontmatter-only document reaches it now
+ * that the two chunking paths agree — so the statistic a caller reads for a
+ * document that legitimately yields nothing has to be a number.
+ *
+ * The JSON round-trip is the load-bearing assertion, not decoration: `NaN` and
+ * `±Infinity` are not JSON values, so `JSON.stringify` writes them as `null`.
+ * Any report that serializes these statistics would therefore publish `null`
+ * where a reader expects a count — a defect that never surfaces in-process.
+ */
+describe('chunkResource statistics for a document that yields no chunks', () => {
+  const config = {
+    targetChunkSize: 512,
+    modelTokenLimit: 8191,
+    paddingFactor: 0.9,
+    tokenCounter: new ApproximateTokenCounter(),
+  };
+
+  it('reports zero for every statistic when nothing was chunked', () => {
+    const result = chunkResource(resourceOf('', []), config);
+
+    expect(result.chunks).toHaveLength(0);
+    expect(result.stats).toEqual({
+      totalChunks: 0,
+      averageTokens: 0,
+      maxTokens: 0,
+      minTokens: 0,
+    });
+  });
+
+  it('serializes as numbers, which NaN and +/-Infinity do not', () => {
+    const { stats } = chunkResource(resourceOf('', []), config);
+
+    // The in-process property: every statistic is a finite number. `NaN` and
+    // `+/-Infinity` are numbers too, and `typeof` cannot tell them apart.
+    expect(Object.values(stats).every((value) => Number.isFinite(value))).toBe(true);
+
+    // The same property at the boundary where it actually bites. None of the
+    // three is a JSON value, so `JSON.stringify` writes each as `null` — a
+    // published report would show `null` where a reader expects a count.
+    expect(JSON.stringify(stats)).not.toContain('null');
+  });
+
+  it('still reports real numbers for a document that does chunk', () => {
+    const { stats } = chunkResource(resourceOf(HEADED_BODY, firstHeadingAt(1)), config);
+
+    expect(stats.totalChunks).toBe(1);
+    expect(stats.averageTokens).toBeGreaterThan(0);
+    expect(stats.maxTokens).toBeGreaterThan(0);
+    expect(stats.minTokens).toBeGreaterThan(0);
   });
 });

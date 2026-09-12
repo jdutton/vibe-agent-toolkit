@@ -217,8 +217,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   /** Resolved once from the embedding provider's real limit; warnings logged once. */
   private resolvedChunkingConfig: ChunkingConfig | null = null;
 
-  /** Accumulated document records during indexing, flushed in indexResources() */
-  private pendingDocuments: DocumentRecord[] = [];
+  /** Opened lazily and reused: the documents table is written once per resource. */
+  private documentsTable: Table | null = null;
 
   private constructor(config: LanceDBConfig<TMetadata>) {
     this.config = {
@@ -305,6 +305,10 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    */
   private async reconnectAndOpenTable(): Promise<void> {
     this.connection = await lancedb.connect(this.config.dbPath);
+    // The memoized documents handle belongs to the connection just replaced.
+    // Keeping it would hand later writes a table bound to a dead connection —
+    // the same buffer-lifecycle hazard this reconnect exists to avoid.
+    this.documentsTable = null;
 
     const tableNames = await this.connection.tableNames();
     if (tableNames.includes(TABLE_NAME)) {
@@ -441,14 +445,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       return null;
     }
 
-    let docsTable: Table;
-    try {
-      const tableNames = await this.connection.tableNames();
-      if (!tableNames.includes(DOCUMENTS_TABLE_NAME)) {
-        return null;
-      }
-      docsTable = await this.connection.openTable(DOCUMENTS_TABLE_NAME);
-    } catch {
+    const docsTable = await this.openDocumentsTable().catch(() => null);
+    if (!docsTable) {
       return null; // Table doesn't exist or connection error
     }
 
@@ -501,8 +499,17 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       throw new Error('Cannot index in readonly mode');
     }
 
-    // Reset pending documents for this indexing batch
-    this.pendingDocuments = [];
+    // Which resources already have a document record, read ONCE for the whole
+    // batch. `detectResourceChangeStatus` needs it to refuse a `skip` for a
+    // resource whose chunks are present and whose document row is not — the
+    // state an interrupted run under an older build left behind, which is
+    // otherwise unreachable forever because the surviving chunks carry a
+    // matching content hash. `null` when document storage is off: there is no
+    // documents table then, and an empty set would re-index the whole corpus on
+    // every run.
+    const documented = this.config.storeDocuments
+      ? await this.readDocumentedResourceIds()
+      : null;
 
     const startTime = Date.now();
     const totalResources = resources.length;
@@ -521,7 +528,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       processedCount++;
 
       try {
-        await this.indexResource(resource, result);
+        await this.indexResource(resource, result, documented);
       } catch (error) {
         // A broken INSTALL, not a broken corpus. `indexResource`'s parse carries
         // no local try, so this catch is the one that sees a failed parser load —
@@ -562,44 +569,88 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       );
     }
 
-    // Flush accumulated document records to rag_documents table
-    if (this.config.storeDocuments && this.pendingDocuments.length > 0 && this.connection) {
-      await this.flushDocumentRecords();
-    }
-
     result.durationMs = Date.now() - startTime;
     return result;
   }
 
   /**
-   * Flush accumulated document records to the rag_documents table.
+   * The resource ids that currently have a document record.
    *
-   * Uses 'overwrite' mode to replace the entire table on each indexing run.
-   * This is simpler than incremental updates and ensures consistency.
+   * Projected to the id column alone: the documents table stores every
+   * document's full text, and this question needs none of it.
+   *
+   * @returns Every `resourceid` in the documents table, empty if there is none
    */
-  private async flushDocumentRecords(): Promise<void> {
-    if (!this.connection || this.pendingDocuments.length === 0) {
-      return;
+  private async readDocumentedResourceIds(): Promise<Set<string>> {
+    const table = await this.openDocumentsTable();
+    if (!table) {
+      return new Set();
+    }
+
+    const rows = await table.query().select(['resourceid']).where('1 = 1').toArray();
+    // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
+    const materialized = JSON.parse(JSON.stringify(rows)) as { resourceid: string }[];
+
+    return new Set(materialized.map((row) => row.resourceid));
+  }
+
+  /**
+   * Open the documents table, or report that it does not exist yet.
+   *
+   * Memoized on the instance: document records are written one per resource, so
+   * an un-memoized open would re-read the table manifest once per document.
+   *
+   * @returns The documents table, or null when nothing has created it
+   */
+  private async openDocumentsTable(): Promise<Table | null> {
+    if (this.documentsTable) {
+      return this.documentsTable;
+    }
+    if (!this.connection) {
+      return null;
     }
 
     const tableNames = await this.connection.tableNames();
-    if (tableNames.includes(DOCUMENTS_TABLE_NAME)) {
-      // Merge: load existing documents, replace those with matching resourceIds, keep the rest
-      const existingTable = await this.connection.openTable(DOCUMENTS_TABLE_NAME);
-      const existingRows = await existingTable.query().where('1 = 1').toArray();
-      // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
-      const existing = JSON.parse(JSON.stringify(existingRows)) as DocumentRecord[];
-
-      const pendingIds = new Set(this.pendingDocuments.map((d) => d.resourceid));
-      const retained = existing.filter((row) => !pendingIds.has(row.resourceid));
-      const merged = [...retained, ...this.pendingDocuments];
-
-      await this.connection.createTable(DOCUMENTS_TABLE_NAME, merged, { mode: 'overwrite' });
-    } else {
-      await this.connection.createTable(DOCUMENTS_TABLE_NAME, this.pendingDocuments);
+    if (!tableNames.includes(DOCUMENTS_TABLE_NAME)) {
+      return null;
     }
 
-    this.pendingDocuments = [];
+    this.documentsTable = await this.connection.openTable(DOCUMENTS_TABLE_NAME);
+    return this.documentsTable;
+  }
+
+  /**
+   * Write one resource's document record, replacing any record it already has.
+   *
+   * Per resource rather than batched at the end of the run, and BEFORE that
+   * resource's chunks rather than after. Both halves matter:
+   *
+   * - Batched, every record was held in memory until the loop finished, so any
+   *   throw out of the loop discarded all of them while leaving every chunk
+   *   already written. That state is permanent: change detection reads the
+   *   chunk table, the surviving chunks carry a matching content hash, and the
+   *   resource is skipped on every subsequent run.
+   * - Ordered document-then-chunks, an interruption between the two leaves a
+   *   document row with no chunks behind it. Change detection counts chunk
+   *   rows, so it reads that resource as new and redoes it. The marker the
+   *   detector trusts is written LAST, which is what makes a partial write
+   *   self-repairing rather than terminal.
+   *
+   * @param record - The document record to store
+   */
+  private async upsertDocumentRecord(record: DocumentRecord): Promise<void> {
+    if (!this.connection) {
+      return;
+    }
+
+    const table = await this.openDocumentsTable();
+    if (!table) {
+      this.documentsTable = await this.connection.createTable(DOCUMENTS_TABLE_NAME, [record]);
+      return;
+    }
+
+    await table.delete(`resourceid = '${escapeSQLString(record.resourceid)}'`);
+    await table.add([record]);
   }
 
   /**
@@ -608,11 +659,16 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * Queries existing rows for the resource and compares content hashes.
    * All Arrow data is materialized before returning to avoid buffer lifecycle issues.
    *
+   * @param resourceId - Resource to inspect
+   * @param contentHash - Hash of the content this run would index
+   * @param documented - Resource ids that already have a document record, or
+   *   null when document storage is off and there is nothing to be missing
    * @returns Object with `action` ('skip' | 'update' | 'new') and `deleteCount` (chunks to remove on update)
    */
   private async detectResourceChangeStatus(
     resourceId: string,
     contentHash: string,
+    documented: ReadonlySet<string> | null,
   ): Promise<{ action: 'skip' | 'update' | 'new'; deleteCount: number }> {
     if (!this.table) {
       return { action: 'new', deleteCount: 0 };
@@ -628,7 +684,13 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     }
 
     const existingHash = existing[0]?.resourcecontenthash;
-    if (existingHash === contentHash) {
+
+    // An unchanged hash is NOT sufficient on its own. A run interrupted under a
+    // build that batched document records to the end of the loop left chunks
+    // whose hash still matches and no document row behind them — and skipping
+    // on the hash alone is exactly what made that state permanent. A resource
+    // that is half in the index is not up to date; redo it.
+    if (existingHash === contentHash && (documented === null || documented.has(resourceId))) {
       return { action: 'skip', deleteCount: existing.length };
     }
 
@@ -640,7 +702,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    */
   private async indexResource(
     resource: ResourceMetadata,
-    result: IndexResult
+    result: IndexResult,
+    documented: ReadonlySet<string> | null,
   ): Promise<void> {
     // Read + parse, served from the disk parse cache when one is filed under
     // these bytes. 'markdown' is stated rather than derived from the extension:
@@ -658,7 +721,11 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     const resourceContentHash = generateContentHash(content);
 
     // Detect whether this resource is new, unchanged (skip), or updated
-    const { action, deleteCount } = await this.detectResourceChangeStatus(resource.id, resourceContentHash);
+    const { action, deleteCount } = await this.detectResourceChangeStatus(
+      resource.id,
+      resourceContentHash,
+      documented,
+    );
 
     if (action === 'skip') {
       result.resourcesSkipped++;
@@ -703,18 +770,20 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       chunkToLanceRow<TMetadata>(chunk, resourceContentHash, this.metadataSchema)
     );
 
+    // The document record goes in FIRST — see `upsertDocumentRecord`. Change
+    // detection reads the chunk table, so the chunks are the marker that says
+    // "this resource is done", and the marker must be the last thing written.
+    if (this.config.storeDocuments) {
+      await this.upsertDocumentRecord(
+        createDocumentRecord(resource, content, resourceContentHash, rows.length, this.tokenCounter, this.metadataSchema)
+      );
+    }
+
     // INSERT into LanceDB
     if (!this.table && this.connection) {
       this.table = await this.connection.createTable(TABLE_NAME, rows);
     } else if (this.table) {
       await this.table.add(rows);
-    }
-
-    // Accumulate document record for rag_documents table
-    if (this.config.storeDocuments) {
-      this.pendingDocuments.push(
-        createDocumentRecord(resource, content, resourceContentHash, rows.length, this.tokenCounter, this.metadataSchema)
-      );
     }
 
     result.resourcesIndexed++;
@@ -748,16 +817,11 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     await this.table.delete(`resourceid = '${escapeSQLString(resourceId)}'`);
 
     // Also delete from rag_documents table if it exists
-    if (this.connection) {
-      try {
-        const tableNames = await this.connection.tableNames();
-        if (tableNames.includes(DOCUMENTS_TABLE_NAME)) {
-          const docsTable = await this.connection.openTable(DOCUMENTS_TABLE_NAME);
-          await docsTable.delete(`resourceid = '${escapeSQLString(resourceId)}'`);
-        }
-      } catch {
-        // Documents table may not exist; ignore
-      }
+    try {
+      const docsTable = await this.openDocumentsTable();
+      await docsTable?.delete(`resourceid = '${escapeSQLString(resourceId)}'`);
+    } catch {
+      // Documents table may not exist; ignore
     }
   }
 
@@ -810,5 +874,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     }
     this.connection = null;
     this.table = null;
+    // Not close()d in its own right: it is a second handle onto the same
+    // connection, which the line above has already released.
+    this.documentsTable = null;
   }
 }

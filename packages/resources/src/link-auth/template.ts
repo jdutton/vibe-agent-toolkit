@@ -9,6 +9,11 @@
  * keys throw `TemplateMissingVarError`. Unknown transform names propagate
  * `UnknownTransformError` from the transforms allowlist.
  *
+ * Every one of those is a question about the TEMPLATE, which comes from config
+ * an author wrote. Substituted VALUES — URL captures, resolved tokens — are
+ * inert: they are never parsed, never re-scanned, and can contain `${` freely.
+ * See `assertNoUnterminatedExpression` for why that distinction is load-bearing.
+ *
  * This is NOT the package's general-purpose Handlebars renderer
  * (`../handlebars-template.ts`, exported as `renderHandlebarsTemplate`) — that
  * one is `{{...}}` and compiles arbitrary expressions. linkAuth needs different
@@ -53,15 +58,37 @@ export class TemplateSyntaxError extends Error {
  * @throws {UnknownTransformError} from a `${transform(name)}` call
  */
 export function renderTemplate(template: string, context: Record<string, string>): string {
-  const rendered = template.replaceAll(/\$\{([^}]*)\}/g, (_match, body: string) =>
+  assertNoUnterminatedExpression(template);
+
+  return template.replaceAll(/\$\{([^}]*)\}/g, (_match, body: string) =>
     resolveExpression(body, template, context),
   );
+}
 
-  if (rendered.includes('${')) {
+/**
+ * Refuse a template carrying a `${` with no closing `}` — the author wrote
+ * `${FOO` and meant `${FOO}`.
+ *
+ * 🚨 **Asked of the TEMPLATE, never of the rendered output.** The guard used to
+ * run on the rendered string, which silently changed the question from "is this
+ * template malformed?" to "did the adopter's DATA contain two characters?". A
+ * Backstage software-template URL answers yes —
+ * `…/skeleton/${{values.name}}/README.md` is an ordinary path segment — so an
+ * ordinary link threw a programming error out of `vat resources validate` and
+ * `vat audit` for every adopter with `resources.linkAuth` configured.
+ *
+ * 🔑 Substituted values are therefore **inert**: `String.replaceAll` does not
+ * re-scan what a replacer function returns, and nothing inspects the result
+ * afterwards. A value may contain `${`, `${{…}}`, or even a well-formed-looking
+ * `${base64url(x)}` and it stays literal text.
+ *
+ * Erasing every well-formed `${…}` first is what makes the leftover `${`
+ * unambiguous: only an expression that never closes can survive the erase.
+ */
+function assertNoUnterminatedExpression(template: string): void {
+  if (template.replaceAll(/\$\{[^}]*\}/g, '').includes('${')) {
     throw new TemplateSyntaxError('unterminated "${" with no matching "}"', template);
   }
-
-  return rendered;
 }
 
 function resolveExpression(

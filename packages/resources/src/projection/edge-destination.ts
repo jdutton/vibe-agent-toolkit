@@ -44,14 +44,6 @@ export interface EdgeDestination {
   readonly dstAnchor: string | null;
 }
 
-/**
- * Ports a URI carries only redundantly, so two spellings of one origin key alike.
- *
- * `URL` already drops these itself — this table is the fallback path's copy, and
- * it is small on purpose: a port this map does not know is KEPT, which is the
- * safe direction. Dropping an unknown port would merge two genuinely different
- * origins; keeping a redundant one only splits a group that could have been one.
- */
 /** An RFC 3986 scheme, matched against an already-isolated prefix. */
 const SCHEME = /^[a-z][\w+.-]*$/iu;
 
@@ -98,8 +90,10 @@ function authorityStartOf(token: string): number {
  *   same answer only as a side effect of greedy backtracking. `//a@b@host/x`
  *   redacts to `//host/x`; the near-miss `//b@host/x` still LOOKS redacted while
  *   carrying a credential, which is why a test pins it.
- * - The search stops at the first `/` after the authority, so an `@` in a PATH
- *   (`//host/path@thing`) is not userinfo and survives untouched.
+ * - The search stops where the authority does — the first `/` or `?` after it,
+ *   per RFC 3986 §3.2 (see {@link authorityEndOf}) — so an `@` in a PATH
+ *   (`//host/path@thing`) or in a QUERY (`//host?x=a@b`) is not userinfo and
+ *   survives untouched.
  *
  * @param token - The reference with any fragment already removed
  * @returns The token with any authority userinfo removed
@@ -107,12 +101,39 @@ function authorityStartOf(token: string): number {
 function redactAuthorityUserinfo(token: string): string {
   const authorityStart = authorityStartOf(token);
   if (authorityStart === -1) return token;
-  const pathStart = token.indexOf('/', authorityStart);
-  const authorityEnd = pathStart === -1 ? token.length : pathStart;
+  const authorityEnd = authorityEndOf(token, authorityStart);
   const at = token.lastIndexOf('@', authorityEnd - 1);
   return at < authorityStart ? token : token.slice(0, authorityStart) + token.slice(at + 1);
 }
 
+/**
+ * Where the authority that begins at `authorityStart` ends: the first `/` or
+ * `?` after it, or the end of the token.
+ *
+ * 🚨 RFC 3986 §3.2 ends an authority at `/`, `?` OR `#`, and this used to stop
+ * at `/` alone. For `//host?x=a@b/c` the `/` inside the QUERY was taken as the
+ * path start, the `@` in `a@b` as userinfo, and the host was deleted — `//b/c`,
+ * which merges two different origins, the one direction the module rule says a
+ * key must never move in. `#` is not tested for because every caller has
+ * already stripped the fragment.
+ */
+function authorityEndOf(token: string, authorityStart: number): number {
+  const pathStart = token.indexOf('/', authorityStart);
+  const queryStart = token.indexOf('?', authorityStart);
+  const bounds = [pathStart, queryStart].filter((index) => index !== -1);
+  return bounds.length === 0 ? token.length : Math.min(...bounds);
+}
+
+/**
+ * Ports a URI carries only redundantly, so two spellings of one origin key alike.
+ *
+ * `URL` already drops these itself on construction; this table is the
+ * belt-and-braces check in {@link normalizeUri}'s success branch for a scheme
+ * `URL` does not treat as special, and it is small on purpose: a port this map
+ * does not know is KEPT, which is the safe direction. Dropping an unknown port
+ * would merge two genuinely different origins; keeping a redundant one only
+ * splits a group that could have been one.
+ */
 const DEFAULT_PORTS = new Map([
   ['http:', '80'],
   ['https:', '443'],
@@ -399,12 +420,9 @@ function normalizeUri(withoutFragment: string): string {
   // the same reason the port is: this is where the parsed URL is edited into
   // the key. Clearing both halves is a no-op on a URI that carries neither, and
   // on a scheme whose URLs cannot hold them at all (`mailto:`), so the branch
-  // needs no guard.
-  //
-  // ⚠️ Success branch ONLY. The fallback above returns the token untouched, so
-  // a credential in a protocol-relative reference is still keyed — parsing that
-  // would require inventing a scheme the author did not write, which is the
-  // trade the fallback's docstring already refuses.
+  // needs no guard. The fallback branch above redacts too — see the function
+  // docstring: "this key carries no secret" is a property of the function, not
+  // of which branch an input took.
   url.username = '';
   url.password = '';
   return url.href;

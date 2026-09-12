@@ -35,6 +35,7 @@ import nodeFsPromises from 'node:fs/promises';
 
 import {
   FsLookupCache,
+  issueLocation,
   safePath,
   setupAsyncTempDirSuite,
   toForwardSlash,
@@ -43,6 +44,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 import { fragmentIndex, validateLink } from '../src/link-validator.js';
 
+import { REFUSAL_ERRNOS, withReaddirRefused } from './helpers/refused-listing.js';
 import { createLink } from './test-helpers.js';
 
 const suite = setupAsyncTempDirSuite('link-path-components');
@@ -105,6 +107,17 @@ async function withUnlistableDirectory<T>(dir: string, body: () => Promise<T>): 
 
 const DEEP_TARGET = 'one/two/three.md';
 const DEEP_BUNDLE = { 'a.md': '# a\n', [DEEP_TARGET]: '# three\n' };
+
+/**
+ * A tree whose target sits two levels below `docs/open` — the directory the
+ * refusal suites make unlistable while leaving it traversable.
+ *
+ * Deliberately deeper than `docs/open` itself: the refusal has to be met at an
+ * ANCESTOR of the target rather than at its own parent, which is the case the
+ * basename-only judge never listed and so never met.
+ */
+const REFUSAL_HREF = './docs/open/inner/target.md';
+const REFUSAL_TREE = { 'a.md': '# a\n', 'docs/open/inner/target.md': '# t\n' };
 
 /** The components of a bundle-relative path, which is always forward-slashed. */
 function componentsOf(relativePath: string): string[] {
@@ -211,7 +224,8 @@ describe('a link path is judged component by component', () => {
 
       expect(issue?.code).toBe('LINK_BROKEN_FILE');
       expect(issue?.message).toContain('File not found');
-      expect(issue?.suggestion).toBe('');
+      // No correction to offer means no `suggestion` at all — not an empty one.
+      expect(issue).not.toHaveProperty('suggestion');
     });
 
     /**
@@ -219,26 +233,143 @@ describe('a link path is judged component by component', () => {
      * below the walk root must now be LISTABLE, where the basename-only judge
      * only ever listed `dirname(target)`. A `0111` directory is traversable —
      * `open()` on the file below it succeeds, so the link genuinely works —
-     * but `readdir` is refused. That refusal used to be recoded as absence and
+     * but `readdir` is refused. That refusal was recoded as absence and
      * reported as `LINK_BROKEN_FILE`: both the verdict and the diagnosis wrong,
      * about a link that opens.
      *
-     * The conservative outcome is the correct one here: a spelling that could
-     * not be verified is not a spelling that is wrong.
+     * 🪤 **And then the first repair went one step too far and made it
+     * silent.** `validateLocalFileLink` read `unverifiable` and returned `null`
+     * — no issue, no counter, nothing in the report — which suppressed FOUR
+     * checks for that link (existence, deferred artifact, gitignore leak, and
+     * the anchor) with nothing said. A refusal is not a pass. It is its own
+     * condition, and the only honest report of it names the link that went
+     * unchecked.
      */
     it.skipIf(!PERMISSIONS_ENFORCED)(
-      'says nothing about a link whose ancestor directory cannot be listed',
+      'reports a link whose ancestor directory cannot be listed as UNREAD, not as broken',
       async () => {
-        const root = await plant({ 'a.md': '# a\n', 'docs/open/inner/target.md': '# t\n' });
+        const root = await plant(REFUSAL_TREE);
 
         const issue = await withUnlistableDirectory(
           safePath.join(root, 'docs', 'open'),
-          async () => await judge(root, './docs/open/inner/target.md'),
+          async () => await judge(root, REFUSAL_HREF),
         );
 
-        expect(issue).toBeNull();
+        expect(issue?.code).toBe('LINK_TARGET_UNREADABLE');
+        expect(issue?.link).toBe(REFUSAL_HREF);
       },
     );
+
+    describe('a refused listing is reported, whatever refused it', () => {
+      /**
+       * `chmod` reaches exactly one of the four errnos that mean "refused", and
+       * only where POSIX modes bind. The other three are reachable in ordinary
+       * operation — `EMFILE`/`ENFILE` are descriptor exhaustion under
+       * concurrency, `ELOOP` a committed symlink cycle — and a fix narrowed to
+       * `EACCES` would leave them reported as broken links.
+       */
+      it.each(REFUSAL_ERRNOS)('reports %s rather than a missing file', async (code) => {
+        const root = await plant(REFUSAL_TREE);
+
+        const issue = await withReaddirRefused(
+          safePath.join(root, 'docs', 'open'),
+          code,
+          async () => await judge(root, REFUSAL_HREF),
+        );
+
+        expect(issue?.code).toBe('LINK_TARGET_UNREADABLE');
+        // The whole complaint about the old behaviour: it said the file was not
+        // there, about a file that opens.
+        expect(issue?.message).not.toContain('File not found');
+        // Project-relative, like every other link issue in this lane — an
+        // absolute path here is the developer's $HOME in a CI log.
+        expect(issue?.message).not.toContain(root);
+        // 🪤 "A directory on that path" is a remedy a reader cannot aim: this
+        // path has three of them. The message names WHICH one refused, still
+        // project-relative, and WHY.
+        expect(issue?.message).toContain('"docs/open"');
+        expect(issue?.message).toContain(code);
+      });
+
+      it('tells the reader to re-run only when the refusal was a transient shortage', async () => {
+        // The two refusals earn different remedies and always did: a mode bit
+        // is the author's to fix, a descriptor shortage is a moment that a
+        // second run walks straight past. One message for both spends the
+        // reader's attention on whichever half does not apply.
+        const root = await plant(REFUSAL_TREE);
+        const refused = safePath.join(root, 'docs', 'open');
+        const judgeRefusedWith = async (code: string) =>
+          await withReaddirRefused(refused, code, async () => await judge(root, REFUSAL_HREF));
+
+        const transient = await judgeRefusedWith('EMFILE');
+        const stable = await judgeRefusedWith('EACCES');
+
+        expect(transient?.message).toContain('re-run');
+        expect(stable?.message).not.toContain('re-run');
+      });
+
+      it('does not call EAGAIN descriptor exhaustion', async () => {
+        // 🚨 The transient set is `EMFILE`, `ENFILE` and `EAGAIN`, and the
+        // remedy was worded "is descriptor exhaustion" for all of it — a
+        // second copy, in prose, of a fact `fs-utils` was made the single owner
+        // of, and wrong for the third member. The clause now comes from the
+        // owner of the errno list, so it cannot drift from it.
+        const root = await plant(REFUSAL_TREE);
+
+        const issue = await withReaddirRefused(
+          safePath.join(root, 'docs', 'open'),
+          'EAGAIN',
+          async () => await judge(root, REFUSAL_HREF),
+        );
+
+        expect(issue?.message).toContain('re-run');
+        expect(issue?.message).toContain('EAGAIN');
+        expect(issue?.message).not.toContain('descriptor exhaustion');
+      });
+
+      it('spells the target against the SAME root as `location` when no project root is given', async () => {
+        // 🚨 `location` is relativised to `process.cwd()` when the caller
+        // supplies no root (`locationRoot`), while the message printed the
+        // absolute target and directory — one issue, two roots, and the
+        // absolute one is the developer's $HOME in a CI log. The message also
+        // carried `suggestion: ''`, copied from a sibling.
+        const root = await plant(REFUSAL_TREE);
+
+        const issue = await withReaddirRefused(
+          safePath.join(root, 'docs', 'open'),
+          'EACCES',
+          async () => await validateLink(
+            createLink('local_file', REFUSAL_HREF),
+            safePath.join(root, 'a.md'),
+            fragmentIndex(),
+            { fsCache: new FsLookupCache(), skipGitIgnoreCheck: true },
+          ),
+        );
+
+        expect(issue?.code).toBe('LINK_TARGET_UNREADABLE');
+        // The exact spellings, not `not.toContain(root)`: a cwd-relative path
+        // to a temp dir still CONTAINS the absolute one as a substring after
+        // its `../` prefix, so absence of the root proves nothing here.
+        const cwd = process.cwd();
+        expect(issue?.message).toContain(
+          `Link target ${issueLocation(safePath.join(root, 'docs', 'open', 'inner', 'target.md'), cwd)} was NOT checked`,
+        );
+        expect(issue?.message).toContain(`"${issueLocation(safePath.join(root, 'docs', 'open'), cwd)}"`);
+        expect(issue?.location).toBe(issueLocation(safePath.join(root, 'a.md'), cwd));
+        expect(issue).not.toHaveProperty('suggestion');
+      });
+
+      it('still reports a genuinely missing target as broken', async () => {
+        // The negative control for the DISTINCTION. A fix that reported every
+        // absence as a refusal would satisfy the four rows above while
+        // destroying the finding that matters most.
+        const root = await plant(REFUSAL_TREE);
+
+        const issue = await judge(root, './docs/open/inner/nowhere.md');
+
+        expect(issue?.code).toBe('LINK_BROKEN_FILE');
+      });
+    });
 
     it('says nothing when every component matches byte for byte', async () => {
       // The negative control. A judge that reported every nested link would

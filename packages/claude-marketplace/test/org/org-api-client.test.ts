@@ -24,6 +24,10 @@ const API_KEY = 'sk-ant-api-test';
 const ENV_ADMIN_KEY = 'sk-ant-admin-env-test';
 const ENV_API_KEY = 'sk-ant-api-env-test';
 const SKILLS_PATH = '/v1/skills';
+/** The body a rate-limited exchange answers with; scripted by several tests. */
+const RATE_LIMITED_BODY = '{"error":{"message":"rate"}}';
+/** The message an absent resource's 404 carries in these fixtures. */
+const NOT_FOUND_MESSAGE = 'API error 404: not found';
 
 // ── Transport test double ──────────────────────────────────────────────
 // `https.request` is injected, so the response/timeout/retry handling is exercised
@@ -756,7 +760,7 @@ describe('nextRetryDelayMs', () => {
 describe('retry, end to end through the transport', () => {
   it('retries a rate-limited DELETE so `delete --all` does not stop half-deleted', async () => {
     const { calls, client } = clientWith([
-      { statusCode: 429, headers: { 'retry-after': '0' }, body: '{"error":{"message":"rate"}}' },
+      { statusCode: 429, headers: { 'retry-after': '0' }, body: RATE_LIMITED_BODY },
       { statusCode: 204, body: '' },
     ]);
     await expect(client.deleteSkillVersion('skill_1', 'v1')).resolves.toBeUndefined();
@@ -765,7 +769,7 @@ describe('retry, end to end through the transport', () => {
 
   it('does NOT retry a rate-limited POST, and says why', async () => {
     const { calls, client } = clientWith([
-      { statusCode: 429, headers: { 'retry-after': '0' }, body: '{"error":{"message":"rate"}}' },
+      { statusCode: 429, headers: { 'retry-after': '0' }, body: RATE_LIMITED_BODY },
       { statusCode: 200, body: '{"id":"should_not_be_reached"}' },
     ]);
     await expect(client.uploadSkill(buildMultipartFormData({}, []))).rejects.toThrow(/not retried/i);
@@ -891,6 +895,73 @@ describe('a transport failure carries what actually left the socket', () => {
   });
 });
 
+// ── A replayed DELETE reading its own success as a failure ─────────────
+
+/**
+ * 🚨 "Replaying a DELETE reaches the same end state" is true of the SERVER and
+ * false of this client's control flow.
+ *
+ * The delete lands. Its response is lost on the way back. The replay the client
+ * owes that lost response finds the resource already gone and is answered 404 —
+ * by the delete it performed itself. A 404 is not retryable, so it was rethrown:
+ * `delete --all` exited 1, never attempted the remaining versions, and OMITTED
+ * from `deletedVersions` the one version it had definitely destroyed. The
+ * operator saw a failure, an incomplete record, and a half-deleted skill.
+ *
+ * The distinguishing fact is the ATTEMPT NUMBER, and only this client holds it:
+ * a 404 on the FIRST attempt is a resource that was never there, and a 404 on a
+ * REPLAY is the answer to a request this client already made.
+ */
+describe('a DELETE replayed after a lost response', () => {
+  const GONE = { statusCode: 404, body: '{"error":{"message":"skill version not found"}}' };
+
+  it('reads the 404 as the delete it already performed, not as a failure', async () => {
+    // The first attempt reaches the origin and the connection drops before the
+    // answer gets back — the shape that makes the replay necessary at all.
+    const { calls, client } = clientWith(['reset', GONE]);
+
+    await expect(client.deleteSkillVersion('skill_1', 'v1')).resolves.toBeUndefined();
+    // It really did replay: the 404 came from the SECOND exchange.
+    expect(calls).toHaveLength(2);
+  });
+
+  /**
+   * The other side of the same coin, and the reason attempt 0 cannot be folded
+   * in: a 404 on the first attempt is a version that was never there, and
+   * swallowing that would report a delete that never happened.
+   */
+  it('still refuses a 404 on the FIRST attempt, which nothing here deleted', async () => {
+    const { calls, client } = clientWith([GONE]);
+
+    await expect(client.deleteSkillVersion('skill_1', 'v1')).rejects.toThrow('API error 404');
+    expect(calls).toHaveLength(1);
+  });
+
+  /** A 404 that answers a rate-limit retry is the same fact: it is gone. */
+  it('reads a 404 after a 429 replay the same way', async () => {
+    const { client } = clientWith([
+      { statusCode: 429, headers: { 'retry-after': '0' }, body: RATE_LIMITED_BODY },
+      GONE,
+    ]);
+
+    await expect(client.deleteSkill('skill_1')).resolves.toBeUndefined();
+  });
+
+  /**
+   * A GET is not a delete. Replaying one changes nothing, so a 404 on its replay
+   * is a genuine 404 and must stay one — the rule is about the METHOD's effect,
+   * not about having retried.
+   */
+  it('does not swallow a 404 on a replayed GET, which deleted nothing', async () => {
+    const { client } = clientWith([
+      { statusCode: 503, body: '{}' },
+      { statusCode: 404, body: '{}' },
+    ]);
+
+    await expect(client.getSkills(SKILLS_PATH)).rejects.toThrow('API error 404');
+  });
+});
+
 describe('decideRetry', () => {
   const reset = (): ApiTransportError => new ApiTransportError('socket hang up', 1024);
   const deadline = (): ApiTransportError =>
@@ -921,6 +992,26 @@ describe('decideRetry', () => {
 
   it('stops replaying once the attempt budget is spent', () => {
     expect(decideRetry('DELETE', 99, reset())).toEqual({ rethrow: expect.any(ApiTransportError) });
+  });
+
+  /**
+   * The policy in one place: a 404 answering a REPLAYED delete is the end state
+   * the caller asked for, so it resolves rather than rethrowing. Attempt 0 is a
+   * resource that was never there, and a replayed GET deleted nothing.
+   */
+  it('resolves a 404 that answers a replayed DELETE', () => {
+    const gone = new ApiRequestError(NOT_FOUND_MESSAGE, 404, undefined);
+    expect(decideRetry('DELETE', 1, gone)).toEqual({ alreadyGone: true });
+  });
+
+  it('rethrows a 404 on the FIRST delete attempt', () => {
+    const gone = new ApiRequestError(NOT_FOUND_MESSAGE, 404, undefined);
+    expect(decideRetry('DELETE', 0, gone)).toEqual({ rethrow: expect.any(ApiRequestError) });
+  });
+
+  it('rethrows a 404 on a replayed GET, which changed nothing', () => {
+    const gone = new ApiRequestError(NOT_FOUND_MESSAGE, 404, undefined);
+    expect(decideRetry('GET', 1, gone)).toEqual({ rethrow: expect.any(ApiRequestError) });
   });
 
   /**

@@ -106,7 +106,6 @@ export async function corpusScanCommand(
     }
 
     const report: RunReport = {
-      schema_version: 1,
       generated_at: generatedAt,
       vat_version: vatVersion,
       vat_commit: vatCommit,

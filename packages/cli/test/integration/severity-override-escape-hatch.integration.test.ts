@@ -29,7 +29,10 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildAuditReport, resetAuditCaches } from '../../src/commands/audit.js';
-import { collectMarketplaceFindings } from '../../src/commands/claude/marketplace/validate.js';
+import {
+  buildMarketplaceValidateReport,
+  collectMarketplaceFindings,
+} from '../../src/commands/claude/marketplace/validate.js';
 import { discoverSkillsFromConfig } from '../../src/commands/skills/skill-discovery.js';
 import { checkPackagedAgentInstructionFiles } from '../../src/commands/verify.js';
 import { loadConfig } from '../../src/utils/config-loader.js';
@@ -201,16 +204,24 @@ function projectWithMarketplace(
 /**
  * What `vat verify`'s `marketplace:<name>` phase publishes for a marketplace tree.
  *
- * `status` is taken from the findings themselves, not recomputed here: it is the
- * value the command turns into its exit code (`status === 'error' ? 1 : 0`), and
- * `vat verify` reads that reported status as the phase's status. Asserting it is
- * how the promote direction is shown to reach the exit code rather than merely
- * relabelling a warning.
+ * `status` is read from the DOCUMENT the builder publishes, not recomputed here:
+ * it is the value the command turns into its exit code (`status === 'error' ?
+ * 1 : 0`), and `vat verify` reads that reported status as the phase's status.
+ * Asserting it is how the promote direction is shown to reach the exit code
+ * rather than merely relabelling a warning.
  */
 async function marketplaceOutcome(
   marketplace: string,
 ): Promise<{ findings: { location: string; severity: string }[]; status: string }> {
-  const { issues, status } = await collectMarketplaceFindings(marketplace, silentLogger);
+  const { marketplaceResult, pluginResults, issues } =
+    await collectMarketplaceFindings(marketplace, silentLogger);
+  const { status } = buildMarketplaceValidateReport({
+    root: marketplace,
+    marketplace: marketplaceResult.metadata,
+    pluginResults,
+    issues,
+    duration: '0ms',
+  });
   return {
     findings: issues
       .filter((i) => i.code === CODE)
@@ -223,7 +234,7 @@ async function marketplaceOutcome(
 async function verifyFindings(root: string): Promise<string[]> {
   const config = loadConfig(root);
   const discovered = config?.skills ? await discoverSkillsFromConfig(config.skills, root) : [];
-  return checkPackagedAgentInstructionFiles(root, discovered).map((i) => String(i.location));
+  return checkPackagedAgentInstructionFiles(root, discovered).issues.map((i) => String(i.location));
 }
 
 /** Every agent-instruction issue `vat audit <target>` publishes, AFTER severity resolution. */

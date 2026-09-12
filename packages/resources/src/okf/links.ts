@@ -82,11 +82,13 @@
  */
 
 import {
+  type AbsenceCause,
   DirectorySpellingIndex,
   type FsLookupCache,
   type PathSpelling,
   safePath,
   toForwardSlash,
+  transientRefusalClause,
 } from '@vibe-agent-toolkit/utils';
 
 import type { ResourceLink } from '../types.js';
@@ -132,6 +134,9 @@ export class BundleDirectoryIndex extends DirectorySpellingIndex {
     return await this.judgePath(this.#root, resolvedPath);
   }
 }
+
+/** The refusal detail an `absent` verdict carries when a listing was refused. */
+type UnreadableDirectory = Extract<AbsenceCause, { kind: 'directory_unreadable' }>;
 
 /** Link types with a local target worth resolving. */
 function hasLocalTarget(link: ResourceLink): boolean {
@@ -210,6 +215,73 @@ function missingDraft(document: string, link: ResourceLink): OkfFindingDraft {
     ...anchorOf(document, link),
     code: 'OKF_BROKEN_CROSS_LINK',
     message: 'Cross-link target does not exist in the bundle. OKF §6.1 lets a CONSUMER tolerate this as not-yet-written knowledge; a publisher is the one party who can fix it, so VAT reports it.',
+  };
+}
+
+/**
+ * The finding a link VAT was REFUSED the chance to judge earns.
+ *
+ * 🪤 **This used to be {@link missingDraft}, and both halves of that were
+ * wrong.** {@link BundleDirectoryIndex.judge} answers `absent` for two entirely
+ * different facts, which is exactly why `PathSpelling` makes it carry a
+ * `because`: the directory was listed and holds nothing matching
+ * (`no_such_entry`), or the OS refused to list it at all
+ * (`directory_unreadable`). Only the first is evidence. A POSIX `--x` directory
+ * is *traversable* — every file below it opens exactly as written — while
+ * `readdir` returns `EACCES`, so the link this reported as broken was a link
+ * that works, and the remedy it printed asked the author to write a document
+ * that is already there. `EMFILE`/`ENFILE` (descriptor exhaustion under
+ * concurrency) and `ELOOP` reach the same verdict without any permission being
+ * unusual at all.
+ *
+ * 🔑 **The code is `OKF_SUBDIRECTORY_UNREADABLE`, deliberately reused rather
+ * than split.** It is the same condition discovery reports when it meets the
+ * same refusal from the other direction — "a directory inside the bundle root
+ * could not be listed, so something under it was not checked" — and the remedy
+ * is identical. Splitting would give one fact two codes and let a dashboard
+ * show a bundle two problems where it has one. Like discovery's, it says
+ * conformance was NOT ASSESSED rather than that anything is non-conformant,
+ * which is what puts it out of the per-bundle severity dial's reach (see
+ * `OkfSeverity`).
+ *
+ * 🔑 **It names the directory and the errno rather than "a directory on that
+ * path".** The earlier wording could not do better, because the verdict carried
+ * neither — and it therefore had to offer BOTH remedies to everyone, telling a
+ * publisher with a mode-bit problem to try re-running and a publisher who hit
+ * descriptor exhaustion to go fix permissions that are fine. `AbsenceCause` now
+ * carries which directory refused and whether re-asking could help, so each
+ * reader gets the one remedy that applies to them.
+ *
+ * 🔒 The directory is re-expressed **relative to the bundle root** before it
+ * reaches the message. `AbsenceCause.directory` is absolute — it has to be, the
+ * two lanes that read it anchor against different roots — and an absolute path
+ * in a finding is the publisher's `$HOME` in every CI log.
+ *
+ * @param askedPath - Bundle-relative path the link resolves to, as written
+ * @param refusal - Which directory refused, with what errno
+ * @param root - Absolute bundle root, to re-express that directory against
+ */
+function unlistableDraft(
+  document: string,
+  link: ResourceLink,
+  askedPath: string,
+  refusal: UnreadableDirectory,
+  root: string,
+): OkfFindingDraft {
+  const relative = toForwardSlash(safePath.relative(root, refusal.directory));
+  // The empty relative path is the bundle root itself, which reads as nothing
+  // at all inside quotes — and it is a genuinely different thing to report.
+  const where = relative === '' ? 'the bundle root itself' : `the directory "${relative}"`;
+  // The transient clause is `fs-utils`'s, beside the errno list it describes —
+  // a lane that words it for itself is a second copy of that list, in prose.
+  const remedy = refusal.transient
+    ? `${transientRefusalClause(refusal.code)} — nothing in the bundle is wrong, so re-run before investigating anything.`
+    : `Fix the permissions on that directory inside the bundle root, then validate again.`;
+
+  return {
+    ...anchorOf(document, link),
+    code: 'OKF_SUBDIRECTORY_UNREADABLE',
+    message: `Cross-link to "${askedPath}" was NOT judged: listing ${where} was refused (${refusal.code}). This is not a report that the link is broken — a directory can be traversable while refusing a listing (POSIX \`--x\`), in which case the target opens exactly as written and VAT simply never got to look. ${remedy} Until then this link's spelling, existence and anchor are all unchecked.`,
   };
 }
 
@@ -365,7 +437,14 @@ async function judgeTarget(
       return caseDraft(document, target.link, verdict.askedPath, verdict.actualPath);
     }
     case 'absent': {
-      return missingDraft(document, target.link);
+      // ⛔ `because` is read, never dropped. `absent` is two facts wearing one
+      // word, and only `no_such_entry` is evidence that anything is missing —
+      // see {@link unlistableDraft}. The whole cause travels into the draft, not
+      // just its kind: the errno and the refusing directory are what let the
+      // message say something a publisher can act on.
+      return verdict.because.kind === 'directory_unreadable'
+        ? unlistableDraft(document, target.link, verdict.askedPath, verdict.because, index.root)
+        : missingDraft(document, target.link);
     }
   }
 }

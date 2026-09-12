@@ -87,19 +87,6 @@ export const EXEMPTIONS: readonly Exemption[] = [
   },
   {
     kind: 'structural',
-    pathPrefix: 'packages/vat-example-cat-agents/',
-    codes: ['LINK_DROPPED_BY_DEPTH'],
-    reason:
-      'VERIFIED FALSE POSITIVE, and a VAT defect worth fixing. `cat-breed-selection.md` IS in the '
-      + 'built bundle — `dist/skills/vat-example-cat-agents/resources/cat-breed-selection.md` — '
-      + 'reached at depth 1 from SKILL.md. The finding is raised for a SECOND occurrence of the '
-      + 'same link at depth 2 (via workflow-orchestration.md), because the check judges the '
-      + 'OCCURRENCE\'s depth rather than whether the TARGET was bundled. Its message ("this link '
-      + 'was not bundled") is therefore false here. ⚠️ Re-verify against dist before extending '
-      + 'this: if a target genuinely stops shipping, this exemption would hide it.',
-  },
-  {
-    kind: 'structural',
     pathPrefix: 'packages/vat-development-agents/plugins/',
     codes: ['PLUGIN_MISSING_VERSION'],
     reason:
@@ -156,10 +143,57 @@ export function classifyFindings(
   return { unexpected, excused, staleExemptions: findStaleExemptions(exemptions, failing) };
 }
 
+/** One issue, as far as this gate insists on reading it. */
+interface RawIssue {
+  severity?: unknown;
+  code?: unknown;
+  message?: unknown;
+}
+
+/** One file entry. `issues` is REQUIRED — see {@link assertAuditReportShape}. */
+interface RawFileEntry {
+  path?: unknown;
+  issues: RawIssue[];
+}
+
 /** The slice of `vat audit`'s document this gate reads. Anything else is ignored. */
 interface AuditReportShape {
   status?: unknown;
-  files?: { path?: unknown; issues?: { severity?: unknown; code?: unknown; message?: unknown }[] }[];
+  files: RawFileEntry[];
+}
+
+/**
+ * Validate ONE `files[]` entry, at the SAME strictness as `files` itself.
+ *
+ * 🚨 **This level used to be coerced** — `Array.isArray(file.issues) ? … : []` —
+ * and that single ternary was enough to hand the gate a permanent, silent
+ * bypass. Group the findings by severity upstream (a plausible, entirely
+ * reasonable shape change) and every real `severity: error` finding parses to
+ * nothing: `findings parsed: 0`, `unexpected: 0`. The gate still fails, but for
+ * the only reason left — `N exemption(s) match nothing — delete them` — and a
+ * maintainer who FOLLOWS THAT PRINTED INSTRUCTION deletes the exemptions and
+ * turns the gate green forever over a report it can no longer read. The
+ * anti-rot mechanism becomes the delivery vehicle. Two levels validated and the
+ * third coerced is not "mostly strict"; the coerced level is the whole hole.
+ *
+ * A file with nothing wrong emits `issues: []`, so requiring the key costs
+ * nothing against the shipped emitter and refuses every shape that is not it.
+ */
+function assertFileEntry(entry: unknown): RawFileEntry {
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+    throw new TypeError(
+      `vat audit report carries a file entry that is not a mapping (${typeof entry}) `
+      + '— its output shape changed.',
+    );
+  }
+  const file = entry as { path?: unknown; issues?: unknown };
+  if (!Array.isArray(file.issues)) {
+    throw new TypeError(
+      `vat audit report carries no \`issues\` array for ${text(file.path, '<unknown>')} `
+      + '— its output shape changed.',
+    );
+  }
+  return { path: file.path, issues: file.issues as RawIssue[] };
 }
 
 /**
@@ -175,14 +209,14 @@ function assertAuditReportShape(doc: unknown): AuditReportShape {
   if (typeof doc !== 'object' || doc === null) {
     throw new TypeError('vat audit produced no YAML document — cannot judge the repository.');
   }
-  const report = doc as AuditReportShape;
+  const report = doc as { status?: unknown; files?: unknown };
   if (report.status === undefined) {
     throw new TypeError('vat audit report carries no `status` — its output shape changed.');
   }
   if (!Array.isArray(report.files)) {
     throw new TypeError('vat audit report carries no `files` array — its output shape changed.');
   }
-  return report;
+  return { status: report.status, files: report.files.map((entry) => assertFileEntry(entry)) };
 }
 
 /** A missing field becomes `<unknown>` rather than dropping the finding: an
@@ -193,9 +227,9 @@ const text = (value: unknown, fallback: string): string =>
 export function parseAuditFindings(stdout: string): AuditFinding[] {
   const report = assertAuditReportShape(parse(stdout));
   const findings: AuditFinding[] = [];
-  for (const file of report.files ?? []) {
+  for (const file of report.files) {
     const path = text(file.path, '<unknown>');
-    for (const issue of Array.isArray(file.issues) ? file.issues : []) {
+    for (const issue of file.issues) {
       findings.push({
         file: path,
         code: text(issue.code, '<unknown>'),
@@ -228,6 +262,47 @@ function reportFailures(result: GateResult): void {
   }
 }
 
+/** The three things about the invocation itself that must hold before its output can be read. */
+export interface AuditRun {
+  /** `spawnSync`'s own error: command missing, ENOBUFS on a maxBuffer overrun, signal kill. */
+  readonly error?: Error | undefined;
+  readonly status: number;
+  readonly stdout: string;
+}
+
+/**
+ * Why this `vat audit` run cannot be believed, or `null` if it can.
+ *
+ * 🚨 **Every branch here fails CLOSED, and each was a live hole.** `main()` used
+ * to read `stdout` and nothing else, so:
+ *
+ * - **`error`** — `spawnSync` reports a `maxBuffer` overrun as ENOBUFS while
+ *   still handing back the bytes it did collect. A truncated report parses, into
+ *   FEWER findings, so a clipped or OOM-killed run read as a CLEANER repository.
+ *   The `maxBuffer` bump below buys headroom; only this check makes the overrun
+ *   itself audible. The heap guard fixed in this same release already does this
+ *   — the audit gate had copied its `maxBuffer` half and not its check.
+ * - **`status`** — `vat audit` exits 0 BY DESIGN, and that is a published
+ *   contract: `status` describes the FINDINGS, the exit code describes whether
+ *   the RUN completed. Which makes a non-zero code unambiguous — the command
+ *   crashed — and whatever it printed before dying is a partial report, not a
+ *   verdict. No specific crash is named here on purpose: the one this check was
+ *   written against was already fixed before it shipped, and a docstring that
+ *   cites a repaired bug as live evidence rots into a false claim. The reason to
+ *   fail closed is the CLASS, which no fix retires.
+ * - **empty stdout** — the document is the signal; no document means the command
+ *   did not run.
+ */
+export function auditRunFailure(run: AuditRun): string | null {
+  if (run.error) return `vat audit could not be run to completion: ${run.error.message}`;
+  if (run.status !== 0) {
+    return `vat audit exited ${run.status.toString()} — it exits 0 by design, so it crashed. `
+      + 'Its output is a partial report, not a verdict.';
+  }
+  if (!run.stdout.trim()) return 'vat audit produced no output — the command did not run.';
+  return null;
+}
+
 function main(): void {
   const result = safeExecResult('bun', ['run', 'vat', 'audit'], {
     cwd: PROJECT_ROOT,
@@ -237,11 +312,10 @@ function main(): void {
     // the heap guard's truncation defect fixed earlier in this release.
     maxBuffer: 64 * 1024 * 1024,
   });
-  // `vat audit` exits 0 by design, so its status says nothing. The DOCUMENT is
-  // the signal; an empty one means the command did not run.
   const stdout = result.stdout.toString();
-  if (!stdout.trim()) {
-    log('❌ vat audit produced no output — the command did not run.', 'red');
+  const ranBadly = auditRunFailure({ ...result, stdout });
+  if (ranBadly !== null) {
+    log(`❌ ${ranBadly}`, 'red');
     process.exitCode = 1;
     return;
   }

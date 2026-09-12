@@ -30,6 +30,11 @@ import { queryRealization } from './helpers/context-query-rows.js';
  * `/`-rooted literal, which on Windows would carry no drive letter.
  */
 const ROOT = safePath.join(normalizedTmpdir(), 'edge-lens-corpus');
+const ROOT_ID = 'root:1';
+/** A second, disjoint corpus root for the federated cases. */
+const SECOND_ROOT = safePath.join(normalizedTmpdir(), 'edge-lens-second-corpus');
+const SECOND_ROOT_ID = 'root:2';
+const SECOND_EXTENT = 'extent:fs2';
 
 /** The referring file in every single-source fixture. */
 const SOURCE = 'a.md';
@@ -106,12 +111,17 @@ function reference(
  * @param references - Every reference row, across every blob
  * @returns The projection
  */
+/** One extent context, tying `contextId` to the root it is scoped to. */
+function extentContext(contextId: string, rootId: string): Projection['resolutionContexts'][number] {
+  return { contextId, species: 'extent', kind: 'filesystem', rootId, extentContextId: null, role: null };
+}
+
 function projectionWith(
   paths: readonly string[],
   references: readonly BlobReferenceRow[],
 ): Projection {
   return {
-    roots: [{ id: 'root:1', path: ROOT, label: null }],
+    roots: [{ id: ROOT_ID, path: ROOT, label: null }],
     resources: [],
     resourceRealizations: paths.map((path) => queryRealization(path)),
     // 🚨 Membership, not the realization's `extentId`, is what puts an identity
@@ -121,7 +131,11 @@ function projectionWith(
     resourceExtents: paths.map((path) => ({ resourceId: `id:${path}`, extentId: LENS.extentContextId })),
     resourceTags: [],
     realizationConditions: [],
-    resolutionContexts: [],
+    // 🔑 The realization's root is reached THROUGH its extent's context row —
+    // `resource_realizations.path` is root-relative and never a standalone
+    // identifier — so a fixture with no context row has realizations that
+    // belong to no root, which `resolveEdges` refuses.
+    resolutionContexts: [extentContext(LENS.extentContextId, ROOT_ID)],
     zoneProvenance: [],
     blobs: [],
     blobReferences: references,
@@ -399,8 +413,9 @@ describe('resolveEdges — the authored-only policy', () => {
     // `realization.extentId` returned ZERO edges for it — measured on this
     // repository, 160 members and no rows — an empty relation shaped exactly
     // like a valid answer.
+    const base = projectionWith([SOURCE, TARGET], [reference(SOURCE, 0, TARGET)]);
     const projection = {
-      ...projectionWith([SOURCE, TARGET], [reference(SOURCE, 0, TARGET)]),
+      ...base,
       resourceRealizations: [SOURCE, TARGET].map((path) => ({
         ...queryRealization(path),
         extentId: 'extent:filesystem',
@@ -409,6 +424,9 @@ describe('resolveEdges — the authored-only policy', () => {
         resourceId: `id:${path}`,
         extentId: LENS.extentContextId,
       })),
+      // The other pass's extent is a real extent with a context row of its own,
+      // scoped to the same root — which is how its realizations find theirs.
+      resolutionContexts: [...base.resolutionContexts, extentContext('extent:filesystem', ROOT_ID)],
     } as unknown as Projection;
 
     const { edges, edgeResolutions } = resolveEdges(projection, LENS);
@@ -585,11 +603,67 @@ describe('resolveEdges — the authored-only policy', () => {
     expect(shared).toEqual(private_);
   });
 
-  it('returns nothing for a projection with no root, rather than guessing one', () => {
+  it('refuses a realization whose extent names no root, rather than guessing one', () => {
+    // 🚨 This used to answer `{ edges: [], edgeResolutions: [] }` for a rootless
+    // projection — the silent confident zero the two sibling lenses
+    // (`whatLoadsAt`, `discoverableFrom`) refuse for the same reason: "nothing
+    // links" is indistinguishable from "nobody resolved anything". A projection
+    // with realizations and no root for them violates the population invariant
+    // (`merge.ts` adds a root per population and a context per extent), and
+    // the honest answer is to say so.
     const projection = projectionWith([SOURCE], [reference(SOURCE, 0, SOURCE)]);
     const rootless = { ...projection, roots: [] } as unknown as Projection;
 
-    expect(resolveEdges(rootless, LENS)).toEqual({ edges: [], edgeResolutions: [] });
+    expect(() => resolveEdges(rootless, LENS)).toThrow(/no root/);
+  });
+
+  it('answers empty, not an error, for a projection that realizes nothing', () => {
+    // The control: with nothing to resolve there is nothing to resolve against,
+    // and that is a genuine zero.
+    const empty = { ...projectionWith([], []), roots: [] } as unknown as Projection;
+
+    expect(resolveEdges(empty, LENS)).toEqual({ edges: [], edgeResolutions: [] });
+  });
+});
+
+/**
+ * Two roots that both realize `docs/x.md`, and a file under the FIRST root
+ * linking `./x.md`. The lens's extent holds every identity as a member, so
+ * the second root's realization is visible too (as a foreign realization,
+ * which `visibleRealizations` indexes AFTER the extent's own) — a closure
+ * extent over a federated projection has exactly this shape.
+ */
+function federated(): Projection {
+  const base = projectionWith([], [reference(GUIDE, 0, './x.md')]);
+  const rows = [
+    queryRealization(GUIDE),
+    { ...queryRealization('docs/x.md'), resourceId: 'id:1:docs/x.md' },
+    // The second root's `docs/x.md`: a path-keyed index that keeps the last
+    // writer hands out THIS identity for the first root's file.
+    { ...queryRealization('docs/x.md'), resourceId: 'id:2:docs/x.md', extentId: SECOND_EXTENT },
+  ];
+  return {
+    ...base,
+    roots: [...base.roots, { id: SECOND_ROOT_ID, path: SECOND_ROOT, label: null }],
+    resolutionContexts: [...base.resolutionContexts, extentContext(SECOND_EXTENT, SECOND_ROOT_ID)],
+    resourceRealizations: rows,
+    resourceExtents: rows.map((row) => ({ resourceId: row.resourceId, extentId: LENS.extentContextId })),
+  } as unknown as Projection;
+}
+
+describe('resolveEdges — a federated projection resolves each file against ITS root', () => {
+  it('resolves a link to the file under the WRITER\'s root, not to a same-named file under another', () => {
+    // 🚨 Every realization used to resolve against `projection.roots[0]`, and
+    // the path index was keyed on the root-RELATIVE path alone — so two roots
+    // that share a relative path collapsed to one entry, and a link resolved to
+    // whichever root's identity was indexed last. `roots` is declared
+    // "Federated corpus roots" and the realization schema says the root comes
+    // from `resolution_contexts.rootId` via `extentId` precisely so that this
+    // stays unambiguous.
+    const { edgeResolutions } = resolveEdges(federated(), LENS);
+
+    expect(edgeResolutions).toHaveLength(1);
+    expect(edgeResolutions[0]).toMatchObject({ dstKind: 'resource', dstResource: 'id:1:docs/x.md' });
   });
 });
 

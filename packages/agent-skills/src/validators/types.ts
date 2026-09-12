@@ -31,6 +31,15 @@ export interface ValidationResult {
     version?: string;
     lineCount?: number;
     referenceFiles?: number;
+    /** Marketplace only: every entry the manifest's `plugins` list declares. */
+    pluginEntries?: number;
+    /**
+     * Marketplace only: the entries whose `source` is a relative path — plugins
+     * the marketplace ships itself, which a walk of its own tree is expected to
+     * find. Published so a consumer can tell "validated none because none are
+     * local" from "validated none of the ones that are".
+     */
+    localPluginEntries?: number;
   };
   /** Raw evidence records collected during validation. Rendered in --verbose. */
   evidence?: EvidenceRecord[];

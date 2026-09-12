@@ -3,8 +3,11 @@ import { promises as fs } from 'node:fs';
 
 import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 import { ExternalLinkCache } from '../src/external-link-cache.js';
+import { ExternalLinkCacheEntrySchema } from '../src/schemas/external-link-cache.js';
+import { schemaShapeSource } from '../src/schemas/parse-facts.js';
 
 const EXAMPLE_URL = 'https://example.com';
 const GITHUB_URL = 'https://github.com';
@@ -176,6 +179,87 @@ describe('ExternalLinkCache', () => {
 			});
 
 			expect(await cache.get(url)).toBeNull();
+		});
+	});
+
+	describe('what decides validity, now that no integer does', () => {
+		// The half the existing cases above do not cover. They prove the schema
+		// MOVES when the stored shape moves — a foreign type, a missing field, a
+		// stray `version` key are all misses. This block adds the other half of
+		// the derivation contract: the decision must be keyed on the SHAPE and
+		// nothing else, so rewording a `.describe()` must not silently cool every
+		// adopter's cache. A hand-bumped integer had neither property — it moved
+		// only when a human moved it, which is why it never moved at all.
+		//
+		// `schemaShapeSource` is the repo's existing prose-stripped rendering of a
+		// schema's structure (the input to `parseFactsShapeSource`). Used here as
+		// the observable for "did the shape move?", not as a stored value: this
+		// cache deliberately lives outside the version namespace, so nothing
+		// persists a digest and nothing should start.
+
+		/** The live schema's three fields, re-declared so a test can move one. */
+		const twin = (fields: z.ZodRawShape): z.ZodTypeAny => z.object(fields).strict();
+
+		const LIVE_FIELDS = {
+			statusCode: z.number().int().nonnegative(),
+			statusMessage: z.string(),
+			timestamp: z.number().int().nonnegative(),
+		};
+
+		it('does not move when only the prose is reworded', () => {
+			// Every `.describe()` replaced, including the object's own. If this
+			// reddens, an editor fixing a typo has invalidated stored data.
+			const reworded = z
+				.object({
+					statusCode: z.number().int().nonnegative().describe('totally different words'),
+					statusMessage: z.string().describe('and here too'),
+					timestamp: z.number().int().nonnegative().describe('reworded as well'),
+				})
+				.strict()
+				.describe('a rewritten summary of the very same entry');
+
+			expect(schemaShapeSource(reworded)).toBe(schemaShapeSource(ExternalLinkCacheEntrySchema));
+		});
+
+		it.each([
+			['a field is renamed', { ...LIVE_FIELDS, status: LIVE_FIELDS.statusCode, statusCode: undefined }],
+			['a field changes type', { ...LIVE_FIELDS, statusCode: z.string() }],
+			['a required field is added', { ...LIVE_FIELDS, redirectedTo: z.string() }],
+			['an optional field is added', { ...LIVE_FIELDS, redirectedTo: z.string().optional() }],
+			['a field is removed', { statusCode: LIVE_FIELDS.statusCode, timestamp: LIVE_FIELDS.timestamp }],
+		])('moves when %s', (_label, fields) => {
+			const moved = twin(
+				Object.fromEntries(
+					Object.entries(fields).filter(([, value]) => value !== undefined),
+				) as z.ZodRawShape,
+			);
+
+			expect(schemaShapeSource(moved)).not.toBe(schemaShapeSource(ExternalLinkCacheEntrySchema));
+		});
+
+		it('accepts and rejects by the shape, not by the prose', async () => {
+			// The observable above tied back to the behaviour it stands for: the
+			// entry a reworded build wrote is still a hit, and the entry a moved
+			// build wrote is a miss — with no integer consulted either way.
+			// A fresh instance per read: `ExternalLinkCache` memoizes the parsed
+			// file on first load, so a second raw write is invisible to a reader
+			// that has already looked.
+			const url = 'https://shape-not-prose.example.com';
+
+			await writeRawCache(tempDir, {
+				[entryKey(url)]: { statusCode: 200, statusMessage: 'OK', timestamp: Date.now() },
+			});
+			expect(await new ExternalLinkCache(tempDir, 24).get(url)).not.toBeNull();
+
+			await writeRawCache(tempDir, {
+				[entryKey(url)]: {
+					statusCode: 200,
+					statusMessage: 'OK',
+					timestamp: Date.now(),
+					redirectedTo: 'https://elsewhere.example.com',
+				},
+			});
+			expect(await new ExternalLinkCache(tempDir, 24).get(url)).toBeNull();
 		});
 	});
 

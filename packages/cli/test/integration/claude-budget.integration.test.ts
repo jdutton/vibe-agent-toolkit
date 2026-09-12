@@ -236,7 +236,7 @@ describe('vat claude budget (integration)', () => {
     expect(scoped.status).toBe(0);
   });
 
-  it('announces a scope that matched no working location instead of reporting clean', async () => {
+  it('REFUSES a scope that matched no working location instead of reporting clean', async () => {
     const fixture = setupBudgetFixture();
 
     // The positive control, on the SAME tree, run FIRST: an "emits nothing"
@@ -246,12 +246,23 @@ describe('vat claude budget (integration)', () => {
 
     const missed = await runBudget(fixture, [UNREALIZED]);
 
-    // Zero findings here means "we looked nowhere", not "you are in budget" —
-    // and a silent zero is the failure mode, so it is named in both channels.
-    expect(missed.findings).toHaveLength(0);
+    // 🔑 This case used to end `status: success`, exit 0, with an empty findings
+    // list and the news of it on stderr ALONE — so a CI wrapper reading the
+    // document (the only channel it gates on) was told a path nobody looked at
+    // was within budget. "We looked nowhere" is now a non-overridable
+    // run-integrity error, the same code and severity `vat resources check`
+    // gives an empty corpus.
+    expect(missed.findings).toHaveLength(1);
+    expect(missed.findings[0]?.code).toBe('RESOURCE_CHECK_BROKEN');
+    expect(missed.findings[0]?.severity).toBe('error');
+    expect(missed.findings[0]?.message).toContain(UNREALIZED);
+    expect(missed.parsed['status']).toBe('error');
     expect(missed.parsed['unmatchedScope']).toEqual([UNREALIZED]);
+    // Both channels still say it — stderr for a person, the document for a
+    // parser. The defect was never the warning; it was the document disagreeing
+    // with it on the half the exit code is computed from.
     expect(missed.stderr).toContain(UNREALIZED);
-    expect(missed.status).toBe(0);
+    expect(missed.status).toBe(1);
   });
 
   it('refuses a path outside the corpus root rather than reporting nothing for it', async () => {

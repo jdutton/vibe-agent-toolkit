@@ -66,7 +66,7 @@
  * empty.
  */
 
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, statSync } from 'node:fs';
 
 import {
   readTextContentSync,
@@ -209,6 +209,89 @@ export class FilesystemCrawlSource implements CrawlSource {
 }
 
 /**
+ * One path a half of {@link GitCrawlSource} found, before the membership rule
+ * has been applied to it.
+ *
+ * Identical to {@link EnumeratedPath} but for the extra `'symlink'` its shape
+ * may carry, and that difference is the entire point: **the two halves observe
+ * symlink-ness by different means and neither may decide what to do about it.**
+ * The snapshot half reads git's mode bits; the walked half `lstat`s the
+ * collapsed `ls-files --others --directory` entries git spells exactly like
+ * files. Each states only WHAT IT SAW, and {@link GitCrawlSource.enumerate}'s
+ * `record` is the single place that acts on it.
+ *
+ * 🪤 Two copies of one rule is how this diverged the first time: the
+ * mode-`120000` drop lived in the snapshot half alone, so a committed symlink
+ * was excluded and an UNTRACKED one walked in through the prune list — under
+ * four docstrings and one published `vat claude budget` limit all saying that no
+ * lane emits a symlink's own path. The link and its target then realized the
+ * same `contentKey` under two identities, which is a budget charging one set of
+ * bytes twice.
+ */
+interface CrawlCandidate {
+  /** Absolute, forward-slashed. */
+  absolutePath: string;
+  /**
+   * As {@link EnumeratedPath.contentHint}, and always `null` for a symlink: its
+   * OID is the TARGET STRING, which does not imply byte equality.
+   */
+  contentHint: string | null;
+  /**
+   * As {@link EnumeratedPath.shape}, plus `'symlink'` — the one value that ends
+   * membership rather than describing it.
+   */
+  shape: PathShape | 'symlink' | null;
+}
+
+/**
+ * A path some walk produced, about which nothing is known for free.
+ *
+ * `shape: null` is the honest answer rather than a conservative one: these come
+ * from a `readdir` walk that deliberately does not report its dirent type (see
+ * {@link FilesystemCrawlSource}), and `'symlink'` is not among the answers it
+ * could give — that walk runs `followSymlinks: false`, so it never offers a
+ * link's own path in the first place.
+ *
+ * @param absolutePath - The path
+ * @returns A candidate carrying no claims
+ */
+function walkedCandidate(absolutePath: string): CrawlCandidate {
+  return { absolutePath, contentHint: null, shape: null };
+}
+
+/**
+ * Whether one collapsed `ls-files --others --directory` entry is a symlink.
+ *
+ * **The one filesystem call git's own answer does not cover.** Git marks a
+ * *directory* in that listing with a trailing slash by `lstat`ing it, so a link
+ * to a directory arrives spelled exactly like a file, and the listing carries no
+ * mode bits at all — this is the single input to this source where membership
+ * cannot be decided from what git said. One `lstat` per COLLAPSED entry buys it
+ * (369 of them on the 8,496-path adopter tree the module docstring measures, not
+ * one per path), and nothing is opened, read or hashed.
+ *
+ * **Anything this call cannot answer answers `null`, and that is deliberate.**
+ * A path that vanished between the listing and this `lstat`, or one whose
+ * directory lost read permission mid-run, stays a member and reaches
+ * `statObservation` in `realizations.ts` — which already has a vocabulary for
+ * "we could not look" (`exists: false`, every other column defaulted). Refusing
+ * it here instead would delete a row on the strength of a failed syscall and say
+ * nothing, which is a silently narrowed population; a symlink that got dropped
+ * is the only thing this function is entitled to decide.
+ *
+ * @param absolutePath - The entry to inspect
+ * @returns `'symlink'` when it is one, else `null`
+ */
+function symlinkShape(absolutePath: string): 'symlink' | null {
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path git just listed, resolved against the repository root
+    return lstatSync(absolutePath).isSymbolicLink() ? 'symlink' : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Git plus a bounded walk. See the module docstring for what it may not do.
  */
 export class GitCrawlSource implements CrawlSource {
@@ -238,23 +321,48 @@ export class GitCrawlSource implements CrawlSource {
       isMember(relativeToRoot(absolutePath, this.#root));
 
     const found = new Map<string, EnumeratedPath>();
-    const record = (entry: EnumeratedPath): void => {
-      if (!found.has(entry.absolutePath)) found.set(entry.absolutePath, entry);
+    /**
+     * ⚠️ **A SYMLINK IS NOT A MEMBER, and this is the ONE place THIS SOURCE
+     * decides so** — for the snapshot half and the prune list, the two halves
+     * that can offer one. The bounded walk cannot: it runs `followSymlinks:
+     * false`, whose `processSymlink` returns before recording anything, so a
+     * link's own path never reaches `record` from that lane and there is nothing
+     * here for this rule to drop. That is a third decision site only in the sense
+     * that it is upstream and shared with the filesystem source; it is not a copy
+     * of this rule.
+     *
+     * Dropping it is what makes this source a re-sourcing rather than a
+     * redefinition. The walk it replaces runs `followSymlinks: false`, whose
+     * `processSymlink` returns before recording anything, so the filesystem
+     * extent has never contained a link's own path. Git has no such notion and
+     * reports one like any other entry — the divergence `file-crawler.ts`'s
+     * KNOWN DIVERGENCE block describes between its own two branches. Admitting
+     * them here would import that divergence into an extent that does not have
+     * it, and would do it silently: the rows would look like ordinary files
+     * whose bytes are a target string, and each would mint its OWN identity over
+     * its TARGET's `contentKey` — one set of bytes, two billable names.
+     *
+     * 🪤 The observation belongs to whichever half made it ({@link
+     * CrawlCandidate}); only the decision is here. Two halves each deciding for
+     * themselves is exactly what shipped: mode `120000` was dropped from the
+     * snapshot, nothing was dropped from the prune list, and an untracked
+     * symlink was a member for as long as the two rules lived apart.
+     */
+    const record = (candidate: CrawlCandidate): void => {
+      if (candidate.shape === 'symlink') return;
+      if (found.has(candidate.absolutePath)) return;
+      found.set(candidate.absolutePath, {
+        absolutePath: candidate.absolutePath,
+        contentHint: candidate.contentHint,
+        shape: candidate.shape,
+      });
     };
 
+    // Snapshot first, because `record` is first-wins and git's entries carry a
+    // content hint and a shape the walked ones cannot.
     const { members, submodules } = this.#snapshotMembers(admits);
-    for (const entry of members) found.set(entry.absolutePath, entry);
-    for (const absolutePath of await this.#untrackedTerritory(admits, submodules)) {
-      // `shape: null`, and that is the honest answer rather than a conservative
-      // one: every path here came from a filesystem walk or from a collapsed
-      // `ls-files --others --directory` entry. The walk knows the dirent type but
-      // deliberately does not report it (see `FilesystemCrawlSource`), and the
-      // collapsed entry is worse than unknown — git marks a *directory* with a
-      // trailing slash by `lstat`ing it, so a symlink pointing at a directory
-      // arrives spelled exactly like a file and a shape derived from it would be
-      // a wrong row.
-      record({ absolutePath, contentHint: null, shape: null });
-    }
+    for (const candidate of members) record(candidate);
+    for (const candidate of await this.#untrackedTerritory(admits, submodules)) record(candidate);
     // Last, so an ancestor already recorded by the snapshot as a FILE is not
     // relabelled. `contentHint` is unconditionally null — a directory has no
     // bytes — and `shape` is unconditionally `'directory'`, which is sound
@@ -278,7 +386,7 @@ export class GitCrawlSource implements CrawlSource {
    * @throws When git could not answer at all
    */
   #snapshotMembers(admits: (absolutePath: string) => boolean): {
-    members: EnumeratedPath[];
+    members: CrawlCandidate[];
     submodules: string[];
   } {
     const snapshot = gitTreeSnapshot({ cwd: this.#root });
@@ -289,7 +397,7 @@ export class GitCrawlSource implements CrawlSource {
       );
     }
 
-    const members: EnumeratedPath[] = [];
+    const members: CrawlCandidate[] = [];
     const submodules: string[] = [];
 
     for (const entry of snapshot.entries) {
@@ -298,17 +406,18 @@ export class GitCrawlSource implements CrawlSource {
       if (!isUnderRoot(entry.absolutePath, this.#root)) continue;
       if (!admits(entry.absolutePath)) continue;
 
-      // ⚠️ A SYMLINK IS NOT A MEMBER HERE, and dropping it is what makes this a
-      // re-sourcing rather than a redefinition. The walk this replaces runs with
-      // `followSymlinks: false`, whose `processSymlink` returns before recording
-      // anything — so the filesystem extent has never contained a symlink's own
-      // path. Git has no such notion and reports mode `120000` like any other
-      // entry, which is precisely the divergence `file-crawler.ts`'s KNOWN
-      // DIVERGENCE block describes between its own two branches. Admitting them
-      // here would import that divergence into an extent that does not have it,
-      // and would do it silently: the rows would look like ordinary files whose
-      // bytes are a target string.
-      if (entry.isSymlink) continue;
+      // A symlink is REPORTED here, never dropped here. This is the only code
+      // that reads git's mode bits, so the observation has to be made here — but
+      // the DECISION is `enumerate`'s `record`, once, for both halves. See
+      // {@link CrawlCandidate} for why those are deliberately separate.
+      //
+      // `contentHint: null` keeps {@link EnumeratedPath.contentHint}'s invariant
+      // literally true even for a candidate that never becomes one: a symlink's
+      // OID is its TARGET STRING and does not imply byte equality.
+      if (entry.isSymlink) {
+        members.push({ absolutePath: entry.absolutePath, contentHint: null, shape: 'symlink' });
+        continue;
+      }
 
       // A submodule is ONE gitlink entry whose OID is a commit — none of its
       // files appear. The walk knows nothing about submodules and simply reads
@@ -324,8 +433,8 @@ export class GitCrawlSource implements CrawlSource {
       // into a throwaway index, which stages deletions — a tracked file removed
       // from the working tree is absent from `entries` rather than present and
       // stale; it is NOT A DIRECTORY because a tree object records blobs and
-      // git lists no directories at all; and it is NOT A SYMLINK because mode
-      // `120000` was dropped a few lines above.
+      // git lists no directories at all; and it is NOT A SYMLINK because every
+      // mode-`120000` entry took the branch above and never reaches here.
       members.push({ absolutePath: entry.absolutePath, contentHint: entry.oid, shape: 'file' });
     }
 
@@ -338,30 +447,50 @@ export class GitCrawlSource implements CrawlSource {
    *
    * @param admits - The shipped include/exclude decision
    * @param submodules - Directories the snapshot named but did not describe
-   * @returns Absolute paths, files and directories alike
+   * @returns Candidates, files and directories alike, each carrying the prune
+   *   list's `lstat` observation so `enumerate` can apply the one membership rule
    */
   async #untrackedTerritory(
     admits: (absolutePath: string) => boolean,
     submodules: readonly string[],
-  ): Promise<string[]> {
-    const paths: string[] = [];
+  ): Promise<CrawlCandidate[]> {
+    const candidates: CrawlCandidate[] = [];
 
     // A submodule's own files belong to its own repository, so the outer
     // snapshot cannot see them while the outer WALK reads them like any other
     // directory. Descending is what keeps the two sources equal.
     for (const submodule of submodules) {
-      paths.push(submodule, ...(await expandDirectory(submodule, admits)));
+      candidates.push(
+        walkedCandidate(submodule),
+        ...(await expandDirectory(submodule, admits)).map(walkedCandidate),
+      );
     }
 
     // Ignored territory: descend, because the extent this feeds must still
     // report `gitignored: true` rows. `NEVER_CRAWL_GLOBS` is applied to the
     // COLLAPSED entry before descending, which is where the saving is — a
     // pruned directory is skipped by name and never entered.
+    //
+    // ⚠️ This is the ONLY lane that can offer a symlink `git add --all` never
+    // staged: an ignored path is in no tree snapshot, so nothing upstream has
+    // seen its mode. `collapsed.shape` is where that gap is closed.
     for (const collapsed of this.#prune({ ignored: true })) {
       if (!admits(collapsed.absolutePath)) continue;
-      paths.push(collapsed.absolutePath);
-      if (collapsed.isDirectory) {
-        paths.push(...(await expandDirectory(collapsed.absolutePath, admits)));
+      candidates.push({
+        absolutePath: collapsed.absolutePath,
+        contentHint: null,
+        shape: collapsed.shape,
+      });
+      // A DIFFERENT question from membership — whether to descend — and it is
+      // asked of the link rather than of its target deliberately: following one
+      // would enumerate a subtree under a second name, which is the same reason
+      // the walk sets `followSymlinks: false`. Git's trailing slash comes from
+      // its own `lstat`, so a link never carries one and this is belt-and-braces
+      // rather than a second copy of the drop.
+      if (collapsed.isDirectory && collapsed.shape !== 'symlink') {
+        candidates.push(
+          ...(await expandDirectory(collapsed.absolutePath, admits)).map(walkedCandidate),
+        );
       }
     }
 
@@ -370,11 +499,22 @@ export class GitCrawlSource implements CrawlSource {
     // (`git add --all` staged it), so walking here would re-enumerate what git
     // just handed over. What this recovers is the directory entry itself —
     // including the empty ones no tree object can represent.
+    //
+    // 🪤 "Already in the snapshot" is why this lane needs `collapsed.shape` too,
+    // not why it can skip it: `record` is first-wins, so a path the snapshot
+    // supplied is a no-op here — but a path the snapshot DROPPED is not, and a
+    // symlink is precisely the path it drops. Re-offering one bare is how an
+    // untracked link became a member while the committed ones were excluded.
     for (const collapsed of this.#prune({ ignored: false })) {
-      if (admits(collapsed.absolutePath)) paths.push(collapsed.absolutePath);
+      if (!admits(collapsed.absolutePath)) continue;
+      candidates.push({
+        absolutePath: collapsed.absolutePath,
+        contentHint: null,
+        shape: collapsed.shape,
+      });
     }
 
-    return paths;
+    return candidates;
   }
 
   /**
@@ -382,16 +522,21 @@ export class GitCrawlSource implements CrawlSource {
    *
    * @param options - Whether to ask for the ignored side
    * @param options.ignored - Restrict to ignored paths
-   * @returns Collapsed entries under this root
+   * @returns Collapsed entries under this root, each with the one property the
+   *   listing cannot express — see {@link symlinkShape}
    */
-  #prune(options: { ignored: boolean }): { absolutePath: string; isDirectory: boolean }[] {
+  #prune(options: { ignored: boolean }): {
+    absolutePath: string;
+    isDirectory: boolean;
+    shape: 'symlink' | null;
+  }[] {
     const listing = gitLsOthers({ cwd: this.#root, ignored: options.ignored, directory: true });
     if (listing === null) return [];
 
     // Relative to the REPOSITORY root, like every other `ls-files` output.
     const repositoryRoot = gitFindRoot(this.#root) ?? this.#root;
 
-    const entries: { absolutePath: string; isDirectory: boolean }[] = [];
+    const entries: { absolutePath: string; isDirectory: boolean; shape: 'symlink' | null }[] = [];
     for (const relativePath of listing) {
       // git marks a collapsed directory with a trailing slash. That is the only
       // signal distinguishing "this whole subtree" from "this one file", so it
@@ -402,7 +547,7 @@ export class GitCrawlSource implements CrawlSource {
         isDirectory ? relativePath.slice(0, -1) : relativePath,
       );
       if (isUnderRoot(absolutePath, this.#root)) {
-        entries.push({ absolutePath, isDirectory });
+        entries.push({ absolutePath, isDirectory, shape: symlinkShape(absolutePath) });
       }
     }
     return entries;
@@ -559,8 +704,20 @@ export function crawlSourceSelector(): string | undefined {
  * **Defaults to git wherever there is a git working tree** — the end state §3.3
  * specifies, taken now that the population was compared on real corpora rather
  * than reasoned about. Both arms enumerate `tracked ∪ (untracked ∧ ¬ignored)`;
- * measured on an 8,548-file adopter the git arm costs 7,705 filesystem calls
- * against the filesystem arm's 18,454, and 6 git spawns.
+ * measured 2026-09-11 on an 8,548-file adopter tree (`vat-lab io run --command
+ * resources-scan`, warm, 3 runs, both arms load-clean) the git arm costs
+ * **8,760** filesystem calls against the filesystem arm's **21,684**, and 6 git
+ * spawns against 1. The per-site delta closes exactly: −12,003 `lstat` in
+ * `realizations` (git holds the mode bits) and −1,679 `readdir`, against +447
+ * `lstat` in {@link symlinkShape} — one per collapsed `--others --directory`
+ * entry, 444 distinct — plus +296 `existsSync`/`statSync` for the bounded walk
+ * of ignored territory, +5 spawns and +10 for the temp index and the
+ * `.git`-readability guard.
+ *
+ * The 447 is the whole cost of {@link symlinkShape}: bounded by the number of
+ * COLLAPSED entries, not by the corpus. An earlier reading of 7,705 against
+ * 18,454 (2026-08-20) predates it and was taken on a smaller tree — the arms are
+ * compared against EACH OTHER at one date, never against the older pair.
  *
  * ⚠️ Outside a git working tree this is not a preference but a REQUIREMENT to
  * fall back — see the guard in {@link gitExtentSelected}.

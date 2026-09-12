@@ -630,6 +630,12 @@ interface NestedScan {
   readonly open: number[];
   /** How many more characters of region text this command may still yield. */
   budget: number;
+  /**
+   * Set once a region has been dropped for want of budget. The scan's own
+   * answer to *"is what I am handing back the whole picture?"* — see
+   * {@link closeRegion} for why a `false` here is not safe to act on.
+   */
+  truncated: boolean;
   inBacktick: boolean;
 }
 
@@ -664,10 +670,27 @@ interface NestedScan {
  * bought its linearity by not answering the question. The budget caps the TOTAL
  * emitted characters at {@link NESTED_REGION_TEXT_BUDGET_FACTOR} × the command's
  * length, which keeps the whole scan linear, and it is spent INNERMOST-FIRST
- * because regions close from the inside out. So an adversarially deep nest keeps
- * the inner regions, where a command can actually sit, and drops the outer ones —
- * which at that depth are that same command wrapped in parentheses, and are the
- * regions a rule is least able to match anyway.
+ * because regions close from the inside out.
+ *
+ * 🚩 That spend order used to be defended here as harmless — *"an adversarially
+ * deep nest keeps the inner regions, where a command can actually sit, and drops
+ * the outer ones, which at that depth are that same command wrapped in
+ * parentheses"*. FALSE, and it was the budget's whole safety argument. An outer
+ * region's OWN TEXT is a place a command sits with no child around it:
+ * `x $( '('×23 + ')'×23 ; rm -rf / )` is 64 characters, and `Bash(rm *)`
+ * answered `false` for it while answering `true` at 21 levels. The regions the
+ * budget dropped were exactly the ones holding the payload. The guard that
+ * existed placed its command at the INNERMOST point — the one position an
+ * innermost-first spend always preserves — so it could not see this.
+ *
+ * ⛔ So a truncated scan is REPORTED rather than silently returned, and
+ * {@link matchesBashRule} FAILS CLOSED on it: past the budget the lane cannot
+ * say what the command contains, and for a blocking lane "cannot say" has to
+ * read as "matches". The cost is real and is pinned in the suite — an innocent
+ * 3,000-deep nest is reported as conflicting with every Bash deny rule — and it
+ * is the direction that is safe to be wrong in. Nothing anybody wrote on purpose
+ * reaches it: real commands nest one to three deep, and this module's own
+ * deepest worked shape, `echo "$(sh -c "rm $(x)")"`, is two.
  *
  * Measured on Node 24 against `Bash(rm *)` and `'('×k + 'echo x' + ')'×k`, with
  * the budget: k=48,000 in 8.47 ms and ~1.9× per 2× input across k=1,500…48,000.
@@ -678,7 +701,12 @@ function closeRegion(scan: NestedScan, command: string, end: number): void {
   const start = scan.open.pop();
   if (start === undefined) return; // A closer with nothing open.
   const length = end - start;
-  if (length > scan.budget) return; // Budget spent — see above for what that costs.
+  if (length > scan.budget) {
+    // Budget spent. The caller must not read the remaining regions as the whole
+    // command — see above for the under-report that reading cost.
+    scan.truncated = true;
+    return;
+  }
   scan.budget -= length;
   scan.found.push(command.slice(start, end));
 }
@@ -739,12 +767,18 @@ function skipQuoting(command: string, index: number, inDouble: boolean): number 
  * regions included verbatim, so a rule literal that crosses a child's boundary
  * still matches. That is not free — see {@link closeRegion} for the budget that
  * pays for it and for what an adversarially deep nest gives up.
+ *
+ * ⛔ `truncated` is not a diagnostic. A `true` means regions were DROPPED, and
+ * the drop is innermost-first-preserving, so what comes back is a nest's inner
+ * text with its outer text — where a command also sits — missing. Every blocking
+ * caller must treat it as "unanalysable" and match, never as "nothing found".
  */
-function nestedRegions(command: string): string[] {
+function nestedRegions(command: string): { regions: string[]; truncated: boolean } {
   const scan: NestedScan = {
     found: [],
     open: [],
     budget: command.length * NESTED_REGION_TEXT_BUDGET_FACTOR,
+    truncated: false,
     inBacktick: false,
   };
   let inDouble = false;
@@ -767,7 +801,7 @@ function nestedRegions(command: string): string[] {
     index += 1;
   }
 
-  return scan.found;
+  return { regions: scan.found, truncated: scan.truncated };
 }
 
 /**
@@ -832,15 +866,22 @@ function unparseableSegments(region: string): string[] {
  * Every command text a deny or ask rule is tested against: the top-level
  * subcommands, plus those of every nested region, plus — for a region that
  * cannot be parsed at all — {@link unparseableSegments}.
+ *
+ * ⛔ `truncated` rides along rather than being dropped here, and a caller that
+ * ignores it is reading a PARTIAL segment list as a complete one. That is the
+ * defect {@link closeRegion} documents: the budget's spend order drops the outer
+ * regions, and a command sitting in an outer region's own text vanishes with
+ * them.
  */
-function denySegments(command: string): string[] {
+function denySegments(command: string): { segments: string[]; truncated: boolean } {
   const segments: string[] = [];
-  for (const region of [command, ...nestedRegions(command)]) {
+  const { regions, truncated } = nestedRegions(command);
+  for (const region of [command, ...regions]) {
     const parts = splitCompound(region);
     if (parts === undefined || parts.length === 0) segments.push(...unparseableSegments(region));
     else segments.push(...parts);
   }
-  return segments;
+  return { segments, truncated };
 }
 
 /**
@@ -1302,7 +1343,16 @@ export function matchesBashRule(command: string, rule: string, lane: PermissionL
   const bare = bareCommandFor(content);
 
   if (isBlockingLane(lane)) {
-    return denySegments(command).some((segment) =>
+    const { segments, truncated } = denySegments(command);
+    // ⛔ FAIL CLOSED. A truncated scan is a nest the region budget could not
+    // materialise in full, and the regions it drops are the OUTER ones — where a
+    // command sits just as readily as at the bottom. Reading the remainder as
+    // the whole command is what answered `false` for
+    // `x $( '('×23 + ')'×23 ; rm -rf / )`. For a blocking lane, "I could not
+    // analyse this" has to read as "it matches"; see {@link closeRegion} for the
+    // over-report this buys and why nothing written on purpose reaches it.
+    if (truncated) return true;
+    return segments.some((segment) =>
       denyReadings(segment).some((reading) => matchesReading(reading, parsed, bare)),
     );
   }
@@ -1482,6 +1532,113 @@ export function ruleConstrainsTool(
     case 'path':
       return true;
   }
+}
+
+/**
+ * Tool inputs drawn from a rule's OWN extension, to ask another rule about.
+ *
+ * The content text is one — `git push:*` read as a command, `./secrets/**` read
+ * as a path — and for Bash the {@link bareCommandFor} command is a second. That
+ * second one is what makes a `:*` or trailing-` *` rule intersect ITSELF: the
+ * text `git push:*` is not matched by the pattern `git push *` that the
+ * identical rule compiles to, while the bare `git push` is.
+ *
+ * ⚠️ A heuristic witness SET, not the extension. Two patterns can overlap on a
+ * string neither of these is — see {@link ruleConstrainsDeclaration} for the
+ * residue that leaves.
+ */
+function ruleWitnesses(toolName: string, content: string): string[] {
+  if (contentLaneFor(toolName) !== 'bash') return [content];
+  const bare = bareCommandFor(content);
+  return bare === undefined || bare === content ? [content] : [content, bare];
+}
+
+/**
+ * Whether `rule` constrains anything a SKILL.md `allowed-tools:` DECLARATION
+ * asks for — the question `settings-compat-checker` actually has, for every
+ * spelling a declaration can take.
+ *
+ * A declaration is not a tool call. It is a rule-shaped PATTERN over the calls
+ * the skill intends to make, and the conflict question is whether its extension
+ * and the rule's extension intersect. {@link matchesPermissionRule} answers the
+ * narrower question — *"does this rule cover this one concrete input?"* — and
+ * {@link ruleConstrainsTool} answers the widest one, for a declaration that
+ * names no input at all.
+ *
+ * 🚩 Between those two lay every spelling people actually write, and they were
+ * being handed to the concrete matcher as if the pattern text were a literal
+ * command or a literal filename. `Bash(git:*)` was tested as a command called
+ * `git:*`. Measured: bare `Bash` vs deny `Bash(git push:*)` reported a conflict,
+ * and `Bash(git:*)` vs the SAME rule reported none — even though the second
+ * declaration is a NARROWING of the first that still contains `git push`. So did
+ * `Bash(git push:*)` against itself. One deny rule, two answers, decided by how
+ * much of its own scope the skill bothered to spell out, and the direction is
+ * UNDER-report: silently telling an adopter "no conflict" about a tool their org
+ * policy blocks.
+ *
+ * ⚠️ The previous repair of that same contradiction fixed one spelling — bare
+ * `Write` versus `Write(./out/**)` — rather than the mechanism, which is why the
+ * `:*` and `./**` forms were still broken afterwards. So the shape here is
+ * per-LANE and spelling-blind: the taxonomy decides the tool, then containment
+ * is asked in BOTH directions.
+ *
+ * 1. Tool names first, through {@link matchesToolName}, so a rule for another
+ *    tool can never be read as a pattern over this one.
+ * 2. A declaration naming no input (bare, or `(*)`) is UNRESTRICTED, so the
+ *    question is {@link ruleConstrainsTool}'s.
+ * 3. Otherwise ask whether the RULE covers the declaration, and then whether the
+ *    DECLARATION covers a {@link ruleWitnesses witness} drawn from the rule.
+ *    Either containment means some call the skill intends is one the rule
+ *    catches.
+ *
+ * The second direction is asked in the ALLOW lane whatever `lane` is, for
+ * {@link isSubsumedBy}'s reason: the question there is *"does the declaration
+ * PERMIT this?"*, and the deny lane's deliberate over-matching would manufacture
+ * intersections that do not hold.
+ *
+ * ⛔ {@link isSubsumedBy} is NOT the primitive for the second direction, though
+ * it looks like it. It asks whether the whole of one extension lies inside the
+ * other and conjoins both halves of that, so a Bash rule does not even subsume
+ * ITSELF: `Bash(git push:*)` fails its own second half, because the content text
+ * `git push:*` is not a command the pattern `git push *` matches. Deliberate
+ * there — it advises DELETING a rule, so it must never over-claim — and wrong
+ * here, where one witness is enough.
+ *
+ * ⚠️ Containment is not intersection, and this returns `false` for the pairs
+ * that overlap without either side containing the other — `Bash(npm *)` against
+ * deny `Bash(* --help *)` share `npm --help x` and are reported as no conflict.
+ * Deciding that needs a real glob-intersection over both patterns; what is here
+ * closes the containment cases, which is every spelling the review measured, and
+ * the residue is named rather than left to be rediscovered.
+ *
+ * @param declaration - The `allowed-tools:` entry, e.g. `Bash(git:*)` or `Read`
+ * @param rule - Full permission rule string
+ * @param lane - Which permission bucket the rule came from
+ * @param cwd - Base directory for path-tool matching
+ */
+export function ruleConstrainsDeclaration(
+  declaration: string,
+  rule: string,
+  lane: PermissionLane,
+  cwd?: string
+): boolean {
+  const { toolName, content: declared } = parsePermissionRule(declaration);
+  const { toolName: ruleTool, content: ruleContent } = parsePermissionRule(rule);
+
+  if (!matchesToolName(ruleTool, toolName, lane)) return false;
+
+  // No input named: the declaration is the whole tool, unrestricted.
+  if (declared === undefined || declared === '*') return ruleConstrainsTool(toolName, rule, lane);
+
+  // A bare rule names the tool and nothing else, so it covers every use of it.
+  if (ruleContent === undefined) return true;
+
+  // Does the rule cover the declaration, read as an input…
+  if (matchesPermissionRule(toolName, declared, rule, lane, cwd)) return true;
+  // …or does the declaration cover something the rule names?
+  return ruleWitnesses(toolName, ruleContent).some((witness) =>
+    matchesPermissionRule(toolName, witness, declaration, 'allow', cwd),
+  );
 }
 
 /**

@@ -14,7 +14,6 @@ export {
   ZipSizeLimitError,
   type PackageSkillOptions,
   type PackageSkillResult,
-  type PackagingTarget,
   type ProjectRegistryOptions,
   type SkillBuildSpec,
   type SkillMetadata,
@@ -50,8 +49,10 @@ export {
 } from './projection/skill-extent.js';
 
 export {
+  getResourceSubdirForFile,
   getTargetSubdir,
   CONTENT_TYPE_ROUTING_MAP,
+  type PackagingTarget,
   type TargetSubdirCategory,
 } from './content-type-routing.js';
 

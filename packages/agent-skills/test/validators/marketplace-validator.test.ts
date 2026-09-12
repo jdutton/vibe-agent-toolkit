@@ -89,4 +89,27 @@ describe('validateMarketplace', () => {
     expect(result.metadata?.description).toBe('A test marketplace');
     expect(result.metadata?.version).toBe('1.0.0');
   });
+
+  it('publishes how many entries the manifest declares, and how many are local', async () => {
+    // A string `source` is a relative path into the marketplace's own tree; an
+    // object `source` names a remote. The two counts are what lets a consumer
+    // tell "validated no plugin because none is local" from "validated none of
+    // the ones that are" — the denominator `vat claude marketplace validate`
+    // was missing when it reported success over an absent `plugins/`.
+    const tempDir = getTempDir();
+    const marketplacePath = createTestMarketplace(tempDir, {
+      ...validMarketplaceData,
+      plugins: [
+        { name: 'local-a', source: './plugins/local-a' },
+        { name: 'local-b', source: './plugins/local-b' },
+        { name: 'remote', source: { source: 'github', repo: 'org/remote' } },
+      ],
+    });
+
+    const result = await validateMarketplace(marketplacePath);
+
+    assertValidationSuccess(result);
+    expect(result.metadata?.pluginEntries).toBe(3);
+    expect(result.metadata?.localPluginEntries).toBe(2);
+  });
 });

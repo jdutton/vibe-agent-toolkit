@@ -37,6 +37,39 @@ import { resolveDialectRef } from './contributors/reference-dialect.js';
 import { relativize } from './realizations.js';
 
 /**
+ * A scheme-bearing or protocol-relative reference, matched on the raw token.
+ *
+ * `//host/path` is protocol-relative and not a local file. A bare `mailto:`,
+ * `tel:`, `https:` or any other scheme is caught by the scheme production of
+ * RFC 3986 §3.1 — a letter followed by letters, digits, `+`, `-` or `.`, then
+ * `:` — so `1:notes.md` and `docs/a:b.md` are paths, as the RFC says they are.
+ * A Windows drive letter (`C:\…`) also matches, and excluding it is correct
+ * here: an absolute drive path is not a corpus-relative reference either.
+ */
+const NON_LOCAL_REF = /^(?:\/\/|[a-z][\w+.-]*:)/iu;
+
+/**
+ * Is this reference something other than a path into the corpus?
+ *
+ * 🔑 The ONE answer, imported by every consumer — the closure contributor, the
+ * edge lens and the discovery lens. It used to be three: two byte-identical
+ * copies of the regex above, and a third predicate ("a colon before any
+ * slash") that answered FALSE for `//cdn.example/lib.js` and handed it to the
+ * path resolver, which reported a document nobody wrote. `blob_references`
+ * records the raw token and not the link type, so without this test every
+ * external URL resolves against the referring directory, finds nothing, and is
+ * reported as a broken *local* reference. A second copy would give the corpus
+ * two answers to one question, with nothing to keep them in step — the
+ * argument this module's header makes for the path half.
+ *
+ * @param rawRef - The reference exactly as authored
+ * @returns True when the token names an external or non-filesystem target
+ */
+export function isNonLocalRef(rawRef: string): boolean {
+  return NON_LOCAL_REF.test(rawRef);
+}
+
+/**
  * Where a reference points, before anything asks whether a file is there.
  *
  * Three outcomes, and the reason they are three rather than two is that
@@ -48,9 +81,18 @@ import { relativize } from './realizations.js';
 export type ReferencePathResolution =
   /** A root-relative path. Whether anything realizes it is the caller's question. */
   | { readonly kind: 'inside-root'; readonly path: string }
-  /** Resolved, and lands outside the root — carried as `relativize` spells it. */
+  /**
+   * Resolved, and lands outside the root — carried as `relativize` spells it.
+   * Both ways out land here: a relative reference that climbs past the root,
+   * and a root-absolute one whose traversal escapes it.
+   */
   | { readonly kind: 'outside-root'; readonly path: string }
-  /** The token named no file: an anchor-only href, or a dialect that declined it. */
+  /**
+   * The token named no file: an anchor-only href, or a dialect that declined
+   * it. NOT a root-absolute reference that escapes the root — that names a real
+   * destination, and folding it in here was exactly the collapse described
+   * above.
+   */
   | { readonly kind: 'unresolvable' };
 
 /**
@@ -70,6 +112,15 @@ export function resolveReferencePath(
   root: string,
 ): ReferencePathResolution {
   const resolution = resolveDialectRef(dialect, rawRef, joinRoot(root, fromPath), root);
+  // 🚨 `absolute_escapes_root` is a destination, not a non-answer: `/../x.md`
+  // resolved to a real path the corpus stops short of. The resolver carries the
+  // candidate it computed, so this is spelled from THAT — no second resolution
+  // here, against a containment rule this module does not own.
+  if (resolution.kind === 'absolute_escapes_root') {
+    return { kind: 'outside-root', path: relativize(resolution.resolvedPath, root) };
+  }
+  // `anchor_only` named no file; `absolute_no_root` cannot occur, since `root`
+  // is always supplied — it is listed so the exhaustiveness is visible.
   if (resolution.kind !== 'resolved') return { kind: 'unresolvable' };
   const relative = relativize(resolution.resolvedPath, root);
   return escapesRoot(relative)

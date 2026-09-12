@@ -7,11 +7,11 @@ import { allowUnusedIssues, createAllowUsageLedger, type ValidationIssue } from 
 import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { getResourceSubdirForFile } from '../src/content-type-routing.js';
 import {
   extractH1Title,
   findCommonAncestor,
   generateTargetPath,
-  getResourceSubdirForFile,
   packageSkill,
   packageSkills,
   synthesizeAssetId,

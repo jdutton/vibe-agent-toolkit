@@ -60,6 +60,7 @@ import {
   withRemedy,
 } from '../src/commands/claude/org/skills.js';
 
+import { recordingLogger } from './helpers/upload-logger.js';
 import { skillMdBytes, writeZipFixture } from './helpers/zip-fixtures.js';
 
 let tempDir: string;
@@ -397,22 +398,6 @@ describe.skipIf(SYMLINK_CAP === null)('a symlinked file in the bundle', () => {
 /** A multipart entry of exactly `bytes` bytes, for measuring the gate. */
 function sizedFile(filename: string, bytes: number): MultipartFile {
   return { fieldName: 'files[]', filename, content: Buffer.alloc(bytes) };
-}
-
-/** An upload logger that keeps every line, so a test can assert on them. */
-function recordingLogger(): { info: (msg: string) => void; warn: (msg: string) => void; lines: string[] } {
-  const lines: string[] = [];
-  return {
-    info: (msg: string) => {
-      lines.push(msg);
-    },
-    // Same sink as `info`: these tests assert on WHAT was said, and splitting
-    // the streams here would let a warning pass a "line not present" assertion.
-    warn: (msg: string) => {
-      lines.push(msg);
-    },
-    lines,
-  };
 }
 
 /**
@@ -753,6 +738,85 @@ describe('what installFromLocal actually reads out of a REAL archive', () => {
 
     await expect(installFromLocal(zipPath, undefined, clientReturningSkill(), recordingLogger()))
       .resolves.toMatchObject({ id: 'skill_1' });
+  });
+
+  /**
+   * 🚨 The ZIP lane ran NONE of the portability checks `install --help` promises
+   * of "every markdown document in the bundle". It posted the archive as one
+   * opaque part and went straight to `sendSkillUpload`, so the adopter finding
+   * that produced the check — 10 of 54 skills referencing paths outside their own
+   * tree — was invisible on the lane most likely to carry a hand-built bundle.
+   * The directory lane warned; the ZIP lane was silent about the same content.
+   */
+  it('warns about an unportable reference INSIDE an archive, as the directory lane does', async () => {
+    const zipPath = writeZipFixture(tempDir, 'unportable-archive.zip', [
+      ['sidecar/SKILL.md', skillMdBytes(
+        'sidecar',
+        '\n# sidecar\n\nRun `node "${CLAUDE_PLUGIN_ROOT}/../sibling/tool.mjs"` first.\n',
+      )],
+    ]);
+    const logger = recordingLogger();
+
+    await installFromLocal(zipPath, undefined, clientReturningSkill(), logger);
+
+    const log = logger.lines.join('\n');
+    expect(log).toContain(PORTABILITY_WARNING);
+    expect(log).toContain('CLAUDE_PLUGIN_ROOT');
+    // Warned, never blocked — the archive still went.
+    expect(log).toContain('uploading anyway');
+  });
+
+  /**
+   * The finding is located by its BUNDLE-relative path, the same namespace a
+   * `validation.allow` glob is matched in — not by the archive-internal
+   * `sidecar/SKILL.md` spelling, which no allow entry written from a build
+   * report would match.
+   */
+  it('locates an in-archive finding by its bundle-relative path', async () => {
+    const zipPath = writeZipFixture(tempDir, 'unportable-nested.zip', [
+      ['nested/SKILL.md', skillMdBytes('nested')],
+      ['nested/resources/guide.md', Buffer.from(
+        '# Guide\n\nRun `node "${CLAUDE_PLUGIN_ROOT}/../sibling/tool.mjs"` first.\n',
+        'utf8',
+      )],
+    ]);
+    const logger = recordingLogger();
+
+    await installFromLocal(zipPath, undefined, clientReturningSkill(), logger);
+
+    const log = logger.lines.join('\n');
+    expect(log).toContain('resources/guide.md');
+    expect(log).not.toContain('nested/resources/guide.md');
+  });
+
+  /** A clean archive stays quiet, so the warning above is about the content. */
+  it('says nothing about a portable archive', async () => {
+    const zipPath = writeZipFixture(tempDir, 'portable-archive.zip', [
+      ['tidy/SKILL.md', skillMdBytes('tidy')],
+      ['tidy/resources/guide.md', Buffer.from('# Guide\n\nRun `node scripts/run.mjs`.\n', 'utf8')],
+    ]);
+    const logger = recordingLogger();
+
+    await installFromLocal(zipPath, undefined, clientReturningSkill(), logger);
+
+    expect(logger.lines.join('\n')).not.toContain(PORTABILITY_WARNING);
+  });
+
+  /**
+   * The one binary in the archive carries the same bytes that fire above. A
+   * `.png` is not prose, and reading it as instructions would report on bytes no
+   * agent ever sees — the same rule the directory lane applies.
+   */
+  it('does not read an archive\'s non-markdown members as prose', async () => {
+    const zipPath = writeZipFixture(tempDir, 'binary-member.zip', [
+      ['imagey/SKILL.md', skillMdBytes('imagey')],
+      ['imagey/logo.png', Buffer.from('node "${CLAUDE_PLUGIN_ROOT}/../other/x.mjs"', 'utf8')],
+    ]);
+    const logger = recordingLogger();
+
+    await installFromLocal(zipPath, undefined, clientReturningSkill(), logger);
+
+    expect(logger.lines.join('\n')).not.toContain(PORTABILITY_WARNING);
   });
 
   /**

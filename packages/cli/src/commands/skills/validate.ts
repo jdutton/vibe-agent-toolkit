@@ -6,6 +6,7 @@
  */
 
 import {
+  conventionalSuiteProbe,
   validateSkillForPackaging,
   type DeclaredEvalSuite,
   type PackagingValidationResult,
@@ -529,11 +530,29 @@ export async function buildSharedValidationContext(
   // nothing. Always present, so no early return can drop it.
   const allowLedger = createAllowUsageLedger();
 
+  // The RUN's conventional-suite probe, and it belongs beside the ledger rather
+  // than with the two optimizations below: resolving a skill's test input probes
+  // `<skill-root>/evals/evals.json` for the subject AND for every entry in
+  // `projectSkills`, so a probe minted per skill asks S questions per skill and
+  // S² per run about the same S paths. Measured with the lab on a 103-skill
+  // adopter: 10,815 probes over 103 distinct paths, half the command's entire
+  // filesystem traffic; with the run's probe threaded, ~103.
+  //
+  // Created here, once, and handed to every skill in the batch — that is the
+  // whole contract of `SkillValidationSharedContext.suiteProbe`, whose fallback
+  // (`?? conventionalSuiteProbe()`) treats an omitting caller as claiming ITS
+  // call is the whole run. This lane loops, so omitting it made that claim
+  // falsely and silently.
+  //
+  // NOT module-scoped: the answer is a filesystem snapshot, and a cache
+  // outliving the run keeps answering for a tree that has since changed.
+  const suiteProbe = conventionalSuiteProbe();
+
   // Likewise not an optimization: the test-input rule is project-wide, so this
   // lane must model a bundle that excludes EVERY declared suite, not just the
   // subject's. Present even for an empty batch, so no early return can drop it.
   if (skills.length === 0) {
-    return { allowLedger, projectSkills };
+    return { allowLedger, projectSkills, suiteProbe };
   }
 
   const projectRoots = new Set<string>();
@@ -553,7 +572,7 @@ export async function buildSharedValidationContext(
     }
   }
 
-  const context: SkillValidationSharedContext = { allowLedger, projectSkills };
+  const context: SkillValidationSharedContext = { allowLedger, projectSkills, suiteProbe };
 
   // One tracker per repo; when the batch spans repos, skip rather than spawn
   // multiple `git ls-files`.
@@ -735,7 +754,9 @@ export async function validateCommand(
   pathArg: string | undefined,
   options: SkillsValidateCommandOptions
 ): Promise<void> {
+  // `undefined`: this command offers no `--format`, so its failure envelope is
+  // YAML like its report.
   finishCommand(await runSkillsValidatePhase(pathArg, options), (document) => {
     writeYamlSummary(document as ReturnType<typeof buildValidateSummary>);
-  });
+  }, undefined);
 }

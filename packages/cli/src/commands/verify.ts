@@ -41,6 +41,7 @@ import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import type { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
+import { nothingCheckedFinding } from '../utils/run-integrity.js';
 import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 
 import { runMarketplaceValidatePhase } from './claude/marketplace/validate.js';
@@ -140,7 +141,11 @@ Output:
     publish issueCounts {errors, warnings, info}; 'consistency' and
     'packaged-content' carry their findings into the document too, while
     'files-config-dests' publishes counts only and lists the missing dests on
-    stderr.
+    stderr. 'packaged-content' also publishes bundlesInspected — the built
+    bundles it crawled — and zero is refused as RESOURCE_CHECK_BROKEN at error
+    (exit 1) rather than reported as a pass: a run that found no built bundle
+    (dist/ not built, or a skills.include glob that matched nothing) is not a
+    verdict on what ships.
   Progress and validation errors → stderr (streamed live)
 
   By default each delegated phase reports a per-asset summary plus the assets
@@ -387,15 +392,20 @@ export function checkFilesConfigDests(
  *
  * Locations anchor at `cwd`, the run's stated root, so a reader can open them.
  *
+ * Returns the count of bundles crawled beside the findings, because the phase
+ * that publishes them needs the denominator: zero findings over zero bundles is
+ * not a pass — see {@link buildPackagedContentPhase}.
+ *
  * @param discovered - The skills this run discovered from `skills.include`. See
  *   {@link collectBuiltSkillOutputs} for why it is required rather than optional.
  */
 export function checkPackagedAgentInstructionFiles(
   cwd: string,
   discovered: readonly DiscoveredSkill[],
-): ValidationIssue[] {
+): PackagedContentCrawl {
   const issues: ValidationIssue[] = [];
-  for (const check of collectBuiltSkillOutputs(cwd, discovered)) {
+  const bundles = collectBuiltSkillOutputs(cwd, discovered);
+  for (const check of bundles) {
     const raw = detectPackagedAgentInstructionFiles(
       check.outputDir,
       cwd,
@@ -403,7 +413,14 @@ export function checkPackagedAgentInstructionFiles(
     );
     issues.push(...resolveIssueSeverity(raw, check.packaging.validation));
   }
-  return issues;
+  return { bundlesInspected: bundles.length, issues };
+}
+
+/** What the packaged-content crawl found, and over how many bundles. */
+export interface PackagedContentCrawl {
+  /** Built bundles that EXIST on disk and were crawled — the phase's denominator. */
+  bundlesInspected: number;
+  issues: ValidationIssue[];
 }
 
 /**
@@ -678,6 +695,54 @@ interface FindingsPhaseResult extends PhaseResult {
   issues: PublishedIssue[];
 }
 
+/** The `packaged-content` phase's result: its findings, and the count they are over. */
+export interface PackagedContentPhaseResult extends FindingsPhaseResult {
+  bundlesInspected: number;
+}
+
+/**
+ * Build the `packaged-content` phase result from what the crawl found.
+ *
+ * 🚨 **Zero bundles is an ERROR, not a clean phase.** The phase is pushed
+ * unconditionally whenever `skills:` exists and it feeds the real exit code;
+ * `discoverSkillsFromConfig` returning `[]` on a typo'd glob — or `dist/` not
+ * having been built at all, or built somewhere else — gave the crawl nothing to
+ * walk, and nothing walked was zero findings was `success`, with no count in
+ * the document to say the phase had looked at nothing. `vat verify` exists to
+ * check the BUILT tree; a run that found none of it is not a verdict on it.
+ *
+ * Derived here, in the one function that produces this phase's document, and
+ * not in the command body, so no path through the orchestrator can publish
+ * `status: success` beside `bundlesInspected: 0`. Through the shared mechanism
+ * in `run-integrity.ts`: one non-overridable `RESOURCE_CHECK_BROKEN` at
+ * `error`, which {@link exitCodeForPhases} then turns into exit 1.
+ *
+ * Pure, and exported so the refusal is pinned without a project on disk.
+ */
+export function buildPackagedContentPhase(
+  bundlesInspected: number,
+  found: readonly ValidationIssue[],
+): PackagedContentPhaseResult {
+  const issues = [
+    ...nothingCheckedFinding(bundlesInspected, found, () =>
+      'The packaged-content phase inspected 0 built skill bundles, so this phase is not a'
+      + ' verdict: nothing was crawled for files that must not ship, and the document reads'
+      + ' the same as a run over clean bundles. Either `vat build` has not run (or wrote'
+      + ' somewhere other than dist/), or `skills.include` in vibe-agent-toolkit.config.yaml'
+      + ' matched no SKILL.md — usually a typo in the glob. Run `vat build` first; `vat skills'
+      + ' validate` lists what the globs discover.'),
+    ...found,
+  ];
+  return {
+    name: PACKAGED_CONTENT,
+    status: calculateValidationStatus(issues),
+    // The denominator, beside the counts it qualifies.
+    bundlesInspected,
+    issueCounts: countBySeverity(issues),
+    issues: issues.map(toPublishedIssue),
+  };
+}
+
 /**
  * `ConsistencyIssue` speaks the same severity vocabulary as `ValidationIssue`
  * but carries a free-form `code`, so it is counted through this projection —
@@ -819,17 +884,13 @@ async function verifyTopLevelCommand(
     // `issueCounts`, or a CI consumer reads a clean report for a bundle carrying
     // one. Warnings do not fail the run; the exit code still comes from errors.
     if (inProcess.includes(PACKAGED_CONTENT)) {
-      const packagedIssues = checkPackagedAgentInstructionFiles(projectRoot, discoveredSkills);
-      if (packagedIssues.length > 0) {
-        reportPackagedContentIssues(packagedIssues, logger);
+      const crawl = checkPackagedAgentInstructionFiles(projectRoot, discoveredSkills);
+      if (crawl.issues.length > 0) {
+        reportPackagedContentIssues(crawl.issues, logger);
       }
-      const packagedResult: FindingsPhaseResult = {
-        name: PACKAGED_CONTENT,
-        status: calculateValidationStatus(packagedIssues),
-        issueCounts: countBySeverity(packagedIssues),
-        issues: packagedIssues.map(toPublishedIssue),
-      };
-      phaseResults.push(packagedResult);
+      // The zero-bundle refusal is derived inside the builder, so it reaches the
+      // document and the exit code whether or not stderr said anything.
+      phaseResults.push(buildPackagedContentPhase(crawl.bundlesInspected, crawl.issues));
     }
 
     // Consistency check: cross-reference discovered skills vs package.json and plugin assignments

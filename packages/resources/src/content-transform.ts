@@ -365,6 +365,9 @@ const MARKDOWN_LINK_REGEX = /\[([^[\]]*)\]\(([^)]*)\)/g;
 /** A fence opener/closer: up to 3 spaces of indent, then 3+ backticks or tildes. */
 const FENCE_LINE_REGEX = /^ {0,3}(`{3,}|~{3,})/;
 
+/** An ATX heading line, which interrupts a paragraph. See {@link breaksParagraph}. */
+const ATX_HEADING_LINE_REGEX = /^ {0,3}#{1,6}(?:[ \t]|$)/;
+
 /**
  * Byte ranges of `content` that are CODE, not prose — link syntax inside them is
  * an EXAMPLE and must survive packaging verbatim.
@@ -392,6 +395,13 @@ function codeSpanRanges(content: string): Array<readonly [number, number]> {
   const ranges: Array<readonly [number, number]> = [];
   let offset = 0;
   let fence: { char: string; len: number; start: number } | undefined;
+  // The paragraph being accumulated, as a span of `content`. Inline spans are
+  // collected per PARAGRAPH, not per line: see {@link endOfParagraph}.
+  let paragraphStart: number | undefined;
+  const flushParagraph = (end: number): void => {
+    if (paragraphStart !== undefined) collectInlineSpans(content.slice(paragraphStart, end), paragraphStart, ranges);
+    paragraphStart = undefined;
+  };
 
   for (const line of content.split('\n')) {
     const lineStart = offset;
@@ -399,10 +409,13 @@ function codeSpanRanges(content: string): Array<readonly [number, number]> {
     const marker = FENCE_LINE_REGEX.exec(line)?.[1];
 
     if (fence === undefined) {
-      if (marker === undefined) {
-        collectInlineSpans(line, lineStart, ranges);
-      } else {
+      if (marker !== undefined) {
+        flushParagraph(lineStart);
         fence = { char: marker[0] as string, len: marker.length, start: lineStart };
+      } else if (breaksParagraph(line)) {
+        flushParagraph(lineStart);
+      } else {
+        paragraphStart ??= lineStart;
       }
       continue;
     }
@@ -412,51 +425,120 @@ function codeSpanRanges(content: string): Array<readonly [number, number]> {
       fence = undefined;
     }
   }
+  flushParagraph(content.length);
   // An unclosed fence runs to end of document — CommonMark closes it implicitly.
   if (fence !== undefined) ranges.push([fence.start, content.length]);
   return ranges;
 }
 
 /**
- * Append every inline code span on one line. A span is a run of N backticks closed
- * by the next run of EXACTLY N, per CommonMark.
+ * Append every inline code span in one paragraph. A span is a run of N backticks
+ * closed by the next run of EXACTLY N, per CommonMark.
+ *
+ * Shares its two rules with {@link matchingBracketEnd} rather than carrying its
+ * own: a backslash escapes the next character (so `` \` `` opens nothing), and a
+ * span is closed by {@link codeSpanEnd} or it is prose. Two scanners disagreeing
+ * about where a code span is — measured, on exactly the escaped backtick — is the
+ * divergence this module exists to stop repeating.
  */
-function collectInlineSpans(line: string, base: number, ranges: Array<readonly [number, number]>): void {
+function collectInlineSpans(text: string, base: number, ranges: Array<readonly [number, number]>): void {
   let i = 0;
-  while (i < line.length) {
-    if (line[i] !== '`') {
+  while (i < text.length) {
+    const character = text.charAt(i);
+    if (character === '\\') {
+      i += 2;
+      continue;
+    }
+    if (character !== '`') {
       i += 1;
       continue;
     }
-    const openStart = i;
-    i = endOfBacktickRun(line, i);
-    const closeEnd = findClosingRun(line, i, i - openStart);
-    if (closeEnd === undefined) continue; // unclosed: prose, resume after the run
-    ranges.push([base + openStart, base + closeEnd]);
+    const closeEnd = codeSpanEnd(text, i, text.length);
+    if (closeEnd === undefined) {
+      i = endOfBacktickRun(text, i); // unclosed: prose, resume after the run
+      continue;
+    }
+    ranges.push([base + i, base + closeEnd]);
     i = closeEnd;
   }
 }
 
 /** Index just past the backtick run starting at `from`. */
-function endOfBacktickRun(line: string, from: number): number {
+function endOfBacktickRun(text: string, from: number): number {
   let i = from;
-  while (i < line.length && line[i] === '`') i += 1;
+  while (i < text.length && text[i] === '`') i += 1;
   return i;
 }
 
-/** End index of the next backtick run of EXACTLY `len`, or undefined if none. */
-function findClosingRun(line: string, from: number, len: number): number | undefined {
+/**
+ * End index of the next backtick run of EXACTLY `len` before `limit`, or
+ * undefined if none.
+ *
+ * `limit` is the end of the paragraph, because a code span does not cross one;
+ * {@link matchingBracketEnd} calls this with the WHOLE document, and
+ * {@link collectInlineSpans} with one already-isolated paragraph.
+ */
+function findClosingRun(text: string, from: number, len: number, limit: number): number | undefined {
   let j = from;
-  while (j < line.length) {
-    if (line[j] !== '`') {
+  while (j < limit) {
+    if (text[j] !== '`') {
       j += 1;
       continue;
     }
     const start = j;
-    j = endOfBacktickRun(line, j);
+    j = endOfBacktickRun(text, j);
     if (j - start === len) return j;
   }
   return undefined;
+}
+
+/**
+ * A line that ends the paragraph before it: blank, a fence, or an ATX heading.
+ *
+ * These are the paragraph interrupters that carry backticks in practice. The
+ * others CommonMark defines (a list item, a block quote, a thematic break) are
+ * not modelled, and the cost of that is bounded in the safe direction: a span
+ * wrongly extended into one of them can only make {@link matchingBracketEnd}
+ * REFUSE a link (its `close` lands past the parser's span), never splice it.
+ */
+function breaksParagraph(line: string): boolean {
+  return line.trim() === '' || FENCE_LINE_REGEX.test(line) || ATX_HEADING_LINE_REGEX.test(line);
+}
+
+/**
+ * Index of the newline ending the paragraph containing `from`, or the end of
+ * `text`.
+ *
+ * 🚨 A PARAGRAPH, not a line. A CommonMark code span crosses a single line ending
+ * (it is rendered as a space) and stops only at the end of its paragraph, so
+ * bounding the closing-run search at the newline refused every link whose code
+ * span wrapped at a soft break — prose reflowed to 80 columns does that without
+ * anyone writing it — and the link then shipped unrewritten and was reported as
+ * PACKAGED_BROKEN_LINK, the symptom the code-span fix was made for, one
+ * line-break over.
+ */
+function endOfParagraph(text: string, from: number): number {
+  let newline = text.indexOf('\n', from);
+  while (newline !== -1) {
+    const next = text.indexOf('\n', newline + 1);
+    if (breaksParagraph(text.slice(newline + 1, next === -1 ? text.length : next))) return newline;
+    newline = next;
+  }
+  return text.length;
+}
+
+/**
+ * Index just past the code span opening at `from`, or undefined when nothing
+ * closes it before `limit` — an unclosed run is literal prose, so a caller must
+ * resume immediately after the run rather than swallow the rest of the paragraph.
+ *
+ * `limit` is passed in rather than derived: the caller already has it and
+ * recomputing the paragraph end per backtick would make a run of N backticks
+ * cost O(N²).
+ */
+function codeSpanEnd(text: string, from: number, limit: number): number | undefined {
+  const runEnd = endOfBacktickRun(text, from);
+  return findClosingRun(text, runEnd, runEnd - from, limit);
 }
 
 /** True when `offset` falls inside any masked code range. */
@@ -465,20 +547,22 @@ function isInsideCode(offset: number, ranges: ReadonlyArray<readonly [number, nu
 }
 
 /**
- * Regex pattern matching reference-style link definitions: `[ref]: url`
+ * A run of three or more line endings, of either flavour, left by a removed
+ * definition.
  *
- * Must appear at the start of a line (multiline flag).
- * Captures:
- * - Group 1: Reference identifier
- * - Group 2: URL (may include trailing whitespace)
+ * ⚠️ Matches `\r\n` as one ending rather than counting the `\n`s: the previous
+ * `/\n{3,}/` could not match `\r\n\r\n\r\n` at all, so a CRLF file kept every
+ * blank line an LF file had cleaned up.
+ *
+ * 🚨 Applied ONLY to the run around a removal, never to the whole document. It
+ * used to run over the entire result whenever any definition existed, code
+ * fences included — so a fenced Python example carrying PEP 8's two blank lines
+ * between top-level defs shipped with one, and a deliberate run in prose was
+ * "tidied" by a pass that had removed nothing near it. A rewriter returns the
+ * file it was given with the intended edit applied; the only blank lines it may
+ * touch are the ones its own edit created. See {@link collapseBlankRunAt}.
  */
-// The `\s*` and the capture must not both be able to match a space — that
-// ambiguity is what made the old `\s*(.+)` form backtrack super-linearly.
-// Requiring the destination to start with `\S` makes them disjoint while
-// keeping CommonMark's destination-on-the-next-line form working. The only
-// input that behaves differently is a whitespace-only destination, which both
-// callers `.trim()` to '' and then fail to find in the registry regardless.
-const MARKDOWN_DEFINITION_REGEX = /^\[([^\]]*)\]:\s*(\S[^\n]*)$/gm;
+const BLANK_LINE_RUN_REGEX = /(?:\r\n|\n){3,}/g;
 
 /**
  * A parsed link the source locates precisely enough to rewrite by SPLICING its
@@ -544,21 +628,53 @@ const REFUSED: SpliceVerdict = { outcome: 'refuse' };
  * Counts nesting depth and honours backslash escapes, so it handles both
  * `[a [b] c](x)` and an image inside a link — the two constructs the flat regexes
  * in this repository get wrong in opposite directions.
+ *
+ * 🚨 It also skips CODE SPANS, because a bracket inside one is not a bracket.
+ * CommonMark binds a code span tighter than a link, so ``[the `[` matcher](x.md)``
+ * is an ordinary link — but a raw depth count opened a nesting level on that `[`
+ * that never closed, ran off the end of the document and returned undefined, and
+ * the link was refused. It then shipped **unrewritten** and `post-build-checks`
+ * reported it as `PACKAGED_BROKEN_LINK`: the author blamed for a rewriter miss,
+ * over a line the parser was entirely happy with. The mirror case
+ * (``[the `]` closer](x.md)``) failed the other way — the span's `]` closed the
+ * construct early, so `close + 1` was not `(` — and the whole-sequence case
+ * (``[see `](` here](x.md)``) was reaching the destination check as a truncating
+ * splice. One cause, three symptoms.
+ *
+ * ⚠️ Span detection is per PARAGRAPH, matching {@link collectInlineSpans}: both
+ * skip a backslash-escaped character and both close a span through
+ * {@link codeSpanEnd}, bounded by {@link endOfParagraph}. Two scanners
+ * disagreeing about where a code span is — measured, on an escaped backtick the
+ * mask honoured and this did not — is the divergence this module exists to stop
+ * repeating, so the rules live in those two functions and nowhere else.
  */
 function matchingBracketEnd(content: string, start: number): number | undefined {
   let depth = 0;
-  for (let i = start; i < content.length; i += 1) {
-    const ch = content.charAt(i);
-    if (ch === '\\') {
-      i += 1;
+  // Computed on the first backtick and refreshed only on crossing, so a link with
+  // no code span never scans for its paragraph end, and one with many backticks
+  // scans for it once.
+  let paragraphEnd: number | undefined;
+  let i = start;
+  while (i < content.length) {
+    const character = content.charAt(i);
+    if (character === '\\') {
+      // An escaped character is never structural — including an escaped backtick,
+      // which does not open a code span.
+      i += 2;
       continue;
     }
-    if (ch === '[') {
+    if (character === '`') {
+      if (paragraphEnd === undefined || i >= paragraphEnd) paragraphEnd = endOfParagraph(content, i);
+      i = codeSpanEnd(content, i, paragraphEnd) ?? endOfBacktickRun(content, i);
+      continue;
+    }
+    if (character === '[') {
       depth += 1;
-    } else if (ch === ']') {
+    } else if (character === ']') {
       depth -= 1;
       if (depth === 0) return i;
     }
+    i += 1;
   }
   return undefined;
 }
@@ -621,8 +737,29 @@ function splicableFrom(content: string, link: ResourceLink): SpliceVerdict {
   //    frontmatter-STRIPPED body with full-document offsets — every span off by
   //    the frontmatter length. Most declined harmlessly, but a stale span can
   //    also land on a *different*, structurally valid link and rewrite ITS href
-  //    to the first link's target. Comparing the destination to the href makes
-  //    that unconstructible rather than merely unlikely.
+  //    to the first link's target.
+  //
+  //    ⛔ **This check MITIGATES that; it does not prevent it, and a docstring
+  //    here used to say it made the corruption "unconstructible rather than
+  //    merely unlikely". That was false.** The comparison is keyed on the HREF,
+  //    which two links in one document routinely share, so a stale span landing
+  //    on a same-href neighbour passes it and the neighbour is rewritten through
+  //    the first link's metadata. Constructed in `content-transform.test.ts` ›
+  //    *two links sharing an href defeat the destination comparison*: a
+  //    frontmatter block tuned to the distance between two equal-length links
+  //    makes their labels swap places, with every guard in this function
+  //    satisfied. It cannot be closed from inside this function either — the
+  //    only field that would distinguish the two is `link.text`, and mdast
+  //    reduces `[**a** _b_](x)` to `a b`, so comparing it to the span's raw text
+  //    would refuse correct rewrites to catch this one.
+  //
+  //    🔑 The guarantee is therefore the PRECONDITION this module's docstring
+  //    states — `links` must come from the same bytes as `content` — and only a
+  //    caller can establish it. The production caller does, and verifies it:
+  //    `skill-packager.ts › bodyRelativeLinks` checks that the body it re-bases
+  //    onto is a literal suffix of the content the links were parsed from, which
+  //    is exactly the condition under which the re-base is exact. Read that
+  //    docstring before adding a defence here.
   // 2. **A destination this template cannot re-emit.** The splice replaces
   //    `[start, end)` while `renderLink` re-emits only text and href, so
   //    anything else in the span is DESTROYED: `[a](x.md "Title")` loses its
@@ -630,11 +767,15 @@ function splicableFrom(content: string, link: ResourceLink): SpliceVerdict {
   //    the space legal — emitting markdown that no longer parses as a link. All
   //    of those have a destination region that is not the bare href, so all of
   //    them now decline and keep their old, untouched behaviour.
-  // 3. **A closing bracket found inside a code span.** `matchingBracketEnd`
-  //    counts raw brackets and cannot see code spans, so `[see `](` here](x.md)`
-  //    reports a `close` in the middle of the construct. The region that follows
-  //    is not the href, so the truncating splice — which deleted prose and left
-  //    an unbalanced backtick — declines instead.
+  // 3. **A `close` that is not the construct's own.** Any disagreement between
+  //    what `matchingBracketEnd` found and what the parser meant lands here: the
+  //    region after that bracket is then not the href, so the truncating splice
+  //    declines instead of deleting the bytes in between. This used to be doing
+  //    real work for code spans — ``[see `](` here](x.md)`` closed early on the
+  //    bracket inside the span — but that is now handled where it belongs, in
+  //    `matchingBracketEnd` itself, and such a link is spliced rather than
+  //    refused. What remains here is the general case: a `close` derived from
+  //    bytes the parser was not describing.
   //
   // ⚠️ Equality, not `includes`: a destination that merely CONTAINS the href is
   // exactly the title/angle-bracket case, which is the one this must refuse.
@@ -755,20 +896,187 @@ function replayUnsplicable(
 }
 
 /**
- * Pass 1 — rewrite inline links, span-first.
+ * One edit to `content`: replace `[start, end)` with `replacement`.
  *
- * Walks the spliced links in source order, replaying the legacy regex only over
- * the gaps between them and only for links that had no splice candidate. A link
- * that WAS a candidate is excluded from the fallback map even if the overlap
- * sweep dropped it, so a nested pair can never be rewritten twice or reintroduce
- * the href-correlation defect through the back door.
+ * Inline links and definitions both become edits, so a single walk over the
+ * document applies them in source order and the definition pass never has to
+ * re-find its constructs in a string pass 1 has already reshaped — the offsets
+ * the parser gave are measured against `content`, and `content` is the only
+ * string they are ever applied to.
  */
-function rewriteInlineLinks(
+interface Edit {
+  readonly start: number;
+  readonly end: number;
+  readonly replacement: string;
+  /**
+   * The edit deleted a whole definition line, so the blank lines around it are
+   * the rewriter's own and may be collapsed — see {@link collapseBlankRunAt}.
+   */
+  readonly removedLine: boolean;
+}
+
+/**
+ * Edits for pass 1 — inline links, span-first — plus the two sets the fallback
+ * replay must exclude (see {@link rewriteLinks}).
+ */
+function inlineEdits(
   content: string,
   links: ResourceLink[],
   options: ContentTransformOptions,
-): string {
+): { edits: Edit[]; candidates: ReadonlySet<ResourceLink>; refused: ReadonlySet<ResourceLink> } {
   const { spliced, candidates, refused } = splicableLinks(content, links);
+  const edits = spliced.map((s): Edit => ({
+    start: s.start,
+    end: s.end,
+    replacement: renderLink(s.link, s.rawText, options) ?? content.slice(s.start, s.end),
+    removedLine: false,
+  }));
+  return { edits, candidates, refused };
+}
+
+/** Index of the first `]` at or after `from` that is not backslash-escaped, before `limit`. */
+function unescapedBracketEnd(text: string, from: number, limit: number): number | undefined {
+  for (let i = from; i < limit; i += 1) {
+    const character = text.charAt(i);
+    if (character === '\\') i += 1;
+    else if (character === ']') return i;
+  }
+  return undefined;
+}
+
+/**
+ * Pass 2 — rewrite `[ref]: url` definitions, span-first, exactly as pass 1 does.
+ *
+ * 🚨 This used to replay `MARKDOWN_DEFINITION_REGEX` and correlate on
+ * `${text}\0${href}` — and `text`, for a `definition`, is mdast's NORMALISED
+ * identifier (lower-cased, whitespace-collapsed), while the regex captured the
+ * label as WRITTEN. `[API]: ./api.md` built the key `api\0./api.md` and looked
+ * up `API\0./api.md`, so any label with an upper-case letter or a doubled space
+ * was never rewritten and never removed, at exit 0. Every fixture was a
+ * lower-case single token, so the suite could not see it. Correlating two
+ * grammars on a value they normalise differently cannot be made correct — the
+ * argument {@link SplicableLink} makes for pass 1 — so this pass now splices at
+ * the `definition` node's own span too.
+ *
+ * Declining is as conservative as pass 1's: the span must start with `[`, the
+ * label must close on an unescaped `]:`, and the region after it must be the
+ * bare href the parser reported — a title or angle brackets there would be
+ * destroyed by re-emitting `[label]: path`, so those keep their bytes. The
+ * whitespace around the destination is kept exactly as written.
+ */
+function definitionEdits(content: string, links: ResourceLink[], options: ContentTransformOptions): Edit[] {
+  const edits: Edit[] = [];
+  for (const link of links) {
+    if (link.nodeType !== 'definition') continue;
+    const edit = definitionEdit(content, link, options);
+    if (edit !== undefined) edits.push(edit);
+  }
+  return edits;
+}
+
+/** One definition's edit, or undefined to leave its bytes alone. */
+function definitionEdit(content: string, link: ResourceLink, options: ContentTransformOptions): Edit | undefined {
+  const { startOffset: start, endOffset: end } = link;
+  if (start === undefined || end === undefined || start >= end || end > content.length) return undefined;
+  if (content.charAt(start) !== '[') return undefined;
+  const labelEnd = unescapedBracketEnd(content, start + 1, end);
+  if (labelEnd === undefined || content.charAt(labelEnd + 1) !== ':') return undefined;
+
+  const region = content.slice(labelEnd + 2, end);
+  const destination = region.trim();
+  if (destination === '' || destination !== link.href) return undefined;
+
+  const rewritten = renderDefinition(link, options);
+  if (rewritten === undefined) return undefined;
+  if (rewritten === '') return { start, end, replacement: '', removedLine: true };
+
+  const leading = region.slice(0, region.indexOf(destination));
+  const trailing = region.slice(leading.length + destination.length);
+  return {
+    start,
+    end,
+    replacement: `${content.slice(start, labelEnd + 2)}${leading}${rewritten}${trailing}`,
+    removedLine: false,
+  };
+}
+
+/**
+ * The definition's new destination, `''` to remove the orphaned definition, or
+ * undefined to leave it untouched (no rule matched and no default template).
+ *
+ * A rule that matches but resolves to no resource means the target does not
+ * ship: the inline uses were stripped to text, so the definition is an orphan.
+ */
+function renderDefinition(link: ResourceLink, options: ContentTransformOptions): string | undefined {
+  const { linkRewriteRules, resourceRegistry, sourceFilePath, defaultTemplate } = options;
+  const resource = link.resolvedId === undefined || resourceRegistry === undefined
+    ? undefined
+    : resourceRegistry.getResourceById(link.resolvedId);
+  const template = findMatchingRule(link, resource, linkRewriteRules)?.template ?? defaultTemplate;
+  if (template === undefined) return undefined;
+  if (resource === undefined || sourceFilePath === undefined) return '';
+
+  const [, anchor] = splitHrefAnchor(link.href);
+  const fragment = anchor === undefined ? '' : `#${anchor}`;
+  return `${toForwardSlash(safePath.relative(path.dirname(sourceFilePath), resource.filePath))}${fragment}`;
+}
+
+/**
+ * Every edit in source order, keeping the outermost survivor of any overlap.
+ *
+ * Overlap is not expected from mdast, which does not nest link nodes and never
+ * puts a definition inside one, but the link list is a merge of more than one
+ * producer and a nested pair would otherwise be spliced twice — the second
+ * splice landing inside text the first already replaced. Sorting by
+ * `(start asc, end desc)` puts the outermost first, and the sweep keeps it.
+ */
+function orderedEdits(edits: Edit[]): Edit[] {
+  edits.sort((a, b) => (a.start - b.start) || (b.end - a.end));
+  const kept: Edit[] = [];
+  let lastEnd = -1;
+  for (const edit of edits) {
+    if (edit.start < lastEnd) continue;
+    kept.push(edit);
+    lastEnd = edit.end;
+  }
+  return kept;
+}
+
+/** True for the two characters a line ending is made of. */
+function isLineEndingChar(character: string): boolean {
+  return character === '\n' || character === '\r';
+}
+
+/**
+ * Collapse the run of line endings around `at` to at most two, in the ending the
+ * run was written with — a mixed run keeps CRLF, which is the ending the removed
+ * definition's own line carried.
+ *
+ * Only the run TOUCHING the removal is examined, so a run anywhere else in the
+ * document — inside a fence, or deliberate in prose — is content and stays.
+ */
+function collapseBlankRunAt(text: string, at: number): string {
+  let start = at;
+  while (start > 0 && isLineEndingChar(text.charAt(start - 1))) start -= 1;
+  let end = at;
+  while (end < text.length && isLineEndingChar(text.charAt(end))) end += 1;
+  const run = text.slice(start, end);
+  const collapsed = run.replaceAll(BLANK_LINE_RUN_REGEX, (r) => (r.includes('\r') ? '\r\n\r\n' : '\n\n'));
+  return collapsed === run ? text : `${text.slice(0, start)}${collapsed}${text.slice(end)}`;
+}
+
+/**
+ * Apply both passes in one walk over `content`.
+ *
+ * Walks the edits in source order, replaying the legacy regex only over the gaps
+ * between them and only for links that had no splice candidate. A link that WAS
+ * a candidate is excluded from the fallback map even if the overlap sweep
+ * dropped it, so a nested pair can never be rewritten twice or reintroduce the
+ * href-correlation defect through the back door.
+ */
+function rewriteLinks(content: string, links: ResourceLink[], options: ContentTransformOptions): string {
+  const { edits: inline, candidates, refused } = inlineEdits(content, links, options);
+  const edits = orderedEdits([...inline, ...definitionEdits(content, links, options)]);
 
   const fallbackByHref = new Map<string, ResourceLink>();
   for (const link of links) {
@@ -784,7 +1092,21 @@ function rewriteInlineLinks(
     // What remains in the map is exactly the links with no usable span. Those
     // are the only ones the replay can be right about, because they are the only
     // ones for which finding the construct in the raw text is the whole job.
-    if (link.nodeType === 'definition' || candidates.has(link) || refused.has(link)) continue;
+    //
+    // 🚨 An `htmlAttribute` link is excluded even without a span, and this is
+    // not the `nodeType` enumeration the ⛔ in `splicableFrom` warns against.
+    // That warning is about `link` vs autolink, which SHARE a type and so cannot
+    // be told apart by it. `htmlAttribute` is decisive the other way: the
+    // replay's grammar is `[text](href)` and an `<a href>` can never match it,
+    // so the only thing such an entry could do was fire on a DIFFERENT
+    // construct sharing the href — an image beside a spanless `<a>` was
+    // measured being rewritten through the anchor's metadata, the third door
+    // of the corruption closed above for titled links and reference uses. And
+    // the HTML producer is the one REAL source of a line-only link (an
+    // `xlink:href` whose attribute span parse5 cannot locate), so this is the
+    // shape that actually reached the map.
+    if (link.nodeType === 'definition' || link.nodeType === 'htmlAttribute') continue;
+    if (candidates.has(link) || refused.has(link)) continue;
     if (!fallbackByHref.has(link.href)) fallbackByHref.set(link.href, link);
   }
 
@@ -794,12 +1116,18 @@ function rewriteInlineLinks(
 
   let out = '';
   let cursor = 0;
-  for (const s of spliced) {
-    out += replayUnsplicable(content.slice(cursor, s.start), cursor, fallbackByHref, codeRanges, options);
-    out += renderLink(s.link, s.rawText, options) ?? content.slice(s.start, s.end);
-    cursor = s.end;
+  const removals: number[] = [];
+  for (const edit of edits) {
+    out += replayUnsplicable(content.slice(cursor, edit.start), cursor, fallbackByHref, codeRanges, options);
+    if (edit.removedLine) removals.push(out.length);
+    out += edit.replacement;
+    cursor = edit.end;
   }
-  return out + replayUnsplicable(content.slice(cursor), cursor, fallbackByHref, codeRanges, options);
+  out += replayUnsplicable(content.slice(cursor), cursor, fallbackByHref, codeRanges, options);
+
+  // Last removal first, so each earlier offset still names the bytes it did.
+  for (const at of removals.toReversed()) out = collapseBlankRunAt(out, at);
+  return out;
 }
 
 /**
@@ -808,18 +1136,18 @@ function rewriteInlineLinks(
  * This is a pure function that takes content, its parsed links, and transform options,
  * and returns the content with matching links rewritten according to the first matching rule.
  *
- * Two passes are performed:
+ * Two kinds of link are rewritten, in one walk over the document:
  * 1. **Inline links** `[text](href)` — matched via rules, rendered through templates
  * 2. **Definition lines** `[ref]: url` — matched via rules, rewritten in definition format
  *    or removed if orphaned (target not in registry)
  *
  * Links matching no rule are left untouched unless a `defaultTemplate` is provided.
  *
- * Pass 1 identifies each link by the SPAN the parser gave it, not by matching a
- * regex and correlating on href — see {@link SplicableLink} for why that
- * correlation could not be made correct. `links` must therefore come from the same
- * bytes as `content`; passing links parsed from a different revision of the
- * document would splice at stale offsets.
+ * Both identify each construct by the SPAN the parser gave it, not by matching a
+ * regex and correlating on href or label — see {@link SplicableLink} and
+ * {@link definitionEdits} for why that correlation could not be made correct.
+ * `links` must therefore come from the same bytes as `content`; passing links
+ * parsed from a different revision of the document would splice at stale offsets.
  *
  * @param content - The markdown content to transform
  * @param links - Parsed links from the content (from ResourceMetadata.links)
@@ -850,80 +1178,12 @@ export function transformContent(
   links: ResourceLink[],
   options: ContentTransformOptions,
 ): string {
-  const { linkRewriteRules, resourceRegistry, sourceFilePath, defaultTemplate } = options;
+  const { linkRewriteRules, defaultTemplate } = options;
 
   // If there are no rules, no default template, or no links, return content unchanged
   if ((linkRewriteRules.length === 0 && defaultTemplate === undefined) || links.length === 0) {
     return content;
   }
 
-  // === Pass 1: Inline links [text](href) ===
-
-  let result = rewriteInlineLinks(content, links, options);
-
-  // === Pass 2: Reference-style definitions [ref]: url ===
-
-  // Build lookup map for definition links (keyed by "identifier\0href")
-  const definitionByKey = new Map<string, ResourceLink>();
-  for (const link of links) {
-    if (link.nodeType !== 'definition') {
-      continue;
-    }
-    const key = `${link.text}\0${link.href}`;
-    if (!definitionByKey.has(key)) {
-      definitionByKey.set(key, link);
-    }
-  }
-
-  if (definitionByKey.size > 0) {
-    // Recomputed against `result`, NOT reused from pass 1. Pass 1 rewrites change
-    // the string's length, so a range measured on `content` names the wrong bytes
-    // here — which would mask a real definition or spare an example at random.
-    const definitionCodeRanges = codeSpanRanges(result);
-    result = result.replaceAll(
-      MARKDOWN_DEFINITION_REGEX,
-      (fullMatch, ref: string, href: string, offset: number) => {
-        if (isInsideCode(offset, definitionCodeRanges)) return fullMatch;
-        const trimmedHref = href.trim();
-
-        // Look up the corresponding definition ResourceLink
-        const key = `${ref}\0${trimmedHref}`;
-        const link = definitionByKey.get(key);
-        if (!link) {
-          return fullMatch;
-        }
-
-        // Resolve the target resource if available
-        const resource = link.resolvedId === undefined || resourceRegistry === undefined
-          ? undefined
-          : resourceRegistry.getResourceById(link.resolvedId);
-
-        // Find matching rule (same rule set as inline links)
-        const rule = findMatchingRule(link, resource, linkRewriteRules);
-        const template = rule?.template ?? defaultTemplate;
-
-        if (template === undefined) {
-          return fullMatch;
-        }
-
-        // If resource is in registry and we have sourceFilePath: rewrite URL in definition format
-        if (resource !== undefined && sourceFilePath !== undefined) {
-          const [, anchor] = splitHrefAnchor(trimmedHref);
-          const fragment = anchor === undefined ? '' : `#${anchor}`;
-          const newRelPath = toForwardSlash(
-            safePath.relative(path.dirname(sourceFilePath), resource.filePath),
-          );
-          return `[${ref}]: ${newRelPath}${fragment}`;
-        }
-
-        // Rule matched but no resource to rewrite to — remove orphaned definition
-        return '';
-      },
-    );
-
-    // Clean up excessive blank lines from removed definitions
-    result = result.replaceAll(/\n{3,}/g, '\n\n');
-  }
-
-  return result;
+  return rewriteLinks(content, links, options);
 }

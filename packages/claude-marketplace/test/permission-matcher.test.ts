@@ -584,14 +584,84 @@ describe('wildcard matching cost is linear in the input', () => {
   });
 
   // 🚩 The blindness guard for the ratio above: a `nestedRegions` that returned
-  // nothing would be linear and pass. The deny lane still has to find the
-  // command at the bottom of the nest.
-  it('still reaches a command nested thousands of regions deep', () => {
-    const nested = '('.repeat(3000) + 'rm -rf tmp' + ')'.repeat(3000);
-    expect(matchesDenyRule(BASH, nested, RM_STAR)).toBe(true);
-    expect(matchesDenyRule(BASH, '('.repeat(3000) + 'echo x' + ')'.repeat(3000), RM_STAR)).toBe(
-      false,
-    );
+  // nothing would be linear and pass. The deny lane still has to analyse the
+  // whole nest whenever the budget covers it — a `true` AND a `false` at a depth
+  // where nothing is dropped, so neither answer can be the constant one.
+  //
+  // ⚠️ The depth is 10 and that is deliberate. This shape's regions sum to
+  // roughly depth², against a budget linear in the command's length, so it stops
+  // being analysed in full somewhere past a depth of 13 — and past that point
+  // the lane FAILS CLOSED and answers `true` for everything, which would make
+  // both assertions below vacuous. See the budget suite for the other side.
+  it('analyses a nest in full at every depth the budget covers', () => {
+    const depth = 10;
+    expect(matchesDenyRule(BASH, '('.repeat(depth) + 'rm -rf tmp' + ')'.repeat(depth), RM_STAR))
+      .toBe(true);
+    expect(matchesDenyRule(BASH, '('.repeat(depth) + 'echo x' + ')'.repeat(depth), RM_STAR))
+      .toBe(false);
+  });
+});
+
+// ============================================================================
+// The region budget's SAFETY direction
+// ============================================================================
+
+/**
+ * A nest `depth` regions deep whose `payload` sits in the own-text of the region
+ * at `level` — 0 being the OUTERMOST region, `depth - 1` the innermost.
+ *
+ * The level is the whole point. {@link closeRegion}'s budget is spent
+ * innermost-first, because regions close from the inside out, so the regions it
+ * drops are the OUTER ones — and an outer region's own text is a place a command
+ * can sit, outside every child.
+ */
+function nestWithPayloadAt(depth: number, level: number, payload: string): string {
+  const children = depth - level - 1;
+  const inner = '('.repeat(children) + ')'.repeat(children);
+  return `${'('.repeat(level + 1)} ${inner} ; ${payload} ${')'.repeat(level + 1)}`;
+}
+
+describe('the nested-region budget fails closed', () => {
+  // 🚩 THE FINDING, from the review: a sixty-odd character command, twenty-odd
+  // levels, and the payload in the OUTER region. `matchesDenyRule` answered
+  // `false` — an UNDER-REPORT, the direction this module's own header calls the
+  // unsafe one, reachable from a plugin's `allowed-tools:` content.
+  //
+  // The guard that existed put its command at the INNERMOST point, which is the
+  // one position the innermost-first spend always preserves, so it could not see
+  // this. A budget that drops work must drop it into `true`, never into `false`.
+  //
+  // Measured on the pre-fix module: `false` from 22 levels up, `true` below it.
+  // Both sides of that boundary are asserted, so a fix that merely MOVED it goes
+  // red rather than passing on the shallower row.
+  it.each([21, 22, 23])('reports a %i-level nest whose payload the budget drops', (depth) => {
+    const command = `x $( ${'('.repeat(depth)}${')'.repeat(depth)} ; ${RM_RF_ROOT} )`;
+    expect(matchesDenyRule(BASH, command, RM_STAR)).toBe(true);
+  });
+
+  // The mechanism rather than that one instance: the payload at EVERY level of
+  // the nest, at depths either side of where the budget binds. A spend that
+  // preserves only part of the nest has to be invisible in the ANSWER.
+  it('reports a denied command at every level of a nest, at every depth', () => {
+    for (const depth of [1, 3, 12, 23, 40, 200]) {
+      for (let level = 0; level < depth; level += 1) {
+        const command = nestWithPayloadAt(depth, level, RM_RF_ROOT);
+        expect(matchesDenyRule(BASH, command, RM_STAR), `depth=${depth} level=${level}`).toBe(true);
+      }
+    }
+  });
+
+  // …and what that costs, stated rather than discovered. Past the budget the
+  // lane cannot say what the command contains, so it says `true` — including for
+  // a command that contains nothing of the kind. This is also the blindness
+  // guard for the cost ratio above: a `nestedRegions` that emitted nothing would
+  // never exhaust its budget and would answer `false` here.
+  it('over-reports an innocent command once the budget is exhausted', () => {
+    const innocent = '('.repeat(3000) + 'echo x' + ')'.repeat(3000);
+    expect(matchesDenyRule(BASH, innocent, RM_STAR)).toBe(true);
+    // ⛔ The ALLOW lane is untouched: it never builds nested regions, so it has
+    // no budget to exhaust and must not start permitting on exhaustion.
+    expect(matchesAllowRule(BASH, innocent, RM_STAR)).toBe(false);
   });
 });
 

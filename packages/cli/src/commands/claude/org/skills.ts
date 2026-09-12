@@ -638,23 +638,44 @@ export interface ZipInspection {
 	 * ZIP lane reach the same verdict about the same content.
 	 */
 	readonly neverUploaded: readonly string[];
+	/**
+	 * Every markdown member, inflated, shaped as the parts the directory lane
+	 * hands {@link warnUnportableReferences} — so the ZIP lane runs the SAME
+	 * checks over the same content rather than a second implementation of them.
+	 *
+	 * Markdown only, and only within {@link MAX_INSPECTED_DOCUMENT_BYTES} an
+	 * entry: these detectors read prose, and inflating an archive's binaries to
+	 * hand them to a reader that skips them is work spent to produce nothing.
+	 */
+	readonly documents: readonly MultipartFile[];
+	/**
+	 * The archive's top-level directory, when it has one — the prefix
+	 * {@link bundleRelativeName} strips so a finding is located in the same
+	 * namespace a `validation.allow` glob is matched in. `undefined` for an
+	 * archive whose SKILL.md sits at the root, which has no prefix to strip.
+	 */
+	readonly bundleRoot: string | undefined;
 }
 
 /**
- * The largest SKILL.md this will decompress to read a `name` out of.
+ * The largest single markdown member this will decompress to read.
  *
  * Not a limit on what may be PUBLISHED — the API's own ceiling decides that, and
- * a bigger document simply goes unread rather than refused. It bounds the one
- * allocation this module performs on attacker-supplied metadata: `getData()`
+ * a bigger document simply goes unread rather than refused. It bounds the
+ * allocations this module performs on attacker-supplied metadata: `getData()`
  * inflates whatever `header.size` claims, and a header can claim anything. A
- * megabyte is two orders of magnitude above any real SKILL.md.
+ * megabyte is two orders of magnitude above any real skill document.
+ *
+ * ⚠️ It is a PER-ENTRY bound. The total is bounded separately, and more
+ * tightly: nothing is inflated at all until the archive's declared uncompressed
+ * total is known to be within {@link API_SKILL_MAX_UPLOAD_BYTES}.
  */
-const MAX_INSPECTED_SKILL_MD_BYTES = 1024 * 1024;
+const MAX_INSPECTED_DOCUMENT_BYTES = 1024 * 1024;
 
 /**
  * What a ZIP will weigh AFTER the API expands it, read from the archive's own
- * central directory — plus the name its inner SKILL.md declares, and any answer
- * key it carries.
+ * central directory — plus the name its inner SKILL.md declares, any answer key
+ * it carries, and the markdown members the portability checks read.
  *
  * 🔑 **The API expands a ZIP and applies the ceiling to the UNCOMPRESSED total,
  * not to the archive.** Measured against the live API by an adopter: a
@@ -686,7 +707,7 @@ const MAX_INSPECTED_SKILL_MD_BYTES = 1024 * 1024;
  * caller's uncompressed-total gate, so the ceiling this function exists to
  * enforce could not protect the inflation this function performed. Nothing is
  * written to disk — that part stands — but the decompression is now ordered
- * after the total is known and bounded by {@link MAX_INSPECTED_SKILL_MD_BYTES},
+ * after the total is known and bounded by {@link MAX_INSPECTED_DOCUMENT_BYTES},
  * so an archive declaring a 4 GiB SKILL.md is enumerated and never inflated.
  */
 export async function inspectZipArchive(zipPath: string): Promise<ZipInspection | undefined> {
@@ -714,15 +735,66 @@ export async function inspectZipArchive(zipPath: string): Promise<ZipInspection 
 		.map(entry => toForwardSlash(entry.entryName))
 		.filter(name => name.split('/').some(segment => NEVER_UPLOADED_DIR_NAMES.has(segment)));
 
-	// PASS 2 — the ONE entry worth inflating, and only once the total says this
+	// PASS 2 — the entries worth inflating, and only once the total says this
 	// archive is not already refused. An over-ceiling archive is about to be
 	// rejected by the caller, so inflating anything out of it would be work spent
 	// on an upload that cannot happen.
-	const declaredName = uncompressedBytes > API_SKILL_MAX_UPLOAD_BYTES
-		? undefined
-		: declaredNameOf(electShallowestSkillMd(files));
+	if (uncompressedBytes > API_SKILL_MAX_UPLOAD_BYTES) {
+		return { uncompressedBytes, declaredName: undefined, neverUploaded, documents: [], bundleRoot: undefined };
+	}
+	const elected = electShallowestSkillMd(files);
+	return {
+		uncompressedBytes,
+		declaredName: declaredNameOf(elected),
+		neverUploaded,
+		documents: inflateMarkdownMembers(files),
+		bundleRoot: archiveRootOf(elected?.entryName),
+	};
+}
 
-	return { uncompressedBytes, declaredName, neverUploaded };
+/**
+ * Every markdown member of the archive, as an upload part.
+ *
+ * 🔑 This exists so the ZIP lane can run the portability family through the ONE
+ * function the directory lane runs it through. Until it did, `install <zip>`
+ * performed none of the checks `install --help` promises of "every markdown
+ * document in the bundle": the archive went to `sendSkillUpload` as one opaque
+ * part, and an operator following the documented contract got silence where they
+ * were promised warnings. Routing the parts back through
+ * {@link warnUnportableReferences} keeps ONE implementation of the checks — a
+ * second copy of the three collector calls is how the two lanes start disagreeing.
+ *
+ * An entry that will not inflate is SKIPPED, never fatal: this module's standing
+ * position is that an archive VAT cannot read is not an archive VAT should block,
+ * and the checks it feeds only ever warn.
+ */
+function inflateMarkdownMembers(files: readonly ZipEntry[]): MultipartFile[] {
+	const documents: MultipartFile[] = [];
+	for (const entry of files) {
+		const filename = toForwardSlash(entry.entryName);
+		if (!filename.toLowerCase().endsWith('.md')) continue;
+		if (entry.header.size > MAX_INSPECTED_DOCUMENT_BYTES) continue;
+		try {
+			documents.push({ fieldName: 'files[]', filename, content: entry.getData() });
+		} catch {
+			continue;
+		}
+	}
+	return documents;
+}
+
+/**
+ * The directory the elected SKILL.md sits in, which is the archive's bundle root.
+ *
+ * `my-skill/SKILL.md` roots the bundle at `my-skill`; a SKILL.md at the archive
+ * root has no prefix, and neither does an archive with no SKILL.md at all. ZIP
+ * fixes `/` as the entry separator, so this reads the format rather than handling
+ * a host path.
+ */
+function archiveRootOf(entryName: string | undefined): string | undefined {
+	if (entryName === undefined) return undefined;
+	const cut = toForwardSlash(entryName).lastIndexOf('/');
+	return cut === -1 ? undefined : entryName.slice(0, cut);
 }
 
 /**
@@ -791,7 +863,7 @@ function zipEntryDepth(entryName: string): number {
  * computed from headers, so failing here costs only the name.
  */
 function declaredNameOf(entry: ZipEntry | undefined): string | undefined {
-	if (entry === undefined || entry.header.size > MAX_INSPECTED_SKILL_MD_BYTES) return undefined;
+	if (entry === undefined || entry.header.size > MAX_INSPECTED_DOCUMENT_BYTES) return undefined;
 	try {
 		return declaredSkillNameIn(entry.getData().toString('utf8'));
 	} catch {
@@ -1533,9 +1605,133 @@ async function installZipArchive(
 				+ `the declared name. Pass --title "${inspected.declaredName}" to make them agree.`,
 			);
 		}
+		// 🚨 The SAME function the directory lane calls, over the archive's own
+		// markdown. Until this line existed, `install <zip>` ran NONE of the
+		// portability checks its `--help` promises of "every markdown document in
+		// the bundle" — the archive went straight to `sendSkillUpload`, so the
+		// adopter finding that produced the family (10 of 54 skills referencing a
+		// path outside their own tree, published green and unable to run) was
+		// invisible on the lane most likely to carry a hand-built bundle.
+		//
+		// ⚠️ NO validation config, and that is a real narrowing, stated in the
+		// help text. `validation.allow` / `validation.severity` are resolved by
+		// walking up from a skill's SKILL.md to its governing project — and an
+		// archive member has no path on disk to walk up from, the same reason a
+		// config-declared eval-suite location is unreadable here. So a waiver that
+		// silences `vat skills build` does NOT silence this lane. The checks only
+		// warn, so the cost of the narrowing is noise, never a blocked publish;
+		// the cost of skipping them was silence on a documented promise.
+		warnUnportableReferences(inspected.documents, inspected.bundleRoot, undefined, logger);
 	}
 
 	return sendSkillUpload(client, displayTitle, files);
+}
+
+/** One version the sweep could not delete, and the reason it gave. */
+export interface VersionDeleteFailure {
+	readonly version: string;
+	readonly reason: string;
+}
+
+/** What a `--all` sweep did to the versions it was handed. */
+export interface VersionSweep {
+	/** Versions this run destroyed. Irreversible, and the record of it. */
+	readonly deleted: readonly string[];
+	/** Versions still there, each with why. Empty means the sweep is complete. */
+	readonly failures: readonly VersionDeleteFailure[];
+}
+
+/**
+ * Delete every version handed in, and keep going when one refuses.
+ *
+ * 🚨 **One refusal is a fact about ONE version.** This loop used to return on the
+ * first one, so every version after it was never ATTEMPTED — not failed, not
+ * reported, unexamined. Deleting a workspace skill requires deleting every
+ * version first, so the operator was left with a skill that could not be deleted,
+ * a report that named one problem out of an unknown number, and no way to tell
+ * from the output which versions were still there. A transient refusal on version
+ * 2 of 30 hid the state of the other 28.
+ *
+ * The sweep therefore ATTEMPTS all of them and reports both lists. The caller
+ * decides what the outcome means: some deleted plus some failed is a run that
+ * happened and went wrong (exit 1, with the record); nothing deleted at all is
+ * the ending the command's help documents as exit 2.
+ *
+ * ⛔ It deliberately does NOT stop early on a repeated failure. A "the API is
+ * clearly down, give up" heuristic is how the abandoned-versions defect reads
+ * from inside: the whole value here is that every version's state is KNOWN when
+ * the command ends.
+ */
+export async function deleteEveryVersion(
+	client: Pick<OrgApiClient, 'deleteSkillVersion'>,
+	skillId: string,
+	versions: readonly string[],
+	logger: UploadLogger,
+): Promise<VersionSweep> {
+	const deleted: string[] = [];
+	const failures: VersionDeleteFailure[] = [];
+	for (const version of versions) {
+		try {
+			await client.deleteSkillVersion(skillId, version);
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			failures.push({ version, reason });
+			logger.info(`   ⚠ version ${version} was not deleted: ${reason}`);
+			continue;
+		}
+		deleted.push(version);
+		logger.info(`   Deleted version ${version}`);
+	}
+	return { deleted, failures };
+}
+
+/**
+ * Every version the sweep could not delete, and why — the one sentence both the
+ * published report and the exit-2 throw are built from, so the two endings never
+ * describe the same run differently.
+ */
+export function describeVersionSweepFailures(failures: readonly VersionDeleteFailure[]): string {
+	return failures.map(failure => `${failure.version}: ${failure.reason}`).join('; ');
+}
+
+/** What {@link reportHalfDeleted} needs to describe a run that destroyed some of what it was asked to. */
+export interface HalfDeletedReport {
+	readonly skillId: string;
+	readonly deletedVersions: readonly string[];
+	/** Versions still present. Empty when the sweep completed and the SKILL delete is what failed. */
+	readonly failedVersions: readonly string[];
+	readonly error: string;
+}
+
+/**
+ * The document a `--all` run publishes when it destroyed something and then did
+ * not finish.
+ *
+ * 🔑 The deleted list is a RECORD, not a progress counter. Version deletion is
+ * irreversible, so a failure part-way through leaves a workspace nobody can
+ * reconstruct — and throwing here would end on `handleCommandError`'s exit 2
+ * ("the run could not happen") and DISCARD the document. It happened, and it
+ * destroyed things the operator now has no other list of. So the lists travel
+ * with the failure and the run ends 1: it happened, and its outcome is wrong.
+ *
+ * `failedVersions` is the other half, and the half a re-run needs: what is still
+ * there. Without it the operator knows what they lost and not what they still
+ * have to deal with.
+ */
+export function reportHalfDeleted(report: HalfDeletedReport): OrgCommandFailure {
+	const { skillId, deletedVersions, failedVersions } = report;
+	return orgCommandFailure({
+		id: skillId,
+		deleted: false,
+		deletedVersions,
+		failedVersions,
+		error: report.error,
+		note:
+			`${String(deletedVersions.length)} version(s) of ${skillId} were deleted and cannot be `
+			+ `restored; ${String(failedVersions.length)} could not be deleted and are still there. `
+			+ 'The skill itself still exists — the API refuses a skill that still has versions. '
+			+ 'Re-run `--all` once the cause is cleared: it will attempt only what is left.',
+	});
 }
 
 // ── Commands ───────────────────────────────────────────────────────────
@@ -1651,9 +1847,16 @@ Description:
   the non-portable reference, non-portable command, and unqualified MCP tool-name
   checks — the ones that catch a skill referencing a path outside its own tree,
   which cannot resolve once the API publishes it alone. These WARN and never
-  block, and \`validation.allow\` / \`validation.severity\` from the governing
-  config are honoured, so a waiver that makes \`vat skills build\` green makes
-  this quiet too. Run \`vat audit <dir>\` for the full report.
+  block. Run \`vat audit <dir>\` for the full report.
+
+  A ZIP faces the same three checks: its markdown members are read out of the
+  archive and run through them, so a hand-built bundle is not the quiet lane.
+  The one difference is the config. On a DIRECTORY, \`validation.allow\` /
+  \`validation.severity\` from the governing vibe-agent-toolkit.config.yaml are
+  honoured, so a waiver that makes \`vat skills build\` green makes this quiet
+  too. On a ZIP there is no directory to resolve that config from — the same
+  reason a config-declared eval-suite location is invisible here — so the checks
+  run UNWAIVED and a warning you have already waived elsewhere will still print.
 
   There are TWO size gates and a ZIP faces both. The REQUEST gate weighs the
   multipart body — file bytes plus about 156 bytes of framing per file — against
@@ -1698,16 +1901,13 @@ Examples:
 				// travels with the failure, and the run ends 1: it happened, and its
 				// outcome is wrong.
 				const deletedVersions: string[] = [];
-				const halfDeleted = (error: unknown): OrgCommandFailure => orgCommandFailure({
-					id: skillId,
-					deleted: false,
-					deletedVersions,
-					error: error instanceof Error ? error.message : String(error),
-					note:
-						`${String(deletedVersions.length)} version(s) of ${skillId} were deleted before this `
-						+ 'failed and cannot be restored. The skill itself still exists. Re-run '
-						+ '`--all` once the cause is cleared; the versions listed here are already gone.',
-				});
+				const halfDeleted = (error: unknown, failedVersions: readonly string[]): OrgCommandFailure =>
+					reportHalfDeleted({
+						skillId,
+						deletedVersions,
+						failedVersions,
+						error: error instanceof Error ? error.message : String(error),
+					});
 
 				if (options.all) {
 					const versions = await autopaginateSkills(client, skillVersionsPath(skillId));
@@ -1715,19 +1915,27 @@ Examples:
 					// "Found …", not "Deleting …": nothing has been deleted at this point
 					// and the very next call can be refused. Cf. `installFromLocal`.
 					logger.info(`Found ${String(versionData.length)} version(s) of ${skillId} to delete first`);
-					for (const ver of versionData) {
-						try {
-							await client.deleteSkillVersion(skillId, ver.version);
-						} catch (error) {
-							// Only after at least one version is gone is there a report worth
-							// publishing. Before that nothing happened, and "could not happen"
-							// (exit 2, via the throw) is the honest ending.
-							if (deletedVersions.length === 0) throw error;
-							logger.info(`   ⚠ version ${ver.version} was not deleted`);
-							return halfDeleted(error);
+					// ATTEMPTS every version, whatever any one of them answers. See
+					// `deleteEveryVersion`: returning on the first refusal left the rest
+					// unexamined, and the skill undeletable with no record of what remained.
+					const sweep = await deleteEveryVersion(client, skillId, versionData.map(v => v.version), logger);
+					deletedVersions.push(...sweep.deleted);
+					if (sweep.failures.length > 0) {
+						const detail = describeVersionSweepFailures(sweep.failures);
+						// Nothing was destroyed, so there is no record worth publishing and
+						// "could not happen" (exit 2, via the throw) is the honest ending —
+						// the same rule as before, now decided on the WHOLE sweep rather than
+						// on its first refusal.
+						if (deletedVersions.length === 0) {
+							throw new Error(
+								`No version of ${skillId} could be deleted, so the skill was left alone. `
+								+ `${String(sweep.failures.length)} attempt(s) failed — ${detail}`,
+							);
 						}
-						deletedVersions.push(ver.version);
-						logger.info(`   Deleted version ${ver.version}`);
+						// The skill delete is not attempted: the API refuses a skill that still
+						// has versions, so it would spend a round trip to be told what is
+						// already known here.
+						return halfDeleted(new Error(detail), sweep.failures.map(failure => failure.version));
 					}
 				}
 
@@ -1743,7 +1951,9 @@ Examples:
 					);
 				} catch (error) {
 					if (deletedVersions.length === 0) throw error;
-					return halfDeleted(error);
+					// The sweep completed — every version is gone — and the SKILL delete is
+					// what failed, so nothing is left in `failedVersions`.
+					return halfDeleted(error, []);
 				}
 				const deleted = reportDelete(raw, skillId, SKILL_DELETED_TYPES);
 				return deletedVersions.length === 0
@@ -1763,16 +1973,24 @@ Description:
   delete every version and then the skill in one command; without it, delete the
   versions yourself with \`vat claude org skills versions delete\` first.
 
-  --all deletes irreversibly and in a loop. If it fails part-way through, the
-  versions it already destroyed are listed under deletedVersions in the output
-  and the run exits 1 — the run happened, and its outcome is wrong. It exits 2
-  only when nothing was deleted at all.
+  --all deletes irreversibly and in a loop, and it ATTEMPTS EVERY VERSION even
+  when one refuses — one refusal is a fact about one version, not about the ones
+  after it. When the sweep ends with anything left, the versions it destroyed are
+  listed under deletedVersions, the ones still there under failedVersions, and
+  the run exits 1 — the run happened, and its outcome is wrong. The skill itself
+  is then left alone, because the API refuses a skill that still has versions.
+  It exits 2 only when nothing was deleted at all.
+
+  A version delete whose response is lost is replayed, and the replay is answered
+  404 because the first attempt already removed it. That 404 is read as the
+  delete it is, not as a failure — the version appears under deletedVersions.
 
 Exit Codes:
   0 - The skill was deleted
   1 - The run completed and the skill was NOT deleted: the API named a different
-      outcome, or --all destroyed some versions and then failed
-  2 - The run could not happen: no API key, or the first request was refused
+      outcome, or --all destroyed some versions and could not destroy the rest
+  2 - The run could not happen: no API key, the first request was refused, or
+      --all deleted no version at all
 
 Example:
   $ vat claude org skills delete skill_abc123 --all

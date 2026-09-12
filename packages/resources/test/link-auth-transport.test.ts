@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { authTransport, parseRetryAfter } from '../src/link-auth-transport.js';
 
-import { sequenceFetch } from './auth-fetch-mocks.js';
+import {
+  LEAK_CANARY,
+  NUL,
+  sequenceFetch,
+  undiciHeaderValidatingFetch,
+} from './auth-fetch-mocks.js';
 
 const TEST_TOKEN = 'Bearer test-token-12345';
 const ORIGIN_URL = 'https://api.github.com/x';
@@ -62,7 +67,7 @@ describe('authTransport — happy path (no redirect, no retry)', () => {
   });
 });
 
-describe('authTransport — cross-origin Authorization stripping (§8)', () => {
+describe('authTransport — cross-origin header stripping (§8)', () => {
   it('same-origin redirect preserves Authorization header', async () => {
     const impl = sequenceFetch([
       { status: 302, headers: { location: 'https://api.github.com/redirected' } },
@@ -95,9 +100,9 @@ describe('authTransport — cross-origin Authorization stripping (§8)', () => {
     expect(response.status).toBe(200);
   });
 
-  it('cross-origin redirect strips Authorization case-insensitively', async () => {
+  it('cross-origin redirect strips a lower-cased authorization key too', async () => {
     // A buggy/exotic caller might pass header key as 'authorization' instead.
-    // The strip must match Headers semantics (case-insensitive).
+    // Nothing is keyed on the name any more, so spelling cannot matter.
     const impl = sequenceFetch([
       { status: 302, headers: { location: ATTACKER_URL } },
       {
@@ -114,6 +119,26 @@ describe('authTransport — cross-origin Authorization stripping (§8)', () => {
       { authorization: 'Bearer t', Accept: 'application/json' },
       impl,
     );
+  });
+
+  it('cross-origin redirect strips a credential in a header NOT named Authorization', async () => {
+    // `auth.headers` is an open adopter-authored record whose every value is
+    // secret-bearing by contract (GitLab: `PRIVATE-TOKEN`; API-key hosts:
+    // `X-API-Key`). A strip keyed on the NAME `authorization` is the instance
+    // shape — whichever name it omits rides the bounce to the other origin.
+    const impl = sequenceFetch([
+      { status: 302, headers: { location: ATTACKER_URL } },
+      {
+        status: 200,
+        assertHeaders: (h) => expect(h).toEqual({}),
+      },
+    ]);
+    const response = await authTransport(
+      ORIGIN_URL,
+      { 'PRIVATE-TOKEN': TEST_TOKEN, 'X-API-Key': TEST_TOKEN, Accept: 'application/json' },
+      impl,
+    );
+    expect(response.status).toBe(200);
   });
 
   it('redirect with relative Location resolves against current URL (still same-origin)', async () => {
@@ -263,6 +288,133 @@ describe('authTransport — signal pass-through', () => {
     const signal = AbortSignal.timeout(30_000);
     await authTransport(ORIGIN_URL, AUTH_HEADERS, impl, { signal });
     expect(capturedSignal).toBe(signal);
+  });
+});
+
+/** What `authTransport` throws for these headers against the undici-faithful fetch. */
+async function thrownFor(headers: Record<string, string>): Promise<Error> {
+  const error: unknown = await authTransport(ORIGIN_URL, headers, undiciHeaderValidatingFetch).then(
+    () => undefined,
+    (e: unknown) => e,
+  );
+  expect(error).toBeInstanceOf(Error);
+  return error as Error;
+}
+
+describe('authTransport — a throwing fetch never carries the token out', () => {
+  // MEASURED on Node 24.13: undici embeds the header VALUE verbatim in the
+  // TypeError it throws for an invalid header —
+  //   Headers.append: "Bearer <tok>\0" is an invalid header value.
+  // `ExternalLinkValidator` serializes that `.message` straight into the
+  // result's `error` field, which `vat resources validate` prints. A
+  // credential helper that emits a NUL or a multi-line payload (`git
+  // credential fill` prints `password=…` on its own line) reaches it.
+  // `LEAK_CANARY`, `NUL` and `undiciHeaderValidatingFetch` are shared with the
+  // validator suite from `auth-fetch-mocks.ts` — see there for why one canary.
+
+  it('the real undici TypeError leaks the token — proving the case is live', () => {
+    // Guard against the fix being tested against a mock that no longer
+    // reproduces the hazard: if undici stops embedding the value, this test
+    // fails and the redaction below can be re-argued from evidence.
+    // `toThrow(string)` is a SUBSTRING check, which is the assertion meant —
+    // and stricter than the `new RegExp(LEAK_CANARY)` this replaced, since the
+    // canary is now an import and every one of its characters is matched
+    // literally rather than as pattern syntax.
+    expect(() => new Headers({ Authorization: `Bearer ${LEAK_CANARY}${NUL}` })).toThrow(
+      LEAK_CANARY,
+    );
+  });
+
+  it('rethrows a redacted error instead of the raw one', async () => {
+    const seen = await thrownFor({ Authorization: `Bearer ${LEAK_CANARY}${NUL}`, Accept: 'application/json' });
+    expect(seen.message).not.toContain(LEAK_CANARY);
+    expect(String(seen.stack)).not.toContain(LEAK_CANARY);
+    // The `cause` chain must not smuggle it either — util.inspect prints it.
+    expect(JSON.stringify(seen, Object.getOwnPropertyNames(seen))).not.toContain(LEAK_CANARY);
+  });
+
+  it('keeps the diagnosis — the operator can still tell what went wrong', async () => {
+    const error = await thrownFor({ Authorization: `Bearer ${LEAK_CANARY}${NUL}` });
+    expect(error.message).toContain('invalid header value');
+    // The original error's class is named in the text, so the swap does not
+    // cost the operator the "what kind of failure was this" signal.
+    expect(error.message).toContain('TypeError');
+  });
+
+  it('redacts a token carried in a header that is NOT named Authorization', async () => {
+    // `auth.headers` is an open adopter-authored record — GitLab's documented
+    // header is `PRIVATE-TOKEN`, API-key hosts use `X-API-Key`. The value is
+    // the secret whatever the name says, so redaction must key on the VALUE.
+    // A name allowlist would leave this exact throw on stdout verbatim.
+    const error = await thrownFor({ 'PRIVATE-TOKEN': `${LEAK_CANARY}${NUL}` });
+    expect(error.message).not.toContain(LEAK_CANARY);
+    expect(JSON.stringify(error, Object.getOwnPropertyNames(error))).not.toContain(LEAK_CANARY);
+  });
+
+  it('passes an ordinary network failure through untouched', async () => {
+    // Nothing to hide → the operator keeps the original object: exact message,
+    // real stack, real class. Rewrapping every failure to guard the rare one
+    // would trade every diagnosis for one.
+    const original = new Error('connect ECONNREFUSED 127.0.0.1:443');
+    const impl = (() => Promise.reject(original)) as typeof fetch;
+    const error = await authTransport(ORIGIN_URL, AUTH_HEADERS, impl).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(error).toBe(original);
+  });
+
+  it('redacts a token hiding one level down in the `cause` chain', async () => {
+    // undici's own "fetch failed" nests the real error as `cause`, and
+    // util.inspect prints it — a probe that read only `.message` would pass
+    // this leak straight through.
+    const impl = (() => {
+      const inner = new Error(`upstream rejected Bearer ${LEAK_CANARY}`);
+      return Promise.reject(new TypeError('fetch failed', { cause: inner }));
+    }) as typeof fetch;
+    const error = (await authTransport(
+      ORIGIN_URL,
+      { Authorization: `Bearer ${LEAK_CANARY}` },
+      impl,
+    ).then(
+      () => undefined,
+      (e: unknown) => e,
+    )) as Error;
+    expect(error.message).not.toContain(LEAK_CANARY);
+    expect(error.message).toContain('fetch failed');
+    expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
+  });
+
+  it('redacts a throw on a LATER hop, not only the first', async () => {
+    // The loop rebuilds `currentHeaders` on every redirect. Redaction must
+    // cover the token for the whole run, not just the first fetch call.
+    let hop = 0;
+    const headers = { Authorization: `Bearer ${LEAK_CANARY}${NUL}` };
+    const impl = ((_url: string | URL, init?: RequestInit) => {
+      hop++;
+      if (hop === 1) {
+        // First hop skips header validation entirely, so nothing throws yet.
+        return Promise.resolve(
+          new Response(null, { status: 302, headers: { location: `${ORIGIN_URL}/next` } }),
+        );
+      }
+      // Same-origin redirect, so Authorization is still attached — undici's
+      // validation is what fails here, on hop 2.
+      const validated = new Headers(init?.headers);
+      return Promise.resolve(
+        new Response(null, {
+          status: 200,
+          headers: { 'x-auth-sent': String(validated.has('authorization')) },
+        }),
+      );
+    }) as typeof fetch;
+
+    const error = (await authTransport(ORIGIN_URL, headers, impl).then(
+      () => undefined,
+      (e: unknown) => e,
+    )) as Error;
+    expect(hop).toBe(2);
+    expect(error.message).not.toContain(LEAK_CANARY);
   });
 });
 

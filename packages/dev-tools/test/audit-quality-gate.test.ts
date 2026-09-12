@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type AuditFinding,
   type Exemption,
+  auditRunFailure,
   classifyFindings,
   findStaleExemptions,
   parseAuditFindings,
@@ -132,5 +133,77 @@ files:
 
   it('THROWS on output that is not a YAML mapping at all', () => {
     expect(() => parseAuditFindings('just a string')).toThrow(/no YAML document/);
+  });
+});
+
+/**
+ * 🚨 The coercion these cover is the one that made the gate's own remedy the
+ * delivery vehicle for a permanent bypass. `issues` was read as
+ * `Array.isArray(x) ? x : []`, so a plausible shape change — findings grouped by
+ * severity, say — parsed to ZERO findings. The gate then failed for the only
+ * reason left, "N exemption(s) match nothing — delete them", a maintainer
+ * followed that printed instruction, and the gate passed green forever over a
+ * report it could no longer read. Two levels validated and the third coerced is
+ * not "mostly strict": it is the whole hole.
+ */
+describe('parseAuditFindings — the issues level is validated, never coerced', () => {
+  it('THROWS when `issues` is an object rather than an array', () => {
+    const grouped = `
+status: error
+files:
+  - path: a/SKILL.md
+    issues:
+      error:
+        - code: REAL_DEFECT
+          message: this must not vanish
+`;
+    expect(() => parseAuditFindings(grouped)).toThrow(/issues/);
+  });
+
+  it('THROWS when a file entry carries no `issues` at all', () => {
+    expect(() => parseAuditFindings('status: ok\nfiles:\n  - path: a/SKILL.md\n')).toThrow(/issues/);
+  });
+
+  it('names the offending path, so the shape change is diagnosable', () => {
+    expect(() => parseAuditFindings('status: ok\nfiles:\n  - path: b/SKILL.md\n'))
+      .toThrow(/b\/SKILL\.md/);
+  });
+
+  it('THROWS when a file entry is not a mapping', () => {
+    expect(() => parseAuditFindings('status: ok\nfiles:\n  - just-a-string\n')).toThrow(/file entry/);
+  });
+
+  it('still accepts an empty issues array — a clean file is not a shape change', () => {
+    expect(parseAuditFindings('status: ok\nfiles:\n  - path: a/SKILL.md\n    issues: []\n'))
+      .toEqual([]);
+  });
+});
+
+/**
+ * The sibling half of the same defect: `main()` read `stdout` and never looked at
+ * `error` or `status`. `spawnSync` reports a `maxBuffer` overrun as an ENOBUFS
+ * `error` while still handing back the bytes it did collect, and a truncated
+ * report parses — into FEWER findings — so an OOM-killed or clipped run read as a
+ * CLEANER repository. The heap guard fixed in this same release fails closed on
+ * `result.error`; this gate had copied the `maxBuffer` half and not the check.
+ */
+describe('auditRunFailure', () => {
+  const ran = { status: 0, stdout: '---\nstatus: ok\nfiles: []\n' } as const;
+
+  it('trusts a run that exited 0 with a document', () => {
+    expect(auditRunFailure(ran)).toBeNull();
+  });
+
+  it('refuses a spawn error even though bytes came back', () => {
+    const truncated = { ...ran, error: new Error('spawnSync ENOBUFS') };
+    expect(auditRunFailure(truncated)).toMatch(/ENOBUFS/);
+  });
+
+  it('refuses a non-zero exit — `vat audit` exits 0 by design, so a code means it crashed', () => {
+    expect(auditRunFailure({ ...ran, status: 1 })).toMatch(/exit(ed)? 1|status 1/i);
+  });
+
+  it('refuses an empty document — the command did not run', () => {
+    expect(auditRunFailure({ status: 0, stdout: '  \n' })).toMatch(/no output/);
   });
 });

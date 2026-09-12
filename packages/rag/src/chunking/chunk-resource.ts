@@ -27,12 +27,129 @@ export interface ChunkableResource extends ResourceMetadata {
 }
 
 /**
+ * Index just past a leading YAML frontmatter block.
+ *
+ * Heading line numbers are absolute in the file, so the region above the first
+ * heading includes the frontmatter fence. Embedding that YAML would give every
+ * frontmatter-carrying document in a corpus an extra chunk of metadata prose,
+ * which is noise at index time and cost at embed time.
+ *
+ * An unterminated opening fence is not frontmatter: the document simply starts
+ * with a thematic break, and its first line is content.
+ *
+ * @param lines - Document content split on newlines
+ * @returns 0-based index of the first line that is not frontmatter
+ */
+function contentStartIndex(lines: string[]): number {
+  if (lines[0]?.trim() !== '---') return 0;
+
+  for (let i = 1; i < lines.length; i++) {
+    const trimmed = lines[i]?.trim();
+    if (trimmed === '---' || trimmed === '...') return i + 1;
+  }
+
+  return 0;
+}
+
+/**
+ * Chunk the unheaded prose between two line indices, frontmatter excluded.
+ *
+ * Serves BOTH unheaded regions a document can have, and serves them the same
+ * way on purpose:
+ *
+ * - the **preamble**, above the first heading. A document opening with an
+ *   abstract, a TL;DR or a lead paragraph used to index that prose at zero
+ *   chunks — the section walk began AT the first heading, and everything above
+ *   it was dropped with no error, no warning and no counter.
+ * - the **whole document**, when it carries no headings at all. That path used
+ *   to hand the entire file to the chunker, YAML fence included, so the same
+ *   body indexed differently depending on whether anybody had written a `#`
+ *   into it: with a heading the frontmatter was dropped, without one it became
+ *   retrievable prose. Nobody chose that; it fell out of two code paths where
+ *   only one had been taught about frontmatter.
+ *
+ * The resulting chunks carry NO `headingPath` and NO `headingLevel`. Unheaded
+ * prose belongs to no section, and labelling it with the heading it sits above
+ * would make it retrievable under a heading that does not describe it — a worse
+ * failure than the omission this replaces. `headingPath` is already optional on
+ * {@link RawChunk}, so downstream consumers see the shape they already handle.
+ *
+ * A region with nothing but frontmatter and blanks in it yields NO chunks. For
+ * a frontmatter-only document that means zero chunks overall, which is the
+ * honest answer — there is no prose to retrieve, and an index entry whose
+ * content is a YAML fence answers no query anyone will ask. It is not an error,
+ * and {@link chunkResource}'s statistics report it as zero rather than as the
+ * `NaN` an empty average used to produce.
+ *
+ * @param lines - Document content split on newlines
+ * @param limit - 0-based exclusive end of the region (the first heading's own
+ *   line index, or the line count for a document with no headings)
+ * @param config - Chunking configuration
+ * @returns Chunks covering the region's prose, or none when it has none
+ */
+function chunkUnheadedRegion(
+  lines: string[],
+  limit: number,
+  config: ChunkingConfig
+): RawChunk[] {
+  let start = contentStartIndex(lines);
+  while (start < limit && lines[start]?.trim() === '') start++;
+
+  let end = limit;
+  while (end > start && lines[end - 1]?.trim() === '') end--;
+
+  if (end <= start) return [];
+
+  // `start`/`end` are already trimmed to real content, so the 1-based line
+  // numbers below are the prose's own — not the frontmatter's or a blank's.
+  return chunkByTokens(lines.slice(start, end).join('\n'), config, {
+    startLine: start + 1,
+    endLine: end,
+  });
+}
+
+/**
+ * Token statistics over a set of chunks.
+ *
+ * Zero chunks is a real outcome, not an error: a document that is only
+ * frontmatter has no prose to retrieve, and {@link chunkUnheadedRegion} says so
+ * by returning nothing. Computed naively that outcome reported `NaN` for the
+ * average (a division by zero length) and `-Infinity`/`+Infinity` for the
+ * extremes (`Math.max` and `Math.min` over an empty list return their identity
+ * elements). None of the three is a JSON value, so any caller serializing this
+ * object published `null` where a reader expects a count — a corruption that
+ * appears only after the value leaves the process.
+ *
+ * Zero is the honest reading of all four: no chunks were produced, so no tokens
+ * were spent, and the largest and smallest of nothing are nothing.
+ *
+ * @param chunks - The chunks produced for one resource
+ * @param tokenCounter - Token counter to measure each chunk with
+ * @returns Statistics that are always finite numbers
+ */
+function summarize(chunks: RawChunk[], tokenCounter: TokenCounter): ChunkingResult['stats'] {
+  if (chunks.length === 0) {
+    return { totalChunks: 0, averageTokens: 0, maxTokens: 0, minTokens: 0 };
+  }
+
+  const tokenCounts = chunks.map((c) => tokenCounter.count(c.content));
+
+  return {
+    totalChunks: chunks.length,
+    averageTokens: tokenCounts.reduce((sum, t) => sum + t, 0) / chunks.length,
+    maxTokens: Math.max(...tokenCounts),
+    minTokens: Math.min(...tokenCounts),
+  };
+}
+
+/**
  * Chunk a resource using hybrid strategy
  *
  * Strategy:
- * 1. Use heading boundaries as primary splits (from ResourceRegistry)
- * 2. For large sections exceeding target size, split by tokens (paragraphs)
- * 3. Link chunks for context expansion (previousChunkId, nextChunkId)
+ * 1. Chunk any content above the first heading (see {@link chunkUnheadedRegion})
+ * 2. Use heading boundaries as primary splits (from ResourceRegistry)
+ * 3. For large sections exceeding target size, split by tokens (paragraphs)
+ * 4. Link chunks for context expansion (previousChunkId, nextChunkId)
  *
  * @param resource - Chunkable resource with content and frontmatter
  * @param config - Chunking configuration
@@ -47,17 +164,16 @@ export function chunkResource(
   // Flatten nested heading tree into a sorted list
   const flatHeadings = flattenHeadings(resource.headings);
 
+  const lines = resource.content.split('\n');
+
   if (flatHeadings.length === 0) {
-    // No headings - chunk entire content by tokens
-    const lines = resource.content.split('\n');
-    const chunks = chunkByTokens(resource.content, config, {
-      startLine: 1,
-      endLine: lines.length,
-    });
-    rawChunks.push(...chunks);
+    // No headings: the whole document is one unheaded region.
+    rawChunks.push(...chunkUnheadedRegion(lines, lines.length, config));
   } else {
-    // Extract content between headings
-    const lines = resource.content.split('\n');
+    // Everything above the first heading, then the sections themselves. The
+    // heading's own line belongs to its section, so the region ends one line
+    // short of it — and `line` is 1-based, which makes that index `line - 1`.
+    rawChunks.push(...chunkUnheadedRegion(lines, (flatHeadings[0]?.line ?? 1) - 1, config));
 
     for (let i = 0; i < flatHeadings.length; i++) {
       const heading = flatHeadings[i];
@@ -100,16 +216,7 @@ export function chunkResource(
     }
   }
 
-  // Calculate statistics
-  const tokenCounts = rawChunks.map((c) => config.tokenCounter.count(c.content));
-  const stats = {
-    totalChunks: rawChunks.length,
-    averageTokens: tokenCounts.reduce((sum, t) => sum + t, 0) / rawChunks.length,
-    maxTokens: Math.max(...tokenCounts),
-    minTokens: Math.min(...tokenCounts),
-  };
-
-  return { chunks: rawChunks, stats };
+  return { chunks: rawChunks, stats: summarize(rawChunks, config.tokenCounter) };
 }
 
 /**

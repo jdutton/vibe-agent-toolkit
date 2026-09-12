@@ -6,6 +6,7 @@ import {
   resolveAuthenticatedUrl,
   type ResolveOutcome,
 } from '../../src/link-auth/resolve.js';
+import { LEAK_CANARY } from '../auth-fetch-mocks.js';
 
 function assertHasFetch(
   outcome: ResolveOutcome,
@@ -315,6 +316,93 @@ describe('resolveAuthenticatedUrl', () => {
         { env: {} },
       );
       expect('outcome' in result && result.outcome).toBe('unverified');
+    });
+  });
+
+  describe('a misconfigured provider degrades one link, it does not kill the run', () => {
+    // `validateLink` calls this function outside any try/catch, so anything
+    // that escapes here takes down `vat resources validate` and `vat audit`
+    // for the whole tree. A provider config error is a finding about one
+    // link, not a process-ending event — the engine owns that boundary
+    // because it is the only place that knows the difference.
+    const TOKEN_ENV = { env: { GITHUB_TOKEN: 'ghp_notreal' } };
+
+    it.each([
+      [
+        'a `to` template with an unterminated ${',
+        githubProvider({
+          rewrite: [{ when: String.raw`^https://github\.com/(?<path>.+)$`, to: 'https://x/${path' }],
+        }),
+      ],
+      [
+        'a `to` template naming a capture that does not exist',
+        githubProvider({
+          rewrite: [{ when: String.raw`^https://github\.com/(?<path>.+)$`, to: 'https://x/${nope}' }],
+        }),
+      ],
+      [
+        'a `when` regex that does not compile',
+        githubProvider({ rewrite: [{ when: '([unclosed', to: 'https://x/' }] }),
+      ],
+      [
+        'a header template calling an unknown transform',
+        githubProvider({ auth: { headers: { Authorization: 'Bearer ${rot13(token)}' } } }),
+      ],
+      [
+        'a `match.host` glob longer than picomatch accepts (the pre-try throw)',
+        // picomatch refuses a pattern over 65 536 bytes with a SyntaxError.
+        // `selectProvider` used to run BEFORE the try, so this one escaped
+        // while every other provider-config error was caught — and the
+        // docstring said "does not throw" over both.
+        githubProvider({ match: { host: 'a'.repeat(70_000) } }),
+      ],
+      [
+        'a `vars` name colliding with a capture',
+        githubProvider({
+          rewrite: [
+            {
+              when: String.raw`^https://github\.com/(?<path>.+)$`,
+              vars: { path: '${path}' },
+              to: 'https://x/${path}',
+            },
+          ],
+        }),
+      ],
+    ])('returns unverified instead of throwing for %s', (_label, provider) => {
+      let outcome: ResolveOutcome | undefined;
+      expect(() => {
+        outcome = resolveAuthenticatedUrl(GITHUB_BLOB_URL, { providers: [provider] }, TOKEN_ENV);
+      }).not.toThrow();
+      expect(outcome).toBeDefined();
+      expect(outcome !== undefined && 'outcome' in outcome && outcome.outcome).toBe('unverified');
+    });
+
+    it('the reason names the provider host and the underlying error', () => {
+      const provider = githubProvider({
+        rewrite: [{ when: String.raw`^https://github\.com/(?<path>.+)$`, to: 'https://x/${nope}' }],
+      });
+      const outcome = resolveAuthenticatedUrl(
+        GITHUB_BLOB_URL,
+        { providers: [provider] },
+        TOKEN_ENV,
+      );
+      const reason = 'outcome' in outcome && outcome.outcome === 'unverified' ? outcome.reason : '';
+      expect(reason).toContain('github.com');
+      expect(reason).toContain('nope');
+    });
+
+    it('does not redact away the resolved token by accident — the reason never carries it', () => {
+      // The reason string is emitted to stdout. A provider error message that
+      // interpolated a rendered header would leak the token here.
+      const provider = githubProvider({
+        auth: { headers: { Authorization: 'Bearer ${rot13(token)}' } },
+      });
+      const outcome = resolveAuthenticatedUrl(
+        GITHUB_BLOB_URL,
+        { providers: [provider] },
+        { env: { GITHUB_TOKEN: LEAK_CANARY } },
+      );
+      expect(JSON.stringify(outcome)).not.toContain(LEAK_CANARY);
     });
   });
 });

@@ -2,14 +2,18 @@ import { describe, expect, it } from 'vitest';
 
 import {
   buildHeaders,
-  redactHeaders,
   REDACTED_VALUE,
+  redactSecretsInText,
+  sensitiveHeaderValues,
 } from '../../src/link-auth/build-headers.js';
 import { TemplateMissingVarError } from '../../src/link-auth/template.js';
 import { UnknownTransformError } from '../../src/link-auth/transforms.js';
 
 const BEARER_TOKEN_TEMPLATE = 'Bearer ${token}';
 const GITHUB_ACCEPT = 'application/vnd.github+json';
+// Not a real credential: a fixed, obviously-synthetic string so a leak is
+// visible as an exact substring in whatever the code under test emits.
+const LEAK_CANARY = 'ghp_leakcanary_0123456789abcdef';
 
 describe('buildHeaders', () => {
   it('renders a single ${token} header (the GitHub/SharePoint macro shape)', () => {
@@ -56,83 +60,87 @@ describe('buildHeaders', () => {
   });
 });
 
-describe('redactHeaders', () => {
-  it('redacts the Authorization header value', () => {
-    expect(redactHeaders({ Authorization: 'Bearer secret-token-12345' })).toEqual({
-      Authorization: REDACTED_VALUE,
+describe('sensitiveHeaderValues', () => {
+  it('returns the value of a sensitive header', () => {
+    expect(sensitiveHeaderValues({ Authorization: `Bearer ${LEAK_CANARY}` })).toContain(
+      `Bearer ${LEAK_CANARY}`,
+    );
+  });
+
+  it('also returns the credential half of a `<scheme> <credential>` value', () => {
+    // A serializer may print the credential without the scheme. Redacting only
+    // the full header value would then miss it.
+    expect(sensitiveHeaderValues({ Authorization: `Bearer ${LEAK_CANARY}` })).toContain(
+      LEAK_CANARY,
+    );
+  });
+
+  it.each([
+    ['PRIVATE-TOKEN', 'the GitLab shape'],
+    ['X-API-Key', 'the API-key shape'],
+    ['X-Authorization-Foo', 'a custom bearer-style header'],
+  ])('treats a %s value as a secret (%s) — the name is not the rule', (name) => {
+    // The header set is an open record the adopter writes; every value is a
+    // rendered secret-bearing template. Keying on the NAME is the instance
+    // shape: whichever name is left off the list leaks verbatim.
+    expect(sensitiveHeaderValues({ [name]: LEAK_CANARY })).toContain(LEAK_CANARY);
+  });
+
+  it('collects the values of every header, not one privileged name', () => {
+    const values = sensitiveHeaderValues({
+      Authorization: `Bearer ${LEAK_CANARY}`,
+      Accept: GITHUB_ACCEPT,
     });
+    expect(values).toContain(`Bearer ${LEAK_CANARY}`);
+    expect(values).toContain(LEAK_CANARY);
+    expect(values).toContain(GITHUB_ACCEPT);
   });
 
-  it('redacts case-insensitively (authorization, AUTHORIZATION)', () => {
-    expect(redactHeaders({ authorization: 'Bearer x' })).toEqual({ authorization: REDACTED_VALUE });
-    expect(redactHeaders({ AUTHORIZATION: 'Bearer x' })).toEqual({ AUTHORIZATION: REDACTED_VALUE });
-  });
-
-  it('passes non-sensitive headers through unchanged', () => {
-    expect(redactHeaders({ Accept: 'application/json' })).toEqual({ Accept: 'application/json' });
-  });
-
-  it('does NOT redact headers that merely contain "Authorization" as a substring', () => {
-    // X-Authorization-Foo is not the Authorization header; only exact (case-insensitive) match.
-    expect(redactHeaders({ 'X-Authorization-Foo': 'value' })).toEqual({
-      'X-Authorization-Foo': 'value',
-    });
-  });
-
-  it('returns an empty object for empty input', () => {
-    expect(redactHeaders({})).toEqual({});
-  });
-
-  it('preserves all header names, only blanking the values of sensitive ones', () => {
-    const result = redactHeaders({
-      Authorization: 'Bearer t',
-      Accept: 'application/json',
-      'X-Custom': 'value',
-    });
-    expect(Object.keys(result).sort((a, b) => a.localeCompare(b))).toEqual([
-      'Accept',
-      'Authorization',
-      'X-Custom',
-    ]);
+  it('skips a blank value — redacting on it would erase the whole message', () => {
+    expect(sensitiveHeaderValues({ Authorization: '   ' })).toEqual([]);
   });
 });
 
-describe('buildHeaders + redactHeaders integration (security claim)', () => {
-  it('a serialized redacted result never contains the raw token value', () => {
-    // The whole point of redactHeaders: a JSON.stringify of the redacted
-    // output must not leak the secret. Pinned against a literal token string
-    // so this test would fail if redaction ever stopped or was misapplied.
-    const built = buildHeaders(
-      { Authorization: BEARER_TOKEN_TEMPLATE },
-      { token: 'secret-token-12345' },
-    );
-    const serialized = JSON.stringify(redactHeaders(built));
-    expect(serialized).not.toContain('secret-token-12345');
-    expect(serialized).toContain(REDACTED_VALUE);
+describe('redactSecretsInText', () => {
+  it('replaces every occurrence of a secret', () => {
+    const text = `sent ${LEAK_CANARY} then retried ${LEAK_CANARY}`;
+    const out = redactSecretsInText(text, [LEAK_CANARY]);
+    expect(out).not.toContain(LEAK_CANARY);
+    expect(out.split(REDACTED_VALUE)).toHaveLength(3);
   });
 
-  it('non-sensitive header values remain visible after redaction (round-trip integrity)', () => {
-    const built = buildHeaders(
-      { Authorization: BEARER_TOKEN_TEMPLATE, Accept: GITHUB_ACCEPT },
-      { token: 't' },
+  it('leaves the surrounding text intact', () => {
+    expect(redactSecretsInText(`a ${LEAK_CANARY} b`, [LEAK_CANARY])).toBe(
+      `a ${REDACTED_VALUE} b`,
     );
-    const redacted = redactHeaders(built);
-    expect(redacted['Accept']).toBe(GITHUB_ACCEPT);
   });
 
-  it('preserves the header count — redaction never silently drops a header', () => {
-    const built = buildHeaders(
-      { Authorization: BEARER_TOKEN_TEMPLATE, Accept: GITHUB_ACCEPT, 'X-Custom': 'value' },
-      { token: 't' },
-    );
-    const redacted = redactHeaders(built);
-    expect(Object.keys(redacted)).toHaveLength(Object.keys(built).length);
+  it.each([
+    ['undefined', undefined],
+    ['empty string', ''],
+    ['whitespace only', '  \t '],
+  ])('ignores a %s secret rather than shredding the text', (_label, secret) => {
+    expect(redactSecretsInText('untouched text', [secret])).toBe('untouched text');
   });
 
-  it('returned maps have a null prototype (prototype-pollution defense)', () => {
-    const built = buildHeaders({ Authorization: BEARER_TOKEN_TEMPLATE }, { token: 't' });
-    const redacted = redactHeaders(built);
-    expect(Object.getPrototypeOf(built)).toBeNull();
-    expect(Object.getPrototypeOf(redacted)).toBeNull();
+  it('redacts the longest overlapping secret first', () => {
+    // `Bearer <tok>` and `<tok>` both arrive from sensitiveHeaderValues. If the
+    // short one ran first, the long one would never match and the output would
+    // read `Bearer <redacted>` — still safe, but it hides that the scheme was
+    // part of the leaked string. Longest-first keeps one clean marker.
+    const values = sensitiveHeaderValues({ Authorization: `Bearer ${LEAK_CANARY}` });
+    const out = redactSecretsInText(`value "Bearer ${LEAK_CANARY}" is invalid`, values);
+    expect(out).toBe(`value "${REDACTED_VALUE}" is invalid`);
+  });
+
+  it('closes the undici message shape verbatim', () => {
+    // MEASURED on Node 24: `new Headers({ Authorization: 'Bearer <tok>\\0' })`
+    // throws `TypeError: Headers.append: "Bearer <tok>\\0" is an invalid header
+    // value.` — the value verbatim in `.message`.
+    const value = `Bearer ${LEAK_CANARY}${String.fromCodePoint(0)}`;
+    const undiciMessage = `Headers.append: "${value}" is an invalid header value.`;
+    const out = redactSecretsInText(undiciMessage, sensitiveHeaderValues({ Authorization: value }));
+    expect(out).not.toContain(LEAK_CANARY);
+    expect(out).toContain('is an invalid header value');
   });
 });

@@ -140,10 +140,16 @@ describe('discoverableFrom', () => {
     // reported as an unrealized document — a fabricated broken link. The https
     // form is the negative control: if the guard were removed entirely, both
     // would appear, so a fixture with only one cannot tell the rules apart.
+    //
+    // 🚨 And `//cdn.example/lib.js` is the case a colon-before-slash test
+    // misses: it has no colon at all, so discovery's own `hasUriScheme` handed
+    // it to the path resolver, which produced `cdn.example/lib.js` — an
+    // unrealized document nobody wrote. One predicate now, shared with the
+    // edge lens and the closure contributor: `isNonLocalRef`.
     const { lens } = await lensAt({
       [ROOT_CLAUDE_MD]:
         `[site](https://example.com/docs.md) and [mail](mailto:someone@example.com)`
-        + ` and a real [guide](${GUIDE})\n`,
+        + ` and [cdn](//cdn.example/lib.js) and a real [guide](${GUIDE})\n`,
       [GUIDE]: 'guidance\n',
     });
 

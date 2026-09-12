@@ -120,7 +120,7 @@
 import { promises as fs, type Stats } from 'node:fs';
 import { threadId } from 'node:worker_threads';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { parseEnvBoolean, safePath } from '@vibe-agent-toolkit/utils';
 
 import { parseCacheDirectory } from './cache-namespace.js';
 import { CONTENT_KEY_PATTERN, type KeyedContent, type ParsableContent, readContentWithKey } from './content-key.js';
@@ -382,7 +382,13 @@ export class ParseCache {
     // is unobservable to a caller that sets the variable later, and untestable
     // without mutating the real `process.env`.
     const env = options.env ?? process.env;
-    this.enabled = options.enabled ?? env['VAT_CACHE'] !== '0';
+    // `parseEnvBoolean`, not a comparison against the literal `'0'`: under the
+    // old shape `VAT_CACHE=false` left caching ON. An UNPARSABLE value reads as
+    // "cache stays on" — this gates a cache, so the cheap failure is a cache
+    // the operator meant to disable, not a run that silently changes behaviour.
+    // The linkAuth kill switch reads the same `undefined` as "deny" because it
+    // gates a capability; the parser deliberately picks neither for you.
+    this.enabled = options.enabled ?? parseEnvBoolean(env['VAT_CACHE']) ?? true;
     this.directory = options.cacheDir ?? parseCacheDirectory();
   }
 

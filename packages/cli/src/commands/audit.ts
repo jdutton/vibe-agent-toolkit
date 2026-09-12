@@ -8,6 +8,7 @@ import { existsSync as fsExistsSync, type Dirent } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
+  conventionalSuiteProbe,
   crawlAndResolveRegistry,
   detectDeclaredButMissing,
   detectMarketplacePluginSourceMissing,
@@ -21,6 +22,7 @@ import {
   validateMarketplace,
   validateSkill,
   validateSkillForPackaging,
+  type ConventionalSuiteProbe,
   type EvidenceRecord,
   type PackagingValidationResult,
   type SkillPackagingConfig,
@@ -384,6 +386,37 @@ async function resolveGoverningConfig(
 const unloadableConfigResults: Map<string, ValidationResult> = new Map();
 
 /**
+ * The RUN's conventional-suite probe — the memo behind "does
+ * `<skill-root>/evals/evals.json` exist?".
+ *
+ * Resolving one skill's test input asks that question of the SUBJECT and of
+ * every entry in `projectSkills`, so a probe minted per skill costs S questions
+ * per skill and S² per run over the same S paths. Measured with the lab on a
+ * 103-skill adopter: 10,815 probes over 103 distinct paths, half of the
+ * command's entire filesystem traffic.
+ *
+ * 🚨 MODULE-scoped and cleared by {@link resetAuditCaches}, for the same reason
+ * `unloadableConfigResults` above is: this command has TWO lanes that build a
+ * shared context — {@link validateSingleSkill} and {@link handleFileEntry} — and
+ * both build it PER SKILL, inside their own loops. A probe threaded as a
+ * parameter would be re-minted by whichever lane forgot to thread it, silently,
+ * and that is exactly how this stayed quadratic: the field existed and no caller
+ * set it.
+ *
+ * ⚠️ Its lifetime is the RUN, never longer. The answer is a filesystem snapshot,
+ * and a memo outliving the invocation would keep answering for a tree that has
+ * since changed — in the CLI entrypoint AND in an in-process test sharing a
+ * vitest worker.
+ */
+let runSuiteProbe: ConventionalSuiteProbe | undefined;
+
+/** The run's probe, minted on first use and dropped by {@link resetAuditCaches}. */
+function suiteProbeForRun(): ConventionalSuiteProbe {
+  runSuiteProbe ??= conventionalSuiteProbe();
+  return runSuiteProbe;
+}
+
+/**
  * Warn about — and file a finding for — a governing config this run could not
  * load, once per config however many skills it governs.
  *
@@ -452,6 +485,9 @@ async function validateSingleSkill(
       registry: await crawlAndResolveRegistry(projectRoot),
       locationRoot,
       projectSkills: await resolveProjectDeclaredEvalSuites(skillPath),
+      // The RUN's probe, not this call's — see {@link runSuiteProbe}. This lane
+      // is called in a loop over every skill in a plugin.
+      suiteProbe: suiteProbeForRun(),
     };
     if (gitTracker !== null) {
       sharedCtx.gitTracker = gitTracker;
@@ -522,6 +558,20 @@ function collect(value: string, previous: string[]): string[] {
 /**
  * Create audit command
  * Top-level command: vat audit [path]
+ *
+ * 🔑 **Two verdicts, deliberately.** The YAML `status` describes the FINDINGS;
+ * the exit code describes whether the RUN completed. `status: error` beside exit
+ * `0` is the correct pair for a tree with errors, and both facts are worth
+ * publishing — but `status` moves with the exit code in every other command of
+ * this CLI, so this one is the exception and the help text says so out loud (see
+ * the `Output` and `Exit Codes` sections below, and `docs/audit.md`).
+ *
+ * ⚠️ Do NOT "reconcile" the two by making one follow the other. Making the exit
+ * code follow `status` turns an advisory report into a gate — the thing
+ * `vat validate` already is, and the thing this command's published contract
+ * promises it is not. Making `status` follow the exit code deletes the only
+ * machine-readable verdict a CI consumer has, and a stamped `success` over a
+ * report full of errors is a stronger falsehood than the mismatch ever was.
  */
 export function createAuditCommand(): Command {
   const audit = new Command('audit');
@@ -594,11 +644,21 @@ Description:
     done
   (See packages/cli/docs/audit.md for details.)
 
+Output — two verdicts, and they answer different questions:
+  The YAML 'status' describes the FINDINGS. The exit code describes whether the
+  RUN completed. On a tree with errors that is 'status: error' beside exit 0,
+  and both are correct.
+
+  Note that 'status' means something narrower here than elsewhere in this CLI,
+  where it moves with the exit code. Gate CI on the report — 'status' and
+  'issueCounts' — never on this command's exit code.
+
 Validation Behavior:
   Advisory only: audit surfaces all validation issues for inspection.
   Unlike 'vat skills validate', audit:
   - NEVER applies validation.allow (allowed codes are always shown)
-  - Respects validation.severity: codes set to 'ignore' are hidden
+  - Respects validation.severity: a code set to 'ignore' is hidden; warnings
+    and errors are both reported, each at its configured severity
   - ALWAYS exits 0 for validation results (never gates on errors)
 
   For gated validation (CI/CD), use: vat skills validate
@@ -643,14 +703,19 @@ Config-Aware Validation:
   which prevents false warnings for links the build pipeline resolves.
 
   Config-aware mode never applies validation.allow — audit always shows
-  all issues. validation.severity IS applied: a code set to 'ignore' is
-  hidden. skills.defaults.validation.severity applies project-wide (skills,
-  plugins and marketplaces alike); skills.config.<name>.validation.severity
-  layers on top for that skill.
+  all issues. validation.severity IS applied, from three scopes, least
+  specific first:
+    resources.validation.severity          project-wide (the same dial
+                                           'vat resources validate' reads)
+    skills.defaults.validation.severity    project-wide (skills, plugins and
+                                           marketplaces alike)
+    skills.config.<name>.validation...     that one skill
 
 Exit Codes:
-  0 - Always (even when validation errors are surfaced)
-  2 - System error (config invalid, directory not found)
+  0 - Always, when the audit completes — including when it reports
+      'status: error'. The findings are in the report; see Output above.
+  2 - System error (config invalid, directory not found). The audit could
+      not run, so there is no report to read.
 
 Examples:
   $ vat audit ./plugins/              # Audit recursively (default)
@@ -857,13 +922,21 @@ function buildFilteredResult(
  * same config promoted correctly. Two lanes, one config key, opposite answers.
  *
  * Status and counts are re-derived from the resolved severities by
- * {@link buildFilteredResult}, so a promotion moves the reported status. It does
- * NOT move this command's exit code — `vat audit` is advisory and its exit-code
- * behaviour is a separate, pre-existing question tracked in its own issue. That
- * asymmetry with `vat verify` (whose exit code IS severity-derived) is
- * deliberate here rather than overlooked.
+ * {@link buildFilteredResult}, so a promotion moves the reported STATUS — which
+ * describes the findings — and never the exit code, which describes whether the
+ * run completed. The two are different questions and audit publishes both; see
+ * {@link handleAuditResults} and the `Output` section of this command's help.
+ * `vat verify` derives its exit code from severity because it is a gate; this
+ * command is a report.
  *
- * Two scopes, both live:
+ * THREE scopes, least specific first:
+ *  - `resources.validation.severity` — the PROJECT-WIDE map `vat resources
+ *    validate` already honours. Audit read only the two `skills.*` scopes below,
+ *    so one dial in one config file produced opposite answers from the two
+ *    commands: measured on a two-code fixture, `LINK_MISSING_TARGET: ignore` and
+ *    `LINK_TO_NAVIGATION_FILE: error` written here moved neither finding in
+ *    audit. It is applied FIRST — a `skills` scope naming the same code is the
+ *    more specific statement and wins.
  *  - `skills.defaults.validation.severity` — the PROJECT-WIDE map, applied to
  *    every result this run produced, including `claude-plugin` and `marketplace`
  *    ones. It used to be applied only to skill-typed results, which left the
@@ -901,12 +974,14 @@ function applySeverityFilter(
   results: ValidationResult[],
   config: ReturnType<typeof loadConfig>
 ): ValidationResult[] {
-  if (config?.skills === undefined) {
-    return results;
-  }
-
-  const skillsConfig = config.skills;
-  const defaultSeverity = skillsConfig.defaults?.validation?.severity ?? {};
+  const skillsConfig = config?.skills;
+  // NOT gated on `config.skills` existing. It was, and that made the resources
+  // dial below inert for exactly the projects that have only one — a repo of
+  // plugins declares no skills at all.
+  const resourceSeverity = config?.resources?.validation?.severity ?? {};
+  const defaultSeverity = skillsConfig?.defaults?.validation?.severity ?? {};
+  const projectSeverity: NonNullable<SeverityConfig['severity']> =
+    { ...resourceSeverity, ...defaultSeverity };
 
   // `.filter` after `.map`, not `.map` alone: a synthetic unreadable-path result
   // exists ONLY to carry its finding, so once the adopter has set
@@ -919,11 +994,11 @@ function applySeverityFilter(
     const skillName = SKILL_RESULT_TYPES.has(result.type) ? result.metadata?.name : undefined;
     const perSkillSeverity = skillName === undefined
       ? {}
-      : (skillsConfig.config?.[skillName]?.validation?.severity ?? {});
+      : (skillsConfig?.config?.[skillName]?.validation?.severity ?? {});
 
-    // Merge: per-skill overrides default
+    // Merge, least specific first: resources → skills.defaults → skills.config.<name>
     const effectiveSeverity: NonNullable<SeverityConfig['severity']> =
-      { ...defaultSeverity, ...perSkillSeverity };
+      { ...projectSeverity, ...perSkillSeverity };
 
     if (Object.keys(effectiveSeverity).length === 0) {
       return result;
@@ -1862,12 +1937,20 @@ function handleAuditResults(
   }
 
   // 🔑 Audit is advisory only — always exit 0 for validation results, and the
-  // WORDING has to agree with that or the three signals contradict each other.
-  // This line used to read "Audit failed", beside `status: error` in the
-  // document, on exit 0: an adopter wiring `vat audit` into CI read a failure,
-  // saw a failure status, and got a green step. "Found" is what actually
-  // happened; the gate is `vat validate`, which is named here rather than
-  // implied.
+  // WORDING has to say so. This line used to read "Audit failed" on exit 0: an
+  // adopter wiring `vat audit` into CI read a failure and got a green step.
+  // "Found" is what actually happened, and the gate is `vat validate`, named
+  // here rather than implied.
+  //
+  // ⚠️ That fixed the WORDING and nothing else. The document still says
+  // `status: error` over exit 0 — measured on
+  // `packages/agent-skills/test/fixtures/skill-files` — and that is the
+  // published contract, not a leftover: `status` describes the FINDINGS, the
+  // exit code describes whether the RUN completed. An earlier version of this
+  // comment claimed all three signals had been reconciled; two of the three
+  // had, and the third is not a signal to reconcile. Where a reader is told
+  // which is which is {@link createAuditCommand}'s help — see its `Output`
+  // section, and `docs/audit.md`.
   if (errorCount > 0) {
     logger.error(`Audit found ${errorCount} file(s) with errors ${ADVISORY_EXIT_NOTE}`);
     logFindingsForStatus(results, 'error', summary.root, logger.error.bind(logger), verbose);
@@ -2108,9 +2191,12 @@ async function handleFileEntry(
       // `projectSkills`: same project-wide test-input rule as the lane above,
       // resolved through the same per-config-root memo.
       const projectSkills = await resolveProjectDeclaredEvalSuites(fullPath);
+      // `suiteProbe`: the RUN's, not this entry's — the directory walk reaches
+      // this function once per SKILL.md it finds. See {@link runSuiteProbe}.
+      const suiteProbe = suiteProbeForRun();
       const sharedCtx: SkillValidationSharedContext = scanCtx.gitTracker === null
-        ? { locationRoot, projectSkills }
-        : { gitTracker: scanCtx.gitTracker, locationRoot, projectSkills };
+        ? { locationRoot, projectSkills, suiteProbe }
+        : { gitTracker: scanCtx.gitTracker, locationRoot, projectSkills, suiteProbe };
       const packagingResult = await validateSkillForPackaging(fullPath, skillConfig, 'source', sharedCtx);
       const configAware = packagingResultToValidationResult(
         fullPath,
@@ -2386,6 +2472,7 @@ export function resetAuditCaches(): void {
   resetPackagingRegistryCache();
   inventoryRegistryCache.clear();
   unloadableConfigResults.clear();
+  runSuiteProbe = undefined;
   resetProjectRootCaches();
   resetLoadedConfigCache();
   resetSkillDiscoveryCache();

@@ -13,6 +13,7 @@ import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
+import { type PackagingTarget } from './content-type-routing.js';
 import { normalizeRelPath } from './files-config.js';
 import { detectMissingReferencedPaths } from './validators/referenced-path-missing.js';
 import { evaluate, makeRuleContext, materializeIssue } from './validators/rule-engine/index.js';
@@ -394,11 +395,21 @@ export async function checkUnreferencedFiles(
  * bundled `evals/` really is shipped to a plugin user, so a path it names really is
  * missing from what they get.
  *
+ * ⛔ `target` is required and is not defaulted. The routed-spelling guard inside
+ * the detector has to ask the SAME routing function the packager asked, and a
+ * default here is exactly how it came to ask a different one: it used the
+ * extension-only `claude-code` rule for every target, so `claude-web` bundles
+ * reported files that shipped.
+ *
  * @param outputDir Absolute path to the packaged skill output.
+ * @param target The packaging target the output was produced for.
  */
-export async function checkMissingReferencedPaths(outputDir: string): Promise<ValidationIssue[]> {
+export async function checkMissingReferencedPaths(
+  outputDir: string,
+  target: PackagingTarget,
+): Promise<ValidationIssue[]> {
   const docFiles = walkDir(outputDir).filter(f => f.endsWith('.md'));
-  return detectMissingReferencedPaths(docFiles, outputDir);
+  return detectMissingReferencedPaths(docFiles, outputDir, target);
 }
 
 /**

@@ -116,8 +116,8 @@ export const CODE_REGISTRY = {
   ),
   LINK_TARGET_UNREADABLE: entry(
     'error',
-    'Markdown link target exists on disk but could not be read, so it was neither classified nor bundled. Most often permissions; also a change racing the walk.',
-    'Fix the permissions on the target, or investigate what changed it mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read.',
+    'Markdown link target could not be checked: a read failure along its path left its existence, spelling, and anchor all unverified, and — when packaging — the target was not bundled either. Usually permissions; sometimes a transient errno (EMFILE/ENFILE/EAGAIN — re-run before investigating) or a change racing the walk.',
+    'Re-run first if the errno looks transient (EMFILE/ENFILE/EAGAIN) — the target may check out clean on a second pass. Otherwise fix the permissions on the path, or investigate what changed mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read.',
     'link_target_unreadable',
   ),
   LINK_DEFERRED_ARTIFACT: entry(
@@ -143,7 +143,7 @@ export const CODE_REGISTRY = {
   ),
   LINK_DROPPED_BY_DEPTH: entry(
     'warning',
-    'Walker stopped following links at the configured linkFollowDepth; this link was not bundled.',
+    "Depth counts hops from SKILL.md: SKILL.md's own links are depth 1, a link inside a depth-1 file is depth 2, and so on. This link was found deeper than the configured linkFollowDepth, so its target was not bundled and the packaged link points at nothing. A drop caused by an excludeReferencesFromBundle rule instead produces the sibling LINK_EXCLUDED_BY_PATTERN (info).",
     'Raise linkFollowDepth, bundle the file via files config, declare the drop intentional with validation.allow, or exclude via excludeReferencesFromBundle.rules.',
     'link_dropped_by_depth',
   ),
@@ -900,6 +900,12 @@ export type NonOverridableCode =
   // `ValidationConfigSchema` refuses it as a `severity` key, because a run whose
   // assertions did not execute has no legitimate `ignore`. Downgrade the CHECK
   // all you like; you cannot downgrade the news that it stopped checking.
+  //
+  // It is also the ONE code every gate uses for "this run checked nothing, so
+  // its green means nothing" — a scan over zero files, a budget over no matched
+  // path, a marketplace walk that found fewer than the declared local plugins, a
+  // verify phase over zero built bundles. One code, because it is one claim and
+  // needs one non-overridability; see `run-integrity.ts` in the CLI.
   | 'RESOURCE_CHECK_BROKEN'
   | 'PATH_STYLE_WINDOWS'
   // FILENAME_COLLISION is NOT here: it has a CODE_REGISTRY entry and is emitted

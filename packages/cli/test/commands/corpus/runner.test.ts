@@ -6,7 +6,12 @@ import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe
 import { describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
-import { auditOnePlugin, buildReviewOutcome, type SkillReviewSection } from '../../../src/commands/corpus/runner.js';
+import {
+  auditOnePlugin,
+  buildAuditOutcome,
+  buildReviewOutcome,
+  type SkillReviewSection,
+} from '../../../src/commands/corpus/runner.js';
 import type { PluginEntry } from '../../../src/commands/corpus/seed.js';
 
 const META = {
@@ -16,6 +21,12 @@ const META = {
 } as const;
 
 const RUN_DIR_PREFIX = 'vat-corpus-rundir-';
+
+/** The code the run-integrity refusal carries, shared with every other gate. */
+const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
+
+/** Where the builder cases say their document goes; the builder only carries it. */
+const AUDIT_DOC = 'x-audit.yaml';
 
 function makeRunDir(): string {
   return mkdtempSync(safePath.join(normalizedTmpdir(), RUN_DIR_PREFIX));
@@ -247,7 +258,12 @@ describe('auditOnePlugin — --with-review', () => {
   });
 
   it('records review.status=error when no SKILL.md is found under the source', async () => {
-    // Audit succeeds (empty tree audits cleanly) but review has nothing to do.
+    // Both lanes see the same empty tree, and both must say so. The review lane
+    // always did; the audit lane used to record `status: success` over
+    // `files_scanned: 0` — "an empty tree audits cleanly" — which is the same
+    // row a clean plugin produces. It is loadable (not `unloadable`: the path
+    // exists and the audit ran), and it is an ERROR carrying the non-overridable
+    // run-integrity code, because a row that audited nothing is not a verdict.
     const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-corpus-empty-'));
     const runDir = makeRunDir();
 
@@ -255,7 +271,19 @@ describe('auditOnePlugin — --with-review', () => {
 
     const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false });
 
-    expect(row.audit.status).not.toBe('unloadable');
+    expect(row.audit.status).toBe('error');
+    expect(row.audit.summary).toEqual({ errors: 1, warnings: 0, info: 0, files_scanned: 0 });
+    expect(row.audit.findings_emitted).toBe(1);
+    // The finding itself lives in the per-plugin audit document, beside the
+    // (empty) per-file results, so the row's counts are backed by a message.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
+    const auditDoc = yaml.parse(readFileSync(safePath.join(runDir, 'empty-audit.yaml'), 'utf-8')) as {
+      results: unknown[];
+      issues: Array<{ code: string; severity: string; message: string }>;
+    };
+    expect(auditDoc.results).toEqual([]);
+    expect(auditDoc.issues.map((i) => [i.code, i.severity])).toEqual([[RUN_INTEGRITY_CODE, 'error']]);
+    expect(auditDoc.issues[0]?.message).toContain('0 file');
     expect(row.review.status).toBe('error');
     expect(row.review.error).toMatch(/No SKILL\.md/i);
     expect(row.review.summary).toEqual({ skills_scanned: 0, reviewed: 0, failed: 0 });
@@ -321,5 +349,70 @@ describe('buildReviewOutcome', () => {
     expect(outcome.summary).toEqual({ skills_scanned: 3, reviewed: 0, failed: 3 });
     expect(outcome.status).toBe('error');
     expect(outcome.error).toContain('3 of 3');
+  });
+});
+
+/** One per-file audit result carrying the given issues — the unit `files_scanned` counts. */
+function auditResult(issues: Array<{ code: string; severity: 'error' | 'warning' | 'info' }>) {
+  return {
+    path: '/corpus-b/SKILL.md',
+    type: 'agent-skill',
+    status: issues.some((i) => i.severity === 'error') ? 'error' : 'success',
+    summary: 'fixture',
+    issues: issues.map((i) => ({ ...i, message: `${i.code} fired` })),
+    issueCounts: { errors: 0, warnings: 0, info: 0 },
+  };
+}
+
+/**
+ * The pure half of the audit lane, so the zero-file refusal is pinned without
+ * an audit on disk. The review lane already refused an empty tree; this is
+ * the same function, on the same fixture, answering the same way.
+ */
+describe('buildAuditOutcome', () => {
+  it('refuses an audit over zero files as error with ONE run-integrity finding', () => {
+    // 🔑 The reproduced case. Delete the guard and this reds: zero results
+    // summarize to zero findings, and zero findings is `success`.
+    const { audit, document } = buildAuditOutcome([], 12, AUDIT_DOC);
+
+    expect(audit.status).toBe('error');
+    expect(audit.summary).toEqual({ errors: 1, warnings: 0, info: 0, files_scanned: 0 });
+    expect(audit.findings_emitted).toBe(1);
+    expect(audit.output_path).toBe(AUDIT_DOC);
+    expect(document.results).toEqual([]);
+    expect(document.issues?.map((i) => i.code)).toEqual([RUN_INTEGRITY_CODE]);
+    expect(document.issues?.[0]?.severity).toBe('error');
+  });
+
+  it('says what did not run and what to do, without calling the plugin broken', () => {
+    const { document } = buildAuditOutcome([], 12, AUDIT_DOC);
+    const message = document.issues?.[0]?.message ?? '';
+
+    expect(message).toContain('0 file');
+    expect(message).toContain('vat audit');
+    expect(message).not.toMatch(/invalid plugin|broken skill/i);
+  });
+
+  it('stays silent over a populated audit, however clean', () => {
+    // 🔑 The over-correction guard: a clean plugin must not start reporting
+    // an error, and its document must not grow an `issues` key.
+    const { audit, document } = buildAuditOutcome([auditResult([])], 12, AUDIT_DOC);
+
+    expect(audit.status).toBe('success');
+    expect(audit.summary).toEqual({ errors: 0, warnings: 0, info: 0, files_scanned: 1 });
+    expect(audit.findings_emitted).toBe(0);
+    expect(document).not.toHaveProperty('issues');
+  });
+
+  it('rolls real findings up unchanged', () => {
+    const { audit } = buildAuditOutcome(
+      [auditResult([{ code: 'SKILL_DESCRIPTION_SHORT', severity: 'warning' }])],
+      12,
+      AUDIT_DOC,
+    );
+
+    expect(audit.status).toBe('warning');
+    expect(audit.summary).toEqual({ errors: 0, warnings: 1, info: 0, files_scanned: 1 });
+    expect(audit.findings_emitted).toBe(1);
   });
 });

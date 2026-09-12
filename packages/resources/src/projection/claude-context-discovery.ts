@@ -76,7 +76,11 @@
  * - A bare path in prose (`see docs/guide.md`) is excluded by the same rule. It
  *   is a mention, not an authored destination, and the lexer classifies it
  *   `bare-token` too.
- * - A scheme-qualified reference is dropped — see {@link hasUriScheme}.
+ * - A scheme-qualified or protocol-relative reference is dropped — see
+ *   `isNonLocalRef` in `reference-resolution.ts`, the one predicate every
+ *   consumer of `blob_references` shares. This lens used to carry its own
+ *   ("a colon before any slash"), which answered FALSE for `//cdn.example/x`
+ *   and handed it to the path resolver — a document nobody wrote, reported.
  */
 
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -85,6 +89,7 @@ import { resolveLocalHref } from '../utils.js';
 
 import type { LoadedContextAnswer } from './claude-context-query.js';
 import type { Projection } from './projection.js';
+import { isNonLocalRef } from './reference-resolution.js';
 
 /**
  * How far VAT can vouch for a discoverable target.
@@ -162,28 +167,6 @@ export interface DiscoveryTotals {
 export interface DiscoverableContext {
   readonly rows: readonly DiscoverableRow[];
   readonly totals: DiscoveryTotals;
-}
-
-/**
- * Does this reference name a scheme rather than a path?
- *
- * ⚠️ Deliberately a DIFFERENT rule from `reference-lexer.ts`'s `URL_SCHEME`,
- * which requires `://` — and the difference is load-bearing rather than a second
- * copy drifting. `mailto:someone@example.com` and `tel:+1` carry no `//`, and
- * handing either to an RFC 3986 path resolver produces a plausible relative
- * filename that would then be reported as an unrealized document. So the test
- * here is a colon before any slash, which is the general shape of a URI scheme
- * and the one this consumer needs. A Windows drive letter cannot reach this:
- * these are markdown hrefs from `blob_references`, not filesystem paths.
- *
- * @param rawRef - The reference exactly as authored
- * @returns True when the reference is scheme-qualified
- */
-function hasUriScheme(rawRef: string): boolean {
-  const colon = rawRef.indexOf(':');
-  if (colon <= 0) return false;
-  const slash = rawRef.indexOf('/');
-  return slash === -1 || colon < slash;
 }
 
 /** The two syntactic forms that carry a URL an author typed as a destination. */
@@ -314,7 +297,7 @@ function isFollowable(reference: { syntacticForm: string; rawRef: string }): boo
   // function as a followed FORM, so such a test could never fire, and a check
   // that cannot fire is a check whose own test is vacuous.
   if (!FOLLOWED_FORMS.has(reference.syntacticForm)) return false;
-  return !hasUriScheme(reference.rawRef);
+  return !isNonLocalRef(reference.rawRef);
 }
 
 /**

@@ -258,6 +258,92 @@ describe('resolveToken — allowCommand opt-out', () => {
   // deps.env to avoid ambient-state pollution.
 });
 
+/**
+ * Does a command source actually get to spawn under this env value?
+ * Returns true when the subprocess ran.
+ */
+function commandRan(rawFlagValue: string | undefined): boolean {
+  const runCommand = vi.fn(() => ({ success: true, stdout: 'spawned' }));
+  resolveToken([{ command: ['gh', 'auth', 'token'] }], {
+    env: rawFlagValue === undefined ? {} : { VAT_LINKAUTH_ALLOW_COMMAND: rawFlagValue },
+    runCommand,
+    // allowCommand deliberately omitted — the env value must decide.
+  });
+  return runCommand.mock.calls.length > 0;
+}
+
+describe('VAT_LINKAUTH_ALLOW_COMMAND is a switch, not the literal string "0"', () => {
+  it.each([
+    ['1'],
+    ['true'],
+    ['TRUE'],
+    ['True'],
+    ['yes'],
+    ['YES'],
+    ['on'],
+    ['ON'],
+    [' true '],
+    ['\t1\n'],
+  ])('%j allows command sources', (raw) => {
+    expect(commandRan(raw)).toBe(true);
+  });
+
+  it.each([
+    ['0'],
+    ['false'],
+    ['FALSE'],
+    ['False'],
+    ['no'],
+    ['NO'],
+    ['off'],
+    ['OFF'],
+    ['0 '],
+    [' 0'],
+  ])('%j denies command sources', (raw) => {
+    // Measured before the fix: only the literal '0' denied. `false` — the
+    // spelling a human reaches for first — still spawned subprocesses.
+    expect(commandRan(raw)).toBe(false);
+  });
+
+  it.each([
+    ['maybe'],
+    ['2'],
+    ['-1'],
+    ['disabled'],
+    ['null'],
+    ['truthy'],
+    [''],
+    ['   '],
+  ])('%j is not understood, so it takes the SAFE side and denies', (raw) => {
+    // A safety switch that fails open is not a safety switch. An operator who
+    // set the variable to *something* was trying to say no; a value we cannot
+    // read is not licence to spawn.
+    expect(commandRan(raw)).toBe(false);
+  });
+
+  it('unset leaves command sources allowed — that is the shipped default', () => {
+    expect(commandRan(undefined)).toBe(true);
+  });
+
+  it('an explicit deps.allowCommand still overrides the env in both directions', () => {
+    const allowRan = vi.fn(() => ({ success: true, stdout: 'x' }));
+    resolveToken([{ command: ['gh'] }], {
+      env: { VAT_LINKAUTH_ALLOW_COMMAND: 'false' },
+      runCommand: allowRan,
+      allowCommand: true,
+    });
+    expect(allowRan).toHaveBeenCalled();
+
+    const denyRan = vi.fn(() => ({ success: true, stdout: 'x' }));
+    resolveToken([{ command: ['gh'] }], {
+      env: { VAT_LINKAUTH_ALLOW_COMMAND: 'true' },
+      runCommand: denyRan,
+      allowCommand: false,
+    });
+    expect(denyRan).not.toHaveBeenCalled();
+  });
+});
+
 describe('scrubGitEnv', () => {
   it('strips uppercase GIT_* keys', () => {
     expect(scrubGitEnv({ GIT_DIR: 'x', PATH: '/bin' })).toEqual({ PATH: '/bin' });

@@ -9,6 +9,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 
 
+import type { EmbeddingProvider } from '@vibe-agent-toolkit/rag';
 import type { ContentTransformOptions, LinkType, ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -172,6 +173,58 @@ export async function queryAllContent(
  * const suite = setupLanceDBTestSuite(true);
  * beforeEach(suite.beforeEach);
  */
+/**
+ * An embedding provider that returns fixed-width vectors without a runtime.
+ *
+ * Lets a unit test drive the indexing lane without loading ONNX/WASM. Shared
+ * rather than copied: two suites need the same thing, and a second copy would
+ * be a duplication finding rather than a convenience.
+ *
+ * `maxInputTokens` is REQUIRED, not decoration: chunk sizing reads it, and a
+ * provider that omits it fails every document with "leaves no room for
+ * content" — which lands as an ordinary per-resource error, so a suite counting
+ * errors would read a broken stub as an extra broken document. 256 matches the
+ * local all-MiniLM-L6-v2 limit; any positive number would do, since no suite
+ * using this asserts chunk boundaries against a real model.
+ *
+ * @returns A deterministic, runtime-free embedding provider
+ */
+export function createStubEmbeddingProvider(): EmbeddingProvider {
+  return {
+    name: 'stub',
+    model: 'stub-model',
+    dimensions: 4,
+    maxInputTokens: 256,
+    embed: async () => [0, 0, 0, 1],
+    embedBatch: async (texts: string[]) => texts.map(() => [0, 0, 0, 1]),
+  };
+}
+
+/**
+ * Minimal resource metadata pointing at `filePath`, with nothing parsed.
+ *
+ * Hand-built rather than derived by parsing, because callers deliberately name
+ * files that do not exist (deriving the metadata would have to read them) or
+ * want the indexing lane, rather than the fixture, to be the thing under test.
+ *
+ * @param id - The resource id chunks and errors will be filed under
+ * @param filePath - Absolute path the indexer will read and parse
+ * @returns Metadata the indexing lane accepts
+ */
+export function createBareResource(id: string, filePath: string): ResourceMetadata {
+  return {
+    id,
+    filePath,
+    links: [],
+    headings: [],
+    frontmatter: {},
+    sizeBytes: 0,
+    estimatedTokenCount: 0,
+    modifiedAt: new Date(0),
+    checksum: `${id}-checksum`,
+  };
+}
+
 export function setupLanceDBTestSuite(autoCreateProvider = false): {
   tempDir: string;
   dbPath: string;

@@ -49,12 +49,15 @@ function realization(contextId: string): Record<string, unknown> {
 /**
  * A projection with the contexts a case needs, and one member to read.
  *
- * 🚨 **`roots` MUST be non-empty.** `resolveEdges` returns `{edges: [], …}` on
- * its first two lines for a rootless projection, so an earlier version of this
- * fixture — `roots: []` — made EVERY test in this file vacuous: not one of them
- * executed a single line of edge code, while the file's own header claimed to
- * guard that a lens's rows carry its own id. Deleting the `resolveEdges` call
- * from the module under test left all six green.
+ * 🚨 **`roots` MUST name the root every extent context points at.** An earlier
+ * version of this fixture — `roots: []` — made EVERY test in this file vacuous:
+ * `resolveEdges` then answered `{edges: [], …}` for a rootless projection, so
+ * not one test executed a single line of edge code, while the file's own header
+ * claimed to guard that a lens's rows carry its own id. Deleting the
+ * `resolveEdges` call from the module under test left all six green. Today
+ * `resolveEdges` resolves each realization against ITS root (through
+ * `resolution_contexts.rootId`) and THROWS for a realization whose extent names
+ * none, so a rootless fixture with members now fails loudly instead of quietly.
  */
 function projectionWith(contexts: Projection['resolutionContexts']): Projection {
   return {

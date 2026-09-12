@@ -110,3 +110,34 @@ export function getTargetSubdir(filePath: string): TargetSubdirCategory {
 
   return EXTENSION_MAP.get(ext) ?? 'resources';
 }
+
+/**
+ * Packaging target: determines ZIP directory structure
+ * - 'claude-code': Standard VAT format with resources/ subdirectory (default)
+ * - 'claude-web': Claude.ai web upload format with references/, scripts/, assets/ subdirectories
+ */
+export type PackagingTarget = 'claude-code' | 'claude-web';
+
+/**
+ * The subdirectory the packager puts a bundled file in — THE routing answer.
+ *
+ * ⛔ {@link getTargetSubdir} is only half of it. It reads the extension, which is
+ * the `claude-code` rule; `claude-web` ignores extensions entirely and flattens
+ * every resource into {@link CLAUDE_WEB_REFERENCES_SUBDIR}. Anything asking
+ * *"where does this file end up?"* must ask HERE and pass the target.
+ *
+ * 🚩 This function lived in `skill-packager.ts`, and a validator that needed the
+ * same answer could not import it without a cycle — so it called
+ * `getTargetSubdir` instead and silently answered for one target. That made the
+ * whole `claude-web` packaging target false-positive
+ * `PACKAGED_REFERENCED_PATH_MISSING` on files that shipped: same fixture, clean
+ * under `--target claude-code`, a finding under `--target claude-web`. Two
+ * routing answers for one question is the defect, and it lives with the routing
+ * table now so there can only be one.
+ */
+export function getResourceSubdirForFile(filePath: string, target: PackagingTarget): string {
+  if (target === 'claude-web') {
+    return CLAUDE_WEB_REFERENCES_SUBDIR;
+  }
+  return getTargetSubdir(filePath);
+}

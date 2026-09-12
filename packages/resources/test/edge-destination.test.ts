@@ -153,6 +153,21 @@ describe('externalDestination', () => {
     expect(externalDestination('//host/path@thing').dstKey).toBe('//host/path@thing');
   });
 
+  it('ends the authority at a ? as well as a /, so an @ in the QUERY is not userinfo', () => {
+    // 🚨 RFC 3986 §3.2 ends the authority at the first `/`, `?` or `#`; the
+    // search ended it at `/` ONLY, so for `//host?x=a@b/c` the `/` inside the
+    // query was taken as the path start, the `@` in `a@b` as userinfo, and the
+    // HOST was deleted — `//b/c`. That merges two different origins, which is
+    // the one direction the module says a key must never move in. The fragment
+    // is already stripped before this runs, so `/` and `?` are the two bounds.
+    expect(externalDestination('//cdn.example/x?u=me@example.com/y').dstKey)
+      .toBe('//cdn.example/x?u=me@example.com/y');
+    expect(externalDestination('//host?x=a@b/c').dstKey).toBe('//host?x=a@b/c');
+    // The positive control on the same shape: userinfo BEFORE the query is
+    // still redacted, and the query survives.
+    expect(externalDestination('//user:pw@host?x=a@b').dstKey).toBe('//host?x=a@b');
+  });
+
   it('redacts an authority whose scheme IS spelled but which URL still refused', () => {
     // 🚨 Reachable, and `^//` alone would miss it: a port above 65535 makes
     // `new URL` throw (measured: ERR_INVALID_URL), so a fully-spelled

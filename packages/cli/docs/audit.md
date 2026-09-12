@@ -205,25 +205,57 @@ hierarchical:
                   message: Skill exceeds recommended length
 ```
 
+## Two verdicts: `status` and the exit code
+
+`vat audit` publishes two verdicts, and they answer different questions.
+
+| Verdict | Answers | Where to read it |
+|---|---|---|
+| `status` in the YAML report | **What was found** — the worst actionable severity across the findings | stdout |
+| The process exit code | **Whether the run completed** | `$?` |
+
+So a tree with errors produces `status: error` beside **exit 0**, and both are
+correct. That pair surprises people because `status` means something wider
+everywhere else in this CLI, where it moves with the exit code. Here it does not,
+because this command is a report rather than a gate.
+
+**Gate CI on the report, never on this command's exit code** — read `status` and
+`issueCounts` out of the YAML (see [CI/CD Integration](#cicd-integration) for a
+worked example), or reach for a command whose exit code *is* the verdict:
+`vat skills validate` and `vat skills build` exit `1` on validation errors.
+
 ## Exit Codes
 
 `vat audit` is **advisory by design** — it reports every issue it detects but does not block on validation severity. Use `vat skills validate` or `vat skills build` for gated checks (those commands exit `1` on validation errors).
 
-- **0** - Always, when the audit completes. The report may still contain errors and warnings; check `status` and `summary` in the YAML output to decide whether action is needed.
-- **2** - System error: Config invalid, path not found, permission denied, etc. The audit could not run.
+- **0** - Always, when the audit completes — including when the report says `status: error`. The findings are in the report; check `status` and `summary` in the YAML output to decide whether action is needed.
+- **2** - System error: Config invalid, path not found, permission denied, etc. The audit could not run, so there is no report to read.
 
 ## Validation Configuration
 
-Audit honors `validation.severity` from `vibe-agent-toolkit.config.yaml` for **display grouping only** — setting a code to `ignore` hides it from output, raising to `error` promotes it in the report's error count. Audit does **not** apply `validation.allow` (per-path allow entries); for that, use `vat skills validate` or `vat skills build`.
+Audit honors `validation.severity` from `vibe-agent-toolkit.config.yaml`: setting a code to `ignore` hides it from the report, and every other level is applied as written — a code raised to `error` is reported as an error, a code lowered to `warning` as a warning. It changes **which findings are reported and at what severity**, never whether the command fails (see [Two verdicts](#two-verdicts-status-and-the-exit-code)). Audit does **not** apply `validation.allow` (per-path allow entries); for that, use `vat skills validate` or `vat skills build`.
+
+Three scopes are read, least specific first — a more specific one naming the same code wins:
 
 ```yaml
 # In vibe-agent-toolkit.config.yaml
+resources:
+  validation:
+    severity:
+      LINK_MISSING_TARGET: ignore       # project-wide; the same dial
+                                        # `vat resources validate` reads
 skills:
   defaults:
     validation:
       severity:
-        LINK_TO_NAVIGATION_FILE: ignore   # hidden from audit output
-        LINK_DROPPED_BY_DEPTH: error      # elevated in the report
+        LINK_TO_NAVIGATION_FILE: ignore # project-wide: skills, plugins and
+                                        # marketplaces alike
+        LINK_DROPPED_BY_DEPTH: error    # elevated in the report
+  config:
+    my-skill:
+      validation:
+        severity:
+          LINK_DROPPED_BY_DEPTH: info   # just this skill
 ```
 
 See `docs/validation-codes.md` for the full code reference.

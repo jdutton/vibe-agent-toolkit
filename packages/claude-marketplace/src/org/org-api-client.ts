@@ -307,6 +307,34 @@ export function isRetryableTransportFailure(method: string, attempt: number): bo
   return IDEMPOTENT_METHODS.has(method.toUpperCase());
 }
 
+/**
+ * Whether a 404 is this client reading its OWN completed delete.
+ *
+ * 🚨 The retry policy above is justified by "replaying a DELETE reaches the same
+ * end state". That is true of the SERVER and false of the caller's control flow.
+ * A delete that lands and loses its response is replayed — that is the whole
+ * point of {@link isRetryableTransportFailure} — and the replay is answered 404,
+ * because the first attempt already removed the thing. Rethrown, that 404 made
+ * `delete --all` report a failure for a version it had definitely destroyed,
+ * abandon every version after it, and leave the destroyed one out of the record.
+ *
+ * 🔑 The distinguishing fact is the ATTEMPT NUMBER, and nothing but this client
+ * holds it. On attempt 0 a 404 is a resource that was never there and must stay
+ * an error; on a replay it is the answer to a request this client already made,
+ * and the end state is the one that was asked for.
+ *
+ * ⚠️ DELETE only, not every idempotent method. A replayed GET changed nothing,
+ * so its 404 is a genuine 404. The rule is about the method's EFFECT having
+ * already happened, not about having retried.
+ */
+function isReplayedDeleteOfAbsentResource(
+  method: string,
+  statusCode: number | undefined,
+  attempt: number,
+): boolean {
+  return method.toUpperCase() === 'DELETE' && attempt > 0 && statusCode === 404;
+}
+
 /** Delay before the next attempt: the server's `Retry-After` if it sent one, else backoff. */
 export function nextRetryDelayMs(attempt: number, retryAfterMs?: number): number {
   const requested = retryAfterMs ?? RETRY_BASE_DELAY_MS * 2 ** attempt;
@@ -347,10 +375,12 @@ export interface ReportPaginationParams {
   next_page?: string;
 }
 
-/** Wait this long and try again, or give up with this error. */
+/** Wait this long and try again, resolve as already done, or give up with this error. */
 export type RetryDecision =
   | { readonly delayMs: number }
-  | { readonly rethrow: unknown };
+  | { readonly rethrow: unknown }
+  /** The resource is gone because THIS client's earlier attempt removed it. */
+  | { readonly alreadyGone: true };
 
 /**
  * What one failed attempt means for the next one — the WHOLE of the retry
@@ -367,6 +397,12 @@ export type RetryDecision =
  * per {@link isRetryableTransportFailure} — method-only, since nothing here says
  * whether the origin acted — and is rethrown untouched, because the CLI annotates
  * it from the bytes it carries.
+ *
+ * There is a third outcome, and it is a SUCCESS: a 404 answering a replayed
+ * DELETE is this client reading the effect of its own earlier attempt. See
+ * {@link isReplayedDeleteOfAbsentResource} — checked before the retry question,
+ * because 404 is not a retryable status and would otherwise fall straight
+ * through to the rethrow.
  */
 export function decideRetry(method: string, attempt: number, error: unknown): RetryDecision {
   if (error instanceof ApiTransportError) {
@@ -377,6 +413,7 @@ export function decideRetry(method: string, attempt: number, error: unknown): Re
     return replayable ? { delayMs: nextRetryDelayMs(attempt) } : { rethrow: error };
   }
   if (!(error instanceof ApiRequestError)) return { rethrow: error };
+  if (isReplayedDeleteOfAbsentResource(method, error.statusCode, attempt)) return { alreadyGone: true };
   if (isRetryableFailure(method, error.statusCode, attempt)) {
     return { delayMs: nextRetryDelayMs(attempt, parseRetryAfterMs(error.retryAfterHeader, Date.now())) };
   }
@@ -659,6 +696,11 @@ export class OrgApiClient {
    * when one fails with a status a retry would have cleared, the error says so
    * instead of silently doing nothing, and when one fails with no status the caller
    * is told exactly how far it got.
+   *
+   * A replayed DELETE answered 404 RESOLVES: it is this client reading the effect
+   * of the attempt whose response was lost. Rethrowing it turned a completed
+   * delete into a reported failure and abandoned the rest of the loop — see
+   * {@link isReplayedDeleteOfAbsentResource}.
    */
   private async send<T>(
     method: string,
@@ -672,6 +714,10 @@ export class OrgApiClient {
       } catch (error) {
         const decision = decideRetry(method, attempt, error);
         if ('rethrow' in decision) throw decision.rethrow;
+        // The resource is gone because the attempt whose response was lost
+        // removed it. Same body a 204 resolves — the API sends none either way,
+        // and the caller's report is built from the request, not from an echo.
+        if ('alreadyGone' in decision) return undefined as T;
         await sleep(decision.delayMs);
       }
     }

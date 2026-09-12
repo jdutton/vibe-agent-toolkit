@@ -105,6 +105,10 @@ export async function validateMarketplace(
 			name: result.data.name,
 			...(result.data.description !== undefined && { description: result.data.description }),
 			...(result.data.version !== undefined && { version: result.data.version }),
+			// The denominators a consumer needs to judge a plugin walk: a string
+			// `source` is a relative path into this marketplace's own tree.
+			pluginEntries: result.data.plugins.length,
+			localPluginEntries: result.data.plugins.filter((entry) => typeof entry.source === 'string').length,
 		};
 	}
 

@@ -205,13 +205,10 @@ const MARKETPLACE_ISSUES = [
 ];
 
 const MARKETPLACE_INPUT = {
-  status: 'error' as const,
   root: '/testroot-dsl/mp',
   marketplace: { name: 'mp', version: '1.0.0' },
   pluginResults: [],
   issues: MARKETPLACE_ISSUES,
-  issueCounts: { errors: 3, warnings: 1, info: 1 },
-  summary: '3 error(s), 1 warning(s), 1 info',
   duration: '7ms',
 };
 
@@ -233,10 +230,13 @@ describe('vat claude marketplace validate — default per-location listing', () 
   });
 
   it('does not drop a finding that carries no location', () => {
-    const rows = marketplaceReport(false)['issues'] as Array<{ errors?: number }>;
+    const report = marketplaceReport(false);
+    const rows = report['issues'] as Array<{ errors?: number }>;
     const total = rows.reduce((sum, row) => sum + (row.errors ?? 0), 0);
 
-    expect(total).toBe(MARKETPLACE_INPUT.issueCounts.errors);
+    // The builder now derives `issueCounts` itself; the rows must sum to it.
+    expect(total).toBe(3);
+    expect((report['issueCounts'] as { errors: number }).errors).toBe(3);
   });
 
   it('never invents a `location` for a finding that had none', () => {

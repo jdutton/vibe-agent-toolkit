@@ -221,13 +221,10 @@ describe('marketplace validate payload', () => {
 
   it('states the marketplace root once and publishes each plugin path relative to it', () => {
     const data = buildMarketplaceValidateReport({
-      status: 'error',
       root: ROOT,
       marketplace: { name: 'mp', version: '1.0.0' },
       pluginResults: [pluginResult],
       issues: pluginResult.issues,
-      issueCounts: { errors: 1, warnings: 0, info: 0 },
-      summary: '1 error(s), 0 warning(s), 0 info',
       duration: '7ms',
     });
 
@@ -253,13 +250,11 @@ describe('marketplace validate payload', () => {
     // The early exit is a second emission site, and it leaked the same absolute
     // path — a document shape that only the happy path was ever checked for.
     const data = buildMarketplaceValidateReport({
-      status: 'error',
       root: ROOT,
       marketplace: undefined,
       pluginResults: [],
       issues: [],
-      issueCounts: { errors: 1, warnings: 0, info: 0 },
-      summary: 'Marketplace manifest missing',
+      bailSummary: 'Marketplace manifest missing',
       duration: '2ms',
     });
 
@@ -297,13 +292,10 @@ async function marketplaceReportFor(root: string): Promise<Record<string, unknow
     silentLogger,
   );
   return buildMarketplaceValidateReport({
-    status: 'error',
     root,
     marketplace: marketplaceResult.metadata,
     pluginResults,
     issues,
-    issueCounts: { errors: issues.length, warnings: 0, info: 0 },
-    summary: `${issues.length} error(s), 0 warning(s), 0 info`,
     duration: '9ms',
   });
 }

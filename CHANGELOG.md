@@ -92,6 +92,41 @@ with a regression test.
 - **`vat skills validate` and `vat skills build` now write their stdout summary after their stderr
   findings**, which is what every other command already did.
 
+- **Multi-value flags are repeatable, not space-separated: `--param a --param b`, not
+  `--param a b`.** A variadic option swallows the command's positional argument, and did:
+  `vat resources query 'SELECT ? AS x, ? AS y' --param a docs/` bound `docs/` as the second SQL
+  parameter, queried the repository root instead of `docs/`, and reported `status: success` at
+  exit 0. Affects `vat resources query --param` and `vat skill test run`'s `--with`,
+  `--with-optional`, `--env` and `--pass-env` — all of which already documented themselves as
+  "(repeatable)". Passing one value per flag was always correct and is unchanged.
+
+- **A run that checked nothing is now refused — `status: error`, one `RESOURCE_CHECK_BROKEN`
+  finding, exit 1 — instead of reported as a pass.** Six gates produced a clean document over an
+  empty denominator, which is the same document a gate that was deleted produces, and nothing said
+  which had happened. Every one now publishes what it counted and refuses zero with a message naming
+  the likely cause. **Any CI step below that previously went green having done no work goes red:**
+  - `vat resources check` with no `checks:` block (was `checksRun: 0`, exit 0 — deleting the block
+    silently deleted the gate). Declaring no checks is a legitimate choice; running a gate that can
+    only pass is not, so take the command out of the pipeline.
+  - `vat claude budget <path>` where a path matched no working location (`budget no/such/dir` was
+    `status: success`). The refusal names the paths, and `<corpus root>` when the whole enumeration
+    came back empty.
+  - `vat resources validate` with a `--collection` or path filter matching nothing (was
+    `filesScanned: 0`, exit 0). `filesWithErrors` now counts only issues that carry a file, so the
+    location-less refusal cannot make it read `1` beside `filesScanned: 0`.
+  - `vat claude marketplace validate` publishes `pluginsValidated` beside the manifest's new
+    `localPluginEntries` count, and refuses when FEWER local plugins were validated than the
+    manifest declares — a missing `plugins/<name>` directory was invisible at exit 0. All-remote
+    manifests and `plugins: []` stay green.
+  - `vat verify`'s `packaged-content` phase publishes `bundlesInspected` and refuses zero: a
+    project with a `skills:` block and no built `dist/`, or a `skills.include` glob matching no
+    `SKILL.md`, now fails the phase. **Run `vat build` before `vat verify`.**
+  - The corpus runner's `summary.yaml` reports an audit over zero files as `error`, not `success`,
+    and no longer carries a `schema_version` field.
+
+  The code is deliberately the one `vat resources check` already used for a statement that would
+  not compile, and no `severity` entry can lower it.
+
 #### RAG (library)
 
 - **A RAG filter no provider implements now throws instead of being silently ignored.** Ignoring one
@@ -396,8 +431,22 @@ with a regression test.
   validator it never calls — **4,000 ms → 2,969 ms** over 184 documents. Reports are unchanged
   throughout.
 
-- **A markdown link whose target exists but cannot be read is now reported instead of silently
-  dropped** — new `LINK_TARGET_UNREADABLE` (error), configurable like any other code.
+- **A markdown link whose target could not be checked is now reported instead of silently
+  dropped** — new `LINK_TARGET_UNREADABLE` (error), configurable like any other code. Both lanes
+  emit it for the same failure class: the packaging walk when the target cannot be read, and
+  `vat resources validate` when a directory on the link's path refused a listing (see Fixed).
+
+- **`LINK_TARGET_UNREADABLE` and `LINK_DROPPED_BY_DEPTH` say what they mean.** The first no
+  longer claims the target "exists on disk" — that is exactly what it means was not established —
+  and tells you to re-run first when the errno is transient (`EMFILE`/`ENFILE`/`EAGAIN`). The
+  second now says how depth is counted: SKILL.md's own links are depth 1, a link inside a depth-1
+  file is depth 2, and a drop caused by an `excludeReferencesFromBundle` rule is the sibling
+  `LINK_EXCLUDED_BY_PATTERN` instead.
+
+- **`vat audit --help` and its docs no longer contradict each other about `status` and the exit
+  code.** `status` describes what was found; the exit code describes whether the run completed —
+  so `status: error` beside exit 0 is correct, and always was. The help now says so in one table and
+  tells you to gate CI on the report, not the exit code. No behaviour changed.
 
 - **A frontmatter link-validation failure is no longer reported as a frontmatter *schema* error.**
   It used to surface as `FRONTMATTER_SCHEMA_ERROR` once per resource, against a schema that had
@@ -484,6 +533,41 @@ with a regression test.
   **in** the table: whether the ALLOW lane descends into `$(…)`, backticks and control-flow bodies
   is undetermined, so only the documented deny/ask nesting is implemented.
 
+- **A deny rule could be bypassed by nesting the command 22 levels deep.** The Bash matcher bounds
+  how many nested `$(…)` / `(…)` regions it materialises, and spent that budget innermost-first on
+  the argument that the outer regions "are that same command wrapped in parentheses". They are not:
+  an outer region's own text is a place a command sits, so `x $( '('×23 + ')'×23 ; rm -rf / )` — 64
+  characters — was reported as NOT matching `Bash(rm *)` while the same payload at 21 levels
+  matched. A scan that hits the budget is now reported as truncated and **the deny lane fails
+  closed on it** — an innocent 3,000-deep nest is reported as conflicting with every Bash deny
+  rule, which is the direction that is safe to be wrong in. Real commands nest one to three deep.
+  **Re-run any saved permission report.**
+
+- **A skill's narrowed Bash declaration was reported as not conflicting with an org deny rule that
+  blocks it.** `allowed-tools: Bash(git:*)` against deny `Bash(git push:*)` reported no conflict,
+  while a bare `Bash` against the same rule did — and so did `Bash(git push:*)` against itself. A
+  declaration is a pattern, not a command, and it was being handed to the concrete matcher as the
+  literal command `git:*`. The earlier repair of this contradiction fixed one spelling (bare `Write`
+  versus `Write(./out/**)`) rather than the mechanism; containment is now asked per tool lane, in
+  both directions, for every spelling. The direction was under-report: "no conflict" about a tool
+  the org policy blocks.
+
+- **A `linkAuth` credential in any header could reach stdout, and followed a cross-origin redirect
+  to another host.** Redaction of a thrown transport error was keyed on the header NAME — only
+  `authorization` — so a `PRIVATE-TOKEN` or `X-API-Key` value that undici rejected as malformed was
+  printed back verbatim in the `TypeError`. Every rendered `auth.headers` / `fetch.headers` value
+  (and the credential half of a `<scheme> <credential>` value) is now redacted from any thrown
+  error, `cause` chain included, and the throw is replaced with an `AuthTransportError`. A
+  cross-origin redirect was likewise stripped of `authorization` alone; it is now re-fetched with
+  **no** adopter headers at all — `Accept` included, since nothing distinguishes a secret-bearing
+  header by its name. Separately, the `VAT_LINKAUTH_ALLOW_COMMAND` kill switch was disarmed by any
+  spelling but the literal `0`; it now fails closed — `false`, `no`, `off` and every unreadable
+  value disable command-sourced tokens, and only an explicit true spelling (`1`, `true`, `yes`,
+  `on`) or an unset variable enables them. And a link whose URL contains `${` — a Backstage
+  `${{values.name}}` path segment, say — no longer throws a programming error out of
+  `vat resources validate` and `vat audit` for every adopter with `resources.linkAuth` configured:
+  the unterminated-expression check is asked of the template, never of substituted data.
+
 - **`vat claude org skills install <file>.zip` published your eval suite — answer keys included.**
   The directory shape withholds `evals/`, `node_modules/` and `.git/`; the ZIP shape never called
   that collector, so `zip -r my-skill.zip my-skill/` uploaded the whole tree to a shared org
@@ -531,6 +615,14 @@ with a regression test.
 
 ### Fixed
 
+- **A command that merely mentions `resources`, `rag` or `agent` no longer prints that group's
+  verbose help instead of running.** The three `--verbose` help pages were selected by testing
+  whether the group's name appeared anywhere on the command line, so `vat inventory resources
+  --verbose` exited 0 having run nothing, and `vat resources scan rag --verbose` — a scan of a
+  directory called `rag` — exited 0 having enumerated nothing. The group must now be the token
+  Commander itself reads as the command name. `vat --cwd docs --help --verbose` likewise read
+  `docs` as a command and rendered the non-verbose page.
+
 - **Skill packaging no longer ships a wrong link when an image sits inside a link.** On
   `[![alt](img.png)](url)` — an ordinary badge — the rewriter silently did nothing, so a link the
   registry had fully resolved went out of the bundle still pointing at its source location. Links
@@ -565,7 +657,146 @@ with a regression test.
   still exit 0.
 
 - **`--format json` was ignored on every command's failure path**, which emitted YAML — so the one
-  document a CI wrapper most needs to read arrived in a format its parser rejects.
+  document a CI wrapper most needs to read arrived in a format its parser rejects. That repair
+  missed three lanes, now closed: `vat claude budget`, `vat claude context`, and the error exit of
+  `vat resources validate` still wrote YAML. A source-level test now refuses any command that reads
+  `options.format` and does not pass it to the failure writer.
+
+- **`vat audit` ignored `resources.validation.severity`.** `vat resources validate` honours it in
+  both directions, but `vat audit` read only `skills.defaults` and `skills.config.<name>`, so a link
+  code you silenced for the whole project was hidden by one command and reported at full severity by
+  the other, from the same config file. Audit now merges the three scopes least-specific first
+  (`resources.validation.severity` → `skills.defaults` → `skills.config.<name>`), for plugins and
+  marketplaces as well as skills. It remains advisory: the dial changes what is reported, never the
+  exit code.
+
+- **`LINK_DROPPED_BY_DEPTH` fired on a link whose target shipped anyway.** The refusal is recorded
+  when an edge is refused, but the finding claims the TARGET was not bundled — and on any diamond
+  the two diverge: a page cited from SKILL.md and again from one hop deeper shipped via the shallow
+  route and was reported dropped for the deep one, with a remedy (raise `linkFollowDepth`) that is
+  a no-op for a link that already works. The finding is now decided against the final bundle.
+
+- **`vat skills package --target claude-web` reported `PACKAGED_REFERENCED_PATH_MISSING` on files
+  that shipped.** The check asked the `claude-code` extension-based routing rule for every target,
+  while the `claude-web` packager flattens every resource into `references/`, so a bare path token
+  in a code fence or code span (`bash resources/setup.sh`) was looked up where it would have landed
+  under the other target. The check now asks the same routing function the packager did, and the
+  target is a required argument all the way up so no caller can default back to the wrong one.
+
+- **`vat claude org skills delete --all` stopped at the first version it could not delete, and read
+  its own replayed success as a failure.** One refused version — a `429`, say — ended the sweep
+  with the remaining versions never attempted and not named, so a re-run could not tell you what
+  was left. Every version is now attempted, and the exit-1 report carries `deletedVersions`,
+  `failedVersions` and each refusal's reason in `error`. Separately, a `DELETE` whose response was
+  lost is replayed, and the replay's `404` was treated as a failure and the version omitted from
+  `deletedVersions`; a replayed `DELETE` that finds nothing is now read as the earlier attempt
+  having succeeded.
+
+- **`vat claude org skills install <file>.zip` ran none of the portability checks the directory
+  lane runs.** The help promised them over "every markdown document in the bundle", but an archive
+  went straight to upload, so a skill whose SKILL.md references a path outside its own tree
+  published green from a ZIP and could not run. The archive's markdown members (up to 1 MiB each)
+  are now inflated and handed to the same `warnUnportableReferences` the directory lane calls, with
+  findings located in the bundle namespace a `validation.allow` glob matches.
+
+- **`vat okf validate` died on an `@`-scoped `okf.bundles.<name>.root`, leaking your home
+  directory into the CI log.** A scoped bare specifier that did not resolve threw a programming
+  error out of the whole run — exit 2, every other bundle's findings discarded, and `run install in
+  <baseDir>` printed with the config's absolute directory. It is now that bundle's own
+  `OKF_BUNDLE_ROOT_UNREADABLE` finding naming the specifier as written, with the rest of the run
+  intact. A bundle root is a directory, and npm resolution answers with a file, so a package
+  subtree was never a usable root — the docstring that said it was is gone.
+
+- **A directory that refused a listing silently unvalidated every link under it.** A traversable
+  but unlistable directory (POSIX `--x`, `EACCES`), a symlink cycle (`ELOOP`), or a transient
+  shortage (`EMFILE`, `ENFILE`, `EAGAIN`) made every link into it "absent with nothing learned" —
+  and that was returned as no finding at all, so a valid link was reported nothing and a broken
+  one was too.
+  `vat resources validate` now reports `LINK_TARGET_UNREADABLE` naming the directory and the
+  errno, and `vat okf validate` reports `OKF_SUBDIRECTORY_UNREADABLE` (which, with the two other
+  "could not look" codes, is pinned at `error` regardless of the bundle's severity dial). A
+  transient refusal is no longer memoized for the run, so the next wave re-asks the filesystem
+  instead of inheriting a verdict about a moment that has passed — and a message no longer calls
+  `EAGAIN` "descriptor exhaustion".
+
+- **A frontmatter block that parses to a YAML list was invisible to `vat okf validate`.** A block
+  beginning `- ` is valid YAML and not a mapping, and the parser folded it into "no frontmatter":
+  `index.md` was certified clean and a concept document got `OKF_TYPE_MISSING`, sending the author
+  to add a `type` key to a block that cannot hold one. It is now `OKF_FRONTMATTER_NOT_A_MAPPING`,
+  which names the file and the fix. An empty or comment-only block is not that case and is judged
+  as carrying no keys, as before.
+
+- **Link-validation messages embedded the absolute path.** `LINK_BROKEN_ANCHOR`, the
+  deferred-artifact message and the unreadable-target message printed the resolved absolute path
+  — `$HOME` in every CI log — and, with no project root given, the file-not-found message did too.
+  Every message path is now spelled against the same root as the finding's `location`. A finding
+  with no suggestion to make no longer carries `suggestion: ''`.
+
+- **A federated projection resolved every file against its FIRST root.** With two roots both
+  realizing `docs/x.md`, the edge lens handed one root's link to the other root's file — the path
+  index was keyed on the root-relative path, so the last root indexed won. Each realization is now
+  resolved against its own root via `resolution_contexts`, and the index is keyed on the absolute
+  path; a realization naming no root is refused rather than guessed. Also: a root-absolute link
+  that escapes the root is now `outside-root`, not `unresolvable`, and one `isNonLocalRef`
+  predicate replaces three divergent copies — one of which took `//cdn.example/x` for a filename
+  and reported a row for a document nobody wrote.
+
+- **An `@` in a URL query deleted the host from a redacted external link.** `redactAuthorityUserinfo`
+  ended the authority at the first `/` only, so `//host?x=a@b/c` became `//b/c`. It now ends at
+  `?` as well.
+
+- **Skill packaging: five link-rewrite defects in one pass.** (1) A reference definition whose label
+  has an upper-case letter or a doubled space (`[Guide]: ./guide.md`) was never rewritten or removed
+  — the pass correlated on the parser's normalised label against the raw text; definitions are now
+  spliced at their parsed span, and both passes are one ordered edit walk so neither reshapes the
+  string under the other. (2) The blank-line collapse after a removed definition ran over the whole
+  document, so a fenced code block with two blank lines lost one; it now touches only the run the
+  removal left. (3) A CRLF file came back with mixed line endings after a definition rewrite, and
+  its blank-line run could not be collapsed at all; endings are preserved per file. (4) A link
+  whose text carries a code span that wraps a line was refused and reported as
+  `PACKAGED_BROKEN_LINK`; the bracket matcher and the fallback mask now share one
+  paragraph-bounded code-span rule, backslash escapes included. (5) A spanless `<a href>` could
+  reach the href-keyed fallback and rewrite a same-href image beside it; `htmlAttribute` links no
+  longer enter that map.
+
+- **A collection whose `mimeType` carries parameters (`text/markdown; charset=utf-8`) silently
+  parsed nothing.** The parser lookup compared the whole string, so no parser matched and every
+  document arrived with no headings, links or sections. Parameters are now stripped and the media
+  type compared case-insensitively.
+
+- **A network failure was cached as a broken link for 24 hours.** DNS, connect and timeout
+  failures (`statusCode: 0`), `429`, a `503` carrying `Retry-After`, and a `403` carrying a
+  rate-limit signal (`Retry-After` or a zero quota-remaining header) were all written to the
+  external-link cache as durable errors, so one flaky moment reported a reachable link broken on
+  every run for a day. None of those are cached now, on the anonymous and the authenticated lane
+  alike; a bare `403` and any other `5xx` stay durable. The same rule is applied on **read**, so a
+  transient row an earlier build already wrote is a miss after upgrading rather than answering for
+  the rest of its TTL.
+
+- **`VAT_CACHE=false` disabled nothing.** Both the parse cache and the projection store compared
+  the variable against the literal `0`. They now share one parser: `0`, `false`, `no`, `off` (any
+  case) disable; `1`, `true`, `yes`, `on` enable; an unreadable value is not a veto.
+
+- **The quadratic eval-suite probe was fixed and then not wired to any shipped command.**
+  `vat skills validate`, `vat skills build`'s pre-build check and both `vat audit` lanes each built
+  their validation context without the run-scoped probe, so every one kept asking the filesystem
+  "does this skill have a conventional suite?" once per skill, per skill — on a 103-skill project,
+  10,815 probes over 103 distinct paths, half the command's filesystem traffic. All four now share
+  one probe per run, and a test counts the calls through the real entry points.
+
+- **The git crawl double-charged an untracked symlink.** The mode-`120000` drop applied to the
+  tracked snapshot only, so an untracked link walked in through the `--others` listing and the link
+  and its target realized the same content under two identities — `vat claude budget` billed one
+  set of bytes twice, contradicting its own published limit that no lane emits a symlink's path.
+  Both halves of the crawl now drop symlinks in one place, with one `lstat` per collapsed
+  untracked entry and nothing opened, read or hashed.
+
+- **Library: `parsePool: { lookAhead: 0 }` hung forever.** The `ResourceRegistry` policy route was
+  unguarded while the `VAT_PARSE_POOL_*` environment route was validated, so a `0` (or `NaN`)
+  look-ahead meant the in-order driver claimed nothing and awaited a race that never settled. Every
+  knob is now validated once, on both routes: anything but a positive whole number is refused, not
+  clamped — `Math.max(1, NaN)` is `NaN`, which removed the sizing threshold rather than flooring
+  it.
 
 - **`vat audit` printed "Audit failed" while exiting 0.** The line now names the count and says it
   is advisory. **No exit code changed.**
@@ -698,6 +929,23 @@ with a regression test.
   throws, and no content is dropped. Separately, **`splitBySentences` discarded sentence-terminating
   punctuation.**
 
+- **The chunker dropped every byte before the first heading.** The section walk began AT the first
+  heading, so a document opening with an abstract, a TL;DR or a lead paragraph indexed that prose
+  at zero chunks — no error, no warning, no counter. The preamble is now chunked like any other
+  unheaded prose, with no `headingPath` (labelling it with the heading it sits above would make it
+  retrievable under a heading that does not describe it). A document with no headings at all no
+  longer embeds its YAML frontmatter as prose either, and a frontmatter-only document yields zero
+  chunks and a `0` average rather than `NaN`. The chunk shape is unchanged. ⚠️ **Already-indexed
+  documents are not re-chunked** — their content hash has not moved — so run
+  `vat rag clear && vat rag index` to pick up preambles.
+
+- **A parser-load failure mid-index left chunks that could never be re-indexed.** Document records
+  were buffered and written once at the end of `indexResources`, so a throw part-way through left
+  every resource already embedded with chunks in the store and no `rag_documents` row — and on the
+  next run its unchanged content hash read as "skip". The document row is now written per resource,
+  and a resource whose chunks are present but whose document row is absent is re-indexed rather than
+  skipped.
+
 - **A corrupt ONNX embedding model could be cached permanently**, surfacing as `protobuf parsing
   failed`. Downloads now publish atomically and a short body is never cached.
 
@@ -758,6 +1006,15 @@ with a regression test.
   `zod-to-json-schema` discards every `.refine()`, so external tooling accepted
   `{"passed": 9, "total": 3}`. It is now stated in the emitted `description` as not
   machine-enforced.
+
+- **The published `validation-config.json` schema lost its `severity` key constraint.** Widening
+  the Zod record key to accept `CUSTOM:<name>` made it a union, and `zod-to-json-schema` emits
+  nothing for a union key — so an editor accepted `LNIK_OUTSIDE_PROJECT: ignore`, offered no
+  completion, and `vat` then refused the file at load. The key is now one pattern alternating every
+  registry code with the `CUSTOM:` namespace, which the emitter can write; a new code joins it with
+  no human action. ⚠️ `propertyNames` is a `pattern` rather than an `enum` for now, so an editor
+  can flag a bad key but not complete a good one. A test now asserts on the generated artifact, not
+  the Zod source.
 
 - **`vat skill test run --help` no longer promises cleanup that `--out`/`--workdir` never perform.**
   Under a location you chose, staged untrusted skill bytes are retained whether or not you pass

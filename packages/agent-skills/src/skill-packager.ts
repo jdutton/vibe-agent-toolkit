@@ -60,7 +60,7 @@ import {
   type GitTracker,
 } from '@vibe-agent-toolkit/utils/git';
 
-import { CLAUDE_WEB_REFERENCES_SUBDIR, getTargetSubdir } from './content-type-routing.js';
+import { getResourceSubdirForFile, type PackagingTarget } from './content-type-routing.js';
 import {
   applyFilesConfig,
   buildArtifactHint,
@@ -164,13 +164,6 @@ function bundledLinkTemplate(stripTemplate: string): string {
  * Resource naming strategy type
  */
 export type ResourceNamingStrategy = 'basename' | 'resource-id' | 'preserve-path';
-
-/**
- * Packaging target: determines ZIP directory structure
- * - 'claude-code': Standard VAT format with resources/ subdirectory (default)
- * - 'claude-web': Claude.ai web upload format with references/, scripts/, assets/ subdirectories
- */
-export type PackagingTarget = 'claude-code' | 'claude-web';
 
 /** Default packaging target */
 const DEFAULT_PACKAGING_TARGET: PackagingTarget = 'claude-code';
@@ -850,7 +843,7 @@ export async function packageSkill(
     // directory, not the plugin the skill will be installed into, so there is no
     // wider root to give it — the sibling-search parameter that measured 1.9%
     // instead of 3.8% was deleted for having no caller. The shipped rate is 3.8%.
-    ...await checkMissingReferencedPaths(outputPath),
+    ...await checkMissingReferencedPaths(outputPath, target),
     // The only byte measurement in the pipeline. Built phase for the same reason
     // as its neighbour above: a `files:` entry materializes files here that the
     // source tree does not have, so the bytes that ship are only knowable now.
@@ -1680,19 +1673,6 @@ function stampDeferredDestResolvedId(
 // ============================================================================
 
 /**
- * Determine the resource subdirectory for a file.
- *
- * For claude-web target: uses the existing references directory.
- * For claude-code target: uses content-type routing based on file extension.
- */
-export function getResourceSubdirForFile(filePath: string, target: PackagingTarget): string {
-  if (target === 'claude-web') {
-    return CLAUDE_WEB_REFERENCES_SUBDIR;
-  }
-  return getTargetSubdir(filePath);
-}
-
-/**
  * The skill a path map is being built for: where it lives, and what it is called.
  *
  * Both, in one parameter, because the two answer different questions and the
@@ -1989,27 +1969,63 @@ async function copyAndRewriteFiles(
  * shipping. Worse, a stale span can land on a *different*, structurally valid
  * link and rewrite ITS href to the first link's target.
  *
- * ⚠️ The re-base is exact rather than approximate: `openFrontmatter` yields a
- * body that is a literal SUFFIX of the input — verified across CRLF, a
- * commented block, an absent block and empty input — so one subtraction moves
- * every offset correctly.
+ * ## The re-base is VERIFIED, not assumed
  *
- * ⚠️ It is also not the only defence, and must not become one. `splicableFrom`
- * refuses any span whose destination is not exactly the parser's href, so a
- * misalignment that survives this degrades to "no rewrite" rather than to a
- * wrong one. Belt and braces, because the failure mode of the braces alone is
- * silent.
+ * Subtracting `content.length - body.length` is correct if and only if `body` is
+ * a literal SUFFIX of `content` — that is exactly the statement "every body index
+ * `i` is content index `i + offset`". `String.endsWith` decides it outright, so
+ * the arithmetic is checked rather than argued, and a body that is not a suffix
+ * comes back with its spans REMOVED instead of with coordinates nothing verified.
+ * `openFrontmatter` does yield a suffix today, across CRLF, a commented block, an
+ * absent block and empty input; the check is what keeps that a fact rather than a
+ * comment that outlives the code it describes.
+ *
+ * ⛔ **This used to claim `splicableFrom` as its backstop, and that claim was
+ * false.** The words were: "`splicableFrom` refuses any span whose destination is
+ * not exactly the parser's href, so a misalignment that survives this degrades to
+ * *no rewrite* rather than to a wrong one." It does not. That comparison is keyed
+ * on the HREF, which two links in one document routinely share, so a stale span
+ * landing on a same-href neighbour passes it and the neighbour is rewritten
+ * through the first link's metadata. Constructed and pinned in
+ * `packages/resources/test/content-transform.test.ts` › *two links sharing an
+ * href defeat the destination comparison*, where a tuned frontmatter length makes
+ * two labels swap places. A mitigation keyed on a value the two candidates have
+ * in common cannot be a guarantee, and a guard resting on one is resting on
+ * nothing.
+ *
+ * 🔑 What holds instead, in full, because the precondition has two halves:
+ *
+ * 1. *The spans address `content`* — discharged by the reader, not by this
+ *    function. `resource.links` and `content` must come from the same decode of
+ *    the same file, which is why the caller's read is pinned to
+ *    `readTextContent` with a 🚨 of its own. A second reader is the one way this
+ *    half fails, and it fails invisibly.
+ * 2. *The subtraction maps `content` onto `body`* — discharged here, by
+ *    `endsWith`.
+ *
+ * `splicableFrom`'s destination check remains a useful mitigation for the
+ * residue. It is not counted on, and nothing here degrades gracefully because of
+ * it.
  *
  * @param content - The file as read, which the links were parsed from
  * @param body - The frontmatter-stripped body the rewrite will run over
  * @param links - The resource's links, carrying whole-file offsets
- * @returns The same links with offsets stated against `body`
+ * @param onUnverifiable - Called when `body` is not a suffix of `content`, so the
+ *   caller can say which file lost its span-driven rewrite. Never called on the
+ *   normal path.
+ * @returns The same links with offsets stated against `body`, or with no offsets
+ *   at all when the re-base could not be verified
  */
-function bodyRelativeLinks(
+export function bodyRelativeLinks(
   content: string,
   body: string,
   links: readonly ResourceLink[],
+  onUnverifiable: () => void,
 ): ResourceLink[] {
+  if (!content.endsWith(body)) {
+    onUnverifiable();
+    return links.map(withoutSpan);
+  }
   const offset = content.length - body.length;
   if (offset === 0) return [...links];
   return links.map((link) => ({
@@ -2017,6 +2033,26 @@ function bodyRelativeLinks(
     ...(link.startOffset === undefined ? {} : { startOffset: link.startOffset - offset }),
     ...(link.endOffset === undefined ? {} : { endOffset: link.endOffset - offset }),
   }));
+}
+
+/**
+ * The link with its coordinates dropped and everything else kept.
+ *
+ * ⚠️ Dropping them is the point, and returning the link unchanged would be the
+ * bug: an unrebased whole-file span still ADDRESSES the body's bytes, just the
+ * wrong ones, so `splicableFrom` would happily splice at it. Without a span the
+ * link is `UNRECOGNISED`, which routes it to the pre-span regex replay — the
+ * behaviour this call site had before spans existed. A documented degrade, not a
+ * silent one; the caller warns.
+ *
+ * @param link - A link whose offsets could not be re-based
+ * @returns The same link with no `startOffset` and no `endOffset` key
+ */
+function withoutSpan(link: ResourceLink): ResourceLink {
+  const stripped = { ...link };
+  delete stripped.startOffset;
+  delete stripped.endOffset;
+  return stripped;
 }
 
 async function copyAndRewriteFile(
@@ -2059,8 +2095,19 @@ async function copyAndRewriteFile(
   // string one character longer, `OPENING_FENCE` (`/^---\r?\n/`) then failed to
   // match, `openFrontmatter` reported no frontmatter, the offset came out 0,
   // and every span stayed whole-file — silently reverting the fix this call
-  // site exists to deliver. It failed CLOSED rather than corrupting, only
-  // because `splicableFrom` compares the destination to the href.
+  // site exists to deliver.
+  //
+  // ⛔ This comment used to add "it failed CLOSED rather than corrupting, only
+  // because `splicableFrom` compares the destination to the href." That is not
+  // a guarantee and must not be read as one: the destination check is keyed on
+  // the href, which two links in one document routinely share, so a stale span
+  // landing on a same-href neighbour passes it (constructed in
+  // `content-transform.test.ts` › *two links sharing an href defeat the
+  // destination comparison*). The BOM shift also survives
+  // `bodyRelativeLinks`'s own `endsWith` check, because a body equal to the
+  // content IS a suffix of it — nothing downstream can see that the links came
+  // from a different decode. **One reader is the only thing standing between
+  // this lane and a wrong rewrite.** Do not swap it.
   //
   // It also stops a UTF-16 source being written back as mojibake, which the
   // `utf-8` read did on the copy as well as the rewrite.
@@ -2132,7 +2179,15 @@ async function copyAndRewriteFile(
   const editor = openFrontmatter(content);
 
   // Body rewrite (existing behavior, unchanged contract).
-  editor.body = transformContent(editor.body, bodyRelativeLinks(content, editor.body, resource.links), {
+  const rebased = bodyRelativeLinks(content, editor.body, resource.links, () => {
+    ctx.warn(
+      `Rewrote links in '${sourcePath}' without parsed spans: the frontmatter-stripped body is not a ` +
+        `suffix of the file as read, so the offsets the parser reported cannot be moved onto it. ` +
+        `Links are matched by href instead, which is the pre-span behaviour — a link the two grammars ` +
+        `disagree about (an image inside a link, most often) may go unrewritten.`,
+    );
+  });
+  editor.body = transformContent(editor.body, rebased, {
     linkRewriteRules: ctx.rewriteRules,
     resourceRegistry: ctx.toRegistry,
     sourceFilePath: targetPath, // Output path so relativePath is computed from output location

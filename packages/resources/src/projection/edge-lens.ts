@@ -46,7 +46,7 @@ import {
   type EdgeDestination,
 } from './edge-destination.js';
 import type { Projection } from './projection.js';
-import { resolveReferencePath } from './reference-resolution.js';
+import { isNonLocalRef, resolveReferencePath } from './reference-resolution.js';
 
 /**
  * The forms a human wrote as a reference, which is the authored-only policy.
@@ -71,17 +71,6 @@ export const AUTHORED_EDGE_FORMS: ReadonlySet<ReferenceSyntacticForm> = new Set(
   'markdown-link-reference',
   'html-link',
 ]);
-
-/**
- * A scheme-bearing or protocol-relative reference, matched on the raw token.
- *
- * The same production `closure-extent.ts` tests with, and for the same reason:
- * `blob_references` records the raw token and not the link type, so without this
- * every external URL resolves against the referring directory, finds nothing,
- * and is reported as a broken *local* reference — a false claim that would fire
- * on essentially every real document.
- */
-const NON_LOCAL_REF = /^(?:\/\/|[a-z][\w+.-]*:)/iu;
 
 /** What a lens admits and how it reads a token. */
 export interface EdgeLens {
@@ -184,19 +173,22 @@ export interface EdgeRelation {
  *   column, so a rehydrated projection answers identically to a derived one
  * @param lens - What this lens admits and how it reads a token
  * @param options - Work shareable across lenses over one projection
- * @returns The two relations. Empty when the projection has no root, because a
- *   reference resolves against one and there is nothing to resolve against
+ * @returns The two relations
+ * @throws When a visible realization's extent names no root. `roots` is a
+ *   FEDERATED table and every realization resolves against ITS root (reached
+ *   through `resolution_contexts.rootId` via `extentId` — see
+ *   {@link rootByExtent}); a realization with none violates the population
+ *   invariant, and answering "no edges" for it would be a silent confident
+ *   zero, the shape the sibling lenses refuse for the same reason
  */
 export function resolveEdges(
   projection: Projection,
   lens: EdgeLens,
   options?: EdgeEvaluationOptions,
 ): EdgeRelation {
-  const root = projection.roots[0]?.path;
-  if (root === undefined) return { edges: [], edgeResolutions: [] };
-
   const referencesByBlob = options?.referencesByBlob ?? groupReferencesByBlob(projection.blobReferences);
   const visible = visibleRealizations(projection, lens);
+  const roots = rootByExtent(projection);
 
   // One map, not a Set beside it: "is this path realized" and "which identity
   // realizes it" are the same lookup, and two structures built from one filter
@@ -215,15 +207,22 @@ export function resolveEdges(
   // usable tracker, or via git-vs-disk casing on a case-insensitive
   // filesystem. The multi-path handling here is insurance for those regimes,
   // not the common one — do not cite symlinks-in-a-repo as its motivation.
+  //
+  // 🚨 Keyed on the ABSOLUTE path, not the root-relative one. `path` is
+  // root-relative and never a standalone identifier (the realization schema
+  // says so): in a federated projection two roots that both realize
+  // `docs/x.md` collapsed to one entry here, and a link resolved to whichever
+  // root's identity was indexed last.
   const resourceByPath = new Map<string, string>();
   for (const rows of visible.values()) {
-    for (const row of rows) resourceByPath.set(row.path, row.resourceId);
+    for (const row of rows) resourceByPath.set(absolutePathOf(row, roots), row.resourceId);
   }
 
   const edges: EdgeRow[] = [];
   const edgeResolutions: EdgeResolutionRow[] = [];
 
   for (const realization of sourceRealizations(visible)) {
+    const root = rootOf(realization, roots);
     for (const reference of referencesByBlob.get(realization.contentKey ?? '') ?? []) {
       if (!lens.forms.has(reference.syntacticForm)) continue;
       emitEdge({ edges, edgeResolutions }, { reference, realization, root, lens, resourceByPath });
@@ -231,6 +230,68 @@ export function resolveEdges(
   }
 
   return { edges, edgeResolutions };
+}
+
+/**
+ * Absolute root path per extent id, through `resolution_contexts.rootId`.
+ *
+ * 🚨 This used to be `projection.roots[0]?.path` for every realization, while
+ * `roots` is declared "Federated corpus roots" and the realization schema says
+ * the root comes from `resolution_contexts.rootId` via `extentId` precisely so
+ * that a federated query over two roots sharing a relative path stays
+ * unambiguous. Store hydration keeps every root the kept contexts name, so a
+ * hydrated projection can carry more than one; a realization under the second
+ * resolved against the first, and its out-of-corpus count was fabricated.
+ *
+ * @param projection - The projection whose contexts and roots to join
+ * @returns Extent context id → absolute root path, for every extent whose root
+ *   the projection carries
+ */
+function rootByExtent(projection: Projection): ReadonlyMap<string, string> {
+  const pathByRootId = new Map(projection.roots.map((row) => [row.id, row.path]));
+  const byExtent = new Map<string, string>();
+  for (const context of projection.resolutionContexts) {
+    if (context.species !== 'extent') continue;
+    const path = pathByRootId.get(context.rootId);
+    if (path !== undefined) byExtent.set(context.contextId, path);
+  }
+  return byExtent;
+}
+
+/**
+ * The root a realization is stated against, or a thrown invariant violation.
+ *
+ * @param realization - The realization row
+ * @param roots - {@link rootByExtent}'s answer
+ * @returns The absolute root path
+ */
+function rootOf(realization: ResourceRealizationRow, roots: ReadonlyMap<string, string>): string {
+  const root = roots.get(realization.extentId);
+  if (root === undefined) {
+    throw new Error(
+      `resolveEdges: realization "${realization.path}" in extent "${realization.extentId}" has no root.`
+      + ' Every extent context names a root (`merge.ts` adds one per population and a context per'
+      + ' extent), so this projection violates its invariant — and answering "no edges" for the file'
+      + ' would report it as unlinked when nothing resolved it.',
+    );
+  }
+  return root;
+}
+
+/**
+ * The absolute path a realization names — the key {@link resolveEdges}'s path
+ * index uses, because a root-relative path is ambiguous across roots.
+ *
+ * String concatenation rather than `safePath.join`, as `reference-resolution.ts`
+ * does for the same pair: both halves are already forward-slashed and
+ * normalized, and `join` would only invite a platform separator back in.
+ *
+ * @param realization - The realization row
+ * @param roots - {@link rootByExtent}'s answer
+ * @returns The absolute, forward-slashed path
+ */
+function absolutePathOf(realization: ResourceRealizationRow, roots: ReadonlyMap<string, string>): string {
+  return `${rootOf(realization, roots)}/${realization.path}`;
 }
 
 /**
@@ -306,7 +367,7 @@ function emitEdge(
  */
 function edgeKindFor(rawRef: string): string {
   if (rawRef.startsWith('#')) return 'anchor';
-  return NON_LOCAL_REF.test(rawRef) ? 'external' : 'local_file';
+  return isNonLocalRef(rawRef) ? 'external' : 'local_file';
 }
 
 /**
@@ -521,9 +582,9 @@ function groupReferencesByBlob(
  *
  * @param reference - The reference row
  * @param fromPath - Root-relative path of the file holding it
- * @param root - Absolute corpus root
+ * @param root - Absolute root of the file holding the reference
  * @param lens - The lens, for its dialect
- * @param resourceByPath - The lens extent's realizations, path → identity
+ * @param resourceByPath - The visible realizations, ABSOLUTE path → identity
  * @returns The destination columns, or undefined when the token named no file
  */
 function destinationFor(
@@ -533,14 +594,14 @@ function destinationFor(
   lens: EdgeLens,
   resourceByPath: ReadonlyMap<string, string>,
 ): EdgeDestination | undefined {
-  if (NON_LOCAL_REF.test(reference.rawRef)) return externalDestination(reference.rawRef);
+  if (isNonLocalRef(reference.rawRef)) return externalDestination(reference.rawRef);
 
   const resolution = resolveReferencePath(lens.dialect, reference.rawRef, fromPath, root);
   if (resolution.kind === 'unresolvable') return undefined;
   if (resolution.kind === 'outside-root') {
     return outOfCorpusDestination(resolution.path, fragmentOf(reference.rawRef));
   }
-  const resourceId = resourceByPath.get(resolution.path);
+  const resourceId = resourceByPath.get(`${root}/${resolution.path}`);
   return resourceId === undefined
     // Inside the root and realized by nothing: the declared-but-unwritten case.
     // Still `out-of-corpus` — the corpus does not contain it — and still NOT a

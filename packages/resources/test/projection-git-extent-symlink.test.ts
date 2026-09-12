@@ -29,12 +29,14 @@
  * divergence worth knowing about is BETWEEN extents, not inside this one: the
  * filesystem extent reports zero realizations for a link's own path, because
  * neither of its enumerators ever hands it over (`FilesystemCrawlSource` walks
- * with `followSymlinks: false`; `GitCrawlSource` drops the mode-`120000` entry —
- * *"A SYMLINK IS NOT A MEMBER HERE"* in
+ * with `followSymlinks: false`; `GitCrawlSource` drops one at a single seam,
+ * *"A SYMLINK IS NOT A MEMBER"* in
  * `packages/resources/src/projection/crawl-source.ts`). The last test here pins
  * one direction of that as a control;
  * `packages/resources/test/projection-filesystem-extent-symlink.test.ts` pins it
- * per-enumerator with a positive control.
+ * per-enumerator with a positive control, and
+ * `packages/resources/test/projection-untracked-symlink-extent.test.ts` pins the
+ * UNTRACKED case every committed fixture here is structurally unable to reach.
  *
  * Two docstrings carry this same measurement and must stay consistent with this
  * file: *"🪤 A symlink and its target do NOT reliably share one identity"* in
@@ -69,10 +71,10 @@ import { FilesystemExtentContributor } from '../src/projection/contributors/file
 import { GitExtentContributor } from '../src/projection/contributors/git-extent.js';
 
 import {
-  plantCommittedSymlinkFixture,
-  removeCommittedSymlinkFixture,
+  plantSymlinkFixture,
+  removeSymlinkFixture,
   symlinkIndexLines,
-} from './helpers/committed-symlink-fixture.js';
+} from './helpers/symlink-fixture.js';
 import { buildExtentContribution } from './test-helpers.js';
 
 /** Committed regular file — the symlinks' target. */
@@ -104,7 +106,7 @@ describe.skipIf(!symlinkCapability())('git extent — a committed symlink', () =
     // Both links point at the SAME target, so their blobs — which hold the
     // target string — are byte-identical. The shared-OID control below is what
     // proves that actually happened.
-    ({ root, lsFilesStaged } = plantCommittedSymlinkFixture({
+    ({ root, lsFilesStaged } = plantSymlinkFixture({
       prefix: 'vat-git-symlink-',
       files: [TARGET],
       links: [
@@ -117,7 +119,7 @@ describe.skipIf(!symlinkCapability())('git extent — a committed symlink', () =
   });
 
   afterAll(() => {
-    removeCommittedSymlinkFixture(root);
+    removeSymlinkFixture(root);
   });
 
   // ── Controls: without these the assertions below can pass vacuously ──────────

@@ -40,6 +40,7 @@ import {
   type DeclaredSkillLink,
 } from '../../../skill-resolution/index.js';
 import { ConfigLoadError, loadConfig, loadConfigCached } from '../../../utils/config-loader.js';
+import { collectRepeated } from '../../../utils/repeatable-option.js';
 import { runClaudePluginBuild } from '../../claude/plugin/build.js';
 
 import { assertValidAuth, assertValidRequireAuth } from './auth-flags.js';
@@ -1398,21 +1399,29 @@ export function createSkillTestRunCommand(): Command {
   command
     .description('Execute a packaged skill\'s eval suite in a headless, context-isolated Claude session (runs the skill\'s code; not an OS sandbox)')
     .argument('<skill>', 'The skill to test')
+    // All four are repeatable single-value options, NOT variadic. A variadic
+    // option consumes every token up to the next flag, so it ate the `<skill>`
+    // positional and the run died reporting the subject missing. See
+    // collectRepeated. Their help text always said "(repeatable)"; now it is true.
     .option(
-      '--with <pair...>',
+      '--with <pair>',
       'Stage a REQUIRED companion skill the subject can invoke, as name=<src> (repeatable). <src> is workspace:<pkg> | npm:<spec> | url:<u> | path:<dir> | vendored (e.g. helper=npm:@scope/s@1.2.3). A path:<dir> that maps to a declared skill is BUILT like the subject (files: build artifacts included), not tree-copied as raw source. The run fails if a source cannot be resolved or its build fails.',
+      collectRepeated,
     )
     .option(
-      '--with-optional <pair...>',
+      '--with-optional <pair>',
       'Stage an OPTIONAL companion skill, as name=<src> (same syntax, repeatable). Staged from its raw (unbuilt) source with a warning if its source cannot be resolved, or if a non-destructive build fails; the run continues.',
+      collectRepeated,
     )
     .option(
-      '--env <pair...>',
+      '--env <pair>',
       'Inject an env var into the executor spawn as KEY=VALUE (repeatable). Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir}. ${fixturesDir} is per-eval and requires that eval to declare input `files`. CLI overrides config for the same key.',
+      collectRepeated,
     )
     .option(
-      '--pass-env <key...>',
+      '--pass-env <key>',
       'Forward a host env var by NAME to the executor spawn if present (repeatable). Protected names (PATH, auth, model) are ignored.',
+      collectRepeated,
     )
     .option('--refresh', 'No-op today, accepted for forward compatibility: staging already does a full re-stage on every run, so there is no retained staged content for this flag to ignore. Nothing reads it — passing it changes nothing.')
     .option('--no-build', 'Skip building declared skills (subject and any --with/--with-optional companion); stage existing dist instead. Errors if absent for the subject or a REQUIRED companion; an OPTIONAL companion falls back to raw source with a warning.')

@@ -126,12 +126,14 @@ describe('link grammar divergence — the two rewriters', () => {
   });
 
   it('still rewrites a link the parser located only by LINE, via the regex fallback', () => {
-    // `startOffset`/`endOffset` are OPTIONAL on ResourceLinkSchema, and the HTML
-    // producer really does emit a link carrying a line and no offsets (a namespaced
-    // `<a xlink:href>`, whose element has a location while a span lookup on the bare
-    // local name misses). Such a link has no span to splice, so it must fall back to
-    // the pre-span regex replay rather than being silently dropped — which is what a
-    // naive span-only rewrite would do.
+    // ⚠️ A SYNTHETIC pin. `startOffset`/`endOffset` are OPTIONAL on
+    // ResourceLinkSchema, and mdast's own types let a node carry a position whose
+    // offsets are absent — but no measured producer emits a `[text](href)` with a
+    // line and no offsets. remark's position-less node is a GFM autolink literal
+    // (`www.` glued to a token), which the replay's regex cannot match either, and
+    // the HTML producer's line-only shape is an `<a>`, which it excludes below.
+    // What this pins is the lane's CONTRACT — a spanless inline link is not
+    // silently dropped — on an input hand-built to reach it.
     const spanless: ResourceLink[] = [
       { text: 'ghost', href: 'ghost.md', type: 'local_file', line: 1, nodeType: 'link' },
     ];
@@ -140,6 +142,27 @@ describe('link grammar divergence — the two rewriters', () => {
       defaultTemplate: PASSTHROUGH_TEMPLATE,
       context: {},
     })).toBe('[ghost](REWRITTEN/ghost.md)');
+  });
+
+  it('never lets a spanless <a href> reach the regex replay', () => {
+    // 🚨 The one REAL producer of a line-only link is HTML — an `<a>` whose
+    // attribute span parse5 could not locate (the namespaced `xlink:href` shape).
+    // `MARKDOWN_LINK_REGEX` matches only `[text](href)`, so the replay can never
+    // re-derive an `<a>` from the source; the only thing such an entry could do
+    // was fire on a DIFFERENT construct sharing the href. Here that construct is
+    // an image, which is never a ResourceLink and so never a splice candidate:
+    // the anchor stayed as written and the image was rewritten through the
+    // anchor's metadata — the third door of the corruption closed for titled
+    // links and reference-style uses.
+    const content = '<a xlink:href="same.png">spec</a> and ![diagram](same.png)';
+    const spanless: ResourceLink[] = [
+      { text: 'spec', href: 'same.png', type: 'local_file', line: 1, nodeType: 'htmlAttribute' },
+    ];
+    expect(transformContent(content, spanless, {
+      linkRewriteRules: [],
+      defaultTemplate: PASSTHROUGH_TEMPLATE,
+      context: {},
+    })).toBe(content);
   });
 
   it('does not let a spanless link reach INSIDE a spliced construct', () => {

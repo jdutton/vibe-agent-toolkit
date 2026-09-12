@@ -328,9 +328,13 @@ describe('vat resources check', () => {
     expect(doc['error']).toContain('declared-one');
   });
 
-  it('says so loudly when the project declares no checks at all', () => {
-    // Exit 0 — declaring none is legitimate — but a silent passing report would
-    // let a misspelled config key read as a green gate forever.
+  it('FAILS when the project declares no checks at all', () => {
+    // 🚨 This exited 0 with `checksRun: 0` and a stderr warning, which means
+    // deleting the `checks:` block silently deleted the gate: a gate that checked
+    // nothing produces the same document as a gate that was removed, and only
+    // the document decides the exit code. The warning stays — it is the same
+    // statement addressed to the human — but it no longer carries the verdict
+    // on its own.
     fs.writeFileSync(
       safePath.join(projectDir, CONFIG_FILE),
       'version: 1\nresources:\n  include:\n    - "**/*.md"\n',
@@ -339,8 +343,12 @@ describe('vat resources check', () => {
 
     const { status, doc, stderr } = check();
 
-    expect(status).toBe(0);
+    expect(status).toBe(1);
+    expect(doc['status']).toBe('error');
     expect(doc['checksRun']).toBe(0);
+    const [issue] = doc['issues'] as CheckFinding[];
+    expect(issue?.code).toBe('RESOURCE_CHECK_BROKEN');
+    expect(issue?.severity).toBe('error');
     expect(stderr).toContain('No checks are declared');
   });
 });

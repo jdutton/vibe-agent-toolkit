@@ -269,7 +269,9 @@ describe('the shape of the table', () => {
  *
  * - the **filesystem** extent never realizes a symlink's own path. Its walk
  *   runs `followSymlinks: false`, and its git-snapshot route drops mode
- *   `120000` explicitly (`crawl-source.ts`, "A SYMLINK IS NOT A MEMBER HERE").
+ *   `120000`, and `lstat`s the collapsed `ls-files --others` entries that carry no
+ *   mode, dropping both at one seam (`crawl-source.ts`, "A SYMLINK IS NOT A
+ *   MEMBER").
  * - the **git** extent does realize one — but only inside a repository, where
  *   `canonicalPathFor` takes git's index path instead of resolving, so the link
  *   and its target mint two ids and never collapse. That is the state

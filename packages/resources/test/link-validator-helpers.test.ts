@@ -6,12 +6,13 @@
  * counts for unit tests.
  */
 
-import type { RealpathTable } from '@vibe-agent-toolkit/utils';
+import { issueLocation, type RealpathTable } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { DeferredArtifacts } from '../src/deferred-artifacts.js';
 import {
   checkAnchor,
+  deferredArtifactIssue,
   escapeNonAscii,
   fileExistenceIssue,
   fragmentIndex,
@@ -29,6 +30,7 @@ function makeLink(href: string, line = 1): ResourceLink {
 const PROJECT_ROOT = '/project';
 const SOURCE = `${PROJECT_ROOT}/docs/page.md`;
 const TARGET_FOO = `${PROJECT_ROOT}/foo.md`;
+const TARGET_MISSING = `${PROJECT_ROOT}/missing.md`;
 const TARGET_SECRET = `${PROJECT_ROOT}/secret.md`;
 const TARGET_OUTSIDE = '/elsewhere/other.md';
 const LINK_FOO = 'foo.md';
@@ -248,13 +250,30 @@ describe('fileExistenceIssue', () => {
   });
 
   it('returns broken_file with "File not found" when missing and no case match', () => {
+    // 🚨 No project root: the message used to print the ABSOLUTE path while the
+    // same issue's `location` was relativised to `process.cwd()` — one issue,
+    // two roots. Every message path now goes through the root `location` uses.
     const issue = fileExistenceIssue(
-      { exists: false, resolvedPath: '/project/missing.md' },
+      { exists: false, resolvedPath: TARGET_MISSING },
       makeLink('missing.md'),
       SOURCE,
     );
     expect(issue?.code).toBe('LINK_BROKEN_FILE');
-    expect(issue?.message).toBe('File not found: /project/missing.md');
+    expect(issue?.message).toBe(`File not found: ${issueLocation(TARGET_MISSING, process.cwd())}`);
+    expect(issue?.location).toBe(issueLocation(SOURCE, process.cwd()));
+  });
+
+  it('carries no `suggestion` when it has none to make', () => {
+    // 🪤 `linkExtras(link, source, root, '')` spread an EMPTY suggestion onto
+    // the issue — a field that says nothing, present on every missing-file
+    // issue, copied to three siblings. Absent, not empty.
+    const issue = fileExistenceIssue(
+      { exists: false, resolvedPath: TARGET_MISSING },
+      makeLink('missing.md'),
+      SOURCE,
+      PROJECT_ROOT,
+    );
+    expect(issue).not.toHaveProperty('suggestion');
   });
 
   it('keeps the absolute path out of the message when projectRoot is known', () => {
@@ -300,6 +319,35 @@ describe('fileExistenceIssue', () => {
       SOURCE,
     );
     expect(issue?.suggestion).toBe('Use "docs/readme.md" instead of "Docs/Readme.md"');
+  });
+});
+
+describe('deferredArtifactIssue', () => {
+  const covering = makeDeferredArtifactsCovering('docs/dist/out.md');
+
+  it('spells the artifact against the project root, like its `location`', () => {
+    // The fourth message that printed `resolvedPath` verbatim. Same rule as
+    // `fileExistenceIssue`: the root `location` uses is the root the message
+    // uses, and with no root that is `process.cwd()`, never an absolute path.
+    const withRoot = deferredArtifactIssue(
+      { exists: false, resolvedPath: `${PROJECT_ROOT}/docs/dist/out.md` },
+      makeLink('dist/out.md'),
+      SOURCE,
+      covering,
+      PROJECT_ROOT,
+    );
+    expect(withRoot?.code).toBe('LINK_DEFERRED_ARTIFACT');
+    expect(withRoot?.message).toContain('docs/dist/out.md');
+    expect(withRoot?.message).not.toContain(PROJECT_ROOT);
+    expect(withRoot).not.toHaveProperty('suggestion');
+
+    const withoutRoot = deferredArtifactIssue(
+      { exists: false, resolvedPath: `${PROJECT_ROOT}/docs/dist/out.md` },
+      makeLink('dist/out.md'),
+      SOURCE,
+      covering,
+    );
+    expect(withoutRoot?.message).toContain(issueLocation(`${PROJECT_ROOT}/docs/dist/out.md`, process.cwd()));
   });
 });
 
