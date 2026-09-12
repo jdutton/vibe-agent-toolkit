@@ -31,7 +31,7 @@ import {
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
@@ -41,7 +41,7 @@ import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import type { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
-import { nothingCheckedFinding } from '../utils/run-integrity.js';
+import { nothingCheckedFinding, runIntegrityFinding } from '../utils/run-integrity.js';
 import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 
 import { runMarketplaceValidatePhase } from './claude/marketplace/validate.js';
@@ -142,10 +142,13 @@ Output:
     'packaged-content' carry their findings into the document too, while
     'files-config-dests' publishes counts only and lists the missing dests on
     stderr. 'packaged-content' also publishes bundlesInspected — the built
-    bundles it crawled — and zero is refused as RESOURCE_CHECK_BROKEN at error
-    (exit 1) rather than reported as a pass: a run that found no built bundle
-    (dist/ not built, or a skills.include glob that matched nothing) is not a
-    verdict on what ships.
+    bundles it crawled — beside bundlesExpected (the bundles 'vat build'
+    produces for the skills this run discovered) and bundlesMissing (expected
+    bundles absent from dist/, by path). Zero inspected, or any missing, is
+    refused as RESOURCE_CHECK_BROKEN at error (exit 1) rather than reported as
+    a pass: a run that found none of the build (dist/ not built, or a
+    skills.include glob that matched nothing) or only part of it (a bundle
+    deleted, a skill added since the last build) is not a verdict on what ships.
   Progress and validation errors → stderr (streamed live)
 
   By default each delegated phase reports a per-asset summary plus the assets
@@ -208,11 +211,36 @@ function filesOf(entry: CheckEntry): NonNullable<SkillPackagingConfig['files']> 
 }
 
 /**
- * Register a check for (skillName, outputDir, packaging) in the dedup map.
+ * What {@link collectBuiltSkillOutputs} enumerates: the bundles that exist, and
+ * the coverage of what `vat build` should have produced.
  *
- * Skips silently if:
- *   - outputDir does not exist on disk (not a candidate)
- *   - the key was already added (dedup guard)
+ * `expected` and `missing` are what let the `packaged-content` phase tell a
+ * whole build from part of one. `built.length` alone could not: it counted the
+ * bundles that EXIST, so two discovered skills with one bundle deleted read as
+ * "1 inspected, clean" — a verdict published over half the tree.
+ */
+interface BuiltSkillOutputs {
+  /** Candidates whose output dir exists on disk — the ones any phase can inspect. */
+  built: CheckEntry[];
+  /**
+   * Candidates `vat build` produces for THIS run's inputs: one pool bundle per
+   * discovered skill, one plugin-tree bundle per plugin-local skill. A
+   * `skills.config` key discovery does not reach is NOT counted — nothing builds
+   * it, and the consistency phase already reports the stale key — so demanding
+   * its bundle here would turn a typo'd config line into a non-overridable
+   * error a second time.
+   */
+  expected: number;
+  /** Expected candidates whose output dir is absent — `cwd`-relative, so a reader can open where it should be. */
+  missing: string[];
+}
+
+/**
+ * Register a (skillName, outputDir, packaging) candidate.
+ *
+ * A candidate whose output dir exists lands in `built` (deduplicated by key). An
+ * `expected` candidate is counted whether or not it exists, and one that does
+ * not exist is named in `missing` — that absence is the finding, not a skip.
  *
  * An EMPTY `files:` block is registered, not skipped: {@link checkFilesConfigDests}
  * has nothing to verify for such a skill and filters it out itself, but
@@ -220,32 +248,37 @@ function filesOf(entry: CheckEntry): NonNullable<SkillPackagingConfig['files']> 
  * with no `files:` block is exactly the one whose agent-instruction file arrived by
  * some other route, and dropping it here would make the crawl blind to it.
  */
-function tryAddCheckEntry(
-  checks: Map<string, CheckEntry>,
-  skillName: string,
-  outputDir: string,
-  packaging: SkillPackagingConfig,
+function addCheckCandidate(
+  outputs: BuiltSkillOutputs,
+  seen: Set<string>,
+  cwd: string,
+  candidate: CheckEntry,
+  expected: boolean,
 ): void {
+  const key = `${candidate.skillName}\0${candidate.outputDir}`;
+  if (seen.has(key)) return;
+  seen.add(key);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputDir is resolved from config, not user input
-  if (!existsSync(outputDir)) return;
-  const key = `${skillName}\0${outputDir}`;
-  if (!checks.has(key)) {
-    checks.set(key, { skillName, outputDir, packaging });
-  }
+  const exists = existsSync(candidate.outputDir);
+  if (exists) outputs.built.push(candidate);
+  if (!expected) return;
+  outputs.expected += 1;
+  if (!exists) outputs.missing.push(toForwardSlash(safePath.relative(cwd, candidate.outputDir)));
 }
 
 /**
- * Every built skill bundle this project's config accounts for that EXISTS on disk,
- * with the `files:` entries that govern it.
+ * Every built skill bundle this project's config accounts for, with the `files:`
+ * entries that govern it — those that EXIST on disk, and the coverage of those
+ * the build should have produced (see {@link BuiltSkillOutputs}).
  *
  * ONE enumeration of "where did `vat build` write this skill", shared by every
  * in-process verify phase, in the two locations the build actually uses:
  *   - Pool skills: `dist/skills/<fsName>/`
  *   - Tree-copy skills: `dist/.claude/plugins/.../skills/<name>/`
  *
- * Returns `[]` (never throws) for an unreadable config: `vat verify`'s delegated
- * phases report the real config error, and one of verify's own phases must not
- * race them with a second, worse diagnosis.
+ * Returns an empty enumeration (never throws) for an unreadable config: `vat
+ * verify`'s delegated phases report the real config error, and one of verify's
+ * own phases must not race them with a second, worse diagnosis.
  *
  * The pool arm enumerates the skills the run DISCOVERED, unioned with the keys of
  * `skills.config`. It used to be the config keys alone, which made both in-process
@@ -277,29 +310,38 @@ function tryAddCheckEntry(
 function collectBuiltSkillOutputs(
   cwd: string,
   discovered: readonly DiscoveredSkill[],
-): CheckEntry[] {
+): BuiltSkillOutputs {
+  const outputs: BuiltSkillOutputs = { built: [], expected: 0, missing: [] };
   try {
     const config = loadConfig(cwd);
-    if (!config) return [];
+    if (!config) return outputs;
 
     const skillsConfig = config.skills;
     const defaults = skillsConfig?.defaults as Record<string, unknown> | undefined;
 
-    // Dedup map: key = `skillName\0outputDir` → check entry
-    const checks = new Map<string, CheckEntry>();
+    // Dedup guard: key = `skillName\0outputDir`
+    const seen = new Set<string>();
 
     // --- Pool skills: candidate dir is dist/skills/<fsName> ---
-    const poolNames = new Set<string>([
-      ...discovered.map((skill) => skill.name),
-      ...Object.keys(skillsConfig?.config ?? {}),
-    ]);
+    // Expected only when discovered: `vat skills build` builds every discovered
+    // skill and nothing else (see BuiltSkillOutputs.expected).
+    const discoveredNames = new Set(discovered.map((skill) => skill.name));
+    const poolNames = new Set<string>([...discoveredNames, ...Object.keys(skillsConfig?.config ?? {})]);
     for (const skillName of poolNames) {
       const perSkill = skillsConfig?.config?.[skillName] as Record<string, unknown> | undefined;
       const outputDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
-      tryAddCheckEntry(checks, skillName, outputDir, mergeSkillPackagingConfig(defaults, perSkill));
+      addCheckCandidate(
+        outputs,
+        seen,
+        cwd,
+        { skillName, outputDir, packaging: mergeSkillPackagingConfig(defaults, perSkill) },
+        discoveredNames.has(skillName),
+      );
     }
 
     // --- Tree-copy skills: candidate dirs are plugin output skill dirs ---
+    // Always expected: every location here is a plugin-local skill the claude
+    // build phase packages into the plugin tree.
     for (const loc of computeTreeCopiedSkillLocations(config, cwd)) {
       // Per-skill config is keyed by the skill's declared NAME. `skillDirPath` is a
       // path (`group/nested-skill` for a nested skill), so try its trailing segment
@@ -307,17 +349,22 @@ function collectBuiltSkillOutputs(
       const dirLeaf = basename(loc.skillDirPath);
       const perSkill = (skillsConfig?.config?.[loc.skillDirPath] ?? skillsConfig?.config?.[dirLeaf]) as
         Record<string, unknown> | undefined;
-      tryAddCheckEntry(
-        checks,
-        loc.skillDirPath,
-        loc.skillOutputDir,
-        mergeSkillPackagingConfig(defaults, perSkill),
+      addCheckCandidate(
+        outputs,
+        seen,
+        cwd,
+        {
+          skillName: loc.skillDirPath,
+          outputDir: loc.skillOutputDir,
+          packaging: mergeSkillPackagingConfig(defaults, perSkill),
+        },
+        true,
       );
     }
 
-    return [...checks.values()];
+    return outputs;
   } catch {
-    return [];
+    return { built: [], expected: 0, missing: [] };
   }
 }
 
@@ -336,7 +383,7 @@ export function checkFilesConfigDests(
   discovered: readonly DiscoveredSkill[],
 ): FilesDestCheckResult[] {
   const results: FilesDestCheckResult[] = [];
-  for (const check of collectBuiltSkillOutputs(cwd, discovered)) {
+  for (const check of collectBuiltSkillOutputs(cwd, discovered).built) {
     const { skillName, outputDir } = check;
     const mergedFiles = filesOf(check);
     if (mergedFiles.length === 0) continue;
@@ -404,8 +451,8 @@ export function checkPackagedAgentInstructionFiles(
   discovered: readonly DiscoveredSkill[],
 ): PackagedContentCrawl {
   const issues: ValidationIssue[] = [];
-  const bundles = collectBuiltSkillOutputs(cwd, discovered);
-  for (const check of bundles) {
+  const outputs = collectBuiltSkillOutputs(cwd, discovered);
+  for (const check of outputs.built) {
     const raw = detectPackagedAgentInstructionFiles(
       check.outputDir,
       cwd,
@@ -413,13 +460,30 @@ export function checkPackagedAgentInstructionFiles(
     );
     issues.push(...resolveIssueSeverity(raw, check.packaging.validation));
   }
-  return { bundlesInspected: bundles.length, issues };
+  return {
+    bundlesInspected: outputs.built.length,
+    bundlesExpected: outputs.expected,
+    bundlesMissing: outputs.missing,
+    issues,
+  };
 }
 
-/** What the packaged-content crawl found, and over how many bundles. */
+/**
+ * What the packaged-content crawl found, over how many bundles, and how many
+ * it should have found.
+ *
+ * `bundlesInspected` can exceed `bundlesExpected`: a bundle sitting in `dist/`
+ * for a `skills.config` key discovery no longer reaches is inspected (it is
+ * distributed output) but not expected (nothing in this run builds it). It can
+ * fall short of it only by the bundles named in `bundlesMissing`.
+ */
 export interface PackagedContentCrawl {
   /** Built bundles that EXIST on disk and were crawled — the phase's denominator. */
   bundlesInspected: number;
+  /** Bundles `vat build` produces for this run's discovered skills — what the denominator should be. */
+  bundlesExpected: number;
+  /** Expected bundles absent from disk, as `cwd`-relative paths. Non-empty means the phase is not a verdict. */
+  bundlesMissing: string[];
   issues: ValidationIssue[];
 }
 
@@ -695,36 +759,73 @@ interface FindingsPhaseResult extends PhaseResult {
   issues: PublishedIssue[];
 }
 
-/** The `packaged-content` phase's result: its findings, and the count they are over. */
+/**
+ * The `packaged-content` phase's result: its findings, the count they are
+ * over, and the count they should have been over — see {@link PackagedContentCrawl}.
+ */
 export interface PackagedContentPhaseResult extends FindingsPhaseResult {
   bundlesInspected: number;
+  bundlesExpected: number;
+  bundlesMissing: string[];
+}
+
+/**
+ * The refusal for a crawl that found only PART of the build.
+ *
+ * Mirrors `unresolvedLocalPluginsFinding` in `claude/marketplace/validate.ts`:
+ * the count declared, the count checked, and the missing ones BY NAME — the
+ * operator's next move is to look at those paths, so the message carries them.
+ * ONE finding however many are missing (run-integrity invariant 4).
+ *
+ * @param crawl - What the crawl found, over what
+ * @returns The one finding, or nothing when every expected bundle was inspected
+ */
+function missingBundlesFinding(crawl: PackagedContentCrawl): readonly ValidationIssue[] {
+  if (crawl.bundlesMissing.length === 0) return [];
+  const named = crawl.bundlesMissing.map((dir) => `\`${dir}\``).join(', ');
+  return [runIntegrityFinding(
+    `This run discovered skills that \`vat build\` produces ${crawl.bundlesExpected} bundle(s) for and`
+    + ` the packaged-content phase inspected ${crawl.bundlesInspected}, so this phase is not a verdict`
+    + ' on the build: a bundle that was never crawled reads the same as a clean one. Expected'
+    + ` bundle(s) not found on disk: ${named}. Usually \`vat build\` has not run since a skill was`
+    + ' added, failed part-way, or wrote somewhere other than dist/ — or the bundle was deleted.'
+    + ' Run `vat build` first, then re-run `vat verify`.',
+  )];
 }
 
 /**
  * Build the `packaged-content` phase result from what the crawl found.
  *
- * 🚨 **Zero bundles is an ERROR, not a clean phase.** The phase is pushed
- * unconditionally whenever `skills:` exists and it feeds the real exit code;
- * `discoverSkillsFromConfig` returning `[]` on a typo'd glob — or `dist/` not
- * having been built at all, or built somewhere else — gave the crawl nothing to
- * walk, and nothing walked was zero findings was `success`, with no count in
- * the document to say the phase had looked at nothing. `vat verify` exists to
- * check the BUILT tree; a run that found none of it is not a verdict on it.
+ * 🚨 **Zero bundles is an ERROR, not a clean phase — and so is a MISSING one.**
+ * The phase is pushed unconditionally whenever `skills:` exists and it feeds the
+ * real exit code; `discoverSkillsFromConfig` returning `[]` on a typo'd glob —
+ * or `dist/` not having been built at all, or built somewhere else — gave the
+ * crawl nothing to walk, and nothing walked was zero findings was `success`,
+ * with no count in the document to say the phase had looked at nothing. `vat
+ * verify` exists to check the BUILT tree; a run that found none of it is not a
+ * verdict on it. Nor is a run that found half of it: with `bundlesInspected` as
+ * the only denominator, two discovered skills and one deleted bundle published
+ * `success` beside `bundlesInspected: 1`. The crawl now also carries what it
+ * should have found, and the document publishes both counts.
  *
  * Derived here, in the one function that produces this phase's document, and
  * not in the command body, so no path through the orchestrator can publish
- * `status: success` beside `bundlesInspected: 0`. Through the shared mechanism
- * in `run-integrity.ts`: one non-overridable `RESOURCE_CHECK_BROKEN` at
- * `error`, which {@link exitCodeForPhases} then turns into exit 1.
+ * `status: success` beside `bundlesInspected: 0` or beside a non-empty
+ * `bundlesMissing`. Through the shared mechanism in `run-integrity.ts`: one
+ * non-overridable `RESOURCE_CHECK_BROKEN` at `error`, which
+ * {@link exitCodeForPhases} then turns into exit 1. ONE, not two, when both
+ * apply: the missing-bundle refusal is derived first because it names paths,
+ * and {@link nothingCheckedFinding} stands down behind an existing
+ * run-integrity finding.
  *
  * Pure, and exported so the refusal is pinned without a project on disk.
  */
-export function buildPackagedContentPhase(
-  bundlesInspected: number,
-  found: readonly ValidationIssue[],
-): PackagedContentPhaseResult {
+export function buildPackagedContentPhase(crawl: PackagedContentCrawl): PackagedContentPhaseResult {
+  const { bundlesInspected, bundlesExpected, bundlesMissing, issues: found } = crawl;
+  const missing = missingBundlesFinding(crawl);
   const issues = [
-    ...nothingCheckedFinding(bundlesInspected, found, () =>
+    ...missing,
+    ...nothingCheckedFinding(bundlesInspected, [...missing, ...found], () =>
       'The packaged-content phase inspected 0 built skill bundles, so this phase is not a'
       + ' verdict: nothing was crawled for files that must not ship, and the document reads'
       + ' the same as a run over clean bundles. Either `vat build` has not run (or wrote'
@@ -736,8 +837,10 @@ export function buildPackagedContentPhase(
   return {
     name: PACKAGED_CONTENT,
     status: calculateValidationStatus(issues),
-    // The denominator, beside the counts it qualifies.
+    // The denominator, beside the counts it qualifies — and what it should have been.
     bundlesInspected,
+    bundlesExpected,
+    bundlesMissing,
     issueCounts: countBySeverity(issues),
     issues: issues.map(toPublishedIssue),
   };
@@ -785,7 +888,7 @@ export function runPackagedContentPhase(
   logger: ReturnType<typeof createLogger>,
 ): PackagedContentPhaseResult {
   const crawl = checkPackagedAgentInstructionFiles(projectRoot, discoveredSkills);
-  const phase = buildPackagedContentPhase(crawl.bundlesInspected, crawl.issues);
+  const phase = buildPackagedContentPhase(crawl);
   if (phase.issues.length > 0) {
     reportPackagedContentIssues(asValidationIssues(phase.issues), logger);
   }

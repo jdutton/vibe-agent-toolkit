@@ -1,3 +1,4 @@
+import { hasParentTraversalSegment, isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
@@ -29,17 +30,28 @@ const OwnerSchema = z
  * We validate the discriminant (`source` field on objects) but use
  * .passthrough() for provider-specific fields (repo, url, package, etc.).
  *
- * String paths must not use .. directory traversal — Claude Code rejects
- * source paths that resolve outside the marketplace directory.
+ * A string `source` is a path the consumer resolves against the marketplace
+ * root and WALKS, so this refine is the first containment gate. It refuses
+ * every spelling that leaves the root on some platform: an absolute path
+ * (POSIX root, drive letter, UNC) and a `..` segment behind EITHER separator.
+ * Claude Code's installer rejects a source that resolves outside the
+ * marketplace directory, so such an entry cannot ship either way.
+ *
+ * 🪤 The check used to split on `/` alone — `plugins\..\..\x` passed it and
+ * `path.resolve` walked it out of the root on every platform; `/etc` passed it
+ * outright — and the consumer entered whatever it named.
  */
 const PluginSourceSchema = z.union([
 	z
 		.string()
 		.min(1)
-		// eslint-disable-next-line local/no-hardcoded-path-split -- source is a URL-style path, not a filesystem path; forward-slash split is correct
-		.refine((s) => !s.split('/').includes('..'), {
-			message: 'source path must not use .. directory traversal',
-		}),
+		.refine((s) => !isAbsoluteAnyPlatform(s) && !hasParentTraversalSegment(s), (s) => ({
+			// Names the value: the reader's next move is to fix THIS entry.
+			message:
+				`source path "${s}" must be relative to the marketplace directory and stay inside it`
+				+ ' (no absolute path, no `..` segment) — Claude Code rejects a plugin source that'
+				+ ' resolves outside the marketplace, so this entry cannot be installed',
+		})),
 	z.object({ source: z.string() }).passthrough(),
 ]);
 

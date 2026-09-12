@@ -126,6 +126,37 @@ describe('fetchAuthenticated — short-circuit outcomes (no fetch, no cache)', (
     expect('outcome' in result && result.outcome).toBe('unverified');
     expect(calls()).toBe(0);
   });
+
+  /**
+   * A provider that claims the host and HAS a token but cannot build the
+   * request for this URL — a `to` template reading a declared capture that
+   * did not participate in the match — is neither "no provider claims this"
+   * nor "no token". It used to land on `unsupported`, the same answer an
+   * unclaimed host gets, with the reason dropped: a consumer falling back to
+   * an anonymous fetch on `unsupported` would have fetched a URL the adopter
+   * configured authentication for. The reason must survive, and the answer
+   * must differ from the unclaimed case pinned above.
+   */
+  it('returns { outcome: "provider-error", reason } when the provider cannot build a request for this URL', async () => {
+    const { fetchImpl, calls } = countingFetch();
+    const provider = githubProvider({
+      rewrite: [
+        {
+          when: String.raw`^https://github\.com/(?<path>[^?]*)(?<query>\?.*)?$`,
+          to: 'https://api.github.com/${path}${query}',
+        },
+      ],
+    });
+    const result = await fetchAuthenticated(GITHUB_BLOB_URL, configFor(provider), {
+      fetchImpl,
+      deps: DEFAULT_DEPS,
+    });
+    expect(result).toEqual({
+      outcome: 'provider-error',
+      reason: expect.stringMatching(/Template variable "query"/) as string,
+    });
+    expect(calls()).toBe(0);
+  });
 });
 
 describe('fetchAuthenticated — successful fetch (live, no cache)', () => {

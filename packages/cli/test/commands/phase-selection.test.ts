@@ -460,7 +460,7 @@ describe('buildPackagedContentPhase — a phase over zero bundles is not a verdi
   it('refuses zero bundles as error with ONE run-integrity finding', () => {
     // 🔑 The reproduced case. Delete the guard and this reds: no issue, so the
     // status collapses to `success` beside a count nobody published.
-    const phase = buildPackagedContentPhase(0, []);
+    const phase = buildPackagedContentPhase({ bundlesInspected: 0, bundlesExpected: 0, bundlesMissing: [], issues: [] });
 
     expect(phase.name).toBe('packaged-content');
     expect(phase.status).toBe('error');
@@ -473,7 +473,7 @@ describe('buildPackagedContentPhase — a phase over zero bundles is not a verdi
 
   it('publishes the count and stays silent once a bundle was inspected', () => {
     // 🔑 The over-correction guard.
-    const phase = buildPackagedContentPhase(2, []);
+    const phase = buildPackagedContentPhase({ bundlesInspected: 2, bundlesExpected: 2, bundlesMissing: [], issues: [] });
 
     expect(phase.status).toBe('success');
     expect(phase.bundlesInspected).toBe(2);
@@ -482,12 +482,17 @@ describe('buildPackagedContentPhase — a phase over zero bundles is not a verdi
   });
 
   it('carries real findings through unchanged, count beside them', () => {
-    const phase = buildPackagedContentPhase(1, [{
-      code: PACKAGED_CODE,
-      severity: 'warning',
-      message: 'shipped',
-      location: PACKAGED_LOCATION,
-    }]);
+    const phase = buildPackagedContentPhase({
+      bundlesInspected: 1,
+      bundlesExpected: 1,
+      bundlesMissing: [],
+      issues: [{
+        code: PACKAGED_CODE,
+        severity: 'warning',
+        message: 'shipped',
+        location: PACKAGED_LOCATION,
+      }],
+    });
 
     expect(phase.status).toBe('warning');
     expect(phase.bundlesInspected).toBe(1);

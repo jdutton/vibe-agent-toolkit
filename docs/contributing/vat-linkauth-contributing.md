@@ -197,10 +197,20 @@ mistyped `when` produced a green run over links nothing had fetched. Now
 over every expanded provider — `match.host` globs, `when` regexes, every template's syntax
 and transform names, `vars`/capture collisions, and every name a template reads against
 what its rule declares — and throws `LinkAuthConfigError` naming `providers[<n>]`, the host
-and the field; the CLI turns that into exit 2. What is left for the runtime outcome is
-per-URL: a declared capture group that did not participate in this match, or a transform
-refusing a particular value. When adding a check to the engine, add its static half to
-`compile-check.ts` in the same change, calling the same function the runtime lane calls.
+and the field; the CLI turns that into exit 2. The CLI calls it at config load
+(`packages/cli/src/utils/resource-loader.ts`, `assertLinkAuthProvidersCompile`), so every
+verb on that loader — `vat validate`, `vat resources validate` with or without
+`--check-external-urls`, `vat resources scan`, `vat rag index` — refuses the same config
+the same way; the registry's own call under the external-URL lane is the second, not the
+only, site. What is left for the runtime outcome is per-URL: a declared capture group that
+did not participate in this match, or a transform refusing a particular value. When adding a
+check to the engine, add its static half to `compile-check.ts` in the same change, calling
+the same function the runtime lane calls.
+
+The public `fetchAuthenticated` (`link-auth-content-fetch.ts`) passes `provider-error`
+through under its own name with the reason; it is a third `ContentFetchResult` variant, not
+`unsupported`, so a consumer that falls back to an anonymous fetch on `unsupported` cannot do
+so for a URL the adopter configured authentication for.
 
 Two rules follow for anything under `link-auth/`:
 
@@ -222,9 +232,14 @@ The mechanism is `sensitiveHeaderValues(headers)` + `redactSecretsInText(text, s
   value carrying a NUL or an interior newline triggers it. `command: git credential fill`
   produces exactly that, because `resolveToken` only trims the ends of stdout. That message
   reached `vat resources validate`'s stdout through the validator's `safeSerializeError`.
-  The probe covers `message`, the `cause` chain, `AggregateError.errors` and the error's own
-  enumerable properties, and the redaction matches the JSON-escaped, percent-encoded,
-  base64/base64url and case-folded forms of each secret as well as the verbatim bytes.
+  The probe is `util.inspect` itself (unbounded depth, hidden and Symbol-keyed properties,
+  getter values, `Map`/`Headers` contents, a reassigned `.stack`) plus `JSON.stringify` for
+  the one thing inspect does not print — a `toJSON` result. The replacement error's message
+  is the compact `name: message` / `cause` / `errors` account, redacted, not the inspect dump.
+  The redaction matches the JSON-escaped, `util.inspect`-escaped, percent-encoded,
+  base64/base64url and case-folded forms of each secret as well as the verbatim bytes; the
+  inspect form exists because inspect prints a NUL as `\x00` where JSON prints `\u0000`, and
+  a NUL-bearing credential on an own property matched neither, measured.
 
 `link-auth/resolve.ts` deliberately has NO scrub. Every error its catch can see quotes the
 template, the pattern or a name — never a substituted value — so its reason text cannot

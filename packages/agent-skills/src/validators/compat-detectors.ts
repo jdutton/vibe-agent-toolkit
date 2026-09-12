@@ -18,7 +18,8 @@ import {
   deriveObservationsFromEvidence,
   EXTERNAL_CLI_BINARIES,
 } from '../evidence/index.js';
-
+import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
+import { allowedToolsOf } from '../schemas/allowed-tools.js';
 
 const SHELL_LANGUAGES = new Set(['bash', 'sh', 'shell', 'zsh']);
 const LOCAL_SHELL_TOOLS = ['Bash', 'Edit', 'Write', 'NotebookEdit'] as const;
@@ -32,11 +33,11 @@ const BROWSER_AUTH_PATTERNS: ReadonlyArray<{ patternId: string; re: RegExp; desc
   { patternId: 'BROWSER_AUTH_WEBBROWSER_OPEN', re: /\bwebbrowser\.open\s*\(/, description: 'webbrowser.open() call' },
 ];
 
-// Minimal frontmatter peek for the allowed-tools list. Skill-validator
-// does full YAML parsing elsewhere; here we only need the one field,
-// so a narrow regex is cheaper than re-parsing.
+// The frontmatter span, on `\n`-normalized content, used ONLY to locate the
+// line the `allowed-tools:` key sits on. The value is read through
+// `parseFrontmatter`, never from this regex.
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---/;
-const ALLOWED_TOOLS_RE = /^allowed-tools:\s*\[([^\]]*)\]/m;
+const ALLOWED_TOOLS_KEY_RE = /^allowed-tools:/m;
 const PROSE_TOOL_RE = /\b(Bash|Edit|Write|NotebookEdit)\s+tool\b/;
 
 export interface DetectorOutput {
@@ -71,20 +72,45 @@ function* iterCodeBlocks(
   }
 }
 
-function allowedToolsList(content: string): { tools: string[]; line: number } {
-  const fm = FRONTMATTER_RE.exec(content);
-  if (!fm) return { tools: [], line: 0 };
-  const fmBody = fm[1] ?? '';
-  const at = ALLOWED_TOOLS_RE.exec(fmBody);
-  if (!at) return { tools: [], line: 0 };
-  const raw = at[1] ?? '';
-  // Locate the line of the allowed-tools entry within the original content.
-  const fmStart = fm.index;
-  const atLineInFm = fmBody.slice(0, at.index).split('\n').length - 1;
-  // +2 to account for the leading '---\n' line of the frontmatter.
-  const line = lineForIndex(content, fmStart) + atLineInFm + 1;
-  const tools = raw.split(',').map(s => s.trim()).filter(s => s.length > 0);
+/**
+ * The `allowed-tools:` declarations a SKILL.md carries and the 1-based line of
+ * the key; `{ tools: [], line: 0 }` when the key is absent or the frontmatter
+ * does not parse (the skill validator names that file
+ * `SKILL_MISSING_FRONTMATTER` on the same run — nothing is read out of it here).
+ *
+ * 🚩 This used to be a hand parser that saw ONLY the `[…]` flow form and split
+ * it on commas. Claude Code's documented spelling is space-separated, and a
+ * block sequence is valid YAML, so `allowed-tools: Read Bash` and a `- Bash`
+ * list both read as NO declaration and the local-shell capability reported
+ * clean over them. The value now goes through the same `parseFrontmatter` the
+ * validator uses and the same `allowedToolsOf` the settings-compat checker uses.
+ */
+export function allowedToolsDeclarations(content: string): { tools: string[]; line: number } {
+  const parsed = parseFrontmatter(content);
+  if (!parsed.success) return { tools: [], line: 0 };
+  // `yaml.parse` of an empty document is `null`; a scalar document is not a mapping.
+  const fields: unknown = parsed.frontmatter;
+  if (fields === null || typeof fields !== 'object' || Array.isArray(fields)) return { tools: [], line: 0 };
+  const tools = allowedToolsOf((fields as Record<string, unknown>)['allowed-tools']) ?? [];
+  if (tools.length === 0) return { tools: [], line: 0 };
+
+  // Locate the line of the key. parseFrontmatter normalized CRLF; do the same.
+  const normalized = content.replaceAll('\r\n', '\n');
+  const fmBody = FRONTMATTER_RE.exec(normalized)?.[1] ?? '';
+  const at = ALLOWED_TOOLS_KEY_RE.exec(fmBody);
+  // The opening `---` is line 1, so the key's line is 1 + its line within the body.
+  const line = at ? 1 + lineForIndex(fmBody, at.index) : 0;
   return { tools, line };
+}
+
+/**
+ * The tool a declaration names: `Bash(git:*)` and `Bash` both declare Bash.
+ * The parenthesised part scopes the grant; it does not change which tool the
+ * skill needs.
+ */
+function toolNameOf(declaration: string): string {
+  const paren = declaration.indexOf('(');
+  return paren === -1 ? declaration : declaration.slice(0, paren);
 }
 
 export function collectLocalShellEvidence(
@@ -95,8 +121,8 @@ export function collectLocalShellEvidence(
   const out: EvidenceRecord[] = [];
 
   // Frontmatter allowed-tools
-  const { tools, line: atLine } = allowedToolsList(content);
-  const matchedTool = tools.find(t => (LOCAL_SHELL_TOOLS as readonly string[]).includes(t));
+  const { tools, line: atLine } = allowedToolsDeclarations(content);
+  const matchedTool = tools.find(t => (LOCAL_SHELL_TOOLS as readonly string[]).includes(toolNameOf(t)));
   if (matchedTool !== undefined) {
     out.push(
       buildEvidence(

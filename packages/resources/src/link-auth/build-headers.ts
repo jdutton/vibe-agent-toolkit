@@ -6,9 +6,13 @@
  * carries `${token}` plus any named captures / vars from the rewrite step.
  *
  * `sensitiveHeaderValues` + `redactSecretsInText` are how the design's §8
- * "tokens never leak" is actually enforced. `link-auth-transport.ts` runs them
- * over anything `fetch` throws; `link-auth/resolve.ts` runs them over a
- * provider-config failure reason. Both of those reach stdout.
+ * "tokens never leak" is actually enforced. One live call site:
+ * `link-auth-transport.ts` runs them over anything `fetch` throws, which
+ * reaches stdout through the validator. `link-auth/resolve.ts` deliberately
+ * does NOT call them — its `provider-error` reason quotes a template, a
+ * pattern or a name and never a substituted value, a property pinned by test
+ * (see `describeProviderFailure` there); a scrub with no input that can carry
+ * a token is a guard whose test passes with the call deleted.
  *
  * 🚨 **They replaced a `redactHeaders(map) → map` helper that the docs named
  * as the §8 mechanism and that had ZERO production callers** — its only caller
@@ -22,6 +26,8 @@
  *
  * Per design issue #113 §4 (auth.headers vocabulary) and §8.
  */
+
+import { inspect } from 'node:util';
 
 import { renderTemplate } from './template.js';
 
@@ -128,12 +134,23 @@ export function redactSecretsInText(
 
 /**
  * The spellings under which one secret can appear in a string: itself, its
- * JSON-escaped body, and its percent-, base64- and base64url-encoded forms.
- * Distinct, non-blank, and never shorter than four characters — a
- * three-character encoding of a short value would match ordinary prose.
+ * JSON-escaped body, its `util.inspect`-escaped body, and its percent-, base64-
+ * and base64url-encoded forms. Distinct, non-blank, and never shorter than
+ * four characters — a three-character encoding of a short value would match
+ * ordinary prose.
+ *
+ * The inspect form exists because `link-auth-transport.ts` probes a thrown
+ * value with `util.inspect`, which quotes every string property and escapes
+ * its control characters its own way (`\x00`, not JSON's `\u0000`) — so a
+ * NUL-bearing credential on an own property matched neither the verbatim nor
+ * the JSON form, measured.
  */
 function secretForms(secret: string): string[] {
-  const forms = new Set<string>([secret, JSON.stringify(secret).slice(1, -1)]);
+  const forms = new Set<string>([
+    secret,
+    JSON.stringify(secret).slice(1, -1),
+    inspect(secret).slice(1, -1),
+  ]);
   try {
     forms.add(encodeURIComponent(secret));
   } catch {

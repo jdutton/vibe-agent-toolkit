@@ -8,6 +8,7 @@ import {
   toForwardSlash,
   withReaddirSyncRefused,
 } from '@vibe-agent-toolkit/utils';
+import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -18,7 +19,7 @@ import {
   DECLINE_IGNORED,
   FilesystemExtentContributor,
 } from '../src/projection/contributors/filesystem-extent.js';
-import { crawlSourceFor, PopulationListingRefusedError } from '../src/projection/crawl-source.js';
+import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 import type { ContentDemand } from '../src/projection/realizations.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
@@ -418,15 +419,17 @@ describe('FilesystemExtentContributor content demand', () => {
 /**
  * A directory the walk could not list is a gap in the POPULATION, and the
  * projection lane refuses the run for it rather than answering with a shorter
- * list — see `PopulationListingRefusedError` for why this lane stops where the
- * incumbent walk degrades (a cached population cannot carry the gap yet).
+ * list — see `ListingRefusals` in `crawl-source.ts` for why this lane stops
+ * where the incumbent walk degrades (a cached population cannot carry the gap
+ * yet), and for the one case it does NOT stop (gitignored territory, pinned by
+ * `projection-crawl-source-refused-listing.test.ts`).
  *
  * 🪤 `crawlDirectory` used to swallow the refusal, so `vat resources validate`
  * on its default lane reported `status: success` over a tree with a `--x`
  * directory in the declared scan.
  */
 describe('FilesystemExtentContributor refuses a population it could not enumerate', () => {
-  it('throws PopulationListingRefusedError naming the directory root-relative, with the errno and remedy', async () => {
+  it("throws DirectoryListingRefusedError naming the directory root-relative, with the errno and this lane's remedy", async () => {
     const locked = safePath.join(root, NESTED_DIR);
     const thrown = await withReaddirSyncRefused(locked, 'EACCES', async () => {
       try {
@@ -437,11 +440,15 @@ describe('FilesystemExtentContributor refuses a population it could not enumerat
       }
     });
 
-    expect(thrown).toBeInstanceOf(PopulationListingRefusedError);
+    expect(thrown).toBeInstanceOf(DirectoryListingRefusedError);
     const message = (thrown as Error).message;
     expect(message).toContain(`'${NESTED_DIR}'`);
     expect(message).toContain('EACCES');
-    expect(message).toContain('resources.exclude');
+    // The projection reads no include/exclude, so its remedy must not name one
+    // — four spellings of `resources.exclude` were tried against this lane and
+    // none changed anything. What it does honour is gitignore.
+    expect(message).not.toContain('resources.exclude');
+    expect(message).toContain('gitignore');
     // Root-relative: an absolute path here is the developer's $HOME in a CI log.
     expect(message).not.toContain(root);
   });

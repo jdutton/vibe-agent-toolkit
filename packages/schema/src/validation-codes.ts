@@ -415,6 +415,23 @@ export const CODE_REGISTRY = {
     'Repoint or delete the dangling symlink, restore the missing target, or fix the permissions. Set severity.RESOURCE_UNREADABLE to warning if a corpus is expected to contain unresolvable entries.',
     'resource_unreadable',
   ),
+  // The two population-time conditions `vat resources validate` surfaces off
+  // the projection's `realization_conditions` table (and, for the MIME
+  // conflict, off the registry's own resolver on the walk lane). Default
+  // severities MATCH the row severities the projection writes, so the two
+  // channels never disagree about how loud one fact is.
+  COLLECTION_MIME_CONFLICT: entry(
+    'error',
+    'Two collections declare different mimeType values for the same file. A file has one type and one parser, so the run used the built-in type table\'s answer for it and the declared routing was ignored.',
+    'Make the two collections\' mimeType declarations agree, or drop mimeType from the collection that should not be typing this file.',
+    'collection_mime_conflict',
+  ),
+  EXTENT_DIRECTORY_UNLISTABLE: entry(
+    'warning',
+    'A gitignored directory could not be listed, so nothing beneath it was enumerated. The directory itself is recorded and every readable sibling was enumerated; nothing beneath a gitignored directory is in the validation population, so no count in this report is narrowed by it.',
+    'Fix the permissions on that directory if what is beneath it should be visible to the projection. Set severity.EXTENT_DIRECTORY_UNLISTABLE to ignore for a directory that is expected to be unreadable (a root-owned cache under an ignored build directory).',
+    'extent_directory_unlistable',
+  ),
   SKILL_LENGTH_EXCEEDS_RECOMMENDED: entry(
     'warning',
     'SKILL.md line count exceeds the recommended limit; longer files degrade skill triggering.',

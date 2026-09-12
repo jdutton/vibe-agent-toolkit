@@ -306,6 +306,52 @@ export interface JudgeLinkOptions extends LinkFactTables {
    * the same declared artifact via the agent-skills walker.
    */
   deferredArtifacts?: DeferredArtifacts;
+  /**
+   * Files the population enumerated but could not READ — the registry's
+   * `RESOURCE_UNREADABLE` set, as {@link unreadableTargetsFrom} shapes it.
+   *
+   * 🪤 **Without it, a link INTO such a file reads as clean.** The file is on
+   * disk and its parent lists it, so existence passes; but it never entered the
+   * fragment index, so `checkAnchor` answers `'skip'` for its anchor exactly
+   * as it would for a non-markdown target, and `skip` is judged as nothing to
+   * report. The link row said nothing and `linksChecked` counted it — the
+   * refused-DIRECTORY lane's "existence and anchor are unverified" finding,
+   * one notch down and silent. With this set the judge can tell "not indexed
+   * because VAT was never asked to read it" from "not indexed because VAT was
+   * refused", and reports the second as `LINK_TARGET_UNREADABLE`.
+   *
+   * Not a second ledger: it is a lookup VIEW over the list the registry
+   * already keeps (`getUnreadableResources()`), built once per run.
+   */
+  unreadableTargets?: UnreadableTargets;
+}
+
+/**
+ * The files a run could not read, keyed for the judge: NFC-normalised absolute
+ * path → the errno the platform gave, or `undefined` when it gave none.
+ *
+ * Keyed the way {@link fragmentIndex} keys — NFC, see that function — because
+ * it is queried with the same derived-from-link-text path `checkAnchor` is, and
+ * for the same reason: on macOS the enumerated spelling and the link's spelling
+ * of one file routinely differ in normalization form.
+ */
+export type UnreadableTargets = ReadonlyMap<string, string | undefined>;
+
+/**
+ * Shape the registry's unreadable-file log into the judge's lookup.
+ *
+ * @param unreadable - Files that were enumerated and could not be read, each
+ *   with the errno the platform reported when it reported one
+ * @returns The lookup {@link JudgeLinkOptions.unreadableTargets} takes
+ */
+export function unreadableTargetsFrom(
+  unreadable: Iterable<{ readonly filePath: string; readonly code?: string | undefined }>,
+): UnreadableTargets {
+  const targets = new Map<string, string | undefined>();
+  for (const { filePath, code } of unreadable) {
+    targets.set(toNfc(filePath), code);
+  }
+  return targets;
 }
 
 /**
@@ -478,6 +524,9 @@ export function judgeOptionsFrom(
     ...(options?.checkHtmlAnchors !== undefined && { checkHtmlAnchors: options.checkHtmlAnchors }),
     ...(options?.deferredArtifacts !== undefined && {
       deferredArtifacts: options.deferredArtifacts,
+    }),
+    ...(options?.unreadableTargets !== undefined && {
+      unreadableTargets: options.unreadableTargets,
     }),
   };
 }
@@ -1139,6 +1188,13 @@ function judgeVerifiedTarget(
   if (gitIgnoreIssue) return gitIgnoreIssue;
 
   if (resolved.anchor) {
+    // Before the anchor is looked up, not after: a refused file is not in the
+    // index, so the lookup would answer `'skip'` and the refusal would read as
+    // "nothing to check". Existence and spelling WERE verified for this link
+    // (the listing holds the name); the anchor is the claim left open.
+    const refused = unreadableFileAnchorIssue(resolved.anchor, fileResult.resolvedPath, link, sourceFilePath, options);
+    if (refused) return refused;
+
     const check = checkAnchor(
       resolved.anchor,
       fileResult.resolvedPath,
@@ -1160,6 +1216,46 @@ function judgeVerifiedTarget(
   // previously produced `null` can reach this line. The change is additive to
   // the gate, never a weakening of it.
   return normalizationMismatchIssue(fileResult, link, sourceFilePath, options.projectRoot);
+}
+
+/**
+ * The issue an anchor into a file the population could not READ earns.
+ *
+ * The file-level counterpart of {@link unreadableTargetIssue}, and the same
+ * code for the same reason: `LINK_TARGET_UNREADABLE` is the registry's word
+ * for "the run could not read this target, so it was not checked", and the
+ * remedy — fix the permissions, then re-run — is this one's. What differs is
+ * how much WAS verified: a refused directory leaves existence open too, a
+ * refused file leaves only its content, so only the anchor is called
+ * unverified here.
+ *
+ * Only reached for a link WITH an anchor. A bare link to a refused file has
+ * every one of its own claims verified — the name is in the listing, and the
+ * spelling and gitignore checks ran above — and the file's own refusal is
+ * already `RESOURCE_UNREADABLE`, reported once against the file rather than
+ * once per link into it.
+ *
+ * @returns The issue, or null when the target is not in the refused set
+ */
+function unreadableFileAnchorIssue(
+  anchor: string,
+  resolvedPath: string,
+  link: ResourceLink,
+  sourceFilePath: string,
+  options: Pick<JudgeLinkOptions, 'unreadableTargets' | 'projectRoot'>,
+): ValidationIssue | null {
+  // NFC on both sides — the same key rule as `fragmentIndex`/`checkAnchor`.
+  const key = toNfc(resolvedPath);
+  if (!options.unreadableTargets?.has(key)) return null;
+  const code = options.unreadableTargets.get(key);
+  const errno = code === undefined ? '' : ` (${code})`;
+  const target = messagePath(resolvedPath, options.projectRoot);
+
+  return createRegistryIssue(
+    'LINK_TARGET_UNREADABLE',
+    `Link anchor #${anchor} in ${target} was NOT checked: the file exists and is spelled as written, but it could not be read${errno}, so it holds no headings this run could look the anchor up in (it is the file reported as RESOURCE_UNREADABLE). Its anchor is unverified, so treat this as a gap in the run rather than as a clean result. Fix the permissions on that file, then validate again.`,
+    linkExtras(link, sourceFilePath, options.projectRoot),
+  );
 }
 
 /**

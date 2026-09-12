@@ -53,7 +53,7 @@ export class DirectoryListingRefusedError extends Error {
   readonly refusal: DirectoryRefusal;
 
   constructor(refusal: DirectoryRefusal, context?: RefuseListingContext) {
-    super(context === undefined ? undecidedRefusalMessage(refusal) : decidedRefusalMessage(refusal, context));
+    super(context === undefined ? undecidedRefusalMessage(refusal) : refusedListingMessage(refusal, context));
     this.name = 'DirectoryListingRefusedError';
     this.refusal = refusal;
   }
@@ -67,8 +67,22 @@ function undecidedRefusalMessage(refusal: DirectoryRefusal): string {
   );
 }
 
-/** The adopter-facing sentence: root-relative directory, errno, and the caller's remedy. */
-function decidedRefusalMessage(refusal: DirectoryRefusal, context: RefuseListingContext): string {
+/**
+ * The adopter-facing sentence: root-relative directory, errno, and the caller's
+ * remedy — **the one owner of that sentence.**
+ *
+ * Exported for the caller that REPORTS a refusal rather than throwing on it
+ * (the resource registry's `SCAN_PATH_UNREADABLE`), so it says the same thing
+ * the throwing callers say. Three lanes used to compose this by hand and had
+ * drifted by a clause each ("enumerated" / "scanned" / "the population could
+ * not be enumerated"); the transient clause in particular was written once in
+ * `fs-utils.ts` precisely so nobody would.
+ *
+ * @param refusal - What was refused
+ * @param context - The root to express it against, and what the adopter can do
+ * @returns One sentence, root-relative, never containing the absolute path
+ */
+export function refusedListingMessage(refusal: DirectoryRefusal, context: RefuseListingContext): string {
   const relative = toForwardSlash(safePath.relative(context.root, refusal.directory));
   const where = relative === '' ? 'the scan root itself' : `the directory '${relative}'`;
   const remedy = refusal.transient
@@ -148,8 +162,16 @@ export interface CrawlOptions {
    *
    * A directory that VANISHED between being enumerated and being listed
    * (`ENOENT` / `ENOTDIR`) is not a refusal: it is no longer in the population
-   * and is skipped without a call. Only the `git ls-files` route never calls
-   * this; git does not list directories.
+   * and is skipped without a call.
+   *
+   * **Both routes call it.** The `git ls-files` route walks the working tree
+   * whenever {@link CrawlOptions.includeUntracked} is set (`--others`), and a
+   * directory git could not open arrives here too — read off git's stderr,
+   * where it is the only trace: git exits 0 and lists fewer files. A directory
+   * the `exclude` patterns drop is not reported on either route, because the
+   * walk never lists one. The tracked-only listing (`includeUntracked: false`)
+   * opens no directory at all — the index names every member — so it has no
+   * gap to report.
    */
   onUnreadable?: (refusal: DirectoryRefusal) => void;
 }
@@ -315,6 +337,29 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   // Resolve base directory to absolute path
   const resolvedBaseDir = safePath.resolve(baseDir);
 
+  // Compiled once, ahead of the route choice, because BOTH routes ask it: the
+  // walk before it lists a directory, the git route before it reports one git
+  // could not list. One matcher is what keeps "is this directory excluded?"
+  // answered the same way on both sides of the fork.
+  const isExcluded = exclude.length > 0 ? picomatch(exclude, picoOptions) : (): boolean => false;
+
+  /**
+   * Check if a path should be excluded based on patterns
+   */
+  function shouldExclude(normalizedPath: string): boolean {
+    // Check explicit exclude patterns
+    return isExcluded(normalizedPath) || isExcluded(normalizedPath + '/');
+  }
+
+  /**
+   * A refused listing surfaces — handed to the caller if it asked, thrown
+   * otherwise. Never a silent skip, on either route.
+   */
+  function raiseRefusal(refusal: DirectoryRefusal): void {
+    if (onUnreadable === undefined) throw new DirectoryListingRefusedError(refusal);
+    onUnreadable(refusal);
+  }
+
   // Ensure base directory exists
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- baseDir is from controlled config, not user input
   if (!fs.existsSync(resolvedBaseDir)) {
@@ -338,6 +383,17 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
       const gitFiles = gitLsFiles({
         cwd: resolvedBaseDir,
         includeUntracked,
+        // The SAME decision the walk makes, in the same order: a directory
+        // outside this crawl's base or dropped by `exclude` is never listed by
+        // the walk, so a refusal on it is not this crawl's gap; anything else
+        // is, and goes where the walk's would go.
+        onUnreadable: (refusal) => {
+          // Strictly beneath the base: a repository is often an ancestor of
+          // the crawl, and git names every refusal in the whole worktree.
+          if (!toForwardSlash(refusal.directory).startsWith(`${toForwardSlash(resolvedBaseDir)}/`)) return;
+          if (shouldExclude(toForwardSlash(safePath.relative(resolvedBaseDir, refusal.directory)))) return;
+          raiseRefusal(refusal);
+        },
       });
 
       if (gitFiles !== null) {
@@ -379,7 +435,6 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   // Fall back to manual directory crawling (not in git repo or git ls-files failed)
   // Compile glob patterns using picomatch
   const isIncluded = picomatch(include, picoOptions);
-  const isExcluded = exclude.length > 0 ? picomatch(exclude, picoOptions) : (): boolean => false;
 
   const results: string[] = [];
 
@@ -400,14 +455,6 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
    * directory cannot be reached twice, so the default path pays no `realpath`.
    */
   const visitedRealDirs = new Set<string>();
-
-  /**
-   * Check if a path should be excluded based on patterns
-   */
-  function shouldExclude(normalizedPath: string): boolean {
-    // Check explicit exclude patterns
-    return isExcluded(normalizedPath) || isExcluded(normalizedPath + '/');
-  }
 
   /**
    * Add a path to results if it matches include patterns
@@ -434,11 +481,7 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   function reportOrSkip(error: unknown, target: string): boolean {
     const listing = listingFailure(error);
     if (listing.outcome === 'absent') return true;
-    if (listing.outcome === 'unreadable') {
-      const refusal = directoryRefusalFor(listing, target);
-      if (onUnreadable === undefined) throw new DirectoryListingRefusedError(refusal);
-      onUnreadable(refusal);
-    }
+    if (listing.outcome === 'unreadable') raiseRefusal(directoryRefusalFor(listing, target));
     return false;
   }
 

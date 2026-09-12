@@ -40,7 +40,12 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape } from 'zod';
 
 import { resolveChunkingConfig } from './chunking-config.js';
-import { createDocumentRecord, overlayChunkMetadata, type DocumentRecord } from './document-helpers.js';
+import {
+  createDocumentRecord,
+  missingDocumentColumns,
+  overlayChunkMetadata,
+  type DocumentRecord,
+} from './document-helpers.js';
 import { buildWhereClause, escapeSQLString, LANCEDB_QUERY_SUPPORT } from './filter-builder.js';
 import {
   chunkToLanceRow,
@@ -366,7 +371,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     if (!this.table) {
       throw new Error(
         `No data indexed yet: no '${TABLE_NAME}' table at ${this.config.dbPath}. ` +
-          'If indexResources() was called, check its returned `errors` for resources that failed to chunk or embed.',
+          'If indexResources() was called, check its returned `errors` for resources that failed to chunk or embed, ' +
+          'and `resourcesEmpty` for resources that had no prose to index (frontmatter-only or blank).',
       );
     }
 
@@ -520,9 +526,17 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // already says what this run would write. `null` when document storage is
     // off: there is no documents table then, and an empty map would re-index
     // the whole corpus on every run.
-    const documented = this.config.storeDocuments
-      ? await this.readDocumentedResources()
-      : null;
+    //
+    // The table is brought up to this build's shape FIRST — before this batch
+    // deletes anything. A record refused for a column the table lacks used to
+    // land after the `update` path had already removed the changed resource's
+    // chunks and document row, so the resource vanished from the index and
+    // failed the same way on every later run.
+    let documented: DocumentedResources = null;
+    if (this.config.storeDocuments) {
+      await this.widenDocumentsTable();
+      documented = await this.readDocumentedResources();
+    }
 
     const startTime = Date.now();
     const totalResources = resources.length;
@@ -614,6 +628,45 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
         row.resourceid,
         { contenthash: row.contenthash, totalchunks: row.totalchunks },
       ]),
+    );
+  }
+
+  /**
+   * Add to the documents table every metadata column a record carries that the
+   * table lacks, filling existing rows with the "absent" sentinel.
+   *
+   * A table written by an earlier build has that build's columns (v0.1.42 wrote
+   * only the frontmatter keys each document had), and LanceDB refuses a record
+   * with a column the table does not have. Detected by comparing the table's
+   * own schema with the record's columns — no stored version number — and done
+   * once per batch, before the batch deletes anything, so a refusal can never
+   * follow a delete. `addColumns` is one commit; no row is read or rewritten,
+   * and a table that already has every column is left untouched (an empty
+   * `addColumns` would still commit a new table version).
+   *
+   * Columns the table has and the record lacks need nothing: LanceDB stores
+   * `null` for a field a record omits.
+   */
+  private async widenDocumentsTable(): Promise<void> {
+    const table = await this.openDocumentsTable();
+    if (!table) {
+      return;
+    }
+
+    const columns = (await table.schema()).fields.map((field) => field.name);
+    const missing = missingDocumentColumns(columns, this.metadataSchema);
+    if (missing.length === 0) {
+      return;
+    }
+
+    // A JS number becomes a Float64 column when LanceDB infers a table from
+    // records, so the added column is declared DOUBLE to match the value the
+    // next `add` will carry for it.
+    await table.addColumns(
+      missing.map(({ name, fill }) => ({
+        name,
+        valueSql: typeof fill === 'number' ? `CAST(${fill} AS DOUBLE)` : `'${escapeSQLString(fill)}'`,
+      })),
     );
   }
 
@@ -897,20 +950,18 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       throw new Error('Cannot delete in readonly mode');
     }
 
-    if (!this.table) {
-      return;
-    }
+    const byResourceId = `resourceid = '${escapeSQLString(resourceId)}'`;
 
-    // Delete chunks (use lowercase column names)
-    await this.table.delete(`resourceid = '${escapeSQLString(resourceId)}'`);
+    // Chunk rows first, when there is a chunk table. There is not always one:
+    // a corpus whose resources have all chunked to nothing has a documents
+    // table and no chunk table, and returning here on that account left the
+    // document row this method promises to remove in place, silently.
+    await this.table?.delete(byResourceId);
 
-    // Also delete from rag_documents table if it exists
-    try {
-      const docsTable = await this.openDocumentsTable();
-      await docsTable?.delete(`resourceid = '${escapeSQLString(resourceId)}'`);
-    } catch {
-      // Documents table may not exist; ignore
-    }
+    // `openDocumentsTable` answers "no such table" with null, not a throw, so
+    // a failure here is a real one and is left to surface.
+    const docsTable = await this.openDocumentsTable();
+    await docsTable?.delete(byResourceId);
   }
 
   /**

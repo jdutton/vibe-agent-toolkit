@@ -35,6 +35,11 @@ export interface RootArgvGrammar {
   wantsRootVerboseHelp(argv: readonly string[]): boolean;
 }
 
+/** How many argv slots a step occupies: a `pair` takes its value with it. */
+function widthOf(step: OptionTokenKind): number {
+  return step === 'pair' ? 2 : 1;
+}
+
 /**
  * Build the grammar from the root program's OWN option declarations.
  *
@@ -106,11 +111,6 @@ export function createRootArgvGrammar(rootOptions: readonly Option[]): RootArgvG
    */
   function stepOver(arg: string): 'operand' | OptionTokenKind {
     return arg.length > 1 && arg.startsWith('-') ? classifyOptionToken(arg) : 'operand';
-  }
-
-  /** How many argv slots a step occupies: a `pair` takes its value with it. */
-  function widthOf(step: OptionTokenKind): number {
-    return step === 'pair' ? 2 : 1;
   }
 
   /**

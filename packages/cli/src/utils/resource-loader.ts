@@ -3,6 +3,7 @@
  */
 
 import {
+  buildLinkAuthEngineConfig,
   buildResourcePopulation,
   DEFAULT_RESOURCE_INCLUDE,
   gitExtentSelected,
@@ -62,6 +63,30 @@ export interface ResourceLoadResult {
    * so when the root is not in a repository.
    */
   extentSource: CrawlSourceKind | null;
+}
+
+/**
+ * Refuse a `resources.linkAuth` provider that cannot compile HERE, where the
+ * config is loaded, so every verb that loads it answers the same way.
+ *
+ * `buildLinkAuthEngineConfig` is the one place the per-provider compile check
+ * (`assertProviderCompiles`) lives, and the registry calls it only when it
+ * constructs the external-link validator — i.e. under `--check-external-urls`.
+ * Every other verb on this loader (`vat validate`, `vat resources validate`
+ * without the flag, `vat resources scan`, `vat rag index`) accepted an
+ * uncompilable `when` and exited 0, while the validation-code registry
+ * promised the refusal "at config load … and every other command that loads
+ * `resources.linkAuth`". The registry was right about what the contract should
+ * be; this makes the code keep it. The built config is discarded — the
+ * registry builds its own when the lane runs — because the value wanted is
+ * the throw, and calling the same function is how the two stay one check.
+ *
+ * @throws {LinkAuthConfigError} naming `providers[<n>]`, the host and the field;
+ *   every caller's catch turns a thrown error into exit 2.
+ */
+function assertLinkAuthProvidersCompile(config: ProjectConfig): void {
+  const linkAuth = config.resources?.linkAuth;
+  if (linkAuth !== undefined) buildLinkAuthEngineConfig(linkAuth);
 }
 
 /**
@@ -253,7 +278,7 @@ function populationSourceFor(
         ...collectionsOption(enumeratedRoot),
       });
       observeExtentSource(population.extentSource);
-      return population.paths;
+      return { paths: population.paths, conditions: population.conditions };
     },
   };
 }
@@ -362,6 +387,7 @@ export async function loadResourcesWithConfig(
 
   if (config) {
     logger.debug(`Loaded config from ${projectRoot}`);
+    assertLinkAuthProvidersCompile(config);
   }
 
   // Built here, but deliberately NOT initialized here — see the call inside the

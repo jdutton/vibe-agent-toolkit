@@ -223,6 +223,13 @@ export function armLabel(row: ReportedLane): string {
  * reports the same word for both, so an A/B varying only `VAT_EXTENT_SOURCE`
  * used to slip past this note reading as a genuine agreement.
  *
+ * Four sentences, and the `[A → B]` arrow is reserved for the one case where
+ * BOTH sides named an arm and the two differ. One side that named none is not
+ * a different enumerator — it is an absent proof — and it used to render with
+ * the same arrow as a genuine arm change, so a reader taught that `→` means
+ * "the arms differ" read "the arm changed" where the honest verdict is "one
+ * side cannot say which arm it ran". That side is now named as UNPROVEN.
+ *
  * @param before - The baseline row's arm, or `null` when that side has no row
  * @param after - The compared row's arm, or `null` when that side has no row
  * @returns A clause to append to the row line, or an empty string when a side
@@ -235,6 +242,20 @@ export function laneNote(before: ReportedLane | null, after: ReportedLane | null
   if (left === null && right === null) {
     return ' [arm UNPROVEN on both sides — neither output reported a lane]';
   }
-  if (left !== right) return ` [${left ?? LANE_UNREPORTED} → ${right ?? LANE_UNREPORTED}]`;
-  return ` [both sides ran the '${String(left)}' arm — this compares one enumerator with itself]`;
+  if (left === null) return oneSidedNote('before', 'after', String(right));
+  if (right === null) return oneSidedNote('after', 'before', left);
+  if (left !== right) return ` [${left} → ${right}]`;
+  return ` [both sides ran the '${left}' arm — this compares one enumerator with itself]`;
+}
+
+/**
+ * The clause for a pair where exactly one side proved its arm.
+ *
+ * @param unproven - Which side reported no lane
+ * @param proven - The other side
+ * @param arm - The arm the proven side ran
+ * @returns The clause, naming the unproven side first
+ */
+function oneSidedNote(unproven: 'before' | 'after', proven: 'before' | 'after', arm: string): string {
+  return ` [arm UNPROVEN on the ${unproven} side — ${LANE_UNREPORTED}; the ${proven} side ran '${arm}']`;
 }

@@ -239,8 +239,8 @@ skill — so a typo'd glob fails the gate there instead of passing it.
 
 `vat audit` is **advisory by design** — it reports every issue it detects but does not block on validation severity. Use `vat skills validate` or `vat skills build` for gated checks (those commands exit `1` on validation errors).
 
-- **0** - Always, when the audit completes — including when the report says `status: error`. The findings are in the report; check `status` and `summary` in the YAML output to decide whether action is needed.
-- **2** - System error: Config invalid, path not found, permission denied, etc. The audit could not run, so there is no report to read.
+- **0** - Always, when the audit completes — including when the report says `status: error`. The findings are in the report; check `status` and `summary` in the YAML output to decide whether action is needed. That includes the environment refusing part of the subject: a path that does not exist or is not a recognisable resource is reported as `UNKNOWN_FORMAT` (error), and a directory or file the scan could not read — permission denied, a vanished mount — as `SCAN_PATH_UNREADABLE` (warning), with every readable sibling still validated. A governing `vibe-agent-toolkit.config.yaml` that cannot be loaded, or whose `skills.include` reaches a directory the crawl cannot list, is warned about once on stderr and filed as `SCAN_PATH_UNREADABLE` on the config file or the directory; the skills it governs are validated config-free rather than dropped. Degrading beats destroying, and the report says where it degraded.
+- **2** - The audit could not run at all, so there is no report to read: `--user` with no Claude config directory installed, a git URL that could not be cloned, or an internal failure (a validator defect). Invalid config, missing paths and permission problems are **not** exit 2 — they are findings, above.
 
 ## Validation Configuration
 

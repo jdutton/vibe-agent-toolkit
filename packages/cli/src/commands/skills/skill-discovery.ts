@@ -11,10 +11,30 @@ import { basename } from 'node:path';
 import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { crawlDirectory, refuseListing } from '@vibe-agent-toolkit/utils/crawl';
+import { crawlDirectory, type DirectoryRefusal, refuseListing } from '@vibe-agent-toolkit/utils/crawl';
 import picomatch from 'picomatch';
 
 import type { DiscoveredSkill } from './command-helpers.js';
+
+/**
+ * How discovery treats a directory its crawl cannot list.
+ *
+ * Absent (the default), discovery REFUSES — it throws `DirectoryListingRefusedError`
+ * with the adopter-facing sentence, because a shorter skill list is the tell-less
+ * drop every command downstream would then confidently work from. That is the
+ * right answer for `vat skills validate`, `vat skills build`, `vat verify` and
+ * the rest, which must not act on a population they could not see.
+ *
+ * A caller whose honest answer is to DEGRADE — `vat audit`, which already reports
+ * an unreadable path as `SCAN_PATH_UNREADABLE` and validates every readable
+ * sibling — says so by supplying `onUnreadable`. Discovery then enumerates around
+ * the refused directory, hands the refusal to the handler, and returns every
+ * skill it COULD see. The default is not changed by any caller passing this; it
+ * is a per-call decision, recorded at the call site.
+ */
+export interface DiscoveryOptions {
+  onUnreadable?: (refusal: DirectoryRefusal) => void;
+}
 
 /**
  * Directories that should always be excluded from skill discovery for performance.
@@ -31,6 +51,14 @@ const DISCOVERY_EXCLUDE = [
  * then its filename. Exported so the Claude plugin build resolves a plugin-local
  * skill's name through the SAME definition `vat skills build` uses — per-skill
  * config is keyed by name, so two answers would mean two effective configs.
+ *
+ * The fallback is a KEY, not a verdict. A name is optional on the agentskills.io
+ * schema, so a nameless frontmatter block is a legal skill and needs a key; a
+ * file with NO frontmatter at all is not a skill, but discovery still returns it
+ * under this key so the glob match is reported rather than dropped — the
+ * packaging validator refuses it as `SKILL_MISSING_FRONTMATTER`, located at the
+ * file's path. Excluding it here instead would shrink the denominator silently,
+ * which is the exact tell-less drop `includeUntracked` below exists to prevent.
  */
 export async function readSkillName(skillPath: string): Promise<string | undefined> {
   const parsed = await parseFileCached(skillPath, 'markdown');
@@ -97,7 +125,12 @@ function groupIncludePatternsByBase(
  * the root does not exist (mirrors audit's filesystem-first tolerance for
  * patterns pointing at nothing).
  */
-async function crawlOneBase(base: string, globs: string[], projectRoot: string): Promise<string[]> {
+async function crawlOneBase(
+  base: string,
+  globs: string[],
+  projectRoot: string,
+  onUnreadable: ((refusal: DirectoryRefusal) => void) | undefined,
+): Promise<string[]> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- base derived from validated config
   if (!existsSync(base)) {
     return [];
@@ -124,13 +157,20 @@ async function crawlOneBase(base: string, globs: string[], projectRoot: string):
     // cannot stop the crawl from entering the directory; only a narrower
     // include base can. Expressed against the project root — the coordinates
     // the include pattern itself is written in, `..` and all.
-    onUnreadable: refuseListing({
+    //
+    // A caller that has decided to degrade instead supplies its own handler
+    // (see {@link DiscoveryOptions}); the refusal is then reported by that
+    // caller, and the crawl continues past the directory.
+    onUnreadable: onUnreadable ?? refuseListing({
       root: projectRoot,
-      remedy:
-        'Fix the permissions on that directory, or narrow the `skills.include` pattern so its base no longer reaches into it.',
+      remedy: SKILLS_INCLUDE_REMEDY,
     }),
   });
 }
+
+/** The knob an adopter has when `skills.include` reaches a directory the crawl cannot list. */
+export const SKILLS_INCLUDE_REMEDY =
+  'Fix the permissions on that directory, or narrow the `skills.include` pattern so its base no longer reaches into it.';
 
 /**
  * Discover skills from config yaml skills section.
@@ -147,11 +187,14 @@ async function crawlOneBase(base: string, globs: string[], projectRoot: string):
  *
  * @param skillsConfig - The skills section from vibe-agent-toolkit.config.yaml
  * @param projectRoot - Absolute path to project root (where config yaml lives)
+ * @param options - What to do with a directory the crawl cannot list; the
+ *   default refuses, see {@link DiscoveryOptions}
  * @returns Array of discovered skills with names and source paths
  */
 export async function discoverSkillsFromConfig(
   skillsConfig: SkillsConfig,
-  projectRoot: string
+  projectRoot: string,
+  options: DiscoveryOptions = {},
 ): Promise<DiscoveredSkill[]> {
   const { include, exclude } = skillsConfig;
 
@@ -162,7 +205,7 @@ export async function discoverSkillsFromConfig(
 
   const foundAbsPaths = new Set<string>();
   for (const [base, globs] of patternsByBase) {
-    const crawled = await crawlOneBase(base, globs, projectRoot);
+    const crawled = await crawlOneBase(base, globs, projectRoot, options.onUnreadable);
     for (const absPath of crawled) {
       if (userExcludeMatcher) {
         const relFromProject = toForwardSlash(safePath.relative(projectRoot, absPath));

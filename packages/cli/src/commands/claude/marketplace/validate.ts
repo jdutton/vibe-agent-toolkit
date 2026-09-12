@@ -24,11 +24,12 @@ import {
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, issueLocation, normalizePath, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { formatDuration, reportCommandError } from '../../../utils/command-error.js';
 import { loadConfig } from '../../../utils/config-loader.js';
+import { escapesCorpusRoot } from '../../../utils/corpus-target.js';
 import { summarizeFindings, type FindingCountSummary } from '../../../utils/issue-rendering.js';
 import { resolveIssueSeverity } from '../../../utils/issue-severity.js';
 import { createLogger } from '../../../utils/logger.js';
@@ -118,6 +119,56 @@ function isDirectory(dir: string): boolean {
 }
 
 /**
+ * The directory a declared `source` names, as the two paths the run needs —
+ * or `undefined` when it names nothing this command may enter.
+ *
+ * 🚨 **This used to be `safePath.resolve(root, source)` + `isDirectory`, and
+ * that walked `/etc`.** `marketplace.json` is attacker-reachable content — it
+ * is the thing being audited — and every string `source` was resolved and
+ * ENTERED. The document then published `../../../../etc/…` locations, breaking
+ * the "every location is relative to root" contract the help text claims.
+ *
+ * Containment is decided by REAL path, in two steps:
+ *
+ * 1. `joinUnderRoot` refuses lexically: an absolute source (POSIX root, drive
+ *    letter) or a `..` that climbs above the root. The source is
+ *    forward-slashed FIRST, because on POSIX `plugins\..\..\x` is one segment
+ *    to `path.resolve` — it resolved to a name containing backslashes, and the
+ *    same string walks out of the root on Windows. That also fixes the LOW:
+ *    `.\plugins\x` resolved to `<root>/./plugins/x`, which `statSync` accepts
+ *    but which is not the string `undeclared` builds for the same directory,
+ *    so one plugin was published as both validated and undeclared.
+ * 2. `realpath` refuses what only the filesystem knows: a symlink inside the
+ *    root pointing out is outside. The check is against the root's OWN real
+ *    path, so a root reached through a symlink (macOS `/var` → `/private/var`)
+ *    does not read as escaping itself.
+ *
+ * The schema refuses step 1's cases at the manifest before this runs, so here
+ * step 1 is the belt to that suspender. The consumer keeps it because the
+ * schema is `.passthrough()` Postel's-Law tolerant by design and this is the
+ * one place a wrong answer opens a directory.
+ *
+ * @returns `lexical` — the path as declared, resolved, which is what the
+ *   validators are handed so findings read `plugins/s/…` as the manifest spells
+ *   it; `real` — the identity, for "have I seen this directory?"
+ */
+function containedPluginDir(
+  marketplacePath: string,
+  realRoot: string,
+  source: string,
+): { lexical: string; real: string } | undefined {
+  let lexical: string;
+  try {
+    lexical = safePath.joinUnderRoot(marketplacePath, toForwardSlash(source));
+  } catch {
+    return undefined;
+  }
+  if (!isDirectory(lexical)) return undefined;
+  const real = toForwardSlash(normalizePath(lexical));
+  return escapesCorpusRoot(safePath.relative(realRoot, real)) ? undefined : { lexical, real };
+}
+
+/**
  * Validate the plugins the manifest DECLARES with a local source.
  *
  * 🚨 **This walked `plugins/*` and shipped both defects that has.** The
@@ -127,11 +178,12 @@ function isDirectory(dir: string): boolean {
  * at exit 1 on a code no override can lower; and a manifest declaring
  * `./plugins/a` over a `plugins/` holding only an undeclared `b` validated
  * "1 of 1" and passed with `a` never looked at. Each declared `source` is now
- * resolved against the marketplace root and THAT directory is validated —
- * the same resolution `extractClaudeMarketplaceInventory` performs for
- * `vat audit`. A source that does not resolve to a directory is simply absent
- * from the results; the builder derives the refusal from that absence, so it
- * lands on the document whatever this function's caller does.
+ * resolved against the marketplace root and THAT directory is validated — see
+ * {@link containedPluginDir} for the containment the resolution enforces;
+ * `extractClaudeMarketplaceInventory` (`vat inventory`/`vat audit`) applies
+ * the same predicate on its side. A source that does not resolve to a directory INSIDE the root is
+ * simply absent from the results; the builder derives the refusal from that
+ * absence, so it lands on the document whatever this function's caller does.
  *
  * Directories under `plugins/` that no entry names come back as `undeclared`,
  * relative to the root: listed, not validated, not a failure. The manifest is
@@ -158,50 +210,71 @@ async function validateDeclaredPlugins(
 ): Promise<{ pluginResults: LocalPluginResult[]; undeclared: string[]; issues: ValidationIssue[] }> {
   const pluginResults: LocalPluginResult[] = [];
   const issues: ValidationIssue[] = [];
-  const resolvedDirs = new Set<string>();
+  // Keyed by REAL path: one directory is validated once however many entries
+  // name it, and the same key is what `undeclaredPluginDirs` compares against.
+  const validatedByDir = new Map<string, ValidationResult>();
+  const realRoot = toForwardSlash(normalizePath(marketplacePath));
 
   for (const entry of declared) {
-    const pluginDir = safePath.resolve(marketplacePath, entry.source);
-    if (!isDirectory(pluginDir)) continue;
-    resolvedDirs.add(pluginDir);
+    // A source that names nothing inside the root — nothing at all, a file,
+    // an absolute path, a `..` climb, a symlink out — is simply absent from the
+    // results, and the builder refuses the run by name from that absence.
+    const dir = containedPluginDir(marketplacePath, realRoot, entry.source);
+    if (dir === undefined) continue;
+
+    // Two entries, one directory: the directory's findings were collected
+    // twice and COUNTED twice (`PLUGIN_MISSING_AUTHOR: 2` for one file). Each
+    // entry still gets its row — the manifest declared two — but the file is
+    // inspected once and its findings enter `issues` once.
+    const seen = validatedByDir.get(dir.real);
+    if (seen !== undefined) {
+      pluginResults.push({ ...entry, result: seen });
+      continue;
+    }
 
     // `locationRoot` is not optional here even though the parameter is: omitted,
     // `validatePlugin` anchors at the plugin's own discovered project root, so
     // its findings land in a different coordinate system than the marketplace
     // and skill findings beside them — and every plugin's manifest collapses to
     // the same `.claude-plugin/plugin.json`.
-    const rawResult = await validatePlugin(pluginDir, { strict: true, locationRoot: marketplacePath });
+    const rawResult = await validatePlugin(dir.lexical, { strict: true, locationRoot: marketplacePath });
     const pluginIssues = resolveIssueSeverity(rawResult.issues, validation);
-    pluginResults.push({
-      ...entry,
-      result: {
-        ...rawResult,
-        issues: pluginIssues,
-        status: calculateValidationStatus(pluginIssues),
-        issueCounts: countBySeverity(pluginIssues),
-      },
-    });
+    const result: ValidationResult = {
+      ...rawResult,
+      issues: pluginIssues,
+      status: calculateValidationStatus(pluginIssues),
+      issueCounts: countBySeverity(pluginIssues),
+    };
+    validatedByDir.set(dir.real, result);
+    pluginResults.push({ ...entry, result });
     issues.push(...pluginIssues);
 
-    const skillIssues = await validatePluginSkills(pluginDir, marketplacePath);
+    const skillIssues = await validatePluginSkills(dir.lexical, marketplacePath);
     issues.push(...resolveIssueSeverity(skillIssues, validation));
   }
 
-  return { pluginResults, undeclared: undeclaredPluginDirs(marketplacePath, resolvedDirs), issues };
+  return {
+    pluginResults,
+    undeclared: undeclaredPluginDirs(marketplacePath, new Set(validatedByDir.keys())),
+    issues,
+  };
 }
 
 /**
  * Directories under `<root>/plugins/` that no declared source resolved to,
  * relative to the root. The conventional location is the only one walked: an
  * undeclared plugin anywhere else is indistinguishable from any other directory.
+ *
+ * @param validatedDirs - REAL paths of the directories the run validated, so
+ *   the comparison cannot be defeated by two spellings of one directory.
  */
-function undeclaredPluginDirs(marketplacePath: string, resolvedDirs: ReadonlySet<string>): string[] {
+function undeclaredPluginDirs(marketplacePath: string, validatedDirs: ReadonlySet<string>): string[] {
   const pluginsDir = safePath.join(marketplacePath, 'plugins');
   if (!existsSync(pluginsDir)) return [];
   return readdirSync(pluginsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => safePath.join(pluginsDir, entry.name))
-    .filter((dir) => !resolvedDirs.has(dir))
+    .filter((dir) => !validatedDirs.has(toForwardSlash(normalizePath(dir))))
     .map((dir) => issueLocation(dir, marketplacePath));
 }
 
@@ -562,8 +635,9 @@ function unresolvedLocalPluginsFinding(
     + ` Declared source(s) that did not resolve to a directory under the marketplace root: ${named}.`
     + ' Usually the marketplace was not built, was built somewhere else, or the entry\'s `source`'
     + ' names the wrong directory — `undeclared` above lists the `plugins/` directories the'
-    + ' manifest does not name. Fix the `source`, run `vat build` first, or point this command at'
-    + ' the built marketplace.',
+    + ' manifest does not name. A source that resolves OUTSIDE the root (a symlink pointing out)'
+    + ' is refused the same way: this command never leaves the directory it was pointed at.'
+    + ' Fix the `source`, run `vat build` first, or point this command at the built marketplace.',
   )];
 }
 
@@ -653,9 +727,11 @@ Output (YAML on stdout):
           declared source that does not resolve is reported as
           RESOURCE_CHECK_BROKEN at error (exit 1), naming it, rather than as
           a pass — a plugin the manifest ships and this run never saw is not
-          a verdict. Co-located marketplaces (source: "./") are validated at
-          the root. An all-remote marketplace has nothing local and stays
-          green.
+          a verdict. A source is never followed outside the root: an absolute
+          path or a ".." segment fails the manifest schema, and a symlink that
+          points out is refused like an unresolved source. Co-located
+          marketplaces (source: "./") are validated at the root. An
+          all-remote marketplace has nothing local and stays green.
   undeclared: directories under plugins/ that no manifest entry names.
           Listed only — they cannot be installed, so they are neither
           validated nor a failure.

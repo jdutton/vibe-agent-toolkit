@@ -50,8 +50,10 @@ Description:
 
 Validation Checks:
   Required (non-overridable):
-    - Valid YAML frontmatter
-    - Skill has a name
+    - A YAML frontmatter block that parses. A matched file with none — a
+      README the glob drifted onto, a SKILL.md that lost its fence — is
+      refused as SKILL_MISSING_FRONTMATTER at error, not passed as a skill.
+      (A block without a name is legal — agentskills.io makes name optional.)
     - No reserved words (anthropic/claude)
     - No broken internal links
     - No circular references

@@ -58,6 +58,51 @@ export function overlayChunkMetadata<TMetadata extends Record<string, unknown>>(
 }
 
 /**
+ * A column a document record carries that the documents table does not have,
+ * with the value every existing row is to be given for it.
+ */
+export interface MissingDocumentColumn {
+  name: string;
+  /** The sentinel an absent metadata field is stored as: `''` or `-1` */
+  fill: string | number;
+}
+
+/**
+ * The metadata columns a document record carries that a documents table lacks.
+ *
+ * A table written by an earlier build has whatever columns that build's record
+ * had: v0.1.42 wrote only the frontmatter keys each document happened to carry,
+ * so its tables lack every column no frontmatter supplies (`headingpath`,
+ * `startline`, …) and any the first document lacked. This build writes every
+ * metadata column on every record, and LanceDB refuses a record with a column
+ * the table does not have. The difference is answered by comparing the table's
+ * own column list with the record's — not by a version number — and each
+ * missing column is filled with the sentinel that reads back as "absent", which
+ * is what those rows' documents had for it.
+ *
+ * Columns the table has and the record lacks are not reported: LanceDB stores
+ * `null` for those, so they need no repair.
+ *
+ * @param tableColumns - The column names the documents table has now
+ * @param metadataSchema - Zod schema defining the metadata fields
+ * @returns The columns to add, in schema order; empty when the table is current
+ */
+export function missingDocumentColumns(
+  tableColumns: readonly string[],
+  metadataSchema: ZodObject<ZodRawShape>,
+): MissingDocumentColumn[] {
+  const present = new Set(tableColumns);
+  // Serializing an empty document yields every metadata column at its sentinel.
+  const sentinels: Record<string, string | number> = serializeMetadata<Record<string, string | number>>(
+    {},
+    metadataSchema,
+  );
+  return Object.entries(sentinels)
+    .filter(([name]) => !present.has(name))
+    .map(([name, fill]) => ({ name, fill }));
+}
+
+/**
  * Create a DocumentRecord for the rag_documents table.
  *
  * Builds the record from resource metadata, transformed content, and every

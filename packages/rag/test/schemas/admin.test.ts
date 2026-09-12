@@ -9,6 +9,17 @@ import type { RAGStats, IndexResult } from '../../src/schemas/admin.js';
 
 const TEST_EMBEDDING_MODEL = 'all-MiniLM-L6-v2';
 
+/** A result every counter of which the schema accepts */
+const VALID_RESULT: IndexResult = {
+  resourcesIndexed: 10,
+  resourcesSkipped: 5,
+  resourcesUpdated: 3,
+  resourcesEmpty: 0,
+  chunksCreated: 100,
+  chunksDeleted: 20,
+  durationMs: 5000,
+};
+
 describe('RAGStatsSchema', () => {
   it('should validate valid stats', () => {
     const stats: RAGStats = {
@@ -108,5 +119,33 @@ describe('IndexResultSchema', () => {
     const parseResult = IndexResultSchema.safeParse(result);
 
     expect(parseResult.success).toBe(false);
+  });
+
+  /**
+   * The schema is the ONE definition of the shape (the provider interface is
+   * inferred from it), so it has to refuse what the shape does not say: a
+   * counter that is not a whole non-negative number, and a field it does not
+   * declare — the drift a second, hand-written copy of the shape used to hide.
+   */
+  it('refuses a field the shape does not declare', () => {
+    const parseResult = IndexResultSchema.safeParse({ ...VALID_RESULT, bogus: 1 });
+
+    expect(parseResult.success).toBe(false);
+  });
+
+  it.each([
+    ['a negative counter', { resourcesEmpty: -5 }],
+    ['a fractional counter', { chunksCreated: 1.5 }],
+  ])('refuses %s', (_label, override) => {
+    const parseResult = IndexResultSchema.safeParse({ ...VALID_RESULT, ...override });
+
+    expect(parseResult.success).toBe(false);
+  });
+
+  it('describes resourcesIndexed as every resource that had chunks written, updated ones included', () => {
+    const description = IndexResultSchema.shape.resourcesIndexed.description ?? '';
+
+    expect(description).not.toMatch(/newly/iu);
+    expect(description).toMatch(/updated|changed/iu);
   });
 });

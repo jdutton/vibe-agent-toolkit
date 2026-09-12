@@ -2,18 +2,27 @@ import { describe, expect, it } from 'vitest';
 
 import { MarketplaceManifestSchema } from '../../src/schemas/marketplace-manifest.js';
 
+const PLUGIN_NAME = 'test-plugin';
+const validMarketplace = {
+  name: 'test-marketplace',
+  owner: { name: 'Test Org' },
+  plugins: [
+    {
+      name: PLUGIN_NAME,
+      source: `./${PLUGIN_NAME}`,
+    },
+  ],
+};
+
+/** Parse a manifest whose one plugin has `source`. */
+function parseSource(source: string) {
+  return MarketplaceManifestSchema.safeParse({
+    ...validMarketplace,
+    plugins: [{ name: PLUGIN_NAME, source }],
+  });
+}
+
 describe('MarketplaceManifestSchema', () => {
-  const PLUGIN_NAME = 'test-plugin';
-  const validMarketplace = {
-    name: 'test-marketplace',
-    owner: { name: 'Test Org' },
-    plugins: [
-      {
-        name: PLUGIN_NAME,
-        source: `./${PLUGIN_NAME}`,
-      },
-    ],
-  };
 
   it('should parse a valid marketplace manifest', () => {
     const result = MarketplaceManifestSchema.safeParse(validMarketplace);
@@ -157,5 +166,43 @@ describe('MarketplaceManifestSchema', () => {
       plugins: [{ name: PLUGIN_NAME, source: './test-plugin' }],
     });
     expect(result.success).toBe(true);
+  });
+
+  /**
+   * A string `source` is a path the consumer resolves against the marketplace
+   * root and WALKS. The refine is the first containment gate, so it has to
+   * reject every spelling that leaves the root on some platform — not only the
+   * `/`-separated `..` it used to split on.
+   */
+  describe('string source containment', () => {
+    it.each([
+      ['POSIX absolute', '/abs'],
+      ['Windows drive absolute', String.raw`C:\x`],
+      ['Windows drive absolute, forward slashes', 'C:/x'],
+      ['UNC absolute', String.raw`\\host\share`],
+      ['backslash traversal inside', String.raw`plugins\..\..\x`],
+      ['backslash traversal leading', String.raw`..\x`],
+      ['bare parent', '..'],
+    ])('rejects %s (%j), naming the rule and the installer', (_label, source) => {
+      const result = parseSource(source);
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      const issue = result.error.issues.find((i) => i.path.join('.') === 'plugins.0.source');
+      // Names the offending value, so the reader knows WHICH entry to fix.
+      expect(issue?.message).toContain(`"${source}"`);
+      // The message says what Claude Code does with such a source, so the
+      // reader learns the entry cannot ship — not only that VAT dislikes it.
+      expect(issue?.message).toMatch(/Claude Code/);
+    });
+
+    it.each([
+      ['co-located root', './'],
+      ['bare dot', '.'],
+      ['no ./ prefix, trailing slash', 'plugins/p/'],
+      ['backslash separators, no traversal', String.raw`.\plugins\x`],
+      ['a name containing two dots', 'plugins/a..b'],
+    ])('accepts %s (%j)', (_label, source) => {
+      expect(parseSource(source).success).toBe(true);
+    });
   });
 });

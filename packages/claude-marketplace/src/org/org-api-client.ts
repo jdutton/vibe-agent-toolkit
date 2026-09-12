@@ -128,6 +128,18 @@ const RETRY_BASE_DELAY_MS = 500;
 const RETRY_MAX_DELAY_MS = 60_000;
 const IDEMPOTENT_METHODS = new Set(['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE']);
 const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
+/**
+ * The retryable statuses that do NOT say the origin left the request undone.
+ *
+ * A gateway answers these on the origin's behalf, and neither one is a verdict
+ * on whether the origin acted. RFC 9110 §15.6.5: a 504 means the gateway "did
+ * not receive a timely response from an upstream server" — the origin may have
+ * performed the request and answered too late. §15.6.3: a 502 means it
+ * "received an invalid response" from upstream, which the origin may have sent
+ * AFTER acting. A 429 (RFC 6585 §4) and a 503 (§15.6.4) are the server declining
+ * to handle the request, so those did not act.
+ */
+const ORIGIN_OUTCOME_UNKNOWN_STATUSES = new Set([502, 504]);
 
 /**
  * A failed HTTP exchange, carrying the status so a caller can branch on it.
@@ -279,10 +291,12 @@ export function parseRetryAfterMs(header: string | undefined, nowMs: number): nu
 /**
  * Whether a failed exchange should be tried again.
  *
- * Only idempotent methods, and only on statuses that mean the origin did NOT act:
- * a rate limit or a gateway refusal. A 500 is excluded because it may mean the origin
- * acted and then failed to answer. A POST is never retried — `POST /v1/skills` creates
- * a skill, and a blind retry would create a duplicate.
+ * Only idempotent methods, and only on a rate limit or a gateway status. A 500 is
+ * excluded because it may mean the origin acted and then failed to answer. A POST is
+ * never retried — `POST /v1/skills` creates a skill, and a blind retry would create a
+ * duplicate. ⚠️ "Retryable" is not "the origin did not act": a 502/504 is retried
+ * because an idempotent replay is SAFE, not because the origin is known idle — see
+ * {@link attemptMayHaveActed} for which of these statuses leave the outcome unknown.
  */
 export function isRetryableFailure(method: string, statusCode: number | undefined, attempt: number): boolean {
   if (attempt + 1 >= MAX_RETRY_ATTEMPTS) return false;
@@ -312,14 +326,24 @@ export function isRetryableTransportFailure(method: string, attempt: number): bo
  * answer was lost — the one fact that decides what a later 404 means.
  *
  * A transport failure says nothing about whether the origin acted (a deadline
- * included: the request may have landed and the answer stalled). A failure
- * that EARNED a status did not act, by {@link isRetryableFailure}'s own
- * rationale: 429/502/503/504 are retried precisely because the origin refused
- * or never saw the request. An error that never reached the transport acted on
- * nothing.
+ * included: the request may have landed and the answer stalled). A status is
+ * not automatically better evidence: a 429 or 503 is the server itself
+ * declining the request, so it did not act — but a 502 or 504 is a GATEWAY
+ * reporting that it lost or could not read the origin's answer (RFC 9110
+ * §15.6.3, §15.6.5; see {@link ORIGIN_OUTCOME_UNKNOWN_STATUSES}), which is a
+ * lost response with a status attached, and the origin may have acted before
+ * it. 🚩 This used to read every status as "did not act", on the premise that
+ * the retry policy replays them "because the origin refused or never saw the
+ * request" — true of 429/503, false of 502/504 — so `DELETE → 504 → 404`
+ * rethrew the 404 and `delete --all` reported a failure for a version it had
+ * destroyed, the case {@link isReplayedDeleteOfAbsentResource} exists for. An
+ * error that never reached the transport acted on nothing.
  */
 export function attemptMayHaveActed(error: unknown): boolean {
-  return error instanceof ApiTransportError;
+  if (error instanceof ApiTransportError) return true;
+  return error instanceof ApiRequestError
+    && error.statusCode !== undefined
+    && ORIGIN_OUTCOME_UNKNOWN_STATUSES.has(error.statusCode);
 }
 
 /**
@@ -340,8 +364,9 @@ export function attemptMayHaveActed(error: unknown): boolean {
  * that another actor removed — and it resolved as "deleted".
  * `deleteSkillVersion('skill', 'typo')` under rate limiting resolved, and
  * `delete --all` recorded the version as deleted. Only a replay owed to a LOST
- * RESPONSE ({@link attemptMayHaveActed}) can be reading its own effect; a 404
- * after nothing but did-not-act failures is a genuine 404 and stays an error.
+ * RESPONSE ({@link attemptMayHaveActed} — a transport loss, or a gateway 502/504
+ * standing in for one) can be reading its own effect; a 404 after nothing but
+ * did-not-act failures (429, 503) is a genuine 404 and stays an error.
  *
  * ⚠️ DELETE only, not every idempotent method. A replayed GET changed nothing,
  * so its 404 is a genuine 404. The rule is about the method's EFFECT having

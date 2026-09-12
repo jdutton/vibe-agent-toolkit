@@ -108,10 +108,13 @@ function chunkUnheadedRegion(
 
   // `start`/`end` are already trimmed to real content, so the 1-based line
   // numbers below are the prose's own — not the frontmatter's or a blank's.
-  // The `.trim()` matches the section path beside this one: it removes the
-  // `\r` a CRLF document leaves on the last line, and cannot move a line
-  // number, because both boundary lines are known to hold non-blank text.
-  return chunkByTokens(lines.slice(start, end).join('\n').trim(), config, {
+  // `.trimEnd()`, not `.trim()`: the trailing side holds only the `\r` a CRLF
+  // document leaves on the last line, but the leading side of the FIRST line
+  // is content — an indented code block opens with four spaces, and a
+  // whole-string trim took them off that one line while the lines under it
+  // kept theirs. Neither end can move a line number: both boundary lines are
+  // known to hold non-blank text.
+  return chunkByTokens(lines.slice(start, end).join('\n').trimEnd(), config, {
     startLine: start + 1,
     endLine: end,
   });

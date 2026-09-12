@@ -27,6 +27,8 @@
  * touch the network or wall-clock. Production callers pass `globalThis.fetch`.
  */
 
+import { inspect } from 'node:util';
+
 import { redactSecretsInText, sensitiveHeaderValues } from './link-auth/build-headers.js';
 
 export interface AuthTransportOptions {
@@ -204,30 +206,78 @@ async function fetchRedacting(
  * degrade every diagnosis to pay for one. So the swap happens only when the
  * redaction actually changed the text.
  *
- * The probe covers everything `util.inspect` or a debug logger would print —
- * see {@link describeThrown} — and the redaction matches every encoded form
- * of the secret, not only the verbatim bytes (see `redactSecretsInText`).
+ * The probe IS `util.inspect` (plus `JSON.stringify`, for the one thing
+ * inspect does not print) — see {@link describeThrown} — and the redaction
+ * matches every encoded form of the secret, not only the verbatim bytes (see
+ * `redactSecretsInText`).
  */
 function redactThrownValue(error: unknown, secrets: readonly string[]): unknown {
   if (secrets.length === 0) return error;
   const exposed = describeThrown(error);
-  const redacted = redactSecretsInText(exposed, secrets);
-  return redacted === exposed ? error : new AuthTransportError(redacted);
+  if (redactSecretsInText(exposed, secrets) === exposed) return error;
+  // The replacement's text is the compact account, not the probe: the probe is
+  // an inspect dump with a stack trace, which is the right thing to search and
+  // the wrong thing to print.
+  return new AuthTransportError(redactSecretsInText(summarizeThrown(error), secrets));
 }
 
 /**
+ * Everything `util.inspect` prints for a thrown value, with no depth, length
+ * or visibility cap: the whole `cause` chain and every `AggregateError`
+ * member, own properties whether enumerable, non-enumerable or Symbol-keyed,
+ * `Map`/`Set`/`Headers` contents, getter values (a throwing getter prints as
+ * `[Getter: <Inspection threw …>]` instead of aborting the probe), a
+ * reassigned `.stack`, and a circular reference as `[Circular]`.
+ */
+const INSPECT_EVERYTHING: Parameters<typeof inspect>[1] = {
+  depth: Infinity,
+  showHidden: true,
+  getters: true,
+  maxArrayLength: Infinity,
+  maxStringLength: Infinity,
+  breakLength: Infinity,
+};
+
+/**
  * Flatten a thrown value into one probe string covering every place a value
- * can ride on it: `name` and `message`, the `cause` chain, an
- * `AggregateError`'s `errors`, and the object's own enumerable properties.
+ * can ride on it. Searched, never printed.
  *
- * 🪤 It used to walk `message` and `cause` only, and judged "exposes nothing"
- * on that — so an error whose `.headers` own property held the token, or an
- * `AggregateError` whose `errors[0].message` did (undici's multi-address
- * connect failure is that shape), was rethrown as the SAME object with the
- * value intact for `util.inspect` to print. Own properties are read through
- * `JSON.stringify`, which is what a logger does with them.
+ * The probe is `util.inspect` itself, because "would `util.inspect` print it"
+ * is the question being asked and no hand-rolled walk answers it as well.
+ *
+ * 🪤 The walk this replaced ({@link summarizeThrown}, kept for the message)
+ * read own properties through `JSON.stringify` and recursed into `cause` and
+ * `errors` by hand. `JSON.stringify` prints a `Headers` or `Map` instance as
+ * `{}`, skips Symbol-keyed and non-enumerable properties, never reads
+ * `.stack`, and throws — abandoning the probe for a bare `String(error)` — on
+ * a getter that throws. Each of those shapes was judged "exposes nothing" and
+ * the SAME object rethrown, token intact, for `util.inspect` to print.
+ * (Before that it read `message` and `cause` only, which missed
+ * `AggregateError.errors` and every own property.)
+ *
+ * `JSON.stringify` stays beside inspect for the one thing inspect does not
+ * do: call `toJSON`. A logger that serializes the error as JSON prints what
+ * `toJSON` returns, and inspect shows the method, not its result.
+ *
+ * inspect quotes string properties and escapes their control characters, so
+ * the redaction must know that spelling of a secret too — `secretForms` in
+ * `build-headers.ts` carries the inspect-escaped body for exactly this probe.
  */
 function describeThrown(error: unknown): string {
+  return `${inspect(error, INSPECT_EVERYTHING)} | ${safeJson(error)}`;
+}
+
+/**
+ * The account of a thrown value handed to the operator in the replacement
+ * error's message: `name: message` and the JSON of own enumerable properties
+ * (`.code`, `.headers`), down the `cause` chain and through an
+ * `AggregateError`'s members.
+ *
+ * This is composition, not detection — {@link describeThrown} decides whether
+ * a swap happens, so a shape this walk cannot see costs nothing. Everything it
+ * emits still goes through `redactSecretsInText` before it becomes a message.
+ */
+function summarizeThrown(error: unknown): string {
   const parts: string[] = [];
   const seen = new Set<unknown>();
   const visit = (value: unknown): void => {
@@ -238,11 +288,7 @@ function describeThrown(error: unknown): string {
     }
     if (seen.has(value)) return;
     seen.add(value);
-    parts.push(`${value.name}: ${value.message}`);
-    // Own enumerable properties — `.headers`, `.response`, `.code` — are what
-    // `JSON.stringify(error)` prints; `message`, `cause` and `errors` are not
-    // enumerable on a standard error and are walked explicitly below.
-    parts.push(safeJson(value));
+    parts.push(`${value.name}: ${value.message}`, safeJson(value));
     visit(value.cause);
     if (value instanceof AggregateError) for (const inner of value.errors as unknown[]) visit(inner);
   };
@@ -274,8 +320,16 @@ function computeRetryDelay(response: Response, maxRetryAfterMs: number): number 
 }
 
 /**
- * Decide the next hop for a 3xx redirect, or `null` if the response is not a
- * redirect / has no Location.
+ * The 3xx statuses that redirect. Not every 3xx does — 304 Not Modified is a
+ * cache validation answer and RFC 9110 permits a `Location` header on it, so
+ * a range test followed it as a redirect and reported hop two's status in
+ * place of the 304 the origin actually gave.
+ */
+const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
+
+/**
+ * Decide the next hop for a redirect, or `null` if the response is not a
+ * redirect (see {@link REDIRECT_STATUSES}) / has no Location.
  *
  * 🔑 **A cross-origin hop carries NO adopter-supplied header — the whole set
  * is dropped, not the one named `Authorization`.** The set is `auth.headers`
@@ -298,7 +352,7 @@ function computeRedirect(
   currentUrl: string,
   currentHeaders: Record<string, string>,
 ): { url: string; headers: Record<string, string> } | null {
-  if (response.status < 300 || response.status >= 400) return null;
+  if (!REDIRECT_STATUSES.has(response.status)) return null;
   const location = response.headers.get('location');
   if (location === null) return null;
   const nextUrl = new URL(location, currentUrl).toString();

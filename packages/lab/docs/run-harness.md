@@ -137,7 +137,10 @@ reads — so a row over the default
 `resources-scan` (YAML out) carries `lane: null`, honestly, and a row over `resources-population`
 carries whatever the subject printed. An `io` A/B that needs to prove its two arms differ measures
 `--command resources-population`; one over the default spec is reported as `arm UNPROVEN on both
-sides` rather than as two arms agreeing.
+sides` rather than as two arms agreeing, and one that mixes the two specs is reported as `arm
+UNPROVEN on the <before|after> side` rather than as an arm change — the `[A → B]` arrow appears
+only when both sides named an arm and the two differ (the four clauses are tabled in
+[Facets](facets.md)).
 
 `validate` and `verify` take no `{subject}` argument: both **reject** a positional path and take
 their scope from the config at the working directory, which the harness has already set to the

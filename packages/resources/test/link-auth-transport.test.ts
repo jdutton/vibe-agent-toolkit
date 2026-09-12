@@ -1,6 +1,8 @@
+import { inspect } from 'node:util';
+
 import { describe, expect, it, vi } from 'vitest';
 
-import { authTransport, parseRetryAfter } from '../src/link-auth-transport.js';
+import { AuthTransportError, authTransport, parseRetryAfter } from '../src/link-auth-transport.js';
 
 import {
   LEAK_CANARY,
@@ -14,6 +16,8 @@ const ORIGIN_URL = 'https://api.github.com/x';
 const ATTACKER_URL = 'https://attacker.example.com/leak';
 
 const AUTH_HEADERS = { Authorization: TEST_TOKEN, Accept: 'application/json' };
+/** undici's message for every connect-level failure; the real error rides in `cause`. */
+const FETCH_FAILED = 'fetch failed';
 
 describe('parseRetryAfter', () => {
   it('null/empty → null', () => {
@@ -190,6 +194,33 @@ describe('authTransport — cross-origin header stripping (§8)', () => {
     const impl = sequenceFetch([{ status: 301 }]);
     const response = await authTransport(ORIGIN_URL, AUTH_HEADERS, impl);
     expect(response.status).toBe(301);
+  });
+
+  /**
+   * 304 Not Modified is a 3xx that is not a redirect; an origin answering 304
+   * with a `Location` (RFC 9110 allows the header on any response) was being
+   * followed as one. Only the five redirect statuses move the request.
+   */
+  it.each([304, 305, 306])('does not follow a Location on %i — a 3xx that is not a redirect', async (status) => {
+    let hops = 0;
+    const impl = ((_url: string | URL) => {
+      hops++;
+      return Promise.resolve(
+        new Response(null, { status: hops === 1 ? status : 200, headers: { location: ATTACKER_URL } }),
+      );
+    }) as typeof fetch;
+    const response = await authTransport(ORIGIN_URL, AUTH_HEADERS, impl);
+    expect(hops).toBe(1);
+    expect(response.status).toBe(status);
+  });
+
+  it.each([301, 302, 303, 307, 308])('follows a Location on %i', async (status) => {
+    const impl = sequenceFetch([
+      { status, headers: { location: 'https://api.github.com/moved' } },
+      { status: 200, assertUrl: (url) => expect(url).toBe('https://api.github.com/moved') },
+    ]);
+    const response = await authTransport(ORIGIN_URL, AUTH_HEADERS, impl);
+    expect(response.status).toBe(200);
   });
 });
 
@@ -381,10 +412,10 @@ describe('authTransport — a throwing fetch never carries the token out', () =>
     const inner = new Error(`upstream rejected Bearer ${LEAK_CANARY}`);
     const error = await thrownByRejection(
       { Authorization: `Bearer ${LEAK_CANARY}` },
-      new TypeError('fetch failed', { cause: inner }),
+      new TypeError(FETCH_FAILED, { cause: inner }),
     );
     expect(error.message).not.toContain(LEAK_CANARY);
-    expect(error.message).toContain('fetch failed');
+    expect(error.message).toContain(FETCH_FAILED);
     expect((error as Error & { cause?: unknown }).cause).toBeUndefined();
   });
 
@@ -414,6 +445,65 @@ describe('authTransport — a throwing fetch never carries the token out', () =>
     expect(JSON.stringify(error, Object.getOwnPropertyNames(error))).not.toContain(LEAK_CANARY);
     expect(error.message).toContain('request failed');
     expect((error as Error & { headers?: unknown }).headers).toBeUndefined();
+  });
+
+  /**
+   * The docstring's claim is "everything `util.inspect` or a debug logger would
+   * print". `JSON.stringify` — the old flatten step — is blind to a `Headers`
+   * or `Map` instance (`{}`), a Symbol-keyed property, a non-enumerable one, an
+   * overwritten `.stack`, and gives up entirely on a throwing getter; each of
+   * those shapes was judged "exposes nothing" and the ORIGINAL object rethrown
+   * with the token visible under `util.inspect`. The assertion is against
+   * `util.inspect` itself, the very function the claim is about.
+   */
+  const INSPECT_OPTIONS = { depth: 6, showHidden: true };
+  const authInit = { Authorization: `Bearer ${LEAK_CANARY}` };
+  it.each<[string, (error: Error) => void]>([
+    ['a `Headers` instance on an own property', (e) => Object.assign(e, { request: { headers: new Headers(authInit) } })],
+    ['a `Map` on an own property', (e) => Object.assign(e, { h: new Map(Object.entries(authInit)) })],
+    ['a Symbol-keyed property', (e) => Object.assign(e, { [Symbol('kInit')]: { headers: authInit } })],
+    ['a non-enumerable own property', (e) => Object.defineProperty(e, 'init', { value: { headers: authInit }, enumerable: false })],
+    [
+      'a throwing getter beside the property that carries it',
+      (e) => {
+        Object.defineProperty(e, 'boom', { enumerable: true, get: () => { throw new Error('x'); } });
+        Object.assign(e, { init: { headers: authInit } });
+      },
+    ],
+    ['an overwritten `.stack` with a clean message', (e) => { e.stack = `Error: clean\n    at ${LEAK_CANARY}`; }],
+  ])('redacts a token that only `util.inspect` would print: %s', async (_label, decorate) => {
+    const original = new Error(FETCH_FAILED);
+    decorate(original);
+    expect(inspect(original, INSPECT_OPTIONS)).toContain(LEAK_CANARY); // the shape is live
+    const error = await thrownByRejection(authInit, original);
+    expect(error).toBeInstanceOf(AuthTransportError);
+    expect(inspect(error, INSPECT_OPTIONS)).not.toContain(LEAK_CANARY);
+    expect(error.message).toContain(FETCH_FAILED);
+  });
+
+  it('redacts a NUL-bearing token that only `util.inspect` prints, in inspect\'s own escaping', async () => {
+    // A `Map` is `{}` to JSON, so only inspect sees the value — and inspect
+    // prints the NUL as `\x00`, which is neither the verbatim credential nor
+    // JSON's `\u0000`. The redaction has to know inspect's spelling of the
+    // secret or this shape is judged clean and rethrown intact.
+    const nulHeaders = { Authorization: `Bearer ${LEAK_CANARY}${NUL}` };
+    const original = Object.assign(new Error(FETCH_FAILED), { h: new Map(Object.entries(nulHeaders)) });
+    expect(JSON.stringify(original)).not.toContain(LEAK_CANARY);
+    const error = await thrownByRejection(nulHeaders, original);
+    expect(error).toBeInstanceOf(AuthTransportError);
+    expect(inspect(error, INSPECT_OPTIONS)).not.toContain(LEAK_CANARY);
+  });
+
+  it('redacts a token that only `JSON.stringify` would print — a `toJSON` own method', async () => {
+    // `util.inspect` never calls `toJSON`; a logger that `JSON.stringify`s the
+    // error does. This is the one shape the inspect probe cannot see, and the
+    // reason the JSON probe stays beside it.
+    const original = Object.assign(new Error(FETCH_FAILED), { toJSON: () => ({ headers: authInit }) });
+    expect(inspect(original, INSPECT_OPTIONS)).not.toContain(LEAK_CANARY);
+    expect(JSON.stringify(original)).toContain(LEAK_CANARY);
+    const error = await thrownByRejection(authInit, original);
+    expect(error).toBeInstanceOf(AuthTransportError);
+    expect(JSON.stringify(error, Object.getOwnPropertyNames(error))).not.toContain(LEAK_CANARY);
   });
 
   it('redacts a token whose surrounding value was JSON-escaped on the way into the message', async () => {

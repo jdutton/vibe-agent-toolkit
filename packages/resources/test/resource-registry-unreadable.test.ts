@@ -13,7 +13,7 @@
  * is a `READ_FAILURE_CODES` member and reproduces cross-platform, unlike EACCES via
  * chmod which is POSIX-only).
  */
-import { writeFileSync } from 'node:fs';
+import { chmodSync, writeFileSync } from 'node:fs';
 
 import {
   mkdirSyncReal,
@@ -29,6 +29,11 @@ import type { ValidationIssue } from '../src/schemas/validation-result.js';
 
 const MISSING_FILE_NAME = 'missing.md';
 const OPEN_FILE = 'docs/open/ok.md';
+const LOCKED_TARGET = 'docs/sub/target.md';
+
+/** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
+const CANNOT_DENY_READS =
+  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 /** Register a nonexistent file under `tempDir` and return its RESOURCE_UNREADABLE issue. */
 async function unreadableIssue(tempDir: string): Promise<ValidationIssue | undefined> {
@@ -136,5 +141,75 @@ describe('ResourceRegistry SCAN_PATH_UNREADABLE for a directory the crawl could 
     const { registry } = await crawlAndValidate(tempDir, locked, 'EACCES');
     registry.clear();
     expect(registry.getUnlistableDirectories()).toEqual([]);
+  });
+});
+
+/**
+ * A link WITH an anchor into a file the registry enumerated but could not read
+ * is a gap, not a clean result — the judge has the finding
+ * (`LINK_TARGET_UNREADABLE`, pinned in `link-validator-unreadable-target.test.ts`)
+ * but only if the registry hands it the `unreadableResources` log. Without that
+ * wiring the anchor is silently `skip`ped and the run says nothing about the
+ * link, while `RESOURCE_UNREADABLE` says only that a FILE was skipped.
+ *
+ * A real `chmod 000`, because the target must EXIST (a missing one is
+ * `LINK_BROKEN_FILE`, a different and already-covered answer) — so POSIX-only
+ * and not as root, like every other chmod-backed suite here.
+ */
+describe.skipIf(CANNOT_DENY_READS)('ResourceRegistry LINK_TARGET_UNREADABLE for an anchor into a file it could not read', () => {
+  const suite = setupAsyncTempDirSuite('resource-registry-unreadable-target');
+  let tempDir: string;
+  let target: string;
+
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+
+  beforeEach(async () => {
+    await suite.beforeEach();
+    tempDir = suite.getTempDir();
+    target = safePath.join(tempDir, LOCKED_TARGET);
+    mkdirSyncReal(safePath.join(tempDir, 'docs', 'sub'), { recursive: true });
+    writeFileSync(target, '# target\n\n## real\n');
+    writeFileSync(
+      safePath.join(tempDir, 'docs', 'a.md'),
+      '# a\n[x](./sub/target.md#nope)\n[y](./sub/target.md#real)\n[z](./sub/target.md)\n',
+    );
+  });
+
+  async function validateWithTargetLocked(): Promise<ValidationIssue[]> {
+    chmodSync(target, 0o000);
+    try {
+      const registry = new ResourceRegistry({ baseDir: tempDir });
+      await registry.crawl({ baseDir: tempDir, include: ['**/*.md'] });
+      return (await registry.validate({ skipGitIgnoreCheck: true })).issues;
+    } finally {
+      chmodSync(target, 0o644);
+    }
+  }
+
+  it('reports every anchored link into the locked file, once per link, with the errno', async () => {
+    const issues = await validateWithTargetLocked();
+
+    expect(issues.filter((i) => i.code === 'RESOURCE_UNREADABLE')).toHaveLength(1);
+    const unverified = issues.filter((i) => i.code === 'LINK_TARGET_UNREADABLE');
+    // x (#nope) and y (#real) both carry it: neither anchor could be looked up.
+    // z has no anchor, so its verdict is complete without reading the file.
+    expect(unverified.map((i) => i.line).sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual([2, 3]);
+    for (const issue of unverified) {
+      expect(issue.location).toBe('docs/a.md');
+      expect(issue.message).toContain('EACCES');
+      expect(issue.message).not.toContain(tempDir);
+    }
+    // Not misreported as a broken anchor: nothing was checked, so nothing is broken.
+    expect(issues.filter((i) => i.code === 'LINK_BROKEN_ANCHOR')).toEqual([]);
+  });
+
+  it('reports LINK_BROKEN_ANCHOR for #nope and nothing for #real once the file is readable (control)', async () => {
+    const registry = new ResourceRegistry({ baseDir: tempDir });
+    await registry.crawl({ baseDir: tempDir, include: ['**/*.md'] });
+    const { issues } = await registry.validate({ skipGitIgnoreCheck: true });
+
+    expect(issues.filter((i) => i.code === 'LINK_TARGET_UNREADABLE')).toEqual([]);
+    expect(issues.filter((i) => i.code === 'LINK_BROKEN_ANCHOR').map((i) => i.line)).toEqual([2]);
   });
 });

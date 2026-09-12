@@ -10,7 +10,7 @@ import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { createDocumentRecord, overlayChunkMetadata } from '../src/document-helpers.js';
+import { createDocumentRecord, missingDocumentColumns, overlayChunkMetadata } from '../src/document-helpers.js';
 
 /** Minimal stub token counter for tests */
 const stubTokenCounter: TokenCounter = {
@@ -188,5 +188,38 @@ describe('createDocumentRecord', () => {
 
     expect(record['title']).toBe('My Doc');
     expect(record).not.toHaveProperty('Title');
+  });
+});
+
+/**
+ * The columns a record carries that an older table lacks, each with the
+ * sentinel its existing rows are to be filled with. The answer comes from the
+ * table's own column list against the schema — no stored version number.
+ */
+describe('missingDocumentColumns', () => {
+  const CORE_COLUMNS = ['resourceid', 'filepath', 'content', 'contenthash', 'tokencount', 'totalchunks', 'indexedat'];
+
+  it('names every metadata column a v0.1.42-shaped table lacks, with the sentinel of its type', () => {
+    // v0.1.42 wrote core columns plus only the frontmatter keys the first document had.
+    const missing = missingDocumentColumns([...CORE_COLUMNS, 'category'], testSchema);
+
+    expect(missing).toEqual([{ name: 'priority', fill: -1 }]);
+  });
+
+  it('lowercases the schema key before comparing, as the record does', () => {
+    const missing = missingDocumentColumns(CORE_COLUMNS, z.object({ Title: z.string(), Rank: z.number().optional() }));
+
+    expect(missing).toEqual([
+      { name: 'title', fill: '' },
+      { name: 'rank', fill: -1 },
+    ]);
+  });
+
+  it('reports nothing for a table that already has every column', () => {
+    expect(missingDocumentColumns([...CORE_COLUMNS, 'category', 'priority'], testSchema)).toEqual([]);
+  });
+
+  it('does not report a column the table has and the record lacks', () => {
+    expect(missingDocumentColumns([...CORE_COLUMNS, 'category', 'priority', 'retired'], testSchema)).toEqual([]);
   });
 });

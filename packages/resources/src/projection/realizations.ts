@@ -326,9 +326,13 @@ export async function collectRealization(
   // Typed BEFORE the bytes are keyed, because the type decides the parser and
   // the parser is mixed into the content key. Resolving it afterwards would let
   // a row carry a `mime` its own `contentKey` disagrees with.
-  const mime = context.mimeResolver === undefined
-    ? mimeTypeForPath(absolutePath)
-    : context.mimeResolver.mimeFor(absolutePath, rel);
+  //
+  // A directory is not asked: `mime` is "what this FILE is", and a directory has
+  // no bytes to type. Asking anyway did two wrong things — it stamped `docs/`
+  // with the type its collection declared for the files beneath it, and it made
+  // the resolver record a COLLECTION_MIME_CONFLICT for the directory path beside
+  // the one for each file, so one authoring mistake surfaced twice.
+  const mime = mimeForRealization(absolutePath, rel, isDirectory, context.mimeResolver);
 
   const { contentKey, contentState } = await keyOrState(absolutePath, context, {
     hasBytes: exists && !isDirectory && symlinkResolves !== false,
@@ -648,6 +652,26 @@ export function createCollectionMimeResolver(
 }
 
 /**
+ * The `mime` column for one realization — null for a directory, the resolver's
+ * (or the built-in table's) answer for anything else.
+ *
+ * @param absolutePath - The path
+ * @param relativePath - Root-relative spelling, for the resolver
+ * @param isDirectory - Whether the path is a directory
+ * @param resolver - The run's collection-aware resolver, when it has one
+ * @returns The type, or null when there is none to state
+ */
+function mimeForRealization(
+  absolutePath: string,
+  relativePath: string,
+  isDirectory: boolean,
+  resolver: CollectionMimeResolver | undefined,
+): string | null {
+  if (isDirectory) return null;
+  return resolver === undefined ? mimeTypeForPath(absolutePath) : resolver.mimeFor(absolutePath, relativePath);
+}
+
+/**
  * Render one conflict as the `realization_conditions` row that carries it.
  *
  * The projection's existing channel for a collected population-time finding, so
@@ -670,11 +694,29 @@ export function collectionMimeConflictCondition(
   extentId: string,
   resourceId: string | null,
 ): RealizationConditionRow {
-  const [firstName, secondName] = conflict.collections;
-  const [firstType, secondType] = conflict.mimeTypes;
   return {
     extentId,
     path: conflict.path,
+    ...collectionMimeConflictFinding(conflict),
+    resourceId,
+    ...CONDITION_WITHOUT_REFERENCE,
+  };
+}
+
+/**
+ * The code, severity and sentence of a MIME conflict — shared by the condition
+ * row above and by `ResourceRegistry.validate()`, which reports the conflicts
+ * ITS resolver met on both lanes so an author is told on the lane they ran.
+ *
+ * @param conflict - The recorded disagreement
+ * @returns The finding's code, severity and message
+ */
+export function collectionMimeConflictFinding(
+  conflict: CollectionMimeConflict,
+): Pick<RealizationConditionRow, 'code' | 'severity' | 'message'> {
+  const [firstName, secondName] = conflict.collections;
+  const [firstType, secondType] = conflict.mimeTypes;
+  return {
     code: COLLECTION_MIME_CONFLICT,
     severity: 'error',
     message: `Collections "${firstName}" and "${secondName}" declare different mimeType values for `
@@ -682,7 +724,5 @@ export function collectionMimeConflictCondition(
       + 'so make the two declarations agree or drop mimeType from the collection that should not be '
       + 'typing this file. This run used the built-in type table\'s answer for the path so the rest '
       + 'of the report could complete.',
-    resourceId,
-    ...CONDITION_WITHOUT_REFERENCE,
   };
 }

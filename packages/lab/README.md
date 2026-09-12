@@ -59,9 +59,12 @@ the extent source separates them. The walk sources no extent and so reports none
 repeat, whose dumps the row reports, where `population` reads its **first** — so an A/B of call
 counts no longer has to infer which arm ran from a call-site signature. ⚠️ **On the default `io`
 spec both are `null`**: `resources-scan` prints YAML and the lab reads a lane out of JSON only. The
-row says `lane UNREPORTED by the subject's output`, and a compare over two such rows says `arm
-UNPROVEN on both sides`. Measure `--command resources-population` to carry the arm on an `io` row —
-see [Facets](docs/facets.md).
+row says `lane UNREPORTED by the subject's output`, a compare over two such rows says `arm
+UNPROVEN on both sides`, and a compare where only one side named its arm says `arm UNPROVEN on
+the before side — …; the after side ran 'projection via git'` (or the sides swapped) — never the
+`[A → B]` form, which is reserved for two named arms that differ. Measure
+`--command resources-population` to carry the arm on an `io` row — see [Facets](docs/facets.md)
+for the full table of arm clauses.
 
 ```bash
 vat-lab population run ../some-project --instrument tree:. --id some-project --out ./walk

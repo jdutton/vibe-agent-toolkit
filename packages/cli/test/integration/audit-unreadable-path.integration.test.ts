@@ -27,12 +27,14 @@ import fs from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 
 import {
   deriveScanRoot,
   getValidationResults,
   resetAuditCaches,
 } from '../../src/commands/audit.js';
+import { runAuditCli } from '../test-helpers.js';
 
 const silentLogger = {
   info: (_msg: string) => {},
@@ -283,5 +285,143 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with an unreadable file', () => {
     const issue = results.flatMap(r => r.issues).find(i => i.code === 'SCAN_PATH_UNREADABLE');
     expect(issue?.location).toBeTruthy();
     expect(issue?.message).not.toMatch(/\(: /);
+  });
+});
+
+
+/**
+ * The CONFIG-AWARE half, which neither suite above can reach: both fixtures are
+ * bare directories with no `vibe-agent-toolkit.config.yaml`, so skill discovery
+ * never runs and the refusal it throws is never exercised.
+ *
+ * Under a config, `skills.include` is expanded by the crawler, and the crawler
+ * REFUSES a directory it cannot list (`DirectoryListingRefusedError`) rather
+ * than handing back a shorter list. That refusal used to be swallowed twice on
+ * its way up — a bare `catch { return null; }` in `resolveSkillPackagingConfig`
+ * and a `logger.debug` in `buildVATProjectContext` — so ONE `chmod 000` sibling
+ * downgraded EVERY skill under the config to the weaker config-free validator:
+ * `DESCRIPTION_TOO_VAGUE` vanished from a perfectly readable skill, the report
+ * went `warning` → `success`, exit 0, and the directory was named only under
+ * `--debug`. The contract `resolveGoverningConfig` documents for an unloadable
+ * config — warn once on stderr AND file a finding — applies to a refused
+ * discovery for the same reason, and this suite pins it on both lanes.
+ *
+ * Driven through the built CLI, not the in-process pipeline: stderr and the
+ * top-level `status` are two of the assertions, and only the CLI publishes both.
+ */
+describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.include reaches an unreadable directory', () => {
+  const CONFIG_AWARE_CODE = 'DESCRIPTION_TOO_VAGUE';
+  const LOCKED_DIR = 'locked';
+  /** The stderr sentence `recordRefusedDiscovery` prints — matched by phrase, not by path, because
+   *  the human findings summary on stderr also names `skills/locked/SKILL.md` while it is readable. */
+  const DISCOVERY_WARNING = 'skipped an unreadable directory';
+  let projectDir: string;
+  let lockedDir: string;
+  let alphaSkillMd: string;
+
+  interface ReportIssue { code: string; location?: string }
+  interface ReportFile { path: string; type: string; issues: ReportIssue[] }
+  interface Report { status: string; files: ReportFile[] }
+
+  /** Each lane's target and where it anchors the refused directory. */
+  const lanes: Array<{ lane: string; target: () => string; expectedLocation: string; alphaPath: string }> = [
+    { lane: 'directory', target: () => projectDir, expectedLocation: `skills/${LOCKED_DIR}`, alphaPath: 'skills/alpha/SKILL.md' },
+    { lane: 'single-file', target: () => alphaSkillMd, expectedLocation: `../${LOCKED_DIR}`, alphaPath: 'SKILL.md' },
+  ];
+
+  function audit(target: string): { exit: number | null; stderr: string; report: Report } {
+    const result = runAuditCli(target, ['--verbose']);
+    return { exit: result.status, stderr: result.stderr, report: parseYaml(result.stdout) as Report };
+  }
+
+  function issuesWithCode(report: Report, code: string): ReportIssue[] {
+    return report.files.flatMap((f) => f.issues).filter((i) => i.code === code);
+  }
+
+  function discoveryWarnings(stderr: string): string[] {
+    return stderr.split('\n').filter((l) => l.includes(DISCOVERY_WARNING));
+  }
+
+  beforeAll(() => {
+    projectDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-locked-include-'));
+    fs.writeFileSync(
+      safePath.join(projectDir, 'vibe-agent-toolkit.config.yaml'),
+      'version: 1\nskills:\n  include:\n    - "skills/*/SKILL.md"\n',
+    );
+    // `description: Short.` is the control: config-aware validation flags it as
+    // DESCRIPTION_TOO_VAGUE and the config-free validator does not, so its
+    // presence is what tells "validated under the config" from "downgraded".
+    const write = (name: string): string => {
+      const dir = safePath.join(projectDir, 'skills', name);
+      fs.mkdirSync(dir, { recursive: true });
+      const target = safePath.join(dir, 'SKILL.md');
+      fs.writeFileSync(target, `---\nname: ${name}\ndescription: Short.\n---\n\n# ${name}\n\nBody.\n`);
+      return target;
+    };
+    alphaSkillMd = write('alpha');
+    write(LOCKED_DIR);
+    lockedDir = safePath.join(projectDir, 'skills', LOCKED_DIR);
+  });
+
+  afterAll(() => {
+    // Restore the mode FIRST: `rm -rf` cannot clear a 000 directory.
+    if (fs.existsSync(lockedDir)) fs.chmodSync(lockedDir, READABLE);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+  });
+
+  it.each(lanes)('control ($lane lane): while every directory is readable, validation is config-aware and nothing is refused', ({ target }) => {
+    fs.chmodSync(lockedDir, READABLE);
+    const { exit, stderr, report } = audit(target());
+
+    expect(exit).toBe(0);
+    expect(issuesWithCode(report, CONFIG_AWARE_CODE).length).toBeGreaterThan(0);
+    expect(issuesWithCode(report, 'SCAN_PATH_UNREADABLE')).toEqual([]);
+    expect(discoveryWarnings(stderr)).toEqual([]);
+  });
+
+  it.each(lanes)('$lane lane: files the refusal once, on the directory, and the status says so', ({ target, expectedLocation }) => {
+    fs.chmodSync(lockedDir, UNREADABLE);
+    const { exit, report } = audit(target());
+
+    // The audit contract: status carries the findings, the exit code says the run completed.
+    expect(exit).toBe(0);
+    expect(report.status).not.toBe('success');
+    // In the directory lane TWO lanes meet `skills/locked` — the walk's per-entry
+    // guard and the refused discovery — and the report must carry the fact once.
+    // In the single-file lane there is no walk, so the refused discovery is the
+    // ONLY report, anchored against the skill's own root.
+    expect(issuesWithCode(report, 'SCAN_PATH_UNREADABLE').map((i) => i.location)).toEqual([expectedLocation]);
+  });
+
+  it.each(lanes)('$lane lane: warns once on stderr, naming the directory, WITHOUT --debug', ({ target }) => {
+    fs.chmodSync(lockedDir, UNREADABLE);
+    const { stderr } = audit(target());
+
+    const warnings = discoveryWarnings(stderr);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(`skills/${LOCKED_DIR}`);
+    // ...and the remedy the crawler attaches, so the operator knows which knob is theirs.
+    expect(warnings[0]).toContain('skills.include');
+  });
+
+  /** Audit `target` with the sibling locked and return alpha's row. */
+  const alphaUnderLockedSibling = (target: () => string, alphaPath: string) => {
+    fs.chmodSync(lockedDir, UNREADABLE);
+    const { report } = audit(target());
+    return report.files.find((f) => f.path === alphaPath);
+  };
+
+  it.each(lanes)('$lane lane: the readable skill is still validated, not dropped with the directory', ({ target, alphaPath }) => {
+    expect(alphaUnderLockedSibling(target, alphaPath)?.type).toBe('agent-skill');
+  });
+
+  // THE regression as the operator sees it: the config loaded, alpha is readable
+  // and declared, and yet one unreadable SIBLING cost it every config-aware check.
+  // Making that loud (above) is necessary; keeping alpha under its config is the
+  // rest of the fix — audit's config-aware lane hands `discoverSkillsFromConfig`
+  // a degrade handler so discovery enumerates AROUND the refused directory
+  // instead of refusing, and every other caller keeps the refuse-by-name default.
+  it.each(lanes)('$lane lane: the readable skill keeps its config-aware finding despite the unreadable sibling', ({ target, alphaPath }) => {
+    expect(alphaUnderLockedSibling(target, alphaPath)?.issues.map((i) => i.code)).toContain(CONFIG_AWARE_CODE);
   });
 });

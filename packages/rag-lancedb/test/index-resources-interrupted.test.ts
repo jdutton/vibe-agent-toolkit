@@ -131,10 +131,34 @@ vi.mock('@lancedb/lancedb', () => {
       .slice(0, cap)
       .map((row) => project(row, columns));
 
+  // A table's columns are those of its first row, as LanceDB infers them.
+  const columnsOf = (name: string): string[] => Object.keys(rowsOf(name)[0] ?? {});
+
+  // The two literal shapes the provider hands `addColumns`: `'text'` and
+  // `CAST(n AS DOUBLE)`. Anything else throws, like an unsupported predicate.
+  const FILL_LITERAL = /^(?:'(?<text>.*)'|CAST\((?<num>-?\d+) AS DOUBLE\))$/su;
+  const evaluateFill = (valueSql: string): string | number => {
+    const groups = FILL_LITERAL.exec(valueSql)?.groups;
+    if (!groups) throw new Error(`fake lancedb: unsupported fill expression: ${valueSql}`);
+    return groups['num'] === undefined ? (groups['text'] ?? '').replaceAll("''", "'") : Number(groups['num']);
+  };
+
   const makeTable = (name: string) => ({
     add: async (rows: Record<string, unknown>[]) => {
       refuseInjected(name, rows);
+      // LanceDB refuses a row carrying a column the table does not have; a fake
+      // that accepted it would hide exactly the class the shape-widening exists for.
+      const known = new Set(columnsOf(name));
+      for (const row of rows) {
+        const unknown = Object.keys(row).find((column) => !known.has(column));
+        if (known.size > 0 && unknown) throw new Error(`Found field not in schema: ${unknown} at row 0`);
+      }
       store.tables.set(name, [...rowsOf(name), ...rows]);
+    },
+    schema: async () => ({ fields: columnsOf(name).map((column) => ({ name: column })) }),
+    addColumns: async (transforms: { name: string; valueSql: string }[]) => {
+      const fills = Object.fromEntries(transforms.map((t) => [t.name, evaluateFill(t.valueSql)]));
+      store.tables.set(name, rowsOf(name).map((row) => ({ ...row, ...fills })));
     },
     delete: async (predicate: string) => {
       store.tables.set(name, rowsOf(name).filter((row) => !matches(row, predicate)));

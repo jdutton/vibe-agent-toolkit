@@ -45,8 +45,20 @@ That reading is not `population`'s alone. Every row of an `io` report carries th
 document — because a call count is a measurement of *some* enumerator, and a row that does not
 say which one leaves the reader inferring it from a call-site signature, which is what the
 2026-09-11 git-vs-filesystem A/B had to do (`realizations.js:51` at 0 calls versus 12,003). The
-rendered row names its arm (`projection via git`), and `io compare` says out loud when both sides
-report the same arm — *this compares one enumerator with itself* — or when neither reports one.
+rendered row names its arm (`projection via git`), and `io compare` and `population compare` append
+one of four arm clauses to every command row — the same clause, from the same `laneNote`:
+
+| Both sides' arms | Clause on the row |
+|---|---|
+| Both named, and differ | `[projection via filesystem → projection via git]` — the `→` is reserved for this case |
+| Both named, and the same | `[both sides ran the 'projection via git' arm — this compares one enumerator with itself]` |
+| Neither named | `[arm UNPROVEN on both sides — neither output reported a lane]` |
+| Exactly one named | `[arm UNPROVEN on the before side — lane UNREPORTED by the subject's output; the after side ran 'projection via git']` (or `after` / `before` swapped) |
+
+The one-sided clause deliberately does not use the arrow: a side that cannot prove which arm it
+ran is not a different enumerator, it is an absent proof, and rendering it as `[A → B]` read as
+"the arm changed" where the honest verdict is "one side cannot say". It is a qualifier, not a
+refusal — the row's numbers stand and the exit code is unaffected.
 
 The reader is shared; the repeat it is pointed at is not, and neither is what it does with a
 malformed field. `io` reads the arm off the **last** repeat's stdout — the repeat whose dumps the
@@ -64,7 +76,8 @@ regex over the `lane:` line would be a second parser that drifts from the first.
 output did not say*, and it is spelled `lane UNREPORTED by the subject's output` on the row. To
 carry the arm on an `io` row, measure the spec that prints JSON: `--command resources-population`.
 That is also why the two arms of an `io` A/B over the default spec read as `arm UNPROVEN on both
-sides` rather than as agreeing.
+sides` rather than as agreeing — and why comparing a default-spec report against a
+`resources-population` one reads `arm UNPROVEN on the <before|after> side`, never as an arm change.
 
 Both use the same coordinate header. The comparator knows which kind it is holding and diffs
 accordingly — set differences for findings, distribution differences for numbers.

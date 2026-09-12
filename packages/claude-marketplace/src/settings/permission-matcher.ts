@@ -125,7 +125,7 @@ import { homedir } from 'node:os';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-import { compilePathPattern, matchesPathPattern } from './path-pattern.js';
+import { compilePathPattern, matchesPathPattern, witnessOf } from './path-pattern.js';
 
 /**
  * Which permission bucket a rule came from. Claude Code evaluates deny → ask →
@@ -1412,23 +1412,13 @@ export function matchesBashRule(command: string, rule: string, lane: PermissionL
  * pattern side only, and the other side — a witness path drawn from a rule, or
  * a declaration read as an input — went to `resolve` verbatim, so `~/.ssh/**`
  * became a literal `~` directory under the root and `Read(~/.ssh/**)` did not
- * contain ITSELF. See {@link pathSpellingToFilePath}.
+ * contain ITSELF. See {@link pathWitnesses}.
  */
 function splitPathSpelling(spelling: string, cwd: string): { root: string; rest: string } {
   if (spelling.startsWith('//')) return { root: '/', rest: spelling.slice(1) };
   if (spelling.startsWith('~/')) return { root: homedir(), rest: spelling.slice(2) };
   if (spelling.startsWith('./')) return { root: cwd, rest: spelling.slice(2) };
   return { root: cwd, rest: spelling };
-}
-
-/**
- * The absolute filesystem path a rule-spelled path denotes, for handing to
- * {@link matchesPathRule} as its `filePath`. `join` rather than `resolve`, so a
- * project-root `/path` lands under cwd instead of at the filesystem root.
- */
-function pathSpellingToFilePath(spelling: string, cwd: string): string {
-  const { root, rest } = splitPathSpelling(normaliseWhitespace(spelling), cwd);
-  return safePath.join(root, rest);
 }
 
 /**
@@ -1456,8 +1446,11 @@ export function matchesPathRule(
   // unaffected: `resolve` returns it unchanged.
   const relative = safePath.relative(root, safePath.resolve(root, filePath));
 
-  // A path that goes "up" (..) is outside the root, so no pattern under it applies.
-  if (relative.startsWith('..')) return false;
+  // A path that goes "up" (..) is outside the root, so no pattern under it
+  // applies. 🚩 That is `..` itself or a `../` prefix — a `startsWith('..')`
+  // also refused every file NAMED `..something` under the root, so a deny
+  // `Read(*)` reported no conflict with a declaration naming `..secret`.
+  if (relative === '..' || relative.startsWith('../')) return false;
 
   // 🚩 An empty relative path THREW in the matcher this replaced (`path must
   // not be empty`), and `settings-compat-checker` reaches this with an empty
@@ -1571,22 +1564,59 @@ export function ruleConstrainsTool(
 }
 
 /**
- * Tool inputs drawn from a rule's OWN extension, to ask another rule about.
+ * File paths drawn from a rule-spelled path pattern's OWN extension: the
+ * pattern's text read as a literal path, and one member materialised from the
+ * compiled pattern ({@link witnessOf}). Both are expanded through the prefix
+ * table of {@link splitPathSpelling} — `join` rather than `resolve`, so a
+ * project-root `/path` lands under cwd instead of at the filesystem root — and
+ * each is kept only if the pattern itself matches it: a "witness" the pattern
+ * does not match is evidence of nothing.
  *
- * The content text is one — `git push:*` read as a command, `./secrets/**` read
- * as a path — and for Bash the {@link bareCommandFor} command is a second. That
- * second one is what makes a `:*` or trailing-` *` rule intersect ITSELF: the
- * text `git push:*` is not matched by the pattern `git push *` that the
- * identical rule compiles to, while the bare `git push` is.
+ * 🚩 The text alone was the witness, and it is a member of its own pattern for
+ * `*`, `**` and `?` only because `*` and `?` match themselves as characters. A
+ * pattern holding `[…]` or a `\` escape was NOT a member of itself, so an
+ * identical `Read(a[!b]c)` pair reported no conflict. The text stays a
+ * witness where it IS a member because it reaches a pair the materialised one
+ * cannot: `a?c` against a declaration naming the literal file `a?c` (`a\?c`),
+ * whose only common member is that file, and `witnessOf` picks `axc`.
+ */
+function pathWitnesses(spelling: string, cwd: string): string[] {
+  const { root, rest } = splitPathSpelling(normaliseWhitespace(spelling), cwd);
+  const candidates = new Set([
+    safePath.join(root, rest),
+    safePath.join(root, witnessOf(compilePathPattern(rest))),
+  ]);
+  return [...candidates].filter((candidate) => matchesPathRule(candidate, spelling, cwd));
+}
+
+/**
+ * Tool inputs drawn from a pattern's OWN extension, to ask the other side of a
+ * containment about — asked of the declaration and of the rule alike.
+ *
+ * For Bash the content text read as a command is one, and the
+ * {@link bareCommandFor} command is a second. That second one is what makes a
+ * `:*` or trailing-` *` rule intersect ITSELF: the text `git push:*` is not
+ * matched by the pattern `git push *` that the identical rule compiles to,
+ * while the bare `git push` is. For the path lane see {@link pathWitnesses}.
+ * For WebFetch the text is the witness.
  *
  * ⚠️ A heuristic witness SET, not the extension. Two patterns can overlap on a
  * string neither of these is — see {@link ruleConstrainsDeclaration} for the
  * residue that leaves.
  */
-function ruleWitnesses(toolName: string, content: string): string[] {
-  if (contentLaneFor(toolName) !== 'bash') return [content];
-  const bare = bareCommandFor(content);
-  return bare === undefined || bare === content ? [content] : [content, bare];
+function witnessesOf(toolName: string, content: string, cwd: string): string[] {
+  switch (contentLaneFor(toolName)) {
+    case 'path':
+      return pathWitnesses(content, cwd);
+    case 'bash': {
+      const bare = bareCommandFor(content);
+      return bare === undefined || bare === content ? [content] : [content, bare];
+    }
+    case 'webfetch':
+    case 'unconsulted':
+    case 'opaque':
+      return [content];
+  }
 }
 
 /**
@@ -1624,15 +1654,18 @@ function ruleWitnesses(toolName: string, content: string): string[] {
  *    a rule naming one of its members.
  * 2. A declaration naming no input (bare, or `(*)`) is UNRESTRICTED, so the
  *    question is {@link ruleConstrainsTool}'s.
- * 3. Otherwise ask whether the RULE covers the declaration, and then whether the
- *    DECLARATION covers a {@link ruleWitnesses witness} drawn from the rule.
- *    Either containment means some call the skill intends is one the rule
+ * 3. Otherwise ask whether the RULE covers a {@link witnessesOf witness} drawn
+ *    from the declaration, and then whether the DECLARATION covers one drawn
+ *    from the rule. Either means some call the skill intends is one the rule
  *    catches. On the path lane both inputs are rule-SPELLED paths, and each is
  *    expanded through the same `~/`, `//`, `/`, `./` table the pattern side
  *    reads ({@link splitPathSpelling}) before it is handed across — 🚩 they
  *    were not, so `Read(~/.ssh/**)` did not contain itself, or its narrowing
  *    `Read(~/.ssh/id_rsa)`, while `Read(./**)` over-reported against it by
- *    matching a literal `~` directory.
+ *    matching a literal `~` directory. 🚩 And the witness was the pattern's
+ *    raw TEXT, which is a member of a `[…]`- or `\`-carrying pattern's
+ *    extension only by accident, so `Read(a[!b]c)` did not contain itself
+ *    either — see {@link pathWitnesses}.
  *
  * The second direction is asked in the ALLOW lane whatever `lane` is, for
  * {@link isSubsumedBy}'s reason: the question there is *"does the declaration
@@ -1648,11 +1681,14 @@ function ruleWitnesses(toolName: string, content: string): string[] {
  * here, where one witness is enough.
  *
  * ⚠️ Containment is not intersection, and this returns `false` for the pairs
- * that overlap without either side containing the other — `Bash(npm *)` against
- * deny `Bash(* --help *)` share `npm --help x` and are reported as no conflict.
- * Deciding that needs a real glob-intersection over both patterns; what is here
- * closes the containment cases, which is every spelling the review measured, and
- * the residue is named rather than left to be rediscovered.
+ * that overlap without either side covering the other's witness — `Bash(npm *)`
+ * against deny `Bash(* --help *)` share `npm --help x` and are reported as no
+ * conflict, and on the path lane `Read(a?c)` against deny `Read(?bc)` share
+ * `abc` while every witness of each (`a?c`, `axc` / `?bc`, `xbc`) is refused by
+ * the other. Deciding that needs a real glob-intersection over both patterns;
+ * what is here closes the containment cases, which is every spelling the
+ * review measured, and the residue is named rather than left to be
+ * rediscovered.
  *
  * @param declaration - The `allowed-tools:` entry, e.g. `Bash(git:*)` or `Read`
  * @param rule - Full permission rule string
@@ -1686,17 +1722,18 @@ export function ruleConstrainsDeclaration(
   // A bare rule names the tool and nothing else, so it covers every use of it.
   if (ruleContent === undefined) return true;
 
-  // The path lane's inputs are rule-SPELLED paths, so each is expanded through
-  // the same prefix table the pattern side reads before it is handed across as
-  // a file path — see {@link splitPathSpelling}.
-  const asInput = (spelling: string): string =>
-    contentLaneFor(toolName) === 'path' ? pathSpellingToFilePath(spelling, cwd ?? process.cwd()) : spelling;
-
-  // Does the rule cover the declaration, read as an input…
-  if (matchesPermissionRule(toolName, asInput(declared), rule, lane, cwd)) return true;
+  const root = cwd ?? process.cwd();
+  // Does the rule cover something the declaration names…
+  if (
+    witnessesOf(toolName, declared, root).some((witness) =>
+      matchesPermissionRule(toolName, witness, rule, lane, cwd),
+    )
+  ) {
+    return true;
+  }
   // …or does the declaration cover something the rule names?
-  return ruleWitnesses(toolName, ruleContent).some((witness) =>
-    matchesPermissionRule(toolName, asInput(witness), declaration, 'allow', cwd),
+  return witnessesOf(toolName, ruleContent, root).some((witness) =>
+    matchesPermissionRule(toolName, witness, declaration, 'allow', cwd),
   );
 }
 

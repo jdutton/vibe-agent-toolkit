@@ -120,4 +120,30 @@ describe('validateMarketplace', () => {
       { name: 'local-b', source: './plugins/local-b' },
     ]);
   });
+
+  it.each([
+    ['an absolute source', '/etc'],
+    ['a backslash traversal', String.raw`plugins\..\..\x`],
+  ])('refuses %s at the manifest, and publishes NO local sources for a consumer to walk', async (_label, source) => {
+    // 🔑 `localPluginSources` is the list the CLI resolves against the root and
+    // ENTERS. A source that leaves the root must never reach it: the manifest
+    // is refused by name (field), the run is `error`, and there is no metadata
+    // at all — so the consumer that keys off it cannot walk the good sibling
+    // either, let alone the escaping one.
+    const tempDir = getTempDir();
+    const marketplacePath = createTestMarketplace(tempDir, {
+      ...validMarketplaceData,
+      plugins: [
+        { name: 'ok', source: './plugins/ok' },
+        { name: 'escapee', source },
+      ],
+    });
+
+    const result = await validateMarketplace(marketplacePath);
+
+    assertSingleError(result, 'MARKETPLACE_INVALID_SCHEMA');
+    expect(result.issues[0]?.field).toBe('plugins.1.source');
+    expect(result.issues[0]?.message).toContain('Claude Code');
+    expect(result.metadata).toBeUndefined();
+  });
 });

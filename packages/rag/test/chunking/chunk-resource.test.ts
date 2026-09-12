@@ -302,6 +302,36 @@ describe('chunkResource preamble (content above the first heading)', () => {
     expect(preamble?.endLine).toBe(5);
   });
 
+  /**
+   * Leading spaces on the FIRST prose line are content: an indented code block
+   * is one. A whole-string `.trim()` took them off that line alone (the second
+   * line kept its indentation), so the embedded text was no longer the source
+   * bytes. Only the trailing envelope — the `\r` of a CRLF last line, trailing
+   * blanks — is removable; blank LINES were already excluded by line index.
+   */
+  it('keeps the indentation of a preamble that opens with an indented code block', () => {
+    const preambleCode = '    code line one\n    code line two';
+    const result = chunkResource(
+      resourceOf(`${preambleCode}\n\n${HEADED_BODY}`, firstHeadingAt(4)),
+      config,
+    );
+
+    const preamble = result.chunks[0];
+    expect(preamble?.content).toBe(preambleCode);
+    expect(preamble?.startLine).toBe(1);
+    expect(preamble?.endLine).toBe(2);
+  });
+
+  it('keeps the indentation of a heading-less document that opens with an indented code block', () => {
+    const body = '    indented first line\nplain second line';
+    const result = chunkResource(resourceOf(`${body}\n`, []), config);
+
+    expect(result.chunks).toHaveLength(1);
+    expect(result.chunks[0]?.content).toBe(body);
+    expect(result.chunks[0]?.startLine).toBe(1);
+    expect(result.chunks[0]?.endLine).toBe(2);
+  });
+
   it('emits no preamble chunk for a document that is only frontmatter and headings', () => {
     const content = `---\ntitle: Test Doc\n---\n\n${HEADED_BODY}`;
     const result = chunkResource(resourceOf(content, firstHeadingAt(5)), config);

@@ -4,6 +4,7 @@
 
 import * as fs from 'node:fs/promises';
 
+import { allowedToolsOf, parseFrontmatter } from '@vibe-agent-toolkit/agent-skills';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { SettingsConflict } from '../types.js';
@@ -16,51 +17,27 @@ interface SkillFrontmatter {
   model?: string;
 }
 
-function parseInlineTools(inline: string): string[] {
-  if (inline.startsWith('[')) {
-    return inline.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean);
-  }
-  return inline.split(',').map(s => s.trim()).filter(Boolean);
-}
-
-const ALLOWED_TOOLS_KEY = 'allowed-tools:';
-
-function parseAllowedTools(frontmatterText: string): string[] | undefined {
-  const lines = frontmatterText.split('\n');
-  const headerIdx = lines.findIndex(l => l.toLowerCase().startsWith(ALLOWED_TOOLS_KEY));
-  if (headerIdx === -1) return undefined;
-
-  const header = lines[headerIdx] ?? '';
-  // `header` is already one line (the text was split on \n), so there is nothing
-  // for a regex to scan for here: the inline value is just whatever follows the
-  // key. Slicing is linear, where the old `\s*([^\n]+)` form backtracked
-  // super-linearly because `\s*` and `[^\n]+` compete for the same spaces.
-  // This also makes the parse case-insensitive, matching the case-insensitive
-  // test that located the header in the first place — previously an
-  // `Allowed-Tools:` line was found and then silently failed to parse.
-  const inlineValue = header.slice(ALLOWED_TOOLS_KEY.length);
-
-  if (inlineValue.length > 0) {
-    return parseInlineTools(inlineValue.trim());
-  }
-
-  // Multi-line list: following lines prefixed with "  - "
-  const tools: string[] = [];
-  for (let i = headerIdx + 1; i < lines.length; i++) {
-    const line = lines[i] ?? '';
-    const itemMatch = /^ {2}- ([^\n]+)$/.exec(line);
-    if (itemMatch?.[1]) {
-      tools.push(itemMatch[1].trim());
-    } else {
-      break;
-    }
-  }
-  return tools.length > 0 ? tools : undefined;
-}
-
 /**
- * Parse SKILL.md frontmatter fields we care about (allowed-tools, model).
- * Returns null if no frontmatter found.
+ * Read the SKILL.md frontmatter fields this checker consults (`allowed-tools`,
+ * `model`), through the SAME parser the skill validator uses.
+ *
+ * 🚩 This used to be a hand parser: an inline value split on `,` only, and a
+ * block list that accepted exactly two-space `  - ` items. So the documented
+ * space-separated spelling `allowed-tools: Read Edit` became ONE declaration
+ * named `Read Edit`, which matches no rule, and a four-space YAML list became
+ * `undefined`, which skipped the skill — both reported "no conflict" against an
+ * org deny that the comma and two-space spellings reported. Under-reporting is
+ * the direction this module's own contract calls unsafe, and it was decided by
+ * how the author indented.
+ *
+ * Returns `null` when the file cannot be read or its frontmatter does not
+ * parse. ⚠️ That is not a silent skip: `SettingsConflict[]` has no slot for
+ * "this skill is unreadable", and it does not need one — the skill validator
+ * runs on the same file in the same `vat audit` and names the failure as
+ * `SKILL_MISSING_FRONTMATTER` (severity error) carrying the YAML parser's
+ * message. Sharing `parseFrontmatter` is what keeps the two in agreement: the
+ * checker contributes nothing for exactly the files the validator calls
+ * unreadable, never for a file it merely failed to hand-parse.
  */
 async function parseSkillFrontmatter(
   skillPath: string
@@ -73,26 +50,22 @@ async function parseSkillFrontmatter(
     return null;
   }
 
-  if (!content.startsWith('---')) return null;
+  const parsed = parseFrontmatter(content);
+  if (!parsed.success) return null;
+  // `yaml.parse` of an empty document is `null`, and a scalar document is not a mapping.
+  const frontmatter: unknown = parsed.frontmatter;
+  if (frontmatter === null || typeof frontmatter !== 'object' || Array.isArray(frontmatter)) return null;
+  const fields = frontmatter as Record<string, unknown>;
 
-  const endIdx = content.indexOf('\n---', 3);
-  if (endIdx === -1) return null;
-
-  const frontmatterText = content.slice(3, endIdx).trim();
   const result: SkillFrontmatter = {};
-
-  const allowedTools = parseAllowedTools(frontmatterText);
-  if (allowedTools) {
+  const allowedTools = allowedToolsOf(fields['allowed-tools']);
+  if (allowedTools !== undefined) {
     result['allowed-tools'] = allowedTools;
   }
-
-  // Parse model
-  const modelMatch = /^model:\s*(.+)/m.exec(frontmatterText);
-  if (modelMatch?.[1]) {
-    const raw = modelMatch[1].trim();
-    result.model = /^['"](.+)['"]$/.exec(raw)?.[1] ?? raw;
+  const model = fields['model'];
+  if (typeof model === 'string' && model.trim() !== '') {
+    result.model = model.trim();
   }
-
   return result;
 }
 

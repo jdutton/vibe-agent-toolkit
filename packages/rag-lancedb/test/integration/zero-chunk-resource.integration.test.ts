@@ -81,6 +81,23 @@ function countersOf(result: IndexResult): Omit<IndexResult, 'durationMs'> {
   return counters as Omit<IndexResult, 'durationMs'>;
 }
 
+/**
+ * Index the frontmatter-only resource ALONE into a fresh provider — the corpus
+ * that leaves a documents table (when storage is on) and no chunk table.
+ *
+ * @param storeDocuments - Whether to keep a `rag_documents` row per resource
+ * @returns The run's result and the provider it ran on (also `suite.provider`, for teardown)
+ */
+async function indexOnlyEmpty(
+  storeDocuments: boolean,
+): Promise<{ empty: ResourceMetadata; result: IndexResult; provider: LanceDBRAGProvider }> {
+  const { empty } = await writeCorpus();
+  const provider = await openProvider(storeDocuments);
+  suite.provider = provider;
+  const result = await provider.indexResources([empty]);
+  return { empty, result, provider };
+}
+
 describe.each([false, true])('zero-chunk resource (storeDocuments: %s)', (storeDocuments) => {
   it('does not fail the run when it is the FIRST resource into a fresh index', async () => {
     const { empty, real } = await writeCorpus();
@@ -136,19 +153,31 @@ describe.each([false, true])('zero-chunk resource (storeDocuments: %s)', (storeD
   });
 
   it('indexes a corpus made ONLY of zero-chunk resources without error', async () => {
-    const { empty } = await writeCorpus();
-    suite.provider = await openProvider(storeDocuments);
-
-    const result = await suite.provider.indexResources([empty]);
+    const { result, provider } = await indexOnlyEmpty(storeDocuments);
 
     expect(result.errors).toEqual([]);
     expect(result.resourcesEmpty).toBe(1);
     expect(result.resourcesIndexed).toBe(0);
 
     // Nothing was written, and the statistics say so rather than failing.
-    const stats = await suite.provider.getStats();
+    const stats = await provider.getStats();
     expect(stats.totalChunks).toBe(0);
     expect(stats.totalResources).toBe(0);
+  });
+
+  /**
+   * A query over that corpus is refused as "nothing indexed", and the refusal
+   * has to point at where the answer is. It used to name only `errors` — the
+   * one field guaranteed EMPTY here — so the operator was sent to look for a
+   * failure that never happened when the whole story was in `resourcesEmpty`.
+   */
+  it('names resourcesEmpty as well as errors when a query finds nothing indexed', async () => {
+    const { result, provider } = await indexOnlyEmpty(storeDocuments);
+    expect(result.errors).toEqual([]);
+
+    await expect(provider.query({ text: 'anything' })).rejects.toThrow(
+      /No data indexed yet(?=.*`errors`)(?=.*`resourcesEmpty`)/su,
+    );
   });
 
   it('removes the stale chunks of a resource whose content shrank to frontmatter only', async () => {
@@ -196,16 +225,31 @@ describe('zero-chunk resource with document storage on', () => {
   });
 
   it('rewrites the document record when the frontmatter itself changes', async () => {
-    const { empty } = await writeCorpus();
-    suite.provider = await openProvider(true);
-    await suite.provider.indexResources([empty]);
+    const { empty, provider } = await indexOnlyEmpty(true);
 
     const changed = '---\ntitle: Still Only Frontmatter\n---\n';
     await createTestMarkdownFile(suite.tempDir, 'stub.md', changed);
-    const result = await suite.provider.indexResources([await createTestResource(empty.filePath, 'stub')]);
+    const result = await provider.indexResources([await createTestResource(empty.filePath, 'stub')]);
 
     expect(result.errors).toEqual([]);
     expect(result.resourcesEmpty).toBe(1);
-    expect((await suite.provider.getDocument('stub'))?.content).toBe(changed);
+    expect((await provider.getDocument('stub'))?.content).toBe(changed);
+  });
+
+  /**
+   * A corpus of only zero-chunk resources has a documents table and NO chunk
+   * table — a state deferred table creation made reachable. `deleteResource`
+   * used to return as soon as it saw no chunk table, above the documents-table
+   * delete, so the row it promises to remove survived with no error and no
+   * signal.
+   */
+  it('deleteResource removes the document row even when no chunk table exists', async () => {
+    const { provider } = await indexOnlyEmpty(true);
+    expect((await provider.getDocument('stub'))?.resourceId).toBe('stub');
+    expect((await provider.getStats()).totalChunks).toBe(0);
+
+    await provider.deleteResource('stub');
+
+    expect(await provider.getDocument('stub')).toBeNull();
   });
 });

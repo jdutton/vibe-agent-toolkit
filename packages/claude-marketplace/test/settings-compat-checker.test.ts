@@ -19,6 +19,7 @@
 
 import * as fs from 'node:fs/promises';
 
+import { validateSkill } from '@vibe-agent-toolkit/agent-skills';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -137,17 +138,18 @@ function setupSkillFixture(prefix: string): { getFixture: () => SkillFixture } {
   };
 }
 
+/** Rewrite the fixture skill with `frontmatter` (the lines between the `---` fences). */
+async function writeSkill(fixture: SkillFixture, frontmatter: string): Promise<void> {
+  await fs.writeFile(fixture.skillFile, `---\nname: s1\n${frontmatter}\n---\n\nbody\n`, 'utf-8');
+}
+
 /** The tool spellings the checker reports as blocked by `rule`. */
 async function blockedTools(
   fixture: SkillFixture,
   tools: string[],
   rule: string
 ): Promise<string[]> {
-  await fs.writeFile(
-    fixture.skillFile,
-    `---\nname: s1\nallowed-tools: [${tools.join(', ')}]\n---\n\nbody\n`,
-    'utf-8'
-  );
+  await writeSkill(fixture, `allowed-tools: [${tools.join(', ')}]`);
   const conflicts = await checkSettingsCompatibility(fixture.pluginDir, settingsDenying(rule));
   return tools.filter((tool) =>
     conflicts.some((conflict) => conflict.detail.startsWith(`Tool "${tool}" `))
@@ -327,5 +329,121 @@ describe('settings compatibility checker — a wildcarded declaration', () => {
     const rule = GIT_PUSH_PREFIX;
     const narrowings = ['Bash', 'Bash(*)', GIT_PREFIX, 'Bash(git *)', GIT_PUSH_PREFIX];
     expect(await blockedTools(getFixture(), narrowings, rule)).toEqual(narrowings);
+  });
+});
+
+// ============================================================================
+// The `allowed-tools:` value is YAML, and its string form is a token list
+// ============================================================================
+
+/**
+ * (frontmatter, declarations) rows: what the checker must read out of each
+ * spelling of `allowed-tools:` an author can write.
+ *
+ * 🚩 The checker used to hand-parse the field: the inline branch split on `,`
+ * ONLY, and the block branch accepted exactly two-space `  - ` items. VAT's own
+ * frontmatter schema (`agent-skill-frontmatter.ts`) documents the field as a
+ * SPACE-separated list — Claude Code's spelling — so `allowed-tools: Read Edit`
+ * became ONE declaration named `Read Edit`, which matches nothing, and a
+ * four-space YAML list became `undefined`, which skipped the skill. Both
+ * reported "no conflict" against a deny of `Read(.env)` where the comma and
+ * two-space forms reported two. The direction is UNDER-report, the one this
+ * module's own docstring calls unsafe.
+ *
+ * The rows are asserted as the exact ordered list of declarations, not a
+ * count, so a mis-split (`Bash(rm -rf /)` into three tokens) cannot pass by
+ * coincidence. The deny rule is the universal `*`, which constrains every
+ * declaration, so the reported list IS the parsed list.
+ */
+const ALLOWED_TOOLS_SPELLINGS: ReadonlyArray<readonly [frontmatter: string, declarations: string[]]> = [
+  // Comma-separated, the form the old parser handled.
+  ['allowed-tools: Read, Edit', ['Read', 'Edit']],
+  // Space-separated — Claude Code's documented spelling, and the schema's.
+  ['allowed-tools: Read Edit', ['Read', 'Edit']],
+  ['allowed-tools: Bash(git add:*) Bash(git status:*)', ['Bash(git add:*)', 'Bash(git status:*)']],
+  // A YAML flow sequence.
+  ['allowed-tools: [Read, Edit]', ['Read', 'Edit']],
+  // A YAML block sequence at two AND four spaces of indentation.
+  ['allowed-tools:\n  - Read\n  - Edit', ['Read', 'Edit']],
+  ['allowed-tools:\n    - Read\n    - Edit', ['Read', 'Edit']],
+  // A quoted scalar keeps its wildcard.
+  ['allowed-tools: "Read(*)"', ['Read(*)']],
+  // Whitespace INSIDE the parentheses belongs to the declaration.
+  ['allowed-tools: Bash(rm -rf /), Read', ['Bash(rm -rf /)', 'Read']],
+  // Stray separators and padding produce no empty declarations.
+  ['allowed-tools: Read,, Edit ,', ['Read', 'Edit']],
+  ['allowed-tools:   Read   Edit  ', ['Read', 'Edit']],
+];
+
+/** The frontmatter that broke the old parser's `[`-prefix branch: an unclosed flow sequence. */
+const MALFORMED_ALLOWED_TOOLS = 'allowed-tools: [Read, Edit';
+
+/** The declarations the checker read, in order, as witnessed against a deny of everything. */
+async function declarationsReadFrom(fixture: SkillFixture, frontmatter: string): Promise<string[]> {
+  await writeSkill(fixture, frontmatter);
+  const conflicts = await checkSettingsCompatibility(fixture.pluginDir, settingsDenying('*'));
+  return conflicts.map((conflict) => /^Tool "(.*)" in /.exec(conflict.detail)?.[1] ?? conflict.detail);
+}
+
+describe('settings compatibility checker — the allowed-tools value', () => {
+  const { getFixture } = setupSkillFixture('vat-compat-spelling-');
+
+  it('reads the same declarations from every spelling of the list', async () => {
+    for (const [frontmatter, declarations] of ALLOWED_TOOLS_SPELLINGS) {
+      expect(await declarationsReadFrom(getFixture(), frontmatter), JSON.stringify(frontmatter)).toEqual(declarations);
+    }
+  });
+
+  // The reproduction as filed: the same deny, four spellings, one answer.
+  it('reports the same conflicts for the space and four-space forms as for the comma form', async () => {
+    const forms = [
+      'allowed-tools: Read, Edit',
+      'allowed-tools: Read Edit',
+      'allowed-tools:\n  - Read\n  - Edit',
+      'allowed-tools:\n    - Read\n    - Edit',
+    ];
+    for (const frontmatter of forms) {
+      await writeSkill(getFixture(), frontmatter);
+      const conflicts = await checkSettingsCompatibility(getFixture().pluginDir, settingsDenying('Read(.env)'));
+      expect(conflicts.map((c) => c.value), JSON.stringify(frontmatter)).toEqual(['Read(.env)']);
+    }
+  });
+
+  /**
+   * An unparseable frontmatter is not a silent skip. The checker's only output
+   * channel is `SettingsConflict[]`, which has no slot for "could not read the
+   * skill", so the NAMED tell is the one the skill validator puts on the same
+   * file in the same `vat audit` run: `SKILL_MISSING_FRONTMATTER`, carrying the
+   * YAML parser's message. This row pins that the two agree — the checker skips
+   * exactly what the validator names — so a checker that grew its own parser
+   * again would read something the validator calls unreadable, and fail here.
+   */
+  it('contributes nothing for a frontmatter the skill validator names as unparseable', async () => {
+    await writeSkill(getFixture(), MALFORMED_ALLOWED_TOOLS);
+
+    const conflicts = await checkSettingsCompatibility(getFixture().pluginDir, settingsDenying('*'));
+    const verdict = await validateSkill({ skillPath: getFixture().skillFile });
+
+    expect(conflicts).toEqual([]);
+    const tell = verdict.issues.find((issue) => issue.code === 'SKILL_MISSING_FRONTMATTER');
+    expect(tell?.severity).toBe('error');
+    expect(tell?.message).toContain('Failed to parse YAML frontmatter');
+  });
+
+  // The other field this checker reads goes through the same parser: a
+  // quoted and an unquoted model are the same model.
+  it('reads the model through the YAML parser, quoted or not', async () => {
+    const opusOnly: EffectiveSettings = {
+      permissions: { allow: [], ask: [], deny: [] },
+      availableModels: { value: ['opus'], provenance: { level: 'managed', file: SETTINGS_FILE } },
+    };
+    for (const spelling of ['model: sonnet', "model: 'sonnet'", 'model: "sonnet"']) {
+      await writeSkill(getFixture(), spelling);
+      const conflicts = await checkSettingsCompatibility(getFixture().pluginDir, opusOnly);
+      expect(conflicts.map((c) => c.type), spelling).toEqual(['model-unavailable']);
+      expect(conflicts[0]?.detail, spelling).toContain('Model "sonnet"');
+    }
+    await writeSkill(getFixture(), 'model: opus');
+    expect(await checkSettingsCompatibility(getFixture().pluginDir, opusOnly)).toEqual([]);
   });
 });

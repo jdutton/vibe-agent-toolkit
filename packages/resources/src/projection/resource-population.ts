@@ -91,6 +91,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { CollectionConfig } from '../schemas/project-config.js';
+import type { RealizationConditionRow } from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { ContributorRegistry } from './contributor.js';
@@ -157,9 +158,30 @@ export interface ResourcePopulationSource {
    *
    * @param root - Absolute root to enumerate, which the guard has already
    *   established names the same directory as {@link ResourcePopulationSource.root}
-   * @returns Absolute paths of every file the population admits
+   * @returns Every file the population admits, and the population-time
+   *   conditions the enumeration recorded — see {@link ResourceEnumeration}
    */
-  enumerate(root: string): Promise<readonly string[]>;
+  enumerate(root: string): Promise<ResourceEnumeration>;
+}
+
+/**
+ * What a population source hands the registry: the members, and what the
+ * enumeration could say about itself while finding them.
+ *
+ * `conditions` is the projection's `realization_conditions` table for the
+ * extents this lane registered — a gitignored directory the enumerator could
+ * not list, a path two identities collided on. It rides WITH the paths rather
+ * than being fetched afterwards because there is no afterwards: the projection
+ * is built and discarded inside `enumerate`, and a fact not carried out of it
+ * is gone. The registry surfaces each row as a finding with the row's own code
+ * and severity; a source with nothing to say hands over an empty list, which is
+ * what the walk lane always does.
+ */
+export interface ResourceEnumeration {
+  /** Absolute paths of every file the population admits. */
+  readonly paths: readonly string[];
+  /** Population-time conditions recorded while enumerating. */
+  readonly conditions: readonly RealizationConditionRow[];
 }
 
 /**
@@ -171,9 +193,7 @@ export interface ResourcePopulationSource {
  * outcome come apart whenever {@link crawlSourceFor} declines a root that is
  * not in a repository.
  */
-export interface ResourcePopulation {
-  /** Absolute file paths, sorted by the projection's own row order. */
-  readonly paths: readonly string[];
+export interface ResourcePopulation extends ResourceEnumeration {
   /** Which enumerator ran — the instance's own kind, not the env's request. */
   readonly extentSource: CrawlSourceKind;
 }
@@ -382,7 +402,11 @@ export async function buildResourcePopulation(options: {
     if (row.gitignored) continue;
     paths.push(safePath.resolve(root, row.path));
   }
-  return { paths, extentSource: source.kind };
+  // Carried out whole rather than filtered here: which rows matter is the
+  // consumer's call (the registry surfaces every one as a finding, and severity
+  // overrides are the adopter's), and a filter at this seam would be a second,
+  // quieter policy nobody configured.
+  return { paths, conditions: projection.realizationConditions, extentSource: source.kind };
 }
 
 

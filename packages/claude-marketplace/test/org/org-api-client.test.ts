@@ -917,6 +917,7 @@ describe('a transport failure carries what actually left the socket', () => {
  */
 describe('a DELETE replayed after a lost response', () => {
   const GONE = { statusCode: 404, body: '{"error":{"message":"skill version not found"}}' };
+  const GATEWAY_TIMEOUT: Exchange = { statusCode: 504, body: '<html>gateway timeout</html>' };
 
   it('reads the 404 as the delete it already performed, not as a failure', async () => {
     // The first attempt reaches the origin and the connection drops before the
@@ -963,6 +964,67 @@ describe('a DELETE replayed after a lost response', () => {
   });
 
   /**
+   * 🚨 A gateway timeout is a LOST RESPONSE with a status attached. RFC 9110
+   * §15.6.5: a 504 means the gateway "did not receive a timely response from an
+   * upstream server" — the origin may well have performed the delete and
+   * answered too late. A 502 (§15.6.3) is the gateway receiving an INVALID
+   * response from upstream, which the origin may also have sent after acting.
+   * `attemptMayHaveActed` read every status as "did not act", so
+   * `DELETE → 504 → 404` was rethrown as a genuine 404 and `delete --all`
+   * reported a failure for a version it had destroyed — the exact case the
+   * `alreadyGone` rule exists for, reopened for the two gateway statuses.
+   */
+  it('reads a 404 as its own delete when a 504 preceded it', async () => {
+    const { calls, client } = clientWith([GATEWAY_TIMEOUT, GONE]);
+
+    await expect(client.deleteSkillVersion('skill_1', 'v1')).resolves.toBeUndefined();
+    expect(calls).toHaveLength(2);
+  });
+
+  it('reads a 404 as its own delete when a 502 preceded it', async () => {
+    const { calls, client } = clientWith([
+      { statusCode: 502, body: '<html>bad gateway</html>' },
+      GONE,
+    ]);
+
+    await expect(client.deleteSkillVersion('skill_1', 'v1')).resolves.toBeUndefined();
+    expect(calls).toHaveLength(2);
+  });
+
+  /**
+   * The control on the other side: a 503 (§15.6.4) is the server declining to
+   * handle the request at all, so it sits with the 429 — the origin did not act
+   * and the 404 answering its replay is a genuine one.
+   */
+  it('still refuses a 404 after a 503 replay, because the 503 attempt did not act', async () => {
+    const { calls, client } = clientWith([
+      { statusCode: 503, body: '{}' },
+      GONE,
+    ]);
+
+    await expect(client.deleteSkillVersion('skill_1', 'v1')).rejects.toThrow(NOT_FOUND_PREFIX);
+    expect(calls).toHaveLength(2);
+  });
+
+  /**
+   * A gateway status on the LAST permitted attempt is still the end of the
+   * budget: nothing here turns "may have acted" into "did act", so the failure
+   * is rethrown with the same "Gave up" note any exhausted retry carries, and
+   * the API key never appears in it.
+   */
+  it('still gives up when the budget ends on a 504, without leaking the key', async () => {
+    const { calls, client } = clientWith([GATEWAY_TIMEOUT, GATEWAY_TIMEOUT, GATEWAY_TIMEOUT, GONE]);
+
+    const failure = await client.deleteSkillVersion('skill_1', 'v1').catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ApiRequestError);
+    expect(String((failure as Error).message)).toContain('API error 504');
+    expect(String((failure as Error).message)).toContain('Gave up after 3 attempt(s)');
+    expect(String((failure as Error).message)).not.toContain(API_KEY);
+    expect(calls).toHaveLength(3);
+  });
+
+  /**
    * The lost-response replay keeps its reading through a rate limit that
    * FOLLOWS it: once an attempt may have acted, that fact does not expire.
    */
@@ -989,6 +1051,15 @@ describe('a DELETE replayed after a lost response', () => {
     ]);
 
     await expect(client.getSkills(SKILLS_PATH)).rejects.toThrow(NOT_FOUND_PREFIX);
+  });
+
+  // …and that holds when the replay was owed to a 504, which for a DELETE
+  // would resolve. The method decides, not the status that caused the replay.
+  it('does not swallow a 404 on a GET replayed after a 504 either', async () => {
+    const { calls, client } = clientWith([GATEWAY_TIMEOUT, { statusCode: 404, body: '{}' }]);
+
+    await expect(client.getSkills(SKILLS_PATH)).rejects.toThrow(NOT_FOUND_PREFIX);
+    expect(calls).toHaveLength(2);
   });
 });
 
@@ -1051,12 +1122,21 @@ describe('decideRetry', () => {
     expect(decideRetry('GET', 1, gone, true)).toEqual({ rethrow: expect.any(ApiRequestError) });
   });
 
-  /** The fact the loop carries: only a lost response can have acted. */
+  /**
+   * The fact the loop carries: a lost response can have acted, and so can a
+   * status that only says the RESPONSE was lost — a gateway that timed out
+   * (504, RFC 9110 §15.6.5) or got garbage (502, §15.6.3) waiting on an origin
+   * that may already have done the work. A 429 or 503 is the server declining
+   * to handle the request, so those did not act.
+   */
   it('says which failures may have reached the origin', () => {
     expect(attemptMayHaveActed(reset())).toBe(true);
     expect(attemptMayHaveActed(deadline())).toBe(true);
+    expect(attemptMayHaveActed(new ApiRequestError('API error 504', 504, undefined))).toBe(true);
+    expect(attemptMayHaveActed(new ApiRequestError('API error 502', 502, undefined))).toBe(true);
     expect(attemptMayHaveActed(new ApiRequestError('API error 429', 429, '0'))).toBe(false);
     expect(attemptMayHaveActed(new ApiRequestError('API error 503', 503, undefined))).toBe(false);
+    expect(attemptMayHaveActed(new ApiRequestError('API error 500', 500, undefined))).toBe(false);
     expect(attemptMayHaveActed(new Error('no key'))).toBe(false);
   });
 

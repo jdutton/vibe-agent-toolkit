@@ -28,6 +28,7 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig, SkillSourceDescriptor, TestConfig } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { Command } from 'commander';
 
 import { parseSourceSpec } from '../../../skill-resolution/classify.js';
@@ -1240,7 +1241,12 @@ async function preflightKnobsAndConfig(
  * reachable from either arm and must report the same code from both.
  */
 function exitCodeForRunError(err: unknown): number {
-  return err instanceof ConfigLoadError ? SkillTestExitCode.Preflight : mapErrorToExitCode(err);
+  // A directory the governing `skills.include` reaches and the crawl cannot list
+  // is the same class: discovery refuses it by name, and the remedy is `chmod` or
+  // a narrower include pattern — the operator's, not the harness's.
+  return err instanceof ConfigLoadError || err instanceof DirectoryListingRefusedError
+    ? SkillTestExitCode.Preflight
+    : mapErrorToExitCode(err);
 }
 
 /**

@@ -1496,6 +1496,59 @@ describe('matchesPathRule — an empty tool input', () => {
   });
 });
 
+const READ_ENV = 'Read(.env)';
+const READ_CLASS_NEGATED = 'Read(a[!b]c)';
+const READ_CLASS_RANGE = 'Read(a[a-c]d)';
+
+/** The rule spellings whose path body is empty once the prefix table has read them. */
+const EMPTY_BODY_RULES = ['Read()', 'Read(/)', 'Read(//)', 'Read(~/)', 'Read(./)'] as const;
+
+describe('matchesPathRule — a rule with nothing after its prefix', () => {
+  // 🚩 `Read()`, `Read(/)`, `Read(//)`, `Read(~/)` and `Read(./)` all hand the
+  // matcher an empty pattern body, and an empty body compiled to a bare
+  // globstar: every one of them matched EVERY file, where the node-ignore
+  // semantics the matcher promises match nothing. Nobody has established what
+  // Claude Code does with `Read(~/)`, so the verdict is the promised one: a
+  // pattern naming no segment names no file.
+  it('matches nothing', () => {
+    for (const rule of EMPTY_BODY_RULES) {
+      const { content } = parsePermissionRule(rule);
+      expect(matchesPathRule(SECRETS_KEY, content ?? '', PLUGIN_DIR), rule).toBe(false);
+      for (const lane of LANES) {
+        expect(matchesPermissionRule('Read', SECRETS_KEY, rule, lane, PLUGIN_DIR), `${rule} ${lane}`).toBe(false);
+      }
+      expect(ruleConstrainsDeclaration(READ_ENV, rule, 'deny', PLUGIN_DIR), rule).toBe(false);
+      expect(ruleConstrainsDeclaration(rule, READ_ENV, 'deny', PLUGIN_DIR), rule).toBe(false);
+      // `isSubsumedBy` never subsumes a path rule with content; unchanged.
+      expect(isSubsumedBy(READ_ENV, rule), rule).toBe(false);
+    }
+  });
+
+  // The control: one more character after the prefix and the rule is live again.
+  it('still matches once the body names something', () => {
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, 'x'), './*', PLUGIN_DIR)).toBe(true);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, 'x'), '/*', PLUGIN_DIR)).toBe(true);
+  });
+});
+
+describe('matchesPathRule — a file NAMED with a leading `..`', () => {
+  // 🚩 `relative.startsWith('..')` was the "outside the root" test, and it also
+  // refused every file whose NAME begins with two dots: a deny `Read(*)`
+  // reported no conflict with a declaration naming `..secret`. Outside the
+  // root is `..` itself or a path that starts with `../`, nothing else.
+  it('matches a file under the root whose name starts with `..`', () => {
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '..foo'), '*', PLUGIN_DIR)).toBe(true);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '..secret'), '..secret', PLUGIN_DIR)).toBe(true);
+    expect(ruleConstrainsDeclaration('Read(..secret)', 'Read(*)', 'deny', PLUGIN_DIR)).toBe(true);
+  });
+
+  it('still refuses a path that leaves the root', () => {
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '../x'), '*', PLUGIN_DIR)).toBe(false);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '..'), '*', PLUGIN_DIR)).toBe(false);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '../..foo'), '*', PLUGIN_DIR)).toBe(false);
+  });
+});
+
 // ============================================================================
 // The path lane's cost — the same class as the Bash lane's, one layer over
 // ============================================================================
@@ -1614,6 +1667,65 @@ describe('ruleConstrainsDeclaration — path spellings', () => {
       [READ_SSH_ALL, 'Read(./secrets/**)'],
       [READ_SSH_ALL, 'Read(~/.aws/**)'],
       ['Read(/etc/**)', 'Read(//etc/passwd)'],
+    ];
+    for (const [decl, rule] of rows) {
+      expect(ruleConstrainsDeclaration(decl, rule, 'deny', PLUGIN_DIR), `${decl} vs ${rule}`).toBe(false);
+    }
+  });
+});
+
+describe('ruleConstrainsDeclaration — a witness drawn from the compiled pattern', () => {
+  // 🚩 The witness of a path rule was its RAW text read as a literal file path.
+  // That is a member of the rule's own extension for `*`, `**` and `?` only
+  // because `*` and `?` match themselves as characters; a rule holding `[…]` or
+  // a `\` escape was NOT a member of itself, so an identical pair reported no
+  // conflict in either direction. The witness is now materialised from the
+  // compiled tokens, so every pattern is a member of itself.
+  it('reports an identical pair holding a class or an escape as a conflict, both ways round', () => {
+    for (const rule of [READ_CLASS_NEGATED, String.raw`Read(a\*c)`, READ_CLASS_RANGE, 'Read(**/x[0-9].env)', 'Read(./a[!b]c)', 'Read(~/x[0-9]/**)']) {
+      expect(ruleConstrainsDeclaration(rule, rule, 'deny', PLUGIN_DIR), rule).toBe(true);
+      expect(ruleConstrainsDeclaration(rule, rule, 'allow', PLUGIN_DIR), rule).toBe(true);
+    }
+  });
+
+  // Both sides are asked through their witnesses, so a declaration NARROWER
+  // than the rule is reached even when its text is not a path the rule matches.
+  it('reports a declaration whose class narrows the rule', () => {
+    expect(ruleConstrainsDeclaration(READ_CLASS_RANGE, 'Read(a?d)', 'deny', PLUGIN_DIR)).toBe(true);
+    expect(ruleConstrainsDeclaration('Read(a?d)', READ_CLASS_RANGE, 'deny', PLUGIN_DIR)).toBe(true);
+  });
+
+  // The raw text stays a witness where it IS a member — it reaches a pair the
+  // materialised one cannot: the rule `a?c` and a declaration naming the
+  // literal file `a?c`, whose only common member is that one file.
+  it('still reaches a literal declaration through the raw text', () => {
+    expect(ruleConstrainsDeclaration(String.raw`Read(a\?c)`, 'Read(a?c)', 'deny', PLUGIN_DIR)).toBe(true);
+    expect(ruleConstrainsDeclaration('Read(a?c)', String.raw`Read(a\?c)`, 'deny', PLUGIN_DIR)).toBe(true);
+  });
+
+  // …and only where it is a member: a rule's raw text that the rule itself does
+  // not match is no evidence about anything, so a literal declaration naming
+  // the text `a[!b]c` does not intersect the class rule `a[!b]c`.
+  it('does not read a rule text the rule does not match as a witness', () => {
+    expect(ruleConstrainsDeclaration(String.raw`Read(a\[!b]c)`, READ_CLASS_NEGATED, 'deny', PLUGIN_DIR)).toBe(false);
+    expect(ruleConstrainsDeclaration(READ_CLASS_NEGATED, String.raw`Read(a\[!b]c)`, 'deny', PLUGIN_DIR)).toBe(false);
+  });
+
+  // The same shape on the Bash lane: the declaration's witness set includes its
+  // bare command, so a deny rule that catches `git push` but not the text
+  // `git push:*` is reached from the declaration side too.
+  it('asks the rule about the declaration’s bare command as well as its text', () => {
+    expect(ruleConstrainsDeclaration('Bash(git push:*)', 'Bash(* push)', 'deny', PLUGIN_DIR)).toBe(true);
+    expect(ruleConstrainsDeclaration('Bash(git push:*)', 'Bash(* pull)', 'deny', PLUGIN_DIR)).toBe(false);
+  });
+
+  // The controls: disjoint extensions stay disjoint through the witness.
+  it('still reports no conflict between disjoint patterns', () => {
+    const rows: ReadonlyArray<readonly [decl: string, rule: string]> = [
+      [READ_CLASS_NEGATED, 'Read(abc)'],
+      [READ_CLASS_RANGE, 'Read(a[x-z]d)'],
+      ['Read(*.env)', 'Read(*.ts)'],
+      ['Read(./src/**)', 'Read(./test/**)'],
     ];
     for (const [decl, rule] of rows) {
       expect(ruleConstrainsDeclaration(decl, rule, 'deny', PLUGIN_DIR), `${decl} vs ${rule}`).toBe(false);

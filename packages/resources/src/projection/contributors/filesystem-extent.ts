@@ -110,12 +110,16 @@
  * It can be re-sourced.
  */
 
+import { safePath, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
+import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
-import type {
-  ResourceExtentRow,
-  ResourceRealizationRow,
-  ResourceRow,
+import {
+  CONDITION_WITHOUT_REFERENCE,
+  type RealizationConditionRow,
+  type ResourceExtentRow,
+  type ResourceRealizationRow,
+  type ResourceRow,
 } from '../../schemas/projection-resources.js';
 import type { JsonValue } from '../../schemas/projection-shared.js';
 import type { ResolutionContextRow } from '../../schemas/projection-zones.js';
@@ -340,7 +344,8 @@ export class FilesystemExtentContributor implements ExtentContributor {
     // Which enumerator answers is chosen at the seam, never here — see
     // `crawl-source.ts`. Both implementations return the same set for the same
     // root; they differ in what they cost and in what they already know.
-    const enumerated = await this.#sourceFor(base.root).enumerate();
+    const source = this.#sourceFor(base.root);
+    const enumerated = await source.enumerate();
 
     const resources = new Map<string, ResourceRow>();
     const realizations: ResourceRealizationRow[] = [];
@@ -408,7 +413,53 @@ export class FilesystemExtentContributor implements ExtentContributor {
       realizations,
       memberships,
       tags: [],
-      conditions: [],
+      // The gitignored directories the enumerator could not list. Not declined
+      // with the rows beneath them: a lane that declines ignored rows still
+      // needs to know where the enumeration stopped seeing, because "nothing
+      // ignored beneath here" and "could not look beneath here" are different
+      // claims and only the first is what `DECLINE_IGNORED` asserts.
+      conditions: source.unlistable.map((refusal) =>
+        unlistableDirectoryCondition(refusal, base.root, extentId, base.identities.idFor(refusal.directory)),
+      ),
     };
   }
+}
+
+/**
+ * `realization_conditions.code` for a gitignored directory the enumerator could
+ * not list — the extent's own fact, recorded where a query and `validate` can
+ * both read it. A warning, not an error: nothing beneath a gitignored directory
+ * is in any lane's declared population, so the run's counts are not narrowed by
+ * it; what is unknown is only whether ignored rows are missing.
+ */
+export const EXTENT_DIRECTORY_UNLISTABLE = 'EXTENT_DIRECTORY_UNLISTABLE';
+
+/**
+ * Render one refusal as the condition row that carries it.
+ *
+ * @param refusal - The directory the enumerator could not list
+ * @param root - The corpus root the path is expressed against
+ * @param extentId - This extent
+ * @param resourceId - The identity of the directory itself, which IS realized
+ * @returns The condition row
+ */
+function unlistableDirectoryCondition(
+  refusal: DirectoryRefusal,
+  root: string,
+  extentId: string,
+  resourceId: string,
+): RealizationConditionRow {
+  const path = toForwardSlash(safePath.relative(root, refusal.directory));
+  const remedy = refusal.transient
+    ? `${transientRefusalClause(refusal.code)}, so nothing is wrong with the tree — re-run before investigating anything.`
+    : 'Fix the permissions on that directory if what is beneath it should be visible; nothing beneath a gitignored directory is in the validation population either way.';
+  return {
+    extentId,
+    path,
+    code: EXTENT_DIRECTORY_UNLISTABLE,
+    severity: 'warning',
+    message: `The gitignored directory '${path}' could not be listed (${refusal.code}), so nothing beneath it was enumerated; the directory itself is recorded and every readable sibling was enumerated. ${remedy}`,
+    resourceId,
+    ...CONDITION_WITHOUT_REFERENCE,
+  };
 }

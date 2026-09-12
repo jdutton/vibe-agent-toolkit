@@ -37,19 +37,46 @@
  *   a segment it is an ordinary `*`.
  * - A pattern that matches a DIRECTORY matches everything under it, and a
  *   trailing `/` restricts the pattern to directories, so it never matches the
- *   last segment of a file path.
+ *   last segment of a file path. After a trailing `**` the `/` adds nothing
+ *   (`a/**` with a slash after it is `a/**`) — unless the `**` is the whole
+ *   pattern, when it names no directory for the `/` to restrict and must
+ *   itself span one: `**` with a slash after it, anchored or not, is a
+ *   directory and something beneath it, the same as `*` followed by `/**`.
  * - `#` and `!` at the start make the pattern match nothing — a comment, or a
  *   negation with nothing to negate. `\#` and `\!` are the literal characters.
+ * - A pattern that names no segment matches nothing: `''`, `/`, `//`. So does
+ *   one with an EMPTY segment inside it (`a//b`, `//a`), which no normalised
+ *   path has. 🚩 An empty body used to compile to a bare globstar and match
+ *   EVERYTHING, and it is reachable from the permission lane as `Read()`,
+ *   `Read(/)`, `Read(~/)` and `Read(./)`.
  * - Matching is case-insensitive, node-ignore's default, which the lane
  *   inherited without ever choosing it; kept so the verdicts do not move.
  *
- * Divergences, pinned in the suite. Two are on MALFORMED patterns: an
- * unterminated `[` is a literal `[` here, where node-ignore's compiled regex
- * fails and it answers `false`; and `[!]` / `[]` are the literal characters
- * here rather than regex accidents. The third is a place node-ignore@6 departs
- * from the gitignore spec it implements: it reads `[!bc]` and `[^bc]` as the
- * literal set `{!, b, c}` / `{^, b, c}`, where the spec — and this — negate the
- * class. The permissions page names the gitignore spec, so the spec wins.
+ * Divergences, each pinned in the suite beside node-ignore's own answer. They
+ * were found by executing both over 3,160 (pattern, path) pairs, not by
+ * reading; in every one this side is the gitignore-spec reading and
+ * node-ignore's is an artefact of compiling to a regex. The permissions page
+ * names the gitignore spec, so the spec wins.
+ *
+ * - `[!bc]` / `[^bc]` NEGATE the class here; node-ignore@6 reads them as the
+ *   literal set `{!, b, c}` / `{^, b, c}`.
+ * - An unterminated `[` is a literal `[` here; node-ignore's regex fails to
+ *   compile and it answers `false`. `[]` and `[!]` are the literal characters
+ *   here rather than regex accidents.
+ * - A `]` first in a class is a member (`[]a]` holds `]` and `a`), and `[\]]`
+ *   is the class holding `]`; node-ignore closes the class at the first `]`.
+ * - An escape is the character it escapes, always: `\*` at the end of a
+ *   pattern is a `*` (node-ignore turns it back into a wildcard), `\?` is a `?`
+ *   (node-ignore compiles `\[^/]`), `\b` / `\d` / `\s` / `\w` are the letters
+ *   (node-ignore passes them to its regex as a word boundary and three
+ *   character classes), and a `\` with nothing after it is a `\`.
+ * - A `/` inside `[…]` is the segment separator first, so `a[/]b` is the two
+ *   segments `a[` and `]b` and a class never matches a separator; node-ignore
+ *   lets `[/]` match one.
+ * - Unicode case-folding differs at the edges (`ẞ`/`ß`, `İ`/`i̇` fold together
+ *   here and not there; `Σ`/`ς` the reverse). `toLowerCase()` and a regex `i`
+ *   flag are different foldings, neither is a reading of the spec, and this is
+ *   documented rather than aligned.
  */
 
 /** One character-level element of a segment pattern. */
@@ -69,7 +96,7 @@ type PatternSegment = 'globstar' | readonly SegmentToken[];
 /** A compiled path pattern. */
 export interface PathPattern {
   readonly segments: readonly PatternSegment[];
-  /** A comment or a lone negation: nothing is ever matched. */
+  /** A comment, a lone negation, or a pattern naming no segment: nothing is ever matched. */
   readonly matchesNothing: boolean;
   /** Trailing `/`: only a directory — never a file path's last segment — matches. */
   readonly directoryOnly: boolean;
@@ -163,7 +190,7 @@ function compileSegment(text: string): SegmentToken[] {
  */
 const SEGMENT_SEPARATOR = '/';
 
-/** Non-empty `/`-separated segments. */
+/** The non-empty `/`-separated segments of a PATH. */
 function splitSegments(text: string): string[] {
   return text.split(SEGMENT_SEPARATOR).filter((segment) => segment.length > 0);
 }
@@ -190,29 +217,101 @@ function compileSegments(raw: readonly string[], anchored: boolean): PatternSegm
   return segments;
 }
 
+const MATCHES_NOTHING: PathPattern = { segments: [], matchesNothing: true, directoryOnly: false };
+
 /**
  * Compile a gitignore-style pattern. The pattern is expected trimmed; matching
  * is case-insensitive, so it is lower-cased here once.
  */
 export function compilePathPattern(pattern: string): PathPattern {
   const lowered = pattern.toLowerCase();
-  if (lowered.startsWith('#') || lowered.startsWith('!')) {
-    return { segments: [], matchesNothing: true, directoryOnly: false };
-  }
+  if (lowered.startsWith('#') || lowered.startsWith('!')) return MATCHES_NOTHING;
 
+  // ONE trailing `/` is the directory restriction and ONE leading `/` is the
+  // anchor; a second of either is an empty segment, and an empty segment —
+  // like an empty body — names no file, so the pattern matches nothing.
+  // 🚩 Every slash used to be stripped, so `''`, `/` and `//` compiled to a
+  // bare globstar and matched EVERYTHING.
   let body = lowered;
-  const trailingSlash = body.length > 1 && body.endsWith(SEGMENT_SEPARATOR);
-  while (body.endsWith(SEGMENT_SEPARATOR)) body = body.slice(0, -1);
+  const trailingSlash = body.endsWith(SEGMENT_SEPARATOR);
+  if (trailingSlash) body = body.slice(0, -1);
   // A `/` at the start or in the middle anchors the pattern at the root.
   const anchored = body.includes(SEGMENT_SEPARATOR);
-  while (body.startsWith(SEGMENT_SEPARATOR)) body = body.slice(1);
+  if (body.startsWith(SEGMENT_SEPARATOR)) body = body.slice(1);
+  if (body.length === 0) return MATCHES_NOTHING;
+  const raw = body.split(SEGMENT_SEPARATOR);
+  if (raw.some((segment) => segment.length === 0)) return MATCHES_NOTHING;
 
-  const raw = splitSegments(body);
   // `a/**/` is everything inside `a`, exactly as `a/**` is: the directory
   // restriction adds nothing to a trailing `**`, and node-ignore reads it so.
+  // 🚩 Unless the `**` is the WHOLE pattern — `**/`, `/**/`, `**/**/` — which
+  // names no directory for the `/` to restrict: the `**` must then span one
+  // itself, and the pattern is `*/**`, a directory with something beneath it.
+  // The restriction was being dropped there too, and `**/` matched a
+  // top-level file.
+  const onlyGlobstars = raw.every((segment) => segment === '**');
+  const effective = trailingSlash && onlyGlobstars ? ['*', '**'] : raw;
   const directoryOnly = trailingSlash && raw.at(-1) !== '**';
 
-  return { segments: compileSegments(raw, anchored), matchesNothing: false, directoryOnly };
+  return { segments: compileSegments(effective, anchored), matchesNothing: false, directoryOnly };
+}
+
+/**
+ * A character no `[…]` class in practice excludes, tried in order when the
+ * class is negated; a class's own first bound is tried before any of these.
+ */
+const WITNESS_CANDIDATES = ['x', 'a', '0', '-', '_', '.'] as const;
+
+/** One character a class accepts. */
+function classMember(token: Extract<SegmentToken, { kind: 'class' }>): string {
+  const candidates = [...token.ranges.map(([low]) => low), ...WITNESS_CANDIDATES];
+  return candidates.find((char) => inClass(token, char)) ?? WITNESS_CANDIDATES[0];
+}
+
+/** One string a segment's tokens accept. */
+function segmentMember(tokens: readonly SegmentToken[]): string {
+  let text = '';
+  for (const token of tokens) {
+    switch (token.kind) {
+      case 'literal':
+        text += token.char;
+        break;
+      case 'any':
+        text += WITNESS_CANDIDATES[0];
+        break;
+      case 'class':
+        text += classMember(token);
+        break;
+      case 'star':
+        break;
+    }
+  }
+  // A segment that is only `*` still has to be a segment.
+  return text.length === 0 ? WITNESS_CANDIDATES[0] : text;
+}
+
+/**
+ * One relative path the pattern matches, materialised from its compiled
+ * tokens: each literal is itself, `?` and a bare `*` are a fixed character, a
+ * `*` between other tokens is nothing, a class is one of its members, `**`
+ * spans zero directories, and a directory-only pattern gets a file beneath it.
+ * Empty for a pattern that matches nothing.
+ *
+ * 🚩 The permission lane used to read a rule's RAW text as a literal file path
+ * and call it a witness of the rule. That works for `*`, `**` and `?` only
+ * because `*` and `?` match themselves as characters; a rule holding `[…]` or
+ * a `\` escape was not a member of its own extension, so an identical
+ * `Read(a[!b]c)` pair reported no conflict.
+ */
+export function witnessOf(pattern: PathPattern): string {
+  if (pattern.matchesNothing) return '';
+  const segments = pattern.segments
+    .filter((segment): segment is readonly SegmentToken[] => segment !== 'globstar')
+    .map(segmentMember);
+  // A bare `**` names no segment and matches any file; a directory-only
+  // pattern needs a file beneath the directory it names.
+  if (segments.length === 0 || pattern.directoryOnly) segments.push(WITNESS_CANDIDATES[0]);
+  return segments.join(SEGMENT_SEPARATOR);
 }
 
 /** Whether `char` is in the class. */

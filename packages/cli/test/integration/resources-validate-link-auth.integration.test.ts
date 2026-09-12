@@ -145,6 +145,17 @@ describe('vat resources validate honours resources.linkAuth without resources.co
  * `status: success, linksChecked: 2` having fetched nothing. The override is
  * declared here on purpose: it must not be able to reach a config defect.
  */
+/**
+ * The refusal, for whichever verb loaded the config. The exact message is
+ * asserted, not merely the exit code: an exit 2 from a different cause (a
+ * crash, an unreadable tree) would otherwise pass for it.
+ */
+function expectRefusedByName(status: number | null, error: unknown): void {
+  expect(status).toBe(2);
+  expect(String(error)).toMatch(/resources\.linkAuth providers\[0\]/);
+  expect(String(error)).toMatch(/rewrite\[0\]\.when/);
+}
+
 describe('vat resources validate refuses a linkAuth provider that cannot compile (integration)', () => {
   let tempDir: string;
 
@@ -193,12 +204,41 @@ describe('vat resources validate refuses a linkAuth provider that cannot compile
       env: { [TOKEN_ENV]: TOKEN },
     });
 
-    expect(result.status).toBe(2);
+    expectRefusedByName(result.status, parsed['error']);
     expect(parsed['status']).toBe('error');
-    expect(String(parsed['error'])).toMatch(/resources\.linkAuth providers\[0\]/);
-    expect(String(parsed['error'])).toMatch(/rewrite\[0\]\.when/);
     // The tell of the old behaviour: a count of links "checked" that nothing
     // had fetched. A refused run reports no such count at all.
     expect(parsed['linksChecked']).toBeUndefined();
+  });
+
+  /**
+   * The registry entry for `LINK_AUTH_PROVIDER_ERROR` promises the refusal "at
+   * config load", on every command that loads `resources.linkAuth` — not only
+   * when the external-URL lane is switched on. Without `--check-external-urls`
+   * the check used to live behind the validator's construction, so an
+   * adopter's pre-commit `vat validate` never met the typo and the run said
+   * `success, linksChecked: 1` over a provider that could not compile.
+   */
+  it('exits 2 by name WITHOUT --check-external-urls too — the refusal is at config load', async () => {
+    const { result, parsed } = await executeCliAndParseYaml(
+      binPath,
+      ['resources', 'validate', '--format', 'json', tempDir],
+      { cwd: tempDir, env: { [TOKEN_ENV]: TOKEN } },
+    );
+
+    expectRefusedByName(result.status, parsed['error']);
+    expect(parsed['linksChecked']).toBeUndefined();
+  });
+
+  it('`vat validate` (the pre-commit verb) exits 2 by name on the same config', async () => {
+    const { result, parsed } = await executeCliAndParseYaml(binPath, ['validate'], {
+      cwd: tempDir,
+      env: { [TOKEN_ENV]: TOKEN },
+    });
+
+    const phases = parsed['phases'] as { name: string; exitCode: number; report: Record<string, unknown> }[];
+    const resources = phases.find((phase) => phase.name === 'resources');
+    expectRefusedByName(result.status, resources?.report['error']);
+    expect(resources?.exitCode).toBe(2);
   });
 });

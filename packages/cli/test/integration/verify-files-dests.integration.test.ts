@@ -438,7 +438,15 @@ skills:
       createDestInPool: false,
     });
 
-    await expect(packagedCrawlIn(tempDir)).resolves.toEqual({ bundlesInspected: 0, issues: [] });
+    // `skills.config.<name>` alone expects nothing: discovery reached no skill,
+    // so nothing was built and nothing is missing — the stale key is the
+    // consistency phase's finding, not this one's.
+    await expect(packagedCrawlIn(tempDir)).resolves.toEqual({
+      bundlesInspected: 0,
+      bundlesExpected: 0,
+      bundlesMissing: [],
+      issues: [],
+    });
   });
 });
 

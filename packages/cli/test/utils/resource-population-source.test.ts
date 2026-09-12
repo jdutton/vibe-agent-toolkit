@@ -78,7 +78,7 @@ describe('withResourcePopulationSource', () => {
       // guard compares exactly this, so a seam that handed back the wrong one
       // would silently put every crawl back on the walk.
       expect(source?.root).toBe(safePath.resolve(root));
-      return [...(await source?.enumerate(root) ?? [])];
+      return [...((await source?.enumerate(root))?.paths ?? [])];
     });
 
     // The source enumerates; it does NOT narrow. Narrowing to the caller's own

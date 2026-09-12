@@ -53,6 +53,7 @@ vat rag clear
 
 **Exit Codes:**
 - `0` - Indexing completed successfully
+- `1` - Indexed with errors: the run finished, `status: partial`, and `errors` names each resource whose content is NOT in the index
 - `2` - System error (config invalid, database error, etc.)
 
 **Output:** YAML on stdout with indexing statistics
@@ -68,7 +69,7 @@ vat rag index docs/
 # status: success
 # resourcesIndexed: 12
 # resourcesSkipped: 0
-# resourcesEmpty: 0      # frontmatter-only or blank files: recorded, not searchable
+# resourcesEmpty: 0      # frontmatter-only or blank files: counted, not stored
 # resourcesUpdated: 0
 # chunksCreated: 48
 # chunksDeleted: 0
