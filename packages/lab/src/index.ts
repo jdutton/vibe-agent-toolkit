@@ -314,6 +314,15 @@ export {
 } from './harness/git-state.js';
 export { resolveInstrument } from './harness/instrument.js';
 export {
+  armLabel,
+  armOf,
+  LANE_UNREPORTED,
+  laneNote,
+  laneOfDocument,
+  readLaneFromOutput,
+  type ReportedLane,
+} from './harness/lane.js';
+export {
   DEFAULT_LOAD_PER_CPU_THRESHOLD,
   judgeLoad,
   type JudgeLoadOptions,

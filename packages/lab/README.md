@@ -55,6 +55,13 @@ varying only `VAT_EXTENT_SOURCE` — which is exactly the axis the git-walker fl
 repository, so "the two enumerators agree" and "the switch did nothing" are the same picture until
 the extent source separates them. The walk sources no extent and so reports none.
 
+`io` rows carry the same `lane` / `extentSource` pair, read by the same reader, so an A/B of call
+counts no longer has to infer which arm ran from a call-site signature. ⚠️ **On the default `io`
+spec both are `null`**: `resources-scan` prints YAML and the lab reads a lane out of JSON only. The
+row says `lane UNREPORTED by the subject's output`, and a compare over two such rows says `arm
+UNPROVEN on both sides`. Measure `--command resources-population` to carry the arm on an `io` row —
+see [Facets](docs/facets.md).
+
 ```bash
 vat-lab population run ../some-project --instrument tree:. --id some-project --out ./walk
 VAT_RESOURCES_CRAWL=projection \

@@ -40,6 +40,22 @@ rather than from the environment the caller set. Setting a variable proves what 
 the output proves what happened, and an A/B whose two arms silently ran the same lane is a clean
 result that means nothing.
 
+That reading is not `population`'s alone. Every row of an `io` report carries the same two fields,
+`lane` and `extentSource`, read by the same reader (`src/harness/lane.ts`) out of the same
+document — because a call count is a measurement of *some* enumerator, and a row that does not
+say which one leaves the reader inferring it from a call-site signature, which is what the
+2026-09-11 git-vs-filesystem A/B had to do (`realizations.js:51` at 0 calls versus 12,003). The
+rendered row names its arm (`projection via git`), and `io compare` says out loud when both sides
+report the same arm — *this compares one enumerator with itself* — or when neither reports one.
+
+⚠️ **On the default `io` spec the lane is honestly `null`.** `resources-scan` — what a bare `io run`
+measures — prints YAML, and the lab reads a lane out of JSON only: it carries no YAML parser, and a
+regex over the `lane:` line would be a second parser that drifts from the first. `null` means *the
+output did not say*, and it is spelled `lane UNREPORTED by the subject's output` on the row. To
+carry the arm on an `io` row, measure the spec that prints JSON: `--command resources-population`.
+That is also why the two arms of an `io` A/B over the default spec read as `arm UNPROVEN on both
+sides` rather than as agreeing.
+
 Both use the same coordinate header. The comparator knows which kind it is holding and diffs
 accordingly — set differences for findings, distribution differences for numbers.
 

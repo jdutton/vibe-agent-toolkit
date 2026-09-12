@@ -57,12 +57,15 @@ export async function withReaddirRefused<T>(
   body: () => Promise<T>,
 ): Promise<T> {
   const original = nodeFsPromises.readdir.bind(nodeFsPromises);
+  // The walk under test always lists by string path; a Buffer or URL here would
+  // be a new caller this helper has never met, and stringifying it silently
+  // would only hide that.
   const spy = vi.spyOn(nodeFsPromises, 'readdir').mockImplementation((async (
-    target: unknown,
+    target: string,
     ...rest: unknown[]
   ) => {
-    if (toForwardSlash(String(target)) === toForwardSlash(directory)) {
-      throw Object.assign(new Error(`${code}: refused, scandir '${String(target)}'`), { code });
+    if (toForwardSlash(target) === toForwardSlash(directory)) {
+      throw Object.assign(new Error(`${code}: refused, scandir '${target}'`), { code });
     }
     return await (original as (...args: unknown[]) => Promise<unknown>)(target, ...rest);
   }) as unknown as typeof nodeFsPromises.readdir);

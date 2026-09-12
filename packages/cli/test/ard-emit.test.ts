@@ -24,10 +24,12 @@ import {
   CONFIG_YAML_ARD_WITHOUT_BASE_URL,
   CONFIG_YAML_WITHOUT_ARD,
   CONFIG_YAML_WITH_ARD,
+  CONFIG_YAML_WITH_ARD_AND_REMOVED_KEY,
   FIXTURE_MARKETPLACE,
   FIXTURE_PUBLISHER,
   PUBLISHED_SKILL,
   QUALIFIED_MARKETPLACE_KEY,
+  REMOVED_RESOURCES_KEY,
   SKILLS_PROJECT,
   UNPUBLISHED_SKILL,
   projectWith,
@@ -190,6 +192,26 @@ describe('runArdEmit', () => {
     await expect(
       runArdEmit({ projectRoot: root, output: safePath.join(root, 'ard.json') })
     ).rejects.toBeInstanceOf(ArdConfigMissingError);
+  });
+});
+
+describe('runArdEmit — a config key VAT removed does not take the command down', () => {
+  // 🚨 A real adopter carries `resources.metadata`, a key removed from the
+  // schema in v0.1.16 and silently discarded ever since. When
+  // `ResourcesConfigSchema` went strict, `vat ard emit` died at config load with
+  // exit 2 — a command that never reads `resources:` — and the fix landed in the
+  // shared loader, where no `ard` test could see it regress. This pins the
+  // whole lane for THIS command: the manifest is written, the key is named on
+  // stderr, and the exit is the success it always should have been.
+  it('names the key on stderr, writes the manifest, and exits 0', async () => {
+    const root = projectWithSkill(workDir, 'removed-key', CONFIG_YAML_WITH_ARD_AND_REMOVED_KEY);
+    const { stderr, exitCalls } = await captureEmit(root);
+
+    expect(exitCalls).toEqual([]);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is built from a test temp dir
+    expect(existsSync(safePath.join(root, 'out', 'ard.json'))).toBe(true);
+    expect(stderr).toContain(`unrecognized key "${REMOVED_RESOURCES_KEY}"`);
+    expect(stderr).toContain('Ignoring the unknown key(s) and continuing');
   });
 });
 

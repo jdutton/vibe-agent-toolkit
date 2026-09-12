@@ -20,6 +20,8 @@
 
 import { z } from 'zod';
 
+import { laneOfDocument, type ReportedLane } from '../../harness/lane.js';
+
 import type { PopulationEntry } from './types.js';
 
 /**
@@ -30,6 +32,10 @@ import type { PopulationEntry } from './types.js';
  * are this facet's business. Modelling them would make an unrelated addition to
  * the subject's output a refusal here.
  *
+ * `lane` and `extentSource` are deliberately NOT here: they are read by the
+ * shared `harness/lane.ts` reader over the same parsed value, so this facet and
+ * `io` cannot disagree about what a document said its arm was.
+ *
  * `files` is optional because the command omits it without `--verbose`, and that
  * case needs its own sentence rather than a schema error — see
  * {@link readPopulationDocument}.
@@ -37,14 +43,6 @@ import type { PopulationEntry } from './types.js';
 const ScanDocumentSchema = z.object({
   root: z.string().min(1),
   filesScanned: z.number().int().nonnegative(),
-  // A free string, matching the body's own field: an unknown lane name must
-  // survive verbatim rather than be folded into a value this build recognises.
-  lane: z.string().min(1).optional(),
-  // Nullable as well as optional, and the difference is load-bearing: vat emits
-  // `null` for the walk (a lane with no extent to source) and omits the key
-  // entirely on a build too old to report it. Rejecting the null would refuse
-  // every walk-lane document.
-  extentSource: z.string().min(1).nullable().optional(),
   files: z
     .array(
       z.object({
@@ -55,14 +53,15 @@ const ScanDocumentSchema = z.object({
     .optional(),
 });
 
-/** A population successfully read out of a command's output. */
-export interface PopulationDocument {
+/**
+ * A population successfully read out of a command's output.
+ *
+ * Extends {@link ReportedLane}: the arm the command said it took travels with
+ * the set, read by the same reader every facet uses.
+ */
+export interface PopulationDocument extends ReportedLane {
   /** The one absolute path every {@link PopulationDocument.files} path is relative to. */
   readonly root: string;
-  /** Which enumerator the command said produced this set, or `null` if it did not say. */
-  readonly lane: string | null;
-  /** Which source the reported lane enumerated from, or `null` if it did not say. */
-  readonly extentSource: string | null;
   /** Every enumerated file, sorted by path. */
   readonly files: readonly PopulationEntry[];
 }
@@ -117,12 +116,16 @@ export function readPopulationDocument(stdout: string): PopulationDocumentResult
     };
   }
 
+  // Read off the same parsed value rather than off `stdout` again: the lane
+  // reader and this schema must be looking at one document, and parsing twice
+  // is a second chance for them not to be.
+  const arm = laneOfDocument(raw);
   return {
     ok: true,
     document: {
       root: document.root,
-      lane: document.lane ?? null,
-      extentSource: document.extentSource ?? null,
+      lane: arm.lane,
+      extentSource: arm.extentSource,
       files: sortByPath(document.files),
     },
   };

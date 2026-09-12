@@ -21,7 +21,10 @@ with a regression test.
 - **An unrecognized key in `vibe-agent-toolkit.config.yaml` is now a warning on stderr, not
   `exit 2`** — at the top level and under every section, at any depth. **A script relying on
   `exit 2` for a stray key must read stderr instead.** Every other validation failure — a wrong
-  type, a missing required field, a bad enum — still refuses.
+  type, a missing required field, a bad enum — still refuses. This unblocks every command that
+  loads config only to read a section the stray key is not in — `vat ard emit` was the measured
+  case: a config carrying the long-removed `resources.metadata` took it down at load, and it now
+  emits its manifest with the key named once on stderr. That lane is pinned by its own test.
 
 - **`vat audit` on a directory no longer exits 2 because one nested config cannot be loaded.** It
   warns once per config, names the file, and validates the skills it governs config-free.
@@ -208,6 +211,17 @@ with a regression test.
   SQLite persistence comes from the new `@vibe-agent-toolkit/projection-sqlite` package, enabled
   with `VAT_PROJECTION_STORE=sqlite`; `VAT_PROJECTION_STORE_DIR` sets where that database lives —
   set it per CI job, or concurrent jobs write into one file.
+
+- **The quality lab's `io` facet now reports the arm it measured.** Every `io` row carries `lane` and
+  `extentSource`, read back out of the subject's own stdout the way `population` already did — never
+  from the environment variable the caller set, which proves only what was asked for. `vat-lab io
+  compare` prints the pair (`[projection via git → projection via filesystem]`) and says plainly
+  when both sides ran the same arm — *"this compares one enumerator with itself"* — or when neither
+  side reported one. Before this, an A/B of the git-vs-filesystem extent source had to infer which
+  arm each side ran from a call-site signature. The reader is one shared module for both facets. The
+  default `resources-scan` spec prints YAML, so its rows honestly read `lane: null`; measure
+  `--command resources-population` to have the arm carried. (`IoBodySchema` is strict, so an io
+  report stored by an earlier build is refused rather than misread.)
 
 - **`vat resources query <sql> [path]`** — runs one read-only SQL statement against this tree's
   resource projection, so questions no command reports a field for (headings, link targets, what the
@@ -484,6 +498,10 @@ with a regression test.
   to 1.19.17; three `minimatch` advisories (one **CVSS 8.7**) were held by an exact pin inside
   `eslint-plugin-sonarjs@3.0.7`, which 4.2.0 widens; five `langsmith` advisories are resolved by the
   `@langchain/core` 1.x move above. Nothing in VAT's own code changed.
+
+- **`smol-toml` 1.6.1 → 1.8.0** (GHSA-7w5x-hrqm-74c2, CVSS 8.2) — a dev-only transitive of `knip`,
+  held by a root `overrides` pin that the advisory arrived under. Re-pinned forward; the lockfile
+  scan is back to `No issues found`.
 
 - **A permission rule with wildcards separated by literals could hang the process, and `vat audit`
   on an untrusted plugin was the way in.** Every `*` became `.*` in a compiled regular expression, so
