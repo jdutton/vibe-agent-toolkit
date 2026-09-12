@@ -2,7 +2,7 @@
  * Test-only mocks for `fetch`-shaped functions, used by the linkAuth tests
  * in this package and intended for reuse by slice 3+ content-fetch tests.
  *
- * Three patterns:
+ * Four patterns:
  *   - `sequenceFetch(responses)` — script an ordered sequence of responses
  *     with per-call URL/header assertions. Used by `link-auth-fetch.test.ts`
  *     to test redirect + 429 chains.
@@ -11,6 +11,10 @@
  *   - `capturingFetch(extract)` — capture one piece of request data (URL or
  *     headers) for later assertion. Returns a 200 response so the caller
  *     can run an end-to-end flow.
+ *   - `undiciHeaderValidatingFetch`, with `LEAK_CANARY` / `NUL` — the §8
+ *     token-leak fixture. Shared by the transport suite and the validator
+ *     suite because both ends of one claim must exercise the SAME header
+ *     validation against the SAME canary.
  *
  * Not test files themselves (no `.test.ts` suffix); vitest's
  * `test/...test.ts` include pattern skips this file.
@@ -74,6 +78,45 @@ export function capturingFetch<T>(
   }) as typeof fetch;
   return { fetchImpl, getCaptured: () => captured };
 }
+
+/**
+ * A token value distinctive enough that finding it anywhere in emitted text is
+ * a leak and nothing else.
+ *
+ * One constant for both suites — `link-auth-transport.test.ts` (redaction at
+ * the transport) and `external-link-validator-auth.test.ts` (redaction as the
+ * validator emits it) are the two ends of one §8 claim, and a canary that
+ * differed between them would let one end drift out from under the other.
+ */
+export const LEAK_CANARY = 'ghp_leakcanary_0123456789abcdef';
+
+/**
+ * The byte that makes undici reject a header value — and, MEASURED on Node
+ * 24.13, embed that value verbatim in the `TypeError` it throws. A credential
+ * helper emitting a NUL, or a multi-line payload whose interior newline
+ * survives `resolveToken`'s end-only trim, puts one here.
+ */
+export const NUL = String.fromCodePoint(0);
+
+/**
+ * A `fetchImpl` that performs the real undici header validation — the same
+ * `new Headers(init.headers)` that `fetch` does internally — and nothing else.
+ * No socket is opened; the throw happens before any connection.
+ *
+ * 🔑 Deliberately NOT a stub of the error. The suites using this are proving a
+ * REAL undici `TypeError` cannot carry a token out; mocking the throw would
+ * test the redaction against a hazard we invented rather than the one that
+ * exists.
+ *
+ * The `x-auth-sent` response header reports whether an Authorization header
+ * survived to the request, which is what cross-origin-strip assertions read.
+ */
+export const undiciHeaderValidatingFetch = ((_url: string | URL, init?: RequestInit) => {
+  const validated = new Headers(init?.headers);
+  return Promise.resolve(
+    new Response(null, { status: 200, headers: { 'x-auth-sent': String(validated.has('authorization')) } }),
+  );
+}) as typeof fetch;
 
 function headersToObject(headers: unknown): Record<string, string> {
   if (headers === undefined || headers === null) return {};

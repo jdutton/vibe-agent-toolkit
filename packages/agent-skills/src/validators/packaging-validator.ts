@@ -623,6 +623,35 @@ export interface SkillValidationSharedContext {
 }
 
 /**
+ * The refusal for a matched file that has no frontmatter object — either no
+ * `---` block at all, or one whose YAML did not parse (`frontmatterError`).
+ *
+ * Either way the file is not a skill, and it is refused with the SAME
+ * non-overridable code `validateSkill` in skill-validator.ts emits for it:
+ * `SKILL_MISSING_FRONTMATTER` has no CODE_REGISTRY entry, so the framework's
+ * `finalize()` passes it through and `validation.severity` cannot name it.
+ *
+ * This refusal used to be absent from the packaging lane — its frontmatter
+ * checks ran only `if (parseResult.frontmatter)` — so a plain `# Readme` a
+ * `skills.include` glob drifted onto, or a SKILL.md that lost its fence, ran
+ * zero frontmatter checks and came back `success` under its H1 as a name:
+ * `vat skills validate`, `vat validate` and `vat verify` were green on a
+ * project that shipped no skill.
+ */
+function missingFrontmatterIssue(frontmatterError: string | undefined, location: string): ValidationIssue {
+  return {
+    severity: 'error',
+    code: 'SKILL_MISSING_FRONTMATTER',
+    message: frontmatterError === undefined
+      ? 'No YAML frontmatter found — a skill starts with a `---` block that names and describes it'
+      : `Frontmatter did not parse as YAML: ${frontmatterError}`,
+    location,
+    line: 1,
+    fix: 'Add YAML frontmatter with name and description fields, or narrow `skills.include` so it no longer matches this file',
+  };
+}
+
+/**
  * Validate a skill for packaging
  *
  * Performs comprehensive validation including:
@@ -671,6 +700,8 @@ export async function validateSkillForPackaging(
       ...validateFrontmatterSchema(parseResult.frontmatter, false, skillLocation),
       ...validateFrontmatterRules(parseResult.frontmatter, skillLocation),
     );
+  } else {
+    rawIssues.push(missingFrontmatterIssue(parseResult.frontmatterError, skillLocation));
   }
 
   // Compat capability detection: collect observations from SKILL.md and

@@ -7,6 +7,7 @@
 
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 
+import type { IndexResult } from '../schemas/admin.js';
 import type { CoreRAGChunk } from '../schemas/core-chunk.js';
 import type { DefaultRAGMetadata } from '../schemas/default-metadata.js';
 
@@ -131,6 +132,8 @@ export interface IndexProgress {
   resourcesSkipped: number;
   /** Resources updated so far */
   resourcesUpdated: number;
+  /** Resources that chunked to nothing so far (see {@link IndexResult.resourcesEmpty}) */
+  resourcesEmpty: number;
   /** Chunks created so far */
   chunksCreated: number;
   /** Elapsed time in milliseconds */
@@ -147,19 +150,6 @@ export interface IndexProgress {
  * Progress callback for indexing operations
  */
 export type ProgressCallback = (progress: IndexProgress) => void;
-
-/**
- * Result from indexing operation
- */
-export interface IndexResult {
-  resourcesIndexed: number;
-  resourcesSkipped: number;
-  resourcesUpdated: number;
-  chunksCreated: number;
-  chunksDeleted: number;
-  durationMs: number;
-  errors?: Array<{ resourceId: string; error: string }>;
-}
 
 /**
  * Full document record stored alongside chunks.

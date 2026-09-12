@@ -128,6 +128,12 @@ export async function captureSymlinkDivergence(
   const base = lane.crawlOptions(corpusRoot);
   const inGitRepo = gitFindRoot(corpusRoot) !== null;
 
+  // No `onUnreadable` on any of the three arms, deliberately: a directory the
+  // walk cannot list makes this a comparison of populations that were never
+  // fully enumerated, and a divergence report over that would be a confident
+  // number about a corpus it did not see. The crawler throws
+  // `DirectoryListingRefusedError`, and the harness records it as the capture's
+  // failure rather than as three shorter sets that happen to agree.
   const gitRoute = inGitRepo ? await crawlDirectory({ ...base, respectGitignore: true }) : null;
   const walkNoFollow = await crawlDirectory({
     ...base,

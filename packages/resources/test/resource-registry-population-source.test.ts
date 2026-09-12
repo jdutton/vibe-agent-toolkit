@@ -55,7 +55,7 @@ function boundSource(
       root: boundRoot,
       enumerate: (root: string) => {
         offeredRoots.push(root);
-        return Promise.resolve(names.map((name) => safePath.join(root, name)));
+        return Promise.resolve({ paths: names.map((name) => safePath.join(root, name)), conditions: [] });
       },
     },
   };

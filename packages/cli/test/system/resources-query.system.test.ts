@@ -267,12 +267,12 @@ function createCommittedCorpus(options: {
 }
 
 /** Run the verb and parse its document, failing loudly if it did not produce one. */
-function query(sql: string, options?: { env?: NodeJS.ProcessEnv; cwd?: string }): {
+function query(sql: string, options?: { env?: NodeJS.ProcessEnv; cwd?: string; args?: readonly string[] }): {
   status: number | null;
   doc: Record<string, unknown>;
   stderr: string;
 } {
-  const result = executeCli(binPath, ['resources', 'query', sql], {
+  const result = executeCli(binPath, ['resources', 'query', sql, ...(options?.args ?? [])], {
     cwd: options?.cwd ?? projectDir,
     ...(options?.env === undefined ? {} : { env: options.env }),
   });
@@ -528,6 +528,59 @@ describe('vat resources query', () => {
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('.vat-cache/');
     expect(found[0]).toContain(`/${PROJECTION_DATABASE}`);
+  });
+
+  it('reads [path] as a project LOCATOR, never as a scope — and says so with root', () => {
+    // 🔑 The honest semantics, pinned. Both SQL verbs answer about ONE tree by
+    // construction: the projection is the whole tracked tree keyed by root and
+    // tree hash, a subtree population would be filed in the shared store under
+    // the whole tree's key, and arbitrary SQL cannot be post-filtered by path.
+    // So `docs/` locates the project (root discovery walks UP from it) and the
+    // corpus is the same either way; `root` in the document is what says so.
+    // `vat resources scan docs/` DOES scope, because it crawls — the help text
+    // for both verbs states the difference, and this case is what keeps it true.
+    const whole = query(COUNT_REALIZATIONS);
+    const located = query(COUNT_REALIZATIONS, { args: [OWN_PREFIX] });
+
+    expect(located.status, located.stderr).toBe(0);
+    expect(located.doc['root']).toBe(whole.doc['root']);
+    expect((located.doc['rows'] as { n: number }[])[0]?.n)
+      .toBe((whole.doc['rows'] as { n: number }[])[0]?.n);
+  });
+
+  it('refuses a [path] that does not exist instead of answering about the tree it walked up to', () => {
+    // 🚨 `nope` located nothing, root discovery fell through to cwd's project,
+    // and the run answered about the WHOLE tree at exit 0 — the same document
+    // as a correct run, for a path the operator mistyped. `validate` already
+    // refuses this with exactly this message; the two verbs must agree.
+    const { status, stderr, doc } = query(COUNT_REALIZATIONS, { args: ['nope'] });
+
+    expect(status).toBe(2);
+    expect(stderr).toContain('Path does not exist');
+    expect(stderr).toContain('nope');
+    expect(doc['rows']).toBeUndefined();
+  });
+
+  it('refuses a [path] that is a file, which cannot locate anything', () => {
+    const { status, stderr } = query(COUNT_REALIZATIONS, { args: [`${OWN_PREFIX}/a.md`] });
+
+    expect(status).toBe(2);
+    expect(stderr).toContain('Path is not a directory');
+  });
+
+  it('refuses an UNDER-bound placeholder instead of binding NULL and reporting success', () => {
+    // 🚨 Measured before the gate: `WHERE kind LIKE ?` with no `--param`
+    // reported `n: 0, status: success` — every comparison against NULL is
+    // false, so the answer was "nothing", confidently. Over-binding was already
+    // refused by the engine; this is the symmetric case, refused with a message
+    // that names both counts rather than the engine's "column index out of range".
+    const under = query('SELECT ? AS x, ? AS y', { args: ['--param', 'a'] });
+    expect(under.status).toBe(2);
+    expect(under.stderr).toContain('2 placeholders and 1 value was bound');
+
+    const bound = query('SELECT ? AS x, ? AS y', { args: ['--param', 'a', '--param', 'b'] });
+    expect(bound.status, bound.stderr).toBe(0);
+    expect(bound.doc['rows']).toEqual([{ x: 'a', y: 'b' }]);
   });
 
   it('refuses a write at the engine and names the surface for a bad column', () => {

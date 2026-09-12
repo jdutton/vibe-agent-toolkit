@@ -79,6 +79,7 @@ import { createLogger, type Logger } from '../../utils/logger.js';
 import { writeJsonOutput, writeStdoutSync, writeYamlOutput } from '../../utils/output.js';
 import { populationWiring } from '../../utils/population-wiring.js';
 import { withPopulationCache } from '../../utils/projection-store.js';
+import { runIntegrityFinding } from '../../utils/run-integrity.js';
 import { gitTrackerForProjectRoot } from '../audit/distributed-tree.js';
 
 /** How this command names itself in a refusal. */
@@ -86,6 +87,9 @@ const COMMAND_NAME = 'vat claude budget';
 
 /** Soft wrap width for the printed limit statements. */
 const WRAP_COLUMNS = 96;
+
+/** How the corpus root itself is named to a reader — it has no path of its own. */
+const CORPUS_ROOT_LABEL = '<corpus root>';
 
 /** How the report is rendered. `text` is for a person; the other two are for a program. */
 export type BudgetOutputFormat = 'text' | 'yaml' | 'json';
@@ -121,6 +125,12 @@ export interface BudgetReport {
   readonly distinctChains: number;
   /** Locations whose representative the projection never realized. Counted, never zeroed. */
   readonly skippedUnknownLocations: number;
+  /**
+   * One finding per over-budget chain — plus, ahead of them, the run-integrity
+   * refusal when part of what was asked about was never measured. See
+   * {@link buildReport}: the second kind is DERIVED here rather than passed in,
+   * so no report can carry an unmatched path and a clean status.
+   */
   readonly findings: readonly ValidationIssue[];
   /**
    * What this verdict does not settle, in either direction. Stated ONCE.
@@ -185,7 +195,10 @@ Configuration (vibe-agent-toolkit.config.yaml):
 
 Output:
   - threshold:          the budget every chain was measured against
-  - scope/unmatchedScope: what was asked about, and what matched nothing
+  - scope/unmatchedScope: what was asked about, and what matched nothing.
+                        A path that matched nothing was NOT checked, so it is
+                        reported as a RESOURCE_CHECK_BROKEN error rather than
+                        passing quietly -- and that code is not configurable
   - status/issueCounts: the worst actionable severity, plus every severity
   - workingLocations, distinctChains, skippedUnknownLocations: whole-tree
                         facts, so an empty findings list is legible
@@ -200,7 +213,8 @@ Output:
 
 Exit Codes:
   0 - Reported (findings at the default info severity do not gate)
-  1 - A finding resolved to error severity via config
+  1 - A finding resolved to error severity via config, or a requested path
+      matched no working location so nothing was checked there
   2 - System error (a path outside the corpus root, unreadable tree)
 
 Example:
@@ -246,11 +260,14 @@ export async function claudeBudgetCommand(
 
     const report = buildReport({ root, threshold, scope, sweep, scoped, findings });
     emit(report, options.format ?? 'text');
-    // Only `error` gates. At the code's `info` default this is always 0, so the
-    // budget cannot fail a build unless an adopter asked it to.
+    // `error` gates, and it is reachable two ways: an adopter promoted
+    // ALWAYS_LOADED_CONTEXT_BUDGET, or the run checked nothing — see
+    // {@link nothingCheckedFindings}. At the code's `info` default the first
+    // never fires, so the budget cannot fail a build unless an adopter asked it
+    // to; the second is not a severity anybody may configure away.
     process.exit(report.issueCounts.errors > 0 ? 1 : 0);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'claude budget');
+    handleCommandError(error, logger, startTime, 'claude budget', options.format);
   }
 }
 
@@ -261,6 +278,7 @@ export interface ReportInput {
   readonly scope: readonly string[];
   readonly sweep: BudgetSweep;
   readonly scoped: { readonly unmatchedScope: readonly string[] };
+  /** The BUDGET findings only. The run-integrity refusal is derived, not passed. */
   readonly findings: readonly ValidationIssue[];
 }
 
@@ -281,22 +299,31 @@ export interface ReportInput {
  * block appears exactly once across a MULTI-finding report — and a presence
  * check passes identically with a copy per finding.
  *
+ * ⛔ The run-integrity refusal is DERIVED here from `scoped.unmatchedScope`
+ * rather than assembled by the caller, which is what makes "a run that checked
+ * nothing never reports success" unrepresentable instead of merely observed:
+ * there is no pipeline step left in which a later edit could drop it. See
+ * {@link nothingCheckedFindings}.
+ *
  * @param input - The run's parts
  * @returns The report, ready to serialize
  */
 export function buildReport(input: ReportInput): BudgetReport {
   const { root, threshold, scope, sweep, scoped, findings } = input;
+  // The run-integrity report LEADS: every budget finding beneath it is noise
+  // until the operator knows part of what they asked about was never measured.
+  const reported = [...nothingCheckedFindings(scoped.unmatchedScope), ...findings];
   return {
     root,
     threshold,
     scope,
     unmatchedScope: scoped.unmatchedScope,
-    status: calculateValidationStatus(findings),
-    issueCounts: countBySeverity(findings),
+    status: calculateValidationStatus(reported),
+    issueCounts: countBySeverity(reported),
     workingLocations: sweep.evaluatedDirectories,
     distinctChains: sweep.queriedDirectories,
     skippedUnknownLocations: sweep.skippedUnknownLocations,
-    findings,
+    findings: reported,
     boundsStatement: CLAUDE_CONTEXT_BOUNDS_STATEMENT,
     limits: ALWAYS_LOADED_BUDGET_LIMITS,
   };
@@ -323,9 +350,9 @@ function scopeWithin(root: string, pathArgs: readonly string[]): string[] {
 /**
  * Say so, loudly, when a requested path named no working location.
  *
- * ⛔ `warn` (stderr), never `debug`. Such a scope produces zero findings, which
- * is byte-identical to a clean bill of health — and a default run that stayed
- * silent about it would publish that confusion rather than the fact behind it.
+ * ⛔ `warn` (stderr), never `debug`. The human half of
+ * {@link nothingCheckedFindings} — the same fact, on the channel a person reads,
+ * ahead of the report rather than inside it.
  *
  * @param unmatched - The requested paths that matched nothing
  * @param logger - Where the warning goes
@@ -336,6 +363,58 @@ function warnUnmatched(unmatched: readonly string[], logger: Logger): void {
     `Warning: no working location matched ${unmatched.join(', ')} — nothing was checked there.`
     + ' This is NOT a report that those paths are within budget.',
   );
+}
+
+/**
+ * The refusal for a run whose requested paths named no working location.
+ *
+ * 🔑 **A gate that checked nothing must never answer `success`.** This shipped:
+ * `vat claude budget no/such/dir` reported `status: success` on exit 0, because
+ * an unmatched scope measures zero chains and zero findings serializes
+ * identically to "everything you asked about is within budget". The command
+ * already knew — it warned on stderr that nothing had been checked — and then
+ * published a document saying the opposite. Only the document gates a build, so
+ * the two channels disagreed on the half that matters.
+ *
+ * 🪤 {@link warnUnmatched} still says the same thing on stderr, and that is not
+ * the duplication this file bans elsewhere: stderr is the human channel and
+ * stdout is the parsed document, so the two are one statement per audience. What
+ * was wrong was never that the warning existed — it was that the DOCUMENT
+ * contradicted it, and the exit code was computed from the document.
+ *
+ * ⛔ Not repeated a THIRD time inside the text rendering, though. That shares a
+ * channel with the finding, which {@link renderReportText} already prints.
+ *
+ * The precedent is `vat resources check`'s `emptyCorpusFinding`, and this
+ * follows it through the shared {@link runIntegrityFinding} rather than
+ * inventing a third convention — `RESOURCE_CHECK_BROKEN` at `error`, derived in
+ * {@link buildReport} rather than assembled in the handler, so it bypasses
+ * `applyAllowFilter` and `resolveIssueSeverity` by construction and no report
+ * carrying an unmatched path can be built with a clean status. The reasoning
+ * behind each of those lives with the mechanism, in `run-integrity.ts`.
+ *
+ * ⛔ ONE finding however many paths went unmatched. The claim is about the RUN,
+ * and one per argument is the per-finding duplication this report is built to
+ * make impossible. It is not routed through `nothingCheckedFinding` because the
+ * denominator here is not a count but a list of names the message must carry.
+ *
+ * @param unmatched - The requested paths that matched no working location
+ * @returns The finding, or nothing when everything asked about was checked
+ */
+function nothingCheckedFindings(unmatched: readonly string[]): readonly ValidationIssue[] {
+  if (unmatched.length === 0) return [];
+
+  const named = unmatched.map((path) => (path === '' ? CORPUS_ROOT_LABEL : path)).join(', ');
+  return [runIntegrityFinding(
+    `No working location matched ${named}, so nothing was checked there and this`
+    + ' report is NOT a statement that those paths are within budget.'
+    + ' A working location is any non-ignored directory holding an enumerated file,'
+    + ' so a path matching none is usually a typo, a directory that is empty, or one'
+    + ' `.gitignore` declines — and the whole corpus root matching none means the'
+    + ' enumeration came back empty, which a broad ignore pattern or a shallow or'
+    + ' sparse checkout produces.'
+    + ' `vat resources scan` over the same path lists what an enumeration finds.',
+  )];
 }
 
 /**
@@ -401,7 +480,6 @@ export function renderReportText(report: BudgetReport): string {
     + ` · ${count(report.skippedUnknownLocations)} unrealized`,
     '',
     ...findingLines(report.findings),
-    ...unmatchedLines(report.unmatchedScope),
     ...limitLines(report),
   ];
   return `${lines.join('\n')}\n`;
@@ -473,27 +551,12 @@ function findingLines(findings: readonly ValidationIssue[]): string[] {
   if (findings.length === 0) return ['Every instruction chain checked is within budget.', ''];
   const lines: string[] = [];
   for (const finding of findings) {
-    lines.push(`${finding.severity} ${finding.code} at ${finding.location ?? '<corpus root>'}`);
+    lines.push(`${finding.severity} ${finding.code} at ${finding.location ?? CORPUS_ROOT_LABEL}`);
     lines.push(`  ${finding.message}`);
     if (finding.fix !== undefined) lines.push(`  Fix: ${finding.fix}`);
     lines.push('');
   }
   return lines;
-}
-
-/**
- * The unmatched-scope notice, printed in the document as well as on stderr.
- *
- * @param unmatched - The requested paths that matched nothing
- * @returns The lines, or none
- */
-function unmatchedLines(unmatched: readonly string[]): string[] {
-  if (unmatched.length === 0) return [];
-  return [
-    `Matched no working location: ${unmatched.join(', ')}`,
-    '  Nothing was checked there — this is not a report that they are within budget.',
-    '',
-  ];
 }
 
 /**

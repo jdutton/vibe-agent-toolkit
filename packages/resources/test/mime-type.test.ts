@@ -220,3 +220,66 @@ describe('parserKindForMimeType', () => {
     expect(parserKindForMimeType(null)).toBeNull();
   });
 });
+
+/**
+ * A declared MIME type is adopter-authored prose, not a value this module produced.
+ *
+ * 🚨 The lookup used to be a byte-exact `Map.get` on it, so
+ * `text/markdown; charset=utf-8` — an entirely ordinary spelling, and the one a
+ * `Content-Type` header uses — routed to no parser at all. That is not a loud
+ * failure: `resource-registry.ts › parserKindFor` turns `null` into
+ * `NO_PARSER_KIND`, so EVERY file in the declaring collection is silently skipped
+ * and the run exits 0 claiming to have looked.
+ *
+ * The rows below are the MECHANISM, not the one spelling in the report: a
+ * parameter, several parameters, a quoted parameter value, OWS either side of the
+ * `;`, surrounding whitespace, and case — RFC 9110 §8.3.1 makes type and subtype
+ * case-insensitive, and parameters are `;`-delimited and never part of the type.
+ */
+describe('parserKindForMimeType — a declared type carries parameters and any case', () => {
+  it.each([
+    // The spelling in the defect report.
+    { mime: 'text/markdown; charset=utf-8', kind: 'markdown' },
+    // No OWS after the delimiter — equally legal, and a different code path for
+    // anything that split on '; ' rather than on ';'.
+    { mime: 'text/markdown;charset=utf-8', kind: 'markdown' },
+    // More than one parameter, so a fix stripping only the LAST one fails here.
+    { mime: 'text/markdown; charset=utf-8; variant=GFM', kind: 'markdown' },
+    // A quoted parameter value containing the delimiter itself. Splitting at the
+    // FIRST ';' is right whatever the value holds — the type is already complete.
+    { mime: 'text/markdown; note=";"', kind: 'markdown' },
+    // Case: RFC 9110 §8.3.1. All three of these name the same type.
+    { mime: 'TEXT/MARKDOWN', kind: 'markdown' },
+    { mime: 'Text/Markdown', kind: 'markdown' },
+    { mime: 'TEXT/MARKDOWN; CHARSET=UTF-8', kind: 'markdown' },
+    // Leading/trailing whitespace, which a hand-edited YAML value picks up.
+    { mime: '  text/markdown  ', kind: 'markdown' },
+    { mime: 'text/markdown ; charset=utf-8', kind: 'markdown' },
+    // The other two routing types get the same treatment — the normalization is
+    // in the lookup, not a special case carved for markdown.
+    { mime: 'text/html; charset=iso-8859-1', kind: 'html' },
+    { mime: 'TEXT/HTML', kind: 'html' },
+    { mime: 'text/plain; charset=us-ascii', kind: 'markdown' },
+  ])('$mime -> $kind', ({ mime, kind }) => {
+    expect(parserKindForMimeType(mime)).toBe(kind);
+  });
+
+  it.each([
+    // A `+suffix` type, parameterised. Normalizing must not start matching it:
+    // `image/svg+xml` routes to no document parser with or without parameters.
+    'image/svg+xml; charset=utf-8',
+    'IMAGE/SVG+XML',
+    'application/json; charset=utf-8',
+    // Not a prefix match. `text/markdownish` is a different type, and stripping
+    // parameters must not turn the lookup into a `startsWith`.
+    'text/markdownish',
+    'text/markdown-extra',
+    // Degenerate spellings, which must stay null rather than resolve to the empty
+    // key or throw.
+    ';',
+    '; charset=utf-8',
+    '   ',
+  ])('does not run a document parser for %s', (mime) => {
+    expect(parserKindForMimeType(mime)).toBeNull();
+  });
+});

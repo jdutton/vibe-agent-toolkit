@@ -225,6 +225,8 @@ vibe-agent-toolkit/
 - **Test Coverage**: Currently enforced at 70% (statements, branches, functions, lines). Goal: 80%+. See [Test Pyramid and Coverage](#test-pyramid-and-coverage) for details.
 - **Code Duplication**: **ZERO TOLERANCE** - See Critical Duplication Policy below
 - **SonarQube**: Automatic analysis on SonarWay — **fix every smell it reports. NEVER `NOSONAR`, never argue one away.** Suppression does not work under automatic analysis. If ESLint can catch the same class, add that rule too so it fails at the desk instead.
+  - **Read the counts in SonarCloud's PR comment, not the badge.** "Quality Gate passed" is not "zero smells" — the comment itself breaks out *New issues*, *Accepted issues* and *Security Hotspots*, and an **Accepted** issue is still an open smell that the gate ignores. Zero means all three lines read zero.
+  - ⛔ **Ignore SonarCloud's "Coverage on New Code" — it is ALWAYS 0.0% here, and that is not a coverage regression.** Automatic analysis never runs the tests, and nothing uploads a report to it: there is no `sonar-project.properties` and no sonar step in any workflow. Coverage goes to **Codecov** only (`.github/workflows/coverage.yml` → `coverage/lcov.info`). Codecov is the coverage authority; Sonar's coverage number is an artifact of a mode that cannot measure it.
 
 ### **CRITICAL: Code Duplication Policy**
 
@@ -611,6 +613,8 @@ session — and a wrong one reports a confident number, which is worse than no n
 ([[measurement-that-did-not-run]], [[fixtures-that-cannot-distinguish]]). Extend the instrument, or
 say plainly that the code is unreachable from it. Code no instrument can reach is code whose
 regressions nobody will catch — that is a merge concern, not a tooling inconvenience.
+- [vat-linkauth-contributing.md](docs/contributing/vat-linkauth-contributing.md) — working on the linkAuth engine itself (not on configuring `resources.linkAuth`, which is adopter documentation); read before touching authenticated external-link resolution
+- [baseline-control-adopter-response.md](docs/contributing/baseline-control-adopter-response.md) — the written record of the `vat skill test --baseline` control-arm contamination: what an adopter's defect report got right, and the two causes it missed that were worse — VAT handed the control arm the staged subject's path and parked its working directory inside it, so the measurement was not degraded but undefined. Read before trusting or re-deriving any pre-fix `--baseline` number
 - [plugin-distribution-findings.md](docs/contributing/plugin-distribution-findings.md) — running evidence log behind VAT's plugin-shape rules (what's DOCUMENTED vs merely OBSERVED), the silent hosted-sync divergence class, and a "rules NOT to add" list; read before proposing or promoting any plugin-shape rule
 
 ## External Documentation Cache

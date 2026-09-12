@@ -15,6 +15,7 @@
 
 import { writeFileSync } from 'node:fs';
 
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -43,8 +44,12 @@ async function discoveredIn(cwd: string): Promise<Awaited<ReturnType<typeof disc
 const filesDestsIn = async (cwd: string): Promise<FilesDestCheckResult[]> =>
   checkFilesConfigDests(cwd, await discoveredIn(cwd));
 
-const packagedContentIn = async (cwd: string): Promise<ReturnType<typeof checkPackagedAgentInstructionFiles>> =>
+const packagedCrawlIn = async (cwd: string): Promise<ReturnType<typeof checkPackagedAgentInstructionFiles>> =>
   checkPackagedAgentInstructionFiles(cwd, await discoveredIn(cwd));
+
+/** The crawl's findings alone; the bundle count beside them is pinned where it matters. */
+const packagedContentIn = async (cwd: string): Promise<ValidationIssue[]> =>
+  (await packagedCrawlIn(cwd)).issues;
 
 // ---------------------------------------------------------------------------
 // Fixture constants
@@ -420,7 +425,10 @@ skills:
     expect(issues[0]?.location).toContain('CLAUDE.md');
   });
 
-  it('reports nothing when no build output exists', async () => {
+  it('reports no finding and ZERO bundles when no build output exists', async () => {
+    // The crawl itself stays honest: nothing found, over nothing. Refusing that
+    // as a verdict is the phase builder's job (`buildPackagedContentPhase`),
+    // which is why the count travels with the findings.
     const { tempDir } = setupFilesDestsFixture({
       includeTreeCopyPlugin: false,
       createPluginSourceSkillDir: false,
@@ -430,7 +438,15 @@ skills:
       createDestInPool: false,
     });
 
-    await expect(packagedContentIn(tempDir)).resolves.toEqual([]);
+    // `skills.config.<name>` alone expects nothing: discovery reached no skill,
+    // so nothing was built and nothing is missing — the stale key is the
+    // consistency phase's finding, not this one's.
+    await expect(packagedCrawlIn(tempDir)).resolves.toEqual({
+      bundlesInspected: 0,
+      bundlesExpected: 0,
+      bundlesMissing: [],
+      issues: [],
+    });
   });
 });
 

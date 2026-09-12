@@ -4,11 +4,12 @@
 
 import * as fs from 'node:fs/promises';
 
+import { allowedToolsOf, parseFrontmatter } from '@vibe-agent-toolkit/agent-skills';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { SettingsConflict } from '../types.js';
 
-import { matchesDenyRule, ruleConstrainsTool } from './permission-matcher.js';
+import { ruleConstrainsDeclaration } from './permission-matcher.js';
 import type { EffectiveSettings, ProvenanceRule } from './settings-merger.js';
 
 interface SkillFrontmatter {
@@ -16,51 +17,27 @@ interface SkillFrontmatter {
   model?: string;
 }
 
-function parseInlineTools(inline: string): string[] {
-  if (inline.startsWith('[')) {
-    return inline.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean);
-  }
-  return inline.split(',').map(s => s.trim()).filter(Boolean);
-}
-
-const ALLOWED_TOOLS_KEY = 'allowed-tools:';
-
-function parseAllowedTools(frontmatterText: string): string[] | undefined {
-  const lines = frontmatterText.split('\n');
-  const headerIdx = lines.findIndex(l => l.toLowerCase().startsWith(ALLOWED_TOOLS_KEY));
-  if (headerIdx === -1) return undefined;
-
-  const header = lines[headerIdx] ?? '';
-  // `header` is already one line (the text was split on \n), so there is nothing
-  // for a regex to scan for here: the inline value is just whatever follows the
-  // key. Slicing is linear, where the old `\s*([^\n]+)` form backtracked
-  // super-linearly because `\s*` and `[^\n]+` compete for the same spaces.
-  // This also makes the parse case-insensitive, matching the case-insensitive
-  // test that located the header in the first place — previously an
-  // `Allowed-Tools:` line was found and then silently failed to parse.
-  const inlineValue = header.slice(ALLOWED_TOOLS_KEY.length);
-
-  if (inlineValue.length > 0) {
-    return parseInlineTools(inlineValue.trim());
-  }
-
-  // Multi-line list: following lines prefixed with "  - "
-  const tools: string[] = [];
-  for (let i = headerIdx + 1; i < lines.length; i++) {
-    const line = lines[i] ?? '';
-    const itemMatch = /^ {2}- ([^\n]+)$/.exec(line);
-    if (itemMatch?.[1]) {
-      tools.push(itemMatch[1].trim());
-    } else {
-      break;
-    }
-  }
-  return tools.length > 0 ? tools : undefined;
-}
-
 /**
- * Parse SKILL.md frontmatter fields we care about (allowed-tools, model).
- * Returns null if no frontmatter found.
+ * Read the SKILL.md frontmatter fields this checker consults (`allowed-tools`,
+ * `model`), through the SAME parser the skill validator uses.
+ *
+ * 🚩 This used to be a hand parser: an inline value split on `,` only, and a
+ * block list that accepted exactly two-space `  - ` items. So the documented
+ * space-separated spelling `allowed-tools: Read Edit` became ONE declaration
+ * named `Read Edit`, which matches no rule, and a four-space YAML list became
+ * `undefined`, which skipped the skill — both reported "no conflict" against an
+ * org deny that the comma and two-space spellings reported. Under-reporting is
+ * the direction this module's own contract calls unsafe, and it was decided by
+ * how the author indented.
+ *
+ * Returns `null` when the file cannot be read or its frontmatter does not
+ * parse. ⚠️ That is not a silent skip: `SettingsConflict[]` has no slot for
+ * "this skill is unreadable", and it does not need one — the skill validator
+ * runs on the same file in the same `vat audit` and names the failure as
+ * `SKILL_MISSING_FRONTMATTER` (severity error) carrying the YAML parser's
+ * message. Sharing `parseFrontmatter` is what keeps the two in agreement: the
+ * checker contributes nothing for exactly the files the validator calls
+ * unreadable, never for a file it merely failed to hand-parse.
  */
 async function parseSkillFrontmatter(
   skillPath: string
@@ -73,26 +50,22 @@ async function parseSkillFrontmatter(
     return null;
   }
 
-  if (!content.startsWith('---')) return null;
+  const parsed = parseFrontmatter(content);
+  if (!parsed.success) return null;
+  // `yaml.parse` of an empty document is `null`, and a scalar document is not a mapping.
+  const frontmatter: unknown = parsed.frontmatter;
+  if (frontmatter === null || typeof frontmatter !== 'object' || Array.isArray(frontmatter)) return null;
+  const fields = frontmatter as Record<string, unknown>;
 
-  const endIdx = content.indexOf('\n---', 3);
-  if (endIdx === -1) return null;
-
-  const frontmatterText = content.slice(3, endIdx).trim();
   const result: SkillFrontmatter = {};
-
-  const allowedTools = parseAllowedTools(frontmatterText);
-  if (allowedTools) {
+  const allowedTools = allowedToolsOf(fields['allowed-tools']);
+  if (allowedTools !== undefined) {
     result['allowed-tools'] = allowedTools;
   }
-
-  // Parse model
-  const modelMatch = /^model:\s*(.+)/m.exec(frontmatterText);
-  if (modelMatch?.[1]) {
-    const raw = modelMatch[1].trim();
-    result.model = /^['"](.+)['"]$/.exec(raw)?.[1] ?? raw;
+  const model = fields['model'];
+  if (typeof model === 'string' && model.trim() !== '') {
+    result.model = model.trim();
   }
-
   return result;
 }
 
@@ -136,14 +109,8 @@ async function hasHooksFile(pluginDir: string): Promise<boolean> {
   }
 }
 
-function extractToolInput(tool: string): string {
-  if (!tool.includes('(')) return '*';
-  const idx = tool.indexOf('(');
-  return tool.endsWith(')') ? tool.slice(idx + 1, -1) : tool.slice(idx + 1);
-}
-
 /**
- * Whether a DENY rule blocks this tool call.
+ * Every `allowed-tools:` entry an org DENY rule constrains.
  *
  * 🔑 The lane is not incidental. Every rule reaching here comes from
  * `effectiveSettings.permissions.deny`, and Claude Code's deny matching is not
@@ -151,41 +118,31 @@ function extractToolInput(tool: string): string {
  * matches, reaches into nested commands, and matches past a leading assignment.
  * Asking the allow-lane question here under-matches, and an under-match in this
  * checker is silently reported to the adopter as "no conflict" for a tool their
- * org policy actually blocks. `matchesDenyRule` is the entry point that asks the
- * right question; `matchesPermissionRule` takes the lane explicitly and has no
- * default, so this can never drift back by omission.
+ * org policy actually blocks. `lane` is a REQUIRED argument throughout the
+ * matcher and has no default, so this can never drift back by omission.
  *
- * 🚩 The `*` branch used to answer its own question, with
- * `rule === toolName || rule.startsWith(`${toolName}(`)`, and that made this
- * module contradict the matcher it depends on. The matcher rules that a
- * `Write`/`Glob`/`NotebookRead`/`NotebookEdit` PATH rule blocks nothing —
- * Claude Code accepts those rules and never consults them — but the string
- * prefix knew nothing about that, so `Write(./secrets/**)` was reported as
- * blocking a skill that spells the tool `Write` and NOT one that spells it
- * `Write(./out/**)`. One deny rule, two answers about one tool, decided by
- * nothing but the SKILL.md's spelling. `ruleConstrainsTool` is the matcher's
- * own answer to the no-concrete-input question, off the same taxonomy that
- * decides the concrete one, so there is exactly one answer now.
+ * ⛔ This module asks ONE question of the matcher and interprets nothing itself.
+ * That is a rule with two scars behind it, both of the same shape — the checker
+ * deciding on its own what a SKILL.md spelling means:
  *
- * That branch also CRASHED on the consulted half: it asked the path lane about
- * an empty path, which node-ignore refuses with `path must not be empty`, so
- * `vat audit` died on any plugin declaring a bare `Read`/`Edit` against an org
- * path rule. It no longer asks that question at all, and the path lane answers
- * `false` for an empty path rather than throwing.
+ * - It answered *"does this rule constrain the tool at all?"* with
+ *   `rule.startsWith(`${toolName}(`)`, which knows nothing of the matcher's
+ *   ruling that a `Write`/`Glob`/`NotebookRead`/`NotebookEdit` PATH rule blocks
+ *   nothing. `Write(./secrets/**)` was reported as blocking a skill spelling the
+ *   tool `Write` and not one spelling it `Write(./out/**)`. That branch also
+ *   CRASHED on the consulted half, handing the path lane an empty path, which
+ *   node-ignore refuses with `path must not be empty` — `vat audit` died on any
+ *   plugin declaring a bare `Read`/`Edit` against an org path rule.
+ * - It then pulled the parenthesised text out of the entry and passed it as a
+ *   CONCRETE tool input. Every partial wildcard — `Bash(git:*)`, `Read(./**)`,
+ *   the spellings Claude Code's own documentation uses — was tested as a command
+ *   literally named `git:*` or a file literally named `./**`, so bare `Bash`
+ *   reported a conflict with `Bash(git push:*)` and `Bash(git:*)` did not.
+ *
+ * `ruleConstrainsDeclaration` takes the entry WHOLE and answers off the same
+ * taxonomy that decides a concrete input, so there is exactly one answer per
+ * (declaration, rule) pair and this file has no spelling logic left to drift.
  */
-function isToolBlocked(
-  toolName: string,
-  toolInput: string,
-  rule: string,
-  pluginDir: string
-): boolean {
-  // A bare `Write` or a wildcarded `Write(*)` declares the tool UNRESTRICTED —
-  // there is no concrete input to match, so the question is whether the rule
-  // constrains the tool at all.
-  if (toolInput === '*') return ruleConstrainsTool(toolName, rule, 'deny');
-  return matchesDenyRule(toolName, toolInput, rule, pluginDir);
-}
-
 async function checkToolBlockingConflicts(
   skillFiles: string[],
   denyRules: ProvenanceRule[],
@@ -198,11 +155,8 @@ async function checkToolBlockingConflicts(
     if (!frontmatter?.['allowed-tools']) continue;
 
     for (const tool of frontmatter['allowed-tools']) {
-      const toolName = tool.includes('(') ? tool.slice(0, tool.indexOf('(')) : tool;
-      const toolInput = extractToolInput(tool);
-
       for (const { rule, provenance } of denyRules) {
-        if (isToolBlocked(toolName, toolInput, rule, pluginDir)) {
+        if (ruleConstrainsDeclaration(tool, rule, 'deny', pluginDir)) {
           conflicts.push({
             type: 'tool-blocked',
             detail: `Tool "${tool}" in ${safePath.relative(pluginDir, skillFile)} blocked by org policy (permissions.deny)`,

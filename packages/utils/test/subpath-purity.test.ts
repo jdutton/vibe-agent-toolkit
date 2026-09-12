@@ -17,7 +17,33 @@ interface ReachedModules {
   thirdParty: Set<string>;
 }
 
-const IMPORT_SPECIFIER = /from\s+'([^']+)'/gu;
+/**
+ * Every shape that puts a module edge into a source file.
+ *
+ * ⛔ This used to be `/from\s+'([^']+)'/gu`, which saw ONE of them. It was blind
+ * to `await import('pkg')`, to a bare `import 'pkg'` side-effect edge, and to
+ * every double-quoted specifier — so the exact trap this repo has already
+ * recorded ("a lazy import defers evaluation, not installation, so the wasm
+ * runtime still ships to every rag adopter") walked straight through the gate
+ * built to stop it, and the walker would have reported the entry pure.
+ *
+ * `\b(?:from|import|require)` then `[\s(]*` then the quote: one unnested
+ * quantifier, so there is no backtracking to pay for. `export … from` is covered
+ * by `from`; `import.meta.url` is not, because `.` is not in `[\s(]`.
+ */
+const IMPORT_SPECIFIER = /\b(?:from|require|import)[\s(]*['"]([^'"]+)['"]/gu;
+
+/**
+ * The character set a module specifier is drawn from.
+ *
+ * Admitting double quotes made the matcher reach prose it never saw before:
+ * `fs-utils.ts` builds the message `(referenced from "${referrer}")`, whose
+ * `from "…"` is textually an import edge and semantically a sentence. Screening
+ * the CAPTURE rather than narrowing the matcher keeps every real shape in scope
+ * — no specifier may contain `$`, a brace, a space or a backslash, so nothing
+ * screened out here could have been an edge.
+ */
+const MODULE_SPECIFIER = /^[\w@./:~+-]+$/u;
 
 /** `picomatch` → `picomatch`; `@scope/pkg/sub` → `@scope/pkg`. Not a filesystem path. */
 const PACKAGE_NAME = /^(@[^/]+\/[^/]+|[^/]+)/u;
@@ -30,8 +56,11 @@ function packageNameOf(specifier: string): string {
  * Collect every `node:*` builtin AND every third-party package reachable from an
  * entry module's source graph.
  *
- * Walks top-level `from '...'` specifiers transitively through relative imports,
- * mapping the emitted `.js` extension back to the `.ts` source. Any relative
+ * Walks every specifier {@link IMPORT_SPECIFIER} recognises — static, dynamic,
+ * side-effect and re-export, in either quote style — transitively through
+ * relative imports, mapping the emitted `.js` extension back to the `.ts`
+ * source. (`test/fixtures/import-shapes/entry.ts` carries one edge of each
+ * shape, so the breadth is exercised rather than claimed.) Any relative
  * specifier that does not resolve to a real source file is a hard error rather
  * than a silent skip — a walker that quietly drops edges returns an empty set
  * and makes every purity assertion below pass vacuously. (`test/fixtures/
@@ -63,7 +92,7 @@ function collectReachedModules(entryPath: string): ReachedModules {
 
     for (const match of source.matchAll(IMPORT_SPECIFIER)) {
       const specifier = match[1];
-      if (specifier === undefined) continue;
+      if (specifier === undefined || !MODULE_SPECIFIER.test(specifier)) continue;
 
       if (specifier.startsWith('node:')) {
         builtins.add(specifier);
@@ -79,12 +108,15 @@ function collectReachedModules(entryPath: string): ReachedModules {
   return { builtins, thirdParty };
 }
 
+/** Deterministic order, so the sets below can be asserted by equality. */
+function sorted(values: Set<string>): string[] {
+  return [...values].sort((a, b) => a.localeCompare(b));
+}
+
 /** Reached modules for a `src/` entry, in deterministic order for equality assertions. */
 function reachedFromEntry(entryFile: string): { builtins: string[]; thirdParty: string[] } {
   const reached = collectReachedModules(safePath.join(srcDir, entryFile));
-  const sort = (values: Set<string>): string[] =>
-    [...values].sort((a, b) => a.localeCompare(b));
-  return { builtins: sort(reached.builtins), thirdParty: sort(reached.thirdParty) };
+  return { builtins: sorted(reached.builtins), thirdParty: sorted(reached.thirdParty) };
 }
 
 describe('pure subpath entries reach no Node builtin', () => {
@@ -169,6 +201,39 @@ describe('the walker actually detects what it claims to (negative controls)', ()
   // every third-party expectation above would be trivially satisfiable by `[]`.
   it('finds picomatch reachable from crawl.ts', () => {
     expect(reachedFromEntry('crawl.ts').thirdParty).toContain('picomatch');
+  });
+
+  /**
+   * The detector itself, exercised on one edge of every shape.
+   *
+   * The rows above can only be trusted to the extent the walker can SEE an edge.
+   * With the old `/from\s+'([^']+)'/gu` this fixture reported one package out of
+   * five: a bare side-effect import, a double-quoted import, and both dynamic
+   * `import()` forms were invisible — and a lazy dynamic import is exactly how a
+   * heavy optional runtime ends up installed for every adopter while the entry
+   * still looks pure.
+   *
+   * `node:crypto` is the transitive half: it is reachable only THROUGH the
+   * `export … from` edge, so its presence proves the walker followed that edge
+   * instead of merely logging its specifier.
+   */
+  it('sees a module edge of every shape, and no sentence that looks like one', () => {
+    const entry = resolveFromImportMeta(
+      import.meta.url,
+      'fixtures',
+      'import-shapes',
+      'entry.ts',
+    );
+    const reached = collectReachedModules(entry);
+
+    expect(sorted(reached.thirdParty)).toEqual([
+      'cjs-required-pkg',
+      'double-quoted-pkg',
+      'dynamic-double-pkg',
+      'dynamic-single-pkg',
+      'side-effect-pkg',
+    ]);
+    expect(sorted(reached.builtins)).toEqual(['node:crypto']);
   });
 
   // The "cannot pass vacuously" guarantee, exercised rather than asserted: a graph

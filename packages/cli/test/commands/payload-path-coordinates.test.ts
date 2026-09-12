@@ -127,17 +127,35 @@ describe('skills list payload', () => {
   const skills = [{ name: 'alpha', path: SKILL, valid: true }];
 
   it('publishes each skill path relative to the stated root', () => {
-    const yamlText = formatSkillsYaml(skills, 'project', ROOT);
+    const yamlText = formatSkillsYaml(skills, 'project', ROOT, []);
 
     expect(yamlText).toContain(`root: ${ROOT}\n`);
     expect(yamlText).toContain(`    path: ${SKILL_REL}\n`);
     expect(yamlText).not.toContain(`path: ${SKILL}`);
+    expect(yamlText).toContain('status: success\n');
+    expect(yamlText).not.toContain('unreadable:');
   });
 
   it('leaves the entries it was handed unmutated', () => {
-    formatSkillsYaml(skills, 'project', ROOT);
+    formatSkillsYaml(skills, 'project', ROOT, []);
 
     expect(skills[0]?.path).toBe(SKILL);
+  });
+
+  // A directory the scan could not list is a skill count the reader cannot
+  // trust; the machine-readable document — the one a CI wrapper diffs — must
+  // say so, in the same root-relative coordinates as every other path in it.
+  it('publishes the directories it could not list, root-relative, and degrades the status', () => {
+    const locked = safePath.join(ROOT, 'skills', 'locked');
+    const yamlText = formatSkillsYaml(skills, 'project', ROOT, [
+      { kind: 'directory_unreadable', code: 'EACCES', directory: locked, transient: false },
+    ]);
+
+    expect(yamlText).toContain('status: warning\n');
+    expect(yamlText).toContain('unreadable:\n  - path: skills/locked\n    code: EACCES\n');
+    expect(yamlText).not.toContain(locked);
+    // The skills that WERE listed are still published.
+    expect(yamlText).toContain(`    path: ${SKILL_REL}\n`);
   });
 });
 
@@ -221,13 +239,11 @@ describe('marketplace validate payload', () => {
 
   it('states the marketplace root once and publishes each plugin path relative to it', () => {
     const data = buildMarketplaceValidateReport({
-      status: 'error',
       root: ROOT,
       marketplace: { name: 'mp', version: '1.0.0' },
-      pluginResults: [pluginResult],
+      pluginResults: [{ name: 'alpha', source: './plugins/alpha', result: pluginResult }],
+      undeclared: [],
       issues: pluginResult.issues,
-      issueCounts: { errors: 1, warnings: 0, info: 0 },
-      summary: '1 error(s), 0 warning(s), 0 info',
       duration: '7ms',
     });
 
@@ -237,6 +253,8 @@ describe('marketplace validate payload', () => {
     expect(data).not.toHaveProperty('path');
     expect(data['plugins']).toEqual([
       {
+        name: 'alpha',
+        source: './plugins/alpha',
         path: PLUGIN_REL,
         status: 'error',
         metadata: { name: 'alpha' },
@@ -253,13 +271,12 @@ describe('marketplace validate payload', () => {
     // The early exit is a second emission site, and it leaked the same absolute
     // path — a document shape that only the happy path was ever checked for.
     const data = buildMarketplaceValidateReport({
-      status: 'error',
       root: ROOT,
       marketplace: undefined,
       pluginResults: [],
+      undeclared: [],
       issues: [],
-      issueCounts: { errors: 1, warnings: 0, info: 0 },
-      summary: 'Marketplace manifest missing',
+      bailSummary: 'Marketplace manifest missing',
       duration: '2ms',
     });
 
@@ -292,18 +309,16 @@ const MANIFEST_DIR = '.claude-plugin';
 
 /** Emit the document the command would, for a marketplace on disk. */
 async function marketplaceReportFor(root: string): Promise<Record<string, unknown>> {
-  const { marketplaceResult, pluginResults, issues } = await collectMarketplaceFindings(
+  const { marketplaceResult, pluginResults, undeclared, issues } = await collectMarketplaceFindings(
     root,
     silentLogger,
   );
   return buildMarketplaceValidateReport({
-    status: 'error',
     root,
     marketplace: marketplaceResult.metadata,
     pluginResults,
+    undeclared,
     issues,
-    issueCounts: { errors: issues.length, warnings: 0, info: 0 },
-    summary: `${issues.length} error(s), 0 warning(s), 0 info`,
     duration: '9ms',
   });
 }
@@ -329,10 +344,13 @@ describe('marketplace validate — every producer anchored at the stated root', 
     writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
 
     marketplaceRoot = safePath.join(projectRoot, 'mp');
+    // DECLARED, because only declared sources are validated: an undeclared
+    // `plugins/*` directory is listed, never inspected, so it would emit no
+    // finding for this suite to anchor.
     writeJsonFixture(safePath.join(marketplaceRoot, MANIFEST_DIR, 'marketplace.json'), {
       name: 'mp',
       owner: { name: 'owner' },
-      plugins: [],
+      plugins: ['alpha', 'beta'].map((name) => ({ name, source: `./plugins/${name}` })),
     });
     // Present so `checkMarketplaceFiles` stays quiet: a missing-file finding
     // necessarily names a path that does not resolve, which would drown the

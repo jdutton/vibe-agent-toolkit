@@ -109,6 +109,7 @@ export async function indexCommand(
       status: outcome.status,
       resourcesIndexed: indexResult.resourcesIndexed,
       resourcesSkipped: indexResult.resourcesSkipped,
+      resourcesEmpty: indexResult.resourcesEmpty,
       resourcesUpdated: indexResult.resourcesUpdated,
       chunksCreated: indexResult.chunksCreated,
       chunksDeleted: indexResult.chunksDeleted,

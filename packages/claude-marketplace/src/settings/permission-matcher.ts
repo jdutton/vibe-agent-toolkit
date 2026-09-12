@@ -3,7 +3,7 @@
  *
  * Two distinct systems depending on tool type:
  * - Bash rules: custom glob matcher (exact | prefix | wildcard)
- * - Read/Edit/Write/Glob path rules: node-ignore (gitignore spec)
+ * - Read/Edit path rules: gitignore-style patterns, matched by the linear scanner in `path-pattern.ts`
  *
  * Sources: the Bash lane is now built to the PUBLISHED behavior table at
  * <https://code.claude.com/docs/en/permissions> (read 2026-09-06), which is quoted
@@ -121,18 +121,11 @@
  * Remaining work is tracked in issue #207.
  */
 
-import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import type { Ignore } from 'ignore';
 
-// createRequire is needed because ignore@6 is CJS and NodeNext module resolution
-// doesn't allow calling the default import directly via ESM interop
-const _require = createRequire(import.meta.url);
-type IgnoreFactory = (options?: object) => Ignore;
-
-const createIgnore: IgnoreFactory = _require('ignore');
+import { compilePathPattern, matchesPathPattern, witnessOf } from './path-pattern.js';
 
 /**
  * Which permission bucket a rule came from. Claude Code evaluates deny → ask →
@@ -630,6 +623,12 @@ interface NestedScan {
   readonly open: number[];
   /** How many more characters of region text this command may still yield. */
   budget: number;
+  /**
+   * Set once a region has been dropped for want of budget. The scan's own
+   * answer to *"is what I am handing back the whole picture?"* — see
+   * {@link closeRegion} for why a `false` here is not safe to act on.
+   */
+  truncated: boolean;
   inBacktick: boolean;
 }
 
@@ -664,10 +663,27 @@ interface NestedScan {
  * bought its linearity by not answering the question. The budget caps the TOTAL
  * emitted characters at {@link NESTED_REGION_TEXT_BUDGET_FACTOR} × the command's
  * length, which keeps the whole scan linear, and it is spent INNERMOST-FIRST
- * because regions close from the inside out. So an adversarially deep nest keeps
- * the inner regions, where a command can actually sit, and drops the outer ones —
- * which at that depth are that same command wrapped in parentheses, and are the
- * regions a rule is least able to match anyway.
+ * because regions close from the inside out.
+ *
+ * 🚩 That spend order used to be defended here as harmless — *"an adversarially
+ * deep nest keeps the inner regions, where a command can actually sit, and drops
+ * the outer ones, which at that depth are that same command wrapped in
+ * parentheses"*. FALSE, and it was the budget's whole safety argument. An outer
+ * region's OWN TEXT is a place a command sits with no child around it:
+ * `x $( '('×23 + ')'×23 ; rm -rf / )` is 64 characters, and `Bash(rm *)`
+ * answered `false` for it while answering `true` at 21 levels. The regions the
+ * budget dropped were exactly the ones holding the payload. The guard that
+ * existed placed its command at the INNERMOST point — the one position an
+ * innermost-first spend always preserves — so it could not see this.
+ *
+ * ⛔ So a truncated scan is REPORTED rather than silently returned, and
+ * {@link matchesBashRule} FAILS CLOSED on it: past the budget the lane cannot
+ * say what the command contains, and for a blocking lane "cannot say" has to
+ * read as "matches". The cost is real and is pinned in the suite — an innocent
+ * 3,000-deep nest is reported as conflicting with every Bash deny rule — and it
+ * is the direction that is safe to be wrong in. Nothing anybody wrote on purpose
+ * reaches it: real commands nest one to three deep, and this module's own
+ * deepest worked shape, `echo "$(sh -c "rm $(x)")"`, is two.
  *
  * Measured on Node 24 against `Bash(rm *)` and `'('×k + 'echo x' + ')'×k`, with
  * the budget: k=48,000 in 8.47 ms and ~1.9× per 2× input across k=1,500…48,000.
@@ -678,7 +694,12 @@ function closeRegion(scan: NestedScan, command: string, end: number): void {
   const start = scan.open.pop();
   if (start === undefined) return; // A closer with nothing open.
   const length = end - start;
-  if (length > scan.budget) return; // Budget spent — see above for what that costs.
+  if (length > scan.budget) {
+    // Budget spent. The caller must not read the remaining regions as the whole
+    // command — see above for the under-report that reading cost.
+    scan.truncated = true;
+    return;
+  }
   scan.budget -= length;
   scan.found.push(command.slice(start, end));
 }
@@ -739,12 +760,18 @@ function skipQuoting(command: string, index: number, inDouble: boolean): number 
  * regions included verbatim, so a rule literal that crosses a child's boundary
  * still matches. That is not free — see {@link closeRegion} for the budget that
  * pays for it and for what an adversarially deep nest gives up.
+ *
+ * ⛔ `truncated` is not a diagnostic. A `true` means regions were DROPPED, and
+ * the drop is innermost-first-preserving, so what comes back is a nest's inner
+ * text with its outer text — where a command also sits — missing. Every blocking
+ * caller must treat it as "unanalysable" and match, never as "nothing found".
  */
-function nestedRegions(command: string): string[] {
+function nestedRegions(command: string): { regions: string[]; truncated: boolean } {
   const scan: NestedScan = {
     found: [],
     open: [],
     budget: command.length * NESTED_REGION_TEXT_BUDGET_FACTOR,
+    truncated: false,
     inBacktick: false,
   };
   let inDouble = false;
@@ -767,7 +794,7 @@ function nestedRegions(command: string): string[] {
     index += 1;
   }
 
-  return scan.found;
+  return { regions: scan.found, truncated: scan.truncated };
 }
 
 /**
@@ -832,15 +859,22 @@ function unparseableSegments(region: string): string[] {
  * Every command text a deny or ask rule is tested against: the top-level
  * subcommands, plus those of every nested region, plus — for a region that
  * cannot be parsed at all — {@link unparseableSegments}.
+ *
+ * ⛔ `truncated` rides along rather than being dropped here, and a caller that
+ * ignores it is reading a PARTIAL segment list as a complete one. That is the
+ * defect {@link closeRegion} documents: the budget's spend order drops the outer
+ * regions, and a command sitting in an outer region's own text vanishes with
+ * them.
  */
-function denySegments(command: string): string[] {
+function denySegments(command: string): { segments: string[]; truncated: boolean } {
   const segments: string[] = [];
-  for (const region of [command, ...nestedRegions(command)]) {
+  const { regions, truncated } = nestedRegions(command);
+  for (const region of [command, ...regions]) {
     const parts = splitCompound(region);
     if (parts === undefined || parts.length === 0) segments.push(...unparseableSegments(region));
     else segments.push(...parts);
   }
-  return segments;
+  return { segments, truncated };
 }
 
 /**
@@ -926,20 +960,48 @@ function stripCaseArmPattern(command: string): string {
 }
 
 /**
+ * How much reading text one deny/ask segment may yield, as a multiple of its
+ * own length. A work bound in the same sense as
+ * {@link NESTED_REGION_TEXT_BUDGET_FACTOR}, and NOT a schema or format number.
+ *
+ * A real chain — `sudo timeout 30 nice -n 5 rm -rf /`, `FOO=1 BAR=2 cmd`, one
+ * `case` arm — yields a handful of readings, each a little shorter than the
+ * last, so their text sums to a few times the segment. Past ~14 strippable
+ * prefixes the sum crosses 8×, and nothing written on purpose has fourteen.
+ */
+const DENY_READING_TEXT_BUDGET_FACTOR = 8;
+
+/**
  * Every reading of one deny/ask segment: the segment itself and the closure of
  * every reduction the lane admits — control-flow keyword, `case` arm pattern,
  * leading assignment, and each wrapper strip the heuristic considers possible.
  *
  * Every reduction strictly shortens the string, and repeats are dropped, so the
  * worklist terminates.
+ *
+ * 🚩 Terminates, but not linearly: each reduction drops one prefix and keeps
+ * the rest as a NEW string, so a chain of `k` strippable prefixes yields `k`
+ * readings whose lengths sum to ~k²/2, each then matched from the front.
+ * Measured on the shipped module against `Bash(rm *)`: `(x) )×1,000 echo z`
+ * 27.5 ms, ×4,000 430.5 ms, ×16,000 6,458 ms (~15× per 4×), and
+ * `(timeout -s KILL 30 )×800 echo hi` 194.6 ms — a 48 KB `allowed-tools:` entry
+ * cost about a minute. The correct reading SET is inherently that size, so as
+ * with {@link closeRegion} the bound is a budget on the emitted text, and a
+ * segment that exhausts it is reported `truncated` for {@link matchesBashRule}
+ * to FAIL CLOSED on — for a blocking lane, "I could not read every reading" has
+ * to mean "it matches".
  */
-function denyReadings(segment: string): string[] {
+function denyReadings(segment: string): { readings: string[]; truncated: boolean } {
   const seen = new Set<string>();
-  const queue = [normaliseWhitespace(segment)];
+  const start = normaliseWhitespace(segment);
+  const queue = [start];
+  let budget = start.length * DENY_READING_TEXT_BUDGET_FACTOR;
 
   while (queue.length > 0) {
     const current = queue.pop() as string;
     if (current.length === 0 || seen.has(current)) continue;
+    if (current.length > budget) return { readings: [...seen], truncated: true };
+    budget -= current.length;
     seen.add(current);
     queue.push(
       stripLeadingControlKeyword(current),
@@ -949,7 +1011,7 @@ function denyReadings(segment: string): string[] {
     );
   }
 
-  return [...seen];
+  return { readings: [...seen], truncated: false };
 }
 
 /**
@@ -1027,6 +1089,12 @@ const ESCAPED_STAR = String.raw`\*`;
  * attacker-reachable files this auditor reads — a `settings.json` permission
  * entry and a plugin `SKILL.md` `allowed-tools:` entry — and `vat audit` reaches
  * them through `checkSettingsCompatibility`, so the blowup hangs CI.
+ *
+ * ⚠️ This closed the class for the BASH lane only. The path lane reached the
+ * same backtracking through node-ignore's compiled regex, and
+ * {@link ruleConstrainsDeclaration} hands a plugin-authored `Read(…)` across as
+ * a pattern — measured at 11.1 s for a 21-character declaration against a
+ * 44-character rule. It has its own linear scanner now, in `path-pattern.ts`.
  *
  * 🚩 The previous fix collapsed a RUN of adjacent stars to one `.*` and asserted
  * the compiled SOURCE to prove it. That assertion was true and the safety
@@ -1302,9 +1370,22 @@ export function matchesBashRule(command: string, rule: string, lane: PermissionL
   const bare = bareCommandFor(content);
 
   if (isBlockingLane(lane)) {
-    return denySegments(command).some((segment) =>
-      denyReadings(segment).some((reading) => matchesReading(reading, parsed, bare)),
-    );
+    const { segments, truncated } = denySegments(command);
+    // ⛔ FAIL CLOSED. A truncated scan is a nest the region budget could not
+    // materialise in full, and the regions it drops are the OUTER ones — where a
+    // command sits just as readily as at the bottom. Reading the remainder as
+    // the whole command is what answered `false` for
+    // `x $( '('×23 + ')'×23 ; rm -rf / )`. For a blocking lane, "I could not
+    // analyse this" has to read as "it matches"; see {@link closeRegion} for the
+    // over-report this buys and why nothing written on purpose reaches it.
+    if (truncated) return true;
+    // The same, one layer down: a segment whose READINGS outran their budget
+    // is a chain of wrappers or arms the lane could not strip to the end, and
+    // the command may sit past the point it stopped. See {@link denyReadings}.
+    return segments.some((segment) => {
+      const { readings, truncated: readingsTruncated } = denyReadings(segment);
+      return readingsTruncated || readings.some((reading) => matchesReading(reading, parsed, bare));
+    });
   }
 
   const subcommands = splitCompound(command);
@@ -1317,15 +1398,33 @@ export function matchesBashRule(command: string, rule: string, lane: PermissionL
 }
 
 /**
- * Check whether a file path matches a Read/Edit/Write/Glob permission rule.
- * Uses node-ignore (gitignore spec) for matching.
+ * A path as a permission rule SPELLS it, split into the directory it is
+ * relative to and the remainder — the prefix table the published permissions
+ * page gives for `Read(…)`/`Edit(…)`:
  *
- * Path prefixes handled:
- * - "./"  → relative to cwd
- * - "~/"  → relative to homedir
- * - "//"  → absolute (strip one /)
- * - "/"   → relative to project root (cwd)
- * - no prefix → relative to cwd
+ * - `//path` → absolute, from the filesystem root (strip one `/`)
+ * - `~/path` → relative to the home directory
+ * - `/path`  → relative to the project root (cwd); the leading `/` stays, and
+ *              anchors the pattern there
+ * - `./path` and `path` → relative to cwd
+ *
+ * ⛔ The ONE table for both sides of a match. It used to be applied to the
+ * pattern side only, and the other side — a witness path drawn from a rule, or
+ * a declaration read as an input — went to `resolve` verbatim, so `~/.ssh/**`
+ * became a literal `~` directory under the root and `Read(~/.ssh/**)` did not
+ * contain ITSELF. See {@link pathWitnesses}.
+ */
+function splitPathSpelling(spelling: string, cwd: string): { root: string; rest: string } {
+  if (spelling.startsWith('//')) return { root: '/', rest: spelling.slice(1) };
+  if (spelling.startsWith('~/')) return { root: homedir(), rest: spelling.slice(2) };
+  if (spelling.startsWith('./')) return { root: cwd, rest: spelling.slice(2) };
+  return { root: cwd, rest: spelling };
+}
+
+/**
+ * Check whether a file path matches a Read/Edit permission rule, under the
+ * gitignore-style semantics of `path-pattern.ts` and the prefix table of
+ * {@link splitPathSpelling}.
  *
  * @param filePath - The absolute file path to check
  * @param ruleContent - The path pattern from the rule (e.g. ".env", "~/.ssh/id_rsa")
@@ -1336,31 +1435,8 @@ export function matchesPathRule(
   ruleContent: string,
   cwd: string = process.cwd()
 ): boolean {
-  const home = homedir();
-  const normalised = normaliseWhitespace(ruleContent);
+  const { root, rest: pattern } = splitPathSpelling(normaliseWhitespace(ruleContent), cwd);
 
-  let root: string;
-  let pattern: string;
-
-  if (normalised.startsWith('//')) {
-    // Absolute path: strip one slash
-    root = '/';
-    pattern = normalised.slice(1);
-  } else if (normalised.startsWith('~/')) {
-    // Home-relative
-    root = home;
-    pattern = normalised.slice(2);
-  } else if (normalised.startsWith('./')) {
-    // CWD-relative
-    root = cwd;
-    pattern = normalised.slice(2);
-  } else {
-    // Default: CWD-relative
-    root = cwd;
-    pattern = normalised;
-  }
-
-  const ig = createIgnore().add(pattern);
   // 🚩 Resolve against `root` explicitly. `safePath.relative(root, filePath)`
   // alone lets Node resolve a RELATIVE filePath against `process.cwd()` rather
   // than against the root this function was handed, so the verdict depended on
@@ -1370,18 +1446,21 @@ export function matchesPathRule(
   // unaffected: `resolve` returns it unchanged.
   const relative = safePath.relative(root, safePath.resolve(root, filePath));
 
-  // node-ignore can't match paths that go "up" (..)
-  if (relative.startsWith('..')) return false;
+  // A path that goes "up" (..) is outside the root, so no pattern under it
+  // applies. 🚩 That is `..` itself or a `../` prefix — a `startsWith('..')`
+  // also refused every file NAMED `..something` under the root, so a deny
+  // `Read(*)` reported no conflict with a declaration naming `..secret`.
+  if (relative === '..' || relative.startsWith('../')) return false;
 
-  // 🚩 An empty relative path THREW: node-ignore raises `path must not be
-  // empty`, and `settings-compat-checker` reaches this with an empty tool input
-  // whenever a SKILL.md declares a bare `Read`/`Edit` against an org path rule.
-  // `vat audit` died with an uncaught TypeError on that plugin rather than
-  // reporting anything about it. An empty path is not a path, and a rule cannot
-  // match a file that was never named, so the answer is `false`.
+  // 🚩 An empty relative path THREW in the matcher this replaced (`path must
+  // not be empty`), and `settings-compat-checker` reaches this with an empty
+  // tool input whenever a SKILL.md declares a bare `Read`/`Edit` against an org
+  // path rule. `vat audit` died with an uncaught TypeError on that plugin rather
+  // than reporting anything about it. An empty path is not a path, and a rule
+  // cannot match a file that was never named, so the answer is `false`.
   if (relative.length === 0) return false;
 
-  return ig.ignores(relative);
+  return matchesPathPattern(compilePathPattern(pattern), relative);
 }
 
 /**
@@ -1482,6 +1561,180 @@ export function ruleConstrainsTool(
     case 'path':
       return true;
   }
+}
+
+/**
+ * File paths drawn from a rule-spelled path pattern's OWN extension: the
+ * pattern's text read as a literal path, and one member materialised from the
+ * compiled pattern ({@link witnessOf}). Both are expanded through the prefix
+ * table of {@link splitPathSpelling} — `join` rather than `resolve`, so a
+ * project-root `/path` lands under cwd instead of at the filesystem root — and
+ * each is kept only if the pattern itself matches it: a "witness" the pattern
+ * does not match is evidence of nothing.
+ *
+ * 🚩 The text alone was the witness, and it is a member of its own pattern for
+ * `*`, `**` and `?` only because `*` and `?` match themselves as characters. A
+ * pattern holding `[…]` or a `\` escape was NOT a member of itself, so an
+ * identical `Read(a[!b]c)` pair reported no conflict. The text stays a
+ * witness where it IS a member because it reaches a pair the materialised one
+ * cannot: `a?c` against a declaration naming the literal file `a?c` (`a\?c`),
+ * whose only common member is that file, and `witnessOf` picks `axc`.
+ */
+function pathWitnesses(spelling: string, cwd: string): string[] {
+  const { root, rest } = splitPathSpelling(normaliseWhitespace(spelling), cwd);
+  const candidates = new Set([
+    safePath.join(root, rest),
+    safePath.join(root, witnessOf(compilePathPattern(rest))),
+  ]);
+  return [...candidates].filter((candidate) => matchesPathRule(candidate, spelling, cwd));
+}
+
+/**
+ * Tool inputs drawn from a pattern's OWN extension, to ask the other side of a
+ * containment about — asked of the declaration and of the rule alike.
+ *
+ * For Bash the content text read as a command is one, and the
+ * {@link bareCommandFor} command is a second. That second one is what makes a
+ * `:*` or trailing-` *` rule intersect ITSELF: the text `git push:*` is not
+ * matched by the pattern `git push *` that the identical rule compiles to,
+ * while the bare `git push` is. For the path lane see {@link pathWitnesses}.
+ * For WebFetch the text is the witness.
+ *
+ * ⚠️ A heuristic witness SET, not the extension. Two patterns can overlap on a
+ * string neither of these is — see {@link ruleConstrainsDeclaration} for the
+ * residue that leaves.
+ */
+function witnessesOf(toolName: string, content: string, cwd: string): string[] {
+  switch (contentLaneFor(toolName)) {
+    case 'path':
+      return pathWitnesses(content, cwd);
+    case 'bash': {
+      const bare = bareCommandFor(content);
+      return bare === undefined || bare === content ? [content] : [content, bare];
+    }
+    case 'webfetch':
+    case 'unconsulted':
+    case 'opaque':
+      return [content];
+  }
+}
+
+/**
+ * Whether `rule` constrains anything a SKILL.md `allowed-tools:` DECLARATION
+ * asks for — the question `settings-compat-checker` actually has, for every
+ * spelling a declaration can take.
+ *
+ * A declaration is not a tool call. It is a rule-shaped PATTERN over the calls
+ * the skill intends to make, and the conflict question is whether its extension
+ * and the rule's extension intersect. {@link matchesPermissionRule} answers the
+ * narrower question — *"does this rule cover this one concrete input?"* — and
+ * {@link ruleConstrainsTool} answers the widest one, for a declaration that
+ * names no input at all.
+ *
+ * 🚩 Between those two lay every spelling people actually write, and they were
+ * being handed to the concrete matcher as if the pattern text were a literal
+ * command or a literal filename. `Bash(git:*)` was tested as a command called
+ * `git:*`. Measured: bare `Bash` vs deny `Bash(git push:*)` reported a conflict,
+ * and `Bash(git:*)` vs the SAME rule reported none — even though the second
+ * declaration is a NARROWING of the first that still contains `git push`. So did
+ * `Bash(git push:*)` against itself. One deny rule, two answers, decided by how
+ * much of its own scope the skill bothered to spell out, and the direction is
+ * UNDER-report: silently telling an adopter "no conflict" about a tool their org
+ * policy blocks.
+ *
+ * ⚠️ The previous repair of that same contradiction fixed one spelling — bare
+ * `Write` versus `Write(./out/**)` — rather than the mechanism, which is why the
+ * `:*` and `./**` forms were still broken afterwards. So the shape here is
+ * per-LANE and spelling-blind: the taxonomy decides the tool, then containment
+ * is asked in BOTH directions.
+ *
+ * 1. Tool names first, through {@link matchesToolName} in BOTH directions, so a
+ *    rule for another tool can never be read as a pattern over this one, and a
+ *    declaration that is itself a tool-name glob (`mcp__srv__*`) is reached by
+ *    a rule naming one of its members.
+ * 2. A declaration naming no input (bare, or `(*)`) is UNRESTRICTED, so the
+ *    question is {@link ruleConstrainsTool}'s.
+ * 3. Otherwise ask whether the RULE covers a {@link witnessesOf witness} drawn
+ *    from the declaration, and then whether the DECLARATION covers one drawn
+ *    from the rule. Either means some call the skill intends is one the rule
+ *    catches. On the path lane both inputs are rule-SPELLED paths, and each is
+ *    expanded through the same `~/`, `//`, `/`, `./` table the pattern side
+ *    reads ({@link splitPathSpelling}) before it is handed across — 🚩 they
+ *    were not, so `Read(~/.ssh/**)` did not contain itself, or its narrowing
+ *    `Read(~/.ssh/id_rsa)`, while `Read(./**)` over-reported against it by
+ *    matching a literal `~` directory. 🚩 And the witness was the pattern's
+ *    raw TEXT, which is a member of a `[…]`- or `\`-carrying pattern's
+ *    extension only by accident, so `Read(a[!b]c)` did not contain itself
+ *    either — see {@link pathWitnesses}.
+ *
+ * The second direction is asked in the ALLOW lane whatever `lane` is, for
+ * {@link isSubsumedBy}'s reason: the question there is *"does the declaration
+ * PERMIT this?"*, and the deny lane's deliberate over-matching would manufacture
+ * intersections that do not hold.
+ *
+ * ⛔ {@link isSubsumedBy} is NOT the primitive for the second direction, though
+ * it looks like it. It asks whether the whole of one extension lies inside the
+ * other and conjoins both halves of that, so a Bash rule does not even subsume
+ * ITSELF: `Bash(git push:*)` fails its own second half, because the content text
+ * `git push:*` is not a command the pattern `git push *` matches. Deliberate
+ * there — it advises DELETING a rule, so it must never over-claim — and wrong
+ * here, where one witness is enough.
+ *
+ * ⚠️ Containment is not intersection, and this returns `false` for the pairs
+ * that overlap without either side covering the other's witness — `Bash(npm *)`
+ * against deny `Bash(* --help *)` share `npm --help x` and are reported as no
+ * conflict, and on the path lane `Read(a?c)` against deny `Read(?bc)` share
+ * `abc` while every witness of each (`a?c`, `axc` / `?bc`, `xbc`) is refused by
+ * the other. Deciding that needs a real glob-intersection over both patterns;
+ * what is here closes the containment cases, which is every spelling the
+ * review measured, and the residue is named rather than left to be
+ * rediscovered.
+ *
+ * @param declaration - The `allowed-tools:` entry, e.g. `Bash(git:*)` or `Read`
+ * @param rule - Full permission rule string
+ * @param lane - Which permission bucket the rule came from
+ * @param cwd - Base directory for path-tool matching
+ */
+export function ruleConstrainsDeclaration(
+  declaration: string,
+  rule: string,
+  lane: PermissionLane,
+  cwd?: string
+): boolean {
+  const { toolName: declaredTool, content: declared } = parsePermissionRule(declaration);
+  const { toolName: ruleTool, content: ruleContent } = parsePermissionRule(rule);
+
+  // Tool names, in BOTH directions. A declaration may itself be the glob the
+  // allow lane accepts — `mcp__srv__*` — and a rule naming one of its members
+  // is a rule-inside-declaration containment, the same relation the content
+  // step handles both ways. 🚩 Asked one way only, `mcp__srv__*` against a deny
+  // rule for `mcp__srv__tool` was refused here before content was consulted:
+  // the deny blocks a tool the declaration claims, and the answer was "no
+  // conflict". When the declaration's glob covers the rule's tool, the rule's
+  // concrete name is the tool the content lanes are asked about.
+  const ruleCoversTool = matchesToolName(ruleTool, declaredTool, lane);
+  if (!ruleCoversTool && !matchesToolName(declaredTool, ruleTool, 'allow')) return false;
+  const toolName = ruleCoversTool ? declaredTool : ruleTool;
+
+  // No input named: the declaration is the whole tool, unrestricted.
+  if (declared === undefined || declared === '*') return ruleConstrainsTool(toolName, rule, lane);
+
+  // A bare rule names the tool and nothing else, so it covers every use of it.
+  if (ruleContent === undefined) return true;
+
+  const root = cwd ?? process.cwd();
+  // Does the rule cover something the declaration names…
+  if (
+    witnessesOf(toolName, declared, root).some((witness) =>
+      matchesPermissionRule(toolName, witness, rule, lane, cwd),
+    )
+  ) {
+    return true;
+  }
+  // …or does the declaration cover something the rule names?
+  return witnessesOf(toolName, ruleContent, root).some((witness) =>
+    matchesPermissionRule(toolName, witness, declaration, 'allow', cwd),
+  );
 }
 
 /**

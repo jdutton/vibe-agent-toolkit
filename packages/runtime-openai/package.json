@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/runtime-openai",
-  "version": "0.2.0-rc.6",
+  "version": "0.2.0-rc.7",
   "description": "OpenAI SDK runtime adapter for VAT agents",
   "type": "module",
   "exports": {
@@ -30,7 +30,7 @@
     "@vibe-agent-toolkit/dev-tools": "workspace:*",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
-    "vitest": "^3.2.4",
+    "vitest": "^4.1.11",
     "@vibe-agent-toolkit/test-agents": "workspace:*"
   },
   "keywords": [

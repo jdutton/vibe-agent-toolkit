@@ -6,6 +6,7 @@ import {
   resolveAuthenticatedUrl,
   type ResolveOutcome,
 } from '../../src/link-auth/resolve.js';
+import { LEAK_CANARY } from '../auth-fetch-mocks.js';
 
 function assertHasFetch(
   outcome: ResolveOutcome,
@@ -60,6 +61,12 @@ function githubProvider(opts: Partial<Provider> = {}): Provider {
 }
 
 const GITHUB_BLOB_URL = 'https://github.com/acme/widgets/blob/main/docs/api.md';
+
+/** Assert the outcome is `provider-error` and hand back its reason. */
+function providerErrorReason(outcome: ResolveOutcome): string {
+  expect('outcome' in outcome && outcome.outcome).toBe('provider-error');
+  return 'outcome' in outcome && outcome.outcome === 'provider-error' ? outcome.reason : '';
+}
 const GITHUB_CONTENTS_URL =
   'https://api.github.com/repos/acme/widgets/contents/docs/api.md?ref=main';
 
@@ -315,6 +322,137 @@ describe('resolveAuthenticatedUrl', () => {
         { env: {} },
       );
       expect('outcome' in result && result.outcome).toBe('unverified');
+    });
+  });
+
+  describe('a provider that fails on one link degrades that link, it does not kill the run', () => {
+    // `validateLink` calls this function outside any try/catch, so anything
+    // that escapes here takes down `vat resources validate` and `vat audit`
+    // for the whole tree. A provider failing on one URL is a finding about
+    // that link, not a process-ending event — the engine owns that boundary
+    // because it is the only place that knows the difference.
+    //
+    // 🔑 The outcome is `provider-error`, NOT `unverified`. `unverified` means
+    // "no token" and its registry remedy invites `ignore` for token-less CI
+    // lanes; a provider that could not build a request is a different fact, and
+    // reporting it under the ignorable code is how a config defect went green.
+    // Statically knowable defects (an uncompilable `when`, an unknown transform,
+    // a template naming an undeclared capture) are refused at CONFIG time by
+    // `buildLinkAuthEngineConfig`; the engine still cannot throw, because it is
+    // a public API a caller can hand a hand-built config to.
+    const TOKEN_ENV = { env: { GITHUB_TOKEN: 'ghp_notreal' } };
+
+    it.each([
+      [
+        'an optional capture that did not participate, read by the `to` template',
+        // Knowable only per URL: the static check sees `query` declared, and this
+        // URL has no query string, so the group is absent from the captures.
+        githubProvider({
+          rewrite: [
+            {
+              when: String.raw`^https://github\.com/(?<path>[^?]+)(?<query>\?.*)?$`,
+              to: 'https://x/${path}${query}',
+            },
+          ],
+        }),
+      ],
+      [
+        'a `to` template with an unterminated ${',
+        githubProvider({
+          rewrite: [{ when: String.raw`^https://github\.com/(?<path>.+)$`, to: 'https://x/${path' }],
+        }),
+      ],
+      [
+        'a `to` template naming a capture that does not exist',
+        githubProvider({
+          rewrite: [{ when: String.raw`^https://github\.com/(?<path>.+)$`, to: 'https://x/${nope}' }],
+        }),
+      ],
+      [
+        'a `when` regex that does not compile',
+        githubProvider({ rewrite: [{ when: '([unclosed', to: 'https://x/' }] }),
+      ],
+      [
+        'a header template calling an unknown transform',
+        githubProvider({ auth: { headers: { Authorization: 'Bearer ${rot13(token)}' } } }),
+      ],
+      [
+        'a `match.host` glob longer than picomatch accepts (the pre-try throw)',
+        // picomatch refuses a pattern over 65 536 bytes with a SyntaxError.
+        // `selectProvider` used to run BEFORE the try, so this one escaped
+        // while every other provider-config error was caught — and the
+        // docstring said "does not throw" over both.
+        githubProvider({ match: { host: 'a'.repeat(70_000) } }),
+      ],
+      [
+        'a `vars` name colliding with a capture',
+        githubProvider({
+          rewrite: [
+            {
+              when: String.raw`^https://github\.com/(?<path>.+)$`,
+              vars: { path: '${path}' },
+              to: 'https://x/${path}',
+            },
+          ],
+        }),
+      ],
+    ])('returns provider-error instead of throwing for %s', (_label, provider) => {
+      let outcome: ResolveOutcome | undefined;
+      expect(() => {
+        outcome = resolveAuthenticatedUrl(GITHUB_BLOB_URL, { providers: [provider] }, TOKEN_ENV);
+      }).not.toThrow();
+      expect(outcome).toBeDefined();
+      if (outcome !== undefined) providerErrorReason(outcome);
+    });
+
+    it('keeps "no token resolved" as unverified — the two outcomes must not merge', () => {
+      const outcome = resolveAuthenticatedUrl(
+        GITHUB_BLOB_URL,
+        { providers: [githubProvider()] },
+        { env: {} },
+      );
+      expect('outcome' in outcome && outcome.outcome).toBe('unverified');
+    });
+
+    it('the reason names the provider host and the underlying error', () => {
+      const provider = githubProvider({
+        rewrite: [{ when: String.raw`^https://github\.com/(?<path>.+)$`, to: 'https://x/${nope}' }],
+      });
+      const reason = providerErrorReason(
+        resolveAuthenticatedUrl(GITHUB_BLOB_URL, { providers: [provider] }, TOKEN_ENV),
+      );
+      expect(reason).toContain('github.com');
+      expect(reason).toContain('nope');
+    });
+
+    it('the reason quotes the TEMPLATE, never a substituted value — so nothing needs scrubbing', () => {
+      // The reason string reaches stdout. Every failure the engine can report
+      // is a question about the template, the pattern or a name, so its text
+      // carries neither the resolved token nor a URL capture. This pins that
+      // property for every arm above at once: a future error that interpolated
+      // a rendered header (or a capture) would surface here as a canary in the
+      // reason. There is deliberately no redaction call in the engine to hide
+      // behind — rendered values meet outside error text only in the transport,
+      // which owns that redaction.
+      const capturedCanary = 'captured-value-canary';
+      const provider = githubProvider({
+        rewrite: [
+          {
+            when: String.raw`^https://github\.com/(?<path>[^?]+)(?<query>\?.*)?$`,
+            to: 'https://x/${path}${query}',
+          },
+        ],
+      });
+      const outcome = resolveAuthenticatedUrl(
+        `https://github.com/${capturedCanary}`,
+        { providers: [provider] },
+        { env: { GITHUB_TOKEN: LEAK_CANARY } },
+      );
+      const reason = providerErrorReason(outcome);
+      // Positive control: the reason is about the template that failed.
+      expect(reason).toContain('${path}${query}');
+      expect(reason).not.toContain(LEAK_CANARY);
+      expect(reason).not.toContain(capturedCanary);
     });
   });
 });

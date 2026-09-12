@@ -201,6 +201,23 @@ function fingerprintFiles(
   root: string,
   scope: FingerprintScope,
 ): { fingerprint: string; fileCount: number } {
+  // No `onUnreadable`, deliberately: a fingerprint over a tree the walk could
+  // not fully list is not a fingerprint of that tree — it would match the same
+  // tree with the directory readable and its contents changed, which is the
+  // one thing a fingerprint exists to catch. In the PLAIN_FOLDER scope the
+  // crawler walks the filesystem, throws `DirectoryListingRefusedError` on a
+  // refused directory, and the subject cannot be resolved.
+  //
+  // ⚠️ That refusal is the plain-folder scope's ALONE. The GIT_POPULATION scope
+  // takes `git ls-files` (`respectGitignore: true`) and never `readdir`s, so a
+  // locked directory refuses nothing there: every tracked file under it is
+  // still listed, `contentDigest` records each as `<unreadable>`, and the
+  // subject RESOLVES with a well-formed fingerprint. Two working trees that
+  // differ only inside that directory therefore fingerprint identically, and
+  // an untracked file placed under it is invisible to `git ls-files --others`
+  // and so absent from the population altogether. `contentDigest` swallows
+  // the read failure because the git route lists tracked-but-deleted paths
+  // (`ENOENT`), and that tolerance takes `EACCES` with it.
   const relativePaths = crawlDirectorySync({
     baseDir: root,
     include: ['**/*'],

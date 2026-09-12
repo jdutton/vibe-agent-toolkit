@@ -2,7 +2,8 @@
 import { writeFileSync } from 'node:fs';
 
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, toForwardSlash, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils';
+import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -171,6 +172,36 @@ describe('listPluginSourceSkillDirs', () => {
 
     const result = listPluginSourceSkillDirs(pluginSourceDir);
     expect([...result].sort((a, b) => a.localeCompare(b))).toEqual(['skill-alpha', 'skill-beta']);
+  });
+
+  /**
+   * A listing that decides WHICH skills get packaged must not answer with fewer
+   * of them because one directory refused to be listed: the skill beneath it
+   * would be absent from the built plugin while the build reported success.
+   * The refusal is a `readdirSync` spy (every platform, root included); the
+   * fixture has no repository, so the walk route — the one that lists
+   * directories — is what runs.
+   */
+  it('refuses by name, against the plugin source dir, when a skills/ subdirectory cannot be listed', async () => {
+    const pluginSourceDir = safePath.join(getTempDir(), 'locked-plugin');
+    const skillsDir = safePath.join(pluginSourceDir, 'skills');
+    writeSkillDir(skillsDir, 'open-skill');
+    const locked = safePath.join(skillsDir, 'group');
+    writeSkillDir(locked, 'locked-skill');
+
+    let thrown: unknown;
+    try {
+      await withReaddirSyncRefused(locked, 'EACCES', () => listPluginSourceSkillDirs(pluginSourceDir));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(DirectoryListingRefusedError);
+    const message = (thrown as Error).message;
+    expect(message).toContain("'skills/group'");
+    expect(message).toContain('EACCES');
+    expect(message).not.toContain(pluginSourceDir);
+    expect(message).not.toContain('onUnreadable');
   });
 
   it('returns a single skill dir when only one is present', () => {

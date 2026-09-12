@@ -205,25 +205,68 @@ hierarchical:
                   message: Skill exceeds recommended length
 ```
 
+## Two verdicts: `status` and the exit code
+
+`vat audit` publishes two verdicts, and they answer different questions.
+
+| Verdict | Answers | Where to read it |
+|---|---|---|
+| `status` in the YAML report | **What was found** — the worst actionable severity across the findings | stdout |
+| The process exit code | **Whether the run completed** | `$?` |
+
+So a tree with errors produces `status: error` beside **exit 0**, and both are
+correct. That pair surprises people because `status` means something wider
+everywhere else in this CLI, where it moves with the exit code. Here it does not,
+because this command is a report rather than a gate.
+
+A run that audited **zero files** is refused, not passed. An existing directory
+with nothing auditable in it — plugins that moved, a wrong subdirectory, an
+excluded tree, files no lane recognises — used to publish `status: success`
+beside `filesScanned: 0`, which is the same document a clean tree produces. It
+now publishes `status: error` with one non-overridable `RESOURCE_CHECK_BROKEN`
+finding under a top-level `issues:` key (the claim is about the run, so it is
+not a `files[]` row and does not count toward `filesScanned`). The exit code is
+still `0`: the run completed; it just is not a verdict.
+
+**Gate CI on the report, never on this command's exit code** — read `status` and
+`issueCounts` out of the YAML (see [CI/CD Integration](#cicd-integration) for a
+worked example), or reach for a command whose exit code *is* the verdict:
+`vat skills validate` and `vat skills build` exit `1` on validation errors, and
+`vat skills validate` also exits `1` when its `skills.include` globs discover no
+skill — so a typo'd glob fails the gate there instead of passing it.
+
 ## Exit Codes
 
 `vat audit` is **advisory by design** — it reports every issue it detects but does not block on validation severity. Use `vat skills validate` or `vat skills build` for gated checks (those commands exit `1` on validation errors).
 
-- **0** - Always, when the audit completes. The report may still contain errors and warnings; check `status` and `summary` in the YAML output to decide whether action is needed.
-- **2** - System error: Config invalid, path not found, permission denied, etc. The audit could not run.
+- **0** - Always, when the audit completes — including when the report says `status: error`. The findings are in the report; check `status` and `summary` in the YAML output to decide whether action is needed. That includes the environment refusing part of the subject: a path that does not exist or is not a recognisable resource is reported as `UNKNOWN_FORMAT` (error), and a directory or file the scan could not read — permission denied, a vanished mount — as `SCAN_PATH_UNREADABLE` (warning), with every readable sibling still validated. A governing `vibe-agent-toolkit.config.yaml` that cannot be loaded, or whose `skills.include` reaches a directory the crawl cannot list, is warned about once on stderr and filed as `SCAN_PATH_UNREADABLE` on the config file or the directory; the skills it governs are validated config-free rather than dropped. Degrading beats destroying, and the report says where it degraded.
+- **2** - The audit could not run at all, so there is no report to read: `--user` with no Claude config directory installed, a git URL that could not be cloned, or an internal failure (a validator defect). Invalid config, missing paths and permission problems are **not** exit 2 — they are findings, above.
 
 ## Validation Configuration
 
-Audit honors `validation.severity` from `vibe-agent-toolkit.config.yaml` for **display grouping only** — setting a code to `ignore` hides it from output, raising to `error` promotes it in the report's error count. Audit does **not** apply `validation.allow` (per-path allow entries); for that, use `vat skills validate` or `vat skills build`.
+Audit honors `validation.severity` from `vibe-agent-toolkit.config.yaml`: setting a code to `ignore` hides it from the report, and every other level is applied as written — a code raised to `error` is reported as an error, a code lowered to `warning` as a warning. It changes **which findings are reported and at what severity**, never whether the command fails (see [Two verdicts](#two-verdicts-status-and-the-exit-code)). Audit does **not** apply `validation.allow` (per-path allow entries); for that, use `vat skills validate` or `vat skills build`.
+
+Three scopes are read, least specific first — a more specific one naming the same code wins:
 
 ```yaml
 # In vibe-agent-toolkit.config.yaml
+resources:
+  validation:
+    severity:
+      LINK_MISSING_TARGET: ignore       # project-wide; the same dial
+                                        # `vat resources validate` reads
 skills:
   defaults:
     validation:
       severity:
-        LINK_TO_NAVIGATION_FILE: ignore   # hidden from audit output
-        LINK_DROPPED_BY_DEPTH: error      # elevated in the report
+        LINK_TO_NAVIGATION_FILE: ignore # project-wide: skills, plugins and
+                                        # marketplaces alike
+        LINK_DROPPED_BY_DEPTH: error    # elevated in the report
+  config:
+    my-skill:
+      validation:
+        severity:
+          LINK_DROPPED_BY_DEPTH: info   # just this skill
 ```
 
 See `docs/validation-codes.md` for the full code reference.
@@ -321,9 +364,13 @@ summary:
   filesWithWarnings: number   # Files whose worst actionable severity is warning
   filesWithErrors: number     # Files carrying at least one error
 issueCounts:                  # FINDINGS, not files — same field name and meaning
-  errors: number              #   as the `issueCounts` on each entry below
-  warnings: number
+  errors: number              #   as the `issueCounts` on each entry below,
+  warnings: number            #   plus the run-level `issues` when present
   info: number
+issues:                       # Only when the RUN itself is refused — a run over
+  - code: RESOURCE_CHECK_BROKEN   # zero files. Not a file, so not in `files[]`.
+    severity: error
+    message: ...
 duration: "123ms"
 files:
   - path: plugins/my-plugin            # relative to `root`

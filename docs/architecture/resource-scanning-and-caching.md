@@ -173,7 +173,7 @@ chosen ad hoc at each site. Stated as the contract:
 |---|---|---|
 | enumerate + content key | `getGitTreeHash()` temp index → `ls-files -s`: paths, blob SHAs, and file modes in one call | `readdir` walk + hash-on-read |
 | gitignored remainder | `ls-files --others --ignored --directory` prune list (369 entries / 60 ms on an 8,496-path adopter), descend only where a lens asks | already enumerated by the walk |
-| symlink detection | free — mode `120000` arrives with the path (§4) | per-entry `lstat` |
+| symlink detection | free for anything the snapshot described — mode `120000` arrives with the path (§4); one `lstat` per *collapsed* `--others --directory` entry, which carries no mode | per-entry `lstat` |
 | cache key | `write-tree` — exact, whole-tree, free | anchored manifest (§3.2, 🔷 unbuilt) or none |
 
 Three constraints this table encodes, each of which has already been got wrong once:
@@ -215,11 +215,18 @@ what makes it return the same set rather than a faster smaller one:
 **Two behaviours the parity harness forced, both of which the design above missed.** Writing the
 differential test is what surfaced them, which is the argument for the seam restated as evidence:
 
-- **A committed symlink is excluded from the git source.** `crawlDirectory`'s manual walk runs with
-  `followSymlinks: false` and never records a link's own path, so the filesystem extent has never
-  contained one. Git reports mode `120000` like any other entry. Admitting it would have imported
-  `file-crawler.ts`'s KNOWN DIVERGENCE into an extent that does not have it — silently, as rows that
-  look like files whose bytes are a path string.
+- **A symlink is excluded from the git source, committed or not.** `crawlDirectory`'s manual walk
+  runs with `followSymlinks: false` and never records a link's own path, so the filesystem extent has
+  never contained one. Git reports mode `120000` like any other entry. Admitting it would have
+  imported `file-crawler.ts`'s KNOWN DIVERGENCE into an extent that does not have it — silently, as
+  rows that look like files whose bytes are a path string, each minting its own identity over its
+  *target's* content key, which is one set of bytes charged twice by any budget summing them.
+
+  ⚠️ The exclusion has to be **one decision, not one per source**. It shipped as two: the
+  mode-`120000` drop sat in the tree-snapshot branch, and the `--others --directory` prune list —
+  which carries no mode — handed untracked links straight back. It is now a single seam that both
+  halves feed, each supplying only its own observation (git's mode bit, or an `lstat` on a collapsed
+  entry).
 - **A submodule is descended into.** It is one mode-`160000` entry whose OID is a *commit*, and none
   of its files appear in the outer snapshot; the outer walk simply reads the directory. Matching it
   means expanding it.
@@ -241,11 +248,15 @@ enumeration — **20,908 `lstatSync` from either source** on an 8,548-file adopt
 `EnumeratedPath.shape` closes it. It is `'file' | 'directory' | null`, and a source may fill it only
 where it knows, without stat-ing, that the path is present, is not a symlink, and is one of the two.
 `GitCrawlSource` can for everything git *described* — a snapshot entry exists because `git add --all`
-stages deletions, is not a directory because a tree records blobs, and is not a symlink because mode
-`120000` was already excluded from membership — and for the ancestor directories derived from those
+stages deletions, is not a directory because a tree records blobs, and is not a symlink because every
+mode-`120000` entry was excluded from membership — and for the ancestor directories derived from those
 names. It is `null` for everything the source had to *walk*: ignored territory, submodule contents,
 and collapsed `--others --directory` entries, where git's trailing-slash spelling comes from its own
-`lstat` and cannot distinguish a directory from a symlink pointing at one.
+`lstat` and cannot distinguish a directory from a symlink pointing at one. Those entries get one
+`lstat` of their own, for the single question membership turns on — *is this a link?* — and the
+file/directory bit that same call returns is deliberately **not** promoted into `shape`: the walk
+this half must agree with reports `null` there, and answering more here would make the two sources
+differ on a column whose entire purpose is that they do not.
 
 `FilesystemCrawlSource` reports `null` everywhere. `readdir` does hand it a dirent type, so this is a
 choice rather than a limit: the walk is the incumbent and the baseline every git-source number is

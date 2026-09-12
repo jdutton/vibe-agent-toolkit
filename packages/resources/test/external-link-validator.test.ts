@@ -1,6 +1,7 @@
 import markdownLinkCheck from 'markdown-link-check';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ExternalLinkCache } from '../src/external-link-cache.js';
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
 
 import { setupExternalLinkValidatorSuite } from './test-helpers.js';
@@ -104,6 +105,55 @@ describe('ExternalLinkValidator', () => {
 		expect(result2.cached).toBe(true);
 		expect(result1.statusCode).toBe(result2.statusCode);
 		// markdown-link-check should only be called once (second call is cache hit)
+		expect(mockedLinkCheck).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([
+		['a 429 — a throttle', () => simulateDead(429, 'Too Many Requests')],
+		['no response at all (statusCode 0)', () => simulateDead(0, 'getaddrinfo ENOTFOUND')],
+		['a top-level link-check failure (statusCode 0)', () => simulateError('ETIMEDOUT')],
+	])('does not cache %s — it must not answer for the whole TTL', async (_label, simulate) => {
+		// The anonymous path sees a status code and no headers, so the
+		// header-keyed signals cannot fire here; what can is a 429 and a
+		// `statusCode: 0` — the shape `checkLink` gives every DNS/connect/
+		// timeout blip. Caching either would let one bad minute report the
+		// link broken for `cacheTtlHours`, and re-running — the obvious
+		// remedy — would read the cache and repeat it.
+		simulate();
+
+		const first = await suite.validator.validateLink(EXAMPLE_URL);
+		const second = await suite.validator.validateLink(EXAMPLE_URL);
+
+		expect(first.cached).toBe(false);
+		expect(second.cached).toBe(false);
+		expect(mockedLinkCheck).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not READ a transient row an earlier build already wrote', async () => {
+		// The write-side guard repairs no row that is already on disk: a
+		// `statusCode: 0` entry from a build that cached network blips would
+		// still answer for the rest of its TTL after the upgrade. The read
+		// side applies the same predicate, so a row the write side would now
+		// refuse is treated as a miss and refetched.
+		await new ExternalLinkCache(suite.tempDir).set(EXAMPLE_URL, 0, 'getaddrinfo ENOTFOUND');
+		simulateAlive();
+
+		const result = await suite.validator.validateLink(EXAMPLE_URL);
+
+		expect(result).toMatchObject({ status: 'ok', statusCode: 200, cached: false });
+		expect(mockedLinkCheck).toHaveBeenCalledTimes(1);
+	});
+
+	it('still caches a 404 — a durable answer stays cached', async () => {
+		// The other side of the line: without this, "do not cache refusals"
+		// would quietly become "do not cache anything that failed".
+		simulateDead(404, 'Not Found');
+
+		const first = await suite.validator.validateLink(BROKEN_URL);
+		const second = await suite.validator.validateLink(BROKEN_URL);
+
+		expect(first.cached).toBe(false);
+		expect(second.cached).toBe(true);
 		expect(mockedLinkCheck).toHaveBeenCalledTimes(1);
 	});
 

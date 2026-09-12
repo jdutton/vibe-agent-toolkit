@@ -9,6 +9,8 @@ import type { CoreRAGChunk, TokenCounter } from '@vibe-agent-toolkit/rag';
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import type { ZodObject, ZodRawShape } from 'zod';
 
+import { serializeMetadata } from './schema.js';
+
 /**
  * Accumulated document record collected during indexing.
  * Stored to rag_documents table when storeDocuments is enabled.
@@ -56,10 +58,60 @@ export function overlayChunkMetadata<TMetadata extends Record<string, unknown>>(
 }
 
 /**
+ * A column a document record carries that the documents table does not have,
+ * with the value every existing row is to be given for it.
+ */
+export interface MissingDocumentColumn {
+  name: string;
+  /** The sentinel an absent metadata field is stored as: `''` or `-1` */
+  fill: string | number;
+}
+
+/**
+ * The metadata columns a document record carries that a documents table lacks.
+ *
+ * A table written by an earlier build has whatever columns that build's record
+ * had: v0.1.42 wrote only the frontmatter keys each document happened to carry,
+ * so its tables lack every column no frontmatter supplies (`headingpath`,
+ * `startline`, …) and any the first document lacked. This build writes every
+ * metadata column on every record, and LanceDB refuses a record with a column
+ * the table does not have. The difference is answered by comparing the table's
+ * own column list with the record's — not by a version number — and each
+ * missing column is filled with the sentinel that reads back as "absent", which
+ * is what those rows' documents had for it.
+ *
+ * Columns the table has and the record lacks are not reported: LanceDB stores
+ * `null` for those, so they need no repair.
+ *
+ * @param tableColumns - The column names the documents table has now
+ * @param metadataSchema - Zod schema defining the metadata fields
+ * @returns The columns to add, in schema order; empty when the table is current
+ */
+export function missingDocumentColumns(
+  tableColumns: readonly string[],
+  metadataSchema: ZodObject<ZodRawShape>,
+): MissingDocumentColumn[] {
+  const present = new Set(tableColumns);
+  // Serializing an empty document yields every metadata column at its sentinel.
+  const sentinels: Record<string, string | number> = serializeMetadata<Record<string, string | number>>(
+    {},
+    metadataSchema,
+  );
+  return Object.entries(sentinels)
+    .filter(([name]) => !present.has(name))
+    .map(([name, fill]) => ({ name, fill }));
+}
+
+/**
  * Create a DocumentRecord for the rag_documents table.
  *
- * Builds the record from resource metadata, transformed content,
- * and overlays frontmatter fields using the metadata schema.
+ * Builds the record from resource metadata, transformed content, and every
+ * metadata field the schema declares — serialized exactly as chunk rows
+ * serialize theirs, sentinel included when the document's frontmatter lacks
+ * the field. The documents table's columns are inferred from the FIRST row
+ * written, so a record that carried only the keys its own document had gave
+ * the table the first document's shape, and any later document with a key the
+ * first lacked was refused at insert time.
  *
  * @param resource - Resource metadata (id, filePath, frontmatter)
  * @param content - Transformed content to store
@@ -77,7 +129,10 @@ export function createDocumentRecord(
   tokenCounter: TokenCounter,
   metadataSchema: ZodObject<ZodRawShape>,
 ): DocumentRecord {
-  const documentRecord: DocumentRecord = {
+  // Metadata first, core fields after, so a metadata schema that reuses a core
+  // column name cannot overwrite the core value — the same order chunk rows use.
+  return {
+    ...serializeMetadata(resource.frontmatter ?? {}, metadataSchema),
     resourceid: resource.id,
     filepath: resource.filePath,
     content,
@@ -86,17 +141,4 @@ export function createDocumentRecord(
     totalchunks: totalChunks,
     indexedat: Date.now(),
   };
-
-  if (resource.frontmatter) {
-    for (const key of Object.keys(metadataSchema.shape)) {
-      if (key in resource.frontmatter) {
-        const value = resource.frontmatter[key];
-        documentRecord[key.toLowerCase()] = typeof value === 'string' || typeof value === 'number'
-          ? value
-          : JSON.stringify(value);
-      }
-    }
-  }
-
-  return documentRecord;
 }

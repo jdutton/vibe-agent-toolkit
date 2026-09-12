@@ -46,7 +46,7 @@ async function assertGitignoreError(
       expected: {
         code: 'LINK_TO_GITIGNORED',
         messageContains: 'gitignored',
-        hasSuggestion: true,
+        hasSuggestion: false,
       },
       validationOptions: {
         projectRoot: gitRoot,
@@ -153,7 +153,7 @@ describe('validateLink', () => {
           expected: {
             code: 'LINK_BROKEN_FILE',
             messageContains: ['File not found', 'nonexistent.md'],
-            hasSuggestion: true,
+            hasSuggestion: false,
           },
         },
         expect,
@@ -221,7 +221,7 @@ describe('validateLink', () => {
           expected: {
             code: 'LINK_BROKEN_ANCHOR',
             messageContains: ['Anchor not found', 'nonexistent-heading'],
-            hasSuggestion: true,
+            hasSuggestion: false,
           },
         },
         expect,
@@ -540,7 +540,10 @@ describe('validateLink', () => {
       expect(result).toHaveProperty('code');
       expect(result).toHaveProperty('link');
       expect(result).toHaveProperty('message');
-      expect(result).toHaveProperty('suggestion');
+      // The remedy is the registry's `fix`; a per-issue `suggestion` is present only
+      // when the builder has something specific to say (e.g. a case-mismatch spelling).
+      expect(result).toHaveProperty('fix');
+      expect(result).not.toHaveProperty('suggestion');
 
       // `location` is contractually relative, never absolute. With no
       // projectRoot supplied, the library entry point falls back to the process
@@ -550,18 +553,21 @@ describe('validateLink', () => {
       expect(result?.link).toBe(NONEXISTENT_FILE_LINK);
     });
 
-    it('should include empty suggestion in broken file issue', async () => {
+    // These two used to pin `suggestion: ''` — a field that said nothing, copied
+    // from one builder to the next. A builder with no specific remedy now omits
+    // the field; the registry's `fix` is the remedy every issue carries.
+    it('carries the registry remedy and no empty suggestion on a broken file issue', async () => {
       const sourceFile = safePath.join(FIXTURES_DIR, BROKEN_FILE_MD);
       const link = createLink('local_file', NONEXISTENT_FILE_LINK, 'Broken');
       const headingsMap = fragmentIndex();
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
-      expect(result?.suggestion).toBeDefined();
-      expect(result?.suggestion).toBe('');
+      expect(result?.fix).toBeTruthy();
+      expect(result).not.toHaveProperty('suggestion');
     });
 
-    it('should include empty suggestion in broken anchor issue', async () => {
+    it('carries the registry remedy and no empty suggestion on a broken anchor issue', async () => {
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('anchor', NONEXISTENT_ANCHOR, 'Broken');
       const headingsMap = fragmentIndex([
@@ -570,8 +576,8 @@ describe('validateLink', () => {
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
-      expect(result?.suggestion).toBeDefined();
-      expect(result?.suggestion).toBe('');
+      expect(result?.fix).toBeTruthy();
+      expect(result).not.toHaveProperty('suggestion');
     });
   });
 

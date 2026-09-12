@@ -19,6 +19,13 @@
  *   - Engine returns `unverified` → return as-is, no fetch, **no cache touch**
  *     even if a cache was supplied (§6.3: result flips when a token appears,
  *     so caching the no-token answer would poison future runs).
+ *   - Engine returns `provider-error` → return as-is WITH the reason, no fetch,
+ *     no cache touch. This is a provider that claims the host and has a token
+ *     but could not build the request for this URL (a `to` template reading a
+ *     capture that did not participate, a transform refusing a value). It is
+ *     not `unsupported`: a consumer that falls back to an anonymous fetch on
+ *     `unsupported` must not do so for a URL the adopter configured
+ *     authentication for.
  *   - Engine returns success + cache present + not forceRefresh + cache hit →
  *     return `{ bytes, metadata, cached: true }`, no fetch.
  *   - Engine returns success otherwise → fetch via `authTransport` (using
@@ -45,7 +52,7 @@
  */
 
 import { type ContentCache } from './content-cache.js';
-import { resolveAuthenticatedUrl, type LinkAuthConfig } from './link-auth/resolve.js';
+import { resolveAuthenticatedUrl, type LinkAuthConfig, type ResolveOutcome } from './link-auth/resolve.js';
 import { type LinkAuthDeps } from './link-auth-deps-memo.js';
 import { authTransport, type AuthTransportOptions } from './link-auth-transport.js';
 import { type ContentMetadata } from './schemas/content-cache.js';
@@ -72,7 +79,40 @@ export type ContentFetchResult =
       readonly cached: boolean;
     }
   | { readonly outcome: 'unsupported' }
-  | { readonly outcome: 'unverified'; readonly reason: string };
+  | { readonly outcome: 'unverified'; readonly reason: string }
+  | { readonly outcome: 'provider-error'; readonly reason: string };
+
+/**
+ * Map an engine non-success outcome onto the public result, one arm per
+ * outcome.
+ *
+ * 🪤 This was a two-way ternary (`unverified` → unverified, anything else →
+ * `unsupported`) written when the engine had two failure outcomes. When the
+ * engine grew `provider-error`, the ternary folded it onto `unsupported` and
+ * dropped the reason — a broken provider WITH a valid token became
+ * indistinguishable from "no provider claims this host". The `switch` with a
+ * `never` default makes the next engine outcome a type error here instead of a
+ * silent downgrade.
+ */
+function shortCircuit(
+  failure: Exclude<ResolveOutcome, { fetchUrl: string }>,
+): Exclude<ContentFetchResult, { bytes: Uint8Array }> {
+  switch (failure.outcome) {
+    case 'unsupported': {
+      return { outcome: 'unsupported' };
+    }
+    case 'unverified': {
+      return { outcome: 'unverified', reason: failure.reason };
+    }
+    case 'provider-error': {
+      return { outcome: 'provider-error', reason: failure.reason };
+    }
+    default: {
+      const exhaustive: never = failure;
+      throw new Error(`fetchAuthenticated: unhandled engine outcome ${JSON.stringify(exhaustive)}`);
+    }
+  }
+}
 
 export async function fetchAuthenticated(
   url: string,
@@ -84,11 +124,9 @@ export async function fetchAuthenticated(
   // injected `fetchUrl` field cannot reroute a non-success outcome onto the
   // cache/fetch path. The engine controls plan shape — defending in depth.
   if (!Object.hasOwn(plan, 'fetchUrl')) {
-    // unsupported / unverified — both short-circuit without fetch or cache.
-    const failure = plan as Exclude<typeof plan, { fetchUrl: string }>;
-    return failure.outcome === 'unverified'
-      ? { outcome: 'unverified', reason: failure.reason }
-      : { outcome: 'unsupported' };
+    // Every non-success outcome short-circuits without fetch or cache, and each
+    // is passed through under its own name.
+    return shortCircuit(plan as Exclude<typeof plan, { fetchUrl: string }>);
   }
   const success = plan as Extract<typeof plan, { fetchUrl: string }>;
 

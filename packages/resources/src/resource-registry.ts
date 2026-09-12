@@ -11,7 +11,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { CODE_REGISTRY, createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue, type ValidationIssueCode } from '@vibe-agent-toolkit/schema';
 import {
   CRAWL_REGISTRY_ADMIT_ID,
   CRAWL_REGISTRY_ENUMERATE_ID,
@@ -28,8 +28,10 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import {
   crawlDirectory,
+  type DirectoryRefusal,
   type CrawlOptions as UtilsCrawlOptions,
   crawlPathFilter,
+  refusedListingMessage,
 } from '@vibe-agent-toolkit/utils/crawl';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
@@ -50,11 +52,12 @@ import {
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
 import { estimateTokens } from './link-classify.js';
 import type { ParseResult } from './link-parser.js';
-import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
+import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, unreadableTargetsFrom, type FragmentIndex, type JudgeLinkOptions, type LinkEntry, type ValidateLinkOptions } from './link-validator.js';
 import { parserKindForMimeType } from './mime-type.js';
 import { ParseCache, type ParseCacheStats, vatCacheRoot } from './parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from './parse-dispatcher.js';
 import {
+  collectionMimeConflictFinding,
   createCollectionMimeResolver,
   relativize,
   type CollectionMimeResolver,
@@ -66,6 +69,7 @@ import type { ResourcePopulationSource } from './projection/resource-population.
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig, ValidationMode } from './schemas/project-config.js';
+import type { RealizationConditionRow } from './schemas/projection-resources.js';
 import type { HeadingNode, ResourceMetadata } from './schemas/resource-metadata.js';
 import type { ValidationResult } from './schemas/validation-result.js';
 import { locationRoot, matchesGlobPattern, resolveLocalHref, sameDirectory } from './utils.js';
@@ -578,7 +582,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * serve the other's facts — but two answers to "is this file prose" is one too
    * many.
    */
-  private mimeResolverInstance?: CollectionMimeResolver;
+  private mimeResolverInstance?: CollectionMimeResolver | undefined;
 
   /**
    * This registry's parse-pool policy — see {@link ResourceRegistryOptions.parsePool}.
@@ -655,6 +659,28 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private unreadableResources: UnreadableResource[] = [];
 
   /**
+   * Directories the crawl asked to list and was refused — so nothing beneath
+   * them was enumerated at all. Cleared by clear(). Surfaced as
+   * SCAN_PATH_UNREADABLE issues in validate().
+   *
+   * 🚨 A different gap from {@link unreadableResources}, one level up: those
+   * are files the walk SAW and could not open; these are subtrees the walk
+   * never saw into. Every file under one is in the declared population and in
+   * none of the counts — the same green-without-running shape the link judge
+   * refuses with `LINK_TARGET_UNREADABLE`, and the crawl used to swallow it.
+   */
+  private unlistableDirectories: DirectoryRefusal[] = [];
+
+  /**
+   * Population-time conditions the population source handed over with the
+   * paths — the projection's `realization_conditions` for the extents the lane
+   * registered. Empty on the walk lane, which has no projection. Cleared by
+   * clear(). Surfaced by validate(), one finding per `(code, path)`, with the
+   * row's own severity — see {@link collectPopulationConditionIssues}.
+   */
+  private populationConditions: readonly RealizationConditionRow[] = [];
+
+  /**
    * Reads that failed, in the order `addResources` attempted them.
    *
    * Same rationale as {@link getDuplicateIdCollisions}: this is a population
@@ -666,6 +692,19 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   getUnreadableResources(): UnreadableResource[] {
     return [...this.unreadableResources];
+  }
+
+  /**
+   * Directories the crawl could not list, in the order the walk met them.
+   *
+   * A population fact like the two logs above: a caller reconciling "declared"
+   * against "admitted" needs to know which subtrees were never enumerated, and
+   * an issue list alone cannot say how many files that cost.
+   *
+   * @returns A copy of the refusal log, oldest first
+   */
+  getUnlistableDirectories(): DirectoryRefusal[] {
+    return [...this.unlistableDirectories];
   }
 
   /**
@@ -1263,6 +1302,13 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       // fast path and it keeps ignored files out, which is the half of the
       // universe that must NOT widen (see {@link CrawlOptions.includeUntracked}).
       includeUntracked: true,
+      // Degrade, don't destroy — but never silently. Without this the walk
+      // THROWS on a refused listing (the crawler's only other honest answer);
+      // with it the refusal is recorded here and reported by `validate()` as
+      // SCAN_PATH_UNREADABLE, while every readable sibling is still admitted.
+      onUnreadable: (refusal) => {
+        this.unlistableDirectories.push(refusal);
+      },
     };
 
     // The enumeration ALONE is charged here, not the whole method: `addResources`
@@ -1364,8 +1410,13 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return undefined;
     }
     const isMember = crawlPathFilter(include, exclude);
+    const { paths, conditions } = await source.enumerate(base);
+    // Kept whole, not narrowed by `include`/`exclude`: a condition is about the
+    // enumeration, and a gap the enumerator met outside this crawl's globs is
+    // still a gap in the population the projection will answer queries from.
+    this.populationConditions = conditions;
     const admitted: string[] = [];
-    for (const absolutePath of await source.enumerate(base)) {
+    for (const absolutePath of paths) {
       if (isMember(safePath.relative(base, absolutePath))) {
         admitted.push(absolutePath);
       }
@@ -1461,6 +1512,76 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
+   * Emit SCAN_PATH_UNREADABLE for every directory the crawl could not list.
+   *
+   * The registry's own code for this shape (its description already reads "a
+   * directory the scan could not enter … so it was not scanned; findings from
+   * every readable sibling are still reported"), rather than a second code
+   * for the same fact on a second lane. The remedy names `resources.exclude`,
+   * which is this lane's deliberate-drop mechanism; the registry `fix` text
+   * names `--exclude`, which is `vat audit`'s.
+   * @private
+   */
+  private collectUnlistableDirectoryIssues(): ValidationIssue[] {
+    const root = locationRoot(this.baseDir);
+    return this.unlistableDirectories.map((refusal) =>
+      createRegistryIssue(
+        'SCAN_PATH_UNREADABLE',
+        // The crawler's own sentence, root-relative (an absolute path in a
+        // finding is the developer's home directory in every CI log), with
+        // this lane's remedy: the registry's crawl DOES read `resources.exclude`.
+        refusedListingMessage(refusal, {
+          root,
+          remedy: 'Fix the permissions on that directory, or add it to resources.exclude to drop it from the scan deliberately.',
+        }),
+        { location: issueLocation(refusal.directory, root) },
+      ),
+    );
+  }
+
+  /**
+   * Surface every population-time condition as a finding — the projection's
+   * rows the source handed over, plus the MIME conflicts THIS registry's own
+   * resolver met while admitting files.
+   *
+   * ## Why the resolver's conflicts are read here and not only off the projection
+   *
+   * `COLLECTION_MIME_CONFLICT` was written as a `realization_conditions` row that
+   * no command read, and this lane's docstring said it "stays silent about it":
+   * two collections typing one file differently made every `vat resources` verb
+   * exit 0 on both lanes. The registry resolves the type for every admitted file
+   * itself (see {@link ResourceRegistry.mimeResolverInstance}), on the walk lane
+   * and the projection lane alike, so its accumulator is the witness that does
+   * not depend on which lane ran. The projection lane's row for the same file
+   * is folded onto it by the `(code, path)` key below.
+   *
+   * ## What a row becomes
+   *
+   * An issue carrying the row's own code and severity, located at the row's
+   * root-relative path. A code in the catalogue picks up its `fix` and
+   * `reference` and is overridable through `severity.<CODE>`; the framework
+   * passes any other code through unchanged, so a row is never dropped for
+   * having a code this catalogue has not met — the row's severity stands.
+   * @private
+   */
+  private collectPopulationConditionIssues(): ValidationIssue[] {
+    const conflicts: Pick<RealizationConditionRow, 'code' | 'severity' | 'message' | 'path'>[] =
+      (this.mimeResolverInstance?.conflicts ?? []).map((conflict) => ({
+        path: conflict.path,
+        ...collectionMimeConflictFinding(conflict),
+      }));
+    const seen = new Set<string>();
+    const issues: ValidationIssue[] = [];
+    for (const row of [...conflicts, ...this.populationConditions]) {
+      const key = `${row.code}\0${row.path}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      issues.push(populationConditionIssue(row));
+    }
+    return issues;
+  }
+
+  /**
    * Emit RESOURCE_UNREADABLE errors for reads that failed during addResources().
    *
    * The message states that the file was **skipped**, because the consequence
@@ -1533,14 +1654,21 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       skipGitIgnoreCheck,
     });
 
+    // The files this run enumerated and could NOT read, as the judge's lookup:
+    // an anchor into one of them cannot be checked, and the judge says so
+    // (LINK_TARGET_UNREADABLE) instead of `skip`ping it as if the file held no
+    // headings. Built once from the existing log — a view, not a second ledger.
+    const unreadableTargets = unreadableTargetsFrom(this.unreadableResources);
+
     // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
     const judgeOptions: JudgeLinkOptions = this.baseDir === undefined
-      ? { ...tables, skipGitIgnoreCheck, checkHtmlAnchors }
+      ? { ...tables, skipGitIgnoreCheck, checkHtmlAnchors, unreadableTargets }
       : {
           ...tables,
           projectRoot: this.baseDir,
           skipGitIgnoreCheck,
           checkHtmlAnchors,
+          unreadableTargets,
           ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker }),
           ...(deferredArtifacts !== undefined && { deferredArtifacts }),
         };
@@ -1745,12 +1873,16 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 
     // Walk URI-family frontmatter values. Default-on; explicit `false` disables.
     if (validation.checkFrontmatterLinks !== false && resource.frontmatter) {
+      // Same lookup the body-link judge gets (see `validateAllLinks`), so a
+      // frontmatter reference with an anchor into a locked file is a finding too.
+      const unreadableTargets = unreadableTargetsFrom(this.unreadableResources);
       const linkOptions: ValidateLinkOptions = this.baseDir === undefined
-        ? { fsCache: this.fsCache, skipGitIgnoreCheck }
+        ? { fsCache: this.fsCache, skipGitIgnoreCheck, unreadableTargets }
         : {
             fsCache: this.fsCache,
             projectRoot: this.baseDir,
             skipGitIgnoreCheck,
+            unreadableTargets,
             ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker }),
           };
 
@@ -1853,6 +1985,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       ...this.collectUnresolvedReferenceIssues(),
       ...this.collectDuplicateIdErrors(),
       ...this.collectUnreadableResourceErrors(),
+      ...this.collectUnlistableDirectoryIssues(),
+      ...this.collectPopulationConditionIssues(),
     );
 
     // Validate each link in each resource
@@ -2291,6 +2425,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     this.resourcesByChecksum.clear();
     this.duplicateIdCollisions = [];
     this.unreadableResources = [];
+    this.unlistableDirectories = [];
+    this.populationConditions = [];
+    // The resolver's conflict accumulator belongs to the files it typed; a fresh
+    // crawl types afresh and must not re-report the previous population's.
+    this.mimeResolverInstance = undefined;
     // Compiled schemas are snapshots of files on disk: a registry being reused
     // for a fresh crawl must re-read them rather than trust a prior compile.
     this.compiledCollectionSchemas.clear();
@@ -2671,3 +2810,27 @@ export function generateIdFromPath(filePath: string, baseDir?: string): string {
     .replace(/-$/, ''); // Trim trailing hyphen
 }
 
+/**
+ * One population-time condition as the finding `validate()` emits for it.
+ *
+ * Built by hand rather than through `createRegistryIssue` because a row's code
+ * is an open vocabulary: the catalogue entry, when there is one, supplies the
+ * remedy and the reference, and the row supplies everything else. Severity is
+ * the ROW's — the framework's `finalize` then applies the adopter's override
+ * for a catalogued code and leaves an uncatalogued one exactly as stated.
+ *
+ * @param row - The condition, or the registry's own equivalent of one
+ * @returns The issue, located at the row's root-relative path
+ */
+function populationConditionIssue(
+  row: Pick<RealizationConditionRow, 'code' | 'severity' | 'message' | 'path'>,
+): ValidationIssue {
+  const entry = (CODE_REGISTRY as Partial<Record<string, (typeof CODE_REGISTRY)[IssueCode]>>)[row.code];
+  return {
+    code: row.code as ValidationIssueCode,
+    severity: row.severity,
+    message: row.message,
+    location: row.path,
+    ...(entry === undefined ? {} : { fix: entry.fix, reference: entry.reference }),
+  };
+}

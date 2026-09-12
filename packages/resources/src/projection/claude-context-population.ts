@@ -161,8 +161,11 @@ async function sharedEnumeration(root: string): Promise<CrawlSource> {
   const enumerated = await source.enumerate();
   // `kind` is the INSTANCE's own, never re-read from the environment:
   // `crawlSourceFor` falls back silently when the root is not in a repository,
-  // and a kind nobody kept is a kind nobody can report.
-  return { kind: source.kind, enumerate: () => Promise.resolve(enumerated) };
+  // and a kind nobody kept is a kind nobody can report. `unlistable` travels for
+  // the same reason: it is a fact about THIS enumeration, and a replay that
+  // dropped it would hand the second pass a population with no record of the
+  // directories the first pass could not see into.
+  return { kind: source.kind, unlistable: source.unlistable, enumerate: () => Promise.resolve(enumerated) };
 }
 
 /**

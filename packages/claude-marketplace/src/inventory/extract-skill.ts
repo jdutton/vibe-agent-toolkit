@@ -17,6 +17,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import {
   crawlDirectory,
+  refuseListing,
 } from '@vibe-agent-toolkit/utils/crawl';
 import {
   type GitTracker,
@@ -268,12 +269,24 @@ async function parseFrontmatterFields(
  */
 export async function crawlSkillLinkRegistry(projectRoot: string): Promise<ResourceRegistry> {
 	const enumerationStartedAt = crawlTimingStart();
+	// A directory the crawl cannot LIST refuses the registry, by name. This
+	// registry is the walker arm's entire population: enumerated around a gap,
+	// every skill whose links reach under that directory reports fewer linked
+	// files and nothing says so. Thrown, it lands in `walkLinkedFiles`'s catch
+	// as a `link walk failed` parse error on each skill it affects — reported,
+	// and attributed. Only the walk route can meet this (no repository, or
+	// `respectGitignore: false`); inside a repository `git ls-files` answers and
+	// never lists a directory, so there is no knob to name beyond the mode bits.
 	const files = await crawlDirectory({
 		baseDir: projectRoot,
 		include: ['**/*.md'],
 		absolute: true,
 		filesOnly: true,
 		includeUntracked: true,
+		onUnreadable: refuseListing({
+			root: projectRoot,
+			remedy: 'Fix the permissions on that directory so the inventory can list every markdown file under the project root.',
+		}),
 	});
 	recordRegistryPass(CRAWL_REGISTRY_ENUMERATE_ID, enumerationStartedAt);
 	const config = await loadConfig(projectRoot).catch(() => undefined);

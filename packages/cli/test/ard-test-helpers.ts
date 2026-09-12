@@ -109,6 +109,27 @@ const BASE_URL_LINE = '  baseUrl: https://example.com/catalog';
 /** Config YAML for a project with one published skill and an `ard:` block. */
 export const CONFIG_YAML_WITH_ARD = ardConfigYaml(BASE_URL_LINE);
 
+/** The dotted config key the removed-key fixture carries. */
+export const REMOVED_RESOURCES_KEY = 'metadata';
+
+/**
+ * {@link CONFIG_YAML_WITH_ARD} plus a `resources:` block carrying a key VAT
+ * removed from its schema in v0.1.16 and silently discarded for releases after.
+ *
+ * A real adopter still carries exactly this block, and when
+ * `ResourcesConfigSchema` went strict it took `vat ard emit` down at config
+ * load — a command that never reads `resources:` at all. The loader now warns
+ * and continues; this fixture is what keeps that true for THIS command, which
+ * has no other test touching a section it does not read.
+ */
+export const CONFIG_YAML_WITH_ARD_AND_REMOVED_KEY = [
+  CONFIG_YAML_WITH_ARD,
+  'resources:',
+  `  ${REMOVED_RESOURCES_KEY}:`,
+  '    frontmatter: true',
+  '',
+].join('\n');
+
 /**
  * Config YAML whose `ard:` block has no `baseUrl`.
  *

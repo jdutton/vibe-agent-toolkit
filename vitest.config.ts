@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-import { inlineDeps, platformTestTimeout, unitPool, unitPoolOptions } from './vitest.shared.js';
+import { inlineDeps, maxTestWorkers, platformTestTimeout, unitExecArgv, unitPool } from './vitest.shared.js';
 
 export default defineConfig({
   test: {
@@ -21,8 +21,12 @@ export default defineConfig({
     testTimeout: platformTestTimeout,
     // Shared with every package's own config — see `inlineDeps`.
     server: { deps: { inline: inlineDeps } },
+    // See `createUnitTestConfig` in vitest.shared.ts for why this is set —
+    // vitest 4's `restoreAllMocks` no longer clears `vi.fn()` call history.
+    clearMocks: true,
     pool: unitPool,
-    poolOptions: unitPoolOptions,
+    maxWorkers: maxTestWorkers,
+    execArgv: unitExecArgv,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'lcov'],

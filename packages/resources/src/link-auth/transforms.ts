@@ -54,8 +54,19 @@ export class UnknownTransformError extends Error {
  *   v1 callers pass URL-derived captures that cannot legally contain these
  */
 export function applyTransform(name: string, input: string): string {
+  assertKnownTransform(name);
+  return TRANSFORMS[name](input);
+}
+
+/**
+ * Refuse a transform name outside the allowlist — the same test
+ * {@link applyTransform} makes, exposed so a template can be checked at config
+ * time without rendering it (there is no value to render against yet).
+ *
+ * @throws {UnknownTransformError} if `name` is not in the allowlist
+ */
+export function assertKnownTransform(name: string): asserts name is TransformName {
   if (!Object.hasOwn(TRANSFORMS, name)) {
     throw new UnknownTransformError(name);
   }
-  return TRANSFORMS[name as TransformName](input);
 }

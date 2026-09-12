@@ -66,7 +66,6 @@ export interface PluginRow {
 }
 
 export interface RunReport {
-  schema_version: 1;
   generated_at: string;          // ISO 8601
   vat_version: string;
   vat_commit: string;
@@ -147,7 +146,6 @@ export async function writeRunReport(report: RunReport, outDir: string): Promise
 
   const totals = computeTotals(report);
   const dump = {
-    schema_version: report.schema_version,
     generated_at: report.generated_at,
     vat_version: report.vat_version,
     vat_commit: report.vat_commit,

@@ -31,6 +31,20 @@
           "minimum": 0,
           "description": "0-based rank among this edge's candidates — 0 is the best candidate this context found"
         },
+        "dstKind": {
+          "type": "string",
+          "enum": [
+            "resource",
+            "external",
+            "out-of-corpus"
+          ],
+          "description": "Which namespace dstKey is drawn from — a destination CLASS, never an existence verdict"
+        },
+        "dstKey": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Canonical destination key within dstKind's namespace — GROUP BY the PAIR (dstKind, dstKey), never this column alone. Equals dstResource when dstKind is \"resource\"; a normalized fragment-less URI for \"external\"; a normalized root-relative path for \"out-of-corpus\". NOT stable across extent widening: widening moves a destination between classes"
+        },
         "dstResource": {
           "anyOf": [
             {
@@ -41,14 +55,31 @@
               "type": "null"
             }
           ],
-          "description": "Resolved target resource id, or null when this candidate resolves to nothing"
+          "description": "Resolved target resource id — non-null exactly when dstKind is \"resource\", so null is the FACT that the target is not in THE EVALUATING LENS'S EXTENT — the corpus for that lens, not the tree — rather than an absence standing in for several. Which destination class it is instead is dstKind. A count of nulls is therefore NOT a dangling-link count: it sums the external and out-of-corpus classes, and an external URL is not broken at all — `SELECT dstKind, COUNT(*) FROM edge_resolutions WHERE dstResource IS NULL GROUP BY dstKind` shows that split on your own corpus. The out-of-corpus half is lens-relative on top of that, varying by an order of magnitude between two lenses over the identical tree, so it is not a defect count either unless the lens's extent IS the tree"
         },
         "dstAnchor": {
-          "type": [
-            "string",
-            "null"
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
           ],
-          "description": "Fragment target, or null"
+          "description": "Fragment target, or null. For dstKind \"resource\" it joins blob_sections.slug (via resources → resource_realizations.contentKey, and a consumer must say WHICH realization: a packaged resource's source and dist bytes differ). For \"external\" and \"out-of-corpus\" it is the raw fragment, which nothing in the projection can resolve"
+        },
+        "tier": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Reachability tier for THIS candidate — open vocabulary, e.g. \"same-plugin\", \"same-marketplace\", \"known-other-marketplace\", \"auth-required\", \"nonexistent\". Null when the lens has no reachability model, so that \"has a tier\" keeps meaning \"reachability was assessed\""
         },
         "score": {
           "anyOf": [
@@ -69,12 +100,15 @@
         "refOrdinal",
         "contextId",
         "candidateOrdinal",
+        "dstKind",
+        "dstKey",
         "dstResource",
         "dstAnchor",
+        "tier",
         "score"
       ],
       "additionalProperties": false,
-      "description": "A row of the path-dependent `edge_resolutions` table"
+      "description": "A row of the path-dependent `edge_resolutions` table. Note: the dstKind/dstResource correspondence and the dstKey-equals-dstResource rule for the resource class are enforced by the Zod schema but NOT encoded in the generated JSON Schema — a consumer validating against the published artifact alone must treat both as producer convention."
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#"

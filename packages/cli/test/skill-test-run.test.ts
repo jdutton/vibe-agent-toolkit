@@ -9,7 +9,7 @@
  *   - exit 1  when an internal/parse-failure error is thrown (InternalHarnessError)
  */
 
-import { rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import * as harness from '@vibe-agent-toolkit/agent-skills';
@@ -476,7 +476,16 @@ async function runAndCaptureOpts(
 ): Promise<Record<string, unknown>> {
   const { harnessSpy } = installRunSpies();
   await runSkillTestRun(subject, options);
-  return harnessSpy.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+  // 🪤 The LAST call, not the first. `installRunSpies` may have already run in
+  // this test — the `--no-baseline` case installs spies, runs once, then calls
+  // this helper for a second run — and under vitest 4 `vi.spyOn` on an
+  // already-mocked method RETURNS THE EXISTING MOCK rather than a fresh one
+  // (vitest 3 replaced it, which is why `calls[0]` used to be this run's).
+  // Reading `calls[0]` therefore handed back the FIRST run's options, so the
+  // override assertion silently examined the un-overridden call and read
+  // `baseline: true`. `.at(-1)` is this run's call whether the spy was fresh
+  // or reused.
+  return harnessSpy.mock.calls.at(-1)?.[0] as unknown as Record<string, unknown>;
 }
 
 const ENV_TEST_SKILL = './acme-skill';
@@ -1704,6 +1713,58 @@ describe('runSkillTestRun (a broken COMPANION config exits 2, not 1)', () => {
 
     expect(exit).toHaveBeenCalledWith(2);
     expect(harnessSpy).not.toHaveBeenCalled();
+  });
+});
+
+// The same symmetry for the OTHER user-fixable preflight condition discovery can
+// raise: a directory the companion's `skills.include` reaches that the crawl cannot
+// list. Discovery refuses it (`DirectoryListingRefusedError`) so the test never runs
+// against a shorter skill list — but `mapErrorToExitCode` has no case for that class
+// either, so it fell through to Internal (1) and told the operator a harness bug had
+// occurred when the fix was `chmod` or a narrower include pattern.
+//
+// `chmod 000` denies nothing to uid 0 and means nothing on Windows — the same guard
+// `audit-unreadable-path.integration.test.ts` carries, for the same reason.
+const CANNOT_DENY_READS =
+  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
+
+describe.skipIf(CANNOT_DENY_READS)('runSkillTestRun (a refused directory under a COMPANION config exits 2, not 1)', () => {
+  let lockedDir: string | undefined;
+
+  afterEach(() => {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- restoring a throwaway fixture directory so it can be removed
+    if (lockedDir !== undefined) chmodSync(lockedDir, 0o755);
+    lockedDir = undefined;
+    vi.restoreAllMocks();
+  });
+
+  it('maps a DirectoryListingRefusedError raised during companion resolution to the preflight code', async () => {
+    const fx = setupReferenceFixture({
+      pool: [DECLARED_POOL],
+      nested: { dir: NESTED_DIR, pool: [NESTED_SKILL] },
+    });
+    resetSkillDiscoveryCache();
+    const nested = nestedOf(fx);
+    // A sibling the nested config's `skills/*/SKILL.md` reaches and cannot list.
+    lockedDir = safePath.join(nested.root, 'skills', 'locked');
+    mkdirSyncReal(lockedDir, { recursive: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- the unreadable directory IS the fixture
+    chmodSync(lockedDir, 0o000);
+    vi.spyOn(process, 'cwd').mockReturnValue(fx.root);
+    const harnessSpy = vi.spyOn(harness, 'runSkillTestHarness');
+    vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+
+    await runSkillTestRun(PATH_SUBJECT, {
+      with: withCompanionAt(nested.skillDir(NESTED_SKILL)),
+      iUnderstandThisRunsSkillCode: true,
+    });
+
+    expect(exit).toHaveBeenCalledWith(2);
+    expect(harnessSpy).not.toHaveBeenCalled();
+    // The operator is told which directory and which knob, not that the harness broke.
+    expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toContain('skills/locked');
   });
 });
 

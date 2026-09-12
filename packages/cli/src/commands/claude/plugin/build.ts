@@ -449,7 +449,9 @@ export async function runClaudePluginBuildPhase(
 }
 
 async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<void> {
-  finishCommand(await runClaudePluginBuildPhase(options), writeYamlOutput);
+  // `undefined`: this command offers no `--format`, so its failure envelope is
+  // YAML like its report.
+  finishCommand(await runClaudePluginBuildPhase(options), writeYamlOutput, undefined);
 }
 
 /**

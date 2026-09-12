@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ContentTransformOptions, LinkRewriteRule, ResourceLookup } from '../src/content-transform.js';
 import { transformContent } from '../src/content-transform.js';
+import { parseMarkdownContent } from '../src/link-parser.js';
 import type { LinkType, ResourceLink, ResourceMetadata } from '../src/schemas/resource-metadata.js';
 
 // ============================================================================
@@ -40,6 +41,19 @@ const CODE_LINK_CONTENT = 'See [`guide.md`](./guide.md).';
 const EMPHASIS_LINK_CONTENT = 'See [**Guide**](./guide.md) and [_details_](./details.md).';
 const PASSTHROUGH_LINK_TEMPLATE = '[{{link.rawText}}]({{link.href}})';
 
+/**
+ * Built from code points, never typed as an escape.
+ *
+ * A `\r` typed into a fixture is invisible in review and turns the file binary to
+ * `grep`; `.claude/rules/tests-that-prove-nothing.md` records this repository
+ * having been bitten by it inside a comment warning about it.
+ */
+const CR = String.fromCodePoint(0x0d);
+const LF = String.fromCodePoint(0x0a);
+const CRLF = `${CR}${LF}`;
+/** A backtick, built from its code point so the fixtures below stay greppable. */
+const TICK = String.fromCodePoint(0x60);
+
 // ============================================================================
 // Test helpers
 // ============================================================================
@@ -57,17 +71,40 @@ function createTestLink(
   };
 }
 
+/**
+ * A `[ref]: href` definition carrying the span the parser would give it.
+ *
+ * The definition pass splices at `startOffset`/`endOffset`, as pass 1 does, so a
+ * fixture has to locate the definition in `content` the way mdast would: the whole
+ * `[ref]: href` construct, line ending excluded. `text` is the NORMALISED
+ * identifier (lower-cased), which is what `remark-parser` puts there.
+ *
+ * @param content - The document the definition sits in
+ * @param ref - The label as written in `content`
+ * @param href - The destination as written in `content`
+ * @param resolvedId - Optional resolved resource ID
+ * @param type - Link type (defaults to 'local_file')
+ * @returns The definition link, located in `content`
+ */
 function createDefinitionLink(
+  content: string,
   ref: string,
   href: string,
   resolvedId?: string,
   type: LinkType = LOCAL_FILE,
 ): ResourceLink {
+  const startOffset = content.indexOf(`[${ref}]:`);
+  if (startOffset === -1) throw new Error(`fixture has no definition for ${ref}`);
+  const lineEnd = content.indexOf(LF, startOffset);
+  const rawEnd = lineEnd === -1 ? content.length : lineEnd;
+  const endOffset = content.charAt(rawEnd - 1) === CR ? rawEnd - 1 : rawEnd;
   return createTestLink({
-    text: ref,
+    text: ref.toLowerCase(),
     href,
     type,
     nodeType: 'definition',
+    startOffset,
+    endOffset,
     ...(resolvedId !== undefined && { resolvedId }),
   });
 }
@@ -1204,7 +1241,7 @@ describe('transformContent', () => {
       const content = `See [Guide][guide-ref] for details.\n\n[guide-ref]: ./guide.md`;
       const links: ResourceLink[] = [
         createTestLink({ text: 'Guide', href: 'guide-ref', type: 'unknown', nodeType: 'linkReference' }),
-        createDefinitionLink('guide-ref', DEF_GUIDE_HREF, DEF_GUIDE_ID),
+        createDefinitionLink(content, 'guide-ref', DEF_GUIDE_HREF, DEF_GUIDE_ID),
       ];
 
       const resource = createTestResource({ id: DEF_GUIDE_ID, filePath: DEF_GUIDE_OUTPUT_PATH });
@@ -1222,7 +1259,7 @@ describe('transformContent', () => {
     it('should preserve definition fragment when rewriting', () => {
       const content = `[guide-ref]: ./guide.md#getting-started`;
       const links: ResourceLink[] = [
-        createDefinitionLink('guide-ref', './guide.md#getting-started', DEF_GUIDE_ID),
+        createDefinitionLink(content, 'guide-ref', './guide.md#getting-started', DEF_GUIDE_ID),
       ];
 
       const resource = createTestResource({ id: DEF_GUIDE_ID, filePath: DEF_GUIDE_OUTPUT_PATH });
@@ -1240,7 +1277,7 @@ describe('transformContent', () => {
     it('should remove excluded definition (orphaned after inline link stripped)', () => {
       const content = `Some text.\n\n[excluded-ref]: ./excluded.md`;
       const links: ResourceLink[] = [
-        createDefinitionLink('excluded-ref', './excluded.md', undefined, LOCAL_FILE),
+        createDefinitionLink(content, 'excluded-ref', './excluded.md', undefined, LOCAL_FILE),
       ];
 
       const result = transformContent(content, links, {
@@ -1256,7 +1293,7 @@ describe('transformContent', () => {
     it('should leave external definition untouched', () => {
       const content = `[ext-ref]: https://example.com`;
       const links: ResourceLink[] = [
-        createDefinitionLink('ext-ref', 'https://example.com', undefined, EXTERNAL),
+        createDefinitionLink(content, 'ext-ref', 'https://example.com', undefined, EXTERNAL),
       ];
 
       const result = transformContent(content, links, {
@@ -1273,7 +1310,7 @@ describe('transformContent', () => {
       const links: ResourceLink[] = [
         createTestLink({ text: GUIDE_TEXT, href: DEF_GUIDE_HREF, resolvedId: DEF_GUIDE_ID, nodeType: 'link' }),
         createTestLink({ text: 'API Ref', href: 'api-ref', type: 'unknown', nodeType: 'linkReference' }),
-        createDefinitionLink('api-ref', './api.md', 'api'),
+        createDefinitionLink(content, 'api-ref', './api.md', 'api'),
       ];
 
       const guideResource = createTestResource({ id: DEF_GUIDE_ID, filePath: DEF_GUIDE_OUTPUT_PATH });
@@ -1312,6 +1349,74 @@ describe('transformContent', () => {
   });
 });
 
+/** The packager's own strip template, which re-emits only the link text. */
+const STRIP_TEMPLATE = '{{link.rawText}}';
+/** One href shared by a link and an image, which is what makes the replay reach the image. */
+const SHARED_IMG_HREF = 'evals/diagram.png';
+
+/**
+ * A link and an image sharing one href, with the link's real span.
+ *
+ * @param destination - What the link's span actually contains
+ * @returns The content and the link carrying offsets into it
+ */
+function neighbourFixture(destination: string): { content: string; links: ResourceLink[] } {
+  const content = `Spec: [Diagram spec](${destination})\nImage: ![diagram](${SHARED_IMG_HREF})`;
+  const start = content.indexOf('[Diagram');
+  const end = content.indexOf(')', start) + 1;
+  return {
+    content,
+    links: [createTestLink({
+      text: 'Diagram spec', href: SHARED_IMG_HREF, startOffset: start, endOffset: end,
+    })],
+  };
+}
+
+describe('a link this refuses to re-emit must not disturb its NEIGHBOURS', () => {
+  it('leaves the whole document alone when the destination carries a title', () => {
+    // 🚨 The regression this pins. The destination guard was added so a titled
+    // link would decline instead of losing its title — but declining put it in
+    // `fallbackByHref`, which turned the href-keyed regex replay back on. The
+    // replay then matched the IMAGE, whose href is the same, and rewrote it
+    // through the strip template: `![diagram](evals/diagram.png)` became
+    // `!diagram` — the image destroyed and the bang orphaned, which is exactly
+    // the defect this file's sibling probe test is named for. The link itself
+    // was left unrewritten either way, so the guard's only observable effect
+    // was to damage a neighbour.
+    const { content, links } = neighbourFixture(`${SHARED_IMG_HREF} "Spec"`);
+
+    const result = transformContent(content, links, {
+      linkRewriteRules: [createTypeRule(LOCAL_FILE, STRIP_TEMPLATE)],
+    });
+
+    expect(result).toBe(content);
+  });
+
+  it('still splices, and still spares the image, when the destination is bare', () => {
+    // The positive control. Without it the assertion above would also pass if
+    // the splice path had simply stopped working altogether.
+    const { content, links } = neighbourFixture(SHARED_IMG_HREF);
+
+    const result = transformContent(content, links, {
+      linkRewriteRules: [createTypeRule(LOCAL_FILE, STRIP_TEMPLATE)],
+    });
+
+    expect(result).toBe(`Spec: Diagram spec\nImage: ![diagram](${SHARED_IMG_HREF})`);
+  });
+
+  it('splices a destination padded with whitespace, which is legal CommonMark', () => {
+    // `renderLink` reproduces this destination exactly, so refusing it would
+    // cost a correct rewrite for nothing.
+    const { content, links } = neighbourFixture(` ${SHARED_IMG_HREF} `);
+
+    const result = transformContent(content, links, {
+      linkRewriteRules: [createTypeRule(LOCAL_FILE, STRIP_TEMPLATE)],
+    });
+
+    expect(result).toBe(`Spec: Diagram spec\nImage: ![diagram](${SHARED_IMG_HREF})`);
+  });
+});
+
 describe('stray unpaired "[" in prose', () => {
   it('does not swallow the text between a stray "[" and the next real link', () => {
     // A sentence listing glob metacharacters ends up with an unpaired `[` inside
@@ -1329,5 +1434,601 @@ describe('stray unpaired "[" in prose', () => {
 
     // Only the genuine link is replaced; every other character survives.
     expect(result).toBe('A glob may use (`*`, `**`, `?`, `[`) — see guide for details.');
+  });
+});
+
+/** An external href, so an autolink over it is a construct CommonMark really produces. */
+const AUTOLINK_HREF = 'https://example.com/d.png';
+
+/**
+ * A construct the parser LOCATED but `MARKDOWN_LINK_REGEX` cannot express, an
+ * inline link, and an image — the construct and the image sharing one href.
+ *
+ * The construct carries a real span, so the parser found it; it simply is not an
+ * inline `[...](...)`. The `[Guide]` link is the positive control that keeps the
+ * assertions below from passing merely because the whole pass stopped working.
+ *
+ * @param construct - The located non-inline construct, verbatim
+ * @param href - The href it and the image share
+ * @param overrides - Fields distinguishing the construct's kind (nodeType, type)
+ */
+function locatedNonInlineFixture(
+  construct: string,
+  href: string,
+  overrides: Partial<ResourceLink>,
+): { content: string; links: ResourceLink[] } {
+  const content =
+    `Spec: ${construct}\nAlso: [${GUIDE_TEXT}](${GUIDE_HREF})\nImage: ![diagram](${href})`;
+  const start = content.indexOf(construct);
+  const guideStart = content.indexOf(`[${GUIDE_TEXT}]`);
+  return {
+    content,
+    links: [
+      createTestLink({
+        text: 'Diagram spec',
+        href,
+        startOffset: start,
+        endOffset: start + construct.length,
+        ...overrides,
+      }),
+      createTestLink({
+        text: GUIDE_TEXT,
+        href: GUIDE_HREF,
+        nodeType: 'link',
+        startOffset: guideStart,
+        endOffset: content.indexOf(')', guideStart) + 1,
+      }),
+    ],
+  };
+}
+
+/** Strip both kinds, so the external autolink case has a rule to match. */
+const STRIP_LOCAL_AND_EXTERNAL = createTypeRule([LOCAL_FILE, EXTERNAL], STRIP_TEMPLATE);
+
+describe('a LOCATED construct the replay cannot express must not disturb its NEIGHBOURS', () => {
+  it('spares an image sharing an href with a reference-style USE', () => {
+    // 🚨 The same corruption the titled-link case above pins, reached through the
+    // other verdict. A reference-style use `[t][id]` HAS a span, so the parser
+    // located it — but it is not `[...](...)`, so the splice pass declined it as
+    // UNRECOGNISED, which put it into `fallbackByHref`. `MARKDOWN_LINK_REGEX` can
+    // never match `[t][id]`, so that map entry could only ever fire on a DIFFERENT
+    // construct sharing the href — and images are never `ResourceLink`s (pinned in
+    // `link-grammar-divergence.test.ts`), so they are never candidates and never
+    // refused: pure prey. Measured against `dist` before the fix,
+    // `![diagram](evals/diagram.png)` was rewritten through the strip template
+    // while the use itself shipped unrewritten either way.
+    const { content, links } = locatedNonInlineFixture(
+      '[Diagram spec][id]',
+      SHARED_IMG_HREF,
+      { nodeType: 'linkReference' },
+    );
+
+    const result = transformContent(content, links, {
+      linkRewriteRules: [STRIP_LOCAL_AND_EXTERNAL],
+    });
+
+    expect(result).toBe(
+      `Spec: [Diagram spec][id]\nAlso: ${GUIDE_TEXT}\nImage: ![diagram](${SHARED_IMG_HREF})`,
+    );
+  });
+
+  it('spares an image sharing an href with an AUTOLINK', () => {
+    // The other located-but-inexpressible shape, and the reason the discriminator
+    // is the span rather than `nodeType`: mdast reports an autolink as a `link`
+    // node, indistinguishable by type from an inline link, and only the bytes at
+    // the span say `<…>`. An `<a href>` reaches the same branch — its span is the
+    // ATTRIBUTE (`html-link-parser.ts › makeLink`), which also does not open `[`.
+    const { content, links } = locatedNonInlineFixture(
+      `<${AUTOLINK_HREF}>`,
+      AUTOLINK_HREF,
+      { type: EXTERNAL, nodeType: 'link' },
+    );
+
+    const result = transformContent(content, links, {
+      linkRewriteRules: [STRIP_LOCAL_AND_EXTERNAL],
+    });
+
+    expect(result).toBe(
+      `Spec: <${AUTOLINK_HREF}>\nAlso: ${GUIDE_TEXT}\nImage: ![diagram](${AUTOLINK_HREF})`,
+    );
+  });
+
+  it('spares an image when a located span has no closing bracket', () => {
+    // The span is in bounds and opens `[`, so the parser placed it, but the
+    // brackets never balance — this is `content` and `links` disagreeing, e.g.
+    // a span measured against different bytes. Failing CLOSED (leave it alone)
+    // is the only safe answer: handing the href to the replay would again reach
+    // for whatever else carries it, and here that is the image.
+    const { content, links } = locatedNonInlineFixture(
+      '[Diagram spec (unclosed',
+      SHARED_IMG_HREF,
+      { nodeType: 'link' },
+    );
+
+    const result = transformContent(content, links, {
+      linkRewriteRules: [STRIP_LOCAL_AND_EXTERNAL],
+    });
+
+    expect(result).toBe(
+      `Spec: [Diagram spec (unclosed\nAlso: ${GUIDE_TEXT}\nImage: ![diagram](${SHARED_IMG_HREF})`,
+    );
+  });
+});
+
+describe('a link with NO usable span must still reach the regex replay', () => {
+  it('rewrites a link whose span runs past the end of the content', () => {
+    // ⚠️ The guard against fixing the neighbour-corruption too broadly. Excluding
+    // every declined link from `fallbackByHref` would silently stop rewriting the
+    // links the fallback exists FOR — and this is the second such shape, beside
+    // the offset-less link pinned in `link-grammar-divergence.test.ts`. A span
+    // that does not address these bytes is not a location, so the parser has told
+    // us nothing about where the construct is and the replay is the only thing
+    // that can find it.
+    const content = `See [${GUIDE_TEXT}](${GUIDE_HREF}).`;
+    const links = [createTestLink({
+      text: GUIDE_TEXT, href: GUIDE_HREF, nodeType: 'link', startOffset: 4, endOffset: 9999,
+    })];
+
+    const result = transformContent(content, links, {
+      linkRewriteRules: [createTypeRule(LOCAL_FILE, STRIP_TEMPLATE)],
+    });
+
+    expect(result).toBe(`See ${GUIDE_TEXT}.`);
+  });
+});
+
+// ============================================================================
+// Line endings — a rewriter returns the file it was given
+// ============================================================================
+
+
+const EOL_REF = 'guide-ref';
+const EOL_ID = 'eol-guide';
+const EOL_SOURCE_OUTPUT = '/output/SKILL.md';
+const EOL_TARGET_PATH = '/output/resources/guide.md';
+const EOL_EXPECTED_REL = 'resources/guide.md';
+
+/**
+ * The definition pass, with a registry that resolves `GUIDE_HREF`.
+ *
+ * @param content - The document to rewrite, line endings included
+ * @returns The rewritten document
+ */
+function rewriteDefinitions(content: string): string {
+  return transformContent(content, [createDefinitionLink(content, EOL_REF, GUIDE_HREF, EOL_ID)], {
+    linkRewriteRules: [createTypeRule(LOCAL_FILE, REWRITE_LINK_TEMPLATE)],
+    resourceRegistry: createTestRegistry([
+      createTestResource({ id: EOL_ID, filePath: EOL_TARGET_PATH }),
+    ]),
+    sourceFilePath: EOL_SOURCE_OUTPUT,
+  });
+}
+
+/**
+ * How many line feeds are NOT preceded by a carriage return.
+ *
+ * The mechanism assertion. `toBe` on the whole string proves this one document is
+ * right; this proves the property the rewriter owes every document, and it is the
+ * one a future edit to the regex would break without changing the fixture.
+ *
+ * @param text - The rewritten document
+ * @returns The count of bare line feeds
+ */
+function bareLineFeeds(text: string): number {
+  const total = [...text].filter((character) => character === LF).length;
+  const paired = text.split(CRLF).length - 1;
+  return total - paired;
+}
+
+describe('a rewritten definition keeps the line ending it was written with', () => {
+  it('leaves a CRLF file entirely CRLF', () => {
+    // 🚨 The defect. `MARKDOWN_DEFINITION_REGEX` ended `(\S[^\n]*)$`, and JS's
+    // multiline `$` asserts before a CR as well as before an LF — so the greedy
+    // class swallowed the CR into the captured destination, the whole match
+    // included it, and the replacement put back a line with no CR at all. The
+    // rewritten definition shipped LF-terminated inside an otherwise CRLF file.
+    // `href.trim()` then hid it: the registry lookup still succeeded, so nothing
+    // failed, and the only evidence was a file that no longer round-trips a diff
+    // or a checksum.
+    const content = `Intro.${CRLF}${CRLF}[${EOL_REF}]: ${GUIDE_HREF}${CRLF}Trailing.${CRLF}`;
+
+    const result = rewriteDefinitions(content);
+
+    expect(result).toBe(
+      `Intro.${CRLF}${CRLF}[${EOL_REF}]: ${EOL_EXPECTED_REL}${CRLF}Trailing.${CRLF}`,
+    );
+    expect(bareLineFeeds(result)).toBe(0);
+  });
+
+  it('leaves an LF file entirely LF', () => {
+    // The control. Preserving CRLF must not be done by NORMALIZING to it — a
+    // rewriter that "fixed" every file to CRLF would pass the assertion above.
+    const content = `Intro.${LF}${LF}[${EOL_REF}]: ${GUIDE_HREF}${LF}Trailing.${LF}`;
+
+    const result = rewriteDefinitions(content);
+
+    expect(result).toBe(
+      `Intro.${LF}${LF}[${EOL_REF}]: ${EOL_EXPECTED_REL}${LF}Trailing.${LF}`,
+    );
+    expect(result).not.toContain(CR);
+  });
+
+  it('rewrites a definition on the last line, which has no ending at all', () => {
+    const content = `Intro.${CRLF}${CRLF}[${EOL_REF}]: ${GUIDE_HREF}`;
+
+    expect(rewriteDefinitions(content)).toBe(
+      `Intro.${CRLF}${CRLF}[${EOL_REF}]: ${EOL_EXPECTED_REL}`,
+    );
+  });
+
+  it('collapses the blank lines left by a REMOVED definition in CRLF too', () => {
+    // The other half. Removing an orphaned definition leaves its line ending
+    // behind, and the tidy-up that collapses the resulting run was written
+    // `/\n{3,}/` — which cannot match `\r\n\r\n\r\n` at all, so a CRLF file kept
+    // every blank line an LF file had cleaned up. Same rule, both endings.
+    const content = `A.${CRLF}${CRLF}[${EOL_REF}]: ${GUIDE_HREF}${CRLF}${CRLF}B.${CRLF}`;
+
+    const result = transformContent(content, [createDefinitionLink(content, EOL_REF, GUIDE_HREF)], {
+      linkRewriteRules: [createTypeRule(LOCAL_FILE, LINK_TEXT_VAR)],
+    });
+
+    expect(result).toBe(`A.${CRLF}${CRLF}B.${CRLF}`);
+    expect(bareLineFeeds(result)).toBe(0);
+  });
+
+  it('collapses the same run in LF, unchanged', () => {
+    const content = `A.${LF}${LF}[${EOL_REF}]: ${GUIDE_HREF}${LF}${LF}B.${LF}`;
+
+    const result = transformContent(content, [createDefinitionLink(content, EOL_REF, GUIDE_HREF)], {
+      linkRewriteRules: [createTypeRule(LOCAL_FILE, LINK_TEXT_VAR)],
+    });
+
+    expect(result).toBe(`A.${LF}${LF}B.${LF}`);
+  });
+});
+
+// ============================================================================
+// Definitions are SPLICED at their span, not correlated by label
+// ============================================================================
+
+/**
+ * The definition pass over links the REAL parser produced, every definition
+ * resolving to the `EOL_ID` resource.
+ *
+ * mdast puts the NORMALISED identifier in `text` (lower-cased, whitespace
+ * collapsed), so a hand-built fixture whose `text` equals the label as written
+ * cannot see a correlation-by-label defect. The parser has to be the producer.
+ *
+ * @param content - The document, definitions included
+ * @param resolve - Whether the registry resolves the definitions
+ * @returns The rewritten document
+ */
+function rewriteParsedDefinitions(content: string, resolve = true): string {
+  const links = parseMarkdownContent(content, Buffer.byteLength(content)).links
+    .map((link) => (link.nodeType === 'definition' && resolve ? { ...link, resolvedId: EOL_ID } : link));
+  return transformContent(content, links, {
+    linkRewriteRules: [createTypeRule(LOCAL_FILE, resolve ? REWRITE_LINK_TEMPLATE : LINK_TEXT_VAR)],
+    ...(resolve && {
+      resourceRegistry: createTestRegistry([createTestResource({ id: EOL_ID, filePath: EOL_TARGET_PATH })]),
+    }),
+    sourceFilePath: EOL_SOURCE_OUTPUT,
+  });
+}
+
+describe('a definition is spliced at its own span, whatever its label\'s spelling', () => {
+  it.each([
+    // 🚨 The finding. Pass 2 keyed a definition on `link.text`, which for a
+    // `definition` is mdast's NORMALISED identifier (`api`), and looked it up
+    // with the label the regex captured as WRITTEN (`API`). Any label with an
+    // upper-case letter missed the map and shipped with the unpackaged path.
+    ['an upper-case letter', 'API'],
+    ['a doubled space, which mdast collapses', 'my  guide'],
+    ['a mixed-case multi-word label', 'User Guide'],
+  ])('rewrites a definition whose label has %s', (_name, label) => {
+    const content = `See [ref][${label}].${LF}${LF}[${label}]: ${GUIDE_HREF}${LF}`;
+
+    expect(rewriteParsedDefinitions(content)).toBe(
+      `See [ref][${label}].${LF}${LF}[${label}]: ${EOL_EXPECTED_REL}${LF}`,
+    );
+  });
+
+  it('removes an orphaned definition whose label has an upper-case letter', () => {
+    // The strip half of the same defect: the orphan was left in place.
+    const content = `Text.${LF}${LF}[API]: ${GUIDE_HREF}${LF}`;
+
+    expect(rewriteParsedDefinitions(content, false)).toBe(`Text.${LF}${LF}`);
+  });
+
+  it('leaves a definition whose destination it cannot re-emit exactly as written', () => {
+    // A title, or angle brackets, are not in `[ref]: href` — re-emitting would
+    // destroy them, so the splice declines, as pass 1 does for the same shapes.
+    const content = `[a]: ${GUIDE_HREF} "Title"${LF}[b]: <${GUIDE_HREF}>${LF}`;
+
+    expect(rewriteParsedDefinitions(content)).toBe(content);
+  });
+});
+
+describe('the blank-line collapse touches ONLY the line a removed definition left', () => {
+  it('keeps two consecutive blank lines inside a fenced block', () => {
+    // 🚨 The finding. The collapse ran over the WHOLE document whenever any
+    // definition existed, code fences included — so a Python example carrying
+    // PEP 8's two blank lines between top-level defs shipped with one. The
+    // rewriter's contract is the file it was given with the intended edit
+    // applied; a blank line inside a fence is content.
+    const fence = `${TICK}${TICK}${TICK}python${LF}def a():${LF}    pass${LF}${LF}${LF}def b():${LF}    pass${LF}${TICK}${TICK}${TICK}${LF}`;
+    const content = `Intro.${LF}${LF}[ref]: ${GUIDE_HREF}${LF}${LF}${fence}`;
+
+    expect(rewriteParsedDefinitions(content, false)).toBe(`Intro.${LF}${LF}${fence}`);
+  });
+
+  it('keeps a run of blank lines in PROSE that no removal created', () => {
+    // The mechanism, not the instance: it is not that fences are exempt, it is
+    // that nothing but the removed line's own run is collapsed.
+    const content = `A.${LF}${LF}${LF}${LF}B.${LF}${LF}[ref]: ${GUIDE_HREF}${LF}${LF}C.${LF}`;
+
+    expect(rewriteParsedDefinitions(content, false)).toBe(`A.${LF}${LF}${LF}${LF}B.${LF}${LF}C.${LF}`);
+  });
+
+  it('collapses nothing when the definition was rewritten rather than removed', () => {
+    const content = `A.${LF}${LF}${LF}${LF}[ref]: ${GUIDE_HREF}${LF}`;
+
+    expect(rewriteParsedDefinitions(content)).toBe(`A.${LF}${LF}${LF}${LF}[ref]: ${EOL_EXPECTED_REL}${LF}`);
+  });
+});
+
+// ============================================================================
+// Bracket matching inside a link's TEXT
+// ============================================================================
+
+const SPAN_HREF = 'refs/guide.md';
+const SPAN_TEMPLATE = '[{{link.rawText}}](REWRITTEN/{{link.href}})';
+
+/**
+ * Rewrite one line through the REAL parser, so the spans are the parser's own.
+ *
+ * Hand-written offsets would let this file assert whatever it assumed mdast says.
+ * The whole question here is what mdast reports for a link whose text contains a
+ * code span, so the parser has to be the one answering it.
+ *
+ * @param markdown - A single line of markdown
+ * @returns The rewritten line
+ */
+function spliceThroughParser(markdown: string): string {
+  const document = `${markdown}${LF}`;
+  const links = parseMarkdownContent(document, Buffer.byteLength(document)).links;
+  return transformContent(markdown, links, {
+    linkRewriteRules: [],
+    defaultTemplate: SPAN_TEMPLATE,
+    context: {},
+  });
+}
+
+/**
+ * A link whose TEXT contains `text`, and the rewrite it is owed.
+ *
+ * @param text - Raw markdown for the link's text
+ * @returns The source line and the line the splice must produce
+ */
+function spanCase(text: string): { source: string; rewritten: string } {
+  return {
+    source: `[${text}](${SPAN_HREF})`,
+    rewritten: `[${text}](REWRITTEN/${SPAN_HREF})`,
+  };
+}
+
+describe('a bracket inside a CODE SPAN is not a bracket', () => {
+  it.each([
+    // 🚨 The finding. `matchingBracketEnd` counted raw brackets, so the `[` inside
+    // the code span opened a nesting level that never closed — the function ran
+    // off the end, returned undefined, and the link was REFUSED. It then shipped
+    // unrewritten and `post-build-checks` reported it as PACKAGED_BROKEN_LINK:
+    // the author blamed for a rewriter miss, over a line CommonMark is entirely
+    // happy with.
+    ['an unbalanced [ in a code span', `the ${TICK}[${TICK} matcher`],
+    // The mirror image, and it failed differently: the `]` inside the span closed
+    // the construct EARLY, so `close + 1` was not `(` and the link was refused
+    // there instead. Two symptoms, one cause.
+    ['an unbalanced ] in a code span', `the ${TICK}]${TICK} closer`],
+    // The whole link-closing sequence inside a code span — the case the
+    // destination check was catching, and describing as a truncating splice.
+    ['a whole ]( in a code span', `see ${TICK}](${TICK} here`],
+    // A double-backtick span, so the fix cannot be "skip one character after a
+    // backtick": the run length decides where the span ends.
+    ['a bracket in a double-backtick span', `a ${TICK}${TICK}[not a link](x)${TICK}${TICK} b`],
+    // A code span with the brackets BALANCED inside it. Counting them happened to
+    // work here, which is why the defect was never noticed on this shape.
+    ['balanced brackets in a code span', `the ${TICK}[x]${TICK} form`],
+  ])('splices a link whose text carries %s', (_name, text) => {
+    const { source, rewritten } = spanCase(text);
+    expect(spliceThroughParser(source)).toBe(rewritten);
+  });
+
+  it.each([
+    // The controls. Every one of these already worked, and a code-span-aware
+    // scanner must not cost any of them.
+    ['balanced nested brackets', 'a [b] c'],
+    ['an escaped opening bracket', String.raw`a \[ b`],
+    ['an escaped closing bracket', String.raw`a \] b`],
+    ['an image', '![alt](img.png)'],
+    ['nested emphasis', '**a** _b_'],
+    // An UNCLOSED backtick is prose, not a code span — CommonMark leaves it as a
+    // literal. A scanner that treated it as opening a span would swallow the rest
+    // of the line and lose the link entirely.
+    ['an unclosed backtick', `a ${TICK} b`],
+    // Two runs of different lengths: the single tick does not close the double.
+    ['mismatched backtick runs', `a ${TICK}${TICK} b ${TICK} c ${TICK}${TICK} d`],
+  ])('still splices a link whose text carries %s', (_name, text) => {
+    const { source, rewritten } = spanCase(text);
+    expect(spliceThroughParser(source)).toBe(rewritten);
+  });
+
+  it('leaves a code span that FOLLOWS the link alone', () => {
+    // The scanner stops at the link's own closing bracket, so a span later on the
+    // line is never consulted — and must not be rewritten either, since mdast
+    // yields no link node inside code.
+    const source = `[Guide](${SPAN_HREF}) — compare ${TICK}[Guide](${SPAN_HREF})${TICK}`;
+
+    expect(spliceThroughParser(source)).toBe(
+      `[Guide](REWRITTEN/${SPAN_HREF}) — compare ${TICK}[Guide](${SPAN_HREF})${TICK}`,
+    );
+  });
+
+  it.each([
+    // 🚨 The finding, one line-break over. A CommonMark code span crosses a
+    // single line ending — only a BLANK line ends it — but both scanners bounded
+    // the closing-run search at the newline, so the `[` inside a span that wraps
+    // at a soft break opened a nesting level that never closed, the link was
+    // refused, shipped unrewritten, and was reported PACKAGED_BROKEN_LINK. Prose
+    // reflowed to 80 columns produces this shape without anyone writing it.
+    ['an unbalanced [ in a code span that wraps a line', `the ${TICK}on${LF}this [ line${TICK} here`],
+    ['a code span whose closer is on the next line', `the ${TICK}[ on${LF}this${TICK} line`],
+  ])('splices a link whose text carries %s', (_name, text) => {
+    const { source, rewritten } = spanCase(text);
+    expect(spliceThroughParser(source)).toBe(rewritten);
+  });
+
+  it('does not let a code span cross a BLANK line', () => {
+    // The bound the scanner keeps. A blank line ends the paragraph, so a
+    // backtick after it cannot close a span opened before it — the run before
+    // the blank line is prose, and the link there is an ordinary link.
+    const source = `[a ${TICK} b](${SPAN_HREF})${LF}${LF}${TICK}[not](x)${TICK}`;
+
+    expect(spliceThroughParser(source)).toBe(
+      `[a ${TICK} b](REWRITTEN/${SPAN_HREF})${LF}${LF}${TICK}[not](x)${TICK}`,
+    );
+  });
+});
+
+// ============================================================================
+// The fallback mask and the bracket matcher share ONE code-span rule
+// ============================================================================
+
+/** A backslash, built from its code point for the same reason `TICK` is. */
+const BACKSLASH = String.fromCodePoint(0x5c);
+
+/**
+ * The regex replay over a link with NO span — the only lane the code-span MASK
+ * still guards — with the same href written twice.
+ *
+ * @param content - The document, carrying `dup.md` twice
+ * @returns The rewritten document
+ */
+function replayOverMask(content: string): string {
+  const spanless: ResourceLink[] = [
+    { text: 'x', href: 'dup.md', type: LOCAL_FILE, line: 1, nodeType: 'link' },
+  ];
+  return transformContent(content, spanless, {
+    linkRewriteRules: [],
+    defaultTemplate: SPAN_TEMPLATE,
+    context: {},
+  });
+}
+
+describe('the fallback mask ends a code span where the bracket matcher does', () => {
+  it('masks an example whose code span wraps a line', () => {
+    // The mask side of the same finding: `collectInlineSpans` was fed one line
+    // at a time, so an example whose closing backtick sat on the next line was
+    // not masked, and the replay rewrote the example as well as the link.
+    const content = `${TICK}[x](dup.md)${LF}${TICK} and [x](dup.md)`;
+
+    expect(replayOverMask(content)).toBe(`${TICK}[x](dup.md)${LF}${TICK} and [x](REWRITTEN/dup.md)`);
+  });
+
+  it('does not treat an ESCAPED backtick as opening a code span', () => {
+    // 🚨 `matchingBracketEnd` honoured backslash escapes and the mask did not,
+    // so on this line the matcher saw two links and the mask saw one example
+    // plus one link — two scanners disagreeing about where a code span is, which
+    // is the divergence the module says it exists to stop. mdast agrees with the
+    // matcher: an escaped backtick is a literal, the run it would have opened is
+    // unclosed prose, and both `[x](dup.md)` are links.
+    const content = BACKSLASH + `${TICK}[x](dup.md)${TICK} and [x](dup.md)`;
+
+    expect(replayOverMask(content)).toBe(
+      BACKSLASH + `${TICK}[x](REWRITTEN/dup.md)${TICK} and [x](REWRITTEN/dup.md)`,
+    );
+  });
+});
+
+// ============================================================================
+// What the destination check does NOT buy
+// ============================================================================
+
+/**
+ * A frontmatter block of EXACTLY the byte distance between the two links below.
+ *
+ * The length is load-bearing, not decorative: the historical misalignment shifted
+ * every span by the frontmatter's length, and a shift only lands one link on top
+ * of ANOTHER link when it happens to equal the distance between them. Tuning it
+ * is what turns "unlikely" into "here it is". `title: TTT` is padding chosen for
+ * its length and nothing else.
+ */
+const SHIFT_FRONTMATTER = `---${LF}title: TTT${LF}---${LF}${LF}`;
+/**
+ * Two links, one href, and the SAME LENGTH.
+ *
+ * Equal length is required for the same reason the frontmatter's length is: the
+ * stale span has to end on the second link's `)` for the splice to be attempted
+ * at all. Equal-length neighbours are not contrived — `[Alpha](x)` and
+ * `[Omega](x)` is the shape of any two same-target links whose labels happen to
+ * match in width.
+ */
+const SHIFT_BODY = `[Alpha](${GUIDE_HREF})${LF}[Omega](${GUIDE_HREF})${LF}`;
+
+describe('two links sharing an href defeat the destination comparison', () => {
+  it('places the FIRST link\'s stale span exactly on the SECOND link', () => {
+    // The premise, asserted rather than assumed. If mdast's offsets move, the
+    // demonstration below stops demonstrating anything, and this is the assertion
+    // that says so instead of the test quietly passing for a new reason.
+    const document = `${SHIFT_FRONTMATTER}${SHIFT_BODY}`;
+    const links = parseMarkdownContent(document, Buffer.byteLength(document)).links;
+
+    expect(links).toHaveLength(2);
+    // Whole-DOCUMENT offsets, which is what the parser reports and what the
+    // packager used to hand to `transformContent` alongside the stripped body.
+    expect(links[0]?.startOffset).toBe(SHIFT_FRONTMATTER.length);
+    // Applied to the BODY, the first link's span names the second link exactly.
+    const [start, end] = [links[0]?.startOffset ?? 0, links[0]?.endOffset ?? 0];
+    expect(SHIFT_BODY.slice(start, end)).toBe(`[Omega](${GUIDE_HREF})`);
+  });
+
+  it('rewrites the SECOND link through the FIRST link\'s metadata', () => {
+    // 🚨 The finding, constructed. `splicableFrom`'s docstring claimed that
+    // comparing the span's destination to the parser's href made this
+    // "unconstructible rather than merely unlikely". It does not: the comparison
+    // is keyed on a value the two links HAVE IN COMMON, so it passes, and the
+    // splice writes the first link's rendering over the second link's span.
+    //
+    // The observable result is a SWAP — `Omega` where `Alpha` was written and
+    // `Alpha` where `Omega` was — because the second link, whose own stale span
+    // runs off the end of the body, is unlocatable and falls through to the
+    // href-keyed replay, which finds the first link's text.
+    //
+    // ⚠️ This is characterization, not a wish. The comparison is a MITIGATION and
+    // the guarantee is the documented precondition — `links` must come from the
+    // same bytes as `content` — which only a caller can establish. The one
+    // production caller now VERIFIES it (`skill-packager.ts › bodyRelativeLinks`
+    // checks that the body is a suffix of the content it re-bases against)
+    // instead of resting on this comparison. Do not "fix" a failure here by
+    // editing the expectation: a change means the mitigation's reach moved.
+    const document = `${SHIFT_FRONTMATTER}${SHIFT_BODY}`;
+    const links = parseMarkdownContent(document, Buffer.byteLength(document)).links;
+
+    const result = transformContent(SHIFT_BODY, links, {
+      linkRewriteRules: [createTypeRule(LOCAL_FILE, LINK_TEXT_VAR)],
+    });
+
+    expect(result).toBe(`Omega${LF}Alpha${LF}`);
+  });
+
+  it('produces the right answer when the spans DO address the content', () => {
+    // The control, and the whole point of the precondition. The same two links,
+    // parsed from the bytes they are then applied to, rewrite correctly.
+    const links = parseMarkdownContent(SHIFT_BODY, Buffer.byteLength(SHIFT_BODY)).links;
+
+    const result = transformContent(SHIFT_BODY, links, {
+      linkRewriteRules: [createTypeRule(LOCAL_FILE, LINK_TEXT_VAR)],
+    });
+
+    expect(result).toBe(`Alpha${LF}Omega${LF}`);
   });
 });

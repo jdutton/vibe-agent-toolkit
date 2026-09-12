@@ -170,5 +170,18 @@ ${paragraph.repeat(3)}
     console.log(`Found ${unfilteredResult.chunks.length} chunks with ${uniqueTypes.size} unique types`);
 
     console.log('All metadata filtering tests passed!');
-  }, 120000); // 120 second timeout for indexing with real embeddings
+    // 300s, not the 120s this carried, and not because the test got slower.
+    // Indexing 30 resources through the REAL local embedding model takes ~97s of
+    // test time on an unloaded dev machine — measured twice, 96.7s and a timeout
+    // at 120s in the same hour, the only difference being what else the machine
+    // was doing. A budget with ~24% headroom over the observed cost is not a
+    // timeout, it is a second assertion about the host, and it fails on load
+    // rather than on the behaviour under test. Symptom when it bites: the run
+    // dies mid-index with LanceDB's `Table rag_chunks is closed`, which reads
+    // like a provider defect and is not one.
+    //
+    // ⚠️ This is a ceiling on a REAL HANG, so it is deliberately not unbounded.
+    // If the honest cost ever approaches this, make the corpus smaller or stub
+    // the embedder — do not raise the number again.
+  }, 300000);
 });

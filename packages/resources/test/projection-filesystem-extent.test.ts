@@ -6,7 +6,9 @@ import {
   normalizedTmpdir,
   safePath,
   toForwardSlash,
+  withReaddirSyncRefused,
 } from '@vibe-agent-toolkit/utils';
+import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -411,5 +413,47 @@ describe('FilesystemExtentContributor content demand', () => {
     // than assumed, because widening that schema to make this change fit would
     // be the wrong fix.
     expectContributionRowsValid(await contributeUnder('deferred'));
+  });
+});
+
+/**
+ * A directory the walk could not list is a gap in the POPULATION, and the
+ * projection lane refuses the run for it rather than answering with a shorter
+ * list — see `ListingRefusals` in `crawl-source.ts` for why this lane stops
+ * where the incumbent walk degrades (a cached population cannot carry the gap
+ * yet), and for the one case it does NOT stop (gitignored territory, pinned by
+ * `projection-crawl-source-refused-listing.test.ts`).
+ *
+ * 🪤 `crawlDirectory` used to swallow the refusal, so `vat resources validate`
+ * on its default lane reported `status: success` over a tree with a `--x`
+ * directory in the declared scan.
+ */
+describe('FilesystemExtentContributor refuses a population it could not enumerate', () => {
+  it("throws DirectoryListingRefusedError naming the directory root-relative, with the errno and this lane's remedy", async () => {
+    const locked = safePath.join(root, NESTED_DIR);
+    const thrown = await withReaddirSyncRefused(locked, 'EACCES', async () => {
+      try {
+        await contribute();
+        return undefined;
+      } catch (error) {
+        return error;
+      }
+    });
+
+    expect(thrown).toBeInstanceOf(DirectoryListingRefusedError);
+    const message = (thrown as Error).message;
+    expect(message).toContain(`'${NESTED_DIR}'`);
+    expect(message).toContain('EACCES');
+    // The projection reads no include/exclude, so its remedy must not name one
+    // — four spellings of `resources.exclude` were tried against this lane and
+    // none changed anything. What it does honour is gitignore.
+    expect(message).not.toContain('resources.exclude');
+    expect(message).toContain('gitignore');
+    // Root-relative: an absolute path here is the developer's $HOME in a CI log.
+    expect(message).not.toContain(root);
+  });
+
+  it('enumerates the whole tree when nothing refuses (positive control)', async () => {
+    expect(pathsOf(await contribute())).toContain(NESTED_FILE);
   });
 });

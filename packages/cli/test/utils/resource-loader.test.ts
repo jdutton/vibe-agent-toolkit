@@ -234,14 +234,60 @@ describe('loadResourcesWithConfig', () => {
     expect(lastCrawlOptions).toBeUndefined();
   });
 
-  it('omits config from registry options when no collections', async () => {
-    loadConfigMock.mockReturnValue({ resources: { include: ['**/*.md'] } });
+  it('passes config to registry options even when no collections are declared', async () => {
+    // 🪤 This used to assert the OPPOSITE — that the config was withheld unless
+    // `collections` was present — and that pin was the defect: the registry
+    // also reads `resources.linkAuth` from its config, so a project declaring
+    // `linkAuth` without `collections` got the anonymous URL lane for every
+    // link, with no `LINK_AUTH_*` code and nothing said. The registry guards
+    // every read with `?.`, so a key it does not find costs nothing.
+    const config = { resources: { include: ['**/*.md'], linkAuth: { providers: [] } } };
+    loadConfigMock.mockReturnValue(config);
+    const { logger } = createTestLogger();
+
+    await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
+
+    expect(lastRegistryOptions?.config).toBe(config);
+    expect(lastRegistryOptions?.baseDir).toBe(PROJECT_ROOT);
+  });
+
+  it('refuses a linkAuth provider that cannot compile at config load, before any crawl', async () => {
+    // The validation-code registry promises this refusal "at config load", on
+    // every command that loads `resources.linkAuth`. It used to live only in
+    // the registry's external-URL lane, so without `--check-external-urls`
+    // the same config crawled, reported success, and exited 0.
+    const config = {
+      resources: {
+        linkAuth: {
+          providers: [
+            {
+              match: { host: 'github.example' },
+              rewrite: [{ when: '([unclosed', to: 'https://api.example/x' }],
+              auth: { headers: { Authorization: 'Bearer ${token}' } },
+              token: [{ env: 'T' }],
+              check: { method: 'GET', aliveStatus: [200], notFoundMeaning: 'ambiguous' },
+            },
+          ],
+        },
+      },
+    };
+    loadConfigMock.mockReturnValue(config);
+    const { logger } = createTestLogger();
+
+    await expect(loadResourcesWithConfig(undefined, PROJECT_ROOT, logger)).rejects.toThrow(
+      /resources\.linkAuth providers\[0\] \(host "github\.example"\): rewrite\[0\]\.when/,
+    );
+    expect(lastRegistryOptions).toBeUndefined();
+    expect(lastCrawlOptions).toBeUndefined();
+  });
+
+  it('omits config from registry options only when no config file was loaded', async () => {
+    loadConfigMock.mockReturnValue(undefined);
     const { logger } = createTestLogger();
 
     await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
     expect(lastRegistryOptions).not.toHaveProperty('config');
-    expect(lastRegistryOptions?.baseDir).toBe(PROJECT_ROOT);
   });
 
   it('passes config to registry options when collections present', async () => {

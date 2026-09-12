@@ -128,6 +128,20 @@ rather than flags added to `resources-scan`, because widening `resources-scan` w
 every stored `perf` and `io` report was taken over. Overriding the default never narrows what
 `--command` can ask for.
 
+The same split decides whether an `io` row can name its arm. `io` reads `lane` / `extentSource`
+out of the measured command's stdout with the reader `population` uses (one shared module,
+`src/harness/lane.ts`) — pointed at the **last** repeat, the one whose dumps the row reports,
+where `population` reads its **first**; and lenient where `population` refuses, a lane of the
+wrong type being `null` on an `io` row (see [Facets](facets.md)). JSON is the only shape either
+reads — so a row over the default
+`resources-scan` (YAML out) carries `lane: null`, honestly, and a row over `resources-population`
+carries whatever the subject printed. An `io` A/B that needs to prove its two arms differ measures
+`--command resources-population`; one over the default spec is reported as `arm UNPROVEN on both
+sides` rather than as two arms agreeing, and one that mixes the two specs is reported as `arm
+UNPROVEN on the <before|after> side` rather than as an arm change — the `[A → B]` arrow appears
+only when both sides named an arm and the two differ (the four clauses are tabled in
+[Facets](facets.md)).
+
 `validate` and `verify` take no `{subject}` argument: both **reject** a positional path and take
 their scope from the config at the working directory, which the harness has already set to the
 subject. `verify` reads the built `dist/` tree, so a subject measured with it must have been built.

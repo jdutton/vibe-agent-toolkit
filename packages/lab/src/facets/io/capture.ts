@@ -20,7 +20,11 @@
  * differs from every repeat after it. It is a warm-up: excluded from the
  * stability comparison, and reported only when it is also the last repeat
  * (`runs: 1`). Everything else compares repeats `1 … runs-1` and reports the
- * last of them.
+ * last of them — its dumps AND its arm: `lane` / `extentSource` are read out
+ * of that LAST repeat's stdout, so the arm on the row is the arm of the counts
+ * on the row. ⚠️ `population` points the same reader (`harness/lane.ts`) at
+ * its FIRST repeat, because it discards none; the reader is shared, the repeat
+ * it reads is not.
  *
  * Below two compared repeats nothing can disagree, so `stable` is `null` rather
  * than `true` — see {@link IoCommandStats.stable}. A boolean there would report
@@ -56,6 +60,7 @@ import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { withDumpDirs } from '../../harness/dumps.js';
+import { readLaneFromOutput } from '../../harness/lane.js';
 import { judgeLoad, readLoad } from '../../harness/load-guard.js';
 import { measureSpec, type SpecMeasurement } from '../../harness/repeat.js';
 import { buildReportEnvelope } from '../../harness/report.js';
@@ -184,6 +189,10 @@ function failedRow(base: RowBase, runs: number, failure: string): IoCommandStats
     runs,
     comparedRuns: 0,
     stable: null,
+    // Not read off the failed run's stdout even when it printed one: an arm on
+    // a row with no measurement would be an arm the row never proved it ran.
+    lane: null,
+    extentSource: null,
     processes: 0,
     loaderCalls: 0,
     userCalls: 0,
@@ -263,6 +272,11 @@ async function rowFromDumps(
   if ('refusal' in read) return failedRow(base, results.length, read.refusal);
 
   const comparedRuns = Math.max(0, results.length - 1);
+  // The arm travels with the numbers it qualifies: the REPORTED repeat is the
+  // last one, so its stdout is the one read. Reading repeat 0 here would pin
+  // the warm-up's arm to the last repeat's counts. Never the caller's env — see
+  // `harness/lane.ts` for why only the output proves what ran.
+  const arm = readLaneFromOutput(results.at(-1)?.stdout ?? '');
   return {
     ...base,
     runs: results.length,
@@ -270,6 +284,8 @@ async function rowFromDumps(
     // Below two compared repeats there is nothing to disagree, so there is
     // nothing to report. `null` is not `false` and emphatically not `true`.
     stable: comparedRuns < 2 ? null : read.allSame,
+    lane: arm.lane,
+    extentSource: arm.extentSource,
     processes: read.reported.processes,
     loaderCalls: read.reported.loaderCalls,
     userCalls: read.reported.userCalls,

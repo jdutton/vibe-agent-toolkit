@@ -46,6 +46,7 @@
 
 import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
+  type AbsenceCause,
   type FilenameMatch,
   fillPathSpellings,
   fillRealpaths,
@@ -55,8 +56,12 @@ import {
   type PathSpellingRequest,
   type PathSpellingTable,
   type RealpathTable,
+  safePath,
+  spellingWalkRoot,
   toForwardSlash,
   toNfc,
+  transientRefusalClause,
+  type VerifiedPrefix,
 } from '@vibe-agent-toolkit/utils';
 import {
   isGitIgnored,
@@ -78,6 +83,14 @@ type LinkIssueExtras = Partial<Pick<ValidationIssue, 'location' | 'line' | 'link
  * Build the common `createRegistryIssue` extras for a link issue: relative
  * location, the problematic href, the line (only when defined — required for
  * exactOptionalPropertyTypes), and an optional suggestion.
+ *
+ * 🪤 Pass no `suggestion` rather than `''`: the spread puts whatever is given
+ * onto the issue, and an empty string is a field that says nothing — present
+ * on every issue that had no remedy to offer, copied from one builder to the
+ * next. A caller with nothing to suggest omits the argument.
+ *
+ * 🔑 Every PATH a message prints goes through {@link messagePath}, the same root
+ * `location` is expressed against. One issue, one root.
  */
 function linkExtras(
   link: ResourceLink,
@@ -91,6 +104,21 @@ function linkExtras(
     ...(link.line !== undefined && { line: link.line }),
     ...(suggestion !== undefined && { suggestion }),
   };
+}
+
+/**
+ * How a message spells an absolute path: against the root `location` uses.
+ *
+ * 🚨 Four builders used to do `projectRoot ? issueLocation(p, projectRoot) : p`
+ * — relative when a root was known and ABSOLUTE otherwise — while `linkExtras`
+ * relativised the same issue's `location` to `process.cwd()` in that case
+ * ({@link locationRoot}: `location` is contractually relative, so "no root" is
+ * not an option). One issue carried two roots, and the absolute one is the
+ * developer's home directory in every CI log. A fifth builder printed the
+ * absolute path unconditionally. One rule now, five sites.
+ */
+function messagePath(absolutePath: string, projectRoot: string | undefined): string {
+  return issueLocation(absolutePath, locationRoot(projectRoot));
 }
 
 /**
@@ -278,6 +306,52 @@ export interface JudgeLinkOptions extends LinkFactTables {
    * the same declared artifact via the agent-skills walker.
    */
   deferredArtifacts?: DeferredArtifacts;
+  /**
+   * Files the population enumerated but could not READ — the registry's
+   * `RESOURCE_UNREADABLE` set, as {@link unreadableTargetsFrom} shapes it.
+   *
+   * 🪤 **Without it, a link INTO such a file reads as clean.** The file is on
+   * disk and its parent lists it, so existence passes; but it never entered the
+   * fragment index, so `checkAnchor` answers `'skip'` for its anchor exactly
+   * as it would for a non-markdown target, and `skip` is judged as nothing to
+   * report. The link row said nothing and `linksChecked` counted it — the
+   * refused-DIRECTORY lane's "existence and anchor are unverified" finding,
+   * one notch down and silent. With this set the judge can tell "not indexed
+   * because VAT was never asked to read it" from "not indexed because VAT was
+   * refused", and reports the second as `LINK_TARGET_UNREADABLE`.
+   *
+   * Not a second ledger: it is a lookup VIEW over the list the registry
+   * already keeps (`getUnreadableResources()`), built once per run.
+   */
+  unreadableTargets?: UnreadableTargets;
+}
+
+/**
+ * The files a run could not read, keyed for the judge: NFC-normalised absolute
+ * path → the errno the platform gave, or `undefined` when it gave none.
+ *
+ * Keyed the way {@link fragmentIndex} keys — NFC, see that function — because
+ * it is queried with the same derived-from-link-text path `checkAnchor` is, and
+ * for the same reason: on macOS the enumerated spelling and the link's spelling
+ * of one file routinely differ in normalization form.
+ */
+export type UnreadableTargets = ReadonlyMap<string, string | undefined>;
+
+/**
+ * Shape the registry's unreadable-file log into the judge's lookup.
+ *
+ * @param unreadable - Files that were enumerated and could not be read, each
+ *   with the errno the platform reported when it reported one
+ * @returns The lookup {@link JudgeLinkOptions.unreadableTargets} takes
+ */
+export function unreadableTargetsFrom(
+  unreadable: Iterable<{ readonly filePath: string; readonly code?: string | undefined }>,
+): UnreadableTargets {
+  const targets = new Map<string, string | undefined>();
+  for (const { filePath, code } of unreadable) {
+    targets.set(toNfc(filePath), code);
+  }
+  return targets;
 }
 
 /**
@@ -451,6 +525,9 @@ export function judgeOptionsFrom(
     ...(options?.deferredArtifacts !== undefined && {
       deferredArtifacts: options.deferredArtifacts,
     }),
+    ...(options?.unreadableTargets !== undefined && {
+      unreadableTargets: options.unreadableTargets,
+    }),
   };
 }
 
@@ -603,7 +680,7 @@ export function resolutionFailureIssue(
     return createRegistryIssue(
       'LINK_BROKEN_FILE',
       `Absolute-path link "${link.href}" escapes the project root via path traversal.`,
-      linkExtras(link, sourceFilePath, projectRoot, ''),
+      linkExtras(link, sourceFilePath, projectRoot),
     );
   }
 
@@ -631,19 +708,27 @@ export function fileExistenceIssue(
     );
   }
 
-  // Spell the missing file the same way the sibling `location` does: relative to
-  // the project root when we know one. An absolute path here leaks the
-  // developer's home directory into every CI log — the same reason `location`
-  // is required to be relative.
-  const missingPath = projectRoot
-    ? issueLocation(fileResult.resolvedPath, projectRoot)
-    : fileResult.resolvedPath;
-
+  // Spell the missing file the same way the sibling `location` does — see
+  // `messagePath`. An absolute path here leaks the developer's home directory
+  // into every CI log, the same reason `location` is required to be relative.
   return createRegistryIssue(
     'LINK_BROKEN_FILE',
-    `File not found: ${missingPath}`,
-    linkExtras(link, sourceFilePath, projectRoot, ''),
+    `File not found: ${messagePath(fileResult.resolvedPath, projectRoot)}`,
+    linkExtras(link, sourceFilePath, projectRoot),
   );
+}
+
+/** The refusal detail an `absent` spelling carries when a listing was refused. */
+type UnreadableDirectory = Extract<AbsenceCause, { kind: 'directory_unreadable' }>;
+
+/**
+ * A refused listing together with what the walk established ABOVE it — the
+ * verdict on the components it did get to judge, which a report must not
+ * discard (see {@link VerifiedPrefix}).
+ */
+export interface UnreadableTarget {
+  readonly refusal: UnreadableDirectory;
+  readonly verified: VerifiedPrefix;
 }
 
 /**
@@ -655,16 +740,32 @@ export interface FileVerification {
   /** Does the target resolve at all — on the machine running validation. */
   exists: boolean;
   /**
-   * True when NO verdict could be reached: a directory on the path is
-   * traversable but could not be LISTED, so the target may well open.
+   * Non-null when NO verdict could be reached: a directory on the path is
+   * traversable but could not be LISTED, so the target may well open. It holds
+   * *which* directory refused and with what errno.
    *
    * ⚠️ **Read it before reading anything else on this object.** With it set,
    * `exists` is `false` only because nothing could be confirmed — not because
    * anything was found missing — and every issue derived from that `false`
    * (a broken file, a not-yet-materialized artifact) would be fabricated.
-   * {@link validateLocalFileLink} returns before any of them.
+   * {@link validateLocalFileLink} returns before any of them, by way of
+   * {@link unreadableTargetIssue}.
+   *
+   * ⛔ **Returning *nothing* is equally wrong, and that was the second defect
+   * here.** The five checks this field suppresses are suppressed silently
+   * unless something says so, and a report that cannot distinguish "checked,
+   * clean" from "never checked" is the green-without-running shape. So it earns
+   * an issue of its own — never `LINK_BROKEN_FILE`, and never silence.
+   *
+   * 🔑 **A cause rather than a boolean, and that is the third fix.** A flag
+   * could say only "a directory on that path refused", which on a five-segment
+   * path names three candidates and no errno — a remedy a reader cannot aim.
+   *
+   * 🪤 **And the verdict on the components above the refusal, which is the
+   * fourth.** Those WERE listed and judged; a case mismatch found there is a
+   * finding on its own, and the message must not call it unverified.
    */
-  unverifiable: boolean;
+  unreadable: UnreadableTarget | null;
   /** Absolute filesystem path the link resolved to. */
   resolvedPath: string;
   /** How the asked-for path matched disk, at its WORST-spelled component. */
@@ -827,8 +928,8 @@ export function deferredArtifactIssue(
 
   return createRegistryIssue(
     'LINK_DEFERRED_ARTIFACT',
-    `Link targets a build artifact declared in the skill files: config, not yet materialized: ${fileResult.resolvedPath}`,
-    linkExtras(link, sourceFilePath, projectRoot, ''),
+    `Link targets a build artifact declared in the skill files: config, not yet materialized: ${messagePath(fileResult.resolvedPath, projectRoot)}`,
+    linkExtras(link, sourceFilePath, projectRoot),
   );
 }
 
@@ -912,14 +1013,14 @@ export function gitIgnoreSafetyIssue(
     return createRegistryIssue(
       'LINK_DEFERRED_ARTIFACT',
       `Link targets a build artifact declared in the skill files: config, materialized and (as expected) gitignored: ${resolvedTarget}`,
-      linkExtras(link, sourceFilePath, options.projectRoot, ''),
+      linkExtras(link, sourceFilePath, options.projectRoot),
     );
   }
 
   return createRegistryIssue(
     'LINK_TO_GITIGNORED',
     `Non-ignored file links to gitignored file: ${resolvedTarget}. Gitignored files are local-only and will not exist in the repository. Remove this link or unignore the target file.`,
-    linkExtras(link, sourceFilePath, options.projectRoot, ''),
+    linkExtras(link, sourceFilePath, options.projectRoot),
   );
 }
 
@@ -967,14 +1068,109 @@ function validateLocalFileLink(
   // arrived here as absence, reported as `LINK_BROKEN_FILE: File not found`.
   // Both halves were wrong: the verdict, and the diagnosis.
   //
-  // Silence is the conservative answer and the correct one. A spelling that
-  // could not be verified is not a spelling that is wrong, and every downstream
-  // builder below would speak about a file this run never got to look at:
-  // `fileExistenceIssue` would call it missing, `deferredArtifactIssue` would
-  // call it an unbuilt artifact, and the anchor check would judge fragments it
-  // never read. Placed FIRST for that reason — a gate below any of them is a
+  // Placed FIRST because every builder below would otherwise speak about a file
+  // this run never got to look at: `fileExistenceIssue` would call it missing,
+  // `deferredArtifactIssue` would call it an unbuilt artifact, and the anchor
+  // check would judge fragments it never read. A gate below any of them is a
   // gate that fires second.
-  if (fileResult.unverifiable) return null;
+  return unreadableTargetIssue(fileResult, link, sourceFilePath, options.projectRoot)
+    ?? judgeVerifiedTarget(entry, resolved, fileResult, fragmentsByFile, options);
+}
+
+/**
+ * The issue a link VAT was REFUSED the chance to check earns.
+ *
+ * 🪤 **This used to be a bare `return null`, and the silence was argued for at
+ * length in a comment.** The argument got the first half right — a spelling
+ * that could not be verified is not a spelling that is wrong, so no broken-file
+ * issue may be fabricated — and then drew the wrong conclusion from it. Five
+ * checks are skipped for this link (deferred artifact, existence, the gitignore
+ * leak, the anchor, and the normalization mismatch — everything
+ * {@link judgeVerifiedTarget} runs), and nothing said so: no issue, no counter, nothing a
+ * reader of the report could see. "VAT looked and found nothing wrong" and "VAT
+ * never got to look" came out of the command as the same output.
+ *
+ * That is the green-without-running shape, and it used to compound: every one
+ * of `EACCES`, `EMFILE`, `ENFILE` and `ELOOP` arrived as the same bare
+ * `directory_unreadable`, and `FsLookupCache.readdir` memoized the FAILED
+ * promise — so one transient descriptor exhaustion silently unvalidated every
+ * link under that directory for the rest of the run, at exit 0. Both halves are
+ * closed: the cache drops a *transient* refusal once it has settled (see
+ * `TRANSIENT_LISTING_ERRNOS`), and the cause now carries the errno and the
+ * directory, so the message below can say which one and why.
+ *
+ * 🔑 `LINK_TARGET_UNREADABLE` rather than a new code: it is the registry's
+ * existing word for "the walk could not read this target, so it was not
+ * checked", and its remedy — fix the permissions, or investigate what changed
+ * mid-walk, then re-run — is exactly this one's. What is NOT reused is
+ * `LINK_BROKEN_FILE`, which asserts something this run has not learned.
+ *
+ * 🔑 **The message names the directory and the errno**, which the first version
+ * could not: the verdict carried neither, so the only honest thing it could say
+ * was "a directory on its path", and on a five-segment path that is three
+ * candidates and no remedy. The transient errnos get a different remedy from
+ * the stable ones for the same reason — telling someone whose `readdir` hit
+ * `EMFILE` to go fix permissions sends them after a fault that is not there.
+ *
+ * @returns The issue, or null when the target WAS looked at and
+ *   {@link judgeVerifiedTarget} should run instead
+ */
+function unreadableTargetIssue(
+  fileResult: Pick<FileVerification, 'unreadable' | 'resolvedPath'>,
+  link: ResourceLink,
+  sourceFilePath: string,
+  projectRoot?: string,
+): ValidationIssue | null {
+  if (fileResult.unreadable === null) return null;
+  const { refusal, verified } = fileResult.unreadable;
+
+  // Both paths are spelled against the root `location` uses, for the same
+  // reason `fileExistenceIssue`'s is: an absolute path here is the developer's
+  // home directory in every CI log. `AbsenceCause.directory` arrives absolute
+  // because the two lanes that read it anchor against different roots —
+  // sanitizing it is this lane's job.
+  const target = messagePath(fileResult.resolvedPath, projectRoot);
+  const directory = messagePath(refusal.directory, projectRoot);
+  // The transient clause is `fs-utils`'s, beside the errno list it describes —
+  // a lane that words it for itself is a second copy of that list, in prose.
+  const remedy = refusal.transient
+    ? `${transientRefusalClause(refusal.code)}, so nothing is wrong with the tree — re-run before investigating anything.`
+    : `Fix the permissions on that directory, or find out what changed mid-walk, then validate again.`;
+  // What the walk learned above the refusal is reported, not discarded — the
+  // spelling clause depends on it. The judged prefix is relative to the walk
+  // root `fillPathSpellings` chose for this pair, so it is re-anchored from
+  // the same root before it is spelled against the project.
+  const walkRoot = spellingWalkRoot(sourceFilePath, fileResult.resolvedPath);
+  const unverified = verified.match === 'exact'
+    ? 'Its existence, spelling and anchor are all unverified'
+    : `Its existence and anchor are unverified — but its spelling above that directory was judged and is wrong: "${messagePath(safePath.join(walkRoot, verified.askedPath), projectRoot)}" is spelled "${messagePath(safePath.join(walkRoot, verified.actualPath), projectRoot)}" on disk (${describeSpellingDefect(verified.match)}), which breaks the link on a byte-exact filesystem whatever lies beneath`;
+
+  return createRegistryIssue(
+    'LINK_TARGET_UNREADABLE',
+    `Link target ${target} was NOT checked: listing the directory "${directory}" was refused (${refusal.code}). This is not a report that the link is broken — a directory can be traversable while refusing a listing (POSIX \`--x\`), in which case the target opens exactly as written. ${unverified}, so treat this as a gap in the run rather than as a clean result. ${remedy}`,
+    linkExtras(link, sourceFilePath, projectRoot),
+  );
+}
+
+/** The one-phrase name of a non-exact spelling verdict, for a message. */
+function describeSpellingDefect(match: Exclude<FilenameMatch, 'absent' | 'exact'>): string {
+  return match === 'case_mismatch' ? 'a case mismatch' : 'a Unicode normalization mismatch';
+}
+
+/**
+ * Everything `validateLocalFileLink` judges once the target is known to have
+ * been LOOKED at — split out so the refusal gate above reads as one line.
+ *
+ * At most one issue, by design: see the ordering note at the end.
+ */
+function judgeVerifiedTarget(
+  entry: ResolvedLinkEntry,
+  resolved: Extract<ResolveLocalHrefResult, { kind: 'resolved' }>,
+  fileResult: FileVerification,
+  fragmentsByFile: FragmentIndex,
+  options: JudgeLinkOptions,
+): ValidationIssue | null {
+  const { link, sourceFilePath } = entry;
 
   const deferred = deferredArtifactIssue(
     fileResult,
@@ -992,6 +1188,13 @@ function validateLocalFileLink(
   if (gitIgnoreIssue) return gitIgnoreIssue;
 
   if (resolved.anchor) {
+    // Before the anchor is looked up, not after: a refused file is not in the
+    // index, so the lookup would answer `'skip'` and the refusal would read as
+    // "nothing to check". Existence and spelling WERE verified for this link
+    // (the listing holds the name); the anchor is the claim left open.
+    const refused = unreadableFileAnchorIssue(resolved.anchor, fileResult.resolvedPath, link, sourceFilePath, options);
+    if (refused) return refused;
+
     const check = checkAnchor(
       resolved.anchor,
       fileResult.resolvedPath,
@@ -1001,8 +1204,8 @@ function validateLocalFileLink(
     if (check === 'broken') {
       return createRegistryIssue(
         'LINK_BROKEN_ANCHOR',
-        `Anchor not found: #${resolved.anchor} in ${fileResult.resolvedPath}`,
-        linkExtras(link, sourceFilePath, options.projectRoot, ''),
+        `Anchor not found: #${resolved.anchor} in ${messagePath(fileResult.resolvedPath, options.projectRoot)}`,
+        linkExtras(link, sourceFilePath, options.projectRoot),
       );
     }
   }
@@ -1013,6 +1216,46 @@ function validateLocalFileLink(
   // previously produced `null` can reach this line. The change is additive to
   // the gate, never a weakening of it.
   return normalizationMismatchIssue(fileResult, link, sourceFilePath, options.projectRoot);
+}
+
+/**
+ * The issue an anchor into a file the population could not READ earns.
+ *
+ * The file-level counterpart of {@link unreadableTargetIssue}, and the same
+ * code for the same reason: `LINK_TARGET_UNREADABLE` is the registry's word
+ * for "the run could not read this target, so it was not checked", and the
+ * remedy — fix the permissions, then re-run — is this one's. What differs is
+ * how much WAS verified: a refused directory leaves existence open too, a
+ * refused file leaves only its content, so only the anchor is called
+ * unverified here.
+ *
+ * Only reached for a link WITH an anchor. A bare link to a refused file has
+ * every one of its own claims verified — the name is in the listing, and the
+ * spelling and gitignore checks ran above — and the file's own refusal is
+ * already `RESOURCE_UNREADABLE`, reported once against the file rather than
+ * once per link into it.
+ *
+ * @returns The issue, or null when the target is not in the refused set
+ */
+function unreadableFileAnchorIssue(
+  anchor: string,
+  resolvedPath: string,
+  link: ResourceLink,
+  sourceFilePath: string,
+  options: Pick<JudgeLinkOptions, 'unreadableTargets' | 'projectRoot'>,
+): ValidationIssue | null {
+  // NFC on both sides — the same key rule as `fragmentIndex`/`checkAnchor`.
+  const key = toNfc(resolvedPath);
+  if (!options.unreadableTargets?.has(key)) return null;
+  const code = options.unreadableTargets.get(key);
+  const errno = code === undefined ? '' : ` (${code})`;
+  const target = messagePath(resolvedPath, options.projectRoot);
+
+  return createRegistryIssue(
+    'LINK_TARGET_UNREADABLE',
+    `Link anchor #${anchor} in ${target} was NOT checked: the file exists and is spelled as written, but it could not be read${errno}, so it holds no headings this run could look the anchor up in (it is the file reported as RESOURCE_UNREADABLE). Its anchor is unverified, so treat this as a gap in the run rather than as a clean result. Fix the permissions on that file, then validate again.`,
+    linkExtras(link, sourceFilePath, options.projectRoot),
+  );
 }
 
 /**
@@ -1046,7 +1289,7 @@ function validateAnchorLink(
       return createRegistryIssue(
         'LINK_BROKEN_ANCHOR',
         `Anchor not found: ${link.href}`,
-        linkExtras(link, sourceFilePath, options.projectRoot, ''),
+        linkExtras(link, sourceFilePath, options.projectRoot),
       );
     default:
       return assertNever(check);
@@ -1095,11 +1338,11 @@ function validateAnchorLink(
  * ⚠️ **`exists: false` is not the same claim as "the file is missing".** An
  * ancestor directory that is traversable but unlistable produces `absent` with
  * nothing learned about the target, which this reports as
- * {@link FileVerification.unverifiable} — read that field before treating a
+ * {@link FileVerification.unreadable} — read that field before treating a
  * `false` here as a finding.
  *
  * @param spellings - Pass-1′ table, filled over exactly these referrer/target pairs.
- * @returns Object with exists and unverifiable flags, the path, the match kind, and the correction when one is needed.
+ * @returns Object with the exists flag and the refusal cause, the path, the match kind, and the correction when one is needed.
  */
 function validateResolvedFile(
   sourceFilePath: string,
@@ -1115,7 +1358,12 @@ function validateResolvedFile(
     // Absence has two causes and only one of them is evidence: `no_such_entry`
     // is a directory that was listed and does not hold the name, while
     // `directory_unreadable` is a listing the OS refused. See `AbsenceCause`.
-    unverifiable: spelling.match === 'absent' && spelling.because === 'directory_unreadable',
+    // The whole cause is carried, not just the fact of it — the message that
+    // reports this has to name the directory and the errno.
+    unreadable:
+      spelling.match === 'absent' && spelling.because.kind === 'directory_unreadable'
+        ? { refusal: spelling.because, verified: spelling.verified }
+        : null,
     resolvedPath,
     match: spelling.match,
   };

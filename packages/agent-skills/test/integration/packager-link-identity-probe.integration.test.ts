@@ -1,8 +1,8 @@
 /**
  * ADVERSARIAL PROBE — link identity in the packager's rewrite pass.
  *
- * `transformContent` replays a raw regex over the whole document and pairs each
- * match with a PARSED link looked up by href. Two consequences worth probing:
+ * Both hazards below came from `transformContent` replaying a raw regex over the
+ * whole document and pairing each match with a PARSED link looked up by href:
  *
  *  A. A link the parser never saw (inside a fenced code block — mdast treats it as
  *     code, not a link) has no map entry, so it is left alone. UNLESS its href
@@ -10,6 +10,13 @@
  *     HITS and a documentation EXAMPLE gets rewritten as if it were a live link.
  *  B. An image `![alt](src)` — the regex matches the `[alt](src)` tail, leaving the
  *     leading `!` outside the replacement.
+ *
+ * ✅ **The href correlation is gone.** `transformContent` now splices each parsed
+ * link at its own `[startOffset, endOffset)` span, so hazard A cannot arise
+ * structurally: mdast yields no link node inside code, so a fenced or code-span
+ * example is never a splice target and no href can make it one. These probes stay
+ * because they assert the OUTCOME rather than the mechanism — an outcome the
+ * packager must keep whatever the rewriter is built from next.
  */
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -33,6 +40,8 @@ Teaching the syntax, which must survive VERBATIM:
 \`\`\`
 
 Image whose target does not ship: ![diagram](evals/diagram.png)
+
+Image inside a link, which must repoint the OUTER href: [![alt](refs/guide.md)](refs/guide.md)
 `;
 
 async function packageFixture(tempDir: string): Promise<string> {
@@ -62,22 +71,19 @@ describe('link identity probe (integration)', () => {
   });
 
   /**
-   * KNOWN DEFECT, pre-existing and deliberately NOT fixed here.
+   * ✅ FIXED — this was an `it.fails` pinning a known defect, and it now passes.
    *
-   * `it.fails` asserts this currently FAILS: the body of a ```markdown fence is
-   * rewritten as if it were a live link, so a skill teaching authored link syntax
-   * ships a lesson pointing at the packaged path instead of the one the reader
-   * must type. `transformContent` replays a raw regex over the whole document with
-   * no notion of code spans; mdast never parsed the fenced text as a link, so it
-   * survives ONLY while no real link shares its href. Inline code spans
-   * (`` `[Guide](refs/guide.md)` ``) have the same exposure.
+   * The defect: the body of a ```markdown fence was rewritten as if it were a live
+   * link, so a skill teaching authored link syntax shipped a lesson pointing at the
+   * packaged path instead of the one the reader must type. It survived ONLY while
+   * no real link shared its href, and inline code spans had the same exposure.
    *
-   * VAT's own 12 skills are unaffected today — verified by diffing every source
-   * skill against its packaged output; no fenced example collides with a real
-   * href. That is why this is filed rather than fixed: it is latent, pre-existing,
-   * and a real fix (masking code spans before replacement) is its own change with
-   * its own blast radius. When someone fixes it, this test flips to passing and
-   * fails the suite until the `.fails` is removed.
+   * It was closed twice over, and the second close is the durable one. First by
+   * masking code ranges before replacement (`codeSpanRanges`), which made the skip
+   * intentional rather than accidental. Then by `transformContent` becoming
+   * span-driven: mdast parses fenced text as a `code` node, never a link, so a
+   * fenced example is not a splice target at all and no href collision can make it
+   * one. The masking is retained for the residual regex fallback.
    */
   it('leaves a fenced code example verbatim even when its href matches a real link', async () => {
     tempDir = createTestTempDir('vat-packager-link-identity-');
@@ -88,6 +94,37 @@ describe('link identity probe (integration)', () => {
 
     // The fenced example teaches authored syntax. Rewriting it corrupts the lesson.
     expect(body).toContain('```markdown\n[Guide](refs/guide.md)\n```');
+  });
+
+  /**
+   * 🚨 The test that would have caught the span rewrite being INERT HERE.
+   *
+   * `transformContent` splices each link at its parsed span instead of replaying
+   * a regex and correlating on href — the fix for `[![alt](img)](url)`, where the
+   * regex matches the INNER image's href and the lookup misses. Every unit test
+   * of that fix passed while the packager, the only production caller, still
+   * shipped the bug: it passed the frontmatter-STRIPPED body together with
+   * WHOLE-FILE offsets, so every span was off by the frontmatter length and every
+   * splice quietly declined to the old path.
+   *
+   * ⇒ A unit test of a fix is not a test that the fix REACHES the caller. This
+   * one runs the real packager end to end.
+   */
+  it('repoints the outer href when an image sits inside a link', async () => {
+    tempDir = createTestTempDir('vat-packager-link-identity-nested-');
+    const body = await packageFixture(tempDir);
+
+    // The OUTER destination is repointed at the flattened location, and the
+    // inner image is re-emitted verbatim inside the link text.
+    expect(body).toContain('[![alt](refs/guide.md)](resources/guide.md)');
+    // 🪤 The exact shape the OLD regex path produced, which is what this pins.
+    // An earlier version of this line excluded `[![alt](refs/guide.md)](refs/guide.md)`
+    // — the wholly-unrewritten construct — and was VACUOUS: that string never
+    // appears either way, because without the fix the regex replay matches the
+    // INNER image href and rewrites THAT, leaving the outer href authored.
+    // Simulated with and without the re-base, this assertion is the one that
+    // separates them.
+    expect(body).not.toContain('[![alt](resources/guide.md)](refs/guide.md)');
   });
 
   it('does not orphan the bang when an image target does not ship', async () => {

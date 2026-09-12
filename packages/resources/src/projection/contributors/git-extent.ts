@@ -41,6 +41,7 @@
 import {
   crawlDirectory,
   NEVER_CRAWL_GLOBS,
+  refuseListing,
 } from '@vibe-agent-toolkit/utils/crawl';
 
 import type {
@@ -51,6 +52,7 @@ import type {
 import type { JsonValue } from '../../schemas/projection-shared.js';
 import type { ResolutionContextRow } from '../../schemas/projection-zones.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../contributor.js';
+import { PROJECTION_LISTING_REMEDY } from '../crawl-source.js';
 import type { ProjectionBase } from '../projection.js';
 import { collectRealization } from '../realizations.js';
 
@@ -143,6 +145,14 @@ export class GitExtentContributor implements ExtentContributor {
       respectGitignore: true,
       includeUntracked: true,
       exclude: [...NEVER_CRAWL_GLOBS],
+      // 🚨 Reached on the git route too, not only when the walk answers: with
+      // `includeUntracked` git walks the working tree, and a directory it could
+      // not open is handed here off its stderr — the only place git says so.
+      // Every such directory is in THIS extent (git had to open it, so it is
+      // not ignored), so the answer is the projection's stop-not-degrade one,
+      // for the caching reason `crawl-source.ts` gives. A locked directory
+      // that IS ignored never reaches here: git prunes it by name.
+      onUnreadable: refuseListing({ root: base.root, remedy: PROJECTION_LISTING_REMEDY }),
     });
 
     const resources = new Map<string, ResourceRow>();

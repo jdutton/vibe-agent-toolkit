@@ -116,8 +116,8 @@ export const CODE_REGISTRY = {
   ),
   LINK_TARGET_UNREADABLE: entry(
     'error',
-    'Markdown link target exists on disk but could not be read, so it was neither classified nor bundled. Most often permissions; also a change racing the walk.',
-    'Fix the permissions on the target, or investigate what changed it mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read.',
+    'Markdown link target could not be checked: a read failure along its path left its existence, spelling, and anchor all unverified, and — when packaging — the target was not bundled either. Usually permissions; sometimes a transient errno (EMFILE/ENFILE/EAGAIN — re-run before investigating) or a change racing the walk.',
+    'Re-run first if the errno looks transient (EMFILE/ENFILE/EAGAIN) — the target may check out clean on a second pass. Otherwise fix the permissions on the path, or investigate what changed mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read.',
     'link_target_unreadable',
   ),
   LINK_DEFERRED_ARTIFACT: entry(
@@ -143,7 +143,7 @@ export const CODE_REGISTRY = {
   ),
   LINK_DROPPED_BY_DEPTH: entry(
     'warning',
-    'Walker stopped following links at the configured linkFollowDepth; this link was not bundled.',
+    "Depth counts hops from SKILL.md: SKILL.md's own links are depth 1, a link inside a depth-1 file is depth 2, and so on. This link was found deeper than the configured linkFollowDepth, so its target was not bundled and the packaged link points at nothing. A drop caused by an excludeReferencesFromBundle rule instead produces the sibling LINK_EXCLUDED_BY_PATTERN (info).",
     'Raise linkFollowDepth, bundle the file via files config, declare the drop intentional with validation.allow, or exclude via excludeReferencesFromBundle.rules.',
     'link_dropped_by_depth',
   ),
@@ -414,6 +414,23 @@ export const CODE_REGISTRY = {
     'A file the crawl enumerated could not be read, so it was skipped. Most often a committed symlink whose target is missing; also permissions, or a file deleted between enumeration and parse.',
     'Repoint or delete the dangling symlink, restore the missing target, or fix the permissions. Set severity.RESOURCE_UNREADABLE to warning if a corpus is expected to contain unresolvable entries.',
     'resource_unreadable',
+  ),
+  // The two population-time conditions `vat resources validate` surfaces off
+  // the projection's `realization_conditions` table (and, for the MIME
+  // conflict, off the registry's own resolver on the walk lane). Default
+  // severities MATCH the row severities the projection writes, so the two
+  // channels never disagree about how loud one fact is.
+  COLLECTION_MIME_CONFLICT: entry(
+    'error',
+    'Two collections declare different mimeType values for the same file. A file has one type and one parser, so the run used the built-in type table\'s answer for it and the declared routing was ignored.',
+    'Make the two collections\' mimeType declarations agree, or drop mimeType from the collection that should not be typing this file.',
+    'collection_mime_conflict',
+  ),
+  EXTENT_DIRECTORY_UNLISTABLE: entry(
+    'warning',
+    'A gitignored directory could not be listed, so nothing beneath it was enumerated. The directory itself is recorded and every readable sibling was enumerated; nothing beneath a gitignored directory is in the validation population, so no count in this report is narrowed by it.',
+    'Fix the permissions on that directory if what is beneath it should be visible to the projection. Set severity.EXTENT_DIRECTORY_UNLISTABLE to ignore for a directory that is expected to be unreadable (a root-owned cache under an ignored build directory).',
+    'extent_directory_unlistable',
   ),
   SKILL_LENGTH_EXCEEDS_RECOMMENDED: entry(
     'warning',
@@ -818,9 +835,25 @@ export const CODE_REGISTRY = {
   ),
   LINK_AUTH_UNVERIFIED: entry(
     'warning',
-    'A provider in resources.linkAuth claims this host, but no token source resolved (none of the configured env/command sources produced a value).',
+    'A provider in resources.linkAuth claims this host, but no token source resolved (none of the configured env/command sources produced a value), so no authenticated request was attempted.',
     "Configure a `token` source (env var or argv command); log in to the underlying CLI (e.g. `gh auth login`, `az login`); or set severity.LINK_AUTH_UNVERIFIED to ignore if running without auth is intentional.",
     'link_auth_unverified',
+  ),
+  // `error`, and its own code rather than LINK_AUTH_UNVERIFIED, because the two
+  // used to be one and the merge was a defect: UNVERIFIED's remedy tells a
+  // token-less lane to set it to `ignore`, and with that override in place a
+  // provider that could not build a request produced a green run over links
+  // nothing had fetched. A provider that fails is a config defect on the
+  // adopter's side of the line, which is what `error` is for. The statically
+  // knowable defects (an uncompilable regex, an unknown transform, a template
+  // naming an undeclared capture) never reach this code — `vat resources
+  // validate` refuses the run for them at config load, exit 2 — so what carries
+  // it is per-URL: a declared capture that did not participate in this match.
+  LINK_AUTH_PROVIDER_ERROR: entry(
+    'error',
+    'A provider in resources.linkAuth claims this host but could not build the authenticated request for this URL — a template read a capture the matching rule did not produce, or a transform refused the value — so the link was neither authenticated nor checked anonymously.',
+    "Fix the provider: make every capture the template reads mandatory in that rule's `when` (or give the rule a `to` that does not read it), then re-run. The message names the host, the template and the missing name.",
+    'link_auth_provider_error',
   ),
 
   // Projection path — always-loaded context budget
@@ -900,6 +933,12 @@ export type NonOverridableCode =
   // `ValidationConfigSchema` refuses it as a `severity` key, because a run whose
   // assertions did not execute has no legitimate `ignore`. Downgrade the CHECK
   // all you like; you cannot downgrade the news that it stopped checking.
+  //
+  // It is also the ONE code every gate uses for "this run checked nothing, so
+  // its green means nothing" — a scan over zero files, a budget over no matched
+  // path, a marketplace walk that found fewer than the declared local plugins, a
+  // verify phase over zero built bundles. One code, because it is one claim and
+  // needs one non-overridability; see `run-integrity.ts` in the CLI.
   | 'RESOURCE_CHECK_BROKEN'
   | 'PATH_STYLE_WINDOWS'
   // FILENAME_COLLISION is NOT here: it has a CODE_REGISTRY entry and is emitted

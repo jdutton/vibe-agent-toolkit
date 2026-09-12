@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils';
+import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -103,6 +104,30 @@ describe('discoverSkillsFromConfig — include patterns with `..` traversal', ()
 
   it('returns empty when an include pattern points to a nonexistent base', async () => {
     expect(await discoveredNames(['../does-not-exist/*/SKILL.md'], packageRoot)).toEqual([]);
+  });
+
+  // Discovery decides which skills every downstream command builds, validates and
+  // verifies. A directory it cannot list is not "no skills there" — it is a skill
+  // count nothing can tell from the right one (the exact tell-less drop the git
+  // suite below documents). So it stops, by name, against the crawl base, rather
+  // than answering with fewer skills. The refusal is a `readdirSync` spy so it
+  // runs on every platform and as root; this fixture has no repository, so the
+  // walk route — the one that lists directories — is what runs.
+  it('refuses by name instead of discovering fewer skills when a directory cannot be listed', async () => {
+    const locked = safePath.join(packageRoot, 'skills', 'private');
+    let thrown: unknown;
+    try {
+      await withReaddirSyncRefused(locked, 'EACCES', () => discoveredNames([SKILLS_GLOB], packageRoot));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(DirectoryListingRefusedError);
+    const message = (thrown as Error).message;
+    expect(message).toContain("'skills/private'");
+    expect(message).toContain('EACCES');
+    expect(message).toContain('skills.include');
+    expect(message).not.toContain(packageRoot);
+    expect(message).not.toContain('onUnreadable');
   });
 });
 

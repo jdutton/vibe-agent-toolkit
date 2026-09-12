@@ -10,9 +10,12 @@ import {
   CRAWL_REGISTRY_ENUMERATE_ID,
   findProjectRoot,
   mkdirSyncReal,
+  resetProjectRootCaches,
   safePath,
   setupAsyncTempDirSuite,
+  withReaddirSyncRefused,
 } from '@vibe-agent-toolkit/utils';
+import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -27,6 +30,7 @@ const SKILL_FILENAME = 'SKILL.md';
 const REFERENCE_FILENAME = 'reference.md';
 const LATE_NOTE_FILENAME = 'late-note.md';
 const IGNORED_NOTE_FILENAME = 'ignored-note.md';
+const REFERENCE_BODY = '# reference\n';
 
 const FIXTURE_DIR = safePath.resolve(__dirname, '../fixtures/inventory-skill');
 const SKILL_MD = safePath.resolve(FIXTURE_DIR, SKILL_FILENAME);
@@ -222,7 +226,7 @@ describe('extractClaudeSkillInventory tracker-state divergence', () => {
 
 		writeRepoFile(repoRoot, '.gitignore', `${IGNORED_NOTE_FILENAME}\n`);
 		writeRepoFile(repoRoot, SKILL_FILENAME, DIVERGENT_SKILL_MD);
-		writeRepoFile(repoRoot, REFERENCE_FILENAME, '# reference\n');
+		writeRepoFile(repoRoot, REFERENCE_FILENAME, REFERENCE_BODY);
 		writeRepoFile(repoRoot, IGNORED_NOTE_FILENAME, '# ignored\n');
 		commitRepo(repoRoot);
 
@@ -294,6 +298,61 @@ describe('extractClaudeSkillInventory tracker-state divergence', () => {
  * wrong place — once per file instead of once per crawl — still produces a
  * plausible-looking number, and only a count tied to the corpus separates them.
  */
+/**
+ * The registry this route builds is the walker arm's whole population: a
+ * directory it could not list is a skill whose linked files are missing from the
+ * inventory with nothing saying so. It refuses by name, and the per-skill
+ * `walkLinkedFiles` catch turns that into a `link walk failed` parse error on the
+ * skill — reported, never a shorter inventory.
+ *
+ * No repository here on purpose: inside one, `git ls-files` answers the listing
+ * and never enters a directory at all, so only the walk route can meet a refusal.
+ */
+describe('crawlSkillLinkRegistry on a directory it cannot list', () => {
+	const suite = setupAsyncTempDirSuite('extract-skill-refused');
+	let root = '';
+	let locked = '';
+
+	beforeAll(async () => {
+		await suite.beforeAll();
+		await suite.beforeEach();
+		root = safePath.join(suite.getTempDir(), 'plain');
+		locked = safePath.join(root, 'locked');
+		writeRepoFile(root, SKILL_FILENAME, DIVERGENT_SKILL_MD);
+		writeRepoFile(root, REFERENCE_FILENAME, REFERENCE_BODY);
+		writeRepoFile(locked, 'note.md', '# note\n');
+		// `findProjectRoot` memoizes its walk-up per ancestor, and the suites above
+		// have already taught it that this temp parent resolves to THEIR repo.
+		resetProjectRootCaches();
+	});
+
+	afterAll(suite.afterAll);
+
+	it('refuses by name, root-relative, rather than building a registry short of the refused subtree', async () => {
+		let thrown: unknown;
+		try {
+			await withReaddirSyncRefused(locked, 'EACCES', () => crawlSkillLinkRegistry(root));
+		} catch (error) {
+			thrown = error;
+		}
+		expect(thrown).toBeInstanceOf(DirectoryListingRefusedError);
+		const message = (thrown as Error).message;
+		expect(message).toContain("'locked'");
+		expect(message).toContain('EACCES');
+		expect(message).not.toContain(root);
+		expect(message).not.toContain('onUnreadable');
+	});
+
+	it('surfaces on the skill as a link-walk parse error, not as a shorter inventory', async () => {
+		const inv = await withReaddirSyncRefused(locked, 'EACCES', () =>
+			extractClaudeSkillInventory(safePath.join(root, SKILL_FILENAME), { gitTrackerSource: NO_GIT_TRACKER }),
+		);
+		expect(inv.parseErrors.map(e => e.message)).toEqual([
+			expect.stringMatching(/^link walk failed: Listing the directory 'locked' was refused \(EACCES\)/),
+		]);
+	});
+});
+
 describe('crawlSkillLinkRegistry crawl-timing', () => {
 	const suite = setupAsyncTempDirSuite('extract-skill-timing');
 	let timedRoot = '';
@@ -303,7 +362,7 @@ describe('crawlSkillLinkRegistry crawl-timing', () => {
 		await suite.beforeEach();
 		timedRoot = safePath.join(suite.getTempDir(), 'repo');
 		writeRepoFile(timedRoot, SKILL_FILENAME, DIVERGENT_SKILL_MD);
-		writeRepoFile(timedRoot, REFERENCE_FILENAME, '# reference\n');
+		writeRepoFile(timedRoot, REFERENCE_FILENAME, REFERENCE_BODY);
 		writeRepoFile(timedRoot, LATE_NOTE_FILENAME, '# late\n');
 		commitRepo(timedRoot);
 	});

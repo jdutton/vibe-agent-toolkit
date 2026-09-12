@@ -6,6 +6,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { getResourceSubdirForFile } from '../../src/content-type-routing.js';
 import {
   bundledPathCandidates,
   detectMissingReferencedPaths,
@@ -37,6 +38,23 @@ function writeSkill(body: string, files: Record<string, string> = {}): string {
 const skillMdOf = (dir: string) => [safePath.join(dir, 'SKILL.md')];
 
 /**
+ * The target the rest of this suite runs under.
+ *
+ * ⚠️ Passed EXPLICITLY at every call site rather than defaulted in the detector.
+ * Test files are not typechecked in this repo, so an omitted argument would
+ * arrive as `undefined`, route as `claude-code` by accident, and quietly make
+ * every case below a claude-code-only assertion again — which is the shape of
+ * the defect the `--target` rows above exist to close.
+ */
+const CLAUDE_CODE = 'claude-code' as const;
+const CLAUDE_WEB = 'claude-web' as const;
+/** Both packaging targets — the axis this suite's routing rows sweep. */
+const TARGETS = [CLAUDE_CODE, CLAUDE_WEB] as const;
+
+/** An authored path the packager relocates under every target. */
+const AUTHORED_SETUP_SH = 'resources/setup.sh';
+
+/**
  * The two-part silence assertion.
  *
  * Asserting only that no finding was reported would also pass for a document the
@@ -46,7 +64,7 @@ const skillMdOf = (dir: string) => [safePath.join(dir, 'SKILL.md')];
  */
 async function expectNoCandidateAndNoFinding(dir: string): Promise<void> {
   await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual([]);
-  await expect(detectMissingReferencedPaths(skillMdOf(dir), dir)).resolves.toEqual([]);
+  await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
 }
 
 /**
@@ -161,7 +179,7 @@ describe('detectMissingReferencedPaths', () => {
       '```',
     ].join('\n'));
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir);
+    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.code).toBe('PACKAGED_REFERENCED_PATH_MISSING');
@@ -189,7 +207,7 @@ describe('detectMissingReferencedPaths', () => {
   it('does NOT see a path glued to an identifier — documented lexer recall limit', async () => {
     const dir = writeSkill("```js\nconst b = TemplateBuilder('templates/brand/constants.json');\n```");
 
-    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir)).resolves.toEqual([]);
+    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
   });
 
   // The BUILD DROP — the class no human review of the source can catch, and the
@@ -197,7 +215,7 @@ describe('detectMissingReferencedPaths', () => {
   it('flags an inline code-span reference whose target did not survive the build', async () => {
     const dir = writeSkill('Install steps are in `references/whisper-setup.md`.');
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir);
+    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.message).toContain('references/whisper-setup.md');
@@ -212,7 +230,7 @@ describe('detectMissingReferencedPaths', () => {
     // leave this green while silently killing the detector.
     await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md')))
       .resolves.toEqual(['scripts/run.mjs']);
-    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir)).resolves.toEqual([]);
+    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
   });
 
   // The ./-prefixed spelling, end to end: it must fire, and it must anchor on
@@ -220,7 +238,7 @@ describe('detectMissingReferencedPaths', () => {
   it('flags a build drop referenced as ./scripts/setup.mjs', async () => {
     const dir = writeSkill('Run `./scripts/setup.mjs` first.');
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir);
+    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.link).toBe('scripts/setup.mjs');
@@ -242,7 +260,7 @@ describe('detectMissingReferencedPaths', () => {
   it('stays silent on a ./-prefixed reference whose target IS shipped', async () => {
     const dir = writeSkill('Run `./scripts/run.mjs`.', { 'scripts/run.mjs': '// ok\n' });
 
-    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir)).resolves.toEqual([]);
+    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
   });
 
   // A `..` token is verbatim markdown content on its way to `existsSync`. It is
@@ -261,7 +279,7 @@ describe('detectMissingReferencedPaths', () => {
       'references/scripts/setup.mjs': '// a doc copy, not the referenced path\n',
     });
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir);
+    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.link).toBe('scripts/setup.mjs');
@@ -282,7 +300,7 @@ describe('detectMissingReferencedPaths', () => {
   // to be the routed-path check clearing the candidate, not the lexer failing to
   // produce one.
   it.each([
-    ['a shell script routed resources/ -> scripts/', 'resources/setup.sh', 'scripts/setup.sh'],
+    ['a shell script routed resources/ -> scripts/', AUTHORED_SETUP_SH, 'scripts/setup.sh'],
     ['a JSON file routed scripts/ -> templates/', 'scripts/config.json', 'templates/config.json'],
     ['a wasm blob routed assets/ -> resources/', 'assets/runtime.wasm', 'resources/runtime.wasm'],
     ['a markdown file routed templates/ -> resources/', 'templates/notes.md', 'resources/notes.md'],
@@ -293,17 +311,63 @@ describe('detectMissingReferencedPaths', () => {
     );
 
     await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual([authored]);
-    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir)).resolves.toEqual([]);
+    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE)).resolves.toEqual([]);
+  });
+
+  // 🚩 THE SAME MISFIRE, one target over. The suppression above asked
+  // `getTargetSubdir` — which is `claude-code` routing — while the packager asks
+  // `getResourceSubdirForFile(file, target)`, and for `claude-web` that FLATTENS
+  // everything into `references/`. Two routing answers for one question, so the
+  // whole `claude-web` target false-positived: the same fixture was clean under
+  // `--target claude-code` and raised `PACKAGED_REFERENCED_PATH_MISSING` under
+  // `--target claude-web`, on a file that DID ship. Reachable from the shipped
+  // `vat skills package --target claude-web`.
+  //
+  // Held to the PACKAGER'S OWN FUNCTION rather than to a second table written
+  // here: one row per routing category per target, with the destination computed
+  // by the same call the packager makes. A category added to the routing map, or
+  // a new target, moves both sides together.
+  it.each(
+    TARGETS.flatMap((target) =>
+      [AUTHORED_SETUP_SH, 'scripts/config.json', 'assets/runtime.wasm', 'templates/notes.md']
+        .map((authored) => [target, authored] as const),
+    ),
+  )('does not fire under --target %s on %s, which the packager relocated', async (target, authored) => {
+    const basename = authored.slice(authored.indexOf('/') + 1);
+    const shipped = `${getResourceSubdirForFile(basename, target)}/${basename}`;
+    const dir = writeSkill(['```bash', `bash ${authored}`, '```'].join('\n'), {
+      [shipped]: 'shipped\n',
+    });
+
+    await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual([authored]);
+    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, target)).resolves.toEqual([]);
+  });
+
+  // 🚩 …and the control that keeps the row above from being an amnesty for every
+  // subdirectory: the OTHER target's destination is not this target's. A bundle
+  // built for `claude-web` puts nothing in `scripts/`, so a doc naming a file
+  // that only exists there is naming a file its readers do not have.
+  it.each([
+    [CLAUDE_CODE, 'references/setup.sh'],
+    [CLAUDE_WEB, 'scripts/setup.sh'],
+  ] as const)('still fires under --target %s when only the OTHER target ships it', async (target, shipped) => {
+    const authored = AUTHORED_SETUP_SH;
+    const dir = writeSkill(['```bash', `bash ${authored}`, '```'].join('\n'), {
+      [shipped]: 'shipped\n',
+    });
+
+    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, target))
+      .resolves.toMatchObject([{ link: authored }]);
   });
 
   // …and the control that keeps the suppression above from being a blanket
   // amnesty: nothing ships at EITHER spelling, so the finding still fires.
   it('still fires when the routed spelling is absent too', async () => {
-    const authored = 'resources/setup.sh';
+    const authored = AUTHORED_SETUP_SH;
     const dir = writeSkill(`\`\`\`bash\nbash ${authored}\n\`\`\``);
 
     await expect(bundledPathCandidates(safePath.join(dir, 'SKILL.md'))).resolves.toEqual([authored]);
-    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir))
+    await expect(detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE))
       .resolves.toMatchObject([{ link: authored }]);
   });
 
@@ -315,7 +379,7 @@ describe('detectMissingReferencedPaths', () => {
   it('still fires when only a SIBLING skill under the plugin root ships the file', async () => {
     const { dir } = writeSkillPointingAtSibling();
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir);
+    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.link).toBe('resources/handling-review-comments.md');
@@ -326,7 +390,7 @@ describe('detectMissingReferencedPaths', () => {
   it('states absence plainly, with no incomplete-search caveat', async () => {
     const { dir } = writeSkillPointingAtSibling();
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir);
+    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues[0]?.message).toBe(
       'References "resources/handling-review-comments.md", which is not in the packaged output',
@@ -357,7 +421,7 @@ describe('detectMissingReferencedPaths', () => {
   it('flags the same path when it is named outside link syntax', async () => {
     const dir = writeSkill('Open `resources/guide.md` for details.');
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir);
+    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.link).toBe('resources/guide.md');
@@ -381,7 +445,7 @@ describe('detectMissingReferencedPaths', () => {
   it('reports one issue per missing path, each anchored on its own link', async () => {
     const dir = writeSkill(['`references/a.md`', '`references/b.md`', '`references/c.md`'].join('\n\n'));
 
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir);
+    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
 
     expect(issues).toHaveLength(3);
     expect(issues.map(i => i.link)).toEqual(['references/a.md', 'references/b.md', 'references/c.md']);
@@ -393,7 +457,7 @@ describe('detectMissingReferencedPaths', () => {
   // and the real finding beside it survives.
   it('lets an allow entry waive ONE path while a real finding in the same file still fires', async () => {
     const dir = writeSkill('Teaching example `resources/gates.md`, and a real one `references/setup.md`.');
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir);
+    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
     expect(issues).toHaveLength(2);
 
     const { emitted } = applyAllowFilter(issues, {
@@ -411,7 +475,7 @@ describe('detectMissingReferencedPaths', () => {
   // …and the coarse form still works, for a file that is entirely illustrative.
   it('still supports waiving a whole document by location', async () => {
     const dir = writeSkill('`resources/gates.md` and `references/setup.md`.');
-    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir);
+    const issues = await detectMissingReferencedPaths(skillMdOf(dir), dir, CLAUDE_CODE);
 
     const { emitted } = applyAllowFilter(issues, {
       allow: {

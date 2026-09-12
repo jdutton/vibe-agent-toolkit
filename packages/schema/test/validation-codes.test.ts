@@ -114,11 +114,12 @@ describe('CODE_REGISTRY — capability and compat codes', () => {
 });
 
 describe('CODE_REGISTRY — link-auth codes (#113 slice 2)', () => {
-  it('registers all five LINK_AUTH_* codes', () => {
+  it('registers all six LINK_AUTH_* codes', () => {
     const codes: IssueCode[] = [
       'LINK_AUTH_DEAD',
       'LINK_AUTH_DEAD_OR_UNAUTHORIZED',
       'LINK_AUTH_FORBIDDEN',
+      'LINK_AUTH_PROVIDER_ERROR',
       'LINK_AUTH_UNAUTHORIZED',
       'LINK_AUTH_UNVERIFIED',
     ];
@@ -139,6 +140,26 @@ describe('CODE_REGISTRY — link-auth codes (#113 slice 2)', () => {
     expect(CODE_REGISTRY.LINK_AUTH_FORBIDDEN.defaultSeverity).toBe('warning');
     expect(CODE_REGISTRY.LINK_AUTH_UNAUTHORIZED.defaultSeverity).toBe('warning');
     expect(CODE_REGISTRY.LINK_AUTH_UNVERIFIED.defaultSeverity).toBe('warning');
+  });
+
+  it('LINK_AUTH_PROVIDER_ERROR is an error whose remedy never offers `ignore`', () => {
+    // A provider that could not build a request is a config defect, not a
+    // missing token. It used to ride under LINK_AUTH_UNVERIFIED, whose remedy
+    // invites `ignore` for token-less lanes — and with that override in place
+    // a broken provider produced a green run over links nothing had fetched.
+    // Its own code, defaulting to error, is what keeps that override from
+    // reaching it; the remedy text must not hand the reader the same trap.
+    const entry = CODE_REGISTRY.LINK_AUTH_PROVIDER_ERROR;
+    expect(entry.defaultSeverity).toBe('error');
+    expect(entry.fix).not.toMatch(/ignore/i);
+    expect(entry.description).toMatch(/provider/i);
+  });
+
+  it('LINK_AUTH_UNVERIFIED describes only the no-token arm', () => {
+    // The provider-failure arm has its own code now, so the text here must be
+    // true of every finding that still carries this code.
+    expect(CODE_REGISTRY.LINK_AUTH_UNVERIFIED.description).toMatch(/no token source resolved/i);
+    expect(CODE_REGISTRY.LINK_AUTH_UNVERIFIED.description).not.toMatch(/provider (config|error)/i);
   });
 });
 

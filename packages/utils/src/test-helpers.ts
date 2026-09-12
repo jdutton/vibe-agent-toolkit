@@ -1,9 +1,9 @@
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import nodeFs, { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import fs from 'node:fs/promises';
 
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from './path-utils.js';
+import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from './path-utils.js';
 
 /**
  * How long a scratch-dir teardown may run before it gives up and warns.
@@ -525,4 +525,45 @@ export function detachGitEnv(): () => void {
       if (value !== undefined) process.env[name] = value;
     }
   };
+}
+
+/**
+ * Run `body` with `fs.readdirSync` of exactly `directory` throwing an error
+ * carrying errno `code`. Every other directory lists for real, so what a walk
+ * under test meets is ONE refused listing inside an otherwise ordinary tree —
+ * a walk that gave up entirely would pass a test where everything was refused.
+ *
+ * A patch rather than a `chmod`, for the reason the promise-API twin in
+ * `resources/test/helpers/refused-listing.ts` gives: `chmod` reaches one errno
+ * (`EACCES`), only where POSIX modes bind, and not as root. The mapping under
+ * test is "anything that is not an absence errno", and `EMFILE` / `ENFILE` /
+ * `ELOOP` are just as reachable in ordinary operation. This one lives in the
+ * shipped helpers because the sync crawler has consumers in three packages that
+ * each need to refuse a listing, and the duplication gate refuses three copies.
+ *
+ * @param directory - Absolute path of the one directory to refuse
+ * @param code - The errno to reject with
+ * @param body - Runs while the refusal is in force; may be async
+ * @returns Whatever `body` returned
+ */
+export async function withReaddirSyncRefused<T>(
+  directory: string,
+  code: string,
+  body: () => T | Promise<T>,
+): Promise<T> {
+  const original = nodeFs.readdirSync;
+  const refused = toForwardSlash(directory);
+  const patched = ((target: nodeFs.PathLike, ...rest: unknown[]) => {
+    if (toForwardSlash(String(target)) === refused) {
+      throw Object.assign(new Error(`${code}: refused, scandir '${String(target)}'`), { code });
+    }
+    return (original as (...args: unknown[]) => unknown)(target, ...rest);
+  }) as typeof nodeFs.readdirSync;
+
+  nodeFs.readdirSync = patched;
+  try {
+    return await body();
+  } finally {
+    nodeFs.readdirSync = original;
+  }
 }

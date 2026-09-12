@@ -59,6 +59,7 @@ import {
   PROBE_DEFAULT_STDERR,
   PROBE_FAIL_EXIT,
   PROBE_FAIL_TOKEN,
+  PROBE_STDOUT_ENV,
   setupProbe,
   type Probe,
 } from './command-probe.js';
@@ -337,6 +338,125 @@ describe('captureIo — which repeat is reported, and which are compared', () =>
     expect(row.stable).toBeNull();
     // The warm-up is still dropped: 4 is repeat 1, 9 is the discarded repeat 0.
     expect(row.userCalls).toBe(4);
+  });
+});
+
+/**
+ * A scan document as `vat resources scan --format json` prints it, carrying
+ * the arm the subject says it took. Only `lane`/`extentSource` matter here; the
+ * rest is what makes it look like the real thing.
+ *
+ * @param lane - The lane to print, or `null` to omit the key
+ * @param extentSource - The extent source to print (`null` prints a JSON null)
+ * @returns The document, serialised
+ */
+function scanJson(lane: string | null, extentSource: string | null): string {
+  return JSON.stringify({
+    status: 'success',
+    root: '/fixture/project',
+    filesScanned: 2,
+    ...(lane === null ? {} : { lane, extentSource }),
+  });
+}
+
+/** The default `resources-scan` spec's output shape: YAML, with a lane a human can read. */
+const SCAN_YAML = 'status: success\nlane: projection\nextentSource: git\nfilesScanned: 2\n';
+
+describe('captureIo — the arm is read from what the subject PRINTED', () => {
+  it('carries the lane and extent source the subject printed', async () => {
+    const probe = setupProbe(PREFIX);
+
+    const row = onlyRow(
+      await capture(probe, {
+        runs: 1,
+        env: { [PROBE_STDOUT_ENV]: JSON.stringify([scanJson('projection', 'git')]) },
+      }),
+    );
+
+    expect(row.failed).toBe(false);
+    expect(row.lane).toBe('projection');
+    expect(row.extentSource).toBe('git');
+  });
+
+  it('keeps the lane when the extent source printed is null, which is the walk', async () => {
+    const probe = setupProbe(PREFIX);
+
+    const row = onlyRow(
+      await capture(probe, {
+        runs: 1,
+        env: { [PROBE_STDOUT_ENV]: JSON.stringify([scanJson('walk', null)]) },
+      }),
+    );
+
+    expect(row.lane).toBe('walk');
+    expect(row.extentSource).toBeNull();
+  });
+
+  it('reports both null, and does NOT fail the row, when the subject printed YAML', async () => {
+    const probe = setupProbe(PREFIX);
+
+    // The default `resources-scan` spec prints YAML. The `lane:` line is right
+    // there and this facet must not read it: a YAML parser is a dependency the
+    // lab does not carry, and a call count is a measurement whether or not the
+    // output named its arm. The row is honest about not knowing, not failed.
+    const row = onlyRow(
+      await capture(probe, { runs: 1, env: { [PROBE_STDOUT_ENV]: JSON.stringify([SCAN_YAML]) } }),
+    );
+
+    expect(row.failed).toBe(false);
+    expect(row.userCalls).toBe(DEFAULT_COUNT);
+    expect(row.lane).toBeNull();
+    expect(row.extentSource).toBeNull();
+  });
+
+  it('CONTROL: with nothing printed at all, both are null too', async () => {
+    const probe = setupProbe(PREFIX);
+
+    const row = onlyRow(await capture(probe, { runs: 1 }));
+
+    expect(row.lane).toBeNull();
+    expect(row.extentSource).toBeNull();
+  });
+
+  it('takes the lane from the REPORTED repeat, which is the last one', async () => {
+    const probe = setupProbe(PREFIX);
+
+    // Three repeats, three different arms. The warm-up says `filesystem`, the
+    // first compared repeat says `walk`, and the reported (last) repeat says
+    // `git`. A capture reading repeat 0 says `filesystem`; one reading the first
+    // compared repeat says `walk`. Only the reported repeat's arm may travel
+    // with the reported repeat's numbers.
+    const row = onlyRow(
+      await capture(probe, {
+        runs: 3,
+        env: {
+          [PROBE_STDOUT_ENV]: JSON.stringify([
+            scanJson('projection', 'filesystem'),
+            scanJson('walk', null),
+            scanJson('projection', 'git'),
+          ]),
+        },
+      }),
+    );
+
+    expect(row.lane).toBe('projection');
+    expect(row.extentSource).toBe('git');
+  });
+
+  it('carries null on a failed row rather than an arm it never proved', async () => {
+    const probe = setupProbe(PREFIX);
+
+    const row = onlyRow(
+      await capture(probe, {
+        runs: 1,
+        commands: [FAILS],
+        env: { [PROBE_STDOUT_ENV]: JSON.stringify([scanJson('projection', 'git')]) },
+      }),
+    );
+
+    expect(row.failed).toBe(true);
+    expect(row.lane).toBeNull();
+    expect(row.extentSource).toBeNull();
   });
 });
 

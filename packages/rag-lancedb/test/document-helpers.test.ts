@@ -10,7 +10,7 @@ import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { createDocumentRecord, overlayChunkMetadata } from '../src/document-helpers.js';
+import { createDocumentRecord, missingDocumentColumns, overlayChunkMetadata } from '../src/document-helpers.js';
 
 /** Minimal stub token counter for tests */
 const stubTokenCounter: TokenCounter = {
@@ -134,13 +134,20 @@ describe('createDocumentRecord', () => {
     expect(record['priority']).toBe(1);
   });
 
-  it('should JSON.stringify non-string/number frontmatter values', () => {
+  /**
+   * Serialization is the SCHEMA's call, exactly as it is for chunk rows: an
+   * array field declared as one is stored comma-joined, and a value that does
+   * not match its declared type is stored as that type's sentinel rather than
+   * as a JSON string the reader would then have to guess at.
+   */
+  it('serializes frontmatter values by their declared type, as chunk rows do', () => {
+    const arraySchema = z.object({ tags: z.array(z.string()), priority: z.number() });
     const resource = makeResource({
-      frontmatter: { category: ['a', 'b'] as unknown as string, priority: 3 },
+      frontmatter: { tags: ['a', 'b'], priority: 3 },
     });
-    const record = createDocumentRecord(resource, 'content', 'hash', 1, stubTokenCounter, testSchema);
+    const record = createDocumentRecord(resource, 'content', 'hash', 1, stubTokenCounter, arraySchema);
 
-    expect(record['category']).toBe('["a","b"]');
+    expect(record['tags']).toBe('a,b');
     expect(record['priority']).toBe(3);
   });
 
@@ -155,13 +162,21 @@ describe('createDocumentRecord', () => {
     expect(record).not.toHaveProperty('extraField');
   });
 
-  it('should handle resource with no frontmatter', () => {
+  /**
+   * Every schema column is present on every record, sentinel or not. The
+   * documents table's Arrow schema is inferred from the first row written, so
+   * a record that omitted the columns its document lacked gave the table the
+   * first document's shape — and every later document carrying a column the
+   * first did not was refused at insert time.
+   */
+  it('writes every schema column even when the resource has no frontmatter', () => {
     const resource = makeResource({ frontmatter: undefined });
     const record = createDocumentRecord(resource, 'some text here', 'hash', 2, stubTokenCounter, testSchema);
 
     expect(record.resourceid).toBe('res-1');
     expect(record.tokencount).toBe(3); // "some text here" = 3 words
-    expect(record).not.toHaveProperty('category');
+    expect(record['category']).toBe('');
+    expect(record['priority']).toBe(-1);
   });
 
   it('should lowercase frontmatter field keys', () => {
@@ -173,5 +188,38 @@ describe('createDocumentRecord', () => {
 
     expect(record['title']).toBe('My Doc');
     expect(record).not.toHaveProperty('Title');
+  });
+});
+
+/**
+ * The columns a record carries that an older table lacks, each with the
+ * sentinel its existing rows are to be filled with. The answer comes from the
+ * table's own column list against the schema — no stored version number.
+ */
+describe('missingDocumentColumns', () => {
+  const CORE_COLUMNS = ['resourceid', 'filepath', 'content', 'contenthash', 'tokencount', 'totalchunks', 'indexedat'];
+
+  it('names every metadata column a v0.1.42-shaped table lacks, with the sentinel of its type', () => {
+    // v0.1.42 wrote core columns plus only the frontmatter keys the first document had.
+    const missing = missingDocumentColumns([...CORE_COLUMNS, 'category'], testSchema);
+
+    expect(missing).toEqual([{ name: 'priority', fill: -1 }]);
+  });
+
+  it('lowercases the schema key before comparing, as the record does', () => {
+    const missing = missingDocumentColumns(CORE_COLUMNS, z.object({ Title: z.string(), Rank: z.number().optional() }));
+
+    expect(missing).toEqual([
+      { name: 'title', fill: '' },
+      { name: 'rank', fill: -1 },
+    ]);
+  });
+
+  it('reports nothing for a table that already has every column', () => {
+    expect(missingDocumentColumns([...CORE_COLUMNS, 'category', 'priority'], testSchema)).toEqual([]);
+  });
+
+  it('does not report a column the table has and the record lacks', () => {
+    expect(missingDocumentColumns([...CORE_COLUMNS, 'category', 'priority', 'retired'], testSchema)).toEqual([]);
   });
 });

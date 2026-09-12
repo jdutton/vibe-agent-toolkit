@@ -47,6 +47,19 @@
  * and exited 0. `requireDeclaredCheck` refuses it before the crawl, naming the
  * declared set. A gate that cannot fail is worse than no gate.
  *
+ * ## 🔑 NO checks at all is the same refusal, and the one that shipped longest
+ *
+ * A project with a valid config and no `checks:` block reported `status:
+ * success`, `checksRun: 0`, exit 0 — so DELETING the `checks:` block silently
+ * deleted the gate and nothing anywhere said so. A gate that checked nothing is
+ * indistinguishable from a gate that was removed, and the entire argument for
+ * having these gates is that you never let those two look alike. It is now a
+ * `RESOURCE_CHECK_BROKEN` error like the other three — see
+ * {@link noCheckRanFinding}, and `RUN_INTEGRITY_CODE` for why one code
+ * covers all four. Declaring no checks is a legitimate CHOICE; running a gate
+ * that can only pass is not, so the remedy is to take the command out of the
+ * pipeline.
+ *
  * ## 🔑 SQL is the surface a user OPTED IN to, so no BUILT-IN check may be SQL
  *
  * Every check this verb runs is adopter-declared: {@link checkCommand} reads
@@ -167,13 +180,14 @@ import { formatDurationSecs } from '../../utils/duration.js';
 import { resolveIssueSeverity, type SeverityOverrides } from '../../utils/issue-severity.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { writeJsonOutput, writeStdoutSync, writeYamlOutput } from '../../utils/output.js';
-import { projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
+import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
 import {
   withQueriedProjection,
   type AskProjection,
   type PopulationExtent,
   type ProjectionProvenance,
 } from '../../utils/projection-query.js';
+import { nothingCheckedFinding, runIntegrityFinding } from '../../utils/run-integrity.js';
 
 import {
   createProgressWriter,
@@ -274,6 +288,61 @@ export interface CheckPayloadInput extends CheckOutcome {
 }
 
 /**
+ * The refusal for a run in which NO check executed.
+ *
+ * 🚨 **The defect this closes shipped, and it is the shape by which a gate gets
+ * silently deleted.** A project with a valid `vibe-agent-toolkit.config.yaml`
+ * and no `checks:` block produced `status: success`, `checksRun: 0`, exit 0 — a
+ * passing gate document. Delete the `checks:` block and the CI step keeps going
+ * green forever; the only thing that said otherwise was a stderr warning nothing
+ * parses. **A gate that checked nothing is indistinguishable from a gate that
+ * was removed, and the whole argument for having these gates is that you never
+ * let those two look alike.**
+ *
+ * It is the third instance of the shape in this release — `vat claude budget`
+ * answered `success` on a path that matched no working location, and the repo's
+ * audit quality gate had a green path over zero parsed findings — so it is
+ * closed the way those were rather than a third way: a non-overridable
+ * `RUN_INTEGRITY_CODE` at `error`, derived in the report builder.
+ *
+ * 🔑 **Derived in {@link buildCheckOutputData}, not asserted by the handler.**
+ * That placement is the guarantee. The builder is where `checksRun` is computed
+ * and every lane's document goes through it — the completed run, the recovered
+ * document of an interrupted one, the child a supervisor forwards — so "the
+ * denominator is zero and the status is clean" is unrepresentable by
+ * construction, and a fourth lane added later inherits the refusal instead of
+ * having to remember it. It also lands after `resolveIssueSeverity`, which is
+ * belt and braces: the code is already unreachable from a `severity` key.
+ *
+ * The mechanism — ask the DENOMINATOR never the config, one report per
+ * situation, stand down behind an existing run-integrity finding — is the shared
+ * {@link nothingCheckedFinding}; this wrapper owns only the message. The
+ * stand-down matters here for an interrupted run, which recovers zero costs when
+ * the kill landed before the first statement finished and already carries
+ * {@link interruptedRunFinding}, the more specific of the two claims. A `--check`
+ * filter that matched nothing is refused earlier by {@link requireDeclaredCheck},
+ * and must stay refused even if that guard is ever widened.
+ *
+ * @param costs - One record per check that EXECUTED; its length is `checksRun`
+ * @param issues - What the run already found, so an existing run-integrity
+ *   report is not duplicated
+ * @returns The finding, or nothing when at least one check ran
+ */
+function noCheckRanFinding(
+  costs: readonly CheckCost[],
+  issues: readonly ValidationIssue[],
+): readonly ValidationIssue[] {
+  return nothingCheckedFinding(costs.length, issues, () =>
+    'No check ran, so this document is not a verdict: a gate that checked nothing'
+    + ' produces the same report as a gate that was removed, and this run cannot tell'
+    + ' you which happened.'
+    + ' Declare checks under `resources.checks` in vibe-agent-toolkit.config.yaml —'
+    + ' each is a description plus one SQL statement selecting the rows that VIOLATE it —'
+    + ' and if this project deliberately has none, take `vat resources check` out of the'
+    + ' pipeline rather than leaving a step that can only pass.');
+}
+
+/**
  * Build the check report.
  *
  * Pure: no file system, no clock, no `process.exit` — the same contract every
@@ -291,11 +360,16 @@ export interface CheckPayloadInput extends CheckOutcome {
  * sum to `durationSecs`. The population is paid once and shared by every check;
  * see {@link CheckCost} for why it is charged to none of them.
  *
+ * 🔑 A denominator of zero is refused HERE rather than published — see
+ * {@link noCheckRanFinding}. This is the one function every lane's document
+ * passes through, so deriving the refusal in it is what makes "checked nothing,
+ * status clean" unrepresentable rather than merely unwritten.
+ *
  * @param input - The findings and the provenance of the run behind them
  * @returns The document to serialize
  */
 export function buildCheckOutputData(input: CheckPayloadInput): Record<string, unknown> {
-  const issues = [...input.issues];
+  const issues = [...noCheckRanFinding(input.costs, input.issues), ...input.issues];
   return {
     status: calculateValidationStatus(issues),
     root: input.root,
@@ -303,6 +377,12 @@ export function buildCheckOutputData(input: CheckPayloadInput): Record<string, u
     // Beside the origin, because a `population: store` a reader cannot price is
     // a label taken on faith. Charged to no check — see {@link CheckCost}.
     populationSecs: formatDurationSecs(input.populationMs),
+    // Published here too, and not only by `query`, because this verb pays it
+    // identically — the lens is evaluated before the first statement runs. A
+    // document that priced the population but not the lens would attribute the
+    // lens's cost to whichever rule the reader happened to be looking at, which
+    // is the same defect `populationSecs` exists to prevent.
+    lensSecs: formatDurationSecs(input.lensMs),
     // The denominator. See above: without it an empty findings list is
     // ambiguous. Derived from `checks`, never carried beside it.
     checksRun: input.costs.length,
@@ -434,13 +514,10 @@ function timed<T>(now: () => number, run: () => T): Timed<T> {
  * @returns The run-integrity finding
  */
 function brokenCheckFinding(name: string, error: unknown): ValidationIssue {
-  return {
-    code: 'RESOURCE_CHECK_BROKEN',
-    severity: 'error',
-    message:
-      `The check "${name}" could not run, so it is asserting nothing: `
-      + (error instanceof Error ? error.message : String(error)),
-  };
+  return runIntegrityFinding(
+    `The check "${name}" could not run, so it is asserting nothing: `
+    + (error instanceof Error ? error.message : String(error)),
+  );
 }
 
 /**
@@ -599,9 +676,11 @@ export function requireDeclaredCheck(
  * as the "no checks are declared" warning in {@link checkCommand}.
  *
  * 📌 The registry half of the key space needs no equivalent: a misspelled
- * REGISTRY code is already refused by `SeverityOverrideCodeSchema`'s enum
- * branch. Only the open `CUSTOM:` namespace can name something that does not
- * exist.
+ * REGISTRY code is already refused by `SeverityOverrideCodeSchema`, whose
+ * `SEVERITY_KEY_PATTERN` alternates every registry code name with the `CUSTOM:`
+ * namespace — so a key has to BE one of the shipped codes to match that half.
+ * Only the open `CUSTOM:` half can name something that does not exist, because
+ * only it matches on shape rather than on identity.
  *
  * @param checks - The project's `resources.checks`
  * @param validation - The project's `resources.validation`, or undefined
@@ -652,18 +731,16 @@ export function warnUndeclaredOverrides(
  * otherwise populates as empty and reports success". That guard covers blob
  * refusals only; this one covers the extent.
  *
- * 🪤 **Only when checks actually RAN.** Declaring no checks is a legitimate
- * state that {@link checkCommand} answers with a loud stderr warning and a
- * deliberate exit 0. Firing here as well would turn that legitimate state into
- * an error and hand the operator two reports about one situation.
+ * 🪤 **Only when checks actually RAN.** A run with no rules at all is refused
+ * too — it is the same class one level further out — but by
+ * {@link noCheckRanFinding}, whose message is about the missing RULES rather
+ * than about the missing rows. Firing both would hand the operator two reports
+ * about one situation, and this is the less specific of the two: "the 0 checks
+ * that ran asserted nothing over 0 members" sends them to inspect a
+ * `.gitignore` when what they are missing is a `checks:` block.
  *
- * 🪤 **`RESOURCE_CHECK_BROKEN`, not a code of its own.** It is the same
- * run-integrity claim as a statement that would not compile — *these assertions
- * did not execute meaningfully, so the green means nothing* — and it needs the
- * identical non-overridability, which `ValidationConfigSchema` grants by refusing
- * that code as a `severity` key. A sibling code would buy a consumer nothing the
- * message does not already say, while adding a second thing an adopter's CI has
- * to know to look for.
+ * 🪤 **`RUN_INTEGRITY_CODE`, not a code of its own** — see that constant
+ * for why all four refusals in this verb share one.
  *
  * @param checksRun - How many checks EXECUTED. Under `--check` that is fewer
  *   than the project declares, which is why the message says "ran" and not
@@ -677,18 +754,15 @@ function emptyCorpusFinding(
 ): readonly ValidationIssue[] {
   if (checksRun === 0 || membersEnumerated > 0) return [];
 
-  return [{
-    code: 'RESOURCE_CHECK_BROKEN',
-    severity: 'error',
-    message:
-      `The projection enumerated 0 members, so the ${checksRun} check(s) that ran`
-      + ' asserted nothing: there were no rows for any statement to select and'
-      + ' zero findings means only that the corpus was empty.'
-      + ' Look at `.gitignore` (one broad pattern declines every file), at whether'
-      + ' the checkout is complete rather than shallow or sparse, and at whether'
-      + ' `root` in this report is the directory you meant.'
-      + ' `vat resources scan` over the same path lists what an enumeration finds.',
-  }];
+  return [runIntegrityFinding(
+    `The projection enumerated 0 members, so the ${checksRun} check(s) that ran`
+    + ' asserted nothing: there were no rows for any statement to select and'
+    + ' zero findings means only that the corpus was empty.'
+    + ' Look at `.gitignore` (one broad pattern declines every file), at whether'
+    + ' the checkout is complete rather than shallow or sparse, and at whether'
+    + ' `root` in this report is the directory you meant.'
+    + ' `vat resources scan` over the same path lists what an enumeration finds.',
+  )];
 }
 
 /**
@@ -963,12 +1037,16 @@ const INCOMPLETE_NOTICE
 /**
  * The finding for a run that was interrupted, however it was interrupted.
  *
- * 🪤 **`RESOURCE_CHECK_BROKEN`, and for the reason {@link emptyCorpusFinding}
- * gives.** It is the same run-integrity claim — *these assertions did not
- * execute, so the green means nothing* — and it needs the identical
- * non-overridability, which `ValidationConfigSchema` grants by refusing that
- * code as a `severity` key. An interrupted run must never be silenceable by the
- * config of the very project whose SQL hung.
+ * 🪤 **`RUN_INTEGRITY_CODE`, for the reason that constant gives.** An
+ * interrupted run must never be silenceable by the config of the very project
+ * whose SQL hung.
+ *
+ * 🔑 **This is the MORE SPECIFIC of two claims that can be true at once.** A run
+ * killed before its first statement completed recovers zero costs, which
+ * {@link noCheckRanFinding} also refuses — so that one stands down when this
+ * one is present. The dedupe there is order-independent (`issues.some(code ===
+ * RUN_INTEGRITY_CODE)`), so this finding only has to be IN the issue list of an
+ * interrupted document, not first in it.
  *
  * @param inFlight - What the run was doing when the log stopped growing
  * @param ending - Which way the run ended, and what the operator can do
@@ -982,7 +1060,7 @@ function interruptedRunFinding(inFlight: UnitInFlight, ending: CheckRunEnding): 
       + ' after it never executed and this document is not a verdict.'
       + deathRemedy(ending.death);
 
-  return { code: 'RESOURCE_CHECK_BROKEN', severity: 'error', message: message + INCOMPLETE_NOTICE };
+  return runIntegrityFinding(message + INCOMPLETE_NOTICE);
 }
 
 /**
@@ -1095,6 +1173,7 @@ export function buildInterruptedCheckInput(options: {
     durationMs,
     population: population.population,
     populationMs: population.populationMs,
+    lensMs: population.lensMs,
     membersEnumerated: population.membersEnumerated,
     issues: [interruptedRunFinding(unitInFlight(entries), ending)],
     // 🪤 Rebuilt field by field rather than passed through. The log's check
@@ -1321,7 +1400,16 @@ async function superviseCheckRun(options: {
  * bound enforced from outside itself, and a hang becomes a bounded failure
  * instead of a job that burns its runner minutes and reports nothing.
  *
- * @param pathArg - The corpus root, or omitted for the current directory
+ * ## `[path]` locates the project; a `WHERE` clause is the only scope a check has
+ *
+ * Same contract as `vat resources query`, for the same reason (see
+ * `queryCommand`): the projection is the whole tracked tree, so the argument is
+ * where root discovery starts and nothing more. A locator that names no
+ * directory is refused HERE, before the fork below — the parent would otherwise
+ * resolve it silently to the cwd's project and spawn a child to run every check
+ * over a tree the operator did not name, at exit 0.
+ *
+ * @param pathArg - Where to look for the project, or omitted for the current directory
  * @param options - Parsed command-line options
  */
 export async function checkCommand(
@@ -1332,6 +1420,7 @@ export async function checkCommand(
   const startTime = Date.now();
 
   try {
+    if (pathArg !== undefined) assertDirectoryArgument(pathArg);
     const budgetSecs = parseBudgetSeconds(options.budget);
     // Before anything is spawned: a budget the fork below would silently ignore
     // is an operator error, not a bound.
@@ -1371,9 +1460,12 @@ export async function checkCommand(
     const checks = config?.resources?.checks;
 
     if (checks === undefined || Object.keys(checks).length === 0) {
-      // Loud, and exit 0. Declaring no checks is a legitimate state — most
-      // projects have none — but a run that silently printed a passing report
-      // would let a config typo read as a green gate forever.
+      // 🪤 Stderr only, and it decides NOTHING. The refusal lives in
+      // {@link noCheckRanFinding}, on the document, because the document is
+      // what the exit code is computed from and what CI parses; this warning is
+      // the same statement addressed to the human, and the two are one statement
+      // per audience. It used to be the ONLY channel, and the document said the
+      // opposite — `status: success`, exit 0 — which is the half that matters.
       logger.warn(
         'No checks are declared. Add them under `resources.checks` in'
         + ' vibe-agent-toolkit.config.yaml; each is a description plus one SQL'
@@ -1454,6 +1546,7 @@ async function runOutcome(options: {
       kind: 'population',
       population: provenance.population,
       populationMs: provenance.populationMs,
+      lensMs: provenance.lensMs,
       membersEnumerated: extent.membersEnumerated,
     });
     // 🪤 `checks-complete` is NOT emitted here. It used to be, and that put

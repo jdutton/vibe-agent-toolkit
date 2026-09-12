@@ -1624,21 +1624,55 @@ describe('skill extent as a shadow of walkLinkGraph, over the real corpus', () =
     )).toEqual([]);
   }, 1_800_000);
 
-  it('records that the PRODUCTION configuration cannot distinguish the two', () => {
-    // Not a pass to be proud of — a stated limit. Under the shipped configs every
-    // skill bundles exactly its own SKILL.md, so the agreement asserted above is
-    // an equality between two singletons and proves nothing about the primitive.
-    // Pinned as a fact so that if a skill ever gains a followed in-project link,
-    // this test fails and the reader learns the corpus grew teeth.
-    const singletons: string[] = [];
+  it('records how far the PRODUCTION configuration can distinguish the two', () => {
+    // This used to assert that EVERY production bundle was a singleton, and it
+    // went red the moment `vat-example-cat-agents` split its SKILL.md into
+    // progressive-disclosure references and raised `linkFollowDepth` to 1. That
+    // is the tripwire firing as designed, not a regression: the comment it
+    // carried promised that "if a skill ever gains a followed in-project link,
+    // this test fails and the reader learns the corpus grew teeth."
+    //
+    // So the fact is re-pinned rather than relaxed. Thirteen of the fourteen
+    // declared skills still bundle exactly their own SKILL.md, and for those the
+    // agreement asserted above remains an equality between two singletons that
+    // proves nothing about the primitive. The fourteenth is the one bundle with
+    // real teeth — SKILL.md plus its three followed references — and it is the
+    // only production skill for which the shadow test above is a claim about
+    // link-following at all.
+    //
+    // Asserted as a sorted equality over the RENDERED `name: size` pairs, so a
+    // change in either direction names the skill AND its new size, instead of
+    // reporting `expected false to be true` and leaving the reader to go find
+    // out which of fourteen moved. Sorted because the fact is the distribution,
+    // not the order discovery happened to enumerate it in.
+    const bundles: string[] = [];
     for (const corpus of corpora) {
       if (corpus.spec.projectRoot === '.') continue;
       for (const skill of corpus.skills) {
-        singletons.push(`${skill.name}: ${projectedMembers(corpus, skill).length}`);
+        bundles.push(`${skill.name}: ${projectedMembers(corpus, skill).length}`);
       }
     }
-    expect(singletons.every((entry) => entry.endsWith(': 1'))).toBe(true);
-    console.log(`[vacuity] ${singletons.length} production skill bundles, all singletons`);
+    expect([...bundles].sort((a, b) => a.localeCompare(b))).toEqual([
+      'coherence-audit: 1',
+      'markdown-rewriting: 1',
+      'vat-adoption-and-configuration: 1',
+      'vat-agent-authoring: 1',
+      'vat-audit: 1',
+      'vat-enterprise-org: 1',
+      // SKILL.md + cat-breed-selection.md + orchestration-patterns.md
+      // + workflow-orchestration.md, at `linkFollowDepth: 1`.
+      'vat-example-cat-agents: 4',
+      'vat-knowledge-resources: 1',
+      'vat-rag: 1',
+      'vat-skill-authoring: 1',
+      'vat-skill-distribution: 1',
+      'vat-skill-review: 1',
+      'vat-skill-testing: 1',
+      'vibe-agent-toolkit: 1',
+    ]);
+    const singletons = bundles.filter((entry) => entry.endsWith(': 1')).length;
+    console.log(`[vacuity] ${bundles.length} production skill bundles,`
+      + ` ${singletons} singletons and ${bundles.length - singletons} with followed references`);
   });
 
   it('populates with a USABLE git oracle, so the gitignored rule is not a claim about nothing', () => {

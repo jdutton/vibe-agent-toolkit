@@ -14,7 +14,6 @@ export {
   ZipSizeLimitError,
   type PackageSkillOptions,
   type PackageSkillResult,
-  type PackagingTarget,
   type ProjectRegistryOptions,
   type SkillBuildSpec,
   type SkillMetadata,
@@ -50,8 +49,10 @@ export {
 } from './projection/skill-extent.js';
 
 export {
+  getResourceSubdirForFile,
   getTargetSubdir,
   CONTENT_TYPE_ROUTING_MAP,
+  type PackagingTarget,
   type TargetSubdirCategory,
 } from './content-type-routing.js';
 
@@ -78,6 +79,11 @@ export {
   type AgentSkillFrontmatter,
   type VATAgentSkillFrontmatter,
 } from './schemas/agent-skill-frontmatter.js';
+
+// The one reader of an `allowed-tools:` value. The settings-compat checker in
+// claude-marketplace imports it from here so it cannot drift from the compat
+// detectors' reading of the same field.
+export { allowedToolsOf, splitAllowedToolsList } from './schemas/allowed-tools.js';
 
 export { MarketplaceManifestJsonSchema, MarketplaceManifestSchema, type MarketplaceManifest } from './schemas/marketplace-manifest.js';
 

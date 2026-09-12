@@ -102,24 +102,101 @@ export function splitHrefAnchor(href: string): [string, string | undefined] {
  *   reference (starts with `/`) but no `projectRoot` was supplied.
  * - `absolute_escapes_root` — the absolute-path reference resolved to a
  *   location outside `projectRoot` (e.g., via `..` traversal or a symlink
- *   pointing outside the project).
+ *   pointing outside the project). Carries `resolvedPath` — the candidate
+ *   this function already computed — so a consumer that reports WHERE the
+ *   reference went (the edge lens's `outside-root`) can say so without
+ *   resolving the href a second time against a rule it does not own.
  */
 export type ResolveLocalHrefResult =
   | { kind: 'anchor_only' }
   | { kind: 'resolved'; resolvedPath: string; anchor: string | undefined }
   | { kind: 'absolute_no_root'; href: string; anchor: string | undefined }
-  | { kind: 'absolute_escapes_root'; href: string; anchor: string | undefined };
+  | { kind: 'absolute_escapes_root'; href: string; resolvedPath: string; anchor: string | undefined };
+
+/**
+ * Decode ONE path segment of an href.
+ *
+ * RFC 3986 §2.2: a percent-encoded reserved character is **not equivalent** to
+ * the character itself. `%2F` inside a segment is a `/` in the file's NAME —
+ * which no filesystem can hold — not a boundary between two segments. So a
+ * segment whose decoding would contain a separator is kept exactly as written:
+ * it then names a file that does not exist, which is what every browser and
+ * GitHub conclude about the same href. Decoding it into a boundary is how
+ * `./sub%2Ftarget.md` validated green against `sub/target.md` (a 404 everywhere
+ * else) — the one direction a link check must never err in.
+ *
+ * `%2e%2e` still decodes to `..`: `.` is unreserved (§2.3), so the two spellings
+ * ARE equivalent and the escape gates downstream see the same resolved path.
+ *
+ * Malformed encoding (`%ZZ`) falls back to the raw segment, per segment — the
+ * well-formed segments around it still decode.
+ */
+function decodeHrefSegment(segment: string): string {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+  // Both separators: `%5C` is a backslash in the NAME by the same rule, and a
+  // decoded backslash is also the one byte that would put `..` back into the
+  // resolved path — `safePath.resolve` forward-slashes its RESULT, after
+  // `path.resolve` has already taken the byte as part of a filename.
+  return decoded.includes('/') || decoded.includes('\\') ? segment : decoded;
+}
+
+/**
+ * The href's path component as a decoded, forward-slashed, RELATIVE-OR-ROOTED
+ * string, ready for `path.resolve`.
+ *
+ * ⚠️ **Separators first, then decoding, segment by segment — the order is the
+ * fix.** An href is a URL reference, and in a URL reference a backslash IS a
+ * separator: the WHATWG URL parser reads `\` as `/` for every special scheme, so
+ * a browser following `[x](..\outside\secret.md)` fetches `../outside/secret.md`.
+ * `path.resolve` on POSIX disagreed — it took the backslashes as filename bytes,
+ * yielded `/proj/docs/..\outside\secret.md`, and `safePath` then forward-slashed
+ * the RESULT into `/proj/docs/../outside/secret.md`: a "resolved" path still
+ * carrying `..`, which is the one shape the spelling judge refuses as a
+ * programming error. That throw was a live exit-2 crash of `vat resources
+ * validate` on any Windows-authored relative link, with the absolute walk root
+ * in the message.
+ *
+ * Splitting on `/` AFTER the backslash pass is what lets {@link decodeHrefSegment}
+ * see one segment at a time; splitting before it would hand a `\`-joined path
+ * to the decoder as a single segment.
+ *
+ * This is only ever called on an href `classifyLink` judged local — the
+ * validating lanes resolve nothing else (`resolveLinkEntry` skips every other
+ * type), and any href carrying a scheme or a `//` authority is `external` or
+ * `unknown` there. A URL's backslashes are never reinterpreted by this path.
+ */
+function decodeHrefPath(fileHref: string): string {
+  return toForwardSlash(fileHref).split('/').map(decodeHrefSegment).join('/');
+}
 
 /**
  * Resolve a markdown link href to a filesystem path or a typed failure.
  *
  * Performs the standard href → path conversion used by both audit and validate:
  * 1. Strips anchor fragment (`#section`)
- * 2. Decodes URL-encoded characters (`%20` → space, `%26` → `&`)
+ * 2. Reads `\` as the separator it is in a URL reference (see
+ *    {@link decodeHrefPath}), then decodes URL-encoded characters per segment
+ *    (`%20` → space, `%26` → `&`; an encoded separator stays in its segment —
+ *    see {@link decodeHrefSegment})
  * 3. Resolves the path:
  *    - Leading `/` (RFC 3986 §4.2 absolute-path reference) → resolve against
  *      `projectRoot`. Requires a `projectRoot`; must not escape it.
  *    - Otherwise → resolve relative to the source file's directory.
+ *
+ * The returned `resolvedPath` never carries a `.` or `..` segment, whatever the
+ * href spelled. That is `path.resolve`'s own contract — for the separators it
+ * recognises, which on POSIX is `/` alone — and {@link decodeHrefPath} hands it
+ * nothing else: every `\` was turned into `/` before the split, and a decoded
+ * segment that would reintroduce one is kept encoded. ⚠️ Do not "harden" this
+ * with `path.posix.normalize` on the result: it collapses a Windows UNC root
+ * (`//server/share` → `/server/share`), and `path.normalize` on POSIX is as
+ * blind to `\` as `path.resolve` is — the guarantee lives in what reaches the
+ * resolver, and the tests pin it.
  *
  * @param href - Raw href from a markdown link
  * @param sourceFilePath - Absolute path of the file containing the link
@@ -148,12 +225,7 @@ export function resolveLocalHref(
     return { kind: 'anchor_only' };
   }
 
-  let decodedHref: string;
-  try {
-    decodedHref = decodeURIComponent(fileHref);
-  } catch {
-    decodedHref = fileHref;
-  }
+  const decodedHref = decodeHrefPath(fileHref);
 
   // RFC 3986 §4.2 absolute-path reference — resolve against projectRoot.
   if (decodedHref.startsWith('/')) {
@@ -162,7 +234,7 @@ export function resolveLocalHref(
     }
     const candidate = safePath.resolve(projectRoot, decodedHref.slice(1));
     if (!isWithinProject(candidate, projectRoot)) {
-      return { kind: 'absolute_escapes_root', href: fileHref, anchor };
+      return { kind: 'absolute_escapes_root', href: fileHref, resolvedPath: candidate, anchor };
     }
     return { kind: 'resolved', resolvedPath: candidate, anchor };
   }

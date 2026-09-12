@@ -54,14 +54,26 @@
  *
  * A `resources.validation.severity` override reaches it. The key space is
  * widened for exactly this: `SeverityOverrideCodeSchema` in
- * `packages/schema/src/validation-config.ts` is the shipped registry enum
- * unioned with one refinement, `isCustomCheckCode`, so `CUSTOM:<name>` parses as
- * a `severity` key while a misspelled REGISTRY code is still refused. Resolution
- * is safe on the same key: `resolveIssueSeverity` calls `resolveSeverity` only
- * for a code the overrides map actually lists, and `resolveSeverity` returns a
- * listed value before it ever indexes `CODE_REGISTRY`. So an adopter downgrades
- * or ignores a check they inherited without editing it — the declaration is the
- * default, not a ceiling.
+ * `packages/schema/src/validation-config.ts` is a single `z.string()` constrained
+ * by one pattern, `SEVERITY_KEY_PATTERN` — composed from the registry enum's own
+ * code names alternated with `CUSTOM_CHECK_CODE_PATTERN_SOURCE` — so
+ * `CUSTOM:<name>` parses as a `severity` key while a misspelled REGISTRY code is
+ * still refused. Resolution is safe on the same key: `resolveIssueSeverity`
+ * calls `resolveSeverity` only for a code the overrides map actually lists, and
+ * `resolveSeverity` returns a listed value before it ever indexes
+ * `CODE_REGISTRY`. So an adopter downgrades or ignores a check they inherited
+ * without editing it — the declaration is the default, not a ceiling.
+ *
+ * ⚠️ **One pattern rather than a union, and that is not a style choice.** The
+ * key space WAS `z.union([registry enum, isCustomCheckCode refinement])`, and
+ * `zod-to-json-schema` has no case for a UNION record key: the emitted
+ * `severity` silently lost its `propertyNames` entirely while `allow`, in the
+ * same published file, kept its full enum. An adopter validating their config in
+ * an editor then got a misspelled registry code accepted by the schema and
+ * refused by `loadConfig`. A pattern emits as `propertyNames.pattern`, which
+ * that generator does understand. Do not "simplify" it back into a union — see
+ * `packages/schema/test/emitted-json-schemas.test.ts`, which asserts on the
+ * generated artifact for exactly this reason.
  *
  * ⚠️ **The override reaches VIOLATIONS only.** A check that cannot run — a
  * renamed column, a table that is gone — is not reported under this code space

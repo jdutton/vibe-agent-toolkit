@@ -1,7 +1,7 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { runCompatDetectors } from '../../src/validators/compat-detectors.js';
+import { allowedToolsDeclarations, runCompatDetectors } from '../../src/validators/compat-detectors.js';
 
 /**
  * Anchor root for these detector tests. `runCompatDetectors` requires one and
@@ -160,6 +160,67 @@ describe('local-shell capability', () => {
     expect(shellObs[0]?.supportingEvidence).toEqual(
       expect.arrayContaining(['ALLOWED_TOOLS_LOCAL_SHELL', 'PROSE_LOCAL_SHELL_TOOL_REFERENCE', 'FENCED_SHELL_BLOCK']),
     );
+  });
+});
+
+/**
+ * Every spelling Claude Code accepts for `allowed-tools:`, the EXACT ordered
+ * declarations it carries, and whether a local-shell tool is among them. The
+ * exact list is asserted (not a count) so a mis-split — `Read Bash` read as one
+ * declaration named "Read Bash", or `Bash(git commit -m "a b")` split at its
+ * inner space — cannot pass. `skill()` emits `---`, `name`, `description`, then
+ * the extra frontmatter, so the key sits at line 4 in every row.
+ */
+const ALLOWED_TOOLS_SPELLINGS: ReadonlyArray<{
+  label: string;
+  frontmatter: string;
+  declarations: string[];
+  shell: boolean;
+}> = [
+  { label: 'comma-separated scalar', frontmatter: 'allowed-tools: Read, Bash', declarations: ['Read', 'Bash'], shell: true },
+  { label: 'space-separated scalar (documented spelling)', frontmatter: 'allowed-tools: Read Bash', declarations: ['Read', 'Bash'], shell: true },
+  { label: 'space-separated scalar, no shell tool', frontmatter: 'allowed-tools: Read Grep', declarations: ['Read', 'Grep'], shell: false },
+  { label: 'flow sequence', frontmatter: 'allowed-tools: [Read, Bash]', declarations: ['Read', 'Bash'], shell: true },
+  { label: 'block sequence, 2-space', frontmatter: 'allowed-tools:\n  - Read\n  - Edit', declarations: ['Read', 'Edit'], shell: true },
+  { label: 'block sequence, 4-space', frontmatter: 'allowed-tools:\n    - Read\n    - Write', declarations: ['Read', 'Write'], shell: true },
+  { label: 'block sequence, 4-space, no shell tool', frontmatter: 'allowed-tools:\n    - Read\n    - Grep', declarations: ['Read', 'Grep'], shell: false },
+  { label: 'quoted flow item', frontmatter: 'allowed-tools: ["Read(*)", Grep]', declarations: ['Read(*)', 'Grep'], shell: false },
+  { label: 'quoted scalar carrying a pattern', frontmatter: 'allowed-tools: "Read(*) Edit"', declarations: ['Read(*)', 'Edit'], shell: true },
+  {
+    label: 'a Bash pattern whose argument holds spaces and quotes stays ONE declaration',
+    frontmatter: 'allowed-tools: Bash(git commit -m "a b") Read',
+    declarations: ['Bash(git commit -m "a b")', 'Read'],
+    shell: true,
+  },
+  { label: 'a scoped Bash pattern declares the Bash tool', frontmatter: 'allowed-tools: Bash(git:*)', declarations: ['Bash(git:*)'], shell: true },
+  { label: 'CRLF line endings', frontmatter: 'allowed-tools: Read Bash\r\nmodel: sonnet', declarations: ['Read', 'Bash'], shell: true },
+];
+
+describe('allowed-tools frontmatter spellings', () => {
+  it.each(ALLOWED_TOOLS_SPELLINGS)('reads $label as its declarations', ({ frontmatter, declarations }) => {
+    const content = skill({ extraFrontmatter: frontmatter, body: 'Body.' });
+    expect(allowedToolsDeclarations(content)).toEqual({ tools: declarations, line: 4 });
+  });
+
+  it.each(ALLOWED_TOOLS_SPELLINGS)('gives $label the same local-shell verdict as the flow form', ({ frontmatter, shell }) => {
+    const content = skill({ extraFrontmatter: frontmatter, body: 'Body.' });
+    const { evidence, observations } = runCompatDetectors(content, 'SKILL.md', LOCATION_ROOT);
+    const fired = evidence.filter(e => e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL');
+    expect(fired.map(e => e.location.line), frontmatter).toEqual(shell ? [4] : []);
+    expect(obsCodes(observations).includes(SHELL_OBS), frontmatter).toBe(shell);
+  });
+
+  it('declares nothing when the frontmatter does not parse, and still scans the body', () => {
+    // The skill validator names this file SKILL_MISSING_FRONTMATTER on the same
+    // run; the detector must not read a bogus declaration out of it.
+    const content = skill({ extraFrontmatter: 'allowed-tools: [Read, Bash', body: bashBlock('ls') });
+    expect(allowedToolsDeclarations(content)).toEqual({ tools: [], line: 0 });
+    const { evidence } = runCompatDetectors(content, 'SKILL.md', LOCATION_ROOT);
+    expect(evidence.map(e => e.patternId)).toEqual(['FENCED_SHELL_BLOCK']);
+  });
+
+  it('declares nothing when the key is absent', () => {
+    expect(allowedToolsDeclarations(skill({ body: 'Body.' }))).toEqual({ tools: [], line: 0 });
   });
 });
 

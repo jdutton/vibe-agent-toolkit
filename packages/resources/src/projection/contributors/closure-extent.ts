@@ -106,7 +106,6 @@ import {
   CRAWL_CLOSURE_RESOLVE_ID,
   CRAWL_PASS_INSIDE,
   crawlTimingStart,
-  isAbsoluteAnyPlatform,
   recordCrawlPass,
 } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
@@ -128,10 +127,9 @@ import type { JsonValue } from '../../schemas/projection-shared.js';
 import type { ResolutionContextRow } from '../../schemas/projection-zones.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../contributor.js';
 import type { Projection, ProjectionBase } from '../projection.js';
-import { relativize } from '../realizations.js';
+import { isNonLocalRef, resolveReferencePath } from '../reference-resolution.js';
 
 import { extentContextId } from './context-id.js';
-import { resolveDialectRef } from './reference-dialect.js';
 
 /** Every closure contributor's id begins here, so one prefix scan identifies them. */
 export const CLOSURE_CONTRIBUTOR_ID_PREFIX = 'closure:';
@@ -758,27 +756,6 @@ function shouldFollow(reference: BlobReferenceRow, declaration: ExtentDeclaratio
 }
 
 /**
- * A scheme-bearing or protocol-relative reference, matched on the raw token.
- *
- * `//host/path` is protocol-relative and equally not a local file. A bare
- * `mailto:`, `https:` or any other scheme is caught by the scheme production of
- * RFC 3986 — a letter followed by letters, digits, `+`, `-` or `.`, then `:`.
- * A Windows drive letter (`C:\…`) also matches, and excluding it is correct
- * here: an absolute drive path is not a corpus-relative reference either.
- */
-const NON_LOCAL_REF = /^(?:\/\/|[a-z][\w+.-]*:)/iu;
-
-/**
- * Is this reference something other than a path into the corpus?
- *
- * @param rawRef - The reference exactly as authored
- * @returns True when the token names an external or non-filesystem target
- */
-function isNonLocalRef(rawRef: string): boolean {
-  return NON_LOCAL_REF.test(rawRef);
-}
-
-/**
  * What one `rawRef` resolved to — three outcomes the closure must keep apart,
  * because each is a different report.
  *
@@ -818,10 +795,12 @@ type ReferenceResolution =
  * `relativize` already settle between them, which is exactly the split that once
  * bundled a de-linked file.
  *
- * ⚠️ `resolveLocalHref`'s own `absolute_escapes_root` verdict is deliberately
- * NOT reported as `outside-root`: that branch returns the href and no path, so
- * naming a target would mean resolving the href a second time, here, against a
- * rule this module does not own. It stays `unrealized`, which is what it was.
+ * `resolveLocalHref`'s own `absolute_escapes_root` verdict IS reported as
+ * `outside-root`: that branch carries the candidate it resolved, so
+ * `reference-resolution.ts` spells the target from it without resolving the
+ * href a second time against a rule this module does not own. (It used to stay
+ * `unrealized` because the verdict carried the href and no path; the verdict
+ * now carries the path.)
  *
  * ⚠️ **Resolution is DIALECT-dependent.** `declaration.referenceDialect` decides
  * whether a leading `/` means root-relative or filesystem-absolute, whether `~/`
@@ -851,64 +830,29 @@ function resolveReference(
   const startedAt = crawlTimingStart();
   try {
     const { root } = walk.base;
-    const resolution = resolveDialectRef(
+    // The path half is shared with the edge lens (`reference-resolution.ts`),
+    // because "where does this token point" has one answer whoever asks. What
+    // stays here is the half that genuinely differs: looking the path up in THIS
+    // walk's index. Two copies of the resolve/relativize/escape sequence would
+    // be two answers to one question with nothing holding them in step.
+    const resolution = resolveReferencePath(
       walk.declaration.referenceDialect,
       rawRef,
-      joinRoot(root, fromPath),
+      fromPath,
       root,
     );
-    if (resolution.kind !== 'resolved') return { kind: 'unrealized' };
-    const relative = relativize(resolution.resolvedPath, root);
-    if (escapesRoot(relative)) return { kind: 'outside-root', path: relative };
-    const row = walk.byPath.get(relative)?.[0];
+    // Returned as-is rather than re-spelled: the shared resolution's
+    // `outside-root` member is structurally this union's, so passing it through
+    // keeps one literal instead of two that could drift apart.
+    if (resolution.kind === 'outside-root') return resolution;
+    if (resolution.kind === 'unresolvable') return { kind: 'unrealized' };
+    const row = walk.byPath.get(resolution.path)?.[0];
     return row === undefined ? { kind: 'unrealized' } : { kind: 'realized', row };
   } finally {
     recordCrawlPass(CRAWL_CLOSURE_RESOLVE_ID, 'closure', CRAWL_PASS_INSIDE, startedAt);
   }
 }
 
-/**
- * Does a path stated against the root fall OUTSIDE it?
- *
- * Two spellings, because `safePath.relative` has two ways of saying "not under
- * this root": a `..`-prefixed relative path in the ordinary case, and an
- * ABSOLUTE path when no relative route exists at all — which on Windows is what
- * a different drive letter produces. Testing only the first would silently admit
- * `D:/elsewhere/doc.md` as though it were a root-relative member, on the one
- * platform where nobody would see it fail.
- *
- * `..` alone is the root's own parent directory and is outside by the same rule;
- * it is spelled separately because it carries no trailing separator to match.
- *
- * The parameter is named `normalized…` for the same reason `isUnderRoot`'s are
- * in `utils.ts`: the name states the precondition this function does not check,
- * and it is what discharges `local/no-path-startswith`. `relativize` is the only
- * producer of this argument and it forward-slashes on the way out.
- *
- * @param normalizedRelative - A forward-slashed path already stated against the
- *   root by `relativize`
- * @returns True when the root does not contain it
- */
-function escapesRoot(normalizedRelative: string): boolean {
-  return normalizedRelative === '..'
-    || normalizedRelative.startsWith('../')
-    || isAbsoluteAnyPlatform(normalizedRelative);
-}
-
-/**
- * The absolute path of a root-relative member.
- *
- * Deliberately string concatenation rather than `safePath.join`: the row's
- * `path` column is already forward-slashed and normalized, and `join` would
- * re-derive a platform separator that `resolveLocalHref` immediately undoes.
- *
- * @param root - The absolute corpus root
- * @param path - A root-relative, forward-slashed path
- * @returns The absolute, forward-slashed path
- */
-function joinRoot(root: string, path: string): string {
-  return `${root}/${path}`;
-}
 
 /**
  * Is a member at `depth` allowed to contribute further hops?

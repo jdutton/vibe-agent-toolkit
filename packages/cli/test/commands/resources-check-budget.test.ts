@@ -342,6 +342,23 @@ describe('buildInterruptedCheckInput', () => {
     expect(payload['status']).toBe('error');
   });
 
+  it('gets ONE run-integrity report when it died before any check completed', () => {
+    // 🪤 The interrupted lane recovers ZERO costs when the kill landed before the
+    // first statement finished, and `buildCheckOutputData` refuses a document
+    // whose denominator is zero — that refusal is what stops a project with no
+    // `checks:` block reading as a pass. Both claims are true here at once, and
+    // the operator must get ONE report about one situation, not two. The
+    // interrupted finding is the more specific of the two, so it is the one that
+    // survives; the builder's derived refusal stands down when a run-integrity
+    // finding is already on the document.
+    const payload = buildCheckOutputData(killed([POPULATION]));
+    const issues = payload['issues'] as { code: string }[];
+
+    expect(payload['checksRun']).toBe(0);
+    expect(payload['status']).toBe('error');
+    expect(issues.map((issue) => issue.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN']);
+  });
+
   it('says so when the run was killed between the population and the first check', () => {
     // Real, and not the same as "a rule hung": the child had populated and had
     // not entered a statement. Naming a rule here would blame one that never ran.

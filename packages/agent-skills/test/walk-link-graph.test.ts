@@ -483,6 +483,28 @@ function createDepthChainRegistry(): WalkableRegistry {
   return createMockRegistry([skill, guide, deep]);
 }
 
+/**
+ * skill → {guide, ref} AND guide → ref: ONE target, two routes, one of them a
+ * hop deeper than the other.
+ *
+ * The shape `LINK_DROPPED_BY_DEPTH` used to get wrong. At `maxDepth: 1` the
+ * direct edge bundles `ref`, and the edge out of `guide` is refused for depth —
+ * so the finding said "this link was not bundled" about a file that is in the
+ * bundle. A diamond is the minimum graph that can tell the two questions apart:
+ * "was this OCCURRENCE followed?" (no) and "did the TARGET ship?" (yes).
+ */
+function createDiamondRegistry(): WalkableRegistry {
+  const skill = createMockResource(SKILL_ID, SKILL_PATH, [
+    createLocalLink('guide', GUIDE_HREF, GUIDE_ID),
+    createLocalLink('ref', './docs/ref.md', REF_ID),
+  ]);
+  const guide = createMockResource(GUIDE_ID, GUIDE_PATH, [
+    createLocalLink('ref', './ref.md', REF_ID),
+  ]);
+  const ref = createMockResource(REF_ID, REF_PATH);
+  return createMockRegistry([skill, guide, ref]);
+}
+
 /** skill → README (navigation file scenario) */
 function createReadmeRegistry(): WalkableRegistry {
   const skill = createMockResource(SKILL_ID, SKILL_PATH, [
@@ -634,6 +656,42 @@ describe('walkLinkGraph', () => {
 
       expectBundledIds(result, [GUIDE_ID, DEEP_ID]);
       expect(result.maxBundledDepth).toBe(2);
+    });
+
+    /**
+     * `LINK_DROPPED_BY_DEPTH` answers "did the TARGET ship?", not "was THIS
+     * occurrence followed?".
+     *
+     * The two diverge on any diamond, and a documentation corpus is nothing but
+     * diamonds — the same reference cited from SKILL.md and from a page one hop
+     * further in. Judging the occurrence made the finding's own message ("this
+     * link was not bundled") false for a file sitting in `dist/`, which is the
+     * worst shape a finding can take: it sends an author to raise
+     * `linkFollowDepth` for a link that already works.
+     *
+     * Order-independent by construction, exactly as the `non-routable-source`
+     * candidates are: the answer is taken against the FINAL bundle, so it cannot
+     * depend on whether the walk met the shallow route or the deep one first.
+     */
+    it('does not report a depth-dropped occurrence whose target another route bundled', () => {
+      const result = walkLinkGraph(SKILL_ID, createDiamondRegistry(), defaultOptions({ maxDepth: 1 }));
+
+      expectBundledIds(result, [GUIDE_ID, REF_ID]);
+      expect(result.excludedReferences).toEqual([]);
+      expect(walkerExclusionsToIssues(result.excludedReferences, PROJECT_ROOT)).toEqual([]);
+    });
+
+    /**
+     * The other direction, and the reason the fix above is a filter rather than
+     * a deletion: a target NOTHING bundled is still reported. Without this row
+     * the change could silence the code entirely and stay green.
+     */
+    it('still reports a depth-dropped occurrence when no route bundled the target', () => {
+      const result = walkLinkGraph(SKILL_ID, createDepthChainRegistry(), defaultOptions({ maxDepth: 1 }));
+
+      expect(walkerExclusionsToIssues(result.excludedReferences, PROJECT_ROOT).map(i => i.code)).toEqual([
+        'LINK_DROPPED_BY_DEPTH',
+      ]);
     });
   });
 

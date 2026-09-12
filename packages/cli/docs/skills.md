@@ -47,85 +47,58 @@ See `docs/validation-codes.md` for the full code reference with per-code descrip
 
 ### vat skills validate [path]
 
-**Purpose:** Validate SKILL.md files for correctness and best practices
+**Purpose:** Validate the skills a project declares, before packaging — the gate `vat validate` and `vat verify` run as their `skills` phase.
 
 **What it does:**
-1. Discovers all SKILL.md files in the target directory
-2. Validates both resource rules (links, frontmatter) and skill-specific rules
-3. Reports errors and warnings in structured format
-4. Exits 0 if valid, 1 if errors found (warnings don't fail)
-
-**Validation Modes:**
-
-**Project mode (default):**
-- Respects `vibe-agent-toolkit.config.yaml` boundaries
-- Strict filename validation - must be exactly "SKILL.md" (case-sensitive)
-- Errors on non-standard filenames (skill.md, Skill.md, etc.)
-
-**User mode (--user flag):**
-- Scans `~/.claude/plugins` and `~/.claude/skills`
-- Permissive validation - non-standard filenames generate warnings only
-- More tolerant for user-installed content
-
-**Path mode (explicit path):**
-- Scans specified directory
-- Strict filename validation like project mode
+1. Reads `vibe-agent-toolkit.config.yaml` from `[path]` (default: current directory) and discovers every file its `skills.include` / `skills.exclude` globs match
+2. Validates each with the packaging validator: frontmatter, links and link depth, size/complexity, `files:` config, compat observations — under the merged `skills.defaults` + `skills.config.<name>` validation config (`severity` + `allow`)
+3. Publishes a YAML document to stdout and a findings report to stderr
+4. Exits 0, 1 or 2 — see below
 
 **Arguments:**
-- `[path]` - Path to validate (defaults to current directory)
+- `[path]` — a directory that holds `vibe-agent-toolkit.config.yaml`. It scopes *which config is read*, not which files are scanned; the globs in that config do the scanning. A path that does not exist, is not a directory, or holds no config is refused (exit 2) rather than silently rescoping the run to nothing. There is no `--user` mode and no "scan this directory" mode.
 
 **Options:**
-- `--user` - Validate user-installed skills in ~/.claude
-- `--debug` - Enable debug logging
+- `--skill <name>` — validate one discovered skill only (narrows what is reported on, not what counts as declared test input)
+- `-v, --verbose` — publish every validated skill, findings or not, with full detail (`allErrors`, `ignoredErrors`, `observations`, `evidence`, metadata) and one block per finding on stderr
+- `-d, --debug` — debug logging
 
-**Exit Codes:**
-- `0` - All validations passed
-- `1` - Validation errors found (warnings don't fail)
-- `2` - System error (directory not found, config invalid)
+**Exit codes:**
 
-**Validation Checks:**
+| Exit | When |
+|---|---|
+| `0` | No active `error` finding (warnings and info do not fail; allowed errors do not fail) |
+| `1` | An active `error` finding on any skill, **or** the run validated no skill: `skills.include` matched nothing (typo, renamed directory, an `exclude` that swallows every match). Refused as one non-overridable `RESOURCE_CHECK_BROKEN` naming the globs — a green over zero skills is not a verdict |
+| `2` | Could not run: `[path]` refused, config invalid, `projectRoot` not found |
 
-*Resource validation:*
-- Internal file links (relative paths)
-- Anchor links within files (#heading)
-- Cross-file anchor links (file.md#heading)
-- Frontmatter schema validation
+A config with no `skills:` block at all is "nothing to validate": no document, exit 0 — declaring no skills is a choice, and both orchestrators skip the phase on that config.
 
-*Skill-specific validation:*
-- Reserved word checks (name field)
-- XML tag detection (name/description fields)
-- Console compatibility warnings
-- Required frontmatter fields (name, description)
+**What a matched file must be.** Every file the globs match is validated as a skill and counted in `skillsValidated`. A matched file with no YAML frontmatter block — or one whose block does not parse — is refused with `SKILL_MISSING_FRONTMATTER` at `error` (non-overridable), located at the file's project-relative path. So a glob that drifts onto a `README.md`, or a `SKILL.md` that lost its fence, fails the run instead of passing under its H1 as a name. A frontmatter block without a `name` is legal (agentskills.io makes `name` optional) and is not refused on that ground.
 
-*Filename validation:*
-- Must be "SKILL.md" (uppercase)
-- Strict mode: errors on skill.md, Skill.md
-- Permissive mode: warnings only
+**Output:**
 
-**Output Format:**
+Default `results[]` lists only skills WITH findings — per-skill counts and a per-code tally, dominant code first; a clean skill is omitted and a zero bucket is an absent field. `skillsValidated` is the true denominator regardless. `issueCounts` always equals the sum of the per-skill rows plus `runIssueCounts` (run-level findings: `ALLOW_UNUSED` entries and the zero-skill refusal).
+
 ```yaml
-status: success | error
-skillsValidated: 3
+status: error            # success | warning | error — worst actionable severity in the run
+issueCounts: { errors: 1, warnings: 0, info: 0 }
+runIssueCounts: { errors: 0, warnings: 0, info: 0 }
+skillsValidated: 2
 results:
-  - path: resources/skills/SKILL.md
-    status: success
-    skill:
-      name: my-skill
-      description: Skill description
-    issues: []
-durationSecs: 0.245
+  - skillName: Beta
+    status: error
+    errors: 1
+    codes:
+      SKILL_MISSING_FRONTMATTER: 1
+runIssues: []
+durationSecs: 0.31
 ```
 
-**Examples:**
+stderr prints the same thing as one line per skill, with every `error` finding rendered in full beneath its row (location, message, fix) at every verbosity.
+
+**Example:**
 ```bash
-# Validate all project skills (default)
-vat skills validate
-
-# Validate user-installed skills
-vat skills validate --user
-
-# Validate specific directory
-vat skills validate packages/my-agent/resources/skills
+vat skills validate packages/my-pkg/   # read packages/my-pkg/vibe-agent-toolkit.config.yaml
 ```
 
 **Requirements:**
@@ -523,6 +496,18 @@ skills:
     path: skills/skill2.md
     validation: warning
     warning: Non-standard filename (should be SKILL.md)
+```
+
+When the scan could not list a directory (a root-owned or quarantined directory under
+`~/.claude/plugins`, say), `status` is `warning` and the document names each such directory,
+root-relative, with the errno — `skillsFound` is then a floor, not the answer:
+
+```yaml
+status: warning
+...
+unreadable:
+  - path: plugins/locked
+    code: EACCES
 ```
 
 **Examples:**

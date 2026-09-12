@@ -175,14 +175,45 @@ export {
 } from './schemas/projection-resources.js';
 
 export {
+  EdgeDestinationKindSchema,
   EdgeKindSchema,
   EdgeOriginSchema,
   EdgeResolutionRowSchema,
   EdgeRowSchema,
+  type EdgeDestinationKind,
   type EdgeOrigin,
   type EdgeResolutionRow,
   type EdgeRow,
 } from './schemas/projection-edges.js';
+
+// The three destination classes as builders. `EdgeResolutionRowSchema` enforces
+// the dstKind/dstResource/dstKey invariants at the boundary; these make them
+// unconstructible, which is what a producer should be reaching for.
+export {
+  externalDestination,
+  outOfCorpusDestination,
+  resourceDestination,
+  type EdgeDestination,
+} from './projection/edge-destination.js';
+
+// The edge relation, COMPUTED per lens and never stored — `projection.ts` places
+// `edges`/`edge_resolutions` in the derived-per-lens column, so this returns rows
+// rather than adding a table. Same shape `claude-context-query.ts` already ships.
+export {
+  AUTHORED_EDGE_FORMS,
+  buildReferenceIndex,
+  resolveEdges,
+  type EdgeEvaluationOptions,
+  type EdgeLens,
+  type EdgeRelation,
+} from './projection/edge-lens.js';
+
+// Where one reference points, as a path. Shared with the closure walk so the
+// corpus has ONE answer to that question.
+export {
+  resolveReferencePath,
+  type ReferencePathResolution,
+} from './projection/reference-resolution.js';
 
 // Projection substrate — population, not schema. `resource_realizations` rows
 // for one path in one extent, plus the two path primitives every population
@@ -249,6 +280,16 @@ export {
   type ProjectionTableScope,
   type ProjectionTableSpec,
 } from './projection/table-registry.js';
+
+// The relations a lens PRODUCES, shaped for a store without being registered as
+// tables — a derived relation has no scope, and never adds a row to a
+// materialised table. See the module header for why both are load-bearing.
+export {
+  allDerivedSpecs,
+  DERIVED_TABLES,
+  type DerivedTableName,
+  type DerivedTableSpec,
+} from './projection/derived-table-registry.js';
 
 // What each column holds, read out of the row schema. Every storage backend
 // needs it — Arrow needs a type per vector, SQL needs one per column — so the
@@ -576,6 +617,9 @@ export {
 // `LinkAuthConfig` (fully-expanded providers). Adopters carrying a parsed
 // config can hand it directly to `fetchAuthenticated` via this bridge.
 export { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
+// The refusal `buildLinkAuthEngineConfig` throws for a provider that cannot
+// compile — named, so a caller can tell a config error from an engine bug.
+export { LinkAuthConfigError } from './link-auth/compile-check.js';
 
 // linkAuth pure engine — public API only (issue #113).
 // Internal helpers (rewrite, build-headers, etc.) stay module-private.

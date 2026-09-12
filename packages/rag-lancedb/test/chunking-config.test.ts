@@ -215,22 +215,112 @@ describe('resolveChunkingConfig', () => {
 
 /**
  * The resolver above is only worth anything if the indexing path actually calls
- * it. `indexResource` needs a live LanceDB connection, so it is out of reach of
- * a unit test — this reads the route instead of the behaviour, deliberately, so
- * a correct resolver cannot sit next to an unchanged caller and still look green.
+ * it. `indexResource` needs a live LanceDB connection — and the provider module
+ * imports `@lancedb/lancedb` and the ONNX embedder at load time — so the call is
+ * out of reach of a unit test. This reads the route instead of the behaviour,
+ * deliberately, so a correct resolver cannot sit next to an unchanged caller and
+ * still look green.
+ *
+ * ⛔ It used to read the route with `expect(source).toContain('resolveChunkingConfig')`,
+ * and that assertion COULD NOT FAIL. The identifier also appears in a `{@link}`
+ * inside the `targetChunkSize` JSDoc, so deleting the import, deleting
+ * `getChunkingConfig` outright and reverting the caller to a hand-rolled config
+ * literal left the suite 12/12 green — measured, by doing exactly that.
+ *
+ * Every pattern below is therefore anchored to a shape a comment cannot take:
+ * `^import` at the start of a line, and a `key:` whose line begins with the key
+ * rather than with a `*`. That is stricter than stripping comment lines first,
+ * because it also refuses a mention embedded in a fenced `@example`.
  */
-describe('LanceDBRAGProvider chunking wiring', () => {
-  it('routes chunking config through the resolver', async () => {
-    const source = await readProviderSource();
 
-    expect(source).toContain('resolveChunkingConfig');
+/** A real import statement, not a mention. A JSDoc line starts with `*`. */
+const RESOLVER_IMPORT =
+  /^import\s*\{[^}]*\bresolveChunkingConfig\b[^}]*\}\s*from\s*'\.\/chunking-config\.js';/mu;
+
+/** Characters from `chunkResource(` that the call and its arguments occupy. */
+const CALL_WINDOW = 400;
+
+/**
+ * Is the chunker handed the RESOLVED config, rather than one assembled inline?
+ *
+ * Scoped to a window at the call rather than the whole file, so an unrelated
+ * `getChunkingConfig()` call elsewhere could not stand in for this one. The
+ * provider contains exactly one `chunkResource(` — the import spells the name
+ * without parentheses, and no comment writes the call form.
+ *
+ * @param source - The provider's own source text
+ * @returns True when the resolved config reaches the chunker
+ */
+function passesResolvedConfigToChunker(source: string): boolean {
+  const at = source.indexOf('chunkResource(');
+  return at !== -1 && source.slice(at, at + CALL_WINDOW).includes('this.getChunkingConfig()');
+}
+
+/**
+ * Does the provider assemble a chunking config of its own?
+ *
+ * `modelTokenLimit` is required by `ChunkingConfig`, so EVERY revert to a
+ * hand-rolled config has to write this key — whether it hardcodes ada-002's
+ * 8191 (which is what shipped, applied to a local model that reads 256) or
+ * derives the number inline and skips the clamping and the warnings the
+ * resolver owes its caller.
+ *
+ * Comment lines are excluded, and the key is looked for ANYWHERE on a code line
+ * rather than at its start: a revert written as a one-line `{ targetChunkSize:
+ * …, modelTokenLimit: … }` puts the key mid-line, and a start-anchored pattern
+ * let exactly that shape through when it was tried against the real file.
+ *
+ * @param source - The provider's own source text
+ * @returns True when the provider writes its own config literal
+ */
+function declaresOwnChunkingConfig(source: string): boolean {
+  return source.split('\n').some((line) => {
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith('*') || trimmed.startsWith('//')) return false;
+    return trimmed.includes('modelTokenLimit');
+  });
+}
+
+describe('LanceDBRAGProvider chunking wiring', () => {
+  it('imports the resolver', async () => {
+    expect(RESOLVER_IMPORT.test(await readProviderSource())).toBe(true);
   });
 
-  it('carries no hardcoded model token limit', async () => {
-    const source = await readProviderSource();
+  it('hands the resolved config to the chunker at the call site', async () => {
+    expect(passesResolvedConfigToChunker(await readProviderSource())).toBe(true);
+  });
 
-    // 8191 is ada-002's limit. It was applied to every provider, including a
-    // local model that reads 256, which made the guard permanently dead.
-    expect(source).not.toContain('8191');
+  it('writes no chunking-config literal of its own', async () => {
+    expect(declaresOwnChunkingConfig(await readProviderSource())).toBe(false);
+  });
+
+  /**
+   * The guard proves it can fail, in the suite, rather than in a commit message.
+   *
+   * Each control puts the source into the broken state the assertion above
+   * claims to catch and asserts the assertion goes false — and the first one
+   * also pins WHY the old test was worthless: with the import deleted, a bare
+   * `toContain` is still satisfied by the surviving JSDoc `{@link}`.
+   */
+  describe('negative controls', () => {
+    it('sees the import deleted, where a bare identifier match does not', async () => {
+      const withoutImport = (await readProviderSource()).replace(RESOLVER_IMPORT, '');
+
+      expect(withoutImport).toContain('resolveChunkingConfig');
+      expect(RESOLVER_IMPORT.test(withoutImport)).toBe(false);
+    });
+
+    it('sees the caller reverted to a hand-rolled config literal', async () => {
+      // The one-line shape on purpose: this is the revert that slipped past the
+      // first attempt at `declaresOwnChunkingConfig`, which anchored the key to
+      // the start of a line.
+      const reverted = (await readProviderSource()).replace(
+        'this.getChunkingConfig()',
+        '{ targetChunkSize: 460, modelTokenLimit: 8191, paddingFactor: 0.9, tokenCounter: this.tokenCounter }',
+      );
+
+      expect(passesResolvedConfigToChunker(reverted)).toBe(false);
+      expect(declaresOwnChunkingConfig(reverted)).toBe(true);
+    });
   });
 });

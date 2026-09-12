@@ -35,15 +35,18 @@ import nodeFsPromises from 'node:fs/promises';
 
 import {
   FsLookupCache,
+  issueLocation,
   safePath,
   setupAsyncTempDirSuite,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { fragmentIndex, validateLink } from '../src/link-validator.js';
+import { classifyLink } from '../src/link-classify.js';
+import { fragmentIndex, resolveLinkEntry, validateLink } from '../src/link-validator.js';
 
-import { createLink } from './test-helpers.js';
+import { REFUSAL_ERRNOS, withReaddirRefused } from './helpers/refused-listing.js';
+import { createLink, writeFileIn } from './test-helpers.js';
 
 const suite = setupAsyncTempDirSuite('link-path-components');
 
@@ -52,24 +55,39 @@ afterAll(suite.afterAll);
 beforeEach(suite.beforeEach);
 
 /** Plant `files` (relative path → body) under this test's temp dir. */
-async function plant(files: Record<string, string>): Promise<string> {
+function plant(files: Record<string, string>): string {
   const root = suite.getTempDir();
-  for (const [relative, body] of Object.entries(files)) {
-    const absolute = safePath.join(root, relative);
-    await nodeFsPromises.mkdir(safePath.join(absolute, '..'), { recursive: true });
-    await nodeFsPromises.writeFile(absolute, body);
-  }
+  for (const [relative, body] of Object.entries(files)) writeFileIn(root, relative, body);
   return root;
+}
+
+/** Judge one href written in `<projectRoot>/<source>`. */
+async function judgeIn(
+  projectRoot: string,
+  source: string,
+  href: string,
+  fsCache = new FsLookupCache(),
+) {
+  return await validateLink(
+    createLink('local_file', href),
+    safePath.join(projectRoot, source),
+    fragmentIndex(),
+    { fsCache, projectRoot, skipGitIgnoreCheck: true },
+  );
+}
+
+/**
+ * A verdict minus the href it was about, for comparing two spellings of one
+ * link: the href is the ONE field entitled to differ.
+ */
+function stripHref(issue: Awaited<ReturnType<typeof validateLink>>): Record<string, unknown> | null {
+  if (issue === null) return null;
+  return Object.fromEntries(Object.entries(issue).filter(([field]) => field !== 'link'));
 }
 
 /** Judge one href written in `<root>/a.md`. */
 async function judge(root: string, href: string, fsCache = new FsLookupCache()) {
-  return await validateLink(
-    createLink('local_file', href),
-    safePath.join(root, 'a.md'),
-    fragmentIndex(),
-    { fsCache, projectRoot: root, skipGitIgnoreCheck: true },
-  );
+  return await judgeIn(root, 'a.md', href, fsCache);
 }
 
 /**
@@ -105,6 +123,17 @@ async function withUnlistableDirectory<T>(dir: string, body: () => Promise<T>): 
 
 const DEEP_TARGET = 'one/two/three.md';
 const DEEP_BUNDLE = { 'a.md': '# a\n', [DEEP_TARGET]: '# three\n' };
+
+/**
+ * A tree whose target sits two levels below `docs/open` — the directory the
+ * refusal suites make unlistable while leaving it traversable.
+ *
+ * Deliberately deeper than `docs/open` itself: the refusal has to be met at an
+ * ANCESTOR of the target rather than at its own parent, which is the case the
+ * basename-only judge never listed and so never met.
+ */
+const REFUSAL_HREF = './docs/open/inner/target.md';
+const REFUSAL_TREE = { 'a.md': '# a\n', 'docs/open/inner/target.md': '# t\n' };
 
 /** The components of a bundle-relative path, which is always forward-slashed. */
 function componentsOf(relativePath: string): string[] {
@@ -165,7 +194,7 @@ describe('a link path is judged component by component', () => {
     // ever compared against a listing.
     for (const index of [0, 1, 2]) {
       it(`reports component ${index} of "${DEEP_TARGET}" when only that one is miscased`, async () => {
-        const root = await plant(DEEP_BUNDLE);
+        const root = plant(DEEP_BUNDLE);
         const asked = miscased(index);
 
         const issue = await judge(root, `./${asked}`);
@@ -182,7 +211,7 @@ describe('a link path is judged component by component', () => {
     it('names BOTH wrong components when a directory and the file are miscased', async () => {
       // 🪤 The basename-only remedy said `Use "three.md" instead of "Three.md"`.
       // An author who wrote that down still had a link that 404s on Linux.
-      const root = await plant(DEEP_BUNDLE);
+      const root = plant(DEEP_BUNDLE);
 
       const issue = await judge(root, './one/Two/Three.md');
 
@@ -192,7 +221,7 @@ describe('a link path is judged component by component', () => {
     it('reports a directory component that differs only in Unicode normalization', async () => {
       // NFC on disk, NFD in the link. macOS reconciles the two at the syscall
       // level; a byte-exact filesystem does not, so this 404s on Linux.
-      const root = await plant({ 'a.md': '# a\n', 'café/guide.md': '# g\n' });
+      const root = plant({ 'a.md': '# a\n', 'café/guide.md': '# g\n' });
 
       const issue = await judge(root, './café/guide.md');
 
@@ -205,13 +234,14 @@ describe('a link path is judged component by component', () => {
       // derived from that quotes a file with no name — which turns every
       // genuinely missing target into a case-mismatch report and hands the
       // deferred-artifact gate a materialized file that does not exist.
-      const root = await plant(DEEP_BUNDLE);
+      const root = plant(DEEP_BUNDLE);
 
       const issue = await judge(root, './one/two/nowhere.md');
 
       expect(issue?.code).toBe('LINK_BROKEN_FILE');
       expect(issue?.message).toContain('File not found');
-      expect(issue?.suggestion).toBe('');
+      // No correction to offer means no `suggestion` at all — not an empty one.
+      expect(issue).not.toHaveProperty('suggestion');
     });
 
     /**
@@ -219,33 +249,274 @@ describe('a link path is judged component by component', () => {
      * below the walk root must now be LISTABLE, where the basename-only judge
      * only ever listed `dirname(target)`. A `0111` directory is traversable —
      * `open()` on the file below it succeeds, so the link genuinely works —
-     * but `readdir` is refused. That refusal used to be recoded as absence and
+     * but `readdir` is refused. That refusal was recoded as absence and
      * reported as `LINK_BROKEN_FILE`: both the verdict and the diagnosis wrong,
      * about a link that opens.
      *
-     * The conservative outcome is the correct one here: a spelling that could
-     * not be verified is not a spelling that is wrong.
+     * 🪤 **And then the first repair went one step too far and made it
+     * silent.** `validateLocalFileLink` read `unverifiable` and returned `null`
+     * — no issue, no counter, nothing in the report — which suppressed FOUR
+     * checks for that link (existence, deferred artifact, gitignore leak, and
+     * the anchor) with nothing said. A refusal is not a pass. It is its own
+     * condition, and the only honest report of it names the link that went
+     * unchecked.
      */
     it.skipIf(!PERMISSIONS_ENFORCED)(
-      'says nothing about a link whose ancestor directory cannot be listed',
+      'reports a link whose ancestor directory cannot be listed as UNREAD, not as broken',
       async () => {
-        const root = await plant({ 'a.md': '# a\n', 'docs/open/inner/target.md': '# t\n' });
+        const root = plant(REFUSAL_TREE);
 
         const issue = await withUnlistableDirectory(
           safePath.join(root, 'docs', 'open'),
-          async () => await judge(root, './docs/open/inner/target.md'),
+          async () => await judge(root, REFUSAL_HREF),
         );
 
-        expect(issue).toBeNull();
+        expect(issue?.code).toBe('LINK_TARGET_UNREADABLE');
+        expect(issue?.link).toBe(REFUSAL_HREF);
       },
     );
+
+    describe('a refused listing is reported, whatever refused it', () => {
+      /**
+       * `chmod` reaches exactly one of the four errnos that mean "refused", and
+       * only where POSIX modes bind. The other three are reachable in ordinary
+       * operation — `EMFILE`/`ENFILE` are descriptor exhaustion under
+       * concurrency, `ELOOP` a committed symlink cycle — and a fix narrowed to
+       * `EACCES` would leave them reported as broken links.
+       */
+      it.each(REFUSAL_ERRNOS)('reports %s rather than a missing file', async (code) => {
+        const root = plant(REFUSAL_TREE);
+
+        const issue = await withReaddirRefused(
+          safePath.join(root, 'docs', 'open'),
+          code,
+          async () => await judge(root, REFUSAL_HREF),
+        );
+
+        expect(issue?.code).toBe('LINK_TARGET_UNREADABLE');
+        // The whole complaint about the old behaviour: it said the file was not
+        // there, about a file that opens.
+        expect(issue?.message).not.toContain('File not found');
+        // Project-relative, like every other link issue in this lane — an
+        // absolute path here is the developer's $HOME in a CI log.
+        expect(issue?.message).not.toContain(root);
+        // 🪤 "A directory on that path" is a remedy a reader cannot aim: this
+        // path has three of them. The message names WHICH one refused, still
+        // project-relative, and WHY.
+        expect(issue?.message).toContain('"docs/open"');
+        expect(issue?.message).toContain(code);
+      });
+
+      it('tells the reader to re-run only when the refusal was a transient shortage', async () => {
+        // The two refusals earn different remedies and always did: a mode bit
+        // is the author's to fix, a descriptor shortage is a moment that a
+        // second run walks straight past. One message for both spends the
+        // reader's attention on whichever half does not apply.
+        const root = plant(REFUSAL_TREE);
+        const refused = safePath.join(root, 'docs', 'open');
+        const judgeRefusedWith = async (code: string) =>
+          await withReaddirRefused(refused, code, async () => await judge(root, REFUSAL_HREF));
+
+        const transient = await judgeRefusedWith('EMFILE');
+        const stable = await judgeRefusedWith('EACCES');
+
+        expect(transient?.message).toContain('re-run');
+        expect(stable?.message).not.toContain('re-run');
+      });
+
+      it('does not call EAGAIN descriptor exhaustion', async () => {
+        // 🚨 The transient set is `EMFILE`, `ENFILE` and `EAGAIN`, and the
+        // remedy was worded "is descriptor exhaustion" for all of it — a
+        // second copy, in prose, of a fact `fs-utils` was made the single owner
+        // of, and wrong for the third member. The clause now comes from the
+        // owner of the errno list, so it cannot drift from it.
+        const root = plant(REFUSAL_TREE);
+
+        const issue = await withReaddirRefused(
+          safePath.join(root, 'docs', 'open'),
+          'EAGAIN',
+          async () => await judge(root, REFUSAL_HREF),
+        );
+
+        expect(issue?.message).toContain('re-run');
+        expect(issue?.message).toContain('EAGAIN');
+        expect(issue?.message).not.toContain('descriptor exhaustion');
+      });
+
+      it('spells the target against the SAME root as `location` when no project root is given', async () => {
+        // 🚨 `location` is relativised to `process.cwd()` when the caller
+        // supplies no root (`locationRoot`), while the message printed the
+        // absolute target and directory — one issue, two roots, and the
+        // absolute one is the developer's $HOME in a CI log. The message also
+        // carried `suggestion: ''`, copied from a sibling.
+        const root = plant(REFUSAL_TREE);
+
+        const issue = await withReaddirRefused(
+          safePath.join(root, 'docs', 'open'),
+          'EACCES',
+          async () => await validateLink(
+            createLink('local_file', REFUSAL_HREF),
+            safePath.join(root, 'a.md'),
+            fragmentIndex(),
+            { fsCache: new FsLookupCache(), skipGitIgnoreCheck: true },
+          ),
+        );
+
+        expect(issue?.code).toBe('LINK_TARGET_UNREADABLE');
+        // The exact spellings, not `not.toContain(root)`: a cwd-relative path
+        // to a temp dir still CONTAINS the absolute one as a substring after
+        // its `../` prefix, so absence of the root proves nothing here.
+        const cwd = process.cwd();
+        expect(issue?.message).toContain(
+          `Link target ${issueLocation(safePath.join(root, 'docs', 'open', 'inner', 'target.md'), cwd)} was NOT checked`,
+        );
+        expect(issue?.message).toContain(`"${issueLocation(safePath.join(root, 'docs', 'open'), cwd)}"`);
+        expect(issue?.location).toBe(issueLocation(safePath.join(root, 'a.md'), cwd));
+        expect(issue).not.toHaveProperty('suggestion');
+      });
+
+      it('still reports a genuinely missing target as broken', async () => {
+        // The negative control for the DISTINCTION. A fix that reported every
+        // absence as a refusal would satisfy the four rows above while
+        // destroying the finding that matters most.
+        const root = plant(REFUSAL_TREE);
+
+        const issue = await judge(root, './docs/open/inner/nowhere.md');
+
+        expect(issue?.code).toBe('LINK_BROKEN_FILE');
+      });
+
+      it('keeps a case mismatch it found ABOVE the refusing directory instead of calling the spelling unverified', async () => {
+        // 🪤 `docs/Open/inner/target.md` against a disk `docs/open` that then
+        // refuses to list: component 1 WAS judged, and found wrong — that link
+        // 404s on Linux whatever the mode bit below says. The message used to
+        // say "Its existence, spelling and anchor are all unverified", which is
+        // false of the component VAT verified; the verdict had thrown it away.
+        const root = plant(REFUSAL_TREE);
+
+        const issue = await withReaddirRefused(
+          safePath.join(root, 'docs', 'open'),
+          'EACCES',
+          async () => await judge(root, './docs/Open/inner/target.md'),
+        );
+
+        expect(issue?.code).toBe('LINK_TARGET_UNREADABLE');
+        expect(issue?.message).toContain('"docs/Open" is spelled "docs/open" on disk');
+        expect(issue?.message).toContain('case');
+        expect(issue?.message).not.toContain('spelling and anchor are all unverified');
+        // The half that IS still unverified is still said to be.
+        expect(issue?.message).toContain('existence and anchor');
+      });
+    });
 
     it('says nothing when every component matches byte for byte', async () => {
       // The negative control. A judge that reported every nested link would
       // satisfy every assertion above.
-      const root = await plant(DEEP_BUNDLE);
+      const root = plant(DEEP_BUNDLE);
 
       expect(await judge(root, `./${DEEP_TARGET}`)).toBeNull();
+    });
+  });
+
+  describe('a Windows-authored href is judged exactly as its forward-slash spelling', () => {
+    /**
+     * 🪤 `[x](..\outside\secret.md)` CRASHED `vat resources validate` — exit 2,
+     * every other finding discarded, the walk root's absolute path (the
+     * developer's `$HOME` in a CI log) in the message — while
+     * `[x](../outside/secret.md)` validated at exit 0. On POSIX `path.resolve`
+     * took the backslashes as filename bytes, `safePath` forward-slashed the
+     * RESULT, and a "resolved" path reached `judgePath` still carrying `..`,
+     * which is the one shape that function refuses as a programming error.
+     *
+     * The property is EQUALITY between the two spellings, verdict for verdict:
+     * a fix that merely stopped the throw (a `catch`, a `null`) would leave the
+     * two spellings disagreeing about the same link.
+     */
+    const PROJECT = 'proj';
+    const SOURCE = 'docs/a.md';
+    const TREE = {
+      'proj/docs/a.md': '# a\n',
+      'proj/docs/sub/target.md': '# t\n',
+      'proj/other/b.md': '# b\n',
+      // Above the project root and present on disk: what `..` reaches.
+      'outside/secret.md': '# s\n',
+    };
+
+    const BACKSLASH_ROWS: ReadonlyArray<readonly [backslash: string, forward: string]> = [
+      // A `..` that lands OUTSIDE the project, target present — the crash row.
+      [String.raw`..\..\outside\secret.md`, '../../outside/secret.md'],
+      // The same escape, target missing.
+      [String.raw`..\..\outside\nope.md`, '../../outside/nope.md'],
+      // `.\` prefix, present and missing.
+      [String.raw`.\sub\target.md`, './sub/target.md'],
+      [String.raw`.\sub\nope.md`, './sub/nope.md'],
+      // Mixed separators in one href.
+      [String.raw`./sub\target.md`, './sub/target.md'],
+      // Descends, then climbs out of the project.
+      [String.raw`sub\..\..\..\outside\secret.md`, 'sub/../../../outside/secret.md'],
+      // Climbs and re-enters the project — inside, so fully judged.
+      [String.raw`..\other\b.md`, '../other/b.md'],
+      // A miscased directory component reached through backslashes: the
+      // component walk must run, and its correction must match.
+      [String.raw`.\Sub\target.md`, './Sub/target.md'],
+    ];
+
+    it.each(BACKSLASH_ROWS)('gives %j the verdict of %j', async (backslash, forward) => {
+      const temp = plant(TREE);
+      const projectRoot = safePath.join(temp, PROJECT);
+
+      // `judgeIn` rather than `judge`: the source sits one level below the
+      // project root, so `..` from it stays inside and `..\..` leaves.
+      const viaBackslash = await judgeIn(projectRoot, SOURCE, backslash);
+      const viaForward = await judgeIn(projectRoot, SOURCE, forward);
+
+      // `link` is the href as written and legitimately differs; every other
+      // field — code, message, suggestion, location — must not.
+      expect(stripHref(viaBackslash)).toEqual(stripHref(viaForward));
+    });
+
+    it('reports a missing backslash target with a forward-slashed, project-relative path', async () => {
+      // Not a restatement of the equality row: this pins WHAT the shared
+      // verdict says, so the pair cannot agree on a wrong message.
+      const temp = plant(TREE);
+
+      const issue = await judgeIn(safePath.join(temp, PROJECT), SOURCE, String.raw`.\sub\nope.md`);
+
+      expect(issue?.code).toBe('LINK_BROKEN_FILE');
+      expect(issue?.message).toBe('File not found: docs/sub/nope.md');
+    });
+
+    it('does not reinterpret a backslash inside a URL — a URL never reaches the resolver', async () => {
+      // The two are told apart upstream, by `classifyLink`: any href with a
+      // scheme (`:`) or a `//` prefix is `external`/`unknown`, and
+      // `resolveLinkEntry` resolves only `local_file`/`local_directory`.
+      const href = String.raw`https://x/a\b`;
+      expect(classifyLink(href)).toBe('external');
+
+      const entry = resolveLinkEntry({ link: createLink('external', href), sourceFilePath: '/p/a.md' }, '/p');
+
+      expect(entry).not.toHaveProperty('resolution');
+      expect(entry.link.href).toBe(href);
+    });
+  });
+
+  describe('a percent-encoded separator is a character in the name, not a boundary', () => {
+    it('reports `./sub%2Ftarget.md` as missing even though `sub/target.md` exists', async () => {
+      // RFC 3986 §2.2. GitHub and every browser 404 this href; VAT decoded the
+      // whole href before splitting it and validated it green.
+      const root = plant({ 'a.md': '# a\n', 'sub/target.md': '# t\n' });
+
+      const issue = await judge(root, './sub%2Ftarget.md');
+
+      expect(issue?.code).toBe('LINK_BROKEN_FILE');
+      expect(issue?.message).toBe('File not found: sub%2Ftarget.md');
+    });
+
+    it('still resolves an encoded space inside a segment', async () => {
+      // The negative control: per-segment decoding must not stop decoding.
+      const root = plant({ 'a.md': '# a\n', 'sub/tar get.md': '# t\n' });
+
+      expect(await judge(root, './sub/tar%20get.md')).toBeNull();
     });
   });
 
@@ -253,7 +524,7 @@ describe('a link path is judged component by component', () => {
     it('examines a directory the same number of times whatever the link count', async () => {
       const files: Record<string, string> = { 'a.md': '# a\n' };
       for (let n = 0; n < 200; n += 1) files[`neighbour-${n}.md`] = '# n\n';
-      const root = await plant(files);
+      const root = plant(files);
 
       const few = await entryReadsFor(root, 5);
       const many = await entryReadsFor(root, 200);

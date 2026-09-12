@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { crawlDirectory, NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
+import { crawlDirectory, type DirectoryRefusal, NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { detectFormat } from '../detectors/format-detector.js';
@@ -52,6 +52,9 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
 
   // Get file list
   let filePaths: string[];
+  // Directories the walk could not list — carried on the summary, never thrown
+  // and never dropped; see `ScanSummary.unreadable` for why this scanner degrades.
+  const unreadable: DirectoryRefusal[] = [];
 
   if (stat.isFile()) {
     filePaths = [absolutePath];
@@ -65,6 +68,7 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
         baseDir: absolutePath,
         respectGitignore: false, // We handle gitignore separately
         exclude: crawlExclusions, // Skip poison directories during crawl (not after)
+        onUnreadable: (refusal) => unreadable.push(refusal),
       });
     } else {
       // Non-recursive: only immediate children
@@ -135,5 +139,6 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
     byFormat: byFormat as ScanSummary['byFormat'],
     sourceFiles,
     buildOutputs,
+    unreadable,
   };
 }

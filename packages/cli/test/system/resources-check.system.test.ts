@@ -328,9 +328,43 @@ describe('vat resources check', () => {
     expect(doc['error']).toContain('declared-one');
   });
 
-  it('says so loudly when the project declares no checks at all', () => {
-    // Exit 0 — declaring none is legitimate — but a silent passing report would
-    // let a misspelled config key read as a green gate forever.
+  it('refuses a [path] that does not exist rather than running the checks it walked up to', () => {
+    // 🚨 `vat resources check nope` located nothing, fell through to the cwd's
+    // project, ran every check over the whole tree and reported success — the
+    // same document a correct run produces, for a path the operator mistyped.
+    // `[path]` is a project locator on this verb (a WHERE clause is the only
+    // scope a check has), and a locator that locates nothing is an operator
+    // error: exit 2, the same message `validate` gives.
+    writeChecks(checkBlock('any-check', NO_TXT, TXT_ROWS));
+
+    const { status, stderr, doc } = check('nope');
+
+    expect(status).toBe(2);
+    expect(stderr).toContain('Path does not exist');
+    expect(doc['checksRun']).toBeUndefined();
+  });
+
+  it('FAILS a check whose SQL carries a placeholder nothing can bind', () => {
+    // 🚨 A `?` in a `resources.checks` statement bound NULL, selected nothing,
+    // and PASSED — `checksRun: 1`, no findings, exit 0 — which is a gate that
+    // asserts nothing while looking like one that ran. A check binds no values,
+    // so a placeholder is a statement that can never run honestly, and it is
+    // reported under the same non-overridable code as a renamed column.
+    writeChecks(checkBlock('placeholder', 'has a ?', "SELECT path FROM resource_realizations WHERE ext = ?"));
+
+    const issue = expectRunIntegrityFailure();
+
+    expect(issue.message).toContain('placeholder');
+    expect(issue.message).toContain('1 placeholder and 0 values were bound');
+  });
+
+  it('FAILS when the project declares no checks at all', () => {
+    // 🚨 This exited 0 with `checksRun: 0` and a stderr warning, which means
+    // deleting the `checks:` block silently deleted the gate: a gate that checked
+    // nothing produces the same document as a gate that was removed, and only
+    // the document decides the exit code. The warning stays — it is the same
+    // statement addressed to the human — but it no longer carries the verdict
+    // on its own.
     fs.writeFileSync(
       safePath.join(projectDir, CONFIG_FILE),
       'version: 1\nresources:\n  include:\n    - "**/*.md"\n',
@@ -339,8 +373,12 @@ describe('vat resources check', () => {
 
     const { status, doc, stderr } = check();
 
-    expect(status).toBe(0);
+    expect(status).toBe(1);
+    expect(doc['status']).toBe('error');
     expect(doc['checksRun']).toBe(0);
+    const [issue] = doc['issues'] as CheckFinding[];
+    expect(issue?.code).toBe('RESOURCE_CHECK_BROKEN');
+    expect(issue?.severity).toBe('error');
     expect(stderr).toContain('No checks are declared');
   });
 });

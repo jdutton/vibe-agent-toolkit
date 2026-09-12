@@ -47,6 +47,11 @@ export function ioSite(over: Partial<IoSite> = {}): IoSite {
 /**
  * One measured command, defaulting to a clean, stable, two-process warm run.
  *
+ * The arm defaults to UNREPORTED, because that is the honest value for the
+ * command this fixture models: `resources-scan` prints YAML, and the lab reads a
+ * lane out of JSON only. A case that wants an arm on the row sets `lane` (and
+ * `extentSource`) itself.
+ *
  * @param over - Fields to replace
  * @returns A complete command row
  */
@@ -58,6 +63,8 @@ export function ioCommand(over: Partial<IoCommandStats> = {}): IoCommandStats {
     runs: 3,
     comparedRuns: 2,
     stable: true,
+    lane: null,
+    extentSource: null,
     processes: 2,
     loaderCalls: 6371,
     userCalls: 436,

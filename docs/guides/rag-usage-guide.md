@@ -435,6 +435,7 @@ vat rag index docs/
 # Output:
 # resourcesIndexed: 1    # Only api.md
 # resourcesSkipped: 41   # All others unchanged
+# resourcesEmpty: 0      # Frontmatter-only or blank files: counted, not stored
 # chunksDeleted: 5       # Old chunks from api.md
 # chunksCreated: 6       # New chunks from api.md
 ```

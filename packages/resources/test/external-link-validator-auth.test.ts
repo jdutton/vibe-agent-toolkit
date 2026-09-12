@@ -5,12 +5,19 @@ import { mkdtemp } from 'node:fs/promises';
 import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { ExternalLinkValidator } from '../src/external-link-validator.js';
+import { ExternalLinkValidator, isTransientRefusal } from '../src/external-link-validator.js';
 import type { LinkAuthConfig, Provider } from '../src/link-auth/resolve.js';
 
-import { capturingFetch, countingFetch } from './auth-fetch-mocks.js';
+import {
+  capturingFetch,
+  countingFetch,
+  LEAK_CANARY,
+  NUL,
+  undiciHeaderValidatingFetch,
+} from './auth-fetch-mocks.js';
 
 const TEST_TOKEN = 'gh_test_token_abc';
+const GITHUB_HOST = 'github.com';
 const HOST = 'https://github.com/owner/repo/blob/main/file.md';
 const REWRITTEN = 'https://api.github.com/repos/owner/repo/contents/file.md?ref=main';
 const CACHE_FILE = 'external-links.json';
@@ -27,7 +34,7 @@ function fsExists(p: string): boolean {
 
 function buildProvider(notFoundMeaning: 'ambiguous' | 'dead' = 'ambiguous'): Provider {
   return {
-    match: { host: 'github.com' },
+    match: { host: GITHUB_HOST },
     rewrite: [
       {
         when: String.raw`^https://github\.com/(?<owner>[^/]+)/(?<repo>[^/]+)/blob/(?<ref>[^/]+)/(?<path>.+)$`,
@@ -142,6 +149,57 @@ describe('ExternalLinkValidator — authenticated branch (unverified, no token)'
   });
 });
 
+/**
+ * A provider that cannot build a request for THIS url is not "no token": it
+ * is reported under its own code, at error severity, and never cached.
+ *
+ * 🪤 It used to come back as `LINK_AUTH_UNVERIFIED` — the warning whose
+ * registry remedy is "set to ignore if running without auth is intentional".
+ * With that override in place a broken provider produced `status: success`
+ * over links nothing had fetched.
+ */
+function providerFailingOnThisUrl(): LinkAuthConfig {
+  const provider = buildProvider();
+  return {
+    providers: [
+      {
+        ...provider,
+        rewrite: [
+          {
+            // `query` is optional and HOST has no query string, so the group
+            // does not participate and `${query}` has nothing to read —
+            // knowable only per URL, which is why it reaches the validator.
+            when: String.raw`^https://github\.com/(?<path>[^?]+)(?<query>\?.*)?$`,
+            to: 'https://api.github.com/${path}${query}',
+          },
+        ],
+      },
+    ],
+  };
+}
+
+describe('ExternalLinkValidator — authenticated branch (provider failed on this link)', () => {
+  it('returns LINK_AUTH_PROVIDER_ERROR without calling fetch, and does not cache it', async () => {
+    const { fetchImpl, calls } = countingFetch();
+    const validator = new ExternalLinkValidator(tempDir, {
+      linkAuthConfig: providerFailingOnThisUrl(),
+      linkAuthDeps: { env: ENV_WITH_TOKEN },
+      fetchImpl,
+      osUser: 'testuser',
+    });
+    const result = await validator.validateLink(HOST);
+    expect(result.code).toBe('LINK_AUTH_PROVIDER_ERROR');
+    expect(result.status).toBe('error');
+    expect(result.error).toContain(GITHUB_HOST);
+    expect(result.cached).toBe(false);
+    expect(calls()).toBe(0);
+    // Nothing written under either cache: the answer is about the provider,
+    // not the URL, and flips the moment the config is fixed.
+    expect(fsExists(safePath.join(tempDir, CACHE_FILE))).toBe(false);
+    expect(fsExists(safePath.join(tempDir, 'auth-testuser', CACHE_FILE))).toBe(false);
+  });
+});
+
 describe('ExternalLinkValidator — engine sends rewritten URL + auth headers', () => {
   it('passes the rewritten URL (not the original) to fetchImpl', async () => {
     const { fetchImpl, getCaptured } = capturingFetch((url) =>
@@ -225,6 +283,136 @@ describe('ExternalLinkValidator — cache hit preserves LINK_AUTH_* code (regres
     const dead = await v2.validateLink(HOST);
     expect(dead.cached).toBe(true);
     expect(dead.code).toBe('LINK_AUTH_DEAD');
+  });
+});
+
+/**
+ * Run the same URL through one validator twice against a fixed response.
+ *
+ * Two runs is the whole point: the first is always a network call, and whether
+ * the SECOND one is tells you — without reaching into the cache file — whether
+ * the refusal was written down. A single validator is enough because its
+ * in-memory map is the same cache the file backs.
+ */
+async function refuseTwice(
+  cacheDir: string,
+  status: number,
+  headers: Record<string, string> = {},
+): Promise<{ secondWasCached: boolean; calls: number }> {
+  let calls = 0;
+  const fetchImpl = (async () => {
+    calls++;
+    return new Response(null, { status, headers });
+  }) as typeof fetch;
+
+  const validator = new ExternalLinkValidator(cacheDir, {
+    linkAuthConfig: configWithProvider(),
+    linkAuthDeps: { env: ENV_WITH_TOKEN },
+    fetchImpl,
+    osUser: 'throttled',
+    // 429s carry a Retry-After in two of the rows below; without this the
+    // suite would sleep for real.
+    sleep: async () => {},
+  });
+
+  await validator.validateLink(HOST);
+  const second = await validator.validateLink(HOST);
+  return { secondWasCached: second.cached === true, calls };
+}
+
+describe('ExternalLinkValidator — a transient refusal is never cached', () => {
+  // 🚨 The defect this pins: a rate-limited response was written into a cache
+  // whose TTL is 24 HOURS, so a throttle that lasts a minute became a day of
+  // "broken link" findings that no re-run could clear. The line drawn is
+  // between a refusal the SERVER SAYS is temporary and one that is a standing
+  // answer about this credential:
+  //
+  //   • 429 is transient by definition (RFC 6585 §4) — always.
+  //   • 403 is transient ONLY when the response carries a rate-limit signal.
+  //     GitHub documents both shapes it uses: a primary-limit refusal sets
+  //     `x-ratelimit-remaining: 0`, a secondary-limit refusal sets
+  //     `retry-after`. The RFC 9239-draft spelling `ratelimit-remaining` is
+  //     accepted for hosts that use it.
+  //   • A bare 403 is a DURABLE permission denial and stays cached — treating
+  //     every 403 as transient would refetch every private link every run,
+  //     which is the cost this cache exists to avoid.
+  //
+  // Signals are read from headers only. A body sniff would mean consuming a
+  // stream on a path that does not otherwise need it, and matching on prose
+  // that a vendor rewrites without notice — while the shapes GitHub actually
+  // documents are headers.
+
+  it.each([
+    ['429 with no hint', 429, {}],
+    ['429 carrying Retry-After', 429, { 'retry-after': '1' }],
+    ['403 carrying Retry-After (GitHub secondary limit)', 403, { 'retry-after': '60' }],
+    ['403 with x-ratelimit-remaining: 0 (GitHub primary limit)', 403, { 'x-ratelimit-remaining': '0' }],
+    ['403 with ratelimit-remaining: 0 (RFC 9239 draft spelling)', 403, { 'ratelimit-remaining': '0' }],
+    ['503 carrying Retry-After (a maintenance window)', 503, { 'retry-after': '300' }],
+  ])('refetches after %s instead of answering from cache', async (_label, status, headers) => {
+    const { secondWasCached } = await refuseTwice(tempDir, status, headers);
+
+    expect(secondWasCached).toBe(false);
+    // And nothing was left on disk for the next RUN to read either.
+    expect(fsExists(safePath.join(tempDir, 'auth-throttled', CACHE_FILE))).toBe(false);
+  });
+
+  it.each([
+    ['a bare 403 (permission denied)', 403, {}],
+    ['a 403 whose quota is not exhausted', 403, { 'x-ratelimit-remaining': '4999' }],
+    ['a 404', 404, {}],
+    ['a bare 503 (no Retry-After — the server said nothing about when)', 503, {}],
+  ])('still caches %s', async (_label, status, headers) => {
+    const { secondWasCached, calls } = await refuseTwice(tempDir, status, headers);
+
+    expect(secondWasCached).toBe(true);
+    expect(calls).toBe(1);
+  });
+});
+
+describe('isTransientRefusal', () => {
+  const headers = (init: Record<string, string>): Headers => new Headers(init);
+
+  it.each([
+    [429, {}],
+    [429, { 'retry-after': '30' }],
+    [403, { 'Retry-After': '30' }],
+    [403, { 'X-RateLimit-Remaining': '0' }],
+    [403, { 'RateLimit-Remaining': '0' }],
+    [403, { 'x-rate-limit-remaining': '0' }],
+    [503, { 'Retry-After': '300' }],
+    [0, {}],
+  ])('calls %i with %o transient', (status, init) => {
+    expect(isTransientRefusal(status, headers(init))).toBe(true);
+  });
+
+  it.each([
+    [403, {}],
+    [403, { 'x-ratelimit-remaining': '17' }],
+    [401, { 'retry-after': '30' }],
+    [404, {}],
+    [200, {}],
+    [500, { 'retry-after': '30' }],
+    [502, { 'retry-after': '30' }],
+    [503, {}],
+  ])('calls %i with %o durable', (status, init) => {
+    expect(isTransientRefusal(status, headers(init))).toBe(false);
+  });
+
+  it('reads a 403 with no headers available as durable', () => {
+    // The anonymous path has a status code and nothing else. Guessing
+    // "transient" there would uncache every genuine permission denial.
+    expect(isTransientRefusal(403, undefined)).toBe(false);
+    expect(isTransientRefusal(429, undefined)).toBe(true);
+  });
+
+  it('reads "no response at all" as transient on both lanes', () => {
+    // `statusCode: 0` is what a DNS/connect/TLS/timeout failure looks like
+    // from either lane. The authenticated lane never reached `cache.set` on
+    // that path by construction; the anonymous lane wrote it. One predicate,
+    // so the two cannot disagree again.
+    expect(isTransientRefusal(0, undefined)).toBe(true);
+    expect(isTransientRefusal(0, headers({}))).toBe(true);
   });
 });
 
@@ -552,6 +740,51 @@ describe('ExternalLinkValidator — clearCache and getCacheStats', () => {
     const third = await validator.validateLink(HOST);
     expect(third.cached).toBe(false);
     expect(fetchCount).toBe(2);
+  });
+});
+
+describe('ExternalLinkValidator — the token never reaches the emitted result (§8)', () => {
+  // The end-to-end version of the transport-level redaction test: what
+  // `vat resources validate` actually prints for a failing authenticated
+  // request. Before the fix, undici's `Headers.append: "<value>" is an
+  // invalid header value.` arrived here verbatim via `safeSerializeError`.
+  // The canary, the NUL and the header-validating fetch are shared with
+  // `link-auth-transport.test.ts` via `auth-fetch-mocks.ts`: this suite and
+  // that one are the emit end and the transport end of the same §8 claim.
+
+  it('a token with a NUL (or a multi-line credential-helper payload) is not emitted', async () => {
+    const validator = new ExternalLinkValidator(tempDir, {
+      linkAuthConfig: configWithProvider(),
+      // A `git credential fill` style helper emits several lines; `resolveToken`
+      // only trims the ends, so the interior separator survives into the header.
+      linkAuthDeps: { env: { TEST_GH_TOKEN: `${LEAK_CANARY}${NUL}` } },
+      fetchImpl: undiciHeaderValidatingFetch,
+      osUser: 'leakcheck',
+    });
+
+    const result = await validator.validateLink(HOST);
+
+    expect(result.status).toBe('error');
+    // The whole emitted record, not just `error` — nothing on it may carry it.
+    expect(JSON.stringify(result)).not.toContain(LEAK_CANARY);
+    expect(result.error).toBeDefined();
+  });
+
+  it('the cache file written for that run does not carry the token either', async () => {
+    const validator = new ExternalLinkValidator(tempDir, {
+      linkAuthConfig: configWithProvider(),
+      linkAuthDeps: { env: { TEST_GH_TOKEN: `${LEAK_CANARY}${NUL}` } },
+      fetchImpl: undiciHeaderValidatingFetch,
+      osUser: 'leakcheck',
+    });
+    await validator.validateLink(HOST);
+
+    const authDir = safePath.join(tempDir, 'auth-leakcheck');
+    const cachePath = safePath.join(authDir, CACHE_FILE);
+    if (fsExists(cachePath)) {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir-rooted path built by this test
+      expect(readFileSync(cachePath, 'utf8')).not.toContain(LEAK_CANARY);
+    }
   });
 });
 

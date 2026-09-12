@@ -1,3 +1,4 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 /**
  * RESOURCE_UNREADABLE issue shape.
  *
@@ -12,13 +13,27 @@
  * is a `READ_FAILURE_CODES` member and reproduces cross-platform, unlike EACCES via
  * chmod which is POSIX-only).
  */
-import { safePath, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { chmodSync, writeFileSync } from 'node:fs';
+
+import {
+  mkdirSyncReal,
+  safePath,
+  setupAsyncTempDirSuite,
+  toForwardSlash,
+  withReaddirSyncRefused,
+} from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ResourceRegistry } from '../src/resource-registry.js';
 import type { ValidationIssue } from '../src/schemas/validation-result.js';
 
 const MISSING_FILE_NAME = 'missing.md';
+const OPEN_FILE = 'docs/open/ok.md';
+const LOCKED_TARGET = 'docs/sub/target.md';
+
+/** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
+const CANNOT_DENY_READS =
+  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 /** Register a nonexistent file under `tempDir` and return its RESOURCE_UNREADABLE issue. */
 async function unreadableIssue(tempDir: string): Promise<ValidationIssue | undefined> {
@@ -52,5 +67,149 @@ describe('ResourceRegistry RESOURCE_UNREADABLE issues', () => {
     expect(issue).toBeDefined();
     expect(issue?.message).not.toContain(tempDir);
     expect(issue?.message).not.toContain(safePath.join(tempDir, MISSING_FILE_NAME));
+  });
+});
+
+/** Crawl `tempDir` with `locked` refusing to list, then validate. */
+async function crawlAndValidate(
+  tempDir: string,
+  locked: string,
+  code: string,
+): Promise<{ registry: ResourceRegistry; issues: ValidationIssue[] }> {
+  const registry = new ResourceRegistry({ baseDir: tempDir });
+  return await withReaddirSyncRefused(locked, code, async () => {
+    await registry.crawl({ baseDir: tempDir, include: ['**/*.md'] });
+    const result = await registry.validate({ skipGitIgnoreCheck: true });
+    return { registry, issues: result.issues };
+  });
+}
+
+/**
+ * The crawl that defines the population must report a directory it could not
+ * enter — the same green-without-running shape the link judge already refuses
+ * (`LINK_TARGET_UNREADABLE`), one level up.
+ *
+ * 🪤 `crawlDirectory` used to swallow the refusal and hand back a shorter list,
+ * so `docs/locked/t.md` — in the declared population, never opened — was in no
+ * count and no finding, and `vat resources validate` reported `status: success`.
+ */
+describe('ResourceRegistry SCAN_PATH_UNREADABLE for a directory the crawl could not list', () => {
+  const suite = setupAsyncTempDirSuite('resource-registry-unlistable');
+  let tempDir: string;
+  let locked: string;
+
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+
+  beforeEach(async () => {
+    await suite.beforeEach();
+    tempDir = suite.getTempDir();
+    locked = safePath.join(tempDir, 'docs', 'locked');
+    mkdirSyncReal(safePath.join(tempDir, 'docs', 'open'), { recursive: true });
+    mkdirSyncReal(locked, { recursive: true });
+    writeFileSync(safePath.join(tempDir, OPEN_FILE), '# ok\n');
+    writeFileSync(safePath.join(locked, 't.md'), '# t\n');
+  });
+
+  it('reports the refused directory, project-relative, with its errno — and still admits the readable sibling', async () => {
+    const { registry, issues } = await crawlAndValidate(tempDir, locked, 'EACCES');
+
+    const refusal = issues.filter((i) => i.code === 'SCAN_PATH_UNREADABLE');
+    expect(refusal).toHaveLength(1);
+    expect(refusal[0]?.location).toBe('docs/locked');
+    expect(refusal[0]?.message).toContain('EACCES');
+    expect(refusal[0]?.message).toContain('resources.exclude');
+    expect(refusal[0]?.message).not.toContain(tempDir);
+
+    // Degrade, don't destroy: the half the walk could list is still there.
+    expect(registry.getAllResources().map((r) => toForwardSlash(safePath.relative(tempDir, r.filePath)))).toEqual([
+      OPEN_FILE,
+    ]);
+    expect(registry.getUnlistableDirectories()).toEqual([
+      { kind: 'directory_unreadable', code: 'EACCES', directory: toForwardSlash(locked), transient: false },
+    ]);
+  });
+
+  it('tells the reader to re-run first when the refusal was transient', async () => {
+    const { issues } = await crawlAndValidate(tempDir, locked, 'EMFILE');
+    const refusal = issues.find((i) => i.code === 'SCAN_PATH_UNREADABLE');
+    expect(refusal?.message).toContain('EMFILE');
+    expect(refusal?.message).toMatch(/re-run/i);
+  });
+
+  it('clears the refusal log with the rest of the registry', async () => {
+    const { registry } = await crawlAndValidate(tempDir, locked, 'EACCES');
+    registry.clear();
+    expect(registry.getUnlistableDirectories()).toEqual([]);
+  });
+});
+
+/**
+ * A link WITH an anchor into a file the registry enumerated but could not read
+ * is a gap, not a clean result — the judge has the finding
+ * (`LINK_TARGET_UNREADABLE`, pinned in `link-validator-unreadable-target.test.ts`)
+ * but only if the registry hands it the `unreadableResources` log. Without that
+ * wiring the anchor is silently `skip`ped and the run says nothing about the
+ * link, while `RESOURCE_UNREADABLE` says only that a FILE was skipped.
+ *
+ * A real `chmod 000`, because the target must EXIST (a missing one is
+ * `LINK_BROKEN_FILE`, a different and already-covered answer) — so POSIX-only
+ * and not as root, like every other chmod-backed suite here.
+ */
+describe.skipIf(CANNOT_DENY_READS)('ResourceRegistry LINK_TARGET_UNREADABLE for an anchor into a file it could not read', () => {
+  const suite = setupAsyncTempDirSuite('resource-registry-unreadable-target');
+  let tempDir: string;
+  let target: string;
+
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+
+  beforeEach(async () => {
+    await suite.beforeEach();
+    tempDir = suite.getTempDir();
+    target = safePath.join(tempDir, LOCKED_TARGET);
+    mkdirSyncReal(safePath.join(tempDir, 'docs', 'sub'), { recursive: true });
+    writeFileSync(target, '# target\n\n## real\n');
+    writeFileSync(
+      safePath.join(tempDir, 'docs', 'a.md'),
+      '# a\n[x](./sub/target.md#nope)\n[y](./sub/target.md#real)\n[z](./sub/target.md)\n',
+    );
+  });
+
+  async function validateWithTargetLocked(): Promise<ValidationIssue[]> {
+    chmodSync(target, 0o000);
+    try {
+      const registry = new ResourceRegistry({ baseDir: tempDir });
+      await registry.crawl({ baseDir: tempDir, include: ['**/*.md'] });
+      return (await registry.validate({ skipGitIgnoreCheck: true })).issues;
+    } finally {
+      chmodSync(target, 0o644);
+    }
+  }
+
+  it('reports every anchored link into the locked file, once per link, with the errno', async () => {
+    const issues = await validateWithTargetLocked();
+
+    expect(issues.filter((i) => i.code === 'RESOURCE_UNREADABLE')).toHaveLength(1);
+    const unverified = issues.filter((i) => i.code === 'LINK_TARGET_UNREADABLE');
+    // x (#nope) and y (#real) both carry it: neither anchor could be looked up.
+    // z has no anchor, so its verdict is complete without reading the file.
+    expect(unverified.map((i) => i.line).sort((a, b) => (a ?? 0) - (b ?? 0))).toEqual([2, 3]);
+    for (const issue of unverified) {
+      expect(issue.location).toBe('docs/a.md');
+      expect(issue.message).toContain('EACCES');
+      expect(issue.message).not.toContain(tempDir);
+    }
+    // Not misreported as a broken anchor: nothing was checked, so nothing is broken.
+    expect(issues.filter((i) => i.code === 'LINK_BROKEN_ANCHOR')).toEqual([]);
+  });
+
+  it('reports LINK_BROKEN_ANCHOR for #nope and nothing for #real once the file is readable (control)', async () => {
+    const registry = new ResourceRegistry({ baseDir: tempDir });
+    await registry.crawl({ baseDir: tempDir, include: ['**/*.md'] });
+    const { issues } = await registry.validate({ skipGitIgnoreCheck: true });
+
+    expect(issues.filter((i) => i.code === 'LINK_TARGET_UNREADABLE')).toEqual([]);
+    expect(issues.filter((i) => i.code === 'LINK_BROKEN_ANCHOR').map((i) => i.line)).toEqual([2]);
   });
 });

@@ -9,9 +9,12 @@
  *     argv. **Not** passed through a shell — operators (`|`, `&&`, `$(...)`)
  *     become literal argv elements, per the design's §6.1 sharp-edge note.
  *
- * Command sources can be disabled at runtime with `VAT_LINKAUTH_ALLOW_COMMAND=0`
- * (or by passing `allowCommand: false` in deps). Useful in security-sensitive
- * environments where arbitrary command execution is undesirable.
+ * Command sources can be disabled at runtime by setting
+ * `VAT_LINKAUTH_ALLOW_COMMAND` to any false spelling (`0`, `false`, `no`,
+ * `off`, case- and whitespace-insensitive), or by passing `allowCommand: false`
+ * in deps. Useful in security-sensitive environments where arbitrary command
+ * execution is undesirable. A value the parser does not recognise also
+ * disables them — see `readAllowCommandFlag`.
  *
  * Returns `undefined` if every source fails or yields an empty/whitespace
  * value — the caller's `resolveAuthenticatedUrl` translates that to the
@@ -21,6 +24,7 @@
  * `safeExecSync`-backed, `shell: false`).
  */
 
+import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
 import { safeExecResult } from '@vibe-agent-toolkit/utils/process';
 
 export type TokenSource = { readonly env: string } | { readonly command: string | readonly string[] };
@@ -45,8 +49,10 @@ export interface TokenResolutionDeps {
    * `VAT_LINKAUTH_ALLOW_COMMAND` from the resolved `env` map (not ambient
    * `process.env`), so a caller supplying a curated `deps.env` can control the
    * flag without touching real process state. Set to `false` (or set
-   * `VAT_LINKAUTH_ALLOW_COMMAND=0` in the env) to skip all command sources and
-   * rely solely on env-var sources — useful in locked-down CI or security reviews.
+   * `VAT_LINKAUTH_ALLOW_COMMAND` to any false spelling — `0`, `false`, `no`,
+   * `off`) to skip all command sources and rely solely on env-var sources —
+   * useful in locked-down CI or security reviews. An explicit value here always
+   * wins over the env var.
    */
   readonly allowCommand: boolean;
 }
@@ -112,7 +118,8 @@ export function resolveToken(
 ): string | undefined {
   const env = deps?.env ?? process.env;
   const runCommand = deps?.runCommand ?? defaultRunCommand;
-  const allowCommand = deps?.allowCommand ?? (env['VAT_LINKAUTH_ALLOW_COMMAND'] !== '0');
+  const allowCommand =
+    deps?.allowCommand ?? readAllowCommandFlag(env['VAT_LINKAUTH_ALLOW_COMMAND']);
 
   for (const source of sources) {
     if (!allowCommand && 'command' in source) continue;
@@ -120,6 +127,27 @@ export function resolveToken(
     if (value !== undefined && value.length > 0) return value;
   }
   return undefined;
+}
+
+/**
+ * Decide whether `{ command: … }` sources may spawn, from the raw
+ * `VAT_LINKAUTH_ALLOW_COMMAND` value.
+ *
+ * 🚨 **Unset and unreadable are different answers.** Unset means the operator
+ * never spoke, so the shipped default stands and commands run. A value we
+ * cannot parse means the operator *did* speak and we failed to understand
+ * them — and since the only reason to touch this variable is to turn command
+ * execution off, the safe reading of an unintelligible value is "off".
+ *
+ * This replaced `raw !== '0'`, under which `VAT_LINKAUTH_ALLOW_COMMAND=false`
+ * still spawned subprocesses. Empty string is deliberately in the "off" bucket
+ * rather than the "unset" one: `--flag "$UNSET_VAR"` producing `''` is an
+ * operator error either way, and the cheap failure is a `LINK_AUTH_UNVERIFIED`
+ * finding, not a subprocess the operator thought they had forbidden.
+ */
+function readAllowCommandFlag(raw: string | undefined): boolean {
+  if (raw === undefined) return true;
+  return parseEnvBoolean(raw) ?? false;
 }
 
 function tryResolveSource(

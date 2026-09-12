@@ -1,11 +1,20 @@
 /* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
-import { existsSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  createSymlink,
+  mkdirSyncReal,
+  safePath,
+  symlinkCapability,
+  withReaddirSyncRefused,
+} from '@vibe-agent-toolkit/utils';
+import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
+import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  PluginSymlinkRefusedError,
   treeCopyPlugin,
   type TreeCopyResult,
 } from '../../../../src/commands/claude/plugin/tree-copy.js';
@@ -122,6 +131,7 @@ describe('treeCopyPlugin', () => {
       mcpCopied: 0,
       filesCopied: 0,
       unusedExcludePatterns: [],
+      symlinksCopied: [],
     });
   });
 
@@ -285,5 +295,230 @@ describe('treeCopyPlugin', () => {
     });
 
     expect(warnings).toEqual([]);
+  });
+
+  /**
+   * A copy over a tree it cannot fully list must STOP, not ship a partial plugin:
+   * every file under the refused directory is in the declared source and would
+   * be silently absent from the published bundle. The crawler used to hand back
+   * the shorter list and the build said "success". The refusal is a
+   * `readdirSync` spy so it runs on every platform and as root; the fixture has
+   * no repository, so the walk route (the one that lists directories) is taken.
+   */
+  it('refuses the copy by name when a source directory cannot be listed, before copying anything', async () => {
+    await mkdir(safePath.join(src, 'commands'), { recursive: true });
+    await writeFile(safePath.join(src, 'commands', 'hello.md'), '# hello');
+    const locked = safePath.join(src, 'hooks');
+    await mkdir(locked, { recursive: true });
+    await writeFile(safePath.join(locked, 'hooks.json'), '{"events":{}}');
+
+    let thrown: unknown;
+    try {
+      await withReaddirSyncRefused(locked, 'EACCES', () => treeCopyPlugin({ sourceDir: src, destDir: dest }));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(DirectoryListingRefusedError);
+    const message = (thrown as Error).message;
+    expect(message).toContain("'hooks'");
+    expect(message).toContain('EACCES');
+    expect(message).toContain('exclude');
+    // Adopter-facing: no absolute path, no library seam.
+    expect(message).not.toContain(src);
+    expect(message).not.toContain('onUnreadable');
+    // Nothing shipped: the crawl decides before the first copy.
+    expect(existsSync(safePath.join(dest, 'commands', 'hello.md'))).toBe(false);
+  });
+});
+
+/**
+ * Symlinks in a plugin source — ONE behaviour on both crawl routes.
+ *
+ * Measured before this: on the walk route (no `.git` above the source) every
+ * symlink — file, directory, dangling, cycle — was silently dropped: `filesCopied:
+ * 2`, no warning, no field. On the git route a file symlink pointing OUTSIDE the
+ * source was copied BY CONTENT (the published bundle read an arbitrary path on
+ * the build host), and a directory or dangling symlink threw a raw `ENOTSUP` /
+ * `ENOENT` out of `copyFile` AFTER earlier files had landed — the half-written
+ * bundle the listing refusal above exists to prevent.
+ *
+ * Now, on both routes: every symlink is `lstat`ed and resolved BEFORE the first
+ * byte is copied. One that does not resolve, resolves outside the source, or
+ * resolves to a directory is refused by name and nothing is copied. An in-tree
+ * FILE symlink is copied by content and reported in `symlinksCopied`.
+ *
+ * Each case runs on both routes: the git route is the same source with a
+ * repository initialised in it and the tree staged, which is what flips
+ * `crawlDirectory` from the walker to `git ls-files`.
+ */
+describe.skipIf(!symlinkCapability())('treeCopyPlugin — symlinks, both crawl routes', () => {
+  const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-tree-copy-symlink-');
+  const OUTSIDE_BYTES = 'OUTSIDE-FILE';
+  const HOOKS_BYTES = '{"events":{}}';
+
+  interface SymlinkFixture {
+    src: string;
+    dest: string;
+    /** A regular file OUTSIDE the plugin source, the target of escaping links. */
+    outsideFile: string;
+    /** Plant `hooks/<name>` → `target` (absolute, or relative to `hooks/`). */
+    link: (name: string, target: string) => void;
+  }
+
+  /** Two regular files under `src`, plus an outside file to point at. */
+  async function seedPlugin(): Promise<SymlinkFixture> {
+    const cap = symlinkCapability();
+    if (!cap) throw new Error('gated by describe.skipIf');
+    const root = createTempDir();
+    const src = safePath.join(root, 'plugins', 'p1');
+    const dest = safePath.join(root, 'out', 'p1');
+    const outsideFile = safePath.join(root, 'outside', 'secret.txt');
+    await mkdir(safePath.join(src, 'commands'), { recursive: true });
+    await mkdir(safePath.join(src, 'hooks'), { recursive: true });
+    await mkdir(safePath.join(root, 'outside'), { recursive: true });
+    await writeFile(safePath.join(src, 'commands', 'hello.md'), '# hello');
+    await writeFile(safePath.join(src, 'hooks', 'hooks.json'), HOOKS_BYTES);
+    await writeFile(outsideFile, OUTSIDE_BYTES);
+    mkdirSyncReal(dest, { recursive: true });
+    return {
+      src,
+      dest,
+      outsideFile,
+      link: (name, target) => createSymlink(cap, target, safePath.join(src, 'hooks', name)),
+    };
+  }
+
+  /** Make `src` a repository with the whole tree staged, so the crawl takes `git ls-files`. */
+  function gitRoute(src: string): void {
+    runGitOrThrow(['init', '-q'], { cwd: src });
+    runGitOrThrow(['add', '-A'], { cwd: src });
+  }
+
+  const routes: Array<['walk' | 'git', (src: string) => void]> = [
+    ['walk', () => {}],
+    ['git', gitRoute],
+  ];
+
+  async function copyExpectingRefusal(fx: SymlinkFixture): Promise<PluginSymlinkRefusedError> {
+    let thrown: unknown;
+    try {
+      await treeCopyPlugin({ sourceDir: fx.src, destDir: fx.dest });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(PluginSymlinkRefusedError);
+    return thrown as PluginSymlinkRefusedError;
+  }
+
+  /** Refused means REFUSED: no file reached the destination, not even the regular ones. */
+  function expectNothingCopied(fx: SymlinkFixture): void {
+    expect(existsSync(safePath.join(fx.dest, 'commands', 'hello.md'))).toBe(false);
+    expect(existsSync(safePath.join(fx.dest, 'hooks', 'hooks.json'))).toBe(false);
+    expect(readdirSync(fx.dest)).toEqual([]);
+  }
+
+  afterEach(() => cleanupTempDirs());
+
+  describe.each(routes)('%s route', (_route, prepare) => {
+    it('refuses a file symlink that resolves OUTSIDE the source, by name, before copying anything', async () => {
+      const fx = await seedPlugin();
+      fx.link('abs-file-link', fx.outsideFile);
+      prepare(fx.src);
+
+      const error = await copyExpectingRefusal(fx);
+
+      expect(error.message).toContain("'hooks/abs-file-link'");
+      expect(error.message).toContain('outside');
+      expect(error.message).toContain('exclude');
+      // Adopter-facing: the bundle's own coordinates, not the build host's.
+      expect(error.message).not.toContain(fx.src);
+      expect(error.refused).toEqual([{ path: 'hooks/abs-file-link', reason: 'escapes-source' }]);
+      expectNothingCopied(fx);
+    });
+
+    it('refuses a relative file symlink that climbs out of the source', async () => {
+      const fx = await seedPlugin();
+      fx.link('rel-file-link', '../../../outside/secret.txt');
+      prepare(fx.src);
+
+      const error = await copyExpectingRefusal(fx);
+
+      expect(error.refused).toEqual([{ path: 'hooks/rel-file-link', reason: 'escapes-source' }]);
+      expectNothingCopied(fx);
+    });
+
+    it('refuses a dangling symlink by name, before copying anything', async () => {
+      const fx = await seedPlugin();
+      fx.link('dangling', safePath.join(fx.src, '..', 'nowhere'));
+      prepare(fx.src);
+
+      const error = await copyExpectingRefusal(fx);
+
+      expect(error.message).toContain("'hooks/dangling'");
+      expect(error.refused).toEqual([{ path: 'hooks/dangling', reason: 'unresolvable' }]);
+      expectNothingCopied(fx);
+    });
+
+    it('refuses an in-tree DIRECTORY symlink by name (a cycle included)', async () => {
+      // Decision: refused, not recursed. Recursing by content would ship the
+      // subtree twice under two names, and `hooks/cycle -> ..` would ship the
+      // whole plugin inside itself.
+      const fx = await seedPlugin();
+      fx.link('dir-link', '../commands');
+      fx.link('cycle', '..');
+      prepare(fx.src);
+
+      const error = await copyExpectingRefusal(fx);
+
+      expect(error.refused).toEqual([
+        { path: 'hooks/cycle', reason: 'directory' },
+        { path: 'hooks/dir-link', reason: 'directory' },
+      ]);
+      expectNothingCopied(fx);
+    });
+
+    it('copies an in-tree FILE symlink by content and reports it', async () => {
+      const fx = await seedPlugin();
+      fx.link('alias.json', 'hooks.json');
+      prepare(fx.src);
+
+      const result = await treeCopyPlugin({ sourceDir: fx.src, destDir: fx.dest });
+
+      const copied = safePath.join(fx.dest, 'hooks', 'alias.json');
+      expect(lstatSync(copied).isSymbolicLink()).toBe(false);
+      expect(readFileSync(copied, 'utf8')).toBe(HOOKS_BYTES);
+      // Not dropped, and not dropped SILENTLY: counted with the files, and named.
+      expect(result.filesCopied).toBe(3);
+      expect(result.hooksCopied).toBe(2);
+      expect(result.symlinksCopied).toEqual(['hooks/alias.json']);
+    });
+
+    it('refuses the whole copy when one link is bad even if another is fine — collect first, then copy', async () => {
+      const fx = await seedPlugin();
+      fx.link('alias.json', 'hooks.json');
+      fx.link('dangling', safePath.join(fx.src, '..', 'nowhere'));
+      prepare(fx.src);
+
+      const error = await copyExpectingRefusal(fx);
+
+      expect(error.refused.map((r) => r.path)).toEqual(['hooks/dangling']);
+      expectNothingCopied(fx);
+      expect(existsSync(safePath.join(fx.dest, 'hooks', 'alias.json'))).toBe(false);
+    });
+
+    it('does not refuse a symlink the caller excluded — the remedy the message names', async () => {
+      const fx = await seedPlugin();
+      fx.link('dangling', safePath.join(fx.src, '..', 'nowhere'));
+      prepare(fx.src);
+
+      const result = await treeCopyPlugin({ sourceDir: fx.src, destDir: fx.dest, exclude: ['hooks/dangling'] });
+
+      expect(result.filesCopied).toBe(2);
+      expect(result.symlinksCopied).toEqual([]);
+      // The pattern did work, so it is not reported as dead.
+      expect(result.unusedExcludePatterns).toEqual([]);
+      expect(existsSync(safePath.join(fx.dest, 'hooks', 'dangling'))).toBe(false);
+    });
   });
 });

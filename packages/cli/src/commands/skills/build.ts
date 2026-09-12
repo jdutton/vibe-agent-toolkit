@@ -16,6 +16,7 @@ import {
   packagingConfigToPackageOptions,
   skillNameToFsPath,
   validateSkillForPackaging,
+  type ConventionalSuiteProbe,
   type DeclaredEvalSuite,
   type PackageSkillResult,
   type PackagingValidationResult,
@@ -368,6 +369,14 @@ interface ValidateSkillInput {
   /** The RUN's declared eval suites — the whole project's, not this skill's. */
   projectSkills: readonly DeclaredEvalSuite[];
   /**
+   * The RUN's conventional-suite probe, shared with the PACKAGING phase below.
+   *
+   * The same probe both phases use, deliberately: they ask the identical
+   * question of the identical paths, and this pre-build lane runs once per skill
+   * inside the build loop — so a probe minted per call costs S² over the run.
+   */
+  suiteProbe: ConventionalSuiteProbe;
+  /**
    * The RUN's enumeration lane, or `undefined` to keep the incumbent walk.
    *
    * This lane has no shared registry to inherit one from — unlike
@@ -397,7 +406,7 @@ interface ValidateSkillInput {
 async function validateSkillBeforeBuild(
   input: ValidateSkillInput,
 ): Promise<SkillValidationFailure | undefined> {
-  const { skillName, sourcePath, packagingConfig, logger, locationRoot, allowLedger, projectSkills, populationSource, verbose } = input;
+  const { skillName, sourcePath, packagingConfig, logger, locationRoot, allowLedger, projectSkills, suiteProbe, populationSource, verbose } = input;
   logger.debug(`   Validating skill: ${skillName}`);
 
   // The run's ledger, not this call's: an allow entry scoped to a SOURCE
@@ -414,6 +423,10 @@ async function validateSkillBeforeBuild(
     {
       allowLedger,
       projectSkills,
+      // Likewise the RUN's, and the same instance the packaging phase gets: this
+      // lane resolves test input for the subject AND every entry in
+      // `projectSkills`, so a per-call probe is S² over the loop.
+      suiteProbe,
       // The RUN's source, so every skill in the loop shares one memo entry
       // behind `crawlAndResolveRegistry` and the run pays one crawl, not N.
       ...(populationSource !== undefined && { populationSource }),
@@ -1372,6 +1385,7 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
         locationRoot: cwd,
         allowLedger,
         projectSkills,
+        suiteProbe,
         populationSource,
         verbose,
       });
@@ -1642,7 +1656,9 @@ async function buildCommand(
   pathArg: string | undefined,
   options: SkillsBuildCommandOptions
 ): Promise<void> {
+  // `undefined`: this command offers no `--format`, so its failure envelope is
+  // YAML like its report.
   finishCommand(await runSkillsBuildPhase(pathArg, options), (document) => {
     outputBuildYaml(document as Record<string, unknown>);
-  });
+  }, undefined);
 }

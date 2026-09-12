@@ -83,9 +83,13 @@ sources, and neither is a clean fourth sink:
   means the normal case is the un-modelled one. It reaches sink 1 only for territory git declines
   to describe: `› expandDirectory()` — *"Walk one directory that git declined to enumerate"* —
   calls `crawlDirectory`, once per submodule (a submodule's files belong to its own repository) and
-  once per collapsed **ignored** directory, that one guarded by `isDirectory`. Untracked-but-not-
-  ignored territory contributes the collapsed entry alone and takes no descent. So a repository with
-  no submodule and no collapsed ignored directory reaches sink 1 **not at all** on this arm.
+  once per collapsed **ignored** directory, that one guarded by `isDirectory` and by the entry not
+  being a symlink. Untracked-but-not-ignored territory contributes the collapsed entry alone and
+  takes no descent. So a repository with no submodule and no collapsed ignored directory reaches
+  sink 1 **not at all** on this arm. It does make one filesystem call of its own outside every sink:
+  `› symlinkShape()` `lstat`s each collapsed entry, because that listing carries no mode bits and a
+  symlink's own path must not become a member. That is a per-collapsed-entry cost, discovers no
+  paths, and so adds no sink.
 - `FilesystemCrawlSource` runs outside a git working tree, on an unreadable git marker, or under
   the `VAT_EXTENT_SOURCE=filesystem` opt-out. It calls `crawlDirectory`, so that arm does land
   squarely in sink 1 — several hops and two packages from the command's own module, as the

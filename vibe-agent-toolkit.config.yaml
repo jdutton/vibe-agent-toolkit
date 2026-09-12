@@ -78,4 +78,95 @@ resources:
         frontmatterSchema: "schemas/rules-frontmatter.json"
         mode: strict
 
+  # SQL assertions over the resource projection, run by `vat resources check`.
+  # Each key becomes a CUSTOM:<name> validation code.
+  #
+  # ⚠️ These checks read the TRACKED TREE, not the scanning lane. `resources.exclude`
+  # above does NOT scope the projection, so every exclusion a check needs it must
+  # repeat in its own SQL. That is why the fixture predicates below duplicate the
+  # exclude list rather than referring to it — a check that assumed otherwise would
+  # fire on every deliberately-broken fixture in the repo (measured: 13 of them).
+  #
+  # 🔑 A discoverability check is only as honest as its model of discovery. An
+  # agentic repo finds a file four ways — convention/auto-load, link traversal,
+  # NAME INVOCATION (`plugin:skill` in a router table) and MANIFEST declaration —
+  # and the edge lens models only the first two. Any reachability assertion must
+  # exclude the other two in its own SQL or it reports confident noise and gets
+  # suppressed within a week. Both exclusions are spelled out below.
+  checks:
+    no-broken-local-links:
+      description: >-
+        A link in project content points at a path that is not in the corpus.
+        Fixtures are excluded because several are deliberately broken.
+      severity: error
+      sql: |-
+        -- ⚠️ KNOWN LIMITATION, measured on a large adopter tree and stated here
+        -- because this check is the template others copy. `edge_resolutions`
+        -- carries exactly three dstKinds -- resource, out-of-corpus, external --
+        -- so SQL CANNOT see the distinction `vat resources validate` draws with
+        -- LINK_DEFERRED_ARTIFACT: a link to a doc the build GENERATES. On a tree
+        -- with generated documentation this check reports every such link as
+        -- broken. One adopter measured 21 of them, all correctly `info` under
+        -- `vat resources validate` and all false positives here.
+        -- This tree scores 0 because it generates no documentation -- i.e. our
+        -- own corpus cannot distinguish a sound check from an unsound one, which
+        -- is why the number is stated rather than trusted. Before copying this
+        -- into a project that generates docs, exclude those paths explicitly.
+        --
+        -- `out-of-corpus` is a CLASS, not a verdict of "dead": nothing in the
+        -- projection stats a path outside the population. On the FILESYSTEM lens,
+        -- whose extent is the tracked tree, it is nevertheless the closest thing
+        -- to "this link names a file we do not have". The lens is named explicitly
+        -- because an out-of-corpus count is meaningless without one: the same tree
+        -- reports 192 under the agentic-convention lens, almost none of them
+        -- broken -- they are documents the always-loaded context links to that the
+        -- closure does not itself contain.
+        SELECT rr.path AS path,
+               r.dstKey AS target
+        FROM edge_resolutions r
+        JOIN resource_realizations rr ON rr.resourceId = r.src
+        WHERE r.dstKind = 'out-of-corpus'
+          AND r.contextId LIKE '%filesystem%'
+          -- Deliberately-broken inputs. Mirrors resources.exclude, which does not
+          -- reach the projection.
+          AND rr.path NOT LIKE '%/test/fixtures/%'
+          AND rr.path NOT LIKE '%/test-fixtures/%'
+          AND rr.path NOT LIKE '%/evals/%'
+          AND rr.path NOT LIKE '%/test/golden/%'
+          AND rr.path NOT LIKE '%/vendor/%'
+        ORDER BY path
+    docs-are-discoverable:
+      description: >-
+        A file under docs/ is reachable by no link and by no auto-load convention,
+        so a reader arrives at it only by already knowing the path.
+      # A HARD gate. `vat resources check` exits non-zero only on `error`, so the
+      # `warning` this shipped with for one commit was not a gate at all -- it
+      # reported seven orphans and passed. The seven are indexed; this keeps them so.
+      severity: error
+      sql: |-
+        -- Scoped to docs/ deliberately. Repo-wide, this question has 173 answers and
+        -- almost all are fixtures, vendored trees or package CHANGELOGs that nothing
+        -- is supposed to link -- a count nobody can act on. Under docs/ the claim is
+        -- meaningful: the tree has an index (docs/README.md) and a document missing
+        -- from it is a document no reader will find.
+        SELECT rr.path AS path
+        FROM resource_realizations rr
+        WHERE rr.path LIKE 'docs/%.md'
+          -- (1) link traversal: anything any lens resolved a link onto.
+          AND rr.resourceId NOT IN (
+            SELECT dstResource FROM edge_resolutions WHERE dstResource IS NOT NULL
+          )
+          -- (2) convention / auto-load: resource_tags carries the harness convention
+          -- a path satisfies (claude-md, skill-md, readme, rules-file, command). A
+          -- tagged file is found by the harness without any link, so its absence from
+          -- the graph is not a defect.
+          AND rr.resourceId NOT IN (SELECT resourceId FROM resource_tags)
+          -- (3) MANIFEST declaration: named by a config key rather than linked.
+          -- docs/marketplace-readme.md is `claude.marketplace.readme` in
+          -- packages/vat-development-agents/vibe-agent-toolkit.config.yaml. The
+          -- projection cannot read YAML, so this exclusion is by path and must be
+          -- extended by hand when another document is declared this way.
+          AND rr.path <> 'docs/marketplace-readme.md'
+        ORDER BY path
+
   # Per-code severity overrides available via resources.validation.severity (see docs/validation-codes.md)
