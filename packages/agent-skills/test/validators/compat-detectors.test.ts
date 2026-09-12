@@ -194,6 +194,26 @@ const ALLOWED_TOOLS_SPELLINGS: ReadonlyArray<{
   },
   { label: 'a scoped Bash pattern declares the Bash tool', frontmatter: 'allowed-tools: Bash(git:*)', declarations: ['Bash(git:*)'], shell: true },
   { label: 'CRLF line endings', frontmatter: 'allowed-tools: Read Bash\r\nmodel: sonnet', declarations: ['Read', 'Bash'], shell: true },
+  // A `)` INSIDE a quoted argument does not close the declaration: the split
+  // tracked parenthesis depth only, so `Bash(git commit -m "a) b") Read` came
+  // out as THREE declarations, the first of them `Bash(git commit -m "a)`.
+  {
+    label: 'a Bash pattern whose quoted argument holds a closing paren stays ONE declaration',
+    frontmatter: 'allowed-tools: Bash(git commit -m "a) b") Read',
+    declarations: ['Bash(git commit -m "a) b")', 'Read'],
+    shell: true,
+  },
+  {
+    label: 'a single-quoted argument holding a paren and a space',
+    frontmatter: "allowed-tools: \"Bash(echo 'x) y') Read\"",
+    declarations: ["Bash(echo 'x) y')", 'Read'],
+    shell: true,
+  },
+  // YAML lets the key be quoted, or padded before its colon; the value parsed
+  // either way but the key's LINE was lost (the locator matched `^allowed-tools:` only).
+  { label: 'a double-quoted key', frontmatter: '"allowed-tools": Bash', declarations: ['Bash'], shell: true },
+  { label: 'a single-quoted key', frontmatter: "'allowed-tools': Bash", declarations: ['Bash'], shell: true },
+  { label: 'a space before the colon', frontmatter: 'allowed-tools : Bash', declarations: ['Bash'], shell: true },
 ];
 
 describe('allowed-tools frontmatter spellings', () => {

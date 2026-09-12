@@ -10,7 +10,13 @@ import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { createDocumentRecord, missingDocumentColumns, overlayChunkMetadata } from '../src/document-helpers.js';
+import {
+  createDocumentRecord,
+  describeDocumentColumnMismatches,
+  mismatchedDocumentColumns,
+  missingDocumentColumns,
+  overlayChunkMetadata,
+} from '../src/document-helpers.js';
 
 /** Minimal stub token counter for tests */
 const stubTokenCounter: TokenCounter = {
@@ -221,5 +227,79 @@ describe('missingDocumentColumns', () => {
 
   it('does not report a column the table has and the record lacks', () => {
     expect(missingDocumentColumns([...CORE_COLUMNS, 'category', 'priority', 'retired'], testSchema)).toEqual([]);
+  });
+});
+
+/**
+ * A column the table HAS can still be wrong: the writer that created it may
+ * have typed it differently from what this build serializes. v0.1.42 stored a
+ * boolean as `JSON.stringify(true)` in a Utf8 column and a numeric-looking
+ * title as Float64; this build writes a boolean as `1`/`0` and a title as a
+ * string. LanceDB casts on `add` rather than refusing, so an unchecked write
+ * turns `true` into `"1"` and reads back `false`. The comparison is by type,
+ * column for column, on the two schemas' own printed types — no version number.
+ */
+describe('mismatchedDocumentColumns', () => {
+  const core = [
+    { name: 'resourceid', type: 'Utf8' },
+    { name: 'tokencount', type: 'Float64' },
+  ];
+
+  it('names a column stored as text that this build writes as a number', () => {
+    const mismatched = mismatchedDocumentColumns(
+      [...core, { name: 'flag', type: 'Utf8' }],
+      [...core, { name: 'flag', type: 'Float64' }],
+    );
+
+    expect(mismatched).toEqual([{ name: 'flag', storedType: 'Utf8', expectedType: 'Float64' }]);
+  });
+
+  it('names a column stored as a number that this build writes as text', () => {
+    const mismatched = mismatchedDocumentColumns(
+      [...core, { name: 'title', type: 'Float64' }],
+      [...core, { name: 'title', type: 'Utf8' }],
+    );
+
+    expect(mismatched).toEqual([{ name: 'title', storedType: 'Float64', expectedType: 'Utf8' }]);
+  });
+
+  it('reports every mismatched column at once, in the expected order', () => {
+    const mismatched = mismatchedDocumentColumns(
+      [{ name: 'when', type: 'Utf8' }, { name: 'flag', type: 'Utf8' }, ...core],
+      [...core, { name: 'flag', type: 'Float64' }, { name: 'when', type: 'Float64' }],
+    );
+
+    expect(mismatched.map((m) => m.name)).toEqual(['flag', 'when']);
+  });
+
+  it('ignores a column only one side has: missing ones are widened, retired ones are stored as null', () => {
+    const mismatched = mismatchedDocumentColumns(
+      [...core, { name: 'retired', type: 'Utf8' }],
+      [...core, { name: 'headingpath', type: 'Utf8' }],
+    );
+
+    expect(mismatched).toEqual([]);
+  });
+
+  it('reports nothing when every shared column agrees', () => {
+    expect(mismatchedDocumentColumns(core, core)).toEqual([]);
+  });
+});
+
+describe('describeDocumentColumnMismatches', () => {
+  it('names the table, every column with both types, and the remedy', () => {
+    const message = describeDocumentColumnMismatches('rag_documents', '/srv/rag/db', [
+      { name: 'flag', storedType: 'Utf8', expectedType: 'Float64' },
+      { name: 'title', storedType: 'Float64', expectedType: 'Utf8' },
+    ]);
+
+    expect(message).toContain("'rag_documents'");
+    expect(message).toContain('/srv/rag/db');
+    expect(message).toMatch(/flag.*Utf8.*Float64/su);
+    expect(message).toMatch(/title.*Float64.*Utf8/su);
+    expect(message).toContain('vat rag clear');
+    // The refusal must say nothing was written: a reader who sees this after a
+    // run needs to know the table is exactly as it was.
+    expect(message).toMatch(/nothing was written/iu);
   });
 });

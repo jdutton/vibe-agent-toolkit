@@ -25,7 +25,7 @@
 import { crawlAndResolveRegistry, createProjectRegistry } from '@vibe-agent-toolkit/agent-skills';
 import { crawlSkillLinkRegistry } from '@vibe-agent-toolkit/claude-marketplace';
 import { DEFAULT_RESOURCE_INCLUDE, type ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import type { CrawlOptions } from '@vibe-agent-toolkit/utils/crawl';
+import type { CrawlOptions, UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
 
 import { buildSkillsValidateRegistry } from '../commands/skills/validate.js';
 import { loadConfig } from '../utils/config-loader.js';
@@ -60,10 +60,32 @@ export interface LaneDefinition {
    * Restatement of the crawl this lane performs. Used to observe the ordered,
    * pre-deduplication path list, which the registry does not retain. Reconciled
    * against {@link build} on every snapshot.
+   *
+   * Without the `unreadable` policy: what a refused listing means to an ORACLE
+   * is the oracle's decision, not the lane's — the production lane may degrade
+   * where a measurement must refuse — so each capture supplies its own.
    */
-  crawlOptions: (projectRoot: string) => CrawlOptions;
+  crawlOptions: (projectRoot: string) => Omit<CrawlOptions, 'unreadable'>;
   /** The production builder. Called as-is; never reimplemented. */
   build: (projectRoot: string) => Promise<ResourceRegistry>;
+}
+
+/**
+ * The `unreadable` policy every oracle capture states: refuse. A measurement
+ * over a population the walk could not fully enumerate is a measurement that
+ * did not run, and the harness records the throw as the capture's failure
+ * rather than as a shorter list that happens to look complete.
+ *
+ * @param corpusRoot - The corpus the refused directory is expressed against
+ * @returns The refuse policy, with a remedy that names the oracle's knob
+ */
+export function oracleRefuses(corpusRoot: string): UnreadablePolicy {
+  return {
+    refuse: {
+      root: corpusRoot,
+      remedy: 'Fix the permissions on that directory, or exclude it from the corpus: an oracle cannot measure a population it could not enumerate.',
+    },
+  };
 }
 
 /**
@@ -101,7 +123,8 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       absolute: true,
       filesOnly: true,
     }),
-    build: async (projectRoot) => crawlAndResolveRegistry(projectRoot),
+    // An oracle arm is a complete population or nothing: refuse, like the verbs it mirrors.
+    build: async (projectRoot) => crawlAndResolveRegistry(projectRoot, { unreadable: 'refuse' }),
   },
   {
     id: 'skills-build',

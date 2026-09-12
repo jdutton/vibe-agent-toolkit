@@ -30,11 +30,13 @@
  *     return `{ bytes, metadata, cached: true }`, no fetch.
  *   - Engine returns success otherwise → fetch via `authTransport` (using
  *     `fetch.headers` merged over `auth.headers` when present), write to
- *     cache if supplied, return `{ bytes, metadata, cached: false }`.
+ *     cache if supplied AND the status is one the origin stood behind (see
+ *     `isCacheableStatus`), return `{ bytes, metadata, cached: false }`.
  *
  * **Throws** on network-level failures from the transport: DNS resolution
  * failure, TLS handshake failure, connection refused, `AbortError` from the
- * caller's `signal`, or any underlying `fetchImpl` rejection. The cache is
+ * caller's `signal`, or any underlying `fetchImpl` rejection — and, as an
+ * `AuthTransportError`, a redirect whose `Location` is not a URL. The cache is
  * only touched after the response body is fully read, so a transport failure
  * cannot land a partial entry on disk. Consumers that need degradation
  * semantics (validators, batch tools) should wrap calls in a try/catch.
@@ -176,9 +178,25 @@ export async function fetchAuthenticated(
 
   // Write-through. The ContentCache whitelists fields and fails soft on IO,
   // so a write failure does not propagate.
-  if (cache !== undefined) {
+  if (cache !== undefined && isCacheableStatus(response.status)) {
     await cache.set(success.fetchUrl, bytes, metadata);
   }
 
   return { bytes, metadata, cached: false };
+}
+
+/**
+ * Whether a response is worth keeping for the TTL: a 2xx, or the 3xx the
+ * transport hands back when it stops following (no `Location`, a 304, or the
+ * hop cap). Nothing else.
+ *
+ * The write-through used to store every status, so a 500 from a flapping
+ * origin — or a 429, a 404 while a page was being published — was served as a
+ * hit for the whole 30-minute window and the recovered origin never saw the
+ * next call. The validator's status cache already refuses its transient
+ * refusals (`isTransientRefusal`); this cache stores a BODY, and a body the
+ * origin did not stand behind is not an answer to keep.
+ */
+function isCacheableStatus(status: number): boolean {
+  return status >= 200 && status < 400;
 }

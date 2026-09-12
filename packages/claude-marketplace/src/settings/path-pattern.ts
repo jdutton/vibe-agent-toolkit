@@ -21,6 +21,9 @@
  * segment level with `**` as the segment wildcard. Each level is O(n·m), so the
  * whole is bounded by the product of the two lengths — the same bound the Bash
  * lane's `matchesWildcardPattern` carries — and no input can push it past that.
+ * Compilation is one pass over the pattern (see `compileSegment` for the
+ * unterminated-`[` case that used to make it quadratic), so the bound holds
+ * for the whole lane, not for the scan alone.
  * ⛔ An atomic-group regex (`(?=(X))\1`) is NOT an alternative: this repo has
  * measured that it satisfies the linter while remaining quadratic.
  *
@@ -109,14 +112,14 @@ function escapedAt(text: string, index: number): { char: string; next: number } 
     : { char: '\\', next: index + 1 };
 }
 
+/** A parsed `[…]` class, and where the next token starts. */
+type ParsedClass = { readonly token: SegmentToken; readonly next: number };
+
 /**
  * Parse a `[…]` class starting at `open`, or report that it is unterminated
  * (in which case the `[` is a literal).
  */
-function parseClass(
-  text: string,
-  open: number,
-): { token: SegmentToken; next: number } | undefined {
+function parseClass(text: string, open: number): ParsedClass | undefined {
   let index = open + 1;
   const negated = text.charAt(index) === '!' || text.charAt(index) === '^';
   if (negated) index += 1;
@@ -148,10 +151,30 @@ function memberAt(text: string, index: number): { char: string; next: number } {
     : { char: text.charAt(index), next: index + 1 };
 }
 
-/** Compile one segment's text into character-level tokens. */
+/**
+ * Compile one segment's text into character-level tokens, in ONE pass.
+ *
+ * 🚩 `parseClass` scans from a `[` towards the end of the segment, and an
+ * unterminated one used to cost that scan at EVERY later `[`: a segment of `n`
+ * `[` characters compiled in O(n²) — 5,000 → 85 ms, 40,000 → 5.9 s — while
+ * the header above claimed no input could push the lane past O(pattern ×
+ * path). A 40 KB `allowed-tools: Read([[[[…)` entry cost 12–18 s per deny rule.
+ *
+ * Once one `[` is unterminated, every `[` after it is too, so the search is
+ * not repeated: the scan from the earlier `[` passes over the later one and
+ * from there reads the same text with the same tokenisation (an escape
+ * consumes its target, a range its bound, and a negation mark is a member to
+ * the earlier scan and skipped by the later — one position either way). The
+ * only state that differs is `first`, which lets a `]` be a member of the
+ * later class where it would CLOSE the earlier one — and the earlier one did
+ * not close. So the later scan meets exactly what the earlier one met, and
+ * runs off the end the same way. ⛔ `lastIndexOf(']')` is not the shortcut:
+ * `[\]` repeated ends in a `]` that every scan reaches and none can use.
+ */
 function compileSegment(text: string): SegmentToken[] {
   const tokens: SegmentToken[] = [];
   let index = 0;
+  let classMayClose = true;
   while (index < text.length) {
     const char = text.charAt(index);
     if (char === '*') {
@@ -166,14 +189,10 @@ function compileSegment(text: string): SegmentToken[] {
       tokens.push({ kind: 'literal', char: escaped.char });
       index = escaped.next;
     } else if (char === '[') {
-      const parsed = parseClass(text, index);
-      if (parsed === undefined) {
-        tokens.push({ kind: 'literal', char: '[' });
-        index += 1;
-      } else {
-        tokens.push(parsed.token);
-        index = parsed.next;
-      }
+      const parsed: ParsedClass | undefined = classMayClose ? parseClass(text, index) : undefined;
+      classMayClose = parsed !== undefined;
+      tokens.push(parsed?.token ?? { kind: 'literal', char: '[' });
+      index = parsed?.next ?? index + 1;
     } else {
       tokens.push({ kind: 'literal', char });
       index += 1;
@@ -193,6 +212,47 @@ const SEGMENT_SEPARATOR = '/';
 /** The non-empty `/`-separated segments of a PATH. */
 function splitSegments(text: string): string[] {
   return text.split(SEGMENT_SEPARATOR).filter((segment) => segment.length > 0);
+}
+
+/** Whether a pattern is anchored at its root: a `/` anywhere but the very end. */
+function isAnchored(pattern: string): boolean {
+  const body = pattern.endsWith(SEGMENT_SEPARATOR) ? pattern.slice(0, -1) : pattern;
+  return body.includes(SEGMENT_SEPARATOR);
+}
+
+/** The parent-directory segment, read as `resolve` reads it in a path. */
+const PARENT_SEGMENT = '..';
+
+/**
+ * `pattern` with each `..` segment applied — it drops the segment before it,
+ * wildcard or not — and the number of those that had nothing before them to
+ * drop, for the caller to apply to the directory the pattern is relative to.
+ * The leading `/` anchor and the trailing `/` directory restriction survive,
+ * and a pattern that was anchored stays anchored: `a/../b` names `b` at the
+ * root, as `resolve` would read it, not a `b` at any depth.
+ *
+ * 🚩 `..` was a literal segment, which no resolved file path carries, so a
+ * rule spelled with one matched nothing — see `splitPathSpelling` in
+ * `permission-matcher.ts` for what that did to the conflict check and why
+ * resolving is the reading chosen.
+ */
+export function collapseParentSegments(pattern: string): { pattern: string; climbs: number } {
+  const raw = pattern.split(SEGMENT_SEPARATOR);
+  if (!raw.includes(PARENT_SEGMENT)) return { pattern, climbs: 0 };
+  const segments: string[] = [];
+  let climbs = 0;
+  for (const segment of raw) {
+    if (segment !== PARENT_SEGMENT) {
+      segments.push(segment);
+    } else if (segments.length > (segments[0] === '' ? 1 : 0)) {
+      segments.pop();
+    } else {
+      climbs += 1;
+    }
+  }
+  const collapsed = segments.join(SEGMENT_SEPARATOR);
+  const reanchored = isAnchored(pattern) && !isAnchored(collapsed) ? SEGMENT_SEPARATOR + collapsed : collapsed;
+  return { pattern: reanchored, climbs };
 }
 
 /**
@@ -236,7 +296,7 @@ export function compilePathPattern(pattern: string): PathPattern {
   const trailingSlash = body.endsWith(SEGMENT_SEPARATOR);
   if (trailingSlash) body = body.slice(0, -1);
   // A `/` at the start or in the middle anchors the pattern at the root.
-  const anchored = body.includes(SEGMENT_SEPARATOR);
+  const anchored = isAnchored(lowered);
   if (body.startsWith(SEGMENT_SEPARATOR)) body = body.slice(1);
   if (body.length === 0) return MATCHES_NOTHING;
   const raw = body.split(SEGMENT_SEPARATOR);
@@ -262,14 +322,42 @@ export function compilePathPattern(pattern: string): PathPattern {
  */
 const WITNESS_CANDIDATES = ['x', 'a', '0', '-', '_', '.'] as const;
 
-/** One character a class accepts. */
-function classMember(token: Extract<SegmentToken, { kind: 'class' }>): string {
-  const candidates = [...token.ranges.map(([low]) => low), ...WITNESS_CANDIDATES];
-  return candidates.find((char) => inClass(token, char)) ?? WITNESS_CANDIDATES[0];
+/** The last UTF-16 code unit — a class bound is one code unit, and so is a member. */
+const LAST_CODE_UNIT = 0xff_ff;
+
+/** The character `offset` code units from `char`, or nothing past either end. */
+function neighbourOf(char: string, offset: 1 | -1): string | undefined {
+  const code = char.codePointAt(0);
+  if (code === undefined) return undefined;
+  const next = code + offset;
+  return next < 0 || next > LAST_CODE_UNIT ? undefined : String.fromCodePoint(next);
 }
 
-/** One string a segment's tokens accept. */
-function segmentMember(tokens: readonly SegmentToken[]): string {
+/**
+ * One character a class accepts, or `undefined` for a class that accepts none.
+ *
+ * The class's own low bounds and the candidates above are tried first, so a
+ * witness is a printable character wherever one is on offer. 🚩 They were the
+ * whole search, and when a negated class excluded every one of them the
+ * fallback was the first candidate — a NON-member, so the pattern refused its
+ * own witness and an identical `Read([!xa0\-_.])` pair reported no conflict.
+ * The complement of a set of ranges is made of runs that each start just
+ * above a range's high bound or end just below a range's low bound (or sit at
+ * an end of the code space, where they touch a bound too), so a member exists
+ * iff one sits NEXT to a bound: those are tried last, highs first.
+ */
+function classMember(token: Extract<SegmentToken, { kind: 'class' }>): string | undefined {
+  const candidates = [
+    ...token.ranges.map(([low]) => low),
+    ...WITNESS_CANDIDATES,
+    ...token.ranges.map(([, high]) => neighbourOf(high, 1)),
+    ...token.ranges.map(([low]) => neighbourOf(low, -1)),
+  ];
+  return candidates.find((char) => char !== undefined && inClass(token, char));
+}
+
+/** One string a segment's tokens accept, or `undefined` when a class in it accepts nothing. */
+function segmentMember(tokens: readonly SegmentToken[]): string | undefined {
   let text = '';
   for (const token of tokens) {
     switch (token.kind) {
@@ -279,9 +367,12 @@ function segmentMember(tokens: readonly SegmentToken[]): string {
       case 'any':
         text += WITNESS_CANDIDATES[0];
         break;
-      case 'class':
-        text += classMember(token);
+      case 'class': {
+        const member = classMember(token);
+        if (member === undefined) return undefined;
+        text += member;
         break;
+      }
       case 'star':
         break;
     }
@@ -295,7 +386,9 @@ function segmentMember(tokens: readonly SegmentToken[]): string {
  * tokens: each literal is itself, `?` and a bare `*` are a fixed character, a
  * `*` between other tokens is nothing, a class is one of its members, `**`
  * spans zero directories, and a directory-only pattern gets a file beneath it.
- * Empty for a pattern that matches nothing.
+ * Empty for a pattern that matches nothing — including one holding a class
+ * that accepts no character (`[z-a]`, or a negation of the whole code space),
+ * which has no member to materialise.
  *
  * 🚩 The permission lane used to read a rule's RAW text as a literal file path
  * and call it a witness of the rule. That works for `*`, `**` and `?` only
@@ -305,9 +398,13 @@ function segmentMember(tokens: readonly SegmentToken[]): string {
  */
 export function witnessOf(pattern: PathPattern): string {
   if (pattern.matchesNothing) return '';
-  const segments = pattern.segments
-    .filter((segment): segment is readonly SegmentToken[] => segment !== 'globstar')
-    .map(segmentMember);
+  const segments: string[] = [];
+  for (const segment of pattern.segments) {
+    if (segment === 'globstar') continue;
+    const member = segmentMember(segment);
+    if (member === undefined) return '';
+    segments.push(member);
+  }
   // A bare `**` names no segment and matches any file; a directory-only
   // pattern needs a file beneath the directory it names.
   if (segments.length === 0 || pattern.directoryOnly) segments.push(WITNESS_CANDIDATES[0]);

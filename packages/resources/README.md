@@ -40,6 +40,7 @@ await registry.addResource('./README.md');
 // Crawl directory for all markdown files
 await registry.crawl({
   baseDir: './docs',
+  unreadable: 'refuse',              // required: stop on a directory the crawl cannot list, or { degrade: (refusal) => … }
   include: ['**/*.md'],
   exclude: ['**/node_modules/**']
 });
@@ -106,6 +107,8 @@ Crawl a directory and add all matching markdown files.
 ```typescript
 const resources = await registry.crawl({
   baseDir: './docs',
+  unreadable: 'refuse',              // REQUIRED, no default: 'refuse' throws DirectoryListingRefusedError on a directory it cannot list;
+                                     // { degrade: (refusal) => … } keeps going and hands you the gap to report
   include: ['**/*.md'],              // Glob patterns (default: ['**/*.md'])
   exclude: ['**/node_modules/**'],   // Exclude patterns (default: node_modules, .git, dist)
   followSymlinks: false              // Follow symbolic links (default: false)
@@ -941,6 +944,7 @@ async function validateDocs() {
   // Crawl all markdown in project
   await registry.crawl({
     baseDir: process.cwd(),
+    unreadable: 'refuse',
     exclude: ['**/node_modules/**', '**/dist/**', '**/.git/**']
   });
 
@@ -974,7 +978,7 @@ import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 
 async function buildGraph() {
   const registry = new ResourceRegistry();
-  await registry.crawl({ baseDir: './docs' });
+  await registry.crawl({ baseDir: './docs', unreadable: 'refuse' });
 
   // Resolve all cross-references
   registry.resolveLinks();
@@ -1010,7 +1014,7 @@ buildGraph();
 ```typescript
 async function linkReport() {
   const registry = new ResourceRegistry();
-  await registry.crawl({ baseDir: './docs' });
+  await registry.crawl({ baseDir: './docs', unreadable: 'refuse' });
 
   const result = await registry.validate();
 

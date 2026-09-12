@@ -793,7 +793,7 @@ async function corpusSkillsOf(configRoot: string, projectRoot: string): Promise<
     throw new Error(`${configRoot} declares no skills section; CORPORA is stale.`);
   }
 
-  const discovered = await discoverSkillsFromConfig(skillsSection, configRoot);
+  const discovered = await discoverSkillsFromConfig(skillsSection, configRoot, 'refuse');
   const { defaults, config: perSkill } = skillsSection;
 
   return discovered.map((skill) => {

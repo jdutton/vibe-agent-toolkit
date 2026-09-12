@@ -75,6 +75,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { refuseUnreadableFixture } from '@vibe-agent-toolkit/utils/testing';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { crawlSkillLinkRegistry, INVENTORY_REFUSED_GITIGNORED, inventoryExtentContributorId, inventoryExtentDeclaration, InventorySkillExtentContributor } from '../../src/index.js';
@@ -262,6 +263,7 @@ const IGNORED_PATHS = ['ignored/secret.md', 'ignored/behind-secret.md'] as const
 async function discoverSkills(root: string): Promise<CorpusSkill[]> {
   const found = await crawlDirectory({
     baseDir: root,
+    unreadable: refuseUnreadableFixture(root),
     include: ['**/SKILL.md'],
     absolute: true,
     filesOnly: true,

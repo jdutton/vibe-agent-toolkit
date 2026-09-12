@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { unlistableDirectoriesIn } from '../src/git-utils.js';
 
 const LOCKED_WARNING = "warning: could not open directory 'docs/locked/': Permission denied";
+const LOCKED_REFUSAL = { directory: 'docs/locked', code: 'EACCES' };
 
 describe('unlistableDirectoriesIn', () => {
   it('returns every refused directory, repo-relative and without the trailing slash, ignoring unrelated lines', () => {
@@ -26,7 +27,7 @@ describe('unlistableDirectoriesIn', () => {
     ].join('\n');
 
     expect(unlistableDirectoriesIn(stderr)).toEqual([
-      { directory: 'docs/locked', code: 'EACCES' },
+      LOCKED_REFUSAL,
       { directory: 'build/cache', code: 'EACCES' },
     ]);
   });
@@ -55,9 +56,29 @@ describe('unlistableDirectoriesIn', () => {
     ]);
   });
 
+  it.each([
+    ['No such file or directory', 'ENOENT'],
+    ['Not a directory', 'ENOTDIR'],
+  ])('drops "%s" (%s): a directory that VANISHED mid-listing is absence, which the readdir walk skips too', (reason) => {
+    // git prints this when an untracked directory is deleted between its
+    // parent's readdir and its own opendir — a concurrent `rm -rf tmp/`. The
+    // walk route classifies the same errnos as absence (`listingFailure`) and
+    // moves on; reporting them here as an UNKNOWN refusal made the git route
+    // abort a run the walk would have completed.
+    expect(unlistableDirectoriesIn(`warning: could not open directory 'gone/': ${reason}`)).toEqual([]);
+  });
+
+  it('still reports a real refusal on the line after a vanished one', () => {
+    expect(
+      unlistableDirectoriesIn(
+        `warning: could not open directory 'gone/': No such file or directory\n${LOCKED_WARNING}`,
+      ),
+    ).toEqual([LOCKED_REFUSAL]);
+  });
+
   it('reports one directory once even when git repeats the warning', () => {
     expect(unlistableDirectoriesIn(`${LOCKED_WARNING}\n${LOCKED_WARNING}\n`)).toEqual([
-      { directory: 'docs/locked', code: 'EACCES' },
+      LOCKED_REFUSAL,
     ]);
   });
 });

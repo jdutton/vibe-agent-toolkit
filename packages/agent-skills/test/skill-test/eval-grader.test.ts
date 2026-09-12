@@ -62,6 +62,9 @@ function baseInput(graderOutDir: string, overrides: Partial<RunGraderInput> = {}
     maxBudgetUsd: 1,
     timeoutMs: 60_000,
     env: {},
+    // Required on the input; a suite that is not about the progress channel
+    // still has to say where it goes, and here it goes nowhere.
+    onProgress: () => {},
     ...overrides,
   };
 }

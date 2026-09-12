@@ -110,6 +110,8 @@
  * It can be re-sourced.
  */
 
+import { existsSync, readdirSync } from 'node:fs';
+
 import { safePath, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
@@ -462,4 +464,40 @@ function unlistableDirectoryCondition(
     resourceId,
     ...CONDITION_WITHOUT_REFERENCE,
   };
+}
+
+/**
+ * Whether a stored {@link EXTENT_DIRECTORY_UNLISTABLE} row is still true of
+ * the tree — the directory exists and still refuses to be listed.
+ *
+ * 🪤 The store key cannot answer this. It is the tree hash plus the ambient
+ * inputs, and the tree hash is `git add --all` over NON-IGNORED content: the
+ * permission bit on a gitignored directory is in no tree object, so a run that
+ * met `build/locked` at `chmod 000` and a run after `chmod 755` share a key.
+ * The served row then says the directory could not be listed while it lists
+ * perfectly, and the rows beneath it — enumerated around the gap — are missing
+ * from the served population with no finding. The driver asks this of every
+ * such row on a hit and treats a `false` as a miss; the cost is one `readdir`
+ * attempt per ROW, and a row is by nature rare.
+ *
+ * A directory that is GONE also answers `false`: a row about a directory that
+ * no longer exists is not a true row, and the population beneath it changed.
+ * The opposite drift — locked AFTER caching — is the pre-existing staleness of
+ * every ignored row and is not addressed here.
+ *
+ * @param row - A `realization_conditions` row carrying this code
+ * @param root - The corpus root the row's path is relative to
+ * @returns True when the directory still exists and still refuses a listing
+ */
+export function unlistableRowStillHolds(row: RealizationConditionRow, root: string): boolean {
+  const directory = safePath.resolve(root, row.path);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- a stored root-relative path, resolved against the corpus root
+  if (!existsSync(directory)) return false;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- same path, one listing attempt per stored row
+    readdirSync(directory);
+    return false;
+  } catch {
+    return true;
+  }
 }

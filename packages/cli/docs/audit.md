@@ -29,6 +29,8 @@ vat audit [git-url-or-path] [options]
 
 - `--user` - Audit user-level Claude plugins installation (`~/.claude/plugins`)
 - `-r, --recursive` - Scan directories recursively for all resource types
+- `--compat` - Run compatibility analysis for each plugin; adds a `compatibility:` block to its entry (see [Compatibility and settings blocks](#compatibility-and-settings-blocks))
+- `--settings [file]` - Check each plugin against Claude settings (auto-discovered, or the given file); adds a `settings:` block. Requires `--compat`
 - `--debug` - Enable debug logging (outputs to stderr)
 
 ### Gitignore-aware scanning
@@ -403,6 +405,70 @@ say in how a path is spelled.
 (`$CLAUDE_CONFIG_DIR`, else `~/.claude`). A URL audit omits `root`: the clone
 lives in a random tempdir that nothing downstream can resolve, so the provenance
 header states the base instead and paths are relative to the cloned repo.
+
+#### Compatibility and settings blocks
+
+Under `--compat`, every `claude-plugin` entry carries a `compatibility:` block;
+under `--compat --settings`, a `settings:` block beside it. **Both blocks are
+always present for every plugin the run was asked about** — a lane that could
+not run says so in its block rather than leaving it out, because a plugin the
+check could not answer for must never look like one the operator never asked
+about.
+
+```yaml
+files:
+  - path: plugins/my-plugin
+    type: claude-plugin
+    compatibility:               # the analyzer's verdicts…
+      plugin: my-plugin
+      declaredTargets: [claude-code]
+      observations: [...]
+      verdicts: [...]
+      unchecked: []              # files the analysis could not read; verdicts were computed without them
+    settings:
+      compatible: false          # true ONLY when conflicts and unchecked are both empty
+      conflicts:
+        - type: tool-blocked
+          detail: Tool "Bash" in skills/deploy/SKILL.md blocked by org policy (permissions.deny)
+          blockedBy: permissions.deny
+          value: Bash
+          settingsFile: /etc/claude-code/managed-settings.json
+          settingsLevel: managed
+      unchecked:                 # present only when non-empty
+        - path: skills/locked/SKILL.md           # relative to `root`
+          reason: "EACCES: permission denied, open 'skills/locked/SKILL.md'"
+  - path: plugins/other-plugin
+    type: claude-plugin
+    compatibility:               # …or the reason there are none
+      analyzed: false
+      reason: "EACCES: permission denied, scandir 'plugins/other-plugin/skills/locked'"
+    settings:
+      compatible: false
+      conflicts: []
+      unchecked:
+        - path: plugins/other-plugin/skills/locked
+          reason: "EACCES: permission denied, scandir 'plugins/other-plugin/skills/locked'"
+```
+
+`settings.unchecked` lists every path the settings check enumerated but could
+not compare: a `SKILL.md` it could not read or whose frontmatter is not a YAML
+mapping (the same file the validator reports as `SKILL_MISSING_FRONTMATTER`), or
+a directory it could not list — in which case any skill beneath it is unseen
+and unnamed. The check follows symlinks the way the validator lane does, so a
+plugin whose `skills/` points at a shared tree is checked, not skipped.
+`compatible` is `false` whenever anything is listed here: zero conflicts over a
+skill that was never read is not compatibility. The two compat lanes are
+independent — a plugin-wide analyzer failure (no valid `plugin.json`, or a root
+that cannot be listed) does not stop the settings check. A single file the
+analyzer cannot read, list or parse is listed under `compatibility.unchecked`
+(root-relative, with the OS or parser reason) and every other file is still
+analyzed; the verdicts are computed WITHOUT the unchecked files, so an empty
+`verdicts` beside a non-empty `unchecked` is a verdict over fewer files than
+the plugin ships.
+
+Both outcomes are also said on stderr without `--debug`: a
+`Compatibility analysis could not run for <plugin>: <reason>` line, and totals
+for conflicts found and paths the settings check could not compare.
 
 ### Standard Error (stderr)
 

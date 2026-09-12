@@ -38,7 +38,7 @@ import { createTempDirTracker } from '../system/test-common.js';
 
 async function discoveredIn(cwd: string): Promise<Awaited<ReturnType<typeof discoverSkillsFromConfig>>> {
   const config = loadConfig(cwd);
-  return config?.skills ? discoverSkillsFromConfig(config.skills, cwd) : [];
+  return config?.skills ? discoverSkillsFromConfig(config.skills, cwd, 'refuse') : [];
 }
 
 const filesDestsIn = async (cwd: string): Promise<FilesDestCheckResult[]> =>

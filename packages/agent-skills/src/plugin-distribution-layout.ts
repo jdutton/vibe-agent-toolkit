@@ -13,7 +13,7 @@ import { dirname } from 'node:path';
 
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { crawlDirectorySync, refuseListing } from '@vibe-agent-toolkit/utils/crawl';
+import { crawlDirectorySync } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot, isGitIgnored } from '@vibe-agent-toolkit/utils/git';
 
 /**
@@ -147,11 +147,13 @@ function crawlSkillDirs(pluginSourceDir: string, respectGitignore: boolean): str
     absolute: false,
     filesOnly: true,
     respectGitignore,
-    onUnreadable: refuseListing({
-      root: pluginSourceDir,
-      remedy:
-        'Fix the permissions on that directory, or move it out of the plugin\'s `skills/` tree so the build no longer has to list it.',
-    }),
+    unreadable: {
+      refuse: {
+        root: pluginSourceDir,
+        remedy:
+          'Fix the permissions on that directory, or move it out of the plugin\'s `skills/` tree so the build no longer has to list it.',
+      },
+    },
   });
 
   const dirs = skillFiles

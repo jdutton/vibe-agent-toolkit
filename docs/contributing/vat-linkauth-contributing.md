@@ -68,6 +68,14 @@ write side and on the read side, so a row an older build already wrote for a tra
 a miss rather than an answer. A durable refusal — a plain 403, a 401, a 404 — is cached as
 before.
 
+The **body** cache is a different tenant with a different rule. `ContentCache`
+(`content-cache.ts`) stores `(bytes, metadata)` for `fetchAuthenticated`
+(`link-auth-content-fetch.ts`) under a 30-minute TTL, and the write-through keeps only a
+response the origin stood behind — a 2xx, or the 3xx the transport hands back when it stops
+following (`isCacheableStatus`). A 5xx, a 429, a 404 or a 401 is returned to the caller with
+its status but never written: it used to be, and a 500 from a flapping origin was served as a
+hit for the whole window while the recovered origin never saw the next call.
+
 ## Adding a new built-in provider macro
 
 A macro is a shorthand that expands to a full inline provider. The two shipped macros
@@ -233,13 +241,25 @@ The mechanism is `sensitiveHeaderValues(headers)` + `redactSecretsInText(text, s
   produces exactly that, because `resolveToken` only trims the ends of stdout. That message
   reached `vat resources validate`'s stdout through the validator's `safeSerializeError`.
   The probe is `util.inspect` itself (unbounded depth, hidden and Symbol-keyed properties,
-  getter values, `Map`/`Headers` contents, a reassigned `.stack`) plus `JSON.stringify` for
-  the one thing inspect does not print — a `toJSON` result. The replacement error's message
-  is the compact `name: message` / `cause` / `errors` account, redacted, not the inspect dump.
+  getter values, `Map`/`Headers` contents, a reassigned `.stack`, every byte of a `Buffer` —
+  the 50-byte `INSPECT_MAX_BYTES` cap is lifted for the span of the call — and every value on
+  one line, so a `Uint8Array` prints as one contiguous decimal list) plus `JSON.stringify` at
+  EVERY level — the thrown value, each `cause`, each `AggregateError` member — for the one thing
+  inspect does not print, a `toJSON` result. A top-level `JSON.stringify` alone never descends
+  into `cause` or `errors` (non-enumerable on a standard Error), so a `toJSON` one level down
+  was judged clean and rethrown intact, measured. The replacement error's message is the
+  compact `name: message` / `cause` / `errors` account, redacted, not the inspect dump.
   The redaction matches the JSON-escaped, `util.inspect`-escaped, percent-encoded,
-  base64/base64url and case-folded forms of each secret as well as the verbatim bytes; the
-  inspect form exists because inspect prints a NUL as `\x00` where JSON prints `\u0000`, and
-  a NUL-bearing credential on an own property matched neither, measured.
+  base64/base64url and case-folded forms of each secret as well as the verbatim bytes, and
+  the five spellings of its BYTES (contiguous and spaced hex, `66, 101, …` and `66,101,…`
+  decimal, and JSON's index-keyed `"0":66,…`) — what inspect and JSON print for a `Buffer`,
+  `ArrayBuffer` or `Uint8Array` own property holding the value. The inspect form exists
+  because inspect prints a NUL as `\x00` where JSON prints `\u0000`, and a NUL-bearing
+  credential on an own property matched neither, measured.
+- `link-auth-transport.ts` — a redirect whose `Location` is not a URL. `new URL` throws a
+  `TypeError: Invalid URL` carrying the raw header as `.input`; it used to escape the loop body
+  outside the catch above. It is now refused inside `computeRedirect` as an `AuthTransportError`
+  naming the status, the current URL and the header, all three redacted.
 
 `link-auth/resolve.ts` deliberately has NO scrub. Every error its catch can see quotes the
 template, the pattern or a name — never a substituted value — so its reason text cannot

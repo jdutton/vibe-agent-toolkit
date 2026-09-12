@@ -103,7 +103,9 @@ async function runAndGetVerdicts(
     undefined,
     vatContext,
   );
-  const compat = compatMap.get(pluginDir);
+  const block = compatMap.get(pluginDir)?.compat;
+  // The analyzer's result, or `undefined` when the entry says it could not run.
+  const compat = block !== undefined && 'verdicts' in block ? block : undefined;
   const codes = compat?.verdicts.map(v => v.code) ?? [];
   return { compat, codes };
 }

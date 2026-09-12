@@ -237,7 +237,7 @@ describe('the packaging validator\'s own project root, against a source bound to
     const store = recordingStore();
     const { source, offeredRoots } = projectionSource(root, store);
 
-    await validateSkillForPackaging(builtSkillPath, undefined, 'built', { populationSource: source });
+    await validateSkillForPackaging(builtSkillPath, undefined, 'built', { unreadable: 'refuse', populationSource: source });
 
     // The POSITIVE CONTROL for the next test: same helper, same store shape, and
     // here the lane really does run and really does key an extent. Without it,
@@ -257,6 +257,7 @@ describe('the packaging validator\'s own project root, against a source bound to
     const { source, offeredRoots } = projectionSource(root, store);
 
     const result = await validateSkillForPackaging(builtSkillPath, undefined, 'built', {
+      unreadable: 'refuse',
       populationSource: source,
     });
 

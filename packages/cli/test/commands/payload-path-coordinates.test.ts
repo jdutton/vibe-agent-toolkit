@@ -243,6 +243,7 @@ describe('marketplace validate payload', () => {
       marketplace: { name: 'mp', version: '1.0.0' },
       pluginResults: [{ name: 'alpha', source: './plugins/alpha', result: pluginResult }],
       undeclared: [],
+      refused: [],
       issues: pluginResult.issues,
       duration: '7ms',
     });
@@ -275,6 +276,7 @@ describe('marketplace validate payload', () => {
       marketplace: undefined,
       pluginResults: [],
       undeclared: [],
+      refused: [],
       issues: [],
       bailSummary: 'Marketplace manifest missing',
       duration: '2ms',
@@ -309,7 +311,7 @@ const MANIFEST_DIR = '.claude-plugin';
 
 /** Emit the document the command would, for a marketplace on disk. */
 async function marketplaceReportFor(root: string): Promise<Record<string, unknown>> {
-  const { marketplaceResult, pluginResults, undeclared, issues } = await collectMarketplaceFindings(
+  const { marketplaceResult, pluginResults, undeclared, refused, issues } = await collectMarketplaceFindings(
     root,
     silentLogger,
   );
@@ -318,6 +320,7 @@ async function marketplaceReportFor(root: string): Promise<Record<string, unknow
     marketplace: marketplaceResult.metadata,
     pluginResults,
     undeclared,
+    refused,
     issues,
     duration: '9ms',
   });

@@ -49,6 +49,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should crawl directory and build complete registry', async () => {
     await registry.crawl({
+      unreadable: 'refuse',
       baseDir: tempDir,
       include: ['**/*.md'],
     });
@@ -59,6 +60,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should query resources with glob patterns', async () => {
     await registry.crawl({
+      unreadable: 'refuse',
       baseDir: tempDir,
       include: ['**/*.md'],
     });
@@ -73,6 +75,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should filter resources with multiple criteria', async () => {
     await registry.crawl({
+      unreadable: 'refuse',
       baseDir: tempDir,
       include: ['**/*.md'],
     });
@@ -88,6 +91,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should detect content-based duplicates', async () => {
     await registry.crawl({
+      unreadable: 'refuse',
       baseDir: tempDir,
       include: ['**/*.md'],
     });
@@ -101,6 +105,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should get unique resources by checksum', async () => {
     await registry.crawl({
+      unreadable: 'refuse',
       baseDir: tempDir,
       include: ['**/*.md'],
     });
@@ -112,6 +117,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should combine query with collection operations', async () => {
     await registry.crawl({
+      unreadable: 'refuse',
       baseDir: tempDir,
       include: ['**/*.md'],
     });
@@ -130,6 +136,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should support name-based lookups', async () => {
     await registry.crawl({
+      unreadable: 'refuse',
       baseDir: tempDir,
       include: ['**/*.md'],
     });
@@ -142,6 +149,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should support checksum-based lookups', async () => {
     await registry.crawl({
+      unreadable: 'refuse',
       baseDir: tempDir,
       include: ['**/*.md'],
     });
@@ -160,6 +168,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should exclude directories with patterns', async () => {
     await registry.crawl({
+      unreadable: 'refuse',
       baseDir: tempDir,
       include: ['**/*.md'],
       exclude: ['**/internal/**'],
@@ -172,6 +181,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should transform query results before collecting', async () => {
     await registry.crawl({
+      unreadable: 'refuse',
       baseDir: tempDir,
       include: ['**/*.md'],
     });
@@ -188,6 +198,7 @@ describe('Resource Collection System - End to End', () => {
 
   it('should support complex workflow: filter, dedupe, collect', async () => {
     await registry.crawl({
+      unreadable: 'refuse',
       baseDir: tempDir,
       include: ['**/*.md'],
     });

@@ -304,6 +304,34 @@ describe('fetchAuthenticated — content cache integration', () => {
     //  absence of any side effect, captured by the next test on persisted tokens)
   });
 
+  /**
+   * The write-through used to store every status, so a 500 from a flapping
+   * origin was served as a hit for the whole TTL and the (now healthy) server
+   * never saw the second call. The validator's status cache already refuses
+   * transient refusals; the content cache stores a body, and a body worth
+   * keeping is one the origin stood behind — 2xx, or the 3xx the transport
+   * returns when it stops following.
+   */
+  it.each([500, 502, 503, 429, 404, 401, 403])('does not cache a %i — the next call reaches the origin', async (status) => {
+    const { fetchImpl: failing } = bytesFetch(SAMPLE_BYTES, {}, status);
+    const first = await fetchOk(failing, { cache });
+    expect(first.metadata.status).toBe(status);
+    expect(await cache.get(GITHUB_CONTENTS_URL)).toBeNull();
+
+    const { fetchImpl: healthy } = bytesFetch(SAMPLE_BYTES_BINARY);
+    const second = await fetchOk(healthy, { cache });
+    expect(second.cached).toBe(false);
+    expect(second.metadata.status).toBe(200);
+    expect(second.bytes).toEqual(SAMPLE_BYTES_BINARY);
+  });
+
+  it.each([200, 203, 301])('caches a %i — a body the origin stood behind (a 301 with no Location is what the transport returns)', async (status) => {
+    const { fetchImpl } = bytesFetch(SAMPLE_BYTES, {}, status);
+    await fetchOk(fetchImpl, { cache });
+    const hit = await cache.get(GITHUB_CONTENTS_URL);
+    expect(hit?.metadata.status).toBe(status);
+  });
+
   it('NEVER caches unverified outcomes even when cache is supplied (§6.3)', async () => {
     const { fetchImpl, calls } = countingFetch();
     const provider = githubProvider({

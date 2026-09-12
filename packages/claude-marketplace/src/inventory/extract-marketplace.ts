@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, statSync, type Stats } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 import type { PluginInventory, PluginRef } from '@vibe-agent-toolkit/agent-skills';
@@ -167,8 +167,9 @@ interface MarketplaceRoot {
 }
 
 /**
- * The directory a string `source` names, or `undefined` when it lies outside
- * the marketplace root — by any of three spellings of "outside".
+ * The directory a string `source` names, or the reason it was refused — when
+ * it lies outside the marketplace root by any of three spellings of "outside",
+ * or (below) when it is inside but is not a plugin directory at all.
  *
  * `marketplace.json` is attacker-reachable content (it is the thing being
  * audited), and this lane reads the RAW entries even when the schema refused
@@ -190,40 +191,79 @@ interface MarketplaceRoot {
  * its third step goes through `escapesCorpusRoot`, which lives in the CLI
  * package and cannot be imported from here, so this lane asks the question
  * through `joinUnderRoot` instead.
+ *
+ * Two more refusals sit in front of the walk, because "inside the root" is
+ * not yet "a plugin directory". Each used to be WALKED as a plugin with an
+ * empty manifest and zero parse errors — indistinguishable from a real
+ * manifest-less plugin:
+ *
+ * - an EMPTY source, or one carrying a `..` segment that collapses back inside
+ *   (`plugins/good/..`) — refused lexically, by the rule the message already
+ *   states ("no `..` segment"); `joinUnderRoot` only asks where the path ENDS
+ *   UP, so it let these through;
+ * - a source naming a regular FILE — `existsSync` is true for it, and the
+ *   plugin extractor then found no manifest and no components.
+ *
+ * @returns the directory, or the refusal's reason — what the parse error says
  */
-function containedSourceDir(root: MarketplaceRoot, source: string): { resolved: string; exists: boolean } | undefined {
+function containedSourceDir(
+	root: MarketplaceRoot,
+	source: string,
+): { resolved: string; exists: boolean } | { refused: string } {
+	const forward = toForwardSlash(source);
+	if (forward === '') return { refused: 'is empty' };
+	if (forward.split('/').includes('..')) return { refused: 'carries a ".." segment' };
 	let resolved: string;
 	try {
-		resolved = safePath.joinUnderRoot(root.path, toForwardSlash(source));
+		resolved = safePath.joinUnderRoot(root.path, forward);
 	} catch {
-		return undefined;
+		return { refused: OUTSIDE_ROOT };
 	}
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- contained under the marketplace root by joinUnderRoot
-	if (!existsSync(resolved)) return { resolved, exists: false };
+	const stats = statOrUndefined(resolved);
+	if (stats === undefined) return { resolved, exists: false };
+	if (!stats.isDirectory()) return { refused: 'is not a directory' };
 	try {
 		safePath.joinUnderRoot(root.realPath, safePath.relative(root.realPath, toForwardSlash(normalizePath(resolved))));
 	} catch {
-		return undefined;
+		return { refused: OUTSIDE_ROOT };
 	}
 	return { resolved, exists: true };
 }
 
+const OUTSIDE_ROOT = 'resolves outside the marketplace directory';
+
 /**
- * A string `source` as a {@link PluginRef}. A source outside the root is
- * declared but never walked: `exists: false` keeps it out of `discovered`, so
+ * `stat` that answers `undefined` for anything that is not there — a missing
+ * path, a dangling link, a component that is a file, a directory the process
+ * may not enter. Every one of those is "no plugin directory here", which is
+ * the `exists: false` the caller already publishes; this lane never throws.
+ */
+function statOrUndefined(path: string): Stats | undefined {
+	try {
+		// eslint-disable-next-line security/detect-non-literal-fs-filename -- contained under the marketplace root by joinUnderRoot
+		return statSync(path);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * A string `source` as a {@link PluginRef}. A source that is refused — outside
+ * the root, empty, `..`-bearing, or a file — is declared but never walked:
+ * `exists: false` keeps it out of `discovered`, so
  * `detectMarketplacePluginSourceMissing` (the code `vat audit` already emits
  * for a path source it cannot reach) names it on the manifest itself, and a
  * `parseErrors` entry says WHY for `vat inventory`. `resolvedPath` is the
- * manifest, not the outside target, so no consumer relativizes a path that
- * starts with `../`.
+ * manifest, not the target, so no consumer relativizes a path that starts
+ * with `../`.
  */
 function pathSourceRef(root: MarketplaceRoot, source: string): PluginRef {
 	const dir = containedSourceDir(root, source);
-	if (dir === undefined) {
+	if ('refused' in dir) {
 		root.parseErrors.push({
 			path: root.manifestFilePath,
-			message: `plugin source "${source}" resolves outside the marketplace directory and was not walked`
-				+ ' — a plugin source must be a relative path that stays inside the marketplace'
+			message: `plugin source "${source}" ${dir.refused} and was not walked`
+				+ ' — a plugin source must be a relative path to a directory inside the marketplace'
 				+ ' (no absolute path, no ".." segment, no symlink pointing out).',
 		});
 		return { manifestPath: source, resolvedPath: root.manifestFilePath, exists: false, source: 'path' };

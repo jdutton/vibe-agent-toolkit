@@ -78,29 +78,65 @@ For the full URL form table and edge cases, see `packages/cli/docs/audit.md` (th
 
 Audit is the general-purpose command — you may point it at any path, configured or not. When it encounters a SKILL.md inside a configured VAT project, it walks UP to that skill's nearest-ancestor `vibe-agent-toolkit.config.yaml` and respects the skill's per-skill packaging rules (`excludeReferencesFromBundle`, `linkFollowDepth`, `files`) to avoid false flags — but it never composes configs across project boundaries. Per-skill rules from one project do not bleed into skills in another project. For gated, configured-project-level validation, use the lifecycle commands (`vat skills validate`, `vat verify`) and run them from within the project directory.
 
-## Compatibility Analysis (`--compat`)
+## Compatibility Analysis (`--compat`, `--settings [file]`)
 
 ```bash
 vat audit ./plugins/ --compat
+vat audit ./plugins/ --compat --settings                                    # auto-discover the effective settings
+vat audit ./plugins/ --compat --settings /etc/claude-code/managed-settings.json
 ```
 
-Output per plugin:
+Every `claude-plugin` entry gets a `compatibility:` block; with `--settings`
+(requires `--compat`), a `settings:` block beside it. Both are ALWAYS present for a plugin the run was
+asked about — a lane that could not run says so in its block:
+
 ```yaml
-plugin: mission-control
-compatibility:
-  claude-code:
-    compatible: true
-    evidence: []
-  cowork:
-    compatible: true
-    evidence: []
-  claude-desktop:
-    compatible: false
-    evidence:
-      - type: python-script
-        file: hooks-handlers/handler.py
-        detail: Python execution not available in claude-desktop
+files:
+  - path: plugins/mission-control
+    type: claude-plugin
+    compatibility:
+      plugin: mission-control
+      declaredTargets: [claude-code, claude-chat]
+      observations:
+        - code: CAPABILITY_LOCAL_SHELL
+          summary: Plugin requires a local shell environment.
+          supportingEvidence: [ALLOWED_TOOLS_LOCAL_SHELL]
+      verdicts:
+        - code: COMPAT_TARGET_INCOMPATIBLE
+          observationCode: CAPABILITY_LOCAL_SHELL
+          target: claude-chat
+          summary: Target 'claude-chat' has no local shell but skill requires one.
+      unchecked:                       # files the analysis could not read — the verdicts above were computed WITHOUT them
+        - path: plugins/mission-control/skills/locked/SKILL.md
+          reason: "EACCES: permission denied, open 'plugins/mission-control/skills/locked/SKILL.md'"
+      summary: { totalFiles: 4, skillFiles: 2, scriptFiles: 1, hookFiles: 0, mcpConfigs: 0 }   # what was ANALYZED
+    settings:
+      compatible: false                # true ONLY when conflicts and unchecked are both empty
+      conflicts:
+        - type: tool-blocked
+          detail: Tool "Bash" in skills/deploy/SKILL.md blocked by org policy (permissions.deny)
+          blockedBy: permissions.deny
+          value: Bash
+          settingsFile: /etc/claude-code/managed-settings.json
+          settingsLevel: managed
+      unchecked:                       # present only when non-empty
+        - path: plugins/mission-control/skills/locked/SKILL.md
+          reason: "EACCES: permission denied, open 'plugins/mission-control/skills/locked/SKILL.md'"
+  - path: plugins/other-plugin
+    type: claude-plugin
+    compatibility:                     # a plugin-wide failure: no valid plugin.json, or a root that cannot be listed
+      analyzed: false
+      reason: "plugin.json missing required \"name\" field in plugins/other-plugin/.claude-plugin/plugin.json"
 ```
+
+Read `verdicts` for the per-target answer (`COMPAT_TARGET_INCOMPATIBLE`,
+`COMPAT_TARGET_UNDECLARED`), and `unchecked` before trusting it: an empty
+`verdicts` over a non-empty `unchecked` is not "compatible", it is a verdict
+over fewer files than the plugin ships. Both lanes follow symlinked skill
+directories and files, and the two lanes are independent — a file the analyzer
+could not read does not stop the settings check. Every path is relative to the
+document's `root`; the plugin-wide `analyzed: false` and the settings-lane
+totals are also said on stderr without `--debug`.
 
 Use this before a release to determine which surfaces each plugin supports.
 

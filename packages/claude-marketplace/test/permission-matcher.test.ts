@@ -3,10 +3,13 @@
  * Verifies our reimplementation of Claude Code's permission matching logic.
  */
 
+import path from 'node:path';
+
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { describe, expect, it } from 'vitest';
 
+import { compilePathPattern, matchesPathPattern } from '../src/settings/path-pattern.js';
 import {
   classifyBashRule,
   isSubsumedBy,
@@ -17,6 +20,7 @@ import {
   matchesPermissionRule,
   parseBashRuleContent,
   parsePermissionRule,
+  relativePathUnderRoot,
   ruleConstrainsDeclaration,
 } from '../src/settings/permission-matcher.js';
 
@@ -1499,6 +1503,12 @@ describe('matchesPathRule — an empty tool input', () => {
 const READ_ENV = 'Read(.env)';
 const READ_CLASS_NEGATED = 'Read(a[!b]c)';
 const READ_CLASS_RANGE = 'Read(a[a-c]d)';
+const READ_STAR = 'Read(*)';
+const READ_X = 'Read(x)';
+const READ_PARENT_X = 'Read(../x)';
+const READ_A_UP_B = 'Read(a/../b)';
+const READ_SRC_ALL = 'Read(./src/**)';
+const SSH_KEY_UNDER_HOME = '.ssh/id_rsa';
 
 /** The rule spellings whose path body is empty once the prefix table has read them. */
 const EMPTY_BODY_RULES = ['Read()', 'Read(/)', 'Read(//)', 'Read(~/)', 'Read(./)'] as const;
@@ -1539,13 +1549,96 @@ describe('matchesPathRule — a file NAMED with a leading `..`', () => {
   it('matches a file under the root whose name starts with `..`', () => {
     expect(matchesPathRule(safePath.join(PLUGIN_DIR, '..foo'), '*', PLUGIN_DIR)).toBe(true);
     expect(matchesPathRule(safePath.join(PLUGIN_DIR, '..secret'), '..secret', PLUGIN_DIR)).toBe(true);
-    expect(ruleConstrainsDeclaration('Read(..secret)', 'Read(*)', 'deny', PLUGIN_DIR)).toBe(true);
+    expect(ruleConstrainsDeclaration('Read(..secret)', READ_STAR, 'deny', PLUGIN_DIR)).toBe(true);
   });
 
   it('still refuses a path that leaves the root', () => {
     expect(matchesPathRule(safePath.join(PLUGIN_DIR, '../x'), '*', PLUGIN_DIR)).toBe(false);
     expect(matchesPathRule(safePath.join(PLUGIN_DIR, '..'), '*', PLUGIN_DIR)).toBe(false);
     expect(matchesPathRule(safePath.join(PLUGIN_DIR, '../..foo'), '*', PLUGIN_DIR)).toBe(false);
+  });
+});
+
+describe('relativePathUnderRoot — a file on another drive', () => {
+  // 🚩 `path.win32.relative` across drive letters (or from a drive to a UNC
+  // share) returns the target's ABSOLUTE path, not a `..`-prefixed one. It is
+  // neither `..`, `../…` nor empty, so the outside-the-root guard passed it to
+  // the matcher as if it were a path under the root, where `**` matched it:
+  // deny `Read(~/**)` with `~` on C: reported a conflict with a plugin on D:
+  // that declared `Read(./src/**)`, and the reverse pair likewise. GitHub's
+  // Windows runners are exactly that layout (`C:\Users\runneradmin` against a
+  // `D:\a\…` workspace). Driven through `path.win32` so the CI leg that is not
+  // Windows pins it too.
+  const win = path.win32;
+  const HOME = String.raw`C:\Users\me`;
+
+  it('refuses a path on another drive, or on a UNC share', () => {
+    expect(relativePathUnderRoot(HOME, String.raw`D:\plugin\src\x`, win)).toBeUndefined();
+    expect(relativePathUnderRoot(String.raw`D:\plugin`, String.raw`C:\Users\me\.ssh\id_rsa`, win)).toBeUndefined();
+    expect(relativePathUnderRoot(HOME, String.raw`\\server\share\x`, win)).toBeUndefined();
+  });
+
+  it('still reads a path under the root, forward-slashed and case-blind, on the same drive', () => {
+    expect(relativePathUnderRoot(HOME, String.raw`C:\Users\me\.ssh\id_rsa`, win)).toBe(SSH_KEY_UNDER_HOME);
+    expect(relativePathUnderRoot(HOME, String.raw`c:\users\ME\x`, win)).toBe('x');
+    expect(relativePathUnderRoot(HOME, String.raw`.ssh\id_rsa`, win)).toBe(SSH_KEY_UNDER_HOME);
+    expect(relativePathUnderRoot(HOME, HOME, win)).toBe('');
+    expect(relativePathUnderRoot(HOME, String.raw`C:\Users\other`, win)).toBeUndefined();
+    expect(relativePathUnderRoot(HOME, String.raw`C:\Users\me\..`, win)).toBeUndefined();
+  });
+
+  it('answers the same on POSIX', () => {
+    const posix = path.posix;
+    expect(relativePathUnderRoot('/home/me', `/home/me/${SSH_KEY_UNDER_HOME}`, posix)).toBe(SSH_KEY_UNDER_HOME);
+    expect(relativePathUnderRoot('/home/me', SSH_KEY_UNDER_HOME, posix)).toBe(SSH_KEY_UNDER_HOME);
+    expect(relativePathUnderRoot('/home/me', '/proj/src/x', posix)).toBeUndefined();
+    expect(relativePathUnderRoot('/home/me', '/home/me/..foo', posix)).toBe('..foo');
+  });
+});
+
+describe('ruleConstrainsDeclaration — a `..` segment in a rule or declaration', () => {
+  // 🚩 The path side of a match is resolved (`safePath.resolve`), so a `..` in
+  // it collapses; the pattern side kept `..` as a literal segment, which no
+  // resolved path carries. The text witness went through `join` and lost its
+  // `..`, the compiled witness kept it, and `matchesPathRule` refused both —
+  // so a rule spelled with `..` constrained nothing and did not contain
+  // itself: `Read(../x)` vs `Read(../x)` → false, `Read(a/../b)` vs `Read(*)`
+  // → false. A rule path is now read the way a file path is: `..` climbs.
+  it('reads `..` in a pattern the way it is read in a path', () => {
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, 'b'), 'a/../b', PLUGIN_DIR)).toBe(true);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, 'b'), './a/../b', PLUGIN_DIR)).toBe(true);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, 'b'), '/a/../b', PLUGIN_DIR)).toBe(true);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, 'a/b'), 'a/../b', PLUGIN_DIR)).toBe(false);
+    // Climbing out of the root moves the root, so the sibling IS reachable.
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '../x'), '../x', PLUGIN_DIR)).toBe(true);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '../y'), '../x', PLUGIN_DIR)).toBe(false);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '../x'), '../**', PLUGIN_DIR)).toBe(true);
+  });
+
+  it('reports an identical pair, and a pair that meet once `..` is resolved, as a conflict', () => {
+    const rows: ReadonlyArray<readonly [decl: string, rule: string]> = [
+      [READ_PARENT_X, READ_PARENT_X],
+      ['Read(./a/../b)', 'Read(./a/../b)'],
+      [READ_A_UP_B, READ_STAR],
+      [READ_A_UP_B, 'Read(b)'],
+      ['Read(b)', READ_A_UP_B],
+      ['Read(**/../x)', READ_STAR],
+      [READ_SRC_ALL, 'Read(./src/../src/index.ts)'],
+    ];
+    for (const [decl, rule] of rows) {
+      expect(ruleConstrainsDeclaration(decl, rule, 'deny', PLUGIN_DIR), `${decl} vs ${rule}`).toBe(true);
+    }
+  });
+
+  it('still reports no conflict where the resolved paths are disjoint', () => {
+    const rows: ReadonlyArray<readonly [decl: string, rule: string]> = [
+      [READ_A_UP_B, 'Read(a/**)'],
+      [READ_PARENT_X, 'Read(./x)'],
+      ['Read(./x)', READ_PARENT_X],
+    ];
+    for (const [decl, rule] of rows) {
+      expect(ruleConstrainsDeclaration(decl, rule, 'deny', PLUGIN_DIR), `${decl} vs ${rule}`).toBe(false);
+    }
   });
 });
 
@@ -1627,6 +1720,70 @@ describe('path-lane matching cost is linear in the input', () => {
       },
     );
   });
+
+  // 🚩 COMPILE, not match. The three ratios above time the scan over a pattern
+  // whose compile is trivial, and the module header's "no input can push it
+  // past O(pattern × path)" was true of the scan only: `parseClass` searched
+  // from each `[` to the END of the segment for a `]`, and an unterminated `[`
+  // advanced one character to the next `[`, which searched to the end again.
+  // Measured on the shipped module: 5,000 `[` → 85 ms, 10,000 → 316 ms, 20,000
+  // → 1,279 ms, 40,000 → 5,855 ms (~4× per doubling), and one 40 KB
+  // `allowed-tools: Read([[[[…)` entry cost 12–18 s PER deny rule through
+  // `ruleConstrainsDeclaration`. The Bash lane at the same size: 0.1 ms.
+  //
+  // ⛔ `lastIndexOf(']')` once per segment is NOT the fix, and the second shape
+  // here is why: `[\]` repeated puts a `]` at the very end, so every `[` sits
+  // before it and every scan still runs to the end. The property is that each
+  // character is scanned a bounded number of times, whatever comes after it.
+  it('compiles a run of unterminated `[` in linear time', () => {
+    // Each unit, and the one path segment it compiles to match.
+    const shapes: ReadonlyArray<readonly [unit: string, member: string]> = [
+      ['[', '['],
+      [String.raw`[\]`, '[]'],
+    ];
+    const sizes = [1000, 4000] as const;
+    for (const [unit, member] of shapes) {
+      const pattern = (n: number): string => unit.repeat(n);
+      // The blindness guard: the compiled pattern is live and every `[` is a
+      // literal, so it matches exactly its own text and nothing shorter.
+      const compiled = compilePathPattern(pattern(sizes[1]));
+      expect(matchesPathPattern(compiled, member.repeat(sizes[1])), unit).toBe(true);
+      expect(matchesPathPattern(compiled, member.repeat(sizes[1] - 1)), unit).toBe(false);
+      expectLinearCost(
+        () => {
+          compilePathPattern(pattern(sizes[0]));
+        },
+        () => {
+          compilePathPattern(pattern(sizes[1]));
+        },
+      );
+    }
+  });
+
+  // The attacker-reachable surface, end to end: a SKILL.md declaration made of
+  // `[` against the bare-ish deny rule an org actually writes, and the reverse.
+  it('does not blow up when a declaration or a rule is a run of `[`', () => {
+    const brackets = (n: number): string => `Read(${'['.repeat(n)})`;
+    const sizes = [1000, 4000] as const;
+    expect(ruleConstrainsDeclaration(brackets(sizes[1]), READ_STAR, 'deny', PLUGIN_DIR)).toBe(true);
+    expect(ruleConstrainsDeclaration(READ_X, brackets(sizes[1]), 'deny', PLUGIN_DIR)).toBe(false);
+    expectLinearCost(
+      () => {
+        ruleConstrainsDeclaration(brackets(sizes[0]), READ_STAR, 'deny', PLUGIN_DIR);
+      },
+      () => {
+        ruleConstrainsDeclaration(brackets(sizes[1]), READ_STAR, 'deny', PLUGIN_DIR);
+      },
+    );
+    expectLinearCost(
+      () => {
+        ruleConstrainsDeclaration(READ_X, brackets(sizes[0]), 'deny', PLUGIN_DIR);
+      },
+      () => {
+        ruleConstrainsDeclaration(READ_X, brackets(sizes[1]), 'deny', PLUGIN_DIR);
+      },
+    );
+  });
 });
 
 // ============================================================================
@@ -1649,7 +1806,7 @@ describe('ruleConstrainsDeclaration — path spellings', () => {
       ['Read(/etc/**)', 'Read(/etc/passwd)'],
       ['Read(//etc/**)', 'Read(//etc/passwd)'],
       ['Read(/src/**)', 'Read(./src/index.ts)'],
-      ['Read(./src/**)', 'Read(/src/index.ts)'],
+      [READ_SRC_ALL, 'Read(/src/index.ts)'],
       ['Read(src/**)', 'Read(./src/index.ts)'],
     ];
     for (const [decl, rule] of rows) {
@@ -1725,7 +1882,7 @@ describe('ruleConstrainsDeclaration — a witness drawn from the compiled patter
       [READ_CLASS_NEGATED, 'Read(abc)'],
       [READ_CLASS_RANGE, 'Read(a[x-z]d)'],
       ['Read(*.env)', 'Read(*.ts)'],
-      ['Read(./src/**)', 'Read(./test/**)'],
+      [READ_SRC_ALL, 'Read(./test/**)'],
     ];
     for (const [decl, rule] of rows) {
       expect(ruleConstrainsDeclaration(decl, rule, 'deny', PLUGIN_DIR), `${decl} vs ${rule}`).toBe(false);

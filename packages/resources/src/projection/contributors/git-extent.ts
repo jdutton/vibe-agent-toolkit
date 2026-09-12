@@ -41,7 +41,6 @@
 import {
   crawlDirectory,
   NEVER_CRAWL_GLOBS,
-  refuseListing,
 } from '@vibe-agent-toolkit/utils/crawl';
 
 import type {
@@ -52,7 +51,7 @@ import type {
 import type { JsonValue } from '../../schemas/projection-shared.js';
 import type { ResolutionContextRow } from '../../schemas/projection-zones.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../contributor.js';
-import { PROJECTION_LISTING_REMEDY } from '../crawl-source.js';
+import { listingRefusalRemedy } from '../crawl-source.js';
 import type { ProjectionBase } from '../projection.js';
 import { collectRealization } from '../realizations.js';
 
@@ -152,7 +151,7 @@ export class GitExtentContributor implements ExtentContributor {
       // not ignored), so the answer is the projection's stop-not-degrade one,
       // for the caching reason `crawl-source.ts` gives. A locked directory
       // that IS ignored never reaches here: git prunes it by name.
-      onUnreadable: refuseListing({ root: base.root, remedy: PROJECTION_LISTING_REMEDY }),
+      unreadable: { refuse: { root: base.root, remedy: listingRefusalRemedy(base.root) } },
     });
 
     const resources = new Map<string, ResourceRow>();

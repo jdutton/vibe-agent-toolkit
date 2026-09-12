@@ -28,10 +28,9 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import {
   crawlDirectory,
-  type DirectoryRefusal,
   type CrawlOptions as UtilsCrawlOptions,
   crawlPathFilter,
-  refusedListingMessage,
+  type UnreadablePolicy,
 } from '@vibe-agent-toolkit/utils/crawl';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
@@ -56,6 +55,10 @@ import { fillLinkFacts, fragmentIndex, judgeLink, resolveLinkEntries, unreadable
 import { parserKindForMimeType } from './mime-type.js';
 import { ParseCache, type ParseCacheStats, vatCacheRoot } from './parse-cache.js';
 import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } from './parse-dispatcher.js';
+// A value import, and acyclic: `crawl-source.ts` reaches only `utils` and a
+// type from `realizations.ts`, never back into the registry. The remedy is
+// shared so the walk lane refuses with the projection's exact sentence.
+import { listingRefusalRemedy } from './projection/crawl-source.js';
 import {
   collectionMimeConflictFinding,
   createCollectionMimeResolver,
@@ -245,11 +248,69 @@ function warnPopulationRootMismatch(boundRoot: string, offeredRoot: string): voi
 }
 
 /**
+ * What the crawl does with a directory it cannot list — the CALLER's decision,
+ * required, with no default, because the two standing rulings are per-verb and
+ * both stand:
+ *
+ * - `'refuse'` — STOP, by name, with the projection's sentence
+ *   ({@link listingRefusalRemedy}): the ruling for every verb whose output is
+ *   acted on as a complete population — `vat resources validate`/`scan`/`check`,
+ *   `vat skills validate`/`build`, `vat build`, `vat claude context`, the
+ *   pipeline oracles. A literal rather than the crawler's `{ refuse: { root,
+ *   remedy } }` so every such lane refuses with ONE sentence and switching
+ *   `VAT_RESOURCES_CRAWL` cannot turn an exit 2 into a warning.
+ * - `{ degrade }` — KEEP GOING and hand the refusal over: the ruling for
+ *   `vat audit`, where status describes what was found and exit describes
+ *   whether the run completed. The caller is promising to REPORT the gap
+ *   (audit files `SCAN_PATH_UNREADABLE` on the directory) — not to drop it.
+ *
+ * 🪤 The policy used to live INSIDE this class, and whichever ruling it
+ * encoded was wrong for the other verb: first "record and warn" (so the walk
+ * lane exited 0 on a tree the projection lane exited 2 on), then "refuse" (so
+ * `vat audit` exited 2 with zero findings over one `chmod 000` sibling —
+ * issue #180's exact shape). It is the caller's knowledge, so it is the
+ * caller's field.
+ */
+export type RegistryUnreadablePolicy = 'refuse' | Extract<UnreadablePolicy, { degrade: unknown }>;
+
+/**
+ * Refuse an omitted `unreadable` up front, by name, before any directory is listed.
+ *
+ * The type makes the field required and that enumerates the TypeScript callers;
+ * this is the runtime half for the callers the type cannot reach (test files
+ * are not typechecked by the build, a JS adopter has no compiler). Surfacing it
+ * only on the first refusal would let a tree with nothing unreadable keep
+ * returning complete lists — the optional seam back again, one layer down.
+ *
+ * @param policy - What the caller passed as `unreadable`
+ */
+function requireRegistryUnreadablePolicy(
+  policy: RegistryUnreadablePolicy | undefined,
+): asserts policy is RegistryUnreadablePolicy {
+  if (policy === undefined) {
+    throw new TypeError(
+      "ResourceRegistry.crawl: `unreadable` is required — pass 'refuse' to stop on a directory the crawl cannot list, "
+      + 'or { degrade: (refusal) => … } to keep going and report the gap yourself.',
+    );
+  }
+}
+
+/**
  * Options for crawling directories to add resources.
  */
 export interface CrawlOptions {
   /** Base directory to crawl */
   baseDir: string;
+  /**
+   * What to do with a directory the crawl cannot list — see
+   * {@link RegistryUnreadablePolicy}. Required, no default.
+   *
+   * Governs the WALK. A `populationSource` decides its own refusals (the
+   * projection refuses inside the population and records inside ignored
+   * territory — see `projection/crawl-source.ts`), so `{ degrade }` beside a
+   * source is refused by name rather than silently ignored.
+   */
+  unreadable: RegistryUnreadablePolicy;
   /** Include patterns (default: {@link DEFAULT_RESOURCE_INCLUDE}) */
   include?: string[];
   /** Exclude patterns (default: node_modules, .git, dist) */
@@ -508,7 +569,7 @@ async function readAndCompileSchema(
  *
  * // Add resources
  * await registry.addResource('/project/README.md');
- * await registry.crawl({ baseDir: '/project/docs' });
+ * await registry.crawl({ baseDir: '/project/docs', unreadable: 'refuse' });
  *
  * // Validate all links
  * const result = await registry.validate();
@@ -659,19 +720,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private unreadableResources: UnreadableResource[] = [];
 
   /**
-   * Directories the crawl asked to list and was refused — so nothing beneath
-   * them was enumerated at all. Cleared by clear(). Surfaced as
-   * SCAN_PATH_UNREADABLE issues in validate().
-   *
-   * 🚨 A different gap from {@link unreadableResources}, one level up: those
-   * are files the walk SAW and could not open; these are subtrees the walk
-   * never saw into. Every file under one is in the declared population and in
-   * none of the counts — the same green-without-running shape the link judge
-   * refuses with `LINK_TARGET_UNREADABLE`, and the crawl used to swallow it.
-   */
-  private unlistableDirectories: DirectoryRefusal[] = [];
-
-  /**
    * Population-time conditions the population source handed over with the
    * paths — the projection's `realization_conditions` for the extents the lane
    * registered. Empty on the walk lane, which has no projection. Cleared by
@@ -692,19 +740,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   getUnreadableResources(): UnreadableResource[] {
     return [...this.unreadableResources];
-  }
-
-  /**
-   * Directories the crawl could not list, in the order the walk met them.
-   *
-   * A population fact like the two logs above: a caller reconciling "declared"
-   * against "admitted" needs to know which subtrees were never enumerated, and
-   * an issue list alone cannot say how many files that cost.
-   *
-   * @returns A copy of the refusal log, oldest first
-   */
-  getUnlistableDirectories(): DirectoryRefusal[] {
-    return [...this.unlistableDirectories];
   }
 
   /**
@@ -841,6 +876,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * ```typescript
    * const registry = await ResourceRegistry.fromCrawl({
    *   baseDir: '/project/docs',
+   *   unreadable: 'refuse', // or { degrade } — see RegistryUnreadablePolicy
    *   include: ['**.md'],
    *   exclude: ['node_modules'],
    * });
@@ -1254,7 +1290,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   /**
    * Crawl a directory and add all matching markdown files.
    *
-   * @param options - Crawl options (baseDir, include, exclude patterns)
+   * @param options - Crawl options (baseDir, the required `unreadable` policy, include, exclude patterns)
    * @returns Array of all added resources
    *
    * @example
@@ -1262,6 +1298,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * // Crawl docs directory, excluding node_modules
    * const resources = await registry.crawl({
    *   baseDir: './docs',
+   *   unreadable: 'refuse',
    *   include: ['**\/*.md'],
    *   exclude: ['**\/node_modules/**']
    * });
@@ -1273,7 +1310,16 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       include = [...DEFAULT_RESOURCE_INCLUDE],
       exclude = ['**/node_modules/**', '**/.git/**', '**/dist/**'],
       followSymlinks = false,
+      unreadable,
+      populationSource,
     } = options;
+    requireRegistryUnreadablePolicy(unreadable);
+    if (populationSource !== undefined && unreadable !== 'refuse') {
+      throw new TypeError(
+        'ResourceRegistry.crawl: `{ degrade }` cannot be honoured beside a `populationSource` — the source decides its own '
+        + "refusals (it refuses inside the population). Pass 'refuse', or drop the source to crawl with the walk.",
+      );
+    }
 
     // Propagate baseDir to registry if not already set (enables path-relative IDs)
     if (baseDir && !this.baseDir) {
@@ -1302,13 +1348,18 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       // fast path and it keeps ignored files out, which is the half of the
       // universe that must NOT widen (see {@link CrawlOptions.includeUntracked}).
       includeUntracked: true,
-      // Degrade, don't destroy — but never silently. Without this the walk
-      // THROWS on a refused listing (the crawler's only other honest answer);
-      // with it the refusal is recorded here and reported by `validate()` as
-      // SCAN_PATH_UNREADABLE, while every readable sibling is still admitted.
-      onUnreadable: (refusal) => {
-        this.unlistableDirectories.push(refusal);
-      },
+      // 🚨 The CALLER's policy — see {@link RegistryUnreadablePolicy}. Under
+      // `'refuse'` this lane refuses by name with the projection's sentence,
+      // so a locked NON-ignored directory reaches the same exit on both lanes
+      // (this lane used to record it as a `SCAN_PATH_UNREADABLE` warning while
+      // the projection lane aborted the identical tree — and the warning
+      // prescribed `resources.exclude`, a knob the default lane does not read).
+      // A locked GITIGNORED directory never reaches here on the git route (git
+      // prunes it by name) and is a warning row on the projection, never an
+      // abort. Under `{ degrade }` the refusal is the caller's to report.
+      unreadable: unreadable === 'refuse'
+        ? { refuse: { root: baseDir, remedy: listingRefusalRemedy(baseDir) } }
+        : unreadable,
     };
 
     // The enumeration ALONE is charged here, not the whole method: `addResources`
@@ -1343,7 +1394,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // back to the walk rather than to an empty list. `??` and not `||`: an empty
     // ARRAY is a legitimate population (a tree with no admitted members) and must
     // not re-trigger the walk, while `undefined` is the refusal.
-    const { populationSource } = options;
     const enumerationStartedAt = crawlTimingStart();
     const sourced = populationSource
       ? await withOuterBracket(() => this.populationFrom(populationSource, baseDir, include, exclude))
@@ -1507,34 +1557,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       createRegistryIssue(
         'DUPLICATE_RESOURCE_ID',
         `Two files resolve to the same resource id '${id}': '${issueLocation(existingPath, locationRoot(this.baseDir))}' and '${issueLocation(conflictingPath, locationRoot(this.baseDir))}'. Rename one of the files so they produce distinct resource ids.`,
-      ),
-    );
-  }
-
-  /**
-   * Emit SCAN_PATH_UNREADABLE for every directory the crawl could not list.
-   *
-   * The registry's own code for this shape (its description already reads "a
-   * directory the scan could not enter … so it was not scanned; findings from
-   * every readable sibling are still reported"), rather than a second code
-   * for the same fact on a second lane. The remedy names `resources.exclude`,
-   * which is this lane's deliberate-drop mechanism; the registry `fix` text
-   * names `--exclude`, which is `vat audit`'s.
-   * @private
-   */
-  private collectUnlistableDirectoryIssues(): ValidationIssue[] {
-    const root = locationRoot(this.baseDir);
-    return this.unlistableDirectories.map((refusal) =>
-      createRegistryIssue(
-        'SCAN_PATH_UNREADABLE',
-        // The crawler's own sentence, root-relative (an absolute path in a
-        // finding is the developer's home directory in every CI log), with
-        // this lane's remedy: the registry's crawl DOES read `resources.exclude`.
-        refusedListingMessage(refusal, {
-          root,
-          remedy: 'Fix the permissions on that directory, or add it to resources.exclude to drop it from the scan deliberately.',
-        }),
-        { location: issueLocation(refusal.directory, root) },
       ),
     );
   }
@@ -1985,7 +2007,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       ...this.collectUnresolvedReferenceIssues(),
       ...this.collectDuplicateIdErrors(),
       ...this.collectUnreadableResourceErrors(),
-      ...this.collectUnlistableDirectoryIssues(),
       ...this.collectPopulationConditionIssues(),
     );
 
@@ -2425,7 +2446,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     this.resourcesByChecksum.clear();
     this.duplicateIdCollisions = [];
     this.unreadableResources = [];
-    this.unlistableDirectories = [];
     this.populationConditions = [];
     // The resolver's conflict accumulator belongs to the files it typed; a fresh
     // crawl types afresh and must not re-report the previous population's.

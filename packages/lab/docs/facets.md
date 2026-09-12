@@ -76,8 +76,15 @@ regex over the `lane:` line would be a second parser that drifts from the first.
 output did not say*, and it is spelled `lane UNREPORTED by the subject's output` on the row. To
 carry the arm on an `io` row, measure the spec that prints JSON: `--command resources-population`.
 That is also why the two arms of an `io` A/B over the default spec read as `arm UNPROVEN on both
-sides` rather than as agreeing — and why comparing a default-spec report against a
-`resources-population` one reads `arm UNPROVEN on the <before|after> side`, never as an arm change.
+sides` rather than as agreeing.
+
+Mixing the two specs in one compare produces NO arm clause at all: the comparator pairs command
+rows by name, a `resources-scan` row never pairs with a `resources-population` row, and the
+report prints one `added` and one `removed` row with nothing to qualify. The one-sided clause
+(`arm UNPROVEN on the <before|after> side`) is reached only when the SAME command name carries a
+lane on one side and not the other — a `resources-population` row measured under a vat build too
+old to print `lane`, against one measured under a current build — and it is never rendered as an
+arm change.
 
 Both use the same coordinate header. The comparator knows which kind it is holding and diffs
 accordingly — set differences for findings, distribution differences for numbers.

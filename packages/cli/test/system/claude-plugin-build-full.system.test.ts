@@ -1,7 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
 import { existsSync, readFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildSkillsThenPlugin, createTempDirTracker, getBinPath, writeTestFile } from './test-common.js';
@@ -91,6 +91,17 @@ Uses the bundled [engine](lib/engine.mjs).
   writeTestFile(safePath.join(tempDir, 'dist', 'gen', 'engine.mjs'), 'export const engine = 3;');
 }
 
+/** The `plugins[]` rows of the first marketplace in a build document. */
+function pluginRowsOf(pb: Awaited<ReturnType<typeof buildSkillsThenPlugin>>): Array<Record<string, unknown>> {
+  const mps = pb.parsed['marketplaces'] as Array<Record<string, unknown>>;
+  return mps[0]?.['plugins'] as Array<Record<string, unknown>>;
+}
+
+/** Build the fixture at `tempDir` (skills, then plugin) and return the first marketplace's plugin rows. */
+async function buildAndReadPluginRows(tempDir: string): Promise<Array<Record<string, unknown>>> {
+  return pluginRowsOf(await buildSkillsThenPlugin(binPath, tempDir));
+}
+
 describe('vat claude plugin build (full plugin support)', () => {
   afterEach(() => cleanupTempDirs());
 
@@ -135,14 +146,28 @@ describe('vat claude plugin build (full plugin support)', () => {
     expect(pluginJson.license).toBe('Apache-2.0');
     expect(pluginJson.author).toEqual({ name: 'Test Org', email: 'ops@test.example' });
 
-    const mps = pb.parsed['marketplaces'] as Array<Record<string, unknown>>;
-    const plugins = mps[0]?.['plugins'] as Array<Record<string, unknown>>;
+    const plugins = pluginRowsOf(pb);
     expect(plugins[0]).toMatchObject({
       commandsCopied: 1,
       hooksCopied: 1,
       agentsCopied: 1,
       mcpCopied: 1,
     });
+  });
+
+  // The published document is what a CI consumer reads. A link copied by content
+  // used to publish as `treeFilesCopied: N` and nothing else — the same row a
+  // tree with no symlinks publishes — so the tell has to be on the row itself.
+  it.skipIf(!symlinkCapability())('publishes the in-tree file symlinks copied by content on the plugin row', async () => {
+    const cap = symlinkCapability();
+    if (!cap) throw new Error('gated by skipIf');
+    const tempDir = createTempDir();
+    buildFixture(tempDir);
+    const hooks = safePath.join(tempDir, 'plugins', 'full-plugin', 'hooks');
+    createSymlink(cap, 'hooks.json', safePath.join(hooks, 'alias.json'));
+
+    const plugins = await buildAndReadPluginRows(tempDir);
+    expect(plugins[0]).toMatchObject({ hooksCopied: 2, symlinksCopied: ['hooks/alias.json'] });
   });
 
   it('resolves a skill claimed by both the pool selector and the plugin-local skills/ tree to the single pool-packaged copy (collision referee)', async () => {
@@ -162,8 +187,7 @@ describe('vat claude plugin build (full plugin support)', () => {
     expect(existsSync(engineOut)).toBe(true);
     expect(readFileSync(engineOut, 'utf-8')).toBe('export const engine = 3;');
 
-    const mps = pb.parsed['marketplaces'] as Array<Record<string, unknown>>;
-    const plugins = mps[0]?.['plugins'] as Array<Record<string, unknown>>;
+    const plugins = pluginRowsOf(pb);
     // local-b now arrives via the pool selector, not the tree-copy.
     expect(plugins[0]?.['skills']).toEqual(['local-b']);
     // The tree-copy's files: re-application is excluded for a colliding skill
@@ -205,10 +229,7 @@ claude:
       '---\nname: foo:bar\ndescription: colon-bearing skill name for fs-safe enumeration testing\n---\n\n# foo:bar\n',
     );
 
-    const pb = await buildSkillsThenPlugin(binPath, tempDir);
-
-    const mps = pb.parsed['marketplaces'] as Array<Record<string, unknown>>;
-    const plugins = mps[0]?.['plugins'] as Array<Record<string, unknown>>;
+    const plugins = await buildAndReadPluginRows(tempDir);
     // The sole plugin-source file (skills/foo__bar/SKILL.md) was excluded
     // from tree-copy — proving the fs-safe form matched and the collision
     // was detected, not just coincidentally overlapping.

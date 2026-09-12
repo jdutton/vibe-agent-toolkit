@@ -60,7 +60,7 @@ function setupTwoBuiltSkills(): string {
 
 async function discoveredIn(root: string): Promise<Awaited<ReturnType<typeof discoverSkillsFromConfig>>> {
   const config = loadConfig(root);
-  return config?.skills ? discoverSkillsFromConfig(config.skills, root) : [];
+  return config?.skills ? discoverSkillsFromConfig(config.skills, root, 'refuse') : [];
 }
 
 async function crawlIn(root: string): Promise<PackagedContentCrawl> {
@@ -71,6 +71,25 @@ async function phaseIn(root: string): Promise<{ phase: PackagedContentPhaseResul
   const { logger, lines } = recordingLogger();
   const phase = runPackagedContentPhase(root, await discoveredIn(root), logger);
   return { phase, stderr: lines.join('\n') };
+}
+
+/**
+ * The refusal shape for a run whose `beta` bundle is not a directory: the crawl
+ * counts 1 of 2 and names `beta`; the phase is `error`, carries ONE
+ * run-integrity finding naming `beta`, and exits 1.
+ */
+async function expectBetaMissing(root: string): Promise<{ phase: PackagedContentPhaseResult; stderr: string }> {
+  const crawl = await crawlIn(root);
+  expect(crawl.bundlesInspected).toBe(1);
+  expect(crawl.bundlesExpected).toBe(2);
+  expect(crawl.bundlesMissing).toEqual([BETA_BUNDLE]);
+
+  const outcome = await phaseIn(root);
+  expect(outcome.phase.status).toBe('error');
+  expect(outcome.phase.issues.map((i) => i.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
+  expect(outcome.phase.issues[0]?.message).toContain(BETA_BUNDLE);
+  expect(exitCodeForPhases([outcome.phase])).toBe(1);
+  return outcome;
 }
 
 describe('packaged-content over a partially built dist/', () => {
@@ -95,21 +114,27 @@ describe('packaged-content over a partially built dist/', () => {
     const root = setupTwoBuiltSkills();
     rmSync(safePath.join(root, 'dist', 'skills', 'beta'), { recursive: true, force: true });
 
-    const crawl = await crawlIn(root);
-    expect(crawl.bundlesInspected).toBe(1);
-    expect(crawl.bundlesExpected).toBe(2);
-    expect(crawl.bundlesMissing).toEqual([BETA_BUNDLE]);
-
-    const { phase, stderr } = await phaseIn(root);
-    expect(phase.status).toBe('error');
+    const { phase, stderr } = await expectBetaMissing(root);
     expect(phase.bundlesMissing).toEqual([BETA_BUNDLE]);
-    expect(phase.issues.map((i) => i.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
-    expect(phase.issues[0]?.message).toContain('beta');
     expect(phase.issues[0]?.message).not.toContain('alpha');
     // stderr and the document carry one list (run-integrity invariant 6).
     expect(stderr).toContain('RESOURCE_CHECK_BROKEN');
     expect(stderr).toContain(BETA_BUNDLE);
-    expect(exitCodeForPhases([phase])).toBe(1);
+  });
+
+  it('a regular FILE where the bundle dir should be ⇒ missing by name, not a throw', async () => {
+    // "Exists" is not "is a directory". A file at `dist/skills/beta` passed
+    // `existsSync`, was counted as built, and the crawl then threw `Base path
+    // is not a directory: /abs/…` out of the whole command — exit 2, no
+    // document, an absolute path on stderr — where the missing-bundle lane
+    // would have named it at exit 1 with the document.
+    const root = setupTwoBuiltSkills();
+    rmSync(safePath.join(root, 'dist', 'skills', 'beta'), { recursive: true, force: true });
+    writeFileSync(safePath.join(root, 'dist', 'skills', 'beta'), 'not a dir\n', 'utf-8');
+
+    const { phase } = await expectBetaMissing(root);
+    // Named in the run's coordinates, never the build host's.
+    expect(phase.issues[0]?.message).not.toContain(root);
   });
 
   it('a stale skills.config key is not an expected bundle (the consistency phase owns that)', async () => {

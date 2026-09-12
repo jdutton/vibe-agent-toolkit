@@ -5,6 +5,7 @@
 
 export type {
   CompatibilityResult,
+  CompatibilityUnchecked,
   EvidenceSource,
   ScannerOutput,
   SettingsConflict,

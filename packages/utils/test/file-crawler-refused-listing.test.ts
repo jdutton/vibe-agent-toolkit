@@ -27,7 +27,7 @@ import {
   crawlDirectorySync,
   DirectoryListingRefusedError,
   type DirectoryRefusal,
-  refuseListing,
+  type UnreadablePolicy,
 } from '../src/file-crawler.js';
 import { mkdirSyncReal, safePath, toForwardSlash } from '../src/path-utils.js';
 import { setupSyncTempDirSuite, withReaddirSyncRefused } from '../src/test-helpers.js';
@@ -48,14 +48,16 @@ function plantTree(root: string): { locked: string } {
   return { locked };
 }
 
-/** The walk lane: no git answer, so `walkDirectory` enumerates. */
-function crawlWalk(root: string, onUnreadable?: (refusal: DirectoryRefusal) => void): string[] {
+const REMEDY = 'Fix the permissions on that directory, or add it to the plugin `exclude:` list.';
+
+/** The walk lane: no git answer, so `walkDirectory` enumerates. Refuses unless told to degrade. */
+function crawlWalk(root: string, unreadable: UnreadablePolicy = { refuse: { root, remedy: REMEDY } }): string[] {
   return crawlDirectorySync({
     baseDir: root,
     include: ['**/*.md'],
     absolute: false,
     respectGitignore: false,
-    ...(onUnreadable === undefined ? {} : { onUnreadable }),
+    unreadable,
   }).map((relativePath) => toForwardSlash(relativePath));
 }
 
@@ -76,7 +78,7 @@ describe('crawlDirectorySync: a refused listing never becomes a shorter list', (
     expect(crawlWalk(root).sort((a, b) => a.localeCompare(b))).toEqual([LOCKED_FILE, OPEN_FILE]);
   });
 
-  it.each(REFUSAL_ERRNOS)('throws DirectoryListingRefusedError on %s when no handler is given', async (code) => {
+  it.each(REFUSAL_ERRNOS)('throws DirectoryListingRefusedError on %s under `refuse`', async (code) => {
     let thrown: unknown;
     try {
       await withReaddirSyncRefused(locked, code, () => crawlWalk(root));
@@ -92,10 +94,10 @@ describe('crawlDirectorySync: a refused listing never becomes a shorter list', (
     expect((thrown as Error).message).toContain(code);
   });
 
-  it.each(REFUSAL_ERRNOS)('hands %s to onUnreadable and keeps walking every readable sibling', async (code) => {
+  it.each(REFUSAL_ERRNOS)('hands %s to `degrade` and keeps walking every readable sibling', async (code) => {
     const refusals: DirectoryRefusal[] = [];
     const files = await withReaddirSyncRefused(locked, code, () =>
-      crawlWalk(root, (refusal) => refusals.push(refusal)),
+      crawlWalk(root, { degrade: (refusal) => refusals.push(refusal) }),
     );
     // The readable half is still enumerated: a refusal degrades, it does not destroy.
     expect(files).toEqual([OPEN_FILE]);
@@ -109,7 +111,7 @@ describe('crawlDirectorySync: a refused listing never becomes a shorter list', (
     // not a member of the population, and not a gap in the run.
     const refusals: DirectoryRefusal[] = [];
     const files = await withReaddirSyncRefused(locked, code, () =>
-      crawlWalk(root, (refusal) => refusals.push(refusal)),
+      crawlWalk(root, { degrade: (refusal) => refusals.push(refusal) }),
     );
     expect(files).toEqual([OPEN_FILE]);
     expect(refusals).toEqual([]);
@@ -122,15 +124,11 @@ describe('crawlDirectorySync: a refused listing never becomes a shorter list', (
     );
   });
 
-  describe('refuseListing: a caller that must stop names the refusal for the adopter', () => {
-    const REMEDY = 'Fix the permissions on that directory, or add it to the plugin `exclude:` list.';
-
+  describe('`refuse`: a caller that must stop names the refusal for the adopter', () => {
     it('throws the crawler error with the directory root-relative and the remedy, never the library seam', async () => {
       let thrown: unknown;
       try {
-        await withReaddirSyncRefused(locked, 'EACCES', () =>
-          crawlWalk(root, refuseListing({ root, remedy: REMEDY })),
-        );
+        await withReaddirSyncRefused(locked, 'EACCES', () => crawlWalk(root));
       } catch (error) {
         thrown = error;
       }
@@ -141,20 +139,20 @@ describe('crawlDirectorySync: a refused listing never becomes a shorter list', (
       expect(message).toContain(REMEDY);
       // An absolute path in an error is the developer's `$HOME` in every CI log.
       expect(message).not.toContain(root);
-      // `onUnreadable` is the library's seam; an adopter has no such knob.
-      expect(message).not.toContain('onUnreadable');
+      // `unreadable` is the library's seam; an adopter has no such knob.
+      expect(message).not.toContain('`unreadable`');
       expect((thrown as DirectoryListingRefusedError).refusal.directory).toBe(toForwardSlash(locked));
     });
 
     it('names a transient shortage as such instead of prescribing the remedy', async () => {
       await expect(
-        withReaddirSyncRefused(locked, 'EMFILE', () => crawlWalk(root, refuseListing({ root, remedy: REMEDY }))),
+        withReaddirSyncRefused(locked, 'EMFILE', () => crawlWalk(root)),
       ).rejects.toThrow(/EMFILE is a transient shortage/);
     });
 
     it('says "the scan root itself" when the root is what refused', async () => {
       await expect(
-        withReaddirSyncRefused(root, 'EACCES', () => crawlWalk(root, refuseListing({ root, remedy: REMEDY }))),
+        withReaddirSyncRefused(root, 'EACCES', () => crawlWalk(root)),
       ).rejects.toThrow(/the scan root itself/);
     });
   });

@@ -27,6 +27,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { refuseUnreadableFixture } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ExtentContribution } from '../src/projection/contributor.js';
@@ -189,6 +190,7 @@ describe('git and filesystem extents disagree — the proving rung', () => {
     // contributor: the same claim, provable without coupling two modules.
     const walked = await crawlDirectory({
       baseDir: root,
+      unreadable: refuseUnreadableFixture(root),
       respectGitignore: false,
       exclude: [...NEVER_CRAWL_GLOBS],
     });

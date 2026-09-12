@@ -1,6 +1,6 @@
 /**
  * The GIT route of `crawlDirectorySync` must surface a refused directory the
- * way the walk route does — through `onUnreadable`, or by throwing.
+ * way the walk route does — under the caller's `unreadable` policy.
  *
  * 🪤 The route's docstring used to say "git does not list directories", and for
  * `git ls-files --cached` that is true. With `--others` it is not: git walks the
@@ -27,6 +27,7 @@ import {
   crawlDirectorySync,
   DirectoryListingRefusedError,
   type DirectoryRefusal,
+  type UnreadablePolicy,
 } from '../src/file-crawler.js';
 import { runGitOrThrow } from '../src/git-run.js';
 import { mkdirSyncReal, safePath, toForwardSlash } from '../src/path-utils.js';
@@ -66,10 +67,12 @@ function plantRepo(root: string): void {
   writeFileSync(safePath.join(root, IGNORED_LOCKED_DIR, 'b.md'), '# b\n');
 }
 
+const REMEDY = 'Fix the permissions on that directory.';
+
 /** The git route: `respectGitignore: true` inside a repository, untracked included. */
 function crawlGit(
   root: string,
-  options: { onUnreadable?: (refusal: DirectoryRefusal) => void; exclude?: string[]; includeUntracked?: boolean } = {},
+  options: { unreadable?: UnreadablePolicy; exclude?: string[]; includeUntracked?: boolean } = {},
 ): string[] {
   return crawlDirectorySync({
     baseDir: root,
@@ -78,7 +81,8 @@ function crawlGit(
     respectGitignore: true,
     includeUntracked: options.includeUntracked ?? true,
     ...(options.exclude === undefined ? {} : { exclude: options.exclude }),
-    ...(options.onUnreadable === undefined ? {} : { onUnreadable: options.onUnreadable }),
+    // Refuse against the fixture root unless the case is about the degrade arm.
+    unreadable: options.unreadable ?? { refuse: { root, remedy: REMEDY } },
   }).map((relativePath) => toForwardSlash(relativePath));
 }
 
@@ -115,11 +119,11 @@ describe.skipIf(CANNOT_DENY_READS)('crawlDirectorySync git route: a directory gi
     expectSameFiles(crawlGit(root), [`${LOCKED_DIR}/t.md`, TRACKED_LOCKED_FILE, OPEN_FILE]);
   });
 
-  it('hands the locked untracked directory to onUnreadable as the same DirectoryRefusal the walk produces', () => {
+  it('hands the locked untracked directory to `degrade` as the same DirectoryRefusal the walk produces', () => {
     const lockedAbsolute = lock(LOCKED_DIR);
     const refusals: DirectoryRefusal[] = [];
 
-    const files = crawlGit(root, { onUnreadable: (refusal) => refusals.push(refusal) });
+    const files = crawlGit(root, { unreadable: { degrade: (refusal) => refusals.push(refusal) } });
 
     expect(refusals).toEqual([
       { kind: 'directory_unreadable', code: 'EACCES', directory: lockedAbsolute, transient: false },
@@ -128,7 +132,7 @@ describe.skipIf(CANNOT_DENY_READS)('crawlDirectorySync git route: a directory gi
     expectSameFiles(files, [TRACKED_LOCKED_FILE, OPEN_FILE]);
   });
 
-  it('throws DirectoryListingRefusedError when no handler is given', () => {
+  it('throws DirectoryListingRefusedError under `refuse`', () => {
     const lockedAbsolute = lock(LOCKED_DIR);
     let thrown: unknown;
     try {
@@ -145,10 +149,30 @@ describe.skipIf(CANNOT_DENY_READS)('crawlDirectorySync git route: a directory gi
     const lockedAbsolute = lock(TRACKED_LOCKED_DIR);
     const refusals: DirectoryRefusal[] = [];
 
-    const files = crawlGit(root, { onUnreadable: (refusal) => refusals.push(refusal) });
+    const files = crawlGit(root, { unreadable: { degrade: (refusal) => refusals.push(refusal) } });
 
     expect(files).toContain(TRACKED_LOCKED_FILE);
     expect(refusals.map((refusal) => refusal.directory)).toEqual([lockedAbsolute]);
+  });
+
+  it('does not claim "nothing beneath it was enumerated" for a locked directory whose TRACKED file it just listed', () => {
+    lock(TRACKED_LOCKED_DIR);
+    let thrown: unknown;
+    try {
+      crawlGit(root);
+    } catch (error) {
+      thrown = error;
+    }
+    // The index named `tr.md`, so the sentence written for the readdir walk —
+    // where a refusal really does mean nothing beneath was seen — is false on
+    // this route. What is true on both: anything the listing would have found
+    // and nothing else named is missing, and the result looks complete.
+    expect(thrown).toBeInstanceOf(DirectoryListingRefusedError);
+    const message = (thrown as Error).message;
+    expect(message).toContain(`'${TRACKED_LOCKED_DIR}'`);
+    expect(message).toContain(REMEDY);
+    expect(message).not.toMatch(/nothing beneath it was enumerated/);
+    expect(message).toMatch(/absent from every count/);
   });
 
   it('does not report a locked directory the caller EXCLUDED — the walk never lists one either', () => {
@@ -157,7 +181,7 @@ describe.skipIf(CANNOT_DENY_READS)('crawlDirectorySync git route: a directory gi
 
     const files = crawlGit(root, {
       exclude: [`${LOCKED_DIR}/**`],
-      onUnreadable: (refusal) => refusals.push(refusal),
+      unreadable: { degrade: (refusal) => refusals.push(refusal) },
     });
 
     expect(refusals).toEqual([]);
@@ -168,7 +192,7 @@ describe.skipIf(CANNOT_DENY_READS)('crawlDirectorySync git route: a directory gi
     lock(IGNORED_LOCKED_DIR);
     const refusals: DirectoryRefusal[] = [];
 
-    const files = crawlGit(root, { onUnreadable: (refusal) => refusals.push(refusal) });
+    const files = crawlGit(root, { unreadable: { degrade: (refusal) => refusals.push(refusal) } });
 
     expect(refusals).toEqual([]);
     expectSameFiles(files, [`${LOCKED_DIR}/t.md`, TRACKED_LOCKED_FILE, OPEN_FILE]);
@@ -178,7 +202,7 @@ describe.skipIf(CANNOT_DENY_READS)('crawlDirectorySync git route: a directory gi
     lock(LOCKED_DIR);
     const refusals: DirectoryRefusal[] = [];
 
-    const files = crawlGit(root, { includeUntracked: false, onUnreadable: (refusal) => refusals.push(refusal) });
+    const files = crawlGit(root, { includeUntracked: false, unreadable: { degrade: (refusal) => refusals.push(refusal) } });
 
     // The population is "tracked files", and the index names every one of them:
     // no directory had to be opened, so there is no gap to report.

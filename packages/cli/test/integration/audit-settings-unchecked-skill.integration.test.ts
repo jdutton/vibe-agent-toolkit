@@ -1,5 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-
 /**
  * `vat audit --compat --settings`: a skill whose frontmatter could not be READ
  * must not be reported as compatible with the settings.
@@ -7,7 +5,7 @@
  * The settings checker reads each SKILL.md's `allowed-tools` and `model` to
  * compare against the org's deny rules and available models. A SKILL.md whose
  * frontmatter does not parse contributes NOTHING to that comparison — the
- * checker skips it, by design, and the audit's own validator reports the same
+ * checker cannot read it, and the audit's own validator reports the same
  * file as `SKILL_MISSING_FRONTMATTER`. But the renderer derived
  * `settings.compatible` from "no conflicts found", so a plugin whose only
  * declared-tools skill was unparseable printed `compatible: true` beside an
@@ -24,22 +22,17 @@ import fs from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { parse as parseYaml } from 'yaml';
 
-import { runAuditCli } from '../test-helpers.js';
-
-interface SettingsBlock {
-  compatible: boolean;
-  conflicts: Array<{ type: string; detail: string }>;
-  unchecked?: Array<{ path: string; reason: string }>;
-}
-interface ReportFile { path: string; type: string; settings?: SettingsBlock }
-interface Report { files: ReportFile[] }
+import {
+  auditWithSettings,
+  bashSkill,
+  type Report,
+  writeDenyBashSettings,
+  writeSettingsPlugin,
+} from './audit-settings-fixture.js';
 
 const UNCHECKED_SKILL = 'skills/unchecked/SKILL.md';
 
-/** Frontmatter the settings checker CAN read: a tool the fixture settings deny. */
-const CHECKED_FRONTMATTER = '---\nname: checked\ndescription: A skill that declares a tool the settings deny.\nallowed-tools: Bash\n---\n';
 /**
  * Malformed YAML — an unclosed flow sequence. The validator reports the file as
  * SKILL_MISSING_FRONTMATTER; the settings checker cannot read its tools, and the
@@ -54,41 +47,23 @@ let mixedPluginDir: string;
 let lonelyPluginDir: string;
 let settingsFile: string;
 
-function writePlugin(name: string, skills: Record<string, string>): string {
-  const pluginDir = safePath.join(tempDir, name);
-  fs.mkdirSync(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
-  fs.writeFileSync(
-    safePath.join(pluginDir, '.claude-plugin', 'plugin.json'),
-    JSON.stringify({ name, description: 'A plugin with an unparseable skill.', version: '0.0.1' }),
-  );
-  for (const [skill, frontmatter] of Object.entries(skills)) {
-    const dir = safePath.join(pluginDir, 'skills', skill);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(safePath.join(dir, 'SKILL.md'), `${frontmatter}\n# ${skill}\n\nBody.\n`);
-  }
-  return pluginDir;
-}
-
 beforeAll(() => {
   tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-settings-unchecked-'));
-  mixedPluginDir = writePlugin('mixed-plugin', { checked: CHECKED_FRONTMATTER, unchecked: UNCHECKED_FRONTMATTER });
-  lonelyPluginDir = writePlugin('lonely-plugin', { unchecked: UNCHECKED_FRONTMATTER });
-  settingsFile = safePath.join(tempDir, 'managed-settings.json');
-  fs.writeFileSync(settingsFile, JSON.stringify({ permissions: { deny: ['Bash'] } }));
+  mixedPluginDir = writeSettingsPlugin(tempDir, 'mixed-plugin', { checked: bashSkill('checked'), unchecked: UNCHECKED_FRONTMATTER });
+  lonelyPluginDir = writeSettingsPlugin(tempDir, 'lonely-plugin', { unchecked: UNCHECKED_FRONTMATTER });
+  settingsFile = writeDenyBashSettings(tempDir);
 });
 
 afterAll(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
-function auditPlugin(pluginDir: string): { exit: number | null; plugin: ReportFile | undefined; report: Report } {
-  const result = runAuditCli(pluginDir, ['--compat', '--settings', settingsFile, '--verbose']);
-  const report = parseYaml(result.stdout) as Report;
-  return { exit: result.status, report, plugin: report.files.find((f) => f.type === 'claude-plugin') };
+function auditPlugin(pluginDir: string): ReturnType<typeof auditWithSettings> {
+  return auditWithSettings(pluginDir, settingsFile, ['--verbose']);
 }
 
 function issueCodes(report: Report): string[] {
-  return report.files.flatMap((f) => (f as { issues?: Array<{ code: string }> }).issues ?? []).map((i) => i.code);
+  return report.files.flatMap((f) => f.issues ?? []).map((i) => i.code);
 }
 
 describe('vat audit --compat --settings with a skill whose frontmatter cannot be parsed', () => {

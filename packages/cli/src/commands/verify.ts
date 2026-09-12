@@ -15,7 +15,7 @@
  * Both sets are config-gated, and both are announced on startup.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
@@ -236,11 +236,29 @@ interface BuiltSkillOutputs {
 }
 
 /**
+ * Whether `dir` is a directory — `false` for a file, for nothing, and for a
+ * path the process cannot stat. All three are "no bundle here": a bundle is a
+ * tree, and a regular FILE sitting where one should be passed `existsSync`,
+ * was counted as built, and the packaged-content crawl then threw `Base path is
+ * not a directory: /abs/…` out of the whole command — exit 2, no document, an
+ * absolute path on stderr — where the missing-bundle lane names it at exit 1.
+ */
+function isDirectory(dir: string): boolean {
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputDir is resolved from config, not user input
+    return statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Register a (skillName, outputDir, packaging) candidate.
  *
- * A candidate whose output dir exists lands in `built` (deduplicated by key). An
- * `expected` candidate is counted whether or not it exists, and one that does
- * not exist is named in `missing` — that absence is the finding, not a skip.
+ * A candidate whose output dir IS A DIRECTORY lands in `built` (deduplicated by
+ * key). An `expected` candidate is counted whether or not it exists, and one
+ * that is not a directory is named in `missing` — that absence is the finding,
+ * not a skip (see {@link isDirectory} for why "exists" is not enough).
  *
  * An EMPTY `files:` block is registered, not skipped: {@link checkFilesConfigDests}
  * has nothing to verify for such a skill and filters it out itself, but
@@ -258,8 +276,7 @@ function addCheckCandidate(
   const key = `${candidate.skillName}\0${candidate.outputDir}`;
   if (seen.has(key)) return;
   seen.add(key);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputDir is resolved from config, not user input
-  const exists = existsSync(candidate.outputDir);
+  const exists = isDirectory(candidate.outputDir);
   if (exists) outputs.built.push(candidate);
   if (!expected) return;
   outputs.expected += 1;
@@ -998,8 +1015,12 @@ async function verifyTopLevelCommand(
     // answer used to be a different one: `consistency` crawled, while
     // `files-config-dests` and `packaged-content` read `skills.config` keys and
     // were therefore blind to every skill discovered by a glob.
+    // `'refuse'`: a verify over a population it could not see is the
+    // green-without-checking shape this command exists to refuse. The throw
+    // lands in the command's catch → `handleCommandError`, exit 2, with the
+    // crawl's own root-relative sentence.
     const discoveredSkills = inProcess.length > 0 && config?.skills
-      ? await discoverSkillsFromConfig(config.skills, projectRoot)
+      ? await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse')
       : [];
 
     // Post-build files config check: verify all dest paths exist in built output

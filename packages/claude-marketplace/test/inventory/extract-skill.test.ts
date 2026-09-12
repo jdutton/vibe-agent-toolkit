@@ -340,7 +340,7 @@ describe('crawlSkillLinkRegistry on a directory it cannot list', () => {
 		expect(message).toContain("'locked'");
 		expect(message).toContain('EACCES');
 		expect(message).not.toContain(root);
-		expect(message).not.toContain('onUnreadable');
+		expect(message).not.toContain('`unreadable`');
 	});
 
 	it('surfaces on the skill as a link-walk parse error, not as a shorter inventory', async () => {

@@ -906,7 +906,10 @@ async function runDeclaredSkillBuild(ref: BuildableReference): Promise<void> {
       packagingConfigToPackageOptions(
         ref.packagingConfig,
         { skillPath: ref.sourcePath, outputPath: ref.expectedDistDir },
-        await resolveProjectDeclaredEvalSuites(ref.sourcePath),
+        // `'refuse'`: staging a dist around a directory discovery could not
+        // list may hand the executor another skill's answer key. The throw is
+        // wrapped as `SkillBuildError` by the caller, message intact.
+        await resolveProjectDeclaredEvalSuites(ref.sourcePath, 'refuse'),
         // Per CALL, deliberately, and this is parity rather than a regression: the
         // probe was built inside `resolveTestInputDirs` on every path before it was
         // threaded, so this lane pays exactly what it paid before. It is also the

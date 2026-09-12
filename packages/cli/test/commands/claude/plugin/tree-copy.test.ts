@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   PluginSymlinkRefusedError,
   treeCopyPlugin,
+  type TreeCopyOptions,
   type TreeCopyResult,
 } from '../../../../src/commands/claude/plugin/tree-copy.js';
 import { createTempDirTracker } from '../../../system/test-common.js';
@@ -326,7 +327,7 @@ describe('treeCopyPlugin', () => {
     expect(message).toContain('exclude');
     // Adopter-facing: no absolute path, no library seam.
     expect(message).not.toContain(src);
-    expect(message).not.toContain('onUnreadable');
+    expect(message).not.toContain('`unreadable`');
     // Nothing shipped: the crawl decides before the first copy.
     expect(existsSync(safePath.join(dest, 'commands', 'hello.md'))).toBe(false);
   });
@@ -400,10 +401,13 @@ describe.skipIf(!symlinkCapability())('treeCopyPlugin — symlinks, both crawl r
     ['git', gitRoute],
   ];
 
-  async function copyExpectingRefusal(fx: SymlinkFixture): Promise<PluginSymlinkRefusedError> {
+  async function copyExpectingRefusal(
+    fx: SymlinkFixture,
+    options: Pick<TreeCopyOptions, 'exclude' | 'excludeSkillDirs'> = {},
+  ): Promise<PluginSymlinkRefusedError> {
     let thrown: unknown;
     try {
-      await treeCopyPlugin({ sourceDir: fx.src, destDir: fx.dest });
+      await treeCopyPlugin({ sourceDir: fx.src, destDir: fx.dest, ...options });
     } catch (error) {
       thrown = error;
     }
@@ -520,5 +524,60 @@ describe.skipIf(!symlinkCapability())('treeCopyPlugin — symlinks, both crawl r
       expect(result.unusedExcludePatterns).toEqual([]);
       expect(existsSync(safePath.join(fx.dest, 'hooks', 'dangling'))).toBe(false);
     });
+
+    it('refuses an in-tree file symlink whose TARGET the caller excluded — the alias must not ship the excluded bytes', async () => {
+      // `exclude: [secrets/**]` is the remedy every refusal names; a one-line
+      // alias must not undo it. Before this the link was 'file', copyFile
+      // followed it, and the excluded bytes shipped under the alias with
+      // `warnings: 0`.
+      const fx = await seedPlugin();
+      await mkdir(safePath.join(fx.src, 'secrets'), { recursive: true });
+      await writeFile(safePath.join(fx.src, 'secrets', 'key.pem'), 'SECRET-KEY-BYTES');
+      fx.link('alias.pem', '../secrets/key.pem');
+      prepare(fx.src);
+
+      const error = await copyExpectingRefusal(fx, { exclude: ['secrets/**'] });
+
+      expect(error.refused).toEqual([{ path: 'hooks/alias.pem', reason: 'target-excluded', target: 'secrets/key.pem' }]);
+      // The message names BOTH ends in bundle coordinates, never the host's.
+      expect(error.message).toContain("'hooks/alias.pem'");
+      expect(error.message).toContain("'secrets/key.pem'");
+      expect(error.message).not.toContain(fx.src);
+      expectNothingCopied(fx);
+      expect(existsSync(safePath.join(fx.dest, 'hooks', 'alias.pem'))).toBe(false);
+    });
+
+    it('refuses an in-tree file symlink into a skill dir another phase produces', async () => {
+      // Same rule, a different way for the target to be left out: the alias
+      // would ship a raw SKILL.md verbatim, which is exactly what
+      // `excludeSkillDirs` exists to prevent.
+      const fx = await seedPlugin();
+      await mkdir(safePath.join(fx.src, 'skills', 'alpha'), { recursive: true });
+      await writeFile(safePath.join(fx.src, 'skills', 'alpha', 'SKILL.md'), '---\nname: alpha\n---\n');
+      fx.link('skill-alias.md', '../skills/alpha/SKILL.md');
+      prepare(fx.src);
+
+      const error = await copyExpectingRefusal(fx, { excludeSkillDirs: ['alpha'] });
+
+      expect(error.refused).toEqual([
+        { path: 'hooks/skill-alias.md', reason: 'target-excluded', target: 'skills/alpha/SKILL.md' },
+      ]);
+      expectNothingCopied(fx);
+    });
+  });
+
+  it('git route: refuses a tracked file symlink whose target is gitignored', async () => {
+    // The git-route twin of the caller-exclude case: `git ls-files` never yields
+    // the ignored target, so the bundle would carry it only through the alias.
+    const fx = await seedPlugin();
+    await writeFile(safePath.join(fx.src, '.env'), 'TOKEN=secret');
+    await writeFile(safePath.join(fx.src, '.gitignore'), '.env\n');
+    fx.link('env-alias', '../.env');
+    gitRoute(fx.src);
+
+    const error = await copyExpectingRefusal(fx);
+
+    expect(error.refused).toEqual([{ path: 'hooks/env-alias', reason: 'target-excluded', target: '.env' }]);
+    expectNothingCopied(fx);
   });
 });

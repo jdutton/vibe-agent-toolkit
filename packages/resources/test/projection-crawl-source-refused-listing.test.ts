@@ -18,7 +18,12 @@
  * git's population reaches (its files would be absent from every count), and
  * for a gitignored one record it and carry on (nothing beneath it was ever in
  * the population). The test that could not exist before is the one asserting
- * the two arms AGREE.
+ * the two arms AGREE — and, since the registry's incumbent walk
+ * (`VAT_RESOURCES_CRAWL=walk`) is a third lane over the same tree that used to
+ * answer with a WARNING at exit 1, that it agrees with them too, sentence for
+ * sentence. The remedy in that sentence is decided per root: an ignore rule
+ * inside a repository, and — pinned in the last suite — no such rule outside
+ * one, where "gitignore it" would be a dead knob.
  *
  * A real repository and a real `chmod 000`, because the git arm's refusal comes
  * from git's own walk, which no `readdir` spy reaches; so POSIX-only, and not as
@@ -27,9 +32,15 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+  toForwardSlash,
+  withReaddirSyncRefused,
+} from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError, type DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
-import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ExtentContribution } from '../src/projection/contributor.js';
@@ -43,8 +54,9 @@ import {
   GitCrawlSource,
 } from '../src/projection/crawl-source.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
+import { ResourceRegistry } from '../src/resource-registry.js';
 
-import { createGitRepo, writeFileIn } from './test-helpers.js';
+import { createCommittedRepo, writeFileIn } from './test-helpers.js';
 
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
 const CANNOT_DENY_READS =
@@ -55,7 +67,6 @@ const LOCKED_DIR = 'docs/locked';
 const LOCKED_FILE = `${LOCKED_DIR}/t.md`;
 const IGNORED_LOCKED_DIR = 'build/locked';
 const IGNORED_LOCKED_FILE = `${IGNORED_LOCKED_DIR}/b.md`;
-const EXCLUDE_KNOB = 'resources.exclude';
 
 const ARMS: readonly (readonly [string, (root: string) => CrawlSource])[] = [
   ['filesystem', (root) => new FilesystemCrawlSource(root)],
@@ -98,16 +109,27 @@ async function thrownBy(source: CrawlSource): Promise<unknown> {
   }
 }
 
+/** What the registry's incumbent walk (`VAT_RESOURCES_CRAWL=walk`) threw over `crawlRoot`, or `undefined`. */
+async function thrownByWalk(crawlRoot: string): Promise<unknown> {
+  try {
+    await new ResourceRegistry({ baseDir: crawlRoot }).crawl({ unreadable: 'refuse', baseDir: crawlRoot, include: ['**/*.md'] });
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
+/** What the filesystem arm and the walk lane each threw for `docs/locked` refusing to list under `crawlRoot`. */
+async function refusalsOn(crawlRoot: string): Promise<{ projection: unknown; walk: unknown }> {
+  return withReaddirSyncRefused(safePath.join(crawlRoot, LOCKED_DIR), 'EACCES', async () => ({
+    projection: await thrownBy(new FilesystemCrawlSource(crawlRoot)),
+    walk: await thrownByWalk(crawlRoot),
+  }));
+}
+
 describe.skipIf(CANNOT_DENY_READS)('crawl sources: a refused listing gets one verdict on both arms', () => {
   beforeEach(() => {
-    root = toForwardSlash(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-crawl-refused-')));
-    createGitRepo(root);
-    runGitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
-    runGitOrThrow(['config', 'user.name', 'Test'], { cwd: root });
-    writeFileIn(root, OPEN_FILE, '# ok\n');
-    writeFileIn(root, '.gitignore', 'build/\n');
-    runGitOrThrow(['add', '-A'], { cwd: root });
-    runGitOrThrow(['commit', '-qm', 'init'], { cwd: root });
+    root = createCommittedRepo('vat-crawl-refused-', { files: { [OPEN_FILE]: '# ok\n' }, gitignore: 'build/\n' });
     // After the commit: untracked and ignored respectively, never staged.
     writeFileIn(root, LOCKED_FILE, '# t\n');
     writeFileIn(root, IGNORED_LOCKED_FILE, '# b\n');
@@ -136,8 +158,15 @@ describe.skipIf(CANNOT_DENY_READS)('crawl sources: a refused listing gets one ve
       expect(message).toContain(`'${LOCKED_DIR}'`);
       expect(message).toContain('EACCES');
       expect(message).not.toContain(root);
-      // The projection reads no include/exclude, so it must not prescribe one.
-      expect(message).not.toContain(EXCLUDE_KNOB);
+      // The projection reads no include/exclude, so it must not prescribe one —
+      // and, because an adopter who HAS excluded the directory is the one
+      // reading this, it must say why that changed nothing.
+      expect(message).not.toMatch(/add it to resources\.exclude/);
+      expect(message).toMatch(/regardless of resources\.include or resources\.exclude/);
+      expect(message).toMatch(/gitignore it/);
+      // Nor may it claim the directory is in a "declared scan" — nothing
+      // declared it; the population is the whole non-ignored tree.
+      expect(message).not.toMatch(/declared scan/);
       expect((thrown as DirectoryListingRefusedError).refusal.directory).toBe(safePath.join(root, LOCKED_DIR));
     });
 
@@ -147,6 +176,21 @@ describe.skipIf(CANNOT_DENY_READS)('crawl sources: a refused listing gets one ve
         ARMS.map(async ([, sourceFor]) => (await thrownBy(sourceFor(root)) as Error).message),
       );
       expect(fromGit).toBe(fromFilesystem);
+    });
+
+    /**
+     * The registry's incumbent walk (`VAT_RESOURCES_CRAWL=walk`) is the third
+     * lane over the same tree, and it used to answer with a WARNING and exit 1
+     * where both projection arms exit 2. Standing ruling: one class, one
+     * sentence, on every lane.
+     */
+    it('the registry walk lane throws the SAME class and sentence as the projection arms', async () => {
+      lock(LOCKED_DIR);
+      const fromWalk = await thrownByWalk(root);
+      const fromGit = await thrownBy(new GitCrawlSource(root));
+
+      expect(fromWalk).toBeInstanceOf(DirectoryListingRefusedError);
+      expect((fromWalk as Error).message).toBe((fromGit as Error).message);
     });
   });
 
@@ -212,5 +256,44 @@ describe.skipIf(CANNOT_DENY_READS)('crawl sources: a refused listing gets one ve
       const contribution = await contribute(sourceFor);
       expect(contribution.conditions.filter((row) => row.code === EXTENT_DIRECTORY_UNLISTABLE)).toEqual([]);
     });
+  });
+});
+
+/**
+ * Outside a repository there is no ignore rule, so "gitignore it" is a remedy
+ * the adopter can apply and see nothing change — the exact failure the remedy
+ * text was written to avoid. `vat build` on a `.git`-less tree said exactly
+ * that. The remedy is decided per root, and the walk that meets the refusal
+ * is a Node `readdir`, so the refusal itself needs no `chmod`: this runs on
+ * every platform.
+ */
+describe('a refused listing under a root with NO repository', () => {
+  let plainRoot: string;
+
+  beforeEach(() => {
+    plainRoot = toForwardSlash(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-crawl-refused-norepo-')));
+    writeFileIn(plainRoot, OPEN_FILE, '# ok\n');
+    writeFileIn(plainRoot, LOCKED_FILE, '# t\n');
+  });
+
+  afterEach(() => {
+    rmSync(plainRoot, { recursive: true, force: true });
+  });
+
+  it('names the missing repository as the reason no ignore rule can help, and does not say "gitignore it"', async () => {
+    const { projection } = await refusalsOn(plainRoot);
+
+    expect(projection).toBeInstanceOf(DirectoryListingRefusedError);
+    const message = (projection as Error).message;
+    expect(message).toContain(`'${LOCKED_DIR}'`);
+    expect(message).toMatch(/no git repository/i);
+    expect(message).not.toMatch(/gitignore it/);
+    expect(message).toMatch(/regardless of resources\.include or resources\.exclude/);
+  });
+
+  it('the registry walk lane throws the SAME class and sentence here too', async () => {
+    const { projection, walk } = await refusalsOn(plainRoot);
+    expect(walk).toBeInstanceOf(DirectoryListingRefusedError);
+    expect((walk as Error).message).toBe((projection as Error).message);
   });
 });

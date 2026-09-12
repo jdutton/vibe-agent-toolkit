@@ -150,7 +150,7 @@ async function blockedTools(
   rule: string
 ): Promise<string[]> {
   await writeSkill(fixture, `allowed-tools: [${tools.join(', ')}]`);
-  const conflicts = await checkSettingsCompatibility(fixture.pluginDir, settingsDenying(rule));
+  const { conflicts } = await checkSettingsCompatibility(fixture.pluginDir, settingsDenying(rule));
   return tools.filter((tool) =>
     conflicts.some((conflict) => conflict.detail.startsWith(`Tool "${tool}" `))
   );
@@ -381,7 +381,7 @@ const MALFORMED_ALLOWED_TOOLS = 'allowed-tools: [Read, Edit';
 /** The declarations the checker read, in order, as witnessed against a deny of everything. */
 async function declarationsReadFrom(fixture: SkillFixture, frontmatter: string): Promise<string[]> {
   await writeSkill(fixture, frontmatter);
-  const conflicts = await checkSettingsCompatibility(fixture.pluginDir, settingsDenying('*'));
+  const { conflicts } = await checkSettingsCompatibility(fixture.pluginDir, settingsDenying('*'));
   return conflicts.map((conflict) => /^Tool "(.*)" in /.exec(conflict.detail)?.[1] ?? conflict.detail);
 }
 
@@ -404,30 +404,30 @@ describe('settings compatibility checker — the allowed-tools value', () => {
     ];
     for (const frontmatter of forms) {
       await writeSkill(getFixture(), frontmatter);
-      const conflicts = await checkSettingsCompatibility(getFixture().pluginDir, settingsDenying('Read(.env)'));
+      const { conflicts } = await checkSettingsCompatibility(getFixture().pluginDir, settingsDenying('Read(.env)'));
       expect(conflicts.map((c) => c.value), JSON.stringify(frontmatter)).toEqual(['Read(.env)']);
     }
   });
 
   /**
-   * An unparseable frontmatter is not a silent skip. The checker's only output
-   * channel is `SettingsConflict[]`, which has no slot for "could not read the
-   * skill", so the NAMED tell is the one the skill validator puts on the same
-   * file in the same `vat audit` run: `SKILL_MISSING_FRONTMATTER`, carrying the
-   * YAML parser's message. This row pins that the two agree — the checker skips
-   * exactly what the validator names — so a checker that grew its own parser
-   * again would read something the validator calls unreadable, and fail here.
+   * An unparseable frontmatter is not a silent skip: the checker lists the file
+   * under `unchecked` with the parser's own message, and the skill validator
+   * names the same file `SKILL_MISSING_FRONTMATTER` in the same `vat audit` run
+   * with the same message. This row pins that the two agree — one parser, one
+   * reason — so a checker that grew its own parser again would read something
+   * the validator calls unreadable (or refuse something it reads), and fail here.
    */
-  it('contributes nothing for a frontmatter the skill validator names as unparseable', async () => {
+  it('reports as unchecked, with the same reason, a frontmatter the skill validator names as unparseable', async () => {
     await writeSkill(getFixture(), MALFORMED_ALLOWED_TOOLS);
 
-    const conflicts = await checkSettingsCompatibility(getFixture().pluginDir, settingsDenying('*'));
+    const { conflicts, unchecked } = await checkSettingsCompatibility(getFixture().pluginDir, settingsDenying('*'));
     const verdict = await validateSkill({ skillPath: getFixture().skillFile });
 
     expect(conflicts).toEqual([]);
     const tell = verdict.issues.find((issue) => issue.code === 'SKILL_MISSING_FRONTMATTER');
     expect(tell?.severity).toBe('error');
     expect(tell?.message).toContain('Failed to parse YAML frontmatter');
+    expect(unchecked).toEqual([{ path: getFixture().skillFile, reason: tell?.message }]);
   });
 
   // The other field this checker reads goes through the same parser: a
@@ -439,11 +439,11 @@ describe('settings compatibility checker — the allowed-tools value', () => {
     };
     for (const spelling of ['model: sonnet', "model: 'sonnet'", 'model: "sonnet"']) {
       await writeSkill(getFixture(), spelling);
-      const conflicts = await checkSettingsCompatibility(getFixture().pluginDir, opusOnly);
+      const { conflicts } = await checkSettingsCompatibility(getFixture().pluginDir, opusOnly);
       expect(conflicts.map((c) => c.type), spelling).toEqual(['model-unavailable']);
       expect(conflicts[0]?.detail, spelling).toContain('Model "sonnet"');
     }
     await writeSkill(getFixture(), 'model: opus');
-    expect(await checkSettingsCompatibility(getFixture().pluginDir, opusOnly)).toEqual([]);
+    expect((await checkSettingsCompatibility(getFixture().pluginDir, opusOnly)).conflicts).toEqual([]);
   });
 });

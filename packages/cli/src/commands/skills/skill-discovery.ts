@@ -11,30 +11,35 @@ import { basename } from 'node:path';
 import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { crawlDirectory, type DirectoryRefusal, refuseListing } from '@vibe-agent-toolkit/utils/crawl';
+import { crawlDirectory, type UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
 import picomatch from 'picomatch';
 
 import type { DiscoveredSkill } from './command-helpers.js';
 
 /**
- * How discovery treats a directory its crawl cannot list.
+ * How discovery treats a directory its crawl cannot list. REQUIRED at every
+ * call — there is no default, so `tsc` enumerates the callers and each one
+ * carries its decision at the call site.
  *
- * Absent (the default), discovery REFUSES — it throws `DirectoryListingRefusedError`
- * with the adopter-facing sentence, because a shorter skill list is the tell-less
- * drop every command downstream would then confidently work from. That is the
- * right answer for `vat skills validate`, `vat skills build`, `vat verify` and
- * the rest, which must not act on a population they could not see.
+ * `'refuse'` — discovery throws `DirectoryListingRefusedError` with the
+ * adopter-facing sentence (root-relative directory, `skills.include` remedy),
+ * because a shorter skill list is the tell-less drop every command downstream
+ * would then confidently work from. The right answer for `vat skills validate`,
+ * `vat skills build`, `vat verify` and the rest, which must not act on a
+ * population they could not see. Discovery owns the sentence, which is why the
+ * arm is a literal here rather than the crawler's `{ refuse: { root, remedy } }`.
  *
- * A caller whose honest answer is to DEGRADE — `vat audit`, which already reports
- * an unreadable path as `SCAN_PATH_UNREADABLE` and validates every readable
- * sibling — says so by supplying `onUnreadable`. Discovery then enumerates around
- * the refused directory, hands the refusal to the handler, and returns every
- * skill it COULD see. The default is not changed by any caller passing this; it
- * is a per-call decision, recorded at the call site.
+ * `{ degrade }` — for a caller whose honest answer is to keep going: `vat
+ * audit`, which reports an unreadable path as `SCAN_PATH_UNREADABLE` and
+ * validates every readable sibling. Discovery enumerates around the refused
+ * directory, hands the refusal to the handler, and returns every skill it
+ * COULD see. The same arm, same shape, as the crawler's own.
+ *
+ * 🪤 This was `DiscoveryOptions { onUnreadable?: … }`, optional, defaulting to
+ * refuse. Every caller that omitted it compiled, and the one that should have
+ * degraded surfaced a round later as a HIGH.
  */
-export interface DiscoveryOptions {
-  onUnreadable?: (refusal: DirectoryRefusal) => void;
-}
+export type DiscoveryUnreadablePolicy = 'refuse' | Extract<UnreadablePolicy, { degrade: unknown }>;
 
 /**
  * Directories that should always be excluded from skill discovery for performance.
@@ -129,7 +134,7 @@ async function crawlOneBase(
   base: string,
   globs: string[],
   projectRoot: string,
-  onUnreadable: ((refusal: DirectoryRefusal) => void) | undefined,
+  unreadable: DiscoveryUnreadablePolicy,
 ): Promise<string[]> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- base derived from validated config
   if (!existsSync(base)) {
@@ -148,23 +153,23 @@ async function crawlOneBase(
     // this and keeps the fast path (unlike `respectGitignore: false`, which costs
     // a full walk); the inventory lane already used it for the same reason.
     includeUntracked: true,
-    // A directory the crawl cannot LIST stops discovery, by name. The alternative
-    // — enumerate around it — is the same tell-less drop described above, from
-    // the other direction: one fewer skill, exit 0, and every command downstream
-    // (build, validate, verify, audit's config-aware lane) confidently working
-    // from the shorter list. The remedy names `skills.include` rather than
-    // `skills.exclude`, because `exclude` is applied to the crawl's RESULT and
-    // cannot stop the crawl from entering the directory; only a narrower
-    // include base can. Expressed against the project root — the coordinates
-    // the include pattern itself is written in, `..` and all.
+    // Under `'refuse'`, a directory the crawl cannot LIST stops discovery, by
+    // name. The alternative — enumerate around it — is the same tell-less drop
+    // described above, from the other direction: one fewer skill, exit 0, and
+    // every command downstream (build, validate, verify, audit's config-aware
+    // lane) confidently working from the shorter list. The remedy names
+    // `skills.include` rather than `skills.exclude`, because `exclude` is
+    // applied to the crawl's RESULT and cannot stop the crawl from entering
+    // the directory; only a narrower include base can. Expressed against the
+    // project root — the coordinates the include pattern itself is written in,
+    // `..` and all.
     //
-    // A caller that has decided to degrade instead supplies its own handler
-    // (see {@link DiscoveryOptions}); the refusal is then reported by that
-    // caller, and the crawl continues past the directory.
-    onUnreadable: onUnreadable ?? refuseListing({
-      root: projectRoot,
-      remedy: SKILLS_INCLUDE_REMEDY,
-    }),
+    // A caller that has decided to degrade passes its handler straight through
+    // (see {@link DiscoveryUnreadablePolicy}); the refusal is then reported by
+    // that caller, and the crawl continues past the directory.
+    unreadable: unreadable === 'refuse'
+      ? { refuse: { root: projectRoot, remedy: SKILLS_INCLUDE_REMEDY } }
+      : unreadable,
   });
 }
 
@@ -187,14 +192,14 @@ export const SKILLS_INCLUDE_REMEDY =
  *
  * @param skillsConfig - The skills section from vibe-agent-toolkit.config.yaml
  * @param projectRoot - Absolute path to project root (where config yaml lives)
- * @param options - What to do with a directory the crawl cannot list; the
- *   default refuses, see {@link DiscoveryOptions}
+ * @param unreadable - What to do with a directory the crawl cannot list —
+ *   see {@link DiscoveryUnreadablePolicy}; required, no default
  * @returns Array of discovered skills with names and source paths
  */
 export async function discoverSkillsFromConfig(
   skillsConfig: SkillsConfig,
   projectRoot: string,
-  options: DiscoveryOptions = {},
+  unreadable: DiscoveryUnreadablePolicy,
 ): Promise<DiscoveredSkill[]> {
   const { include, exclude } = skillsConfig;
 
@@ -205,7 +210,7 @@ export async function discoverSkillsFromConfig(
 
   const foundAbsPaths = new Set<string>();
   for (const [base, globs] of patternsByBase) {
-    const crawled = await crawlOneBase(base, globs, projectRoot, options.onUnreadable);
+    const crawled = await crawlOneBase(base, globs, projectRoot, unreadable);
     for (const absPath of crawled) {
       if (userExcludeMatcher) {
         const relFromProject = toForwardSlash(safePath.relative(projectRoot, absPath));

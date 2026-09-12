@@ -578,7 +578,9 @@ export async function computeDeferredArtifacts(
     return undefined;
   }
 
-  const discovered = await discoverSkillsFromConfig(config.skills, projectRoot);
+  // `'refuse'`: the `files:` dest check below is only as complete as this
+  // list. The throw lands in the command's catch → `reportCommandError`, exit 2.
+  const discovered = await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse');
   const { defaults, config: perSkillConfig } = config.skills;
 
   // Assembled ONCE for the whole run, then handed to every skill below. Rebuilding

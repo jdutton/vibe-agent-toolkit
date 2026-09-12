@@ -201,7 +201,7 @@ describe('listPluginSourceSkillDirs', () => {
     expect(message).toContain("'skills/group'");
     expect(message).toContain('EACCES');
     expect(message).not.toContain(pluginSourceDir);
-    expect(message).not.toContain('onUnreadable');
+    expect(message).not.toContain('`unreadable`');
   });
 
   it('returns a single skill dir when only one is present', () => {

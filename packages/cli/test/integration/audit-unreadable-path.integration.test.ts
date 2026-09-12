@@ -24,6 +24,7 @@
  */
 
 import fs from 'node:fs';
+import { dirname } from 'node:path';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -423,5 +424,87 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
   // instead of refusing, and every other caller keeps the refuse-by-name default.
   it.each(lanes)('$lane lane: the readable skill keeps its config-aware finding despite the unreadable sibling', ({ target, alphaPath }) => {
     expect(alphaUnderLockedSibling(target, alphaPath)?.issues.map((i) => i.code)).toContain(CONFIG_AWARE_CODE);
+  });
+});
+
+/**
+ * A PLUGIN whose skills include one SKILL.md the scan cannot open and one whose
+ * frontmatter is not a mapping.
+ *
+ * Both facts are the SKILL's findings, and the skill lane files them with their
+ * own codes: `SCAN_PATH_UNREADABLE` for the file it could not open,
+ * `SKILL_MISSING_FRONTMATTER` for the block that is not `key: value` fields. The
+ * plugin inventory carries the same two facts on `parseErrors[]`, and the
+ * plugin's own result used to re-file each of them as `PLUGIN_INVALID_JSON` —
+ * a second copy under a code that names a file it is not (plugin.json) and a
+ * format it is not (JSON), at error severity beside the skill lane's warning,
+ * with the build host's absolute path in the message where every other finding
+ * in the report is scan-root-relative.
+ */
+describe.skipIf(CANNOT_DENY_READS)('vat audit of a plugin with a SKILL.md it cannot read or parse', () => {
+  let pluginTempDir: string;
+  let pluginDir: string;
+  let lockedSkillMd: string;
+
+  beforeAll(() => {
+    pluginTempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-plugin-unreadable-skill-'));
+    pluginDir = safePath.join(pluginTempDir, 'plug');
+    const write = (rel: string, body: string): string => {
+      const abs = safePath.join(pluginDir, rel);
+      fs.mkdirSync(dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, body);
+      return abs;
+    };
+    write('.claude-plugin/plugin.json', '{"name":"plug","version":"1.0.0","description":"A plugin with one skill the scan cannot open."}\n');
+    write('skills/good/SKILL.md', '---\nname: good\ndescription: A readable skill that must survive its siblings.\n---\n\n# Good\n');
+    write('skills/badfm/SKILL.md', '---\n- just\n- a list\n---\n\n# Bad\n');
+    lockedSkillMd = write('skills/lockedfile/SKILL.md', '---\nname: lockedfile\ndescription: A skill whose SKILL.md cannot be opened.\n---\n\n# Locked\n');
+    fs.chmodSync(lockedSkillMd, UNREADABLE);
+  });
+
+  afterAll(() => {
+    if (fs.existsSync(lockedSkillMd)) fs.chmodSync(lockedSkillMd, 0o644);
+    fs.rmSync(pluginTempDir, { recursive: true, force: true });
+  });
+
+  /**
+   * Both ways a plugin is reached: named directly (the inventory-driven skill
+   * lane) and found by the walk from its parent (the directory lane). The skip
+   * in `appendInventoryParseErrors` is only honest if BOTH lanes file the
+   * skill's own finding, so both are pinned; the expected locations differ by
+   * one `plug/` segment because each lane anchors at its own scan root.
+   */
+  const lanes = [
+    { lane: 'plugin-target', target: () => pluginDir, prefix: '' },
+    { lane: 'directory', target: () => pluginTempDir, prefix: 'plug/' },
+  ];
+
+  async function audit(target: string) {
+    resetAuditCaches();
+    return getValidationResults(target, true, {}, silentLogger, deriveScanRoot(target));
+  }
+
+  it.each(lanes)('$lane lane: files each fact ONCE, on the skill, under its own code — never as PLUGIN_INVALID_JSON on the plugin', async ({ target, prefix }) => {
+    const results = await audit(target());
+    const issues = results.flatMap((r) => r.issues);
+
+    expect(issues.map((i) => i.code)).not.toContain('PLUGIN_INVALID_JSON');
+    const unreadable = issues.filter((i) => i.code === 'SCAN_PATH_UNREADABLE');
+    expect(unreadable.map((i) => i.location)).toEqual([`${prefix}skills/lockedfile/SKILL.md`]);
+    const badFrontmatter = issues.filter((i) => i.code === 'SKILL_MISSING_FRONTMATTER');
+    expect(badFrontmatter.map((i) => i.location)).toEqual([`${prefix}skills/badfm/SKILL.md`]);
+    // The readable sibling still scanned — the denominator this suite exists to protect.
+    expect(results.some((r) => r.path.endsWith('skills/good/SKILL.md'))).toBe(true);
+  });
+
+  it.each(lanes)('$lane lane: never spells the build host into a message — every path in the report is scan-root-relative', async ({ target, prefix }) => {
+    const results = await audit(target());
+    const leaking = results.flatMap((r) => r.issues).filter((i) => i.message.includes(pluginDir));
+
+    expect(leaking.map((i) => `${i.code} ${i.location ?? ''}`)).toEqual([]);
+    // And the refusal still says what was refused, and why.
+    const unreadable = results.flatMap((r) => r.issues).find((i) => i.code === 'SCAN_PATH_UNREADABLE');
+    expect(unreadable?.message).toMatch(/EACCES|permission denied/i);
+    expect(unreadable?.message).toContain(`${prefix}skills/lockedfile/SKILL.md`);
   });
 });

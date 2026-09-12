@@ -664,6 +664,15 @@ const provider = await LanceDBRAGProvider.create({
 - When `storeDocuments` is not enabled (default), `getDocument()` returns `null`.
 - Documents are automatically updated/deleted when their resource is updated/deleted.
 - Full document content reflects any `contentTransform` rules applied.
+- A `rag_documents` table written by an earlier build is brought up to this build's column list
+  automatically on the next `indexResources()`. A column the earlier build typed differently
+  (a boolean or date it stored as text, a numeric-looking title it stored as a number) cannot
+  be retyped in place and is not written into — `indexResources()` throws before deleting
+  anything, naming the column, its stored type, the type this build writes, and the remedy:
+  `vat rag clear` (or `clear()`) and re-index.
+- `close()` releases the connection; a later `indexResources()`, `deleteResource()`,
+  `getDocument()`, `query()` or `getStats()` on the same instance reopens it and does the work
+  it reports.
 
 ---
 

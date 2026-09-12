@@ -27,6 +27,7 @@
  * touch the network or wall-clock. Production callers pass `globalThis.fetch`.
  */
 
+import buffer from 'node:buffer';
 import { inspect } from 'node:util';
 
 import { redactSecretsInText, sensitiveHeaderValues } from './link-auth/build-headers.js';
@@ -100,6 +101,14 @@ export async function authTransport(
   const maxRetryAfterMs = options.maxRetryAfterMs ?? DEFAULT_MAX_RETRY_AFTER_MS;
   const sleep = options.sleep ?? defaultSleep;
 
+  // Redaction keys off the headers passed in at the top of the run rather
+  // than the current hop's map, because the current map is only ever a subset
+  // (the cross-origin strip removes headers, never adds a value) — so the
+  // original set is the safe superset for the whole loop. Every value in that
+  // set counts as a secret, whatever its header name — see
+  // {@link sensitiveHeaderValues}.
+  const secrets = sensitiveHeaderValues(headers);
+
   let currentUrl = url;
   let currentHeaders: Record<string, string> = { ...headers };
   let redirects = 0;
@@ -115,7 +124,7 @@ export async function authTransport(
     };
     if (options.signal !== undefined) init.signal = options.signal;
 
-    const response = await fetchRedacting(fetchImpl, currentUrl, init, headers);
+    const response = await fetchRedacting(fetchImpl, currentUrl, init, secrets);
 
     const retryDelay =
       retries < maxRetries ? computeRetryDelay(response, maxRetryAfterMs) : null;
@@ -126,7 +135,7 @@ export async function authTransport(
     }
 
     if (redirects < maxRedirects) {
-      const next = computeRedirect(response, currentUrl, currentHeaders);
+      const next = computeRedirect(response, currentUrl, currentHeaders, secrets);
       if (next !== null) {
         currentUrl = next.url;
         currentHeaders = next.headers;
@@ -174,23 +183,19 @@ export class AuthTransportError extends Error {
  * `ExternalLinkValidator` then serializes that `.message` into the result's
  * `error` field and `vat resources validate` prints it.
  *
- * Redaction keys off the headers passed in at the top of the run rather than
- * the current hop's map, because the current map is only ever a subset (the
- * cross-origin strip removes headers, never adds a value) — so the
- * original set is the safe superset for the whole loop. Every value in that
- * set counts as a secret, whatever its header name — see
- * {@link sensitiveHeaderValues}.
+ * `secrets` is the whole run's set (see `authTransport`), not the current
+ * hop's.
  */
 async function fetchRedacting(
   fetchImpl: typeof fetch,
   url: string,
   init: RequestInit,
-  originalHeaders: Record<string, string>,
+  secrets: readonly string[],
 ): Promise<Response> {
   try {
     return await fetchImpl(url, init);
   } catch (error) {
-    throw redactThrownValue(error, sensitiveHeaderValues(originalHeaders));
+    throw redactThrownValue(error, secrets);
   }
 }
 
@@ -206,10 +211,11 @@ async function fetchRedacting(
  * degrade every diagnosis to pay for one. So the swap happens only when the
  * redaction actually changed the text.
  *
- * The probe IS `util.inspect` (plus `JSON.stringify`, for the one thing
- * inspect does not print) — see {@link describeThrown} — and the redaction
- * matches every encoded form of the secret, not only the verbatim bytes (see
- * `redactSecretsInText`).
+ * The probe IS `util.inspect` (plus `JSON.stringify` at every level, for the
+ * one thing inspect does not print) — see {@link describeThrown} — and the
+ * redaction matches every encoded form of the secret, not only the verbatim
+ * bytes: escaped, percent, base64, and the hex / decimal spellings of its
+ * bytes (see `redactSecretsInText`).
  */
 function redactThrownValue(error: unknown, secrets: readonly string[]): unknown {
   if (secrets.length === 0) return error;
@@ -228,6 +234,12 @@ function redactThrownValue(error: unknown, secrets: readonly string[]): unknown 
  * `Map`/`Set`/`Headers` contents, getter values (a throwing getter prints as
  * `[Getter: <Inspection threw …>]` instead of aborting the probe), a
  * reassigned `.stack`, and a circular reference as `[Circular]`.
+ *
+ * `compact: true` with an infinite `breakLength` puts every value on one
+ * line. That is what makes a `Uint8Array` print as one contiguous
+ * `66, 101, 97, …` — under the default layout inspect groups a long numeric
+ * array into aligned columns across lines, and no literal spelling of the
+ * secret's bytes can match a list broken by variable whitespace.
  */
 const INSPECT_EVERYTHING: Parameters<typeof inspect>[1] = {
   depth: Infinity,
@@ -236,7 +248,28 @@ const INSPECT_EVERYTHING: Parameters<typeof inspect>[1] = {
   maxArrayLength: Infinity,
   maxStringLength: Infinity,
   breakLength: Infinity,
+  compact: true,
 };
+
+/**
+ * `util.inspect` with {@link INSPECT_EVERYTHING}, and every byte of a `Buffer`.
+ *
+ * A `Buffer` ignores `maxArrayLength`; it prints `INSPECT_MAX_BYTES` (50) of
+ * its bytes and then `… N more bytes`. A credential longer than that — a
+ * fine-grained GitHub token is 93 characters — would print as a hex PREFIX
+ * that no whole-secret form matches, and the probe would judge it clean. The
+ * cap is a process-wide setting with no per-call override, so it is raised
+ * for the synchronous span of this one call and restored on every exit.
+ */
+function inspectEverything(value: unknown): string {
+  const cap = buffer.INSPECT_MAX_BYTES;
+  buffer.INSPECT_MAX_BYTES = Number.POSITIVE_INFINITY;
+  try {
+    return inspect(value, INSPECT_EVERYTHING);
+  } finally {
+    buffer.INSPECT_MAX_BYTES = cap;
+  }
+}
 
 /**
  * Flatten a thrown value into one probe string covering every place a value
@@ -257,14 +290,20 @@ const INSPECT_EVERYTHING: Parameters<typeof inspect>[1] = {
  *
  * `JSON.stringify` stays beside inspect for the one thing inspect does not
  * do: call `toJSON`. A logger that serializes the error as JSON prints what
- * `toJSON` returns, and inspect shows the method, not its result.
+ * `toJSON` returns, and inspect shows the method, not its result. It is
+ * applied at EVERY level — the top-level value, each `cause` down the chain,
+ * each `AggregateError` member — which is what {@link summarizeThrown}'s walk
+ * does, so the walk is reused as this half of the probe. A top-level
+ * `JSON.stringify` alone never descends into `cause` or `errors` (both are
+ * non-enumerable on a standard Error), so a `toJSON` one level down was
+ * judged clean and the object rethrown intact, measured.
  *
  * inspect quotes string properties and escapes their control characters, so
  * the redaction must know that spelling of a secret too — `secretForms` in
  * `build-headers.ts` carries the inspect-escaped body for exactly this probe.
  */
 function describeThrown(error: unknown): string {
-  return `${inspect(error, INSPECT_EVERYTHING)} | ${safeJson(error)}`;
+  return `${inspectEverything(error)} | ${summarizeThrown(error)}`;
 }
 
 /**
@@ -273,9 +312,10 @@ function describeThrown(error: unknown): string {
  * (`.code`, `.headers`), down the `cause` chain and through an
  * `AggregateError`'s members.
  *
- * This is composition, not detection — {@link describeThrown} decides whether
- * a swap happens, so a shape this walk cannot see costs nothing. Everything it
- * emits still goes through `redactSecretsInText` before it becomes a message.
+ * This is composition, and the `JSON.stringify` half of detection —
+ * {@link describeThrown} pairs it with `util.inspect`, which sees every shape
+ * this walk cannot. Everything it emits still goes through
+ * `redactSecretsInText` before it becomes a message.
  */
 function summarizeThrown(error: unknown): string {
   const parts: string[] = [];
@@ -331,6 +371,14 @@ const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]
  * Decide the next hop for a redirect, or `null` if the response is not a
  * redirect (see {@link REDIRECT_STATUSES}) / has no Location.
  *
+ * A `Location` that is not a URL is refused with an {@link AuthTransportError}
+ * whose text is redacted, never with the `TypeError: Invalid URL` that
+ * `new URL` throws: that TypeError carries the raw header as `.input`, and it
+ * used to escape the loop body outside `fetchRedacting`'s catch — so a server
+ * that echoed the request's credential into `Location` handed it back
+ * verbatim, and the failure fell outside the documented network-level
+ * contract with a message that named nothing.
+ *
  * 🔑 **A cross-origin hop carries NO adopter-supplied header — the whole set
  * is dropped, not the one named `Authorization`.** The set is `auth.headers`
  * (or `fetch.headers`), an open record the adopter writes whose every value
@@ -351,11 +399,22 @@ function computeRedirect(
   response: Response,
   currentUrl: string,
   currentHeaders: Record<string, string>,
+  secrets: readonly string[],
 ): { url: string; headers: Record<string, string> } | null {
   if (!REDIRECT_STATUSES.has(response.status)) return null;
   const location = response.headers.get('location');
   if (location === null) return null;
-  const nextUrl = new URL(location, currentUrl).toString();
+  let nextUrl: string;
+  try {
+    nextUrl = new URL(location, currentUrl).toString();
+  } catch {
+    throw new AuthTransportError(
+      redactSecretsInText(
+        `authTransport: the ${response.status} from ${currentUrl} carries a Location that is not a URL: ${JSON.stringify(location)}`,
+        secrets,
+      ),
+    );
+  }
   const sameOrigin = new URL(nextUrl).origin === new URL(currentUrl).origin;
   return {
     url: nextUrl,

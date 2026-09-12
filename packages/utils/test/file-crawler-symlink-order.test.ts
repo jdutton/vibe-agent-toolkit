@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import { crawlDirectorySync } from '../src/file-crawler.js';
 import { mkdirSyncReal, safePath, toForwardSlash } from '../src/path-utils.js';
 import { createSymlink, setupSyncTempDirSuite, symlinkCapability } from '../src/test-helpers.js';
+import { refuseUnreadableFixture } from '../src/testing.js';
 
 /**
  * `readdirSync` order is filesystem-defined, not alphabetical — so a real
@@ -87,6 +88,7 @@ describe('file-crawler: symlink-vs-real-directory dedup ordering', () => {
 
     const files = crawlDirectorySync({
       baseDir: testDir,
+      unreadable: refuseUnreadableFixture(testDir),
       include: ['**/*.md'],
       followSymlinks: true,
       respectGitignore: false,

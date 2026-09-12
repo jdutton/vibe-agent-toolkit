@@ -16,7 +16,7 @@
  *
  * // Add resources
  * await registry.addResource('./README.md');
- * await registry.crawl({ baseDir: './docs' });
+ * await registry.crawl({ baseDir: './docs', unreadable: 'refuse' });
  *
  * // Validate all links
  * const result = await registry.validate();
@@ -53,6 +53,7 @@ export {
   // this is the one export and not an invitation.
   unparsedResourceFacts,
   type CrawlOptions,
+  type RegistryUnreadablePolicy,
   type DuplicateIdCollision,
   type UnreadableResource,
   type ResourceRegistryOptions,
@@ -841,6 +842,7 @@ export {
   FilesystemCrawlSource,
   gitExtentSelected,
   GitCrawlSource,
+  listingRefusalRemedy,
   type CrawlSource,
   type CrawlSourceKind,
   type EnumeratedPath,

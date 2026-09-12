@@ -419,18 +419,21 @@ describe('FilesystemExtentContributor content demand', () => {
 /**
  * A directory the walk could not list is a gap in the POPULATION, and the
  * projection lane refuses the run for it rather than answering with a shorter
- * list — see `ListingRefusals` in `crawl-source.ts` for why this lane stops
- * where the incumbent walk degrades (a cached population cannot carry the gap
- * yet), and for the one case it does NOT stop (gitignored territory, pinned by
+ * list — see `ListingRefusals` in `crawl-source.ts` for why (a cached
+ * population cannot carry the gap; the incumbent walk refuses the same way),
+ * and for the one case it does NOT stop (gitignored territory, pinned by
  * `projection-crawl-source-refused-listing.test.ts`).
  *
  * 🪤 `crawlDirectory` used to swallow the refusal, so `vat resources validate`
  * on its default lane reported `status: success` over a tree with a `--x`
- * directory in the declared scan.
+ * directory inside the population.
  */
 describe('FilesystemExtentContributor refuses a population it could not enumerate', () => {
   it("throws DirectoryListingRefusedError naming the directory root-relative, with the errno and this lane's remedy", async () => {
     const locked = safePath.join(root, NESTED_DIR);
+    // No repository here, so the walk arm runs and the remedy is the
+    // no-repository one; the in-repository variant ("gitignore it", both arms,
+    // real chmod) is pinned in `projection-crawl-source-refused-listing.test.ts`.
     const thrown = await withReaddirSyncRefused(locked, 'EACCES', async () => {
       try {
         await contribute();
@@ -444,11 +447,15 @@ describe('FilesystemExtentContributor refuses a population it could not enumerat
     const message = (thrown as Error).message;
     expect(message).toContain(`'${NESTED_DIR}'`);
     expect(message).toContain('EACCES');
-    // The projection reads no include/exclude, so its remedy must not name one
-    // — four spellings of `resources.exclude` were tried against this lane and
-    // none changed anything. What it does honour is gitignore.
-    expect(message).not.toContain('resources.exclude');
-    expect(message).toContain('gitignore');
+    // The projection reads no include/exclude, so its remedy must not PRESCRIBE
+    // one — four spellings of `resources.exclude` were tried against this lane
+    // and none changed anything — and must say so, since the adopter who tried
+    // them is the one reading this. Outside a repository "gitignore it" is a
+    // dead knob too, so the remedy names the missing repository instead.
+    expect(message).not.toMatch(/add it to resources\.exclude/);
+    expect(message).toMatch(/regardless of resources\.include or resources\.exclude/);
+    expect(message).toMatch(/no git repository/i);
+    expect(message).not.toMatch(/gitignore it/);
     // Root-relative: an absolute path here is the developer's $HOME in a CI log.
     expect(message).not.toContain(root);
   });

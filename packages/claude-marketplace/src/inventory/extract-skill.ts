@@ -17,7 +17,6 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import {
   crawlDirectory,
-  refuseListing,
 } from '@vibe-agent-toolkit/utils/crawl';
 import {
   type GitTracker,
@@ -283,10 +282,12 @@ export async function crawlSkillLinkRegistry(projectRoot: string): Promise<Resou
 		absolute: true,
 		filesOnly: true,
 		includeUntracked: true,
-		onUnreadable: refuseListing({
-			root: projectRoot,
-			remedy: 'Fix the permissions on that directory so the inventory can list every markdown file under the project root.',
-		}),
+		unreadable: {
+			refuse: {
+				root: projectRoot,
+				remedy: 'Fix the permissions on that directory so the inventory can list every markdown file under the project root.',
+			},
+		},
 	});
 	recordRegistryPass(CRAWL_REGISTRY_ENUMERATE_ID, enumerationStartedAt);
 	const config = await loadConfig(projectRoot).catch(() => undefined);

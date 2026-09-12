@@ -49,8 +49,14 @@ export interface RunGraderInput {
   env: NodeJS.ProcessEnv;
   /** Injectable seam for tests; defaults to the real {@link spawnHeadlessClaude}. */
   spawn?: typeof spawnHeadlessClaude;
-  /** Called with each stdout chunk as it streams (for progress echo). */
-  onProgress?: (chunk: string) => void;
+  /**
+   * Called with each stdout chunk as it streams (for progress echo), and with
+   * the `[skill-test]` warning line when the grader's friction was cut — see
+   * {@link fragmentWarnRouter}. Required: it is the only channel on which a
+   * dropped friction item is ever said, and an optional sink here was the
+   * optional `onWarn` one layer down wearing a different name.
+   */
+  onProgress: (chunk: string) => void;
   /**
    * Reports this grader session's `total_cost_usd` (parsed from its stream-json
    * transcript's terminal result; `undefined` when the transcript carried none,
@@ -85,14 +91,10 @@ export interface RunGraderInput {
  */
 /**
  * Adapt the grader's stdout `onProgress` sink into the `onWarn` callback
- * {@link parseEvalFragment} expects (used only when it drops malformed friction
- * items). Extracted so the ternary does not add a branch to `runGraderForEval`'s
- * cognitive complexity budget.
+ * {@link parseEvalFragment} requires (called only when it drops malformed
+ * friction items).
  */
-function fragmentWarnRouter(
-  onProgress: RunGraderInput['onProgress'],
-): ((message: string) => void) | undefined {
-  if (onProgress === undefined) return undefined;
+function fragmentWarnRouter(onProgress: RunGraderInput['onProgress']): (message: string) => void {
   return (message) => onProgress(`[skill-test] ${message}\n`);
 }
 
@@ -143,7 +145,7 @@ export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragm
   let graderTranscript = '';
   const onStdout = (chunk: string): void => {
     graderTranscript += chunk;
-    input.onProgress?.(chunk);
+    input.onProgress(chunk);
   };
 
   let spawnResult;

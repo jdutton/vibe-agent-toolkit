@@ -72,21 +72,74 @@ function checkMarketplaceFiles(marketplacePath: string): ValidationIssue[] {
 }
 
 /**
- * Validate all SKILL.md files within a plugin's skills/ directory.
+ * The boundary of what this command may read, applied to every path the walk
+ * opens below a contained plugin — not only to the declared `source`.
+ *
+ * 🚨 **Containment used to stop at the `source`.** Inside a contained plugin,
+ * `skills/` was `readdir`ed through a directory link, a `SKILL.md` parsed
+ * through a file link, and `.claude-plugin/plugin.json` read through one — each
+ * pointing OUT of the root — and the outside file's findings were published at
+ * a root-relative location whose real file is not under the root. A
+ * marketplace checkout is the untrusted input (git carries symlinks), so the
+ * class the source lane closed was open one level down, while the help text
+ * and the refusal message promised the absolute.
+ *
+ * Same predicate as {@link containedPluginDir}: real path against the root's
+ * own real path, so a link INSIDE the root is followed (the link is not the
+ * offence, leaving the root is) and one that leaves it is recorded by its
+ * root-relative spelling in `refused` and never opened. The record is what the
+ * document publishes and what the builder turns into the run-integrity
+ * refusal: a path the run would not read is a plugin the run did not finish
+ * validating, and silence there is the reassuring failure.
  */
-async function validatePluginSkills(pluginDir: string, marketplacePath: string): Promise<ValidationIssue[]> {
+class WalkBoundary {
+  readonly refused: string[] = [];
+
+  constructor(
+    private readonly marketplacePath: string,
+    private readonly realRoot: string,
+  ) {}
+
+  /**
+   * May the walk open `abs`? `true` when its real path sits under the root.
+   * `false` records the refusal by name and is final for that path: nothing
+   * beneath it is visited either, because nothing beneath it was read.
+   */
+  contains(abs: string): boolean {
+    const real = toForwardSlash(normalizePath(abs));
+    if (!escapesCorpusRoot(safePath.relative(this.realRoot, real))) return true;
+    this.refused.push(issueLocation(abs, this.marketplacePath));
+    return false;
+  }
+}
+
+/**
+ * Validate all SKILL.md files within a plugin's skills/ directory.
+ *
+ * Every path opened here — `skills/`, each skill directory, each `SKILL.md` —
+ * is checked against `boundary` first, so a link out of the root at any of
+ * the three depths is refused by name rather than read. A skill directory is
+ * recognised by what it RESOLVES to (a link to an in-root directory is a
+ * skill directory; `Dirent.isDirectory()` said no to every link and skipped
+ * the skill silently), which is the same by-real-path rule the source gets.
+ */
+async function validatePluginSkills(
+  pluginDir: string,
+  marketplacePath: string,
+  boundary: WalkBoundary,
+): Promise<ValidationIssue[]> {
   const skillsDir = safePath.join(pluginDir, 'skills');
-  if (!existsSync(skillsDir)) return [];
+  if (!existsSync(skillsDir) || !boundary.contains(skillsDir)) return [];
 
   const issues: ValidationIssue[] = [];
   const skillEntries = readdirSync(skillsDir, { withFileTypes: true });
 
   for (const skillEntry of skillEntries) {
-    if (!skillEntry.isDirectory()) continue;
-
     const skillDir = safePath.join(skillsDir, skillEntry.name);
+    if (!isDirectory(skillDir) || !boundary.contains(skillDir)) continue;
+
     const skillMdPath = safePath.join(skillDir, 'SKILL.md');
-    if (!existsSync(skillMdPath)) continue;
+    if (!existsSync(skillMdPath) || !boundary.contains(skillMdPath)) continue;
 
     const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir, locationRoot: marketplacePath });
     issues.push(...skillResult.issues);
@@ -207,13 +260,14 @@ async function validateDeclaredPlugins(
   marketplacePath: string,
   declared: readonly LocalPluginSource[],
   validation: ValidationConfig | undefined,
-): Promise<{ pluginResults: LocalPluginResult[]; undeclared: string[]; issues: ValidationIssue[] }> {
+): Promise<{ pluginResults: LocalPluginResult[]; undeclared: string[]; refused: string[]; issues: ValidationIssue[] }> {
   const pluginResults: LocalPluginResult[] = [];
   const issues: ValidationIssue[] = [];
   // Keyed by REAL path: one directory is validated once however many entries
   // name it, and the same key is what `undeclaredPluginDirs` compares against.
   const validatedByDir = new Map<string, ValidationResult>();
   const realRoot = toForwardSlash(normalizePath(marketplacePath));
+  const boundary = new WalkBoundary(marketplacePath, realRoot);
 
   for (const entry of declared) {
     // A source that names nothing inside the root — nothing at all, a file,
@@ -232,31 +286,63 @@ async function validateDeclaredPlugins(
       continue;
     }
 
-    // `locationRoot` is not optional here even though the parameter is: omitted,
-    // `validatePlugin` anchors at the plugin's own discovered project root, so
-    // its findings land in a different coordinate system than the marketplace
-    // and skill findings beside them — and every plugin's manifest collapses to
-    // the same `.claude-plugin/plugin.json`.
-    const rawResult = await validatePlugin(dir.lexical, { strict: true, locationRoot: marketplacePath });
-    const pluginIssues = resolveIssueSeverity(rawResult.issues, validation);
-    const result: ValidationResult = {
-      ...rawResult,
-      issues: pluginIssues,
-      status: calculateValidationStatus(pluginIssues),
-      issueCounts: countBySeverity(pluginIssues),
-    };
+    const result = await validateContainedPlugin(dir.lexical, marketplacePath, boundary, validation);
     validatedByDir.set(dir.real, result);
     pluginResults.push({ ...entry, result });
-    issues.push(...pluginIssues);
+    issues.push(...result.issues);
 
-    const skillIssues = await validatePluginSkills(dir.lexical, marketplacePath);
+    const skillIssues = await validatePluginSkills(dir.lexical, marketplacePath, boundary);
     issues.push(...resolveIssueSeverity(skillIssues, validation));
   }
 
   return {
     pluginResults,
     undeclared: undeclaredPluginDirs(marketplacePath, new Set(validatedByDir.keys())),
+    refused: boundary.refused,
     issues,
+  };
+}
+
+/**
+ * Validate one contained plugin directory — unless its manifest is a link out
+ * of the root, in which case the manifest is refused by name and the plugin's
+ * row says so instead of carrying findings about a file the run did not read.
+ *
+ * The row keeps `status: 'error'` with no issues: the error is the refusal
+ * the builder publishes once for the run, and a `success` row for a plugin
+ * whose manifest was never opened would be the reassuring lie this whole
+ * boundary exists to refuse.
+ */
+async function validateContainedPlugin(
+  pluginDir: string,
+  marketplacePath: string,
+  boundary: WalkBoundary,
+  validation: ValidationConfig | undefined,
+): Promise<ValidationResult> {
+  const manifestPath = safePath.join(pluginDir, '.claude-plugin', 'plugin.json');
+  if (existsSync(manifestPath) && !boundary.contains(manifestPath)) {
+    return {
+      path: pluginDir,
+      type: 'claude-plugin',
+      status: 'error',
+      summary: `Plugin manifest not read: ${issueLocation(manifestPath, marketplacePath)} resolves outside the marketplace root`,
+      issues: [],
+      issueCounts: countBySeverity([]),
+    };
+  }
+
+  // `locationRoot` is not optional here even though the parameter is: omitted,
+  // `validatePlugin` anchors at the plugin's own discovered project root, so
+  // its findings land in a different coordinate system than the marketplace
+  // and skill findings beside them — and every plugin's manifest collapses to
+  // the same `.claude-plugin/plugin.json`.
+  const rawResult = await validatePlugin(pluginDir, { strict: true, locationRoot: marketplacePath });
+  const pluginIssues = resolveIssueSeverity(rawResult.issues, validation);
+  return {
+    ...rawResult,
+    issues: pluginIssues,
+    status: calculateValidationStatus(pluginIssues),
+    issueCounts: countBySeverity(pluginIssues),
   };
 }
 
@@ -336,6 +422,13 @@ export interface MarketplaceFindings {
   /** `plugins/*` directories no declared source resolved to, relative to the root. */
   undeclared: string[];
   /**
+   * Paths INSIDE a validated plugin the walk refused to open because their
+   * real path lies outside the root (a `skills/` link, a skill dir link, a
+   * `SKILL.md` or `plugin.json` link pointing out), relative to the root.
+   * Empty when the manifest failed: the run never reached a plugin.
+   */
+  refused: string[];
+  /**
    * Manifest, required-file, plugin and skill issues, in report order, with
    * every severity already resolved against the governing project's
    * `validation.severity` map.
@@ -396,13 +489,14 @@ export async function collectMarketplaceFindings(
       marketplaceResult,
       pluginResults: [],
       undeclared: [],
+      refused: [],
       issues: [...marketplaceResult.issues],
     };
   }
 
   const validation = resolveProjectValidationConfig(marketplacePath, logger);
   const fileIssues = checkMarketplaceFiles(marketplacePath);
-  const { pluginResults, undeclared, issues: pluginIssues } = await validateDeclaredPlugins(
+  const { pluginResults, undeclared, refused, issues: pluginIssues } = await validateDeclaredPlugins(
     marketplacePath,
     marketplaceResult.metadata?.localPluginSources ?? [],
     validation,
@@ -414,7 +508,7 @@ export async function collectMarketplaceFindings(
     ...pluginIssues,
   ];
 
-  return { marketplaceResult, pluginResults, undeclared, issues };
+  return { marketplaceResult, pluginResults, undeclared, refused, issues };
 }
 
 /** Everything the emitted report is built from. */
@@ -441,6 +535,14 @@ export interface MarketplaceValidateReportInput {
   pluginResults: readonly LocalPluginResult[];
   /** `plugins/*` directories no declared source resolved to; listed, never graded. */
   undeclared: readonly string[];
+  /**
+   * Root-relative paths inside a validated plugin the walk refused to open
+   * because their real path lies outside the root. Required, not optional: a
+   * caller that cannot say is a caller whose walk may have left the root
+   * unrecorded, and the builder turns a non-empty list into the run-integrity
+   * refusal.
+   */
+  refused: readonly string[];
   issues: readonly ValidationIssue[];
   /**
    * The manifest's own summary, present iff the run bailed on the manifest. A
@@ -532,10 +634,10 @@ export function summarizeIssuesByLocation(
 export function buildMarketplaceValidateReport(
   input: MarketplaceValidateReportInput,
 ): MarketplaceValidateReport {
-  const { root, marketplace, pluginResults, undeclared, bailSummary, duration, verbose } = input;
+  const { root, marketplace, pluginResults, undeclared, refused, bailSummary, duration, verbose } = input;
 
   const issues = [
-    ...unresolvedLocalPluginsFinding(marketplace, pluginResults),
+    ...unfinishedRunFinding(marketplace, pluginResults, refused),
     ...input.issues,
   ];
   const issueCounts = countBySeverity(issues);
@@ -565,6 +667,10 @@ export function buildMarketplaceValidateReport(
     // Named, not graded — see `validateDeclaredPlugins`. Always present, so an
     // empty list is a statement that `plugins/` was looked at.
     undeclared: [...undeclared],
+    // Paths the walk would not open (real path outside the root) — see
+    // `WalkBoundary`. Always present: an empty list says every path the run
+    // read was under `root`, which is the containment claim the help text makes.
+    refused: [...refused],
     // One row per inspected asset by default; the flat per-issue list under
     // `--verbose`. Either way every `location` stays relative to `root` above.
     issues: verbose === true ? issues : summarizeIssuesByLocation(issues),
@@ -609,6 +715,14 @@ export interface MarketplaceValidateReport extends Record<string, unknown> {
  * The message names the unresolved sources: the reader's next move is to fix
  * the `source` or build the tree, and either needs the name.
  *
+ * The second half is the same claim one level down: a path INSIDE a validated
+ * plugin that the walk refused to open because it resolves outside the root
+ * (`refused`, from {@link WalkBoundary}). The plugin's row exists, but what
+ * sits behind that path was never read, so the document is not a verdict
+ * about it either. ONE finding carries both halves — the claim is about the
+ * run, and two reports about one run is the per-finding duplication
+ * `run-integrity.ts` forbids.
+ *
  * Derived here in the builder, not in {@link collectMarketplaceFindings}, so
  * the status the document publishes — and the exit code taken from it — cannot
  * be computed over an issue set that lacks it. Shared mechanism:
@@ -616,29 +730,45 @@ export interface MarketplaceValidateReport extends Record<string, unknown> {
  *
  * @param marketplace - The manifest's metadata; `undefined` when the run bailed
  * @param validated - The declared local plugins the run validated
+ * @param refused - Root-relative paths the walk would not open
  * @returns The one finding, or nothing
  */
-function unresolvedLocalPluginsFinding(
+function unfinishedRunFinding(
   marketplace: ValidationResult['metadata'],
   validated: readonly LocalPluginResult[],
+  refused: readonly string[],
 ): readonly ValidationIssue[] {
   const declared = marketplace?.localPluginSources ?? [];
   const unresolved = declared.filter(
     (entry) => !validated.some((v) => v.name === entry.name && v.source === entry.source),
   );
-  if (unresolved.length === 0) return [];
-  const named = unresolved.map((entry) => `\`${entry.name}\` (${entry.source})`).join(', ');
-  return [runIntegrityFinding(
-    `The manifest declares ${declared.length} plugin(s) with a local source and this run validated`
-    + ` ${validated.length} of them, so this document is not a verdict about the rest: it reads the`
-    + ' same as a run over a marketplace whose plugins are all clean.'
-    + ` Declared source(s) that did not resolve to a directory under the marketplace root: ${named}.`
-    + ' Usually the marketplace was not built, was built somewhere else, or the entry\'s `source`'
-    + ' names the wrong directory — `undeclared` above lists the `plugins/` directories the'
-    + ' manifest does not name. A source that resolves OUTSIDE the root (a symlink pointing out)'
-    + ' is refused the same way: this command never leaves the directory it was pointed at.'
-    + ' Fix the `source`, run `vat build` first, or point this command at the built marketplace.',
-  )];
+  if (unresolved.length === 0 && refused.length === 0) return [];
+  const parts: string[] = [];
+  if (unresolved.length > 0) {
+    const named = unresolved.map((entry) => `\`${entry.name}\` (${entry.source})`).join(', ');
+    parts.push(
+      `The manifest declares ${declared.length} plugin(s) with a local source and this run validated`
+      + ` ${validated.length} of them, so this document is not a verdict about the rest: it reads the`
+      + ' same as a run over a marketplace whose plugins are all clean.'
+      + ` Declared source(s) that did not resolve to a directory under the marketplace root: ${named}.`
+      + ' Usually the marketplace was not built, was built somewhere else, or the entry\'s `source`'
+      + ' names the wrong directory — `undeclared` above lists the `plugins/` directories the'
+      + ' manifest does not name. A source that resolves OUTSIDE the root (a symlink pointing out)'
+      + ' is refused the same way: this command never leaves the directory it was pointed at.'
+      + ' Fix the `source`, run `vat build` first, or point this command at the built marketplace.',
+    );
+  }
+  if (refused.length > 0) {
+    const named = refused.map((path) => `\`${path}\``).join(', ');
+    parts.push(
+      `This run refused to open ${refused.length} path(s) inside a validated plugin because each resolves`
+      + ` OUTSIDE the marketplace root (a symbolic link pointing out): ${named}.`
+      + ' Nothing behind them was read, so this document is not a verdict about the skills or manifest'
+      + ' they hold — this command never leaves the directory it was pointed at. Replace each link'
+      + ' with the files it points at, or move its target under the marketplace root.',
+    );
+  }
+  return [runIntegrityFinding(parts.join(' '))];
 }
 
 /**
@@ -662,7 +792,7 @@ export async function runMarketplaceValidatePhase(
     const marketplacePath = safePath.resolve(targetPath ?? '.');
     logger.info(`Validating marketplace: ${marketplacePath}`);
 
-    const { marketplaceResult, pluginResults, undeclared, issues } =
+    const { marketplaceResult, pluginResults, undeclared, refused, issues } =
       await collectMarketplaceFindings(marketplacePath, logger);
 
     // A bailed run reports WHY it stopped; a completed run reports what it
@@ -674,6 +804,7 @@ export async function runMarketplaceValidatePhase(
       marketplace: marketplaceResult.metadata,
       pluginResults,
       undeclared,
+      refused,
       issues,
       ...(bailed ? { bailSummary: marketplaceResult.summary } : {}),
       duration: formatDuration(Date.now() - startTime),
@@ -735,6 +866,11 @@ Output (YAML on stdout):
   undeclared: directories under plugins/ that no manifest entry names.
           Listed only — they cannot be installed, so they are neither
           validated nor a failure.
+  refused: paths inside a validated plugin this run would not open because
+          they resolve outside the root (a skills/ dir, skill dir, SKILL.md
+          or plugin.json that is a symlink pointing out). Containment is by
+          real path at every depth, not only at the declared source; each is
+          named here and in the RESOURCE_CHECK_BROKEN finding (exit 1).
 
   issues: one row per inspected location, carrying only that location's counts
           ({location, errors?, warnings?, info?, codes}). A zero bucket is

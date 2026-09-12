@@ -35,6 +35,7 @@ import {
   normalizedTmpdir,
   safePath,
   symlinkCapability,
+  toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -48,6 +49,7 @@ const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
  */
 const SYMLINK_CAP = symlinkCapability();
 const MANIFEST_DIR = '.claude-plugin';
+const PLUGIN_JSON = 'plugin.json';
 /** The root-relative path most cases put their declared plugin at. */
 const PLUGIN_A = 'plugins/a';
 /** The one declared entry most cases share: `a`, at the conventional location. */
@@ -100,7 +102,7 @@ function writeMarketplace(root: string, plugins: Array<{ name: string; source: s
 
 /** A complete (info-only under strict) plugin manifest at `dir`. */
 function writePlugin(dir: string, name: string): void {
-  writeJson(safePath.join(dir, MANIFEST_DIR, 'plugin.json'), { name, version: '1.0.0' });
+  writeJson(safePath.join(dir, MANIFEST_DIR, PLUGIN_JSON), { name, version: '1.0.0' });
 }
 
 /** The refusal shape shared by every "nothing validated" case: exit 1, error, empty results. */
@@ -410,5 +412,137 @@ describe('marketplace validate — a declared source never leaves the marketplac
     expect(codeCounts.length).toBeGreaterThan(0);
     expect(codeCounts.every((n) => n === 1)).toBe(true);
     expect((doc['issueCounts'] as { info: number }).info).toBe(codeCounts.length);
+  });
+});
+
+/**
+ * Containment holds for every path the walk READS, not only for the declared
+ * `source`. The delta above closed the source lane and left the next depth
+ * open: inside a contained plugin, `skills/` was `readdir`ed through a
+ * directory link, a `SKILL.md` was parsed through a file link, and
+ * `.claude-plugin/plugin.json` was read through one — each pointing OUT of the
+ * root — and the outside file's findings were published at a root-relative
+ * location whose real file is not under the root. The help text and the
+ * refusal message both promise "this command never leaves the directory it was
+ * pointed at"; these pin that the code honours it one level down, through the
+ * same run-integrity refusal an escaping source gets, with the refused path
+ * named on the document.
+ */
+describe.skipIf(SYMLINK_CAP === null)('marketplace validate — containment holds below the plugin source', () => {
+  const cap = SYMLINK_CAP as SymlinkCapability;
+  const SKILL_LEAK = 'plugins/a/skills/leak/SKILL.md';
+  /** A skill whose ONE finding (a broken link) is the tell that it was read. */
+  const LEAKY_SKILL_MD = '---\nname: leak\ndescription: outside skill reached through a link\n---\n# leak\nSee [x](../../nowhere.md)\n';
+  let tmp: string;
+  let outsideSkills: string;
+  let outsidePluginJson: string;
+
+  beforeAll(() => {
+    tmp = safePath.resolve(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-mp-deep-contained-')));
+    outsideSkills = safePath.join(tmp, 'outside', 'skills');
+    mkdirSyncReal(safePath.join(outsideSkills, 'leak'), { recursive: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
+    writeFileSync(safePath.join(outsideSkills, 'leak', 'SKILL.md'), LEAKY_SKILL_MD);
+    outsidePluginJson = safePath.join(tmp, 'outside', PLUGIN_JSON);
+    writeJson(outsidePluginJson, { name: 'a', version: '1.0.0' });
+  });
+
+  afterAll(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  /** A contained plugin `a`, declared and with a real manifest, at `<tmp>/<name>`. */
+  function containedPluginRoot(name: string): { root: string; plugin: string } {
+    const root = safePath.join(tmp, name);
+    writeMarketplace(root, [DECLARED_A]);
+    const plugin = safePath.join(root, 'plugins', 'a');
+    writePlugin(plugin, 'a');
+    return { root, plugin };
+  }
+
+  /**
+   * The refusal shape for a path the walk would not follow: the plugin itself
+   * WAS validated (exit 1 comes from the refusal, not from an absent plugin),
+   * ONE run-integrity finding names `refusedPath`, the document lists it under
+   * `refused`, and nothing read through the link reached the document.
+   */
+  async function expectRefusedBelowSource(root: string, refusedPath: string): Promise<void> {
+    const { exitCode, doc } = await validate(root, true);
+    const issues = doc['issues'] as VerboseIssue[];
+    const integrity = issues.filter((i) => i.code === RUN_INTEGRITY_CODE);
+
+    expect(exitCode).toBe(1);
+    expect(doc['status']).toBe('error');
+    expect(doc['pluginsValidated']).toBe(1);
+    expect(doc['refused']).toEqual([refusedPath]);
+    expect(integrity).toHaveLength(1);
+    expect(integrity[0]?.message).toContain(`\`${refusedPath}\``);
+    // Never read: the outside skill's broken link is not a finding here, and
+    // no location sits at or beneath the refused path.
+    expect(issues.map((i) => i.code)).not.toContain('LINK_INTEGRITY_BROKEN');
+    for (const location of everyLocationIn(doc)) {
+      expect(toForwardSlash(location).startsWith(refusedPath)).toBe(false);
+      expect(location).not.toMatch(/^\.\.(\/|$)/);
+    }
+  }
+
+  it('refuses a `skills/` directory link that points out, by name, and reads nothing through it', async () => {
+    const { root, plugin } = containedPluginRoot('skills-dir-out');
+    createSymlink(cap, outsideSkills, safePath.join(plugin, 'skills'), 'dir');
+
+    await expectRefusedBelowSource(root, 'plugins/a/skills');
+  });
+
+  it('refuses a skill directory link that points out, by name', async () => {
+    const { root, plugin } = containedPluginRoot('skill-dir-out');
+    mkdirSyncReal(safePath.join(plugin, 'skills'), { recursive: true });
+    createSymlink(cap, safePath.join(outsideSkills, 'leak'), safePath.join(plugin, 'skills', 'leak'), 'dir');
+
+    await expectRefusedBelowSource(root, 'plugins/a/skills/leak');
+  });
+
+  it('refuses a SKILL.md file link that points out, by name', async () => {
+    const { root, plugin } = containedPluginRoot('skill-md-out');
+    mkdirSyncReal(safePath.join(plugin, 'skills', 'leak'), { recursive: true });
+    createSymlink(cap, safePath.join(outsideSkills, 'leak', 'SKILL.md'), safePath.join(root, SKILL_LEAK), 'file');
+
+    await expectRefusedBelowSource(root, SKILL_LEAK);
+  });
+
+  it('refuses a plugin.json file link that points out, by name, and does not parse it', async () => {
+    const root = safePath.join(tmp, 'manifest-out');
+    writeMarketplace(root, [DECLARED_A]);
+    const manifestDir = safePath.join(root, 'plugins', 'a', MANIFEST_DIR);
+    mkdirSyncReal(manifestDir, { recursive: true });
+    createSymlink(cap, outsidePluginJson, safePath.join(manifestDir, PLUGIN_JSON), 'file');
+
+    const { exitCode, doc } = await validate(root, true);
+    const issues = doc['issues'] as VerboseIssue[];
+
+    expect(exitCode).toBe(1);
+    expect(doc['refused']).toEqual(['plugins/a/.claude-plugin/plugin.json']);
+    expect(issues.filter((i) => i.code === RUN_INTEGRITY_CODE)).toHaveLength(1);
+    // Not parsed: none of the manifest-content findings a read would produce.
+    expect(issues.map((i) => i.code)).not.toContain('PLUGIN_MISSING_AUTHOR');
+    expect(issues.map((i) => i.code)).not.toContain('PLUGIN_MISSING_MANIFEST');
+  });
+
+  it('follows a `skills/` link that points INSIDE the root — containment is by real path, not by spelling', async () => {
+    // Positive control: the link is not the offence, leaving the root is. The
+    // skill behind the in-root link is validated and its finding published at
+    // the link's spelling.
+    const { root, plugin } = containedPluginRoot('skills-dir-in');
+    const realSkills = safePath.join(root, 'real-skills');
+    mkdirSyncReal(safePath.join(realSkills, 'leak'), { recursive: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
+    writeFileSync(safePath.join(realSkills, 'leak', 'SKILL.md'), LEAKY_SKILL_MD);
+    createSymlink(cap, realSkills, safePath.join(plugin, 'skills'), 'dir');
+
+    const { doc } = await validate(root, true);
+    const issues = doc['issues'] as Array<VerboseIssue & { location?: string }>;
+
+    expect(doc['refused']).toEqual([]);
+    expect(issues.map((i) => i.code)).not.toContain(RUN_INTEGRITY_CODE);
+    expect(issues.some((i) => i.code === 'LINK_INTEGRITY_BROKEN' && i.location === SKILL_LEAK)).toBe(true);
   });
 });

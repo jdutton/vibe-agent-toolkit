@@ -68,7 +68,7 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
         baseDir: absolutePath,
         respectGitignore: false, // We handle gitignore separately
         exclude: crawlExclusions, // Skip poison directories during crawl (not after)
-        onUnreadable: (refusal) => unreadable.push(refusal),
+        unreadable: { degrade: (refusal) => unreadable.push(refusal) },
       });
     } else {
       // Non-recursive: only immediate children

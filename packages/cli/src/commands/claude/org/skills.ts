@@ -967,7 +967,10 @@ interface CollectedUploadFiles {
  * skill dir — nothing inside the tree to withhold.
  */
 async function declaredTestInputPaths(skillDir: string): Promise<ReadonlySet<string>> {
-	const config = await resolveSkillPackagingConfig(safePath.join(skillDir, 'SKILL.md'));
+	// `'refuse'`: an upload that cannot tell which paths are test input might
+	// publish an answer key. The throw is reported per skill by the install
+	// loop's catch (logged, and counted in its failures) — never swallowed.
+	const config = await resolveSkillPackagingConfig(safePath.join(skillDir, 'SKILL.md'), 'refuse');
 	const declared = config?.test?.evals;
 	if (declared === undefined) return new Set();
 	const unit = evalSuiteUnitPath(safePath.resolve(skillDir), declared);
@@ -1156,7 +1159,7 @@ async function prepareSkillUpload(
 	// Resolved HERE rather than plumbed out of `collectSkillUploadFiles`, which is
 	// exported and deliberately resolves its own so no caller can hand it a config
 	// with the exclusion skipped.
-	const packaging = await resolveSkillPackagingConfig(skillMdPath);
+	const packaging = await resolveSkillPackagingConfig(skillMdPath, 'refuse');
 	warnUnportableReferences(files, dirName, packaging?.validation, logger);
 
 	return { displayTitle, files, dirName };

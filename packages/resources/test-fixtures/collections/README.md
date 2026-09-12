@@ -146,7 +146,7 @@ const config = await loadProjectConfig(fixturesDir);
 const registry = new ResourceRegistry({ config, baseDir: fixturesDir });
 
 // Crawl and validate
-await registry.crawl({ baseDir: fixturesDir });
+await registry.crawl({ baseDir: fixturesDir, unreadable: 'refuse' });
 const issues = await registry.validate();
 
 // Should find 7 validation errors

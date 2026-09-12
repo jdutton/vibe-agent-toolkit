@@ -367,6 +367,35 @@ describe('witnessOf — one member of the pattern, materialised', () => {
       expect(witnessOf(compilePathPattern(pattern)), JSON.stringify(pattern)).toBe('');
     }
   });
+
+  // 🚩 A negated class was answered from a fixed list of candidates, and when
+  // the class excluded every one of them the fallback was the first candidate
+  // — a NON-member. The pattern is live (`b` matches `[!xa0\-_.]`), but its
+  // witness was `x`, the pattern refused its own witness, and an identical
+  // `Read([!xa0\-_.])` pair reported no conflict. A member exists iff one sits
+  // next to a range bound, so those are tried after the candidates.
+  it('finds a member of a negated class that excludes every candidate', () => {
+    const excludesEveryCandidate = String.raw`[!xa0\-_.]`;
+    const witness = witnessOf(compilePathPattern(excludesEveryCandidate));
+    expect(witness).toHaveLength(1);
+    expect(matches(excludesEveryCandidate, witness)).toBe(true);
+    // Tiled ranges: the first free character above them.
+    expect(witnessOf(compilePathPattern(String.raw`[!a-cd-fx0._\-]`))).toBe('g');
+    // Only the character below the lowest range is free, and then only the
+    // one above the highest.
+    const first = String.fromCodePoint(0);
+    const last = String.fromCodePoint(0xff_ff);
+    expect(witnessOf(compilePathPattern(`[!${String.fromCodePoint(1)}-${last}]`))).toBe(first);
+    expect(witnessOf(compilePathPattern(`[!${first}-${String.fromCodePoint(0xff_fe)}]`))).toBe(last);
+  });
+
+  it('is empty for a class that accepts no character', () => {
+    const everything = `${String.fromCodePoint(0)}-${String.fromCodePoint(0xff_ff)}`;
+    expect(witnessOf(compilePathPattern(`a[!${everything}]c`))).toBe('');
+    expect(witnessOf(compilePathPattern('a[z-a]c'))).toBe('');
+    // A live segment beside it does not rescue the pattern.
+    expect(witnessOf(compilePathPattern(`x/a[!${everything}]c`))).toBe('');
+  });
 });
 
 describe('path patterns — the shapes the lane hands over', () => {

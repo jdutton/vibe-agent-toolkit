@@ -213,13 +213,14 @@ function projectWithMarketplace(
 async function marketplaceOutcome(
   marketplace: string,
 ): Promise<{ findings: { location: string; severity: string }[]; status: string }> {
-  const { marketplaceResult, pluginResults, undeclared, issues } =
+  const { marketplaceResult, pluginResults, undeclared, refused, issues } =
     await collectMarketplaceFindings(marketplace, silentLogger);
   const { status } = buildMarketplaceValidateReport({
     root: marketplace,
     marketplace: marketplaceResult.metadata,
     pluginResults,
     undeclared,
+    refused,
     issues,
     duration: '0ms',
   });
@@ -234,7 +235,7 @@ async function marketplaceOutcome(
 /** Agent-instruction findings `vat verify`'s packaged-content phase publishes for `root`. */
 async function verifyFindings(root: string): Promise<string[]> {
   const config = loadConfig(root);
-  const discovered = config?.skills ? await discoverSkillsFromConfig(config.skills, root) : [];
+  const discovered = config?.skills ? await discoverSkillsFromConfig(config.skills, root, 'refuse') : [];
   return checkPackagedAgentInstructionFiles(root, discovered).issues.map((i) => String(i.location));
 }
 

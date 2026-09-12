@@ -10,9 +10,10 @@
  *     directory name; a pattern matching nothing is returned to the caller)
  *
  * Symlinks are judged before anything is copied, identically on both crawl
- * routes: an in-tree FILE symlink is copied by content and reported; one that
- * leaves the source, does not resolve, or names a directory stops the copy by
- * name ({@link PluginSymlinkRefusedError}) before the first byte lands.
+ * routes: a FILE symlink whose target this copy ships is copied by content and
+ * reported; one that leaves the source, does not resolve, names a directory,
+ * or names a file the copy leaves out stops the copy by name
+ * ({@link PluginSymlinkRefusedError}) before the first byte lands.
  *
  * Respects .gitignore via crawlDirectory (respectGitignore: true, the default).
  * Returns counts keyed to the spec's YAML summary extension.
@@ -24,7 +25,7 @@ import { dirname } from 'node:path';
 
 import { AGENT_INSTRUCTION_FILE_PATTERNS, toAnyDepthGlobs } from '@vibe-agent-toolkit/agent-skills';
 import { isGlob, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { crawlDirectory, crawlPathFilter, refuseListing } from '@vibe-agent-toolkit/utils/crawl';
+import { crawlDirectory, crawlPathFilter } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 import picomatch from 'picomatch';
 
@@ -95,9 +96,10 @@ export interface TreeCopyResult {
    * The tell for the one symlink shape that ships. A bundle is a plain tree —
    * there is no symlink-preserving copy — so the target's bytes travel under the
    * link's name; the caller can say so. Every other shape (a link out of the
-   * source, a dangling one, a directory link) is refused by name before the
-   * first copy: see {@link PluginSymlinkRefusedError}. Empty (never `undefined`)
-   * when the source holds no symlinks.
+   * source, a dangling one, a directory link, a link to a file this copy leaves
+   * out) is refused by name before the first copy: see
+   * {@link PluginSymlinkRefusedError}. Empty (never `undefined`) when the
+   * source holds no symlinks.
    */
   symlinksCopied: string[];
 }
@@ -109,20 +111,42 @@ export type SymlinkRefusalReason =
   /** It does not resolve: dangling, or a self-referential loop. */
   | 'unresolvable'
   /** It resolves to a directory (inside the source). */
-  | 'directory';
+  | 'directory'
+  /**
+   * It resolves to an in-tree file this copy leaves out — excluded by the
+   * caller's `exclude:`, by a built-in exclusion, produced by another phase
+   * (a skill dir), or never listed (gitignored / untracked on the git route).
+   * Following it would ship under the alias the very bytes the copy refused
+   * under their own name.
+   */
+  | 'target-excluded';
 
-/** One refused symlink: where it is in the source, and why it cannot ship. */
-export interface RefusedSymlink {
-  /** Root-relative, forward-slashed — the spelling the adopter's `exclude:` would name. */
-  path: string;
-  reason: SymlinkRefusalReason;
+/**
+ * One refused symlink: where it is in the source, and why it cannot ship.
+ *
+ * `path` is root-relative and forward-slashed — the spelling the adopter's
+ * `exclude:` would name. `target` (same coordinates) travels ONLY with
+ * `'target-excluded'`, the one reason that is about WHICH in-tree file the
+ * link names: an escaping target is a build-host path the message must not
+ * carry, a dangling one has none, and a directory's is not actionable.
+ */
+export type RefusedSymlink =
+  | { path: string; reason: Exclude<SymlinkRefusalReason, 'target-excluded'> }
+  | { path: string; reason: 'target-excluded'; target: string };
+
+function describeRefusal(entry: RefusedSymlink): string {
+  switch (entry.reason) {
+    case 'escapes-source':
+      return 'points outside the plugin source, so the bundle would carry a file from elsewhere on the build host';
+    case 'unresolvable':
+      return 'does not resolve to anything (dangling, or a loop)';
+    case 'directory':
+      return 'is a directory symlink; a bundle is a plain tree and cannot carry a directory alias';
+    case 'target-excluded':
+      return `resolves to '${entry.target}', which this copy leaves out (excluded, gitignored, untracked, or`
+        + ' packaged by another phase), so the bundle would carry the excluded bytes under the link\'s name';
+  }
 }
-
-const REFUSAL_REASON_TEXT: Record<SymlinkRefusalReason, string> = {
-  'escapes-source': 'points outside the plugin source, so the bundle would carry a file from elsewhere on the build host',
-  unresolvable: 'does not resolve to anything (dangling, or a loop)',
-  directory: 'is a directory symlink; a bundle is a plain tree and cannot carry a directory alias',
-};
 
 /**
  * The copy stopped because the plugin source holds symlinks that cannot ship.
@@ -144,7 +168,7 @@ export class PluginSymlinkRefusedError extends Error {
   readonly refused: readonly RefusedSymlink[];
 
   constructor(refused: readonly RefusedSymlink[]) {
-    const lines = refused.map((entry) => `  - '${entry.path}' ${REFUSAL_REASON_TEXT[entry.reason]}`);
+    const lines = refused.map((entry) => `  - '${entry.path}' ${describeRefusal(entry)}`);
     super(
       `Refusing to copy the plugin source: ${refused.length} symbolic link(s) cannot be shipped in a bundle,`
         + ` so nothing was copied.\n${lines.join('\n')}\n`
@@ -338,19 +362,36 @@ function isUnderSource(real: string, realSource: string): boolean {
 
 /**
  * Judge one symlink: the one shape that ships (`'file'`, in-tree, copied by
- * content) or the reason it cannot.
+ * content) or the refusal that stops the copy.
+ *
+ * `shipped` is the set of root-relative REGULAR files this copy will land —
+ * after the crawl's membership (built-in exclusions, gitignore, tracking) and
+ * the caller's `exclude:`. A link ships only when its target is in that set:
+ * "in-tree" alone is not enough, because the tree is not the bundle. Every
+ * way a file can be left out — a caller pattern, `.claude-plugin/**`, a skill
+ * dir another phase produces, a gitignored or untracked path on the git route
+ * — is a way a one-line alias would put its bytes back, under a different
+ * name, with nothing to say so. Asking "would the target ship on its own?"
+ * closes all of them with the copy's own answer rather than re-deriving each
+ * exclusion here.
  */
-async function classifySymlink(abs: string, realSource: string): Promise<SymlinkRefusalReason | 'file'> {
+async function classifySymlink(
+  link: SourceEntry,
+  realSource: string,
+  shipped: ReadonlySet<string>,
+): Promise<RefusedSymlink | 'file'> {
   let real: string;
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- a symlink the crawl of sourceDir returned
-    real = toForwardSlash(await realpath(abs));
+    real = toForwardSlash(await realpath(link.abs));
   } catch {
-    return 'unresolvable';
+    return { path: link.rel, reason: 'unresolvable' };
   }
-  if (!isUnderSource(real, realSource)) return 'escapes-source';
+  if (!isUnderSource(real, realSource)) return { path: link.rel, reason: 'escapes-source' };
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- canonical path proven to sit under sourceDir
-  return (await stat(real)).isDirectory() ? 'directory' : 'file';
+  if ((await stat(real)).isDirectory()) return { path: link.rel, reason: 'directory' };
+  const target = toForwardSlash(safePath.relative(realSource, real));
+  return shipped.has(target) ? 'file' : { path: link.rel, reason: 'target-excluded', target };
 }
 
 /**
@@ -361,6 +402,7 @@ async function classifySymlink(abs: string, realSource: string): Promise<Symlink
 async function judgeSymlinks(
   sourceDir: string,
   links: readonly SourceEntry[],
+  shipped: ReadonlySet<string>,
 ): Promise<{ copyable: SourceEntry[]; refused: RefusedSymlink[] }> {
   const copyable: SourceEntry[] = [];
   const refused: RefusedSymlink[] = [];
@@ -368,11 +410,11 @@ async function judgeSymlinks(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- sourceDir resolved from config
   const realSource = toForwardSlash(await realpath(sourceDir));
   for (const link of [...links].toSorted((a, b) => a.rel.localeCompare(b.rel))) {
-    const verdict = await classifySymlink(link.abs, realSource);
+    const verdict = await classifySymlink(link, realSource, shipped);
     if (verdict === 'file') {
       copyable.push(link);
     } else {
-      refused.push({ path: link.rel, reason: verdict });
+      refused.push(verdict);
     }
   }
   return { copyable, refused };
@@ -424,11 +466,13 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
     absolute: true,
     filesOnly: true,
     respectGitignore: true,
-    onUnreadable: refuseListing({
-      root: sourceDir,
-      remedy:
-        'Fix the permissions on that directory, or name it in the plugin\'s `exclude:` list to leave it out of the bundle deliberately.',
-    }),
+    unreadable: {
+      refuse: {
+        root: sourceDir,
+        remedy:
+          'Fix the permissions on that directory, or name it in the plugin\'s `exclude:` list to leave it out of the bundle deliberately.',
+      },
+    },
   });
 
   // Caller `exclude:` patterns are applied HERE rather than handed to the crawl,
@@ -452,12 +496,20 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
     : crawledLinks;
   // A link the caller excluded is left out like any other excluded path — and
   // that is the remedy the refusal names, so it must count as a hit here.
-  const { copyable, refused } = await judgeSymlinks(sourceDir, links.filter(notExcludedByCaller));
+  // The regular files are filtered FIRST so the judgement can ask whether a
+  // link's target is one of them (see classifySymlink) — and so a caller
+  // pattern that matches only a link's target still records its hit.
+  const shippedRegular = regular.filter(notExcludedByCaller);
+  const { copyable, refused } = await judgeSymlinks(
+    sourceDir,
+    links.filter(notExcludedByCaller),
+    new Set(shippedRegular.map((entry) => entry.rel)),
+  );
   if (refused.length > 0) {
     throw new PluginSymlinkRefusedError(refused);
   }
 
-  for (const entry of [...regular.filter(notExcludedByCaller), ...copyable]) {
+  for (const entry of [...shippedRegular, ...copyable]) {
     const target = safePath.join(destDir, entry.rel);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest resolved from sourceDir+relative
     await mkdir(dirname(target), { recursive: true });

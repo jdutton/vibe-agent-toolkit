@@ -155,8 +155,10 @@ function sanitizeFrictionField(raw: unknown): { value: unknown; dropped: number 
  *
  * The verdict channels are strict. The auxiliary `friction` field is sanitized
  * leniently first (see {@link sanitizeFrictionField}); when items are dropped,
- * `onWarn` (if given) is called so the operator sees that friction was partial —
- * grading itself is never affected.
+ * `onWarn` is called so the operator sees that friction was partial — grading
+ * itself is never affected. `onWarn` is REQUIRED: a caller that could omit it
+ * received a fragment with friction silently missing, and "friction is
+ * advisory" is only true when the operator is told it was cut.
  *
  * THIS IS THE TEXT BOUNDARY. Every string in the fragment is run through
  * {@link sanitizeGraderTextDeep} BEFORE anything else looks at it, so no
@@ -165,11 +167,11 @@ function sanitizeFrictionField(raw: unknown): { value: unknown; dropped: number 
  * the friction sanitizer and the strict parse, because both of those quote
  * grader text into messages of their own.
  */
-export function parseEvalFragment(raw: unknown, onWarn?: (message: string) => void): EvalFragment {
+export function parseEvalFragment(raw: unknown, onWarn: (message: string) => void): EvalFragment {
   const sanitized = sanitizeGraderTextDeep(raw, UNSANITIZED_FRAGMENT_KEYS);
   const { value, dropped } = sanitizeFrictionField(sanitized);
   if (dropped > 0) {
-    onWarn?.(
+    onWarn(
       `grader fragment for eval ${extractRawEvalId(sanitized)} had ${dropped} malformed friction item(s) — ` +
         `dropped them (friction is advisory; grading is unaffected).`,
     );

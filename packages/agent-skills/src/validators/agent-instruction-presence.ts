@@ -69,7 +69,7 @@ export function detectPackagedAgentInstructionFiles(
   // that the crawler's defaults would skip entirely — the scan would pass by
   // scanning nothing.
   //
-  // `onUnreadable` DEGRADES rather than stops: this detector is a backstop
+  // `unreadable` DEGRADES rather than stops: this detector is a backstop
   // appended to a larger report (audit, verify, build), and one directory it
   // cannot list must not destroy every finding beside it. The gap is not
   // dropped either — each refusal becomes a `SCAN_PATH_UNREADABLE` finding
@@ -84,7 +84,7 @@ export function detectPackagedAgentInstructionFiles(
     absolute: true,
     filesOnly: true,
     respectGitignore: false,
-    onUnreadable: (refusal) => refusals.push(refusal),
+    unreadable: { degrade: (refusal) => refusals.push(refusal) },
   });
 
   const issues: ValidationIssue[] = [];

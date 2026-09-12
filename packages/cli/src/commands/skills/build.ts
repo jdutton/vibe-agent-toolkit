@@ -423,6 +423,9 @@ async function validateSkillBeforeBuild(
     {
       allowLedger,
       projectSkills,
+      // A build must not ship a shorter bundle: a directory the validator's own
+      // registry crawl cannot list refuses the run by name.
+      unreadable: 'refuse',
       // Likewise the RUN's, and the same instance the packaging phase gets: this
       // lane resolves test input for the subject AND every entry in
       // `projectSkills`, so a per-call probe is S² over the loop.
@@ -1569,7 +1572,10 @@ export async function runSkillsBuildPhase(
 
     // Discover SKILL.md files from config globs (relative to cwd where config lives)
     logger.info(`Discovering skills from config...`);
-    const discoveredSkills = await discoverSkillsFromConfig(skillsConfig, cwd);
+    // `'refuse'`: a build that silently ships fewer skills is the drop this
+    // command exists to prevent. The throw lands in the catch below →
+    // `reportCommandError`, exit 2.
+    const discoveredSkills = await discoverSkillsFromConfig(skillsConfig, cwd, 'refuse');
 
     if (discoveredSkills.length === 0) {
       throw new Error(

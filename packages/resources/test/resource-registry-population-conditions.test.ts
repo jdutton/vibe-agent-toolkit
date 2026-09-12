@@ -51,7 +51,7 @@ function configTyping(second: string | undefined): ProjectConfig {
 /** Crawl `root` under `config` on the walk lane (no population source) and validate. */
 async function validateWalk(root: string, config: ProjectConfig): Promise<ValidationIssue[]> {
   const registry = new ResourceRegistry({ baseDir: root, config });
-  await registry.crawl({ baseDir: root, include: ['**/*.md'] });
+  await registry.crawl({ unreadable: 'refuse', baseDir: root, include: ['**/*.md'] });
   return (await registry.validate({ skipGitIgnoreCheck: true })).issues;
 }
 
@@ -118,7 +118,7 @@ describe('ResourceRegistry surfaces population-time conditions', () => {
     /** Crawl `root` over a source carrying `rows`; the registry is returned before validation. */
     const crawledWith = async (rows: Parameters<typeof sourceWith>[1]): Promise<ResourceRegistry> => {
       const registry = new ResourceRegistry({ baseDir: root });
-      await registry.crawl({ baseDir: root, include: ['**/*.md'], populationSource: sourceWith(root, rows) });
+      await registry.crawl({ unreadable: 'refuse', baseDir: root, include: ['**/*.md'], populationSource: sourceWith(root, rows) });
       return registry;
     };
     const unlistableIssues = async (registry: ResourceRegistry) => {

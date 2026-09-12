@@ -35,9 +35,11 @@ const BROWSER_AUTH_PATTERNS: ReadonlyArray<{ patternId: string; re: RegExp; desc
 
 // The frontmatter span, on `\n`-normalized content, used ONLY to locate the
 // line the `allowed-tools:` key sits on. The value is read through
-// `parseFrontmatter`, never from this regex.
+// `parseFrontmatter`, never from this regex. YAML lets the key be quoted and
+// pads before the colon (`"allowed-tools": …`, `allowed-tools : …`); those
+// parsed fine but the locator missed them, so the evidence went out with no line.
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---/;
-const ALLOWED_TOOLS_KEY_RE = /^allowed-tools:/m;
+const ALLOWED_TOOLS_KEY_RE = /^(?:"allowed-tools"|'allowed-tools'|allowed-tools)\s*:/m;
 const PROSE_TOOL_RE = /\b(Bash|Edit|Write|NotebookEdit)\s+tool\b/;
 
 export interface DetectorOutput {
@@ -86,12 +88,12 @@ function* iterCodeBlocks(
  * validator uses and the same `allowedToolsOf` the settings-compat checker uses.
  */
 export function allowedToolsDeclarations(content: string): { tools: string[]; line: number } {
+  // A block that is not a mapping (empty, `~`, a scalar, a sequence) is a parse
+  // FAILURE at the seam — `parseFrontmatter` refuses it — so there is no shape
+  // left for this reader to guard against on its own.
   const parsed = parseFrontmatter(content);
   if (!parsed.success) return { tools: [], line: 0 };
-  // `yaml.parse` of an empty document is `null`; a scalar document is not a mapping.
-  const fields: unknown = parsed.frontmatter;
-  if (fields === null || typeof fields !== 'object' || Array.isArray(fields)) return { tools: [], line: 0 };
-  const tools = allowedToolsOf((fields as Record<string, unknown>)['allowed-tools']) ?? [];
+  const tools = allowedToolsOf(parsed.frontmatter['allowed-tools']) ?? [];
   if (tools.length === 0) return { tools: [], line: 0 };
 
   // Locate the line of the key. parseFrontmatter normalized CRLF; do the same.

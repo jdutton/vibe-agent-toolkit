@@ -72,12 +72,16 @@ import {
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { CollectionConfig } from '../schemas/project-config.js';
-import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
+import type { RealizationConditionRow, ResourceRealizationRow } from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { populateBlobs, type BlobPopulationResult } from './blob-population.js';
 import { RunContentCache } from './content-cache.js';
 import type { ContributorRegistry, ExtentContribution, ExtentContributor } from './contributor.js';
+import {
+  EXTENT_DIRECTORY_UNLISTABLE,
+  unlistableRowStillHolds,
+} from './contributors/filesystem-extent.js';
 import { crawlSourceSelector } from './crawl-source.js';
 import { canonicalJson, extentDigest } from './digest.js';
 import { rootIdFor } from './identity.js';
@@ -862,6 +866,12 @@ async function readCachedProjection(
     if (contexts === undefined) return undefined;
 
     const extent = selectRequestedRows(stored, { contexts, rootId });
+    // A stored extent enumerated AROUND a directory it could not list is a hit
+    // only while that directory still cannot be listed. The key cannot tell —
+    // an ignored directory's mode bit is in no tree hash — so the rows say
+    // what they claimed and the tree is asked whether it is still so. See
+    // `unlistableRowStillHolds` for the staleness this closes.
+    if (!unlistableRowsStillHold(extent.realizationConditions, options.root)) return undefined;
     // A run that declined to derive the blob tier must also decline to read it
     // back, or a hit would hand it four tables a populate would have left empty
     // — and `'skip'` is a claim about what the caller reads, so honouring it on
@@ -882,6 +892,25 @@ async function readCachedProjection(
     // from a subject that exercised nothing. See {@link CRAWL_STORE_READ_ID}.
     recordCrawlPass(CRAWL_STORE_READ_ID, 'base', BASE_STRATUM_PASS, startedAt);
   }
+}
+
+/**
+ * Whether every stored `EXTENT_DIRECTORY_UNLISTABLE` row is still true of the
+ * tree — the gate that turns a key match into a real hit.
+ *
+ * Only those rows are re-verified, and only they can be: the other condition
+ * rows describe content the tree hash already covers. Rare by construction —
+ * one probe per stored refusal, not per path — so a tree with none pays one
+ * filter over the conditions table and no syscall.
+ *
+ * @param conditions - The stored extent's `realization_conditions`
+ * @param root - The corpus root the rows' paths are relative to
+ * @returns True when the extent may be served
+ */
+function unlistableRowsStillHold(conditions: readonly RealizationConditionRow[], root: string): boolean {
+  return conditions
+    .filter((row) => row.code === EXTENT_DIRECTORY_UNLISTABLE)
+    .every((row) => unlistableRowStillHolds(row, root));
 }
 
 /**

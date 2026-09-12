@@ -42,8 +42,11 @@ import type { ZodObject, ZodRawShape } from 'zod';
 import { resolveChunkingConfig } from './chunking-config.js';
 import {
   createDocumentRecord,
+  describeDocumentColumnMismatches,
+  mismatchedDocumentColumns,
   missingDocumentColumns,
   overlayChunkMetadata,
+  type DocumentColumn,
   type DocumentRecord,
 } from './document-helpers.js';
 import { buildWhereClause, escapeSQLString, LANCEDB_QUERY_SUPPORT } from './filter-builder.js';
@@ -51,6 +54,7 @@ import {
   chunkToLanceRow,
   deserializeMetadata,
   lanceRowToChunk,
+  serializeMetadata,
   type LanceDBRow,
   type SerializedMetadata,
 } from './schema.js';
@@ -189,6 +193,17 @@ function progressAfter(
   };
 }
 
+/**
+ * An Arrow schema field as a name and a printed type, the form the documents
+ * table's shape is compared and reported in.
+ *
+ * @param field - A field of an Arrow schema
+ * @returns Its name and its type's printed form (`Utf8`, `Float64`, …)
+ */
+function arrowColumn(field: { name: string; type: { toString(): string } }): DocumentColumn {
+  return { name: field.name, type: String(field.type) };
+}
+
 const TABLE_NAME = 'rag_chunks';
 const DOCUMENTS_TABLE_NAME = 'rag_documents';
 
@@ -325,23 +340,46 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * Reconnect and open table (workaround for a @lancedb/lancedb + Bun Arrow
    * buffer lifecycle bug: a stale connection's buffers can detach after table
    * modifications, so we re-open the connection before reading).
+   *
+   * @returns The connection just opened
    */
-  private async reconnectAndOpenTable(): Promise<void> {
-    this.connection = await lancedb.connect(this.config.dbPath);
+  private async reconnectAndOpenTable(): Promise<Connection> {
+    const connection = await lancedb.connect(this.config.dbPath);
+    this.connection = connection;
     // The memoized documents handle belongs to the connection just replaced.
     // Keeping it would hand later writes a table bound to a dead connection —
     // the same buffer-lifecycle hazard this reconnect exists to avoid.
     this.documentsTable = null;
 
-    const tableNames = await this.connection.tableNames();
+    const tableNames = await connection.tableNames();
     if (tableNames.includes(TABLE_NAME)) {
-      this.table = await this.connection.openTable(TABLE_NAME);
+      this.table = await connection.openTable(TABLE_NAME);
     } else {
       // Table doesn't exist
       // In admin mode: will be created on first insert
       // In readonly mode: operations that require table will fail gracefully
       this.table = null;
     }
+    return connection;
+  }
+
+  /**
+   * The live connection, reopened if `close()` released it.
+   *
+   * `close()` is a resource release, not the end of the provider: `query()` and
+   * `getStats()` reconnect on entry, `clear()` closes and callers carry on with
+   * the same instance, and the default embedder reloads its model after
+   * `dispose()`. The write paths used to answer a released connection by doing
+   * NOTHING — `indexResources()` ran its loop, took neither insert branch, and
+   * still counted every resource as indexed; `deleteResource()` returned with
+   * both rows in place; `getDocument()` said "not found". A counter with no
+   * write behind it is worse than a throw, and a throw would contradict the
+   * siblings, so a released connection is reopened here the way they reopen it.
+   *
+   * @returns A connection every write path can rely on
+   */
+  private async connected(): Promise<Connection> {
+    return this.connection ?? this.reconnectAndOpenTable();
   }
 
   /**
@@ -465,13 +503,12 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * @returns Full document record or null
    */
   async getDocument(resourceId: string): Promise<DocumentResult | null> {
-    if (!this.connection) {
-      return null;
-    }
-
-    const docsTable = await this.openDocumentsTable().catch(() => null);
+    // "No such table" is null; a failure to connect or open is left to surface.
+    // A released connection is reopened (see `connected`) rather than read as
+    // "not found", and a swallowed open failure used to read the same way.
+    const docsTable = await this.openDocumentsTable();
     if (!docsTable) {
-      return null; // Table doesn't exist or connection error
+      return null;
     }
 
     const rows = await docsTable.query()
@@ -516,6 +553,12 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       throw new Error('Cannot index in readonly mode');
     }
 
+    // Reopened here if `close()` released it, so change detection sees the
+    // chunk table and the insert below has a connection to create it on. Without
+    // this the loop ran to completion against nothing and counted every
+    // resource as indexed.
+    await this.connected();
+
     // Which resources already have a document record, read ONCE for the whole
     // batch. `detectResourceChangeStatus` needs it to refuse a `skip` for a
     // resource whose chunks are present and whose document row is not — the
@@ -527,14 +570,15 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // off: there is no documents table then, and an empty map would re-index
     // the whole corpus on every run.
     //
-    // The table is brought up to this build's shape FIRST — before this batch
+    // The table is checked against this build's shape FIRST — before this batch
     // deletes anything. A record refused for a column the table lacks used to
     // land after the `update` path had already removed the changed resource's
     // chunks and document row, so the resource vanished from the index and
-    // failed the same way on every later run.
+    // failed the same way on every later run. A column typed differently is
+    // refused outright, for the same reason: the refusal must precede the delete.
     let documented: DocumentedResources = null;
     if (this.config.storeDocuments) {
-      await this.widenDocumentsTable();
+      await this.reconcileDocumentsTable();
       documented = await this.readDocumentedResources();
     }
 
@@ -632,29 +676,50 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   }
 
   /**
-   * Add to the documents table every metadata column a record carries that the
-   * table lacks, filling existing rows with the "absent" sentinel.
+   * Bring the documents table's shape into agreement with the record this
+   * build writes, or refuse the batch if it cannot be.
    *
-   * A table written by an earlier build has that build's columns (v0.1.42 wrote
-   * only the frontmatter keys each document had), and LanceDB refuses a record
-   * with a column the table does not have. Detected by comparing the table's
-   * own schema with the record's columns — no stored version number — and done
-   * once per batch, before the batch deletes anything, so a refusal can never
-   * follow a delete. `addColumns` is one commit; no row is read or rewritten,
-   * and a table that already has every column is left untouched (an empty
-   * `addColumns` would still commit a new table version).
+   * Two ways an existing table can disagree with this build, answered in
+   * this order and both from the table's own schema — no stored version number:
+   *
+   * 1. **A column the table has, typed differently.** v0.1.42 stored a boolean
+   *    as `JSON.stringify(true)` in a Utf8 column and a numeric-looking title
+   *    as Float64; this build writes `1`/`0` and a string. LanceDB does not
+   *    refuse that on `add` — it CASTS, so `true` lands as `"1"` and reads back
+   *    `false`, silently and permanently (`addColumns` cannot retype a column).
+   *    Refused by name, with both types and the remedy, before anything is
+   *    deleted. The expected type is not hand-written: it is what LanceDB's own
+   *    inference (`makeArrowTable`) assigns to the record this build writes, so
+   *    it moves with the writer and with LanceDB, never with a constant here.
+   * 2. **A column the table lacks.** Added, filling existing rows with the
+   *    "absent" sentinel. LanceDB refuses a record with a column the table
+   *    does not have, and that refusal used to land after the `update` path
+   *    had deleted the changed resource. `addColumns` is one commit; no row is
+   *    read or rewritten, and a table that already has every column is left
+   *    untouched (an empty `addColumns` would still commit a new table version).
    *
    * Columns the table has and the record lacks need nothing: LanceDB stores
    * `null` for a field a record omits.
+   *
+   * @throws {Error} naming every mismatched column, its stored and expected
+   *   types, and `vat rag clear` — before this batch has deleted anything
    */
-  private async widenDocumentsTable(): Promise<void> {
+  private async reconcileDocumentsTable(): Promise<void> {
     const table = await this.openDocumentsTable();
     if (!table) {
       return;
     }
 
-    const columns = (await table.schema()).fields.map((field) => field.name);
-    const missing = missingDocumentColumns(columns, this.metadataSchema);
+    const stored = (await table.schema()).fields.map(arrowColumn);
+    const expected = lancedb
+      .makeArrowTable([serializeMetadata<Record<string, unknown>>({}, this.metadataSchema)])
+      .schema.fields.map(arrowColumn);
+    const mismatched = mismatchedDocumentColumns(stored, expected);
+    if (mismatched.length > 0) {
+      throw new Error(describeDocumentColumnMismatches(DOCUMENTS_TABLE_NAME, this.config.dbPath, mismatched));
+    }
+
+    const missing = missingDocumentColumns(stored.map((column) => column.name), this.metadataSchema);
     if (missing.length === 0) {
       return;
     }
@@ -682,16 +747,16 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     if (this.documentsTable) {
       return this.documentsTable;
     }
-    if (!this.connection) {
-      return null;
-    }
 
-    const tableNames = await this.connection.tableNames();
+    // Null means "no such table" and nothing else: a released connection is
+    // reopened, not read as an absent table.
+    const connection = await this.connected();
+    const tableNames = await connection.tableNames();
     if (!tableNames.includes(DOCUMENTS_TABLE_NAME)) {
       return null;
     }
 
-    this.documentsTable = await this.connection.openTable(DOCUMENTS_TABLE_NAME);
+    this.documentsTable = await connection.openTable(DOCUMENTS_TABLE_NAME);
     return this.documentsTable;
   }
 
@@ -715,13 +780,10 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * @param record - The document record to store
    */
   private async upsertDocumentRecord(record: DocumentRecord): Promise<void> {
-    if (!this.connection) {
-      return;
-    }
-
     const table = await this.openDocumentsTable();
     if (!table) {
-      this.documentsTable = await this.connection.createTable(DOCUMENTS_TABLE_NAME, [record]);
+      const connection = await this.connected();
+      this.documentsTable = await connection.createTable(DOCUMENTS_TABLE_NAME, [record]);
       return;
     }
 
@@ -920,11 +982,14 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // INSERT into LanceDB. `rows` is non-empty here — the zero-chunk return
     // above guarantees it — which is what lets the table be created from the
     // rows themselves: LanceDB infers the schema from them and refuses an
-    // empty list.
-    if (!this.table && this.connection) {
-      this.table = await this.connection.createTable(TABLE_NAME, rows);
-    } else if (this.table) {
+    // empty list. One branch or the other ALWAYS runs: a guard that skipped
+    // both on a missing connection let the counters below move with nothing
+    // written behind them.
+    if (this.table) {
       await this.table.add(rows);
+    } else {
+      const connection = await this.connected();
+      this.table = await connection.createTable(TABLE_NAME, rows);
     }
 
     result.resourcesIndexed++;
@@ -952,14 +1017,20 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
 
     const byResourceId = `resourceid = '${escapeSQLString(resourceId)}'`;
 
+    // A released connection is reopened, which also reopens the chunk table if
+    // there is one. Without this a `close()`d provider returned here with both
+    // rows in place and nothing to say about it.
+    await this.connected();
+
     // Chunk rows first, when there is a chunk table. There is not always one:
     // a corpus whose resources have all chunked to nothing has a documents
     // table and no chunk table, and returning here on that account left the
     // document row this method promises to remove in place, silently.
     await this.table?.delete(byResourceId);
 
-    // `openDocumentsTable` answers "no such table" with null, not a throw, so
-    // a failure here is a real one and is left to surface.
+    // `openDocumentsTable` answers "no such table" with null and nothing else
+    // (the connection is guaranteed above), so a failure here is a real one and
+    // is left to surface.
     const docsTable = await this.openDocumentsTable();
     await docsTable?.delete(byResourceId);
   }

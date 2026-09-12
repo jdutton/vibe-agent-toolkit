@@ -114,14 +114,21 @@ export interface UnappliedRewrite {
  *
  * A rewrite that is wanted (the href resolves to a new value) but cannot be
  * spliced back — because parse5 omitted the source location or the attribute
- * span is unparseable — is reported via `onUnapplied` rather than dropped
- * silently. Malformed pages are exactly the ones that hit this path, so the
- * caller can surface it instead of shipping a stale link.
+ * span is unparseable — is a link left pointing at its SOURCE in the packaged
+ * output. It is handed to `onUnapplied`, which is REQUIRED: the caller is the
+ * one who can say so (a packaging warning, a finding), and a caller that
+ * could omit it shipped the stale link without a word. Malformed pages are
+ * exactly the ones that hit this path.
+ *
+ * @param source - The HTML to rewrite
+ * @param rewriteHref - The href → href decision, applied per link attribute
+ * @param onUnapplied - Receives every wanted rewrite that could not be spliced
+ * @returns The rewritten HTML, or `source` itself when nothing changed
  */
 export function rewriteHtmlLinks(
   source: string,
   rewriteHref: RewriteHref,
-  onUnapplied?: (info: UnappliedRewrite) => void,
+  onUnapplied: (info: UnappliedRewrite) => void,
 ): string {
   const { document } = parseHtmlDocument(source);
   const edits: Edit[] = [];
@@ -148,12 +155,12 @@ export function rewriteHtmlLinks(
     const spelling = sourceSpelling(attr);
     const location = element.sourceCodeLocation?.attrs?.[spelling];
     if (location === undefined) {
-      onUnapplied?.({ tagName: element.tagName, attr: spelling, from: attr.value, to: newValue, reason: 'no-source-location' });
+      onUnapplied({ tagName: element.tagName, attr: spelling, from: attr.value, to: newValue, reason: 'no-source-location' });
       continue;
     }
     const span = valueSpan(source.slice(location.startOffset, location.endOffset), location.startOffset);
     if (span === undefined) {
-      onUnapplied?.({ tagName: element.tagName, attr: spelling, from: attr.value, to: newValue, reason: 'unparseable-attribute' });
+      onUnapplied({ tagName: element.tagName, attr: spelling, from: attr.value, to: newValue, reason: 'unparseable-attribute' });
       continue;
     }
     edits.push({ ...span, newValue });

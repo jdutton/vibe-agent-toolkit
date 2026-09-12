@@ -1052,7 +1052,7 @@ async function runPostBuildValidation(
     builtSkillPath,
     validation ? { validation } : undefined,
     'built',
-    { allowLedger },
+    { allowLedger, unreadable: 'refuse' },
   );
 }
 
@@ -1169,6 +1169,9 @@ export async function createProjectRegistry(
     {
       baseDir: projectRoot,
       include: ['**/*.md'],
+      // A build must not ship a shorter bundle: a directory this crawl cannot
+      // list refuses the run by name — see `RegistryUnreadablePolicy`.
+      unreadable: 'refuse',
       ...(options.populationSource !== undefined && { populationSource: options.populationSource }),
     },
     config === undefined ? undefined : { config },

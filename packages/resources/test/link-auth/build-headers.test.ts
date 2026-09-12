@@ -183,6 +183,25 @@ describe('redactSecretsInText', () => {
       expect(out).toBe(`saw ${REDACTED_VALUE} here`);
     });
 
+    /**
+     * A secret held as bytes: `util.inspect` prints a `Buffer`/`ArrayBuffer`
+     * as spaced hex and a `Uint8Array` as decimal; `JSON.stringify` prints a
+     * `Buffer` as `"data":[66,101,…]` and a `Uint8Array` index-keyed. Each is
+     * one decode away from the credential and none is a string form.
+     */
+    const bytes = Buffer.from(value, 'utf8');
+    it.each([
+      ['hex', bytes.toString('hex')],
+      ['upper-case hex', bytes.toString('hex').toUpperCase()],
+      ['spaced hex (inspect of a Buffer)', bytes.toString('hex').replaceAll(/(..)(?=.)/g, '$1 ')],
+      ['decimal bytes (inspect of a Uint8Array)', [...bytes].join(', ')],
+      ['decimal bytes (JSON of a Buffer)', [...bytes].join(',')],
+      ['index-keyed bytes (JSON of a Uint8Array)', [...bytes].map((byte, i) => `"${i}":${byte}`).join(',')],
+    ])('redacts the %s form', (_label, encoded) => {
+      const out = redactSecretsInText(`bytes ${encoded} end`, secrets);
+      expect(out).toBe(`bytes ${REDACTED_VALUE} end`);
+    });
+
     it('still leaves unrelated text intact (encoded forms widen the net, not the shred)', () => {
       expect(redactSecretsInText('nothing to see', secrets)).toBe('nothing to see');
     });

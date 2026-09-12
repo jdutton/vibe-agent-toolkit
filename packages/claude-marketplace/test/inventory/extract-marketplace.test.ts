@@ -288,6 +288,26 @@ async function expectRefusedWithoutLeaving(root: string, outside: string, source
 	}
 }
 
+/**
+ * A source that resolves INSIDE the root but names no plugin directory —
+ * a regular file, an entry that is empty, or one carrying a `..` segment
+ * that happens to collapse back inside — used to be walked as a plugin with
+ * an empty manifest and zero parse errors, indistinguishable from a real
+ * manifest-less plugin. Each is now refused by name: `exists: false` on the
+ * declaration (so `vat audit`'s SOURCE_MISSING detector names it) and a
+ * parse error saying WHY, the same two channels an outside source uses.
+ */
+async function expectRefusedByName(root: string, source: string, reason: string): Promise<void> {
+	const inv = await extractClaudeMarketplaceInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
+
+	expect(inv.discovered.plugins).toEqual([]);
+	const ref = inv.declared.plugins.find(p => p.manifestPath === source);
+	expect(ref?.source).toBe('path');
+	expect(ref?.exists).toBe(false);
+	expect(inv.parseErrors.some(e => e.message.includes(`"${source}"`) && e.message.includes(reason))).toBe(true);
+	expect(detectMarketplacePluginSourceMissing(inv, root).map(f => f.message).join('\n')).toContain(source);
+}
+
 async function expectWalked(root: string, pluginName: string): Promise<void> {
 	const inv = await extractClaudeMarketplaceInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
 
@@ -355,6 +375,29 @@ describe('a declared source never leaves the marketplace root', () => {
 		createSymlink(cap, outside, safePath.join(root, 'plugins', 's'), 'dir');
 
 		await expectRefusedWithoutLeaving(root, outside, './plugins/s');
+	});
+
+	it('refuses a source that is a regular FILE, by name, and never walks it as a plugin', async () => {
+		const root = marketplaceDeclaring(safePath.join(tempDir, 'file-src'), [{ name: 'f', source: 'plugins/afile' }]);
+		mkdirSyncReal(safePath.join(root, 'plugins'), { recursive: true });
+		// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
+		writeFileSync(safePath.join(root, 'plugins', 'afile'), 'not a directory\n');
+
+		await expectRefusedByName(root, 'plugins/afile', 'not a directory');
+	});
+
+	it('refuses a `..` segment even when it collapses back inside the root — the contract says no `..`', async () => {
+		const root = safePath.join(tempDir, 'dotdot-in');
+		writePluginDir(safePath.join(root, 'plugins', 'good'), 'good');
+		marketplaceDeclaring(root, [{ name: 'g', source: 'plugins/good/..' }]);
+
+		await expectRefusedByName(root, 'plugins/good/..', '".."');
+	});
+
+	it('refuses an EMPTY source by name rather than walking the marketplace root as a plugin', async () => {
+		const root = marketplaceDeclaring(safePath.join(tempDir, 'empty-src'), [{ name: 'e', source: '' }]);
+
+		await expectRefusedByName(root, '', 'empty');
 	});
 
 	it('walks a symlink inside the root that points inside it (control for the realpath lane)', async ({ skip }) => {

@@ -140,7 +140,7 @@ function crawlOptionsForPath(
       `${resolved} is outside projectRoot ${projectRoot}; ` +
         `resources include/exclude patterns from the config do not apply to it`,
     );
-    return { baseDir: resolved };
+    return { baseDir: resolved, unreadable: RESOURCES_UNREADABLE };
   }
 
   // The crawler used to perform this check itself, because it received the path
@@ -151,10 +151,21 @@ function crawlOptionsForPath(
 
   return {
     baseDir: projectRoot,
+    unreadable: RESOURCES_UNREADABLE,
     include: scopeIncludeToSubtree(DEFAULT_RESOURCE_INCLUDE, normalizedRelDir),
     ...(config?.resources?.exclude ? { exclude: config.resources.exclude } : {}),
   };
 }
+
+/**
+ * The resources verbs' ruling for a directory the crawl cannot list: refuse
+ * the run by name, exit 2 — `vat resources validate`/`scan`/`check` and every
+ * verb that reaches this loader act on the registry as the whole population,
+ * and the projection lane behind `populationSource` refuses the same directory
+ * with the same sentence, so the two lanes cannot reach different exits.
+ * See `RegistryUnreadablePolicy` on the registry.
+ */
+const RESOURCES_UNREADABLE = 'refuse' as const;
 
 /**
  * The env var that selects the crawler behind every resources-crawling verb —
@@ -428,6 +439,7 @@ export async function loadResourcesWithConfig(
 
     crawlOptions = {
       baseDir: projectRoot,
+      unreadable: RESOURCES_UNREADABLE,
       // Apply include patterns from config (if specified)
       ...(config?.resources?.include ? { include: config.resources.include } : {}),
       // Apply exclude patterns from config (if specified)

@@ -428,9 +428,16 @@ describe('a link path is judged component by component', () => {
      * RESULT, and a "resolved" path reached `judgePath` still carrying `..`,
      * which is the one shape that function refuses as a programming error.
      *
-     * The property is EQUALITY between the two spellings, verdict for verdict:
-     * a fix that merely stopped the throw (a `catch`, a `null`) would leave the
-     * two spellings disagreeing about the same link.
+     * The property is EQUALITY between the two spellings, verdict for verdict,
+     * AND each row states the verdict the pair must agree on. Equality alone
+     * cannot catch a fix that merely stopped the throw (a `catch`, a `null`)
+     * on the rows whose true verdict IS `null` — the crash row's target is
+     * present and outside the project, which this judge calls clean, so both
+     * sides read `null` there whether the resolver worked or was caught. The
+     * rows that discriminate a swallowed throw are the ones with a non-null
+     * verdict (a missing target, a miscased component): a `catch → null` on
+     * the backslash side disagrees with the forward spelling there. Stating
+     * every verdict keeps that division visible instead of implied.
      */
     const PROJECT = 'proj';
     const SOURCE = 'docs/a.md';
@@ -442,26 +449,31 @@ describe('a link path is judged component by component', () => {
       'outside/secret.md': '# s\n',
     };
 
-    const BACKSLASH_ROWS: ReadonlyArray<readonly [backslash: string, forward: string]> = [
+    /** `null` is the clean verdict — `validateLink` returns no issue. */
+    const CLEAN = null;
+    const BACKSLASH_ROWS: ReadonlyArray<readonly [backslash: string, forward: string, verdict: string | null]> = [
       // A `..` that lands OUTSIDE the project, target present — the crash row.
-      [String.raw`..\..\outside\secret.md`, '../../outside/secret.md'],
-      // The same escape, target missing.
-      [String.raw`..\..\outside\nope.md`, '../../outside/nope.md'],
+      // Clean on purpose: a relative escape to an existing file is not a
+      // finding of this judge, so this row proves only that the backslash
+      // spelling no longer throws where the forward one is clean.
+      [String.raw`..\..\outside\secret.md`, '../../outside/secret.md', CLEAN],
+      // The same escape, target missing — the row that catches a swallowed throw.
+      [String.raw`..\..\outside\nope.md`, '../../outside/nope.md', 'LINK_BROKEN_FILE'],
       // `.\` prefix, present and missing.
-      [String.raw`.\sub\target.md`, './sub/target.md'],
-      [String.raw`.\sub\nope.md`, './sub/nope.md'],
+      [String.raw`.\sub\target.md`, './sub/target.md', CLEAN],
+      [String.raw`.\sub\nope.md`, './sub/nope.md', 'LINK_BROKEN_FILE'],
       // Mixed separators in one href.
-      [String.raw`./sub\target.md`, './sub/target.md'],
+      [String.raw`./sub\target.md`, './sub/target.md', CLEAN],
       // Descends, then climbs out of the project.
-      [String.raw`sub\..\..\..\outside\secret.md`, 'sub/../../../outside/secret.md'],
+      [String.raw`sub\..\..\..\outside\secret.md`, 'sub/../../../outside/secret.md', CLEAN],
       // Climbs and re-enters the project — inside, so fully judged.
-      [String.raw`..\other\b.md`, '../other/b.md'],
+      [String.raw`..\other\b.md`, '../other/b.md', CLEAN],
       // A miscased directory component reached through backslashes: the
       // component walk must run, and its correction must match.
-      [String.raw`.\Sub\target.md`, './Sub/target.md'],
+      [String.raw`.\Sub\target.md`, './Sub/target.md', 'LINK_BROKEN_FILE'],
     ];
 
-    it.each(BACKSLASH_ROWS)('gives %j the verdict of %j', async (backslash, forward) => {
+    it.each(BACKSLASH_ROWS)('gives %j the verdict of %j, which is %j', async (backslash, forward, verdict) => {
       const temp = plant(TREE);
       const projectRoot = safePath.join(temp, PROJECT);
 
@@ -473,6 +485,10 @@ describe('a link path is judged component by component', () => {
       // `link` is the href as written and legitimately differs; every other
       // field — code, message, suggestion, location — must not.
       expect(stripHref(viaBackslash)).toEqual(stripHref(viaForward));
+      // And the shared verdict is the stated one, so two nulls agree because
+      // the link IS clean, not because both sides fell into a catch.
+      expect(viaForward?.code ?? CLEAN).toBe(verdict);
+      expect(viaBackslash?.code ?? CLEAN).toBe(verdict);
     });
 
     it('reports a missing backslash target with a forward-slashed, project-relative path', async () => {

@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 import { gitFindRoot, gitLsFiles, isGitIgnored } from '../../src/git-utils.js';
 import { normalizedTmpdir } from '../../src/path-utils.js';
 import { createSymlink, setupSyncTempDirSuite, symlinkCapability } from '../../src/test-helpers.js';
+import { refuseUnreadableFixture } from '../../src/testing.js';
 import { createGitRepo } from '../test-helpers.js';
 
 const GITIGNORE_FILENAME = '.gitignore';
@@ -102,6 +103,10 @@ describe('gitLsFiles', () => {
     setupGitRepo(tempDir);
   });
 
+  /** The fixture's listing, with the policy a fixture states: refuse. */
+  const listFixture = (extra: { patterns?: string[]; includeUntracked?: boolean } = {}): string[] | null =>
+    gitLsFiles({ cwd: tempDir, unreadable: refuseUnreadableFixture(tempDir), ...extra });
+
   it('should list tracked files', () => {
     // Create and track files
     const file1 = safePath.join(tempDir, 'README.md');
@@ -118,7 +123,7 @@ describe('gitLsFiles', () => {
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
     spawnSync('git', ['add', '.'], { cwd: tempDir, stdio: 'pipe' });
 
-    const result = gitLsFiles({ cwd: tempDir });
+    const result = listFixture();
 
     expect(result).not.toBeNull();
     expect(result).toContain('README.md');
@@ -136,7 +141,7 @@ describe('gitLsFiles', () => {
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
     spawnSync('git', ['add', '.'], { cwd: tempDir, stdio: 'pipe' });
 
-    const result = gitLsFiles({ cwd: tempDir, patterns: ['*.md'] });
+    const result = listFixture({ patterns: ['*.md'] });
 
     expect(result).not.toBeNull();
     expect(result).toContain('README.md');
@@ -154,7 +159,7 @@ describe('gitLsFiles', () => {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.writeFileSync(safePath.join(tempDir, 'untracked.md'), '# Untracked');
 
-    const result = gitLsFiles({ cwd: tempDir, includeUntracked: true });
+    const result = listFixture({ includeUntracked: true });
 
     expect(result).not.toBeNull();
     expect(result).toContain(TRACKED_FILE);
@@ -165,7 +170,7 @@ describe('gitLsFiles', () => {
     const nonGitDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'non-git-'));
 
     try {
-      const result = gitLsFiles({ cwd: nonGitDir });
+      const result = gitLsFiles({ cwd: nonGitDir, unreadable: refuseUnreadableFixture(nonGitDir) });
       expect(result).toBeNull();
     } finally {
       fs.rmSync(nonGitDir, { recursive: true, force: true });
@@ -174,7 +179,7 @@ describe('gitLsFiles', () => {
 
   it('should handle empty repository', () => {
     // Fresh repo with no files
-    const result = gitLsFiles({ cwd: tempDir });
+    const result = listFixture();
 
     expect(result).not.toBeNull();
     expect(result).toEqual([]);
@@ -191,7 +196,7 @@ describe('gitLsFiles', () => {
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
     spawnSync('git', ['add', nonAsciiFile], { cwd: tempDir, stdio: 'pipe' });
 
-    const result = gitLsFiles({ cwd: tempDir });
+    const result = listFixture();
 
     expect(result).not.toBeNull();
     expect(result).toContain(nonAsciiFile);

@@ -118,11 +118,12 @@ describe('authTransport — cross-origin header stripping (§8)', () => {
         },
       },
     ]);
-    await authTransport(
+    const response = await authTransport(
       'https://api.github.com/o',
       { authorization: 'Bearer t', Accept: 'application/json' },
       impl,
     );
+    expect(response.status).toBe(200); // the hop with the assertions actually ran
   });
 
   it('cross-origin redirect strips a credential in a header NOT named Authorization', async () => {
@@ -145,6 +146,11 @@ describe('authTransport — cross-origin header stripping (§8)', () => {
     expect(response.status).toBe(200);
   });
 
+  // The two chain tests below assert the FINAL status as well as the per-hop
+  // headers: every per-hop `expect` sits inside a hop that only runs if the
+  // redirect was followed, so without the final-status check both passed
+  // verbatim against a transport that never redirects at all (mutation-verified
+  // with `REDIRECT_STATUSES` emptied).
   it('redirect with relative Location resolves against current URL (still same-origin)', async () => {
     const impl = sequenceFetch([
       { status: 302, headers: { location: '/relative/path' } },
@@ -154,7 +160,8 @@ describe('authTransport — cross-origin header stripping (§8)', () => {
         assertHeaders: (h) => expect(h['Authorization']).toBe(TEST_TOKEN),
       },
     ]);
-    await authTransport(ORIGIN_URL, AUTH_HEADERS, impl);
+    const response = await authTransport(ORIGIN_URL, AUTH_HEADERS, impl);
+    expect(response.status).toBe(200);
   });
 
   it('chain of redirects: first cross-origin strip propagates to subsequent hops', async () => {
@@ -172,7 +179,23 @@ describe('authTransport — cross-origin header stripping (§8)', () => {
         assertHeaders: (h) => expect(h['Authorization']).toBeUndefined(),
       },
     ]);
-    await authTransport('https://api.github.com/start', AUTH_HEADERS, impl);
+    const response = await authTransport('https://api.github.com/start', AUTH_HEADERS, impl);
+    expect(response.status).toBe(200);
+  });
+
+  it('a malformed Location is refused through the redaction seam, not as a bare `Invalid URL`', async () => {
+    // `new URL('http://[bad', currentUrl)` throws a TypeError whose `.input`
+    // is the raw header. It used to escape from the loop body untouched —
+    // outside `fetchRedacting`'s catch and outside the documented
+    // "network-level failure" contract — so a server that echoed the
+    // request's credential into `Location` handed it back verbatim.
+    const location = `http://[bad/${LEAK_CANARY}`;
+    const impl = sequenceFetch([{ status: 302, headers: { location } }]);
+    const error = await thrownBy({ Authorization: `Bearer ${LEAK_CANARY}` }, impl);
+    expect(error).toBeInstanceOf(AuthTransportError);
+    expect(error.message).toContain('Location');
+    expect(error.message).toContain('302');
+    expect(inspect(error, { depth: 6, showHidden: true })).not.toContain(LEAK_CANARY);
   });
 
   it('exceeding maxRedirects returns the last 3xx response (does not throw)', async () => {
@@ -504,6 +527,110 @@ describe('authTransport — a throwing fetch never carries the token out', () =>
     const error = await thrownByRejection(authInit, original);
     expect(error).toBeInstanceOf(AuthTransportError);
     expect(JSON.stringify(error, Object.getOwnPropertyNames(error))).not.toContain(LEAK_CANARY);
+  });
+
+  /**
+   * `cause` and `errors` are non-enumerable on a standard Error, so a
+   * top-level `JSON.stringify(error)` never descends into them and a `toJSON`
+   * living there is only ever called by a consumer that serializes
+   * `err.cause` / `err.errors` directly. The walk that `describeThrown`
+   * replaced called `JSON.stringify` at every level; the inspect-only probe
+   * printed `[Function: toJSON]` and judged each of these clean.
+   */
+  it.each<[string, () => unknown]>([
+    [
+      'a `toJSON` on the `cause` Error',
+      () => new TypeError(FETCH_FAILED, { cause: Object.assign(new Error('inner'), { toJSON: () => ({ headers: authInit }) }) }),
+    ],
+    [
+      'a `toJSON` on a plain-object `cause`',
+      () => new TypeError(FETCH_FAILED, { cause: { toJSON: () => ({ headers: authInit }) } }),
+    ],
+    [
+      'a `toJSON` on an `AggregateError` member',
+      () => new AggregateError([Object.assign(new Error('inner'), { toJSON: () => ({ headers: authInit }) })], FETCH_FAILED),
+    ],
+  ])('redacts a token that only `JSON.stringify` of a nested member would print: %s', async (_label, build) => {
+    const original = build() as Error & { cause?: unknown; errors?: unknown[] };
+    expect(inspect(original, INSPECT_OPTIONS)).not.toContain(LEAK_CANARY);
+    expect(JSON.stringify(original)).not.toContain(LEAK_CANARY);
+    const nested = original.cause ?? original.errors?.[0];
+    expect(JSON.stringify(nested)).toContain(LEAK_CANARY); // the shape is live one level down
+    const error = await thrownByRejection(authInit, original);
+    expect(error).toBeInstanceOf(AuthTransportError);
+    expect(error.message).toContain(FETCH_FAILED);
+    expect(JSON.stringify(error, Object.getOwnPropertyNames(error))).not.toContain(LEAK_CANARY);
+  });
+
+  /**
+   * A secret carried as BYTES. `util.inspect` prints a `Buffer` and an
+   * `ArrayBuffer` as spaced hex and a `Uint8Array` as decimal bytes;
+   * `JSON.stringify` prints a `Buffer` as `{"type":"Buffer","data":[…]}` and
+   * a `Uint8Array` as an index-keyed object. None of those is the verbatim,
+   * escaped, percent- or base64-encoded credential, and each is one decode
+   * away from it. Every encoding the swap could print is asserted absent:
+   * the credential itself, its hex, its base64, its base64url and its
+   * decimal bytes, in the replacement's inspect dump and its JSON.
+   */
+  const secretBytes = Buffer.from(`Bearer ${LEAK_CANARY}`);
+  const encodings: readonly [string, string][] = [
+    ['verbatim', LEAK_CANARY],
+    ['hex', Buffer.from(LEAK_CANARY).toString('hex')],
+    ['spaced hex', Buffer.from(LEAK_CANARY).toString('hex').replaceAll(/(..)(?=.)/g, '$1 ')],
+    ['base64', Buffer.from(LEAK_CANARY).toString('base64')],
+    ['base64url', Buffer.from(LEAK_CANARY).toString('base64url')],
+    ['decimal bytes', [...Buffer.from(LEAK_CANARY)].join(', ')],
+    ['JSON decimal bytes', [...Buffer.from(LEAK_CANARY)].join(',')],
+    ['JSON index-keyed bytes', [...Buffer.from(LEAK_CANARY)].map((byte, i) => `"${i}":${byte}`).join(',')],
+  ];
+  /** Every element on one line, so a decimal byte list is one contiguous string as the probe sees it. */
+  const INSPECT_BYTES = { ...INSPECT_OPTIONS, maxArrayLength: Infinity, breakLength: Infinity, compact: true };
+  it.each<[string, (error: Error) => void]>([
+    ['a `Buffer` own property', (e) => Object.assign(e, { buf: Buffer.from(secretBytes) })],
+    ['a `Uint8Array` own property', (e) => Object.assign(e, { bytes: new Uint8Array(secretBytes) })],
+    [
+      'an `ArrayBuffer` own property',
+      (e) => Object.assign(e, { ab: secretBytes.buffer.slice(secretBytes.byteOffset, secretBytes.byteOffset + secretBytes.byteLength) }),
+    ],
+  ])('redacts a secret carried as bytes on %s, in every encoding', async (_label, decorate) => {
+    const original = new Error(FETCH_FAILED);
+    decorate(original);
+    const printed = `${inspect(original, INSPECT_BYTES)} | ${JSON.stringify(original)}`;
+    expect(printed).not.toContain(LEAK_CANARY); // no textual form is present…
+    expect(encodings.some(([, form]) => printed.includes(form))).toBe(true); // …but a byte form is
+    const error = await thrownByRejection(authInit, original);
+    expect(error).toBeInstanceOf(AuthTransportError);
+    const swapped = `${inspect(error, INSPECT_BYTES)} | ${JSON.stringify(error, Object.getOwnPropertyNames(error))}`;
+    for (const [name, form] of encodings) {
+      expect(swapped, `leaks the ${name} form`).not.toContain(form);
+    }
+  });
+
+  it('redacts a byte-held secret longer than inspect\'s 50-byte Buffer cap that only inspect would print', async () => {
+    // A `Buffer` inside a `Map` is `{}` to JSON, so only inspect sees it — and
+    // inspect prints `INSPECT_MAX_BYTES` (50) of a Buffer, then `… N more
+    // bytes`. A 93-character fine-grained token would print as a hex PREFIX
+    // that no whole-secret form matches unless the probe lifts the cap.
+    const longCanary = `${LEAK_CANARY}_${'x'.repeat(60)}`;
+    const headers = { Authorization: `Bearer ${longCanary}` };
+    const original = Object.assign(new Error(FETCH_FAILED), { m: new Map([['buf', Buffer.from(longCanary)]]) });
+    expect(inspect(original, INSPECT_BYTES)).toContain('more bytes>'); // the cap is live at the default
+    const error = await thrownByRejection(headers, original);
+    expect(error).toBeInstanceOf(AuthTransportError);
+    expect(inspect(error, INSPECT_BYTES)).not.toContain(Buffer.from(LEAK_CANARY).toString('hex').replaceAll(/(..)(?=.)/g, '$1 '));
+  });
+
+  it('redacts a `Uint8Array` that only inspect would print — its decimal bytes must be one contiguous list', async () => {
+    // Inside a `Map` the array is `{}` to JSON. Under inspect's default
+    // layout a long numeric array is grouped into aligned columns across
+    // lines, and no literal spelling of the bytes matches a list broken by
+    // variable whitespace; the probe has to print it on one line.
+    const original = Object.assign(new Error(FETCH_FAILED), { m: new Map([['u', new Uint8Array(secretBytes)]]) });
+    expect(JSON.stringify(original)).not.toContain('66');
+    expect(inspect(original, INSPECT_OPTIONS)).toMatch(/66,\s+101,/); // the shape is live, and grouped by default
+    const error = await thrownByRejection(authInit, original);
+    expect(error).toBeInstanceOf(AuthTransportError);
+    expect(inspect(error, INSPECT_BYTES)).not.toContain([...Buffer.from(LEAK_CANARY)].join(', '));
   });
 
   it('redacts a token whose surrounding value was JSON-escaped on the way into the message', async () => {

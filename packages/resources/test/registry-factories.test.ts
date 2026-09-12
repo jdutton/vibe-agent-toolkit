@@ -100,6 +100,7 @@ describe('ResourceRegistry factory methods', () => {
       await fs.writeFile(safePath.join(tempDir, 'doc2.md'), '# Doc 2', 'utf-8');
 
       const registry = await ResourceRegistry.fromCrawl({
+        unreadable: 'refuse',
         baseDir: tempDir,
         include: ['*.md'],
       });
@@ -115,6 +116,7 @@ describe('ResourceRegistry factory methods', () => {
       await fs.writeFile(safePath.join(tempDir, 'private/doc.md'), '# Private', 'utf-8');
 
       const registry = await ResourceRegistry.fromCrawl({
+        unreadable: 'refuse',
         baseDir: tempDir,
         include: ['**/*.md'],
         exclude: ['**/private/**'],
@@ -130,6 +132,7 @@ describe('ResourceRegistry factory methods', () => {
       await fs.writeFile(safePath.join(tempDir, 'docs/api/guide.md'), '# Guide', 'utf-8');
 
       const registry = await ResourceRegistry.fromCrawl({
+        unreadable: 'refuse',
         baseDir: tempDir,
         include: ['**/*.md'],
       });
@@ -139,6 +142,7 @@ describe('ResourceRegistry factory methods', () => {
 
     it('should handle empty directory', async () => {
       const registry = await ResourceRegistry.fromCrawl({
+        unreadable: 'refuse',
         baseDir: tempDir,
         include: ['*.md'],
       });
@@ -152,6 +156,7 @@ describe('ResourceRegistry factory methods', () => {
       await fs.writeFile(safePath.join(tempDir, 'doc2.md'), '# Same Content', 'utf-8');
 
       const registry = await ResourceRegistry.fromCrawl({
+        unreadable: 'refuse',
         baseDir: tempDir,
         include: ['*.md'],
       });

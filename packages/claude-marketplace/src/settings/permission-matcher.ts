@@ -122,10 +122,11 @@
  */
 
 import { homedir } from 'node:os';
+import path from 'node:path';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
-import { compilePathPattern, matchesPathPattern, witnessOf } from './path-pattern.js';
+import { collapseParentSegments, compilePathPattern, matchesPathPattern, witnessOf } from './path-pattern.js';
 
 /**
  * Which permission bucket a rule came from. Claude Code evaluates deny → ask →
@@ -1413,12 +1414,67 @@ export function matchesBashRule(command: string, rule: string, lane: PermissionL
  * a declaration read as an input — went to `resolve` verbatim, so `~/.ssh/**`
  * became a literal `~` directory under the root and `Read(~/.ssh/**)` did not
  * contain ITSELF. See {@link pathWitnesses}.
+ *
+ * A `..` segment in the remainder is read the way `resolve` reads one in a
+ * file path: it drops the segment before it, and with nothing before it moves
+ * the root up one directory. 🚩 It was a literal segment in the pattern, which
+ * no resolved file path carries, while the text witness went through `join`
+ * and lost it — so a rule spelled with `..` constrained nothing and did not
+ * contain itself: `Read(../x)` vs `Read(../x)` → false, `Read(a/../b)` vs
+ * `Read(*)` → false. Whether Claude Code resolves it or reads it literally is
+ * not documented; resolving errs towards REPORTING a conflict, which is the
+ * direction a deny check should err in, and is the one reading under which
+ * both sides of a match see the same path.
  */
 function splitPathSpelling(spelling: string, cwd: string): { root: string; rest: string } {
+  const { root, rest } = splitPathPrefix(spelling, cwd);
+  const { pattern, climbs } = collapseParentSegments(rest);
+  return { root: safePath.resolve(root, ...Array.from({ length: climbs }, () => '..')), rest: pattern };
+}
+
+/** The prefix table alone: which directory the spelling is relative to, and the remainder. */
+function splitPathPrefix(spelling: string, cwd: string): { root: string; rest: string } {
   if (spelling.startsWith('//')) return { root: '/', rest: spelling.slice(1) };
   if (spelling.startsWith('~/')) return { root: homedir(), rest: spelling.slice(2) };
   if (spelling.startsWith('./')) return { root: cwd, rest: spelling.slice(2) };
   return { root: cwd, rest: spelling };
+}
+
+/**
+ * `filePath`, resolved against `root`, as a `/`-separated path under `root` —
+ * `''` for the root itself — or `undefined` when it is not under `root`.
+ *
+ * 🚩 Resolve against `root` explicitly. `relative(root, filePath)` alone lets
+ * Node resolve a RELATIVE filePath against `process.cwd()` rather than against
+ * the root this function was handed, so the verdict depended on where the
+ * process was launched. The only production caller passes a plugin directory,
+ * which is never `process.cwd()` — so the whole path lane of the deny check
+ * answered `false` for everything. An absolute filePath is unaffected:
+ * `resolve` returns it unchanged.
+ *
+ * A path that goes "up" is outside the root. 🚩 That is `..` itself or a `../`
+ * prefix — a `startsWith('..')` also refused every file NAMED `..something`
+ * under the root, so a deny `Read(*)` reported no conflict with a declaration
+ * naming `..secret`. 🚩 And on Windows it is ALSO an absolute path: across
+ * drive letters, or from a drive to a UNC share, `path.win32.relative` returns
+ * the target's absolute path rather than climbing to a common root — neither
+ * `..`, `../…` nor empty, so it reached the matcher as if it were under the
+ * root and `**` matched it. Deny `Read(~/**)` with `~` on C: reported a
+ * conflict with a plugin on D: declaring `Read(./src/**)`, and the reverse
+ * pair likewise; GitHub's Windows runners (`C:\Users\runneradmin` against a
+ * `D:\a\…` workspace) are that layout.
+ *
+ * `platform` is Node's `path` for the platform to answer for. Production
+ * passes `path`; the suite passes `path.win32` so the cross-drive case is
+ * pinned on the CI legs that are not Windows. Every result is forward-slashed
+ * here, which is the guarantee `safePath` exists to give and the reason the
+ * raw `relative`/`resolve` are reached through a parameter rather than
+ * through it: `safePath` is bound to the host platform.
+ */
+export function relativePathUnderRoot(root: string, filePath: string, platform: typeof path): string | undefined {
+  const relative = toForwardSlash(platform.relative(root, platform.resolve(root, filePath)));
+  if (relative === '..' || relative.startsWith('../') || platform.isAbsolute(relative)) return undefined;
+  return relative;
 }
 
 /**
@@ -1437,20 +1493,9 @@ export function matchesPathRule(
 ): boolean {
   const { root, rest: pattern } = splitPathSpelling(normaliseWhitespace(ruleContent), cwd);
 
-  // 🚩 Resolve against `root` explicitly. `safePath.relative(root, filePath)`
-  // alone lets Node resolve a RELATIVE filePath against `process.cwd()` rather
-  // than against the root this function was handed, so the verdict depended on
-  // where the process was launched. The only production caller passes a plugin
-  // directory, which is never `process.cwd()` — so the whole path lane of the
-  // deny check answered `false` for everything. An absolute filePath is
-  // unaffected: `resolve` returns it unchanged.
-  const relative = safePath.relative(root, safePath.resolve(root, filePath));
-
-  // A path that goes "up" (..) is outside the root, so no pattern under it
-  // applies. 🚩 That is `..` itself or a `../` prefix — a `startsWith('..')`
-  // also refused every file NAMED `..something` under the root, so a deny
-  // `Read(*)` reported no conflict with a declaration naming `..secret`.
-  if (relative === '..' || relative.startsWith('../')) return false;
+  const relative = relativePathUnderRoot(root, filePath, path);
+  // Outside the root, so no pattern under it applies.
+  if (relative === undefined) return false;
 
   // 🚩 An empty relative path THREW in the matcher this replaced (`path must
   // not be empty`), and `settings-compat-checker` reaches this with an empty

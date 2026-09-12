@@ -103,6 +103,90 @@ export function missingDocumentColumns(
 }
 
 /**
+ * A column as an Arrow schema reports it: its name and its data type's printed
+ * form (`Utf8`, `Float64`, …).
+ *
+ * The printed form is compared rather than the `DataType` object because that
+ * is also what the refusal message shows, and the two sides come from the same
+ * Arrow implementation (the stored table's schema and LanceDB's own inference
+ * over the record this build writes), so a printed type that differs is a type
+ * that differs.
+ */
+export interface DocumentColumn {
+  name: string;
+  type: string;
+}
+
+/** A column both the table and this build's record carry, typed differently by each. */
+export interface DocumentColumnTypeMismatch {
+  name: string;
+  /** The type the table's column has now */
+  storedType: string;
+  /** The type this build's record would be inferred to carry for it */
+  expectedType: string;
+}
+
+/**
+ * The columns a documents table shares with this build's record but types
+ * differently.
+ *
+ * A column can be PRESENT and still wrong: v0.1.42 stored a non-string,
+ * non-number frontmatter value as `JSON.stringify(value)` — a boolean became a
+ * Utf8 column holding `"true"`, a date a Utf8 column holding an ISO string —
+ * and a numeric-looking title a Float64 column. This build serializes a boolean
+ * as `1`/`0`, a date as epoch milliseconds and a title as a string. LanceDB
+ * does not refuse the mismatch on `add`: it casts, so `true` lands as `"1"` and
+ * reads back `false`, a title lands as null and reads back as absent — with no
+ * error, and permanently, since `addColumns` cannot retype a column. The only
+ * honest answer is to refuse the write before anything is deleted.
+ *
+ * Columns only one side has are not reported: a column the table lacks is the
+ * widening's to add, and a column the record lacks is stored as null.
+ *
+ * @param stored - The table's columns, as its schema reports them
+ * @param expected - The columns this build's record is inferred to carry
+ * @returns Every shared column whose types differ, in `expected` order
+ */
+export function mismatchedDocumentColumns(
+  stored: readonly DocumentColumn[],
+  expected: readonly DocumentColumn[],
+): DocumentColumnTypeMismatch[] {
+  const storedTypes = new Map(stored.map((column) => [column.name, column.type]));
+  const mismatches: DocumentColumnTypeMismatch[] = [];
+  for (const column of expected) {
+    const storedType = storedTypes.get(column.name);
+    if (storedType !== undefined && storedType !== column.type) {
+      mismatches.push({ name: column.name, storedType, expectedType: column.type });
+    }
+  }
+  return mismatches;
+}
+
+/**
+ * The refusal an adopter reads when {@link mismatchedDocumentColumns} found
+ * something: every offending column at once, both types, and the remedy.
+ *
+ * @param tableName - The documents table's name
+ * @param dbPath - Where the database lives, so the message names the store
+ * @param mismatches - What differs; must be non-empty
+ * @returns One message naming everything the adopter needs to act
+ */
+export function describeDocumentColumnMismatches(
+  tableName: string,
+  dbPath: string,
+  mismatches: readonly DocumentColumnTypeMismatch[],
+): string {
+  const columns = mismatches
+    .map((m) => `'${m.name}' is stored as ${m.storedType} but this build writes ${m.expectedType}`)
+    .join('; ');
+  return (
+    `The '${tableName}' table at ${dbPath} was written by a build that typed its columns differently: ${columns}. ` +
+    'Writing into it would silently coerce every new value into the stored type, so nothing was written. ' +
+    'Run `vat rag clear` (or `clear()`) and re-index.'
+  );
+}
+
+/**
  * Create a DocumentRecord for the rag_documents table.
  *
  * Builds the record from resource metadata, transformed content, and every

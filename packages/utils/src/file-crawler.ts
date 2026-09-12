@@ -6,113 +6,22 @@ import {
   type DirectoryRefusal,
   directoryRefusalFor,
   listingFailure,
-  transientRefusalClause,
 } from './fs-utils.js';
 import { gitFindRoot, gitLsFiles } from './git-utils.js';
+import { requireUnreadablePolicy, settleRefusal, type UnreadablePolicy } from './listing-refusal.js';
 import { toForwardSlash, safePath } from './path-utils.js';
 
 export type { DirectoryRefusal } from './fs-utils.js';
-
-/**
- * What a caller that STOPS on a refusal tells the person reading the error.
- *
- * The crawler's own message names its library seam (`onUnreadable`), which is
- * the right hint for the programmer who reached the throw without deciding.
- * A caller that HAS decided — a build that must not ship an incomplete bundle,
- * a discovery that must not silently find fewer skills — owes the adopter a
- * different sentence: the directory against the root they know, and the knob
- * THEY have. See {@link refuseListing}.
- */
-export interface RefuseListingContext {
-  /**
-   * The root the refused directory is expressed against. An absolute path in
-   * an error is the developer's `$HOME` in every CI log.
-   */
-  root: string;
-  /**
-   * What the adopter can do about it — naming this lane's deliberate-drop
-   * mechanism (`resources.exclude`, a plugin `exclude:`, `--exclude`), which
-   * differs per caller and is why the crawler cannot supply it.
-   */
-  remedy: string;
-}
-
-/**
- * Thrown by the walk when a directory refused to be listed and the caller gave
- * no {@link CrawlOptions.onUnreadable} to hand the refusal to — or gave
- * {@link refuseListing}, which throws it with an adopter-facing message.
- *
- * 🚨 A refused listing is a gap in the POPULATION: every file beneath that
- * directory is in the declared crawl, was never seen, and would be absent from
- * every count downstream. The walk used to `catch { return; }` here and hand
- * back a shorter list — the green-without-running shape, one level above the
- * link judges that already refuse it. It surfaces now, and a caller that would
- * rather degrade than stop says so by supplying the handler.
- */
-export class DirectoryListingRefusedError extends Error {
-  readonly refusal: DirectoryRefusal;
-
-  constructor(refusal: DirectoryRefusal, context?: RefuseListingContext) {
-    super(context === undefined ? undecidedRefusalMessage(refusal) : refusedListingMessage(refusal, context));
-    this.name = 'DirectoryListingRefusedError';
-    this.refusal = refusal;
-  }
-}
-
-/** The programmer-facing sentence: the walk threw because nobody decided. */
-function undecidedRefusalMessage(refusal: DirectoryRefusal): string {
-  return (
-    `Listing the directory "${refusal.directory}" was refused (${refusal.code}), so nothing beneath it ` +
-    `was enumerated. Pass \`onUnreadable\` to crawl past it and report the gap instead.`
-  );
-}
-
-/**
- * The adopter-facing sentence: root-relative directory, errno, and the caller's
- * remedy — **the one owner of that sentence.**
- *
- * Exported for the caller that REPORTS a refusal rather than throwing on it
- * (the resource registry's `SCAN_PATH_UNREADABLE`), so it says the same thing
- * the throwing callers say. Three lanes used to compose this by hand and had
- * drifted by a clause each ("enumerated" / "scanned" / "the population could
- * not be enumerated"); the transient clause in particular was written once in
- * `fs-utils.ts` precisely so nobody would.
- *
- * @param refusal - What was refused
- * @param context - The root to express it against, and what the adopter can do
- * @returns One sentence, root-relative, never containing the absolute path
- */
-export function refusedListingMessage(refusal: DirectoryRefusal, context: RefuseListingContext): string {
-  const relative = toForwardSlash(safePath.relative(context.root, refusal.directory));
-  const where = relative === '' ? 'the scan root itself' : `the directory '${relative}'`;
-  const remedy = refusal.transient
-    ? `${transientRefusalClause(refusal.code)}, so nothing is wrong with the tree — re-run before investigating anything.`
-    : context.remedy;
-  return (
-    `Listing ${where} was refused (${refusal.code}), so nothing beneath it was enumerated: ` +
-    `every file there is in the declared scan and would be absent from every count. ${remedy}`
-  );
-}
-
-/**
- * The `onUnreadable` for a caller whose honest answer to a refusal is to STOP —
- * a copy that must not ship a partial tree, a discovery that must not silently
- * find fewer skills — rather than to degrade and report.
- *
- * It throws {@link DirectoryListingRefusedError} like the undecided default
- * does, so nothing downstream can tell the two apart by type; the difference
- * is the sentence, which is written for the adopter. Passing it is the caller's
- * recorded decision, which is the point: the default throw means "nobody
- * chose", this one means "we chose to refuse".
- *
- * @param context - The root to express the directory against, and the remedy
- * @returns A handler that throws for every refusal it is handed
- */
-export function refuseListing(context: RefuseListingContext): (refusal: DirectoryRefusal) => never {
-  return (refusal) => {
-    throw new DirectoryListingRefusedError(refusal, context);
-  };
-}
+// The refusal vocabulary lives in `listing-refusal.ts` so `git-utils.ts` can
+// share it without importing this module (which imports that one). Re-exported
+// here because `./crawl` is where every caller of the walk already looks.
+export {
+  DirectoryListingRefusedError,
+  type RefuseListingContext,
+  refusedListingMessage,
+  settleRefusal,
+  type UnreadablePolicy,
+} from './listing-refusal.js';
 
 /**
  * Options for directory crawling
@@ -152,19 +61,15 @@ export interface CrawlOptions {
    */
   includeUntracked?: boolean;
   /**
-   * Receive every directory the walk could not LIST, and keep walking.
-   *
-   * Without it a refused listing throws {@link DirectoryListingRefusedError},
-   * because the only other answer is a shorter list that nothing can tell
-   * from a complete one. A caller that supplies this is promising to report
-   * the gap — as its own finding, with the directory and errno the refusal
-   * carries — not to drop it.
+   * What to do with a directory the walk could not LIST. Required, with no
+   * default: see {@link UnreadablePolicy} for the two answers and why the
+   * caller — not the crawler — is the one who knows which is honest here.
    *
    * A directory that VANISHED between being enumerated and being listed
    * (`ENOENT` / `ENOTDIR`) is not a refusal: it is no longer in the population
    * and is skipped without a call.
    *
-   * **Both routes call it.** The `git ls-files` route walks the working tree
+   * **Both routes settle it.** The `git ls-files` route walks the working tree
    * whenever {@link CrawlOptions.includeUntracked} is set (`--others`), and a
    * directory git could not open arrives here too — read off git's stderr,
    * where it is the only trace: git exits 0 and lists fewer files. A directory
@@ -173,7 +78,7 @@ export interface CrawlOptions {
    * opens no directory at all — the index names every member — so it has no
    * gap to report.
    */
-  onUnreadable?: (refusal: DirectoryRefusal) => void;
+  unreadable: UnreadablePolicy;
 }
 
 /**
@@ -329,8 +234,9 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     filesOnly = true,
     respectGitignore = true,
     includeUntracked = false,
-    onUnreadable,
+    unreadable,
   } = options;
+  requireUnreadablePolicy(unreadable, 'crawlDirectory');
 
   const picoOptions = PICOMATCH_OPTIONS;
 
@@ -352,12 +258,11 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   }
 
   /**
-   * A refused listing surfaces — handed to the caller if it asked, thrown
-   * otherwise. Never a silent skip, on either route.
+   * A refused listing surfaces under the caller's policy — thrown, or handed
+   * over. Never a silent skip, on either route.
    */
   function raiseRefusal(refusal: DirectoryRefusal): void {
-    if (onUnreadable === undefined) throw new DirectoryListingRefusedError(refusal);
-    onUnreadable(refusal);
+    settleRefusal(unreadable, refusal);
   }
 
   // Ensure base directory exists
@@ -387,12 +292,17 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
         // outside this crawl's base or dropped by `exclude` is never listed by
         // the walk, so a refusal on it is not this crawl's gap; anything else
         // is, and goes where the walk's would go.
-        onUnreadable: (refusal) => {
-          // Strictly beneath the base: a repository is often an ancestor of
-          // the crawl, and git names every refusal in the whole worktree.
-          if (!toForwardSlash(refusal.directory).startsWith(`${toForwardSlash(resolvedBaseDir)}/`)) return;
-          if (shouldExclude(toForwardSlash(safePath.relative(resolvedBaseDir, refusal.directory)))) return;
-          raiseRefusal(refusal);
+        // `degrade` from git's side only: the refusal is filtered to this
+        // crawl's territory and then settled under the CALLER's policy, which
+        // may well be `refuse`.
+        unreadable: {
+          degrade: (refusal) => {
+            // Strictly beneath the base: a repository is often an ancestor of
+            // the crawl, and git names every refusal in the whole worktree.
+            if (!toForwardSlash(refusal.directory).startsWith(`${toForwardSlash(resolvedBaseDir)}/`)) return;
+            if (shouldExclude(toForwardSlash(safePath.relative(resolvedBaseDir, refusal.directory)))) return;
+            raiseRefusal(refusal);
+          },
         },
       });
 

@@ -145,6 +145,24 @@ with a regression test.
 
 #### Library
 
+- **Every crawl states what a refused directory listing means for it: `CrawlOptions` and
+  `GitListingOptions` require an `unreadable` policy** — `{ refuse: { root, remedy } }` (the listing
+  throws `DirectoryListingRefusedError` naming the directory and errno) or `{ degrade: (refusal) => void }`
+  (the listing continues and hands the refusal to you). There is no default and the optional
+  `onUnreadable` callback is gone: a caller that omits the field fails to compile (and throws a
+  `TypeError` from plain JS), so a listing can no longer be silently shorter than the tree.
+  `ResourceRegistry.crawl` / `crawlAndResolveRegistry` require the same `unreadable` field
+  (`'refuse' | { degrade }`): `vat audit` degrades and files `SCAN_PATH_UNREADABLE` at exit 0; every
+  other verb refuses at exit 2. `rewriteHtmlLinks(…, onUnapplied)` and `parseEvalFragment(raw, onWarn)` likewise take their
+  handlers as required arguments — an unapplied rewrite or a partial-friction warning is never dropped
+  because nobody asked for it.
+- **`checkSettingsCompatibility` returns `{ conflicts, unchecked }` instead of a bare conflict array.**
+  `unchecked` lists every skill the check could not compare (unreadable, unlistable, unparseable
+  frontmatter) with its reason; a consumer that reads only `conflicts` reports `compatible` for a plugin
+  it never checked, so read both.
+- **`CompatibilityResult.unchecked` is a new required field** (`{ path, reason }[]` — files the analyzer
+  could not read, list or parse; verdicts were computed without them) **and `settingsConflicts`, which was
+  never populated, is removed.**
 - **`matchesPermissionRule` and `matchesBashRule` now require a `lane` argument** (`'allow' |
   'deny' | 'ask'`), with no default. Pass `'allow'` to keep today's semantics, or use the new
   `matchesAllowRule` / `matchesDenyRule` wrappers. `PermissionLane` is exported alongside them.
@@ -449,7 +467,9 @@ with a regression test.
 - **A `linkAuth` credential in any header could reach stdout, and followed a cross-origin
   redirect to another host.** Only `authorization` was redacted, so a malformed `PRIVATE-TOKEN` or
   `X-API-Key` value was printed verbatim in the thrown `TypeError`. Every rendered header value is
-  now redacted from any thrown error, and a cross-origin redirect carries **no** adopter headers.
+  now redacted from any thrown error — including the hex/decimal spellings of a token held as bytes and
+  a `toJSON` on a nested `cause`/`AggregateError` member — and a cross-origin redirect carries **no**
+  adopter headers.
 
 - **`VAT_LINKAUTH_ALLOW_COMMAND` now fails closed**: `0`, `false`, `no`, `off` and any unreadable
   value disable command-sourced tokens (only the literal `0` did before); unset, `1`, `true`,
@@ -505,12 +525,13 @@ with a regression test.
   transform, undeclared capture) refuses the run at config load — exit 2, naming `providers[<n>]` and the
   field — instead of a per-link `LINK_AUTH_UNVERIFIED` warning that `severity: ignore` turned into a green run.**
   A provider failing on one URL now reports `LINK_AUTH_PROVIDER_ERROR` (error); `LINK_AUTH_UNVERIFIED` means only "no token".
-- **A directory the resource crawl could not list is reported instead of silently narrowing the population.**
-  `vat resources validate` now emits `SCAN_PATH_UNREADABLE` for it on the walk lane and refuses the run by name
-  on the default lane — inside a git repository too, where git's own "could not open directory" warning was
-  discarded; `crawlDirectory` throws `DirectoryListingRefusedError` unless given `onUnreadable`. A locked
-  directory in gitignored territory (a root-owned cache under `build/`) does not abort the run: it stays a
-  `gitignored` directory row.
+- **A directory the resource crawl could not list refuses the run by name instead of silently narrowing
+  the population.** `vat resources validate`/`scan`, `vat skills validate`/`build` and `vat build` exit 2
+  naming the directory and errno on BOTH crawl lanes with the same sentence — inside a git repository too,
+  where git's own "could not open directory" warning was discarded — and the remedy names an ignore rule
+  only when a repository exists to read one. A locked directory in gitignored territory (a root-owned
+  cache under `build/`) does not abort the run: it stays a `gitignored` directory row plus an
+  `EXTENT_DIRECTORY_UNLISTABLE` warning.
 - **Every other crawl caller now states what a refused listing means for it** instead of silently
   reporting a shorter set: `vat audit` files `SCAN_PATH_UNREADABLE` on the skill, and on a `skills.include`
   directory it cannot list (warning once on stderr; the readable skills keep their config-aware checks);
@@ -541,7 +562,57 @@ with a regression test.
 - **`vat build` handled symlinks in a plugin source differently in and out of a git repository** —
   silently dropped off-git; copied through (even to a file outside the source) or crashed mid-copy in-git.
   A symlink pointing outside the source, a dangling one, or a directory symlink now stops the build by name
-  before anything is copied; an in-tree file symlink is copied by content and counted in `symlinksCopied`.
+  before anything is copied; an in-tree file symlink is copied by content and counted in `symlinksCopied`
+  on the plugin's row of the build document. **A file symlink whose target the copy leaves out** (`exclude:`,
+  gitignore, a packaged skill directory, `.claude-plugin/`) used to ship the excluded bytes under the
+  link's name with `warnings: 0`; it is now refused by name (`target-excluded`) naming link and target.
+- **`vat audit` died (exit 2, `Cannot read properties of null (reading 'name')`) on a SKILL.md whose
+  `---` block is empty, `~`, a scalar or a sequence.** The file now gets one `SKILL_MISSING_FRONTMATTER`
+  naming what was found, and every reader of frontmatter refuses it the same way.
+- **`vat audit --compat --settings`: a plugin with one unreadable SKILL.md or skill directory printed
+  NEITHER a `compatibility:` nor a `settings:` block, at exit 0, with the reason under `--debug` only —
+  the settings check never ran.** It now gets `compatibility: { analyzed: false, reason }` and a
+  `settings:` block whose `unchecked` names the refused path (`compatible: false`), both said on stderr.
+  The settings check also follows symlinked skill directories and SKILL.md files (previously skipped
+  silently ⇒ `compatible: true` beside a deny that blocks them), and the stderr line "N settings
+  conflict(s) found" prints again — it read a field the renderer had already moved, so it was 0 on every run.
+- **`vat audit --compat` analyzed a plugin whose skills live behind a symlinked directory WITHOUT them**
+  (`summary.skillFiles` short by every linked skill, verdicts over the rest) while the validator lane in
+  the same document reported them; the analyzer now follows symlinked directories and files, cycle-safe.
+  **One unreadable file, unlistable directory or unparseable `hooks.json`/`.mcp.json` no longer costs the
+  whole plugin its `compatibility:` block** — every readable file is analyzed and the refused paths are
+  listed under `compatibility.unchecked` (root-relative, with the reason); `analyzed: false` is reserved
+  for a plugin-wide failure.
+- **`vat audit --compat --settings` on Windows: a `Read`/`Edit` rule anchored at `~` matched plugin files
+  on another drive (and vice versa)** — `path.win32.relative` across drives returns an absolute path,
+  which the outside-the-root guard passed as if it were under the root. **A rule or `allowed-tools` entry
+  carrying a `..` segment matched nothing**; it is now resolved the way a file path is (`a/../b` is `b`,
+  `../x` is `x` in the parent) and can conflict with the rules it overlaps.
+- **`vat claude marketplace validate`: a `skills/`, skill directory, `SKILL.md` or `plugin.json` symlink
+  inside a plugin that points outside the marketplace root was followed and its findings published at
+  root-relative locations.** Every path the walk opens is now realpath-checked; refused paths are listed
+  under a new always-present `refused:` key and the run is refused as `RESOURCE_CHECK_BROKEN` (exit 1).
+  A link pointing inside the root is followed, and a linked skill directory (previously skipped silently)
+  is now validated.
+- **`vat inventory` / `vat audit` on a marketplace walked a string plugin `source` naming a regular file,
+  an empty string, or a path with a `..` segment as an empty plugin with no error.** Each is now refused
+  with a parse error naming the reason and reported as `MARKETPLACE_PLUGIN_SOURCE_MISSING`.
+- **`vat verify`: a regular file sitting where a skill bundle directory should be crashed the command
+  (exit 2, `Base path is not a directory: /abs/…`).** It is now reported under `bundlesMissing` at exit 1
+  with the document.
+- **`LINK_TO_GITIGNORED_FILE` and the link-graph walker called an untracked file *gitignored* when its
+  parent directory was traversable but not listable (`--x`).** The tracker now records the directory git
+  could not open and asks `git check-ignore` about anything beneath it instead of reading its absence
+  from the active set as an ignore.
+- **`vat resources validate` with `linkAuth`: a 5xx/429/404 from an authenticated content fetch was
+  served from the content cache for its 30-minute TTL;** only 2xx/3xx responses are cached now. **A
+  redirect whose `Location` is not a URL surfaced as a bare `Invalid URL` outside the credential-redaction
+  path;** it is now an `AuthTransportError` naming status and URL, every header value redacted.
+- **`vat rag index` dropped a declared resource it had enumerated but could not read (permission denied)
+  and reported `success`.** It now reports `status: partial`, exits 1 and lists the file under `errors`.
+- **(library) After `close()`, `LanceDBRAGProvider.indexResources()` reported `resourcesIndexed` /
+  `chunksCreated` with nothing written, and `deleteResource()` / `getDocument()` silently no-op'd.** The
+  write paths now reopen the released connection the way `query()` already did.
 - **`vat resources validate` exited 2 — printing the absolute walk root and discarding every other
   finding — on a Windows-spelled relative link such as `[x](..\outside\secret.md)`.** A backslash in an
   href is read as the separator it is; the link gets exactly the verdict its `/` spelling gets. A

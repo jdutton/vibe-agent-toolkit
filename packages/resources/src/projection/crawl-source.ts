@@ -78,7 +78,8 @@ import {
   crawlPathFilter,
   type DirectoryRefusal,
   NEVER_CRAWL_GLOBS,
-  refuseListing,
+  settleRefusal,
+  type UnreadablePolicy,
 } from '@vibe-agent-toolkit/utils/crawl';
 import {
   gitFindRoot,
@@ -93,21 +94,51 @@ import type { PathShape } from './realizations.js';
 const GITDIR_PREFIX = 'gitdir:';
 
 /**
- * What the projection tells an adopter about a refused listing — true for THIS
- * lane, which is why it is not the registry's sentence.
+ * What every resources lane tells an adopter about a refused listing — **one
+ * sentence, decided per ROOT, printed by the projection's two arms and by the
+ * registry's incumbent walk alike.**
  *
  * The projection enumerates every path beneath the root that
  * {@link NEVER_CRAWL_GLOBS} admits; `resources.include`/`exclude` narrow the
- * registry's view of the population, not the population. A remedy naming that
- * knob here would be one the adopter can apply and see nothing change (it was,
- * and four spellings of it were tried). The knob this lane DOES honour is the
- * one git honours: an ignored directory is outside the population, and a
- * refusal met inside ignored territory is recorded rather than fatal — see
- * {@link ListingRefusals}.
+ * registry's view of the population, not the population. A remedy prescribing
+ * that knob would be one the adopter can apply and see nothing change (it was,
+ * and four spellings of it were tried) — and an adopter who HAS excluded the
+ * directory is exactly who reads this, so the sentence says why that did not
+ * help rather than pretending the knob does not exist.
+ *
+ * 🪤 **Route-aware, because "gitignore it" is a dead knob outside a
+ * repository.** The projection falls back to a plain walk there
+ * ({@link crawlSourceFor}) and the walk reads no ignore file, so the remedy
+ * used to send a `.git`-less `vat build` to an ignore rule that changed
+ * nothing. Decided from the root, not from which arm ran: inside a repository
+ * both arms honour ignore rules (the filesystem arm asks `check-ignore` — see
+ * {@link ListingRefusals}); outside one, neither can.
+ *
+ * ⚠️ Whether a locked directory REFUSES at all is a different question with a
+ * standing answer: a locked gitignored directory is a warning row
+ * (`EXTENT_DIRECTORY_UNLISTABLE`), never an abort; a locked non-ignored one
+ * refuses by name on every lane. The registry's walk lane used to degrade to a
+ * `SCAN_PATH_UNREADABLE` warning here while the default lane exited 2 on the
+ * identical tree — two lanes that are documented as cost models rather than
+ * behaviours reaching opposite exit codes. It now refuses with THIS sentence.
+ *
+ * @param root - The corpus root, whose repository (or lack of one) decides
+ *   which knob is real
+ * @returns The remedy clause the `refuse` policy appends to the refusal sentence
  */
-export const PROJECTION_LISTING_REMEDY =
-  'Fix the permissions on that directory, or — if it is not part of the project — gitignore it: '
-  + 'the projection enumerates every non-ignored path beneath the root, and no include or exclude setting narrows it.';
+export function listingRefusalRemedy(root: string): string {
+  const knobs = 'regardless of resources.include or resources.exclude';
+  if (gitFindRoot(root) === null) {
+    return (
+      'Fix the permissions on that directory, or move it out of the tree: with no git repository above the root '
+      + `there is no ignore rule that could declare it outside the project, and the population is every path beneath the root ${knobs}.`
+    );
+  }
+  return (
+    'Fix the permissions on that directory, or — if it is not part of the project — gitignore it: '
+    + `the population is every non-ignored path beneath the root ${knobs}, so only an ignore rule keeps a directory out of it.`
+  );
+}
 
 /**
  * 🚨 **The projection lane STOPS on a refused listing inside the population;
@@ -116,12 +147,14 @@ export const PROJECTION_LISTING_REMEDY =
  *
  * *Inside the population* — a directory git would have to open to find
  * untracked files, or a submodule's contents — every file beneath it is a
- * member that would be absent from every count, and this lane cannot degrade
- * the way the registry's walk does: its population is built by contributors,
- * merged, and — when a store is open — CACHED, and a cached population
- * enumerated around a gap would answer every later run with the narrowed list
- * and no finding. The only answer that cannot be mistaken for a complete one is
- * to refuse the run, by name, with {@link PROJECTION_LISTING_REMEDY}.
+ * member that would be absent from every count, and this lane in particular
+ * cannot degrade: its population is built by contributors, merged, and — when
+ * a store is open — CACHED, and a cached population enumerated around a gap
+ * would answer every later run with the narrowed list and no finding. The only
+ * answer that cannot be mistaken for a complete one is to refuse the run, by
+ * name, with {@link listingRefusalRemedy} — and the registry's incumbent walk
+ * refuses the same directory with the same sentence, so switching lanes cannot
+ * turn an exit 2 into a warning.
  *
  * *Inside ignored territory* — beneath a collapsed `--ignored --directory`
  * entry — nothing beneath the directory was ever in git's population; the
@@ -141,11 +174,11 @@ class ListingRefusals {
   readonly #root: string;
   readonly #recorded: DirectoryRefusal[] = [];
   readonly #seen = new Set<string>();
-  readonly #refuse: (refusal: DirectoryRefusal) => never;
+  readonly #inPopulation: UnreadablePolicy;
 
   constructor(root: string) {
     this.#root = root;
-    this.#refuse = refuseListing({ root, remedy: PROJECTION_LISTING_REMEDY });
+    this.#inPopulation = { refuse: { root, remedy: listingRefusalRemedy(root) } };
   }
 
   /** Every refusal met inside ignored territory, in the order met, once each. */
@@ -153,24 +186,32 @@ class ListingRefusals {
     return this.#recorded;
   }
 
-  /** The handler for a walk whose every directory is known to be in the population. */
-  get inPopulation(): (refusal: DirectoryRefusal) => never {
-    return this.#refuse;
+  /** The policy for a walk whose every directory is known to be in the population: refuse. */
+  get inPopulation(): UnreadablePolicy {
+    return this.#inPopulation;
   }
 
-  /** The handler for a walk known to be inside gitignored territory. */
-  get inIgnoredTerritory(): (refusal: DirectoryRefusal) => void {
-    return (refusal) => this.#record(refusal);
+  /** The policy for a walk known to be inside gitignored territory: record, continue. */
+  get inIgnoredTerritory(): UnreadablePolicy {
+    return { degrade: (refusal) => this.#record(refusal) };
   }
 
-  /** The handler for a walk that does not know which territory it is in. */
-  get undetermined(): (refusal: DirectoryRefusal) => void {
-    return (refusal) => {
-      if (isGitIgnored(refusal.directory, this.#root)) {
-        this.#record(refusal);
-        return;
-      }
-      this.#refuse(refusal);
+  /**
+   * The policy for a walk that does not know which territory it is in: ask
+   * git, then settle under whichever of the two policies above applies. Spelled
+   * `degrade` from the walk's side, because the walk must hand the refusal
+   * over for the question to be asked — the refuse arm is reached through
+   * {@link inPopulation} when the answer is "not ignored".
+   */
+  get undetermined(): UnreadablePolicy {
+    return {
+      degrade: (refusal) => {
+        if (isGitIgnored(refusal.directory, this.#root)) {
+          this.#record(refusal);
+          return;
+        }
+        settleRefusal(this.#inPopulation, refusal);
+      },
     };
   }
 
@@ -303,7 +344,7 @@ export class FilesystemCrawlSource implements CrawlSource {
       respectGitignore: false,
       // The walk does not know whether a refused directory is ignored, so it
       // asks — the git arm knows from construction, and the two must agree.
-      onUnreadable: this.#refusals.undetermined,
+      unreadable: this.#refusals.undetermined,
     });
 
     // `shape: null` even though `crawlDirectory` walked with `readdir`, which
@@ -658,15 +699,21 @@ export class GitCrawlSource implements CrawlSource {
     // which makes every file beneath it a member absent from every count — the
     // stop-not-degrade case. `--ignored --directory` is the listing that walks
     // the same tree the snapshot did, so this is where the snapshot's own
-    // refusals surface too; the not-ignored prune list opens nothing.
+    // refusals surface too. The not-ignored prune list collapses a WHOLLY
+    // untracked directory without opening it, but it does open a locked
+    // directory that holds tracked files (looking for untracked siblings) and
+    // warns on that one — the same refusal the ignored listing, which runs
+    // first, has already refused the run for, so it never gets a second turn.
     const listing = gitLsOthers({
       cwd: this.#root,
       ignored: options.ignored,
       directory: true,
-      onUnreadable: (refusal) => {
-        if (isUnderRoot(refusal.directory, this.#root) && admitsUnderRoot(refusal.directory, this.#root)) {
-          this.#refusals.inPopulation(refusal);
-        }
+      unreadable: {
+        degrade: (refusal) => {
+          if (isUnderRoot(refusal.directory, this.#root) && admitsUnderRoot(refusal.directory, this.#root)) {
+            settleRefusal(this.#refusals.inPopulation, refusal);
+          }
+        },
       },
     });
     if (listing === null) return [];
@@ -697,14 +744,14 @@ export class GitCrawlSource implements CrawlSource {
  *
  * @param directory - Absolute path to descend into
  * @param admits - The shipped include/exclude decision, applied per path
- * @param onUnreadable - What a refused listing beneath it means — decided by
+ * @param unreadable - What a refused listing beneath it means — decided by
  *   the caller, which knows whose territory this directory is in
  * @returns Every admitted path beneath it, files and directories
  */
 async function expandDirectory(
   directory: string,
   admits: (absolutePath: string) => boolean,
-  onUnreadable: (refusal: DirectoryRefusal) => void,
+  unreadable: UnreadablePolicy,
 ): Promise<string[]> {
   const found = await crawlDirectory({
     baseDir: directory,
@@ -722,7 +769,7 @@ async function expandDirectory(
     // Already inside ignored territory by construction, so consulting git again
     // would return nothing and cost a spawn.
     respectGitignore: false,
-    onUnreadable,
+    unreadable,
   });
   // Still applied: `admits` evaluates against the CORPUS root, and it is the
   // single authority on membership for both sources.

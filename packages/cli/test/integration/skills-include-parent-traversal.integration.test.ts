@@ -42,7 +42,7 @@ async function discoveredNames(
   exclude?: string[],
 ): Promise<string[]> {
   const config = (exclude ? { include, exclude } : { include }) as SkillsConfig;
-  const skills = await discoverSkillsFromConfig(config, projectRoot);
+  const skills = await discoverSkillsFromConfig(config, projectRoot, 'refuse');
   return skills.map(s => s.name).sort((a, b) => a.localeCompare(b));
 }
 
@@ -127,7 +127,7 @@ describe('discoverSkillsFromConfig — include patterns with `..` traversal', ()
     expect(message).toContain('EACCES');
     expect(message).toContain('skills.include');
     expect(message).not.toContain(packageRoot);
-    expect(message).not.toContain('onUnreadable');
+    expect(message).not.toContain('`unreadable`');
   });
 });
 

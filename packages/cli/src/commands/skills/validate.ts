@@ -596,6 +596,9 @@ export async function buildSkillsValidateRegistry(
     {
       baseDir: projectRoot,
       include: ['**/*.md'],
+      // `vat skills validate` acts on this registry as the whole population: a
+      // directory it cannot list refuses the run by name, exit 2.
+      unreadable: 'refuse',
       ...(populationSource !== undefined && { populationSource }),
     },
     config === undefined ? undefined : { config },
@@ -638,7 +641,7 @@ export async function buildSharedValidationContext(
   // lane must model a bundle that excludes EVERY declared suite, not just the
   // subject's. Present even for an empty batch, so no early return can drop it.
   if (skills.length === 0) {
-    return { allowLedger, projectSkills, suiteProbe };
+    return { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse' };
   }
 
   const projectRoots = new Set<string>();
@@ -658,7 +661,7 @@ export async function buildSharedValidationContext(
     }
   }
 
-  const context: SkillValidationSharedContext = { allowLedger, projectSkills, suiteProbe };
+  const context: SkillValidationSharedContext = { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse' };
 
   // One tracker per repo; when the batch spans repos, skip rather than spawn
   // multiple `git ls-files`.
@@ -763,8 +766,10 @@ export async function runSkillsValidatePhase(
       return { document: undefined, exitCode: 0 };
     }
 
-    // Discover skills from config yaml (relative to cwd where config lives)
-    const discovered = await discoverSkillsFromConfig(config.skills, cwd);
+    // Discover skills from config yaml (relative to cwd where config lives).
+    // `'refuse'`: one fewer skill at exit 0 is the drop this command must not
+    // make. The throw lands in the catch below → `reportCommandError`, exit 2.
+    const discovered = await discoverSkillsFromConfig(config.skills, cwd, 'refuse');
 
     // No early return on `discovered.length === 0` — see the function comment.
     // The empty batch flows through every step below unchanged: the shared

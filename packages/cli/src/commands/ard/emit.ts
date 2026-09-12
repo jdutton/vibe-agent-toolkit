@@ -164,7 +164,11 @@ export async function runArdEmit(options: ArdEmitOptions): Promise<ArdEmitResult
     ...(config.skills === undefined
       ? {}
       : {
-          discoveredSkills: (await discoverSkillsFromConfig(config.skills, projectRoot)).map(
+          // `'refuse'`: a manifest cross-checked against a partial skill list
+          // would advertise or omit entries on a population it never saw. The
+          // throw is an invocation failure → exit 2 (see the catch in
+          // `ardEmitCommand`).
+          discoveredSkills: (await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse')).map(
             (skill) => skill.name
           ),
         }),

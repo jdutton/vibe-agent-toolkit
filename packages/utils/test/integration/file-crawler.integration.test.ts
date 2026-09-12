@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { crawlDirectory, crawlDirectorySync } from '../../src/file-crawler.js';
 import { mkdirSyncReal, toForwardSlash } from '../../src/path-utils.js';
 import { createSymlink, setupSyncTempDirSuite, symlinkCapability } from '../../src/test-helpers.js';
+import { refuseUnreadableFixture } from '../../src/testing.js';
 import { createGitRepo } from '../test-helpers.js';
 
 const GITIGNORE = '.gitignore';
@@ -93,6 +94,7 @@ describe('file-crawler', () => {
 
       const files = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
       });
 
       // Should find all files except node_modules
@@ -106,6 +108,7 @@ describe('file-crawler', () => {
 
       const files = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['**/*.md'],
       });
 
@@ -120,6 +123,7 @@ describe('file-crawler', () => {
 
       const files = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['**/*.md'],
         exclude: ['**/docs/**', '**/node_modules/**'],
       });
@@ -133,6 +137,7 @@ describe('file-crawler', () => {
 
       const files = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['docs/**/*.md'],
       });
 
@@ -145,6 +150,7 @@ describe('file-crawler', () => {
 
       const files = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['**/*.md'],
         absolute: false,
       });
@@ -159,6 +165,7 @@ describe('file-crawler', () => {
 
       const files = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['**/*.md', '**/*.ts'],
       });
 
@@ -174,6 +181,7 @@ describe('file-crawler', () => {
 
       const files = crawlDirectorySync({
         baseDir: emptyDir,
+        unreadable: refuseUnreadableFixture(emptyDir),
       });
 
       expect(files).toEqual([]);
@@ -183,6 +191,7 @@ describe('file-crawler', () => {
       expect(() =>
         crawlDirectorySync({
           baseDir: '/non/existent/path',
+          unreadable: refuseUnreadableFixture('/non/existent/path'),
         })
       ).toThrow('Base directory does not exist');
     });
@@ -195,6 +204,7 @@ describe('file-crawler', () => {
       expect(() =>
         crawlDirectorySync({
           baseDir: filePath,
+          unreadable: refuseUnreadableFixture(filePath),
         })
       ).toThrow('Base path is not a directory');
     });
@@ -204,6 +214,7 @@ describe('file-crawler', () => {
 
       const results = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['docs/**'],
         filesOnly: false,
       });
@@ -217,6 +228,7 @@ describe('file-crawler', () => {
 
       const files = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['**/*.md'],
         exclude: ['**/advanced/**', '**/node_modules/**'], // Include node_modules in exclude
       });
@@ -231,6 +243,7 @@ describe('file-crawler', () => {
 
       const files = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['**/g*.md'], // guide.md
       });
 
@@ -245,6 +258,7 @@ describe('file-crawler', () => {
 
         const files = crawlDirectorySync({
           baseDir: testDir,
+          unreadable: refuseUnreadableFixture(testDir),
           include: ['*.md'], // Only root level
           followSymlinks: false,
         });
@@ -260,6 +274,7 @@ describe('file-crawler', () => {
 
         const files = crawlDirectorySync({
           baseDir: testDir,
+          unreadable: refuseUnreadableFixture(testDir),
           include: ['*.md'],
           followSymlinks: true,
         });
@@ -284,6 +299,7 @@ describe('file-crawler', () => {
 
         const files = crawlDirectorySync({
           baseDir: testDir,
+          unreadable: refuseUnreadableFixture(testDir),
           include: ['**/*.md'],
           followSymlinks: true,
         });
@@ -317,6 +333,7 @@ describe('file-crawler', () => {
 
         const files = crawlDirectorySync({
           baseDir: testDir,
+          unreadable: refuseUnreadableFixture(testDir),
           include: ['**/*.md'],
           followSymlinks: true,
         });
@@ -333,6 +350,7 @@ describe('file-crawler', () => {
 
       const files = await crawlDirectory({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['**/*.md'],
       });
 
@@ -345,11 +363,13 @@ describe('file-crawler', () => {
 
       const asyncFiles = await crawlDirectory({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['**/*.md'],
       });
 
       const syncFiles = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['**/*.md'],
       });
 
@@ -367,6 +387,7 @@ describe('file-crawler', () => {
       // Test that pattern matching works regardless of platform separator
       const files = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['docs/**/*.md'], // Always forward slashes in patterns
       });
 
@@ -379,6 +400,7 @@ describe('file-crawler', () => {
 
       const files = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['**/*.md'],
         absolute: true,
       });
@@ -406,6 +428,7 @@ describe('file-crawler', () => {
 
       const files = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['**/*'],
       });
 
@@ -428,6 +451,7 @@ describe('file-crawler', () => {
 
       const files = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['**/*.md'],
         respectGitignore: false,
       });
@@ -457,6 +481,7 @@ describe('file-crawler', () => {
 
       const files = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['**/*'],
         includeUntracked: true,
       }).map(toForwardSlash);
@@ -489,7 +514,7 @@ describe('file-crawler', () => {
       createDotDirStructure(testDir);
 
       const crawl = (): string[] =>
-        crawlDirectorySync({ baseDir: testDir, include: ['**/*.md'] }).map(toForwardSlash);
+        crawlDirectorySync({ baseDir: testDir, unreadable: refuseUnreadableFixture(testDir), include: ['**/*.md'] }).map(toForwardSlash);
 
       // No git repo yet — the manual recursive walk answers.
       const walked = crawl();
@@ -516,6 +541,7 @@ describe('file-crawler', () => {
 
       const files = crawlDirectorySync({
         baseDir: testDir,
+        unreadable: refuseUnreadableFixture(testDir),
         include: ['**/*.md'],
         exclude: ['**/.github/**'],
       }).map(toForwardSlash);

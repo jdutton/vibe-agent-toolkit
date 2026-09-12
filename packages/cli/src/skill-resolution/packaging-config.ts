@@ -12,7 +12,7 @@
 import type { DeclaredEvalSuite, SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
 import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 
-import { type DiscoveryOptions, discoverSkillsFromConfig } from '../commands/skills/skill-discovery.js';
+import { type DiscoveryUnreadablePolicy, discoverSkillsFromConfig } from '../commands/skills/skill-discovery.js';
 import { ConfigLoadError, type loadConfig, loadConfigCached } from '../utils/config-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 
@@ -51,7 +51,7 @@ export function resetSkillDiscoveryCache(): void {
  */
 export async function resolveProjectDeclaredEvalSuites(
   skillPath: string,
-  discovery: DiscoveryOptions = {},
+  unreadable: DiscoveryUnreadablePolicy,
 ): Promise<DeclaredEvalSuite[]> {
   const projectRoot = findProjectRoot(safePath.resolve(safePath.join(skillPath, '..')));
   if (projectRoot === null) return [];
@@ -62,7 +62,7 @@ export async function resolveProjectDeclaredEvalSuites(
   try {
     const config = loadConfigCached(projectRoot);
     if (config?.skills !== undefined) {
-      const byPath = await getDiscoveredSkillsByPath(config.skills, projectRoot, discovery);
+      const byPath = await getDiscoveredSkillsByPath(config.skills, projectRoot, unreadable);
       suites = collectDeclaredEvalSuites(
         config.skills,
         [...byPath.entries()].map(([sourcePath, name]) => ({ name, sourcePath })),
@@ -82,13 +82,13 @@ export async function resolveProjectDeclaredEvalSuites(
  * The config root's declared skills, as absolute SKILL.md path → declared name.
  *
  * One expansion of `skills.include` per root per run. A discovery that THROWS is
- * not memoized — the next question re-asks the filesystem — and by default it
- * throws whenever the crawl refuses a directory it cannot list
+ * not memoized — the next question re-asks the filesystem — and under `'refuse'`
+ * it throws whenever the crawl refuses a directory it cannot list
  * (`DirectoryListingRefusedError` from `@vibe-agent-toolkit/utils/crawl`): the
  * declared population is then unknown, and the caller decides whether that stops
- * the command or degrades it. A caller that degrades passes `discovery.onUnreadable`
- * and gets every skill the crawl COULD see, with the refusal handed to its
- * handler — see `DiscoveryOptions`. Nothing here decides for them.
+ * the command or degrades it. A caller that degrades passes `{ degrade }` and
+ * gets every skill the crawl COULD see, with the refusal handed to its handler
+ * — see `DiscoveryUnreadablePolicy`. Nothing here decides for them.
  *
  * ⚠️ The memo is per root, not per policy: the first question about a root
  * decides how that root's refusals are handled for the rest of the run. Every
@@ -98,13 +98,13 @@ export async function resolveProjectDeclaredEvalSuites(
 export async function getDiscoveredSkillsByPath(
   skillsSection: NonNullable<ReturnType<typeof loadConfig>>['skills'],
   configRoot: string,
-  discovery: DiscoveryOptions = {},
+  unreadable: DiscoveryUnreadablePolicy,
 ): Promise<Map<string, string>> {
   const cached = skillDiscoveryCache.get(configRoot);
   if (cached !== undefined) return cached;
   const map = new Map<string, string>();
   if (skillsSection !== undefined) {
-    const discovered = await discoverSkillsFromConfig(skillsSection, configRoot, discovery);
+    const discovered = await discoverSkillsFromConfig(skillsSection, configRoot, unreadable);
     for (const entry of discovered) {
       map.set(safePath.resolve(entry.sourcePath), entry.name);
     }
@@ -132,14 +132,14 @@ export async function getDiscoveredSkillsByPath(
  * an include pattern reaches returned `null` for EVERY skill under the config:
  * `vat audit` validated them all config-free, reported `success`, exited 0 and
  * named the directory only under `--debug`. A caller that would rather degrade
- * than stop passes `discovery.onUnreadable` — `vat audit` does, files a
+ * than stop passes `{ degrade }` — `vat audit` does, files a
  * `SCAN_PATH_UNREADABLE` finding on the directory, and every skill the crawl
- * could still see keeps its config; the rest stop, as the same refusal already
- * stops `vat skills validate` and `vat skills build`.
+ * could still see keeps its config; the rest say `'refuse'`, as the same
+ * refusal already stops `vat skills validate` and `vat skills build`.
  */
 export async function resolveSkillPackagingConfig(
   skillPath: string,
-  discovery: DiscoveryOptions = {},
+  unreadable: DiscoveryUnreadablePolicy,
 ): Promise<SkillPackagingConfig | null> {
   const absSkillPath = safePath.resolve(skillPath);
   const skillDir = safePath.resolve(safePath.join(absSkillPath, '..'));
@@ -148,7 +148,7 @@ export async function resolveSkillPackagingConfig(
   const config = loadConfigCached(projectRoot);
   if (config?.skills === undefined) return null;
 
-  const byPath = await getDiscoveredSkillsByPath(config.skills, projectRoot, discovery);
+  const byPath = await getDiscoveredSkillsByPath(config.skills, projectRoot, unreadable);
   const matchedName = byPath.get(absSkillPath);
   if (matchedName === undefined) return null;
 

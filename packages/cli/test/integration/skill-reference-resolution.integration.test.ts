@@ -136,7 +136,7 @@ describe('resolveSkillReference (integration, synthetic temp projects)', () => {
     });
 
     // Review view: full merge keeps validation.allow.
-    const full = await resolveSkillPackagingConfig(fx.poolSkillMd('parity-skill'));
+    const full = await resolveSkillPackagingConfig(fx.poolSkillMd('parity-skill'), 'refuse');
     expect(full).not.toBeNull();
     if (full === null) throw new Error('unreachable');
     // defaults + per-skill merge: defaults-only field flows through, per-skill wins on linkFollowDepth.

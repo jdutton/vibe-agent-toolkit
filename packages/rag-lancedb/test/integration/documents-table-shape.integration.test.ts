@@ -24,7 +24,7 @@ import * as lancedb from '@lancedb/lancedb';
 import { ApproximateTokenCounter, DefaultRAGMetadataSchema, type TokenCounter } from '@vibe-agent-toolkit/rag';
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { ZodObject, ZodRawShape } from 'zod';
+import { z, type ZodObject, type ZodRawShape } from 'zod';
 
 import type { DocumentRecord } from '../../src/document-helpers.js';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
@@ -92,9 +92,13 @@ function createDocumentRecordAtV0_1_42(
  * the chunk rows and the document rows as one consistent index.
  *
  * @param resources - The resources whose rows the table holds, by id
+ * @param metadataSchema - The schema that release was configured with
  * @returns The column names the rewritten table has
  */
-async function downgradeDocumentsTable(resources: Map<string, ResourceMetadata>): Promise<string[]> {
+async function downgradeDocumentsTable(
+  resources: Map<string, ResourceMetadata>,
+  metadataSchema: ZodObject<ZodRawShape> = DefaultRAGMetadataSchema,
+): Promise<string[]> {
   const connection = await lancedb.connect(suite.dbPath);
   const table = await connection.openTable(DOCUMENTS_TABLE);
   // eslint-disable-next-line unicorn/prefer-structured-clone -- Arrow buffer lifecycle workaround, as in the provider
@@ -109,7 +113,7 @@ async function downgradeDocumentsTable(resources: Map<string, ResourceMetadata>)
       row.contenthash,
       row.totalchunks,
       tokenCounter,
-      DefaultRAGMetadataSchema,
+      metadataSchema,
     );
   });
   await connection.dropTable(DOCUMENTS_TABLE);
@@ -120,37 +124,69 @@ async function downgradeDocumentsTable(resources: Map<string, ResourceMetadata>)
 }
 
 /**
+ * @param metadataSchema - The metadata schema to open with (default: the default schema)
  * @returns A provider over the suite's database with document storage on and a runtime-free embedder
  */
-function openWithDocuments(): Promise<LanceDBRAGProvider> {
+function openWithDocuments(metadataSchema?: ZodObject<ZodRawShape>): Promise<LanceDBRAGProvider> {
   return LanceDBRAGProvider.create({
     dbPath: suite.dbPath,
     storeDocuments: true,
     embeddingProvider: createStubEmbeddingProvider(),
+    ...(metadataSchema ? { metadataSchema } : {}),
   });
+}
+
+/**
+ * Row counts of both tables, read through a fresh connection.
+ *
+ * @returns Document rows and chunk rows, so a refusal can be shown to have deleted nothing
+ */
+async function countRows(): Promise<{ documents: number; chunks: number }> {
+  const connection = await lancedb.connect(suite.dbPath);
+  const documents = await (await connection.openTable(DOCUMENTS_TABLE)).countRows();
+  const chunks = await (await connection.openTable('rag_chunks')).countRows();
+  connection.close();
+  return { documents, chunks };
+}
+
+/**
+ * Index `a.md` and `b.md` under `schema`, then rewrite the documents table as
+ * v0.1.42 would have, and hand back a changed `a` for the run under test.
+ *
+ * @param aFrontmatter - The frontmatter block `a.md` carries, in both versions
+ * @param schema - The metadata schema both providers are configured with
+ * @returns The changed `a`, the untouched `b`, and the column names the old table has
+ */
+async function indexThenDowngrade(
+  aFrontmatter: string,
+  schema: ZodObject<ZodRawShape>,
+): Promise<{ aChanged: ResourceMetadata; b: ResourceMetadata; oldColumns: string[] }> {
+  const aPath = await createTestMarkdownFile(suite.tempDir, 'a.md', `${aFrontmatter}\n# A\n\nprose a\n`);
+  const bPath = await createTestMarkdownFile(suite.tempDir, 'b.md', '---\ntitle: B\n---\n\n# B\n\nprose b\n');
+  const a = await createTestResource(aPath, 'a');
+  const b = await createTestResource(bPath, 'b');
+
+  const provider = await openWithDocuments(schema);
+  const first = await provider.indexResources([a, b]);
+  expect(first.errors).toEqual([]);
+  expect(first.resourcesIndexed).toBe(2);
+  await provider.close();
+
+  const oldColumns = await downgradeDocumentsTable(new Map([['a', a], ['b', b]]), schema);
+
+  await createTestMarkdownFile(suite.tempDir, 'a.md', `${aFrontmatter}\n# A\n\nprose a CHANGED\n`);
+  const aChanged = await createTestResource(aPath, 'a');
+  return { aChanged, b, oldColumns };
 }
 
 describe('documents table written by v0.1.42', () => {
   it('re-indexes a changed resource instead of deleting it and refusing the replacement', async () => {
-    const aPath = await createTestMarkdownFile(suite.tempDir, 'a.md', '---\ntitle: A\n---\n\n# A\n\nprose a\n');
-    const bPath = await createTestMarkdownFile(suite.tempDir, 'b.md', '---\ntitle: B\n---\n\n# B\n\nprose b\n');
-    const a = await createTestResource(aPath, 'a');
-    const b = await createTestResource(bPath, 'b');
-
-    suite.provider = await openWithDocuments();
-    const first = await suite.provider.indexResources([a, b]);
-    expect(first.errors).toEqual([]);
-    expect(first.resourcesIndexed).toBe(2);
-    await suite.provider.close();
+    const { aChanged, b, oldColumns } = await indexThenDowngrade('---\ntitle: A\n---\n', DefaultRAGMetadataSchema);
 
     // The fixture is real: the old shape lacks the columns this build writes.
-    const oldColumns = await downgradeDocumentsTable(new Map([['a', a], ['b', b]]));
     expect(oldColumns).toContain('title');
     expect(oldColumns).not.toContain('headingpath');
     expect(oldColumns).not.toContain('tags');
-
-    await createTestMarkdownFile(suite.tempDir, 'a.md', '---\ntitle: A\n---\n\n# A\n\nprose a CHANGED\n');
-    const aChanged = await createTestResource(aPath, 'a');
 
     suite.provider = await openWithDocuments();
     const second = await suite.provider.indexResources([aChanged, b]);
@@ -173,6 +209,59 @@ describe('documents table written by v0.1.42', () => {
     expect(untouched?.metadata['title']).toBe('B');
     expect(untouched?.metadata).not.toHaveProperty('tags');
     expect(untouched?.metadata).not.toHaveProperty('headingPath');
+
+    // The columns the widening added are typed the way this build writes them,
+    // so the type check on the NEXT run has nothing to refuse.
+    const third = await suite.provider.indexResources([aChanged, b]);
+    expect(third.errors).toEqual([]);
+    expect(third.resourcesSkipped).toBe(2);
+  });
+
+  /**
+   * A column the old table HAS, typed by the old writer, is not repaired by
+   * widening — `addColumns` cannot retype a column — and LanceDB does not
+   * refuse the write: it CASTS. A boolean `true` this build writes as `1`
+   * lands in the old Utf8 column as `"1"` and reads back `false`; a string
+   * title into the old Float64 column lands as null and reads back as absent.
+   * No error, and permanent. The batch has to be refused by name, before the
+   * `update` path deletes anything, with the remedy spelled out.
+   */
+  describe.each([
+    {
+      label: 'a boolean the old writer stored as text',
+      frontmatter: '---\nflag: true\n---\n',
+      schema: z.object({ flag: z.boolean() }),
+      column: 'flag',
+      storedType: 'Utf8',
+      expectedType: 'Float64',
+    },
+    {
+      label: 'a numeric-looking title the old writer stored as a number',
+      frontmatter: '---\ntitle: 2024\n---\n',
+      schema: DefaultRAGMetadataSchema,
+      column: 'title',
+      storedType: 'Float64',
+      expectedType: 'Utf8',
+    },
+  ])('with $label', ({ frontmatter, schema, column, storedType, expectedType }) => {
+    it('refuses the batch by column, stored type, expected type and remedy, and deletes nothing', async () => {
+      const { aChanged, b } = await indexThenDowngrade(frontmatter, schema);
+      const before = await countRows();
+      expect(before).toEqual({ documents: 2, chunks: 2 });
+
+      suite.provider = await openWithDocuments(schema);
+      const refusal = await suite.provider.indexResources([aChanged, b]).then(
+        () => undefined,
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+      expect(refusal).toContain(`'${column}' is stored as ${storedType} but this build writes ${expectedType}`);
+      expect(refusal).toContain('vat rag clear');
+
+      // Refused BEFORE the update path ran: nothing deleted, nothing coerced.
+      expect(await countRows()).toEqual(before);
+      const kept = await suite.provider.getDocument('a');
+      expect(kept?.content).not.toContain('CHANGED');
+    });
   });
 
   it('is a no-op on a table this build wrote', async () => {

@@ -84,8 +84,9 @@ describe('GitTracker', () => {
       const tracker = new GitTracker(projectRoot);
       await tracker.initialize({ includeUntracked: false });
 
-      // Opt-out path should not pass includeUntracked to gitLsFiles.
-      expect(gitUtils.gitLsFiles).toHaveBeenCalledWith({ cwd: projectRoot });
+      // Opt-out path should not pass includeUntracked to gitLsFiles. The
+      // refusal seam is always passed (see `git-tracker-unlistable.test.ts`).
+      expect(gitUtils.gitLsFiles).toHaveBeenCalledWith({ cwd: projectRoot, unreadable: { degrade: expect.any(Function) } });
     });
 
     it('should handle git ls-files returning null (not in git repo)', async () => {

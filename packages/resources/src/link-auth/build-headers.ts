@@ -134,9 +134,10 @@ export function redactSecretsInText(
 
 /**
  * The spellings under which one secret can appear in a string: itself, its
- * JSON-escaped body, its `util.inspect`-escaped body, and its percent-, base64-
- * and base64url-encoded forms. Distinct, non-blank, and never shorter than
- * four characters — a three-character encoding of a short value would match
+ * JSON-escaped body, its `util.inspect`-escaped body, its percent-, base64-
+ * and base64url-encoded forms, and the five spellings of its BYTES (see
+ * {@link byteForms}). Distinct, non-blank, and never shorter than four
+ * characters — a three-character encoding of a short value would match
  * ordinary prose.
  *
  * The inspect form exists because `link-auth-transport.ts` probes a thrown
@@ -159,7 +160,38 @@ function secretForms(secret: string): string[] {
   const bytes = Buffer.from(secret, 'utf8');
   forms.add(bytes.toString('base64'));
   forms.add(bytes.toString('base64url'));
+  for (const form of byteForms(bytes)) forms.add(form);
   return [...forms].filter((form) => form.trim().length >= MIN_FORM_LENGTH);
+}
+
+/**
+ * How a secret held as BYTES is printed — a `Buffer`, `Uint8Array` or
+ * `ArrayBuffer` own property of a thrown value, which no string form matches
+ * and which is one decode away from the credential:
+ *
+ * - contiguous hex, `426561…` — `buf.toString('hex')` pasted into a message;
+ * - spaced hex, `42 65 61 …` — `util.inspect` of a `Buffer` (`<Buffer 42 65 …>`)
+ *   and of an `ArrayBuffer` (`[Uint8Contents]: <42 65 …>`);
+ * - decimal bytes, `66, 101, 97, …` — `util.inspect` of a `Uint8Array`;
+ * - decimal bytes, `66,101,97,…` — `JSON.stringify` of a `Buffer`
+ *   (`{"type":"Buffer","data":[66,101,…]}`);
+ * - index-keyed decimal bytes, `"0":66,"1":101,…` — `JSON.stringify` of a
+ *   `Uint8Array`.
+ *
+ * Each is derived from the secret's own bytes, never from the text, so widening
+ * the net cannot shred unrelated prose. Hex is matched case-insensitively like
+ * every other form.
+ */
+function byteForms(bytes: Buffer): string[] {
+  const hex = bytes.toString('hex');
+  const decimal = [...bytes];
+  return [
+    hex,
+    hex.replaceAll(/(..)(?=.)/g, '$1 '),
+    decimal.join(', '),
+    decimal.join(','),
+    decimal.map((byte, index) => `"${index}":${byte}`).join(','),
+  ];
 }
 
 /** Below this an encoded form is too short to be a credential and long enough to shred prose. */

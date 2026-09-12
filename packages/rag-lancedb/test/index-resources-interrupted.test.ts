@@ -131,7 +131,11 @@ vi.mock('@lancedb/lancedb', () => {
       .slice(0, cap)
       .map((row) => project(row, columns));
 
-  // A table's columns are those of its first row, as LanceDB infers them.
+  // A table's columns are those of its first row, typed as LanceDB infers
+  // them from JS values: a number is Float64, anything else here is Utf8. The
+  // type is printed, as the provider compares it (`String(field.type)`).
+  const fieldsOf = (row: Record<string, unknown>): { name: string; type: string }[] =>
+    Object.entries(row).map(([name, value]) => ({ name, type: typeof value === 'number' ? 'Float64' : 'Utf8' }));
   const columnsOf = (name: string): string[] => Object.keys(rowsOf(name)[0] ?? {});
 
   // The two literal shapes the provider hands `addColumns`: `'text'` and
@@ -155,7 +159,7 @@ vi.mock('@lancedb/lancedb', () => {
       }
       store.tables.set(name, [...rowsOf(name), ...rows]);
     },
-    schema: async () => ({ fields: columnsOf(name).map((column) => ({ name: column })) }),
+    schema: async () => ({ fields: fieldsOf(rowsOf(name)[0] ?? {}) }),
     addColumns: async (transforms: { name: string; valueSql: string }[]) => {
       const fills = Object.fromEntries(transforms.map((t) => [t.name, evaluateFill(t.valueSql)]));
       store.tables.set(name, rowsOf(name).map((row) => ({ ...row, ...fills })));
@@ -189,6 +193,9 @@ vi.mock('@lancedb/lancedb', () => {
   });
 
   return {
+    // The provider asks LanceDB what types it would infer for the record this
+    // build writes, and compares the stored table against that answer.
+    makeArrowTable: (rows: Record<string, unknown>[]) => ({ schema: { fields: fieldsOf(rows[0] ?? {}) } }),
     connect: async () => ({
       tableNames: async () => [...store.tables.keys()],
       createTable: async (

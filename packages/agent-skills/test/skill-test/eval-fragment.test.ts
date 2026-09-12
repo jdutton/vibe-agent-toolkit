@@ -8,6 +8,14 @@ import {
 } from '../../src/skill-test/eval-fragment.js';
 
 const NONCE = 'a1b2c3d4';
+
+/**
+ * The `onWarn` sink for a case that is not ABOUT the friction warning. It is
+ * required on the call — a caller that could omit it dropped friction without
+ * a word — so every case says where the warning goes; the cases about the
+ * warning collect it, these let it pass.
+ */
+const warnUnwatched = (): void => {};
 const EXPECTATION_TEXT = 'does the thing';
 const FRICTION_MESSAGE = 'assumed /tmp exists';
 const PATH_ASSUMPTION = 'path-assumption';
@@ -129,39 +137,39 @@ describe('EvalFragmentSchema', () => {
 
 describe('parseEvalFragment', () => {
   it('returns the parsed fragment on valid input', () => {
-    expect(parseEvalFragment(validFragment)).toEqual(validFragment);
+    expect(parseEvalFragment(validFragment, warnUnwatched)).toEqual(validFragment);
   });
 
   it('throws EvalFragmentError on a missing runNonce', () => {
     const withoutNonce = { evalId: validFragment.evalId, expectations: validFragment.expectations };
-    expect(() => parseEvalFragment(withoutNonce)).toThrow(EvalFragmentError);
+    expect(() => parseEvalFragment(withoutNonce, warnUnwatched)).toThrow(EvalFragmentError);
   });
 
   it('throws EvalFragmentError on an empty expectations array', () => {
-    expect(() => parseEvalFragment({ ...validFragment, expectations: [] })).toThrow(EvalFragmentError);
+    expect(() => parseEvalFragment({ ...validFragment, expectations: [] }, warnUnwatched)).toThrow(EvalFragmentError);
   });
 
   it('throws EvalFragmentError on unknown top-level keys', () => {
-    expect(() => parseEvalFragment({ ...validFragment, bogus: 'nope' })).toThrow(EvalFragmentError);
+    expect(() => parseEvalFragment({ ...validFragment, bogus: 'nope' }, warnUnwatched)).toThrow(EvalFragmentError);
   });
 
   it('throws EvalFragmentError on an invalid `tool` shape', () => {
-    expect(() => parseEvalFragment({ ...validFragment, tool: 'bash' })).toThrow(EvalFragmentError);
+    expect(() => parseEvalFragment({ ...validFragment, tool: 'bash' }, warnUnwatched)).toThrow(EvalFragmentError);
   });
 
   it('throws EvalFragmentError on non-object input', () => {
-    expect(() => parseEvalFragment('not an object')).toThrow(EvalFragmentError);
+    expect(() => parseEvalFragment('not an object', warnUnwatched)).toThrow(EvalFragmentError);
   });
 
   it('names the eval id in the error message (not a grading.json-specific message)', () => {
-    expect(() => parseEvalFragment({ ...validFragment, expectations: [] })).toThrow(
+    expect(() => parseEvalFragment({ ...validFragment, expectations: [] }, warnUnwatched)).toThrow(
       /grader fragment for eval "eval-1" has an invalid shape/,
     );
   });
 
   it('falls back to "(unknown)" in the message when evalId itself is missing', () => {
     const withoutEvalId = { runNonce: validFragment.runNonce, expectations: validFragment.expectations };
-    expect(() => parseEvalFragment(withoutEvalId)).toThrow(/grader fragment for eval \(unknown\) has an invalid shape/);
+    expect(() => parseEvalFragment(withoutEvalId, warnUnwatched)).toThrow(/grader fragment for eval \(unknown\) has an invalid shape/);
   });
 });
 
@@ -178,7 +186,7 @@ describe('parseEvalFragment — lenient friction (PR #147 defense-in-depth)', ()
   };
 
   it('drops bare-string friction items and STILL returns the graded fragment (adopter repro)', () => {
-    const fragment = parseEvalFragment(fragmentWithStringFriction);
+    const fragment = parseEvalFragment(fragmentWithStringFriction, warnUnwatched);
     expect(fragment.evalId).toBe('eval-1');
     expect(fragment.expectations).toHaveLength(1);
     expect(fragment.friction).toEqual([]); // the malformed item was dropped, not fatal
@@ -189,12 +197,12 @@ describe('parseEvalFragment — lenient friction (PR #147 defense-in-depth)', ()
     const fragment = parseEvalFragment({
       ...fragmentWithStringFriction,
       friction: [good, 'a bare string', { severity: 'nope', category: 'x', message: '' }],
-    });
+    }, warnUnwatched);
     expect(fragment.friction).toEqual([good]);
   });
 
   it('drops a `friction` that is not an array at all (e.g. a bare string) without failing the run', () => {
-    const fragment = parseEvalFragment({ ...fragmentWithStringFriction, friction: 'a single prose blob' });
+    const fragment = parseEvalFragment({ ...fragmentWithStringFriction, friction: 'a single prose blob' }, warnUnwatched);
     expect(fragment.evalId).toBe('eval-1');
     expect(fragment.friction).toBeUndefined();
   });
@@ -216,12 +224,12 @@ describe('parseEvalFragment — lenient friction (PR #147 defense-in-depth)', ()
 
   it('keeps the VERDICT channels strict — a bad expectation still throws despite lenient friction', () => {
     expect(() =>
-      parseEvalFragment({ ...fragmentWithStringFriction, expectations: [{ text: 'x', passed: 'yes' }] }),
+      parseEvalFragment({ ...fragmentWithStringFriction, expectations: [{ text: 'x', passed: 'yes' }] }, warnUnwatched),
     ).toThrow(EvalFragmentError);
   });
 
   it('keeps the fragment strict for unknown top-level keys despite lenient friction', () => {
-    expect(() => parseEvalFragment({ ...fragmentWithStringFriction, bogus: 'nope' })).toThrow(EvalFragmentError);
+    expect(() => parseEvalFragment({ ...fragmentWithStringFriction, bogus: 'nope' }, warnUnwatched)).toThrow(EvalFragmentError);
   });
 });
 
@@ -280,7 +288,7 @@ describe('parseEvalFragment — grader text cannot forge an operator line', () =
 
   it('leaves runNonce byte-exact so the integrity gate still compares what the grader wrote', () => {
     const wobbly = `${NONCE}${ESC}[0m`;
-    const fragment = parseEvalFragment(fragmentWith({ runNonce: wobbly }));
+    const fragment = parseEvalFragment(fragmentWith({ runNonce: wobbly }), warnUnwatched);
     // If the nonce were sanitized, this would equal NONCE and a FORGED fragment
     // carrying a decorated nonce would sail through the gate in eval-grader.ts.
     expect(fragment.runNonce).toBe(wobbly);
@@ -290,7 +298,7 @@ describe('parseEvalFragment — grader text cannot forge an operator line', () =
   it('sanitizes the grader-chosen evalId quoted into the thrown error message', () => {
     let message = '';
     try {
-      parseEvalFragment({ runNonce: NONCE, evalId: FORGED, expectations: [] });
+      parseEvalFragment({ runNonce: NONCE, evalId: FORGED, expectations: [] }, warnUnwatched);
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     }
@@ -305,7 +313,7 @@ describe('parseEvalFragment — grader text cannot forge an operator line', () =
     // this is the one path by which an UNPARSEABLE fragment still reaches stderr.
     let message = '';
     try {
-      parseEvalFragment(fragmentWith({ [`bogus${ESC}[31m`]: 'nope' }));
+      parseEvalFragment(fragmentWith({ [`bogus${ESC}[31m`]: 'nope' }), warnUnwatched);
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     }

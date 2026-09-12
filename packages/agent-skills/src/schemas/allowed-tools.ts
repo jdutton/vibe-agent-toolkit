@@ -14,18 +14,20 @@
  *
  * Commas and whitespace are both separators, but only at parenthesis depth
  * zero — `Bash(rm -rf /)` is one declaration, and the whitespace inside its
- * parentheses is part of the command pattern the matcher is handed.
- * Consecutive separators and edge padding produce no empty declaration.
+ * parentheses is part of the command pattern the matcher is handed. A `(` or
+ * `)` inside a quoted argument — `Bash(git commit -m "a) b")` — is part of the
+ * argument, not of the depth: the split used to count it, and the declaration
+ * ended at the quoted paren, handing the matcher `Bash(git commit -m "a)` and
+ * two stray tokens. Consecutive separators and edge padding produce no empty
+ * declaration.
  */
 export function splitAllowedToolsList(value: string): string[] {
   const declarations: string[] = [];
+  const nesting = new Nesting();
   let current = '';
-  let depth = 0;
   for (const char of value) {
-    if (char === '(') depth += 1;
-    else if (char === ')' && depth > 0) depth -= 1;
-    const separator = depth === 0 && (char === ',' || /\s/.test(char));
-    if (!separator) {
+    nesting.advance(char);
+    if (nesting.inside || !(char === ',' || /\s/.test(char))) {
       current += char;
       continue;
     }
@@ -34,6 +36,32 @@ export function splitAllowedToolsList(value: string): string[] {
   }
   if (current !== '') declarations.push(current);
   return declarations;
+}
+
+/**
+ * Where the split is inside a declaration's parentheses — and, within them,
+ * inside a quoted argument, where a paren is text rather than nesting.
+ */
+class Nesting {
+  private depth = 0;
+  private quote: '"' | "'" | undefined;
+
+  /** Whether the character just consumed sits inside a parenthesised argument. */
+  get inside(): boolean {
+    return this.depth > 0;
+  }
+
+  advance(char: string): void {
+    if (this.quote !== undefined) {
+      if (char === this.quote) this.quote = undefined;
+    } else if (this.depth > 0 && (char === '"' || char === "'")) {
+      this.quote = char;
+    } else if (char === '(') {
+      this.depth += 1;
+    } else if (char === ')' && this.depth > 0) {
+      this.depth -= 1;
+    }
+  }
 }
 
 /**
