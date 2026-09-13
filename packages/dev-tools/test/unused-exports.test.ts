@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { UnusedExportFile } from '../src/unused-exports-allowlist.js';
+import { loadUnusedExportsAllowlist, parseAllowlist, type UnusedExportFile } from '../src/unused-exports-allowlist.js';
 import {
   classifyReason,
   flattenAllowlist,
@@ -101,20 +101,37 @@ describe('classifyReason', () => {
 });
 
 describe('renderAllowlist', () => {
-  it('groups by file, sorts files and names, and round-trips through the module shape', () => {
-    const rendered = renderAllowlist([
-      { file: 'packages/b/src/y.ts', name: 'gamma', reason: 'dead' },
-      { file: 'packages/a/src/x.ts', name: 'beta', reason: 'dead' },
-      { file: 'packages/a/src/x.ts', name: 'alpha', reason: 'test-only' },
-    ]);
+  it('renders one line per excused export, files then names sorted, and round-trips through parseAllowlist', () => {
+    const entries = [
+      { file: 'packages/b/src/y.ts', name: 'gamma', reason: 'dead' as const },
+      { file: 'packages/a/src/x.ts', name: 'beta', reason: 'dead' as const },
+      { file: 'packages/a/src/x.ts', name: 'alpha', reason: 'test-only' as const },
+    ];
+    const rendered = renderAllowlist(entries);
 
-    expect(rendered).toContain("export const UNUSED_EXPORTS_ALLOWLIST: readonly UnusedExportFile[] = [");
-    expect(rendered.indexOf("packages/a/src/x.ts")).toBeLessThan(rendered.indexOf("packages/b/src/y.ts"));
-    expect(rendered.indexOf("name: 'alpha'")).toBeLessThan(rendered.indexOf("name: 'beta'"));
-    expect(rendered).toContain("  { file: 'packages/b/src/y.ts', unused: [\n    { name: 'gamma', reason: 'dead' },\n  ] },");
+    expect(rendered).toContain('packages/a/src/x.ts alpha test-only\npackages/a/src/x.ts beta dead\npackages/b/src/y.ts gamma dead\n');
+    expect(rendered.startsWith('#')).toBe(true);
+    expect(parseAllowlist(rendered)).toEqual([
+      { file: 'packages/a/src/x.ts', unused: [{ name: 'alpha', reason: 'test-only' }, { name: 'beta', reason: 'dead' }] },
+      { file: 'packages/b/src/y.ts', unused: [{ name: 'gamma', reason: 'dead' }] },
+    ]);
   });
 
-  it('renders an empty list as an empty array, not a broken module', () => {
-    expect(renderAllowlist([])).toContain('readonly UnusedExportFile[] = [\n];');
+  it('renders an empty list as the header alone, which parses back to no entries', () => {
+    expect(parseAllowlist(renderAllowlist([]))).toEqual([]);
+  });
+});
+
+describe('parseAllowlist', () => {
+  it('ignores comments and blank lines and refuses a malformed row by line number', () => {
+    expect(parseAllowlist('# header\n\npackages/a/src/x.ts alpha dead\n')).toEqual([
+      { file: 'packages/a/src/x.ts', unused: [{ name: 'alpha', reason: 'dead' }] },
+    ]);
+    expect(() => parseAllowlist('packages/a/src/x.ts alpha\n')).toThrow(/line 1/);
+    expect(() => parseAllowlist('packages/a/src/x.ts alpha maybe\n')).toThrow(/line 1.*maybe/);
+  });
+
+  it('reads the committed allowlist, which must parse and be non-empty while the ratchet exists', () => {
+    expect(loadUnusedExportsAllowlist().length).toBeGreaterThan(0);
   });
 });

@@ -1,8 +1,9 @@
 /**
- * The generated blocks in `CLAUDE.md` are owned by `generate-claude-md.ts`.
- * These cases pin the marker grammar (indentation, unknown names, unclosed
- * blocks), the wrapping shape, and — on the real tree — that every registered
- * generator runs and every generator name has a block to fill.
+ * The generated blocks in `CLAUDE.md` and its sibling documents are owned by
+ * `generate-claude-md.ts`. These cases pin the marker grammar (indentation,
+ * unknown names, unclosed blocks), the wrapping shape, and — on the real tree —
+ * that every registered generator runs, every generator name is claimed by
+ * exactly one document, and every document carries the blocks it claims.
  */
 
 import { readFileSync } from 'node:fs';
@@ -11,7 +12,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { PROJECT_ROOT } from '../src/common.js';
-import { CLAUDE_MD_GENERATORS, regenerateBlocks, wrapBacktickedList } from '../src/generate-claude-md.js';
+import { CLAUDE_MD_GENERATORS, GENERATED_DOCUMENTS, regenerateBlocks, regenerateDocument, wrapBacktickedList } from '../src/generate-claude-md.js';
 
 describe('regenerateBlocks', () => {
   it('rewrites only what sits between markers and carries the marker indentation', () => {
@@ -70,16 +71,31 @@ describe('wrapBacktickedList', () => {
   });
 });
 
-describe('the real CLAUDE.md', () => {
-  const text = readFileSync(safePath.join(PROJECT_ROOT, 'CLAUDE.md'), 'utf8');
+describe('the real generated documents', () => {
+  it('claim every registered generator exactly once, and every generator produces content', () => {
+    const claimed = GENERATED_DOCUMENTS.flatMap((document) => document.blocks);
 
-  it('carries one block for every registered generator, and every generator produces content', () => {
-    const { found } = regenerateBlocks(text, PROJECT_ROOT);
-
-    expect([...found].sort((a, b) => a.localeCompare(b))).toEqual(Object.keys(CLAUDE_MD_GENERATORS).sort((a, b) => a.localeCompare(b)));
+    expect([...claimed].sort((a, b) => a.localeCompare(b))).toEqual(Object.keys(CLAUDE_MD_GENERATORS).sort((a, b) => a.localeCompare(b)));
     for (const [name, generate] of Object.entries(CLAUDE_MD_GENERATORS)) {
       expect(generate(PROJECT_ROOT).length, `${name} generated nothing`).toBeGreaterThan(0);
     }
+  });
+
+  it.each(GENERATED_DOCUMENTS.map((document) => [document.path, document] as const))(
+    '%s carries exactly the blocks it claims',
+    (_path, document) => {
+      const { result, missing } = regenerateDocument(PROJECT_ROOT, document);
+
+      expect(missing).toEqual([]);
+      expect([...result.found].sort((a, b) => a.localeCompare(b))).toEqual([...document.blocks].sort((a, b) => a.localeCompare(b)));
+    },
+  );
+
+  it('names the document in a marker error', () => {
+    const doc = { path: 'docs/does-not-matter.md', blocks: ['contributing-docs'] };
+    expect(() => regenerateBlocks('<!-- gen:no-such-block -->\nx\n<!-- /gen:no-such-block -->', PROJECT_ROOT, doc.path)).toThrow(
+      /^docs\/does-not-matter\.md:1: no generator/,
+    );
   });
 
   it('lists every resolveAssetReference call site under packages/*/src', () => {

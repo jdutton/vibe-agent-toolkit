@@ -18,7 +18,10 @@ export function withTimeout<T>(
   return new Promise<T>((resolve, reject) => {
     const handle = setTimeout(() => {
       onTimeout?.();
-      reject(new TimeoutError(`operation timed out after ${timeoutMs}ms`));
+      // Annotated `Error` so an analyser that cannot resolve `VatError` (a
+      // workspace import) still sees a rejection reason that is one.
+      const failure: Error = new TimeoutError(`operation timed out after ${timeoutMs}ms`);
+      reject(failure);
     }, timeoutMs);
 
     promise.then(

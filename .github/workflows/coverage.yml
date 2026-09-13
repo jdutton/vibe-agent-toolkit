@@ -20,6 +20,9 @@ jobs:
       - name: Setup toolchain
         uses: ./.github/actions/setup
 
+      # vitest directly, not through `vibe-validate run`: the wrapper's capture
+      # dropped vitest's own summary on a long run, so a red here showed no
+      # failing file — the exit code and the reporter verdicts are the record.
       - name: Run tests with coverage
         run: bun run test:coverage
         env:

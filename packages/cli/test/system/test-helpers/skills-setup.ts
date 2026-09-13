@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import * as yaml from 'yaml';
 
 import { getBinPath , createTestTempDir } from '../test-common.js';
@@ -69,7 +70,7 @@ export function executeSkillsCommandAndExpectYaml(
   targetPath: string,
   extraArgs: readonly string[] = []
 ): { result: CliResult; parsed: Record<string, unknown> } {
-  const result = spawnSync('node', [binPath, 'skills', command, targetPath, ...extraArgs], {
+  const result = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', command, targetPath, ...extraArgs], {
     encoding: 'utf-8',
   });
 

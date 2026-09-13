@@ -18,7 +18,7 @@
 
 import { chmodSync, rmSync, writeFileSync } from 'node:fs';
 
-import { isFilesystemAccessError } from '../fs-utils.js';
+import { isFilesystemAccessError } from '../errors/errno.js';
 import { mkdirSyncReal, safePath } from '../path-utils.js';
 import { createSymlink, symlinkCapability, type SymlinkCapability } from '../test-helpers.js';
 

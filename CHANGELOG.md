@@ -373,7 +373,8 @@ with a regression test.
 
 - **(contributor gates)** `local/commands-import-boundary` (a new `node:fs` import in a CLI command
   module is a lint error; 45 files ratcheted with reasons); `bun run unused-exports` (a knip ratchet:
-  a new unused export or a stale allowlist entry fails); a comment-density ratchet per package.
+  a new unused export or a stale allowlist entry fails; the allowlist is a `<file> <name> <reason>`
+  data file, not a module); a comment-density ratchet per package.
 
 - **(contributor convention) `__internal`** — a module exports one `__internal` object for its
   test-facing helpers instead of one `export` per helper; a test holds that no barrel re-exports it

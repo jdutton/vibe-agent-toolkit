@@ -10,6 +10,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { mkdirSyncReal } from '../src/path-utils.js';
 import { resetProjectRootCaches } from '../src/project-utils.js';
+import { gitExecutable } from '../src/testing/executables.js';
 
 /**
  * Drop comment lines before scanning source for `import`/`require` specifiers.
@@ -53,7 +54,7 @@ export function stripCommentLines(source: string): string {
  * ```
  */
 export function createGitRepo(directory: string): string {
-  spawnSync('git', ['init'], { cwd: directory, stdio: 'pipe' });
+  spawnSync(gitExecutable(), ['init'], { cwd: directory, stdio: 'pipe' });
   // `gitFindRoot()` memoizes `null` for any directory a prior walk climbed
   // through (e.g. before this repo existed). Without this reset, a later
   // crawl in the same process silently keeps answering from that stale

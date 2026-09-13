@@ -18,6 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 
 import { createTestTempDir } from '../test-common.js';
 
@@ -37,6 +38,6 @@ export function createMarkdownGitFixture(prefix: string): string {
   mkdirSyncReal(safePath.join(dir, 'docs'), { recursive: true });
   writeFileSync(safePath.join(dir, 'docs/a.md'), '# Alpha\n', 'utf-8');
   writeFileSync(safePath.join(dir, 'docs/b.md'), '# Bravo\n', 'utf-8');
-  spawnSync('git', ['init', '--quiet'], { cwd: dir });
+  spawnSync(gitExecutable(), ['init', '--quiet'], { cwd: dir });
   return dir;
 }

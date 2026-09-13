@@ -660,3 +660,11 @@ Automatic analysis never runs the tests and nothing uploads a report to it — t
 coverage authority.
 **Tell:** `0.0%` on every PR regardless of tests.
 **Remedy:** read Codecov; read Sonar's New / Accepted / Hotspot counts instead.
+
+### `NOSONAR` does nothing under SonarCloud automatic analysis
+
+Automatic analysis reads the code without the project's suppression configuration, so a `NOSONAR`
+marker or an "accepted" argument in the PR leaves the smell counted. The only thing that moves the
+number is removing the smell at its cause.
+**Tell:** a smell still listed after the directive landed.
+**Remedy:** fix the cause; the bar is New, Accepted and Security Hotspots all zero in the PR comment.

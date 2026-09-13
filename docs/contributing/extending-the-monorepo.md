@@ -69,3 +69,20 @@ commit the regenerated `.json` beside the `.ts` change. There is no `*.schema.js
 5. Update [`command-lane-table.md`](command-lane-table.md) if the command reads the filesystem to
    build a population — the table is the bounded list of walkers.
 6. Handle errors with a user-facing message that names the config mechanism that fixes it.
+
+## Adding a development tool
+
+1. TypeScript only, in `packages/dev-tools/src/<name>.ts` — never a shell script; the same lint,
+   typecheck, duplication and unit-test bar as shipped code.
+2. Entry point: a `main(argv)` returning an `ExitCode` value, guarded by
+   `if (isEntrypoint(import.meta.url)) process.exit(main(process.argv.slice(2)))` from
+   `./common.js`. A bare `import.meta.main` guard is a silent no-op on the Node floor
+   (enforced by: `local/no-fragile-entrypoint-guard`).
+3. A `scripts` line in the root `package.json` is the index — `bun run <name>` is how it is run.
+   If it produces a derived artifact, give it a `--check` and run that check in
+   `validate-structure` (the `derived-artifact-rules.ts` pattern); a generator without a gate-time
+   check is a list that will be wrong within a month.
+4. Extract the pure logic so `packages/dev-tools/test/<name>.test.ts` can cover it; keep the I/O
+   thin.
+5. `packages/dev-tools/README.md` lists every script from the directory (a generated block) — run
+   `bun run generate:claude-md`.

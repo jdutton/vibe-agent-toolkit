@@ -89,18 +89,18 @@ CHANGELOG.md uses a strict format. **RC/prerelease versions NEVER get their own 
    bun run bump-version 0.1.0       # For stable
    ```
 
-3. **Build and run pre-publish check** (catches CHANGELOG, version, metadata issues):
+3. **Build and run the release-readiness check** (catches CHANGELOG, version, metadata and tag issues):
    ```bash
    bun run build
-   bun run pre-publish
+   bun run pre-release
    ```
-   This runs full validation AND checks:
-   - CHANGELOG has entry for current version (stable releases)
-   - All packages built, versions synchronized
-   - Package metadata complete (repository, author, license)
-   - No uncommitted changes or untracked files
+   `pre-release` is `pre-publish` (full validation, CHANGELOG entry for the current version on a
+   stable release, all packages built and version-synchronized, package metadata complete, no
+   uncommitted or untracked files) plus the release-readiness checks: a marketplace publish
+   dry-run, no tag of this version already on the remote, and on a stable release a non-empty
+   stamped CHANGELOG section with nothing left under `[Unreleased]`.
 
-   **Do NOT skip this step** - the CI publish workflow runs the same check and will fail if it finds issues.
+   **Do NOT skip this step** - the CI publish workflow runs the same check against the pushed tag and will fail if it finds issues.
 
 4. **Commit and tag**:
    ```bash

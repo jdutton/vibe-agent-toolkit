@@ -10,7 +10,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, parse } from 'node:path';
 
-import { isPathAbsentError } from './fs-utils.js';
+import { isPathAbsentError } from './errors/errno.js';
 import { resetGitRootCache } from './git-root-cache.js';
 import { safePath } from './path-utils.js';
 import { readTextContentSync } from './text-file.js';

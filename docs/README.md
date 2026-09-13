@@ -23,8 +23,11 @@ Welcome to the Vibe Agent Toolkit documentation.
 Material for people working on VAT, not for people using it — [`contributing/`](./contributing/):
 
 - **[Content Routing](./contributing/content-routing.md)** - Where a new statement belongs (root CLAUDE.md, a rule file, a doc, a docstring, or deleted)
+- **[Drift Classes](./contributing/drift-classes.md)** - The quality problems that grow under a green gate, the tell for each, and the class-level fix
+- **[Subagent Execution](./contributing/subagent-execution.md)** - Batch every task, validate once, commit once; the implementer contract and the wave pattern
+- **[Pull Request Checklist](./contributing/pull-request-checklist.md)** - Changelog fragment, version question, final gate, `pre-release`, tag
 - **[Traps](./contributing/traps.md)** - Failures that look like something else: the tell and the remedy, one entry each
-- **[Extending the Monorepo](./contributing/extending-the-monorepo.md)** - Adding a package, a utility, a schema, a CLI command
+- **[Extending the Monorepo](./contributing/extending-the-monorepo.md)** - Adding a package, a utility, a schema, a CLI command, a dev tool
 - **[No Version Constants](./contributing/no-version-constants.md)** - Why a hand-bumped integer never decides data validity, and what replaces it
 - **[Command → Enumeration Lane](./contributing/command-lane-table.md)** - Which of the 72 commands walk the filesystem, through which entry point
 - **[Debugging VAT](./contributing/vat-debugging.md)** - Reproducing bugs, `VAT_ROOT_DIR` adopter testing, failing-test-first fixes
@@ -76,8 +79,8 @@ See also: [Skill Packaging Shapes](./architecture/skill-packaging.md) for the ar
 ## Development Tools
 
 All development tools are TypeScript under `packages/dev-tools/src/` (never shell scripts); the
-root `package.json` `scripts` block is the index of what runs them. The list in the root
-[`CLAUDE.md`](../CLAUDE.md#where-the-rest-lives) is generated from the directory.
+root `package.json` `scripts` block is the index of what runs them. The list in
+[`packages/dev-tools/README.md`](../packages/dev-tools/README.md) is generated from the directory.
 
 ## Design Specifications & Research
 

@@ -25,6 +25,25 @@ supported versions, a regex that parses versions, a `VERSION` string in a test f
 [`docs/contributing/no-version-constants.md`](docs/contributing/no-version-constants.md).
 (enforced by: `local/no-version-literal` for the integer shapes; labels and the PR heading are not)
 
+## Drift classes — fix the class, never the instance
+
+Each of these grew for months under a green gate and was found only by adversarial review. When one
+surfaces, fix it the right way in the same change — one contract, every caller migrated, the
+enforcer added — never quiet it with a compat shim, an allowlist entry, a directive, a widened
+factor or a TODO. Tells and fixes: [`docs/contributing/drift-classes.md`](docs/contributing/drift-classes.md).
+(not enforced)
+
+- **Two contracts for one thing** — a second exit-code table, severity vocabulary, envelope, error
+  base, containment predicate or enumeration lane. Keep one.
+- **An optional seam whose omission is the failure** — `field?:`, a defaulted parameter,
+  `.passthrough()`, an opt-in check; every caller that ignores it compiles. Make it required.
+- **A rule nothing enforces** — prose or a tag the code does not implement, a hand-kept list. Add
+  the enforcer or `--check`, or delete the claim.
+- **A one-way ratchet** — an allowlist asserted only against growth. Assert both ways.
+- **A check that cannot fail** — an indistinguishable fixture, a suite no tier runs, a guard that
+  returns the reassuring value (refused → absent, crash → 1). Prove it red first.
+- **A contract carried in text** — dispatch on `error.message`. Use a `code`.
+
 ## Paths, imports, asset references
 
 - Use `safePath.join/resolve/relative` from `@vibe-agent-toolkit/utils` — never raw `node:path`
@@ -34,39 +53,10 @@ supported versions, a regex that parses versions, a `VERSION` string in a test f
   writes go through `openFrontmatter` from `@vibe-agent-toolkit/resources`. The approved-library
   list is owned by `noRestrictedImportsConfig` in `eslint.config.js`, not by any doc.
   (enforced by: `no-restricted-imports`)
-- Every config-supplied "where is this file?" value — a schema path, a template path — resolves
-  through `resolveAssetReference(specifier, baseDir)` from `@vibe-agent-toolkit/utils` from day one;
-  never write a parallel path-only resolver. It accepts filesystem paths (relative to `baseDir` or
-  absolute) and npm bare specifiers (`@scope/pkg/subpath`, honouring `exports`). Not for markdown
-  URI-references (RFC 3986), dynamic JS imports (`dynamicImportPath()`), `node_modules` enumeration
-  walks, or CJS interop shims. (not enforced)
-
-  Call sites today — the templates for a new one:
-  <!-- gen:asset-reference-sites -->
-  - `packages/agent-skills/src/skill-packager.ts`
-  - `packages/agent-skills/src/skill-source/sources/npm-source.ts`
-  - `packages/agent-skills/src/skill-source/sources/path-source.ts`
-  - `packages/agent-skills/src/skill-test/run-harness.ts`
-  - `packages/cli/src/commands/doctor.ts`
-  - `packages/cli/src/commands/resources/validate.ts`
-  - `packages/cli/src/commands/skill/test/run.ts`
-  - `packages/resources/src/okf/config.ts`
-  - `packages/resources/src/projection/contributors/package-extent.ts`
-  - `packages/resources/src/resource-registry.ts`
-  <!-- /gen:asset-reference-sites -->
-
-## Skill distribution boundaries
-
-- `SKILL.md` frontmatter carries only the portable skill schema — never a VAT-specific field. All
-  VAT config (discovery globs, packaging, `publish`, plugin membership) lives in
-  `vibe-agent-toolkit.config.yaml`. (not enforced)
-- `package.json` `vat.skills` is a packaging hint that `vat verify` checks and `vat build` never
-  reads. (enforced by: `vat verify` consistency-check)
-- `publish: false` opts a skill out of the distribution-consistency checks only; it is still
-  discovered, built and held to every packaging rule. (enforced by: `vat build`)
-- Error messages name the config mechanism that fixes them. (not enforced)
-
-Roles table: [`docs/architecture/skill-packaging.md`](docs/architecture/skill-packaging.md#who-owns-what-skillmd-configyaml-packagejson).
+- Every config-supplied "where is this file?" value resolves through `resolveAssetReference` from
+  `@vibe-agent-toolkit/utils` — never a parallel path-only resolver. Scope, exclusions and the
+  call-site templates: [`.claude/rules/asset-references.md`](.claude/rules/asset-references.md).
+  (not enforced)
 
 ## Monorepo layout and build
 
@@ -106,12 +96,9 @@ ESLint, vibe-validate, GitHub Actions (Node 24 × Ubuntu/Windows) — [`docs/bui
 | `vibe-agent-toolkit` | yes | Modular toolkit for building, testing, and deploying portable AI agents |
 <!-- /gen:packages-tree -->
 
-**Adding a package**: `packages/<name>/` with `package.json`, `tsconfig.json` extending
-`../../tsconfig.base.json` with `composite: true`, `src/`, `test/`, `README.md`; nothing to
-register — `private` decides whether it publishes and the publish order is derived from workspace
-deps (`workspace-graph.ts`); run `bun install`. `tsconfig.json` `references` are generated from
-workspace deps — do not hand-edit. Walkthrough:
-[`docs/contributing/extending-the-monorepo.md`](docs/contributing/extending-the-monorepo.md).
+**Adding a package, utility, schema, CLI command or dev tool**:
+[`docs/contributing/extending-the-monorepo.md`](docs/contributing/extending-the-monorepo.md) —
+nothing to register; `tsconfig.json` `references` are generated, never hand-edited.
 (enforced by: `validate-structure` for the scripts and the generated `references`; the rest is not)
 
 ## Code standards
@@ -122,21 +109,15 @@ workspace deps — do not hand-edit. Walkthrough:
   error in `src` and off in `test`; every `eslint-disable` directive carries a description.
   Custom rules live in `packages/utils/eslint/` — see
   [`docs/custom-eslint-rules.md`](docs/custom-eslint-rules.md). (enforced by: `bun run lint`)
-- **Zero code duplication.** When `duplication-check` fails, refactor — extract to a shared helper.
-  Never run `duplication-update-baseline` or edit `.github/.jscpd-baseline.json` without the
-  owner's explicit permission; the baseline tracks progress to zero, it does not accept new
-  duplication. (enforced by: `bun run duplication-check`)
-- SonarCloud runs automatic analysis: fix every smell it reports; **never `NOSONAR`**, never argue
-  one away (suppression does not work under automatic analysis). In its PR comment, New, Accepted
-  and Security Hotspots must all be zero — "Quality Gate passed" is not zero. Ignore its "Coverage
-  on New Code" line ([why](docs/contributing/traps.md#sonarcloud-coverage-on-new-code-is-always-zero));
-  Codecov is the coverage authority. (not enforced)
-- Coverage thresholds in `vitest.config.ts` are a self-raising ratchet (`thresholds.autoUpdate`,
-  whole points), currently 82/77/86/82 % over ALL of `src` (enforced by: `coverage.yml`). Never
-  lower one by hand. (not enforced)
-- Licensing: open-source packages `"MIT"` + `LICENSE`; proprietary `"SEE LICENSE IN LICENSE"` +
-  `"private": true` + `LICENSE`; `"UNLICENSED"` only for a package not yet licensed. Template in
-  [`docs/publishing.md`](docs/publishing.md#licensing-conventions). (not enforced)
+- **Zero code duplication.** When `duplication-check` fails, refactor — extract to a shared helper;
+  the baseline is never updated to accept a clone. (enforced by: `bun run duplication-check`)
+- SonarCloud runs automatic analysis: fix every smell it reports at its cause; **never `NOSONAR`**
+  ([why](docs/contributing/traps.md#nosonar-does-nothing-under-sonarcloud-automatic-analysis)), never
+  argue one away. In its PR comment, New, Accepted and Security Hotspots must all be zero — "Quality
+  Gate passed" is not zero. Codecov is the coverage authority
+  ([why](docs/contributing/traps.md#sonarcloud-coverage-on-new-code-is-always-zero)). (not enforced)
+- Coverage thresholds are a self-raising ratchet over ALL of `src`; never lower one by hand.
+  (enforced by: `coverage.yml`; the "never lower" half is not)
 
 ## Testing
 
@@ -147,18 +128,8 @@ pyramid, the helper-extraction rule, fixture storage, and the per-FILE duration 
 - **Never `bun test`** — it ignores `vitest.config.ts` and runs every tier in one process. Use
   `bun run validate` or `bun run test:<tier>`. Only unit tests are coverage-instrumented.
   (not enforced)
-- Run a single integration/system file from its **package** directory, never the repo root (the root
-  config collects 0 files and exits 0):
-  `cd packages/<pkg> && bunx vitest run --config vitest.integration.config.ts test/integration/<file>`.
-  (not enforced)
 - Extract pure logic so it can be unit-tested; keep I/O thin and cover it with integration tests.
   (not enforced)
-
-### Test Fixtures Convention
-
-Committed fixtures never use gitignored names (`dist/`, `node_modules/`, `coverage/`, `build/`) —
-`git add` silently skips them, so they vanish in a clean clone. Store under e.g. `build-artifacts/`
-and copy in `beforeAll`. (not enforced)
 
 ## Workflow — the gate
 
@@ -185,27 +156,16 @@ and copy in `beforeAll`. (not enforced)
 - **A green commit is NOT a green PR.** Run `bun run validate` before pushing; CI runs the full
   tier on ubuntu and Windows.
 
-**Subagent-driven execution — batch, validate once.** `git commit` runs the pre-commit tier (~66 s
-warm, ~130 s cold on macOS); the full gate costs minutes to over an hour uncached; a mid-refactor
-tree is never all-green for either. So: do not commit per task, do not run `bun run validate`
-mid-flight. Batch every task into one uncommitted tree, validate once when stable, fix, commit at
-the end. Each "move/rename" task deletes the original in the same task (duplication is caught only
-at that final gate). Give every implementer subagent this contract: (not enforced)
+**Subagent-driven execution — batch, validate once.** Do not commit per task and do not run
+`bun run validate` mid-flight: every task lands in one uncommitted tree, the gate runs once when
+it is stable, and one commit closes it. The contract to give every implementer, and the wave and
+reconciliation pattern: [`docs/contributing/subagent-execution.md`](docs/contributing/subagent-execution.md).
+(not enforced)
 
-> Verify with the fast isolated signal only: `bunx eslint <changed files> --max-warnings=0` and
-> `bunx vitest run <path/to/file.test.ts>` (or `bun run test:unit -- <substring>`). Do NOT run
-> `bun run validate`, `test:system`, `test:integration` or `bun test`. Do NOT commit.
-
-**Before a pull request:** add the changelog entry — prefer a `.changes/<topic>.md` fragment (see
-`.changes/README.md`; `bump-version` folds it) over editing `CHANGELOG.md` `[Unreleased]` directly,
-adopter-visible wording per `.claude/rules/changelog-adopter-visible.md`; ask the developer *"bump the version or cut
-an RC for this change?"* (`bun run bump-version <version>`; a stable bump stamps `[Unreleased]`, an
-RC stays there); run `bun run validate` once more. (not enforced)
-
-**Before tagging a release:** `bun run pre-release` must pass (CHANGELOG stamped, no stale remote
-tags, marketplace dry-run); only then `git tag v<version>` and `git push origin main v<version>` —
-the tag push triggers `publish.yml`. Rollback: [`docs/publishing.md`](docs/publishing.md).
-(enforced by: `bun run pre-release`, `publish.yml`)
+**Before a pull request and before a release tag:** the changelog fragment, the version question,
+the final gate, `bun run pre-release`, the tag — in order at
+[`docs/contributing/pull-request-checklist.md`](docs/contributing/pull-request-checklist.md).
+(enforced by: `bun run pre-release`, `publish.yml`; the rest is not)
 
 **Three "validate" commands — do not conflate them:** `bun run validate` is this repo's gate (full
 tier, `CI=1 --force`; the hook runs the smaller tier); `vat validate` runs source-level validators
@@ -223,15 +183,15 @@ that is the finding — extend it or say so.
 ## Demos
 
 Every demo goes through a runtime adapter and supports every compatible runtime — never direct
-agent execution. Example: `packages/vat-example-cat-agents/examples/conversational-demo.ts`;
-patterns: [`docs/demo-guidelines.md`](docs/demo-guidelines.md). (not enforced)
+agent execution. Reference implementation and patterns: [`.claude/rules/demos.md`](.claude/rules/demos.md).
+(not enforced)
 
 ## Agent-facing skills for VAT work
 
 `packages/vat-development-agents/resources/skills/` ships the `vibe-agent-toolkit` plugin. **When a
 task matches a row, load the skill before acting** — `docs/` is reference; these are the runbooks.
-Editing one reds the golden drift test in the last validate phase; regenerate the golden in the same
-edit (steps in that directory's `CLAUDE.md`) and read the diff — it must be exactly your edit.
+Editing one reds the golden drift test; regenerate the golden in the same edit (steps in that
+directory's `CLAUDE.md`) and read the diff — it must be exactly your edit.
 (enforced by: `packaged-output-drift.system.test.ts`)
 
 <!-- gen:skills-table -->
@@ -259,28 +219,16 @@ edit (steps in that directory's `CLAUDE.md`) and read the diff — it must be ex
   failure that looks like something else goes in `traps.md`.
   <!-- gen:contributing-docs -->
   `baseline-control-adopter-response.md`, `command-lane-table.md`, `content-routing.md`,
-  `cowork-driver-spike.md`, `extending-the-monorepo.md`, `no-version-constants.md`,
-  `plugin-distribution-findings.md`, `traps.md`, `vat-debugging.md`, `vat-install-architecture.md`,
+  `cowork-driver-spike.md`, `drift-classes.md`, `extending-the-monorepo.md`,
+  `no-version-constants.md`, `plugin-distribution-findings.md`, `pull-request-checklist.md`,
+  `subagent-execution.md`, `traps.md`, `vat-debugging.md`, `vat-install-architecture.md`,
   `vat-linkauth-contributing.md`
   <!-- /gen:contributing-docs -->
 - Subtree-scoped rules fire from `.claude/rules/*.md` (`paths:` globs).
 - External vendor guidance is cached under [`docs/external/`](docs/external/) with source URL and
   fetch date; `@vendor-claim reviewed=<date>` stamps in code are re-verified within 90 days.
   (enforced by: `validate-structure` Rule 11, at `warning`)
-- Dev tooling is TypeScript under `packages/dev-tools/src/` (never shell scripts), same quality bar:
-  <!-- gen:dev-tools-scripts -->
-  `audit-quality-gate`, `bump-version`, `changelog-fragments`, `check-test-heap-budget`,
-  `clean-build`, `comment-density-ceilings`, `comment-density`, `common`, `contraband-scan`,
-  `copy-yaml-assets`, `derived-artifact-rules`, `determine-publish-tags`, `duplication-check`,
-  `extract-changelog`, `fix-workspace-deps`, `generate-claude-md`, `generate-python-stdlib`,
-  `generate-resources-json-schemas`, `generate-tsconfig-refs`, `generate-workflow`,
-  `import-marketplace`, `index`, `jscpd-check-new`, `jscpd-update-baseline`, `link-all`,
-  `link-workspace-packages`, `markdown-it-parser`, `parser-bakeoff`, `pin-barrel-exports`,
-  `pin-emitted-schemas`, `pre-publish-check`, `prepare-bin`, `process-test-images`,
-  `publish-with-rollback`, `resolve-workspace-deps`, `runtime-test-helpers`, `structure-finding`,
-  `test-tier-budget-allowlist`, `test-tier-budget-reporter`, `test-tier-budget-seed`,
-  `tsc-clean-build`, `unlink-all`, `unused-exports-allowlist`, `unused-exports`,
-  `validate-repo-structure`, `validate-version`, `workspace-graph`
-  <!-- /gen:dev-tools-scripts -->
+- Dev tooling is TypeScript under `packages/dev-tools/src/` (never shell scripts), same quality bar;
+  every script is indexed in [`packages/dev-tools/README.md`](packages/dev-tools/README.md).
 - [Architecture](docs/architecture/README.md) · [Best practices](docs/best-practices.md) ·
   [Structured outputs](docs/structured-outputs.md) · CI: `.github/workflows/validate.yml`.

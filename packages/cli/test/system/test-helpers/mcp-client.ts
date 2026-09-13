@@ -4,6 +4,8 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
+
 // ── MCP Test Client ──────────────────────────────────────────────────
 
 /** JSON-RPC response shape */
@@ -109,7 +111,7 @@ export class MCPTestClient {
   ): Promise<MCPTestClient> {
     const readyTimeout = options?.readyTimeout ?? 10_000;
 
-    const proc = spawn('node', [binPath, ...args], {
+    const proc = spawn(NODE_EXECUTABLE, [binPath, ...args], {
       env: { ...process.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

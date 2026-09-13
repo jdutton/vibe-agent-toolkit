@@ -20,7 +20,10 @@ export const COMMENT_DENSITY_CEILINGS: Readonly<Record<string, number>> = {
   'agent-skills': 50.7,
   'claude-marketplace': 42.6,
   'cli': 43.2,
-  'dev-tools': 29.7,
+  // 29.7 → 31.7 when the 565-row unused-exports allowlist moved out of src
+  // into a data file: those rows counted as CODE, so the seed was inflated by
+  // ~1,000 lines of data and the ratio rose with no prose added.
+  'dev-tools': 31.7,
   'discovery': 42.1,
   'gateway-mcp': 27.7,
   'lab': 55.9,

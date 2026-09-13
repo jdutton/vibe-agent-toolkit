@@ -25,7 +25,7 @@
 import { lstatSync } from 'node:fs';
 import path from 'node:path';
 
-import { isPathAbsentError } from './fs-utils.js';
+import { isPathAbsentError } from './errors/errno.js';
 import { normalizePath, safePath, toForwardSlash } from './path-utils.js';
 
 /**

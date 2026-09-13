@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { expect } from 'vitest';
 import * as yaml from 'yaml';
 
@@ -63,7 +64,7 @@ export function executeCli(
 
   let result: ReturnType<typeof spawnSync>;
   try {
-    result = spawnSync('node', [binPath, ...args], {
+    result = spawnSync(NODE_EXECUTABLE, [binPath, ...args], {
       cwd: options?.cwd,
       env: options?.env,
       stdio: ['inherit', stdoutFd, stderrFd],
@@ -198,7 +199,7 @@ export function testConfigError(
 
   fs.writeFileSync(safePath.join(projectDir, 'docs/test.md'), '# Test');
 
-  return spawnSync('node', [binPath, 'resources', 'scan'], {
+  return spawnSync(NODE_EXECUTABLE, [binPath, 'resources', 'scan'], {
     encoding: 'utf-8',
     cwd: projectDir,
   });

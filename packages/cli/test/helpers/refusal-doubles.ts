@@ -58,7 +58,10 @@ export function refusingOnly<F extends (...args: never[]) => unknown>(
 ): F {
   const resolvedTarget = safePath.resolve(target);
   return ((path: unknown, ...rest: unknown[]) => {
-    if (safePath.resolve(String(path)) === resolvedTarget) throw error;
+    // Only a string path can be the target: a Buffer or URL argument is not
+    // what these doubles stand in for, and stringifying one would compare
+    // `[object Object]` against a path.
+    if (typeof path === 'string' && safePath.resolve(path) === resolvedTarget) throw error;
     return (real as (...args: unknown[]) => unknown)(path, ...rest);
   }) as unknown as F;
 }

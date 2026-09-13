@@ -28,8 +28,8 @@ import type { Dirent } from 'node:fs';
 import { statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 
+import { isPathAbsentError } from './errors/errno.js';
 import { VatError } from './errors/vat-error.js';
-import { isPathAbsentError } from './fs-utils.js';
 import { toForwardSlash } from './path-core.js';
 import { normalizePath, safePath } from './path-utils.js';
 

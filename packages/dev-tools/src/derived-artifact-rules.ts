@@ -31,7 +31,7 @@ import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 
 import { validateFragments } from './changelog-fragments.js';
 import { checkCommentDensity } from './comment-density.js';
-import { CLAUDE_MD_GENERATORS, regenerateBlocks } from './generate-claude-md.js';
+import { GENERATED_DOCUMENTS, regenerateDocument } from './generate-claude-md.js';
 import { findStaleTsconfigs } from './generate-tsconfig-refs.js';
 import { checkValidateWorkflow, WORKFLOW_PATH } from './generate-workflow.js';
 import { ERROR_TYPES, type ValidationError } from './structure-finding.js';
@@ -64,28 +64,31 @@ export function checkTsconfigReferences(repoRoot: string): ValidationError[] {
   );
 }
 
-/** Rule: every `<!-- gen:… -->` block in `CLAUDE.md` holds what the tree says, and every generator has a block. */
-export function checkClaudeMdGenerated(repoRoot: string): ValidationError[] {
-  const text = readFileSync(safePath.join(repoRoot, CLAUDE_MD), 'utf8');
+/**
+ * Rule: every `<!-- gen:… -->` block in every generated document holds what
+ * the tree says, and every block a document must carry is present.
+ */
+export function checkGeneratedBlocks(repoRoot: string): ValidationError[] {
   const findings: ValidationError[] = [];
-  let result: ReturnType<typeof regenerateBlocks>;
-  try {
-    result = regenerateBlocks(text, repoRoot);
-  } catch (error) {
-    return [stale(CLAUDE_MD, error instanceof Error ? error.message : String(error))];
-  }
-  for (const name of result.changed) {
-    findings.push(
-      stale(
-        CLAUDE_MD,
-        `Generated block "${name}" is stale — the tree no longer matches what is written between its markers. ` +
-          'Run `bun run --cwd packages/dev-tools generate:claude-md`; never edit between the markers by hand.',
-      ),
-    );
-  }
-  for (const name of Object.keys(CLAUDE_MD_GENERATORS)) {
-    if (!result.found.includes(name)) {
-      findings.push(stale(CLAUDE_MD, `No \`<!-- gen:${name} -->\` block: the "${name}" list has nowhere to be regenerated into.`));
+  for (const document of GENERATED_DOCUMENTS) {
+    let report: ReturnType<typeof regenerateDocument>;
+    try {
+      report = regenerateDocument(repoRoot, document);
+    } catch (error) {
+      findings.push(stale(document.path, error instanceof Error ? error.message : String(error)));
+      continue;
+    }
+    for (const name of report.result.changed) {
+      findings.push(
+        stale(
+          document.path,
+          `Generated block "${name}" is stale — the tree no longer matches what is written between its markers. ` +
+            'Run `bun run --cwd packages/dev-tools generate:claude-md`; never edit between the markers by hand.',
+        ),
+      );
+    }
+    for (const name of report.missing) {
+      findings.push(stale(document.path, `No \`<!-- gen:${name} -->\` block: the "${name}" list has nowhere to be regenerated into.`));
     }
   }
   return findings;
@@ -336,7 +339,7 @@ export function checkChangelogFragments(repoRoot: string): ValidationError[] {
 export function collectDerivedArtifactFindings(repoRoot: string): ValidationError[] {
   const rules: Array<(root: string) => ValidationError[]> = [
     checkTsconfigReferences,
-    checkClaudeMdGenerated,
+    checkGeneratedBlocks,
     checkClaudeMdByteBudget,
     checkValidateWorkflowGenerated,
     checkLockfileWorkspaceResolutions,

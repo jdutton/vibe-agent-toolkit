@@ -861,10 +861,13 @@ export class OrgApiClient {
 
       req.on('error', (error: Error) => {
         clearConnectDeadline();
-        reject(new ApiTransportError(error.message, meter.bytesSent(), {
+        // Annotated `Error` so an analyser that cannot resolve `VatError` (a
+        // workspace import) still sees a rejection reason that is one.
+        const failure: Error = new ApiTransportError(error.message, meter.bytesSent(), {
           cause: error,
           deadlineExceeded: error instanceof RequestDeadlineExceeded,
-        }));
+        });
+        reject(failure);
       });
       if (body) {
         req.write(body);

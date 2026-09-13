@@ -33,12 +33,6 @@ inputs:
     description: Run `bun run build` after installing.
     required: false
     default: 'true'
-  ignore-scripts:
-    description: >-
-      Install with --ignore-scripts (no lifecycle scripts from dependencies) and
-      then run this repo's own postinstall explicitly, as a visible step.
-    required: false
-    default: 'false'
   registry-url:
     description: >-
       Passed through to setup-node, which then writes the .npmrc that makes
@@ -133,17 +127,13 @@ runs:
       with:
         bun-version-file: package.json
 
-    - name: Install dependencies
-      if: inputs.ignore-scripts != 'true'
-      shell: bash
-      run: bun install --frozen-lockfile
-
     # `--ignore-scripts` blocks lifecycle scripts from DEPENDENCIES, which is
     # the actual exposure: arbitrary code from the registry running at install
-    # time. It does not mean the caller needs no lifecycle script — it needs
-    # exactly one, and the next step runs it explicitly.
+    # time. It is the only install mode this action has — a plain install was
+    # an input option until the security scanner flagged it, and no caller
+    # needed it. It does not mean the caller needs no lifecycle script — it
+    # needs exactly one, and the next step runs it explicitly.
     - name: Install dependencies (no lifecycle scripts)
-      if: inputs.ignore-scripts == 'true'
       shell: bash
       run: bun install --frozen-lockfile --ignore-scripts
 
@@ -152,7 +142,6 @@ runs:
     # this repo's own postinstall symlinks the workspace packages into
     # node_modules/@vibe-agent-toolkit/ for anything spawned with `node`.
     - name: Link workspace packages for Node resolution
-      if: inputs.ignore-scripts == 'true'
       shell: bash
       run: bun run postinstall
 

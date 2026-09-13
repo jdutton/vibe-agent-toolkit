@@ -1,15 +1,17 @@
 #!/usr/bin/env tsx
 /**
- * Regenerate the file-derived lists in the root `CLAUDE.md`.
+ * Regenerate the file-derived lists in the root `CLAUDE.md` and the other
+ * documents that carry one ({@link GENERATED_DOCUMENTS}).
  *
  * `CLAUDE.md` is loaded into every agent session, and four of its lists were
  * `ls` output that nothing re-derived: they were correct the day they were
  * written and wrong within a month (a skill missing from the skills table, a
  * contributing doc missing from the docs list, 29 of 36 dev-tools scripts
  * unlisted, five `resolveAssetReference` call sites unlisted). Each such list
- * now sits between `<!-- gen:<name> -->` and `<!-- /gen:<name> -->` markers,
- * this script owns what is between them, and `--check` (run by
- * `validate-structure`) fails when the committed text is not what the tree says.
+ * now sits between `<!-- gen:<name> -->` and `<!-- /gen:<name> -->` markers in
+ * the document whose topic it belongs to, this script owns what is between
+ * them, and `--check` (run by `validate-structure`) fails when the committed
+ * text is not what the tree says.
  *
  * Usage:
  *   bun run --cwd packages/dev-tools generate:claude-md           # rewrite every generated block
@@ -197,14 +199,33 @@ const skillsTable: BlockGenerator = (repoRoot) => {
   return ['| Skill | Use when |', '|---|---|', ...rows];
 };
 
-/** Every block name `CLAUDE.md` may carry, and what fills it. */
+/** Every block name a generated document may carry, and what fills it. */
 export const CLAUDE_MD_GENERATORS: Readonly<Record<string, BlockGenerator>> = {
   'packages-tree': packagesTree,
-  'dev-tools-scripts': (repoRoot) => wrapBacktickedList(devToolsScripts(repoRoot), 2),
+  'dev-tools-scripts': (repoRoot) => wrapBacktickedList(devToolsScripts(repoRoot), 0),
   'skills-table': skillsTable,
   'contributing-docs': (repoRoot) => wrapBacktickedList(contributingDocs(repoRoot), 2),
   'asset-reference-sites': assetReferenceSites,
 };
+
+/** A document that carries generated blocks, and the blocks it must carry. */
+export interface GeneratedDocument {
+  /** Repo-relative path. */
+  readonly path: string;
+  /** Every block name the document must carry — a missing one is a list with nowhere to go. */
+  readonly blocks: readonly string[];
+}
+
+/**
+ * Where each generated list lives: beside the rule it serves, so a list is
+ * loaded only by the session that reads that rule. Every generator name is
+ * claimed by exactly one document (pinned by the unit test).
+ */
+export const GENERATED_DOCUMENTS: readonly GeneratedDocument[] = [
+  { path: CLAUDE_MD, blocks: ['packages-tree', 'skills-table', 'contributing-docs'] },
+  { path: '.claude/rules/asset-references.md', blocks: ['asset-reference-sites'] },
+  { path: 'packages/dev-tools/README.md', blocks: ['dev-tools-scripts'] },
+];
 
 const OPEN_MARKER = /^([ \t]*)<!-- gen:([\w-]+) -->[ \t]*$/;
 const CLOSE_MARKER = /^[ \t]*<!-- \/gen:([\w-]+) -->[ \t]*$/;
@@ -224,12 +245,13 @@ export interface RegeneratedDocument {
  *
  * @param text - The current document
  * @param repoRoot - Where the generators read from
+ * @param docPath - The document's repo-relative path, for the error messages
  * @returns The regenerated document and which blocks moved
  * @throws On a marker whose name has no generator, an unclosed block, or a
  *   close marker with no open — each is a block that would silently never be
  *   regenerated
  */
-export function regenerateBlocks(text: string, repoRoot: string): RegeneratedDocument {
+export function regenerateBlocks(text: string, repoRoot: string, docPath: string = CLAUDE_MD): RegeneratedDocument {
   const lines = text.split('\n');
   const out: string[] = [];
   const changed: string[] = [];
@@ -240,7 +262,7 @@ export function regenerateBlocks(text: string, repoRoot: string): RegeneratedDoc
     const line = lines[index] ?? '';
     const open = OPEN_MARKER.exec(line);
     if (!open) {
-      if (CLOSE_MARKER.test(line)) throw new Error(`${CLAUDE_MD}:${index + 1}: close marker with no open block`);
+      if (CLOSE_MARKER.test(line)) throw new Error(`${docPath}:${index + 1}: close marker with no open block`);
       out.push(line);
       index += 1;
       continue;
@@ -249,12 +271,12 @@ export function regenerateBlocks(text: string, repoRoot: string): RegeneratedDoc
     const [, indent = '', name = ''] = open;
     const generator = CLAUDE_MD_GENERATORS[name];
     if (generator === undefined) {
-      throw new Error(`${CLAUDE_MD}:${index + 1}: no generator is registered for block "${name}"`);
+      throw new Error(`${docPath}:${index + 1}: no generator is registered for block "${name}"`);
     }
     found.push(name);
 
     const closeIndex = lines.findIndex((candidate, at) => at > index && CLOSE_MARKER.exec(candidate)?.[1] === name);
-    if (closeIndex === -1) throw new Error(`${CLAUDE_MD}:${index + 1}: block "${name}" is never closed`);
+    if (closeIndex === -1) throw new Error(`${docPath}:${index + 1}: block "${name}" is never closed`);
 
     const previous = lines.slice(index + 1, closeIndex);
     const generated = generator(repoRoot).map((generatedLine) => `${indent}${generatedLine}`);
@@ -267,32 +289,50 @@ export function regenerateBlocks(text: string, repoRoot: string): RegeneratedDoc
   return { text: out.join('\n'), changed, found };
 }
 
-function main(argv: readonly string[]): ExitCodeValue {
-  const check = argv.includes('--check');
-  const path = safePath.join(PROJECT_ROOT, CLAUDE_MD);
-  const current = readFileSync(path, 'utf8');
-  const result = regenerateBlocks(current, PROJECT_ROOT);
+/** One document's regeneration: the result plus the blocks it must carry but does not. */
+export interface RegeneratedDocumentReport {
+  readonly document: GeneratedDocument;
+  readonly result: RegeneratedDocument;
+  readonly missing: readonly string[];
+}
 
-  const missing = Object.keys(CLAUDE_MD_GENERATORS).filter((name) => !result.found.includes(name));
+/** Regenerate one document in memory (nothing is written). */
+export function regenerateDocument(repoRoot: string, document: GeneratedDocument): RegeneratedDocumentReport {
+  const text = readFileSync(safePath.join(repoRoot, document.path), 'utf8');
+  const result = regenerateBlocks(text, repoRoot, document.path);
+  const missing = document.blocks.filter((name) => !result.found.includes(name));
+  return { document, result, missing };
+}
+
+/** Regenerate one document on disk unless `check`; the exit code says whether anything was off. */
+function processDocument(document: GeneratedDocument, check: boolean): ExitCodeValue {
+  const { result, missing } = regenerateDocument(PROJECT_ROOT, document);
+
   if (missing.length > 0) {
-    log(`✗ ${CLAUDE_MD} carries no block for: ${missing.join(', ')}`, 'red');
+    log(`✗ ${document.path} carries no block for: ${missing.join(', ')}`, 'red');
     return ExitCode.FINDINGS;
   }
 
   if (result.changed.length === 0) {
-    log(`✓ ${CLAUDE_MD} generated blocks match the tree (${result.found.length} blocks)`, 'green');
+    log(`✓ ${document.path} generated blocks match the tree (${result.found.length} blocks)`, 'green');
     return ExitCode.OK;
   }
 
   if (check) {
-    log(`✗ ${CLAUDE_MD} generated block(s) are stale: ${result.changed.join(', ')}`, 'red');
+    log(`✗ ${document.path} generated block(s) are stale: ${result.changed.join(', ')}`, 'red');
     log('  Regenerate with: bun run --cwd packages/dev-tools generate:claude-md', 'yellow');
     return ExitCode.FINDINGS;
   }
 
-  writeFileSync(path, result.text, 'utf8');
-  log(`✓ Regenerated ${CLAUDE_MD} block(s): ${result.changed.join(', ')}`, 'green');
+  writeFileSync(safePath.join(PROJECT_ROOT, document.path), result.text, 'utf8');
+  log(`✓ Regenerated ${document.path} block(s): ${result.changed.join(', ')}`, 'green');
   return ExitCode.OK;
+}
+
+function main(argv: readonly string[]): ExitCodeValue {
+  const check = argv.includes('--check');
+  const codes = GENERATED_DOCUMENTS.map((document) => processDocument(document, check));
+  return codes.every((code) => code === ExitCode.OK) ? ExitCode.OK : ExitCode.FINDINGS;
 }
 
 if (isEntrypoint(import.meta.url)) {

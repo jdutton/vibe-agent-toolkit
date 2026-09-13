@@ -39,6 +39,7 @@ export {
 } from './crawl-timing.js';
 // The three fixture modules the sinks' suites share: the ONE temp-dir family,
 // the host gates, and the hostile tree every sink is tested against.
+export * from './testing/executables.js';
 export * from './testing/hostile-tree.js';
 export * from './testing/platform-gates.js';
 export * from './testing/temp-dir.js';

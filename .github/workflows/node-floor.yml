@@ -37,8 +37,6 @@ jobs:
       - name: Setup toolchain at the floor
         id: setup
         uses: ./.github/actions/setup
-        with:
-          ignore-scripts: 'true'
 
       # setup-node accepts a semver range, so asking for the floor can quietly
       # give you something newer. That would make every assertion below pass for

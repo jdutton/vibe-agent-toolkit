@@ -145,7 +145,8 @@ For small test data (<10 files), raw files in `test/fixtures/` are fine.
 
 **Never use gitignored directory names (`dist/`, `node_modules/`, `coverage/`, `build/`) in
 committed fixtures.** Files committed under these names silently disappear in CI (clean clone)
-while appearing to work locally — see the guard in root [`CLAUDE.md`](../CLAUDE.md#test-fixtures-convention).
+while appearing to work locally — the guard fires from
+[`.claude/rules/test-fixtures.md`](../.claude/rules/test-fixtures.md) when a fixture is read.
 Store committed artifact sources under a non-gitignored name (e.g., `build-artifacts/`) and have
 test `beforeAll` copy them to `tempDir/dist/`, simulating a real build step.
 

@@ -16,7 +16,7 @@ import {
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
-import { removeScratchDir, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
+import { gitExecutable, removeScratchDir, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, expect, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
@@ -69,7 +69,7 @@ export function writeFileIn(rootDir: string, relativePath: string, contents: str
  * ```
  */
 export function createGitRepo(directory: string): string {
-  spawnSync('git', ['init'], { cwd: directory, stdio: 'pipe' });
+  spawnSync(gitExecutable(), ['init'], { cwd: directory, stdio: 'pipe' });
   // `gitFindRoot()` memoizes `null` for any directory a prior walk climbed
   // through (e.g. before this repo existed). Without this reset, a later
   // crawl in the same process silently keeps answering from that stale

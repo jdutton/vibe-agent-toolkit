@@ -76,7 +76,7 @@ export function setupRefusedSkillFixture(prefix: string): () => RefusedSkillFixt
   });
 
   afterAll(async () => {
-    for (const p of locked) await fs.chmod(p, 0o755).catch(() => undefined);
+    for (const p of locked) await fs.chmod(p, 0o700).catch(() => undefined);
     if (fixture !== undefined) await fs.rm(fixture.root, { recursive: true, force: true });
   });
 

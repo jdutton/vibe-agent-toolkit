@@ -2,8 +2,8 @@ import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
 
 import which from 'which';
 
+import { isPathAbsentError } from './errors/errno.js';
 import { VatError } from './errors/vat-error.js';
-import { isPathAbsentError } from './fs-utils.js';
 import { runGit } from './git-run.js';
 import {
   buildWindowsShellLine,

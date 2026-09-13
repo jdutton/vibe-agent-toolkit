@@ -3,7 +3,7 @@ import nodeFs, { rmSync, symlinkSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 
-import { isFilesystemAccessError } from './fs-utils.js';
+import { isFilesystemAccessError } from './errors/errno.js';
 import { normalizedTmpdir, safePath, toForwardSlash } from './path-utils.js';
 
 declare const symlinkCapabilityBrand: unique symbol;

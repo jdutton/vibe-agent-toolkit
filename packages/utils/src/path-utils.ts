@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { isPathAbsentError } from './fs-utils.js';
+import { isPathAbsentError } from './errors/errno.js';
 import { safePath } from './path-core.js';
 
 /**
