@@ -154,8 +154,10 @@ function secretForms(secret: string): string[] {
   ]);
   try {
     forms.add(encodeURIComponent(secret));
-  } catch {
-    // A lone surrogate cannot be percent-encoded; the other forms still apply.
+  } catch (error) {
+    // A lone surrogate cannot be percent-encoded (`URIError`, the one thing
+    // `encodeURIComponent` throws); the other forms still apply.
+    if (!(error instanceof URIError)) throw error;
   }
   const bytes = Buffer.from(secret, 'utf8');
   forms.add(bytes.toString('base64'));

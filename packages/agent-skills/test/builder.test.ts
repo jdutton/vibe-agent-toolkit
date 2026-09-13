@@ -16,6 +16,26 @@ const TEST_AGENT_TOOLS_NAME = 'test-agent-tools';
 const TEST_AGENT_SCRIPTS_NAME = 'test-agent-scripts';
 const TEST_AGENT_LICENSE_NAME = 'test-agent-license';
 const TEST_AGENT_NO_PROMPT_NAME = 'test-agent-no-prompt';
+const LICENSE_FILE = 'LICENSE.txt';
+const MINIMAL_SYSTEM_PROMPT = 'Test agent';
+
+/**
+ * A minimal buildable agent dir — package.json, prompts/system.md, agent.yaml —
+ * for the cases that only care what sits BESIDE the manifest.
+ */
+async function writeMinimalAgent(tempDir: string, name: string): Promise<{ agentDir: string; manifestPath: string }> {
+  const agentDir = safePath.join(tempDir, name);
+  await fs.mkdir(safePath.join(agentDir, PROMPTS_DIR), { recursive: true });
+  await fs.writeFile(safePath.join(agentDir, PACKAGE_JSON_NAME), JSON.stringify({ name }));
+  await fs.writeFile(safePath.join(agentDir, PROMPTS_DIR, SYSTEM_MD), MINIMAL_SYSTEM_PROMPT);
+  const manifestPath = safePath.join(agentDir, AGENT_YAML);
+  await fs.writeFile(
+    manifestPath,
+    `metadata:\n  name: ${name}\n  description: Minimal\n\nspec:\n  llm:\n    provider: anthropic\n` +
+      `    model: claude-sonnet-5\n  prompts:\n    system:\n      $ref: ./prompts/system.md\n`,
+  );
+  return { agentDir, manifestPath };
+}
 
 describe('buildAgentSkill', () => {
   const suite = setupAsyncTempDirSuite('agent-skill');
@@ -151,7 +171,7 @@ spec:
     await fs.mkdir(promptsDir);
     await fs.writeFile(
       safePath.join(promptsDir, SYSTEM_MD),
-      'Test agent'
+      MINIMAL_SYSTEM_PROMPT
     );
 
     // Create scripts directory
@@ -204,12 +224,12 @@ spec:
     await fs.mkdir(promptsDir);
     await fs.writeFile(
       safePath.join(promptsDir, SYSTEM_MD),
-      'Test agent'
+      MINIMAL_SYSTEM_PROMPT
     );
 
     // Create LICENSE.txt
     await fs.writeFile(
-      safePath.join(agentDir, 'LICENSE.txt'),
+      safePath.join(agentDir, LICENSE_FILE),
       'MIT License...'
     );
 
@@ -231,12 +251,35 @@ spec:
     const result = await buildAgentSkill({ agentPath: manifestPath });
 
     // Verify LICENSE.txt was copied (builder writes directly, not via packager)
-    const outputLicensePath = safePath.join(result.outputPath, 'LICENSE.txt');
+    const outputLicensePath = safePath.join(result.outputPath, LICENSE_FILE);
     const licenseExists = await fs.access(outputLicensePath).then(() => true).catch(() => false);
     expect(licenseExists).toBe(true);
 
     const licenseContent = await fs.readFile(outputLicensePath, 'utf-8');
     expect(licenseContent).toBe('MIT License...');
+  });
+
+  // "Copy X if it exists" used to be spelled `try { access(X); copy(X) } catch {}`,
+  // so a copy that FAILED — not a copy that was never needed — produced a bundle
+  // silently missing X. Only absence may skip; a failed copy is the build's error.
+  it('rejects when LICENSE.txt exists but cannot be copied (it is a directory)', async () => {
+    const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'license-is-a-dir');
+    await fs.mkdir(safePath.join(agentDir, LICENSE_FILE));
+    // The errno is platform-specific (EISDIR on Linux, ENOTSUP on macOS, EPERM on
+    // Windows); the syscall in Node's message is not.
+    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toThrow(/copyfile/);
+  });
+
+  it('rejects when scripts/ exists but cannot be copied (it is a plain file)', async () => {
+    const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'scripts-is-a-file');
+    await fs.writeFile(safePath.join(agentDir, 'scripts'), 'not a directory');
+    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toThrow(/ENOTDIR|not a directory/);
+  });
+
+  it('builds without scripts/ or LICENSE.txt when neither exists (absence still skips)', async () => {
+    const { manifestPath } = await writeMinimalAgent(tempDir, 'nothing-beside');
+    const result = await buildAgentSkill({ agentPath: manifestPath });
+    expect(result.files.some((f) => f.endsWith('/scripts') || f.endsWith(LICENSE_FILE))).toBe(false);
   });
 
   it('should throw error if system prompt is missing', async () => {

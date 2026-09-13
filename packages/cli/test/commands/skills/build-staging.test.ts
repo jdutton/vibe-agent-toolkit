@@ -1,6 +1,6 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- test code writes into its own temp dirs */
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 
 import type {
   PackageSkillResult,
@@ -23,8 +23,14 @@ import {
 } from '../../../src/commands/skills/build.js';
 import { collectPostBuildIssues } from '../../../src/utils/issue-rendering.js';
 import type { Logger } from '../../../src/utils/logger.js';
+import { errno } from '../../helpers/refusal-doubles.js';
 import { createTempDirTracker } from '../../system/test-common.js';
 import { recordingLogger, silentLogger as SILENT_LOGGER } from '../../test-doubles.js';
+
+// `rm` is a named import in the build, so the one refused-cleanup case injects
+// at the module seam. Every other call removes for real.
+vi.mock('node:fs/promises', async (importOriginal) =>
+  (await import('../../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['rm']));
 
 /**
  * A body whose relative link resolves to nothing: `LINK_MISSING_TARGET`, an
@@ -471,8 +477,27 @@ describe('beginStagedBuild - a failed promotion still leaves an answer', () => {
     const recovery = await staging.recover();
 
     expect(recovery.restoredPrevious).toBe(false);
-    expect(recovery.residue).toEqual([staging.parkedPath]);
+    expect(recovery.residue).toEqual([{ path: staging.parkedPath, reason: expect.stringContaining('occupied') }]);
     await expect(readdir(safePath.join(cwd, 'dist', 'skills'))).resolves.toEqual([OTHER_RUN_BUNDLE]);
+  });
+
+  it('names WHY each path stayed on disk, so a second refusal is not lost behind the first', async () => {
+    // The repair runs because the filesystem already refused something; when
+    // it refuses again, the parked path used to be listed with no reason and
+    // the second errno went nowhere.
+    const cwd = createTempDir();
+    await seedPreviousOutput(cwd, ['kept']);
+    const staging = await beginStagedBuild(cwd, undefined);
+    await seedTree(safePath.join(staging.root, 'fresh'), 'this run\n');
+    await seedTree(safePath.join(cwd, 'dist', 'skills', OTHER_RUN_BUNDLE), OTHER_RUN_BYTES);
+    // `commit()` fails on the occupied target; `recover()` then cannot restore
+    // (occupied) AND, here, cannot drop its own staging root either.
+    vi.mocked(rm).mockRejectedValueOnce(errno('EBUSY', 'EBUSY: resource busy'));
+
+    const settled = await settleStaging(staging, false, SILENT_LOGGER);
+
+    expect(settled.promotionError).toContain(`${staging.parkedPath} — the promotion target is already occupied`);
+    expect(settled.promotionError).toContain(`${staging.root} — removal failed: EBUSY`);
   });
 
   it('reports the promotion failure, names the parked path, and publishes the document', async () => {

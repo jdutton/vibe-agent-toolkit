@@ -4,7 +4,7 @@
 
 import fs from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
@@ -37,7 +37,10 @@ export async function uninstallAgent(
     // Check if installed
     try {
       await fs.access(installPath);
-    } catch {
+    } catch (error) {
+      // "Not installed" is an absence. A refusal is reported as itself by the
+      // command's error handler, not as an install that does not exist.
+      if (!isPathAbsentError(error)) throw error;
       logger.error(`\n${agentName} is not installed at ${installPath}\n`);
       process.exit(1);
     }

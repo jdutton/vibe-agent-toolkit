@@ -105,25 +105,34 @@ describe('gitignore-checker', () => {
       expect(ig?.ignores('subdir/file.tmp')).toBe(true); // From subdir
     });
 
-    it('should handle unreadable .gitignore files gracefully', () => {
-      const gitignorePath = safePath.join(gitRoot, GITIGNORE_FILENAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
-      fs.writeFileSync(gitignorePath, 'node_modules/\n');
-      // Make file unreadable (Unix-like systems only)
-      if (process.platform !== 'win32') {
+    // A `.gitignore` that exists but cannot be read holds rules this checker
+    // cannot honour. It used to be skipped silently — "handled gracefully" —
+    // which meant a crawl proceeded WITHOUT the rules and enumerated the
+    // ignored tree, with nothing anywhere saying so. Only a file that vanished
+    // between `existsSync` and the read is skipped now; a refusal is loud.
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'throws EACCES for a .gitignore the OS refuses to read, rather than crawling without its rules',
+      () => {
+        const gitignorePath = safePath.join(gitRoot, GITIGNORE_FILENAME);
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
+        fs.writeFileSync(gitignorePath, 'node_modules/\n');
         // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
         fs.chmodSync(gitignorePath, 0o000);
-      }
+        try {
+          expect(() => loadGitignoreRules(gitRoot)).toThrow(/EACCES/);
+        } finally {
+          // eslint-disable-next-line security/detect-non-literal-fs-filename, sonarjs/file-permissions -- tempDir is from mkdtempSync, safe test file
+          fs.chmodSync(gitignorePath, 0o644);
+        }
+      },
+    );
 
-      const ig = loadGitignoreRules(gitRoot);
-      // Should still return an ignore instance (with just .git rule)
-      expect(ig).not.toBeNull();
-
-      // Restore permissions for cleanup
-      if (process.platform !== 'win32') {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename, sonarjs/file-permissions -- tempDir is from mkdtempSync, safe test file
-        fs.chmodSync(gitignorePath, 0o644);
-      }
+    it('throws EISDIR for a DIRECTORY named .gitignore, on every platform', () => {
+      // Reaches the same catch as the chmod case without needing POSIX modes or
+      // a non-root user: `existsSync` says yes, `readFileSync` refuses.
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
+      fs.mkdirSync(safePath.join(gitRoot, GITIGNORE_FILENAME));
+      expect(() => loadGitignoreRules(gitRoot)).toThrow(/EISDIR/);
     });
   });
 });

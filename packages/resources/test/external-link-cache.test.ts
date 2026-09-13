@@ -382,6 +382,30 @@ describe('ExternalLinkCache', () => {
 		},
 	);
 
+	// The `no-blind-catch` split: fail-soft covers the FILESYSTEM refusing and a
+	// corrupt file (pinned above). A `TypeError` from inside the load or save
+	// path is a bug, and a bug absorbed as an empty cache re-fetches the
+	// internet on every run while reporting nothing.
+	it('propagates a non-filesystem error from the load rather than reading it as an empty cache', async () => {
+		const bug = new TypeError('simulated defect inside readFile');
+		const readFile = vi.spyOn(fs, 'readFile').mockRejectedValueOnce(bug);
+		try {
+			await expect(cache.get(EXAMPLE_URL)).rejects.toBe(bug);
+		} finally {
+			readFile.mockRestore();
+		}
+	});
+
+	it('propagates a non-filesystem error from the save rather than dropping the write', async () => {
+		const bug = new TypeError('simulated defect inside writeFile');
+		const writeFile = vi.spyOn(fs, 'writeFile').mockRejectedValueOnce(bug);
+		try {
+			await expect(cache.set(EXAMPLE_URL, 200, 'OK')).rejects.toBe(bug);
+		} finally {
+			writeFile.mockRestore();
+		}
+	});
+
 	it('should clear all cache entries', async () => {
 		// Add some entries
 		await cache.set(EXAMPLE_URL, 200, 'OK');

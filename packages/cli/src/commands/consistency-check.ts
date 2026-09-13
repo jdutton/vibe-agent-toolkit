@@ -6,12 +6,14 @@
  * package.json is a SUSPECT being validated, never an input for truth.
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 
 import { getPluginSourceDir } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig, SkillPackagingConfig } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
+
+import { readPackageJsonOrAbsent } from '../utils/package-json.js';
 
 import type { DiscoveredSkill } from './skills/command-helpers.js';
 
@@ -70,27 +72,17 @@ export function isSkillPublished(
 export function readVatSkillsFromPackageJson(
   projectRoot: string
 ): string[] | undefined {
-  const pkgPath = safePath.join(projectRoot, 'package.json');
+  // Absent manifest, or one with no `vat.skills`: nothing declared. A manifest
+  // that is there and cannot be read is NOT "nothing declared" — it used to be,
+  // and the cross-check then verified nothing and said so nowhere.
+  const pkg = readPackageJsonOrAbsent(safePath.join(projectRoot, 'package.json'));
+  const vat = pkg?.['vat'] as Record<string, unknown> | undefined;
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- pkgPath derived from projectRoot parameter
-  if (!existsSync(pkgPath)) {
+  if (!vat || !Array.isArray(vat['skills'])) {
     return undefined;
   }
 
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- pkgPath derived from projectRoot parameter
-    const raw = readFileSync(pkgPath, 'utf-8');
-    const pkg = JSON.parse(raw) as Record<string, unknown>;
-    const vat = pkg['vat'] as Record<string, unknown> | undefined;
-
-    if (!vat || !Array.isArray(vat['skills'])) {
-      return undefined;
-    }
-
-    return vat['skills'] as string[];
-  } catch {
-    return undefined;
-  }
+  return vat['skills'] as string[];
 }
 
 /**
@@ -404,25 +396,14 @@ function checkSkillUnpublished(
 
 /**
  * Read the `files` array from a package's `package.json`.
- * Returns an empty array when the file is absent, unreadable, or has no `files` field.
+ * Returns an empty array when the file is absent or has no `files` field. A
+ * manifest that is there and cannot be read throws — an empty allowlist is a
+ * finding ("vendor/ is not shipped"), and it must not be minted by a parse error.
  */
 function readPackageJsonFilesAllowlist(packageDir: string): string[] {
-  const pkgPath = safePath.join(packageDir, 'package.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- pkgPath derived from trusted packageDir parameter
-  if (!existsSync(pkgPath)) {
-    return [];
-  }
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- pkgPath derived from trusted packageDir parameter
-    const raw = readFileSync(pkgPath, 'utf-8');
-    const pkg = JSON.parse(raw) as Record<string, unknown>;
-    if (!Array.isArray(pkg['files'])) {
-      return [];
-    }
-    return pkg['files'] as string[];
-  } catch {
-    return [];
-  }
+  const pkg = readPackageJsonOrAbsent(safePath.join(packageDir, 'package.json'));
+  const files = pkg?.['files'];
+  return Array.isArray(files) ? (files as string[]) : [];
 }
 
 /**

@@ -223,15 +223,26 @@ function quoteBody(responseText: string): string {
   return `${trimmed.slice(0, MAX_QUOTED_BODY_CHARS)}… (truncated, ${String(trimmed.length)} characters)`;
 }
 
+/**
+ * `JSON.parse`, or `undefined` when the text is not JSON — an edge proxy's HTML,
+ * a bare gateway error, an empty body. ONLY a `SyntaxError` is that case: it is
+ * the one thing `JSON.parse` throws for bad input, and anything else is a fault
+ * in this process that must not be reported as a malformed body from the API.
+ */
+function parseJsonOrUndefined(text: string): { parsed: unknown } | undefined {
+  try {
+    return { parsed: JSON.parse(text) };
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    return undefined;
+  }
+}
+
 /** The API's own error message when the error body is JSON; the raw body otherwise. */
 function errorDetail(responseText: string): string {
-  try {
-    const parsed: unknown = JSON.parse(responseText);
-    const message = (parsed as { error?: { message?: unknown } } | null)?.error?.message;
-    if (typeof message === 'string' && message !== '') return message;
-  } catch {
-    // Not JSON: an edge proxy's HTML, or a bare gateway error. Fall through to the body.
-  }
+  const body = parseJsonOrUndefined(responseText);
+  const message = (body?.parsed as { error?: { message?: unknown } } | null | undefined)?.error?.message;
+  if (typeof message === 'string' && message !== '') return message;
   return quoteBody(responseText);
 }
 
@@ -263,14 +274,14 @@ export function interpretApiResponse<T>(
   if (responseText.trim() === '') {
     return { ok: true, value: undefined as T };
   }
-  try {
-    return { ok: true, value: JSON.parse(responseText) as T };
-  } catch {
+  const body = parseJsonOrUndefined(responseText);
+  if (body === undefined) {
     return {
       ok: false,
       message: `Failed to parse API response (HTTP ${String(statusCode)}): ${quoteBody(responseText)}`,
     };
   }
+  return { ok: true, value: body.parsed as T };
 }
 
 /** The single `Retry-After` value, if the response carried one. */

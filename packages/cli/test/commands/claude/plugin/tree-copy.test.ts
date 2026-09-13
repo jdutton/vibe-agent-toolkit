@@ -1,6 +1,6 @@
 /* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, writeFile } from 'node:fs/promises';
 
 import {
   createSymlink,
@@ -11,7 +11,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   PluginSymlinkRefusedError,
@@ -19,7 +19,13 @@ import {
   type TreeCopyOptions,
   type TreeCopyResult,
 } from '../../../../src/commands/claude/plugin/tree-copy.js';
+import { errno, realBehind, refusingOnly } from '../../../helpers/refusal-doubles.js';
 import { createTempDirTracker } from '../../../system/test-common.js';
+
+// `realpath` is a named import in the copy, so the one refused-resolution case
+// injects at the module seam. Every other case resolves for real through it.
+vi.mock('node:fs/promises', async (importOriginal) =>
+  (await import('../../../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['realpath']));
 
 /**
  * Seed a plugin source and tree-copy it with the given `exclude:` patterns.
@@ -579,5 +585,31 @@ describe.skipIf(!symlinkCapability())('treeCopyPlugin — symlinks, both crawl r
 
     expect(error.refused).toEqual([{ path: 'hooks/env-alias', reason: 'target-excluded', target: '.env' }]);
     expectNothingCopied(fx);
+  });
+
+  it('refuses a self-referencing symlink as unresolvable — a loop is what the message says', async () => {
+    const fx = await seedPlugin();
+    fx.link('self', 'self');
+
+    const error = await copyExpectingRefusal(fx);
+
+    expect(error.refused).toEqual([{ path: 'hooks/self', reason: 'unresolvable' }]);
+    expectNothingCopied(fx);
+  });
+
+  it('lets a link the OS refuses to resolve through as itself, not as dangling', async () => {
+    // 'unresolvable' means dangling or a loop. A link whose target the process
+    // may not see resolves fine for everyone else, and telling the operator to
+    // fix it is the wrong remedy.
+    const fx = await seedPlugin();
+    fx.link('alias.json', 'hooks.json');
+    vi.mocked(realpath).mockImplementation(
+      refusingOnly(safePath.join(fx.src, 'hooks', 'alias.json'), errno('EACCES'), realBehind(realpath)),
+    );
+    try {
+      await expect(treeCopyPlugin({ sourceDir: fx.src, destDir: fx.dest })).rejects.toMatchObject({ code: 'EACCES' });
+    } finally {
+      vi.mocked(realpath).mockRestore();
+    }
   });
 });

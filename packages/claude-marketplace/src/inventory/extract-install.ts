@@ -100,6 +100,23 @@ async function collectMarketplaces(
 	}
 }
 
+/**
+ * The subdirectories of `dir`, or `[]` with the listing failure recorded in
+ * `parseErrors` — every failure, the concurrent-deletion race included, because
+ * a path that was listed a moment ago and is now gone is worth a row too.
+ */
+async function subdirectoriesOrRecord(dir: string, parseErrors: ParseErrors): Promise<string[]> {
+	try {
+		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from cache directory walk
+		return (await readdir(dir, { withFileTypes: true }))
+			.filter(e => e.isDirectory())
+			.map(e => safePath.join(dir, e.name));
+	} catch (e) {
+		parseErrors.push({ path: dir, message: (e as Error).message });
+		return [];
+	}
+}
+
 async function collectCachedPlugins(
 	cacheDir: string,
 	plugins: PluginInventory[],
@@ -109,18 +126,7 @@ async function collectCachedPlugins(
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from validated ClaudeUserPaths
 	if (!existsSync(cacheDir)) return;
 
-	let marketplaceDirs: string[];
-	try {
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from validated ClaudeUserPaths
-		marketplaceDirs = (await readdir(cacheDir, { withFileTypes: true }))
-			.filter(e => e.isDirectory())
-			.map(e => safePath.join(cacheDir, e.name));
-	} catch (e) {
-		parseErrors.push({ path: cacheDir, message: (e as Error).message });
-		return;
-	}
-
-	for (const mpDir of marketplaceDirs) {
+	for (const mpDir of await subdirectoriesOrRecord(cacheDir, parseErrors)) {
 		await collectPluginsInMarketplaceCache(mpDir, plugins, parseErrors, gitTrackerSource);
 	}
 }
@@ -131,27 +137,12 @@ async function collectPluginsInMarketplaceCache(
 	parseErrors: ParseErrors,
 	gitTrackerSource: GitTrackerSource,
 ): Promise<void> {
-	let pluginNameDirs: string[];
-	try {
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from cache directory walk
-		pluginNameDirs = (await readdir(mpDir, { withFileTypes: true }))
-			.filter(e => e.isDirectory())
-			.map(e => safePath.join(mpDir, e.name));
-	} catch {
-		// best-effort: skip unreadable marketplace cache directories
-		return;
-	}
+	// A level the OS refuses to list is recorded against its own path, the same way
+	// the cache root above is: an unlisted marketplace used to read as "no plugins".
+	const pluginNameDirs = await subdirectoriesOrRecord(mpDir, parseErrors);
 
 	for (const nameDir of pluginNameDirs) {
-		let versionDirs: string[];
-		try {
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from cache directory walk
-			versionDirs = (await readdir(nameDir, { withFileTypes: true }))
-				.filter(e => e.isDirectory())
-				.map(e => safePath.join(nameDir, e.name));
-		} catch {
-			continue;
-		}
+		const versionDirs = await subdirectoriesOrRecord(nameDir, parseErrors);
 		for (const versionDir of versionDirs) {
 			try {
 				// N+1 WHOLE-CORPUS CRAWL — known, not fixed here. No `SharedRegistrySource` is

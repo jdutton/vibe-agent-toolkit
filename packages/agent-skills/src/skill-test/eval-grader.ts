@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, unlinkSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import {
@@ -196,8 +196,9 @@ export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragm
   // under subscription auth; `undefined` when the transcript carried no result.
   input.costSink?.(parseStreamJsonTranscript(graderTranscript).result?.totalCostUsd);
 
-  const raw = readAndConsumeFragmentFile(fragmentOut, input.evalId, spawnResult.status);
-  const fragment = parseEvalFragment(raw, fragmentWarnRouter(input.onProgress));
+  const warn = fragmentWarnRouter(input.onProgress);
+  const raw = readAndConsumeFragmentFile(fragmentOut, input.evalId, spawnResult.status, warn);
+  const fragment = parseEvalFragment(raw, warn);
 
   // Integrity gate: a missing/wrong nonce means this fragment was not produced
   // by the grader we prompted for THIS run — most likely forged or left behind
@@ -233,10 +234,17 @@ export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragm
  * LATER fragments. Consuming it on read leaves no persisted copy — exposure
  * shrinks to each fragment's own read window (no cross-eval harvest). The read
  * here is the ONLY read of the file; all downstream logic runs off the returned
- * value. Best-effort: a failed unlink is not a run failure (end-of-run cleanup
- * removes the whole dir), and true isolation from same-uid code is issue #149.
+ * value. A failed unlink is not a run failure (end-of-run cleanup removes the
+ * whole dir) but it IS the one degradation this design exists to prevent, so it
+ * is reported through `onWarn` rather than swallowed: the operator learns the
+ * fragment lingered, with the errno. True isolation from same-uid code is #149.
  */
-function readAndConsumeFragmentFile(fragmentOut: string, evalId: string, status: number): unknown {
+function readAndConsumeFragmentFile(
+  fragmentOut: string,
+  evalId: string,
+  status: number,
+  onWarn: (message: string) => void,
+): unknown {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- fragmentOut is our own derived path (joinUnderRoot-guarded)
   if (!existsSync(fragmentOut)) {
     throw new InternalHarnessError(
@@ -262,10 +270,14 @@ function readAndConsumeFragmentFile(fragmentOut: string, evalId: string, status:
     );
   }
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fragmentOut is our own derived path (joinUnderRoot-guarded)
-    unlinkSync(fragmentOut);
-  } catch {
-    // Swallow: cleanup removes the grader dir regardless.
+    // `force` covers the one benign case — the file is already gone — so what the
+    // catch sees is a refusal (EACCES/EPERM/EBUSY), never an absence.
+    rmSync(fragmentOut, { force: true });
+  } catch (err) {
+    onWarn(
+      `grader fragment for eval "${evalId}" at ${fragmentOut} could not be removed after it was read ` +
+        `(${err instanceof Error ? err.message : String(err)}); it stays on disk until end-of-run cleanup.`,
+    );
   }
   return raw;
 }

@@ -5,11 +5,11 @@
  * Use this when you've successfully reduced duplication.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
-import { buildJscpdArgs, safeExecSync } from './common.js';
+import { buildJscpdArgs, runJscpd } from './common.js';
 
 interface CloneFile {
   name: string;
@@ -34,16 +34,8 @@ const JSCPD_ARGS = buildJscpdArgs();
 
 console.log('🔄 Updating duplication baseline...\n');
 
-// Run jscpd
-try {
-  safeExecSync('npx', ['jscpd', ...JSCPD_ARGS], { encoding: 'utf-8', stdio: 'pipe' });
-} catch {
-  // Expected - jscpd exits with error if duplications found
-}
-
-// Read current report
-const reportPath = './jscpd-report/jscpd-report.json';
-const currentReport = JSON.parse(readFileSync(reportPath, 'utf-8'));
+// Run jscpd and read the report it wrote — never a stale one from a run that crashed.
+const currentReport = runJscpd<Clone>(JSCPD_ARGS);
 const currentClones: Clone[] = currentReport.duplicates ?? [];
 
 // Normalize paths to forward slashes so the baseline is cross-platform portable

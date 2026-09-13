@@ -169,7 +169,10 @@ export function readLaneFromOutput(stdout: string): ReportedLane {
   let raw: unknown;
   try {
     raw = JSON.parse(stdout) as unknown;
-  } catch {
+  } catch (error) {
+    // Not a JSON document is the one case "unreported" means; JSON.parse
+    // throws nothing else, so anything else here is a bug and stays loud.
+    if (!(error instanceof SyntaxError)) throw error;
     return UNREPORTED;
   }
   return laneOfDocument(raw);

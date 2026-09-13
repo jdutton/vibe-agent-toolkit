@@ -20,7 +20,7 @@ import type { ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import { delimiter } from 'node:path';
 
-import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import { spawnHardened } from '@vibe-agent-toolkit/utils/process';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 
@@ -139,8 +139,11 @@ function observe(barrel: string): Observation {
   let contents: string;
   try {
     contents = fs.readFileSync(barrel, 'utf8');
-  } catch {
-    return 'missing';
+  } catch (error) {
+    // Only absence is the `missing` observation this test is about; a refusal
+    // would be a broken fixture, not a build that made the barrel vanish.
+    if (isPathAbsentError(error)) return 'missing';
+    throw error;
   }
   return contents.includes(BARREL_EXPORT) ? 'ok' : 'partial';
 }

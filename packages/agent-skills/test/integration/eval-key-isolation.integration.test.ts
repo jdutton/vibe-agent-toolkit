@@ -86,13 +86,10 @@ function filesContaining(roots: readonly string[], needle: string): string[] {
   const hits = new Set<string>();
   for (const root of roots) {
     for (const file of walkFiles(root)) {
-      let raw: string;
-      try {
-        raw = readFileSync(file, 'utf8');
-      } catch {
-        continue; // unreadable/binary — cannot carry the key as text
-      }
-      if (raw.includes(needle)) hits.add(file);
+      // `walkFiles` just listed it, and a binary file decodes to garbage rather
+      // than throwing — so a read that fails here is the test's own problem and
+      // must fail the test, not silently shrink the set the leak is looked for in.
+      if (readFileSync(file, 'utf8').includes(needle)) hits.add(file);
     }
   }
   return [...hits];

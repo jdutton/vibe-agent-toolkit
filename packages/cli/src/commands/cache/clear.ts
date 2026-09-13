@@ -15,7 +15,7 @@ import { type Dirent, promises as fs } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import { parseCacheDirectory } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
@@ -281,14 +281,18 @@ async function measureTree(dir: string): Promise<TreeUsage> {
  * A file that disappears between the listing and the stat contributes 0 rather
  * than failing the clear — the whole tree is about to be deleted anyway, and a
  * concurrent vat run pruning its own temp file must not turn cleanup into an
- * error.
+ * error. Only a DISAPPEARANCE is 0: an entry the OS refuses to stat is still
+ * there, still about to be counted as reclaimed, and the `rm` that follows is
+ * about to meet the same refusal — so it is raised here, where it names the
+ * entry, rather than read as an empty file.
  */
 async function sizeOf(target: string): Promise<number> {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is inside the cache root being measured
     const stats = await fs.lstat(target);
     return stats.size;
-  } catch {
-    return 0;
+  } catch (error) {
+    if (isPathAbsentError(error)) return 0;
+    throw error;
   }
 }

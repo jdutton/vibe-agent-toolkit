@@ -21,7 +21,7 @@
 import type { Dirent } from 'node:fs';
 import * as fs from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 /** A path the walk could not list, and the OS message for it. Absolute. */
 export interface WalkRefusal {
@@ -32,7 +32,7 @@ export interface WalkRefusal {
 export interface WalkedTree {
   /** Every regular file reached (through links), absolute, in walk order. */
   files: string[];
-  /** Every directory beneath the root the walk could not list. */
+  /** Every path beneath the root the walk could not list or, for a link, resolve. */
   unlistable: WalkRefusal[];
 }
 
@@ -54,15 +54,24 @@ interface FileKind {
 
 /**
  * What a directory entry is, through a symlink when it is one. A link whose
- * target is gone is neither — there is nothing there to read.
+ * target is gone is neither — there is nothing there to read. A link whose
+ * target the OS REFUSES to examine (`EACCES` on a component, `ELOOP` on a link
+ * chain) is recorded in `unlistable`, the same row a directory that cannot be
+ * listed gets: it used to take the "gone" exit, and a refused skill directory
+ * behind a link vanished from both compat lanes with no row saying so.
  */
-async function entryKind(entry: Dirent<string>, entryPath: string): Promise<'file' | 'directory' | 'other'> {
+async function entryKind(
+  entry: Dirent<string>,
+  entryPath: string,
+  unlistable: WalkRefusal[],
+): Promise<'file' | 'directory' | 'other'> {
   let target: FileKind = entry;
   if (entry.isSymbolicLink()) {
     try {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- trusted plugin dir
       target = await fs.stat(entryPath);
-    } catch {
+    } catch (error) {
+      if (!isPathAbsentError(error)) unlistable.push({ path: entryPath, reason: reasonOf(error) });
       return 'other';
     }
   }
@@ -94,7 +103,7 @@ export async function walkFollowingLinks(rootDir: string, options: WalkOptions =
   async function scanEntries(dir: string, entries: Dirent<string>[]): Promise<void> {
     for (const entry of entries) {
       const entryPath = safePath.join(dir, entry.name);
-      const kind = await entryKind(entry, entryPath);
+      const kind = await entryKind(entry, entryPath, unlistable);
       if (kind === 'file') {
         files.push(entryPath);
       } else if (kind === 'directory' && options.skipDirectory?.(entry.name) !== true) {

@@ -78,7 +78,7 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 import { z } from 'zod';
 
@@ -204,6 +204,10 @@ async function canonicalPath(path: string): Promise<string> {
 /**
  * Is this path an existing regular file?
  *
+ * Only a path that is not there answers `false`. A path the OS refuses to
+ * look at throws: every caller turns `false` into "no vat entry point here,
+ * build it", and that is the wrong remedy for a permissions problem.
+ *
  * @param path - Path to probe
  * @returns `true` when it exists and is a file
  */
@@ -212,8 +216,9 @@ async function isRegularFile(path: string): Promise<boolean> {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied instrument path; probing it is the point
     const stats = await stat(path);
     return stats.isFile();
-  } catch {
-    return false;
+  } catch (error) {
+    if (isPathAbsentError(error)) return false;
+    throw error;
   }
 }
 

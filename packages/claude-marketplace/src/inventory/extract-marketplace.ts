@@ -1,9 +1,9 @@
-import { existsSync, statSync, type Stats } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 import type { PluginInventory, PluginRef } from '@vibe-agent-toolkit/agent-skills';
 import { MarketplaceManifestSchema } from '@vibe-agent-toolkit/agent-skills';
-import { normalizePath, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, normalizePath, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { extractClaudePluginInventory } from './extract-plugin.js';
 import type { GitTrackerSource } from './extract-skill.js';
@@ -180,7 +180,9 @@ interface MarketplaceRoot {
  *
  * 1. `safePath.joinUnderRoot` — refuses an absolute path (POSIX, drive letter,
  *    UNC) and a `..` climb, behind either separator (`toForwardSlash` first).
- * 2. `existsSync` — a source that is not there is `exists: false`, as before.
+ * 2. `statSync` — a source that is not there is `exists: false`, as before; one
+ *    the OS REFUSES to examine (`EACCES`, `ELOOP`) is refused by errno, because
+ *    "missing" would send the reader to create a directory that is there.
  * 3. realpath, via `normalizePath`, compared against the root's OWN realpath
  *    with the same `joinUnderRoot` — a symlink inside the root pointing out is
  *    outside; a root reached through a symlink (`/var` → `/private/var`) is not
@@ -209,23 +211,35 @@ interface MarketplaceRoot {
 function containedSourceDir(
 	root: MarketplaceRoot,
 	source: string,
-): { resolved: string; exists: boolean } | { refused: string } {
+): { resolved: string; exists: boolean } | SourceRefusal {
 	const forward = toForwardSlash(source);
-	if (forward === '') return { refused: 'is empty' };
-	if (forward.split('/').includes('..')) return { refused: 'carries a ".." segment' };
+	if (forward === '') return shapeRefusal('is empty');
+	if (forward.split('/').includes('..')) return shapeRefusal('carries a ".." segment');
 	let resolved: string;
 	try {
 		resolved = safePath.joinUnderRoot(root.path, forward);
-	} catch {
-		return { refused: OUTSIDE_ROOT };
+	} catch (error) {
+		if (!isRootEscape(error)) throw error;
+		return shapeRefusal(OUTSIDE_ROOT);
 	}
-	const stats = statOrUndefined(resolved);
-	if (stats === undefined) return { resolved, exists: false };
-	if (!stats.isDirectory()) return { refused: 'is not a directory' };
+	let isDirectory: boolean;
+	try {
+		// eslint-disable-next-line security/detect-non-literal-fs-filename -- contained under the marketplace root by joinUnderRoot
+		isDirectory = statSync(resolved).isDirectory();
+	} catch (error) {
+		// Absent — a missing path, a dangling link, a file where a directory
+		// component should be — is the `exists: false` the caller publishes. A
+		// refusal is not absence: it is named by errno so the parse error says why.
+		if (isPathAbsentError(error)) return { resolved, exists: false };
+		const reason = error instanceof Error ? error.message : String(error);
+		return { refused: `could not be examined (${reason})`, shape: false };
+	}
+	if (!isDirectory) return shapeRefusal('is not a directory');
 	try {
 		safePath.joinUnderRoot(root.realPath, safePath.relative(root.realPath, toForwardSlash(normalizePath(resolved))));
-	} catch {
-		return { refused: OUTSIDE_ROOT };
+	} catch (error) {
+		if (!isRootEscape(error)) throw error;
+		return shapeRefusal(OUTSIDE_ROOT);
 	}
 	return { resolved, exists: true };
 }
@@ -233,18 +247,28 @@ function containedSourceDir(
 const OUTSIDE_ROOT = 'resolves outside the marketplace directory';
 
 /**
- * `stat` that answers `undefined` for anything that is not there — a missing
- * path, a dangling link, a component that is a file, a directory the process
- * may not enter. Every one of those is "no plugin directory here", which is
- * the `exists: false` the caller already publishes; this lane never throws.
+ * Why a source was not walked. `shape: true` is a refusal of the source's
+ * SPELLING — the parse error then states the rule it broke; `shape: false` is
+ * the OS refusing to examine a well-formed one, where that rule would mislead.
  */
-function statOrUndefined(path: string): Stats | undefined {
-	try {
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- contained under the marketplace root by joinUnderRoot
-		return statSync(path);
-	} catch {
-		return undefined;
-	}
+interface SourceRefusal {
+	refused: string;
+	shape: boolean;
+}
+
+function shapeRefusal(refused: string): SourceRefusal {
+	return { refused, shape: true };
+}
+
+/**
+ * Whether `error` is `safePath.joinUnderRoot` refusing a path that leaves its
+ * root — the one failure that lane throws by design, and the only one the
+ * refusal above may absorb. It throws a plain `Error` with no class of its own,
+ * so the prefix it stamps on every message is the seam; anything else (a
+ * `TypeError` from a bad argument) is a bug and stays loud.
+ */
+function isRootEscape(error: unknown): boolean {
+	return error instanceof Error && error.message.startsWith('safePath.joinUnderRoot:');
 }
 
 /**
@@ -260,11 +284,13 @@ function statOrUndefined(path: string): Stats | undefined {
 function pathSourceRef(root: MarketplaceRoot, source: string): PluginRef {
 	const dir = containedSourceDir(root, source);
 	if ('refused' in dir) {
+		const rule = dir.shape
+			? ' — a plugin source must be a relative path to a directory inside the marketplace'
+				+ ' (no absolute path, no ".." segment, no symlink pointing out).'
+			: '';
 		root.parseErrors.push({
 			path: root.manifestFilePath,
-			message: `plugin source "${source}" ${dir.refused} and was not walked`
-				+ ' — a plugin source must be a relative path to a directory inside the marketplace'
-				+ ' (no absolute path, no ".." segment, no symlink pointing out).',
+			message: `plugin source "${source}" ${dir.refused} and was not walked${rule}`,
 		});
 		return { manifestPath: source, resolvedPath: root.manifestFilePath, exists: false, source: 'path' };
 	}

@@ -20,20 +20,25 @@ function readPackageVersion(packagePath: string): PackageInfo | null {
     return null;
   }
 
+  let pkg: { name?: string; version?: string };
   try {
-    const content = readFileSync(packageJsonPath, 'utf-8');
-    const pkg = JSON.parse(content) as { name?: string; version?: string };
-    if (!pkg.name || !pkg.version) {
-      return null;
-    }
-    return {
-      name: pkg.name,
-      version: pkg.version,
-      path: packagePath,
-    };
-  } catch {
+    pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as { name?: string; version?: string };
+  } catch (cause) {
+    // A manifest that is there but unreadable or not JSON must not vanish from
+    // the population: "all N packages agree" would then be true of N-1.
+    throw new Error(
+      `Cannot read ${packageJsonPath}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+  }
+  if (!pkg.name || !pkg.version) {
     return null;
   }
+  return {
+    name: pkg.name,
+    version: pkg.version,
+    path: packagePath,
+  };
 }
 
 function validateVersion(projectRoot: string): void {
@@ -82,4 +87,9 @@ function validateVersion(projectRoot: string): void {
 }
 
 const projectRoot = process.argv[2] ?? process.cwd();
-validateVersion(projectRoot);
+try {
+  validateVersion(projectRoot);
+} catch (error) {
+  log(`✗ ${error instanceof Error ? error.message : String(error)}`, 'red');
+  process.exit(1);
+}

@@ -10,6 +10,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, parse } from 'node:path';
 
+import { isPathAbsentError } from './fs-utils.js';
 import { resetGitRootCache } from './git-root-cache.js';
 import { safePath } from './path-utils.js';
 import { readTextContentSync } from './text-file.js';
@@ -64,8 +65,13 @@ export function findNodeWorkspaceRoot(startDir: string): string | null {
         if (typeof parsed === 'object' && parsed !== null && 'workspaces' in parsed) {
           return current;
         }
-      } catch {
-        // Invalid JSON — skip and continue walking up.
+      } catch (error) {
+        // Not JSON: not a manifest this walk can read, so skip it and keep
+        // walking up. Gone between `existsSync` and the read counts the same. A
+        // manifest the OS refused (`EACCES`), or a directory named
+        // `package.json` (`EISDIR`), is neither — reading past it would make
+        // the walk settle on the WRONG root, silently.
+        if (!(error instanceof SyntaxError) && !isPathAbsentError(error)) throw error;
       }
     }
     current = dirname(current);

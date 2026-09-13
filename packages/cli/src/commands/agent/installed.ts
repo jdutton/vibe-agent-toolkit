@@ -2,9 +2,10 @@
  * List installed agents command
  */
 
+import type { Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import yaml from 'yaml';
 
 import { handleCommandError } from '../../utils/command-error.js';
@@ -110,15 +111,8 @@ async function scanForInstalledSkills(
     const location = scopeLocations[currentScope];
     if (!location) continue;
 
-    try {
-      await fs.access(location);
-    } catch {
-      // Directory doesn't exist, skip
-      continue;
-    }
-
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from validated scope location
-    const entries = await fs.readdir(location, { withFileTypes: true });
+    const entries = await listScopeLocation(location);
+    if (entries === null) continue;
 
     for (const entry of entries) {
       if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
@@ -138,4 +132,20 @@ async function scanForInstalledSkills(
   }
 
   return skills;
+}
+
+/**
+ * The entries of one scope location, or `null` when there is no such directory.
+ *
+ * Only an ABSENCE is `null`. A scope directory the OS refuses to list is not an
+ * empty one, and reading it as empty would list fewer installs than there are.
+ */
+async function listScopeLocation(location: string): Promise<Dirent[] | null> {
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from validated scope location
+    return await fs.readdir(location, { withFileTypes: true });
+  } catch (error) {
+    if (isPathAbsentError(error)) return null;
+    throw error;
+  }
 }

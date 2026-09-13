@@ -4,7 +4,7 @@
 
 import fs from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
 export interface DiscoveredAgent {
@@ -43,9 +43,13 @@ async function discoverAgentsInPath(searchPath: string): Promise<DiscoveredAgent
 
     const agents = await Promise.all(agentPromises);
     return agents.filter((agent): agent is DiscoveredAgent => agent !== null);
-  } catch {
-    // Path doesn't exist or not accessible - return empty array
-    return [];
+  } catch (error) {
+    // No such search path: nothing here. Only an ABSENCE reads as empty — a
+    // directory the OS refuses to list is not one with no agents in it, and
+    // answering "no agents" for it is how `agent install x` said "not found"
+    // about a tree it never opened.
+    if (isPathAbsentError(error)) return [];
+    throw error;
   }
 }
 
@@ -66,8 +70,9 @@ async function findManifest(dir: string): Promise<string | null> {
     try {
       await fs.access(manifestPath);
       return manifestPath;
-    } catch {
-      // Continue
+    } catch (error) {
+      // Not this candidate. Anything but an absence stays loud.
+      if (!isPathAbsentError(error)) throw error;
     }
   }
 
@@ -93,8 +98,11 @@ async function parseAgentManifest(
         manifestPath,
       };
     }
-  } catch {
-    // Invalid manifest - skip
+  } catch (error) {
+    // A manifest that is not YAML is skipped — the documented shape of "not an
+    // agent". A manifest that vanished since the probe is the same. A manifest
+    // the OS refuses to read is neither, and stays loud.
+    if (!(error instanceof yaml.YAMLParseError) && !isPathAbsentError(error)) throw error;
   }
 
   return null;

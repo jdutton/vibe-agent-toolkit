@@ -1694,8 +1694,13 @@ function renderToolInput(input: unknown): string {
   if (input === undefined || input === null) return '';
   try {
     return JSON.stringify(input) ?? '';
-  } catch {
-    return '';
+  } catch (error) {
+    // `JSON.stringify` throws exactly one class — TypeError, for a cycle or a
+    // BigInt — and an input that cannot be rendered has no text to scan. Neither
+    // can arrive from a `JSON.parse`d transcript; the narrowing is here so that a
+    // throw from anything else (a `toJSON` on a foreign object) stays loud.
+    if (error instanceof TypeError) return '';
+    throw error;
   }
 }
 

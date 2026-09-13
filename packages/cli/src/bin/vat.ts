@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   findNodeWorkspaceRoot,
+  isPathAbsentError,
   safePath,
 } from '@vibe-agent-toolkit/utils';
 import {
@@ -162,16 +163,27 @@ function findLocalInstall(projectRoot: string): string | null {
 /**
  * `require.resolve` reduced to "found it, or didn't".
  *
- * A failure here is priority 3's ordinary "not applicable" answer — no local
+ * A NOT-FOUND is priority 3's ordinary "not applicable" answer — no local
  * install on this base — so it falls through to the next base and ultimately to
- * the global install rather than failing the run.
+ * the global install rather than failing the run. Two codes spell it: the
+ * package is not installed (`MODULE_NOT_FOUND`), or it is installed but too old
+ * to export its manifest (`ERR_PACKAGE_PATH_NOT_EXPORTED`) — either way no
+ * usable local install. Anything else (`ERR_INVALID_ARG_VALUE` from a bad
+ * `fromPath`, a loader fault) is not "absent" and stays loud.
  */
 function tryResolve(fromPath: string, specifier: string): string | null {
   try {
     return createRequire(fromPath).resolve(specifier);
-  } catch {
-    return null;
+  } catch (error) {
+    if (isResolutionNotFound(error)) return null;
+    throw error;
   }
+}
+
+/** The two `require.resolve` codes that mean "nothing usable here". */
+function isResolutionNotFound(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === 'MODULE_NOT_FOUND' || code === 'ERR_PACKAGE_PATH_NOT_EXPORTED';
 }
 
 /**
@@ -189,8 +201,13 @@ function readVersion(packageJsonPath: string): string | null {
     const content = readFileSync(packageJsonPath, 'utf-8');
     const pkg = JSON.parse(content) as { version?: string };
     return pkg.version ?? null;
-  } catch {
-    return null;
+  } catch (error) {
+    // The existence check above is not atomic with the read: a manifest removed
+    // between the two is "not found". A manifest the OS refuses, or one that is
+    // not JSON, is not — this wrapper is about to dispatch to that very install,
+    // and a broken manifest is the first fact worth seeing.
+    if (isPathAbsentError(error)) return null;
+    throw error;
   }
 }
 

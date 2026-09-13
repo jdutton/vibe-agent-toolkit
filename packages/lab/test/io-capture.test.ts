@@ -39,7 +39,7 @@
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ReportEnvelope } from '../src/envelope/envelope.js';
@@ -230,8 +230,10 @@ function trace(probe: Probe): TraceLine[] {
   let raw: string;
   try {
     raw = readFileSync(tracePath(probe), 'utf-8');
-  } catch {
-    return [];
+  } catch (error) {
+    // No trace file is "the counter never loaded", which a test asserts on.
+    if (isPathAbsentError(error)) return [];
+    throw error;
   }
   return raw
     .split('\n')

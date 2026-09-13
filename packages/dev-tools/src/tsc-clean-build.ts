@@ -121,7 +121,7 @@
 
 import { copyFileSync, existsSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { isEntrypoint, safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import { rimrafSync } from 'rimraf';
 
@@ -160,18 +160,31 @@ function collectFiles(dir: string, into: string[]): void {
 
 /**
  * Absolute path of the source a declaration map was generated from, or
- * `undefined` when the map is unreadable or shaped unexpectedly — in which case
- * the caller must leave the output alone rather than guess.
+ * `undefined` when the map is not JSON or shaped unexpectedly — in which case
+ * the caller must leave the output alone rather than guess. A map that has
+ * vanished since the listing (a concurrent build swapping dist) is the same
+ * "nothing to go on" case. A map the OS REFUSES to read is not: that throws,
+ * because leaving the output alone there would let a permissions accident
+ * keep dead emit alive with no sign anything was skipped.
  */
 function declaredSource(mapPath: string): string | undefined {
+  let text: string;
   try {
-    const parsed: unknown = JSON.parse(readFileSync(mapPath, 'utf8'));
-    const sources: unknown = (parsed as { sources?: unknown }).sources;
-    const first: unknown = Array.isArray(sources) ? sources[0] : undefined;
-    return typeof first === 'string' ? safePath.resolve(mapPath, '..', first) : undefined;
-  } catch {
-    return undefined;
+    text = readFileSync(mapPath, 'utf8');
+  } catch (error) {
+    if (isPathAbsentError(error)) return undefined;
+    throw error;
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    if (error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+  const sources: unknown = (parsed as { sources?: unknown } | null)?.sources;
+  const first: unknown = Array.isArray(sources) ? sources[0] : undefined;
+  return typeof first === 'string' ? safePath.resolve(mapPath, '..', first) : undefined;
 }
 
 /**

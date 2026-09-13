@@ -121,14 +121,16 @@ Example:
 /**
  * Check whether the current project has a claude.marketplaces config.
  * Returns false if no config file found or no claude section.
+ *
+ * A config that EXISTS and cannot be loaded throws (`ConfigLoadError`), and
+ * that is left to `buildCommand`'s own catch, which publishes it as the
+ * build's answer. It used to be absorbed here as "no marketplaces" — so an
+ * unreadable config announced a build with no claude phase, and `--only claude`
+ * on it was refused as "not configured", which was not the problem.
  */
 function hasClaudeMarketplacesConfig(cwd: string): boolean {
-  try {
-    const config = loadConfig(cwd);
-    return Boolean(config?.claude?.marketplaces && Object.keys(config.claude.marketplaces).length > 0);
-  } catch {
-    return false;
-  }
+  const config = loadConfig(cwd);
+  return Boolean(config?.claude?.marketplaces && Object.keys(config.claude.marketplaces).length > 0);
 }
 
 // Skill directories shipped inside a built plugin tree — every

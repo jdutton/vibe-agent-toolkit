@@ -4,7 +4,7 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
-import { writeFileSync, unlinkSync, utimesSync } from 'node:fs';
+import { chmodSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
 
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -20,6 +20,10 @@ import {
 
 // Test fixture constant
 const TEST_MD_CONTENT = '## Fragment\nContent';
+
+/** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
+const CANNOT_DENY_READS =
+  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 // Test loader factory
 function createTestLoader(fragments: string): () => MarkdownResource {
@@ -67,11 +71,7 @@ function setupTestFiles(
     files,
     cleanup: () => {
       for (const file of files) {
-        try {
-          unlinkSync(file);
-        } catch {
-          // Ignore errors
-        }
+        rmSync(file, { force: true });
       }
     },
   };
@@ -113,12 +113,8 @@ describe('markdown-cache', () => {
   });
 
   afterEach(() => {
-    // Clean up test files
-    try {
-      unlinkSync(testFile);
-    } catch {
-      // Ignore errors if file doesn't exist
-    }
+    // Clean up test files; `force` covers the tests that never wrote one.
+    rmSync(testFile, { force: true });
   });
 
   describe('getMarkdownResource', () => {
@@ -201,6 +197,21 @@ describe('markdown-cache', () => {
       // This is correct behavior - the cache key is still valid
       getMarkdownResource(nonExistentFile, wrappedLoader);
       expect(loaderCalls).toBe(1);
+    });
+
+    it.skipIf(CANNOT_DENY_READS)('propagates a refusal to stat the file rather than caching under mtime 0', () => {
+      // "Not there" and "may not look" must not share the mtime-0 slot: a
+      // refused file would be cached once, forever, under the same key as an
+      // absent one, and never reloaded when its permissions were fixed.
+      writeFileSync(testFile, TEST_MD_CONTENT);
+      const { loader, getCallCount } = createCountingLoader(createTestLoader(TEST_MD_CONTENT));
+      chmodSync(testDir, 0o000);
+      try {
+        expect(() => getMarkdownResource(testFile, loader)).toThrow(/EACCES/);
+      } finally {
+        chmodSync(testDir, 0o700);
+      }
+      expect(getCallCount()).toBe(0);
     });
   });
 

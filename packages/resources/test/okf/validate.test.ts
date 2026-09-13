@@ -655,6 +655,41 @@ describe('validateOkfBundle', () => {
     });
   });
 
+  describe('a symlink the OS refuses to follow', () => {
+    it.skipIf(!SYMLINKS_AVAILABLE)('is NOT ASSESSED — an unreadable-document finding, not an escape', async () => {
+      // ELOOP from a self-cycle. Before the split this was reported as
+      // OKF_DOCUMENT_ESCAPES_BUNDLE with "its target does not exist", sending the
+      // author to repair a link that may point at a perfectly good file. It is
+      // a "could not look" code, so the severity dial must not reach it.
+      const root = plantOkfBundle({ 'a.md': conceptDoc(TABLE_TYPE) });
+      plantSymlink(root, 'loop.md', 'loop.md', 'file');
+
+      const report = await validateOkfBundle({
+        bundle: 'docs',
+        root,
+        rootSpecifier: ROOT_SPECIFIER,
+        severity: 'info',
+      });
+
+      expect(report.conceptDocuments).toEqual(['a.md']);
+      expect(codesOf(report.findings)).toEqual(['OKF_DOCUMENT_UNREADABLE']);
+      expect(report.findings[0]?.document).toBe('loop.md');
+      expect(report.findings[0]?.severity).toBe('error');
+      expect(report.findings[0]?.message).toContain('ELOOP');
+    });
+
+    it.skipIf(!SYMLINKS_AVAILABLE)('still reports a link to NOTHING as dangling', async () => {
+      // The positive control: absence is still absence.
+      const root = plantOkfBundle({ 'a.md': conceptDoc(TABLE_TYPE) });
+      plantSymlink(root, 'ghost.md', 'never-written.md', 'file');
+
+      const report = await validateOkfBundle({ bundle: 'docs', root, rootSpecifier: ROOT_SPECIFIER });
+
+      expect(codesOf(report.findings)).toEqual(['OKF_DOCUMENT_ESCAPES_BUNDLE']);
+      expect(report.findings[0]?.message).toContain('does not exist');
+    });
+  });
+
   describe('a link ABOVE the root that canonicalizes back INSIDE it', () => {
     // 🪤 Two containment questions, two different predicates. `resolveOne`
     // admitted a target on `isWithinProject` — REALPATH containment, which a

@@ -9,7 +9,7 @@
  */
 
 import { cpSync, existsSync, lstatSync, readdirSync, rmSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import { validateSkill } from '@vibe-agent-toolkit/agent-skills';
@@ -33,6 +33,7 @@ import { createLogger } from '../../utils/logger.js';
 import {
   extractTarballToTemp,
   findSkillsDirInNpmPackage,
+  removeResolvedTempDirs,
   resolveNpmOrTarballSource,
 } from './source-resolvers.js';
 
@@ -384,13 +385,7 @@ export async function installCommand(
         logger.info(`\nInstalled ${plans.length} skill(s) to ${toForwardSlash(installDir)}`);
       }
     } finally {
-      for (const dir of resolved.tempDirs) {
-        try {
-          await rm(dir, { recursive: true, force: true });
-        } catch {
-          // best-effort cleanup
-        }
-      }
+      await removeResolvedTempDirs(resolved.tempDirs, logger);
     }
   } catch (error) {
     if (error instanceof InstallError) {

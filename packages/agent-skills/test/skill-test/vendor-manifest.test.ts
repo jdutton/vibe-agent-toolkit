@@ -1,9 +1,12 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { regenerateVendoredManifest, verifyVendoredManifest } from '../../src/skill-test/vendor-manifest.js';
+
+const MANIFEST_FILE = 'vendored.manifest.json';
 
 describe('vendored manifest', () => {
   let dir: string;
@@ -39,8 +42,25 @@ describe('vendored manifest', () => {
     // Corrupt the manifest into invalid JSON — the JSON.parse throw must be
     // caught and treated as tampering (false), never silently accepted.
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture mutation, controlled directory
-    writeFileSync(safePath.join(dir, 'vendored.manifest.json'), '{ this is not json', 'utf8');
+    writeFileSync(safePath.join(dir, MANIFEST_FILE), '{ this is not json', 'utf8');
     expect(verifyVendoredManifest(dir)).toBe(false);
+  });
+
+  it('verify fails (fail-closed) when the manifest is JSON of the wrong shape', () => {
+    regenerateVendoredManifest(dir);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture mutation, controlled directory
+    writeFileSync(safePath.join(dir, MANIFEST_FILE), JSON.stringify({ files: 'nope' }), 'utf8');
+    expect(verifyVendoredManifest(dir)).toBe(false);
+  });
+
+  // `false` means "tampered" and fails preflight with that word. A manifest the
+  // OS refused to hand over has not been shown to be tampered — reporting it as
+  // such sends the operator to reinstall a package whose bytes are fine.
+  it('verify rethrows a refused manifest read rather than reporting tampering', async () => {
+    regenerateVendoredManifest(dir);
+    await withSyncFsRefused('readFileSync', safePath.join(dir, MANIFEST_FILE), 'EACCES', () => {
+      expect(() => verifyVendoredManifest(dir)).toThrow(/EACCES/);
+    });
   });
 
   it('verify fails (fail-closed) when a manifest-listed file is missing on disk', () => {

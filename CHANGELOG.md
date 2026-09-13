@@ -322,6 +322,13 @@ with a regression test.
   `no-self-package-import`, `no-bare-symlink-in-tests`, `no-process-exit-in-phase` and
   `no-fragile-entrypoint-guard`. All ship in `rules`; none is in `configs.recommended`.
 
+- **`@vibe-agent-toolkit/no-blind-catch`** — flags a `catch` that neither reads its error nor
+  throws, so a permission refusal or a bug cannot be absorbed into the same `return null` as a
+  missing file. In `configs.recommended` at `warn` (no autofix; expect a long first list on an
+  existing tree). Pair it with the new `isPathAbsentError(e)` (`ENOENT`/`ENOTDIR` only) from
+  `@vibe-agent-toolkit/utils` — `isFilesystemAccessError` groups `EACCES` with `ENOENT` and is the
+  wrong narrowing for "is it there?".
+
 - **New concept guide: [Knowledge interop formats](docs/concepts/knowledge-interop-formats.md)** —
   what the Open Knowledge Format and Agentic Resource Discovery each are, how they differ, and
   VAT's producer-side stance toward both.
@@ -518,6 +525,42 @@ with a regression test.
 
 ### Fixed
 
+- **`vat claude plugin install` no longer overwrites `~/.claude/settings.json`,
+  `installed_plugins.json` or `known_marketplaces.json` when one is present but unreadable or not
+  valid JSON** — it warns naming the file and leaves it as it was. Previously a corrupt
+  `settings.json` was replaced by `{ "enabledPlugins": {…} }`.
+- **A file or directory the OS REFUSES (`EACCES`, `EPERM`, `ELOOP`, a directory where a file
+  belongs) is no longer reported as ABSENT — across 202 `catch` sites in every package.** The
+  visible change is the same everywhere: a refusal now fails the command by errno (or lands in
+  the report as its own row) where it used to read as "no plugins", "not installed", "no agents",
+  "0 bytes", "no version", "not configured", or a bundle with something silently missing. A
+  genuinely missing path behaves exactly as before. Commands with a new refusal surface:
+  `vat audit` (`SCAN_PATH_UNREADABLE`, still exit 0; a refused `marketplace.json` no longer reads
+  as "no surfaces"), `vat audit --compat`/`--settings` (an unreadable layer is `unchecked`, never
+  `compatible`), `vat inventory` (a parse error per unlistable `skills/`/`commands/`/`agents/`),
+  `vat verify`/`vat build`/`vat ard emit` (a `package.json` that is not JSON fails by name),
+  `vat build` (an unloadable config fails the build instead of dropping the claude phase),
+  `vat claude marketplace validate` (exit 2 by errno, not "does not resolve"), `vat claude plugin
+  list|uninstall`, `vat agent list|install|build|validate|run|uninstall`, `vat cache clear`, `vat
+  okf validate` (a symlink the OS refuses to follow is `OKF_DOCUMENT_UNREADABLE`, not
+  `OKF_DOCUMENT_ESCAPES_BUNDLE`), `vat rag stats`, `vat skill test` (refused staged files fail
+  the run instead of silently disarming the `--baseline` scan), `vat skills list|install`.
+  Library: `normalizePath`/`normalizedTmpdir`/`mkdirSyncReal` throw on a refused ancestor,
+  `loadGitignoreRules`/`findNodeWorkspaceRoot`/`FileSessionStore.exists()`/`ParseCache.clear()`
+  throw instead of answering "none".
+- **`vat build` no longer ships a skill whose collection `frontmatterSchema` is missing, unreadable
+  or not JSON** — the receipt carries `FRONTMATTER_SCHEMA_ERROR` and `hasErrors` is true. A skill
+  whose `scripts/` or `LICENSE.txt` exists but cannot be copied fails the build instead of
+  producing a bundle without them.
+- **`vat skills list npm:…` leaked its extracted package on every successful run** — cleanup sat
+  after a `process.exit(0)`. A temp directory that cannot be removed is now warned about by path.
+- **`vat claude org skills install <zip>`: an archive VAT cannot parse is still uploaded, but the
+  command now says so and names the checks it skipped**; members it could not inflate are listed
+  by name and reason instead of skipped silently.
+- The `VAT_DEBUG` stdio line no longer claims stdout/stderr are blocking when libuv refused the
+  switch (Windows TTY) — the libuv return value was ignored. A CLI transport whose session file is
+  corrupt now warns before starting a fresh session in its place. The ONNX provider's `dispose()`
+  no longer swallows a failed `session.release()`.
 - **`resources.linkAuth` now applies whenever it is declared — it was silently inert unless
   `resources.collections` was also declared, so every link on a claimed host was checked anonymously.**
   Adopters with `linkAuth` and no `collections`: expect new `LINK_AUTH_*` findings in CI output.

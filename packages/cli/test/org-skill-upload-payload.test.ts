@@ -21,7 +21,7 @@
  * upload failed that still reported `status: success`.
  */
 
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
 import { API_SKILL_MAX_UPLOAD_BYTES } from '@vibe-agent-toolkit/agent-skills';
 import { ApiRequestError, ApiTransportError, buildMultipartFormData } from '@vibe-agent-toolkit/claude-marketplace';
@@ -728,6 +728,45 @@ describe('what installFromLocal actually reads out of a REAL archive', () => {
     await expect(
       installFromLocal(zipPath, undefined, clientThatMustNotBeCalled(), recordingLogger()),
     ).rejects.toThrow(/my-skill\/evals\/evals\.json/);
+  });
+
+  it('says which checks it skipped, and why, on an archive it cannot read', async () => {
+    // Every check the lane promises is skipped for an unparseable archive, and
+    // a skipped check that is not announced is indistinguishable from one that
+    // passed. `inspectZipArchive` used to return a bare `undefined` here and the
+    // lane said nothing.
+    const zipPath = safePath.join(tempDir, 'unparseable.zip');
+    writeFileSync(zipPath, Buffer.from(ZIP_STAND_IN));
+    const logger = recordingLogger();
+
+    await installFromLocal(zipPath, undefined, clientReturningSkill(), logger);
+
+    const log = logger.lines.join('\n');
+    expect(log).toContain('Could not read the archive');
+    expect(log).toContain('checks were not run');
+  });
+
+  it('names a member it could not inflate, so an unchecked document is never silently unchecked', async () => {
+    const goodPath = writeZipFixture(tempDir, 'one-bad-member-source.zip', [
+      ['bm/SKILL.md', skillMdBytes('bm')],
+      ['bm/resources/guide.md', Buffer.from('# Guide\n', 'utf8')],
+    ]);
+    // Flip ONE central-directory entry's compression method to one adm-zip
+    // refuses; the other member stays readable, so the lane runs and the
+    // refused one is the thing it has to name.
+    const bytes = readFileSync(goodPath);
+    const marker = Buffer.from([0x50, 0x4b, 0x01, 0x02]);
+    const second = bytes.indexOf(marker, bytes.indexOf(marker) + 1);
+    expect(second).toBeGreaterThan(0);
+    bytes.writeUInt16LE(99, second + 10);
+    const zipPath = safePath.join(tempDir, 'one-bad-member.zip');
+    writeFileSync(zipPath, bytes);
+    const logger = recordingLogger();
+
+    await installFromLocal(zipPath, undefined, clientReturningSkill(), logger);
+
+    const log = logger.lines.join('\n');
+    expect(log).toMatch(/1 archive member\(s\) could not be inflated and were not checked: bm\/\S+ \(/);
   });
 
   it('sends a clean archive, so the refusal is about the answer key and not about ZIPs', async () => {

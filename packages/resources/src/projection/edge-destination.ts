@@ -28,6 +28,7 @@
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import type { EdgeDestinationKind } from '../schemas/projection-edges.js';
+import { isInvalidUrlError } from '../url-errors.js';
 import { splitHrefAnchor } from '../utils.js';
 
 /**
@@ -390,7 +391,8 @@ function normalizeUri(withoutFragment: string): string {
   let url: URL;
   try {
     url = new URL(withoutFragment);
-  } catch {
+  } catch (error) {
+    if (!isInvalidUrlError(error)) throw error;
     // ⭐ The ONE mutation this branch makes, and it is deliberate: REDACTION,
     // not canonicalization. The two are different acts and only the second is
     // what "honest, not canonical" refuses. Canonicalizing asserts an

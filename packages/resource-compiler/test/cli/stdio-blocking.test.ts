@@ -33,8 +33,16 @@ import { runCLI } from '../../src/cli/index.js';
  * test runner wired its own stdio — which is why the tests install their own
  * rather than asserting against whatever they happen to inherit.
  */
+/** What the `process.exit` stub throws, so the harness can tell an exit from a crash. */
+class ExitSignal extends Error {
+  constructor(readonly code: number | undefined) {
+    super(`process.exit(${String(code)})`);
+    this.name = 'ExitSignal';
+  }
+}
+
 interface StreamWithHandle {
-  _handle?: { setBlocking?: (blocking: boolean) => void } | undefined;
+  _handle?: { setBlocking?: (blocking: boolean) => number } | undefined;
 }
 
 /**
@@ -55,8 +63,13 @@ function installRecordingHandle(
   target._handle = options.setBlocking === false
     ? {}
     : {
+        // libuv reports the switch as an int RETURN VALUE — 0 for success, a
+        // negative errno for a refusal — never as a throw. The double answers
+        // the way the real handle does, so the production check
+        // (`=== 0`) is what the assertion below exercises.
         setBlocking: (blocking: boolean) => {
           calls.push(blocking);
+          return 0;
         },
       };
   return {
@@ -87,7 +100,7 @@ async function runInstrumentedCLI(
   const errHandle = installRecordingHandle(process.stderr);
   const errorOutput: string[] = [];
   const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
-    throw new Error(`process.exit(${String(code)})`);
+    throw new ExitSignal(code);
   }) as never);
   const outSpy = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
   const errSpy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => {
@@ -100,9 +113,11 @@ async function runInstrumentedCLI(
 
   try {
     await runCLI(argv);
-  } catch {
+  } catch (error) {
     // Commander's own exit path, rethrown by the stub above. Irrelevant here:
-    // the assertions are about what happened BEFORE any command ran.
+    // the assertions are about what happened BEFORE any command ran. Anything
+    // else is a crash inside the CLI and must not be read as "it exited".
+    if (!(error instanceof ExitSignal)) throw error;
   } finally {
     logSpy.mockRestore();
     errSpy.mockRestore();

@@ -120,7 +120,7 @@
 import { promises as fs, type Stats } from 'node:fs';
 import { threadId } from 'node:worker_threads';
 
-import { parseEnvBoolean, safePath } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, isPathAbsentError, parseEnvBoolean, safePath } from '@vibe-agent-toolkit/utils';
 
 import { parseCacheDirectory } from './cache-namespace.js';
 import { CONTENT_KEY_PATTERN, type KeyedContent, type ParsableContent, readContentWithKey } from './content-key.js';
@@ -451,8 +451,10 @@ export class ParseCache {
 
       // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-raw-text-decode -- reading back this cache's own entry, written as UTF-8 by `set()`; a corpus document never lands here
       raw = await fs.readFile(this.entryPath(keyed.key), 'utf-8');
-    } catch {
-      // ENOENT (never written), EACCES (perms), EISDIR — all a miss.
+    } catch (error) {
+      // ENOENT (never written), EACCES (perms), EISDIR — all a miss. A bug in
+      // this class is not a miss and stays loud.
+      if (!isFilesystemAccessError(error)) throw error;
       return null;
     } finally {
       // Charged on the miss path too: a failed open is what a COLD document
@@ -562,13 +564,16 @@ export class ParseCache {
       await fs.writeFile(tempPath, JSON.stringify(entry), 'utf-8');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- both paths are cacheDir + a charset-validated content key
       await fs.rename(tempPath, this.entryPath(key));
-    } catch {
+    } catch (error) {
       // Fail-soft: EACCES on the directory, ENOSPC on the disk, EROFS on a
-      // read-only mount. The current run already holds the fresh result; only
-      // the persistence is lost. Best-effort sweep of a temp file that was
-      // written but never renamed, so a failing write cannot accumulate litter.
+      // read-only mount — counted in `writeFailures` so it stays visible. A
+      // bug in this class is not a persistence failure and stays loud. The
+      // current run already holds the fresh result; only the persistence is
+      // lost. Best-effort sweep of a temp file that was written but never
+      // renamed, so a failing write cannot accumulate litter.
+      if (!isFilesystemAccessError(error)) throw error;
       this.writeFailureCount += 1;
-      await removeQuietly(tempPath);
+      await removeTempQuietly(tempPath);
       return false;
     }
     return true;
@@ -578,10 +583,13 @@ export class ParseCache {
    * Delete this cache's entire tree.
    *
    * Runs regardless of {@link enabled}: turning reads off must not disarm an
-   * explicit operator request to reclaim the space.
+   * explicit operator request to reclaim the space. And it THROWS when the
+   * tree cannot be removed: an operator who asked for the space back is told
+   * why they did not get it, rather than told nothing. A tree that is already
+   * gone is not a failure (`force`).
    */
   async clear(): Promise<void> {
-    await removeQuietly(this.directory, true);
+    await fs.rm(this.directory, { force: true, recursive: true });
   }
 
   /** Count a miss and return the value every miss path returns. */
@@ -1083,7 +1091,10 @@ function readFacts(raw: string): ParseFacts | null {
   let value: unknown;
   try {
     value = JSON.parse(raw);
-  } catch {
+  } catch (error) {
+    // Not JSON — a truncated or corrupted entry — is a miss. Nothing else can
+    // come out of `JSON.parse`, and nothing else is a miss.
+    if (!(error instanceof SyntaxError)) throw error;
     return null;
   }
 
@@ -1120,8 +1131,14 @@ async function isSafeShardDir(dir: string): Promise<boolean> {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is cacheDir + a charset-validated content key
     stats = await fs.lstat(dir);
-  } catch {
-    return true;
+  } catch (error) {
+    // Absent: `mkdir` will create it fresh, owned by this process.
+    if (isPathAbsentError(error)) return true;
+    // Present but the OS will not describe it (EACCES on the parent, ELOOP):
+    // a directory whose owner and mode cannot be checked is not one to write
+    // into. The caller counts this as a write failure, which it is.
+    if (isFilesystemAccessError(error)) return false;
+    throw error;
   }
 
   const uid = process.getuid?.();
@@ -1130,11 +1147,16 @@ async function isSafeShardDir(dir: string): Promise<boolean> {
   return ownedByThisProcess && notGroupOrOtherWritable;
 }
 
-/** `fs.rm` that swallows everything — used only on paths this module created. */
-async function removeQuietly(target: string, recursive = false): Promise<void> {
+/**
+ * Sweep a temp file this module created, on the write path that has already
+ * failed. A filesystem refusal here is absorbed — the write failure it follows
+ * is already counted, and a second one adds nothing an operator can act on —
+ * but a bug in the sweep itself is not a refusal and stays loud.
+ */
+async function removeTempQuietly(target: string): Promise<void> {
   try {
-    await fs.rm(target, { force: true, recursive });
-  } catch {
-    // Nothing useful to do: this is already the cleanup path.
+    await fs.rm(target, { force: true });
+  } catch (error) {
+    if (!isFilesystemAccessError(error)) throw error;
   }
 }

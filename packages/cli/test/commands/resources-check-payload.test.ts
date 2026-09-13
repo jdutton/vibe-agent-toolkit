@@ -180,7 +180,10 @@ function firstUnspreadableLength(): number {
     const sink: number[] = [];
     try {
       sink.push(...Array.from<number>({ length }));
-    } catch {
+    } catch (error) {
+      // The runtime refuses a spread this wide with a RangeError (argument
+      // count, or the stack). Anything else is not the limit being probed.
+      if (!(error instanceof RangeError)) throw error;
       return length;
     }
     // Read, so the probe is a real spread of a real array and not something a

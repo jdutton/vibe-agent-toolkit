@@ -24,7 +24,7 @@ import { copyFile, lstat, mkdir, readdir, realpath, stat } from 'node:fs/promise
 import { dirname } from 'node:path';
 
 import { AGENT_INSTRUCTION_FILE_PATTERNS, toAnyDepthGlobs } from '@vibe-agent-toolkit/agent-skills';
-import { isGlob, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isGlob, isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, crawlPathFilter } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 import picomatch from 'picomatch';
@@ -384,7 +384,12 @@ async function classifySymlink(
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- a symlink the crawl of sourceDir returned
     real = toForwardSlash(await realpath(link.abs));
-  } catch {
+  } catch (error) {
+    // 'unresolvable' is what the message says it is: dangling, or a loop. A
+    // link whose target the OS REFUSES to resolve is neither — it resolves to
+    // something this process may not see — and reporting it as dangling sends
+    // the operator to fix a link that is fine.
+    if (!isPathAbsentError(error) && !isSymlinkLoop(error)) throw error;
     return { path: link.rel, reason: 'unresolvable' };
   }
   if (!isUnderSource(real, realSource)) return { path: link.rel, reason: 'escapes-source' };
@@ -392,6 +397,11 @@ async function classifySymlink(
   if ((await stat(real)).isDirectory()) return { path: link.rel, reason: 'directory' };
   const target = toForwardSlash(safePath.relative(realSource, real));
   return shipped.has(target) ? 'file' : { path: link.rel, reason: 'target-excluded', target };
+}
+
+/** `realpath` on a link that chases its own tail. */
+function isSymlinkLoop(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 'ELOOP';
 }
 
 /**

@@ -33,7 +33,7 @@
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { InstrumentVersion } from '../src/envelope/coordinate.js';
 import type { RepeatSpec } from '../src/harness/repeat.js';
@@ -195,9 +195,10 @@ function readProbeLog(cwd: string): ProbeEntry[] {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture under a fresh temp dir
     raw = readFileSync(safePath.join(cwd, PROBE_LOG), 'utf-8');
-  } catch {
+  } catch (error) {
     // No file at all is the "nothing ran" case, which a test asserts on.
-    return [];
+    if (isPathAbsentError(error)) return [];
+    throw error;
   }
   return raw
     .split('\n')

@@ -126,6 +126,7 @@ describe('gitFindRoot (sanity — canonical git-root walker)', () => {
 
 describe('findNodeWorkspaceRoot', () => {
   const suite = setupAsyncTempDirSuite('find-node-workspace-root');
+  const WORKSPACE_ROOT_MANIFEST = JSON.stringify({ name: 'monorepo', workspaces: ['packages/*'] });
   let tempDir: string;
 
   beforeAll(suite.beforeAll);
@@ -143,7 +144,7 @@ describe('findNodeWorkspaceRoot', () => {
 
     fs.writeFileSync(
       safePath.join(root, PACKAGE_JSON),
-      JSON.stringify({ name: 'monorepo', workspaces: ['packages/*'] }),
+      WORKSPACE_ROOT_MANIFEST,
     );
     // Inner package.json without "workspaces" should be skipped.
     fs.writeFileSync(
@@ -164,10 +165,27 @@ describe('findNodeWorkspaceRoot', () => {
     // Valid workspace-bearing package.json at root.
     fs.writeFileSync(
       safePath.join(root, PACKAGE_JSON),
-      JSON.stringify({ name: 'monorepo', workspaces: ['packages/*'] }),
+      WORKSPACE_ROOT_MANIFEST,
     );
 
     expect(findNodeWorkspaceRoot(middle)).toBe(root);
+  });
+
+  it('throws for a package.json the OS refuses to read, rather than reading past it as "not the root"', () => {
+    // A DIRECTORY named package.json reaches the read's catch on every platform
+    // (`existsSync` says yes, `readFileSync` says EISDIR) without POSIX modes.
+    // The catch used to answer every failure with "skip and keep walking", so a
+    // manifest that could not be read was indistinguishable from one that was
+    // not a workspace root — and the root the walk then found was the WRONG one.
+    const root = safePath.join(tempDir, 'mono');
+    const middle = safePath.join(root, 'middle');
+    fs.mkdirSync(safePath.join(middle, PACKAGE_JSON), { recursive: true });
+    fs.writeFileSync(
+      safePath.join(root, PACKAGE_JSON),
+      WORKSPACE_ROOT_MANIFEST,
+    );
+
+    expect(() => findNodeWorkspaceRoot(middle)).toThrow(/EISDIR/);
   });
 
   it('returns null when no workspace-bearing package.json is found below the VAT repo', () => {

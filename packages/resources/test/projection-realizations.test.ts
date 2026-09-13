@@ -91,11 +91,18 @@ async function ignoreAwareRow(relativePath: string): Promise<ResourceRealization
  * A cache stand-in whose every read throws, so the `unreadable` branch is
  * reachable on every platform and under every uid.
  *
+ * The rejection carries a real errno `code`, as Node's own would: `unreadable`
+ * is what the FILESYSTEM refusing means, and a throw without one is a bug the
+ * row must not absorb — see the sibling test below.
+ *
+ * @param thrown - What every read rejects with; defaults to an `EACCES` refusal
  * @returns A {@link RunContentCache}-shaped object that always rejects
  */
-function throwingCache(): RunContentCache {
+function throwingCache(
+  thrown: unknown = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }),
+): RunContentCache {
   return {
-    read: () => Promise.reject(new Error('EACCES: permission denied')),
+    read: () => Promise.reject(thrown),
     stats: { hits: 0, misses: 0, entries: 0, bytesHeld: 0 },
   } as unknown as RunContentCache;
 }
@@ -209,6 +216,16 @@ describe('collectRealization', () => {
     expect(row.isDirectory).toBe(false);
     expect(row.contentKey).toBeNull();
     expect(row.contentState).toBe('unreadable');
+  });
+
+  it('propagates a read that threw WITHOUT an errno — a bug is not an unreadable file', async () => {
+    // The `no-blind-catch` split: `unreadable` is a fact about the corpus, and
+    // only the filesystem refusing may produce it. A `TypeError` from inside
+    // the keying absorbed as `unreadable` would be a row that lies about the
+    // file to cover for the harness.
+    const bug = new TypeError('simulated defect inside the keying');
+
+    await expect(realize(NESTED_RELATIVE, { contentCache: throwingCache(bug) })).rejects.toBe(bug);
   });
 
   it('produces a row the shipped schema accepts', async () => {

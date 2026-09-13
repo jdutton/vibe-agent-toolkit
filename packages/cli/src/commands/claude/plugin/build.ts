@@ -30,6 +30,7 @@ import {
 } from '../../../utils/issue-rendering.js';
 import { createLogger } from '../../../utils/logger.js';
 import { writeYamlOutput } from '../../../utils/output.js';
+import { readPackageJsonOrAbsent } from '../../../utils/package-json.js';
 import { withResourcePopulationSource } from '../../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../../utils/skill-packaging-config.js';
 import { finishCommand, type PhaseOutcome } from '../../phase-utils.js';
@@ -241,16 +242,11 @@ export async function runClaudePluginBuild(
   // per-plugin version chain (config > plugin.json > root). Used so Claude
   // Code caches by version instead of "unknown/" when no per-plugin version
   // is supplied.
-  let rootVersion: string | undefined;
-  try {
-    const pkgPath = safePath.join(configDir, 'package.json');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- configDir is the project root
-    const pkgRaw = readFileSync(pkgPath, 'utf-8');
-    const pkg = JSON.parse(pkgRaw) as { version?: string };
-    rootVersion = pkg.version;
-  } catch {
-    // No package.json or unreadable — version will be omitted
-  }
+  // No package.json: the version is omitted. One that is there and cannot be
+  // read is refused by name — it used to be omitted too, which cached every
+  // plugin under "unknown/" for a reason the build never printed.
+  const rootPkg = readPackageJsonOrAbsent(safePath.join(configDir, 'package.json'));
+  const rootVersion = typeof rootPkg?.['version'] === 'string' ? rootPkg['version'] : undefined;
 
   // Discover available skills from dist/skills/ for pool-to-plugin selectors
   const availableSkills = await discoverBuiltSkills(configDir);

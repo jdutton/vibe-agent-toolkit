@@ -9,7 +9,10 @@ const BROKEN_URL = 'https://this-domain-definitely-does-not-exist-12345.com';
 
 /**
  * Quick reachability check before running network-dependent tests.
- * Returns false if network is unavailable or httpbin.org is down.
+ * Returns false if network is unavailable or httpbin.org is down — and says
+ * WHY on stderr, so a suite that skipped itself is distinguishable from one
+ * that never ran: a DNS failure, a TLS interception, and a 3s timeout are three
+ * different things to fix.
  */
 async function isNetworkAvailable(): Promise<boolean> {
 	try {
@@ -18,7 +21,8 @@ async function isNetworkAvailable(): Promise<boolean> {
 			signal: AbortSignal.timeout(3000),
 		});
 		return response.ok;
-	} catch {
+	} catch (error) {
+		console.warn(`[external-link-validator.integration] network unavailable, skipping: ${String(error)}`);
 		return false;
 	}
 }

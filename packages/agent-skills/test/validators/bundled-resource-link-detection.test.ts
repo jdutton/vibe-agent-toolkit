@@ -3,6 +3,7 @@
 import * as fs from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -38,7 +39,7 @@ function makeSkillDir(
 
 function runDetector(skillDir: string, linkedFiles: readonly string[] = []) {
   return detectBundledResourceWithoutLinks(
-    safePath.join(skillDir, 'SKILL.md'),
+    fs.readFileSync(safePath.join(skillDir, 'SKILL.md'), 'utf-8'),
     skillDir,
     linkedFiles,
     skillDir,
@@ -118,6 +119,16 @@ describe('detectBundledResourceWithoutLinks', () => {
     );
     const issues = runDetector(skillDir);
     expect(issues).toHaveLength(0);
+  });
+
+  // `[]` from the listing means "no bundled files" and the check goes quiet. A
+  // `references/` the OS refused to list used to read the same way — the one
+  // directory the check could not see was reported as having nothing in it.
+  it('rethrows when a bundled subdir is refused rather than reporting it empty', async () => {
+    const skillDir = makeSkillDir(getTempDir(), { references: ['detail.md'] });
+    await withSyncFsRefused('readdirSync', safePath.join(skillDir, 'references'), 'EACCES', () => {
+      expect(() => runDetector(skillDir)).toThrow(/EACCES/);
+    });
   });
 
   it('emits no issues when no bundled subdir exists', () => {

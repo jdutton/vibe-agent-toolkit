@@ -32,6 +32,7 @@ export {
   fillRealpaths,
   FsLookupCache,
   isFilesystemAccessError,
+  isPathAbsentError,
   pathSpellingFrom,
   realpathFrom,
   spellingWalkRoot,

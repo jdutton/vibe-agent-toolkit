@@ -19,7 +19,7 @@ import { basename } from 'node:path';
 
 import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import { getClaudeUserPaths, installPlugin, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
-import { normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
@@ -932,8 +932,11 @@ export async function executeReplaces(
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from Claude user paths + skill name
       lstatSync(skillPath); // throws if path itself doesn't exist (doesn't follow symlinks)
       pathExists = true;
-    } catch {
-      // path doesn't exist or is inaccessible — nothing to remove
+    } catch (error) {
+      // Path doesn't exist — nothing to remove. One the OS refuses to examine
+      // is not "nothing to remove": the legacy install is still there and a
+      // silent skip leaves it beside its replacement.
+      if (!isPathAbsentError(error)) throw error;
     }
 
     if (pathExists) {
@@ -1014,8 +1017,10 @@ async function prepareInstallation(
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Install path from config
     lstatSync(installPath);
     exists = true;
-  } catch {
-    // Does not exist
+  } catch (error) {
+    // Does not exist. A refusal is not that: it used to read as "free", and
+    // the extraction that followed then met the same refusal without a name.
+    if (!isPathAbsentError(error)) throw error;
   }
 
   if (exists && !options.force) {

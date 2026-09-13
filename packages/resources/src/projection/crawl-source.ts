@@ -69,6 +69,7 @@
 import { existsSync, lstatSync, statSync } from 'node:fs';
 
 import {
+  isFilesystemAccessError,
   readTextContentSync,
   safePath,
   toForwardSlash,
@@ -439,7 +440,10 @@ function symlinkShape(absolutePath: string): 'symlink' | null {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path git just listed, resolved against the repository root
     return lstatSync(absolutePath).isSymbolicLink() ? 'symlink' : null;
-  } catch {
+  } catch (error) {
+    // The filesystem would not answer: the entry stays a member and
+    // `statObservation` reports what it can (see above). A bug is not that.
+    if (!isFilesystemAccessError(error)) throw error;
     return null;
   }
 }
@@ -1007,9 +1011,11 @@ function gitMarkerIsReadable(gitRoot: string): boolean {
     const target = safePath.resolve(gitRoot, pointer.slice(GITDIR_PREFIX.length).trim());
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from a resolved corpus root
     return existsSync(safePath.join(target, 'HEAD'));
-  } catch {
-    // Unreadable for any reason is the same answer as absent: do not select an
-    // enumerator that will throw on it.
+  } catch (error) {
+    // The filesystem refusing the marker is the same answer as absent: do not
+    // select an enumerator that will throw on it. The command then reports
+    // `extentSource: filesystem`, which is where the refusal becomes visible.
+    if (!isFilesystemAccessError(error)) throw error;
     return false;
   }
 }

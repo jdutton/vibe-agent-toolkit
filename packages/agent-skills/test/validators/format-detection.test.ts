@@ -3,6 +3,7 @@
 import * as fs from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { detectResourceFormat, enumerateSurfaces } from '../../src/validators/format-detection.js';
@@ -13,6 +14,8 @@ import {
 } from '../test-helpers.js';
 
 const SURFACE_TYPE_CLAUDE_PLUGIN = 'claude-plugin';
+const MARKETPLACE_JSON = 'marketplace.json';
+const STANDALONE_SKILL_FIXTURE = 'standalone-skill';
 const SURFACE_TYPE_AGENT_SKILL = 'agent-skill';
 
 describe('detectResourceFormat', () => {
@@ -67,7 +70,7 @@ describe('detectResourceFormat', () => {
 				plugins: [],
 			};
 			fs.writeFileSync(
-				safePath.join(claudePluginDir, 'marketplace.json'),
+				safePath.join(claudePluginDir, MARKETPLACE_JSON),
 				JSON.stringify(marketplaceData, null, 2),
 			);
 
@@ -110,7 +113,7 @@ describe('detectResourceFormat', () => {
 				],
 			};
 			fs.writeFileSync(
-				safePath.join(claudePluginDir, 'marketplace.json'),
+				safePath.join(claudePluginDir, MARKETPLACE_JSON),
 				JSON.stringify(marketplaceData, null, 2),
 			);
 
@@ -134,6 +137,29 @@ describe('detectResourceFormat', () => {
 			expect(result.type).toBe('unknown');
 			expect(result.path).toBe(ambiguousDir);
 			expect(result.reason).toContain('both plugin.json and marketplace.json');
+		});
+
+		// The co-located check reads marketplace.json. When that read or parse fails
+		// the answer used to fall through to the generic "ambiguous" reason, so a
+		// marketplace.json that is not JSON — or one the OS refused — was reported
+		// as a LAYOUT problem, sending the author to restructure a directory that
+		// only needed one file fixed.
+		it('names the marketplace.json failure in the reason when it cannot be read to check co-location', async () => {
+			const tempDir = getTempDir();
+			const ambiguousDir = createAmbiguousDirectory(tempDir, { id: 'test' }, { id: 'test' }, 'broken-marketplace');
+			const marketplaceJson = safePath.join(ambiguousDir, CLAUDE_PLUGIN_DIR, MARKETPLACE_JSON);
+			fs.writeFileSync(marketplaceJson, '{ not json');
+
+			const notJson = await detectResourceFormat(ambiguousDir);
+			expect(notJson.type).toBe('unknown');
+			expect(notJson.reason).toMatch(/marketplace\.json could not be read.*JSON/);
+
+			fs.writeFileSync(marketplaceJson, '{}');
+			const refused = await withSyncFsRefused('readFileSync', marketplaceJson, 'EACCES', () =>
+				detectResourceFormat(ambiguousDir),
+			);
+			expect(refused.type).toBe('unknown');
+			expect(refused.reason).toMatch(/marketplace\.json could not be read.*EACCES/);
 		});
 	});
 
@@ -245,6 +271,7 @@ describe('detectResourceFormat', () => {
 });
 
 describe('enumerateSurfaces', () => {
+	const { getTempDir } = setupTempDir('enumerate-surfaces-test-');
 	const fixturesBase = safePath.join(
 		import.meta.dirname,
 		'..',
@@ -253,7 +280,7 @@ describe('enumerateSurfaces', () => {
 	);
 
 	it('returns a single agent-skill surface for a standalone skill', async () => {
-		const dir = safePath.join(fixturesBase, 'standalone-skill');
+		const dir = safePath.join(fixturesBase, STANDALONE_SKILL_FIXTURE);
 		const surfaces = await enumerateSurfaces(dir);
 		expect(surfaces).toHaveLength(1);
 		expect(surfaces[0]).toEqual({
@@ -300,9 +327,33 @@ describe('enumerateSurfaces', () => {
 	});
 
 	it('returns an empty array for a file (not a directory)', async () => {
-		const file = safePath.join(fixturesBase, 'standalone-skill', 'SKILL.md');
+		const file = safePath.join(fixturesBase, STANDALONE_SKILL_FIXTURE, 'SKILL.md');
 		const surfaces = await enumerateSurfaces(file);
 		expect(surfaces).toEqual([]);
+	});
+
+	// `[]` is the answer for "nothing here". A directory the OS refused to stat
+	// used to get the same answer, so `vat audit` over a tree with one unreadable
+	// entry reported it as having no surfaces at all — and exited 0.
+	it('rejects when the path is refused rather than reporting no surfaces', async () => {
+		const dir = safePath.join(fixturesBase, STANDALONE_SKILL_FIXTURE);
+		await withSyncFsRefused('statSync', dir, 'EACCES', async () => {
+			await expect(enumerateSurfaces(dir)).rejects.toThrow(/EACCES/);
+		});
+	});
+
+	it('treats a marketplace.json that is not JSON as not co-located, and rejects one that is refused', async () => {
+		const dir = createAmbiguousDirectory(getTempDir(), { id: 'p' }, { plugins: [{ source: './' }] }, 'colocated');
+		const marketplaceJson = safePath.join(dir, '.claude-plugin', MARKETPLACE_JSON);
+		expect((await enumerateSurfaces(dir)).map((s) => s.type)).toEqual(['marketplace']);
+
+		fs.writeFileSync(marketplaceJson, '{ not json');
+		// Not co-located → the plugin surface is NOT collapsed into the marketplace.
+		expect((await enumerateSurfaces(dir)).map((s) => s.type)).toEqual([SURFACE_TYPE_CLAUDE_PLUGIN, 'marketplace']);
+
+		await withSyncFsRefused('readFileSync', marketplaceJson, 'EACCES', async () => {
+			await expect(enumerateSurfaces(dir)).rejects.toThrow(/EACCES/);
+		});
 	});
 
 	it('collapses co-located plugin+marketplace to a single marketplace surface', async () => {

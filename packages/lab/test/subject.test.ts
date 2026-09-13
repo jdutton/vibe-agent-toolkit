@@ -368,10 +368,10 @@ describe.skipIf(CANNOT_DENY_READS)('resolveSubject — a directory the crawl cou
 
   afterEach(() => {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- unlocking this suite's own fixture directories
-    for (const dir of lockedDirs.splice(0)) chmodSync(dir, 0o755);
+    for (const path of lockedDirs.splice(0)) chmodSync(path, 0o755);
   });
 
-  /** `chmod 000` a fixture directory, remembering to unlock it for the temp-dir sweep. */
+  /** `chmod 000` a fixture path, remembering to unlock it for the temp-dir sweep. */
   function lock(root: string, relativePath: string): void {
     const absolute = safePath.join(root, relativePath);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled temp fixture tree
@@ -398,6 +398,30 @@ describe.skipIf(CANNOT_DENY_READS)('resolveSubject — a directory the crawl cou
     lock(root, LOCKED_DIR);
 
     await expect(resolve(root)).rejects.toBeInstanceOf(DirectoryListingRefusedError);
+  });
+
+  it('plain-folder scope: a locked FILE refuses the subject, naming the file, rather than hashing a placeholder', async () => {
+    // A file whose bytes cannot be read is the same hole as a directory that
+    // cannot be listed: two different contents behind the lock would fingerprint
+    // identically. The one thing that IS tolerated is a file that is not there
+    // at all (the git route lists tracked-but-deleted paths) — pinned below.
+    const root = suite.getTempDir();
+    writeFixtureFile(root, TRACKED_FILE, 'first\n');
+    writeFixtureFile(root, LOCKED_FILE, 'secret\n');
+    lock(root, LOCKED_FILE);
+
+    await expect(resolve(root)).rejects.toThrow(/secret\.txt.*EACCES|EACCES.*secret\.txt/s);
+  });
+
+  it('git scope: a locked FILE in a dirty tree refuses the subject too', async () => {
+    const root = suite.getTempDir();
+    committedRepo(root);
+    writeFixtureFile(root, LOCKED_FILE, 'secret\n');
+    commitAll(root, 'locked');
+    writeFixtureFile(root, 'dirty.txt', 'x\n');
+    lock(root, LOCKED_FILE);
+
+    await expect(resolve(root)).rejects.toThrow(/EACCES/);
   });
 
   it('resolves both scopes once the directory is readable again (control)', async () => {

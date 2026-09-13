@@ -47,6 +47,10 @@ function emitGroup(
   return { js, declaration };
 }
 
+/** Only run where the OS actually enforces directory permissions. */
+const skipUnlessRealPermissions =
+  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
+
 describe('pruneStaleEmit', () => {
   const suite = setupSyncTempDirSuite('tsc-clean-build');
   let tempDir: string;
@@ -113,6 +117,24 @@ describe('pruneStaleEmit', () => {
   it('is a no-op when dist does not exist', () => {
     expect(pruneStaleEmit(tempDir)).toEqual([]);
   });
+
+  it.skipIf(skipUnlessRealPermissions)(
+    'throws when the declaration map is refused, rather than passing stale output off as live',
+    () => {
+      // "Unreadable" above means the map is not JSON — a state the tool can leave
+      // alone, because the map says nothing. A map the OS will not let it read
+      // says nothing for a different reason, and treating the two alike lets a
+      // permissions accident keep dead emit alive indefinitely.
+      emitGroup(tempDir, 'index', { withSource: false });
+      const map = safePath.join(tempDir, 'dist', 'index.d.ts.map');
+      fs.chmodSync(map, 0o000);
+      try {
+        expect(() => pruneStaleEmit(tempDir)).toThrow(/EACCES/);
+      } finally {
+        fs.chmodSync(map, 0o600);
+      }
+    },
+  );
 
   it('does not touch files outside dist', () => {
     const source = safePath.join(tempDir, 'src-marker.ts');
@@ -181,10 +203,6 @@ function stage(packageRoot: string, relativePath: string, contents = EMPTY_MODUL
 function distPath(packageRoot: string, relativePath: string): string {
   return safePath.join(packageRoot, 'dist', relativePath);
 }
-
-/** Only run where the OS actually enforces directory permissions. */
-const skipUnlessRealPermissions =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 describe('promoteStagedEmit', () => {
   const suite = setupSyncTempDirSuite('tsc-promote-staged');

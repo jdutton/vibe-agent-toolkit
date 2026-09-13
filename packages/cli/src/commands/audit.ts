@@ -60,6 +60,7 @@ import {
   findProjectRoot,
   isAbsolutePath,
   isFilesystemAccessError,
+  isPathAbsentError,
   issueLocation,
   resetProjectRootCaches,
   safePath,
@@ -1811,32 +1812,51 @@ async function validateAuditSubject(
 	}
 
 	// If unknown format, check if it's a directory we can scan
-	const fsp = await import('node:fs/promises');
-	try {
-		const stat = await fsp.stat(scanPath);
-		if (stat.isDirectory()) {
-			logger.debug('Scanning directory for resources');
+	if (await isScannableDirectory(scanPath)) {
+		logger.debug('Scanning directory for resources');
 
-			// The project's `resources.exclude` is applied by the scan context,
-			// on the project-root basis its globs were written against — NOT
-			// merged into `options.exclude`, whose patterns are relative to the
-			// directory the operator named. See resolveProjectExcludes.
-			return scanDirectory(
-				scanPath,
-				recursive,
-				options,
-				logger,
-				await resolveScanContext(scanPath, locationRoot, logger),
-			);
-		}
-	} catch {
-		// Path doesn't exist or not accessible, let validate() handle it
+		// The project's `resources.exclude` is applied by the scan context,
+		// on the project-root basis its globs were written against — NOT
+		// merged into `options.exclude`, whose patterns are relative to the
+		// directory the operator named. See resolveProjectExcludes.
+		return scanDirectory(
+			scanPath,
+			recursive,
+			options,
+			logger,
+			await resolveScanContext(scanPath, locationRoot, logger),
+		);
 	}
 
 	// Unknown resource type - use unified validator which will return appropriate error
 	logger.debug(`Unknown resource type at: ${scanPath}`);
 	const result = await validate(scanPath, { locationRoot });
 	return [result];
+}
+
+/**
+ * Whether `scanPath` is a directory the walk can enter.
+ *
+ * `false` for a file and for NOTHING — `validate()` then names the path as
+ * unknown or absent, which is the answer the operator can act on. A refusal on
+ * the stat is neither: it propagates to `getValidationResults`, whose own catch
+ * files it as `SCAN_PATH_UNREADABLE`, so the audit still degrades (exit 0, the
+ * refusal a finding) rather than refusing the run.
+ *
+ * 🪤 The stat used to share ONE `try` with `scanDirectory` itself, and the
+ * catch was bare. Every throw from the scan — a crawl refusal, a `TypeError`
+ * two frames down — was absorbed into "let validate() handle it", and
+ * `validate()` then reported the directory as an unknown resource format. A
+ * scan that examined nothing was reported as a directory that was nothing.
+ */
+async function isScannableDirectory(scanPath: string): Promise<boolean> {
+	const fsp = await import('node:fs/promises');
+	try {
+		return (await fsp.stat(scanPath)).isDirectory();
+	} catch (error) {
+		if (isPathAbsentError(error)) return false;
+		throw error;
+	}
 }
 
 /**

@@ -69,9 +69,37 @@ function unknownBundleError(requested: string, declared: string[]): Error {
 function resolveBundleRoot(specifier: string, baseDir: string): string {
   try {
     return resolveAssetReference(specifier, baseDir);
-  } catch {
+  } catch (error) {
+    // Only Node's own "could not resolve this specifier" answers degrade — a
+    // `TypeError` from a bug in the resolver is not a fact about the config.
+    if (!isModuleResolutionFailure(error)) throw error;
     return safePath.resolve(baseDir, specifier);
   }
+}
+
+/**
+ * The codes Node's module resolver refuses a specifier with.
+ *
+ * `resolveAssetReference` wraps the resolver's throw as the `cause` of its own
+ * actionable error, so the code is read one level down. Not exported from
+ * `@vibe-agent-toolkit/utils` and not shared with `package-extent.ts`, whose
+ * `errorCodeOf` answers a different question (WHICH condition code to file).
+ */
+const MODULE_RESOLUTION_CODES: ReadonlySet<string> = new Set([
+  'MODULE_NOT_FOUND',
+  'ERR_PACKAGE_PATH_NOT_EXPORTED',
+  'ERR_INVALID_PACKAGE_CONFIG',
+  'ERR_INVALID_PACKAGE_TARGET',
+  'ERR_INVALID_MODULE_SPECIFIER',
+  'ERR_UNSUPPORTED_DIR_IMPORT',
+]);
+
+/** Whether `error` is the module resolver refusing a specifier, read through `cause`. */
+function isModuleResolutionFailure(error: unknown): boolean {
+  const cause = error instanceof Error ? error.cause : undefined;
+  if (typeof cause !== 'object' || cause === null || !('code' in cause)) return false;
+  const { code } = cause as { code: unknown };
+  return typeof code === 'string' && MODULE_RESOLUTION_CODES.has(code);
 }
 
 /**

@@ -17,7 +17,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
 	crawlSkillLinkRegistry,
@@ -167,20 +167,37 @@ describe('extractClaudeSkillInventory git-tracker source', () => {
 		expect(parseErrors).toEqual([]);
 	});
 
-	it('degrades to the untracked walk when the source throws, without inventing a parse error', async () => {
-		const { linked, parseErrors } = await extractWith(SKILL_MD, registry, () => {
-			throw new Error('git ls-files unavailable');
-		});
+	it('degrades to the untracked walk when the source throws, without inventing a parse error — and says so on stderr', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		try {
+			const { linked, parseErrors } = await extractWith(SKILL_MD, registry, () => {
+				throw new Error('git ls-files unavailable');
+			});
 
-		expect(linked).toEqual(baseline);
-		expect(parseErrors).toEqual([]);
+			expect(linked).toEqual(baseline);
+			expect(parseErrors).toEqual([]);
+			// Degraded, not silent: the source failing is a missing optimization, and
+			// a run paying one `git check-ignore` per link target is told why.
+			expect(warn.mock.calls.map(call => String(call[0]))).toEqual([
+				expect.stringMatching(/^\[vat\] Warning: .*git tracker.*git ls-files unavailable/s),
+			]);
+			expect(String(warn.mock.calls[0]?.[0])).toContain(projectRoot);
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
-	it('degrades to the untracked walk when the source declines to answer for a root', async () => {
-		const { linked, parseErrors } = await extractWith(SKILL_MD, registry, async () => undefined);
+	it('degrades to the untracked walk when the source declines to answer for a root, silently', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		try {
+			const { linked, parseErrors } = await extractWith(SKILL_MD, registry, async () => undefined);
 
-		expect(linked).toEqual(baseline);
-		expect(parseErrors).toEqual([]);
+			expect(linked).toEqual(baseline);
+			expect(parseErrors).toEqual([]);
+			expect(warn).not.toHaveBeenCalled();
+		} finally {
+			warn.mockRestore();
+		}
 	});
 });
 

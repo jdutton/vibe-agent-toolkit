@@ -296,6 +296,17 @@ describe('runArdEmit — a manifest never advertises a skill that is not there',
     expect(result.entryCount).toBe(1);
     expect(manifest.entries[0]).not.toHaveProperty('version');
   });
+
+  it('refuses a package.json that is not JSON rather than emitting an unversioned manifest', async () => {
+    // "Absent" is the only shape that omits the version. A manifest that is
+    // there and broken used to be read the same way — an entry with no
+    // `version`, exit 0, from a tree npm itself cannot load.
+    const root = projectWithSkill(workDir, 'broken-manifest', CONFIG_YAML_WITH_ARD);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is built from a test temp dir
+    writeFileSync(safePath.join(root, 'package.json'), '{"name":"x",', 'utf-8');
+
+    await expect(emitAndRead(root)).rejects.toThrow(/package\.json is not valid JSON/);
+  });
 });
 
 describe('runArdEmit — which of the three absences it is', () => {

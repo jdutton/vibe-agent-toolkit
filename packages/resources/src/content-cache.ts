@@ -45,7 +45,8 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, safePath } from '@vibe-agent-toolkit/utils';
+import { ZodError } from 'zod';
 
 import {
   ContentMetadataSchema,
@@ -120,11 +121,13 @@ export class ContentCache {
       await fs.writeFile(binPath, Buffer.from(bytes));
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- jsonPath derived from cacheDir
       await fs.writeFile(jsonPath, JSON.stringify(stored), 'utf-8');
-    } catch {
+    } catch (error) {
       // Fail-soft per #125 review: a write IO failure (EACCES on the dir,
       // ENOSPC on the disk, EROFS on read-only mounts) — or metadata this
       // build cannot validate — becomes a no-op. The current run still has the
-      // fresh bytes; only the disk persistence is lost.
+      // fresh bytes; only the disk persistence is lost. Anything else is a bug
+      // in this class or its caller, and a bug is not a persistence failure.
+      if (!isFilesystemAccessError(error) && !(error instanceof ZodError)) throw error;
     }
   }
 
@@ -153,9 +156,11 @@ export class ContentCache {
       // as corruption: we have no standing to interpret the other fields of a
       // file we did not write. See `schemas/content-cache.ts`.
       return validated.success ? validated.data : null;
-    } catch {
+    } catch (error) {
       // ENOENT (never written), EACCES (perms revoked), SyntaxError
       // (corrupted JSON) — all degrade to a miss. The next fetch repopulates.
+      // A TypeError from our own code is not a miss and stays loud.
+      if (!isFilesystemAccessError(error) && !(error instanceof SyntaxError)) throw error;
       return null;
     }
   }
@@ -167,7 +172,10 @@ export class ContentCache {
       // Return a fresh Uint8Array view that does not alias the Node Buffer's
       // underlying ArrayBuffer slab — callers may mutate or store the bytes.
       return new Uint8Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-    } catch {
+    } catch (error) {
+      // The `.json` half was readable and fresh but the `.bin` half is not
+      // there or cannot be opened: a miss, on the same fail-soft footing.
+      if (!isFilesystemAccessError(error)) throw error;
       return null;
     }
   }

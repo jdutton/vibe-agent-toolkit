@@ -51,6 +51,23 @@ describe('parseStreamJsonTranscript', () => {
     ]);
   });
 
+  it('summarises a tool_use with no input as empty, not as unserializable', () => {
+    // Every value the summariser sees is a fragment of a JSON.parse result, so
+    // JSON.stringify cannot fail on it; the one thing it CAN answer with is
+    // `undefined`, for an absent field. That used to trip a `.length` TypeError
+    // inside a blind catch and come out as '<unserializable>' — a parser
+    // accident reported as a property of the event.
+    const parsed = parseStreamJsonTranscript(
+      stream({
+        type: 'assistant',
+        parent_tool_use_id: null,
+        message: { content: [{ type: 'tool_use', id: 'toolu_0', name: 'Bare' }] },
+      }),
+    );
+    expect(parsed.toolUseEvents).toEqual([{ name: 'Bare', inputSummary: '' }]);
+    expect(parsed.toolUses[0]?.inputSummary).toBe('');
+  });
+
   it('omits `command` for non-Bash tool_use blocks (input.command not a string)', () => {
     const parsed = parseStreamJsonTranscript(
       stream({

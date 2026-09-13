@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import nodeFs, { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import fs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 
-
+import { isFilesystemAccessError } from './fs-utils.js';
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from './path-utils.js';
 
 /**
@@ -362,17 +363,34 @@ export type SymlinkCapability = { readonly [symlinkCapabilityBrand]: true };
 let cachedCapability: SymlinkCapability | null | undefined;
 
 /**
+ * The errnos that mean "this host cannot create symlinks": Windows without
+ * Developer Mode or `SeCreateSymbolicLinkPrivilege` (`EPERM`), and a
+ * filesystem that has no symlinks to offer (`ENOTSUP` / `EOPNOTSUPP`).
+ */
+const SYMLINK_UNSUPPORTED_ERRNOS: ReadonlySet<string> = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP']);
+
+function isSymlinkUnsupported(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && typeof error.code === 'string' && SYMLINK_UNSUPPORTED_ERRNOS.has(error.code);
+}
+
+/**
  * Whether this PROCESS can create symlinks — probed once and memoized.
  *
  * On Windows, `symlink()` needs either Developer Mode or
  * `SeCreateSymbolicLinkPrivilege`. That privilege lives on the process's
  * security token, not on any one directory: it cannot change between calls
  * within a single run, so probing it once and reusing the result is a
- * memoization, not a shortcut that risks a stale answer. (An exotic
- * filesystem that itself refuses symlinks — some network shares, some FAT
- * variants — is a real exception this does not model; every fixture in this
- * repo creates its roots under {@link normalizedTmpdir}, so it never arises
- * here.)
+ * memoization, not a shortcut that risks a stale answer. (A filesystem that
+ * itself has no symlinks — some network shares, some FAT variants — answers
+ * `ENOTSUP` and is read as the same "no"; every fixture in this repo creates
+ * its roots under {@link normalizedTmpdir}, so it never arises here.)
+ *
+ * Because the answer is memoized for the whole process, what reads as "no"
+ * matters more than usual: a `null` here silently `skip()`s every symlink test
+ * for the rest of the run. So ONLY {@link SYMLINK_UNSUPPORTED_ERRNOS} is a
+ * no. A tmpdir that is unwritable or missing, or a bug, is not an answer about
+ * symlinks at all and stays loud rather than becoming a process-wide skip for
+ * a reason nothing reported.
  *
  * Fixtures that depend on symlinks must ask rather than assume — and, having
  * asked, must SAY they skipped. A symlink case that silently no-ops reads as
@@ -389,18 +407,20 @@ export function symlinkCapability(): SymlinkCapability | null {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed tmp dir plus a random basename generated here
       symlinkSync('.', probe);
       cachedCapability = {} as SymlinkCapability;
-    } catch {
+    } catch (error) {
+      if (!isSymlinkUnsupported(error)) throw error;
       cachedCapability = null;
     }
     if (cachedCapability !== null) {
       // Best-effort: the capability answer comes from creation succeeding, not
       // from cleanup — a probe left behind by a failed rmSync (e.g. a transient
       // lock on the freshly-created reparse point) must not flip a real "yes"
-      // into a memoized, process-wide "no".
+      // into a memoized, process-wide "no". Only the filesystem refusing the
+      // delete is that case; a bug is not, and stays loud.
       try {
         rmSync(probe, { force: true });
-      } catch {
-        // Leftover probe file; harmless, and not this function's concern.
+      } catch (error) {
+        if (!isFilesystemAccessError(error)) throw error;
       }
     }
   }
@@ -527,19 +547,104 @@ export function detachGitEnv(): () => void {
   };
 }
 
+
+/**
+ * The errno-shaped error a refused `fs` call throws: a message, the `code`,
+ * and the `syscall`, exactly as Node shapes one.
+ */
+export function errnoError(code: string, syscall: string, target: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`${code}: refused, ${syscall} '${target}'`), { code, syscall });
+}
+
+/** The sync `node:fs` calls a refusal can be injected into. */
+export type RefusableSyncFsMethod =
+  | 'readdirSync'
+  | 'readFileSync'
+  | 'statSync'
+  | 'lstatSync'
+  | 'realpathSync'
+  | 'renameSync'
+  | 'rmSync'
+  | 'unlinkSync';
+
+/** The `node:fs/promises` calls a refusal can be injected into. */
+export type RefusableAsyncFsMethod = 'readdir' | 'readFile' | 'stat' | 'lstat' | 'access';
+
+/**
+ * Assign `fn` over `module[method]` and republish the builtin's ESM bindings.
+ *
+ * Assigning on the CJS object alone reaches ONLY a `import fs from 'node:fs'`
+ * caller — a named or namespace import reads the builtin's ESM bindings, which
+ * Node snapshots at import time. `syncBuiltinESMExports()` after each
+ * assignment republishes the patch (and the restore) to every import style;
+ * measured under vitest: without it, a spy on a named-import caller attached
+ * and counted zero, which reads exactly like "this function performs no I/O".
+ */
+function republish(module: object, method: string, fn: unknown): void {
+  (module as Record<string, unknown>)[method] = fn;
+  syncBuiltinESMExports();
+}
+
+/**
+ * Make `fs[method]` throw `code` for exactly `targetPath` until the returned
+ * restore is called; every other path, and every other method, stays real.
+ *
+ * A patch rather than a `chmod`: `chmod` reaches one errno (`EACCES`), only
+ * where POSIX modes bind, and not as root — and the property under test is
+ * "any refusal that is not an absence", so `EACCES`, `ELOOP`, `EMFILE` must all
+ * be reachable. What a walk under test meets is ONE refused call inside an
+ * otherwise ordinary tree; a walk that gave up entirely would pass a test where
+ * everything was refused.
+ *
+ * Lives in the shipped helpers because consumers in five packages each need to
+ * refuse a call, and the duplication gate refuses five copies.
+ */
+export function refuseSyncFs(method: RefusableSyncFsMethod, targetPath: string, code: string): () => void {
+  const original = nodeFs[method] as (...args: unknown[]) => unknown;
+  const refused = toForwardSlash(targetPath);
+  republish(nodeFs, method, (target: unknown, ...rest: unknown[]): unknown => {
+    if (toForwardSlash(String(target)) === refused) throw errnoError(code, method, String(target));
+    return original(target, ...rest);
+  });
+  return () => republish(nodeFs, method, original);
+}
+
+/**
+ * `fs/promises[method]` rejects with `code` for exactly `targetPath` until the
+ * returned restore is called; every other path, and every other method, is real.
+ */
+export function refuseAsyncFs(method: RefusableAsyncFsMethod, targetPath: string, code: string): () => void {
+  const original = (fs[method] as (...args: unknown[]) => Promise<unknown>).bind(fs);
+  const refused = toForwardSlash(targetPath);
+  republish(fs, method, async (target: unknown, ...rest: unknown[]): Promise<unknown> => {
+    if (toForwardSlash(String(target)) === refused) throw errnoError(code, method, String(target));
+    return original(target, ...rest);
+  });
+  return () => republish(fs, method, original);
+}
+
+/**
+ * Run `body` while `fs[method]` throws `code` for exactly `targetPath`; the
+ * patch is lifted however `body` exits. See {@link refuseSyncFs}.
+ */
+export async function withSyncFsRefused<T>(
+  method: RefusableSyncFsMethod,
+  targetPath: string,
+  code: string,
+  body: () => T | Promise<T>,
+): Promise<T> {
+  const restore = refuseSyncFs(method, targetPath, code);
+  try {
+    return await body();
+  } finally {
+    restore();
+  }
+}
+
 /**
  * Run `body` with `fs.readdirSync` of exactly `directory` throwing an error
- * carrying errno `code`. Every other directory lists for real, so what a walk
- * under test meets is ONE refused listing inside an otherwise ordinary tree —
- * a walk that gave up entirely would pass a test where everything was refused.
- *
- * A patch rather than a `chmod`, for the reason the promise-API twin in
- * `resources/test/helpers/refused-listing.ts` gives: `chmod` reaches one errno
- * (`EACCES`), only where POSIX modes bind, and not as root. The mapping under
- * test is "anything that is not an absence errno", and `EMFILE` / `ENFILE` /
- * `ELOOP` are just as reachable in ordinary operation. This one lives in the
- * shipped helpers because the sync crawler has consumers in three packages that
- * each need to refuse a listing, and the duplication gate refuses three copies.
+ * carrying errno `code`. The listing case of {@link withSyncFsRefused}, named
+ * because refusing a LISTING is the question the crawler's consumers ask.
  *
  * @param directory - Absolute path of the one directory to refuse
  * @param code - The errno to reject with
@@ -551,19 +656,5 @@ export async function withReaddirSyncRefused<T>(
   code: string,
   body: () => T | Promise<T>,
 ): Promise<T> {
-  const original = nodeFs.readdirSync;
-  const refused = toForwardSlash(directory);
-  const patched = ((target: nodeFs.PathLike, ...rest: unknown[]) => {
-    if (toForwardSlash(String(target)) === refused) {
-      throw Object.assign(new Error(`${code}: refused, scandir '${String(target)}'`), { code });
-    }
-    return (original as (...args: unknown[]) => unknown)(target, ...rest);
-  }) as typeof nodeFs.readdirSync;
-
-  nodeFs.readdirSync = patched;
-  try {
-    return await body();
-  } finally {
-    nodeFs.readdirSync = original;
-  }
+  return withSyncFsRefused('readdirSync', directory, code, body);
 }

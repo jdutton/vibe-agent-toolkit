@@ -1,5 +1,5 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -32,6 +32,10 @@ const PUBLIC_SUBPATH = 'public.json';
 const PRIVATE_SUBPATH = 'private.json';
 const WORKSPACE_DIR = 'packages/a';
 const INSTALLED_DIR = 'node_modules/@fixture/b';
+// chmod modes — same documentation pattern as content-cache.test.ts.
+const MODE_NO_PERMS = 0o000;
+const MODE_RW_FILE = 0o644;
+const MODE_RW_DIR = 0o755;
 
 let root: string;
 
@@ -207,4 +211,56 @@ describe('PackageExtentContributor exports map', () => {
     expect(paths).not.toContain(safePath.join(INSTALLED_DIR, PRIVATE_SUBPATH));
     expect(found.conditions.map((row) => row.code)).toEqual([PACKAGE_SUBPATH_NOT_EXPORTED]);
   });
+});
+
+describe('PackageExtentContributor — a refusal is not "not a package"', () => {
+  // The `no-blind-catch` split: a manifest or workspace parent that is ABSENT is
+  // a fact about the corpus and stays silent; one the filesystem REFUSES would,
+  // absorbed, drop every package beneath it from the population with no
+  // finding. The refusal propagates instead, naming what could not be read.
+
+  it('still treats a workspaces parent that does not exist as matching nothing', async () => {
+    writeJson(MANIFEST, { name: ROOT_PKG, workspaces: ['nowhere/*'] });
+
+    const contribution = await contribute();
+
+    expect(contribution.contexts.map((row) => row.contextId)).toContain(extentIdFor(ROOT_PKG));
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'refuses a workspaces parent the OS will not list (POSIX, not root)',
+    async () => {
+      // A real mode bit rather than a patched `readdirSync`: the contributor
+      // reads through a named import, which a patch on the default object
+      // does not reach.
+      const parent = safePath.join(root, 'packages');
+      chmodSync(parent, MODE_NO_PERMS);
+      try {
+        await expect(contribute()).rejects.toMatchObject({ code: 'EACCES' });
+      } finally {
+        chmodSync(parent, MODE_RW_DIR);
+      }
+    },
+  );
+
+  it('still treats a manifest that is not JSON as "not a package"', async () => {
+    writeFileSync(safePath.join(root, WORKSPACE_DIR, MANIFEST), '{ not json');
+
+    const contribution = await contribute();
+
+    expect(contribution.contexts.map((row) => row.contextId)).not.toContain(extentIdFor(WORKSPACE_PKG));
+  });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'refuses a manifest the OS will not hand over (POSIX, not root)',
+    async () => {
+      const manifest = safePath.join(root, WORKSPACE_DIR, MANIFEST);
+      chmodSync(manifest, MODE_NO_PERMS);
+      try {
+        await expect(contribute()).rejects.toMatchObject({ code: 'EACCES' });
+      } finally {
+        chmodSync(manifest, MODE_RW_FILE);
+      }
+    },
+  );
 });

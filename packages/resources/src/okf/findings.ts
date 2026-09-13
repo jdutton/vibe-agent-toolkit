@@ -102,7 +102,9 @@ function isNotAMapping(parsed: ParsedFrontmatter): boolean {
   if (parsed.frontmatterSource === undefined) return false;
   try {
     return yaml.parse(parsed.frontmatterSource) !== null;
-  } catch {
+  } catch (error) {
+    // Only the YAML parser's own refusal is "not claimed as a non-mapping".
+    if (!(error instanceof yaml.YAMLError)) throw error;
     return false;
   }
 }

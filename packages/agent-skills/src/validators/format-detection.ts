@@ -2,7 +2,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ResourceFormat, Surface } from './types.js';
 
@@ -129,8 +129,19 @@ function detectDirectoryFormat(dirPath: string): ResourceFormat {
 					};
 				}
 			}
-		} catch {
-			// If we can't read/parse marketplace.json, fall through to ambiguous error
+		} catch (error) {
+			// The co-located check could not be made. Say so: falling through to the
+			// generic "ambiguous" reason reported a marketplace.json that is not JSON
+			// (or one the OS refused) as a LAYOUT problem, sending the author to
+			// restructure a directory that only needed one file fixed.
+			return {
+				type: 'unknown',
+				path: dirPath,
+				reason:
+					'Ambiguous: directory contains both plugin.json and marketplace.json, and ' +
+					'marketplace.json could not be read to check for the co-located pattern: ' +
+					(error instanceof Error ? error.message : String(error)),
+			};
 		}
 
 		// Truly ambiguous - both files exist but not co-located pattern
@@ -223,20 +234,22 @@ function detectFileFormat(filePath: string): ResourceFormat {
  * - `<dir>/.claude-plugin/marketplace.json` exists → { type: 'marketplace', path: <dir> }
  *
  * Returns `[]` for nonexistent paths, files, or directories with no recognized manifests.
+ * A path that is there and REFUSED (a `stat` the OS will not answer, a
+ * marketplace.json it will not hand over) rejects instead: `[]` is "no surfaces
+ * here", and an audit that read a refusal as that exited 0 over a tree it never saw.
  *
  * @param dirPath - Absolute path to a directory
  * @returns Array of surfaces in enumerator-stable order (skill, plugin, marketplace)
  */
 export async function enumerateSurfaces(dirPath: string): Promise<Surface[]> {
+	let stats: fs.Stats;
 	try {
-		if (!fs.existsSync(dirPath)) {
-			return [];
-		}
-		const stats = fs.statSync(dirPath);
-		if (!stats.isDirectory()) {
-			return [];
-		}
-	} catch {
+		stats = fs.statSync(dirPath);
+	} catch (error) {
+		if (isPathAbsentError(error)) return [];
+		throw error;
+	}
+	if (!stats.isDirectory()) {
 		return [];
 	}
 
@@ -275,23 +288,25 @@ export async function enumerateSurfaces(dirPath: string): Promise<Surface[]> {
  * at the current directory (`./`, `.`, etc.), indicating a single-directory
  * marketplace that owns the co-located plugin.
  *
- * Best-effort: swallows read/parse errors (caller treats as "not co-located").
+ * A marketplace.json that is not JSON is "not co-located" (there is no plugin
+ * list to consult). One the OS refused to hand over is not that, and propagates.
  */
 function hasColocatedPluginInMarketplace(marketplaceJsonPath: string): boolean {
+	let data: Record<string, unknown>;
 	try {
-		const content = fs.readFileSync(marketplaceJsonPath, 'utf-8');
-		const data = JSON.parse(content) as Record<string, unknown>;
-		const plugins = data['plugins'];
-		if (!Array.isArray(plugins)) {
-			return false;
-		}
-		return plugins.some((plugin: unknown) => {
-			if (typeof plugin !== 'object' || plugin === null) return false;
-			const source = (plugin as Record<string, unknown>)['source'];
-			if (typeof source !== 'string') return false;
-			return source === './' || source === '.' || source === '.\\' || source === '';
-		});
-	} catch {
+		data = JSON.parse(fs.readFileSync(marketplaceJsonPath, 'utf-8')) as Record<string, unknown>;
+	} catch (error) {
+		if (error instanceof SyntaxError) return false;
+		throw error;
+	}
+	const plugins = data['plugins'];
+	if (!Array.isArray(plugins)) {
 		return false;
 	}
+	return plugins.some((plugin: unknown) => {
+		if (typeof plugin !== 'object' || plugin === null) return false;
+		const source = (plugin as Record<string, unknown>)['source'];
+		if (typeof source !== 'string') return false;
+		return source === './' || source === '.' || source === '.\\' || source === '';
+	});
 }

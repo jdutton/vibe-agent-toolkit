@@ -339,9 +339,12 @@ function summarizeThrown(error: unknown): string {
 function safeJson(value: unknown): string {
   try {
     return JSON.stringify(value) ?? String(value);
-  } catch {
-    // Circular or BigInt-bearing. String() still reveals enough to redact against.
-    return String(value);
+  } catch (error) {
+    // Circular, BigInt-bearing, or a `toJSON` that threw. String() still
+    // reveals enough to redact against, and the reason rides along so the
+    // message says why this level has no JSON — a logger that serializes the
+    // error would hit the same throw, so its text is part of what is exposed.
+    return `${String(value)} (JSON.stringify threw: ${String(error)})`;
   }
 }
 

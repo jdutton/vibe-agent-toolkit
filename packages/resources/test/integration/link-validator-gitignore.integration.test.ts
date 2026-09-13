@@ -143,12 +143,8 @@ describe('isWithinProject', () => {
       fs.writeFileSync(fileInsideRealRoot, '# inside\n');
       expect(isWithinProject(fileInsideRealRoot, symlinkRoot)).toBe(true);
     } finally {
-      try {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
-        fs.unlinkSync(symlinkRoot);
-      } catch {
-        /* ignore */
-      }
+      // `force`: a link the test never got to create is not a cleanup failure.
+      fs.rmSync(symlinkRoot, { force: true });
     }
   });
 });

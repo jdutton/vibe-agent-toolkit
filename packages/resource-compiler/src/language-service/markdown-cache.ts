@@ -5,6 +5,8 @@
 
 import { statSync } from 'node:fs';
 
+import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
+
 import type { MarkdownResource } from '../compiler/types.js';
 
 interface CacheEntry {
@@ -41,14 +43,18 @@ export function getMarkdownResource(
   filePath: string,
   loader: () => MarkdownResource,
 ): MarkdownResource {
-  // Get current file modification time
+  // Get current file modification time. A file that is not there caches under
+  // mtime 0 (the loader decides what an absent file means). A file the OS
+  // refuses to stat must NOT share that slot: it would be cached once, under
+  // the same key as an absent one, and never reloaded once its permissions
+  // were fixed. The language-service entry points catch and log.
   let currentMtime: number;
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Using validated path from TypeScript Language Service
     const stats = statSync(filePath);
     currentMtime = stats.mtimeMs;
-  } catch {
-    // File doesn't exist or can't be accessed - always reload
+  } catch (error) {
+    if (!isPathAbsentError(error)) throw error;
     currentMtime = 0;
   }
 

@@ -147,11 +147,27 @@ interface DocumentInspection {
  * @returns A hard-error finding naming the document and the errno, no path
  */
 function unreadableDocumentFinding(document: string, error: unknown): OkfFinding {
+  return unreadableDocumentFindingByCode(document, fsErrorCode(error));
+}
+
+/**
+ * The same finding, from an errno discovery already extracted — a `.md` symlink
+ * whose target the OS refused to `stat` (`ELOOP`, `EACCES`) arrives here from
+ * {@link OkfBundleFiles.unreadableDocuments} rather than from a failed read.
+ *
+ * One code for both routes: what the adopter has to know is that this entry
+ * was NOT assessed, and which errno explains it.
+ *
+ * @param document - Bundle-relative path of the entry
+ * @param code - The errno, already stripped of any path
+ * @returns A hard-error finding naming the document and the errno, no path
+ */
+function unreadableDocumentFindingByCode(document: string, code: string): OkfFinding {
   return {
     code: 'OKF_DOCUMENT_UNREADABLE',
     severity: 'error',
     document,
-    message: `This document is inside the bundle and could not be read (${fsErrorCode(error)}), so its conformance was not assessed. Every other document in the bundle still was. Fix its permissions, or remove it from the bundle root.`,
+    message: `This document is inside the bundle and could not be read (${code}), so its conformance was not assessed. Every other document in the bundle still was. Fix its permissions, or remove it from the bundle root.`,
   };
 }
 
@@ -351,7 +367,10 @@ export async function validateOkfBundle(
   // same directory once per document that points into it.
   const index = new BundleDirectoryIndex(root, new FsLookupCache());
   const drafts: OkfFindingDraft[] = files.unpackableDocuments.map(unpackableDocumentDraft);
-  const hardFindings: OkfFinding[] = files.unreadableDirectories.map(unreadableDirectoryFinding);
+  const hardFindings: OkfFinding[] = [
+    ...files.unreadableDirectories.map(unreadableDirectoryFinding),
+    ...files.unreadableDocuments.map((entry) => unreadableDocumentFindingByCode(entry.document, entry.code)),
+  ];
   let declaredOkfVersion: string | undefined;
 
   const documents: ReadonlyArray<readonly [string, boolean]> = [

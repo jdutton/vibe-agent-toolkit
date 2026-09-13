@@ -17,6 +17,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { EvalFragment } from '../../src/skill-test/eval-fragment.js';
@@ -38,6 +39,7 @@ import {
   buildStageItems,
   buildStaleDistWarningLines,
   cleanupHarness,
+  emitFrictionReport,
   computeCompositeVerdict,
   detectItemPluginLayout,
   FLAG_PROBE_SENTINEL,
@@ -53,6 +55,7 @@ import {
   renderPreflightSummary,
   recordSessionCost,
   rejectedArtifactPath,
+  removeVatOnlyDir,
   resolveArtifactPaths,
   resolveCompositeAllPassed,
   resolveGraderOutDir,
@@ -553,6 +556,8 @@ function writeArtifacts(
   return paths;
 }
 
+const NOT_JSON = '{ not json';
+
 describe('assertVatWroteArtifacts', () => {
   const { getTempDir } = setupTempDir('vat-artifact-gate-');
 
@@ -631,14 +636,31 @@ describe('assertVatWroteArtifacts', () => {
     expect(() => assertVatWroteArtifacts(paths, true)).toThrow(/\.rejected/);
   });
 
+  // Quarantine is best-effort on the way OUT of a failing run, so a refused rename
+  // must not replace the diagnosis. It used to fall through two blind catches to
+  // '' — the operator read "not valid JSON" and found the file still sitting there
+  // under its authoritative name with nothing saying why. The refusals now ride
+  // the same message.
+  it('says so in the error when the artifact could neither be moved aside nor removed', async () => {
+    const paths = writeArtifacts(getTempDir());
+    writeFileSync(paths.gradingOut, NOT_JSON, 'utf-8');
+
+    await withSyncFsRefused('renameSync', paths.gradingOut, 'EPERM', () =>
+      withSyncFsRefused('rmSync', paths.gradingOut, 'EBUSY', () => {
+        expect(() => assertVatWroteArtifacts(paths, false)).toThrow(/could not be moved aside \(.*EPERM.*\) or removed \(.*EBUSY.*\)/);
+      }),
+    );
+    expect(existsSync(paths.gradingOut), 'the refusals were real: the file is still there').toBe(true);
+  });
+
   it('quarantines an unparseable artifact too, not only a schema-invalid one', () => {
     const resultsDir = getTempDir();
     const paths = writeArtifacts(resultsDir);
-    writeFileSync(paths.gradingOut, '{ not json', 'utf-8');
+    writeFileSync(paths.gradingOut, NOT_JSON, 'utf-8');
 
     expect(() => assertVatWroteArtifacts(paths, false)).toThrow(/grading\.json/);
     expect(existsSync(paths.gradingOut)).toBe(false);
-    expect(readFileSync(rejectedArtifactPath(paths.gradingOut), 'utf-8')).toBe('{ not json');
+    expect(readFileSync(rejectedArtifactPath(paths.gradingOut), 'utf-8')).toBe(NOT_JSON);
   });
 });
 
@@ -728,21 +750,29 @@ describe('swallowCleanupFailure', () => {
 
   // Swallowed, not silent: a lockfile that could not be removed breaks the NEXT run
   // with a "busy" error, and an operator who saw nothing here cannot connect the two.
-  it('reports the failure on stderr', () => {
-    const written: string[] = [];
-    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
-      written.push(String(chunk));
-      return true;
-    });
-    try {
+  it('reports the failure on stderr', async () => {
+    const written = await captureStderr(() => {
       swallowCleanupFailure(() => { throw new Error('EROFS: read-only file system'); });
-    } finally {
-      spy.mockRestore();
-    }
-    expect(written.join('')).toContain('EROFS: read-only file system');
-    expect(written.join('')).toContain('the run\'s result stands');
+    });
+    expect(written).toContain('EROFS: read-only file system');
+    expect(written).toContain('the run\'s result stands');
   });
 });
+
+/** Everything `body` wrote to `process.stderr`, with the real stream left untouched. */
+async function captureStderr(body: () => void | Promise<void>): Promise<string> {
+  const written: string[] = [];
+  const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+    written.push(String(chunk));
+    return true;
+  });
+  try {
+    await body();
+  } finally {
+    spy.mockRestore();
+  }
+  return written.join('');
+}
 
 /**
  * The SINGLE derivation behind both `baselineIntegrity.skew` (which reads `total`)
@@ -940,7 +970,7 @@ describe('resolveSkillContentNeedles', () => {
     expect(asDir).toEqual(asFile);
   });
 
-  it('returns [] when the staged SKILL.md cannot be read', () => {
+  it('returns [] when there is no staged SKILL.md (absence: the signal is unarmed, not clean)', () => {
     expect(
       resolveSkillContentNeedles(safePath.join(getTempDir(), 'nope'), [], {
         workspacesRoot: getTempDir(),
@@ -948,11 +978,70 @@ describe('resolveSkillContentNeedles', () => {
       }),
     ).toEqual([]);
   });
+
+  // `[]` means "unarmed". A SKILL.md that is THERE but refused used to read as
+  // unarmed too, so a permission problem on vat's own staged copy silently
+  // disarmed the contamination signal for the whole run.
+  it('rethrows when the staged SKILL.md is refused rather than reporting the signal unarmed', async () => {
+    const root = getTempDir();
+    const subject = safePath.join(root, 'staged');
+    mkdirSyncReal(subject, { recursive: true });
+    const skillMd = safePath.join(subject, 'SKILL.md');
+    writeFileSync(skillMd, NEEDLE_SKILL_MD, 'utf8');
+    await withSyncFsRefused('readFileSync', skillMd, 'EACCES', () => {
+      expect(() =>
+        resolveSkillContentNeedles(subject, [], { workspacesRoot: root, armDirs: { with: ARM_SEGMENT } }),
+      ).toThrow(/EACCES/);
+    });
+  });
+
+  it('skips a declared fixture that was never staged (absence), leaving the needles armed', () => {
+    // Staging does `existsSync` then `cpSync`, so a declared file that did not exist
+    // at the source is simply not there in the arm's workspace.
+    expect(needlesFor(getTempDir(), ['never-staged.md'], {})).toContain(QUOTED.toLowerCase());
+  });
+
+  it('rethrows when a staged fixture is refused rather than silently narrowing the exclusion set', async () => {
+    const root = getTempDir();
+    const fixture = safePath.join(root, ARM_SEGMENT, 'e1', 'input.md');
+    await withSyncFsRefused('readFileSync', fixture, 'EACCES', () => {
+      expect(() => needlesFor(root, ['input.md'], { 'input.md': `${QUOTED}\n` })).toThrow(/EACCES/);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
 // Friction report formatter
 // ---------------------------------------------------------------------------
+
+describe('emitFrictionReport', () => {
+  const { getTempDir } = setupTempDir('vat-friction-emit-');
+
+  it('emits nothing for an absent or empty report', async () => {
+    const empty = safePath.join(getTempDir(), 'friction.json');
+    writeFileSync(empty, JSON.stringify({ items: [] }), 'utf-8');
+    expect(await captureStderr(() => emitFrictionReport(undefined))).toBe('');
+    expect(await captureStderr(() => emitFrictionReport(safePath.join(getTempDir(), 'nope.json')))).toBe('');
+    expect(await captureStderr(() => emitFrictionReport(empty))).toBe('');
+  });
+
+  // vat is the sole writer of friction.json. A copy it wrote and cannot read back
+  // used to emit nothing — indistinguishable from "no friction" on stderr.
+  it('warns, rather than staying silent, when the report is there but unreadable or malformed', async () => {
+    const bad = safePath.join(getTempDir(), 'friction.json');
+    writeFileSync(bad, NOT_JSON, 'utf-8');
+    expect(await captureStderr(() => emitFrictionReport(bad))).toMatch(/warning: could not read the friction report/);
+
+    writeFileSync(bad, JSON.stringify({ items: 'not-an-array' }), 'utf-8');
+    expect(await captureStderr(() => emitFrictionReport(bad))).toMatch(/warning: the friction report .* does not match its schema/);
+
+    writeFileSync(bad, JSON.stringify({ items: [] }), 'utf-8');
+    const refused = await captureStderr(() =>
+      withSyncFsRefused('readFileSync', bad, 'EACCES', () => { emitFrictionReport(bad); }),
+    );
+    expect(refused).toMatch(/warning: could not read the friction report.*EACCES/);
+  });
+});
 
 describe('formatFrictionReport', () => {
   const highItem: FrictionItem = {
@@ -1538,6 +1627,20 @@ describe('cleanupHarness', () => {
     expect(() => cleanupHarness(root, { keep: false, created: true })).not.toThrow();
   });
 
+  // Best-effort from a `finally` is right; SILENT was not. A harness dir the OS
+  // refused to remove is staged untrusted bytes left in tmp, and the operator who
+  // saw nothing cannot connect the leftover to this run.
+  it('reports a refused removal on stderr (the run\'s result stands) instead of swallowing it', async () => {
+    const root = makeHarnessDir(getTempDir(), 'refused');
+    const written = await captureStderr(() =>
+      withSyncFsRefused('rmSync', root, 'EPERM', () => {
+        expect(() => cleanupHarness(root, { keep: false, created: true })).not.toThrow();
+      }),
+    );
+    expect(written).toMatch(/harness cleanup step failed.*EPERM/);
+    expect(written).toContain("the run's result stands");
+  });
+
   it(
     'does not follow a symlinked root — leaves the link target intact',
     ({ skip }) => {
@@ -1551,6 +1654,28 @@ describe('cleanupHarness', () => {
       expect(existsSync(safePath.join(target, STAGED_FILE))).toBe(true);
     },
   );
+});
+
+describe('removeVatOnlyDir', () => {
+  const { getTempDir } = setupTempDir('vat-remove-vat-only-');
+
+  it('removes the dir, and is a no-op on an absent one or undefined', () => {
+    const dir = makeHarnessDir(getTempDir(), 'gone');
+    removeVatOnlyDir(dir);
+    expect(existsSync(dir)).toBe(false);
+    expect(() => removeVatOnlyDir(safePath.join(getTempDir(), 'missing'))).not.toThrow();
+    expect(() => removeVatOnlyDir(undefined)).not.toThrow();
+  });
+
+  it('reports a refused removal on stderr instead of swallowing it', async () => {
+    const dir = makeHarnessDir(getTempDir(), 'refused');
+    const written = await captureStderr(() =>
+      withSyncFsRefused('rmSync', dir, 'EACCES', () => {
+        expect(() => removeVatOnlyDir(dir)).not.toThrow();
+      }),
+    );
+    expect(written).toMatch(/harness cleanup step failed.*EACCES/);
+  });
 });
 
 describe('verdictExitCode', () => {

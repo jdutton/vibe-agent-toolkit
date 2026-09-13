@@ -999,8 +999,20 @@ export interface BuildStaging {
 export interface StagingRecovery {
   /** True when the previous output was moved back onto the promotion target. */
   restoredPrevious: boolean;
-  /** Paths still on disk that this run could not clean up, in report order. */
-  residue: string[];
+  /**
+   * Paths still on disk that this run could not clean up, in report order,
+   * each with WHY it stayed. The repair is best-effort by construction — it
+   * runs because the filesystem already refused something — so a second
+   * refusal must not replace the first diagnosis; but it must not vanish
+   * either, and a bare path list is where it used to vanish.
+   */
+  residue: StagingResidue[];
+}
+
+/** One path a recovery could not remove or restore, and the reason. */
+export interface StagingResidue {
+  path: string;
+  reason: string;
 }
 
 /**
@@ -1113,7 +1125,7 @@ export async function beginStagedBuild(
       await rename(parked, promoteTo);
     },
     recover: async () => {
-      const residue: string[] = [];
+      const residue: StagingResidue[] = [];
       let restoredPrevious = false;
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
       const targetFree = !existsSync(promoteTo);
@@ -1126,15 +1138,15 @@ export async function beginStagedBuild(
             // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
             await rename(parked, promoteTo);
             restoredPrevious = true;
-          } catch {
+          } catch (error) {
             // The repair is best-effort by construction: it runs because the
             // filesystem already refused something. A throw here must not replace
-            // the original diagnosis, so the parked path is reported as residue
-            // and the caller still names the real cause.
-            residue.push(parked);
+            // the original diagnosis, so the parked path is reported as residue —
+            // with this refusal beside it — and the caller still names the real cause.
+            residue.push({ path: parked, reason: `restore failed: ${describeThrown(error)}` });
           }
         } else {
-          residue.push(parked);
+          residue.push({ path: parked, reason: 'the promotion target is already occupied' });
         }
       }
       // This run's own staging root is always safe to drop: it holds output this
@@ -1142,8 +1154,8 @@ export async function beginStagedBuild(
       // copy of the build output in `dist/` on every failed promotion.
       try {
         await rm(root, { recursive: true, force: true });
-      } catch {
-        residue.push(root);
+      } catch (error) {
+        residue.push({ path: root, reason: `removal failed: ${describeThrown(error)}` });
       }
       return { restoredPrevious, residue };
     },
@@ -1208,7 +1220,7 @@ function describePromotionFailure(
   error: unknown,
   recovery: StagingRecovery,
 ): string {
-  const cause = error instanceof Error ? error.message : String(error);
+  const cause = describeThrown(error);
   const lines = [`Build output promotion failed: ${cause}`];
   if (staging.promoted()) {
     lines.push(`   ${staging.promoteLabel} DOES hold this run's output — the failure was in the cleanup that follows.`);
@@ -1222,10 +1234,15 @@ function describePromotionFailure(
   } else {
     lines.push(`   ${staging.promoteLabel} was never written, and there was no previous output to lose.`);
   }
-  for (const path of recovery.residue) {
-    lines.push(`   Left on disk (this run could not remove it): ${path}`);
+  for (const { path, reason } of recovery.residue) {
+    lines.push(`   Left on disk (this run could not remove it): ${path} — ${reason}`);
   }
   return lines.join('\n');
+}
+
+/** The message of whatever was thrown, for a report line. */
+function describeThrown(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** One discovered skill paired with the packaging config merged for it. */

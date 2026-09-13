@@ -3,10 +3,12 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import fs from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
+import { mkdirSyncReal } from '../src/path-utils.js';
 import { resetProjectRootCaches } from '../src/project-utils.js';
 
 /**
@@ -96,4 +98,39 @@ export async function setupNestedDirectory(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is controlled temp directory in tests
   await fs.writeFile(safePath.join(srcDir, subdir, nestedFile), nestedContent);
   return { srcDir, destDir };
+}
+
+/**
+ * The errno `code` a call throws with, or `undefined` when it does not throw.
+ *
+ * For asserting that a refusal PROPAGATES with its errno intact — the property
+ * every `no-blind-catch` rewrite is pinned by — without a try/catch per test.
+ */
+export function errnoOf(fn: () => unknown): string | undefined {
+  try {
+    fn();
+    return undefined;
+  } catch (error) {
+    return (error as { code?: string }).code;
+  }
+}
+
+/**
+ * Two files under a common `docs/` parent, one of which a test then makes the
+ * OS refuse: `docs/open/ok.md` beside `docs/locked/t.md`. The walk must still
+ * find the one it can list.
+ *
+ * Shared by the crawler refusal suites (`file-crawler-refused-listing`,
+ * `file-crawler-realpath-refused`): same tree, different syscall refused.
+ */
+export function plantOpenAndLockedTree(root: string): { locked: string } {
+  const open = safePath.join(root, 'docs', 'open');
+  const locked = safePath.join(root, 'docs', 'locked');
+  mkdirSyncReal(open, { recursive: true });
+  mkdirSyncReal(locked, { recursive: true });
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled temp fixture tree
+  writeFileSync(safePath.join(open, 'ok.md'), '# ok\n');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled temp fixture tree
+  writeFileSync(safePath.join(locked, 't.md'), '# t\n');
+  return { locked };
 }

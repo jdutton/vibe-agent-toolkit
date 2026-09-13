@@ -1,8 +1,8 @@
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { computeContentKey, type KeyedContent, type ParserKind } from '../src/content-key.js';
 import { parseHtmlContent } from '../src/html-link-parser.js';
@@ -291,7 +291,8 @@ async function exists(target: string): Promise<boolean> {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: path under self-created tempDir
     await fs.stat(target);
     return true;
-  } catch {
+  } catch (error) {
+    if (!isPathAbsentError(error)) throw error;
     return false;
   }
 }
@@ -864,6 +865,68 @@ describe('ParseCache maintenance', () => {
 
     expect(await cache.get(keyed)).toBeNull();
     expect(await exists(suite.dir())).toBe(false);
+  });
+
+  it('clear() on a tree that is already gone is not a failure', async () => {
+    await removeScratchDir(suite.dir());
+
+    await expect(suite.makeCache().clear()).resolves.toBeUndefined();
+  });
+
+  it('clear() throws when the tree cannot be removed, rather than reporting nothing', async () => {
+    // An operator who asked for the space back is told why they did not get
+    // it. Injected rather than chmod'ed: a refusal on `rm -r` needs a mode on
+    // the PARENT, which is the shared tmpdir.
+    const refusal = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    const rm = vi.spyOn(fs, 'rm').mockRejectedValueOnce(refusal);
+    try {
+      await expect(suite.makeCache().clear()).rejects.toBe(refusal);
+    } finally {
+      rm.mockRestore();
+    }
+  });
+});
+
+describe('ParseCache — a bug is not a miss', () => {
+  // The `no-blind-catch` split: the fail-soft contract covers the FILESYSTEM
+  // refusing (EACCES, ENOSPC, EROFS — pinned above) and a corrupt entry. A
+  // `TypeError` thrown from inside the read or write path is neither, and
+  // absorbing it as a miss would make the cache quietest exactly when broken.
+  const suite = setupParseCacheTestSuite();
+
+  it('get() propagates a non-filesystem error from the read', async () => {
+    const bug = new TypeError('simulated defect inside readFile');
+    const readFile = vi.spyOn(fs, 'readFile').mockRejectedValueOnce(bug);
+    try {
+      await expect(suite.makeCache().get(keyedFromText(SIMPLE_DOC))).rejects.toBe(bug);
+    } finally {
+      readFile.mockRestore();
+    }
+  });
+
+  it('get() still treats a filesystem refusal on the read as a miss', async () => {
+    const refusal = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    const readFile = vi.spyOn(fs, 'readFile').mockRejectedValueOnce(refusal);
+    try {
+      const cache = suite.makeCache();
+      expect(await cache.get(keyedFromText(SIMPLE_DOC))).toBeNull();
+      expect(cache.stats).toStrictEqual({ hits: 0, misses: 1, writeFailures: 0 });
+    } finally {
+      readFile.mockRestore();
+    }
+  });
+
+  it('set() propagates a non-filesystem error from the write, and does not count it', async () => {
+    const bug = new TypeError('simulated defect inside writeFile');
+    const writeFile = vi.spyOn(fs, 'writeFile').mockRejectedValueOnce(bug);
+    try {
+      const keyed = keyedFromText(SIMPLE_DOC);
+      const cache = suite.makeCache();
+      await expect(cache.set(keyed, freshParse(keyed))).rejects.toBe(bug);
+      expect(cache.stats.writeFailures).toBe(0);
+    } finally {
+      writeFile.mockRestore();
+    }
   });
 });
 

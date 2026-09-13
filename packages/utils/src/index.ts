@@ -82,6 +82,7 @@ export {
   copyDirectory,
   FsLookupCache,
   isFilesystemAccessError,
+  isPathAbsentError,
   transientRefusalClause,
 } from './fs-utils.js';
 // The two fill+judge pairs, in the order the note above lists them, plus the

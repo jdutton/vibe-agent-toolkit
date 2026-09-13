@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { detectMarketplacePluginSourceMissing } from '@vibe-agent-toolkit/agent-skills';
 import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { refuseSyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { extractClaudeMarketplaceInventory } from '../../src/inventory/extract-marketplace.js';
@@ -392,6 +393,19 @@ describe('a declared source never leaves the marketplace root', () => {
 		marketplaceDeclaring(root, [{ name: 'g', source: 'plugins/good/..' }]);
 
 		await expectRefusedByName(root, 'plugins/good/..', '".."');
+	});
+
+	it('reports a source the OS refuses to stat as refused, by errno — not as missing', async () => {
+		const root = safePath.join(tempDir, 'stat-refused');
+		const pluginDir = writePluginDir(safePath.join(root, 'plugins', 'locked'), 'locked');
+		marketplaceDeclaring(root, [{ name: 'l', source: 'plugins/locked' }]);
+
+		const restore = refuseSyncFs('statSync', pluginDir, 'EACCES');
+		try {
+			await expectRefusedByName(root, 'plugins/locked', 'EACCES');
+		} finally {
+			restore();
+		}
 	});
 
 	it('refuses an EMPTY source by name rather than walking the marketplace root as a plugin', async () => {

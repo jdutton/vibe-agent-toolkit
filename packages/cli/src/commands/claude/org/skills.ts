@@ -32,6 +32,7 @@ import { createAllowUsageLedger, runValidationFramework } from '@vibe-agent-tool
 import type { ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   isAbsoluteAnyPlatform,
+  isFilesystemAccessError,
   normalizedTmpdir,
   safePath,
   toForwardSlash,
@@ -655,6 +656,26 @@ export interface ZipInspection {
 	 * archive whose SKILL.md sits at the root, which has no prefix to strip.
 	 */
 	readonly bundleRoot: string | undefined;
+	/**
+	 * Members this inspection wanted and could not inflate — a bad CRC, a
+	 * compression method that is not store/deflate, an encrypted entry — each
+	 * with the reader's reason. Skipped, never fatal (an archive VAT cannot read
+	 * is not an archive VAT should block), but NAMED: a document that was not
+	 * checked is a promise `install --help` makes that this run did not keep,
+	 * and the operator is owed the list.
+	 */
+	readonly unreadable: readonly ZipEntryFailure[];
+}
+
+/** One archive member the reader refused, and why. */
+export interface ZipEntryFailure {
+	readonly entry: string;
+	readonly reason: string;
+}
+
+/** An archive the reader could not open at all, and why. */
+export interface ZipUnreadable {
+	readonly archiveUnreadable: string;
 }
 
 /**
@@ -710,7 +731,7 @@ const MAX_INSPECTED_DOCUMENT_BYTES = 1024 * 1024;
  * after the total is known and bounded by {@link MAX_INSPECTED_DOCUMENT_BYTES},
  * so an archive declaring a 4 GiB SKILL.md is enumerated and never inflated.
  */
-export async function inspectZipArchive(zipPath: string): Promise<ZipInspection | undefined> {
+export async function inspectZipArchive(zipPath: string): Promise<ZipInspection | ZipUnreadable> {
 	// `adm-zip` is already a runtime dependency of this package (the packager and
 	// the url skill-source both use it). An earlier comment here reasoned that
 	// reading the archive would mean "adding a dependency … for a log line" and
@@ -720,11 +741,17 @@ export async function inspectZipArchive(zipPath: string): Promise<ZipInspection 
 	let entries: ZipEntry[];
 	try {
 		entries = new AdmZip(zipPath).getEntries();
-	} catch {
-		// An archive VAT cannot parse is not an archive VAT should block. The API
+	} catch (error) {
+		// An archive VAT cannot PARSE is not an archive VAT should block. The API
 		// is the authority on the upload either way, and refusing here would turn
-		// "our reader disagrees with your zip tool" into a failed publish.
-		return undefined;
+		// "our reader disagrees with your zip tool" into a failed publish. The
+		// caller is told why, so "checks skipped" is never silent.
+		//
+		// An archive the FILESYSTEM refuses is a different thing: the path was
+		// readable a moment ago (the caller holds its bytes), so a refusal here
+		// is not a parse disagreement and stays loud.
+		if (isFilesystemAccessError(error)) throw error;
+		return { archiveUnreadable: describeZipFailure(error) };
 	}
 
 	// PASS 1 — headers only. Nothing is decompressed while this runs, so both
@@ -740,16 +767,25 @@ export async function inspectZipArchive(zipPath: string): Promise<ZipInspection 
 	// rejected by the caller, so inflating anything out of it would be work spent
 	// on an upload that cannot happen.
 	if (uncompressedBytes > API_SKILL_MAX_UPLOAD_BYTES) {
-		return { uncompressedBytes, declaredName: undefined, neverUploaded, documents: [], bundleRoot: undefined };
+		return {
+			uncompressedBytes, declaredName: undefined, neverUploaded, documents: [], bundleRoot: undefined, unreadable: [],
+		};
 	}
 	const elected = electShallowestSkillMd(files);
+	const unreadable: ZipEntryFailure[] = [];
 	return {
 		uncompressedBytes,
-		declaredName: declaredNameOf(elected),
+		declaredName: declaredNameOf(elected, unreadable),
 		neverUploaded,
-		documents: inflateMarkdownMembers(files),
+		documents: inflateMarkdownMembers(files, unreadable),
 		bundleRoot: archiveRootOf(elected?.entryName),
+		unreadable,
 	};
+}
+
+/** adm-zip throws plain `Error`s; the message is all it has to say. */
+function describeZipFailure(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 /**
@@ -768,19 +804,40 @@ export async function inspectZipArchive(zipPath: string): Promise<ZipInspection 
  * position is that an archive VAT cannot read is not an archive VAT should block,
  * and the checks it feeds only ever warn.
  */
-function inflateMarkdownMembers(files: readonly ZipEntry[]): MultipartFile[] {
+function inflateMarkdownMembers(files: readonly ZipEntry[], unreadable: ZipEntryFailure[]): MultipartFile[] {
 	const documents: MultipartFile[] = [];
 	for (const entry of files) {
 		const filename = toForwardSlash(entry.entryName);
 		if (!filename.toLowerCase().endsWith('.md')) continue;
 		if (entry.header.size > MAX_INSPECTED_DOCUMENT_BYTES) continue;
-		try {
-			documents.push({ fieldName: 'files[]', filename, content: entry.getData() });
-		} catch {
-			continue;
-		}
+		const content = inflateOrRecord(entry, unreadable);
+		if (content !== undefined) documents.push({ fieldName: 'files[]', filename, content });
 	}
 	return documents;
+}
+
+/**
+ * One member's bytes, or `undefined` with the refusal RECORDED.
+ *
+ * `getData()` is the only decompression in this module, so it is the only thing
+ * that can throw here: adm-zip raises on BAD_CRC, on any compression method but
+ * store/deflate, and on an encrypted entry. Those used to escape and abort the
+ * publish on exit 2 — contradicting this module's own stance that an archive VAT
+ * cannot parse is not an archive VAT should block — and then, once caught, were
+ * dropped without a word. The member is skipped AND named.
+ */
+function inflateOrRecord(entry: ZipEntry, unreadable: ZipEntryFailure[]): Buffer | undefined {
+	try {
+		return entry.getData();
+	} catch (error) {
+		// Once per member: the elected SKILL.md is asked for twice (its name, then
+		// its text), and one refusal is one fact.
+		const name = toForwardSlash(entry.entryName);
+		if (!unreadable.some((failure) => failure.entry === name)) {
+			unreadable.push({ entry: name, reason: describeZipFailure(error) });
+		}
+		return undefined;
+	}
 }
 
 /**
@@ -855,20 +912,14 @@ function zipEntryDepth(entryName: string): number {
  * the root of their archive. The election decides; whatever it holds is the
  * answer, absence included.
  *
- * `getData()` is the only decompression in this module, so it is the only thing
- * that can throw here: adm-zip raises on BAD_CRC, on any compression method but
- * store/deflate, and on an encrypted entry. Those used to escape and abort the
- * publish on exit 2 — contradicting this module's own stance that an archive VAT
- * cannot parse is not an archive VAT should block. The size total is already
- * computed from headers, so failing here costs only the name.
+ * An elected SKILL.md that will not inflate costs only the name (the size total
+ * is already computed from headers) — see {@link inflateOrRecord}, which records
+ * the refusal so the operator learns why no name was read.
  */
-function declaredNameOf(entry: ZipEntry | undefined): string | undefined {
+function declaredNameOf(entry: ZipEntry | undefined, unreadable: ZipEntryFailure[]): string | undefined {
 	if (entry === undefined || entry.header.size > MAX_INSPECTED_DOCUMENT_BYTES) return undefined;
-	try {
-		return declaredSkillNameIn(entry.getData().toString('utf8'));
-	} catch {
-		return undefined;
-	}
+	const content = inflateOrRecord(entry, unreadable);
+	return content === undefined ? undefined : declaredSkillNameIn(content.toString('utf8'));
 }
 
 async function sendSkillUpload(
@@ -1560,74 +1611,102 @@ async function installZipArchive(
 		: 'from --title'})`);
 
 	const inspected = await inspectZipArchive(sourcePath);
-	if (inspected !== undefined) {
-		// 🚨 REFUSED, not warned. The directory lane refuses an answer key
-		// unconditionally (`NEVER_UPLOADED_DIR_NAMES`, plus whatever the config
-		// declares), and until this existed the ZIP lane bypassed `collectFiles`
-		// entirely and posted the archive as one opaque part — so
-		// `zip -r my-skill.zip my-skill/` over a tree holding
-		// `my-skill/evals/evals.json` published the answer key org-wide with a
-		// green tick, while `install my-skill/` on the very same tree refused.
-		// Two lanes of one command must not disagree about whether a skill's
-		// answer key may be published, and a warning is a disagreement.
-		//
-		// This lane can only see the CONVENTIONAL names: there is no skill
-		// directory to walk up from, so a config-declared suite location is
-		// unreadable here. That is a narrower check than the directory lane's,
-		// not a looser verdict on what it does see.
-		if (inspected.neverUploaded.length > 0) {
-			throw new Error(
-				`This ZIP contains ${String(inspected.neverUploaded.length)} entr`
-				+ `${inspected.neverUploaded.length === 1 ? 'y' : 'ies'} that are never published with a `
-				+ `skill: ${inspected.neverUploaded.slice(0, 10).join(', ')}`
-				+ `${inspected.neverUploaded.length > 10 ? ', …' : ''}. An eval suite is the skill's ANSWER `
-				+ `KEY and this would publish it to everyone in the organization. Rebuild the archive from `
-				+ `the BUILT skill directory (\`vat skills build\`), or upload that directory directly — `
-				+ `\`install <dir>\` withholds these and reports each one.`,
-			);
-		}
-		if (inspected.uncompressedBytes > API_SKILL_MAX_UPLOAD_BYTES) {
-			throw new Error(
-				`ZIP expands to ${formatBytes(inspected.uncompressedBytes)}, over the `
-				+ `${formatBytes(API_SKILL_MAX_UPLOAD_BYTES)} ceiling. The API expands the archive and `
-				+ `weighs the UNCOMPRESSED total, so ${formatBytes(zipContent.length)} on the wire does not `
-				+ `get this under the limit — it will refuse with "Zip file uncompressed size exceeds 30MB". `
-				+ `Remove files from the bundle; compressing harder cannot help.`,
-			);
-		}
-		// The title/name divergence this branch discloses above, now stated as a
-		// FACT rather than as a caveat, because the archive can be read after
-		// all. A ZIP whose inner SKILL.md declares a different name publishes a
-		// skill whose title and versions disagree — and that divergence is what
-		// makes a title-keyed lookup unsafe, so it is worth naming at the moment
-		// it is minted rather than diagnosing later.
-		if (inspected.declaredName !== undefined && inspected.declaredName !== displayTitle) {
-			logger.warn(
-				`Title/name divergence: this uploads with display title "${displayTitle}", but the `
-				+ `SKILL.md inside declares name "${inspected.declaredName}". Every version will carry `
-				+ `the declared name. Pass --title "${inspected.declaredName}" to make them agree.`,
-			);
-		}
-		// 🚨 The SAME function the directory lane calls, over the archive's own
-		// markdown. Until this line existed, `install <zip>` ran NONE of the
-		// portability checks its `--help` promises of "every markdown document in
-		// the bundle" — the archive went straight to `sendSkillUpload`, so the
-		// adopter finding that produced the family (10 of 54 skills referencing a
-		// path outside their own tree, published green and unable to run) was
-		// invisible on the lane most likely to carry a hand-built bundle.
-		//
-		// ⚠️ NO validation config, and that is a real narrowing, stated in the
-		// help text. `validation.allow` / `validation.severity` are resolved by
-		// walking up from a skill's SKILL.md to its governing project — and an
-		// archive member has no path on disk to walk up from, the same reason a
-		// config-declared eval-suite location is unreadable here. So a waiver that
-		// silences `vat skills build` does NOT silence this lane. The checks only
-		// warn, so the cost of the narrowing is noise, never a blocked publish;
-		// the cost of skipping them was silence on a documented promise.
-		warnUnportableReferences(inspected.documents, inspected.bundleRoot, undefined, logger);
+	if ('archiveUnreadable' in inspected) {
+		// Degrade, and SAY so. Every check below is skipped, and a skipped check
+		// that is not announced is indistinguishable from one that passed.
+		logger.warn(
+			`Could not read the archive (${inspected.archiveUnreadable}); the answer-key, expanded-size, `
+			+ `name and portability checks were not run on it. The API decides the upload.`,
+		);
+	} else {
+		refuseOrWarnOnArchive(inspected, displayTitle, zipContent.length, logger);
 	}
 
 	return sendSkillUpload(client, displayTitle, files);
+}
+
+/**
+ * The archive lane's own decisions, over what {@link inspectZipArchive} read:
+ * two refusals (answer key, expanded size), and the warnings the inspection
+ * earns (title/name divergence, portability, members it could not inflate).
+ */
+function refuseOrWarnOnArchive(
+	inspected: ZipInspection,
+	displayTitle: string,
+	wireBytes: number,
+	logger: UploadLogger,
+): void {
+	// 🚨 REFUSED, not warned. The directory lane refuses an answer key
+	// unconditionally (`NEVER_UPLOADED_DIR_NAMES`, plus whatever the config
+	// declares), and until this existed the ZIP lane bypassed `collectFiles`
+	// entirely and posted the archive as one opaque part — so
+	// `zip -r my-skill.zip my-skill/` over a tree holding
+	// `my-skill/evals/evals.json` published the answer key org-wide with a
+	// green tick, while `install my-skill/` on the very same tree refused.
+	// Two lanes of one command must not disagree about whether a skill's
+	// answer key may be published, and a warning is a disagreement.
+	//
+	// This lane can only see the CONVENTIONAL names: there is no skill
+	// directory to walk up from, so a config-declared suite location is
+	// unreadable here. That is a narrower check than the directory lane's,
+	// not a looser verdict on what it does see.
+	if (inspected.neverUploaded.length > 0) {
+		throw new Error(
+			`This ZIP contains ${String(inspected.neverUploaded.length)} entr`
+			+ `${inspected.neverUploaded.length === 1 ? 'y' : 'ies'} that are never published with a `
+			+ `skill: ${inspected.neverUploaded.slice(0, 10).join(', ')}`
+			+ `${inspected.neverUploaded.length > 10 ? ', …' : ''}. An eval suite is the skill's ANSWER `
+			+ `KEY and this would publish it to everyone in the organization. Rebuild the archive from `
+			+ `the BUILT skill directory (\`vat skills build\`), or upload that directory directly — `
+			+ `\`install <dir>\` withholds these and reports each one.`,
+		);
+	}
+	if (inspected.uncompressedBytes > API_SKILL_MAX_UPLOAD_BYTES) {
+		throw new Error(
+			`ZIP expands to ${formatBytes(inspected.uncompressedBytes)}, over the `
+			+ `${formatBytes(API_SKILL_MAX_UPLOAD_BYTES)} ceiling. The API expands the archive and `
+			+ `weighs the UNCOMPRESSED total, so ${formatBytes(wireBytes)} on the wire does not `
+			+ `get this under the limit — it will refuse with "Zip file uncompressed size exceeds 30MB". `
+			+ `Remove files from the bundle; compressing harder cannot help.`,
+		);
+	}
+	// The title/name divergence this branch discloses above, now stated as a
+	// FACT rather than as a caveat, because the archive can be read after
+	// all. A ZIP whose inner SKILL.md declares a different name publishes a
+	// skill whose title and versions disagree — and that divergence is what
+	// makes a title-keyed lookup unsafe, so it is worth naming at the moment
+	// it is minted rather than diagnosing later.
+	if (inspected.declaredName !== undefined && inspected.declaredName !== displayTitle) {
+		logger.warn(
+			`Title/name divergence: this uploads with display title "${displayTitle}", but the `
+			+ `SKILL.md inside declares name "${inspected.declaredName}". Every version will carry `
+			+ `the declared name. Pass --title "${inspected.declaredName}" to make them agree.`,
+		);
+	}
+	// 🚨 The SAME function the directory lane calls, over the archive's own
+	// markdown. Until this line existed, `install <zip>` ran NONE of the
+	// portability checks its `--help` promises of "every markdown document in
+	// the bundle" — the archive went straight to `sendSkillUpload`, so the
+	// adopter finding that produced the family (10 of 54 skills referencing a
+	// path outside their own tree, published green and unable to run) was
+	// invisible on the lane most likely to carry a hand-built bundle.
+	//
+	// ⚠️ NO validation config, and that is a real narrowing, stated in the
+	// help text. `validation.allow` / `validation.severity` are resolved by
+	// walking up from a skill's SKILL.md to its governing project — and an
+	// archive member has no path on disk to walk up from, the same reason a
+	// config-declared eval-suite location is unreadable here. So a waiver that
+	// silences `vat skills build` does NOT silence this lane. The checks only
+	// warn, so the cost of the narrowing is noise, never a blocked publish;
+	// the cost of skipping them was silence on a documented promise.
+	warnUnportableReferences(inspected.documents, inspected.bundleRoot, undefined, logger);
+	if (inspected.unreadable.length > 0) {
+		const named = inspected.unreadable.map(({ entry, reason }) => `${entry} (${reason})`).join(', ');
+		logger.warn(
+			`${String(inspected.unreadable.length)} archive member(s) could not be inflated and were `
+			+ `not checked: ${named}`,
+		);
+	}
 }
 
 /** One version the sweep could not delete, and the reason it gave. */

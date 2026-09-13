@@ -27,6 +27,8 @@ import { ensureModelFiles } from '../../src/embedding-providers/onnx-utils.js';
 const fsCalls = vi.hoisted(() => ({
   writeFilePaths: [] as string[],
   renamePairs: [] as { from: string; to: string }[],
+  /** When set, `stat` of a path ending in this suffix throws with this errno. */
+  refuseStat: null as { suffix: string; code: string } | null,
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -40,6 +42,13 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     rename: async (from: unknown, to: unknown) => {
       fsCalls.renamePairs.push({ from: String(from), to: String(to) });
       return (actual.rename as (...a: unknown[]) => Promise<void>)(from, to);
+    },
+    stat: async (path: unknown, ...rest: unknown[]) => {
+      const refusal = fsCalls.refuseStat;
+      if (refusal !== null && String(path).endsWith(refusal.suffix)) {
+        throw Object.assign(new Error(`${refusal.code}: refused, stat '${String(path)}'`), { code: refusal.code });
+      }
+      return (actual.stat as (...a: unknown[]) => Promise<unknown>)(path, ...rest);
     },
   };
 });
@@ -59,8 +68,8 @@ const VOCAB_BODY = Buffer.from('[PAD]\n[UNK]\n[CLS]\n[SEP]\n');
  * status 200), which is the other way this cache acquires a file that cannot be
  * parsed.
  */
-function stubFetch(declaredModelLength?: number): void {
-  vi.stubGlobal('fetch', async (input: unknown) => {
+function stubFetch(declaredModelLength?: number): ReturnType<typeof vi.fn> {
+  const stub = vi.fn(async (input: unknown) => {
     const url = String(input);
     const body = url.endsWith('vocab.txt') ? VOCAB_BODY : MODEL_BODY;
     const declared = url.endsWith('vocab.txt') ? body.byteLength : (declaredModelLength ?? body.byteLength);
@@ -69,6 +78,8 @@ function stubFetch(declaredModelLength?: number): void {
       headers: { 'content-length': String(declared) },
     });
   });
+  vi.stubGlobal('fetch', stub);
+  return stub;
 }
 
 describe('ensureModelFiles publication', () => {
@@ -77,6 +88,7 @@ describe('ensureModelFiles publication', () => {
   beforeEach(async () => {
     fsCalls.writeFilePaths.length = 0;
     fsCalls.renamePairs.length = 0;
+    fsCalls.refuseStat = null;
     cacheDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-onnx-publish-'));
   });
 
@@ -117,6 +129,18 @@ describe('ensureModelFiles publication', () => {
     const modelPath = safePath.join(cacheDir, MODEL_ID.replaceAll('/', '_'), MODEL_FILE);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp file
     await expect(stat(modelPath)).rejects.toThrow();
+  });
+
+  it('propagates a refusal to stat the cache path instead of downloading over it', async () => {
+    // The cache is guarded by existence alone. A `stat` the OS refuses is not
+    // "absent": answering so would start a download to a path that cannot be
+    // read, and report the refusal as a write failure at the wrong step.
+    const fetchSpy = stubFetch();
+    fsCalls.refuseStat = { suffix: MODEL_FILE, code: 'EACCES' };
+
+    await expect(ensureModelFiles(MODEL_ID, cacheDir, true)).rejects.toMatchObject({ code: 'EACCES' });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('leaves no temp files behind after a successful download', async () => {

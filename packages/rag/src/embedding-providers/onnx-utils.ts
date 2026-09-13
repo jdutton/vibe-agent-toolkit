@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { stat, mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 
 // ---------------------------------------------------------------------------
@@ -630,14 +630,20 @@ export function l2Normalize(vector: number[]): number[] {
 
 /**
  * Check whether a file exists at the given path.
+ *
+ * Only a path that is not there is `false`. The cache is guarded by existence
+ * alone, so a `stat` the OS refuses must not read as "absent": that would
+ * start a download onto a path that cannot even be read, and surface the
+ * refusal as a write failure at the wrong step.
  */
 async function fileExists(filePath: string): Promise<boolean> {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is constructed from known cache directory
     await stat(filePath);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (isPathAbsentError(error)) return false;
+    throw error;
   }
 }
 

@@ -359,11 +359,8 @@ const tempFiles: string[] = [];
  */
 export function cleanupTestFiles(): void {
 	for (const file of tempFiles) {
-		try {
-			fs.unlinkSync(file);
-		} catch {
-			// Ignore errors - file may not exist
-		}
+		// `force` is "may not exist"; anything else (a refusal) is a real teardown failure.
+		fs.rmSync(file, { force: true });
 	}
 	tempFiles.length = 0;
 }

@@ -119,7 +119,13 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import { normalizedTmpdir, resolveFromImportMeta, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  isPathAbsentError,
+  normalizedTmpdir,
+  resolveFromImportMeta,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
 
 import { parseFactsShapeSource } from './schemas/parse-facts.js';
 
@@ -149,10 +155,13 @@ function readVersion(moduleDir: string): string {
         const version = (parsed as { version?: unknown }).version;
         if (typeof version === 'string' && version !== '') return version;
       }
-    } catch {
-      // Try the next candidate. A package with no readable manifest falls
-      // through to the caller's 'unknown', which still yields a usable (if
-      // uninformative) namespace rather than throwing on a cache lookup.
+    } catch (error) {
+      // No manifest at this candidate: try the next. A package with no
+      // manifest at either falls through to 'unknown', which still yields a
+      // usable (if uninformative) namespace rather than throwing on a cache
+      // lookup. A manifest that IS there but cannot be read or is not JSON is
+      // our own install being broken, and that stays loud.
+      if (!isPathAbsentError(error)) throw error;
     }
   }
   return 'unknown';

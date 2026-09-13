@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 
 import { AgentManifestSchema, type AgentManifest } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { parse as parseYaml } from 'yaml';
 
 export interface LoadedAgentManifest extends AgentManifest {
@@ -23,12 +23,8 @@ export async function findManifestPath(pathArg: string): Promise<string> {
 
   // Check if it's a direct file reference
   if (pathArg.endsWith('.yaml') || pathArg.endsWith('.yml')) {
-    try {
-      await fs.access(absolutePath);
-      return absolutePath;
-    } catch {
-      throw new Error(`Manifest file not found: ${absolutePath}`);
-    }
+    if (!(await isAbsent(absolutePath))) return absolutePath;
+    throw new Error(`Manifest file not found: ${absolutePath}`);
   }
 
   // Assume it's a directory - search for manifest
@@ -38,17 +34,28 @@ export async function findManifestPath(pathArg: string): Promise<string> {
   ];
 
   for (const candidate of candidates) {
-    try {
-      await fs.access(candidate);
-      return candidate;
-    } catch {
-      // Continue to next candidate
-    }
+    if (!(await isAbsent(candidate))) return candidate;
   }
 
   throw new Error(
     `No agent manifest found in ${absolutePath}. Expected agent.yaml or agent.yml`
   );
+}
+
+/**
+ * Whether nothing is at `path`. Only an absence answers `true`: a path the OS
+ * refuses (`EACCES`, `ELOOP`) is not "not found", and reporting it as such
+ * sends the reader to create a manifest that is already there — so the
+ * refusal propagates.
+ */
+async function isAbsent(path: string): Promise<boolean> {
+  try {
+    await fs.access(path);
+    return false;
+  } catch (error) {
+    if (isPathAbsentError(error)) return true;
+    throw error;
+  }
 }
 
 /**

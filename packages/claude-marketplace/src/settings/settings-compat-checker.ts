@@ -6,7 +6,7 @@ import * as fs from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import { allowedToolsOf, parseFrontmatter } from '@vibe-agent-toolkit/agent-skills';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { SettingsConflict } from '../types.js';
 import { reasonOf, walkFollowingLinks, type WalkedTree } from '../walk-following-links.js';
@@ -127,15 +127,18 @@ async function findSkillFiles(pluginDir: string): Promise<{ skillFiles: string[]
 }
 
 /**
- * Check if a plugin has a hooks.json file.
+ * Check if a plugin has a hooks.json file. Only an ABSENT file is "no hooks":
+ * a refusal (`EACCES`) propagates, and `vat audit` then reports the plugin as
+ * one its settings check could not run on rather than as compatible.
  */
 async function hasHooksFile(pluginDir: string): Promise<boolean> {
   const hooksPath = safePath.join(pluginDir, 'hooks.json');
   try {
     await fs.access(hooksPath);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (isPathAbsentError(error)) return false;
+    throw error;
   }
 }
 

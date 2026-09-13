@@ -3,6 +3,7 @@
  */
 
 import type { RuntimeSession, SessionStore } from '@vibe-agent-toolkit/agent-runtime';
+import { SessionNotFoundError } from '@vibe-agent-toolkit/agent-runtime';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { CLITransport } from '../src/cli.js';
@@ -10,7 +11,8 @@ import type { ConversationalFunction } from '../src/types.js';
 
 // Test constants
 const TEST_SESSION_ID = 'test-session';
-const SESSION_NOT_FOUND_ERROR = 'Session not found';
+/** What a real store rejects with for an id it has never seen — the one "start fresh" case. */
+const sessionNotFound = (): SessionNotFoundError => new SessionNotFoundError(TEST_SESSION_ID);
 
 /**
  * Helper to create a mock session store
@@ -20,7 +22,7 @@ function createMockStore<TState>(
 ): SessionStore<TState> {
   return {
     create: vi.fn().mockResolvedValue('mock-session-id'),
-    load: vi.fn().mockRejectedValue(new Error(SESSION_NOT_FOUND_ERROR)),
+    load: vi.fn().mockRejectedValue(sessionNotFound()),
     save: vi.fn().mockResolvedValue(undefined),
     delete: vi.fn().mockResolvedValue(undefined),
     exists: vi.fn().mockResolvedValue(false),
@@ -60,6 +62,27 @@ function expectSavedSessionStructure(mockStore: SessionStore<unknown>, expectedS
 }
 
 /**
+ * Start and stop a transport whose store rejects `load` with `error`; it must not throw.
+ */
+async function startOverFailingLoad(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mockFn: ConversationalFunction<string, string, any>,
+  error: unknown,
+): Promise<void> {
+  const mockStore = createMockStore({
+    load: vi.fn().mockRejectedValue(error),
+  });
+  const testTransport = new CLITransport({
+    fn: mockFn,
+    sessionId: 'test',
+    sessionStore: mockStore,
+  });
+
+  await expect(testTransport.start()).resolves.not.toThrow();
+  await testTransport.stop();
+}
+
+/**
  * Helper to create a transport with a new session (not found in store)
  */
 function createTransportWithNewSession<TState>(
@@ -69,7 +92,7 @@ function createTransportWithNewSession<TState>(
 ): { transport: CLITransport<TState>; mockStore: SessionStore<TState> } {
   const mockStore = createMockStore<TState>({
     exists: vi.fn().mockResolvedValue(false),
-    load: vi.fn().mockRejectedValue(new Error(SESSION_NOT_FOUND_ERROR)),
+    load: vi.fn().mockRejectedValue(sessionNotFound()),
   });
 
   const newTransport = new CLITransport({
@@ -249,7 +272,7 @@ describe('CLITransport with SessionStore', () => {
   describe('High Priority #2: Fallback to initial state', () => {
     it('should fall back to initial state when session not found', async () => {
       const mockStore = createMockStore({
-        load: vi.fn().mockRejectedValue(new Error(SESSION_NOT_FOUND_ERROR)),
+        load: vi.fn().mockRejectedValue(sessionNotFound()),
         exists: vi.fn().mockResolvedValue(false),
       });
 
@@ -273,27 +296,31 @@ describe('CLITransport with SessionStore', () => {
       );
     });
 
-    it('should handle various error types gracefully', async () => {
+    it('starts fresh silently when the store says the session does not exist', async () => {
+      await startOverFailingLoad(mockFn, sessionNotFound());
+
+      // A new session is the expected case, not a failure: nothing is reported.
+      expect(consoleErrorSpy).not.toHaveBeenCalled();
+    });
+
+    it('warns, naming the cause, when the session could not be loaded for any other reason', async () => {
+      // A corrupt session file or a permission refusal is NOT "no session": the
+      // transport still starts (a chat that refuses to open over a bad file
+      // helps nobody), but silently starting fresh would let stop() overwrite
+      // the session the user could not see. The warning is what tells them.
       const errorTypes = [
-        new Error(SESSION_NOT_FOUND_ERROR),
         new Error('File not found'),
         new Error('Permission denied'),
-        { code: 'ENOENT' } as NodeJS.ErrnoException,
+        Object.assign(new Error('EACCES'), { code: 'EACCES' }) as NodeJS.ErrnoException,
       ];
 
       for (const error of errorTypes) {
-        const mockStore = createMockStore({
-          load: vi.fn().mockRejectedValue(error),
-        });
+        consoleErrorSpy.mockClear();
+        await startOverFailingLoad(mockFn, error);
 
-        const testTransport = new CLITransport({
-          fn: mockFn,
-          sessionId: 'test',
-          sessionStore: mockStore,
-        });
-
-        await expect(testTransport.start()).resolves.not.toThrow();
-        await testTransport.stop();
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining(`Failed to load session test: ${error.message}`),
+        );
       }
     });
   });
@@ -373,6 +400,9 @@ describe('CLITransport with SessionStore', () => {
 
       // Should not throw - logs warning instead
       await expect(transport.start()).resolves.not.toThrow();
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to load session'),
+      );
 
       // Should still be functional (no session data, but doesn't crash)
       expect(transport).toBeDefined();
@@ -429,7 +459,7 @@ describe('CLITransport with SessionStore', () => {
 
     it('should handle missing sessionId gracefully', async () => {
       const mockStore = createMockStore({
-        load: vi.fn().mockRejectedValue(new Error(SESSION_NOT_FOUND_ERROR)),
+        load: vi.fn().mockRejectedValue(sessionNotFound()),
       });
 
       transport = new CLITransport({

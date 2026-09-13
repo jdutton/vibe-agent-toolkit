@@ -183,7 +183,12 @@ export function getCompletionEntryDetails(
     }
 
     return undefined;
-  } catch {
+  } catch (error) {
+    // Same lane as getCompletions above: a language-service hook must not
+    // throw into tsserver, and the plugin log is where the reason goes.
+    info.project.projectService.logger.info(
+      `markdown-import-plugin: Error loading markdown for completion details: ${String(error)}`,
+    );
     return undefined;
   }
 }

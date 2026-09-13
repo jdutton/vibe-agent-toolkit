@@ -28,11 +28,9 @@ export function cleanupTestTempDir(dir: string): void {
     throw new Error(`Security: Refusing to delete directory outside temp: ${dir}`);
   }
 
-  try {
-    rmSync(normalizedDir, { recursive: true, force: true });
-  } catch {
-    // Ignore cleanup errors - test directories may already be deleted
-  }
+  // `force: true` already tolerates a directory that is gone; anything else
+  // (a file held open, a permission refusal) is a real cleanup failure.
+  rmSync(normalizedDir, { recursive: true, force: true });
 }
 
 export interface MockPackageOptions {

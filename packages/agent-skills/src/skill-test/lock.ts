@@ -109,6 +109,7 @@ export function acquireHarnessLock(harnessRoot: string, opts: { wait?: boolean }
               `${err instanceof Error ? err.message : String(err)}. ` +
               'The next run of this skill will report the lock as busy until it is deleted.\n',
           );
+          // eslint-disable-next-line local/no-blind-catch -- the REPORTING channel (fd 2) is what threw; there is no surface left to carry the error to, and a rethrow from a `finally` would destroy a good harness result
         } catch {
           // The REPORTING channel is what failed — an EBADF/EPIPE on a file- or
           // TTY-backed fd 2 throws synchronously out of `write`. There is nowhere

@@ -30,11 +30,10 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- skill paths validated upstream */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { readdirSync } from 'node:fs';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { CLAUDE_WEB_REFERENCES_SUBDIR, TARGET_SUBDIR_CATEGORIES } from '../content-type-routing.js';
 
@@ -53,34 +52,29 @@ const BUNDLED_SUBDIRS: readonly string[] = [
 /** How many dead file names the message spells out before summarising. */
 const MAX_LISTED_FILES = 5;
 
-/** Read SKILL.md content (best-effort) — empty string if unreadable. */
-function readSkillContent(skillPath: string): string {
-  try {
-    return readFileSync(skillPath, 'utf-8');
-  } catch {
-    return '';
-  }
-}
-
 /**
  * Every file under `dir`, recursively, as paths relative to `baseDir`
- * (forward-slash normalised by safePath). Empty when `dir` is absent,
- * unreadable, or contains no files.
+ * (forward-slash normalised by safePath). Empty when `dir` is absent or
+ * contains no files. A directory that is there and REFUSED throws: `[]` is
+ * this check's "nothing bundled, nothing to say", and a listing the OS would
+ * not hand over has not established that.
  */
 function listFilesRelative(dir: string, baseDir: string): string[] {
-  if (!existsSync(dir)) return [];
-  const found: string[] = [];
+  let entries;
   try {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const child = safePath.join(dir, entry.name);
-      if (entry.isFile()) {
-        found.push(safePath.relative(baseDir, child));
-      } else if (entry.isDirectory()) {
-        found.push(...listFilesRelative(child, baseDir));
-      }
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch (error) {
+    if (isPathAbsentError(error)) return [];
+    throw error;
+  }
+  const found: string[] = [];
+  for (const entry of entries) {
+    const child = safePath.join(dir, entry.name);
+    if (entry.isFile()) {
+      found.push(safePath.relative(baseDir, child));
+    } else if (entry.isDirectory()) {
+      found.push(...listFilesRelative(child, baseDir));
     }
-  } catch {
-    return [];
   }
   return found;
 }
@@ -110,30 +104,30 @@ function summariseFiles(relPaths: readonly string[]): string {
 }
 
 /**
- * @param skillPath Absolute path to SKILL.md
- * @param skillDir Absolute path to the skill directory (typically dirname(skillPath))
+ * @param body The SKILL.md text the caller already holds — the validator read it
+ *   once at its entry, and a second best-effort read here used to turn a refused
+ *   read into an empty body, i.e. into "nothing mentions these files"
+ * @param skillDir Absolute path to the skill directory
  * @param linkedFiles Absolute paths of files reached during BFS link traversal
  * @param locationRoot Root the emitted `location` is expressed relative to
  */
 export function detectBundledResourceWithoutLinks(
-  skillPath: string,
+  body: string,
   skillDir: string,
   linkedFiles: readonly string[],
   locationRoot: string,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  const body = readSkillContent(skillPath);
-  const baseDir = skillDir.length > 0 ? skillDir : dirname(skillPath);
   const linked = new Set(linkedFiles.map((f) => safePath.resolve(f)));
 
   for (const sub of BUNDLED_SUBDIRS) {
-    const subPath = safePath.join(baseDir, sub);
-    const bundled = listFilesRelative(subPath, baseDir);
+    const subPath = safePath.join(skillDir, sub);
+    const bundled = listFilesRelative(subPath, skillDir);
     if (bundled.length === 0) continue;
 
     const unreferenced = bundled.filter(
       (rel) =>
-        !bodyMentionsFile(body, rel) && !linkedFilesCoverFile(linked, safePath.join(baseDir, rel)),
+        !bodyMentionsFile(body, rel) && !linkedFilesCoverFile(linked, safePath.join(skillDir, rel)),
     );
     if (unreferenced.length === 0) continue;
 

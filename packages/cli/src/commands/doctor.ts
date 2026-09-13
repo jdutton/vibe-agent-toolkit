@@ -12,6 +12,8 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import {
   findConfigFile,
+  isFilesystemAccessError,
+  isPathAbsentError,
   resolveAssetReference,
   safePath,
 } from '@vibe-agent-toolkit/utils';
@@ -159,11 +161,16 @@ function requiredNodeRange(): { range: string } | { problem: 'unreadable' | 'und
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- a URL built from import.meta.url, not from input
     raw = readFileSync(CLI_MANIFEST_URL, 'utf8');
-  } catch {
+  } catch (error) {
     // Distinguished from `undeclared` deliberately. This module's own doctrine says a
     // file that cannot be read is `undetermined` — nothing was verified — not a `fail`.
     // Collapsing the two told a user with an unreadable manifest that it was incomplete
     // and to reinstall, which is the wrong diagnosis and the wrong remedy.
+    //
+    // "Cannot be read" is the FILESYSTEM's answer, and the caller reports it as
+    // one ("check permissions"). A throw with no errno is a defect, and is left
+    // to the caller's own catch, which names it as what it is.
+    if (!isFilesystemAccessError(error)) throw error;
     return { problem: 'unreadable' };
   }
 
@@ -171,7 +178,10 @@ function requiredNodeRange(): { range: string } | { problem: 'unreadable' | 'und
     const manifest: unknown = JSON.parse(raw);
     const range = (manifest as { engines?: { node?: unknown } }).engines?.node;
     return typeof range === 'string' && range.length > 0 ? { range } : { problem: 'undeclared' };
-  } catch {
+  } catch (error) {
+    // Not JSON: the manifest could not be read for its floor, which is the same
+    // verdict as not being able to read it at all.
+    if (!(error instanceof SyntaxError)) throw error;
     return { problem: 'unreadable' };
   }
 }
@@ -383,17 +393,30 @@ function checkSchemaFiles(
         if (!existsSync(absoluteSchemaPath)) {
           missingSchemas.push(schemaPath);
         }
-      } catch {
+      } catch (error) {
         // resolveAssetReference throws for unresolvable bare specifiers
         // (package not installed, subpath not exported). vat doctor's
         // contract is "report what's missing" — convert the throw back
-        // to a missingSchemas entry.
+        // to a missingSchemas entry. Only THOSE two: any other throw is not
+        // a missing schema and reaches the caller's own catch, which reports
+        // it under its own message rather than under "Missing:".
+        if (!isUnresolvableSpecifier(error)) throw error;
         missingSchemas.push(schemaPath);
       }
     }
   }
 
   return { schemaFiles, missingSchemas };
+}
+
+/**
+ * Whether `resolveAssetReference` threw because the specifier names nothing
+ * installed. It wraps Node's resolution error and keeps it as `cause`, so the
+ * code is one level down.
+ */
+function isUnresolvableSpecifier(error: unknown): boolean {
+  const code = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
+  return code === 'MODULE_NOT_FOUND' || code === 'ERR_PACKAGE_PATH_NOT_EXPORTED';
 }
 
 /**
@@ -550,33 +573,38 @@ export async function checkVatVersion(
   }
 }
 
-/** Whether the tree is VAT's own source. Three-valued: the probe can fail. */
-type SourceTreeAnswer = 'yes' | 'no' | 'undetermined';
-
 /**
  * Detect if running in VAT source tree
  *
- * Returns `'undetermined'` when the probe file exists but cannot be read or
- * parsed: "I could not tell whether this is the source tree" is a different
- * answer from "this is not the source tree", and only the latter justifies
- * skipping the build-sync check.
+ * THROWS when the probe file exists but cannot be read or parsed: "I could not
+ * tell whether this is the source tree" is a different answer from "this is not
+ * the source tree", and only the latter justifies skipping the build-sync check.
+ * The caller's catch reports the throw as `undetermined` WITH the reason — a
+ * bare "is unreadable" used to stand in for an errno, a parse error and a
+ * defect alike, and sent every one of them to check file permissions.
  *
  * @param projectRoot - Pre-resolved project root from the CLI boundary (null if absent)
  */
-function isVatSourceTree(projectRoot: string | null): SourceTreeAnswer {
-  if (!projectRoot) return 'no';
+function isVatSourceTree(projectRoot: string | null): boolean {
+  if (!projectRoot) return false;
 
   const cliPackagePath = safePath.join(projectRoot, 'packages/cli/package.json');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path for VAT source detection
+  if (!existsSync(cliPackagePath)) return false;
+
+  let raw: string;
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path for VAT source detection
-    if (!existsSync(cliPackagePath)) return 'no';
-
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path for VAT source detection
-    const pkg = JSON.parse(readFileSync(cliPackagePath, 'utf8')) as { name?: string };
-    return pkg.name === '@vibe-agent-toolkit/cli' ? 'yes' : 'no';
-  } catch {
-    return 'undetermined';
+    raw = readFileSync(cliPackagePath, 'utf8');
+  } catch (error) {
+    // Gone since the existence check: not the source tree. Anything else is
+    // the probe failing, not the probe answering "no".
+    if (isPathAbsentError(error)) return false;
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`packages/cli/package.json is unreadable: ${reason}`, { cause: error });
   }
+  const pkg = JSON.parse(raw) as { name?: string };
+  return pkg.name === '@vibe-agent-toolkit/cli';
 }
 
 /**
@@ -692,17 +720,7 @@ export function checkCliBuildSync(projectRoot: string | null): DoctorCheckResult
       };
     }
 
-    const sourceTree = isVatSourceTree(projectRoot);
-
-    if (sourceTree === 'undetermined') {
-      return {
-        name: CHECK_NAME_CLI_BUILD_STATUS,
-        outcome: 'undetermined',
-        message: 'Could not determine whether this is the VAT source tree (packages/cli/package.json is unreadable)',
-      };
-    }
-
-    if (sourceTree === 'no') {
+    if (!isVatSourceTree(projectRoot)) {
       return {
         name: CHECK_NAME_CLI_BUILD_STATUS,
         outcome: 'skipped',

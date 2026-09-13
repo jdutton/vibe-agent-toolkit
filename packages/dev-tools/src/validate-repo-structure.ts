@@ -36,12 +36,12 @@
 /* eslint-disable security/detect-non-literal-fs-filename */
 // This utility script needs to read dynamic file paths for validation
 
-import { existsSync } from 'node:fs';
+import { existsSync, type Dirent } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 
 import { isEntrypoint } from './common.js';
@@ -104,6 +104,46 @@ const TEXT_FILE_EXTENSIONS = new Set([
 ]);
 
 /**
+ * Read the bytes of a file the population named, or `null` when it is absent
+ * from the working tree (a sparse checkout, a delete not yet committed) —
+ * there is no content to check, so nothing is recorded.
+ *
+ * A file the OS REFUSES to read is also `null`, but that is recorded through
+ * `onRefused`: every content rule over that file did not run, and a gate that
+ * said nothing would read as a clean bill of health for a file it never saw.
+ *
+ * @param fullPath - Absolute path to read
+ * @param onRefused - Receives the reason when the read failed for any reason
+ *   other than absence
+ * @returns The bytes, or `null`
+ */
+export async function readTrackedFile(
+  fullPath: string,
+  onRefused: (reason: string) => void,
+): Promise<Buffer | null> {
+  try {
+    return await readFile(fullPath);
+  } catch (error) {
+    if (isPathAbsentError(error)) return null;
+    onRefused(error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+
+/**
+ * Record a tracked file the gate could not read as a finding at `error`
+ * severity: the rules over its content did not run, so the run cannot be green.
+ */
+function recordUnreadable(relPath: string, reason: string): void {
+  errors.push({
+    type: ERROR_TYPES.STRUCTURAL_VIOLATION,
+    path: relPath,
+    message: `Could not read this file (${reason}), so no content rule ran over it. Fix the permissions or remove it from the tree; a gate that skips what it cannot read is not a gate.`,
+    severity: 'error',
+  });
+}
+
+/**
  * Helper: apply a handler to the raw bytes of every git-tracked text file.
  *
  * Tracked-only is deliberate: these rules are about what a *clean clone* shows a
@@ -124,13 +164,10 @@ async function forEachTrackedTextFile(
       continue;
     }
 
-    const fullPath = safePath.join(REPO_ROOT, relPath);
-    let contents: Buffer;
-    try {
-      contents = await readFile(fullPath);
-    } catch {
-      continue; // Tracked but absent from the working tree (e.g. sparse checkout)
-    }
+    const contents = await readTrackedFile(safePath.join(REPO_ROOT, relPath), (reason) => {
+      recordUnreadable(relPath, reason);
+    });
+    if (contents === null) continue;
 
     handler(relPath, contents);
   }
@@ -154,9 +191,27 @@ async function forEachTrackedTextFileLine(
 }
 
 /**
- * Helper: Walk directory tree recursively, calling handler for each entry
+ * The entries of `dir`, or none when the directory does not exist. A refusal
+ * to list propagates — see {@link walkDirectory}.
  */
-async function walkDirectory(
+async function listOrEmptyIfAbsent(dir: string): Promise<Dirent[]> {
+  try {
+    return await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    if (isPathAbsentError(error)) return [];
+    throw error;
+  }
+}
+
+/**
+ * Helper: Walk directory tree recursively, calling handler for each entry.
+ *
+ * A directory that does not exist is walked as empty — several rules walk
+ * optional locations. A directory the OS refuses to list is NOT empty, and
+ * saying so would let every rule below report "nothing found" over a subtree
+ * it never saw; that throws, and `validate()` exits 2 naming it.
+ */
+export async function walkDirectory(
   dir: string,
   relativePath: string,
   options: {
@@ -165,14 +220,7 @@ async function walkDirectory(
     onFile?: (entry: { name: string; fullPath: string; relPath: string }) => Promise<void>;
   },
 ): Promise<void> {
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return; // Directory doesn't exist or not accessible
-  }
-
-  for (const entry of entries) {
+  for (const entry of await listOrEmptyIfAbsent(dir)) {
     const fullPath = safePath.join(dir, entry.name);
     const relPath = safePath.join(relativePath, entry.name);
 
@@ -583,13 +631,13 @@ async function validateNoContrabandTokens(): Promise<void> {
   console.log(`   contraband scan: ${tokens.length} token(s) from ${tokensPath ?? 'an unnamed source'}`);
 
   for (const relPath of contrabandPopulation(REPO_ROOT)) {
-    let text: string;
-    try {
-      text = await readFile(safePath.join(REPO_ROOT, relPath), 'utf8');
-    } catch {
-      continue; // unreadable or deleted-but-tracked; other rules cover structure
-    }
-    for (const hit of scanTextForContraband(text, tokens)) {
+    // Deleted-but-tracked has nothing to leak; a file this gate could not
+    // read is a file it did not scan, and it says so at error severity.
+    const bytes = await readTrackedFile(safePath.join(REPO_ROOT, relPath), (reason) => {
+      recordUnreadable(relPath, reason);
+    });
+    if (bytes === null) continue;
+    for (const hit of scanTextForContraband(bytes.toString('utf8'), tokens)) {
       errors.push({
         type: ERROR_TYPES.STRUCTURAL_VIOLATION,
         path: `${relPath}:${hit.line}`,

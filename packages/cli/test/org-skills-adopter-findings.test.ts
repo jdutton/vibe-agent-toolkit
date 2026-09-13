@@ -16,11 +16,11 @@
  *   their own tree — green tick, cannot run.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import fs, { readFileSync, writeFileSync } from 'node:fs';
 
 import { API_SKILL_MAX_UPLOAD_BYTES } from '@vibe-agent-toolkit/agent-skills';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { inspectZipArchive, warnUnportableReferences } from '../src/commands/claude/org/skills.js';
 
@@ -92,14 +92,36 @@ describe('inspectZipArchive', () => {
     expect(inspected?.declaredName).toBe('wiki-lint');
   });
 
-  it('returns undefined for an unreadable archive rather than blocking the publish', async () => {
+  it('says WHY it could not read an archive rather than blocking the publish', async () => {
     const notAZip = safePath.join(tempDir, 'corrupt.zip');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own temp dir
     writeFileSync(notAZip, 'this is not a zip archive');
 
     // VAT failing to parse an archive is not grounds to refuse an upload the API
-    // is the authority on. Degrade, do not destroy.
-    await expect(inspectZipArchive(notAZip)).resolves.toBeUndefined();
+    // is the authority on. Degrade, do not destroy — and say so: this used to
+    // be a bare `undefined`, which the caller turned into silence about every
+    // check it then skipped.
+    await expect(inspectZipArchive(notAZip)).resolves.toEqual({
+      archiveUnreadable: expect.stringMatching(/zip|format|header/i),
+    });
+  });
+
+  it('lets the filesystem refusing the archive through, rather than reading it as "not a zip"', async () => {
+    // The caller already holds the archive's bytes when this runs, so a refusal
+    // here is not a parse disagreement. It stays loud, by errno.
+    const zipPath = writeZip('refused.zip', [[SKILL_MD, skillMdBytes('demo')]]);
+    const realRead = fs.readFileSync;
+    const spy = vi.spyOn(fs, 'readFileSync').mockImplementation((target, ...rest) => {
+      if (String(target) === zipPath) {
+        throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      }
+      return (realRead as (...args: unknown[]) => Buffer)(target, ...rest);
+    });
+    try {
+      await expect(inspectZipArchive(zipPath)).rejects.toMatchObject({ code: 'EACCES' });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   /**
@@ -175,9 +197,14 @@ describe('inspectZipArchive', () => {
 
     const inspected = await inspectZipArchive(zipPath);
 
-    expect(inspected).toBeDefined();
-    expect(inspected?.declaredName).toBeUndefined();
-    expect(inspected?.uncompressedBytes).toBeGreaterThan(0);
+    expect(inspected).toMatchObject({ declaredName: undefined });
+    expect(inspected).toMatchObject({ uncompressedBytes: expect.any(Number) });
+    // Skipped, never fatal — and NAMED. A member that was not read is a check
+    // `install --help` promises that this run did not run, and a `continue`
+    // used to drop it without a word.
+    expect(inspected).toMatchObject({
+      unreadable: [{ entry: SKILL_MD, reason: expect.stringMatching(/method|compression/i) }],
+    });
   });
 
   /**

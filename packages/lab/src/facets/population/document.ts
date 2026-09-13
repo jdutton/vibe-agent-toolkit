@@ -88,11 +88,12 @@ export function readPopulationDocument(stdout: string): PopulationDocumentResult
   let raw: unknown;
   try {
     raw = JSON.parse(stdout) as unknown;
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
     return {
       ok: false,
       refusal:
-        'the command printed no JSON document, so it reports no population this facet can read — ' +
+        `the command printed no JSON document (${error.message}), so it reports no population this facet can read — ` +
         'measure a command that emits one (`resources scan … --format json --verbose`)',
     };
   }

@@ -7,7 +7,7 @@
  * this rule avoids.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 
 import {
   ArdDerivationError,
@@ -23,6 +23,7 @@ import { handleCommandError, handleExpectedFailure } from '../../utils/command-e
 import { loadConfig } from '../../utils/config-loader.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeJsonOutput } from '../../utils/output.js';
+import { readPackageJsonOrAbsent } from '../../utils/package-json.js';
 import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
 
 import { collectArdSurfaces, type SkippedArdSurface } from './surfaces.js';
@@ -109,27 +110,21 @@ export interface ArdEmitResult {
  * The project's own package version, when it has one.
  *
  * The npm package version is the only version this project recognises, and an
- * adopter's is the only one VAT can honestly stamp on an entry. Absent or
- * unreadable, the field is simply omitted.
+ * adopter's is the only one VAT can honestly stamp on an entry. Absent, the
+ * field is simply omitted. A `package.json` that is there and is not JSON is
+ * refused by name instead: it used to be read as "no version" too, and a
+ * manifest emitted with no `version` from a tree npm itself cannot read is a
+ * manifest that hid the one fact worth reporting.
  */
 function readProjectVersion(projectRoot: string): string | undefined {
-  const packagePath = safePath.join(projectRoot, 'package.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derives from the caller's project root
-  if (!existsSync(packagePath)) return undefined;
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- existence just confirmed above; same path
-    const parsed = JSON.parse(readFileSync(packagePath, 'utf-8')) as { version?: unknown };
-    // `""` is ABSENT, not a version. A `package.json` carrying it emitted
-    // `"version": ""` on every entry at exit 0 — a field asserting a version
-    // that does not exist. The entry schema now refuses it too, so leaving this
-    // would turn a blank field into a hard emission failure instead.
-    if (typeof parsed.version !== 'string' || parsed.version === '') return undefined;
-    return parsed.version;
-  } catch {
-    // A package.json VAT cannot read is not a reason to refuse a manifest; the
-    // entry is emitted without a `version`, which is a conformant entry.
-    return undefined;
-  }
+  const parsed = readPackageJsonOrAbsent(safePath.join(projectRoot, 'package.json'));
+  const version = parsed?.['version'];
+  // `""` is ABSENT, not a version. A `package.json` carrying it emitted
+  // `"version": ""` on every entry at exit 0 — a field asserting a version
+  // that does not exist. The entry schema now refuses it too, so leaving this
+  // would turn a blank field into a hard emission failure instead.
+  if (typeof version !== 'string' || version === '') return undefined;
+  return version;
 }
 
 /**

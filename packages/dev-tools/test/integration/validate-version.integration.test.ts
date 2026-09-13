@@ -1,11 +1,12 @@
  
 // Test file - paths are controlled by test code, not user input
 
+import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
+import { CommandExecutionError, safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { createTestTempDir, cleanupTestTempDir, createMockPackageJson } from '../test-helpers.js';
@@ -50,5 +51,27 @@ describe('validate-version', () => {
     expect(() => {
       safeExecSync('bunx', ['tsx', validateVersionPath, tempDir], { encoding: 'utf-8' });
     }).toThrow();
+  });
+
+  it('fails naming the manifest when a package.json is not JSON, rather than checking the rest', () => {
+    // Two agreeing packages plus one whose manifest cannot be parsed: dropping
+    // the third would report "all 2 packages agree" over a checkout with 3.
+    setupPackages(tempDir, { pkg1: '0.1.0', pkg2: '0.1.0' });
+    const brokenDir = safePath.join(tempDir, 'packages', 'pkg3');
+    mkdirSyncReal(brokenDir, { recursive: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- this test's own scratch dir
+    writeFileSync(safePath.join(brokenDir, 'package.json'), '{ not json');
+
+    let failure: unknown;
+    try {
+      safeExecSync('bunx', ['tsx', validateVersionPath, tempDir], { encoding: 'utf-8' });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(CommandExecutionError);
+    const { stdout } = failure as CommandExecutionError;
+    expect(String(stdout)).toContain('pkg3');
+    expect(String(stdout)).toContain('package.json');
+    expect(String(stdout)).not.toContain('✓ All');
   });
 });

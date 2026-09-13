@@ -6,9 +6,9 @@
  */
 
 import { existsSync } from 'node:fs';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import * as tar from 'tar';
 
 import { downloadNpmPackage } from '../claude/plugin/helpers.js';
@@ -98,4 +98,30 @@ export async function resolveNpmOrTarballSource(
     skillsDir: findSkillsDirInNpmPackage(packageDir),
     tempDirs: [tempDir],
   };
+}
+
+/**
+ * Remove the temp directories a resolved source left behind.
+ *
+ * Best-effort by design — the command's answer is already out, and a temp
+ * directory that will not go (an `EBUSY` on Windows, a handle a scanner still
+ * holds) must not turn a finished install into a failed one. But best-effort
+ * is not silent: a directory left behind is named, so the operator can remove
+ * what this run could not. `force: true` already tolerates one that is gone.
+ *
+ * @param tempDirs - What {@link resolveNpmOrTarballSource} minted
+ * @param logger - Where a directory that stays is reported
+ */
+export async function removeResolvedTempDirs(
+  tempDirs: readonly string[],
+  logger: { warn: (message: string) => void },
+): Promise<void> {
+  for (const dir of tempDirs) {
+    try {
+      await rm(dir, { recursive: true, force: true });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      logger.warn(`Could not remove temp directory ${toForwardSlash(dir)}: ${reason}`);
+    }
+  }
 }

@@ -105,26 +105,25 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
   const guidePath = await generateManifestGuide(outputPath);
   files.push(guidePath);
 
-  // Copy scripts/ directory if it exists (supports .js and .py)
+  // Copy scripts/ directory if it exists (supports .js and .py). Only ABSENCE
+  // skips the copy: a scripts/ that is there but cannot be copied (a plain file,
+  // an unreadable entry) fails the build rather than shipping a bundle that
+  // silently lacks its scripts.
   const scriptsPath = safePath.join(agentDir, 'scripts');
-  try {
-    await fs.access(scriptsPath);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from the validated agent dir
+  if (existsSync(scriptsPath)) {
     const outputScriptsPath = safePath.join(outputPath, 'scripts');
     await copyDirectory(scriptsPath, outputScriptsPath);
     files.push(outputScriptsPath);
-  } catch {
-    // No scripts directory to copy
   }
 
-  // Copy LICENSE.txt if it exists
+  // Copy LICENSE.txt if it exists — same rule: absence skips, a failed copy throws.
   const licensePath = safePath.join(agentDir, 'LICENSE.txt');
-  try {
-    await fs.access(licensePath);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from the validated agent dir
+  if (existsSync(licensePath)) {
     const outputLicensePath = safePath.join(outputPath, 'LICENSE.txt');
     await fs.copyFile(licensePath, outputLicensePath);
     files.push(outputLicensePath);
-  } catch {
-    // No LICENSE.txt to copy
   }
 
   // STEP 2: Optionally package the generated SKILL.md

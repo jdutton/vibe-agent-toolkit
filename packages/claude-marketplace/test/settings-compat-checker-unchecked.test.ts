@@ -21,7 +21,10 @@
  * through one helper, and both are held to the same layout.
  */
 
+import * as fs from 'node:fs/promises';
+
 import { safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { checkSettingsCompatibility } from '../src/settings/settings-compat-checker.js';
@@ -129,5 +132,51 @@ describe('checkSettingsCompatibility — a SKILL.md whose frontmatter cannot be 
 
     expect(conflictFiles(check)).toEqual(['skills/a/SKILL.md']);
     expect(check.unchecked).toEqual([]);
+  });
+});
+
+describe('checkSettingsCompatibility — a hooks.json the OS refuses', () => {
+  const DISABLE_HOOKS: EffectiveSettings = {
+    permissions: { allow: [], ask: [], deny: [] },
+    disableAllHooks: { value: true, provenance: { level: 'managed', file: 'managed-settings.json' } },
+  };
+
+  /**
+   * "Is there a hooks.json?" is answered by `fs.access`, and a refusal used to
+   * answer `false` — "no hooks" — for a plugin whose hooks the org policy
+   * disables. The refusal now propagates, and `vat audit` reports the plugin as
+   * one it could not check rather than as compatible.
+   */
+  it('propagates the refusal rather than answering "no hooks"', async () => {
+    const plugin = safePath.join(getFixture().root, 'hooks-refused-plugin');
+    await writeSkill(safePath.join(plugin, SKILLS, 'a'), BASH_SKILL('a'));
+    const hooksPath = safePath.join(plugin, 'hooks.json');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
+    await fs.writeFile(hooksPath, '{}', 'utf-8');
+
+    const restore = refuseAsyncFs('access', hooksPath, 'EACCES');
+    try {
+      await expect(checkSettingsCompatibility(plugin, DISABLE_HOOKS)).rejects.toThrow(/EACCES/);
+    } finally {
+      restore();
+    }
+  });
+
+  it('reports the hook conflict when hooks.json is there and readable (positive case)', async () => {
+    const plugin = safePath.join(getFixture().root, 'hooks-present-plugin');
+    await writeSkill(safePath.join(plugin, SKILLS, 'a'), BASH_SKILL('a'));
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
+    await fs.writeFile(safePath.join(plugin, 'hooks.json'), '{}', 'utf-8');
+
+    const check = await checkSettingsCompatibility(plugin, DISABLE_HOOKS);
+    expect(check.conflicts.map((c) => c.type)).toEqual(['hook-disabled']);
+  });
+
+  it('reports no hook conflict when hooks.json is absent (positive case)', async () => {
+    const plugin = safePath.join(getFixture().root, 'hooks-absent-plugin');
+    await writeSkill(safePath.join(plugin, SKILLS, 'a'), BASH_SKILL('a'));
+
+    const check = await checkSettingsCompatibility(plugin, DISABLE_HOOKS);
+    expect(check.conflicts).toEqual([]);
   });
 });

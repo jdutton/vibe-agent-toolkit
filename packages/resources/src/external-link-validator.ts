@@ -23,9 +23,11 @@ function resolveOsUser(): string {
   try {
     const u = userInfo().username;
     if (u !== '') return u;
-  } catch {
-    // userInfo() throws when the running user has no /etc/passwd entry —
-    // recover via env vars below.
+  } catch (error) {
+    // userInfo() throws a SystemError (`ERR_SYSTEM_ERROR`) when the running
+    // user has no /etc/passwd entry — recover via env vars below. That is the
+    // only failure it documents; anything else is a bug and stays loud.
+    if ((error as { code?: unknown }).code !== 'ERR_SYSTEM_ERROR') throw error;
   }
   // Use `||` (not `??`) so an empty-string USER/USERNAME also falls through.
   // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
@@ -229,11 +231,14 @@ function safeSerializeError(err: unknown): string | undefined {
 			return typeof msg === 'string' && msg.trim() ? msg : 'Unknown error';
 		}
 		return serialized;
-	} catch {
-		// JSON.stringify can fail on circular references
-		// Try to extract message property if it exists
+	} catch (serializeError) {
+		// JSON.stringify fails on a circular reference or a BigInt, or because the
+		// object's own `toJSON` threw. Prefer its message; failing that, say WHY
+		// it could not be serialized rather than only that it could not.
 		const msg = (err as { message?: unknown }).message;
-		return typeof msg === 'string' && msg.trim() ? msg : 'Error (unserializable)';
+		if (typeof msg === 'string' && msg.trim()) return msg;
+		const why = serializeError instanceof Error ? serializeError.message : String(serializeError);
+		return `Error (unserializable: ${why})`;
 	}
 }
 

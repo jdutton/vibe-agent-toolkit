@@ -17,6 +17,8 @@
 
 import picomatch from 'picomatch';
 
+import { isInvalidUrlError } from '../url-errors.js';
+
 export interface ProviderMatch {
   readonly host: string;
   readonly excludeHost?: readonly string[];
@@ -46,7 +48,8 @@ export function selectProvider<P extends { readonly match: ProviderMatch }>(
 function extractHostname(url: string): string | undefined {
   try {
     return new URL(url).hostname;
-  } catch {
+  } catch (error) {
+    if (!isInvalidUrlError(error)) throw error;
     return undefined;
   }
 }

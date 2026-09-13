@@ -262,9 +262,16 @@ export class FsLookupCache {
       try {
         // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-validated path
         isDirectory = nodeFs.statSync(targetPath).isDirectory();
-      } catch {
-        // Present to `existsSync` but unstattable. `null` records "no answer"
-        // rather than guessing `false`, which would read as "it is a file".
+      } catch (error) {
+        // Present to `existsSync` but unstattable — a permission change or a
+        // delete racing between the two calls. `null` records "no answer" rather
+        // than guessing `false`, which would read as "it is a file", and the
+        // link walker reports it as an unreadable target — so the refusal is
+        // SEEN, not swallowed. A bug from under the stat is not a refusal and
+        // stays loud; `isFilesystemAccessError` is the right predicate here
+        // precisely because it groups every environmental errno together and
+        // excludes a `TypeError`.
+        if (!isFilesystemAccessError(error)) throw error;
         isDirectory = null;
       }
     }
@@ -1274,12 +1281,43 @@ const FILESYSTEM_ACCESS_ERRNOS: ReadonlySet<string> = new Set([
  * cannot be `code`-only.
  */
 export function isFilesystemAccessError(error: unknown): boolean {
-  // Bounded: a malformed `cause` chain must not become an infinite loop here.
+  return hasErrnoCode(error, (code) => FILESYSTEM_ACCESS_ERRNOS.has(code));
+}
+
+/**
+ * Whether `error` means **there is nothing at this path** — `ENOENT`, or
+ * `ENOTDIR` for a path whose component turned out to be a file — and nothing
+ * else.
+ *
+ * This is the narrowing a `try { stat(p) } catch { return null }` is rewritten
+ * to under the `no-blind-catch` lint rule: the sentinel stands for *absent*,
+ * so only an absence may produce it; a refusal (`EACCES`, `EPERM`, `ELOOP`) or
+ * a bug (`TypeError`) is rethrown and stays loud.
+ *
+ * ⚠️ Deliberately NOT {@link isFilesystemAccessError}. That predicate answers
+ * "is this the environment's fault?" and to answer it groups `ENOENT` with
+ * `EACCES` — the exact conflation that once turned an unreadable directory
+ * into an empty one. The two questions have two predicates on purpose; see
+ * also {@link listingFailure}, which makes the same split for `readdir`.
+ *
+ * Walks `cause` for the same reason its sibling does: the errno is routinely
+ * re-wrapped on its way up.
+ */
+export function isPathAbsentError(error: unknown): boolean {
+  return hasErrnoCode(error, (code) => code === 'ENOENT' || code === 'ENOTDIR');
+}
+
+/**
+ * Whether any string `code` on `error` or down its `cause` chain satisfies
+ * `accept`. Bounded: a malformed `cause` chain must not become an infinite
+ * loop inside an error path, which is the worst place to hang.
+ */
+function hasErrnoCode(error: unknown, accept: (code: string) => boolean): boolean {
   for (let current: unknown = error, depth = 0; depth < 10; depth++) {
     if (typeof current !== 'object' || current === null) return false;
     if ('code' in current) {
       const { code } = current as { code: unknown };
-      if (typeof code === 'string' && FILESYSTEM_ACCESS_ERRNOS.has(code)) return true;
+      if (typeof code === 'string' && accept(code)) return true;
     }
     if (!('cause' in current)) return false;
     current = (current as { cause: unknown }).cause;

@@ -119,7 +119,7 @@ export async function extractClaudePluginInventory(
 		gitTrackerSource,
 		sharedPopulation,
 	);
-	const unexpected = await buildUnexpected(absolute, shape);
+	const unexpected = await buildUnexpected(absolute, shape, parseErrors);
 
 	await collectAssetParseErrors(absolute, parseErrors);
 
@@ -279,8 +279,8 @@ async function buildDiscovered(
 		gitTrackerSource,
 		sharedPopulation,
 	);
-	const commands = await discoverComponents(safePath.join(absolute, 'commands'));
-	const agents = await discoverComponents(safePath.join(absolute, 'agents'));
+	const commands = await discoverComponents(safePath.join(absolute, 'commands'), parseErrors);
+	const agents = await discoverComponents(safePath.join(absolute, 'agents'), parseErrors);
 	return { skills, commands, agents };
 }
 
@@ -317,7 +317,7 @@ async function discoverSkills(
 	// "the skill extractor requires a source" was a statement about one file
 	// rather than about the lane. Both now carry the obligation to their own
 	// callers, and a lane that wants no tracker names `NO_GIT_TRACKER`.
-	const skillMdPaths = await collectSkillMdPaths(absolute, shape, rootSkillMd);
+	const skillMdPaths = await collectSkillMdPaths(absolute, shape, rootSkillMd, parseErrors);
 
 	// Resolved ONCE, here, because this is the first layer that knows the whole
 	// skill list — and a population must register a contributor per skill before it
@@ -440,6 +440,31 @@ function describePopulationFailure(absolute: string, error: unknown): string {
 }
 
 /**
+ * The entries of `dir`, or `[]` with the listing failure recorded against `dir`.
+ *
+ * Every listing this extractor performs goes through here, because each of the
+ * four used to `catch { return }` on its own — and a `skills/` the OS refused
+ * to list then read as a plugin with no skills, which `vat audit` reported as
+ * exactly that. The concurrent-deletion race lands here too, deliberately: a
+ * directory `existsSync` saw a moment ago and `readdir` cannot find is worth a
+ * row, not silence.
+ */
+async function listOrRecord(dir: string, parseErrors: ParseErrors): Promise<Dirent<string>[]> {
+	try {
+		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated absolute plugin root
+		return await readdir(dir, { withFileTypes: true, encoding: 'utf8' });
+	} catch (e) {
+		// `skills/` and `commands/` are each listed twice — once by discovery and
+		// once by the whole-tree crawl behind `unexpected` — so one refusal is one row.
+		const message = (e as Error).message;
+		if (!parseErrors.some(row => row.path === dir && row.message === message)) {
+			parseErrors.push({ path: dir, message });
+		}
+		return [];
+	}
+}
+
+/**
  * Every SKILL.md this plugin owns, in extraction order: the root skill (skill-claude-plugin
  * shape only) first, then each `skills/<name>/SKILL.md`.
  */
@@ -447,6 +472,7 @@ async function collectSkillMdPaths(
 	absolute: string,
 	shape: ClaudePluginInventory['shape'],
 	rootSkillMd: string,
+	parseErrors: ParseErrors,
 ): Promise<string[]> {
 	const paths: string[] = [];
 	if (shape === SHAPE_SKILL_CLAUDE_PLUGIN) paths.push(rootSkillMd);
@@ -455,14 +481,7 @@ async function collectSkillMdPaths(
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated absolute plugin root
 	if (!existsSync(skillsDir)) return paths;
 
-	let entries: string[] = [];
-	try {
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated absolute plugin root
-		entries = await readdir(skillsDir);
-	} catch {
-		// skip unreadable directory
-	}
-	for (const entry of entries) {
+	for (const { name: entry } of await listOrRecord(skillsDir, parseErrors)) {
 		const skillMd = safePath.join(skillsDir, entry, SKILL_MD);
 		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated skills directory
 		if (existsSync(skillMd)) paths.push(skillMd);
@@ -475,12 +494,12 @@ async function collectSkillMdPaths(
  * Walk a component directory (commands/ or agents/) and return one ComponentRef per .md file,
  * recursing into subdirectories. Every .md file in the tree is treated as a component ref.
  */
-async function discoverComponents(dir: string): Promise<ComponentRef[]> {
+async function discoverComponents(dir: string, parseErrors: ParseErrors): Promise<ComponentRef[]> {
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated absolute plugin root
 	if (!existsSync(dir)) return [];
 	const refs: ComponentRef[] = [];
 	const pluginRoot = safePath.resolve(safePath.join(dir, '..'));
-	await walkComponentDir(dir, pluginRoot, refs);
+	await walkComponentDir(dir, pluginRoot, refs, parseErrors);
 	return refs;
 }
 
@@ -488,21 +507,15 @@ async function walkComponentDir(
 	currentDir: string,
 	pluginRoot: string,
 	refs: ComponentRef[],
+	parseErrors: ParseErrors,
 ): Promise<void> {
-	let entries: Dirent<string>[];
-	try {
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path recursively constructed from validated component directory
-		entries = await readdir(currentDir, { withFileTypes: true, encoding: 'utf8' });
-	} catch {
-		return;
-	}
-	for (const entry of entries) {
+	for (const entry of await listOrRecord(currentDir, parseErrors)) {
 		const fullPath = safePath.join(currentDir, entry.name);
 		const relPath = './' + safePath.relative(pluginRoot, fullPath);
 		if (entry.isFile() && entry.name.endsWith('.md')) {
 			refs.push({ manifestPath: relPath, resolvedPath: fullPath, exists: true });
 		} else if (entry.isDirectory()) {
-			await walkComponentDir(fullPath, pluginRoot, refs);
+			await walkComponentDir(fullPath, pluginRoot, refs, parseErrors);
 		}
 	}
 }
@@ -510,8 +523,9 @@ async function walkComponentDir(
 async function buildUnexpected(
 	absolute: string,
 	shape: ClaudePluginInventory['shape'],
+	parseErrors: ParseErrors,
 ): Promise<ClaudePluginInventory['unexpected']> {
-	const matches = await crawlForFilenames(absolute, [SKILL_MD, PLUGIN_JSON]);
+	const matches = await crawlForFilenames(absolute, [SKILL_MD, PLUGIN_JSON], parseErrors);
 	const allSkillMds = matches.get(SKILL_MD) ?? [];
 	const allPluginJsons = matches.get(PLUGIN_JSON) ?? [];
 
@@ -535,7 +549,9 @@ async function buildUnexpected(
 /**
  * Try parsing hooks/hooks.json and .mcp.json. Any JSON syntax error is
  * appended to `parseErrors` as a PLUGIN_INVALID_JSON-compatible record;
- * missing files are silently skipped.
+ * missing files are silently skipped. A file that is there and cannot be READ
+ * is recorded too — it used to be skipped like a missing one, which passed an
+ * unreadable hooks.json as valid.
  */
 async function collectAssetParseErrors(absolute: string, parseErrors: ParseErrors): Promise<void> {
 	const checks: Array<{ path: string; label: string }> = [
@@ -550,7 +566,8 @@ async function collectAssetParseErrors(absolute: string, parseErrors: ParseError
 		try {
 			// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated absolute plugin root
 			raw = await readFile(path, 'utf-8');
-		} catch {
+		} catch (e) {
+			parseErrors.push({ path, message: `${label} could not be read: ${(e as Error).message}` });
 			continue;
 		}
 		try {
@@ -574,28 +591,23 @@ async function collectAssetParseErrors(absolute: string, parseErrors: ParseError
 async function crawlForFilenames(
 	dir: string,
 	filenames: readonly string[],
+	parseErrors: ParseErrors,
 ): Promise<Map<string, string[]>> {
 	const results = new Map<string, string[]>(filenames.map(name => [name, []]));
-	await crawlForFilenamesInner(dir, results);
+	await crawlForFilenamesInner(dir, results, parseErrors);
 	return results;
 }
 
 async function crawlForFilenamesInner(
 	currentDir: string,
 	results: Map<string, string[]>,
+	parseErrors: ParseErrors,
 ): Promise<void> {
-	let entries: Dirent<string>[];
-	try {
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated base dir, recursively walking
-		entries = await readdir(currentDir, { withFileTypes: true, encoding: 'utf8' });
-	} catch {
-		return;
-	}
-	for (const entry of entries) {
+	for (const entry of await listOrRecord(currentDir, parseErrors)) {
 		const fullPath = safePath.join(currentDir, entry.name);
 		if (entry.isDirectory()) {
 			if (entry.name === 'node_modules' || entry.name === '.git') continue;
-			await crawlForFilenamesInner(fullPath, results);
+			await crawlForFilenamesInner(fullPath, results, parseErrors);
 		} else if (entry.isFile()) {
 			results.get(entry.name)?.push(fullPath);
 		}

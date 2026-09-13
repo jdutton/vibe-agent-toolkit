@@ -4,6 +4,7 @@
  */
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { extractImplicitReferences } from '../../src/validators/skill-validator.js';
@@ -135,6 +136,26 @@ describe('extractImplicitReferences', () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.referencedFile).toBe('orphan.md');
     expect(results[0]?.foundIn).toBe(safePath.resolve(tempDir, 'linked.md'));
+  });
+
+  // A visited file is one the BFS already READ, so "cannot read it now" is a race
+  // (skipped: nothing to scan) or a refusal — and a refusal used to be skipped
+  // too, which silently dropped every reference that file carried.
+  it('skips a visited file that has since vanished, and rethrows one that is refused', async () => {
+    const tempDir = getTempDir();
+    createTransitiveSkillStructure(
+      tempDir,
+      { [COMPANION_FILE]: COMPANION_CONTENT },
+      createSkillContent(SKILL_FRONTMATTER, '\n# Skill\n\nSee `companion.md`.'),
+    );
+    const vanished = safePath.resolve(tempDir, 'gone.md');
+    expect(extractImplicitReferences(tempDir, [COMPANION_FILE], visitedSet(tempDir, 'gone.md'))).toHaveLength(1);
+    expect(vanished).not.toBe('');
+
+    const skillMd = safePath.resolve(tempDir, 'SKILL.md');
+    await withSyncFsRefused('readFileSync', skillMd, 'EACCES', () => {
+      expect(() => extractImplicitReferences(tempDir, [COMPANION_FILE], visitedSet(tempDir))).toThrow(/EACCES/);
+    });
   });
 
   it('should return empty array when no implicit references found', () => {

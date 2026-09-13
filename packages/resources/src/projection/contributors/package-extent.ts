@@ -37,7 +37,7 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 
-import { resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { readTextContentSync } from '@vibe-agent-toolkit/utils/fs';
 import { z } from 'zod';
 
@@ -429,14 +429,22 @@ function expandWorkspacePattern(root: string, pattern: string): string[] {
   return pattern.includes('*') ? [] : [safePath.join(root, pattern)];
 }
 
-/** Immediate subdirectories of a path, or none when it cannot be read. */
+/**
+ * Immediate subdirectories of a path, or none when there is no such directory.
+ *
+ * A `workspaces` glob whose parent does not exist matches nothing, which is a
+ * fact about the corpus. A parent that exists and REFUSES to be listed is not:
+ * every package beneath it would silently leave the population, so the refusal
+ * propagates and the build says which directory it could not read.
+ */
 function childDirectories(parent: string): string[] {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- a workspaces-declared directory under the corpus root
     return readdirSync(parent, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => safePath.join(parent, entry.name));
-  } catch {
+  } catch (error) {
+    if (!isPathAbsentError(error)) throw error;
     return [];
   }
 }
@@ -446,7 +454,10 @@ function childDirectories(parent: string): string[] {
  *
  * A missing or malformed `package.json` is a fact about the corpus, not a
  * harness error — a workspace glob legitimately matches a directory that is not
- * a package.
+ * a package, and a manifest that is not JSON is not a package either. A
+ * manifest the filesystem REFUSES to hand over (`EACCES`, `ELOOP`) is neither:
+ * reporting it as "not a package" would drop every dependency it declares from
+ * the population with no finding, so that propagates.
  */
 function readManifest(manifestPath: string): Manifest | undefined {
   try {
@@ -457,7 +468,8 @@ function readManifest(manifestPath: string): Manifest | undefined {
     return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
       ? (parsed as Manifest)
       : undefined;
-  } catch {
+  } catch (error) {
+    if (!isPathAbsentError(error) && !(error instanceof SyntaxError)) throw error;
     return undefined;
   }
 }

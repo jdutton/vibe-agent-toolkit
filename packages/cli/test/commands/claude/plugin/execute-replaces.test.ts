@@ -218,6 +218,20 @@ describe('executeReplaces — flatSkills', () => {
     expect(rm).not.toHaveBeenCalled();
   });
 
+  it('lets a refused lstat through rather than reading it as "nothing to remove"', async () => {
+    // The legacy install is still there; the process may not examine it. A
+    // silent skip leaves it beside its replacement, which is the state
+    // `replaces.flatSkills` exists to prevent.
+    vi.mocked(lstatSync).mockImplementation(() => {
+      throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    });
+
+    await expect(
+      executeReplaces({ flatSkills: ['locked-skill'] }, [], makePaths(), false, makeLogger()),
+    ).rejects.toMatchObject({ code: 'EACCES' });
+    expect(rm).not.toHaveBeenCalled();
+  });
+
   it('removes dangling symlink — lstatSync succeeds but existsSync would return false', async () => {
     // lstatSync returns the stat of the symlink itself (not its target), so it
     // succeeds even for dangling symlinks. existsSync would return false here

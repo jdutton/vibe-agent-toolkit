@@ -36,6 +36,7 @@ import { stat } from 'node:fs/promises';
 
 import {
   fileContentHash,
+  isPathAbsentError,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
@@ -70,9 +71,8 @@ const CONCRETE_COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const RECORD_SEPARATOR = Buffer.from([0]);
 
 /**
- * Stands in for a file the population listed but that could not be read — a
- * tracked file deleted from the working tree, a dangling symlink, a permission
- * denial.
+ * Stands in for a file the population listed but that is not there — a
+ * tracked file deleted from the working tree, or a dangling symlink.
  *
  * Recorded rather than skipped, and rather than allowed to throw. Throwing
  * would make one of the commonest dirty states of all (`rm` a tracked file)
@@ -80,8 +80,11 @@ const RECORD_SEPARATOR = Buffer.from([0]);
  * Skipping would drop the path from the manifest, which reads as "this file
  * never existed" rather than "this file is gone". It cannot collide with a real
  * digest, which is always 64 hex characters.
+ *
+ * Absence is the ONLY case it stands in for. A file that is there but cannot
+ * be read (a permission denial) throws instead — see {@link contentDigest}.
  */
-const UNREADABLE = '<unreadable>';
+const ABSENT = '<absent>';
 
 /**
  * What a fingerprint covers.
@@ -163,16 +166,29 @@ function compareByCodeUnit(a: string, b: string): number {
 }
 
 /**
- * The SHA-256 of a file's raw bytes, or {@link UNREADABLE}.
+ * The SHA-256 of a file's raw bytes, or {@link ABSENT} when the file is gone.
  *
- * @param absolutePath - File to hash
- * @returns A 64-character hex digest, or the unreadable sentinel
+ * A file that is there but REFUSES to be read throws, for the reason a
+ * directory that refuses to be listed does: a placeholder in its slot would
+ * make two different contents behind the lock fingerprint identically, which
+ * is the one thing a fingerprint exists to catch.
+ *
+ * @param root - The subject being fingerprinted, for the error message
+ * @param relativePath - The file, relative to `root`
+ * @returns A 64-character hex digest, or the absent sentinel
+ * @throws {Error} naming the file when it exists and cannot be read
  */
-function contentDigest(absolutePath: string): string {
+function contentDigest(root: string, relativePath: string): string {
   try {
-    return fileContentHash(absolutePath);
-  } catch {
-    return UNREADABLE;
+    return fileContentHash(safePath.join(root, relativePath));
+  } catch (cause) {
+    if (isPathAbsentError(cause)) return ABSENT;
+    throw new Error(
+      `Cannot fingerprint ${root}: ${relativePath} could not be read ` +
+        `(${cause instanceof Error ? cause.message : String(cause)}). ` +
+        'Fix the permissions on that file: a subject the lab cannot read in full cannot be fingerprinted.',
+      { cause },
+    );
   }
 }
 
@@ -216,10 +232,10 @@ function fingerprintFiles(
   // and resolves. That describes the TRACKED-ONLY listing (`includeUntracked:
   // false`), which opens no directory because the index names every member —
   // a listing this function never asks for. What is still true of the git
-  // scope: a tracked file whose bytes cannot be read is recorded by
-  // `contentDigest` as `<unreadable>` rather than thrown, because that route
-  // also lists tracked-but-deleted paths (`ENOENT`) and the tolerance is one
-  // catch. A locked FILE therefore does not refuse; a locked DIRECTORY does.
+  // scope: a tracked file that is GONE from the working tree is recorded by
+  // `contentDigest` as `<absent>` rather than thrown, because that route lists
+  // tracked-but-deleted paths (`ENOENT`). A locked FILE refuses exactly as a
+  // locked directory does — the same hole, one level down.
   const relativePaths = crawlDirectorySync({
     baseDir: root,
     include: ['**/*'],
@@ -243,7 +259,7 @@ function fingerprintFiles(
   for (const relativePath of relativePaths) {
     digest.update(relativePath, 'utf8');
     digest.update(RECORD_SEPARATOR);
-    digest.update(contentDigest(safePath.join(root, relativePath)), 'utf8');
+    digest.update(contentDigest(root, relativePath), 'utf8');
     digest.update(RECORD_SEPARATOR);
   }
 

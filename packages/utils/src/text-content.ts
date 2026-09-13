@@ -398,7 +398,12 @@ export function decodeTextContent(bytes: Uint8Array): DecodedText {
     // scan. A throw here is the ONLY evidence that a substitution happened —
     // see FATAL_DECODERS.
     return { text: fatalDecoder.decode(body), encoding, encodingSource, replacementCharacters: 0 };
-  } catch {
+  } catch (error) {
+    // A fatal `TextDecoder` refuses malformed input with a `TypeError` — that is
+    // the WHATWG contract, and the only failure the lenient retry answers.
+    // Anything else thrown from in here is a bug, and reporting it as a mildly
+    // damaged file (a replacement count) would hide it.
+    if (!(error instanceof TypeError)) throw error;
     const text = decoder.decode(body);
     return { text, encoding, encodingSource, replacementCharacters: countReplacementCharacters(text) };
   }

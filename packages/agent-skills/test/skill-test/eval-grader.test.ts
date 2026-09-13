@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { type SpawnHeadlessOptions } from '@vibe-agent-toolkit/utils/skill-test';
+import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { EvalFragmentError } from '../../src/skill-test/eval-fragment.js';
@@ -189,6 +190,27 @@ describe('runGraderForEval', () => {
     );
 
     expect(progressChunks.join('')).toContain('some progress');
+  });
+
+  /**
+   * Consume-on-read is the security-relevant half of reading the fragment: a copy
+   * left on disk lets same-uid skill code read the echoed nonce. A refused unlink
+   * used to be swallowed outright, so the one degradation this design exists to
+   * prevent was also the one it could not report. It is now a `[skill-test]`
+   * warning on the progress channel — the run's result still stands (end-of-run
+   * cleanup removes the whole dir), but the operator is told the fragment lingered.
+   */
+  it('warns on the progress channel when the consumed fragment cannot be unlinked', async () => {
+    const progressChunks: string[] = [];
+    const { spawn } = stubWritingFragment(graderOutDir, validFragmentFor(EVAL_ID, NONCE));
+    const fragmentPath = safePath.join(graderOutDir, `${EVAL_ID}.json`);
+
+    const result = await withSyncFsRefused('rmSync', fragmentPath, 'EBUSY', () =>
+      runGraderForEval(baseInput(graderOutDir, { spawn, onProgress: (chunk) => { progressChunks.push(chunk); } })),
+    );
+
+    expect(result.evalId).toBe(EVAL_ID);
+    expect(progressChunks.join('')).toMatch(/\[skill-test\].*could not be removed.*EBUSY/);
   });
 
   it('non-zero grader exit: throws InternalHarnessError', async () => {

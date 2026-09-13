@@ -400,18 +400,22 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
    *
    * Identity is `realpathSync.native`, not the traversal path: two names for
    * one directory must collide here or the alias is enumerated twice. A
-   * directory whose real path cannot be read is treated as already-walked —
-   * refusing to descend into something we cannot identify is the safe side of
-   * a guard whose whole job is bounding traversal.
+   * directory whose real path cannot be read is not descended into — refusing
+   * to walk something we cannot identify is the safe side of a guard whose
+   * whole job is bounding traversal — but it is NOT silently "already walked":
+   * a directory that vanished is skipped like any other absence, and one the
+   * OS refused to canonicalise is a gap, surfaced under the caller's policy
+   * exactly as a refused listing is (see `reportOrSkip`).
    *
    * @param dir - Directory about to be walked
-   * @returns True when this directory has been walked before
+   * @returns True when this directory must not be walked (seen before, gone, or refused)
    */
   function alreadyWalked(dir: string): boolean {
     let realPath: string;
     try {
       realPath = fs.realpathSync.native(dir);
-    } catch {
+    } catch (error) {
+      reportOrSkip(error, dir);
       return true;
     }
 

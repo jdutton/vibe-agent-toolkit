@@ -145,6 +145,14 @@ const localRulesConfig = {
   // addressed to a human is not a mechanism, and this repo has watched one
   // survive 24 days and a green CI before.
   'local/no-fragile-entrypoint-guard': 'error',
+  // A `catch` that neither reads its error nor throws answers every failure
+  // the same way, so a permission refusal or a bug reads as "nothing here" at
+  // exit 0. This is the one seam `tsc` cannot enumerate: when a callee learns
+  // to refuse, every blind catch above it compiles unchanged and absorbs the
+  // refusal — which is how a refuse-by-default crawler shipped under a
+  // caller that swallowed it. Repo-wide, tests included: a test that swallows
+  // is a test that cannot see the failure it is there to catch.
+  'local/no-blind-catch': 'error',
 };
 
 // Import organization. Apply to both TS and JS source.

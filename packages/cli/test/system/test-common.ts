@@ -72,15 +72,15 @@ export function createTestTempDir(prefix: string): string {
 }
 
 /**
- * Clean up a temporary directory
- * Safe wrapper around fs.rmSync with proper error handling
+ * Clean up a temporary directory.
+ *
+ * `force: true` already tolerates a directory that is gone, and the retries
+ * are Node's own remedy for the transient `EBUSY` / `EPERM` a just-closed
+ * handle produces on Windows. Anything left after that is a real failure of
+ * the teardown, and a teardown that swallows it hides a leaking fixture.
  */
 export function cleanupTestTempDir(tempDir: string): void {
-  try {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  } catch {
-    // Ignore cleanup errors in tests
-  }
+  fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
 
 /**

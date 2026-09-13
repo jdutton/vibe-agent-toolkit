@@ -32,7 +32,7 @@
 import type { Dirent } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 
-import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import { isWithinProject } from '../utils.js';
 
@@ -79,6 +79,14 @@ export interface OkfUnreadableDirectory {
   code: string;
 }
 
+/** A `.md` entry whose target the filesystem refused to describe. */
+export interface OkfUnreadableDocument {
+  /** Bundle-relative, forward-slashed path of the entry. */
+  document: string;
+  /** The errno, for the finding to quote without a path in it. */
+  code: string;
+}
+
 /** The documents beneath a bundle root, split by what the spec makes of them. */
 export interface OkfBundleFiles {
   /**
@@ -109,6 +117,17 @@ export interface OkfBundleFiles {
    * ROOT's own listing failure still propagates.
    */
   unreadableDirectories: OkfUnreadableDirectory[];
+  /**
+   * Every `.md` symlink whose target the OS refused to `stat` — `ELOOP` on a
+   * cycle, `EACCES` on the target's directory — as opposed to one that points
+   * at nothing.
+   *
+   * Reported as "not assessed", not as "dangling": a refusal is not an absence,
+   * and calling it one would send the author to repair a link that may be
+   * perfectly good. The same "could not look" footing as an unreadable
+   * subdirectory, and like it outside the reach of the severity dial.
+   */
+  unreadableDocuments: OkfUnreadableDocument[];
 }
 
 /** Whether a filename is markdown, judged case-insensitively (widens). */
@@ -116,8 +135,8 @@ function isMarkdownFilename(name: string): boolean {
   return name.toLowerCase().endsWith('.md');
 }
 
-/** What a `.md` symlink is, once followed. */
-type SymlinkVerdict = 'member' | 'outside' | 'dangling' | 'not-a-file';
+/** What a `.md` symlink is, once followed — or the errno when it could not be. */
+type SymlinkVerdict = 'member' | 'outside' | 'dangling' | 'not-a-file' | { unreadable: string };
 
 /**
  * Classify a symlinked `.md` entry: is it a bundle member, and if not, why not?
@@ -144,9 +163,12 @@ async function classifySymlink(root: string, candidate: string): Promise<Symlink
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- an entry name read from a bundle root the adopter's own config named
     if (!(await stat(candidate)).isFile()) return 'not-a-file';
-  } catch {
+  } catch (error) {
     // No target at all: nothing to pack, and nothing to parse either.
-    return 'dangling';
+    if (isPathAbsentError(error)) return 'dangling';
+    // The OS would not say what the link points at (ELOOP, EACCES, EIO…).
+    // That is not "nothing there", and the caller records it as not assessed.
+    return { unreadable: fsErrorCode(error) };
   }
 
   return isWithinProject(candidate, root) ? 'member' : 'outside';
@@ -192,6 +214,10 @@ async function recordMarkdownEntry(
   const verdict = await classifySymlink(root, absolute);
   if (verdict === 'member') {
     record(root, absolute, entry.name, found);
+    return;
+  }
+  if (typeof verdict === 'object') {
+    found.unreadableDocuments.push({ document: safePath.relative(root, absolute), code: verdict.unreadable });
     return;
   }
 
@@ -266,6 +292,7 @@ export async function discoverOkfBundle(root: string): Promise<OkfBundleFiles> {
     reservedDocuments: [],
     unpackableDocuments: [],
     unreadableDirectories: [],
+    unreadableDocuments: [],
   };
   await walkInto(root, root, found);
 

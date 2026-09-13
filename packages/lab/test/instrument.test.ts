@@ -24,7 +24,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- every path here is derived from a controlled mkdtemp scratch dir */
 
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 
 import {
   normalizedTmpdir,
@@ -55,6 +55,10 @@ const CLI_BIN = 'packages/cli/dist/bin.js';
 /** The context-detecting wrapper `package.json` maps `vat` to, sitting beside it. */
 const CLI_WRAPPER = 'packages/cli/dist/bin/vat.js';
 const CLI_MANIFEST = 'packages/cli/package.json';
+
+/** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
+const CANNOT_DENY_READS =
+  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 let scratch: string;
 
@@ -394,6 +398,27 @@ describe('resolveInstrument — kind: dist', () => {
     const missing = safePath.join(scratch, 'no-such-dist');
     await expectRejectionNaming({ kind: 'dist', path: missing }, missing);
   });
+
+  it.skipIf(CANNOT_DENY_READS)(
+    'propagates a refusal to look at the path, rather than reporting "no entry point"',
+    async () => {
+      // "Nothing there" and "you may not look" must not read the same: the
+      // first is answered by building, the second by fixing permissions, and
+      // a harness that says the former for the latter sends the user to the
+      // wrong remedy.
+      const locked = safePath.join(scratch, 'locked-dist');
+      await mkdir(locked, { recursive: true });
+      await writeFile(safePath.join(locked, 'bin.js'), '');
+      await chmod(locked, 0o000);
+      try {
+        await expect(
+          resolveInstrument({ kind: 'dist', path: safePath.join(locked, 'bin.js') }),
+        ).rejects.toMatchObject({ code: 'EACCES' });
+      } finally {
+        await chmod(locked, 0o700);
+      }
+    },
+  );
 
   it('throws naming the path and the candidates tried when a directory holds no entry point', async () => {
     const empty = safePath.join(scratch, 'empty-dist');

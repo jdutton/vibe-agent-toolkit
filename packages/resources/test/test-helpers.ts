@@ -9,6 +9,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
+  isPathAbsentError,
   mkdirSyncReal,
   normalizedTmpdir,
   removeScratchDir,
@@ -133,8 +134,10 @@ function findPackageDirectory(
       if (predicate(pkg)) {
         return currentDir;
       }
-    } catch {
-      // Keep searching upward
+    } catch (error) {
+      // No manifest at this level: keep searching upward. A manifest that is
+      // there but unreadable or not JSON is a broken checkout, and stays loud.
+      if (!isPathAbsentError(error)) throw error;
     }
     currentDir = path.dirname(currentDir);
   }

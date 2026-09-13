@@ -24,7 +24,7 @@ import {
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, issueLocation, normalizePath, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, isPathAbsentError, issueLocation, normalizePath, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { formatDuration, reportCommandError } from '../../../utils/command-error.js';
@@ -160,14 +160,18 @@ export interface LocalPluginResult extends LocalPluginSource {
 }
 
 /**
- * Whether `dir` is a directory. `false` for a file, for nothing, and for a path
- * the process cannot stat — all three are "no plugin directory here".
+ * Whether `dir` is a directory. `false` for a file and for nothing — both are
+ * "no plugin directory here". A path the process cannot stat is NOT: a
+ * declared source the OS refuses used to be reported as one that does not
+ * resolve, sending the reader to create a directory that is there. The refusal
+ * propagates and the command refuses the run by errno, like every other verb.
  */
 function isDirectory(dir: string): boolean {
   try {
     return statSync(dir).isDirectory();
-  } catch {
-    return false;
+  } catch (error) {
+    if (isPathAbsentError(error)) return false;
+    throw error;
   }
 }
 
@@ -213,7 +217,11 @@ function containedPluginDir(
   let lexical: string;
   try {
     lexical = safePath.joinUnderRoot(marketplacePath, toForwardSlash(source));
-  } catch {
+  } catch (error) {
+    // `joinUnderRoot` refuses an escape by design and throws a plain `Error`
+    // with no class of its own, so the prefix it stamps on every message is
+    // the seam. Anything else (a `TypeError` from a bad argument) is a bug.
+    if (!(error instanceof Error && error.message.startsWith('safePath.joinUnderRoot:'))) throw error;
     return undefined;
   }
   if (!isDirectory(lexical)) return undefined;

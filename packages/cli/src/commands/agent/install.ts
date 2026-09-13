@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { loadAgentManifest } from '@vibe-agent-toolkit/agent-config';
-import { copyDirectory, safePath } from '@vibe-agent-toolkit/utils';
+import { copyDirectory, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { handleCommandError } from '../../utils/command-error.js';
@@ -74,8 +74,12 @@ export async function installAgent(
       }
       // Remove existing if force flag is set
       await fs.rm(installPath, { recursive: true, force: true });
-    } catch {
-      // Not installed, continue
+    } catch (error) {
+      // Not installed: continue. Only an ABSENCE means that — a refused `lstat`
+      // (the scope dir the OS will not let us into) or a failed `rm` used to
+      // land here too, read as "not installed", and the install then tripped
+      // over whatever was actually there.
+      if (!isPathAbsentError(error)) throw error;
     }
 
     if (dev) {
@@ -181,7 +185,10 @@ async function findAgentPackageRoot(manifestPath: string): Promise<string> {
     try {
       await fs.access(packageJsonPath);
       return currentDir;
-    } catch {
+    } catch (error) {
+      // No manifest at this level: climb. A refused ancestor is not "no
+      // manifest" and stays loud.
+      if (!isPathAbsentError(error)) throw error;
       currentDir = path.dirname(currentDir);
     }
   }

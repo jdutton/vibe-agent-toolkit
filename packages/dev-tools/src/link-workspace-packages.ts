@@ -76,9 +76,14 @@ function removeExistingSymlink(linkPath: string, packageName: string): void {
     if (stats.isSymbolicLink()) {
       unlinkSync(linkPath);
     }
-  } catch {
-    // Acceptable: old links may be stale or inaccessible
-    console.warn(`⚠️  Could not remove existing link: ${packageName}`);
+  } catch (error) {
+    // Warn-and-continue: `linkPackage` below retries the link and reports its
+    // own failure. The reason is printed so a refusal (EPERM on a junction
+    // Windows will not let this user remove) reads differently from a link
+    // that vanished between the existsSync and the lstat.
+    console.warn(
+      `⚠️  Could not remove existing link: ${packageName} (${error instanceof Error ? error.message : String(error)})`,
+    );
   }
 }
 

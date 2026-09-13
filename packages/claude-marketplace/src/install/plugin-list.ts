@@ -9,7 +9,7 @@
 
 import { existsSync, lstatSync, readdirSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
@@ -100,10 +100,12 @@ function collectLegacySkills(paths: ClaudeUserPaths): ListedLegacySkill[] {
         type: stat.isSymbolicLink() ? 'symlink' : 'directory',
       });
     }
-  } catch {
-    // skillsDir may be unreadable (permissions, broken symlink, concurrent deletion).
-    // Legacy skill enumeration is best-effort — a failure here must not break `vat plugins list`.
-    // Return whatever entries were collected before the error.
+  } catch (error) {
+    // A skillsDir (or an entry in it) that vanished between `existsSync` and the
+    // read is the concurrent-deletion race: the entries collected so far are the
+    // answer. A listing the OS REFUSES is not — reporting it as "no legacy skills"
+    // is the quiet answer that is wrong, so the refusal reaches `vat plugins list`.
+    if (!isPathAbsentError(error)) throw error;
   }
 
   return legacySkills;

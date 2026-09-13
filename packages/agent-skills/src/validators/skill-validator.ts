@@ -3,7 +3,7 @@ import { basename, dirname } from 'node:path';
 
 import { isLocalFileLink, isParserUnavailable, parseFileCached, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
 import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, isPathAbsentError, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 
 import type { EvidenceRecord } from '../evidence/index.js';
@@ -142,7 +142,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   // Bundled-resource link detection — fires after link traversal so the
   // linkedFiles set reflects everything reachable from SKILL.md.
   const bundledResourceIssues = detectBundledResourceWithoutLinks(
-    skillPath,
+    content,
     skillDir,
     linkedFiles.map((lf) => lf.path),
     locationRoot,
@@ -590,8 +590,13 @@ function scanFileForReferences(
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- visitedPath from BFS traversal
     content = fs.readFileSync(visitedPath, 'utf-8');
-  } catch {
-    return; // File unreadable, skip
+  } catch (error) {
+    // The BFS already read this file, so "not there now" is a race with nothing
+    // left to scan. A refusal is not that: skipping it silently dropped every
+    // implicit reference the file carried, and the unreferenced-file finding
+    // it would have cleared fired instead.
+    if (isPathAbsentError(error)) return;
+    throw error;
   }
 
   const lines = content.split('\n');

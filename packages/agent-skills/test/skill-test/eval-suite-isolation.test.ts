@@ -8,7 +8,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { evalSuiteUnitPath, isolateEvalSuite } from '../../src/skill-test/eval-suite-isolation.js';
 import { setupTempDir } from '../test-helpers.js';
@@ -38,6 +38,10 @@ function writeStaged(root: string, name: string, opts: { suite?: boolean; subpat
 }
 
 describe('evalSuiteUnitPath', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('resolves the suite DIRECTORY for a nested subpath (it also holds fixtures/)', () => {
     expect(evalSuiteUnitPath(SKILL_DIR, SUBPATH)).toBe(`${SKILL_DIR}/evals`);
     expect(evalSuiteUnitPath(SKILL_DIR, 'evals/my-skill/evals.json')).toBe(`${SKILL_DIR}/evals/my-skill`);
@@ -54,6 +58,17 @@ describe('evalSuiteUnitPath', () => {
     // to strip, and we must not resolve to a path outside the staged copy.
     expect(evalSuiteUnitPath(SKILL_DIR, '../shared/evals/evals.json')).toBeUndefined();
     expect(evalSuiteUnitPath(SKILL_DIR, '/etc/passwd')).toBeUndefined();
+  });
+
+  it('rethrows a containment-check failure that is not a refusal (undefined means "outside", not "broke")', () => {
+    // `undefined` is the answer for a subpath that ESCAPES the skill dir. The
+    // containment check used to be `try { joinUnderRoot } catch { undefined }`, so a
+    // bug inside the check read as "nothing to strip" and the answer key stayed in
+    // the staged copy. Only the helper's own refusal may produce `undefined`.
+    vi.spyOn(safePath, 'joinUnderRoot').mockImplementation(() => {
+      throw new TypeError('The "path" argument must be of type string');
+    });
+    expect(() => evalSuiteUnitPath(SKILL_DIR, SUBPATH)).toThrow(TypeError);
   });
 
   it('returns undefined when no eval suite is declared at all (evalsSubpath is undefined)', () => {

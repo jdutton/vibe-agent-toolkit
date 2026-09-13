@@ -62,34 +62,32 @@ export function executeCli(
   const stdoutFd = fs.openSync(stdoutFile, 'w');
   const stderrFd = fs.openSync(stderrFile, 'w');
 
+  let result: ReturnType<typeof spawnSync>;
   try {
     // eslint-disable-next-line sonarjs/no-os-command-from-path
-    const result = spawnSync('node', [binPath, ...args], {
+    result = spawnSync('node', [binPath, ...args], {
       cwd: options?.cwd,
       env: options?.env,
       stdio: ['inherit', stdoutFd, stderrFd],
     });
-
-    // Close file descriptors before reading
+  } finally {
+    // Closed exactly once, here, whether or not the spawn threw — so there is
+    // no second close to absorb an EBADF from.
     fs.closeSync(stdoutFd);
     fs.closeSync(stderrFd);
+  }
 
-    // Read output from files
-    const stdout = fs.readFileSync(stdoutFile, 'utf-8');
-    const stderr = fs.readFileSync(stderrFile, 'utf-8');
-
+  try {
     return {
       status: result.status,
-      stdout,
-      stderr,
+      stdout: fs.readFileSync(stdoutFile, 'utf-8'),
+      stderr: fs.readFileSync(stderrFile, 'utf-8'),
     };
   } finally {
-    // Close FDs if not already closed (e.g., spawnSync threw before closeSync)
-    try { fs.closeSync(stdoutFd); } catch { /* already closed */ }
-    try { fs.closeSync(stderrFd); } catch { /* already closed */ }
-    // Cleanup temp files
-    try { fs.unlinkSync(stdoutFile); } catch { /* ignore */ }
-    try { fs.unlinkSync(stderrFile); } catch { /* ignore */ }
+    // `force: true` tolerates a file that is already gone, which is the only
+    // failure the old bare catches were written for.
+    fs.rmSync(stdoutFile, { force: true });
+    fs.rmSync(stderrFile, { force: true });
   }
 }
 

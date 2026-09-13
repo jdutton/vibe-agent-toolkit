@@ -398,10 +398,10 @@ async function registryFor(
  * the source returns `undefined` for this root, or it throws. A source that
  * fails is a MISSING OPTIMIZATION, not a bad skill: the walk still produces its
  * answer, one `git check-ignore` per link target instead of an active-set
- * lookup. So the throw is swallowed here rather than allowed to reach
- * `walkLinkedFiles`'s catch, which would file it as a `link walk failed`
- * parseError against the skill's own path — a fabricated defect in a file that
- * has none.
+ * lookup. So the throw is absorbed here — said on stderr, never silently —
+ * rather than allowed to reach `walkLinkedFiles`'s catch, which would file it
+ * as a `link walk failed` parseError against the skill's own path — a
+ * fabricated defect in a file that has none.
  *
  * ⚠️ Both remaining routes produce the SAME walk the missing argument used to,
  * so required-ness narrows who can arrive here by accident; it does not close
@@ -413,7 +413,18 @@ async function gitTrackerFor(
 ): Promise<GitTracker | undefined> {
 	try {
 		return await gitTrackerSource(projectRoot);
-	} catch {
+	} catch (error) {
+		// Degraded, not silent. The shipped CLI source keeps its own contract and
+		// answers `undefined` for "not a repository" and "tracker could not be
+		// built", so what arrives here is a source that BROKE its contract — a bug
+		// in the caller's source, or a caller that never wrapped it — and a run
+		// paying one `git check-ignore` per link target is told why. Same posture
+		// as the population lane in `extract-plugin.ts`: stderr, not `parseErrors`,
+		// because `audit.ts` renders every parse error as a defect in the skill.
+		console.warn(
+			`[vat] Warning: the git tracker source failed for ${projectRoot}, so this skill's`
+			+ ` link walk asks git per link target instead of an active-set lookup: ${String(error)}`,
+		);
 		return undefined;
 	}
 }

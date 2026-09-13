@@ -121,6 +121,41 @@ asserted the wrong thing — no linter can see those. The control for that class
 convention in [writing-tests.md](writing-tests.md#every-assertion-of-absence-needs-a-positive-control),
 not this rule.
 
+### `no-blind-catch`
+
+Errors on a `catch` clause that neither **reads its error binding** nor **throws** — the shape
+behind the worst finding in seven consecutive adversarial review rounds on one branch:
+
+```ts
+try { return statSync(p); } catch { return null; }   // absent, refused and bug all → null
+```
+
+**Why it's dangerous:** the sentinel collapses three answers into one. *Not there* is what the
+author meant; *refused* (`EACCES` / `EPERM` / `ELOOP`) is a file that exists and now reads as
+absent; *bug* (a `TypeError` two frames down) is a defect that now reads as a file that is not
+there. All three exit 0. And it is the one seam `tsc` cannot enumerate: when a callee learns to
+throw where it used to return, every caller whose contract changed by type breaks at compile
+time and gets fixed — the blind `catch` compiles unchanged and absorbs the new refusal. That is
+exactly how round 5's refuse-by-default crawler shipped under round 6's `catch { return null }`.
+
+**What counts as handling** (either is enough): the binding is referenced anywhere in the body
+— `isFilesystemAccessError(e)`, `e instanceof X`, `e.code === 'ENOENT'`, `errors.push(String(e))`,
+a log call — or the body throws at its own level (a `throw` inside a nested function is not a
+rethrow). The rule cannot tell narrowing from logging and does not try; it is a floor.
+
+**Rewrites**, in order of preference:
+
+1. Narrow to the case the sentinel means, rethrow the rest:
+   `catch (e) { if (isPathAbsentError(e)) return null; throw e; }`
+2. Carry the error into the result so the report can show it:
+   `catch (e) { return { ok: false, reason: String(e) }; }`
+3. Translate into a louder error: `catch { throw new Error('…') }`.
+
+**No annotation grammar.** `eslint-disable-next-line local/no-blind-catch -- <why>` is the
+escape hatch ESLint already provides, and `rg 'eslint-disable.*no-blind-catch'` counts the debt.
+Ships in `configs.recommended` at `warn` (no autofix, long first-run list); this repo enables it
+at `error`, tests included.
+
 ## Creating New Rules
 
 When you identify a dangerous pattern (security, platform-specific, error-prone):

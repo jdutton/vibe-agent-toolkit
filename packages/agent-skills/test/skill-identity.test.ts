@@ -3,9 +3,11 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { readDeclaredSkillName } from '../src/skill-identity.js';
+
 
 /** Write a SKILL.md with the given raw content under `parent/caseName/`. */
 function writeSkillMdRaw(parent: string, caseName: string, content: string): string {
@@ -61,5 +63,20 @@ describe('readDeclaredSkillName', () => {
 
   it('returns undefined when the file does not exist', () => {
     expect(readDeclaredSkillName(safePath.join(tempDir, 'nope', 'SKILL.md'))).toBeUndefined();
+  });
+
+  it('returns undefined when a path component is a file (ENOTDIR is absence too)', () => {
+    const path = writeSkillMd(tempDir, 'file-as-dir', 'name: x\ndescription: y.');
+    expect(readDeclaredSkillName(safePath.join(path, 'SKILL.md'))).toBeUndefined();
+  });
+
+  it('rethrows a refused read instead of reporting the skill as nameless', async () => {
+    // `undefined` means "declares no usable name"; a permission refusal has not
+    // established that, and a caller falling back to the directory leaf would
+    // then rename the skill on the operator's behalf.
+    const path = writeSkillMd(tempDir, 'refused', 'name: pdf-processor\ndescription: Reads PDFs.');
+    await withSyncFsRefused('readFileSync', path, 'EACCES', () => {
+      expect(() => readDeclaredSkillName(path)).toThrow(/EACCES/);
+    });
   });
 });

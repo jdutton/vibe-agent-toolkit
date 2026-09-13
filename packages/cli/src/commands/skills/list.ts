@@ -7,7 +7,6 @@
  */
 
 import { existsSync, readdirSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
@@ -22,7 +21,7 @@ import { relativizePathEntries } from '../../utils/relativize-paths.js';
 import { discoverSkills, validateSkillFilename } from '../../utils/skill-discovery.js';
 import { scanUserContext } from '../../utils/user-context-scanner.js';
 
-import { isNpmOrTarballSource, resolveNpmOrTarballSource } from './source-resolvers.js';
+import { isNpmOrTarballSource, removeResolvedTempDirs, resolveNpmOrTarballSource } from './source-resolvers.js';
 
 export interface SkillsListCommandOptions {
   user?: boolean;
@@ -219,16 +218,14 @@ async function listFromNpmSource(
     // refused short of the extraction itself failing.
     process.stdout.write(formatSkillsYaml(skills, 'npm', resolved.skillsDir, []));
     outputSkillsHuman(skills, [], logger, options);
-    process.exit(0);
   } finally {
-    for (const dir of resolved.tempDirs) {
-      try {
-        await rm(dir, { recursive: true, force: true });
-      } catch {
-        // best-effort cleanup
-      }
-    }
+    // AFTER the exit below used to sit inside the `try`, which meant this
+    // `finally` never ran on the success path — `process.exit` does not unwind
+    // — and every `vat skills list npm:…` left its extracted package in the
+    // temp dir.
+    await removeResolvedTempDirs(resolved.tempDirs, logger);
   }
+  process.exit(0);
 }
 
 export async function listCommand(

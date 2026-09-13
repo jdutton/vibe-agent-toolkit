@@ -12,13 +12,14 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, type Dirent } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
 import {
+  isPathAbsentError,
   mkdirSyncReal,
   normalizedTmpdir,
   resolveAssetReference,
@@ -102,7 +103,7 @@ import { acquireHarnessLock, installSignalCleanup } from './lock.js';
 import { RateLimitSignal, runPipeline } from './pipeline.js';
 import { detectPluginLayout } from './plugin-layout.js';
 import { runPreflight, type PreflightInput } from './preflight.js';
-import { descriptorToSource, stageHarness, type StageItem } from './staging.js';
+import { descriptorToSource, stageHarness, type SkippedOptionalItem, type StageItem } from './staging.js';
 import {
   buildSkippedSummary,
   formatSkippedTiersSummary,
@@ -680,12 +681,15 @@ export function formatFrictionReport(items: readonly FrictionItem[]): string {
 /**
  * Read the run's friction.json (if present + valid) and echo a concise report to
  * STDERR so users don't miss packaging-fidelity friction VAT merged from the grader
- * fragments (it is otherwise only written to disk). Best-effort: a missing, unparseable, or
- * empty report emits nothing. Never touches stdout (which stays machine-readable).
- * Accepts `undefined` (a no-op) so the harness `finally` can call it unconditionally
- * even when a throw preempted assignment of the friction path.
+ * fragments (it is otherwise only written to disk). Best-effort: a missing or empty
+ * report emits nothing. A report that is there but cannot be read or does not parse
+ * emits a one-line warning instead — this runs from the harness `finally`, so it
+ * must not throw, but vat is the sole writer of friction.json and a file it wrote
+ * that it cannot read back is worth a line. Never touches stdout (which stays
+ * machine-readable). Accepts `undefined` (a no-op) so the harness `finally` can
+ * call it unconditionally even when a throw preempted assignment of the path.
  */
-function emitFrictionReport(frictionPath: string | undefined): void {
+export function emitFrictionReport(frictionPath: string | undefined): void {
   if (frictionPath === undefined) return;
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
   if (!existsSync(frictionPath)) return;
@@ -693,11 +697,21 @@ function emitFrictionReport(frictionPath: string | undefined): void {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
     raw = JSON.parse(readFileSync(frictionPath, 'utf-8'));
-  } catch {
+  } catch (err) {
+    process.stderr.write(
+      `warning: could not read the friction report at ${frictionPath}: ` +
+        `${err instanceof Error ? err.message : String(err)}\n`,
+    );
     return;
   }
   const parsed = FrictionReportSchema.safeParse(raw);
-  if (!parsed.success || parsed.data.items.length === 0) return;
+  if (!parsed.success) {
+    process.stderr.write(
+      `warning: the friction report at ${frictionPath} does not match its schema: ${parsed.error.message}\n`,
+    );
+    return;
+  }
+  if (parsed.data.items.length === 0) return;
   process.stderr.write(`\nPackaging friction (${parsed.data.items.length}):\n`);
   process.stderr.write(formatFrictionReport(parsed.data.items) + '\n');
 }
@@ -720,10 +734,11 @@ function emitBaselineReport(report: string | undefined): void {
  * run's staged skill set stays legible. No-op when none were skipped. (Required
  * `--with` companions instead propagate a fatal resolve error from stageHarness.)
  */
-function emitSkippedOptionalWarning(skippedOptional: string[]): void {
+function emitSkippedOptionalWarning(skippedOptional: readonly SkippedOptionalItem[]): void {
   if (skippedOptional.length === 0) return;
+  const named = skippedOptional.map((item) => `${item.name} (${item.reason})`).join(', ');
   process.stderr.write(
-    `warning: optional companion skill(s) not staged (source unresolvable): ${skippedOptional.join(', ')}\n`,
+    `warning: optional companion skill(s) not staged: ${named}\n`,
   );
 }
 
@@ -1272,8 +1287,11 @@ export function cleanupHarness(harnessRoot: string, opts: CleanupHarnessOptions)
   if (opts.keep || !opts.created) return;
   // Best-effort: cleanup runs from a `finally`, so a TOCTOU race (the dir is
   // reaped between checks) or a permission error must never throw out and mask
-  // the run's real outcome. Worst case is a leftover 0700 tmp dir, not a failure.
-  try {
+  // the run's real outcome. Worst case is a leftover 0700 tmp dir, not a failure —
+  // but a leftover the operator was never told about is staged untrusted bytes
+  // sitting in tmp with nothing to connect them to this run, so the failure is
+  // REPORTED on stderr ({@link swallowCleanupFailure}), not swallowed silently.
+  swallowCleanupFailure(() => {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
     if (!existsSync(harnessRoot)) return;
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
@@ -1291,9 +1309,7 @@ export function cleanupHarness(harnessRoot: string, opts: CleanupHarnessOptions)
       if (entry === RETAINED_RESULTS_DIRNAME) continue;
       rmSync(safePath.joinUnderRoot(harnessRoot, entry), { recursive: true, force: true });
     }
-  } catch {
-    // Swallow: a failed cleanup is not a run failure.
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1450,17 +1466,19 @@ export function swallowCleanupFailure(step: () => void): void {
   }
 }
 
+/**
+ * Remove one vat-only temp dir. Same discipline as {@link cleanupHarness}: a failed
+ * removal is not a run failure, and it is reported rather than swallowed.
+ */
 export function removeVatOnlyDir(dir: string | undefined): void {
   if (dir === undefined) return;
-  try {
+  swallowCleanupFailure(() => {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived vat-only tmp dir
     if (!existsSync(dir)) return;
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived vat-only tmp dir
     if (lstatSync(dir).isSymbolicLink()) return;
     rmSync(dir, { recursive: true, force: true });
-  } catch {
-    // Swallow: a failed cleanup is not a run failure.
-  }
+  });
 }
 
 /** Everything one executor→grader pipeline worker needs, built once per run. */
@@ -1873,11 +1891,12 @@ type EvalWorkOutcome =
  * Fixtures are read from the STAGED workspace rather than the suite directory, for
  * the same reason the SKILL.md is: that is byte-for-byte what the arm was handed.
  *
- * Returns `[]` when the file cannot be read. A missing SKILL.md is not this
+ * Returns `[]` when there is no staged SKILL.md. A missing SKILL.md is not this
  * function's error to raise (staging has already validated the subject), and an
- * unarmed signal is reported as unarmed rather than claimed as clean. An
- * unreadable FIXTURE is skipped for the same reason, and errs the safe way: a
- * fixture we could not exclude can only make the signal noisier, never blinder.
+ * unarmed signal is reported as unarmed rather than claimed as clean. A SKILL.md
+ * that is THERE but refused is a different thing — `[]` would silently disarm the
+ * contamination signal for the whole run — so a refusal propagates. The same split
+ * applies to fixtures: see {@link collectFixtureText}.
  */
 export function resolveSkillContentNeedles(
   subjectStagedDir: string,
@@ -1899,8 +1918,9 @@ export function resolveSkillContentNeedles(
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from vat's own staged dir
     markdown = readFileSync(skillMdPath, 'utf8');
-  } catch {
-    return [];
+  } catch (err) {
+    if (isPathAbsentError(err)) return [];
+    throw err;
   }
   const excluded = evals
     .flatMap((entry) => [
@@ -1914,7 +1934,8 @@ export function resolveSkillContentNeedles(
 }
 
 /**
- * The text of one eval's staged input files. Unreadable/binary fixtures are skipped.
+ * The text of one eval's staged input files. A declared fixture that was never
+ * staged is skipped; one that is there but cannot be read propagates.
  *
  * A declared `files[]` entry is legitimately a DIRECTORY — staging does `existsSync`
  * then a recursive `cpSync` — so this walks one. It used to call `readFileSync` on
@@ -1927,9 +1948,11 @@ export function resolveSkillContentNeedles(
  *
  * The `catch`'s old claim that skipping "errs the safe way: noisier, never blinder"
  * is BACKWARDS for this signal. Over-reporting is the harm here, because a false
- * `contaminated: true` is actioned by discarding a run that was fine. A fixture that
- * cannot be read is still skipped — there is nothing else to do with it — but that
- * is a cost, not a safety margin.
+ * `contaminated: true` is actioned by discarding a run that was fine. So only an
+ * ABSENT fixture is skipped (staging does `existsSync` then `cpSync`, so a declared
+ * file missing at the source is simply not in the workspace); a fixture that is
+ * there and refused throws, because an exclusion set vat could not compute is a
+ * signal vat cannot stand behind.
  */
 function readStagedFixtures(stagedWorkspaceRoot: string, entry: EvalEntry): string[] {
   const texts: string[] = [];
@@ -1943,29 +1966,38 @@ function readStagedFixtures(stagedWorkspaceRoot: string, entry: EvalEntry): stri
 /** Depth cap on the fixture walk — a symlink loop must not hang the run's setup. */
 const MAX_FIXTURE_WALK_DEPTH = 32;
 
-/** Append `path`'s text, recursing when it is a directory. Never throws. */
-function collectFixtureText(path: string, into: string[], depth = 0): void {
-  if (depth > MAX_FIXTURE_WALK_DEPTH) return;
-  let entries: Dirent[] | undefined;
+/**
+ * Append the declared fixture's text — the file's, or every file's under it when
+ * it is a directory. `lstat` first, so the ONE absence case (`ENOENT`, or `ENOTDIR`
+ * for a path routed through a file) is the only thing skipped; a symlink at the
+ * declared path is skipped too, for the same reason the walk below skips one.
+ */
+function collectFixtureText(path: string, into: string[]): void {
+  let kind: Stats;
   try {
-    // `withFileTypes` on the DIRECTORY is one syscall for the whole level, and
-    // `lstat`-shaped: a symlinked entry reports as a link rather than as whatever it
-    // points at, so the walk stays inside the bytes vat actually staged.
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is contained under vat's own staged workspace
-    entries = readdirSync(path, { withFileTypes: true });
-  } catch {
-    // Not a directory (the common case: a plain file fixture), or unreadable.
-    try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is contained under vat's own staged workspace
-      into.push(readFileSync(path, 'utf8'));
-    } catch {
-      // Unreadable or binary — nothing to exclude, and not this function's error to raise.
-    }
-    return;
+    kind = lstatSync(path);
+  } catch (err) {
+    if (isPathAbsentError(err)) return;
+    throw err;
   }
-  for (const child of entries) {
-    if (!child.isFile() && !child.isDirectory()) continue;
-    collectFixtureText(safePath.joinUnderRoot(path, child.name), into, depth + 1);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is contained under vat's own staged workspace
+  if (kind.isFile()) into.push(readFileSync(path, 'utf8'));
+  else if (kind.isDirectory()) walkFixtureDir(path, into, 0);
+}
+
+/** Append every file's text under `dir`, recursing. Symlinked entries are skipped. */
+function walkFixtureDir(dir: string, into: string[], depth: number): void {
+  if (depth > MAX_FIXTURE_WALK_DEPTH) return;
+  // `withFileTypes` on the DIRECTORY is one syscall for the whole level, and
+  // `lstat`-shaped: a symlinked entry reports as a link rather than as whatever it
+  // points at, so the walk stays inside the bytes vat actually staged.
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is contained under vat's own staged workspace
+  for (const child of readdirSync(dir, { withFileTypes: true })) {
+    const childPath = safePath.joinUnderRoot(dir, child.name);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is contained under vat's own staged workspace
+    if (child.isFile()) into.push(readFileSync(childPath, 'utf8'));
+    else if (child.isDirectory()) walkFixtureDir(childPath, into, depth + 1);
   }
 }
 
@@ -2676,21 +2708,29 @@ function assertVatWroteArtifact(path: string, validate: (raw: unknown) => void, 
  * failing, and a cleanup that replaces the real diagnosis with a rename error would
  * be strictly worse than a file left in place. If the rename fails the file is
  * removed instead — an absent artifact reads as "vat wrote nothing", which is at
- * least not a false claim of authority.
+ * least not a false claim of authority. If THAT fails too, the file is still there
+ * under its authoritative name, and the returned clause says so with both errors:
+ * the operator is about to read a CI archive, and a bare '' told them nothing.
  */
 function quarantineArtifact(path: string): string {
   const rejected = rejectedArtifactPath(path);
+  let renameFailure: string;
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
     renameSync(path, rejected);
     return `; moved aside to ${rejected} so it is not read as authoritative`;
-  } catch {
-    try {
-      rmSync(path, { force: true });
-      return '; removed so it is not read as authoritative';
-    } catch {
-      return '';
-    }
+  } catch (err) {
+    renameFailure = err instanceof Error ? err.message : String(err);
+  }
+  try {
+    rmSync(path, { force: true });
+    return '; removed so it is not read as authoritative';
+  } catch (err) {
+    return (
+      `; it could not be moved aside (${renameFailure}) or removed ` +
+      `(${err instanceof Error ? err.message : String(err)}), so it is STILL THERE under its ` +
+      'authoritative name — do not read it as authoritative'
+    );
   }
 }
 

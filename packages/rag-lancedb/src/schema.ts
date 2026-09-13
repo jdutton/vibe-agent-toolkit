@@ -194,12 +194,16 @@ function deserializeArray(value: string | number, isOptional: boolean): unknown[
     return isOptional ? undefined : [];
   }
 
-  // Try JSON parsing first (for arrays of objects)
+  // Try JSON parsing first (for arrays of objects). `serializeArray` writes
+  // JSON only for arrays holding objects; a comma-joined list of primitives
+  // whose first item happens to begin with `[` is the one legitimate way a
+  // `[`-led value fails to parse, and that is the fall-through. JSON.parse
+  // throws nothing but SyntaxError, so anything else here is a bug.
   if (value.startsWith('[')) {
     try {
       return JSON.parse(value);
-    } catch {
-      // Fall through to comma-separated parsing
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
     }
   }
 
@@ -260,7 +264,10 @@ function deserializeFallback(value: string | number): unknown {
 
   try {
     return JSON.parse(value);
-  } catch {
+  } catch (error) {
+    // A column whose Zod type this mapping does not model (a union, a literal)
+    // was stored as-is when it was not JSON; the raw string IS the value.
+    if (!(error instanceof SyntaxError)) throw error;
     return value;
   }
 }

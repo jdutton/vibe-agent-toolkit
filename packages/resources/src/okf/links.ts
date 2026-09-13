@@ -177,9 +177,10 @@ function isRootAnchored(href: string): boolean {
   const [fileHref] = splitHrefAnchor(href);
   try {
     return decodeURIComponent(fileHref).startsWith('/');
-  } catch {
-    // Malformed percent-encoding. `resolveLocalHref` falls back to the raw href
-    // in the same case, so this has to as well or the two disagree.
+  } catch (error) {
+    // Malformed percent-encoding (`URIError`). `resolveLocalHref` falls back to
+    // the raw href in the same case, so this has to as well or the two disagree.
+    if (!(error instanceof URIError)) throw error;
     return fileHref.startsWith('/');
   }
 }

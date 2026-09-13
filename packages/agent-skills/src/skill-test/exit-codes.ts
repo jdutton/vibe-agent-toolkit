@@ -178,6 +178,7 @@ function selfDeclaredExitCode(err: unknown): number | undefined {
   let declared: unknown;
   try {
     declared = (err as { exitCode?: unknown }).exitCode;
+    // eslint-disable-next-line local/no-blind-catch -- a property read throws only from a getter or Proxy trap on a FOREIGN error, and "the read itself threw" is exactly "not self-declared": there is no second case to tell apart, and this runs inside the CLI's own catch, where a rethrow escapes the handler entirely (pinned in exit-codes.test.ts).
   } catch {
     return undefined;
   }

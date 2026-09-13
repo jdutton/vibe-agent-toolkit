@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { AuthPreflightError, resolveAuth, type AuthStatusProbe } from '../../src/skill-test/auth-resolver.js';
+import { AuthPreflightError, parseAuthStatus, resolveAuth, type AuthStatusProbe } from '../../src/skill-test/auth-resolver.js';
 
 const SUB_ENV = { CLAUDE_CONFIG_DIR: '/c', ANTHROPIC_API_KEY: 'sk' } as NodeJS.ProcessEnv;
 
@@ -127,5 +127,34 @@ describe('resolveAuth', () => {
     const r = resolveAuth({ mode: 'subscription', sourceEnv: SUB_ENV, probe: bareProbe });
     expect('authMethod' in r).toBe(false);
     expect('apiKeySource' in r).toBe(false);
+  });
+});
+
+/**
+ * The pure half of `probeAuthStatus`: what `claude auth status --json` printed,
+ * read. `null` means "not the JSON object the flag promises" — an older CLI
+ * answering in prose, or a bare literal — and nothing else. The parse used to
+ * sit in a blind catch, so a failure inside the reader itself was ALSO "not
+ * logged in", which `resolveAuth` then turned into a preflight exit.
+ */
+describe('parseAuthStatus', () => {
+  it('reads the documented shape (positive control)', () => {
+    expect(parseAuthStatus('{"loggedIn":true,"authMethod":"claude.ai","apiKeySource":"ANTHROPIC_API_KEY"}')).toEqual({
+      loggedIn: true,
+      authMethod: 'claude.ai',
+      apiKeySource: 'ANTHROPIC_API_KEY',
+    });
+    expect(parseAuthStatus('{"loggedIn":false}')).toEqual({ loggedIn: false });
+  });
+
+  it('answers null for prose, which is what an older CLI prints', () => {
+    expect(parseAuthStatus('Logged in as someone@example.com\n')).toBeNull();
+    expect(parseAuthStatus('')).toBeNull();
+  });
+
+  it.each(['null', '42', '"logged in"', 'true'])('answers null for a JSON literal that is not an object (%s)', (stdout) => {
+    // `JSON.parse('null')['loggedIn']` is a TypeError, which the blind catch used
+    // to absorb into the same null — by accident. Now it is an explicit shape check.
+    expect(parseAuthStatus(stdout)).toBeNull();
   });
 });

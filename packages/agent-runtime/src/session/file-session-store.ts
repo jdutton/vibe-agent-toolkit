@@ -5,11 +5,10 @@
  * Claude Agent SDK's storage patterns.
  */
 
-import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 
-
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import { SessionNotFoundError } from './errors.js';
 import {
@@ -119,10 +118,13 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
   async exists(sessionId: string): Promise<boolean> {
     try {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- sessionId validated by getSessionPath
-      await readFile(this.getSessionPath(sessionId));
-      return true;
-    } catch {
-      return false;
+      return (await stat(this.getSessionPath(sessionId))).isFile();
+    } catch (error) {
+      // Only a path that is not there is "no session". A refusal (EACCES) or
+      // any other failure stays loud: `false` tells the caller to start a new
+      // session, and that must never be the answer to "you may not look".
+      if (isPathAbsentError(error)) return false;
+      throw error;
     }
   }
 

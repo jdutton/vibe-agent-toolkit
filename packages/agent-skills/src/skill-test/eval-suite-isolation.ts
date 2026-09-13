@@ -71,9 +71,19 @@ export function evalSuiteUnitPath(skillDir: string, evalsSubpath: string | undef
   const relative = parent === '.' || parent === '' ? evalsSubpath : parent;
   try {
     return safePath.joinUnderRoot(skillDir, relative);
-  } catch {
-    return undefined;
+  } catch (error) {
+    // Only the containment helper's OWN refusal means "outside the skill dir".
+    // It throws a plain `Error` (no class to narrow on), always prefixed with its
+    // name; anything else out of it is a bug, and `undefined` would read as
+    // "nothing to strip" — leaving the answer key in the staged copy.
+    if (isJoinUnderRootRefusal(error)) return undefined;
+    throw error;
   }
+}
+
+/** The refusal `safePath.joinUnderRoot` throws for a segment that escapes its root. */
+function isJoinUnderRootRefusal(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('safePath.joinUnderRoot:');
 }
 
 /**

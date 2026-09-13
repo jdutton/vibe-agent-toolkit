@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { ZodError } from 'zod';
 
 import type {
   ResolveSkillSourceContext,
@@ -79,6 +80,13 @@ export interface StageHarnessOptions {
   evalSuiteHoldDir?: string;
 }
 
+/** One `--with-optional` companion that did not stage, and the reason it did not. */
+export interface SkippedOptionalItem {
+  name: string;
+  /** The message of whatever `resolve`/staging threw. */
+  reason: string;
+}
+
 export interface StageHarnessResult {
   manifest: StagedManifest;
   pluginDirs: string[];
@@ -98,13 +106,13 @@ export interface StageHarnessResult {
    */
   subjectPluginRoot: string | null;
   /**
-   * Names of `--with-optional` items that were SKIPPED because resolving or
-   * staging them threw (unresolvable source, build failure, etc.). Empty when
-   * every optional item staged cleanly, or when there were none. A required item
-   * (subject or `--with`) that throws is never recorded here — it propagates and
-   * fails the whole run instead.
+   * `--with-optional` items that were SKIPPED because resolving or staging them
+   * threw (unresolvable source, build failure, etc.), each with the error's
+   * message so the warning can say WHY. Empty when every optional item staged
+   * cleanly, or when there were none. A required item (subject or `--with`) that
+   * throws is never recorded here — it propagates and fails the whole run instead.
    */
-  skippedOptional: string[];
+  skippedOptional: SkippedOptionalItem[];
   /**
    * True when the SUBJECT's resolved copy carried an eval suite, which was
    * therefore relocated into `evalSuiteHoldDir` (and removed from everything the
@@ -241,8 +249,13 @@ function readExistingManifest(harnessRoot: string): StagedManifest | null {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own harness root
     return StagedManifestSchema.parse(JSON.parse(readFileSync(manifestPath, 'utf8')));
-  } catch {
-    return null; // corrupt/tampered manifest → force a full re-stage
+  } catch (error) {
+    // Corrupt or tampered (not JSON, or JSON of the wrong shape) → null, which
+    // forces a full re-stage. A manifest vat could not READ is neither: the
+    // harness root is vat's own 0700 dir, and a refusal there is a problem the
+    // next write would hit anyway — let it surface with its errno.
+    if (error instanceof SyntaxError || error instanceof ZodError) return null;
+    throw error;
   }
 }
 
@@ -255,7 +268,7 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
 
   const entries: StagedEntry[] = [];
   const pluginDirs: string[] = [];
-  const skippedOptional: string[] = [];
+  const skippedOptional: SkippedOptionalItem[] = [];
   let subjectStagedDir: string | null = null;
   let subjectPluginRoot: string | null = null;
   let subjectEvalSuiteHeld = false;
@@ -305,8 +318,10 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
     // A `--with-optional` companion degrades to skip-with-warning on ANY failure
     // resolving or staging it (unresolvable source, build failure, etc.) — it must
     // never take down a run whose subject and required `--with` companions are
-    // otherwise fine. A required item (subject or `--with`) still fails closed:
-    // its throw propagates unchanged.
+    // otherwise fine. The failure is CARRIED into the result, not dropped: the
+    // warning names the reason, so an unresolvable source and a bug in the
+    // resolver do not both read as "not staged". A required item (subject or
+    // `--with`) still fails closed: its throw propagates unchanged.
     if (item.optional === true) {
       try {
         const resolved = await opts.resolve(item.source, opts.ctx);
@@ -318,8 +333,8 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
         const contentHash = computeDirContentHash(pluginDir);
         entries.push({ name: item.name, identity: resolved.identity, contentHash });
         pluginDirs.push(pluginDir);
-      } catch {
-        skippedOptional.push(item.name);
+      } catch (error) {
+        skippedOptional.push({ name: item.name, reason: error instanceof Error ? error.message : String(error) });
       }
       continue;
     }

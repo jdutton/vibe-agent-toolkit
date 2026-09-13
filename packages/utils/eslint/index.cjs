@@ -56,6 +56,7 @@ const rules = {
   'no-bare-symlink-in-tests': require('./rules/no-bare-symlink-in-tests.cjs'),
   'no-process-exit-in-phase': require('./rules/no-process-exit-in-phase.cjs'),
   'no-fragile-entrypoint-guard': require('./rules/no-fragile-entrypoint-guard.cjs'),
+  'no-blind-catch': require('./rules/no-blind-catch.cjs'),
 };
 
 /**
@@ -192,6 +193,12 @@ const RECOMMENDED_WARN = new Set([
   'no-path-join',
   'no-path-resolve',
   'no-path-relative',
+  // Same criterion, without the autofix: a blind `catch` has no mechanical
+  // rewrite — each site is a decision about WHICH failure the sentinel stands
+  // for — and the first run on an existing tree is a long list. Measured on
+  // this repo's own ~200k-line tree: 202 sites. `warn` makes that a backlog to
+  // burn down rather than a wall; the hazard is real at every one of them.
+  'no-blind-catch',
 ]);
 
 /**

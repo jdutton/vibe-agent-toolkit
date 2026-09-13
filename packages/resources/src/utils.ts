@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import {
+  isFilesystemAccessError,
   toForwardSlash,
   normalizePath,
   safePath,
@@ -135,7 +136,9 @@ function decodeHrefSegment(segment: string): string {
   let decoded: string;
   try {
     decoded = decodeURIComponent(segment);
-  } catch {
+  } catch (error) {
+    // `URIError` is the one thing `decodeURIComponent` throws: malformed escape.
+    if (!(error instanceof URIError)) throw error;
     return segment;
   }
   // Both separators: `%5C` is a backslash in the NAME by the same rule, and a
@@ -408,7 +411,13 @@ export function canonicalizeSync(filePath: string): string {
     try {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- candidate derives from the validated path parameter
       return safePath.join(toForwardSlash(fs.realpathSync(candidate)), ...missingRemainder);
-    } catch {
+    } catch (error) {
+      // The filesystem refused this candidate — ENOENT, and equally EACCES on
+      // an existing file or ELOOP on a symlink cycle: for all three the
+      // ancestor's namespace is a strictly better answer than the lexical one,
+      // which is the ruling `FsLookupCache.realpath` documents and this
+      // function must match. A bug is none of those and stays loud.
+      if (!isFilesystemAccessError(error)) throw error;
       const parent = toForwardSlash(path.dirname(candidate));
       // Fixpoint at a filesystem root, where `dirname` returns its own input.
       // Nothing left to walk, and nothing on the path resolved, so the lexical

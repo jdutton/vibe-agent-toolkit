@@ -609,7 +609,10 @@ export async function packageSkill(
 
   // 3b. Load per-collection frontmatter schemas (Gap 3: packager rewrites frontmatter URI-refs
   // against the same schemas the validator uses, with body parity).
-  const collectionSchemas = await loadCollectionSchemas(registry.config, projectRoot);
+  const { schemas: collectionSchemas, issues: collectionSchemaIssues } = await loadCollectionSchemas(
+    registry.config,
+    projectRoot,
+  );
 
   // 4. Walk the link graph using registry data
   const linkFollowDepth = options.linkFollowDepth ?? 2;
@@ -889,6 +892,9 @@ export async function packageSkill(
     // A receipt for each `files:` entry that was dropped for pointing into declared
     // test input — the build already produced the right artifact; this just says so.
     ...testInputFileEntryIssues(droppedTestInputFiles),
+    // A collection schema that could not be loaded, so its frontmatter was not
+    // rewritten (see loadCollectionSchemas).
+    ...collectionSchemaIssues,
     // Backstop: if declared test input reached the output despite both exclusions,
     // say so rather than shipping an answer key silently.
     ...checkPackagedTestInput({ pathMap, outputPath, testInputDirs }),
@@ -1186,17 +1192,23 @@ export async function createProjectRegistry(
  * Mirrors ResourceRegistry.validateAgainstCollectionSchema's loading flow so
  * the packager rewrites frontmatter URI-refs against the same schemas the
  * validator uses. Collections without a frontmatterSchema configured are
- * absent from the map. Schema file read/parse failures are silently skipped
- * — the validator will surface those errors elsewhere; the packager just
- * won't rewrite the un-routed collection's frontmatter.
+ * absent from the map.
+ *
+ * A schema that cannot be resolved, read or parsed is absent from the map too,
+ * and that is REPORTED as a `FRONTMATTER_SCHEMA_ERROR` issue in the build's own
+ * receipt — the same code `vat validate` gives the same config. It used to be
+ * swallowed on the theory that "the validator will surface it elsewhere", which
+ * left `vat build` shipping a bundle whose frontmatter URI-refs still pointed
+ * at source-tree paths, with a clean report and nothing to say why.
  */
 async function loadCollectionSchemas(
   config: ProjectConfig | undefined,
   baseDir: string,
-): Promise<Map<string, object>> {
+): Promise<{ schemas: Map<string, object>; issues: ValidationIssue[] }> {
   const schemas = new Map<string, object>();
+  const issues: ValidationIssue[] = [];
   const collections = config?.resources?.collections;
-  if (!collections) return schemas;
+  if (!collections) return { schemas, issues };
   for (const [collectionId, collectionConfig] of Object.entries(collections)) {
     const schemaPath = collectionConfig.validation?.frontmatterSchema;
     if (schemaPath === undefined) continue;
@@ -1205,11 +1217,19 @@ async function loadCollectionSchemas(
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- schema path from validated config
       const content = await readFile(resolvedPath, 'utf-8');
       schemas.set(collectionId, JSON.parse(content) as object);
-    } catch {
-      // Schema unavailable — validator will report; packager skips rewrite.
+    } catch (error) {
+      issues.push(
+        materializeIssue('FRONTMATTER_SCHEMA_ERROR', {
+          location: schemaPath,
+          message:
+            `Collection "${collectionId}" declares frontmatterSchema "${schemaPath}", which could not ` +
+            `be loaded: ${error instanceof Error ? error.message : String(error)}. Frontmatter ` +
+            `URI-references in this collection were NOT rewritten for the packaged output.`,
+        }),
+      );
     }
   }
-  return schemas;
+  return { schemas, issues };
 }
 
 /**

@@ -40,22 +40,26 @@ import {
 // claude + auth detection (module-level, synchronous)
 // ---------------------------------------------------------------------------
 
+// `spawnSync` does not throw for a binary that is not there: it reports the
+// spawn failure in `.error` and leaves `.status` null, which reads as "no
+// claude" below without a catch.
 const hasClaude = (() => {
-  try {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- probing for claude CLI presence; not user-supplied
-    return spawnSync('claude', ['--version'], { stdio: 'ignore' }).status === 0;
-  } catch {
-    return false;
-  }
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- probing for claude CLI presence; not user-supplied
+  return spawnSync('claude', ['--version'], { stdio: 'ignore' }).status === 0;
 })();
 
 const authed = (() => {
   if (!hasClaude) return false;
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- probing claude auth status; not user-supplied
+  const r = spawnSync('claude', ['auth', 'status', '--json'], { encoding: 'utf8' });
+  if (r.status !== 0) return false;
   try {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- probing claude auth status; not user-supplied
-    const r = spawnSync('claude', ['auth', 'status', '--json'], { encoding: 'utf8' });
-    return r.status === 0 && (JSON.parse(r.stdout) as Record<string, unknown>).loggedIn === true;
-  } catch {
+    return (JSON.parse(r.stdout) as Record<string, unknown>).loggedIn === true;
+  } catch (error) {
+    // A `claude auth status --json` that printed something other than JSON is
+    // "not logged in" for the purposes of gating these cases; anything else
+    // thrown here is a defect in the probe.
+    if (!(error instanceof SyntaxError)) throw error;
     return false;
   }
 })();

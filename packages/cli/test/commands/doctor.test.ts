@@ -4,6 +4,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 
+import { resolveAssetReference } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -19,6 +20,7 @@ import {
   selectDisplayChecks,
   type DoctorCheckResult,
 } from '../../src/commands/doctor.js';
+import { errno } from '../helpers/refusal-doubles.js';
 import {
   assertCheck,
   assertCheckFailed,
@@ -46,6 +48,10 @@ vi.mock('node:fs', () => ({
   existsSync: vi.fn(),
   readFileSync: vi.fn(),
 }));
+vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return { ...actual, resolveAssetReference: vi.fn(actual['resolveAssetReference'] as (...args: unknown[]) => unknown) };
+});
 vi.mock('../../src/utils/config-loader.js', () => ({
   loadConfig: vi.fn(),
 }));
@@ -57,7 +63,15 @@ const CHECK_VAT_VERSION = 'vat version';
 const CHECK_CLI_BUILD = 'CLI build status';
 const CLI_PACKAGE_NAME = '@vibe-agent-toolkit/cli';
 const UNREADABLE = 'EACCES: permission denied';
+/** What the OS actually throws for a refused read: a message AND an errno. */
+const refusedRead = (): never => {
+  throw errno('EACCES', UNREADABLE);
+};
+/** A throw with no errno is not the filesystem talking — it is a defect. */
+const DEFECT = 'TypeError: not the filesystem';
 const ADVISORY_CHECK = 'p3-advisory';
+const UNINSTALLED_SCHEMA = '@no-such-scope/no-such-package/schema.json';
+const CANNOT_READ_MANIFEST = 'Cannot read the CLI manifest';
 
 describe('doctor command - unit tests', () => {
   beforeEach(() => {
@@ -156,14 +170,39 @@ describe('doctor command - unit tests', () => {
       // reinstall — the wrong diagnosis and the wrong remedy.
       await mockDoctorFileSystem();
       await mockDoctorEnvironment({ nodeVersion: 'v24.13.1' });
-      vi.mocked(readFileSync).mockImplementation(() => {
-        throw new Error(UNREADABLE);
-      });
+      vi.mocked(readFileSync).mockImplementation(refusedRead);
 
       const result = checkNodeVersion();
 
       expect(result.outcome).toBe('undetermined');
-      expect(result.message).toContain('Cannot read the CLI manifest');
+      expect(result.message).toContain(CANNOT_READ_MANIFEST);
+    });
+
+    it('reports a manifest that is not JSON as undetermined, not as one declaring no floor', async () => {
+      await mockDoctorFileSystem();
+      await mockDoctorEnvironment({ nodeVersion: 'v24.13.1' });
+      vi.mocked(readFileSync).mockReturnValue('{ not json');
+
+      const result = checkNodeVersion();
+
+      expect(result.outcome).toBe('undetermined');
+      expect(result.message).toContain(CANNOT_READ_MANIFEST);
+    });
+
+    it('does not file a defect in the read as an unreadable manifest', async () => {
+      // "Unreadable" is the filesystem's answer. A throw with no errno is ours,
+      // and dressing it as a permissions problem sends the user to chmod.
+      await mockDoctorFileSystem();
+      await mockDoctorEnvironment({ nodeVersion: 'v24.13.1' });
+      vi.mocked(readFileSync).mockImplementation(() => {
+        throw new TypeError(DEFECT);
+      });
+
+      const result = checkNodeVersion();
+
+      expect(result.outcome).toBe('fail');
+      expect(result.message).toContain(DEFECT);
+      expect(result.message).not.toContain(CANNOT_READ_MANIFEST);
     });
 
     it('reports a manifest that declares no floor, rather than guessing one', async () => {
@@ -299,6 +338,36 @@ describe('doctor command - unit tests', () => {
         'not found',
         'Create vibe-agent-toolkit.config.yaml',
       );
+    });
+
+    it('reports a schema behind an uninstalled package as missing', async () => {
+      await mockDoctorFileSystem({ configExists: true });
+      const cleanup = await mockDoctorConfig({
+        config: { resources: { collections: { docs: { validation: { frontmatterSchema: UNINSTALLED_SCHEMA } } } } },
+      });
+
+      const result = checkConfigValid();
+
+      assertCheckFailed(result, CHECK_CONFIG_VALID, `Missing: ${UNINSTALLED_SCHEMA}`, 'Create missing schema files');
+      cleanup();
+    });
+
+    it('does not file a defect in schema resolution as a missing schema', async () => {
+      // "Missing" is what resolution says when the package or subpath is not
+      // there. Anything else the resolver throws is reported as what it is.
+      await mockDoctorFileSystem({ configExists: true });
+      const cleanup = await mockDoctorConfig({
+        config: { resources: { collections: { docs: { validation: { frontmatterSchema: UNINSTALLED_SCHEMA } } } } },
+      });
+      vi.mocked(resolveAssetReference).mockImplementationOnce(() => {
+        throw new TypeError(DEFECT);
+      });
+
+      const result = checkConfigValid();
+
+      assertCheckFailed(result, CHECK_CONFIG_VALID, DEFECT, 'Fix YAML syntax');
+      expect(result.message).not.toContain('Missing:');
+      cleanup();
     });
   });
 
@@ -459,13 +528,37 @@ describe('doctor command - unit tests', () => {
       // we cannot tell whether this is the VAT source tree, which is NOT the
       // same answer as "it is not the VAT source tree".
       vi.mocked(existsSync).mockReturnValue(true);
-      vi.mocked(readFileSync).mockImplementation((): string => {
-        throw new Error(UNREADABLE);
-      });
+      vi.mocked(readFileSync).mockImplementation(refusedRead);
 
       const result = checkCliBuildSync(FAKE_PROJECT_ROOT);
 
       assertCheckUndetermined(result, CHECK_CLI_BUILD, 'Could not determine');
+      // The reason travels with the verdict: "unreadable" alone sends the user
+      // looking, and the errno is the thing they would be looking for.
+      expect(result.message).toContain(UNREADABLE);
+    });
+
+    it('skips (not-the-source-tree) when the probe vanished between the existence check and the read', async () => {
+      // The only throw that means "no such file" is the file not being there.
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockImplementation(() => {
+        throw Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' });
+      });
+
+      const result = checkCliBuildSync(FAKE_PROJECT_ROOT);
+
+      assertCheckSkipped(result, CHECK_CLI_BUILD, 'not in VAT source tree');
+    });
+
+    it('names the defect when the probe read throws something that is not the filesystem', async () => {
+      vi.mocked(existsSync).mockReturnValue(true);
+      vi.mocked(readFileSync).mockImplementation(() => {
+        throw new TypeError(DEFECT);
+      });
+
+      const result = checkCliBuildSync(FAKE_PROJECT_ROOT);
+
+      assertCheckUndetermined(result, CHECK_CLI_BUILD, DEFECT);
     });
   });
 

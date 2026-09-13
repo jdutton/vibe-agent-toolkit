@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { isPathAbsentError } from './fs-utils.js';
 import { safePath } from './path-core.js';
 
 /**
@@ -17,6 +18,40 @@ import { safePath } from './path-core.js';
  * `test/path-fs-subpaths.test.ts`).
  */
 export * from './path-core.js';
+
+/**
+ * `realpathSync.native(target)`, or `target` itself when there is nothing at
+ * that path to canonicalize.
+ *
+ * Absence is the ONLY failure answered with the lexical path: `normalizePath`
+ * is documented to accept a path that does not exist, and a path that does not
+ * exist has no realpath. Everything else — `EACCES` on an ancestor, `ELOOP` on
+ * a symlink cycle, `ENAMETOOLONG` — is the filesystem refusing a path that IS
+ * there. Those used to come back as the lexical spelling with nothing to say
+ * so, which put a lexical path where every caller compares canonical ones: a
+ * containment check judged such a path by the spelling the OS had just refused
+ * to resolve. They stay loud.
+ *
+ * The JS `realpathSync` is asked before absence is concluded, because the
+ * native call can fail where the JS walk succeeds — Node's docs note that on a
+ * musl libc without procfs the native `realpath(3)` cannot work at all, and it
+ * reports that as `ENOENT` for a path that exists. Only when both agree that
+ * nothing is there is the lexical path the answer.
+ */
+function realpathOrSelf(target: string): string {
+  try {
+    return realpathSync.native(target);
+  } catch (error) {
+    if (!isPathAbsentError(error)) throw error;
+  }
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- the same path the native call was just asked about
+    return realpathSync(target);
+  } catch (error) {
+    if (isPathAbsentError(error)) return target;
+    throw error;
+  }
+}
 
 /**
  * Normalize any path (resolve short names on Windows)
@@ -68,19 +103,9 @@ export function normalizePath(...paths: string[]): string {
     resolved = path.resolve(...paths);
   }
 
-  try {
-    // Use native OS realpath for better Windows compatibility
-    return realpathSync.native(resolved);
-  } catch {
-    // Fallback to regular realpathSync
-    try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: resolved is from path.resolve
-      return realpathSync(resolved);
-    } catch {
-      // Last resort: return resolved path (better than original input)
-      return resolved;
-    }
-  }
+  // Native OS realpath first (resolves Windows short names); a path that is not
+  // there is answered with `resolved` — better than the original input.
+  return realpathOrSelf(resolved);
 }
 
 /**
@@ -109,20 +134,7 @@ export function normalizePath(...paths: string[]): string {
  * ```
  */
 export function normalizedTmpdir(): string {
-  const temp = tmpdir();
-  try {
-    // Use native OS realpath for better Windows compatibility
-    return realpathSync.native(temp);
-  } catch {
-    // Fallback to regular realpathSync
-    try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: temp is from tmpdir()
-      return realpathSync(temp);
-    } catch {
-      // Last resort: return original
-      return temp;
-    }
-  }
+  return realpathOrSelf(tmpdir());
 }
 
 /**
@@ -163,19 +175,7 @@ export function mkdirSyncReal(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- This IS the mkdirSyncReal() implementation
   mkdirSync(dirPath, options);
 
-  try {
-    // Use native OS realpath for better Windows compatibility
-    return realpathSync.native(dirPath);
-  } catch {
-    // Fallback to regular realpathSync
-    try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: dirPath is function parameter
-      return realpathSync(dirPath);
-    } catch {
-      // Last resort: return original
-      return dirPath;
-    }
-  }
+  return realpathOrSelf(dirPath);
 }
 
 /**

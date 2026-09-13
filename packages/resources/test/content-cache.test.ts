@@ -306,6 +306,56 @@ describe('ContentCache — fail-soft IO (per #125 review)', () => {
   );
 });
 
+describe('ContentCache — a bug is not a miss', () => {
+  // The `no-blind-catch` split: fail-soft covers the FILESYSTEM refusing, a
+  // corrupt entry, and metadata the schema rejects (all pinned above). A
+  // `TypeError` from inside the read or write path is none of those.
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'content-cache-bug-'));
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await removeScratchDir(tempDir);
+  });
+
+  it('get() propagates a non-filesystem error from the metadata read', async () => {
+    const bug = new TypeError('simulated defect inside readFile');
+    vi.spyOn(fs, 'readFile').mockRejectedValueOnce(bug);
+
+    await expect(new ContentCache(tempDir, 30).get(EXAMPLE_URL)).rejects.toBe(bug);
+  });
+
+  it('get() propagates a non-filesystem error from the bytes read', async () => {
+    const cache = new ContentCache(tempDir, 30);
+    await cache.set(EXAMPLE_URL, SAMPLE_BYTES, makeMetadata());
+    const bug = new TypeError('simulated defect inside readFile');
+    // The .json half reads for real (and is fresh); only the .bin half throws.
+    const original = fs.readFile as (...args: unknown[]) => Promise<never>;
+    vi.spyOn(fs, 'readFile').mockImplementation((path, ...rest) =>
+      typeof path === 'string' && path.endsWith('.bin') ? Promise.reject(bug) : original(path, ...rest),
+    );
+
+    await expect(cache.get(EXAMPLE_URL)).rejects.toBe(bug);
+  });
+
+  it('set() propagates a non-filesystem error from the write', async () => {
+    const bug = new TypeError('simulated defect inside writeFile');
+    vi.spyOn(fs, 'writeFile').mockRejectedValueOnce(bug);
+
+    await expect(new ContentCache(tempDir, 30).set(EXAMPLE_URL, SAMPLE_BYTES, makeMetadata())).rejects.toBe(bug);
+  });
+
+  it('still treats a filesystem refusal on the read as a miss', async () => {
+    const refusal = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    vi.spyOn(fs, 'readFile').mockRejectedValueOnce(refusal);
+
+    expect(await new ContentCache(tempDir, 30).get(EXAMPLE_URL)).toBeNull();
+  });
+});
+
 describe('ContentCache — security disciplines (§6.3, §8)', () => {
   let tempDir: string;
   let cache: ContentCache;

@@ -1,11 +1,27 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with safe temp directories */
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { findManifestPath, loadAgentManifest } from '../../src/loader/manifest-loader.js';
+
+/**
+ * `fs.access` of exactly `refusedPath` rejects with `EACCES`; every other path
+ * answers for real. A patch rather than `chmod`: modes bind only on POSIX and
+ * never as root, and the case under test is "any refusal", not one errno.
+ */
+function refuseAccess(refusedPath: string): void {
+  const original = fsp.access.bind(fsp);
+  vi.spyOn(fsp, 'access').mockImplementation(async (target, mode) => {
+    if (String(target) === refusedPath) {
+      throw Object.assign(new Error(`EACCES: permission denied, access '${refusedPath}'`), { code: 'EACCES' });
+    }
+    return original(target, mode);
+  });
+}
 
 describe('manifest-loader', () => {
   let tempDir: string;
@@ -60,7 +76,32 @@ describe('manifest-loader', () => {
     it('should throw when manifest file does not exist', async () => {
       const nonexistent = safePath.join(tempDir, 'nonexistent', AGENT_YAML);
 
-      await expect(findManifestPath(nonexistent)).rejects.toThrow();
+      await expect(findManifestPath(nonexistent)).rejects.toThrow('Manifest file not found');
+    });
+
+    describe('a manifest the OS refuses is not "not found"', () => {
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it('propagates a refused direct manifest path instead of calling it missing', async () => {
+        const agentDir = safePath.join(tempDir, 'refused-direct');
+        mkdirSyncReal(agentDir);
+        const manifestPath = safePath.join(agentDir, AGENT_YAML);
+        fs.writeFileSync(manifestPath, 'test');
+        refuseAccess(manifestPath);
+
+        await expect(findManifestPath(manifestPath)).rejects.toThrow(/EACCES/);
+      });
+
+      it('propagates a refused candidate instead of walking past it to "no manifest"', async () => {
+        const agentDir = safePath.join(tempDir, 'refused-candidate');
+        mkdirSyncReal(agentDir);
+        fs.writeFileSync(safePath.join(agentDir, AGENT_YAML), 'test');
+        refuseAccess(safePath.join(agentDir, AGENT_YAML));
+
+        await expect(findManifestPath(agentDir)).rejects.toThrow(/EACCES/);
+      });
     });
   });
 

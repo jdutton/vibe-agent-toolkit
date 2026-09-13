@@ -11,6 +11,7 @@ import path from 'node:path';
 
 import ignore, { type Ignore } from 'ignore';
 
+import { isPathAbsentError } from './fs-utils.js';
 import { safePath , toForwardSlash } from './path-utils.js';
 import { readTextContentSync } from './text-file.js';
 
@@ -57,8 +58,13 @@ export function loadGitignoreRules(gitRoot: string, baseDir?: string): Ignore | 
         // string of NUL-interleaved garbage — every pattern silently wrong, with
         // no error anywhere.
         ig.add(readTextContentSync(gitignorePath).text);
-      } catch {
-        // Skip gitignore files we can't read
+      } catch (error) {
+        // Gone between `existsSync` and the read: no rules here. A `.gitignore`
+        // the OS refuses to read (`EACCES`), or one that is a directory
+        // (`EISDIR`), holds rules this checker cannot honour — and a crawl that
+        // quietly proceeded without them enumerated the ignored tree with
+        // nothing anywhere saying so. Those stay loud.
+        if (!isPathAbsentError(error)) throw error;
       }
     }
   }

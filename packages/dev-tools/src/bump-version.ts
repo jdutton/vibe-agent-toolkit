@@ -28,7 +28,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename */
 // File paths derived from PROJECT_ROOT (controlled, not user input)
 
-import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 
 
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -265,16 +265,12 @@ try {
 console.log('');
 log('Updating workspace packages...', 'blue');
 
-// Check if packages directory exists
+// A missing packages directory is the only "no packages" case; a directory
+// that is there but cannot be listed stays loud.
 const packagesDir = safePath.join(PROJECT_ROOT, 'packages');
-let hasPackages = false;
-try {
-  const packages = readdirSync(packagesDir, { withFileTypes: true })
-    .filter(dirent => dirent.isDirectory());
-  hasPackages = packages.length > 0;
-} catch {
-  hasPackages = false;
-}
+const hasPackages =
+  existsSync(packagesDir) &&
+  readdirSync(packagesDir, { withFileTypes: true }).some((dirent) => dirent.isDirectory());
 
 if (hasPackages) {
   // Update all workspace packages

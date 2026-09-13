@@ -101,7 +101,8 @@ export function regenerateVendoredManifest(vendorDir: string): void {
  * Verify the integrity of `vendorDir` against its stored manifest.
  *
  * Fail-closed: returns `false` when:
- *   - `vendored.manifest.json` is absent or unparseable
+ *   - `vendored.manifest.json` is absent, unparseable, or of the wrong shape
+ *     (a manifest the OS REFUSES to read throws instead — that is not tampering)
  *   - Any listed file is missing on disk
  *   - Any listed file's current hash differs from the stored hash
  *   - Any on-disk file (other than the manifest itself) is NOT listed in the
@@ -119,8 +120,13 @@ export function verifyVendoredManifest(vendorDir: string): boolean {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifestPath is derived from our own vendorDir
     const raw = readFileSync(manifestPath, 'utf8');
     manifest = VendoredManifestSchema.parse(JSON.parse(raw));
-  } catch {
-    return false;
+  } catch (error) {
+    // Not JSON, or JSON of the wrong shape: tampered, fail closed. A manifest the
+    // OS refused to hand over has not been shown to be either — `false` here
+    // fails preflight with the word "tampered" and sends the operator to reinstall
+    // bytes that are fine — so a refusal propagates with its errno.
+    if (error instanceof SyntaxError || error instanceof z.ZodError) return false;
+    throw error;
   }
 
   for (const [rel, expectedHash] of Object.entries(manifest.files)) {

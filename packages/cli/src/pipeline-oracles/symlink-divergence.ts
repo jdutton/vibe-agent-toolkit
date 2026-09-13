@@ -44,6 +44,7 @@ import { realpathSync } from 'node:fs';
 import { relativize } from '@vibe-agent-toolkit/resources';
 import {
   isAbsolutePath,
+  isPathAbsentError,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
@@ -249,9 +250,10 @@ function classify(input: ClassifyInput): DivergenceClass[] {
 /**
  * Resolve a path's real location, falling back to the path itself.
  *
- * A dangling symlink cannot be resolved, and that is a corpus fact rather than
- * a harness error — reporting the link's own path keeps the row in the report
- * instead of dropping the one entry most likely to be interesting.
+ * A dangling symlink (or a loop) cannot be resolved, and that is a corpus fact
+ * rather than a harness error — reporting the link's own path keeps the row in
+ * the report instead of dropping the one entry most likely to be interesting.
+ * A path the OS REFUSES to resolve is a harness error, and stays one.
  *
  * @param absolutePath - Path to resolve
  * @returns The real path, or the input when it cannot be resolved
@@ -259,7 +261,9 @@ function classify(input: ClassifyInput): DivergenceClass[] {
 function realPathOrSelf(absolutePath: string): string {
   try {
     return toForwardSlash(realpathSync.native(absolutePath));
-  } catch {
+  } catch (error) {
+    const loop = (error as { code?: unknown } | null)?.code === 'ELOOP';
+    if (!isPathAbsentError(error) && !loop) throw error;
     return toForwardSlash(absolutePath);
   }
 }

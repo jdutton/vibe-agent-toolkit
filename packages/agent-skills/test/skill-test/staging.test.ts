@@ -22,6 +22,7 @@ import type {
 } from '@vibe-agent-toolkit/agent-skills';
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import {
@@ -332,7 +333,11 @@ describe('stageHarness — optional item resolve failure (skip-with-warning)', (
 
     const result = await stageHarness({ harnessRoot, items, resolve, ctx: CTX, currentUid, ...EVAL_ISOLATION });
 
-    expect(result.skippedOptional).toEqual(['flaky-optional']);
+    // The REASON rides along: "not staged" alone sent the operator to guess
+    // between an unresolvable source, a build failure and a bug in the resolver.
+    expect(result.skippedOptional).toEqual([
+      { name: 'flaky-optional', reason: expect.stringContaining('cannot resolve') },
+    ]);
     expect(result.pluginDirs).toHaveLength(1);
     expect(result.manifest.entries).toHaveLength(1);
     expect(result.manifest.entries[0]?.name).toBe(SUBJECT_NAME);
@@ -384,6 +389,29 @@ describe('stageHarness — manifest re-stage behavior (readExistingManifest)', (
     const second = await stageFlat(harnessRoot, sourceDir);
     expect(second.manifest.entries).toHaveLength(1);
     expect(existsSync(safePath.join(harnessRoot, MANIFEST_FILE))).toBe(true);
+  });
+
+  // "Corrupt → re-stage" is the sentinel's case. A manifest vat cannot READ is not
+  // corrupt, and treating the refusal as "start over" hides a permission problem
+  // on the harness root that the very next write will hit anyway, less legibly.
+  it('propagates a refused manifest read instead of reading it as corrupt', async () => {
+    const sourceDir = writeSourceSkill(getTempDir());
+    const harnessRoot = makeHarnessRoot();
+    await stageFlat(harnessRoot, sourceDir);
+
+    await withSyncFsRefused('readFileSync', safePath.join(harnessRoot, MANIFEST_FILE), 'EACCES', async () => {
+      await expect(stageFlat(harnessRoot, sourceDir)).rejects.toThrow(/EACCES/);
+    });
+  });
+
+  it('treats a schema-invalid manifest as corrupt too (valid JSON, wrong shape) and re-stages', async () => {
+    const sourceDir = writeSourceSkill(getTempDir());
+    const harnessRoot = makeHarnessRoot();
+    await stageFlat(harnessRoot, sourceDir);
+    writeFileSync(safePath.join(harnessRoot, MANIFEST_FILE), JSON.stringify({ entries: 'nope' }));
+
+    const result = await stageFlat(harnessRoot, sourceDir);
+    expect(result.manifest.entries).toHaveLength(1);
   });
 
   it('treats a corrupt manifest as null and re-stages without throwing', async () => {

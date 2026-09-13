@@ -2,7 +2,7 @@
 
 ESLint rules that enforce the cross-platform and agentic-code safety helpers in the rest of [`@vibe-agent-toolkit/utils`](https://www.npmjs.com/package/@vibe-agent-toolkit/utils).
 
-Twenty-six rules, all of them derived from a bug that actually shipped: `os.tmpdir()` returning an 8.3 short path on a Windows CI runner, `path.join()` producing backslashes that then failed a string comparison, `await import(absolutePath)` throwing on Windows without a `file://` URL, `execSync()` interpolating a caller-controlled string into a shell. Most auto-fix.
+Twenty-seven rules, all of them derived from a bug that actually shipped: `os.tmpdir()` returning an 8.3 short path on a Windows CI runner, `path.join()` producing backslashes that then failed a string comparison, `await import(absolutePath)` throwing on Windows without a `file://` URL, `execSync()` interpolating a caller-controlled string into a shell. Most auto-fix.
 
 ## Installation
 
@@ -25,7 +25,7 @@ export default [
 ];
 ```
 
-`configs.recommended` registers the plugin under the `@vibe-agent-toolkit` namespace and enables the **cross-platform safety core** — 18 of the 26 rules, most at `error` and three at `warn` (see [Severities](#severities)). The other eight are opt-in; the [rule tables](#rules) mark each rule's `recommended` severity, and `—` means not in `recommended`.
+`configs.recommended` registers the plugin under the `@vibe-agent-toolkit` namespace and enables the **cross-platform safety core** — 19 of the 27 rules, most at `error` and four at `warn` (see [Severities](#severities)). The other eight are opt-in; the [rule tables](#rules) mark each rule's `recommended` severity, and `—` means not in `recommended`.
 
 To pick rules yourself, register the plugin and name them:
 
@@ -150,6 +150,20 @@ All three banned spellings fail the same way: the guard answers **false for the 
 The other two are one defect wearing two spellings: a raw string comparison of where the module lives against `process.argv[1]`, with no realpath pass, written either in URL space (`pathToFileURL` the argv path) or in path space (`fileURLToPath` the module URL). A `node_modules/.bin` entry is a **symlink**, so `process.argv[1]` is the link and the module's own location is the resolved target: the strings differ and the guard is false, in either space. Measured false on Node 22.14.0 and 24.13.1 alike, where `isEntrypoint()` is true. Only `process.argv[1]` counts — `argv[2]` and up are ordinary CLI arguments. `import.meta.url`, `import.meta.dirname` and `import.meta.filename` are untouched; only `.main` is banned.
 
 Not in `recommended` because the first half depends on **your** Node floor — at or above 24.2 / 22.18, `import.meta.main` is correct. The argv compares depend on nothing and are a defect everywhere; the two share a rule id, so enable it explicitly if your floor is below 24.2 / 22.18 or you ship a `bin`.
+
+### Error handling
+
+| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
+|---|---|---|---|---|---|
+| `no-blind-catch` | a `catch` that neither reads its error nor throws | narrow on the error and rethrow the rest, or carry it into the result | — | | `warn` |
+
+`try { return statSync(p); } catch { return null; }` answers three different questions with one word. *Not there* is what the author meant. *Refused* — `EACCES`, `EPERM`, `ELOOP` — is a file that exists and could not be read, now reported as absent. *Bug* — a `TypeError` two frames down — is a defect, now reported as a file that is not there. All three exit 0, and the tool is quietest exactly where it is most wrong.
+
+The rule is a floor, deliberately syntactic: a catch is fine if it **references its error binding anywhere** in the body (`isFilesystemAccessError(e)`, `e instanceof X`, `e.code === 'ENOENT'`, `errors.push(String(e))`, `log.warn(e)`) or **throws at its own level** (a rethrow, or a translation into a louder error; a `throw` inside a nested function is a promise to fail later, not a rethrow). It cannot tell `narrow(e)` from `log(e)` and does not try. What it guarantees is the weaker, enforceable property — *the error was looked at before it was discarded* — which every one of the shipped defects lacked.
+
+This is the one seam `tsc` cannot see. When a callee learns to throw where it used to return — a crawler that starts refusing an unreadable directory instead of skipping it — every caller whose contract changed by TYPE fails to compile and gets fixed; the caller with a blind `catch` compiles unchanged and absorbs the new refusal. That is how a refuse-by-default crawler shipped under a `catch { return null }` that turned `vat audit` into a scan of nothing.
+
+There is no annotation escape hatch. Every flagged site has a legitimate rewrite, and an `eslint-disable-next-line` with a reason is the escape hatch ESLint already provides — visible in the diff, and countable with `rg 'eslint-disable.*no-blind-catch'`. `warn` in `recommended` because there is no autofix and an existing tree has many (this repo measured 202 across ~200k lines); the hazard is real at each one.
 
 ### Content decoding
 
@@ -286,11 +300,12 @@ export default [
 
 ### Severities
 
-Within `recommended`, `error` is the default; three rules are `warn`:
+Within `recommended`, `error` is the default; four rules are `warn`:
 
 - **`no-path-join`, `no-path-resolve`, `no-path-relative`** — by far the highest-churn rules; they fire on every raw `node:path` call in an existing codebase. Measured on a 4,670-file adopter tree: 3,963 + 372 + 1 findings, **every one of them autofixable**. `warn` lets a project run `--fix` and burn the list down incrementally instead of blocking CI on day one.
+- **`no-blind-catch`** — the same criterion without the autofix: each site is a decision about which failure its sentinel stands for, and an existing tree has many of them (202 in this repo's own ~200k lines when the rule landed).
 
-Raise all three to `error` once the backlog is clear. That is what this repo does.
+Raise all four to `error` once the backlog is clear. That is what this repo does.
 
 The criterion for `warn` is **migration volume**, not how real the finding is — a rule whose findings we doubted would be out of `recommended` entirely, not demoted. Everything at `error` either prevents a bug or moves a static-analysis finding left of a merge.
 

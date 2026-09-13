@@ -131,19 +131,30 @@ export function classifyLink(href: string): LinkType {
   }
   // URL-decode and check if it looks like a relative file path
   // (e.g., "My%20Document.pdf" decodes to "My Document.pdf")
-  try {
-    const decoded = decodeURIComponent(href);
-    if (decoded !== href) {
-      return 'local_file';
-    }
-  } catch {
-    // Invalid percent encoding — leave as unknown
+  if (isPercentEncoded(href)) {
+    return 'local_file';
   }
   // Bare filenames with extensions (e.g., "config.schema.json", "image.png")
   if (href.includes('.')) {
     return 'local_file';
   }
   return 'unknown';
+}
+
+/**
+ * Whether decoding the href changes it — i.e. it carries at least one
+ * well-formed percent escape.
+ *
+ * Invalid percent encoding (`URIError`, the one thing `decodeURIComponent`
+ * throws) answers false: the href is then judged on its extension alone.
+ */
+function isPercentEncoded(href: string): boolean {
+  try {
+    return decodeURIComponent(href) !== href;
+  } catch (error) {
+    if (!(error instanceof URIError)) throw error;
+    return false;
+  }
 }
 
 /**

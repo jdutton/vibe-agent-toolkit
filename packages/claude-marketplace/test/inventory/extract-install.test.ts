@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { extractClaudeInstallInventory } from '../../src/inventory/extract-install.js';
@@ -37,6 +38,29 @@ async function installWithFileWhereDirExpected(
 		pathsOrRoot: claudeDir,
 		gitTrackerSource: NO_GIT_TRACKER,
 	});
+}
+
+/**
+ * A cache directory beneath the root that the OS refuses to list is recorded
+ * against its own path — the same channel a cache ROOT that is a file already
+ * uses — rather than read as a marketplace with no plugins. The two inner
+ * levels (`cache/<mp>` and `cache/<mp>/<plugin>`) used to skip silently.
+ *
+ * @returns The parse-error messages recorded against the refused path
+ */
+async function refusedCacheLevel(tempDir: string, name: string, refusedRel: string[]): Promise<string[]> {
+	const claudeDir = safePath.join(tempDir, name, '.claude');
+	const cacheDir = safePath.join(claudeDir, 'plugins', 'cache');
+	mkdirSyncReal(safePath.join(cacheDir, 'mp', 'plugin', '1.0.0'), { recursive: true });
+	const refused = safePath.join(cacheDir, ...refusedRel);
+	const restore = refuseAsyncFs('readdir', refused, 'EACCES');
+	try {
+		const inv = await extractClaudeInstallInventory({ pathsOrRoot: claudeDir, gitTrackerSource: NO_GIT_TRACKER });
+		expect(inv.plugins).toEqual([]);
+		return inv.parseErrors.filter(e => e.path === refused).map(e => e.message);
+	} finally {
+		restore();
+	}
 }
 
 /**
@@ -131,6 +155,14 @@ describe('extractClaudeInstallInventory', () => {
 			expect(inv.parseErrors.length).toBeGreaterThanOrEqual(1);
 			const err = inv.parseErrors.find(e => e.path.endsWith('cache'));
 			expect(err).toBeDefined();
+		});
+
+		it('records a marketplace cache dir the OS refuses to list', async () => {
+			expect(await refusedCacheLevel(tempDir, 'refused-mp', ['mp'])).toEqual([expect.stringContaining('EACCES')]);
+		});
+
+		it('records a plugin-name cache dir the OS refuses to list', async () => {
+			expect(await refusedCacheLevel(tempDir, 'refused-plugin', ['mp', 'plugin'])).toEqual([expect.stringContaining('EACCES')]);
 		});
 
 		it('walks valid cache structure with empty marketplace and plugin dirs', async () => {

@@ -146,6 +146,17 @@ describe('OnnxEmbeddingProvider - session lifecycle', () => {
     expect(mockRelease).not.toHaveBeenCalled();
   });
 
+  it('dispose() propagates a failure to release the session rather than leaking it silently', async () => {
+    // The WASM backend has no finalizer: a session whose release() failed is
+    // leaked for the life of the process. "Nothing to release" (init failed)
+    // and "release refused" must not share one silent path.
+    mockRelease.mockRejectedValueOnce(new Error('release refused'));
+    const provider = new OnnxEmbeddingProvider();
+    await provider.embed('hello');
+
+    await expect(provider.dispose()).rejects.toThrow('release refused');
+  });
+
   it('quantized: true (the default) requests the quantized model file', async () => {
     const provider = new OnnxEmbeddingProvider();
 

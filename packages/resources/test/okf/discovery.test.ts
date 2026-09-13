@@ -201,6 +201,21 @@ describe('discoverOkfBundle', () => {
       expect(found.unpackableDocuments).toEqual([]);
     });
 
+    it.skipIf(!SYMLINKS_AVAILABLE)('reports a symlink the OS REFUSES to follow as unreadable, not dangling', async () => {
+      // A self-cycle: `stat` answers ELOOP, not ENOENT. Absorbed as "dangling"
+      // this told the author their link pointed at nothing, when what happened
+      // is that the OS would not say what it pointed at — the `no-blind-catch`
+      // conflation. It is neither a member nor an absence: not assessed.
+      const root = plantOkfBundle({ 'real.md': conceptDoc(TABLE_TYPE) });
+      plantSymlink(root, 'loop.md', 'loop.md', 'file');
+
+      const found = await discoverOkfBundle(root);
+
+      expect(found.conceptDocuments).toEqual(['real.md']);
+      expect(found.unpackableDocuments).toEqual([]);
+      expect(found.unreadableDocuments).toEqual([{ document: 'loop.md', code: 'ELOOP' }]);
+    });
+
     it.skipIf(!SYMLINKS_AVAILABLE)('keeps a symlink whose target is INSIDE the root', async () => {
       // The negative control for all three: a rule that excluded every symlink
       // would satisfy them and would drop conformant documents on the floor.

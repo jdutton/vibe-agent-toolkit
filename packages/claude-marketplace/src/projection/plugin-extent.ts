@@ -557,12 +557,9 @@ function componentDirectories(
  * @returns The declared name and component paths
  */
 function readPluginManifest(scope: ExtentScope, manifestPath: string): PluginManifestFacts {
-  const parsed = ClaudePluginSchema.safeParse(readJson(absoluteOf(scope.base, manifestPath)));
-  if (!parsed.success) {
-    scope.out.conditions.push(unreadableManifest(scope.extentId, manifestPath, PLUGIN_MANIFEST));
-    return { name: null, componentPaths: [] };
-  }
-  return { name: parsed.data.name, componentPaths: componentPathsOf(parsed.data) };
+  const parsed = readManifest(scope, manifestPath, ClaudePluginSchema, PLUGIN_MANIFEST);
+  if (parsed === undefined) return { name: null, componentPaths: [] };
+  return { name: parsed.name, componentPaths: componentPathsOf(parsed) };
 }
 
 /**
@@ -577,26 +574,47 @@ function readMarketplaceManifest(
   scope: ExtentScope,
   manifestPath: string,
 ): MarketplaceManifest | undefined {
-  const parsed = MarketplaceManifestSchema.safeParse(readJson(absoluteOf(scope.base, manifestPath)));
-  if (!parsed.success) {
-    scope.out.conditions.push(unreadableManifest(scope.extentId, manifestPath, MARKETPLACE_MANIFEST));
-    return undefined;
-  }
-  return parsed.data;
+  return readManifest(scope, manifestPath, MarketplaceManifestSchema, MARKETPLACE_MANIFEST);
 }
 
-/** The condition recording a manifest that could not be read or did not validate. */
+/**
+ * Read and validate one manifest, recording a `MANIFEST_UNREADABLE` condition
+ * that says WHY when it cannot be — the OS refused the file, the text is not
+ * JSON, or the JSON failed `schema`. One row for three facts used to be one
+ * message, and a projection's reader could not tell a typo from a permission
+ * bit.
+ *
+ * @returns The validated manifest, or undefined once the condition is recorded
+ */
+function readManifest<T>(
+  scope: ExtentScope,
+  manifestPath: string,
+  schema: { safeParse(value: unknown): { success: true; data: T } | { success: false; error: { message: string } } },
+  manifestKind: string,
+): T | undefined {
+  const read = readJson(absoluteOf(scope.base, manifestPath));
+  const refuse = (reason: string): undefined => {
+    scope.out.conditions.push(unreadableManifest(scope.extentId, manifestPath, manifestKind, reason));
+    return undefined;
+  };
+  if ('reason' in read) return refuse(read.reason);
+  const parsed = schema.safeParse(read.value);
+  return parsed.success ? parsed.data : refuse(`schema validation failed: ${parsed.error.message}`);
+}
+
+/** The condition recording a manifest that could not be read or did not validate, and why. */
 function unreadableManifest(
   extentId: string,
   manifestPath: string,
   manifestKind: string,
+  reason: string,
 ): RealizationConditionRow {
   return {
     extentId,
     path: manifestPath,
     code: MANIFEST_UNREADABLE,
     severity: 'warning',
-    message: `"${manifestPath}" could not be read as a ${manifestKind} manifest,`
+    message: `"${manifestPath}" could not be read as a ${manifestKind} manifest (${reason}),`
       + ' so this extent holds only what convention supplies',
     resourceId: null,
     ...CONDITION_WITHOUT_REFERENCE,
@@ -716,17 +734,25 @@ function absoluteOf(base: ProjectionBase, relativePath: string): string {
 }
 
 /**
- * Parse a JSON file, reporting unreadable and malformed alike as `undefined`.
+ * Parse a JSON file, or say why it could not be: the OS refusing it and the
+ * text not being JSON are both facts about the corpus, and both are carried
+ * into the condition the caller records rather than collapsed to `undefined`.
  *
  * @param absolutePath - Absolute path of the manifest
- * @returns The parsed value, or undefined
+ * @returns The parsed value, or the reason it has none
  */
-function readJson(absolutePath: string): unknown {
+function readJson(absolutePath: string): { value: unknown } | { reason: string } {
+  let text: string;
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- a manifest path the base projection already enumerated
-    const parsed: unknown = JSON.parse(readFileSync(absolutePath, 'utf8'));
-    return parsed;
-  } catch {
-    return undefined;
+    text = readFileSync(absolutePath, 'utf8');
+  } catch (error) {
+    return { reason: error instanceof Error ? error.message : String(error) };
+  }
+  try {
+    return { value: JSON.parse(text) };
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    return { reason: `not valid JSON: ${error.message}` };
   }
 }

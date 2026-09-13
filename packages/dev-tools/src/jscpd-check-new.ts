@@ -8,9 +8,8 @@
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { CommandExecutionError } from '@vibe-agent-toolkit/utils/process';
 
-import { buildJscpdArgs, JSCPD_CONFIG, safeExecSync } from './common.js';
+import { buildJscpdArgs, runJscpd } from './common.js';
 
 // Type definitions for jscpd output
 interface CloneLocation {
@@ -49,45 +48,6 @@ const BASELINE_FILE = safePath.join('.github', '.jscpd-baseline.json');
 const JSCPD_ARGS = buildJscpdArgs();
 
 /**
- * Run jscpd and return results
- */
-function runJscpd() {
-  try {
-    safeExecSync('npx', ['jscpd', ...JSCPD_ARGS], { encoding: 'utf-8', stdio: 'pipe' });
-  } catch (error) {
-    // Expected behavior: jscpd exits with non-zero when duplications found,
-    // but still generates JSON report which we process below
-    // Verify it's the expected failure (not a critical error like ENOENT)
-    if (error instanceof Error && error.message.includes('ENOENT')) {
-      throw new Error('jscpd executable not found. Install with: npm install -g jscpd');
-    }
-    // Otherwise continue - duplications found, but report still generated below.
-    // Surface jscpd's own stdout/stderr so a genuine crash (as opposed to the
-    // expected "duplications found" non-zero exit) is diagnosable from CI logs
-    // instead of only showing up as "report not found" further down.
-    if (error instanceof CommandExecutionError) {
-      const stdout = error.stdout.toString().trim();
-      const stderr = error.stderr.toString().trim();
-      if (stdout) console.error(`jscpd stdout:\n${stdout}`);
-      if (stderr) console.error(`jscpd stderr:\n${stderr}`);
-    } else if (error instanceof Error) {
-      console.error(`jscpd invocation error: ${error.message}`);
-    }
-  }
-
-  const reportPath = safePath.join(JSCPD_CONFIG.OUTPUT_DIR, 'jscpd-report.json');
-  // Path derived from JSCPD_CONFIG constant (controlled, not user input)
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
-  if (!existsSync(reportPath)) {
-    throw new Error(`jscpd report not found at ${reportPath}`);
-  }
-
-  // Path derived from JSCPD_CONFIG constant (controlled, not user input)
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
-  return JSON.parse(readFileSync(reportPath, 'utf-8'));
-}
-
-/**
  * Create clone signature for comparison
  */
 function getCloneSignature(clone: Clone) {
@@ -105,7 +65,7 @@ function checkNewDuplications() {
   console.log('🔍 Checking for new code duplication...\n');
 
   // Run current scan
-  const currentReport = runJscpd();
+  const currentReport = runJscpd<Clone>(JSCPD_ARGS);
   const currentClones = currentReport.duplicates ?? [];
 
   // Load baseline

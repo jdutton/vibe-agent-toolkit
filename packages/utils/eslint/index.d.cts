@@ -47,7 +47,7 @@ declare namespace plugin {
     rules: Record<string, RuleModule>;
     configs: {
       /**
-       * The cross-platform safety core: 18 of the 26 rules, 15 `error` / 3 `warn`.
+       * The cross-platform safety core: 19 of the 27 rules, 15 `error` / 4 `warn`.
        *
        * Eight are excluded, for five reasons. `no-test-scoped-functions`,
        * `require-justified-skip` and `no-bare-symlink-in-tests` are positions on

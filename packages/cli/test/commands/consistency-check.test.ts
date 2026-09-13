@@ -7,11 +7,18 @@
  * the pre-computed DiscoveredSkill.sourcePath values.
  */
 
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
+import { afterAll, describe, expect, it } from 'vitest';
 
-import { resolveAssignedSkills, runConsistencyChecks } from '../../src/commands/consistency-check.js';
+import {
+  readVatSkillsFromPackageJson,
+  resolveAssignedSkills,
+  runConsistencyChecks,
+} from '../../src/commands/consistency-check.js';
 import type { DiscoveredSkill } from '../../src/commands/skills/command-helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -204,5 +211,32 @@ describe('PUBLISHED_SKILL_NOT_IN_PLUGIN check', () => {
     const flagged = issues.filter((i) => i.code === 'PUBLISHED_SKILL_NOT_IN_PLUGIN');
     expect(flagged).toHaveLength(1);
     expect(flagged[0]?.message).toContain('orphan-skill');
+  });
+});
+
+describe('readVatSkillsFromPackageJson', () => {
+  const workDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-cc-pkg-'));
+  afterAll(() => {
+    rmSync(workDir, { recursive: true, force: true });
+  });
+
+  it('returns the declared list', () => {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
+    writeFileSync(safePath.join(workDir, 'package.json'), '{"vat":{"skills":["a","b"]}}');
+
+    expect(readVatSkillsFromPackageJson(workDir)).toEqual(['a', 'b']);
+  });
+
+  it('returns undefined when there is no package.json — nothing declared', () => {
+    expect(readVatSkillsFromPackageJson(safePath.join(workDir, 'nowhere'))).toBeUndefined();
+  });
+
+  it('refuses a package.json that is not JSON rather than reading it as "nothing declared"', () => {
+    // "Nothing declared" skips the cross-check. A broken manifest used to skip
+    // it the same way, so `vat verify` verified nothing and reported nothing.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
+    writeFileSync(safePath.join(workDir, 'package.json'), '{"vat":');
+
+    expect(() => readVatSkillsFromPackageJson(workDir)).toThrow(/package\.json is not valid JSON/);
   });
 });
