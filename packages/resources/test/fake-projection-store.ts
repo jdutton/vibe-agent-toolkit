@@ -132,7 +132,13 @@ export class FakeProjectionStore implements ProjectionStore {
     const incoming = new Map<string, RowBundle>();
     for (const table of BLOB_TABLES) {
       for (const row of source[table] ?? []) {
-        const key = String(row[blobKeyColumn(table)]);
+        const column = blobKeyColumn(table);
+        const key = row[column];
+        if (typeof key !== 'string') {
+          throw new TypeError(
+            `the store double expected '${table}.${column}' to hold a string content key, got ${typeof key}`,
+          );
+        }
         const bundle = incoming.get(key) ?? emptyBlobBundle();
         incoming.set(key, bundle);
         bundle[table] = [...(bundle[table] ?? []), row];
