@@ -8,27 +8,98 @@
  *   - Integration: forks on ALL platforms (native modules like lancedb + process.chdir() don't
  *     survive the threads pool — teardown SIGABRTs on Unix).
  *
- * Both unit and integration pools are capped at maxForks/maxThreads: 2 on ALL platforms —
+ * Both unit and integration pools are capped at `maxWorkers: 2` on ALL platforms —
  * integration test files load native ML models (onnxruntime, transformers) + LanceDB's Arrow
  * engine, each ~1-3GB resident in NATIVE memory (not the JS heap, so provider.close() can't
  * reclaim it — only worker exit does). Leaving this unbounded on Unix once spawned
  * ~availableParallelism (~10) such workers at once, swapping the machine and OOM-killing
  * workers (surfaces as ERR_IPC_CHANNEL_CLOSED, not a test failure) — see commit 9f7ad9c9.
+ *
+ * 🚨 **`poolOptions` was REMOVED in vitest 4 — the knobs are top-level now.** Every cap in
+ * this file used to live under `poolOptions.forks.maxForks` / `poolOptions.threads.maxThreads`
+ * / `poolOptions.forks.execArgv`. Vitest 4 replaced all of them with a single top-level
+ * `maxWorkers` and a single top-level `execArgv`, and it does NOT error on the old shape — it
+ * prints a DEPRECATED line and ignores it. So carrying the v3 spelling across the bump would
+ * have silently uncapped every pool and removed the heap ceiling, which is precisely the
+ * unbounded-worker OOM commit 9f7ad9c9 exists to prevent. `singleFork`/`singleThread: false`
+ * had no replacement because it was already the default; `fileParallelism: false` is the knob
+ * if serial execution is ever wanted.
  */
 
 import { fileURLToPath } from 'node:url';
 
 const setupFilePath = fileURLToPath(new URL('./vitest.setup.js', import.meta.url));
 
+/**
+ * Clear every mock's CALL HISTORY before each test, in all three tiers.
+ *
+ * 🚨 Restores the pre-vitest-4 hygiene these suites were written against. In
+ * vitest 3 `vi.restoreAllMocks()` also cleared the call history of mocks made
+ * with `vi.fn()`; in vitest 4 it only restores originals for `vi.spyOn` spies,
+ * so a module mock's `mock.calls` now ACCUMULATES across tests in one file.
+ * Three suites went red on exactly that — counts reading 2 and 3 where they
+ * asserted 1, and "expected not to be called, called 6 times".
+ *
+ * `clearMocks` calls `.mockClear()`, which clears calls WITHOUT touching
+ * implementations, so a mock configured in `beforeAll` still works. Set here
+ * rather than at the 55 individual `restoreAllMocks()` sites, so the next suite
+ * to hit this does not have to rediscover it.
+ *
+ * ⚠️ One constant rather than the same comment in three factories: the comment
+ * IS the reason, and three copies of a reason drift. `duplication-check` caught
+ * the first attempt at exactly that.
+ */
+const CLEAR_MOCKS_BEFORE_EACH_TEST = true;
+
 export const platformTestTimeout = process.platform === 'win32' ? 900_000 : 60_000; // 15min Windows, 1min Unix
 
 export const unitPool = process.platform === 'win32' ? 'forks' : 'threads';
-export const unitPoolOptions = {
-  forks: { singleFork: false, maxForks: 2 },
-  // Unix unit pool is 'threads', whose cap knob is maxThreads (singleFork is forks-only).
-  // Without this the intended 2-way cap was silently ignored and threads ran unbounded.
-  threads: { singleThread: false, maxThreads: 2 },
-};
+
+/**
+ * Worker cap, shared by every tier.
+ *
+ * One number now covers both pools. Under vitest 3 this was two knobs
+ * (`maxForks` for the Windows fork pool, `maxThreads` for the Unix thread pool)
+ * and getting only one of them right left the other silently unbounded — a real
+ * defect this file used to carry. `maxWorkers` is pool-agnostic, so that class
+ * of mistake is gone.
+ */
+export const maxTestWorkers = 2;
+
+/**
+ * V8 old-space ceiling for a UNIT worker.
+ *
+ * ⚠️ The unit tier shipped with NO heap ceiling while integration and system
+ * both had one, so a unit fork inherited Node's default — which scales with
+ * host RAM and therefore never binds on a 16GB CI runner. That is the tier
+ * whose worker deaths are hardest to read: a fork that dies takes the run's
+ * exit code to 1 while printing no test-level failure, which vibe-validate's
+ * extractor then reports as `0 test failure(s)` with an empty error list. A
+ * bounded heap turns that into a deterministic, named OOM instead.
+ *
+ * 🪤 EMPTY on the thread pool, which is not a hedge — `worker_threads` REFUSES
+ * this flag outright (`ERR_WORKER_INVALID_EXEC_ARGV`: "Initiated Worker with
+ * invalid execArgv flags"), because a thread shares the host process's V8 heap
+ * and cannot be given its own. Setting it unconditionally took every Unix unit
+ * file to "no tests, 1 error" — which is why this is keyed on `unitPool` rather
+ * than on platform: the pool is the thing that decides whether the flag is
+ * legal, and a future move of Unix to forks should carry the cap with it.
+ *
+ * MEASURED, not guessed: `vitest run --pool=forks --logHeapUsage
+ * --reporter=verbose` over all 635 unit files on this tree puts the heaviest at
+ * **166MB** (`dev-tools/test/local-eslint-rule-enablement.test.ts`), with
+ * `utils/test/eslint/rules.test.ts` at 152MB and
+ * `cli/test/commands/resources-check-payload.test.ts` at 151MB behind it. 512MB
+ * is ~3.1x that, which covers the fork-reuse variance the heap guard's own
+ * budget comment describes (a fork is reused across files, so a file's reading
+ * depends on what ran before it in the same fork).
+ *
+ * Deliberately tighter than the 1024MB integration/system cap, because no unit
+ * test loads a native ML model — a unit file approaching this ceiling is doing
+ * integration-shaped work and should change tier rather than be given more
+ * memory.
+ */
+export const unitExecArgv = unitPool === 'forks' ? ['--max-old-space-size=512'] : [];
 
 /**
  * Dependencies vitest must TRANSFORM rather than externalize.
@@ -51,21 +122,17 @@ export const unitPoolOptions = {
 export const inlineDeps = ['@vibe-validate/git'];
 
 export const integrationPool = 'forks' as const;
-export const integrationPoolOptions = {
-  forks: {
-    singleFork: false,
-    maxForks: 2,
-    // V8 old-space cap — bounds JS-HEAP blowups only. This does NOT bound the
-    // native-memory risk (LanceDB's Arrow engine, onnxruntime models each
-    // ~1-3GB resident OUTSIDE V8's heap) that maxForks above already guards
-    // via concurrency. 1024MB gives ~2.5x headroom over the heaviest measured
-    // integration file (resource-compiler's language-service/transformer
-    // suites, 231-382MB across repeated runs) while staying tight enough to
-    // actually terminate a future JS-heap regression — unlike Node's default,
-    // which scales with host RAM and never binds.
-    execArgv: ['--max-old-space-size=1024'],
-  },
-};
+/**
+ * V8 old-space cap — bounds JS-HEAP blowups only. This does NOT bound the
+ * native-memory risk (LanceDB's Arrow engine, onnxruntime models each
+ * ~1-3GB resident OUTSIDE V8's heap) that `maxTestWorkers` already guards
+ * via concurrency. 1024MB gives ~2.5x headroom over the heaviest measured
+ * integration file (resource-compiler's language-service/transformer
+ * suites, 231-382MB across repeated runs) while staying tight enough to
+ * actually terminate a future JS-heap regression — unlike Node's default,
+ * which scales with host RAM and never binds.
+ */
+export const integrationExecArgv = ['--max-old-space-size=1024'];
 
 export interface UnitTestConfigOverrides {
   coverageExclude?: string[];
@@ -89,8 +156,10 @@ export function createUnitTestConfig(overrides: UnitTestConfigOverrides = {}) {
     // NOTE: no hookTimeout override here on purpose. Unit hooks should fail
     // fast at vitest's 10s default — a unit hook that needs longer is doing
     // real I/O and belongs in the integration or system tier instead.
+    clearMocks: CLEAR_MOCKS_BEFORE_EACH_TEST,
     pool: unitPool,
-    poolOptions: unitPoolOptions,
+    maxWorkers: maxTestWorkers,
+    execArgv: unitExecArgv,
     coverage: {
       provider: 'v8' as const,
       reporter: ['text', 'json', 'html'] as const,
@@ -130,8 +199,10 @@ export function createIntegrationTestConfig(overrides: IntegrationTestConfigOver
     // ceiling testTimeout already uses.
     hookTimeout: platformTestTimeout,
     passWithNoTests: true,
+    clearMocks: CLEAR_MOCKS_BEFORE_EACH_TEST,
     pool: integrationPool,
-    poolOptions: integrationPoolOptions,
+    maxWorkers: maxTestWorkers,
+    execArgv: integrationExecArgv,
   };
 }
 
@@ -162,17 +233,13 @@ export function createSystemTestConfig(overrides: SystemTestConfigOverrides = {}
     // Tests emitting verbose console output pile RPC pressure onto the same
     // channel the onTaskUpdate heartbeat uses; write worker stdout directly instead.
     disableConsoleIntercept: true,
+    clearMocks: CLEAR_MOCKS_BEFORE_EACH_TEST,
     pool: 'forks' as const,
-    poolOptions: {
-      forks: {
-        singleFork: false,
-        // Windows: one worker at a time (serial) for reliability on constrained
-        // VMs. Unix: 2 workers for ~2x speedup; system tests are fully isolated.
-        maxForks: process.platform === 'win32' ? 1 : 2,
-        // Same V8 old-space cap as integrationPoolOptions — see its comment.
-        // Heaviest measured system-test file: cli/inventory-parity.system.test.ts, ~196MB.
-        execArgv: ['--max-old-space-size=1024'],
-      },
-    },
+    // Windows: one worker at a time (serial) for reliability on constrained
+    // VMs. Unix: 2 workers for ~2x speedup; system tests are fully isolated.
+    maxWorkers: process.platform === 'win32' ? 1 : maxTestWorkers,
+    // Same V8 old-space cap as `integrationExecArgv` — see its comment.
+    // Heaviest measured system-test file: cli/inventory-parity.system.test.ts, ~196MB.
+    execArgv: integrationExecArgv,
   };
 }

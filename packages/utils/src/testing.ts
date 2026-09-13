@@ -21,6 +21,7 @@
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
+import type { UnreadablePolicy } from './listing-refusal.js';
 import { normalizedTmpdir, safePath } from './path-utils.js';
 
 // The rest of the testing surface. ⚠️ This re-export is the ENTIRETY of what
@@ -125,4 +126,22 @@ export function replantableCorpus(
       return planted.root;
     },
   };
+}
+
+/**
+ * The `unreadable` policy a FIXTURE crawl states: refuse, against the fixture
+ * root, with a remedy that names the fixture rather than an adopter knob.
+ *
+ * A suite that is not ABOUT refusals still has to say what one would mean —
+ * the policy is required, with no default, and test files are not typechecked
+ * — and the honest answer for a planted tree is that a directory it cannot
+ * list is a broken fixture, not a case to degrade around. A suite that IS
+ * about refusals spells its own policy inline, because the policy is the
+ * subject.
+ *
+ * @param root - The fixture root the refused directory is expressed against
+ * @returns A `refuse` policy for `crawlDirectory` and the git listings
+ */
+export function refuseUnreadableFixture(root: string): UnreadablePolicy {
+  return { refuse: { root, remedy: 'A test fixture must be listable in full; fix the fixture, not the walk.' } };
 }

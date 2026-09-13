@@ -266,6 +266,23 @@ function runWithClock(options: {
 /** One entry of the document's `checks` list, as a reader sees it. */
 type PublishedCheck = { name: string; durationSecs: number; rows?: number; broken?: true };
 
+/** One entry of the document's `issues` list, as a reader sees it. */
+type PublishedIssue = { code: string; severity: string; message: string; path?: string };
+
+/**
+ * The document's findings, narrowed to what a reader actually gets.
+ *
+ * The builder returns `Record<string, unknown>` on purpose — the document's
+ * shape is the contract, not a type — so every case that reads a finding out of
+ * it needs the same cast. Named once, so the cast is not repeated per case.
+ *
+ * @param payload - A built document
+ * @returns Its `issues` list
+ */
+function publishedIssues(payload: Record<string, unknown>): PublishedIssue[] {
+  return payload['issues'] as PublishedIssue[];
+}
+
 /**
  * The `checks` list of the document built from a real run of the loop.
  *
@@ -885,10 +902,11 @@ describe('a corpus of zero members is a failure, not a pass', () => {
   });
 
   it('does not double-report when the project declares no checks at all', () => {
-    // 🪤 A DIFFERENT condition, already handled by a loud stderr warning and a
-    // deliberate exit 0 — declaring no checks is legitimate. A run with neither
-    // checks nor corpus must not turn that legitimate state into an error, or
-    // the operator gets two reports about one situation and the wrong verdict.
+    // 🪤 A DIFFERENT condition with its OWN refusal — `noCheckRanFinding`,
+    // derived in the payload builder, which says the missing thing is the RULES.
+    // A run with neither checks nor corpus must not also emit this one, or the
+    // operator gets two reports about one situation and the less specific of the
+    // two sends them to inspect a `.gitignore` that is not the problem.
     const { issues, costs } = runDeclaredChecks({
       checks: {}, only: undefined, ask: ASK_NO_ROWS, validation: undefined,
       membersEnumerated: 0,
@@ -910,6 +928,98 @@ describe('a corpus of zero members is a failure, not a pass', () => {
 
     expect(issues.map((issue) => issue.code))
       .toStrictEqual(['RESOURCE_CHECK_BROKEN', FIRST_CODE, SECOND_CODE]);
+  });
+});
+
+/**
+ * The same failure class as the empty-corpus block above, one level further out:
+ * a run with no RULES rather than no rows.
+ *
+ * 🚨 **Measured before this was written.** A project with a valid
+ * `vibe-agent-toolkit.config.yaml` and no `checks:` block produced
+ * `status: success`, `checksRun: 0` and exit 0 — a passing gate document. So
+ * deleting the `checks:` block silently DELETED the gate, and the only thing
+ * that said otherwise was a stderr warning nothing parses and no CI step reads.
+ *
+ * 🔑 A gate that checked nothing is indistinguishable from a gate that was
+ * removed, and the entire argument for having these gates is that you never let
+ * those two look alike. It is the third instance of the shape in this release —
+ * `vat claude budget` answered success on a path that matched no working
+ * location, and the repo's audit quality gate had a green path over zero parsed
+ * findings — so it is closed the way those were rather than a third way.
+ *
+ * 🪤 Derived in `buildCheckOutputData` itself, NOT assembled by the handler. The
+ * builder is where `checksRun` is computed, so "zero checks ran and the status
+ * is clean" is unrepresentable by construction: every lane that publishes a
+ * document — the completed run, the interrupted run, the supervised child —
+ * goes through it, and a fourth lane added later inherits the refusal instead of
+ * having to remember it.
+ */
+describe('a run that ran no checks at all is a failure, not a pass', () => {
+  it('fails the document when the denominator is zero', () => {
+    // 🔑 The reproduced case, at the seam that decides the exit code. Delete the
+    // guard and this reds: `status` is `success` over a project that asserted
+    // nothing, which is the same document a project whose gate was deleted
+    // produces.
+    const payload = buildCheckOutputData(payloadInput({ costs: [] }));
+
+    expect(payload['checksRun']).toBe(0);
+    expect(payload['status']).toBe('error');
+  });
+
+  it('fails end to end, from a loop that was handed no declared checks', () => {
+    // The whole pipeline rather than the builder alone: a config with no
+    // `checks:` block reaches `runDeclaredChecks` as an empty map, which runs
+    // nothing and returns no findings of its own to carry the news.
+    const { payload, checks } = documentFor({ checks: {}, ask: ASK_NO_ROWS });
+
+    expect(checks).toStrictEqual([]);
+    expect(payload['status']).toBe('error');
+  });
+
+  it('carries the non-overridable run-integrity code at error', () => {
+    // Same claim as a broken statement and as an empty corpus — *these
+    // assertions did not execute, so the green means nothing* — so the same
+    // code, which `ValidationConfigSchema` refuses as a `severity` key. A
+    // sibling code would add a second thing an adopter's CI has to know to look
+    // for and say nothing the message does not.
+    const [finding] = publishedIssues(buildCheckOutputData(payloadInput({ costs: [] })));
+
+    expect(finding?.code).toBe('RESOURCE_CHECK_BROKEN');
+    expect(finding?.severity).toBe('error');
+  });
+
+  it('tells the operator that a DELETED checks block reads identically', () => {
+    // "no checks ran" is not actionable on its own. The reason it is an error
+    // rather than a shrug — a removed gate and a passing gate serialize the same
+    // — is the sentence the operator needs, plus where checks are declared.
+    const [finding] = publishedIssues(buildCheckOutputData(payloadInput({ costs: [] })));
+
+    expect(finding?.message).toContain('resources.checks');
+    expect(finding?.message).toContain('removed');
+  });
+
+  it('refuses whatever emptied the run, not only an absent config block', () => {
+    // 🔑 The builder cannot see WHY nothing ran, and deliberately does not ask.
+    // An absent `checks:` block, a filter that matched nothing (which
+    // `requireDeclaredCheck` refuses earlier, and which must stay refused even
+    // if that guard is one day widened), a future `continue` that skips every
+    // rule — all reach here as the same document, and every one of them is a
+    // gate that asserted nothing over a perfectly healthy corpus.
+    const payload = buildCheckOutputData(payloadInput({ costs: [], membersEnumerated: 8000 }));
+
+    expect(payload['membersEnumerated']).toBe(8000);
+    expect(payload['status']).toBe('error');
+  });
+
+  it('stays silent the moment a single check ran', () => {
+    // 🔑 The over-correction guard. Fire this on a run that DID check something
+    // — compare the wrong number, drop the length test — and every clean gate in
+    // every adopter repository starts reporting an error.
+    const payload = buildCheckOutputData(payloadInput({ costs: costsOf(1) }));
+
+    expect(payload['issues']).toStrictEqual([]);
+    expect(payload['status']).toBe('success');
   });
 });
 

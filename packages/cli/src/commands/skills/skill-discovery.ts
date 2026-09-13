@@ -11,10 +11,35 @@ import { basename } from 'node:path';
 import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
+import { crawlDirectory, type UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
 import picomatch from 'picomatch';
 
 import type { DiscoveredSkill } from './command-helpers.js';
+
+/**
+ * How discovery treats a directory its crawl cannot list. REQUIRED at every
+ * call — there is no default, so `tsc` enumerates the callers and each one
+ * carries its decision at the call site.
+ *
+ * `'refuse'` — discovery throws `DirectoryListingRefusedError` with the
+ * adopter-facing sentence (root-relative directory, `skills.include` remedy),
+ * because a shorter skill list is the tell-less drop every command downstream
+ * would then confidently work from. The right answer for `vat skills validate`,
+ * `vat skills build`, `vat verify` and the rest, which must not act on a
+ * population they could not see. Discovery owns the sentence, which is why the
+ * arm is a literal here rather than the crawler's `{ refuse: { root, remedy } }`.
+ *
+ * `{ degrade }` — for a caller whose honest answer is to keep going: `vat
+ * audit`, which reports an unreadable path as `SCAN_PATH_UNREADABLE` and
+ * validates every readable sibling. Discovery enumerates around the refused
+ * directory, hands the refusal to the handler, and returns every skill it
+ * COULD see. The same arm, same shape, as the crawler's own.
+ *
+ * 🪤 This was `DiscoveryOptions { onUnreadable?: … }`, optional, defaulting to
+ * refuse. Every caller that omitted it compiled, and the one that should have
+ * degraded surfaced a round later as a HIGH.
+ */
+export type DiscoveryUnreadablePolicy = 'refuse' | Extract<UnreadablePolicy, { degrade: unknown }>;
 
 /**
  * Directories that should always be excluded from skill discovery for performance.
@@ -31,6 +56,14 @@ const DISCOVERY_EXCLUDE = [
  * then its filename. Exported so the Claude plugin build resolves a plugin-local
  * skill's name through the SAME definition `vat skills build` uses — per-skill
  * config is keyed by name, so two answers would mean two effective configs.
+ *
+ * The fallback is a KEY, not a verdict. A name is optional on the agentskills.io
+ * schema, so a nameless frontmatter block is a legal skill and needs a key; a
+ * file with NO frontmatter at all is not a skill, but discovery still returns it
+ * under this key so the glob match is reported rather than dropped — the
+ * packaging validator refuses it as `SKILL_MISSING_FRONTMATTER`, located at the
+ * file's path. Excluding it here instead would shrink the denominator silently,
+ * which is the exact tell-less drop `includeUntracked` below exists to prevent.
  */
 export async function readSkillName(skillPath: string): Promise<string | undefined> {
   const parsed = await parseFileCached(skillPath, 'markdown');
@@ -97,7 +130,12 @@ function groupIncludePatternsByBase(
  * the root does not exist (mirrors audit's filesystem-first tolerance for
  * patterns pointing at nothing).
  */
-async function crawlOneBase(base: string, globs: string[]): Promise<string[]> {
+async function crawlOneBase(
+  base: string,
+  globs: string[],
+  projectRoot: string,
+  unreadable: DiscoveryUnreadablePolicy,
+): Promise<string[]> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- base derived from validated config
   if (!existsSync(base)) {
     return [];
@@ -115,8 +153,29 @@ async function crawlOneBase(base: string, globs: string[]): Promise<string[]> {
     // this and keeps the fast path (unlike `respectGitignore: false`, which costs
     // a full walk); the inventory lane already used it for the same reason.
     includeUntracked: true,
+    // Under `'refuse'`, a directory the crawl cannot LIST stops discovery, by
+    // name. The alternative — enumerate around it — is the same tell-less drop
+    // described above, from the other direction: one fewer skill, exit 0, and
+    // every command downstream (build, validate, verify, audit's config-aware
+    // lane) confidently working from the shorter list. The remedy names
+    // `skills.include` rather than `skills.exclude`, because `exclude` is
+    // applied to the crawl's RESULT and cannot stop the crawl from entering
+    // the directory; only a narrower include base can. Expressed against the
+    // project root — the coordinates the include pattern itself is written in,
+    // `..` and all.
+    //
+    // A caller that has decided to degrade passes its handler straight through
+    // (see {@link DiscoveryUnreadablePolicy}); the refusal is then reported by
+    // that caller, and the crawl continues past the directory.
+    unreadable: unreadable === 'refuse'
+      ? { refuse: { root: projectRoot, remedy: SKILLS_INCLUDE_REMEDY } }
+      : unreadable,
   });
 }
+
+/** The knob an adopter has when `skills.include` reaches a directory the crawl cannot list. */
+export const SKILLS_INCLUDE_REMEDY =
+  'Fix the permissions on that directory, or narrow the `skills.include` pattern so its base no longer reaches into it.';
 
 /**
  * Discover skills from config yaml skills section.
@@ -133,11 +192,14 @@ async function crawlOneBase(base: string, globs: string[]): Promise<string[]> {
  *
  * @param skillsConfig - The skills section from vibe-agent-toolkit.config.yaml
  * @param projectRoot - Absolute path to project root (where config yaml lives)
+ * @param unreadable - What to do with a directory the crawl cannot list —
+ *   see {@link DiscoveryUnreadablePolicy}; required, no default
  * @returns Array of discovered skills with names and source paths
  */
 export async function discoverSkillsFromConfig(
   skillsConfig: SkillsConfig,
-  projectRoot: string
+  projectRoot: string,
+  unreadable: DiscoveryUnreadablePolicy,
 ): Promise<DiscoveredSkill[]> {
   const { include, exclude } = skillsConfig;
 
@@ -148,7 +210,7 @@ export async function discoverSkillsFromConfig(
 
   const foundAbsPaths = new Set<string>();
   for (const [base, globs] of patternsByBase) {
-    const crawled = await crawlOneBase(base, globs);
+    const crawled = await crawlOneBase(base, globs, projectRoot, unreadable);
     for (const absPath of crawled) {
       if (userExcludeMatcher) {
         const relFromProject = toForwardSlash(safePath.relative(projectRoot, absPath));

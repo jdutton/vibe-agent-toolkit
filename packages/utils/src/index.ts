@@ -78,7 +78,12 @@ export * from './asset-reference.js';
 // symptom is a type that cannot be imported, which surfaces the first time
 // someone tries — not a silent break in existing code.
 // The lookups themselves, plus the memo every fill shares.
-export { copyDirectory, FsLookupCache, isFilesystemAccessError } from './fs-utils.js';
+export {
+  copyDirectory,
+  FsLookupCache,
+  isFilesystemAccessError,
+  transientRefusalClause,
+} from './fs-utils.js';
 // The two fill+judge pairs, in the order the note above lists them, plus the
 // lazy index a caller that cannot enumerate its targets up front reaches for.
 export {
@@ -90,6 +95,7 @@ export {
   spellingWalkRoot,
 } from './fs-utils.js';
 export type {
+  AbsenceCause,
   ComponentMatch,
   FilenameMatch,
   PathProbe,
@@ -98,6 +104,7 @@ export type {
   PathSpellingRequest,
   PathSpellingTable,
   RealpathTable,
+  VerifiedPrefix,
 } from './fs-utils.js';
 
 // Project root discovery (canonical: config → git → null).
@@ -120,6 +127,11 @@ export * from './glob/glob-pattern.js';
 export * from './fs/file-hash.js';
 
 export { parseWholeNumberAtLeast } from './numeric-args.js';
+
+// THE reading of an environment variable as a boolean. One implementation
+// because three switches each had their own `!== '0'` comparison and none of
+// them turned off for `=false`.
+export { parseEnvBoolean } from './env-flag.js';
 
 // Machine-independent string ordering for hashed/serialized output — never `localeCompare`.
 export { compareCodeUnits } from './compare-code-units.js';

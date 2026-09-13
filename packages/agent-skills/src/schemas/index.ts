@@ -10,6 +10,8 @@ export {
   type VATAgentSkillFrontmatter,
 } from './agent-skill-frontmatter.js';
 
+export { allowedToolsOf, splitAllowedToolsList } from './allowed-tools.js';
+
 export {
   detectInstalledPluginsRegistryDrift,
   InstalledPluginsRegistryJsonSchema,

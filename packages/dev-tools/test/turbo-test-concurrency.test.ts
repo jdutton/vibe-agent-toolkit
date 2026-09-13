@@ -8,7 +8,7 @@ import { PROJECT_ROOT } from '../src/common.js';
 /**
  * Regression guard for the cross-package OOM fix.
  *
- * Each package's vitest caps its own workers (`maxForks`/`maxThreads`) in
+ * Each package's vitest caps its own workers (`maxWorkers`) in
  * vitest.shared.ts, but `turbo run test:<suite>` runs MANY packages' suites
  * concurrently (turbo's default concurrency is 10). The per-package cap does
  * NOT compose across turbo's parallel packages, so ~10 packages × 2 forks
@@ -38,7 +38,7 @@ describe('turbo test-suite concurrency (cross-package OOM guard)', () => {
       expect(script).toContain(`turbo run ${scriptName}`);
       expect(
         script,
-        `"${scriptName}" must pin --concurrency=1 so per-package maxForks bounds peak memory across turbo's parallel packages`,
+        `"${scriptName}" must pin --concurrency=1 so per-package maxWorkers bounds peak memory across turbo's parallel packages`,
       ).toContain('--concurrency=1');
     },
   );

@@ -269,3 +269,27 @@ describe('compat detectors in validateSkill', () => {
     expect(result.issues.some(i => i.code === 'CAPABILITY_EXTERNAL_CLI')).toBe(true);
   });
 });
+
+/**
+ * `validateSkill` on a SKILL.md whose `---` block is empty (or `~`, or a bare
+ * scalar) used to throw `TypeError: Cannot read properties of null (reading
+ * 'name')` — and `vat audit` has no per-skill guard for a TypeError, so one
+ * such file ended the whole run at exit 2 with no result for ANY plugin. The
+ * packaging lane reported the same bytes as `SKILL_MISSING_FRONTMATTER`; this
+ * lane must say the same thing and keep going.
+ */
+describe('validateSkill on a frontmatter block that is not a mapping', () => {
+  const { getTempDir } = setupTempDir('skill-validator-non-mapping-');
+
+  for (const block of ['', '~', 'hello', '- a']) {
+    it(`reports SKILL_MISSING_FRONTMATTER for ${JSON.stringify(block)} instead of throwing`, async () => {
+      const result = await createSkillAndValidate(getTempDir(), `---\n${block}\n---\n# x\n`);
+
+      expect(result.status).toBe('error');
+      expectError(result, 'SKILL_MISSING_FRONTMATTER');
+      // ONE finding: the per-character `SKILL_FRONTMATTER_EXTRA_FIELDS` cascade a
+      // scalar produced ("h", "e", "l", "l", "o") is gone with it.
+      expect(result.issues.filter((i) => i.code === 'SKILL_FRONTMATTER_EXTRA_FIELDS')).toEqual([]);
+    });
+  }
+});

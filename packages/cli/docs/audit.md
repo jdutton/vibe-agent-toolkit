@@ -29,6 +29,8 @@ vat audit [git-url-or-path] [options]
 
 - `--user` - Audit user-level Claude plugins installation (`~/.claude/plugins`)
 - `-r, --recursive` - Scan directories recursively for all resource types
+- `--compat` - Run compatibility analysis for each plugin; adds a `compatibility:` block to its entry (see [Compatibility and settings blocks](#compatibility-and-settings-blocks))
+- `--settings [file]` - Check each plugin against Claude settings (auto-discovered, or the given file); adds a `settings:` block. Requires `--compat`
 - `--debug` - Enable debug logging (outputs to stderr)
 
 ### Gitignore-aware scanning
@@ -205,25 +207,68 @@ hierarchical:
                   message: Skill exceeds recommended length
 ```
 
+## Two verdicts: `status` and the exit code
+
+`vat audit` publishes two verdicts, and they answer different questions.
+
+| Verdict | Answers | Where to read it |
+|---|---|---|
+| `status` in the YAML report | **What was found** — the worst actionable severity across the findings | stdout |
+| The process exit code | **Whether the run completed** | `$?` |
+
+So a tree with errors produces `status: error` beside **exit 0**, and both are
+correct. That pair surprises people because `status` means something wider
+everywhere else in this CLI, where it moves with the exit code. Here it does not,
+because this command is a report rather than a gate.
+
+A run that audited **zero files** is refused, not passed. An existing directory
+with nothing auditable in it — plugins that moved, a wrong subdirectory, an
+excluded tree, files no lane recognises — used to publish `status: success`
+beside `filesScanned: 0`, which is the same document a clean tree produces. It
+now publishes `status: error` with one non-overridable `RESOURCE_CHECK_BROKEN`
+finding under a top-level `issues:` key (the claim is about the run, so it is
+not a `files[]` row and does not count toward `filesScanned`). The exit code is
+still `0`: the run completed; it just is not a verdict.
+
+**Gate CI on the report, never on this command's exit code** — read `status` and
+`issueCounts` out of the YAML (see [CI/CD Integration](#cicd-integration) for a
+worked example), or reach for a command whose exit code *is* the verdict:
+`vat skills validate` and `vat skills build` exit `1` on validation errors, and
+`vat skills validate` also exits `1` when its `skills.include` globs discover no
+skill — so a typo'd glob fails the gate there instead of passing it.
+
 ## Exit Codes
 
 `vat audit` is **advisory by design** — it reports every issue it detects but does not block on validation severity. Use `vat skills validate` or `vat skills build` for gated checks (those commands exit `1` on validation errors).
 
-- **0** - Always, when the audit completes. The report may still contain errors and warnings; check `status` and `summary` in the YAML output to decide whether action is needed.
-- **2** - System error: Config invalid, path not found, permission denied, etc. The audit could not run.
+- **0** - Always, when the audit completes — including when the report says `status: error`. The findings are in the report; check `status` and `summary` in the YAML output to decide whether action is needed. That includes the environment refusing part of the subject: a path that does not exist or is not a recognisable resource is reported as `UNKNOWN_FORMAT` (error), and a directory or file the scan could not read — permission denied, a vanished mount — as `SCAN_PATH_UNREADABLE` (warning), with every readable sibling still validated. A governing `vibe-agent-toolkit.config.yaml` that cannot be loaded, or whose `skills.include` reaches a directory the crawl cannot list, is warned about once on stderr and filed as `SCAN_PATH_UNREADABLE` on the config file or the directory; the skills it governs are validated config-free rather than dropped. Degrading beats destroying, and the report says where it degraded.
+- **2** - The audit could not run at all, so there is no report to read: `--user` with no Claude config directory installed, a git URL that could not be cloned, or an internal failure (a validator defect). Invalid config, missing paths and permission problems are **not** exit 2 — they are findings, above.
 
 ## Validation Configuration
 
-Audit honors `validation.severity` from `vibe-agent-toolkit.config.yaml` for **display grouping only** — setting a code to `ignore` hides it from output, raising to `error` promotes it in the report's error count. Audit does **not** apply `validation.allow` (per-path allow entries); for that, use `vat skills validate` or `vat skills build`.
+Audit honors `validation.severity` from `vibe-agent-toolkit.config.yaml`: setting a code to `ignore` hides it from the report, and every other level is applied as written — a code raised to `error` is reported as an error, a code lowered to `warning` as a warning. It changes **which findings are reported and at what severity**, never whether the command fails (see [Two verdicts](#two-verdicts-status-and-the-exit-code)). Audit does **not** apply `validation.allow` (per-path allow entries); for that, use `vat skills validate` or `vat skills build`.
+
+Three scopes are read, least specific first — a more specific one naming the same code wins:
 
 ```yaml
 # In vibe-agent-toolkit.config.yaml
+resources:
+  validation:
+    severity:
+      LINK_MISSING_TARGET: ignore       # project-wide; the same dial
+                                        # `vat resources validate` reads
 skills:
   defaults:
     validation:
       severity:
-        LINK_TO_NAVIGATION_FILE: ignore   # hidden from audit output
-        LINK_DROPPED_BY_DEPTH: error      # elevated in the report
+        LINK_TO_NAVIGATION_FILE: ignore # project-wide: skills, plugins and
+                                        # marketplaces alike
+        LINK_DROPPED_BY_DEPTH: error    # elevated in the report
+  config:
+    my-skill:
+      validation:
+        severity:
+          LINK_DROPPED_BY_DEPTH: info   # just this skill
 ```
 
 See `docs/validation-codes.md` for the full code reference.
@@ -321,9 +366,13 @@ summary:
   filesWithWarnings: number   # Files whose worst actionable severity is warning
   filesWithErrors: number     # Files carrying at least one error
 issueCounts:                  # FINDINGS, not files — same field name and meaning
-  errors: number              #   as the `issueCounts` on each entry below
-  warnings: number
+  errors: number              #   as the `issueCounts` on each entry below,
+  warnings: number            #   plus the run-level `issues` when present
   info: number
+issues:                       # Only when the RUN itself is refused — a run over
+  - code: RESOURCE_CHECK_BROKEN   # zero files. Not a file, so not in `files[]`.
+    severity: error
+    message: ...
 duration: "123ms"
 files:
   - path: plugins/my-plugin            # relative to `root`
@@ -356,6 +405,70 @@ say in how a path is spelled.
 (`$CLAUDE_CONFIG_DIR`, else `~/.claude`). A URL audit omits `root`: the clone
 lives in a random tempdir that nothing downstream can resolve, so the provenance
 header states the base instead and paths are relative to the cloned repo.
+
+#### Compatibility and settings blocks
+
+Under `--compat`, every `claude-plugin` entry carries a `compatibility:` block;
+under `--compat --settings`, a `settings:` block beside it. **Both blocks are
+always present for every plugin the run was asked about** — a lane that could
+not run says so in its block rather than leaving it out, because a plugin the
+check could not answer for must never look like one the operator never asked
+about.
+
+```yaml
+files:
+  - path: plugins/my-plugin
+    type: claude-plugin
+    compatibility:               # the analyzer's verdicts…
+      plugin: my-plugin
+      declaredTargets: [claude-code]
+      observations: [...]
+      verdicts: [...]
+      unchecked: []              # files the analysis could not read; verdicts were computed without them
+    settings:
+      compatible: false          # true ONLY when conflicts and unchecked are both empty
+      conflicts:
+        - type: tool-blocked
+          detail: Tool "Bash" in skills/deploy/SKILL.md blocked by org policy (permissions.deny)
+          blockedBy: permissions.deny
+          value: Bash
+          settingsFile: /etc/claude-code/managed-settings.json
+          settingsLevel: managed
+      unchecked:                 # present only when non-empty
+        - path: skills/locked/SKILL.md           # relative to `root`
+          reason: "EACCES: permission denied, open 'skills/locked/SKILL.md'"
+  - path: plugins/other-plugin
+    type: claude-plugin
+    compatibility:               # …or the reason there are none
+      analyzed: false
+      reason: "EACCES: permission denied, scandir 'plugins/other-plugin/skills/locked'"
+    settings:
+      compatible: false
+      conflicts: []
+      unchecked:
+        - path: plugins/other-plugin/skills/locked
+          reason: "EACCES: permission denied, scandir 'plugins/other-plugin/skills/locked'"
+```
+
+`settings.unchecked` lists every path the settings check enumerated but could
+not compare: a `SKILL.md` it could not read or whose frontmatter is not a YAML
+mapping (the same file the validator reports as `SKILL_MISSING_FRONTMATTER`), or
+a directory it could not list — in which case any skill beneath it is unseen
+and unnamed. The check follows symlinks the way the validator lane does, so a
+plugin whose `skills/` points at a shared tree is checked, not skipped.
+`compatible` is `false` whenever anything is listed here: zero conflicts over a
+skill that was never read is not compatibility. The two compat lanes are
+independent — a plugin-wide analyzer failure (no valid `plugin.json`, or a root
+that cannot be listed) does not stop the settings check. A single file the
+analyzer cannot read, list or parse is listed under `compatibility.unchecked`
+(root-relative, with the OS or parser reason) and every other file is still
+analyzed; the verdicts are computed WITHOUT the unchecked files, so an empty
+`verdicts` beside a non-empty `unchecked` is a verdict over fewer files than
+the plugin ships.
+
+Both outcomes are also said on stderr without `--debug`: a
+`Compatibility analysis could not run for <plugin>: <reason>` line, and totals
+for conflicts found and paths the settings check could not compare.
 
 ### Standard Error (stderr)
 

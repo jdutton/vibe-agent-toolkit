@@ -1,9 +1,9 @@
-import { existsSync } from 'node:fs';
+import { existsSync, statSync, type Stats } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 import type { PluginInventory, PluginRef } from '@vibe-agent-toolkit/agent-skills';
 import { MarketplaceManifestSchema } from '@vibe-agent-toolkit/agent-skills';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { normalizePath, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { extractClaudePluginInventory } from './extract-plugin.js';
 import type { GitTrackerSource } from './extract-skill.js';
@@ -98,9 +98,15 @@ export async function extractClaudeMarketplaceInventory(
 	const pluginsRaw = (data['plugins'] as unknown[] | undefined) ?? [];
 	const declared: PluginRef[] = [];
 	const discovered: PluginInventory[] = [];
+	const root: MarketplaceRoot = {
+		path: absolute,
+		realPath: toForwardSlash(normalizePath(absolute)),
+		manifestFilePath,
+		parseErrors,
+	};
 
 	for (const entry of pluginsRaw) {
-		const ref = pluginEntryToRef(absolute, entry);
+		const ref = pluginEntryToRef(root, entry);
 		declared.push(ref);
 		if (ref.source === 'path' && ref.exists) {
 			// N+1 WHOLE-CORPUS CRAWL — known, not fixed here. `extractClaudePluginInventory`
@@ -151,7 +157,121 @@ function strField(obj: Record<string, unknown>, key: string, fallback: string): 
 	return typeof v === 'string' ? v : fallback;
 }
 
-function pluginEntryToRef(base: string, entry: unknown): PluginRef {
+/** The marketplace a string `source` is resolved against, and where a refusal is recorded. */
+interface MarketplaceRoot {
+	path: string;
+	/** `path` after realpath — the identity a symlinked source is compared against. */
+	realPath: string;
+	manifestFilePath: string;
+	parseErrors: ParseErrors;
+}
+
+/**
+ * The directory a string `source` names, or the reason it was refused — when
+ * it lies outside the marketplace root by any of three spellings of "outside",
+ * or (below) when it is inside but is not a plugin directory at all.
+ *
+ * `marketplace.json` is attacker-reachable content (it is the thing being
+ * audited), and this lane reads the RAW entries even when the schema refused
+ * the manifest, so the schema's own refusal of an absolute or `..` source is
+ * no protection here: before this guard, `source: "/etc"` was resolved, walked,
+ * and published at `../` locations. Three checks, each reusing the utils
+ * predicate the skill `files:` containment already trusts:
+ *
+ * 1. `safePath.joinUnderRoot` — refuses an absolute path (POSIX, drive letter,
+ *    UNC) and a `..` climb, behind either separator (`toForwardSlash` first).
+ * 2. `existsSync` — a source that is not there is `exists: false`, as before.
+ * 3. realpath, via `normalizePath`, compared against the root's OWN realpath
+ *    with the same `joinUnderRoot` — a symlink inside the root pointing out is
+ *    outside; a root reached through a symlink (`/var` → `/private/var`) is not
+ *    "escaping itself".
+ *
+ * `vat claude marketplace validate` enforces the same contract on its lane
+ * (`containedPluginDir` in `packages/cli/src/commands/claude/marketplace/validate.ts`);
+ * its third step goes through `escapesCorpusRoot`, which lives in the CLI
+ * package and cannot be imported from here, so this lane asks the question
+ * through `joinUnderRoot` instead.
+ *
+ * Two more refusals sit in front of the walk, because "inside the root" is
+ * not yet "a plugin directory". Each used to be WALKED as a plugin with an
+ * empty manifest and zero parse errors — indistinguishable from a real
+ * manifest-less plugin:
+ *
+ * - an EMPTY source, or one carrying a `..` segment that collapses back inside
+ *   (`plugins/good/..`) — refused lexically, by the rule the message already
+ *   states ("no `..` segment"); `joinUnderRoot` only asks where the path ENDS
+ *   UP, so it let these through;
+ * - a source naming a regular FILE — `existsSync` is true for it, and the
+ *   plugin extractor then found no manifest and no components.
+ *
+ * @returns the directory, or the refusal's reason — what the parse error says
+ */
+function containedSourceDir(
+	root: MarketplaceRoot,
+	source: string,
+): { resolved: string; exists: boolean } | { refused: string } {
+	const forward = toForwardSlash(source);
+	if (forward === '') return { refused: 'is empty' };
+	if (forward.split('/').includes('..')) return { refused: 'carries a ".." segment' };
+	let resolved: string;
+	try {
+		resolved = safePath.joinUnderRoot(root.path, forward);
+	} catch {
+		return { refused: OUTSIDE_ROOT };
+	}
+	const stats = statOrUndefined(resolved);
+	if (stats === undefined) return { resolved, exists: false };
+	if (!stats.isDirectory()) return { refused: 'is not a directory' };
+	try {
+		safePath.joinUnderRoot(root.realPath, safePath.relative(root.realPath, toForwardSlash(normalizePath(resolved))));
+	} catch {
+		return { refused: OUTSIDE_ROOT };
+	}
+	return { resolved, exists: true };
+}
+
+const OUTSIDE_ROOT = 'resolves outside the marketplace directory';
+
+/**
+ * `stat` that answers `undefined` for anything that is not there — a missing
+ * path, a dangling link, a component that is a file, a directory the process
+ * may not enter. Every one of those is "no plugin directory here", which is
+ * the `exists: false` the caller already publishes; this lane never throws.
+ */
+function statOrUndefined(path: string): Stats | undefined {
+	try {
+		// eslint-disable-next-line security/detect-non-literal-fs-filename -- contained under the marketplace root by joinUnderRoot
+		return statSync(path);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * A string `source` as a {@link PluginRef}. A source that is refused — outside
+ * the root, empty, `..`-bearing, or a file — is declared but never walked:
+ * `exists: false` keeps it out of `discovered`, so
+ * `detectMarketplacePluginSourceMissing` (the code `vat audit` already emits
+ * for a path source it cannot reach) names it on the manifest itself, and a
+ * `parseErrors` entry says WHY for `vat inventory`. `resolvedPath` is the
+ * manifest, not the target, so no consumer relativizes a path that starts
+ * with `../`.
+ */
+function pathSourceRef(root: MarketplaceRoot, source: string): PluginRef {
+	const dir = containedSourceDir(root, source);
+	if ('refused' in dir) {
+		root.parseErrors.push({
+			path: root.manifestFilePath,
+			message: `plugin source "${source}" ${dir.refused} and was not walked`
+				+ ' — a plugin source must be a relative path to a directory inside the marketplace'
+				+ ' (no absolute path, no ".." segment, no symlink pointing out).',
+		});
+		return { manifestPath: source, resolvedPath: root.manifestFilePath, exists: false, source: 'path' };
+	}
+	return { manifestPath: source, resolvedPath: dir.resolved, exists: dir.exists, source: 'path' };
+}
+
+function pluginEntryToRef(root: MarketplaceRoot, entry: unknown): PluginRef {
 	if (typeof entry !== 'object' || entry === null) {
 		return { manifestPath: '', resolvedPath: '', exists: false, source: 'unknown' };
 	}
@@ -159,14 +279,7 @@ function pluginEntryToRef(base: string, entry: unknown): PluginRef {
 	const source = e['source'];
 
 	if (typeof source === 'string') {
-		const resolved = safePath.resolve(base, source);
-		return {
-			manifestPath: source,
-			resolvedPath: resolved,
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from marketplace-relative path entry
-			exists: existsSync(resolved),
-			source: 'path',
-		};
+		return pathSourceRef(root, source);
 	}
 
 	if (typeof source === 'object' && source !== null) {

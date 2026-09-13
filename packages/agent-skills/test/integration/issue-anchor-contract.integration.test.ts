@@ -101,6 +101,7 @@ beforeAll(async () => {
 
   const validated = await validateSkill({ skillPath, checkUnreferencedFiles: true });
   const packaged = await validateSkillForPackaging(skillPath, undefined, 'source', {
+    unreadable: 'refuse',
     gitTracker,
     locationRoot: tempDir,
   });

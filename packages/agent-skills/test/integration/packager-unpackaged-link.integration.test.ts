@@ -121,7 +121,7 @@ describe('packaging a link whose target does not ship (integration)', () => {
     // not, so it stood in for the whole span and ate the prose.
     expect(body).toContain('a glob may use (`*`, `?`, `[`) — see i for details');
 
-    // Two links sharing one href, both stripping. `transformContent` keys parsed
+    // Two links sharing one href, both stripping. `transformContent` used to key parsed
     // links by href and lets the FIRST win, so the strip template's `{{link.text}}`
     // rendered this second link with the FIRST one's text ("a") — silently swapping
     // one phrase for an unrelated one in shipped prose. The rewrite branch never

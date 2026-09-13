@@ -26,6 +26,9 @@ import { setupNestedDirectory } from './test-helpers.js';
 /** A directory name no fixture plants, so listing it always fails. */
 const NO_SUCH_DIR = 'no-such-dir';
 
+/** A name to ask a directory about, where WHICH name is beside the point. */
+const ANY_NAME = 'anything.md';
+
 /** The path `plantDeep` plants, spelled as a `pathSpellingFrom` correction is. */
 const PLANTED_PATH = 'one/two/three.md';
 
@@ -76,6 +79,51 @@ async function plantDeep(dir: string): Promise<string> {
   await fs.writeFile(safePath.join(dir, 'one', 'two', 'three.md'), '');
   await fs.writeFile(safePath.join(dir, 'a.md'), '');
   return dir;
+}
+
+/**
+ * The errnos a refused `readdir` arrives as, split by whether re-asking can
+ * answer differently.
+ *
+ * ⚠️ **The split IS the contract under test, not a taxonomy.** `EACCES` (a mode
+ * bit) and `ELOOP` (a committed symlink cycle) are facts about the tree that
+ * hold for the whole run, so memoizing them is exactly what the cache is for.
+ * `EMFILE`/`ENFILE` are a *moment* — the process ran out of descriptors — and a
+ * memo that keeps one turns a blip into a run-long verdict about every path
+ * under that directory, at exit 0, that a re-run does not reproduce.
+ */
+const STABLE_REFUSALS = ['EACCES', 'ELOOP'] as const;
+const TRANSIENT_REFUSALS = ['EMFILE', 'ENFILE'] as const;
+const ALL_REFUSALS = [...STABLE_REFUSALS, ...TRANSIENT_REFUSALS];
+
+/** A rejection shaped like the one `fs.readdir` throws for `code`. */
+function refusal(code: string): Error {
+  return Object.assign(new Error(`${code}: refused, scandir`), { code });
+}
+
+/**
+ * Run `body` with exactly the NEXT `readdir` refused with `code`.
+ *
+ * `vi.spyOn` calls through once the one-shot rejection is consumed, so what the
+ * run sees is a single refused syscall inside an otherwise ordinary tree —
+ * which is what a transient shortage looks like, and the only shape that can
+ * tell a dropped memo from a kept one. A mock that refused *every* call would
+ * pass whether the failure is memoized or not.
+ *
+ * @param code - The errno to refuse the next listing with
+ * @param body - Runs while the refusal is armed
+ * @returns What `body` returned, plus how many listings actually happened
+ */
+async function withReaddirRefusedOnce<T>(
+  code: string,
+  body: () => Promise<T>,
+): Promise<{ result: T; readdirCalls: number }> {
+  const spy = vi.spyOn(fs, 'readdir').mockRejectedValueOnce(refusal(code));
+  try {
+    return { result: await body(), readdirCalls: spy.mock.calls.length };
+  } finally {
+    spy.mockRestore();
+  }
 }
 
 /**
@@ -344,6 +392,77 @@ describe('fs-utils', () => {
         expect(listing).toEqual({ outcome: 'unreadable', code: 'EACCES' });
       },
     );
+
+    /**
+     * 🪤 **The memo was right for one kind of refusal and wrong for the other,
+     * and it could not tell them apart.** Caching a failed listing is correct
+     * for `EACCES`/`ELOOP` — nothing about the tree will change mid-run — and
+     * wrong for `EMFILE`/`ENFILE`, where the process merely ran out of
+     * descriptors for an instant. One blip un-verified every path under that
+     * directory for the REST OF THE RUN, producing a burst of findings that a
+     * re-run does not reproduce. Not silent any more, but still fabricated.
+     */
+    describe('a refused listing is remembered only when re-asking cannot help', () => {
+      it.each(STABLE_REFUSALS)(
+        'memoizes a %s refusal, because a stable denial is a fact about the tree',
+        async (code) => {
+          const cache = new FsLookupCache();
+
+          const { result, readdirCalls } = await withReaddirRefusedOnce(code, async () => ({
+            first: await cache.readdir(tempDir),
+            second: await cache.readdir(tempDir),
+          }));
+
+          expect(result.first).toEqual({ outcome: 'unreadable', code });
+          expect(result.second).toEqual({ outcome: 'unreadable', code });
+          // One syscall for two asks. This is the assertion that dies if the fix
+          // over-corrects into "never cache a failure", which would re-issue a
+          // refused listing per caller for every path under a `--x` directory.
+          expect(readdirCalls).toBe(1);
+        },
+      );
+
+      it.each(TRANSIENT_REFUSALS)(
+        'does NOT memoize a %s refusal, because a descriptor shortage is a moment',
+        async (code) => {
+          await fs.writeFile(safePath.join(tempDir, 'a.txt'), '');
+          const cache = new FsLookupCache();
+
+          const { result, readdirCalls } = await withReaddirRefusedOnce(code, async () => ({
+            first: await cache.readdir(tempDir),
+            second: await cache.readdir(tempDir),
+          }));
+
+          expect(result.first).toEqual({ outcome: 'unreadable', code });
+          // The second ask gets the real listing — which is the whole point: the
+          // directory was always readable, the process was momentarily not.
+          expect(namesOf(result.second)).toEqual(['a.txt']);
+          expect(readdirCalls).toBe(2);
+        },
+      );
+
+      it('shares the in-flight promise through a transient refusal, so N callers cost ONE syscall', async () => {
+        const cache = new FsLookupCache();
+
+        const { result, readdirCalls } = await withReaddirRefusedOnce(
+          'EMFILE',
+          async () =>
+            await Promise.all([
+              cache.readdir(tempDir),
+              cache.readdir(tempDir),
+              cache.readdir(tempDir),
+            ]),
+        );
+
+        // ⛔ "Do not cache the failure" must not degrade into "ask again per
+        // caller": that turns a descriptor shortage into a descriptor storm,
+        // which is the very condition EMFILE reports. The memo is dropped only
+        // once it has SETTLED, so a concurrent wave still shares one syscall.
+        expect(readdirCalls).toBe(1);
+        expect(result[0]).toBe(result[1]);
+        expect(result[0]).toEqual({ outcome: 'unreadable', code: 'EMFILE' });
+      });
+    });
 
     it('memoizes realpath and falls back to a resolved path when it fails', async () => {
       const cache = new FsLookupCache();
@@ -918,7 +1037,8 @@ describe('fs-utils', () => {
           match: 'absent',
           askedPath: 'one/two/nowhere.md',
           actualPath: '',
-          because: 'no_such_entry',
+          because: { kind: 'no_such_entry' },
+          verified: { match: 'exact', askedPath: 'one/two', actualPath: 'one/two' },
         });
       });
 
@@ -949,7 +1069,13 @@ describe('fs-utils', () => {
             match: 'absent',
             askedPath: PLANTED_PATH,
             actualPath: '',
-            because: 'directory_unreadable',
+            because: {
+              kind: 'directory_unreadable',
+              code: 'EACCES',
+              directory: safePath.join(root, 'one'),
+              transient: false,
+            },
+            verified: { match: 'exact', askedPath: 'one', actualPath: 'one' },
           });
         },
       );
@@ -1155,9 +1281,9 @@ describe('fs-utils', () => {
         const index = new DirectorySpellingIndex(new FsLookupCache());
         const missing = safePath.join(tempDir, NO_SUCH_DIR);
 
-        expect(await index.lookup(missing, 'anything.md')).toEqual({
+        expect(await index.lookup(missing, ANY_NAME)).toEqual({
           match: 'absent',
-          because: 'no_such_entry',
+          because: { kind: 'no_such_entry' },
         });
       });
 
@@ -1172,12 +1298,181 @@ describe('fs-utils', () => {
 
           const found = await withUnlistableDirectory(
             closed,
-            async () => await index.lookup(closed, 'anything.md'),
+            async () => await index.lookup(closed, ANY_NAME),
           );
 
-          expect(found).toEqual({ match: 'absent', because: 'directory_unreadable' });
+          expect(found).toEqual({
+            match: 'absent',
+            because: {
+              kind: 'directory_unreadable',
+              code: 'EACCES',
+              directory: closed,
+              transient: false,
+            },
+          });
         },
       );
+
+      /**
+       * 🪤 **A second memo sits above the listing memo.** `DirectorySpellingIndex`
+       * caches the built INDEX, not just the listing, so evicting a transient
+       * refusal from `FsLookupCache` alone leaves the refusal pinned exactly
+       * where every consumer reads it. The fix would be real and invisible.
+       */
+      it.each(STABLE_REFUSALS)(
+        'keeps a %s refusal, so a stable denial is still listed once',
+        async (code) => {
+          const root = await plantDeep(tempDir);
+          const index = new DirectorySpellingIndex(new FsLookupCache());
+          const target = safePath.join(root, 'one', 'two', 'three.md');
+
+          const { result, readdirCalls } = await withReaddirRefusedOnce(code, async () => ({
+            first: await index.judgePath(root, target),
+            second: await index.judgePath(root, target),
+          }));
+
+          expect(result.first.match).toBe('absent');
+          expect(result.second.match).toBe('absent');
+          expect(readdirCalls).toBe(1);
+          expect(index.directoriesIndexed).toBe(1);
+        },
+      );
+
+      it.each(TRANSIENT_REFUSALS)(
+        're-asks after a %s refusal at the INDEX layer, not only at the listing memo',
+        async (code) => {
+          const root = await plantDeep(tempDir);
+          const index = new DirectorySpellingIndex(new FsLookupCache());
+          const target = safePath.join(root, 'one', 'two', 'three.md');
+
+          const { result } = await withReaddirRefusedOnce(code, async () => ({
+            first: await index.judgePath(root, target),
+            second: await index.judgePath(root, target),
+          }));
+
+          expect(result.first.match).toBe('absent');
+          expect(result.second).toEqual({
+            match: 'exact',
+            askedPath: PLANTED_PATH,
+            actualPath: PLANTED_PATH,
+          });
+        },
+      );
+    });
+
+    /**
+     * 🪤 Every refusal used to collapse to the bare word `directory_unreadable`,
+     * so no message downstream could say WHICH errno or WHICH directory refused
+     * — leaving a reader of a five-segment path with "a directory on that path"
+     * and a remedy they cannot aim.
+     */
+    describe('an absence says WHICH directory refused, with WHAT errno', () => {
+      it.each(ALL_REFUSALS)('carries %s and the refusing directory', async (code) => {
+        const closed = safePath.join(tempDir, 'closed-cause');
+        await fs.mkdir(closed, { recursive: true });
+        const index = new DirectorySpellingIndex(new FsLookupCache());
+
+        const { result } = await withReaddirRefusedOnce(
+          code,
+          async () => await index.lookup(closed, ANY_NAME),
+        );
+
+        expect(result).toEqual({
+          match: 'absent',
+          because: {
+            kind: 'directory_unreadable',
+            code,
+            directory: closed,
+            // Derived here rather than by each consumer: two lanes write a
+            // "re-run and see" remedy off this, and a second errno list is how
+            // they come to disagree about which refusals are worth re-running.
+            transient: TRANSIENT_REFUSALS.includes(code as (typeof TRANSIENT_REFUSALS)[number]),
+          },
+        });
+      });
+
+      it('says `no_such_entry` and nothing else when the directory WAS listed', async () => {
+        // The negative control. A cause that carried an errno for a plain miss
+        // would let every genuinely missing file read as a refusal.
+        const root = await plantDeep(tempDir);
+        const index = new DirectorySpellingIndex(new FsLookupCache());
+
+        expect(await index.lookup(root, 'nowhere.md')).toEqual({
+          match: 'absent',
+          because: { kind: 'no_such_entry' },
+        });
+      });
+
+      it.skipIf(!PERMISSIONS_ENFORCED)(
+        'names the ANCESTOR that refused, not the walk root and not the target parent',
+        async () => {
+          const root = await plantDeep(tempDir);
+          const index = new DirectorySpellingIndex(new FsLookupCache());
+          const refused = safePath.join(root, 'one');
+
+          const spelling = await withUnlistableDirectory(
+            refused,
+            async () => await index.judgePath(root, safePath.join(root, 'one', 'two', 'three.md')),
+          );
+
+          // Guard the premise: the three candidates a wrong implementation
+          // would hand back are all distinct from each other here, so the
+          // assertion below cannot pass by coincidence.
+          expect(refused).not.toBe(root);
+          expect(refused).not.toBe(safePath.join(root, 'one', 'two'));
+          expect(spelling).toEqual({
+            match: 'absent',
+            askedPath: PLANTED_PATH,
+            actualPath: '',
+            because: {
+              kind: 'directory_unreadable',
+              code: 'EACCES',
+              directory: refused,
+              transient: false,
+            },
+            verified: { match: 'exact', askedPath: 'one', actualPath: 'one' },
+          });
+        },
+      );
+
+      /**
+       * 🪤 A refusal must not DISCARD what the walk had already learned. The
+       * components above the refusing directory WERE listed and judged, and a
+       * case mismatch found there is a defect on its own — that link 404s on a
+       * case-sensitive filesystem whatever the mode bit below says. Returning
+       * bare `absent` threw the verdict away, and the message downstream then
+       * called the spelling "unverified" about a component VAT had verified
+       * and found wrong.
+       */
+      it.skipIf(!PERMISSIONS_ENFORCED)(
+        'carries the spelling defect it found ABOVE the directory that refused',
+        async () => {
+          const root = await plantDeep(tempDir);
+          const index = new DirectorySpellingIndex(new FsLookupCache());
+          const refused = safePath.join(root, 'one');
+
+          const spelling = await withUnlistableDirectory(
+            refused,
+            async () => await index.judgePath(root, safePath.join(root, 'One', 'two', 'three.md')),
+          );
+
+          expect(spelling.match).toBe('absent');
+          if (spelling.match !== 'absent') return;
+          expect(spelling.because.kind).toBe('directory_unreadable');
+          expect(spelling.verified).toEqual({ match: 'case_mismatch', askedPath: 'One', actualPath: 'one' });
+        },
+      );
+
+      it('reports an empty verified prefix when the FIRST component is what is missing', async () => {
+        const root = await plantDeep(tempDir);
+        const index = new DirectorySpellingIndex(new FsLookupCache());
+
+        const spelling = await index.judgePath(root, safePath.join(root, 'nowhere', 'x.md'));
+
+        expect(spelling.match).toBe('absent');
+        if (spelling.match !== 'absent') return;
+        expect(spelling.verified).toEqual({ match: 'exact', askedPath: '', actualPath: '' });
+      });
     });
   });
 });

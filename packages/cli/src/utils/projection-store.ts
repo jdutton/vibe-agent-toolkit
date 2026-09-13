@@ -47,6 +47,7 @@
 
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
 import type { PopulationCache, ProjectionStore } from '@vibe-agent-toolkit/resources';
+import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
 import { gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
 import { isModuleMissing, reportMissingBackend, type OptionalBackend } from './optional-backend.js';
@@ -139,8 +140,6 @@ export const PROJECTION_STORE_DIR_ENV = 'VAT_PROJECTION_STORE_DIR';
  */
 export const CACHE_ENV = 'VAT_CACHE';
 
-/** {@link CACHE_ENV}'s one off value. Exactly `'0'`, never truthiness — see {@link projectionStoreSelected}. */
-export const CACHE_DISABLED = '0';
 
 /**
  * The backend as a user is told to install it.
@@ -181,15 +180,21 @@ const PROJECTION_STORE_BACKEND: OptionalBackend = {
  * `vat cache`'s own help text described three caches while a fourth was being
  * written beside them.
  *
- * 🪤 Compared against `'0'` exactly, never for truthiness, matching
- * `ParseCache`'s `env['VAT_CACHE'] !== '0'`. `VAT_CACHE=1` is the value an
- * operator writes to turn caching ON, and a truthiness test would read it as a
- * reason to decline.
+ * 🪤 Read through `parseEnvBoolean`, never for truthiness — `VAT_CACHE=1` is
+ * the value an operator writes to turn caching ON, and a truthiness test would
+ * read it as a reason to decline. It was previously a comparison against the
+ * literal `'0'`, which is the same shape `ParseCache` carried and the same
+ * defect: `VAT_CACHE=false` disabled nothing. The two now share one parser
+ * (`@vibe-agent-toolkit/utils`) so the variable cannot be read two ways again.
+ *
+ * Only an explicit `false` vetoes. `parseEnvBoolean` returns `undefined` for a
+ * value it cannot read, and an unreadable value is not something the operator
+ * said — the veto has to be a statement, not a shrug.
  *
  * @returns `true` when a store is selected
  */
 export function projectionStoreSelected(): boolean {
-  if (process.env[CACHE_ENV] === CACHE_DISABLED) return false;
+  if (parseEnvBoolean(process.env[CACHE_ENV]) === false) return false;
   return process.env[PROJECTION_STORE_ENV] === PROJECTION_STORE_SQLITE;
 }
 

@@ -81,7 +81,7 @@ Three properties that are easy to get wrong:
   | extent | what a planted symlink yields | why |
   |---|---|---|
   | `filesystem` | **ZERO realizations** — the link contributes no row of its own | the walk runs `followSymlinks: false` (`packages/resources/src/projection/crawl-source.ts:180,424`), whose `processSymlink` returns before recording the link's own path (`:293`) |
-  | `git` | **ZERO realizations** for the link *as a link* | `GitCrawlSource` drops mode `120000` explicitly, to match the filesystem arm (`packages/resources/src/projection/crawl-source.ts:30,295,318`) |
+  | `git` | **ZERO realizations** for the link *as a link*, tracked or untracked | `GitCrawlSource` drops it at one membership seam fed by both halves — git's mode `120000` for anything the tree snapshot described, an `lstat` for the collapsed `ls-files --others` entries that carry no mode — to match the filesystem arm (`packages/resources/src/projection/crawl-source.ts`, *"A SYMLINK IS NOT A MEMBER"*) |
   | `git`, identity minting | **TWO distinct ids** where a symlink and its target are *both* tracked | `canonicalPathFor` short-circuits to `gitTracker.indexPathFor()` for any tracked path and never reaches `realPathOrSelf` (`packages/resources/src/projection/identity.ts:106-115`), so the link path and the target path each mint their own id — defeating the "a symlink and its target share one identity" consequence that same docstring declares at `:98-100` |
 
   Consequence for findings: a broken committed symlink that the incumbent walk reports as

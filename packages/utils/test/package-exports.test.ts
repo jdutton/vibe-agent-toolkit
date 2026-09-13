@@ -1,9 +1,9 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
 import { resolveFromImportMeta } from '../src/fs.js';
-import { safePath } from '../src/path.js';
+import { safePath, toForwardSlash } from '../src/path.js';
 
 /**
  * A value in the `exports` map: either a bare target, or conditions.
@@ -29,6 +29,43 @@ function asConditions(entry: ExportEntry | undefined): { types?: string; import?
 const manifestPath = resolveFromImportMeta(import.meta.url, '..', 'package.json');
 // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from import.meta.url
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Manifest;
+
+/** What `files: ["dist"]` publishes. */
+const distDir = resolveFromImportMeta(import.meta.url, '..', 'dist');
+
+/**
+ * The `src/` file a compiled output was emitted from.
+ *
+ * @param distRelative - Path of an output, relative to `dist/`, forward slashes
+ * @returns The source path relative to `src/`, or `null` for a non-module file
+ */
+function sourceOf(distRelative: string): string | null {
+  for (const suffix of ['.d.ts', '.js']) {
+    if (distRelative.endsWith(suffix)) {
+      return `${distRelative.slice(0, -suffix.length)}.ts`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Compiled outputs that no source file backs.
+ *
+ * @param distRelatives - Every path under `dist/`, relative and forward-slashed
+ * @param hasSource - Whether a `src/`-relative path exists
+ * @returns The orphaned outputs, sorted, so a failure names them
+ */
+function orphanedOutputs(
+  distRelatives: string[],
+  hasSource: (srcRelative: string) => boolean,
+): string[] {
+  return distRelatives
+    .filter((relative) => {
+      const source = sourceOf(relative);
+      return source !== null && !hasSource(source);
+    })
+    .sort((a, b) => a.localeCompare(b));
+}
 
 describe('utils package manifest', () => {
   it('declares the Node floor so adopters get an install-time signal', () => {
@@ -163,14 +200,13 @@ describe('utils package manifest', () => {
   });
 
   /**
-   * Every entry module must have a source file. `tsc --build --clean` cannot
-   * delete an output whose source is already gone — the regenerated
-   * `.tsbuildinfo` no longer lists it — so a deleted entry leaves its compiled
-   * `.js` behind in `dist/`, and `files: ["dist"]` then ships a module with no
-   * source. That is exactly what happened when `./project` was withdrawn: the
-   * key left the manifest, `dist/project.js` kept shipping, and the tarball
-   * carried a room with its door bricked up for a full release cycle. An adopter
-   * found it, not us. Nothing else in the build guards this.
+   * Every entry module must have a source file.
+   *
+   * This is the FORWARD direction — it iterates the keys the manifest declares.
+   * It catches a key pointing at a module that was never written or was renamed
+   * out from under it, and it cannot, by construction, catch a key that is GONE.
+   * The reverse direction is `ships no compiled module whose source has been
+   * withdrawn` below, and that is the one the `./project` incident needed.
    */
   it('every dist-backed entry resolves to a real source file', () => {
     const srcDir = resolveFromImportMeta(import.meta.url, '..', 'src');
@@ -186,5 +222,81 @@ describe('utils package manifest', () => {
     }
 
     expect(missing).toEqual([]);
+  });
+
+  /**
+   * The tarball ships no room whose door is bricked up.
+   *
+   * `tsc --build --clean` cannot delete an output whose source is already gone —
+   * the regenerated `.tsbuildinfo` no longer lists it — and the root's
+   * `build:packages` runs a bare `tsc --build`, which emits into every package's
+   * `dist/` without the `rimraf` the per-package script does. So a withdrawn
+   * module leaves its compiled `.js` and `.d.ts` behind, and `files: ["dist"]`
+   * then publishes a module with no source. That is exactly what happened when
+   * `./project` was withdrawn: the key left the manifest, `dist/project.js` kept
+   * shipping, and the tarball carried it for a full release cycle. An adopter
+   * found it, not us.
+   *
+   * ⛔ The forward test above could never have found it. It walks the keys that
+   * EXIST, and a withdrawal is precisely the absence of a key — the incident is
+   * structurally invisible from that side. This test asks the opposite question,
+   * of the artifact rather than of the manifest, so it needs no list of what
+   * used to be there and has nothing to keep in sync. It sees the withdrawal of
+   * an internal module too, not only of an exported entry: `src/template.ts`,
+   * `src/template-entry.ts` and all of `src/link-auth/` left in this same
+   * release, and only one of them was ever an export key.
+   */
+  it('ships no compiled module whose source has been withdrawn', () => {
+    const srcDir = resolveFromImportMeta(import.meta.url, '..', 'src');
+    expect(
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from import.meta.url
+      existsSync(distDir),
+      `${distDir} does not exist — build the package before running this test`,
+    ).toBe(true);
+
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from import.meta.url
+    const outputs = readdirSync(distDir, { recursive: true, withFileTypes: false })
+      .map((entry) => toForwardSlash(String(entry)));
+
+    const orphans = orphanedOutputs(outputs, (relative) =>
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from srcDir
+      existsSync(safePath.join(srcDir, relative)),
+    );
+
+    expect(orphans).toEqual([]);
+  });
+});
+
+/**
+ * The detector above, exercised on inputs it can be given deliberately.
+ *
+ * Reading the real `dist/` proves the package is currently clean; it cannot
+ * prove the reading would notice if it were not, because a correct build leaves
+ * nothing to notice. These cases supply the orphan the filesystem will not.
+ */
+describe('orphanedOutputs', () => {
+  it('reports both artifacts of a module whose source is gone', () => {
+    expect(
+      orphanedOutputs(
+        ['path.js', 'path.d.ts', 'template.js', 'template.d.ts'],
+        (relative) => relative === 'path.ts',
+      ),
+    ).toEqual(['template.d.ts', 'template.js']);
+  });
+
+  it('reports a withdrawn module nested in a subdirectory', () => {
+    expect(orphanedOutputs(['link-auth/resolve.js'], () => false)).toEqual([
+      'link-auth/resolve.js',
+    ]);
+  });
+
+  it('reports nothing when every output is backed by a source file', () => {
+    expect(orphanedOutputs(['fs.js', 'fs.d.ts'], () => true)).toEqual([]);
+  });
+
+  it('leaves source maps to the module they belong to', () => {
+    // A map is not a module: flagging `template.js` already names the problem,
+    // and `.js.map` / `.d.ts.map` have no `.ts` of their own to look for.
+    expect(orphanedOutputs(['template.js.map', 'template.d.ts.map'], () => false)).toEqual([]);
   });
 });

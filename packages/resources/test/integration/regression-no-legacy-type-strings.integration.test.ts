@@ -106,7 +106,7 @@ describe('Regression guard: no legacy lowercase type strings emitted as codes', 
     const config = await writeFixtureProject(suite.tempDir);
 
     const registry = new ResourceRegistry({ config, baseDir: suite.tempDir });
-    await registry.crawl({ baseDir: suite.tempDir });
+    await registry.crawl({ unreadable: 'refuse', baseDir: suite.tempDir });
     const result = await registry.validate();
 
     // The fixture must actually produce issues, otherwise the guard is vacuous.

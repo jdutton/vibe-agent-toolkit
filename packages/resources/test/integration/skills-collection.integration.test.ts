@@ -55,6 +55,7 @@ See [documentation](../../docs/README.md) for details.
 
       // Crawl and validate
       await suite.registry.crawl({
+        unreadable: 'refuse',
         baseDir: suite.tempDir,
         include: ['**/*.md'],
       });
@@ -89,6 +90,7 @@ See [missing file](../../docs/MISSING.md) for more.
 
       // Crawl and validate
       await suite.registry.crawl({
+        unreadable: 'refuse',
         baseDir: suite.tempDir,
         include: ['**/*.md'],
       });
@@ -139,6 +141,7 @@ This should fail validation.
 
       // Crawl all markdown files
       await suite.registry.crawl({
+        unreadable: 'refuse',
         baseDir: suite.tempDir,
         include: ['**/*.md'],
       });
@@ -192,6 +195,7 @@ This should fail pattern validation.
 
       // Crawl all markdown files
       await suite.registry.crawl({
+        unreadable: 'refuse',
         baseDir: suite.tempDir,
         include: ['**/*.md'],
       });
@@ -248,6 +252,7 @@ See [missing file](../../docs/MISSING.md) for more.
 
       // Crawl all markdown files
       await suite.registry.crawl({
+        unreadable: 'refuse',
         baseDir: suite.tempDir,
         include: ['**/*.md'],
       });

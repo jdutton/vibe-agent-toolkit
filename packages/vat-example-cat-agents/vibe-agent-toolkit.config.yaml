@@ -12,7 +12,12 @@ skills:
     targets: ['claude-code']
   config:
     vat-example-cat-agents:
-      linkFollowDepth: 0
+      # 1, not 0: SKILL.md was split for progressive disclosure, and a reference
+      # file the bundle does not contain is a pointer to nothing. Depth 1 bundles
+      # the sibling reference docs; the `../agents/` pointers the header comment
+      # describes stay out through excludeReferencesFromBundle below, which is the
+      # mechanism that actually expresses "text pointer, not bundled content".
+      linkFollowDepth: 1
       excludeReferencesFromBundle:
         rules:
           - patterns: ["**/agents/**"]

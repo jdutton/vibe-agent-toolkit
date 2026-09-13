@@ -97,6 +97,114 @@ describe('resolveLocalHref', () => {
   });
 });
 
+/** Resolve `href` from `SOURCE` and return the path, failing loudly on any other kind. */
+function resolvedPathOf(href: string, projectRoot?: string): string {
+  const result = resolveLocalHref(href, SOURCE, projectRoot);
+  if (result.kind !== 'resolved') throw new Error(`${EXPECTED_RESOLVED} for ${href}, got ${result.kind}`);
+  return result.resolvedPath;
+}
+
+/** Whether a resolved path still carries a `.` or `..` segment — the shape `judgePath` refuses. */
+function carriesDotSegment(resolvedPath: string): boolean {
+  return toForwardSlash(resolvedPath).split('/').some((segment) => segment === '.' || segment === '..');
+}
+
+describe('resolveLocalHref separator normalisation', () => {
+  // 🪤 On POSIX `path.resolve('/project/docs', '..\\outside\\secret.md')` is ONE
+  // filename — the backslashes are ordinary bytes — so the result was
+  // `/project/docs/..\outside\secret.md`, which `safePath` then forward-slashed
+  // AFTER resolution into `/project/docs/../outside/secret.md`: a "resolved"
+  // path still carrying `..`. `spellingWalkRoot` picked `/project/docs`,
+  // `judgePath` saw a leading `..` and threw its programming-error guard, and
+  // `vat resources validate` exited 2 with the developer's absolute path in the
+  // message. The same href with forward slashes validated at exit 0.
+  //
+  // A backslash IS a path separator in an href: the WHATWG URL parser treats
+  // `\` as `/` for every special scheme, so a browser following
+  // `[x](..\outside\secret.md)` fetches `../outside/secret.md`. Resolving it as
+  // a filename character disagreed with every renderer.
+  const SEPARATOR_ROWS: ReadonlyArray<readonly [backslash: string, forward: string]> = [
+    [String.raw`..\outside\secret.md`, '../outside/secret.md'],
+    [String.raw`.\sub\target.md`, './sub/target.md'],
+    [String.raw`sub\..\..\outside\x.md`, 'sub/../../outside/x.md'],
+    [String.raw`./sub\target.md`, './sub/target.md'],
+    [String.raw`..\..\..\..\..\..\etc\hosts`, '../../../../../../etc/hosts'],
+  ];
+
+  it.each(SEPARATOR_ROWS)('resolves %j exactly as %j', (backslash, forward) => {
+    expect(resolvedPathOf(backslash)).toBe(resolvedPathOf(forward));
+  });
+
+  it.each(SEPARATOR_ROWS)('leaves no dot segment in the resolution of %j', (backslash) => {
+    // The invariant the judge's guard depends on. A result with `..` still in
+    // it is not resolved, whatever `path.resolve` was asked.
+    expect(carriesDotSegment(resolvedPathOf(backslash))).toBe(false);
+  });
+
+  it('keeps a percent-encoded backslash in its segment — an encoded separator is a byte in the name', () => {
+    // `%5C` would decode to `\` AFTER the separator pass, and `safePath.resolve`
+    // forward-slashes the RESULT — which is exactly how the `..` survived the
+    // first time. It gets the same treatment as `%2F` (below): kept as written,
+    // so it names a file that does not exist rather than a boundary.
+    const resolved = resolvedPathOf('..%5Coutside%5Csecret.md');
+    expect(resolved).toBe(safePath.resolve(SOURCE_DIR, '..%5Coutside%5Csecret.md'));
+    expect(carriesDotSegment(resolved)).toBe(false);
+  });
+
+  it('leaves the anchor alone — a backslash after `#` is fragment text, not a separator', () => {
+    const result = resolveLocalHref(String.raw`.\sub\target.md#sec\tion`, SOURCE);
+    if (result.kind !== 'resolved') throw new Error(EXPECTED_RESOLVED);
+    expect(result.resolvedPath).toBe(safePath.resolve(SOURCE_DIR, 'sub/target.md'));
+    expect(result.anchor).toBe(String.raw`sec\tion`);
+  });
+
+  it('reads a backslash-rooted href as the RFC 3986 §4.2 absolute-path form', () => {
+    const result = resolveLocalHref(String.raw`\docs\foo.md`, SOURCE, '/project');
+    expect(result.kind).toBe('resolved');
+    if (result.kind !== 'resolved') return;
+    expect(result.resolvedPath).toBe(safePath.resolve('/project', 'docs/foo.md'));
+  });
+});
+
+describe('resolveLocalHref decodes per path segment', () => {
+  // RFC 3986 §2.2: a percent-encoded reserved character is NOT equivalent to the
+  // character itself. `%2F` inside a segment is a `/` in the file's NAME, which
+  // no filesystem can hold — GitHub and every browser 404 `./sub%2Ftarget.md`
+  // while VAT, decoding the whole href before splitting it, validated it green
+  // against `sub/target.md`. The only link this ever affected was a broken one
+  // reported as fine.
+  it('keeps an encoded `/` inside its segment instead of splitting on it', () => {
+    expect(resolvedPathOf('./sub%2Ftarget.md')).toBe(safePath.resolve(SOURCE_DIR, 'sub%2Ftarget.md'));
+    expect(resolvedPathOf('./sub%2ftarget.md')).toBe(safePath.resolve(SOURCE_DIR, 'sub%2ftarget.md'));
+    expect(resolvedPathOf('./a%2Fb/c.md')).toBe(safePath.resolve(SOURCE_DIR, 'a%2Fb/c.md'));
+  });
+
+  it('still decodes an unreserved octet inside a segment', () => {
+    expect(resolvedPathOf('./sub/tar%20get.md')).toBe(safePath.resolve(SOURCE_DIR, 'sub/tar get.md'));
+  });
+
+  it('still decodes `%2e%2e` to a dot segment, as RFC 3986 §2.3 requires', () => {
+    // `.` is unreserved, so `%2e%2e` IS `..` — the escape gate downstream
+    // (OKF's `leavesRootAsWritten`) sees the same resolved path either way.
+    expect(resolvedPathOf('./sub/%2e%2e/%2e%2e/outside/secret.md')).toBe(resolvedPathOf('../outside/secret.md'));
+    expect(resolvedPathOf('%2E%2E/x.md')).toBe(resolvedPathOf('../x.md'));
+  });
+
+  it('falls back per segment on malformed encoding, decoding the segments that are well-formed', () => {
+    expect(resolvedPathOf('My%20Folder/bad%ZZ.md')).toBe(safePath.resolve(SOURCE_DIR, 'My Folder/bad%ZZ.md'));
+  });
+
+  it('does not read a leading `%2F` as the root-anchored form', () => {
+    // Root-anchoring is decided on the href AS WRITTEN. An encoded `/` at the
+    // front is a segment that begins with a literal `/` — unresolvable, and
+    // reported by the lanes as missing rather than silently re-rooted.
+    const result = resolveLocalHref('%2FREADME.md', SOURCE, '/project');
+    expect(result.kind).toBe('resolved');
+    if (result.kind !== 'resolved') return;
+    expect(result.resolvedPath).toBe(safePath.resolve(SOURCE_DIR, '%2FREADME.md'));
+  });
+});
+
 describe('resolveLocalHref leading-/ behavior', () => {
   const PROJECT_ROOT = '/proj';
   const SOURCE_IN_PROJECT = '/proj/docs/sub/page.md';

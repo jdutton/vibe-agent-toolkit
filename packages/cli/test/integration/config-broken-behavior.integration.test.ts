@@ -147,7 +147,7 @@ Body content for a skill under a broken governing config.
   beforeEach(() => resetLoadedConfigCache());
 
   it('resolveSkillPackagingConfig throws ConfigLoadError (review/skill-test path surfaces it)', async () => {
-    await expect(resolveSkillPackagingConfig(skillPath)).rejects.toBeInstanceOf(ConfigLoadError);
+    await expect(resolveSkillPackagingConfig(skillPath, 'refuse')).rejects.toBeInstanceOf(ConfigLoadError);
   });
 
   it('vat audit tolerates the broken config and still validates the skill (falls back, no abort)', async () => {

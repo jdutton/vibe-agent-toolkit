@@ -44,6 +44,9 @@ Output:
   <--out>/<UTC-date>-<vat-short-sha>/
     summary.yaml          # index: per-plugin status + totals
     <name>-audit.yaml     # full audit output per plugin
+                          #   results: one entry per audited file; issues: run-level
+                          #   findings. An audit over 0 files is audit.status: error
+                          #   with one RESOURCE_CHECK_BROKEN, never a clean row.
     <name>-review.md      # full skill-review output (only with --with-review)
 
 Exit codes:

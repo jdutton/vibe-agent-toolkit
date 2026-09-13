@@ -3,10 +3,13 @@
  * Verifies our reimplementation of Claude Code's permission matching logic.
  */
 
+import path from 'node:path';
+
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { describe, expect, it } from 'vitest';
 
+import { compilePathPattern, matchesPathPattern } from '../src/settings/path-pattern.js';
 import {
   classifyBashRule,
   isSubsumedBy,
@@ -17,6 +20,8 @@ import {
   matchesPermissionRule,
   parseBashRuleContent,
   parsePermissionRule,
+  relativePathUnderRoot,
+  ruleConstrainsDeclaration,
 } from '../src/settings/permission-matcher.js';
 
 // Every suite from here to the lane suites at the bottom of this file pins the
@@ -69,6 +74,10 @@ const LS_PREFIX = 'Bash(ls:*)';
 const LS_GLUED = 'Bash(ls*)';
 const LS_LA = 'ls -la';
 const LSOF = 'lsof';
+const RM_RF_TMP = 'rm -rf tmp';
+// The home-relative spellings the permissions documentation uses.
+const READ_SSH_ALL = 'Read(~/.ssh/**)';
+const READ_SSH_KEY = 'Read(~/.ssh/id_rsa)';
 
 describe('parsePermissionRule', () => {
   it('parses bare tool name', () => {
@@ -584,14 +593,123 @@ describe('wildcard matching cost is linear in the input', () => {
   });
 
   // 🚩 The blindness guard for the ratio above: a `nestedRegions` that returned
-  // nothing would be linear and pass. The deny lane still has to find the
-  // command at the bottom of the nest.
-  it('still reaches a command nested thousands of regions deep', () => {
-    const nested = '('.repeat(3000) + 'rm -rf tmp' + ')'.repeat(3000);
-    expect(matchesDenyRule(BASH, nested, RM_STAR)).toBe(true);
-    expect(matchesDenyRule(BASH, '('.repeat(3000) + 'echo x' + ')'.repeat(3000), RM_STAR)).toBe(
-      false,
+  // nothing would be linear and pass. The deny lane still has to analyse the
+  // whole nest whenever the budget covers it — a `true` AND a `false` at a depth
+  // where nothing is dropped, so neither answer can be the constant one.
+  //
+  // ⚠️ The depth is 10 and that is deliberate. This shape's regions sum to
+  // roughly depth², against a budget linear in the command's length, so it stops
+  // being analysed in full somewhere past a depth of 13 — and past that point
+  // the lane FAILS CLOSED and answers `true` for everything, which would make
+  // both assertions below vacuous. See the budget suite for the other side.
+  it('analyses a nest in full at every depth the budget covers', () => {
+    const depth = 10;
+    expect(matchesDenyRule(BASH, '('.repeat(depth) + RM_RF_TMP + ')'.repeat(depth), RM_STAR))
+      .toBe(true);
+    expect(matchesDenyRule(BASH, '('.repeat(depth) + 'echo x' + ')'.repeat(depth), RM_STAR))
+      .toBe(false);
+  });
+
+  // 🚩 The same class one layer further down: the deny lane's READINGS. Each
+  // reduction drops one prefix and keeps the rest as a new string, so a chain
+  // of `k` `case` arms or wrappers yields `k` readings summing to ~k²/2
+  // characters. Measured on the shipped module, `(x) )×k echo z` against
+  // `Bash(rm *)`: k=1,000 → 27.5 ms, 4,000 → 430.5 ms, 16,000 → 6,458 ms (~15×
+  // per 4×). After the reading budget: 0.3 / 1.0 / 3.6 ms.
+  it('does not blow up on a chain of case arms in the deny lane', () => {
+    const command = (arms: number): string => 'x) '.repeat(arms) + 'echo z';
+    // The budget FAILS CLOSED past a chain nobody writes on purpose, so the
+    // timed calls both answer `true`; the answer at a real depth is pinned below.
+    expect(matchesDenyRule(BASH, command(12_000), RM_STAR)).toBe(true);
+    const ratio = costRatio(
+      () => {
+        matchesDenyRule(BASH, command(3000), RM_STAR);
+      },
+      () => {
+        matchesDenyRule(BASH, command(12_000), RM_STAR);
+      },
     );
+    expect(ratio).toBeLessThan(MAX_COST_RATIO_FOR_4X_INPUT);
+  });
+
+  // 🚩 The blindness guard for the ratio above, and the budget's SAFETY
+  // direction: a chain the budget covers is still read to the end — a `true`
+  // AND a `false` at a depth where nothing is dropped — and past it the lane
+  // answers `true` for everything rather than reading a partial chain as the
+  // whole. Measured: `(x) ` arms and `FOO=1 ` assignments fail closed from 14,
+  // `if ` from 13, and the two-reading wrapper `timeout -s KILL 30 ` from 8.
+  it('reads a reading chain in full at every length the budget covers, and fails closed past it', () => {
+    const arms = (count: number, body: string): string => 'x) '.repeat(count) + body;
+    expect(matchesDenyRule(BASH, arms(10, RM_RF_TMP), RM_STAR)).toBe(true);
+    expect(matchesDenyRule(BASH, arms(10, 'echo z'), RM_STAR)).toBe(false);
+    expect(matchesDenyRule(BASH, arms(14, 'echo z'), RM_STAR)).toBe(true);
+    const wrappers = (count: number, body: string): string => 'timeout -s KILL 30 '.repeat(count) + body;
+    expect(matchesDenyRule(BASH, wrappers(5, RM_RF_TMP), RM_STAR)).toBe(true);
+    expect(matchesDenyRule(BASH, wrappers(5, 'echo hi'), RM_STAR)).toBe(false);
+    expect(matchesDenyRule(BASH, wrappers(8, 'echo hi'), RM_STAR)).toBe(true);
+  });
+});
+
+// ============================================================================
+// The region budget's SAFETY direction
+// ============================================================================
+
+/**
+ * A nest `depth` regions deep whose `payload` sits in the own-text of the region
+ * at `level` — 0 being the OUTERMOST region, `depth - 1` the innermost.
+ *
+ * The level is the whole point. {@link closeRegion}'s budget is spent
+ * innermost-first, because regions close from the inside out, so the regions it
+ * drops are the OUTER ones — and an outer region's own text is a place a command
+ * can sit, outside every child.
+ */
+function nestWithPayloadAt(depth: number, level: number, payload: string): string {
+  const children = depth - level - 1;
+  const inner = '('.repeat(children) + ')'.repeat(children);
+  return `${'('.repeat(level + 1)} ${inner} ; ${payload} ${')'.repeat(level + 1)}`;
+}
+
+describe('the nested-region budget fails closed', () => {
+  // 🚩 THE FINDING, from the review: a sixty-odd character command, twenty-odd
+  // levels, and the payload in the OUTER region. `matchesDenyRule` answered
+  // `false` — an UNDER-REPORT, the direction this module's own header calls the
+  // unsafe one, reachable from a plugin's `allowed-tools:` content.
+  //
+  // The guard that existed put its command at the INNERMOST point, which is the
+  // one position the innermost-first spend always preserves, so it could not see
+  // this. A budget that drops work must drop it into `true`, never into `false`.
+  //
+  // Measured on the pre-fix module: `false` from 22 levels up, `true` below it.
+  // Both sides of that boundary are asserted, so a fix that merely MOVED it goes
+  // red rather than passing on the shallower row.
+  it.each([21, 22, 23])('reports a %i-level nest whose payload the budget drops', (depth) => {
+    const command = `x $( ${'('.repeat(depth)}${')'.repeat(depth)} ; ${RM_RF_ROOT} )`;
+    expect(matchesDenyRule(BASH, command, RM_STAR)).toBe(true);
+  });
+
+  // The mechanism rather than that one instance: the payload at EVERY level of
+  // the nest, at depths either side of where the budget binds. A spend that
+  // preserves only part of the nest has to be invisible in the ANSWER.
+  it('reports a denied command at every level of a nest, at every depth', () => {
+    for (const depth of [1, 3, 12, 23, 40, 200]) {
+      for (let level = 0; level < depth; level += 1) {
+        const command = nestWithPayloadAt(depth, level, RM_RF_ROOT);
+        expect(matchesDenyRule(BASH, command, RM_STAR), `depth=${depth} level=${level}`).toBe(true);
+      }
+    }
+  });
+
+  // …and what that costs, stated rather than discovered. Past the budget the
+  // lane cannot say what the command contains, so it says `true` — including for
+  // a command that contains nothing of the kind. This is also the blindness
+  // guard for the cost ratio above: a `nestedRegions` that emitted nothing would
+  // never exhaust its budget and would answer `false` here.
+  it('over-reports an innocent command once the budget is exhausted', () => {
+    const innocent = '('.repeat(3000) + 'echo x' + ')'.repeat(3000);
+    expect(matchesDenyRule(BASH, innocent, RM_STAR)).toBe(true);
+    // ⛔ The ALLOW lane is untouched: it never builds nested regions, so it has
+    // no budget to exhaust and must not start permitting on exhaustion.
+    expect(matchesAllowRule(BASH, innocent, RM_STAR)).toBe(false);
   });
 });
 
@@ -1379,5 +1497,422 @@ describe('matchesPathRule — an empty tool input', () => {
   // is not a blanket `false` for the whole path lane.
   it('still matches a real path under the same root', () => {
     expect(matchesPathRule(SECRETS_KEY, SECRETS_PATTERN, PLUGIN_DIR)).toBe(true);
+  });
+});
+
+const READ_ENV = 'Read(.env)';
+const READ_CLASS_NEGATED = 'Read(a[!b]c)';
+const READ_CLASS_RANGE = 'Read(a[a-c]d)';
+const READ_STAR = 'Read(*)';
+const READ_X = 'Read(x)';
+const READ_PARENT_X = 'Read(../x)';
+const READ_A_UP_B = 'Read(a/../b)';
+const READ_SRC_ALL = 'Read(./src/**)';
+const SSH_KEY_UNDER_HOME = '.ssh/id_rsa';
+
+/** The rule spellings whose path body is empty once the prefix table has read them. */
+const EMPTY_BODY_RULES = ['Read()', 'Read(/)', 'Read(//)', 'Read(~/)', 'Read(./)'] as const;
+
+describe('matchesPathRule — a rule with nothing after its prefix', () => {
+  // 🚩 `Read()`, `Read(/)`, `Read(//)`, `Read(~/)` and `Read(./)` all hand the
+  // matcher an empty pattern body, and an empty body compiled to a bare
+  // globstar: every one of them matched EVERY file, where the node-ignore
+  // semantics the matcher promises match nothing. Nobody has established what
+  // Claude Code does with `Read(~/)`, so the verdict is the promised one: a
+  // pattern naming no segment names no file.
+  it('matches nothing', () => {
+    for (const rule of EMPTY_BODY_RULES) {
+      const { content } = parsePermissionRule(rule);
+      expect(matchesPathRule(SECRETS_KEY, content ?? '', PLUGIN_DIR), rule).toBe(false);
+      for (const lane of LANES) {
+        expect(matchesPermissionRule('Read', SECRETS_KEY, rule, lane, PLUGIN_DIR), `${rule} ${lane}`).toBe(false);
+      }
+      expect(ruleConstrainsDeclaration(READ_ENV, rule, 'deny', PLUGIN_DIR), rule).toBe(false);
+      expect(ruleConstrainsDeclaration(rule, READ_ENV, 'deny', PLUGIN_DIR), rule).toBe(false);
+      // `isSubsumedBy` never subsumes a path rule with content; unchanged.
+      expect(isSubsumedBy(READ_ENV, rule), rule).toBe(false);
+    }
+  });
+
+  // The control: one more character after the prefix and the rule is live again.
+  it('still matches once the body names something', () => {
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, 'x'), './*', PLUGIN_DIR)).toBe(true);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, 'x'), '/*', PLUGIN_DIR)).toBe(true);
+  });
+});
+
+describe('matchesPathRule — a file NAMED with a leading `..`', () => {
+  // 🚩 `relative.startsWith('..')` was the "outside the root" test, and it also
+  // refused every file whose NAME begins with two dots: a deny `Read(*)`
+  // reported no conflict with a declaration naming `..secret`. Outside the
+  // root is `..` itself or a path that starts with `../`, nothing else.
+  it('matches a file under the root whose name starts with `..`', () => {
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '..foo'), '*', PLUGIN_DIR)).toBe(true);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '..secret'), '..secret', PLUGIN_DIR)).toBe(true);
+    expect(ruleConstrainsDeclaration('Read(..secret)', READ_STAR, 'deny', PLUGIN_DIR)).toBe(true);
+  });
+
+  it('still refuses a path that leaves the root', () => {
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '../x'), '*', PLUGIN_DIR)).toBe(false);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '..'), '*', PLUGIN_DIR)).toBe(false);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '../..foo'), '*', PLUGIN_DIR)).toBe(false);
+  });
+});
+
+describe('relativePathUnderRoot — a file on another drive', () => {
+  // 🚩 `path.win32.relative` across drive letters (or from a drive to a UNC
+  // share) returns the target's ABSOLUTE path, not a `..`-prefixed one. It is
+  // neither `..`, `../…` nor empty, so the outside-the-root guard passed it to
+  // the matcher as if it were a path under the root, where `**` matched it:
+  // deny `Read(~/**)` with `~` on C: reported a conflict with a plugin on D:
+  // that declared `Read(./src/**)`, and the reverse pair likewise. GitHub's
+  // Windows runners are exactly that layout (`C:\Users\runneradmin` against a
+  // `D:\a\…` workspace). Driven through `path.win32` so the CI leg that is not
+  // Windows pins it too.
+  const win = path.win32;
+  const HOME = String.raw`C:\Users\me`;
+
+  it('refuses a path on another drive, or on a UNC share', () => {
+    expect(relativePathUnderRoot(HOME, String.raw`D:\plugin\src\x`, win)).toBeUndefined();
+    expect(relativePathUnderRoot(String.raw`D:\plugin`, String.raw`C:\Users\me\.ssh\id_rsa`, win)).toBeUndefined();
+    expect(relativePathUnderRoot(HOME, String.raw`\\server\share\x`, win)).toBeUndefined();
+  });
+
+  it('still reads a path under the root, forward-slashed and case-blind, on the same drive', () => {
+    expect(relativePathUnderRoot(HOME, String.raw`C:\Users\me\.ssh\id_rsa`, win)).toBe(SSH_KEY_UNDER_HOME);
+    expect(relativePathUnderRoot(HOME, String.raw`c:\users\ME\x`, win)).toBe('x');
+    expect(relativePathUnderRoot(HOME, String.raw`.ssh\id_rsa`, win)).toBe(SSH_KEY_UNDER_HOME);
+    expect(relativePathUnderRoot(HOME, HOME, win)).toBe('');
+    expect(relativePathUnderRoot(HOME, String.raw`C:\Users\other`, win)).toBeUndefined();
+    expect(relativePathUnderRoot(HOME, String.raw`C:\Users\me\..`, win)).toBeUndefined();
+  });
+
+  it('answers the same on POSIX', () => {
+    const posix = path.posix;
+    expect(relativePathUnderRoot('/home/me', `/home/me/${SSH_KEY_UNDER_HOME}`, posix)).toBe(SSH_KEY_UNDER_HOME);
+    expect(relativePathUnderRoot('/home/me', SSH_KEY_UNDER_HOME, posix)).toBe(SSH_KEY_UNDER_HOME);
+    expect(relativePathUnderRoot('/home/me', '/proj/src/x', posix)).toBeUndefined();
+    expect(relativePathUnderRoot('/home/me', '/home/me/..foo', posix)).toBe('..foo');
+  });
+});
+
+describe('ruleConstrainsDeclaration — a `..` segment in a rule or declaration', () => {
+  // 🚩 The path side of a match is resolved (`safePath.resolve`), so a `..` in
+  // it collapses; the pattern side kept `..` as a literal segment, which no
+  // resolved path carries. The text witness went through `join` and lost its
+  // `..`, the compiled witness kept it, and `matchesPathRule` refused both —
+  // so a rule spelled with `..` constrained nothing and did not contain
+  // itself: `Read(../x)` vs `Read(../x)` → false, `Read(a/../b)` vs `Read(*)`
+  // → false. A rule path is now read the way a file path is: `..` climbs.
+  it('reads `..` in a pattern the way it is read in a path', () => {
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, 'b'), 'a/../b', PLUGIN_DIR)).toBe(true);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, 'b'), './a/../b', PLUGIN_DIR)).toBe(true);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, 'b'), '/a/../b', PLUGIN_DIR)).toBe(true);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, 'a/b'), 'a/../b', PLUGIN_DIR)).toBe(false);
+    // Climbing out of the root moves the root, so the sibling IS reachable.
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '../x'), '../x', PLUGIN_DIR)).toBe(true);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '../y'), '../x', PLUGIN_DIR)).toBe(false);
+    expect(matchesPathRule(safePath.join(PLUGIN_DIR, '../x'), '../**', PLUGIN_DIR)).toBe(true);
+  });
+
+  it('reports an identical pair, and a pair that meet once `..` is resolved, as a conflict', () => {
+    const rows: ReadonlyArray<readonly [decl: string, rule: string]> = [
+      [READ_PARENT_X, READ_PARENT_X],
+      ['Read(./a/../b)', 'Read(./a/../b)'],
+      [READ_A_UP_B, READ_STAR],
+      [READ_A_UP_B, 'Read(b)'],
+      ['Read(b)', READ_A_UP_B],
+      ['Read(**/../x)', READ_STAR],
+      [READ_SRC_ALL, 'Read(./src/../src/index.ts)'],
+    ];
+    for (const [decl, rule] of rows) {
+      expect(ruleConstrainsDeclaration(decl, rule, 'deny', PLUGIN_DIR), `${decl} vs ${rule}`).toBe(true);
+    }
+  });
+
+  it('still reports no conflict where the resolved paths are disjoint', () => {
+    const rows: ReadonlyArray<readonly [decl: string, rule: string]> = [
+      [READ_A_UP_B, 'Read(a/**)'],
+      [READ_PARENT_X, 'Read(./x)'],
+      ['Read(./x)', READ_PARENT_X],
+    ];
+    for (const [decl, rule] of rows) {
+      expect(ruleConstrainsDeclaration(decl, rule, 'deny', PLUGIN_DIR), `${decl} vs ${rule}`).toBe(false);
+    }
+  });
+});
+
+// ============================================================================
+// The path lane's cost — the same class as the Bash lane's, one layer over
+// ============================================================================
+
+/**
+ * A `Read`/`Edit` declaration carrying wildcards separated by literals, the
+ * shape whose regex form backtracks polynomially in the path's length.
+ */
+const starryDeclaration = (stars: number): string => `Read(${'a*'.repeat(stars)}b)`;
+
+/** A deny rule naming a path of `n` `a`s and a tail the declaration refuses. */
+const longPathRule = (n: number, tail: string): string => `Read(./${'a'.repeat(n)}${tail})`;
+
+describe('path-lane matching cost is linear in the input', () => {
+  // 🚩 THE FINDING. `ruleConstrainsDeclaration`'s witness direction compiles the
+  // plugin-authored declaration as a PATTERN and runs it over the org rule's
+  // path. Both are files `vat audit --compat --settings` reads from ONE tree,
+  // and the pattern compiler in use turned each `*` into a backtracking
+  // `[^/]*`. Measured on the shipped module, ten stars against a path of `n`
+  // `a`s: n=30 → 303 ms, n=40 → 2,604 ms, n=50 → 29,158 ms (~10× per +10
+  // characters); an end-to-end `vat audit --compat --settings` on a 21-character
+  // declaration and a 44-character rule took 11.1 s against a 0.24 s control.
+  it('does not blow up when a declaration with many wildcards is the pattern', () => {
+    const stars = 10;
+    // 8 and 32 `a`s — 4× the part that grows.
+    const sizes = [8, 32] as const;
+    // The blindness guard: the timed pair has to be the shape the finding
+    // measured — a path the declaration REFUSES (the backtracking case), and one
+    // it accepts, so a matcher that answered `false` in O(1) fails here.
+    expect(ruleConstrainsDeclaration(starryDeclaration(stars), longPathRule(32, 'c'), 'deny', PLUGIN_DIR))
+      .toBe(false);
+    expect(ruleConstrainsDeclaration(starryDeclaration(stars), longPathRule(32, 'b'), 'deny', PLUGIN_DIR))
+      .toBe(true);
+    for (const tail of ['c', 'b']) {
+      expectLinearCost(
+        () => {
+          ruleConstrainsDeclaration(starryDeclaration(stars), longPathRule(sizes[0], tail), 'deny', PLUGIN_DIR);
+        },
+        () => {
+          ruleConstrainsDeclaration(starryDeclaration(stars), longPathRule(sizes[1], tail), 'deny', PLUGIN_DIR);
+        },
+      );
+    }
+  });
+
+  // The rule is attacker-supplied too, so the honest input is one where the
+  // pattern and the path grow together — a ratio blind to a fixed star count
+  // is not blind to this.
+  it('stays linear when the pattern and the path grow together', () => {
+    const pattern = (n: number): string => `${'a*'.repeat(n)}b`;
+    const path = (n: number): string => 'a'.repeat(n) + 'c';
+    expect(matchesPathRule(path(1000), pattern(1000), PLUGIN_DIR)).toBe(false);
+    expect(matchesPathRule('a'.repeat(1000) + 'b', pattern(1000), PLUGIN_DIR)).toBe(true);
+    expectLinearCost(
+      () => {
+        matchesPathRule(path(250), pattern(250), PLUGIN_DIR);
+      },
+      () => {
+        matchesPathRule(path(1000), pattern(1000), PLUGIN_DIR);
+      },
+    );
+  });
+
+  // The other direction has had the mirror exposure all along: the org RULE as
+  // the pattern over the declaration's path.
+  it('does not blow up when a rule with many wildcards is the pattern', () => {
+    const rule = `Read(${'a*'.repeat(10)}b)`;
+    const declaration = (n: number): string => `Read(./${'a'.repeat(n)}c)`;
+    expect(ruleConstrainsDeclaration(declaration(32), rule, 'deny', PLUGIN_DIR)).toBe(false);
+    expectLinearCost(
+      () => {
+        ruleConstrainsDeclaration(declaration(8), rule, 'deny', PLUGIN_DIR);
+      },
+      () => {
+        ruleConstrainsDeclaration(declaration(32), rule, 'deny', PLUGIN_DIR);
+      },
+    );
+  });
+
+  // 🚩 COMPILE, not match. The three ratios above time the scan over a pattern
+  // whose compile is trivial, and the module header's "no input can push it
+  // past O(pattern × path)" was true of the scan only: `parseClass` searched
+  // from each `[` to the END of the segment for a `]`, and an unterminated `[`
+  // advanced one character to the next `[`, which searched to the end again.
+  // Measured on the shipped module: 5,000 `[` → 85 ms, 10,000 → 316 ms, 20,000
+  // → 1,279 ms, 40,000 → 5,855 ms (~4× per doubling), and one 40 KB
+  // `allowed-tools: Read([[[[…)` entry cost 12–18 s PER deny rule through
+  // `ruleConstrainsDeclaration`. The Bash lane at the same size: 0.1 ms.
+  //
+  // ⛔ `lastIndexOf(']')` once per segment is NOT the fix, and the second shape
+  // here is why: `[\]` repeated puts a `]` at the very end, so every `[` sits
+  // before it and every scan still runs to the end. The property is that each
+  // character is scanned a bounded number of times, whatever comes after it.
+  it('compiles a run of unterminated `[` in linear time', () => {
+    // Each unit, and the one path segment it compiles to match.
+    const shapes: ReadonlyArray<readonly [unit: string, member: string]> = [
+      ['[', '['],
+      [String.raw`[\]`, '[]'],
+    ];
+    const sizes = [1000, 4000] as const;
+    for (const [unit, member] of shapes) {
+      const pattern = (n: number): string => unit.repeat(n);
+      // The blindness guard: the compiled pattern is live and every `[` is a
+      // literal, so it matches exactly its own text and nothing shorter.
+      const compiled = compilePathPattern(pattern(sizes[1]));
+      expect(matchesPathPattern(compiled, member.repeat(sizes[1])), unit).toBe(true);
+      expect(matchesPathPattern(compiled, member.repeat(sizes[1] - 1)), unit).toBe(false);
+      expectLinearCost(
+        () => {
+          compilePathPattern(pattern(sizes[0]));
+        },
+        () => {
+          compilePathPattern(pattern(sizes[1]));
+        },
+      );
+    }
+  });
+
+  // The attacker-reachable surface, end to end: a SKILL.md declaration made of
+  // `[` against the bare-ish deny rule an org actually writes, and the reverse.
+  it('does not blow up when a declaration or a rule is a run of `[`', () => {
+    const brackets = (n: number): string => `Read(${'['.repeat(n)})`;
+    const sizes = [1000, 4000] as const;
+    expect(ruleConstrainsDeclaration(brackets(sizes[1]), READ_STAR, 'deny', PLUGIN_DIR)).toBe(true);
+    expect(ruleConstrainsDeclaration(READ_X, brackets(sizes[1]), 'deny', PLUGIN_DIR)).toBe(false);
+    expectLinearCost(
+      () => {
+        ruleConstrainsDeclaration(brackets(sizes[0]), READ_STAR, 'deny', PLUGIN_DIR);
+      },
+      () => {
+        ruleConstrainsDeclaration(brackets(sizes[1]), READ_STAR, 'deny', PLUGIN_DIR);
+      },
+    );
+    expectLinearCost(
+      () => {
+        ruleConstrainsDeclaration(READ_X, brackets(sizes[0]), 'deny', PLUGIN_DIR);
+      },
+      () => {
+        ruleConstrainsDeclaration(READ_X, brackets(sizes[1]), 'deny', PLUGIN_DIR);
+      },
+    );
+  });
+});
+
+// ============================================================================
+// Both sides of a path containment read the same prefix table
+// ============================================================================
+
+describe('ruleConstrainsDeclaration — path spellings', () => {
+  // 🚩 `~/`, `//`, `/` and `./` were interpreted on the PATTERN side only. The
+  // other side of each containment was handed across as a file path and
+  // resolved verbatim, so `~/.ssh/id_rsa` became a literal `~` directory under
+  // the root and `Read(~/.ssh/**)` did not contain ITSELF. Every row here is a
+  // spelling Claude Code's own documentation uses.
+  it('reports the identical rule, and a narrowing of it, as a conflict', () => {
+    const rows: ReadonlyArray<readonly [decl: string, rule: string]> = [
+      [READ_SSH_ALL, READ_SSH_ALL],
+      [READ_SSH_ALL, READ_SSH_KEY],
+      [READ_SSH_KEY, READ_SSH_ALL],
+      ['Edit(~/.aws/**)', 'Edit(~/.aws/credentials)'],
+      ['Read(~/**)', READ_SSH_KEY],
+      ['Read(/etc/**)', 'Read(/etc/passwd)'],
+      ['Read(//etc/**)', 'Read(//etc/passwd)'],
+      ['Read(/src/**)', 'Read(./src/index.ts)'],
+      [READ_SRC_ALL, 'Read(/src/index.ts)'],
+      ['Read(src/**)', 'Read(./src/index.ts)'],
+    ];
+    for (const [decl, rule] of rows) {
+      expect(ruleConstrainsDeclaration(decl, rule, 'deny', PLUGIN_DIR), `${decl} vs ${rule}`).toBe(true);
+    }
+  });
+
+  // The controls: a home-relative path is not under the project, and the
+  // project is not under `~/.ssh`. The over-reports the old resolution produced
+  // — `./**` matching a literal `~` directory — go with the under-reports.
+  it('reports no conflict between unrelated roots', () => {
+    const rows: ReadonlyArray<readonly [decl: string, rule: string]> = [
+      ['Read(./out/**)', READ_SSH_ALL],
+      ['Read(./**)', READ_SSH_ALL],
+      [READ_SSH_ALL, 'Read(./secrets/**)'],
+      [READ_SSH_ALL, 'Read(~/.aws/**)'],
+      ['Read(/etc/**)', 'Read(//etc/passwd)'],
+    ];
+    for (const [decl, rule] of rows) {
+      expect(ruleConstrainsDeclaration(decl, rule, 'deny', PLUGIN_DIR), `${decl} vs ${rule}`).toBe(false);
+    }
+  });
+});
+
+describe('ruleConstrainsDeclaration — a witness drawn from the compiled pattern', () => {
+  // 🚩 The witness of a path rule was its RAW text read as a literal file path.
+  // That is a member of the rule's own extension for `*`, `**` and `?` only
+  // because `*` and `?` match themselves as characters; a rule holding `[…]` or
+  // a `\` escape was NOT a member of itself, so an identical pair reported no
+  // conflict in either direction. The witness is now materialised from the
+  // compiled tokens, so every pattern is a member of itself.
+  it('reports an identical pair holding a class or an escape as a conflict, both ways round', () => {
+    for (const rule of [READ_CLASS_NEGATED, String.raw`Read(a\*c)`, READ_CLASS_RANGE, 'Read(**/x[0-9].env)', 'Read(./a[!b]c)', 'Read(~/x[0-9]/**)']) {
+      expect(ruleConstrainsDeclaration(rule, rule, 'deny', PLUGIN_DIR), rule).toBe(true);
+      expect(ruleConstrainsDeclaration(rule, rule, 'allow', PLUGIN_DIR), rule).toBe(true);
+    }
+  });
+
+  // Both sides are asked through their witnesses, so a declaration NARROWER
+  // than the rule is reached even when its text is not a path the rule matches.
+  it('reports a declaration whose class narrows the rule', () => {
+    expect(ruleConstrainsDeclaration(READ_CLASS_RANGE, 'Read(a?d)', 'deny', PLUGIN_DIR)).toBe(true);
+    expect(ruleConstrainsDeclaration('Read(a?d)', READ_CLASS_RANGE, 'deny', PLUGIN_DIR)).toBe(true);
+  });
+
+  // The raw text stays a witness where it IS a member — it reaches a pair the
+  // materialised one cannot: the rule `a?c` and a declaration naming the
+  // literal file `a?c`, whose only common member is that one file.
+  it('still reaches a literal declaration through the raw text', () => {
+    expect(ruleConstrainsDeclaration(String.raw`Read(a\?c)`, 'Read(a?c)', 'deny', PLUGIN_DIR)).toBe(true);
+    expect(ruleConstrainsDeclaration('Read(a?c)', String.raw`Read(a\?c)`, 'deny', PLUGIN_DIR)).toBe(true);
+  });
+
+  // …and only where it is a member: a rule's raw text that the rule itself does
+  // not match is no evidence about anything, so a literal declaration naming
+  // the text `a[!b]c` does not intersect the class rule `a[!b]c`.
+  it('does not read a rule text the rule does not match as a witness', () => {
+    expect(ruleConstrainsDeclaration(String.raw`Read(a\[!b]c)`, READ_CLASS_NEGATED, 'deny', PLUGIN_DIR)).toBe(false);
+    expect(ruleConstrainsDeclaration(READ_CLASS_NEGATED, String.raw`Read(a\[!b]c)`, 'deny', PLUGIN_DIR)).toBe(false);
+  });
+
+  // The same shape on the Bash lane: the declaration's witness set includes its
+  // bare command, so a deny rule that catches `git push` but not the text
+  // `git push:*` is reached from the declaration side too.
+  it('asks the rule about the declaration’s bare command as well as its text', () => {
+    expect(ruleConstrainsDeclaration('Bash(git push:*)', 'Bash(* push)', 'deny', PLUGIN_DIR)).toBe(true);
+    expect(ruleConstrainsDeclaration('Bash(git push:*)', 'Bash(* pull)', 'deny', PLUGIN_DIR)).toBe(false);
+  });
+
+  // The controls: disjoint extensions stay disjoint through the witness.
+  it('still reports no conflict between disjoint patterns', () => {
+    const rows: ReadonlyArray<readonly [decl: string, rule: string]> = [
+      [READ_CLASS_NEGATED, 'Read(abc)'],
+      [READ_CLASS_RANGE, 'Read(a[x-z]d)'],
+      ['Read(*.env)', 'Read(*.ts)'],
+      [READ_SRC_ALL, 'Read(./test/**)'],
+    ];
+    for (const [decl, rule] of rows) {
+      expect(ruleConstrainsDeclaration(decl, rule, 'deny', PLUGIN_DIR), `${decl} vs ${rule}`).toBe(false);
+    }
+  });
+});
+
+// ============================================================================
+// Tool-name containment is asked in both directions
+// ============================================================================
+
+describe('ruleConstrainsDeclaration — a tool-name glob on the declaration side', () => {
+  // 🚩 Only "does the rule's tool name cover the declaration's" was asked. A
+  // declaration that is itself the glob the allow lane accepts — `mcp__srv__*`
+  // — against a deny rule naming one of its members was refused at the
+  // tool-name step, before content was consulted: the deny blocks a tool the
+  // declaration claims, and the answer was "no conflict".
+  it('reports a deny rule naming a member of the declared glob', () => {
+    expect(ruleConstrainsDeclaration(MCP_SRV_GLOB, MCP_TOOL, 'deny', PLUGIN_DIR)).toBe(true);
+    expect(ruleConstrainsDeclaration(MCP_SRV_GLOB, `${MCP_TOOL}(*)`, 'deny', PLUGIN_DIR)).toBe(true);
+    // …and the direction that already worked still does.
+    expect(ruleConstrainsDeclaration(MCP_TOOL, MCP_SRV_GLOB, 'deny', PLUGIN_DIR)).toBe(true);
+  });
+
+  it('still refuses a glob that does not cover the rule tool, and an uninterpreted content', () => {
+    expect(ruleConstrainsDeclaration(MCP_SRV_GLOB, 'mcp__other__tool', 'deny', PLUGIN_DIR)).toBe(false);
+    // An MCP tool's content is not interpreted, so `(foo)` covers no call.
+    expect(ruleConstrainsDeclaration(MCP_SRV_GLOB, `${MCP_TOOL}(foo)`, 'deny', PLUGIN_DIR)).toBe(false);
+    // The declaration side is read in the ALLOW lane, so a bare `*` there is a
+    // literal tool name, never a blanket claim over every rule.
+    expect(ruleConstrainsDeclaration('*', 'Bash(rm *)', 'deny', PLUGIN_DIR)).toBe(false);
   });
 });

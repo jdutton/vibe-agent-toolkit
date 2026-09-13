@@ -53,7 +53,8 @@ vat rag clear
 
 **Exit Codes:**
 - `0` - Indexing completed successfully
-- `2` - System error (config invalid, database error, etc.)
+- `1` - Indexed with errors: the run finished, `status: partial`, and `errors` names each resource whose content is NOT in the index — one the provider failed to chunk or embed, or one the crawl enumerated but could not read (a permission-denied file is reported here, never silently dropped)
+- `2` - System error (config invalid, database error, a `rag_documents` table whose columns an earlier build typed differently — the message names the columns and `vat rag clear` is the remedy, etc.)
 
 **Output:** YAML on stdout with indexing statistics
 
@@ -68,6 +69,7 @@ vat rag index docs/
 # status: success
 # resourcesIndexed: 12
 # resourcesSkipped: 0
+# resourcesEmpty: 0      # frontmatter-only or blank files: counted, not stored
 # resourcesUpdated: 0
 # chunksCreated: 48
 # chunksDeleted: 0

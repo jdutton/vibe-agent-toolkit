@@ -41,6 +41,7 @@
 
 import {
   PROJECTION_TABLES,
+  type DerivedTableSpec,
   type ProjectionColumnKind,
   type ProjectionColumnTypeSource,
   type ProjectionTableScope,
@@ -192,18 +193,82 @@ export function storedPrimaryKey(spec: StoredTableSpec): readonly string[] {
  * // CREATE TABLE IF NOT EXISTS "blobs" ("contentKey" TEXT NOT NULL, … PRIMARY KEY ("contentKey"))
  */
 export function createTableSql(spec: StoredTableSpec): string {
-  const definitions: string[] = [];
+  const leading: string[] = [];
   if (spec.scope === 'extent') {
     assertNoKeyColumnClash(spec);
     for (const column of EXTENT_KEY_COLUMNS) {
-      definitions.push(`${quoteIdentifier(column)} TEXT NOT NULL`);
+      leading.push(`${quoteIdentifier(column)} TEXT NOT NULL`);
     }
   }
-  for (const [column, { kind, nullable }] of projectionColumnTypes(spec)) {
+  return createTable(spec.name, leading, spec, storedPrimaryKey(spec));
+}
+
+/**
+ * One column's declaration, and the `CREATE TABLE` they compose into.
+ *
+ * Shared with {@link createDerivedTableSql} rather than copied, so a derived
+ * relation's DDL cannot drift from a stored table's — the two differ only in
+ * whether an extent key is prepended, and that difference is the caller's.
+ *
+ * @param name - The table's SQL name
+ * @param leading - Column declarations to emit first, already rendered
+ * @param source - Where the declared columns and their types come from
+ * @param primaryKey - The key columns, in comparison order
+ * @returns A complete `CREATE TABLE IF NOT EXISTS` statement
+ * @throws TypeError When a column's Zod type has no storage representation
+ */
+function createTable(
+  name: string,
+  leading: readonly string[],
+  source: ProjectionColumnTypeSource,
+  primaryKey: readonly string[],
+): string {
+  const definitions = [...leading];
+  for (const [column, { kind, nullable }] of projectionColumnTypes(source)) {
     definitions.push(`${quoteIdentifier(column)} ${SQLITE_TYPES[kind]}${nullable ? '' : ' NOT NULL'}`);
   }
-  const key = storedPrimaryKey(spec).map((column) => quoteIdentifier(column)).join(', ');
-  return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(spec.name)} (${definitions.join(', ')}, PRIMARY KEY (${key}))`;
+  const key = primaryKey.map((column) => quoteIdentifier(column)).join(', ');
+  return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(name)} (${definitions.join(', ')}, PRIMARY KEY (${key}))`;
+}
+
+/**
+ * The `CREATE TABLE` for one relation a LENS produces.
+ *
+ * ## Why this is a second function and not a widened first one
+ *
+ * A derived relation carries **no extent key**, and that is the whole
+ * difference. It could have been expressed by giving `ProjectionTableScope` a
+ * third member, or by passing a stored spec with `scope: 'blob'` — and both are
+ * wrong for the same reason: they would emit correct DDL while making a false
+ * claim about what the rows ARE. `'blob'` says "a pure function of bytes", and
+ * a lens's output is a function of bytes *and of the lens*; a third scope member
+ * ripples into the store's scope-partitioned row bundles, which are what a
+ * shared on-disk store persists and which derived rows must never enter.
+ *
+ * Taking a {@link DerivedTableSpec} — a type with no `scope` field at all —
+ * makes that distinction unstatable rather than merely unstated, and the shared
+ * {@link createTable} keeps the column emission single-sourced.
+ *
+ * @param spec - A derived relation's registry entry
+ * @returns A complete `CREATE TABLE IF NOT EXISTS` statement
+ * @throws TypeError When a column's Zod type has no storage representation
+ *
+ * @example
+ * createDerivedTableSql(DERIVED_TABLES.edges);
+ * // CREATE TABLE IF NOT EXISTS "edges" ("src" TEXT NOT NULL, … PRIMARY KEY ("src", "refOrdinal", "contextId"))
+ */
+export function createDerivedTableSql(spec: DerivedTableSpec): string {
+  return createTable(spec.name, [], spec, spec.primaryKey);
+}
+
+/**
+ * The `INSERT` for one relation a lens produces.
+ *
+ * @param spec - A derived relation's registry entry
+ * @returns An `INSERT INTO … VALUES (?, …)` statement
+ */
+export function insertDerivedSql(spec: DerivedTableSpec): string {
+  return insertInto(spec.name, spec.columns);
 }
 
 /**
@@ -221,10 +286,20 @@ export function createTableSql(spec: StoredTableSpec): string {
  * // INSERT INTO "roots" ("rootId", "treeHash", "id", "path") VALUES (?, ?, ?, ?)
  */
 export function insertSql(spec: StoredTableSpec): string {
-  const columns = storedColumns(spec);
+  return insertInto(spec.name, storedColumns(spec));
+}
+
+/**
+ * The `INSERT` for a named table over a named column list.
+ *
+ * @param name - The table's SQL name
+ * @param columns - Its columns, in binding order
+ * @returns An `INSERT INTO … VALUES (?, …)` statement
+ */
+function insertInto(name: string, columns: readonly string[]): string {
   const placeholders = columns.map(() => '?').join(', ');
   const names = columns.map((column) => quoteIdentifier(column)).join(', ');
-  return `INSERT INTO ${quoteIdentifier(spec.name)} (${names}) VALUES (${placeholders})`;
+  return `INSERT INTO ${quoteIdentifier(name)} (${names}) VALUES (${placeholders})`;
 }
 
 /**

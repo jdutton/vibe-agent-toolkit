@@ -2,9 +2,8 @@
  * Utilities for loading and crawling resources
  */
 
-import { existsSync, statSync } from 'node:fs';
-
 import {
+  buildLinkAuthEngineConfig,
   buildResourcePopulation,
   DEFAULT_RESOURCE_INCLUDE,
   gitExtentSelected,
@@ -22,6 +21,7 @@ import { GitTracker, gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
+import { assertDirectoryArgument } from './project-root-policy.js';
 import { withPopulationCache } from './projection-store.js';
 
 /**
@@ -63,6 +63,30 @@ export interface ResourceLoadResult {
    * so when the root is not in a repository.
    */
   extentSource: CrawlSourceKind | null;
+}
+
+/**
+ * Refuse a `resources.linkAuth` provider that cannot compile HERE, where the
+ * config is loaded, so every verb that loads it answers the same way.
+ *
+ * `buildLinkAuthEngineConfig` is the one place the per-provider compile check
+ * (`assertProviderCompiles`) lives, and the registry calls it only when it
+ * constructs the external-link validator — i.e. under `--check-external-urls`.
+ * Every other verb on this loader (`vat validate`, `vat resources validate`
+ * without the flag, `vat resources scan`, `vat rag index`) accepted an
+ * uncompilable `when` and exited 0, while the validation-code registry
+ * promised the refusal "at config load … and every other command that loads
+ * `resources.linkAuth`". The registry was right about what the contract should
+ * be; this makes the code keep it. The built config is discarded — the
+ * registry builds its own when the lane runs — because the value wanted is
+ * the throw, and calling the same function is how the two stay one check.
+ *
+ * @throws {LinkAuthConfigError} naming `providers[<n>]`, the host and the field;
+ *   every caller's catch turns a thrown error into exit 2.
+ */
+function assertLinkAuthProvidersCompile(config: ProjectConfig): void {
+  const linkAuth = config.resources?.linkAuth;
+  if (linkAuth !== undefined) buildLinkAuthEngineConfig(linkAuth);
 }
 
 /**
@@ -116,17 +140,32 @@ function crawlOptionsForPath(
       `${resolved} is outside projectRoot ${projectRoot}; ` +
         `resources include/exclude patterns from the config do not apply to it`,
     );
-    return { baseDir: resolved };
+    return { baseDir: resolved, unreadable: RESOURCES_UNREADABLE };
   }
 
-  assertCrawlableDirectory(resolved);
+  // The crawler used to perform this check itself, because it received the path
+  // argument as its `baseDir`. Now that `baseDir` is the project root, a bad path
+  // argument would otherwise degrade into a glob that matches nothing — a green
+  // run reporting `filesScanned: 0`.
+  assertDirectoryArgument(resolved);
 
   return {
     baseDir: projectRoot,
+    unreadable: RESOURCES_UNREADABLE,
     include: scopeIncludeToSubtree(DEFAULT_RESOURCE_INCLUDE, normalizedRelDir),
     ...(config?.resources?.exclude ? { exclude: config.resources.exclude } : {}),
   };
 }
+
+/**
+ * The resources verbs' ruling for a directory the crawl cannot list: refuse
+ * the run by name, exit 2 — `vat resources validate`/`scan`/`check` and every
+ * verb that reaches this loader act on the registry as the whole population,
+ * and the projection lane behind `populationSource` refuses the same directory
+ * with the same sentence, so the two lanes cannot reach different exits.
+ * See `RegistryUnreadablePolicy` on the registry.
+ */
+const RESOURCES_UNREADABLE = 'refuse' as const;
 
 /**
  * The env var that selects the crawler behind every resources-crawling verb —
@@ -166,9 +205,10 @@ export const RESOURCES_CRAWL_WALK = 'walk';
  *
  * ⚠️⚠️ **ONE DISAGREEMENT SURVIVES, AND IT DROPS FINDINGS: SYMLINKS.** The
  * `filesystem` extent crawls with `followSymlinks: false` and records no link's
- * own path, and `GitCrawlSource` skips mode `120000` deliberately to match it —
- * so BOTH projection extents omit a committed symlink that the incumbent walk
- * includes. For an out-of-tree target those bytes have no other path into the
+ * own path, and `GitCrawlSource` drops one at a single seam to match it (git's
+ * mode `120000` for the paths the tree snapshot described, an `lstat` for the
+ * collapsed `ls-files --others` entries that carry no mode) — so BOTH projection
+ * extents omit a symlink, committed or not, that the incumbent walk includes. For an out-of-tree target those bytes have no other path into the
  * population, which means **a broken symlink the walk reports as
  * `LINK_BROKEN_FILE` is not reported on this lane.** That is a real loss, it is
  * known, and it is the cost this default was accepted at; closing it is its own
@@ -249,7 +289,7 @@ function populationSourceFor(
         ...collectionsOption(enumeratedRoot),
       });
       observeExtentSource(population.extentSource);
-      return population.paths;
+      return { paths: population.paths, conditions: population.conditions };
     },
   };
 }
@@ -321,25 +361,6 @@ export async function withResourcePopulationSource<T>(
 }
 
 /**
- * Fail loudly on a path argument that cannot be crawled.
- *
- * The crawler used to perform this check itself, because it received the path
- * argument as its `baseDir`. Now that `baseDir` is the project root, a bad path
- * argument would otherwise degrade into a glob that matches nothing — a green
- * run reporting `filesScanned: 0`.
- */
-function assertCrawlableDirectory(resolved: string): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- CLI path argument, resolved above
-  if (!existsSync(resolved)) {
-    throw new Error(`Path does not exist: ${resolved}`);
-  }
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- CLI path argument, existence checked above
-  if (!statSync(resolved).isDirectory()) {
-    throw new Error(`Path is not a directory: ${resolved}`);
-  }
-}
-
-/**
  * Load resources from a path with config support
  *
  * Common pattern for CLI commands that need to:
@@ -377,6 +398,7 @@ export async function loadResourcesWithConfig(
 
   if (config) {
     logger.debug(`Loaded config from ${projectRoot}`);
+    assertLinkAuthProvidersCompile(config);
   }
 
   // Built here, but deliberately NOT initialized here — see the call inside the
@@ -385,14 +407,22 @@ export async function loadResourcesWithConfig(
   const gitTracker = new GitTracker(projectRoot);
 
   // Create registry and crawl
-  // Build options conditionally to satisfy exactOptionalPropertyTypes
+  // Build options conditionally to satisfy exactOptionalPropertyTypes.
+  //
+  // 🚨 The config is handed over WHENEVER one was loaded — never gated on one of
+  // its keys. This used to read `if (config?.resources?.collections)`, written
+  // when collections were the only thing the registry read from it. The registry
+  // has since grown a second consumer, `resources.linkAuth`, and the gate made
+  // it silently inert for every adopter who declared `linkAuth` without
+  // `collections`: no rewrite, no token, no `LINK_AUTH_*` code — the anonymous
+  // lane ran and the run reported success. Every read inside the registry is
+  // already `this.config?.resources?.<key>`-guarded, so an undeclared key costs
+  // nothing; a key-gate here can only ever hide the next consumer the same way.
   const registryOptions: ResourceRegistryOptions = {
     baseDir: projectRoot,
     gitTracker,
+    ...(config === undefined ? {} : { config }),
   };
-  if (config?.resources?.collections) {
-    registryOptions.config = config;
-  }
   const registry = new ResourceRegistry(registryOptions);
 
   let crawlOptions: CrawlOptions;
@@ -409,6 +439,7 @@ export async function loadResourcesWithConfig(
 
     crawlOptions = {
       baseDir: projectRoot,
+      unreadable: RESOURCES_UNREADABLE,
       // Apply include patterns from config (if specified)
       ...(config?.resources?.include ? { include: config.resources.include } : {}),
       // Apply exclude patterns from config (if specified)

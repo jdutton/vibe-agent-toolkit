@@ -22,6 +22,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { gitLsFiles, isGitIgnored } from '../../src/git-utils.js';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '../../src/path-utils.js';
 import { detachGitEnv } from '../../src/test-helpers.js';
+import { refuseUnreadableFixture } from '../../src/testing.js';
 import { createGitRepo } from '../test-helpers.js';
 
 /** The file only the repository under test has. */
@@ -67,11 +68,11 @@ describe('git helpers under a hook environment', () => {
   });
 
   it('gitLsFiles describes the directory it was given, not the one being committed', () => {
-    const clean = gitLsFiles({ cwd: ours, includeUntracked: true });
+    const clean = gitLsFiles({ cwd: ours, unreadable: refuseUnreadableFixture(ours), includeUntracked: true });
     expect(clean).toContain(OURS);
 
     enterHookOf(theirs);
-    const hooked = gitLsFiles({ cwd: ours, includeUntracked: true });
+    const hooked = gitLsFiles({ cwd: ours, unreadable: refuseUnreadableFixture(ours), includeUntracked: true });
 
     // The load-bearing half is the second assertion: an implementation that
     // followed the inherited GIT_DIR returns a well-formed list of the WRONG
@@ -84,7 +85,7 @@ describe('git helpers under a hook environment', () => {
     enterHookOf(theirs);
     // GIT_PREFIX is prepended when git interprets a pathspec, so an inherited
     // value silently re-scopes this pattern.
-    expect(gitLsFiles({ cwd: ours, patterns: ['docs/*.md'], includeUntracked: true }))
+    expect(gitLsFiles({ cwd: ours, unreadable: refuseUnreadableFixture(ours), patterns: ['docs/*.md'], includeUntracked: true }))
       .toContain(OURS);
   });
 
@@ -106,13 +107,13 @@ describe('git helpers under a hook environment', () => {
       const excludesFile = safePath.join(excludes, 'extra-excludes');
       writeFileSync(excludesFile, 'docs/\n');
 
-      const before = gitLsFiles({ cwd: ours, includeUntracked: true });
+      const before = gitLsFiles({ cwd: ours, unreadable: refuseUnreadableFixture(ours), includeUntracked: true });
       expect(before).toContain(OURS);
 
       // Exactly the shape git uses to carry `-c key=value` into a hook.
       process.env.GIT_CONFIG_PARAMETERS = `'core.excludesFile'='${excludesFile}'`;
 
-      expect(gitLsFiles({ cwd: ours, includeUntracked: true })).toContain(OURS);
+      expect(gitLsFiles({ cwd: ours, unreadable: refuseUnreadableFixture(ours), includeUntracked: true })).toContain(OURS);
     } finally {
       rmSync(excludes, { recursive: true, force: true });
     }

@@ -111,6 +111,7 @@ import {
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { NEVER_CRAWL_GLOBS, crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { refuseUnreadableFixture } from '@vibe-agent-toolkit/utils/testing';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -180,6 +181,7 @@ let registeredIds: readonly string[];
 async function discoverSkillPaths(): Promise<string[]> {
   const absolute = await crawlDirectory({
     baseDir: ROOT,
+    unreadable: refuseUnreadableFixture(ROOT),
     include: ['**/SKILL.md'],
     exclude: [...NEVER_CRAWL_GLOBS],
     respectGitignore: true,

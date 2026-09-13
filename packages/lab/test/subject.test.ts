@@ -25,10 +25,11 @@
  *    because a repo fixture with no commits behaves nothing like one with them.
  */
 
-import { rmSync } from 'node:fs';
+import { chmodSync, rmSync } from 'node:fs';
 
 import { safePath, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { type SubjectVersion, SubjectVersionSchema } from '../src/envelope/coordinate.js';
 import { resolveSubject } from '../src/harness/subject.js';
@@ -43,6 +44,12 @@ const OUTSIDE_FILE = 'outside.md';
 /** Gitignored, so git's population cannot see it but a filesystem walk can. */
 const IGNORED_FILE = 'build-cache';
 const CONCRETE_SHA = /^[0-9a-f]{40}$/;
+/** A directory that gets `chmod 000`, and the file inside it. */
+const LOCKED_DIR = 'locked';
+const LOCKED_FILE = `${LOCKED_DIR}/secret.txt`;
+/** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
+const CANNOT_DENY_READS =
+  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 const suite = setupSyncTempDirSuite('lab-subject');
@@ -339,6 +346,68 @@ describe('resolveSubject — a dirty working tree is measured and labelled', () 
     expect(before.dirty).toBe(false);
     expect(after.dirty).toBe(true);
     expect(after.workingFingerprint).toMatch(SHA256_HEX);
+  });
+});
+
+/**
+ * A fingerprint over a tree the crawl could not fully list is not a
+ * fingerprint of that tree: it would match the same tree with the directory
+ * readable and its contents changed. So a locked directory REFUSES the subject
+ * — on both scopes. The git population runs `git ls-files --others`, which
+ * walks the working tree and reports the directory it could not open on
+ * stderr; the crawler reads that and throws exactly as the plain-folder walk
+ * does. (`fingerprintFiles`' comment used to claim the git scope "refuses
+ * nothing" and resolves; it does not, and a test is the only thing that keeps
+ * a comment from quietly re-describing a hole the code has closed.)
+ *
+ * A real `chmod 000`, because the git scope's refusal comes from git's own
+ * walk, which no `readdir` spy reaches — so POSIX-only and not as root.
+ */
+describe.skipIf(CANNOT_DENY_READS)('resolveSubject — a directory the crawl could not list refuses the subject', () => {
+  const lockedDirs: string[] = [];
+
+  afterEach(() => {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- unlocking this suite's own fixture directories
+    for (const dir of lockedDirs.splice(0)) chmodSync(dir, 0o755);
+  });
+
+  /** `chmod 000` a fixture directory, remembering to unlock it for the temp-dir sweep. */
+  function lock(root: string, relativePath: string): void {
+    const absolute = safePath.join(root, relativePath);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled temp fixture tree
+    chmodSync(absolute, 0o000);
+    lockedDirs.push(absolute);
+  }
+
+  it('git scope: a dirty tree with a locked directory throws rather than resolving a fingerprint', async () => {
+    const root = suite.getTempDir();
+    committedRepo(root);
+    writeFixtureFile(root, LOCKED_FILE, 'secret\n');
+    commitAll(root, 'locked');
+    // Dirty, so the working fingerprint is taken at all.
+    writeFixtureFile(root, 'dirty.txt', 'x\n');
+    lock(root, LOCKED_DIR);
+
+    await expect(resolve(root)).rejects.toBeInstanceOf(DirectoryListingRefusedError);
+  });
+
+  it('plain-folder scope: a locked directory throws rather than resolving a snapshot', async () => {
+    const root = suite.getTempDir();
+    writeFixtureFile(root, TRACKED_FILE, 'first\n');
+    writeFixtureFile(root, LOCKED_FILE, 'secret\n');
+    lock(root, LOCKED_DIR);
+
+    await expect(resolve(root)).rejects.toBeInstanceOf(DirectoryListingRefusedError);
+  });
+
+  it('resolves both scopes once the directory is readable again (control)', async () => {
+    const root = suite.getTempDir();
+    committedRepo(root);
+    writeFixtureFile(root, LOCKED_FILE, 'secret\n');
+    commitAll(root, 'locked');
+    writeFixtureFile(root, 'dirty.txt', 'x\n');
+
+    expect((await gitVersionOf(root)).workingFingerprint).toMatch(SHA256_HEX);
   });
 });
 

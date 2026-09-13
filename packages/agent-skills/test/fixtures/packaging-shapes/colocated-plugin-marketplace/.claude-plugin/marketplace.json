@@ -2,6 +2,7 @@
   "name": "colocated-marketplace",
   "version": "1.0.0",
   "description": "Marketplace that co-locates a single plugin via source: './'.",
+  "owner": { "name": "fixture" },
   "plugins": [
     {
       "name": "colocated-plugin",

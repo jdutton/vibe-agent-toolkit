@@ -17,7 +17,16 @@ import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
-import { DeferredArtifacts, loadConfig, parseFileCached, ResourceRegistry, type ResourcePopulationSource, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
+import {
+  DeferredArtifacts,
+  listingRefusalRemedy,
+  loadConfig,
+  parseFileCached,
+  type RegistryUnreadablePolicy,
+  ResourceRegistry,
+  type ResourcePopulationSource,
+  type SkillExecutableEntry,
+} from '@vibe-agent-toolkit/resources';
 import {
   CODE_REGISTRY,
   runSingleUnitValidation,
@@ -35,6 +44,7 @@ import {
   toForwardSlash,
   safePath,
 } from '@vibe-agent-toolkit/utils';
+import { type DirectoryRefusal, DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
@@ -272,6 +282,18 @@ function registryIssueAt(
  */
 export interface CrawlRegistryOptions {
   /**
+   * What the crawl does with a directory it cannot list — the caller's ruling,
+   * required, no default: `'refuse'` for every verb that acts on the registry as
+   * a complete population, `{ degrade }` for `vat audit`. See
+   * {@link RegistryUnreadablePolicy} on the registry for the two rulings.
+   *
+   * NOT part of the memo key: the memo replays the refusals the ONE crawl met
+   * into every later caller's policy, so a `'refuse'` caller served a registry
+   * that was built under `{ degrade }` still gets its throw — see
+   * {@link MemoizedRegistry}.
+   */
+  unreadable: RegistryUnreadablePolicy;
+  /**
    * Where the file list comes from — omit for the incumbent walk, supply one to
    * source it from a projection instead.
    *
@@ -281,6 +303,47 @@ export interface CrawlRegistryOptions {
    * an environment, so a library caller that passes nothing keeps the walk.
    */
   populationSource?: ResourcePopulationSource | undefined;
+}
+
+/**
+ * One memoized crawl: the registry AND every directory the crawl was refused.
+ *
+ * The memo is keyed on the root, and two callers of one root may hold
+ * different `unreadable` rulings — `vat audit` degrades, everything else
+ * refuses. A registry built under `{ degrade }` is a population WITH A GAP,
+ * and serving it to a `'refuse'` caller as-is would be the exact silent
+ * shorter-list the refuse ruling exists to prevent; serving it to a second
+ * `{ degrade }` caller would leave that caller's handler never told. So the
+ * refusals ride beside the registry and are settled again under EACH caller's
+ * policy on every hit: a `'refuse'` caller throws the same
+ * {@link DirectoryListingRefusedError} the crawl would have thrown for it, and
+ * a `{ degrade }` caller's handler is called for each. A registry built under
+ * `'refuse'` carries none by construction (the crawl threw instead), so any
+ * later policy is served it unchanged.
+ */
+interface MemoizedRegistry {
+  readonly registry: ResourceRegistry;
+  readonly refusals: readonly DirectoryRefusal[];
+}
+
+/**
+ * Settle the memoized refusals under THIS caller's policy — see {@link MemoizedRegistry}.
+ *
+ * @param refusals - What the one crawl of `projectRoot` was refused
+ * @param unreadable - This caller's ruling
+ * @param projectRoot - The crawl's root, for the refuse sentence
+ */
+function replayRefusals(
+  refusals: readonly DirectoryRefusal[],
+  unreadable: RegistryUnreadablePolicy,
+  projectRoot: string,
+): void {
+  for (const refusal of refusals) {
+    if (unreadable === 'refuse') {
+      throw new DirectoryListingRefusedError(refusal, { root: projectRoot, remedy: listingRefusalRemedy(projectRoot) });
+    }
+    unreadable.degrade(refusal);
+  }
 }
 
 /**
@@ -338,23 +401,33 @@ export interface CrawlRegistryOptions {
  */
 export async function crawlAndResolveRegistry(
   projectRoot: string,
-  options: CrawlRegistryOptions = {},
+  options: CrawlRegistryOptions,
 ): Promise<ResourceRegistry> {
-  const { populationSource } = options;
+  const { populationSource, unreadable } = options;
   const cache = registryCacheFor(populationSource);
   const key = toForwardSlash(safePath.resolve(projectRoot));
   const cached = cache.get(key);
   if (cached !== undefined) {
-    return cached;
+    const { registry, refusals } = await cached;
+    replayRefusals(refusals, unreadable, projectRoot);
+    return registry;
   }
   // The PROMISE is cached, not the resolved value, so two overlapping requests
   // for one root can never start two crawls.
-  const pending = (async (): Promise<ResourceRegistry> => {
+  const pending = (async (): Promise<MemoizedRegistry> => {
     const config = await loadConfig(projectRoot).catch(() => undefined);
+    // Every refusal the crawl hands over is kept for the memo's later callers —
+    // see {@link MemoizedRegistry}. Under `'refuse'` the crawl throws instead and
+    // this stays empty.
+    const refusals: DirectoryRefusal[] = [];
+    const recorded: RegistryUnreadablePolicy = unreadable === 'refuse'
+      ? 'refuse'
+      : { degrade: (refusal) => { refusals.push(refusal); unreadable.degrade(refusal); } };
     const registry = await ResourceRegistry.fromCrawl(
       {
         baseDir: projectRoot,
         include: ['**/*.md', '**/*.html', '**/*.htm'],
+        unreadable: recorded,
         // Enumeration only. `ResourceRegistry.crawl` re-applies the include set
         // above — and the crawl's default exclude — to whatever the source
         // offers, through the same compiled matcher the walk itself uses, so a
@@ -366,10 +439,10 @@ export async function crawlAndResolveRegistry(
       config === undefined ? undefined : { config },
     );
     registry.resolveLinks();
-    return registry;
+    return { registry, refusals };
   })();
   cache.set(key, pending);
-  return pending;
+  return (await pending).registry;
 }
 
 /**
@@ -404,7 +477,7 @@ export async function crawlAndResolveRegistry(
  * one lane can see its own output retracts that argument for every lane sharing
  * this memo — it is not a one-lane fix, and it lands here, not there.
  */
-const walkRegistryCache = new Map<string, Promise<ResourceRegistry>>();
+const walkRegistryCache = new Map<string, Promise<MemoizedRegistry>>();
 
 /**
  * The same memo for the SOURCE-BACKED lanes, keyed first by the population
@@ -446,7 +519,7 @@ const walkRegistryCache = new Map<string, Promise<ResourceRegistry>>();
  */
 let sourcedRegistryCache = new WeakMap<
   ResourcePopulationSource,
-  Map<string, Promise<ResourceRegistry>>
+  Map<string, Promise<MemoizedRegistry>>
 >();
 
 /**
@@ -460,7 +533,7 @@ let sourcedRegistryCache = new WeakMap<
  */
 function registryCacheFor(
   populationSource: ResourcePopulationSource | undefined,
-): Map<string, Promise<ResourceRegistry>> {
+): Map<string, Promise<MemoizedRegistry>> {
   if (populationSource === undefined) {
     return walkRegistryCache;
   }
@@ -468,7 +541,7 @@ function registryCacheFor(
   if (existing !== undefined) {
     return existing;
   }
-  const created = new Map<string, Promise<ResourceRegistry>>();
+  const created = new Map<string, Promise<MemoizedRegistry>>();
   sourcedRegistryCache.set(populationSource, created);
   return created;
 }
@@ -488,6 +561,34 @@ export function resetPackagingRegistryCache(): void {
   // then re-supplied the SAME source closure would be served the pre-reset parse
   // of a tree it may have changed. A `WeakMap` has no `clear`, so it is replaced.
   sourcedRegistryCache = new WeakMap();
+}
+
+/**
+ * The registry a skill is validated against: the caller's, when it covers the
+ * skill; otherwise one crawled here under the caller's `unreadable` ruling.
+ *
+ * No shared context is a single-skill lane whose result is acted on whole (the
+ * packager's post-build check passes one; a library caller that passes nothing
+ * is the same shape): it refuses. A caller with a context has ruled on
+ * `shared.unreadable` — see that field.
+ *
+ * @param skillPath - Path to SKILL.md
+ * @param projectRoot - The root the fallback crawl covers
+ * @param shared - The batching caller's context, if any
+ * @returns A registry whose links are resolved and that covers `skillPath`
+ */
+async function registryForSkill(
+  skillPath: string,
+  projectRoot: string,
+  shared: SkillValidationSharedContext | undefined,
+): Promise<ResourceRegistry> {
+  if (shared?.registry !== undefined && registryCoversSkill(shared.registry, skillPath)) {
+    return shared.registry;
+  }
+  return crawlAndResolveRegistry(projectRoot, {
+    unreadable: shared === undefined ? 'refuse' : shared.unreadable,
+    ...(shared?.populationSource !== undefined && { populationSource: shared.populationSource }),
+  });
 }
 
 /**
@@ -523,6 +624,23 @@ function registryCoversSkill(registry: ResourceRegistry, skillPath: string): boo
  * legacy per-skill behavior so one-off callers keep working.
  */
 export interface SkillValidationSharedContext {
+  /**
+   * What the validator's OWN registry crawl does with a directory it cannot
+   * list, when it has to build one (no `registry` below, or one that does not
+   * cover this skill) — the caller's ruling, and the ONE required field here:
+   * `'refuse'` for `vat skills validate`/`build`, `vat skill review` and the
+   * packager's post-build check, `{ degrade }` for `vat audit`, whose directory
+   * lane supplies no registry and reaches {@link crawlAndResolveRegistry} through
+   * exactly this seam. See {@link RegistryUnreadablePolicy}.
+   *
+   * Ignored when `registry` below already covers the skill, for the same reason
+   * `populationSource` is: the caller that built it has already ruled.
+   *
+   * A caller that passes NO shared context at all is a single-skill lane whose
+   * result is acted on whole, and is ruled `'refuse'` by
+   * {@link validateSkillForPackaging} — said there, once, not defaulted here.
+   */
+  unreadable: RegistryUnreadablePolicy;
   /** Pre-built registry that covers the skill's project root. */
   registry?: ResourceRegistry;
   /**
@@ -623,6 +741,35 @@ export interface SkillValidationSharedContext {
 }
 
 /**
+ * The refusal for a matched file that has no frontmatter object — either no
+ * `---` block at all, or one whose YAML did not parse (`frontmatterError`).
+ *
+ * Either way the file is not a skill, and it is refused with the SAME
+ * non-overridable code `validateSkill` in skill-validator.ts emits for it:
+ * `SKILL_MISSING_FRONTMATTER` has no CODE_REGISTRY entry, so the framework's
+ * `finalize()` passes it through and `validation.severity` cannot name it.
+ *
+ * This refusal used to be absent from the packaging lane — its frontmatter
+ * checks ran only `if (parseResult.frontmatter)` — so a plain `# Readme` a
+ * `skills.include` glob drifted onto, or a SKILL.md that lost its fence, ran
+ * zero frontmatter checks and came back `success` under its H1 as a name:
+ * `vat skills validate`, `vat validate` and `vat verify` were green on a
+ * project that shipped no skill.
+ */
+function missingFrontmatterIssue(frontmatterError: string | undefined, location: string): ValidationIssue {
+  return {
+    severity: 'error',
+    code: 'SKILL_MISSING_FRONTMATTER',
+    message: frontmatterError === undefined
+      ? 'No YAML frontmatter found — a skill starts with a `---` block that names and describes it'
+      : `Frontmatter did not parse as YAML: ${frontmatterError}`,
+    location,
+    line: 1,
+    fix: 'Add YAML frontmatter with name and description fields, or narrow `skills.include` so it no longer matches this file',
+  };
+}
+
+/**
  * Validate a skill for packaging
  *
  * Performs comprehensive validation including:
@@ -671,6 +818,8 @@ export async function validateSkillForPackaging(
       ...validateFrontmatterSchema(parseResult.frontmatter, false, skillLocation),
       ...validateFrontmatterRules(parseResult.frontmatter, skillLocation),
     );
+  } else {
+    rawIssues.push(missingFrontmatterIssue(parseResult.frontmatterError, skillLocation));
   }
 
   // Compat capability detection: collect observations from SKILL.md and
@@ -698,11 +847,7 @@ export async function validateSkillForPackaging(
   // per-file markdown parse is paid for exactly once across the batch. Only
   // reuse when the shared registry covers this skill's projectRoot; otherwise
   // fall back to a fresh crawl to avoid leaking resources across roots.
-  const registry = shared?.registry !== undefined && registryCoversSkill(shared.registry, skillPath)
-    ? shared.registry
-    : await crawlAndResolveRegistry(projectRoot, {
-      ...(shared?.populationSource !== undefined && { populationSource: shared.populationSource }),
-    });
+  const registry = await registryForSkill(skillPath, projectRoot, shared);
 
   const skillResource = registry.getResource(safePath.resolve(skillPath));
   // Only the entries the PACKAGER will actually copy defer a link: an entry pointing

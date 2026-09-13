@@ -74,6 +74,24 @@
       "outputs": [],
       "cache": true
     },
+    // `packaged-output-drift.system.test.ts` lives in vat-development-agents but compares
+    // TWO packages' `dist/skills` trees against committed goldens — the second is cat-agents,
+    // the repo's only multi-file bundle and the only place the link rewriter rewrites a link
+    // in a packaged non-SKILL.md file. cat-agents is not a workspace dependency of
+    // vat-development-agents, so without this edge the generic `test:system` above gives the
+    // gate neither ordering nor invalidation:
+    //   - ORDERING: `turbo run test:system` on a clean clone can run the gate before
+    //     cat-agents' skills exist. The gate now FAILS on an absent build rather than
+    //     skipping, so that would be a spurious red.
+    //   - INVALIDATION: a turbo task hash folds in its dependencies' hashes, so this edge is
+    //     what makes a change to cat-agents' packaged output re-run the gate. Without it a
+    //     rewriter change to cat-agents' bundle replays a cached green from a run that never
+    //     saw it — a cached verdict on work it could not have measured.
+    "@vibe-agent-toolkit/vat-development-agents#test:system": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/vat-example-cat-agents#build:skills"],
+      "outputs": [],
+      "cache": true
+    },
     "test:coverage": {
       "dependsOn": ["^build"],
       "outputs": ["coverage/**"],

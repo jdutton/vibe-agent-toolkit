@@ -52,16 +52,16 @@ describe('assertCompiles', () => {
   it('accepts a statement the schema can answer, against ZERO rows', () => {
     // The point of the preflight: no population has happened, and the schema is
     // still the whole authority on whether the names resolve.
-    expect(() => store.assertCompiles('SELECT path FROM resource_realizations')).not.toThrow();
+    expect(() => store.assertCompiles('SELECT path FROM resource_realizations', [])).not.toThrow();
   });
 
   it('refuses an unknown column, naming it', () => {
-    expect(() => store.assertCompiles('SELECT contentKey, no_such_column FROM blobs'))
+    expect(() => store.assertCompiles('SELECT contentKey, no_such_column FROM blobs', []))
       .toThrow(/no such column: no_such_column/);
   });
 
   it('refuses an unknown table, naming it', () => {
-    expect(() => store.assertCompiles('SELECT * FROM no_such_table'))
+    expect(() => store.assertCompiles('SELECT * FROM no_such_table', []))
       .toThrow(/no such table: no_such_table/);
   });
 
@@ -69,18 +69,18 @@ describe('assertCompiles', () => {
     // Moving the KIND gate in front of the population is half the win: a
     // statement refused for what it IS should not cost more than one refused for
     // what it names.
-    expect(() => store.assertCompiles('ATTACH DATABASE \'evil.db\' AS e')).toThrow();
-    expect(() => store.assertCompiles('PRAGMA query_only = 0')).toThrow();
-    expect(() => store.assertCompiles('DELETE FROM blobs')).toThrow();
+    expect(() => store.assertCompiles('ATTACH DATABASE \'evil.db\' AS e', [])).toThrow();
+    expect(() => store.assertCompiles('PRAGMA query_only = 0', [])).toThrow();
+    expect(() => store.assertCompiles('DELETE FROM blobs', [])).toThrow();
   });
 
   it('refuses a second statement, exactly as `query` does', () => {
-    expect(() => store.assertCompiles('SELECT 1; DELETE FROM blobs')).toThrow();
+    expect(() => store.assertCompiles('SELECT 1; DELETE FROM blobs', [])).toThrow();
   });
 
   it('does NOT step: a non-terminating statement compiles and returns', () => {
     const start = performance.now();
-    expect(() => store.assertCompiles(NON_TERMINATING)).not.toThrow();
+    expect(() => store.assertCompiles(NON_TERMINATING, [])).not.toThrow();
     const elapsed = performance.now() - start;
     expect(elapsed).toBeLessThan(COMPILE_BUDGET_MS);
   });
@@ -89,19 +89,19 @@ describe('assertCompiles', () => {
     // Stated as a type-level fact by the `void` return, and asserted here
     // because a future "helpful" change that returned `.all()`'s rows would
     // silently reintroduce the unbounded step this method exists to avoid.
-    expect(store.assertCompiles('SELECT 1 AS n')).toBeUndefined();
+    expect(store.assertCompiles('SELECT 1 AS n', [])).toBeUndefined();
   });
 
   it('leaves the connection WRITABLE, so the next write is not refused', async () => {
     // `query_only` is set for the compile and restored in `finally`. The failure
     // this guards is delayed and confusing: a `writeBlobFacts` failing with
     // "attempt to write a readonly database" with no query in sight.
-    store.assertCompiles('SELECT contentKey FROM blobs');
+    store.assertCompiles('SELECT contentKey FROM blobs', []);
     await expect(store.writeBlobFacts(sampleBlobRows())).resolves.toBeUndefined();
   });
 
   it('refuses after close, exactly as every other method does', async () => {
     await store.close();
-    expect(() => store.assertCompiles('SELECT 1')).toThrow();
+    expect(() => store.assertCompiles('SELECT 1', [])).toThrow();
   });
 });

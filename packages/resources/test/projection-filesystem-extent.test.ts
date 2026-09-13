@@ -6,7 +6,9 @@ import {
   normalizedTmpdir,
   safePath,
   toForwardSlash,
+  withReaddirSyncRefused,
 } from '@vibe-agent-toolkit/utils';
+import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -411,5 +413,54 @@ describe('FilesystemExtentContributor content demand', () => {
     // than assumed, because widening that schema to make this change fit would
     // be the wrong fix.
     expectContributionRowsValid(await contributeUnder('deferred'));
+  });
+});
+
+/**
+ * A directory the walk could not list is a gap in the POPULATION, and the
+ * projection lane refuses the run for it rather than answering with a shorter
+ * list — see `ListingRefusals` in `crawl-source.ts` for why (a cached
+ * population cannot carry the gap; the incumbent walk refuses the same way),
+ * and for the one case it does NOT stop (gitignored territory, pinned by
+ * `projection-crawl-source-refused-listing.test.ts`).
+ *
+ * 🪤 `crawlDirectory` used to swallow the refusal, so `vat resources validate`
+ * on its default lane reported `status: success` over a tree with a `--x`
+ * directory inside the population.
+ */
+describe('FilesystemExtentContributor refuses a population it could not enumerate', () => {
+  it("throws DirectoryListingRefusedError naming the directory root-relative, with the errno and this lane's remedy", async () => {
+    const locked = safePath.join(root, NESTED_DIR);
+    // No repository here, so the walk arm runs and the remedy is the
+    // no-repository one; the in-repository variant ("gitignore it", both arms,
+    // real chmod) is pinned in `projection-crawl-source-refused-listing.test.ts`.
+    const thrown = await withReaddirSyncRefused(locked, 'EACCES', async () => {
+      try {
+        await contribute();
+        return undefined;
+      } catch (error) {
+        return error;
+      }
+    });
+
+    expect(thrown).toBeInstanceOf(DirectoryListingRefusedError);
+    const message = (thrown as Error).message;
+    expect(message).toContain(`'${NESTED_DIR}'`);
+    expect(message).toContain('EACCES');
+    // The projection reads no include/exclude, so its remedy must not PRESCRIBE
+    // one — four spellings of `resources.exclude` were tried against this lane
+    // and none changed anything — and must say so, since the adopter who tried
+    // them is the one reading this. Outside a repository "gitignore it" is a
+    // dead knob too, so the remedy names the missing repository instead.
+    expect(message).not.toMatch(/add it to resources\.exclude/);
+    expect(message).toMatch(/regardless of resources\.include or resources\.exclude/);
+    expect(message).toMatch(/no git repository/i);
+    expect(message).not.toMatch(/gitignore it/);
+    // Root-relative: an absolute path here is the developer's $HOME in a CI log.
+    expect(message).not.toContain(root);
+  });
+
+  it('enumerates the whole tree when nothing refuses (positive control)', async () => {
+    expect(pathsOf(await contribute())).toContain(NESTED_FILE);
   });
 });

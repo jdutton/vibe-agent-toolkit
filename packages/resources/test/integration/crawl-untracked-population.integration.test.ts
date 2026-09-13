@@ -89,7 +89,7 @@ let plainMembers: string[] = [];
  */
 async function crawlMembers(rootDir: string): Promise<string[]> {
   const registry = new ResourceRegistry({ baseDir: rootDir });
-  const resources = await registry.crawl({ baseDir: rootDir, include: ['**/*.md'] });
+  const resources = await registry.crawl({ unreadable: 'refuse', baseDir: rootDir, include: ['**/*.md'] });
   return resources
     .map((resource) => toForwardSlash(safePath.relative(rootDir, resource.filePath)))
     .sort(compareCodeUnits);

@@ -266,11 +266,18 @@ export async function reviewCommand(
     const skillPath = resolveSkillPath(pathArg);
     logger.debug(`Reviewing SKILL.md at: ${skillPath}`);
 
-    const packagingConfig = (await resolveSkillPackagingConfig(skillPath)) ?? undefined;
+    // `'refuse'` on both: a review that cannot tell whether this skill is
+    // declared, or which suites are the project's, would report against the
+    // wrong rules at exit 0. The throw lands in the catch below →
+    // `handleCommandError`, exit 2.
+    const packagingConfig = (await resolveSkillPackagingConfig(skillPath, 'refuse')) ?? undefined;
     // Project-wide test input: a review of skill A must not count skill B's eval
     // suite as content A ships. Memoized per config root; `[]` in wild mode.
     const result = await validateSkillForPackaging(skillPath, packagingConfig, 'source', {
-      projectSkills: await resolveProjectDeclaredEvalSuites(skillPath),
+      projectSkills: await resolveProjectDeclaredEvalSuites(skillPath, 'refuse'),
+      // Same ruling as the discovery above: a review is acted on whole, so a
+      // directory the registry crawl cannot list refuses it by name.
+      unreadable: 'refuse',
     });
     // The anchor root for a single-skill review is the skill's own project
     // boundary — the same base the packaging validator anchored its issues

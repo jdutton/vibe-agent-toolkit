@@ -8,6 +8,7 @@ import { existsSync as fsExistsSync, type Dirent } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
+  conventionalSuiteProbe,
   crawlAndResolveRegistry,
   detectDeclaredButMissing,
   detectMarketplacePluginSourceMissing,
@@ -21,6 +22,7 @@ import {
   validateMarketplace,
   validateSkill,
   validateSkillForPackaging,
+  type ConventionalSuiteProbe,
   type EvidenceRecord,
   type PackagingValidationResult,
   type SkillPackagingConfig,
@@ -46,6 +48,7 @@ import {
   type Target,
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
+import { listingRefusalRemedy, type RegistryUnreadablePolicy } from '@vibe-agent-toolkit/resources';
 import {
   calculateValidationStatus,
   countBySeverity,
@@ -61,6 +64,7 @@ import {
   resetProjectRootCaches,
   safePath,
 } from '@vibe-agent-toolkit/utils';
+import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import {
   gitFindRoot,
   type GitTracker,
@@ -88,11 +92,13 @@ import {
   formatIssueLines,
   formatSeverityBreakdown,
   issuesToRenderAtVerbosity,
+  sumSeverityCounts,
 } from '../utils/issue-rendering.js';
 import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { relativizePathEntries } from '../utils/relativize-paths.js';
+import { nothingCheckedFinding } from '../utils/run-integrity.js';
 import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';
 import { computeConfigVerdicts } from '../utils/verdict-helpers.js';
@@ -113,7 +119,11 @@ import {
   type Provenance,
 } from './audit/provenance.js';
 import { createAuditSettingsCommand } from './audit-settings.js';
-import { discoverSkillsFromConfig } from './skills/skill-discovery.js';
+import {
+  type DiscoveryUnreadablePolicy,
+  discoverSkillsFromConfig,
+  SKILLS_INCLUDE_REMEDY,
+} from './skills/skill-discovery.js';
 
 export interface AuditCommandOptions {
   compat?: boolean;
@@ -162,6 +172,7 @@ const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 async function buildVATProjectContext(
   scanRoot: string,
   logger: ReturnType<typeof createLogger>,
+  locationRoot: string,
 ): Promise<VATProjectContext | null> {
   const configPath = safePath.join(scanRoot, VAT_CONFIG_FILENAME);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- scanRoot is a controlled parameter
@@ -181,7 +192,11 @@ async function buildVATProjectContext(
 
   const skillConfigs = new Map<string, SkillPackagingConfig>();
   try {
-    const discovered = await discoverSkillsFromConfig(config.skills, scanRoot);
+    const discovered = await discoverSkillsFromConfig(
+      config.skills,
+      scanRoot,
+      degradingDiscovery(scanRoot, logger, locationRoot),
+    );
     const { defaults, config: perSkillConfig } = config.skills;
 
     for (const skill of discovered) {
@@ -197,7 +212,15 @@ async function buildVATProjectContext(
 
     logger.debug(`Config-aware audit: found ${discovered.length} skill(s) in ${scanRoot}`);
   } catch (error) {
-    logger.debug(`Config-aware audit: failed to discover skills in ${scanRoot}: ${String(error)}`);
+    // Discovery was handed the degrade policy above, so a refused listing never
+    // reaches here; one that does (a caller that switched it to `'refuse'`) is
+    // still degraded past through the same ledger rather than swallowed. It used
+    // to be `logger.debug` for ANY error, which is how a `chmod 000` directory
+    // under `skills.include` downgraded every skill to config-free validation with
+    // the directory named nowhere an operator without `--debug` could see it. A
+    // defect in discovery is not environmental and still fails loudly.
+    if (!(error instanceof DirectoryListingRefusedError)) throw error;
+    recordRefusedDiscovery(error, scanRoot, logger, locationRoot);
   }
 
   if (skillConfigs.size === 0) {
@@ -346,21 +369,37 @@ async function resolveGoverningConfig(
   logger: ReturnType<typeof createLogger>,
   locationRoot: string,
 ): Promise<ReturnType<typeof stripValidationAllowForDisplay> | null> {
+  // The walk-up the resolver is about to do (cached), so the degrade handler can
+  // name the config whose include reached the directory. `null` means no config
+  // governs this skill; the resolver answers the same and nothing can be refused.
+  const configRoot = findProjectRoot(safePath.resolve(skillPath, '..'));
+  if (configRoot === null) return null;
   let fullConfig: Awaited<ReturnType<typeof resolveSkillPackagingConfig>>;
   try {
-    fullConfig = await resolveSkillPackagingConfig(skillPath);
+    fullConfig = await resolveSkillPackagingConfig(skillPath, degradingDiscovery(configRoot, logger, locationRoot));
   } catch (err) {
-    if (!(err instanceof ConfigLoadError)) throw err;
-    recordUnloadableConfig(err, logger, locationRoot);
-    return null;
+    if (err instanceof ConfigLoadError) {
+      recordUnloadableConfig(err, logger, locationRoot);
+      return null;
+    }
+    // Unreachable while the resolver is handed `degradingDiscovery` above — the
+    // crawl then enumerates around a refused directory instead of throwing — but
+    // kept as the fallback for the default policy: same two channels, the skill
+    // goes on config-free rather than the run aborting.
+    if (err instanceof DirectoryListingRefusedError) {
+      recordRefusedDiscovery(err, configRoot, logger, locationRoot);
+      return null;
+    }
+    throw err;
   }
   return fullConfig === null ? null : stripValidationAllowForDisplay(fullConfig);
 }
 
 /**
- * Configs this run has already reported as unloadable, keyed by the config's own
- * project root, each holding the synthetic result that carries its finding into
- * the report.
+ * Configs this run has already degraded past — unloadable, or loaded but with a
+ * `skills.include` the crawl could not fully expand — keyed by the PATH that was
+ * refused (the config file, or the directory the crawl could not list), each
+ * holding the synthetic result that carries its finding into the report.
  *
  * 🚨 MODULE-scoped, and cleared by {@link resetAuditCaches}, exactly like
  * `config-loader.ts`'s `warnedConfigPaths`. It used to be a `Set` threaded as a
@@ -373,15 +412,47 @@ async function resolveGoverningConfig(
  * while the lane that actually repeated was never exercised. A run-scoped ledger
  * cannot be re-created per call by mistake; a parameter can.
  *
- * ⚠️ Keyed on `ConfigLoadError.projectRoot`, NOT on `err.message`. The old key
- * was the message with a comment claiming it "names the offending config path" —
- * true only for a Zod failure, which is what the fixture happened to be. A YAML
- * SYNTAX error is thrown out of `yaml.parse` and wrapped as `Failed to load
- * config: ${message}`, and `YAMLParseError.message` carries no filename at all,
- * so two nested projects with the same copy-pasted broken config collapsed to ONE
- * warning naming NEITHER.
+ * ⚠️ Keyed on the refused PATH (derived from `ConfigLoadError.projectRoot` or
+ * `DirectoryListingRefusedError.refusal.directory`), NOT on `err.message`. The
+ * old key was the message with a comment claiming it "names the offending config
+ * path" — true only for a Zod failure, which is what the fixture happened to be.
+ * A YAML SYNTAX error is thrown out of `yaml.parse` and wrapped as `Failed to
+ * load config: ${message}`, and `YAMLParseError.message` carries no filename at
+ * all, so two nested projects with the same copy-pasted broken config collapsed
+ * to ONE warning naming NEITHER.
  */
 const unloadableConfigResults: Map<string, ValidationResult> = new Map();
+
+/**
+ * The RUN's conventional-suite probe — the memo behind "does
+ * `<skill-root>/evals/evals.json` exist?".
+ *
+ * Resolving one skill's test input asks that question of the SUBJECT and of
+ * every entry in `projectSkills`, so a probe minted per skill costs S questions
+ * per skill and S² per run over the same S paths. Measured with the lab on a
+ * 103-skill adopter: 10,815 probes over 103 distinct paths, half of the
+ * command's entire filesystem traffic.
+ *
+ * 🚨 MODULE-scoped and cleared by {@link resetAuditCaches}, for the same reason
+ * `unloadableConfigResults` above is: this command has TWO lanes that build a
+ * shared context — {@link validateSingleSkill} and {@link handleFileEntry} — and
+ * both build it PER SKILL, inside their own loops. A probe threaded as a
+ * parameter would be re-minted by whichever lane forgot to thread it, silently,
+ * and that is exactly how this stayed quadratic: the field existed and no caller
+ * set it.
+ *
+ * ⚠️ Its lifetime is the RUN, never longer. The answer is a filesystem snapshot,
+ * and a memo outliving the invocation would keep answering for a tree that has
+ * since changed — in the CLI entrypoint AND in an in-process test sharing a
+ * vitest worker.
+ */
+let runSuiteProbe: ConventionalSuiteProbe | undefined;
+
+/** The run's probe, minted on first use and dropped by {@link resetAuditCaches}. */
+function suiteProbeForRun(): ConventionalSuiteProbe {
+  runSuiteProbe ??= conventionalSuiteProbe();
+  return runSuiteProbe;
+}
 
 /**
  * Warn about — and file a finding for — a governing config this run could not
@@ -396,9 +467,9 @@ function recordUnloadableConfig(
   logger: ReturnType<typeof createLogger>,
   locationRoot: string,
 ): void {
-  if (unloadableConfigResults.has(err.projectRoot)) return;
   const configPath = safePath.join(err.projectRoot, VAT_CONFIG_FILENAME);
-  unloadableConfigResults.set(err.projectRoot, unreadablePathResult(configPath, err, locationRoot));
+  if (unloadableConfigResults.has(configPath)) return;
+  unloadableConfigResults.set(configPath, unreadablePathResult(configPath, err, locationRoot));
   // The filesystem answer changes the NOUN, because the two conditions need
   // different actions from the operator: `chmod`/ownership on one side, an edit
   // to the file on the other. Collapsing them into one sentence was the whole
@@ -411,6 +482,130 @@ function recordUnloadableConfig(
 }
 
 /**
+ * Audit's discovery policy: enumerate AROUND a directory the crawl cannot list,
+ * report the gap, and keep every skill the crawl could see under its config.
+ *
+ * 🔑 This is what keeps ONE `chmod 000` sibling from costing a readable,
+ * declared skill every config-aware check. Discovery's default is to refuse —
+ * right for a build that must not ship a shorter bundle — but audit already
+ * validates "a skill beside the unreadable path exactly as if it were not
+ * there", and that promise is only kept if discovery degrades the same way the
+ * walk does. The refusal is recorded through the same ledger as an unloadable
+ * config, so it is warned about once and filed once however many skills ask.
+ *
+ * @param configRoot - The project root whose `skills.include` is being expanded
+ * @param logger - Warnings go to stderr; the finding goes to the report
+ * @param locationRoot - The run's anchor base for the emitted location
+ */
+function degradingDiscovery(
+  configRoot: string,
+  logger: ReturnType<typeof createLogger>,
+  locationRoot: string,
+): DiscoveryUnreadablePolicy {
+  return {
+    degrade: (refusal) => {
+      recordRefusedDiscovery(
+        new DirectoryListingRefusedError(refusal, { root: configRoot, remedy: SKILLS_INCLUDE_REMEDY }),
+        configRoot,
+        logger,
+        locationRoot,
+      );
+    },
+  };
+}
+
+/**
+ * Audit's ruling for the registry crawl — the link graph `crawlAndResolveRegistry`
+ * builds over the whole project root for the config-aware lane: enumerate
+ * AROUND a directory it cannot list, file the gap, keep every readable document.
+ *
+ * The other half of {@link degradingDiscovery}, on the other crawl the
+ * config-aware lane makes. Every other verb hands this crawl `'refuse'` (a build
+ * must not ship a shorter bundle), and while the registry carried that ruling
+ * INSIDE itself `vat audit` on a tree with one `chmod 000` sibling exited 2
+ * with `status: error` and ZERO findings — issue #180's exact shape, from the
+ * crawl the fix for #180 never looked at. Audit's contract is the opposite:
+ * status describes what was found, exit describes whether the run completed.
+ *
+ * Recorded through the same per-directory ledger as a refused discovery, so a
+ * directory both crawls meet is warned about once and filed once; a directory
+ * only THIS crawl meets (the link graph covers the whole root, discovery only
+ * `skills.include`'s bases) gets its own sentence, naming the crawl that
+ * skipped it. The finding carries the projection's remedy — the same sentence
+ * the refuse ruling throws — because `--exclude` governs audit's own walk, not
+ * this crawl, and an ignore rule is the one knob that does.
+ *
+ * @param projectRoot - The root the link graph is crawled from
+ * @param logger - Warnings go to stderr; the finding goes to the report
+ * @param locationRoot - The run's anchor base for the emitted location
+ */
+function degradingRegistry(
+  projectRoot: string,
+  logger: ReturnType<typeof createLogger>,
+  locationRoot: string,
+): RegistryUnreadablePolicy {
+  return {
+    degrade: (refusal) => {
+      const err = new DirectoryListingRefusedError(refusal, { root: projectRoot, remedy: listingRefusalRemedy(projectRoot) });
+      recordRefusedListing(err, logger, locationRoot, () =>
+        `The link graph under ${projectRoot} skipped an unreadable directory; every document beneath it`
+        + ` is missing from this audit's link and reference checks: ${err.message}`);
+    },
+  };
+}
+
+/**
+ * Warn about — and file a finding for — a directory that skill discovery under
+ * `configRoot` could not list, once per directory however many skills ask.
+ *
+ * The finding is anchored on the DIRECTORY, not the config: the config loaded
+ * fine, and the directory is the path the filesystem refused. In the directory
+ * lane the walk's own per-entry guard files the same code on the same location;
+ * {@link dedupeUnreadablePathResults} keeps one. The warning carries the crawl's
+ * own sentence, which already names the directory against the project root and
+ * the `skills.include` remedy.
+ *
+ * @param err - The refusal, naming the directory the crawl could not list
+ * @param configRoot - The project root whose `skills.include` reached it
+ * @param logger - Warnings go to stderr; the finding goes to the report
+ * @param locationRoot - The run's anchor base for the emitted location
+ */
+function recordRefusedDiscovery(
+  err: DirectoryListingRefusedError,
+  configRoot: string,
+  logger: ReturnType<typeof createLogger>,
+  locationRoot: string,
+): void {
+  const configPath = safePath.join(configRoot, VAT_CONFIG_FILENAME);
+  recordRefusedListing(err, logger, locationRoot, () =>
+    `Skill discovery under ${configPath} skipped an unreadable directory; any skill beneath it`
+    + ` is missing from this audit: ${err.message}`);
+}
+
+/**
+ * The one ledger write for a refused listing, whichever crawl met it: file
+ * `SCAN_PATH_UNREADABLE` on the directory and warn once on stderr. Keyed on the
+ * refused directory, so the second crawl to meet it — discovery and the link
+ * graph both walk `skills/locked` in the directory lane — says nothing more.
+ *
+ * @param err - The refusal, naming the directory the crawl could not list
+ * @param logger - Warnings go to stderr; the finding goes to the report
+ * @param locationRoot - The run's anchor base for the emitted location
+ * @param warning - The stderr sentence, built only when this is the first record
+ */
+function recordRefusedListing(
+  err: DirectoryListingRefusedError,
+  logger: ReturnType<typeof createLogger>,
+  locationRoot: string,
+  warning: () => string,
+): void {
+  const directory = err.refusal.directory;
+  if (unloadableConfigResults.has(directory)) return;
+  unloadableConfigResults.set(directory, unreadablePathResult(directory, err, locationRoot));
+  logger.warn(warning());
+}
+
+/**
  * The synthetic results for every config this run degraded past, so the report
  * carries what the stderr warning says.
  *
@@ -419,6 +614,24 @@ function recordUnloadableConfig(
  */
 function unloadableConfigFindings(): ValidationResult[] {
   return [...unloadableConfigResults.values()];
+}
+
+/**
+ * A run's results plus the findings for every config it degraded past, with each
+ * refused path reported once.
+ *
+ * Appended, not merged into a neighbour: a config the scan could not load, or a
+ * directory its discovery could not list, has no host result to hang off, and
+ * attributing it to a skill would name a file that was read fine. Without the
+ * append the ONLY record was a stderr warning, so a run that downgraded every
+ * skill under that config to the weaker config-free validator exited 0 with a
+ * report that said nothing about it. Deduped AFTER the append, because the
+ * directory lane's walk files its own `SCAN_PATH_UNREADABLE` on the very
+ * directory a refused discovery names — one fact, one finding, whichever lane
+ * met it first.
+ */
+function withDegradedConfigFindings(results: ValidationResult[]): ValidationResult[] {
+  return dedupeUnreadablePathResults([...results, ...unloadableConfigFindings()]);
 }
 
 async function validateSingleSkill(
@@ -448,10 +661,18 @@ async function validateSingleSkill(
     // The project's declared eval suites, memoized per config root, so this lane
     // predicts the same bundle the packager produces: no skill's report counts a
     // SIBLING skill's eval suite as an ordinary bundled file.
+    // Audit's ruling for the link-graph crawl — see {@link degradingRegistry}.
+    // Stated on the context too, for the fallback crawl `validateSkillForPackaging`
+    // makes when this registry does not cover the skill: one ruling, both crawls.
+    const unreadable = degradingRegistry(projectRoot, logger, locationRoot);
     const sharedCtx: SkillValidationSharedContext = {
-      registry: await crawlAndResolveRegistry(projectRoot),
+      registry: await crawlAndResolveRegistry(projectRoot, { unreadable }),
+      unreadable,
       locationRoot,
-      projectSkills: await resolveProjectDeclaredEvalSuites(skillPath),
+      projectSkills: await resolveProjectDeclaredEvalSuites(skillPath, degradingDiscovery(projectRoot, logger, locationRoot)),
+      // The RUN's probe, not this call's — see {@link runSuiteProbe}. This lane
+      // is called in a loop over every skill in a plugin.
+      suiteProbe: suiteProbeForRun(),
     };
     if (gitTracker !== null) {
       sharedCtx.gitTracker = gitTracker;
@@ -522,6 +743,20 @@ function collect(value: string, previous: string[]): string[] {
 /**
  * Create audit command
  * Top-level command: vat audit [path]
+ *
+ * 🔑 **Two verdicts, deliberately.** The YAML `status` describes the FINDINGS;
+ * the exit code describes whether the RUN completed. `status: error` beside exit
+ * `0` is the correct pair for a tree with errors, and both facts are worth
+ * publishing — but `status` moves with the exit code in every other command of
+ * this CLI, so this one is the exception and the help text says so out loud (see
+ * the `Output` and `Exit Codes` sections below, and `docs/audit.md`).
+ *
+ * ⚠️ Do NOT "reconcile" the two by making one follow the other. Making the exit
+ * code follow `status` turns an advisory report into a gate — the thing
+ * `vat validate` already is, and the thing this command's published contract
+ * promises it is not. Making `status` follow the exit code deletes the only
+ * machine-readable verdict a CI consumer has, and a stamped `success` over a
+ * report full of errors is a stronger falsehood than the mismatch ever was.
  */
 export function createAuditCommand(): Command {
   const audit = new Command('audit');
@@ -594,11 +829,26 @@ Description:
     done
   (See packages/cli/docs/audit.md for details.)
 
+Output — two verdicts, and they answer different questions:
+  The YAML 'status' describes the FINDINGS. The exit code describes whether the
+  RUN completed. On a tree with errors that is 'status: error' beside exit 0,
+  and both are correct.
+
+  Note that 'status' means something narrower here than elsewhere in this CLI,
+  where it moves with the exit code. Gate CI on the report — 'status' and
+  'issueCounts' — never on this command's exit code.
+
+  A run that audited ZERO files is refused, not passed: 'status: error' with one
+  non-overridable RESOURCE_CHECK_BROKEN under a top-level 'issues:' (the claim is
+  about the run, so it is not a files[] row), still beside exit 0 — the run
+  completed; it just is not a verdict.
+
 Validation Behavior:
   Advisory only: audit surfaces all validation issues for inspection.
   Unlike 'vat skills validate', audit:
   - NEVER applies validation.allow (allowed codes are always shown)
-  - Respects validation.severity: codes set to 'ignore' are hidden
+  - Respects validation.severity: a code set to 'ignore' is hidden; warnings
+    and errors are both reported, each at its configured severity
   - ALWAYS exits 0 for validation results (never gates on errors)
 
   For gated validation (CI/CD), use: vat skills validate
@@ -643,14 +893,24 @@ Config-Aware Validation:
   which prevents false warnings for links the build pipeline resolves.
 
   Config-aware mode never applies validation.allow — audit always shows
-  all issues. validation.severity IS applied: a code set to 'ignore' is
-  hidden. skills.defaults.validation.severity applies project-wide (skills,
-  plugins and marketplaces alike); skills.config.<name>.validation.severity
-  layers on top for that skill.
+  all issues. validation.severity IS applied, from three scopes, least
+  specific first:
+    resources.validation.severity          project-wide (the same dial
+                                           'vat resources validate' reads)
+    skills.defaults.validation.severity    project-wide (skills, plugins and
+                                           marketplaces alike)
+    skills.config.<name>.validation...     that one skill
 
 Exit Codes:
-  0 - Always (even when validation errors are surfaced)
-  2 - System error (config invalid, directory not found)
+  0 - Always, when the audit completes — including when it reports
+      'status: error'. The findings are in the report; see Output above.
+      A missing or unrecognised path is UNKNOWN_FORMAT; an unreadable one,
+      or a governing config that cannot be loaded or whose skills.include
+      reaches an unreadable directory, is SCAN_PATH_UNREADABLE — readable
+      siblings are still validated, and the config's skills config-free.
+  2 - The audit could not run at all (--user with no Claude config dir,
+      a git URL that would not clone, an internal failure), so there is
+      no report to read.
 
 Examples:
   $ vat audit ./plugins/              # Audit recursively (default)
@@ -732,7 +992,7 @@ async function auditUserDirectories(
     process.exit(2);
   }
 
-  const results: ValidationResult[] = [];
+  const scanned: ValidationResult[] = [];
 
   // The roots that exist, minus any one another already covers — see
   // {@link userScanTargets}. `marketplaces/` lives inside `plugins/`.
@@ -743,13 +1003,13 @@ async function auditUserDirectories(
   ];
   for (const target of userScanTargets(present, recursive)) {
     logger.debug(`Auditing user-level resources at: ${target}`);
-    results.push(...await getValidationResults(target, recursive, options, logger, scanRoot));
+    scanned.push(...await getValidationResults(target, recursive, options, logger, scanRoot));
   }
 
   // The `--user` report is assembled here rather than by `buildAuditReport`, so
   // it needs its own append or the config findings would reach stderr and not the
   // document — see the same call in `buildAuditReport`.
-  results.push(...unloadableConfigFindings());
+  const results = withDegradedConfigFindings(scanned);
 
   // Run compatibility analysis if --compat flag is set
   const compatMap = options.compat
@@ -764,7 +1024,7 @@ async function auditUserDirectories(
   if (verbose) {
     renderVerboseEvidence(results, scanRoot, logger);
   }
-  logHierarchicalSummary(results, logger);
+  logHierarchicalSummary(results, summary.issues, logger);
 }
 
 /** Skill resource types that can have per-skill validation config. */
@@ -857,13 +1117,21 @@ function buildFilteredResult(
  * same config promoted correctly. Two lanes, one config key, opposite answers.
  *
  * Status and counts are re-derived from the resolved severities by
- * {@link buildFilteredResult}, so a promotion moves the reported status. It does
- * NOT move this command's exit code — `vat audit` is advisory and its exit-code
- * behaviour is a separate, pre-existing question tracked in its own issue. That
- * asymmetry with `vat verify` (whose exit code IS severity-derived) is
- * deliberate here rather than overlooked.
+ * {@link buildFilteredResult}, so a promotion moves the reported STATUS — which
+ * describes the findings — and never the exit code, which describes whether the
+ * run completed. The two are different questions and audit publishes both; see
+ * {@link handleAuditResults} and the `Output` section of this command's help.
+ * `vat verify` derives its exit code from severity because it is a gate; this
+ * command is a report.
  *
- * Two scopes, both live:
+ * THREE scopes, least specific first:
+ *  - `resources.validation.severity` — the PROJECT-WIDE map `vat resources
+ *    validate` already honours. Audit read only the two `skills.*` scopes below,
+ *    so one dial in one config file produced opposite answers from the two
+ *    commands: measured on a two-code fixture, `LINK_MISSING_TARGET: ignore` and
+ *    `LINK_TO_NAVIGATION_FILE: error` written here moved neither finding in
+ *    audit. It is applied FIRST — a `skills` scope naming the same code is the
+ *    more specific statement and wins.
  *  - `skills.defaults.validation.severity` — the PROJECT-WIDE map, applied to
  *    every result this run produced, including `claude-plugin` and `marketplace`
  *    ones. It used to be applied only to skill-typed results, which left the
@@ -901,12 +1169,14 @@ function applySeverityFilter(
   results: ValidationResult[],
   config: ReturnType<typeof loadConfig>
 ): ValidationResult[] {
-  if (config?.skills === undefined) {
-    return results;
-  }
-
-  const skillsConfig = config.skills;
-  const defaultSeverity = skillsConfig.defaults?.validation?.severity ?? {};
+  const skillsConfig = config?.skills;
+  // NOT gated on `config.skills` existing. It was, and that made the resources
+  // dial below inert for exactly the projects that have only one — a repo of
+  // plugins declares no skills at all.
+  const resourceSeverity = config?.resources?.validation?.severity ?? {};
+  const defaultSeverity = skillsConfig?.defaults?.validation?.severity ?? {};
+  const projectSeverity: NonNullable<SeverityConfig['severity']> =
+    { ...resourceSeverity, ...defaultSeverity };
 
   // `.filter` after `.map`, not `.map` alone: a synthetic unreadable-path result
   // exists ONLY to carry its finding, so once the adopter has set
@@ -919,11 +1189,11 @@ function applySeverityFilter(
     const skillName = SKILL_RESULT_TYPES.has(result.type) ? result.metadata?.name : undefined;
     const perSkillSeverity = skillName === undefined
       ? {}
-      : (skillsConfig.config?.[skillName]?.validation?.severity ?? {});
+      : (skillsConfig?.config?.[skillName]?.validation?.severity ?? {});
 
-    // Merge: per-skill overrides default
+    // Merge, least specific first: resources → skills.defaults → skills.config.<name>
     const effectiveSeverity: NonNullable<SeverityConfig['severity']> =
-      { ...defaultSeverity, ...perSkillSeverity };
+      { ...projectSeverity, ...perSkillSeverity };
 
     if (Object.keys(effectiveSeverity).length === 0) {
       return result;
@@ -1011,15 +1281,20 @@ export async function buildAuditReport(
   logger.debug(`Auditing resources at: ${scanPath}`);
 
   const scanRoot = deriveScanRoot(scanPath);
-  // Appended, not merged into a neighbour: a config the scan could not load has
-  // no host result to hang off, and attributing it to a skill would name a file
-  // that was read fine. Without this the ONLY record was a stderr warning, so a
-  // run that downgraded every skill under that config to the weaker config-free
-  // validator exited 0 with a report that said nothing about it.
-  const rawResults = [
-    ...await getValidationResults(scanPath, recursive, options, logger, scanRoot),
-    ...unloadableConfigFindings(),
-  ];
+  const scanned = await getValidationResults(scanPath, recursive, options, logger, scanRoot);
+
+  // Build config-aware context scoped to the single derived config root —
+  // used by compat analysis to resolve the plugin-level `targets` union.
+  // VAT's design: one config per project, no composition.
+  //
+  // BEFORE the report is assembled, not after: this is the lane that expands
+  // `skills.include` even when the scan reached no SKILL.md under the config,
+  // and a refusal it meets is recorded in the same ledger the append below
+  // reads. Built afterwards, that finding reached stderr and not the document.
+  const vatContextForCompat = await buildVATProjectContext(deriveConfigRoot(scanPath), logger, scanRoot);
+
+  // See {@link withDegradedConfigFindings} for why these are appended, not merged.
+  const rawResults = withDegradedConfigFindings(scanned);
 
   // Load config for severity filtering (audit ignores allow; only severity matters).
   //
@@ -1051,11 +1326,6 @@ export async function buildAuditReport(
   const results = applySeverityFilter(rawResults, config);
 
   const effectiveSettings = await resolveEffectiveSettings(options, scanPath, logger);
-
-  // Build config-aware context scoped to the single derived config root —
-  // used by compat analysis to resolve the plugin-level `targets` union.
-  // VAT's design: one config per project, no composition.
-  const vatContextForCompat = await buildVATProjectContext(deriveConfigRoot(scanPath), logger);
 
   // Run compatibility analysis if --compat flag is set
   const compatMap = options.compat
@@ -1298,9 +1568,23 @@ async function appendPluginInventoryToSurfaceResults(
 
 /**
  * Surface `inventory.parseErrors[]` as `PLUGIN_INVALID_JSON` findings on
- * `result`, skipping the plugin.json manifest entry (which is already covered
- * by `validatePlugin`). Only hooks/hooks.json and .mcp.json parse errors reach
- * this helper; they are appended with error severity.
+ * `result`, skipping the entries another lane already files under their own
+ * code:
+ *
+ * - the plugin.json manifest entry, covered by `validatePlugin`;
+ * - every `SKILL.md` entry. The skill extractor records a SKILL.md it could
+ *   not open, could not parse, or could not link-walk on the plugin's
+ *   `parseErrors[]` — and each of those is the SKILL's finding, filed on the
+ *   skill by its own validation (`SCAN_PATH_UNREADABLE`,
+ *   `SKILL_MISSING_FRONTMATTER`) in both the plugin-target lane
+ *   (`validatePluginSkillsViaInventory`, over the same inventory) and the
+ *   directory lane (the walk reaches every SKILL.md beneath the plugin).
+ *   Re-filing it here was a second copy under a code that names a file it is
+ *   not (plugin.json) and a format it is not (JSON), at error severity beside
+ *   the skill lane's warning, and carrying the build host's absolute path.
+ *
+ * What remains — hooks/hooks.json, .mcp.json — is appended with error
+ * severity, the message spelled scan-root-relative wherever it names the file.
  */
 function appendInventoryParseErrors(
 	result: ValidationResult,
@@ -1310,11 +1594,11 @@ function appendInventoryParseErrors(
 	const pluginJsonSuffix = safePath.join('.claude-plugin', 'plugin.json');
 	const parseIssues: ValidationIssue[] = [];
 	for (const err of inv.parseErrors) {
-		if (err.path.endsWith(pluginJsonSuffix)) continue;
+		if (err.path.endsWith(pluginJsonSuffix) || basename(err.path) === 'SKILL.md') continue;
 		parseIssues.push({
 			severity: 'error',
 			code: 'PLUGIN_INVALID_JSON',
-			message: err.message,
+			message: withRelativePath(err.message, err.path, locationRoot),
 			location: issueLocation(err.path, locationRoot),
 		});
 	}
@@ -1362,7 +1646,9 @@ export async function getValidationResults(
 	locationRoot: string,
 ): Promise<ValidationResult[]> {
 	try {
-		return await validateAuditSubject(scanPath, recursive, options, logger, locationRoot);
+		return dedupeUnreadablePathResults(
+			await validateAuditSubject(scanPath, recursive, options, logger, locationRoot),
+		);
 	} catch (error) {
 		// Only the filesystem refusing the subject degrades; a defect in a validator
 		// must still fail loudly rather than be reported as a permissions problem.
@@ -1370,6 +1656,81 @@ export async function getValidationResults(
 		logger.debug(`Unreadable audit subject: ${scanPath}`);
 		return [unreadablePathResult(scanPath, error, locationRoot)];
 	}
+}
+
+/**
+ * One refused path, one `SCAN_PATH_UNREADABLE` — however many lanes met it.
+ *
+ * Two lanes can reach the same unreadable directory in one run: the directory
+ * walk (`scanDirectory`, which files the synthetic {@link unreadablePathResult})
+ * and the distributed-tree detector, which crawls a skill's own directory at any
+ * depth and reports what it could not list as an issue ON the skill's result.
+ * Their populations overlap, but neither contains the other: the walk skips
+ * what `--exclude`, the project's `resources.exclude` and gitignore skip, and
+ * does not descend at all under `--no-recursive` or when the SKILL.md is named
+ * directly — the detector enters all of those. So "the walk already reports
+ * everything under the scan root" is false in both directions, and a rule that
+ * silenced one lane by geography would drop the refusal in exactly the cases
+ * where it is the only report. The rule is instead keyed on the FACT: the
+ * code and the location, which both lanes derive from the same directory and
+ * the same anchor root.
+ *
+ * The hosted issue wins and the synthetic result is dropped, not the reverse:
+ * the detector's copy says which SKILL's crawl was cut short, which the
+ * synthetic result cannot, and it is the only copy the direct-target lane ever
+ * produces — so keeping it makes the two lanes' reports the same shape. A
+ * synthetic result that carried nothing but the duplicate is removed whole; one
+ * that somehow carried more keeps its other issues (it cannot today, but the
+ * filter says what it means rather than assuming).
+ *
+ * A THIRD lane files synthetic results too: skill discovery under a governing
+ * config, which refuses a directory its `skills.include` cannot list and is
+ * recorded through {@link recordRefusedDiscovery}. In the directory lane the
+ * walk has already filed its own synthetic result on that same directory, so
+ * two synthetic results can carry one fact. Among synthetics the FIRST wins and
+ * later copies of the same location are dropped — the walk's copy carries the
+ * raw errno, the discovery's copy the crawl's remedy sentence, and the stderr
+ * warning carries the latter either way.
+ */
+function dedupeUnreadablePathResults(results: ValidationResult[]): ValidationResult[] {
+	const reported = new Set<string>();
+	for (const result of results) {
+		if (result.type === 'unknown') continue;
+		for (const issue of result.issues) {
+			if (issue.code === 'SCAN_PATH_UNREADABLE') reported.add(issue.location ?? '');
+		}
+	}
+	return results.flatMap((result) => {
+		if (result.type !== 'unknown') return [result];
+		const kept = withoutHostedRefusals(result, reported);
+		for (const survivor of kept) {
+			for (const issue of survivor.issues) {
+				if (issue.code === 'SCAN_PATH_UNREADABLE') reported.add(issue.location ?? '');
+			}
+		}
+		return kept;
+	});
+}
+
+/**
+ * A synthetic result minus the refusals some hosted result already carries —
+ * as an empty array when nothing is left, so {@link dedupeUnreadablePathResults}
+ * can `flatMap` it away.
+ */
+function withoutHostedRefusals(result: ValidationResult, hosted: ReadonlySet<string>): ValidationResult[] {
+	const issues = result.issues.filter(
+		(issue) => !(issue.code === 'SCAN_PATH_UNREADABLE' && hosted.has(issue.location ?? '')),
+	);
+	if (issues.length === 0) return [];
+	if (issues.length === result.issues.length) return [result];
+	const issueCounts = countBySeverity(issues);
+	return [{
+		...result,
+		status: calculateValidationStatus(issues),
+		summary: formatCountsSummary(issueCounts),
+		issues,
+		issueCounts,
+	}];
 }
 
 async function validateAuditSubject(
@@ -1566,8 +1927,56 @@ function resolveConfigTargetsForPlugin(
   return union.size === 0 ? undefined : [...union];
 }
 
+/** What the settings check compared and what it could not — the checker's own answer, paths absolute. */
+type SettingsCheck = Awaited<ReturnType<typeof checkSettingsCompatibility>>;
+
 /**
- * Run compatibility analysis on plugin results and return a map of path -> CompatibilityResult.
+ * The `compatibility:` block when the analyzer produced no verdicts: it says
+ * so, in the document, rather than the block being absent.
+ *
+ * Reserved for a PLUGIN-WIDE failure — no valid `plugin.json`, a root that
+ * cannot be listed. A single file the analyzer cannot read, list or parse is
+ * NOT this: the analyzer names it under its own `CompatibilityResult.unchecked`
+ * and analyzes every other file, so its verdicts are over fewer files than the
+ * plugin ships and the document says which.
+ *
+ * 🚨 The analyzer throwing used to be `logger.debug` and NO block of either
+ * kind for that plugin, exit 0 — and it threw on the first file it could not
+ * read, so ONE unreadable SKILL.md (or one unlistable directory) was enough.
+ * Under `--settings` the settings check, which does not depend on the
+ * analyzer at all, never ran either. A plugin the run could not analyze was
+ * indistinguishable from one the operator never asked about.
+ */
+interface CompatibilityUnavailable {
+  analyzed: false;
+  /** The analyzer's own message, with the refused path root-relative. */
+  reason: string;
+}
+
+/** What the `compatibility:` block can hold. */
+type CompatibilityBlock = CompatibilityResult | CompatibilityUnavailable;
+
+/**
+ * One plugin's entry in the compat map: what each lane the operator asked for
+ * produced. The two lanes are INDEPENDENT — the settings check is present iff
+ * the run asked for `--settings`, whether or not the analyzer succeeded.
+ */
+interface PluginCompatEntry {
+  compat: CompatibilityBlock;
+  settings?: SettingsCheck;
+}
+
+/**
+ * `message`, with `absolutePath` spelled root-relative wherever it appears.
+ * An OS refusal names the path it refused, absolutely; every other path in
+ * the document is relative to `root`, and this one leaks the build host.
+ */
+function withRelativePath(message: string, absolutePath: string, locationRoot: string): string {
+  return message.replaceAll(absolutePath, issueLocation(absolutePath, locationRoot) || '.');
+}
+
+/**
+ * Run compatibility analysis on plugin results and return a map of path -> PluginCompatEntry.
  * Non-plugin results are skipped silently.
  * When effectiveSettings is provided, also runs settings conflict detection.
  *
@@ -1589,69 +1998,130 @@ export async function runCompatAnalysis(
   locationRoot: string,
   effectiveSettings?: EffectiveSettings,
   vatContext: VATProjectContext | null = null,
-): Promise<Map<string, CompatibilityResult>> {
-  const compatMap = new Map<string, CompatibilityResult>();
+): Promise<Map<string, PluginCompatEntry>> {
+  const compatMap = new Map<string, PluginCompatEntry>();
 
   for (const result of results) {
     if (result.type !== RESOURCE_TYPE_CLAUDE_PLUGIN) continue;
 
-    try {
-      logger.debug(`Running compatibility analysis for: ${result.path}`);
-      const configTargets = resolveConfigTargetsForPlugin(result.path, vatContext);
-      const analyzeOptions = configTargets === undefined
-        ? undefined
-        : { configTargets };
-      const compat = await analyzeCompatibility(result.path, locationRoot, analyzeOptions);
-
-      // Settings conflict detection (when --settings flag is used)
-      if (effectiveSettings === undefined) {
-        compatMap.set(result.path, compat);
-      } else {
-        try {
-          const settingsConflicts = await checkSettingsCompatibility(result.path, effectiveSettings);
-          compatMap.set(result.path, { ...compat, settingsConflicts });
-        } catch (settingsErr) {
-          logger.debug(`Settings compat check skipped for ${result.path}: ${String(settingsErr)}`);
-          compatMap.set(result.path, compat);
-        }
-      }
-    } catch (err) {
-      // Log but do not fail the audit — compat analysis is best-effort
-      logger.debug(`Compatibility analysis skipped for ${result.path}: ${String(err)}`);
+    const entry: PluginCompatEntry = {
+      compat: await analyzeOrExplain(result.path, locationRoot, vatContext, logger),
+    };
+    if (effectiveSettings !== undefined) {
+      entry.settings = await settingsVerdict(result.path, effectiveSettings, locationRoot, logger);
     }
+    compatMap.set(result.path, entry);
   }
 
   return compatMap;
 }
 
 /**
+ * The analyzer's result for one plugin, or — when it threw — the reason, said
+ * on stderr and carried into the document. Compat analysis is best-effort:
+ * it never fails the audit, but a plugin it could not analyze is reported as
+ * exactly that, never as a plugin with no `compatibility:` block.
+ */
+async function analyzeOrExplain(
+  pluginDir: string,
+  locationRoot: string,
+  vatContext: VATProjectContext | null,
+  logger: ReturnType<typeof createLogger>,
+): Promise<CompatibilityBlock> {
+  try {
+    logger.debug(`Running compatibility analysis for: ${pluginDir}`);
+    const configTargets = resolveConfigTargetsForPlugin(pluginDir, vatContext);
+    const analyzeOptions = configTargets === undefined ? undefined : { configTargets };
+    return await analyzeCompatibility(pluginDir, locationRoot, analyzeOptions);
+  } catch (err) {
+    const refused = typeof (err as { path?: unknown }).path === 'string' ? (err as { path: string }).path : undefined;
+    const raw = err instanceof Error ? err.message : String(err);
+    const reason = refused === undefined ? raw : withRelativePath(raw, refused, locationRoot);
+    logger.warn(`Compatibility analysis could not run for ${issueLocation(pluginDir, locationRoot) || '.'}: ${reason}`);
+    return { analyzed: false, reason };
+  }
+}
+
+/**
+ * One plugin's settings verdict: the checker's conflicts and the paths it
+ * never saw — and, when the checker itself fails, the plugin as the one thing
+ * unchecked, rather than no `settings:` block at all.
+ *
+ * The checker failing used to be `logger.debug` and a result with no settings
+ * block, so a plugin the check could not run on was indistinguishable from one
+ * the operator never asked about. A run that asked for `--settings` and got no
+ * answer for a plugin is told so on stderr and in the document.
+ */
+async function settingsVerdict(
+  pluginDir: string,
+  effectiveSettings: EffectiveSettings,
+  locationRoot: string,
+  logger: ReturnType<typeof createLogger>,
+): Promise<SettingsCheck> {
+  try {
+    return await checkSettingsCompatibility(pluginDir, effectiveSettings);
+  } catch (settingsErr) {
+    const reason = settingsErr instanceof Error ? settingsErr.message : String(settingsErr);
+    logger.warn(`Settings compatibility could not be checked for ${issueLocation(pluginDir, locationRoot) || '.'}: ${reason}`);
+    return { conflicts: [], unchecked: [{ path: pluginDir, reason }] };
+  }
+}
+
+/** A path the settings check never compared, as the report renders it. */
+interface SettingsUncheckedEntry {
+  /** Root-relative, like every other location in the document. */
+  path: string;
+  reason: string;
+}
+
+/** The `settings:` block as the report renders it. */
+interface SettingsBlock {
+  /** `false` when a conflict was found OR when anything went unchecked — never "fine by omission". */
+  compatible: boolean;
+  conflicts: SettingsCheck['conflicts'];
+  /** Present only when non-empty: what the check never saw, and why. */
+  unchecked?: SettingsUncheckedEntry[];
+}
+
+/** A file entry with the compat lanes' blocks attached. */
+type ResultWithCompat = ValidationResult & { compatibility?: CompatibilityBlock; settings?: SettingsBlock };
+
+/**
+ * The `settings:` block for one plugin, every path anchored at `locationRoot`.
+ * `compatible` is derived from BOTH halves: zero conflicts over a skill the
+ * check never read is not compatibility, it is silence.
+ */
+function renderSettingsBlock(check: SettingsCheck, locationRoot: string): SettingsBlock {
+  const settings: SettingsBlock = {
+    compatible: check.conflicts.length === 0 && check.unchecked.length === 0,
+    conflicts: check.conflicts,
+  };
+  if (check.unchecked.length > 0) {
+    settings.unchecked = check.unchecked.map(({ path, reason }) => ({
+      path: issueLocation(path, locationRoot) || '.',
+      reason: withRelativePath(reason, path, locationRoot),
+    }));
+  }
+  return settings;
+}
+
+/**
  * Merge compatibility analysis results into validation result output objects.
  * Returns an array of plain objects ready for YAML serialization.
- * When settingsConflicts are present, adds a `settings:` block for cleaner output.
+ * A plugin the run asked `--settings` about gets a `settings:` block, whatever
+ * the analyzer did.
  */
 function mergeCompatIntoResults(
   results: ValidationResult[],
-  compatMap: Map<string, CompatibilityResult>
-): Array<ValidationResult & { compatibility?: Omit<CompatibilityResult, 'settingsConflicts'>; settings?: { compatible: boolean; conflicts: CompatibilityResult['settingsConflicts'] } }> {
+  compatMap: Map<string, PluginCompatEntry>,
+  locationRoot: string,
+): ResultWithCompat[] {
   return results.map(r => {
-    const compat = compatMap.get(r.path);
-    if (compat === undefined) return r;
-
-    // Extract settingsConflicts from compat to render as a separate `settings:` block
-    const { settingsConflicts, ...compatWithoutSettings } = compat;
-
-    if (settingsConflicts !== undefined) {
-      return {
-        ...r,
-        compatibility: compatWithoutSettings,
-        settings: {
-          compatible: settingsConflicts.length === 0,
-          conflicts: settingsConflicts,
-        },
-      };
-    }
-
-    return { ...r, compatibility: compat };
+    const entry = compatMap.get(r.path);
+    if (entry === undefined) return r;
+    const merged: ResultWithCompat = { ...r, compatibility: entry.compat };
+    if (entry.settings !== undefined) merged.settings = renderSettingsBlock(entry.settings, locationRoot);
+    return merged;
   });
 }
 
@@ -1661,10 +2131,11 @@ function mergeCompatIntoResults(
  */
 function applyCompatMap(
   results: ValidationResult[],
-  compatMap?: Map<string, CompatibilityResult>
-): Array<ValidationResult & { compatibility?: CompatibilityResult }> {
+  compatMap: Map<string, PluginCompatEntry> | undefined,
+  locationRoot: string,
+): ResultWithCompat[] {
   if (compatMap !== undefined && compatMap.size > 0) {
-    return mergeCompatIntoResults(results, compatMap);
+    return mergeCompatIntoResults(results, compatMap, locationRoot);
   }
   return results;
 }
@@ -1674,13 +2145,13 @@ function applyCompatMap(
  * the audit is not running in --verbose mode. Producing the field at all
  * (even as `[]`) would clutter terse YAML; we omit the key entirely.
  */
-function stripCompatEvidence(compat: CompatibilityResult): Omit<CompatibilityResult, 'evidence'> {
+function stripCompatEvidence(compat: CompatibilityBlock): Omit<CompatibilityBlock, 'evidence'> {
   const out: Record<string, unknown> = { ...compat };
   delete out['evidence'];
-  return out as Omit<CompatibilityResult, 'evidence'>;
+  return out as Omit<CompatibilityBlock, 'evidence'>;
 }
 
-function applyVerboseFilter<T extends ValidationResult & { compatibility?: CompatibilityResult }>(
+function applyVerboseFilter<T extends ResultWithCompat>(
   results: T[],
   verbose: boolean,
 ): T[] {
@@ -1708,12 +2179,12 @@ const NESTED_PATH_CARRIERS = ['linkedFiles'] as const;
 function calculateSummary(
   results: ValidationResult[],
   startTime: number,
-  compatMap: Map<string, CompatibilityResult> | undefined,
+  compatMap: Map<string, PluginCompatEntry> | undefined,
   verbose: boolean,
   root: string,
 ) {
   const { entries, ...base } = buildBaseSummary(results, startTime);
-  const withCompat = applyCompatMap(entries, compatMap);
+  const withCompat = applyCompatMap(entries, compatMap, root);
   return {
     // Stated once, first, and the only absolute path in the document.
     root,
@@ -1841,9 +2312,74 @@ function renderVerboseEvidence(
   }
 }
 
+/**
+ * The stderr half of a run-level refusal, so the human channel says what the
+ * document says. The document is derived in `buildBaseSummary`; this only
+ * RENDERS it. Both stderr lanes call it first, because "Audit successful: 0
+ * file(s) passed" over `status: error` is the exact disagreement the refusal
+ * exists to end (invariant 6 of `run-integrity.ts`). Exit stays 0 — the run
+ * completed — and the note says which command gates.
+ *
+ * @returns Whether a refusal was rendered, so the caller skips its verdict line
+ */
+function logRunIntegrity(
+  runIssues: readonly ValidationIssue[] | undefined,
+  logger: ReturnType<typeof createLogger>,
+): boolean {
+  if (runIssues === undefined || runIssues.length === 0) return false;
+  logger.error(`Audit is not a verdict: it audited 0 files ${ADVISORY_EXIT_NOTE}`);
+  for (const issue of runIssues) {
+    for (const line of formatIssueLines(issue, '  ')) logger.error(line);
+  }
+  return true;
+}
+
+/**
+ * The stderr line for the settings lane: how many conflicts it found and how
+ * many paths it never compared, across every plugin in the document.
+ *
+ * 🚩 This read `f.compatibility?.settingsConflicts` — a field the renderer had
+ * already moved out into the `settings:` block — so the count was 0 on every
+ * run and the line never printed. It reads the rendered block now, the same
+ * one the YAML carries, and it counts the unchecked half too: a run that
+ * skipped a skill says so without `--debug`.
+ */
+function logSettingsTotals(
+  files: ReadonlyArray<{ compatibility?: CompatibilityBlock; settings?: SettingsBlock }>,
+  logger: ReturnType<typeof createLogger>,
+): void {
+  let conflicts = 0;
+  let unchecked = 0;
+  // The compat lane's own unchecked paths — a plugin the analyzer could only
+  // partly read is in the document under `compatibility.unchecked`, and this is
+  // the one line that keeps it from being silent on the human channel while the
+  // settings lane says its half. `analyzed: false` has no list: it is the
+  // plugin-wide failure, and the `reason` line already says so.
+  let compatUnchecked = 0;
+  for (const { compatibility, settings } of files) {
+    conflicts += settings?.conflicts.length ?? 0;
+    unchecked += settings?.unchecked?.length ?? 0;
+    if (compatibility !== undefined && 'unchecked' in compatibility) compatUnchecked += compatibility.unchecked.length;
+  }
+  if (conflicts > 0) {
+    logger.error(`⚠ ${conflicts} settings conflict(s) found — see 'settings' section in YAML output`);
+  }
+  if (unchecked > 0) {
+    logger.error(`⚠ ${unchecked} path(s) the settings check could not compare — see 'settings.unchecked' in YAML output`);
+  }
+  if (compatUnchecked > 0) {
+    logger.error(`⚠ ${compatUnchecked} path(s) the compatibility analysis could not read — see 'compatibility.unchecked' in YAML output`);
+  }
+}
+
 function handleAuditResults(
   results: ValidationResult[],
-  summary: { root: string; summary: FileStatusCounts; files?: Array<{ compatibility?: CompatibilityResult }> },
+  summary: {
+    root: string;
+    summary: FileStatusCounts;
+    issues?: readonly ValidationIssue[];
+    files?: Array<{ compatibility?: CompatibilityBlock; settings?: SettingsBlock }>;
+  },
   logger: ReturnType<typeof createLogger>,
   verbose: boolean,
 ): void {
@@ -1853,22 +2389,26 @@ function handleAuditResults(
     filesPassed: successCount,
   } = summary.summary;
 
-  // Report settings conflicts (advisory, non-blocking)
-  const totalSettingsConflicts = (summary.files ?? []).reduce((sum, f) => {
-    return sum + (f.compatibility?.settingsConflicts?.length ?? 0);
-  }, 0);
-  if (totalSettingsConflicts > 0) {
-    logger.error(`\u26a0 ${totalSettingsConflicts} settings conflict(s) found — see 'settings' section in YAML output`);
-  }
+  logSettingsTotals(summary.files ?? [], logger);
 
   // 🔑 Audit is advisory only — always exit 0 for validation results, and the
-  // WORDING has to agree with that or the three signals contradict each other.
-  // This line used to read "Audit failed", beside `status: error` in the
-  // document, on exit 0: an adopter wiring `vat audit` into CI read a failure,
-  // saw a failure status, and got a green step. "Found" is what actually
-  // happened; the gate is `vat validate`, which is named here rather than
-  // implied.
-  if (errorCount > 0) {
+  // WORDING has to say so. This line used to read "Audit failed" on exit 0: an
+  // adopter wiring `vat audit` into CI read a failure and got a green step.
+  // "Found" is what actually happened, and the gate is `vat validate`, named
+  // here rather than implied.
+  //
+  // ⚠️ That fixed the WORDING and nothing else. The document still says
+  // `status: error` over exit 0 — measured on
+  // `packages/agent-skills/test/fixtures/skill-files` — and that is the
+  // published contract, not a leftover: `status` describes the FINDINGS, the
+  // exit code describes whether the RUN completed. An earlier version of this
+  // comment claimed all three signals had been reconciled; two of the three
+  // had, and the third is not a signal to reconcile. Where a reader is told
+  // which is which is {@link createAuditCommand}'s help — see its `Output`
+  // section, and `docs/audit.md`.
+  if (logRunIntegrity(summary.issues, logger)) {
+    // Rendered above; there is no file verdict to print over zero files.
+  } else if (errorCount > 0) {
     logger.error(`Audit found ${errorCount} file(s) with errors ${ADVISORY_EXIT_NOTE}`);
     logFindingsForStatus(results, 'error', summary.root, logger.error.bind(logger), verbose);
   } else if (warningCount > 0) {
@@ -2107,10 +2647,24 @@ async function handleFileEntry(
       // checks in the link-graph walk stay O(1).
       // `projectSkills`: same project-wide test-input rule as the lane above,
       // resolved through the same per-config-root memo.
-      const projectSkills = await resolveProjectDeclaredEvalSuites(fullPath);
+      const projectSkills = await resolveProjectDeclaredEvalSuites(
+        fullPath,
+        degradingDiscovery(findProjectRoot(safePath.resolve(fullPath, '..')) ?? locationRoot, logger, locationRoot),
+      );
+      // `suiteProbe`: the RUN's, not this entry's — the directory walk reaches
+      // this function once per SKILL.md it finds. See {@link runSuiteProbe}.
+      const suiteProbe = suiteProbeForRun();
+      // No registry is supplied on this lane, so `validateSkillForPackaging`
+      // crawls one per project root through `crawlAndResolveRegistry` — under
+      // audit's ruling, which is the ONLY reason one `chmod 000` sibling no
+      // longer exits this whole run at 2 with zero findings. The root is the
+      // one the validator itself derives (`findProjectRoot(dirname) ?? dirname`),
+      // so the refuse sentence and the finding name the same crawl.
+      const skillDir = safePath.resolve(fullPath, '..');
+      const unreadable = degradingRegistry(findProjectRoot(skillDir) ?? skillDir, logger, locationRoot);
       const sharedCtx: SkillValidationSharedContext = scanCtx.gitTracker === null
-        ? { locationRoot, projectSkills }
-        : { gitTracker: scanCtx.gitTracker, locationRoot, projectSkills };
+        ? { locationRoot, projectSkills, suiteProbe, unreadable }
+        : { gitTracker: scanCtx.gitTracker, locationRoot, projectSkills, suiteProbe, unreadable };
       const packagingResult = await validateSkillForPackaging(fullPath, skillConfig, 'source', sharedCtx);
       const configAware = packagingResultToValidationResult(
         fullPath,
@@ -2386,6 +2940,7 @@ export function resetAuditCaches(): void {
   resetPackagingRegistryCache();
   inventoryRegistryCache.clear();
   unloadableConfigResults.clear();
+  runSuiteProbe = undefined;
   resetProjectRootCaches();
   resetLoadedConfigCache();
   resetSkillDiscoveryCache();
@@ -2512,10 +3067,14 @@ function unreadablePathResult(
   // identical reason, already exists on the distributed-tree finding — see
   // `anchoredTreeLocation` in ./audit/distributed-tree.ts.
   const location = issueLocation(dirPath, locationRoot) || '.';
+  // The OS names the path it refused absolutely; the report speaks scan-root
+  // coordinates everywhere else, and an absolute path here is the build host's
+  // `$HOME` in every CI log.
+  const reason = withRelativePath(error instanceof Error ? error.message : String(error), dirPath, locationRoot);
   const issues = [
     materializeIssue('SCAN_PATH_UNREADABLE', {
       location,
-      detail: `${location}: ${error instanceof Error ? error.message : String(error)}`,
+      detail: `${location}: ${reason}`,
     }),
   ];
   const issueCounts = countBySeverity(issues);
@@ -2769,6 +3328,24 @@ function countFilesByStatus(results: ValidationResult[]): FileStatusCounts {
  * also present in its owner's `issues`, so the nested list is a VIEW of records
  * already counted, not extra records. `audit-report-coherence.integration.test.ts`
  * pins that subset relation, because counting once is only correct while it holds.
+ *
+ * 🚨 **Zero files audited is an ERROR, not "an empty tree audits cleanly".**
+ * `calculateOverallStatus([])` is `success`, so an existing directory holding
+ * nothing auditable — moved plugins, a wrong subdirectory, an excluded tree, a
+ * tree of files no lane recognises — published `status: success` beside
+ * `filesScanned: 0`, and this command's own documentation tells CI to gate on
+ * that `status`. Derived HERE, in the one builder both the directory lane
+ * (`calculateSummary`) and the `--user` lane (`calculateHierarchicalSummary`)
+ * pass through, so neither can publish a clean status over a zero denominator.
+ * Through the shared mechanism in `run-integrity.ts`: one non-overridable
+ * `RESOURCE_CHECK_BROKEN` at `error`, published under a top-level `issues` —
+ * the claim is about the RUN, so it is not a `files[]` row and does not count
+ * toward `filesScanned` — and counted in the header `issueCounts`, so the
+ * identity becomes `issueCounts === Σ files[].issueCounts + Σ issues`.
+ *
+ * The exit code is NOT touched by this: `status` describes the findings and the
+ * exit code describes whether the run completed, and this run completed. See
+ * {@link createAuditCommand}.
  */
 function buildBaseSummary<T extends ValidationResult>(
   results: T[],
@@ -2778,6 +3355,7 @@ function buildBaseSummary<T extends ValidationResult>(
   status: string;
   summary: FileStatusCounts;
   issueCounts: SeverityCounts;
+  issues?: ValidationIssue[];
   duration: string;
 } {
   const issueCounts: SeverityCounts = { errors: 0, warnings: 0, info: 0 };
@@ -2789,11 +3367,23 @@ function buildBaseSummary<T extends ValidationResult>(
     return { ...result, issueCounts: counts };
   });
 
+  const runIssues = nothingCheckedFinding(entries.length, entries.flatMap((entry) => entry.issues), () =>
+    'The audit ran over 0 files, so this report is not a verdict: a tree with nothing'
+    + ' to audit produces the same counts as a clean one. The path resolved to a tree'
+    + ' holding no auditable file — usually a wrong subdirectory, plugins or skills that'
+    + ' have moved, an excluded tree, files no audit lane recognises, or `--no-recursive`'
+    + ' over a tree whose resources sit deeper. Point the command at the plugin,'
+    + ' marketplace, registry or SKILL.md tree it should read.');
+
   return {
     entries,
-    status: calculateOverallStatus(entries),
+    // Every run-integrity finding is `error` by construction (invariant 2 of
+    // `run-integrity.ts`), so a non-empty refusal IS the status; otherwise the
+    // files decide it, as before.
+    status: runIssues.length > 0 ? 'error' : calculateOverallStatus(entries),
     summary: countFilesByStatus(entries),
-    issueCounts,
+    issueCounts: sumSeverityCounts([issueCounts, countBySeverity(runIssues)]),
+    ...(runIssues.length === 0 ? {} : { issues: [...runIssues] }),
     duration: `${Date.now() - startTime}ms`,
   };
 }
@@ -2805,12 +3395,12 @@ function calculateHierarchicalSummary(
   results: ValidationResult[],
   hierarchical: ReturnType<typeof buildHierarchicalOutput>,
   startTime: number,
-  compatMap: Map<string, CompatibilityResult> | undefined,
+  compatMap: Map<string, PluginCompatEntry> | undefined,
   verbose: boolean,
   root: string,
 ) {
   const { entries, ...base } = buildBaseSummary(results, startTime);
-  const withCompat = applyCompatMap(entries, compatMap);
+  const withCompat = applyCompatMap(entries, compatMap, root);
 
   return {
     root,
@@ -2832,6 +3422,7 @@ function calculateHierarchicalSummary(
  */
 function logHierarchicalSummary(
   results: ValidationResult[],
+  runIssues: readonly ValidationIssue[] | undefined,
   logger: ReturnType<typeof createLogger>
 ): void {
   const status = calculateOverallStatus(results);
@@ -2840,7 +3431,9 @@ function logHierarchicalSummary(
 
   // Audit is advisory only — always exit 0 for validation results.
   // Use vat skills validate for gated validation (exit 1 on errors).
-  if (status === 'error') {
+  if (logRunIntegrity(runIssues, logger)) {
+    // Rendered above; there is no skill verdict to print over zero skills.
+  } else if (status === 'error') {
     const errorCount = results.filter((r: ValidationResult) => r.status === 'error').length;
     logger.error(`Audit found ${errorCount} skill(s) with errors (${totalSkills} scanned, ${skillsWithIssues} with issues) ${ADVISORY_EXIT_NOTE}`);
   } else if (status === 'warning') {

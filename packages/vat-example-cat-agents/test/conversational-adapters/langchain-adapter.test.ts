@@ -63,11 +63,11 @@ function createMockAgent() {
 
 // Mock LangChain
 vi.mock('@langchain/openai', () => ({
-  ChatOpenAI: vi.fn().mockImplementation(() => ({
+  ChatOpenAI: vi.fn().mockImplementation(function () { return {
     invoke: vi.fn().mockResolvedValue({
       content: 'Mocked LLM response',
     }),
-  })),
+  }; }),
 }));
 
 // Mock the breed advisor agent with realistic extraction

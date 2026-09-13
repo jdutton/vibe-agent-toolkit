@@ -20,6 +20,7 @@
  * and §4 (engine vocabulary).
  */
 
+import { assertProviderCompiles } from './link-auth/compile-check.js';
 import { expandMacro } from './link-auth/expand-macro.js';
 import type { LinkAuthConfig, Provider } from './link-auth/resolve.js';
 import { InlineProviderSchema, type LinkAuthProjectConfig } from './schemas/link-auth.js';
@@ -52,9 +53,14 @@ type _KeysAgree = [_SchemaKeys] extends [_EngineKeys]
 export const _assertSchemaKeysAgreeWithEngine: _KeysAgree = true;
 
 export function buildLinkAuthEngineConfig(adopter: LinkAuthProjectConfig): LinkAuthConfig {
-  const providers: Provider[] = adopter.providers.map((entry, index) =>
-    expandProviderEntry(entry, index),
-  );
+  const providers: Provider[] = adopter.providers.map((entry, index) => {
+    const provider = expandProviderEntry(entry, index);
+    // A provider that cannot compile is refused HERE, by name, like an invalid
+    // macro override is above — not met per link. See compile-check.ts for why
+    // the per-link shape was a defect and not a courtesy.
+    assertProviderCompiles(provider, index);
+    return provider;
+  });
   // Pass the cache block through to the engine config so the slice-3
   // content-fetch primitive can read `ttlMinutes` from the same source of
   // truth as the rest of the engine config. The engine itself doesn't consume

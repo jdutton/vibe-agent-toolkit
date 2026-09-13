@@ -62,18 +62,42 @@ export function parseFrontmatter(content: string): FrontmatterResult {
     : '';
 
   // Parse YAML
+  let parsed: unknown;
   try {
-    const frontmatter = yaml.parse(yamlContent) as Record<string, unknown>;
-
-    return {
-      success: true,
-      frontmatter,
-      body,
-    };
+    parsed = yaml.parse(yamlContent);
   } catch (error) {
     return {
       success: false,
       error: `Failed to parse YAML frontmatter: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
+
+  // A block that parsed but is not a mapping is refused HERE, once. `yaml.parse`
+  // answers `null` for an empty document or `~`, a string for a bare scalar, an
+  // array for a sequence — and the success arm promises `Record<string,
+  // unknown>`, so every reader dereferenced it. `validateSkill` died with
+  // `Cannot read properties of null (reading 'name')` and took the whole
+  // `vat audit` run with it, while two other readers had grown their own `null`
+  // guards: three consumers of one seam, three answers for one file. The
+  // refusal names what was found, because "no frontmatter" over a file that
+  // plainly has a `---` block sends the author to the wrong fix.
+  if (parsed === null || parsed === undefined || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return {
+      success: false,
+      error: `Frontmatter is not a YAML mapping: the block between the "---" delimiters is ${describeNonMapping(parsed)}`,
+    };
+  }
+
+  return {
+    success: true,
+    frontmatter: parsed as Record<string, unknown>,
+    body,
+  };
+}
+
+/** The shape a non-mapping frontmatter block turned out to be, for the refusal message. */
+function describeNonMapping(parsed: unknown): string {
+  if (parsed === null || parsed === undefined) return 'empty';
+  if (Array.isArray(parsed)) return 'a sequence, not key: value fields';
+  return `a scalar (${JSON.stringify(parsed)}), not key: value fields`;
 }

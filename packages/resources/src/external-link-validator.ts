@@ -88,6 +88,86 @@ export function isAliveStatus(statusCode: number): boolean {
 	return ALIVE_STATUS_CODES.has(statusCode);
 }
 
+/**
+ * Header names whose value `0` means "you have spent your quota".
+ *
+ * Three spellings because three families ship: GitHub and most of the REST
+ * ecosystem use `x-ratelimit-remaining`, the RFC 9239 draft standardised
+ * `ratelimit-remaining`, and X/Twitter-lineage APIs hyphenate `rate-limit`.
+ * Each is looked up through `Headers.get`, which is case-insensitive.
+ */
+const QUOTA_REMAINING_HEADERS: readonly string[] = [
+	'x-ratelimit-remaining',
+	'ratelimit-remaining',
+	'x-rate-limit-remaining',
+];
+
+/** The subset of `Headers` this module needs; lets the anonymous path pass nothing. */
+type ResponseHeaderLookup = Pick<Headers, 'get'>;
+
+/**
+ * Is this result one that must NOT answer from the cache — a refusal the
+ * server says is TEMPORARY, or no answer at all?
+ *
+ * 🚨 **A cache entry answers for `cacheTtlHours` — 24 by default — so the cost
+ * of getting this wrong is asymmetric and not symmetric.** Cache a throttle and
+ * a rate limit that lasted ninety seconds becomes a day of "broken link"
+ * findings that re-running cannot clear, because the re-run reads the cache.
+ * Fail to cache a durable denial and you pay one extra request per run. So the
+ * rule refuses only what a server has actually SAID is temporary, and treats
+ * silence as durable.
+ *
+ * The line, and why it falls there:
+ *
+ * - **No response at all (`statusCode: 0`) is always transient.** That is the
+ *   shape both lanes give a DNS, connect, TLS or timeout failure — nothing was
+ *   said about the link, so there is nothing to remember. 🔑 This arm is what
+ *   keeps the two lanes honest with each other: the authenticated lane never
+ *   reached its cache write on that path by construction, while the anonymous
+ *   lane wrote a ten-second blip as a day of "broken link". One predicate,
+ *   read by both, so they cannot disagree again.
+ * - **429 is always transient.** RFC 6585 §4 defines it as "too many requests
+ *   in a given amount of time" — the status itself is the statement.
+ * - **403 is transient only with a rate-limit signal.** A 403 is overwhelmingly
+ *   a standing answer about this credential, and reading every one as transient
+ *   would refetch every private link on every run. But two documented shapes
+ *   are throttles wearing a 403: GitHub's primary limit sends
+ *   `x-ratelimit-remaining: 0`, and its secondary limit sends `retry-after`.
+ *   Either signal flips it.
+ * - **503 is transient only with `Retry-After`.** 503 is DEFINED as temporary
+ *   overload or maintenance (RFC 9110 §15.6.4), and `Retry-After` on it is
+ *   "how long the service is expected to be unavailable" (§10.2.3) — a stated
+ *   window, the same signal the 403 arm reads. A bare 503 stays durable: the
+ *   server said nothing about when, and silence is durable.
+ * - **Everything else is durable**, including any other 5xx carrying
+ *   `Retry-After`. A server error is not a rate limit, and widening this
+ *   predicate into "any refusal that might clear" is how it stops being
+ *   decidable.
+ *
+ * ⚠️ **Headers only — the body is never read.** A body sniff would mean
+ * consuming a stream this path does not otherwise touch, and matching on prose
+ * a vendor rewrites without notice; the shapes GitHub documents are headers.
+ *
+ * @param statusCode - The HTTP status of the result, or `0` for no response
+ * @param headers - The response's headers, or `undefined` where the caller has
+ *   only a status (the anonymous markdown-link-check path). Absent headers mean
+ *   no signal, which reads as durable.
+ * @returns `true` when the result must NOT be written to the cache
+ */
+export function isTransientRefusal(
+	statusCode: number,
+	headers: ResponseHeaderLookup | undefined,
+): boolean {
+	if (statusCode === 0 || statusCode === 429) return true;
+	if (headers === undefined) return false;
+
+	const signalledWindow = headers.get('retry-after') !== null;
+	if (statusCode === 503) return signalledWindow;
+	if (statusCode !== 403) return false;
+	if (signalledWindow) return true;
+	return QUOTA_REMAINING_HEADERS.some((name) => headers.get(name)?.trim() === '0');
+}
+
 type VerifiedPlan = Extract<ResolveOutcome, { fetchUrl: string }>;
 
 /**
@@ -334,14 +414,38 @@ export class ExternalLinkValidator {
 					code: 'LINK_AUTH_UNVERIFIED',
 				};
 			}
+			if (plan.outcome === 'provider-error') {
+				// Its own code, deliberately not LINK_AUTH_UNVERIFIED: that one's
+				// registry remedy invites `ignore` for token-less lanes, and a
+				// provider that could not build a request must not ride under it —
+				// see resolve.ts. Not cached either: the answer is about the
+				// provider, not the URL, and flips when the config is fixed.
+				return {
+					url,
+					status: 'error',
+					statusCode: 0,
+					error: plan.reason,
+					cached: false,
+					code: 'LINK_AUTH_PROVIDER_ERROR',
+				};
+			}
 			// 'unsupported' → fall through to anonymous markdown-link-check path
 		}
 
-		// Check cache first
+		// Check cache first — a row the write side below would refuse is a
+		// miss, not a hit: the write-side guard repairs no row an earlier build
+		// already left on disk, and reading one keeps a blip answering for
+		// the rest of its TTL.
+		//
+		// ⚠️ Repairs only the HEADER-FREE arms. The cache stores `statusCode`
+		// and `statusMessage`, so the read side asks `isTransientRefusal` with
+		// `headers: undefined` and can recognise `0` and `429` — not a
+		// throttled 403, which is only distinguishable from a permission denial
+		// by the rate-limit headers the row never kept. On this lane that is no
+		// loss: markdown-link-check hands back no headers either, so the write
+		// side never had them and never wrote a 403 it could have refused.
 		const cached = await this.cache.get(url);
-		if (cached) {
-			// Same predicate the fresh-fetch path hands to markdown-link-check.
-			// Cache-hit semantics must match cache-miss semantics.
+		if (cached && !isTransientRefusal(cached.statusCode, undefined)) {
 			// Same predicate the fresh-fetch path hands to markdown-link-check.
 			// Cache-hit semantics must match cache-miss semantics.
 			const isOk = isAliveStatus(cached.statusCode);
@@ -369,8 +473,15 @@ export class ExternalLinkValidator {
 		// Validate using markdown-link-check
 		const result = await this.checkLink(url);
 
-		// Store in cache
-		await this.cache.set(url, result.statusCode, result.error ?? 'OK');
+		// Store in cache — unless the answer was transient. This path sees a
+		// status and nothing else (markdown-link-check hands back no headers),
+		// so only the header-free arms of {@link isTransientRefusal} can fire
+		// here: 429, and `statusCode: 0` for a DNS/connect/timeout blip. A
+		// rate-limited 403 is indistinguishable from a permission denial
+		// without the headers, and guessing would uncache every private link.
+		if (!isTransientRefusal(result.statusCode, undefined)) {
+			await this.cache.set(url, result.statusCode, result.error ?? 'OK');
+		}
 
 		return {
 			...result,
@@ -407,8 +518,21 @@ export class ExternalLinkValidator {
 		// `EXTERNAL_URL_DEAD` (error) instead of `LINK_AUTH_DEAD_OR_UNAUTHORIZED`
 		// (warning). Cache-hit semantics must match cache-miss semantics for
 		// the same (url, provider) pair.
+		//
+		// A row the write below would refuse on `statusCode` alone is a miss,
+		// whatever build wrote it — see the anonymous lane's cache read for why.
+		//
+		// ⚠️ That is narrower than the write side, and the gap is real on THIS
+		// lane. The write refuses a 403 whose headers say "rate limited" (GitHub
+		// primary/secondary limits), but the row keeps no headers, so a
+		// throttled 403 a pre-guard build wrote answers here as
+		// `LINK_AUTH_FORBIDDEN` for the rest of its TTL — and a cheap honest
+		// check does not exist: `statusMessage` is the classifier's own text,
+		// identical for both kinds of 403, and refusing EVERY cached 403 would
+		// refetch every genuinely private link on every run. The remedy for such
+		// a row is `--no-cache` once (`VAT_CACHE` off); the guard cannot see it.
 		const cached = await this.authCache.get(plan.fetchUrl);
-		if (cached) {
+		if (cached && !isTransientRefusal(cached.statusCode, undefined)) {
 			return buildAuthResult(originalUrl, cached.statusCode, plan, true, cached.statusMessage);
 		}
 
@@ -448,7 +572,17 @@ export class ExternalLinkValidator {
 		// only stores statusCode + statusMessage; the `code` is re-derived on
 		// read by re-running classifyAuthenticatedResponse against the current
 		// provider (see the authCache.get branch above).
-		await this.authCache.set(plan.fetchUrl, result.statusCode, result.error ?? 'OK');
+		//
+		// …unless the server said "not now" — the same predicate the anonymous
+		// lane reads, so the two cannot drift. See {@link isTransientRefusal}: a
+		// throttle written here would answer for `cacheTtlHours`, turning a
+		// minute of rate limiting into a day of false findings that a re-run
+		// cannot clear. Not cached at all rather than cached briefly — a second
+		// TTL would be a second, invisible expiry rule on entries that are
+		// indistinguishable on disk.
+		if (!isTransientRefusal(response.status, response.headers)) {
+			await this.authCache.set(plan.fetchUrl, result.statusCode, result.error ?? 'OK');
+		}
 		return result;
 	}
 

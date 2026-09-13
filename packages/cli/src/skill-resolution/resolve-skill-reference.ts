@@ -113,7 +113,10 @@ async function findFirstDeclaredSkillEntry<T>(
   if (configRoot === null) return undefined;
   const config = loadConfigCached(configRoot);
   if (config?.skills === undefined) return undefined;
-  const byPath = await getDiscoveredSkillsByPath(config.skills, configRoot);
+  // `'refuse'`: a reference resolved against a partial declared list can land
+  // on `not-found` for a skill that exists. The throw propagates to the
+  // command (`vat skill test` wraps it as `SkillBuildError`, named).
+  const byPath = await getDiscoveredSkillsByPath(config.skills, configRoot, 'refuse');
   for (const [sourcePath, name] of byPath.entries()) {
     const result = await matches(sourcePath, name, configRoot, config);
     if (result !== undefined) return result;
@@ -211,7 +214,7 @@ async function resolveBareName(ref: string, cwd: string): Promise<SkillReference
   }
 
   const byName = new Map<string, string>(); // name → abs SKILL.md path
-  const byPath = await getDiscoveredSkillsByPath(config.skills, configRoot);
+  const byPath = await getDiscoveredSkillsByPath(config.skills, configRoot, 'refuse');
   for (const [skillMdPath, name] of byPath.entries()) byName.set(name, skillMdPath);
 
   const sourcePath = byName.get(ref);
@@ -256,7 +259,7 @@ async function buildBuildable(
   configRoot: string,
   config: NonNullable<ReturnType<typeof loadConfigCached>>,
 ): Promise<BuildableReference> {
-  const packagingConfig = (await resolveSkillPackagingConfig(sourcePath)) ?? {};
+  const packagingConfig = (await resolveSkillPackagingConfig(sourcePath, 'refuse')) ?? {};
   const { distribution, expectedDistDir } = computeSkillDistribution(name, sourcePath, configRoot, config);
   return { kind: 'buildable', name, sourcePath, configRoot, packagingConfig, distribution, expectedDistDir };
 }

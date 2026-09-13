@@ -791,6 +791,35 @@ describe('ParseCache enable toggle', () => {
     expect(suite.makeCache().enabled).toBe(true);
   });
 
+  it.each(['false', 'FALSE', 'no', 'off', 'n', ' 0 '])(
+    'is disabled by VAT_CACHE=%j, not only by the literal "0"',
+    (raw) => {
+      // 🪤 The defect: this was `env['VAT_CACHE'] !== '0'`, so every spelling
+      // an operator actually reaches for left caching ON while reading as if
+      // it had been turned off. A switch whose off position is one exact
+      // string is not a switch. Now shared with `projectionStoreSelected()`
+      // and the linkAuth kill switch via `parseEnvBoolean`.
+      expect(suite.makeCache({ env: { VAT_CACHE: raw } }).enabled).toBe(false);
+    },
+  );
+
+  it.each(['true', 'yes', 'on', '1'])('stays enabled for VAT_CACHE=%j', (raw) => {
+    expect(suite.makeCache({ env: { VAT_CACHE: raw } }).enabled).toBe(true);
+  });
+
+  it.each(['maybe', '', '2', '   '])(
+    'leaves the cache ON for the unparsable VAT_CACHE=%j — this gate picks the CONVENIENT side',
+    (raw) => {
+      // `parseEnvBoolean` never guesses; the caller picks the safe side, and
+      // safe differs by caller. This one gates a CACHE, so an unreadable value
+      // costs at worst a cache the operator meant to turn off — whereas the
+      // linkAuth `command` kill switch reads the same `undefined` as "deny"
+      // because there it gates a capability. Same parser, opposite defaults,
+      // both deliberate.
+      expect(suite.makeCache({ env: { VAT_CACHE: raw } }).enabled).toBe(true);
+    },
+  );
+
   it('is disabled by VAT_CACHE=0, and an explicit option still wins', () => {
     expect(suite.makeCache({ env: { VAT_CACHE: '0' } }).enabled).toBe(false);
     expect(suite.makeCache({ env: { VAT_CACHE: '1' } }).enabled).toBe(true);

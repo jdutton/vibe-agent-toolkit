@@ -44,6 +44,7 @@
  */
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
+import { armLabel, laneNote } from '../../harness/lane.js';
 import {
   comparisonText,
   coordinateLines,
@@ -219,13 +220,20 @@ function stabilityLine(row: IoCommandStats): string {
 /**
  * The headline for one measured command.
  *
+ * The arm sits in the same parenthesis as the cache mode and the repeat counts,
+ * because it qualifies the numbers the same way they do: 436 user calls is a
+ * measurement of *some* enumerator, and a reader who cannot see which one from
+ * the line will infer it from a call-site signature — which is what the
+ * 2026-09-11 git-vs-filesystem A/B had to do. A row whose output named no lane
+ * says so in words rather than leaving a gap, since a gap reads as ordinary.
+ *
  * @param row - The command's statistics
  * @returns A single line carrying every aggregate
  */
 function summaryLine(row: IoCommandStats): string {
   return (
     `  ${row.name} (${row.cache}, ${quantity(row.runs, 'run', 'runs')}, ` +
-    `${tally(row.comparedRuns)} compared): ${tally(row.userCalls)} user calls across ` +
+    `${tally(row.comparedRuns)} compared, arm: ${armLabel(row)}): ${tally(row.userCalls)} user calls across ` +
     `${quantity(row.sites.length, 'site', 'sites')}, ${tally(row.loaderCalls)} loader calls, ` +
     `${quantity(row.processes, 'process', 'processes')}`
   );
@@ -382,15 +390,25 @@ function caveatLines(movement: IoMovement): readonly string[] {
 /**
  * Every line for one command's diff.
  *
+ * The three verdicts that hold a row on BOTH sides — `changed`, `unchanged`,
+ * `unwarranted` — carry the arm note on their first line, the same clause
+ * `population` prints. It goes on `unwarranted` too: that row's numbers are
+ * real, only the entitlement to subtract them is missing, and a reader looking
+ * at its raw movement needs to know whether the two sides even ran different
+ * enumerators. `unmeasurable` has a failed side, whose arm is `null` by
+ * construction, so the note would only ever say "unproven" about a row that
+ * already says it measured nothing.
+ *
  * @param diff - The command's diff row
  * @returns That command's block
  */
 function diffLines(diff: IoComparisonResult['commands'][number]): readonly string[] {
   const verdict = diff.verdict;
+  const arms = laneNote(diff.before, diff.after);
   switch (verdict.kind) {
     case 'changed': {
       return [
-        `  ${diff.name}: CHANGED — ${totalsLine(verdict.movement)}`,
+        `  ${diff.name}: CHANGED — ${totalsLine(verdict.movement)}${arms}`,
         ...verdict.movement.sites.map((site) => siteMovementLine(site)),
         ...caveatLines(verdict.movement),
       ];
@@ -399,13 +417,13 @@ function diffLines(diff: IoComparisonResult['commands'][number]): readonly strin
       const { userCalls, loaderCalls, processes } = verdict.movement.totals;
       return [
         `  ${diff.name}: unchanged — every count identical (${tally(userCalls.after)} user calls, ` +
-          `${tally(loaderCalls.after)} loader calls, ${quantity(processes.after, 'process', 'processes')})`,
+          `${tally(loaderCalls.after)} loader calls, ${quantity(processes.after, 'process', 'processes')})${arms}`,
         ...caveatLines(verdict.movement),
       ];
     }
     case 'unwarranted': {
       return [
-        `  ${diff.name}: NOT ATTRIBUTABLE — ${verdict.reason}`,
+        `  ${diff.name}: NOT ATTRIBUTABLE — ${verdict.reason}${arms}`,
         `      the movement below is real, but it cannot be read as a difference in the subject: ${totalsLine(verdict.movement)}`,
         ...verdict.movement.sites.map((site) => siteMovementLine(site)),
         ...caveatLines(verdict.movement),

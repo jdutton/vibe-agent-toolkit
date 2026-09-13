@@ -3,12 +3,15 @@
  */
 
 import * as fs from 'node:fs/promises';
+import { basename } from 'node:path';
 
+import { allowedToolsOf, parseFrontmatter } from '@vibe-agent-toolkit/agent-skills';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { SettingsConflict } from '../types.js';
+import { reasonOf, walkFollowingLinks, type WalkedTree } from '../walk-following-links.js';
 
-import { matchesDenyRule, ruleConstrainsTool } from './permission-matcher.js';
+import { ruleConstrainsDeclaration } from './permission-matcher.js';
 import type { EffectiveSettings, ProvenanceRule } from './settings-merger.js';
 
 interface SkillFrontmatter {
@@ -16,111 +19,111 @@ interface SkillFrontmatter {
   model?: string;
 }
 
-function parseInlineTools(inline: string): string[] {
-  if (inline.startsWith('[')) {
-    return inline.slice(1, -1).split(',').map(s => s.trim()).filter(Boolean);
-  }
-  return inline.split(',').map(s => s.trim()).filter(Boolean);
-}
-
-const ALLOWED_TOOLS_KEY = 'allowed-tools:';
-
-function parseAllowedTools(frontmatterText: string): string[] | undefined {
-  const lines = frontmatterText.split('\n');
-  const headerIdx = lines.findIndex(l => l.toLowerCase().startsWith(ALLOWED_TOOLS_KEY));
-  if (headerIdx === -1) return undefined;
-
-  const header = lines[headerIdx] ?? '';
-  // `header` is already one line (the text was split on \n), so there is nothing
-  // for a regex to scan for here: the inline value is just whatever follows the
-  // key. Slicing is linear, where the old `\s*([^\n]+)` form backtracked
-  // super-linearly because `\s*` and `[^\n]+` compete for the same spaces.
-  // This also makes the parse case-insensitive, matching the case-insensitive
-  // test that located the header in the first place — previously an
-  // `Allowed-Tools:` line was found and then silently failed to parse.
-  const inlineValue = header.slice(ALLOWED_TOOLS_KEY.length);
-
-  if (inlineValue.length > 0) {
-    return parseInlineTools(inlineValue.trim());
-  }
-
-  // Multi-line list: following lines prefixed with "  - "
-  const tools: string[] = [];
-  for (let i = headerIdx + 1; i < lines.length; i++) {
-    const line = lines[i] ?? '';
-    const itemMatch = /^ {2}- ([^\n]+)$/.exec(line);
-    if (itemMatch?.[1]) {
-      tools.push(itemMatch[1].trim());
-    } else {
-      break;
-    }
-  }
-  return tools.length > 0 ? tools : undefined;
+/** A SKILL.md the checker read, and the fields it consults. */
+interface ReadSkill {
+  path: string;
+  frontmatter: SkillFrontmatter;
 }
 
 /**
- * Parse SKILL.md frontmatter fields we care about (allowed-tools, model).
- * Returns null if no frontmatter found.
+ * A path the settings check could not compare, and why.
+ *
+ * `path` is ABSOLUTE — the caller anchors it to its own document root. It is a
+ * SKILL.md the checker could not read or parse, or a DIRECTORY it could not
+ * list, in which case every skill beneath it is unseen and unnamed.
+ */
+export interface SettingsUnchecked {
+  path: string;
+  reason: string;
+}
+
+/**
+ * What the settings check found, and what it never looked at.
+ *
+ * 🚩 The check used to answer with `conflicts` alone, and every path it failed
+ * to see fell out of that answer as "no conflict" — an unlistable skill
+ * directory, an unreadable SKILL.md, a frontmatter that would not parse, and a
+ * skill reached through a symlink. Its consumer tried to recover the unchecked
+ * list from the skill validator's result codes in the same run, which cannot
+ * see a directory (no SKILL.md result exists for it) and never fired for an
+ * unreadable file (the compat analyzer threw first). The checker is the one
+ * that enumerated and read, so it is the one that says what it skipped.
+ * `conflicts` being empty means "compatible" only when `unchecked` is too.
+ */
+export interface SettingsCheck {
+  conflicts: SettingsConflict[];
+  unchecked: SettingsUnchecked[];
+}
+
+/**
+ * Read the SKILL.md frontmatter fields this checker consults (`allowed-tools`,
+ * `model`), through the SAME parser the skill validator uses.
+ *
+ * 🚩 This used to be a hand parser: an inline value split on `,` only, and a
+ * block list that accepted exactly two-space `  - ` items. So the documented
+ * space-separated spelling `allowed-tools: Read Edit` became ONE declaration
+ * named `Read Edit`, which matches no rule, and a four-space YAML list became
+ * `undefined`, which skipped the skill — both reported "no conflict" against an
+ * org deny that the comma and two-space spellings reported. Under-reporting is
+ * the direction this module's own contract calls unsafe, and it was decided by
+ * how the author indented.
+ *
+ * Returns the refusal `reason` when the file cannot be read or its frontmatter
+ * does not parse (a block that is not a YAML mapping — empty, `~`, a scalar —
+ * is a parse failure at the seam, so no shape is guarded here). The skill
+ * validator names the same file `SKILL_MISSING_FRONTMATTER` in the same
+ * `vat audit`, off the same parser; the checker reports it as unchecked rather
+ * than contributing nothing, because "nothing" reads as "no conflict".
  */
 async function parseSkillFrontmatter(
   skillPath: string
-): Promise<SkillFrontmatter | null> {
+): Promise<{ frontmatter: SkillFrontmatter } | { reason: string }> {
   let content: string;
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from trusted plugin dir
     content = await fs.readFile(skillPath, 'utf-8');
-  } catch {
-    return null;
+  } catch (error) {
+    return { reason: reasonOf(error) };
   }
 
-  if (!content.startsWith('---')) return null;
+  const parsed = parseFrontmatter(content);
+  if (!parsed.success) return { reason: parsed.error };
+  const fields = parsed.frontmatter;
 
-  const endIdx = content.indexOf('\n---', 3);
-  if (endIdx === -1) return null;
-
-  const frontmatterText = content.slice(3, endIdx).trim();
-  const result: SkillFrontmatter = {};
-
-  const allowedTools = parseAllowedTools(frontmatterText);
-  if (allowedTools) {
-    result['allowed-tools'] = allowedTools;
+  const frontmatter: SkillFrontmatter = {};
+  const allowedTools = allowedToolsOf(fields['allowed-tools']);
+  if (allowedTools !== undefined) {
+    frontmatter['allowed-tools'] = allowedTools;
   }
-
-  // Parse model
-  const modelMatch = /^model:\s*(.+)/m.exec(frontmatterText);
-  if (modelMatch?.[1]) {
-    const raw = modelMatch[1].trim();
-    result.model = /^['"](.+)['"]$/.exec(raw)?.[1] ?? raw;
+  const model = fields['model'];
+  if (typeof model === 'string' && model.trim() !== '') {
+    frontmatter.model = model.trim();
   }
-
-  return result;
+  return { frontmatter };
 }
 
 /**
- * Find all SKILL.md files within a plugin directory (recursive).
+ * Every SKILL.md within a plugin directory (recursive), and every directory the
+ * walk could not list — the plugin root included, so a plugin that cannot be
+ * listed at all is the one thing unchecked rather than a thrown check.
+ *
+ * The walk is SHARED with the compatibility analyzer (`walkFollowingLinks`):
+ * it follows symlinks the way the audit's validator lane does and terminates
+ * on a link back into an ancestor. Both lanes used to enumerate on their own,
+ * and both lost a symlinked skill the same way — a `Dirent` for a link answers
+ * `false` to `isFile()` and `isDirectory()` alike.
  */
-async function findSkillFiles(pluginDir: string): Promise<string[]> {
-  const skillFiles: string[] = [];
-
-  async function scanDir(dir: string): Promise<void> {
-    try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- trusted plugin dir
-      const entries = await fs.readdir(dir, { withFileTypes: true, encoding: 'utf-8' });
-
-      for (const entry of entries) {
-        if (entry.name === 'SKILL.md' && entry.isFile()) {
-          skillFiles.push(safePath.join(dir, entry.name));
-        } else if (entry.isDirectory()) {
-          await scanDir(safePath.join(dir, entry.name));
-        }
-      }
-    } catch {
-      // Directory not readable — skip silently
-    }
+async function findSkillFiles(pluginDir: string): Promise<{ skillFiles: string[]; unchecked: SettingsUnchecked[] }> {
+  let tree: WalkedTree;
+  try {
+    tree = await walkFollowingLinks(pluginDir);
+  } catch (error) {
+    return { skillFiles: [], unchecked: [{ path: pluginDir, reason: reasonOf(error) }] };
   }
-
-  await scanDir(pluginDir);
-  return skillFiles;
+  return {
+    skillFiles: tree.files.filter((file) => basename(file) === 'SKILL.md'),
+    unchecked: tree.unlistable,
+  };
 }
 
 /**
@@ -136,14 +139,8 @@ async function hasHooksFile(pluginDir: string): Promise<boolean> {
   }
 }
 
-function extractToolInput(tool: string): string {
-  if (!tool.includes('(')) return '*';
-  const idx = tool.indexOf('(');
-  return tool.endsWith(')') ? tool.slice(idx + 1, -1) : tool.slice(idx + 1);
-}
-
 /**
- * Whether a DENY rule blocks this tool call.
+ * Every `allowed-tools:` entry an org DENY rule constrains.
  *
  * 🔑 The lane is not incidental. Every rule reaching here comes from
  * `effectiveSettings.permissions.deny`, and Claude Code's deny matching is not
@@ -151,61 +148,45 @@ function extractToolInput(tool: string): string {
  * matches, reaches into nested commands, and matches past a leading assignment.
  * Asking the allow-lane question here under-matches, and an under-match in this
  * checker is silently reported to the adopter as "no conflict" for a tool their
- * org policy actually blocks. `matchesDenyRule` is the entry point that asks the
- * right question; `matchesPermissionRule` takes the lane explicitly and has no
- * default, so this can never drift back by omission.
+ * org policy actually blocks. `lane` is a REQUIRED argument throughout the
+ * matcher and has no default, so this can never drift back by omission.
  *
- * 🚩 The `*` branch used to answer its own question, with
- * `rule === toolName || rule.startsWith(`${toolName}(`)`, and that made this
- * module contradict the matcher it depends on. The matcher rules that a
- * `Write`/`Glob`/`NotebookRead`/`NotebookEdit` PATH rule blocks nothing —
- * Claude Code accepts those rules and never consults them — but the string
- * prefix knew nothing about that, so `Write(./secrets/**)` was reported as
- * blocking a skill that spells the tool `Write` and NOT one that spells it
- * `Write(./out/**)`. One deny rule, two answers about one tool, decided by
- * nothing but the SKILL.md's spelling. `ruleConstrainsTool` is the matcher's
- * own answer to the no-concrete-input question, off the same taxonomy that
- * decides the concrete one, so there is exactly one answer now.
+ * ⛔ This module asks ONE question of the matcher and interprets nothing itself.
+ * That is a rule with two scars behind it, both of the same shape — the checker
+ * deciding on its own what a SKILL.md spelling means:
  *
- * That branch also CRASHED on the consulted half: it asked the path lane about
- * an empty path, which node-ignore refuses with `path must not be empty`, so
- * `vat audit` died on any plugin declaring a bare `Read`/`Edit` against an org
- * path rule. It no longer asks that question at all, and the path lane answers
- * `false` for an empty path rather than throwing.
+ * - It answered *"does this rule constrain the tool at all?"* with
+ *   `rule.startsWith(`${toolName}(`)`, which knows nothing of the matcher's
+ *   ruling that a `Write`/`Glob`/`NotebookRead`/`NotebookEdit` PATH rule blocks
+ *   nothing. `Write(./secrets/**)` was reported as blocking a skill spelling the
+ *   tool `Write` and not one spelling it `Write(./out/**)`. That branch also
+ *   CRASHED on the consulted half, handing the path lane an empty path, which
+ *   node-ignore refuses with `path must not be empty` — `vat audit` died on any
+ *   plugin declaring a bare `Read`/`Edit` against an org path rule.
+ * - It then pulled the parenthesised text out of the entry and passed it as a
+ *   CONCRETE tool input. Every partial wildcard — `Bash(git:*)`, `Read(./**)`,
+ *   the spellings Claude Code's own documentation uses — was tested as a command
+ *   literally named `git:*` or a file literally named `./**`, so bare `Bash`
+ *   reported a conflict with `Bash(git push:*)` and `Bash(git:*)` did not.
+ *
+ * `ruleConstrainsDeclaration` takes the entry WHOLE and answers off the same
+ * taxonomy that decides a concrete input, so there is exactly one answer per
+ * (declaration, rule) pair and this file has no spelling logic left to drift.
  */
-function isToolBlocked(
-  toolName: string,
-  toolInput: string,
-  rule: string,
-  pluginDir: string
-): boolean {
-  // A bare `Write` or a wildcarded `Write(*)` declares the tool UNRESTRICTED —
-  // there is no concrete input to match, so the question is whether the rule
-  // constrains the tool at all.
-  if (toolInput === '*') return ruleConstrainsTool(toolName, rule, 'deny');
-  return matchesDenyRule(toolName, toolInput, rule, pluginDir);
-}
-
-async function checkToolBlockingConflicts(
-  skillFiles: string[],
+function toolBlockingConflicts(
+  skills: readonly ReadSkill[],
   denyRules: ProvenanceRule[],
   pluginDir: string
-): Promise<SettingsConflict[]> {
+): SettingsConflict[] {
   const conflicts: SettingsConflict[] = [];
 
-  for (const skillFile of skillFiles) {
-    const frontmatter = await parseSkillFrontmatter(skillFile);
-    if (!frontmatter?.['allowed-tools']) continue;
-
-    for (const tool of frontmatter['allowed-tools']) {
-      const toolName = tool.includes('(') ? tool.slice(0, tool.indexOf('(')) : tool;
-      const toolInput = extractToolInput(tool);
-
+  for (const skill of skills) {
+    for (const tool of skill.frontmatter['allowed-tools'] ?? []) {
       for (const { rule, provenance } of denyRules) {
-        if (isToolBlocked(toolName, toolInput, rule, pluginDir)) {
+        if (ruleConstrainsDeclaration(tool, rule, 'deny', pluginDir)) {
           conflicts.push({
             type: 'tool-blocked',
-            detail: `Tool "${tool}" in ${safePath.relative(pluginDir, skillFile)} blocked by org policy (permissions.deny)`,
+            detail: `Tool "${tool}" in ${safePath.relative(pluginDir, skill.path)} blocked by org policy (permissions.deny)`,
             blockedBy: 'permissions.deny',
             value: rule,
             settingsFile: provenance.file,
@@ -242,31 +223,29 @@ async function checkHookDisablingConflicts(
   ];
 }
 
-async function checkModelUnavailabilityConflicts(
-  skillFiles: string[],
+function modelUnavailabilityConflicts(
+  skills: readonly ReadSkill[],
   effectiveSettings: EffectiveSettings,
   pluginDir: string
-): Promise<SettingsConflict[]> {
+): SettingsConflict[] {
   if (!effectiveSettings.availableModels?.value) return [];
 
   const allowedModels = new Set(effectiveSettings.availableModels.value);
   const { provenance } = effectiveSettings.availableModels;
   const conflicts: SettingsConflict[] = [];
 
-  for (const skillFile of skillFiles) {
-    const frontmatter = await parseSkillFrontmatter(skillFile);
-    if (!frontmatter?.model) continue;
+  for (const skill of skills) {
+    const { model } = skill.frontmatter;
+    if (model === undefined || allowedModels.has(model)) continue;
 
-    if (!allowedModels.has(frontmatter.model)) {
-      conflicts.push({
-        type: 'model-unavailable',
-        detail: `Model "${frontmatter.model}" required by ${safePath.relative(pluginDir, skillFile)} is not in org's availableModels`,
-        blockedBy: 'availableModels',
-        value: effectiveSettings.availableModels.value.join(', '),
-        settingsFile: provenance.file,
-        settingsLevel: provenance.level,
-      });
-    }
+    conflicts.push({
+      type: 'model-unavailable',
+      detail: `Model "${model}" required by ${safePath.relative(pluginDir, skill.path)} is not in org's availableModels`,
+      blockedBy: 'availableModels',
+      value: effectiveSettings.availableModels.value.join(', '),
+      settingsFile: provenance.file,
+      settingsLevel: provenance.level,
+    });
   }
 
   return conflicts;
@@ -274,7 +253,10 @@ async function checkModelUnavailabilityConflicts(
 
 /**
  * Check a plugin directory against effective settings for conflicts.
- * Returns conflicts found; empty array means no issues.
+ *
+ * Returns the conflicts found AND every path it could not compare — see
+ * {@link SettingsCheck} for why the second half exists. A plugin is compatible
+ * only when both lists are empty.
  *
  * Only deny rules are checked here — Claude Code evaluates deny → ask → allow
  * (first match wins), so a deny rule is the only bucket that can actually block
@@ -283,14 +265,23 @@ async function checkModelUnavailabilityConflicts(
 export async function checkSettingsCompatibility(
   pluginDir: string,
   effectiveSettings: EffectiveSettings
-): Promise<SettingsConflict[]> {
-  const skillFiles = await findSkillFiles(pluginDir);
+): Promise<SettingsCheck> {
+  const { skillFiles, unchecked } = await findSkillFiles(pluginDir);
 
-  const [toolConflicts, hookConflicts, modelConflicts] = await Promise.all([
-    checkToolBlockingConflicts(skillFiles, effectiveSettings.permissions.deny, pluginDir),
-    checkHookDisablingConflicts(pluginDir, effectiveSettings),
-    checkModelUnavailabilityConflicts(skillFiles, effectiveSettings, pluginDir),
-  ]);
+  // Each SKILL.md is read ONCE, here, and every lane below consults the same
+  // reading — a file the checker could not read is unchecked for all of them.
+  const skills: ReadSkill[] = [];
+  for (const path of skillFiles) {
+    const read = await parseSkillFrontmatter(path);
+    if ('reason' in read) unchecked.push({ path, reason: read.reason });
+    else skills.push({ path, frontmatter: read.frontmatter });
+  }
 
-  return [...toolConflicts, ...hookConflicts, ...modelConflicts];
+  const conflicts = [
+    ...toolBlockingConflicts(skills, effectiveSettings.permissions.deny, pluginDir),
+    ...(await checkHookDisablingConflicts(pluginDir, effectiveSettings)),
+    ...modelUnavailabilityConflicts(skills, effectiveSettings, pluginDir),
+  ];
+
+  return { conflicts, unchecked };
 }

@@ -40,6 +40,7 @@ function payloadFor(
     population: 'derived',
     durationMs: 1060,
     populationMs: 190,
+    lensMs: 27,
     ...overrides,
   });
 }
@@ -105,6 +106,27 @@ describe('the query payload', () => {
     // is the whole point of the case. The `not.toBe(0)` below restates it.
     expect(payload['populationSecs']).toBeCloseTo(0.0004, 10);
     expect(payload['populationSecs']).not.toBe(0);
+  });
+
+  it('publishes what the LENS cost, as a field of its own', () => {
+    // 🚨 `lensSecs` shipped on both verbs with NO test naming it: deleting
+    // either producing line left the whole suite green. An unconditional cost
+    // that nothing pins is one that can quietly disappear, and this field is
+    // the only evidence anyone would have if the lens ever grew expensive
+    // enough to deserve a flag.
+    //
+    // Distinct from `populationMs` in the fixture so wiring the two to one
+    // input is red rather than invisible.
+    const payload = payloadFor({ populationMs: 400, lensMs: 27 });
+
+    expect(payload['lensSecs']).toBeCloseTo(0.027, 10);
+    expect(payload['populationSecs']).toBeCloseTo(0.4, 10);
+    // 🔑 The two spans are DISJOINT — the population clock stops before the
+    // lens runs. It shipped otherwise, with `populationSecs` silently
+    // containing `lensSecs` while three docstrings said it did not, so anyone
+    // adding them over-counted. Neither may exceed the run that contains both.
+    const total = (payload['populationSecs'] as number) + (payload['lensSecs'] as number);
+    expect(total).toBeLessThanOrEqual(payload['durationSecs'] as number);
   });
 
   it('places the population cost immediately after the population origin', () => {

@@ -100,12 +100,16 @@ import { DatabaseSync, type StatementSync } from 'node:sqlite';
 
 import {
   type BlobScopedRows,
+  type DerivedTableName,
+  type DerivedTableSpec,
   type ExtentKey,
   type ExtentScopedRows,
   type ProjectionColumnType,
   type ProjectionStore,
+  allDerivedSpecs,
   projectionColumnTypes,
   projectionShapeDigest,
+  quoteIdentifier,
   vatCacheNamespaceRoot,
 } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -118,11 +122,13 @@ import {
   type StoredTableSpec,
   allSpecs,
   blobKeyColumn,
+  createDerivedTableSql,
   createTableSql,
   deleteBlobFactsSql,
   deleteExtentContextSql,
   deleteExtentSql,
   deleteRowByKeySql,
+  insertDerivedSql,
   insertSql,
   selectBlobFactsSql,
   selectExtentSql,
@@ -300,6 +306,140 @@ function indexOfStatementSeparator(sql: string): number {
   return -1;
 }
 
+/** The characters SQLite's tokenizer admits in a parameter name after a sigil. */
+const PARAMETER_NAME_CHAR = /[\w\u0080-\uFFFF]/;
+
+/** The sigils that open a NAMED parameter, which positional values never reach. */
+const NAMED_PARAMETER_SIGILS: ReadonlySet<string> = new Set([':', '@', '$']);
+
+/** One decimal digit, for the `?NNN` form. */
+const DIGIT = /\d/;
+
+/**
+ * How many values SQLite expects bound to `sql`, and whether any of its
+ * placeholders is one positional values can never reach.
+ *
+ * 🚨 **Derived, because the driver does not say.** `StatementSync` exposes no
+ * `sqlite3_bind_parameter_count` (verified on Node 24.13.1 — the prototype has
+ * nothing between `columns` and the setters), and the engine only refuses ONE
+ * direction: a value with no slot throws `column index out of range`, while a
+ * slot with no value is silently bound to NULL. On this surface that second
+ * case is not an error but a wrong answer at exit 0 — every comparison against
+ * NULL is false, so the statement selects nothing, and "selected nothing" is
+ * what a passing `resources.checks` entry looks like.
+ *
+ * So the count is read off the statement with the SAME scanner the separator
+ * gate uses, and follows SQLite's own numbering: a bare `?` is the largest index
+ * so far plus one; `?NNN` is NNN, which also declares every lower slot (`?3`
+ * alone is three slots — measured, one value fills slot 1 and `?3` reads NULL).
+ * A `:x`, `@x` or `$x` name is reported rather than numbered: the driver binds
+ * positional values only into anonymous and `?NNN` slots, so a named slot is one
+ * this surface cannot fill however many values arrive.
+ *
+ * @param sql - The statement text
+ * @returns The slot count, and the first named parameter if there is one
+ */
+function countBoundParameters(sql: string): { readonly slots: number; readonly named: string | undefined } {
+  let slots = 0;
+  let named: string | undefined;
+  let index = 0;
+  while (index < sql.length) {
+    const skipped = skipLiteralOrComment(sql, index);
+    if (skipped > index) {
+      index = skipped;
+      continue;
+    }
+    const placeholder = placeholderAt(sql, index);
+    if (placeholder === undefined) {
+      index += 1;
+      continue;
+    }
+    if (placeholder.name === undefined) {
+      slots = placeholder.slot === undefined ? slots + 1 : Math.max(slots, placeholder.slot);
+    } else {
+      named ??= placeholder.name;
+    }
+    index = placeholder.end;
+  }
+  return { slots, named };
+}
+
+/** What one placeholder token is: where it ends, and its `?NNN` slot or its `:name`. */
+interface PlaceholderToken {
+  readonly end: number;
+  readonly slot?: number;
+  readonly name?: string;
+}
+
+/**
+ * The placeholder token beginning at `index`, or `undefined` when none does.
+ *
+ * Outside literals and comments only — the caller has already stepped past
+ * those, and a `?` inside one is text.
+ *
+ * @param sql - The statement text
+ * @param index - Where to look
+ * @returns The token, or `undefined`
+ */
+function placeholderAt(sql: string, index: number): PlaceholderToken | undefined {
+  const char = sql[index] ?? '';
+  if (char === '?') {
+    const end = indexPastRun(sql, index + 1, DIGIT);
+    return end > index + 1 ? { end, slot: Number(sql.slice(index + 1, end)) } : { end };
+  }
+  if (NAMED_PARAMETER_SIGILS.has(char) && PARAMETER_NAME_CHAR.test(sql[index + 1] ?? '')) {
+    const end = indexPastRun(sql, index + 1, PARAMETER_NAME_CHAR);
+    return { end, name: sql.slice(index, end) };
+  }
+  return undefined;
+}
+
+/**
+ * Index just past the run of characters matching `pattern` that starts at `from`.
+ *
+ * @param sql - The statement text
+ * @param from - Where the run may start
+ * @param pattern - A single-character test
+ * @returns `from` itself when the run is empty
+ */
+function indexPastRun(sql: string, from: number, pattern: RegExp): number {
+  let end = from;
+  while (end < sql.length && pattern.test(sql[end] ?? '')) end += 1;
+  return end;
+}
+
+/**
+ * Refuse a statement whose placeholders and values do not pair off exactly.
+ *
+ * Both directions, in one message that names both counts — the engine's own
+ * over-bind refusal says `column index out of range`, which is about a column
+ * in a statement that has no column problem. See {@link countBoundParameters}
+ * for why the under-bound direction is the one that matters.
+ *
+ * @param sql - The statement text
+ * @param parameters - What the caller is binding, positionally
+ * @throws If a placeholder is named, or the counts differ
+ */
+function assertParametersBound(sql: string, parameters: readonly SqliteValue[]): void {
+  const { slots, named } = countBoundParameters(sql);
+  if (named !== undefined) {
+    throw new Error(
+      `This statement has a named parameter (\`${named}\`), and this surface binds values`
+      + ' positionally, so nothing can ever fill it — write `?` instead.',
+    );
+  }
+  if (slots === parameters.length) return;
+  const placeholders = `${slots} placeholder${slots === 1 ? '' : 's'}`;
+  const values = `${parameters.length} value${parameters.length === 1 ? ' was' : 's were'} bound`;
+  const consequence = parameters.length < slots
+    ? 'SQLite binds a missing value as NULL, so an under-bound statement compares against nothing'
+      + ' and reports that it succeeded'
+    : 'there is no placeholder for the extra value';
+  throw new Error(
+    `This statement has ${placeholders} and ${values}; ${consequence}. Bind exactly one value per placeholder.`,
+  );
+}
+
 /**
  * How long a blocked connection waits for a lock before giving up.
  *
@@ -437,6 +577,25 @@ interface TablePlan {
 }
 
 /**
+ * One derived relation's prepared statements.
+ *
+ * Deliberately not a {@link TablePlan} with the extent fields left absent: six
+ * of that type's seven optional members exist to serve the extent partition,
+ * which a derived relation does not have, and reusing it would invite a reader
+ * to look for a `selectExtent` that is missing for a reason no comment states.
+ * The statement-reuse requirement in {@link TablePlan}'s header applies here
+ * identically, which is why these are memoized rather than prepared per write.
+ */
+interface DerivedPlan {
+  readonly spec: DerivedTableSpec;
+  /** Each declared column paired with what it holds, in registry order. */
+  readonly columns: readonly (readonly [column: string, type: ProjectionColumnType])[];
+  readonly insert: StatementSync;
+  /** Empty the relation, so one evaluation replaces another rather than joining it. */
+  readonly clear: StatementSync;
+}
+
+/**
  * Open a SQLite-backed projection store.
  *
  * The directory is created if absent, the schema is created if absent, and the
@@ -491,11 +650,16 @@ export interface SqlQueryableStore extends ProjectionStore {
    * underlying row depending on how the caller phrased the question.
    *
    * @param sql - One `SELECT`, `WITH` or `VALUES` statement
-   * @param parameters - Bound in order, for every `?` in the statement
+   * @param parameters - Bound in order, for every `?` in the statement — and
+   *   exactly one per `?`. The engine refuses a value with no slot but binds a
+   *   slot with no value to NULL, which on this surface is a wrong answer that
+   *   reports success; both directions are refused here, naming the counts
    * @returns The rows, in the order SQLite produced them
    * @throws If the statement is not a query (`SELECT`, `WITH` or `VALUES`), if
-   *   it is not read-only, if it is more than one statement, or if SQLite
-   *   rejects it — an unknown column included
+   *   it is not read-only, if it is more than one statement, if its
+   *   placeholders and `parameters` do not pair off exactly, if it names a
+   *   parameter (`:x`) positional values cannot reach, or if SQLite rejects it
+   *   — an unknown column included
    */
   query(sql: string, ...parameters: readonly SqliteValue[]): readonly Record<string, unknown>[];
 
@@ -518,16 +682,81 @@ export interface SqlQueryableStore extends ProjectionStore {
    * design, because admitting a prefix means deciding safety past the first
    * token.
    *
-   * Runs the same kind and single-statement gates as {@link query}, so a
-   * statement refused for what it IS is refused just as early as one refused
-   * for what it names.
+   * Runs the same kind, single-statement and placeholder-count gates as
+   * {@link query}, so a statement refused for what it IS — or for what the
+   * caller forgot to bind — is refused just as early as one refused for what
+   * it names.
    *
    * @param sql - One `SELECT`, `WITH` or `VALUES` statement
+   * @param parameters - What the caller WILL bind when it runs the statement.
+   *   Required rather than defaulted, because an omitted argument would read as
+   *   "no values" and silently pass every under-bound statement through the
+   *   very preflight meant to catch it early
    * @throws The same errors {@link query} throws for a statement that is not a
-   *   query, is more than one statement, or names something the schema lacks
+   *   query, is more than one statement, does not pair its placeholders with
+   *   `parameters`, or names something the schema lacks
    */
-  assertCompiles(sql: string): void;
+  assertCompiles(sql: string, parameters: readonly SqliteValue[]): void;
+
+  /**
+   * Write the rows one lens evaluation produced, so SQL can ask about them.
+   *
+   * ## 🚨 "A lens's output never reaches the shared on-disk store" is enforced
+   * at RUNTIME. Do not re-read it as a type guarantee — it was one, wrongly.
+   *
+   * An earlier version of this docstring claimed `openSqliteProjectionStore`
+   * returned the narrower `ProjectionStore`, so declaring the write here made
+   * it unreachable on disk "without a runtime guard anyone could forget".
+   * **That was false.** The factory returns `SqlQueryableStore`, so every
+   * consumer of this package sees `writeDerived` on a shared on-disk handle
+   * with no type friction whatsoever. The wide type is correct — the
+   * file-backed store is legitimately queryable — so the guarantee is a
+   * refusal instead: a store built without the derived DDL throws, and only
+   * `openEphemeralProjectionStore` builds one with it.
+   *
+   * ⛔ Do not "simplify" by moving `allDerivedSpecs()` into `createSchema`.
+   * That is the obvious "why are these two loops different?" cleanup, and it
+   * would make the write succeed silently on a database shared by every
+   * repository on the machine — where the rows are also **unevictable** (they
+   * carry no extent key, and eviction goes by the extent manifest) and where
+   * this method's per-relation `DELETE` has **no root predicate**, so one
+   * repository's evaluation would empty another's.
+   *
+   * The rule matters because the on-disk store is **one database per VAT
+   * release, shared by every root on the machine**, retaining three tree hashes
+   * per root. A lens's rows are a function of bytes AND of the lens, and a
+   * question asked once — so persisting them would mean a later run reading one
+   * lens's answers under another lens's question, across repositories.
+   *
+   * ⚠️ **Replaces the relation's contents.** Two evaluations in one process are
+   * two answers to two questions, not an accumulation; appending would silently
+   * union them and make every `GROUP BY` double-count.
+   *
+   * @param rows - Each derived relation's rows, keyed by `DERIVED_TABLES`'s own
+   *   keys. A relation the caller omits is left UNTOUCHED — not emptied
+   * @throws If a row carries a value no column type can store
+   */
+  writeDerived(rows: DerivedRows): Promise<void>;
 }
+
+/**
+ * The rows of one lens evaluation, keyed by {@link DERIVED_TABLES}'s own keys.
+ *
+ * Every relation is optional, and omitting one leaves it UNTOUCHED while passing
+ * an empty array CLEARS it.
+ *
+ * 🪤 **Omitting is not equivalent to passing empty, and the difference is a
+ * hazard rather than a convenience.** An earlier docstring said the two "read
+ * the same to SQL" — true only on a virgin store. Write `{lensContexts, edges}`
+ * and then `{edges}`, and `edges` describes the second evaluation while
+ * `lens_contexts` still describes the first: a join across two answers to two
+ * questions, which is the exact double-count `writeDerived` clears each relation
+ * to prevent. ⇒ **A caller should pass every relation it evaluated, every time.**
+ * `EvaluatedLenses` makes all three fields required for precisely this reason.
+ */
+export type DerivedRows = {
+  readonly [Name in DerivedTableName]?: readonly Record<string, unknown>[];
+};
 
 /**
  * Open a projection store that lives only in this process's memory.
@@ -568,7 +797,18 @@ export interface SqlQueryableStore extends ProjectionStore {
 export function openEphemeralProjectionStore(): SqlQueryableStore {
   const database = new DatabaseSync(':memory:');
   createSchema(database);
-  return new SqliteProjectionStore(database, DEFAULT_RETAINED_EXTENTS_PER_ROOT);
+  // ⛔ HERE AND NOWHERE ELSE. `createSchema` is shared with the file-backed
+  // store, and a lens's rows must never enter it — that database is one per VAT
+  // release, shared by every root on the machine, so a persisted lens answer
+  // would be read back under a different lens's question in a different
+  // repository. Creating the relations only on this path means the on-disk
+  // schema has no table for them to land in even if a future caller tried.
+  for (const spec of allDerivedSpecs()) {
+    database.exec(createDerivedTableSql(spec));
+  }
+  // The `true` and the loop above are ONE decision: this is the only store that
+  // has the relations, so it is the only one permitted to write them.
+  return new SqliteProjectionStore(database, DEFAULT_RETAINED_EXTENTS_PER_ROOT, true);
 }
 
 /**
@@ -790,16 +1030,37 @@ class SqliteProjectionStore implements SqlQueryableStore {
   readonly #retainedExtentsPerRoot: number;
   /** Blob-fact statements memoized by table and placeholder count — see {@link TablePlan}. */
   readonly #blobStatements = new Map<string, StatementSync>();
+  /** Derived-relation statements, prepared on first use — see {@link SqliteProjectionStore.writeDerived}. */
+  #derivedPlanCache: readonly DerivedPlan[] | undefined;
+  /**
+   * Whether this connection's schema HAS the derived relations.
+   *
+   * 🚨 The one thing standing between a lens's rows and the shared on-disk
+   * database, and it has to be a runtime flag rather than a type. An earlier
+   * version of this file claimed `openSqliteProjectionStore` returned the
+   * narrower `ProjectionStore`, so `writeDerived` was unreachable on disk —
+   * **that was false**. The factory returns `SqlQueryableStore`, and it should:
+   * the file-backed store is legitimately queryable, and `query.test.ts`
+   * compares its rows against the in-memory store's precisely to keep "one
+   * tree, one answer" honest. So the wide type is right and the guarantee had
+   * to move here.
+   */
+  readonly #hasDerivedTables: boolean;
   #closed = false;
 
   /**
    * @param database - An open, configured connection whose schema exists
    * @param retainedExtentsPerRoot - How many of a root's newest trees survive a
    *   write. Already clamped to at least one by {@link openSqliteProjectionStore}
+   * @param hasDerivedTables - Whether this connection's schema carries the
+   *   derived relations, which is the ONLY thing permitting `writeDerived`.
+   *   Defaults to false so a new factory has to opt in deliberately; pass true
+   *   only where the derived DDL was actually issued
    */
-  constructor(database: DatabaseSync, retainedExtentsPerRoot: number) {
+  constructor(database: DatabaseSync, retainedExtentsPerRoot: number, hasDerivedTables = false) {
     this.#database = database;
     this.#retainedExtentsPerRoot = retainedExtentsPerRoot;
+    this.#hasDerivedTables = hasDerivedTables;
     this.#plans = allSpecs().map((spec) => ({
       spec,
       columns: projectionColumnTypes(spec),
@@ -906,6 +1167,72 @@ class SqliteProjectionStore implements SqlQueryableStore {
     if (evicted > 0) this.#database.exec('PRAGMA incremental_vacuum');
   }
 
+  /**
+   * @inheritdoc
+   *
+   * Prepared lazily rather than in the constructor, because the constructor is
+   * shared with the file-backed store whose schema has no derived relations to
+   * prepare against. The RUNTIME REFUSAL below keeps that store from reaching
+   * the write; the laziness keeps it from paying for statements it could never
+   * run.
+   *
+   * ⛔ Not "the type keeps that store from reaching this method" — that was the
+   * claim this PR shipped in four places and it was false in all of them:
+   * `openSqliteProjectionStore` returns `SqlQueryableStore`, so the method is
+   * right there on a file-backed handle. Three copies were corrected and this
+   * one, the closest to the code, was missed — which is the narrow-to-the-
+   * instance fix the review keeps finding. See {@link SqliteProjectionStore.
+   * #hasDerivedTables}.
+   */
+  async writeDerived(rows: DerivedRows): Promise<void> {
+    this.#assertOpen();
+    if (!this.#hasDerivedTables) {
+      throw new Error(
+        'This store has no derived relations, so a lens evaluation cannot be written to it.'
+        + ' They exist only on the per-run in-memory store from `openEphemeralProjectionStore()`.'
+        + ' The file-backed store is ONE database per VAT release, shared by every root on the'
+        + " machine — a lens's rows are a function of the lens as well as the bytes, and a question"
+        + " asked once, so persisting them there would answer one lens's question with another"
+        + " lens's rows, across repositories. Populate from the file-backed store, then query the"
+        + ' in-memory one.',
+      );
+    }
+    const bundle = rows as Record<string, readonly Record<string, unknown>[] | undefined>;
+    this.#transaction(() => {
+      for (const plan of this.#derivedPlans()) {
+        const supplied = bundle[plan.spec.key];
+        // Omitted is not the same as empty: an omitted relation is one this
+        // evaluation has nothing to say about, and clearing it would be this
+        // method inventing a claim. An empty ARRAY does mean "no rows", and
+        // clears — which is why the two are distinguished here rather than
+        // collapsed with `?? []`.
+        if (supplied === undefined) continue;
+        plan.clear.run();
+        for (const row of supplied) {
+          plan.insert.run(...plan.columns.map(([column, { kind }]) => encodeValue(kind, row[column])));
+        }
+      }
+    });
+  }
+
+  /**
+   * The derived relations' statements, prepared once and memoized.
+   *
+   * @returns One plan per derived relation, in registry order
+   */
+  #derivedPlans(): readonly DerivedPlan[] {
+    const cached = this.#derivedPlanCache;
+    if (cached !== undefined) return cached;
+    const plans: readonly DerivedPlan[] = allDerivedSpecs().map((spec) => ({
+      spec,
+      columns: projectionColumnTypes(spec),
+      insert: this.#database.prepare(insertDerivedSql(spec)),
+      clear: this.#database.prepare(`DELETE FROM ${quoteIdentifier(spec.name)}`),
+    }));
+    this.#derivedPlanCache = plans;
+    return plans;
+  }
+
   /** @inheritdoc */
   async readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
     this.#assertOpen();
@@ -931,6 +1258,7 @@ class SqliteProjectionStore implements SqlQueryableStore {
     this.#assertOpen();
     assertSingleStatement(sql);
     assertIsQuery(sql);
+    assertParametersBound(sql, parameters);
 
     // 🪤 Read-only-ness is `PRAGMA query_only` and NOT an inspection of the
     // statement, because there is nothing useful to inspect: `StatementSync`
@@ -986,10 +1314,11 @@ class SqliteProjectionStore implements SqlQueryableStore {
   }
 
   /** @inheritdoc */
-  assertCompiles(sql: string): void {
+  assertCompiles(sql: string, parameters: readonly SqliteValue[]): void {
     this.#assertOpen();
     assertSingleStatement(sql);
     assertIsQuery(sql);
+    assertParametersBound(sql, parameters);
 
     // `query_only` is set for the same reason {@link query} sets it, and NOT as
     // ceremony: `prepare` is where SQLite decides a statement is legal, and a

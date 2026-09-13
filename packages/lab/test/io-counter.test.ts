@@ -564,8 +564,17 @@ function twoCallsUnder(label: string): DumpRow {
   const state = internals.createState('/unused', COUNTER_DIST);
   internals.wrapFunction(state, shared, 'readFile', label);
 
-  shared.readFile('/usr/bin/git', ['status']);
-  shared.readFile('/usr/bin/git', ['rev-parse', 'HEAD']);
+  // 🪤 Both calls must issue from ONE source line. The counter keys a row on
+  // `class \0 method \0 file:line`, so two calls WRITTEN on two lines are two
+  // SITES and therefore two rows, whatever their arguments. This fixture used to
+  // be two statements and passed only because vitest 3's transform mapped them
+  // onto a single line; vitest 4 reports the true lines and it split into two
+  // rows of one call each. Routing both through one helper is what the assertion
+  // always meant — same site, different argv — and it no longer rests on a
+  // transform detail that a dependency bump can move.
+  const callGit = (argv: string[]): void => { shared.readFile('/usr/bin/git', argv); };
+  callGit(['status']);
+  callGit(['rev-parse', 'HEAD']);
 
   const rows = internals.toRows(state);
   const only = rows[0];

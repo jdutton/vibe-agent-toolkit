@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/vat-example-cat-agents",
-  "version": "0.2.0-rc.6",
+  "version": "0.2.0-rc.7",
   "description": "Example agents: 8 quirky cat agents demonstrating VAT patterns",
   "type": "module",
   "exports": {
@@ -51,11 +51,11 @@
     "@vibe-agent-toolkit/runtime-claude-agent-sdk": "workspace:*",
     "@vibe-agent-toolkit/runtime-langchain": "workspace:*",
     "@vibe-agent-toolkit/runtime-openai": "workspace:*",
-    "@vitest/coverage-v8": "^3.2.4",
+    "@vitest/coverage-v8": "^4.1.11",
     "ai": "^6.0.48",
     "openai": "^4.77.3",
     "typescript": "^5.7.3",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.11"
   },
   "vat": {
     "version": "1.0",

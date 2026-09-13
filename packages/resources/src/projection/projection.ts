@@ -98,7 +98,7 @@ const KEY_SEPARATOR = '\u0000';
  * The twelve materialised tables of the resource projection.
  *
  * `edges`, `edge_resolutions` and `lens_entry_points` are absent on purpose:
- * zones.md §3.2 places them in the derived-per-lens column, so they are the
+ * zones.md §2 places them in the derived-per-lens column, so they are the
  * output of evaluating a lens rather than rows anything populates. Declaring
  * empty slots for them would state the opposite.
  */

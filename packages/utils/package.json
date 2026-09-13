@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/utils",
-  "version": "0.2.0-rc.6",
+  "version": "0.2.0-rc.7",
   "type": "module",
   "description": "Core utility functions shared across the vibe-agent-toolkit packages",
   "sideEffects": [
@@ -118,7 +118,7 @@
     "eslint": "^9.39.5",
     "rimraf": "^6.0.1",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.4",
+    "vitest": "^4.1.11",
     "zod": "^3.25.0"
   },
   "publishConfig": {

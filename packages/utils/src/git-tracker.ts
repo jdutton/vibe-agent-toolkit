@@ -76,6 +76,27 @@ export class GitTracker {
    * comes from, so it costs one extra `Map` and no extra git invocation.
    */
   private readonly indexPaths: Map<string, string> = new Map();
+  /**
+   * Absolute, forward-slashed directories the active-set listing could not
+   * OPEN, so nothing beneath them is in the set — read off `git ls-files
+   * --others`' stderr through the listing's `unreadable` policy (`degrade`).
+   *
+   * 🚨 Beneath one of these the active set has no opinion. Its rule is "absent
+   * from the set and present on disk ⇒ ignored", and that rule is sound only
+   * where the listing LOOKED: an untracked, non-ignored file under a `--x`
+   * directory is absent because git could not read the directory, not because
+   * a pattern excludes it, and `git check-ignore` — which answers from the
+   * patterns and needs no listing — says so. Before this was recorded the
+   * tracker called such a file gitignored, silently, and every consumer of
+   * that answer (the leak judge, the link-graph walker, audit's distributed
+   * lane) was one refused `opendir` from a wrong verdict.
+   *
+   * The directory ITSELF is non-ignored by construction — git opened it
+   * precisely because no pattern excluded it — so it and its ancestors are
+   * entered into {@link activeAncestors}: a walker must not prune what the
+   * listing could not see into.
+   */
+  private readonly unlistableDirectories: string[] = [];
   private initialized = false;
   private activeSetPopulated = false;
   /** Whether `git ls-files` actually answered during {@link initialize}. */
@@ -127,6 +148,15 @@ export class GitTracker {
     const files = this.activePathsFromOpenSnapshot(includeUntracked) ?? gitLsFiles({
       cwd: this.projectRoot,
       ...(includeUntracked ? { includeUntracked: true } : {}),
+      // Degrade, and RECORD: a directory git could not open is a shorter list
+      // nothing can tell from a complete one — see {@link unlistableDirectories}
+      // for how the tracker keeps that gap honest. Only the untracked listing
+      // walks the tree, so the tracked-only one never calls this.
+      unreadable: {
+        degrade: (refusal) => {
+          this.unlistableDirectories.push(refusal.directory);
+        },
+      },
     });
 
     if (files !== null) {
@@ -238,27 +268,53 @@ export class GitTracker {
    * `hasActiveDescendant` / `isIgnoredByActiveSet` ancestor lookup misses on Windows.
    */
   private populateAncestorSet(): void {
-    const root = this.normalizedProjectRoot;
-
     for (const absolutePath of this.activeSet) {
-      let current = toForwardSlash(dirname(absolutePath));
-
-      while (current !== root && current.length > root.length) {
-        if (this.activeAncestors.has(current)) {
-          // Ancestor (and all of its ancestors) already recorded — avoid redundant work.
-          break;
-        }
-        this.activeAncestors.add(current);
-        const parent = toForwardSlash(dirname(current));
-        if (parent === current) {
-          break;
-        }
-        current = parent;
-      }
+      this.recordAncestorsFrom(toForwardSlash(dirname(absolutePath)));
+    }
+    // A directory the listing could not open is itself non-ignored (git opened
+    // it because no pattern excluded it) and may hold active files nobody could
+    // list — so it counts as an ancestor from ITSELF down, not from its parent.
+    for (const directory of this.unlistableDirectories) {
+      this.recordAncestorsFrom(directory);
     }
 
     // projectRoot itself is always an implicit ancestor of everything under it.
-    this.activeAncestors.add(root);
+    this.activeAncestors.add(this.normalizedProjectRoot);
+  }
+
+  /**
+   * Record `start` and every directory above it up to (not including) the
+   * project root as active ancestors, stopping at the first one already known
+   * — everything above it necessarily is too.
+   *
+   * @param start - Forward-slashed absolute directory to begin at
+   */
+  private recordAncestorsFrom(start: string): void {
+    const root = this.normalizedProjectRoot;
+    let current = start;
+
+    while (current !== root && current.length > root.length) {
+      if (this.activeAncestors.has(current)) {
+        break;
+      }
+      this.activeAncestors.add(current);
+      const parent = toForwardSlash(dirname(current));
+      if (parent === current) {
+        break;
+      }
+      current = parent;
+    }
+  }
+
+  /**
+   * Whether the active set can say anything about a path: it cannot beneath a
+   * directory the listing was refused — see {@link unlistableDirectories}.
+   *
+   * @param normalizedAbsolutePath - Forward-slashed absolute path
+   * @returns True when the path lies strictly beneath a refused directory
+   */
+  private beneathUnlistable(normalizedAbsolutePath: string): boolean {
+    return this.unlistableDirectories.some((directory) => normalizedAbsolutePath.startsWith(`${directory}/`));
   }
 
   /**
@@ -278,7 +334,9 @@ export class GitTracker {
       return true;
     }
     const normalized = safePath.resolve(absolutePath);
-    return this.activeSet.has(normalized) || this.activeAncestors.has(normalized);
+    // Beneath a refused directory nothing was listed, so "no active descendant"
+    // would be a claim the listing never earned.
+    return this.activeSet.has(normalized) || this.activeAncestors.has(normalized) || this.beneathUnlistable(normalized);
   }
 
   /**
@@ -287,7 +345,9 @@ export class GitTracker {
    * For paths INSIDE the project root **that exist on disk**, membership in the
    * active set is authoritative: such a path is ignored iff it is not in the
    * active set AND not an ancestor of any active-set path. No `git
-   * check-ignore` spawn.
+   * check-ignore` spawn. The one exception is a path beneath a directory the
+   * listing could not OPEN — see {@link unlistableDirectories} — where absence
+   * says nothing and the question goes to `git check-ignore`.
    *
    * The existence qualifier is load-bearing, not a caveat. The active set is
    * built from `git ls-files`, so it can only ever contain paths that EXIST — a
@@ -368,6 +428,13 @@ export class GitTracker {
 
     if (this.activeSet.has(normalized) || this.activeAncestors.has(normalized)) {
       return false;
+    }
+
+    // Absent from the set beneath a directory the listing could not open: the
+    // set never looked there, so absence is not evidence — see
+    // {@link unlistableDirectories}. Only `git check-ignore` can answer.
+    if (this.beneathUnlistable(normalized)) {
+      return this.isIgnored(absolutePath);
     }
 
     // Absent from the active set. That means "ignored" only for a path that is
@@ -462,6 +529,7 @@ export class GitTracker {
     this.activeSet.clear();
     this.activeAncestors.clear();
     this.indexPaths.clear();
+    this.unlistableDirectories.length = 0;
     this.initialized = false;
     this.activeSetPopulated = false;
     this.gitAnswered = false;

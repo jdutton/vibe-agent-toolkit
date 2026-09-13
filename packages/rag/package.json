@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/rag",
-  "version": "0.2.0-rc.6",
+  "version": "0.2.0-rc.7",
   "type": "module",
   "description": "Abstract RAG (Retrieval-Augmented Generation) interfaces and shared implementations",
   "keywords": [
@@ -46,7 +46,7 @@
     "@types/node": "^25.0.0",
     "openai": "^6.16.0",
     "typescript": "^5.9.0",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.11"
   },
   "peerDependencies": {
     "openai": "^6.16.0"

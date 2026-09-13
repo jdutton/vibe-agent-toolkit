@@ -1,8 +1,8 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- tmpdir paths constructed in test setup */
 import { readdirSync, statSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { resolveWorkspaceSource } from '../../src/skill-source/sources/workspace-source.js';
 
@@ -15,6 +15,7 @@ describe('resolveWorkspaceSource', () => {
 
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
+  afterEach(() => vi.unstubAllEnvs());
 
   beforeEach(() => {
     skillDir = safePath.join(suite.root, 'skills', 'bar');
@@ -34,21 +35,29 @@ describe('resolveWorkspaceSource', () => {
   });
 
   it('removes its build temp dir after staging (no vat-ws-build- leak) (M4)', async () => {
-    const before = new Set(
-      readdirSync(normalizedTmpdir()).filter((n) => n.startsWith('vat-ws-build-')),
-    );
+    // The subject builds under `os.tmpdir()`, which is OS-wide and shared with
+    // every other process on the box — including the sibling vitest workers
+    // running other test files, whose own transient `vat-ws-build-` dirs appear
+    // and vanish while this test runs. A before/after diff of the shared dir
+    // read one of those as this subject's leak (2026-09-12, gate run 2), and an
+    // earlier exact-equality check failed on a stale entry someone else cleaned
+    // up mid-test (2026-08-12). So give the subject a tmpdir nothing else uses:
+    // `os.tmpdir()` reads TMPDIR (POSIX) / TEMP, TMP (win32) on every call.
+    const privateTmp = safePath.join(suite.root, 'private-tmp');
+    mkdirSyncReal(privateTmp, { recursive: true });
+    vi.stubEnv('TMPDIR', privateTmp);
+    vi.stubEnv('TEMP', privateTmp);
+    vi.stubEnv('TMP', privateTmp);
+    // `normalizedTmpdir()` is realpath'd in the OS's own spelling (backslashes on Windows).
+    expect(toForwardSlash(normalizedTmpdir())).toBe(privateTmp);
+
     const result = await resolveWorkspaceSource('bar', suite.ctx, {
       skillPath: safePath.join(skillDir, 'SKILL.md'),
     });
     // Staged output survives; the build temp dir does not.
     expect(statSync(safePath.join(result.stagedDir, 'SKILL.md')).isFile()).toBe(true);
-    const after = readdirSync(normalizedTmpdir()).filter((n) => n.startsWith('vat-ws-build-'));
-    // Assert no NEW dir leaked, rather than `after === before`. The tmpdir is
-    // OS-wide and shared with every other process on the box, so a stale
-    // `vat-ws-build-` left by an earlier interrupted run can be cleaned up by
-    // someone else *during* this test — which fails an exact-equality check
-    // while proving nothing about a leak. Observed 2026-08-12: `before` held a
-    // stale entry, `after` was empty, and the subject had leaked nothing.
-    expect(after.filter((n) => !before.has(n))).toEqual([]);
+    // The build also parks the parse cache's fallback root (`.vat-cache`) in the
+    // tmpdir; that is the cache's own contract, not this subject's leak.
+    expect(readdirSync(privateTmp).filter((n) => n.startsWith('vat-ws-build-'))).toEqual([]);
   });
 });

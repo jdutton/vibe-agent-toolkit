@@ -179,7 +179,7 @@ describe('the projection lane and ResourceRegistry agree about a declared mimeTy
     // `this.config?.resources?.collections` with `undefined` in
     // `admitResource` left the whole suite green before this existed.
     const registry = await ResourceRegistry.fromCrawl(
-      { baseDir: corpus.root(), include: ['**/*.md'] },
+      { unreadable: 'refuse', baseDir: corpus.root(), include: ['**/*.md'] },
       { config: CONFIG },
     );
 
@@ -191,6 +191,7 @@ describe('the projection lane and ResourceRegistry agree about a declared mimeTy
     // the disagreement is caused by the absent config and by nothing else, so
     // every failing lane below has exactly one cause.
     const registry = await ResourceRegistry.fromCrawl({
+      unreadable: 'refuse',
       baseDir: corpus.root(),
       include: ['**/*.md'],
     });
@@ -201,7 +202,7 @@ describe('the projection lane and ResourceRegistry agree about a declared mimeTy
 
 describe('every shipped registry-construction site reaches the projection lane verdict', () => {
   it('crawlAndResolveRegistry — `vat audit`, `vat skills build` post-build validation', async () => {
-    const registry = await crawlAndResolveRegistry(corpus.root());
+    const registry = await crawlAndResolveRegistry(corpus.root(), { unreadable: 'refuse' });
 
     expect(registryVerdicts(registry)).toEqual(EXPECTED);
   });

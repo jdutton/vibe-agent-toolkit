@@ -72,11 +72,19 @@
  *
  * ## A path VAT'S OWN PACKAGER moved is not a missing path
  *
- * Content-type routing relocates a bundled file by EXTENSION, so an authored
- * `resources/setup.sh` ships as `scripts/setup.sh`. Markdown links are rewritten
- * to follow it; bare tokens in fences and code spans — this check's only input —
- * are not. A candidate is therefore only missing if it is absent under BOTH its
- * authored spelling and its routed one. See {@link routedSpelling}.
+ * Routing relocates a bundled file, so an authored `resources/setup.sh` ships as
+ * `scripts/setup.sh` under `claude-code` and as `references/setup.sh` under
+ * `claude-web`. Markdown links are rewritten to follow it; bare tokens in fences
+ * and code spans — this check's only input — are not. A candidate is therefore
+ * only missing if it is absent under BOTH its authored spelling and its routed
+ * one.
+ *
+ * ⛔ Routing is a function of the TARGET, not of the extension alone, so this
+ * check takes the target as a required argument and asks
+ * `getResourceSubdirForFile` — the same function the packager asks. It used to
+ * ask the extension-only half and answer for `claude-code` whatever it was
+ * packaging, which false-positived the entire `claude-web` target. See
+ * {@link routedSpelling}.
  *
  * ## Deliberately NOT handled here
  *
@@ -108,7 +116,8 @@ import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import {
   CLAUDE_WEB_REFERENCES_SUBDIR,
-  getTargetSubdir,
+  getResourceSubdirForFile,
+  type PackagingTarget,
   TARGET_SUBDIR_CATEGORIES,
 } from '../content-type-routing.js';
 
@@ -244,33 +253,46 @@ function bundleHas(skillDir: string, rel: string): boolean {
 }
 
 /**
- * Where the packager would actually put a file with this basename.
+ * Where the packager would actually put a file with this basename, FOR THIS
+ * TARGET.
  *
  * 🚨 **VAT's own packaging manufactures this finding, and this is the guard.**
- * `getTargetSubdir` routes an auto-discovered bundled file by EXTENSION alone,
- * discarding the subdirectory its author chose: source `resources/setup.sh`
- * ships as `scripts/setup.sh`, `scripts/config.json` as `templates/config.json`,
- * `assets/runtime.wasm` as `resources/runtime.wasm`. The packager rewrites
- * markdown LINKS to the routed destination, so those stay correct — but a bare
- * token in a code fence or code span is deliberately NOT rewritten, and bare
- * tokens are precisely what {@link bundledPathCandidates} reads. So a skill that
- * says ``bash resources/setup.sh`` in a fenced block, and links `resources/setup.sh`
- * in prose, gets one rewritten reference that resolves and one unrewritten one
- * that reports a file which DID ship.
+ * Content-type routing relocates an auto-discovered bundled file, discarding the
+ * subdirectory its author chose: under `claude-code` by EXTENSION, so source
+ * `resources/setup.sh` ships as `scripts/setup.sh`, `scripts/config.json` as
+ * `templates/config.json`, `assets/runtime.wasm` as `resources/runtime.wasm`;
+ * under `claude-web` by flattening every resource into `references/`. The
+ * packager rewrites markdown LINKS to the routed destination, so those stay
+ * correct — but a bare token in a code fence or code span is deliberately NOT
+ * rewritten, and bare tokens are precisely what {@link bundledPathCandidates}
+ * reads. So a skill that says ``bash resources/setup.sh`` in a fenced block, and
+ * links `resources/setup.sh` in prose, gets one rewritten reference that
+ * resolves and one unrewritten one that reports a file which DID ship.
  *
  * That misfire is unfixable by the author: the registered remedy ("Ship the
  * file, correct the path…") names no action that resolves it, because writing
  * the packaged spelling into the source breaks the source repo, where the file
  * really is under the authored subdirectory.
  *
+ * 🚩 The guard used to call `getTargetSubdir` — the EXTENSION half — while the
+ * packager routed through `getResourceSubdirForFile(file, target)`. Two routing
+ * answers for one question, and the half this file happened to hold was the
+ * `claude-code` one, so the whole `claude-web` target false-positived: the same
+ * fixture was clean under `--target claude-code` and raised
+ * `PACKAGED_REFERENCED_PATH_MISSING` under `--target claude-web`, on a file that
+ * did ship. Reachable from the shipped `vat skills package --target claude-web`.
+ * `target` is a REQUIRED parameter all the way up to `packageSkill` for that
+ * reason: a default here would let the next caller re-acquire the wrong answer
+ * by saying nothing.
+ *
  * So a candidate is only missing if it is absent under BOTH its authored
  * spelling and its routed one. The suppression is deliberately narrow — a
  * basename-for-basename relocation, which is exactly the shape routing produces
  * — and it costs one extra `existsSync` on a path that already failed one.
  */
-function routedSpelling(rel: string): string {
+function routedSpelling(rel: string, target: PackagingTarget): string {
   const basename = rel.slice(rel.lastIndexOf('/') + 1);
-  return `${getTargetSubdir(basename)}/${basename}`;
+  return `${getResourceSubdirForFile(basename, target)}/${basename}`;
 }
 
 /**
@@ -340,6 +362,7 @@ function routedSpelling(rel: string): string {
 export async function detectMissingReferencedPaths(
   docFiles: readonly string[],
   skillDir: string,
+  target: PackagingTarget,
 ): Promise<ValidationIssue[]> {
   const registryEntry = CODE_REGISTRY.PACKAGED_REFERENCED_PATH_MISSING;
   const issues: ValidationIssue[] = [];
@@ -347,7 +370,7 @@ export async function detectMissingReferencedPaths(
   for (const docFile of docFiles) {
     const candidates = await bundledPathCandidates(docFile);
     const missing = candidates.filter(
-      rel => !bundleHas(skillDir, rel) && !bundleHas(skillDir, routedSpelling(rel)),
+      rel => !bundleHas(skillDir, rel) && !bundleHas(skillDir, routedSpelling(rel, target)),
     );
     if (missing.length === 0) continue;
 

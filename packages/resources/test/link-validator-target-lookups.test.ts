@@ -210,6 +210,11 @@ describe('validateLink target lookups', () => {
     );
 
     expect(issue?.code).toBe('LINK_BROKEN_ANCHOR');
+    // 🚨 The one issue builder in `judgeVerifiedTarget` that still printed the
+    // ABSOLUTE `resolvedPath` — the developer's $HOME in every CI log — forty
+    // lines below the sibling that explains why that is forbidden.
+    expect(issue?.message).toBe(`Anchor not found: #nope in ${ACCENTED_IN_HREF}`);
+    expect(issue).not.toHaveProperty('suggestion');
   });
 
   /**

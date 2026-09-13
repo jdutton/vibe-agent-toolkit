@@ -64,11 +64,31 @@ export interface SettingsConflict {
 }
 
 /**
+ * A path the compatibility analysis could not read, and why.
+ *
+ * `path` is relative to the analysis's `locationRoot`, like every evidence
+ * `location.file` beside it. It is a file the analyzer could not read or
+ * parse, or a DIRECTORY it could not list — in which case every file beneath
+ * it is unseen and unnamed.
+ */
+export interface CompatibilityUnchecked {
+  path: string;
+  reason: string;
+}
+
+/**
  * Aggregated compatibility result for a single plugin.
  *
  * Evidence is the raw per-pattern record. Observations are rolled-up
  * capability claims derived from evidence. Verdicts are emitted by the
  * verdict engine based on observations + effective targets.
+ *
+ * 🚩 `unchecked` is REQUIRED. The analyzer used to throw out of the whole
+ * plugin on ONE unreadable file, so its consumer rendered "not analyzed" for a
+ * plugin whose every other file it could have read; and a file it silently
+ * never read (a symlinked skill directory) simply had no evidence, which reads
+ * as "nothing found". A verdict is only as good as the population it was
+ * computed over, and this is where the population's holes are named.
  */
 export interface CompatibilityResult {
   /** Plugin name from plugin.json */
@@ -83,9 +103,16 @@ export interface CompatibilityResult {
   observations: Observation[];
   /** Compat verdicts produced by the verdict engine */
   verdicts: Verdict[];
-  /** Settings conflicts found (only present when --settings used) */
-  settingsConflicts?: SettingsConflict[] | undefined;
-  /** Summary counts for quick assessment */
+  /**
+   * Every path the analysis enumerated but could not read, list or parse.
+   * Empty when every file was analyzed; a verdict over a non-empty list was
+   * computed without those files.
+   */
+  unchecked: CompatibilityUnchecked[];
+  /**
+   * `totalFiles` is every file the walk found; the per-kind counts are what
+   * was ANALYZED — a file under `unchecked` is in none of them.
+   */
   summary: {
     totalFiles: number;
     skillFiles: number;

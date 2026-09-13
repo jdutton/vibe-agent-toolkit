@@ -177,6 +177,35 @@ export function mimeTypeForPath(filePath: string): string | null {
 }
 
 /**
+ * Reduce a media type to the `type/subtype` the routing table is keyed on.
+ *
+ * 🚨 This exists because the lookup below is fed **adopter-authored** strings —
+ * `resources.collections.<id>.mimeType` reaches it through
+ * `resource-registry.ts › parserKindFor` — and it used to be a byte-exact
+ * `Map.get`. So `text/markdown; charset=utf-8`, the ordinary spelling and the one
+ * every `Content-Type` header uses, matched nothing, `parserKindFor` turned the
+ * `null` into `NO_PARSER_KIND`, and every file in that collection was skipped at
+ * exit 0. A declaration that types a whole collection is exactly the wrong place
+ * for a spelling to be silently fatal.
+ *
+ * Two rules, both from RFC 9110 §8.3.1, and nothing beyond them:
+ *
+ * - **Parameters are not part of the type.** They start at the first `;`,
+ *   whatever follows — a quoted value may itself contain `;`, and cutting at the
+ *   first one is still right because the type is already complete by then.
+ * - **Type and subtype are case-insensitive.** Parameter *values* are not, but
+ *   none survive this function, so lower-casing the whole remainder is safe.
+ *
+ * ⚠️ It normalizes and does not validate. `text/markdownish` comes back as
+ * itself and a bare `;` comes back empty; both miss the table, which is the
+ * right answer — the table, not this function, decides what is known.
+ */
+function mediaTypeOf(mimeType: string): string {
+  const parameters = mimeType.indexOf(';');
+  return (parameters === -1 ? mimeType : mimeType.slice(0, parameters)).trim().toLowerCase();
+}
+
+/**
  * Decide which document parser, if any, a MIME type routes to.
  *
  * `text/plain` routes to **markdown**, which looks surprising and is not: CommonMark
@@ -189,9 +218,14 @@ export function mimeTypeForPath(filePath: string): string | null {
  * Everything else, including `null`, returns `null`: do not run a document parser.
  * A typed-but-unparsed file is the normal case, not a gap.
  *
- * @param mimeType - A type from {@link mimeTypeForPath}, or `null` for an untyped file
+ * The argument is normalized by {@link mediaTypeOf} first, because it is not
+ * always a value {@link mimeTypeForPath} produced — an adopter may declare one in
+ * config, complete with a `charset` parameter and whatever casing they wrote.
+ *
+ * @param mimeType - A type from {@link mimeTypeForPath} or from an adopter's
+ *   `resources.collections.<id>.mimeType`, or `null` for an untyped file
  * @returns The parser to run, or `null` to run none
  */
 export function parserKindForMimeType(mimeType: string | null): DocumentParserKind | null {
-  return mimeType === null ? null : (PARSER_BY_MIME_TYPE.get(mimeType) ?? null);
+  return mimeType === null ? null : (PARSER_BY_MIME_TYPE.get(mediaTypeOf(mimeType)) ?? null);
 }

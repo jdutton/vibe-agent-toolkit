@@ -1,8 +1,8 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 
 import type { EvidenceRecord, Observation } from '@vibe-agent-toolkit/agent-skills';
-import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { readMarketplaceDefaultTargets, resolveEffectiveTargets } from './marketplace-defaults.js';
 import {
@@ -14,8 +14,9 @@ import {
   scanMcpConfig,
   scanPythonImports,
 } from './scanners/index.js';
-import type { CompatibilityResult, Target } from './types.js';
+import type { CompatibilityResult, CompatibilityUnchecked, Target } from './types.js';
 import { computeVerdicts } from './verdict-engine.js';
+import { reasonOf, walkFollowingLinks } from './walk-following-links.js';
 
 /** File extensions treated as scripts by the scanner */
 const SCRIPT_EXTENSIONS = new Set(['.py', '.sh', '.bash', '.mjs', '.js', '.cjs']);
@@ -65,32 +66,64 @@ async function readPluginManifest(pluginDir: string): Promise<PluginManifest> {
 }
 
 /**
- * Recursively collect all file paths relative to the root directory.
- * Skips the .claude-plugin directory itself (manifest is read separately).
+ * Every file in the plugin (paths relative to the plugin root), following
+ * symlinks, plus every directory the walk could not list, spelled the way the
+ * result carries it (see {@link uncheckedEntry}).
+ *
+ * Skips the `.claude-plugin` metadata directory (the manifest is read
+ * separately). The walk itself is the one the settings checker uses, so the
+ * two compat lanes see the same population — this one used to use
+ * `Dirent.isDirectory()`, `false` for a symlink, and pushed a linked skill
+ * directory as a FILE with no extension that nothing scanned.
  */
-async function collectFiles(rootDir: string): Promise<string[]> {
-  const files: string[] = [];
+async function collectFiles(
+  pluginDir: string,
+  locationRoot: string,
+): Promise<{ files: string[]; unchecked: CompatibilityUnchecked[] }> {
+  const tree = await walkFollowingLinks(pluginDir, { skipDirectory: (name) => name === '.claude-plugin' });
+  return {
+    files: tree.files.map((file) => safePath.relative(pluginDir, file)),
+    unchecked: tree.unlistable.map(({ path, reason }) => uncheckedEntry(path, reason, locationRoot)),
+  };
+}
 
-  async function walk(dir: string): Promise<void> {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- recursive walk of user-provided plugin directory
-    const entries = await readdir(dir, { withFileTypes: true });
+/**
+ * One `unchecked` entry, anchored at `locationRoot` like every evidence
+ * location: an OS refusal names the path it refused absolutely, and every
+ * other path in the result is root-relative, so the absolute spelling is
+ * replaced wherever the message carries it.
+ */
+function uncheckedEntry(absolutePath: string, reason: string, locationRoot: string): CompatibilityUnchecked {
+  const path = issueLocation(absolutePath, locationRoot) || '.';
+  return { path, reason: reason.replaceAll(absolutePath, path) };
+}
 
-    for (const entry of entries) {
-      const fullPath = safePath.join(dir, entry.name);
-      const relativePath = toForwardSlash(safePath.relative(rootDir, fullPath));
+/** Which `summary` counter a scanned file lands in. */
+type FileCounter = Exclude<keyof FileCounts, 'totalFiles'>;
 
-      if (entry.isDirectory()) {
-        // Skip the .claude-plugin metadata directory
-        if (entry.name === '.claude-plugin') continue;
-        await walk(fullPath);
-      } else {
-        files.push(relativePath);
-      }
-    }
+/**
+ * Scan one file by what it is; `undefined` for a file no scanner reads.
+ * Throws the scanner's own error — the caller names the file as unchecked.
+ */
+async function scanFile(
+  relativePath: string,
+  fullPath: string,
+  locationRoot: string,
+): Promise<{ counter: FileCounter; evidence: EvidenceRecord[] } | undefined> {
+  const ext = extname(relativePath).toLowerCase();
+  if (MARKDOWN_EXTENSIONS.has(ext)) {
+    return { counter: 'skillFiles', evidence: await scanMarkdownFile(fullPath, locationRoot) };
   }
-
-  await walk(rootDir);
-  return files;
+  if (SCRIPT_EXTENSIONS.has(ext)) {
+    return { counter: 'scriptFiles', evidence: await scanScriptFile(fullPath, locationRoot) };
+  }
+  if (isHooksFile(relativePath)) {
+    return { counter: 'hookFiles', evidence: await scanHooksFile(fullPath, locationRoot) };
+  }
+  if (isMcpConfigFile(relativePath)) {
+    return { counter: 'mcpConfigs', evidence: await scanMcpFile(fullPath, locationRoot) };
+  }
+  return undefined;
 }
 
 /**
@@ -164,7 +197,7 @@ async function scanMcpFile(
  */
 function isHooksFile(relativePath: string): boolean {
   if (relativePath === 'hooks.json') return true;
-  // eslint-disable-next-line local/no-path-startswith -- relativePath already normalized via toForwardSlash in collectFiles
+  // eslint-disable-next-line local/no-path-startswith -- relativePath is forward-slashed by safePath.relative in collectFiles
   return relativePath.startsWith('hooks/') && relativePath.endsWith('.json');
 }
 
@@ -210,8 +243,12 @@ export interface AnalyzeCompatibilityOptions {
  *   `options.configTargets` lets callers thread a config-layer target declaration
  *   through to the verdict engine — plugin.json / marketplace.json targets still
  *   win when present.
- * @returns CompatibilityResult with evidence, observations, verdicts, and counts
- * @throws If the directory does not contain a valid .claude-plugin/plugin.json
+ * @returns CompatibilityResult with evidence, observations, verdicts, counts,
+ *   and `unchecked` — every path beneath the plugin the analysis could not
+ *   read, list or parse. Those are named per path and the rest is analyzed;
+ *   the result is a verdict over the files it names as read.
+ * @throws Only for a failure that is plugin-wide: no valid
+ *   `.claude-plugin/plugin.json`, or a plugin root that cannot be listed.
  */
 export async function analyzeCompatibility(
   pluginDir: string,
@@ -219,9 +256,10 @@ export async function analyzeCompatibility(
   options?: AnalyzeCompatibilityOptions,
 ): Promise<CompatibilityResult> {
   const manifest = await readPluginManifest(pluginDir);
-  const files = await collectFiles(pluginDir);
+  const { files, unchecked: unlistable } = await collectFiles(pluginDir, locationRoot);
 
   const allEvidence: EvidenceRecord[] = [];
+  const unchecked: CompatibilityUnchecked[] = [...unlistable];
   const counts: FileCounts = {
     totalFiles: files.length,
     skillFiles: 0,
@@ -230,22 +268,18 @@ export async function analyzeCompatibility(
     mcpConfigs: 0,
   };
 
+  // Each file is scanned on its own: one the filesystem refuses, or one whose
+  // JSON will not parse, is named under `unchecked` and the rest are still
+  // analyzed. This used to throw out of the whole plugin.
   for (const relativePath of files) {
     const fullPath = safePath.join(pluginDir, relativePath);
-    const ext = extname(relativePath).toLowerCase();
-
-    if (MARKDOWN_EXTENSIONS.has(ext)) {
-      counts.skillFiles++;
-      allEvidence.push(...await scanMarkdownFile(fullPath, locationRoot));
-    } else if (SCRIPT_EXTENSIONS.has(ext)) {
-      counts.scriptFiles++;
-      allEvidence.push(...await scanScriptFile(fullPath, locationRoot));
-    } else if (isHooksFile(relativePath)) {
-      counts.hookFiles++;
-      allEvidence.push(...await scanHooksFile(fullPath, locationRoot));
-    } else if (isMcpConfigFile(relativePath)) {
-      counts.mcpConfigs++;
-      allEvidence.push(...await scanMcpFile(fullPath, locationRoot));
+    try {
+      const scanned = await scanFile(relativePath, fullPath, locationRoot);
+      if (scanned === undefined) continue;
+      counts[scanned.counter]++;
+      allEvidence.push(...scanned.evidence);
+    } catch (error) {
+      unchecked.push(uncheckedEntry(fullPath, reasonOf(error), locationRoot));
     }
   }
 
@@ -274,6 +308,7 @@ export async function analyzeCompatibility(
     evidence: allEvidence,
     observations,
     verdicts,
+    unchecked,
     summary: counts,
   };
 }

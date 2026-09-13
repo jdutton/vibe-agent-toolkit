@@ -102,6 +102,17 @@ describe('ParsePoolPolicy.size — reachable from the environment', () => {
     // pool.
     expect(sizeFromActivation({}, 1000, 4096)).toBeNull();
   });
+
+  it('applies that same test to an explicit policy size', () => {
+    // The OTHER half of a two-route field. The case above pins the guarded
+    // route; a policy route that skipped the test would build a pool of NaN
+    // workers, because `NaN < 1` is false and the decline guard never fires.
+    process.env[POOL_ENV] = '1';
+
+    expect(sizeFromActivation({ size: Number.NaN }, 1000, 4096)).toBeNull();
+    expect(sizeFromActivation({ size: 2.5 }, 1000, 4096)).toBeNull();
+    expect(sizeFromActivation({ size: 0 }, 1000, 4096)).toBeNull();
+  });
 });
 
 describe('ParsePoolPolicy.lookAhead — reachable from the environment', () => {
@@ -128,6 +139,27 @@ describe('ParsePoolPolicy.lookAhead — reachable from the environment', () => {
 
     expect(lookAheadOf({})).toBe(4);
   });
+
+  it('applies that same test to an explicit policy look-ahead', () => {
+    // ⛔ The half the case above cannot reach, and the one that HANGS. A
+    // look-ahead of 0 makes `claimed - emitted < width * 0` false on the very
+    // first claim, so `driveInOrder` claims no target, its in-flight map stays
+    // empty, and the race it awaits never settles: no error, no output, forever.
+    // Asserted on the normalized value rather than on a run, deliberately —
+    // proving it by hanging would cost the CI job.
+    expect(lookAheadOf({ lookAhead: 0 })).toBe(4);
+    expect(lookAheadOf({ lookAhead: -2 })).toBe(4);
+    expect(lookAheadOf({ lookAhead: Number.NaN })).toBe(4);
+    expect(lookAheadOf({ lookAhead: 1.5 })).toBe(4);
+  });
+
+  it('falls a refused policy look-ahead through to the environment, not past it', () => {
+    // Refusing the policy value must not also discard the value the lab named:
+    // the fall-through order is policy, then environment, then the default.
+    process.env[LOOK_AHEAD_ENV] = '9';
+
+    expect(lookAheadOf({ lookAhead: 0 })).toBe(9);
+  });
 });
 
 describe('ParsePoolPolicy.missThreshold — reachable from the environment', () => {
@@ -152,5 +184,18 @@ describe('ParsePoolPolicy.missThreshold — reachable from the environment', () 
     process.env[MISSES_ENV] = '500';
 
     expect(sizeFromActivation({ size: 2, missThreshold: 1 }, 1, 256)).toBe(2);
+  });
+
+  it('ignores a threshold that is not a positive whole number, on BOTH routes', () => {
+    // A NaN threshold does not floor at 1 — it compares false against every
+    // count, so the guard never returns and a FULLY WARM run (zero misses,
+    // nothing parsed) buys a pool it has no work for. That is the documented
+    // floor inverted, and `Math.max(1, Math.floor(NaN))` is still NaN.
+    process.env[POOL_ENV] = '1';
+    process.env[MISSES_ENV] = 'soon';
+
+    expect(sizeFromActivation({ size: 2 }, 0, 256)).toBeNull();
+    expect(sizeFromActivation({ size: 2, missThreshold: Number.NaN }, 0, 256)).toBeNull();
+    expect(sizeFromActivation({ size: 2, missThreshold: 0 }, 0, 256)).toBeNull();
   });
 });

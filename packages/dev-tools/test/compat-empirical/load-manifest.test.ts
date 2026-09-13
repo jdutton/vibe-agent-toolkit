@@ -119,7 +119,7 @@ prompts:
     authoring: hand
     kind: positive
 `,
-      (run) => expect(run).toThrowError(MISSING_KIND_PATTERN),
+      (run) => expect(run).toThrow(MISSING_KIND_PATTERN),
     );
   });
 
@@ -149,7 +149,7 @@ prompts:
     authoring: hand
     kind: negative
 `,
-      (run) => expect(run).toThrowError(MISSING_KIND_PATTERN),
+      (run) => expect(run).toThrow(MISSING_KIND_PATTERN),
     );
   });
 

@@ -35,7 +35,7 @@ import {
 } from './discovery.js';
 import { conceptFindings, indexFindings, type OkfFindingDraft } from './findings.js';
 import { BundleDirectoryIndex, linkFindings } from './links.js';
-import type { OkfBundleReport, OkfFinding, OkfSeverity } from './types.js';
+import type { OkfBundleReport, OkfFinding, OkfFindingCode, OkfSeverity } from './types.js';
 
 /** What a bundle validation run needs to know. */
 export interface ValidateOkfBundleOptions {
@@ -287,6 +287,37 @@ function unpackableDocumentDraft(entry: OkfUnpackableDocument): OkfFindingDraft 
   };
 }
 
+/**
+ * The codes the per-bundle severity dial does not reach, enforced rather than
+ * observed.
+ *
+ * `OkfSeverity`'s docstring states the rule — a conformance dial has no
+ * standing over a finding that says conformance was never ASSESSED — and until
+ * now the rule was kept by routing: three call sites built a finished
+ * {@link OkfFinding} carrying its own `error`, and everything else built a
+ * draft the dial stamped. That held only for as long as every emitter of a
+ * "could not look" code happened to be one of those three.
+ *
+ * 🪤 It stopped holding the moment the LINK judge learned to report a refused
+ * listing, because a link finding is a draft by construction: `linkFindings`
+ * returns drafts. `severity: warning` on that bundle would have demoted "VAT
+ * never got to look at this link" to a warning — the green-without-running
+ * shape the dial's docstring exists to forbid, arriving through the one route
+ * its author had no reason to expect. Deciding it from the CODE means the rule
+ * is true of every emitter, present and future, including one that has not
+ * been written.
+ */
+const UNASSESSED_CODES: ReadonlySet<OkfFindingCode> = new Set([
+  'OKF_BUNDLE_ROOT_UNREADABLE',
+  'OKF_SUBDIRECTORY_UNREADABLE',
+  'OKF_DOCUMENT_UNREADABLE',
+]);
+
+/** Stamp the bundle's dial on a draft — unless its code is out of the dial's reach. */
+function stamp(draft: OkfFindingDraft, severity: OkfSeverity): OkfFinding {
+  return { ...draft, severity: UNASSESSED_CODES.has(draft.code) ? 'error' : severity };
+}
+
 /** Order findings so two runs over one bundle produce comparable reports. */
 function byDocumentThenCode(left: OkfFindingDraft, right: OkfFindingDraft): number {
   if (left.document !== right.document) return left.document < right.document ? -1 : 1;
@@ -335,10 +366,11 @@ export async function validateOkfBundle(
     declaredOkfVersion ??= inspection.declaredOkfVersion;
   }
 
-  // The dial is stamped on the drafts only. The hard findings carry their own
-  // `error` because they say conformance was never ASSESSED — see OkfSeverity.
+  // The dial is stamped by `stamp`, which withholds it from the codes that say
+  // conformance was never ASSESSED — see UNASSESSED_CODES and OkfSeverity. The
+  // hard findings already carry their own `error` and are appended as built.
   const findings: OkfFinding[] = [
-    ...drafts.map((draft) => ({ ...draft, severity })),
+    ...drafts.map((draft) => stamp(draft, severity)),
     ...hardFindings,
   ];
   findings.sort(byDocumentThenCode);

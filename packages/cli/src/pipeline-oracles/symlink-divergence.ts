@@ -55,7 +55,7 @@ import {
   gitFindRoot,
 } from '@vibe-agent-toolkit/utils/git';
 
-import type { LaneDefinition } from './lanes.js';
+import { type LaneDefinition, oracleRefuses } from './lanes.js';
 import type { LaneId } from './types.js';
 
 /** Why one path appears in some enumerations of a corpus and not others. */
@@ -125,7 +125,13 @@ export async function captureSymlinkDivergence(
   options: { corpusRoot: string; corpus: string },
 ): Promise<SymlinkDivergenceReport> {
   const corpusRoot = safePath.resolve(options.corpusRoot);
-  const base = lane.crawlOptions(corpusRoot);
+  // `refuse` on all three arms, deliberately: a directory the walk cannot list
+  // makes this a comparison of populations that were never fully enumerated,
+  // and a divergence report over that would be a confident number about a
+  // corpus it did not see. The crawler throws `DirectoryListingRefusedError`,
+  // and the harness records it as the capture's failure rather than as three
+  // shorter sets that happen to agree.
+  const base = { ...lane.crawlOptions(corpusRoot), unreadable: oracleRefuses(corpusRoot) };
   const inGitRepo = gitFindRoot(corpusRoot) !== null;
 
   const gitRoute = inGitRepo ? await crawlDirectory({ ...base, respectGitignore: true }) : null;

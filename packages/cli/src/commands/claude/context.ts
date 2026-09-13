@@ -423,7 +423,7 @@ export async function claudeContextCommand(
     // process ends rather than waiting on whatever the population left behind.
     process.exit(0);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'claude context');
+    handleCommandError(error, logger, startTime, 'claude context', options.format);
   }
 }
 

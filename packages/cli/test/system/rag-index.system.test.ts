@@ -6,16 +6,20 @@
  * unconditional `process.exit(0)`, so every case here passed no matter what
  * `indexResources` reported. They are real assertions now.
  *
- * The other half of that contract — a run with failing resources reporting
- * `status: 'partial'` and exiting 1 — is NOT covered here, and deliberately so.
- * A per-resource index error has to survive the crawl to reach
- * `indexResources`, and the crawl reads and parses every file itself
- * (`ResourceRegistry.addResource`), so an unreadable or malformed fixture is
- * dropped before indexing ever sees it — it produces a resource that is
- * *missing*, not one that *failed*. The failures actually observed in the wild
- * came from the chunker rejecting an over-long line, which is a moving target.
- * The status/exit mapping is therefore pinned as pure logic in
- * `test/commands/rag/index-outcome.test.ts` instead of manufactured here.
+ * The other half of that contract — a run that did not index everything it was
+ * asked to reporting `status: 'partial'` and exiting 1 — is covered by the
+ * unreadable-file case below. A file the crawl enumerates and cannot READ never
+ * reaches `indexResources` (the crawl reads and parses every file itself), so it
+ * was a resource that is *missing* rather than one that *failed*: in none of
+ * the provider's counters, not in its `errors`, and the report said `success`
+ * over a corpus with a document absent from it. The registry keeps that log
+ * (`getUnreadableResources()`); the command now folds it into `errors`. The
+ * provider's own per-resource failures (the chunker rejecting an over-long
+ * line, an embedding error) are a moving target and stay pinned as pure logic
+ * in `test/commands/rag/index-outcome.test.ts`.
+ *
+ * `chmod 000` is the fixture, so that case is POSIX-only and refuses to run as
+ * root, where `chmod 000` denies nothing.
  */
 
 import { getTestOutputDir } from '@vibe-agent-toolkit/utils';
@@ -33,6 +37,10 @@ import {
 import { setupRagTestProject, setupTestProject } from './test-helpers/index.js';
 
 const binPath = getBinPath(import.meta.url);
+
+/** `chmod 000` denies nothing to uid 0 and does not exist on Windows — see the file header. */
+const CANNOT_DENY_READS =
+  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 describe('RAG index command (system test)', () => {
   let tempDir: string;
@@ -110,6 +118,38 @@ describe('RAG index command (system test)', () => {
     expect(parsed2.resourcesUpdated).toBe(0);
     expect(parsed2.chunksCreated).toBe(0);
   });
+
+  it.skipIf(CANNOT_DENY_READS)(
+    'reports partial and exits 1 when a declared resource cannot be read, naming it',
+    async () => {
+      const unreadableProjectDir = setupTestProject(tempDir, {
+        name: 'unreadable-test-project',
+        withDocs: true,
+      });
+      const unreadableDbPath = getTestOutputDir('cli', 'system', 'rag-index-unreadable-db');
+      const docsDir = safePath.join(unreadableProjectDir, 'docs');
+      fs.writeFileSync(safePath.join(docsDir, 'good.md'), '# Good\n\nReadable prose.\n');
+      const lockedPath = safePath.join(docsDir, 'locked.md');
+      fs.writeFileSync(lockedPath, '# Locked\n\nProse nobody can read.\n');
+      fs.chmodSync(lockedPath, 0o000);
+
+      const { result, parsed } = await executeCliAndParseYaml(
+        binPath,
+        ['rag', 'index', unreadableProjectDir, '--db', unreadableDbPath],
+        { cwd: unreadableProjectDir }
+      );
+
+      // The readable neighbour is indexed and the report is complete: this is a
+      // REPORTED outcome (exit 1), not a command that could not run (exit 2).
+      expect(result.status).toBe(1);
+      expect(parsed.status).toBe('partial');
+      expect(parsed.resourcesIndexed).toBe(1);
+      const errors = parsed.errors as { resourceId: string; error: string }[];
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.resourceId).toBe('docs/locked.md');
+      expect(errors[0]?.error).toContain('EACCES');
+    }
+  );
 
   it('should error when no path and no project root', async () => {
     // Create a temp dir without .git (no project root)

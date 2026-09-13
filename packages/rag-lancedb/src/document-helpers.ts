@@ -9,6 +9,8 @@ import type { CoreRAGChunk, TokenCounter } from '@vibe-agent-toolkit/rag';
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import type { ZodObject, ZodRawShape } from 'zod';
 
+import { serializeMetadata } from './schema.js';
+
 /**
  * Accumulated document record collected during indexing.
  * Stored to rag_documents table when storeDocuments is enabled.
@@ -56,10 +58,144 @@ export function overlayChunkMetadata<TMetadata extends Record<string, unknown>>(
 }
 
 /**
+ * A column a document record carries that the documents table does not have,
+ * with the value every existing row is to be given for it.
+ */
+export interface MissingDocumentColumn {
+  name: string;
+  /** The sentinel an absent metadata field is stored as: `''` or `-1` */
+  fill: string | number;
+}
+
+/**
+ * The metadata columns a document record carries that a documents table lacks.
+ *
+ * A table written by an earlier build has whatever columns that build's record
+ * had: v0.1.42 wrote only the frontmatter keys each document happened to carry,
+ * so its tables lack every column no frontmatter supplies (`headingpath`,
+ * `startline`, …) and any the first document lacked. This build writes every
+ * metadata column on every record, and LanceDB refuses a record with a column
+ * the table does not have. The difference is answered by comparing the table's
+ * own column list with the record's — not by a version number — and each
+ * missing column is filled with the sentinel that reads back as "absent", which
+ * is what those rows' documents had for it.
+ *
+ * Columns the table has and the record lacks are not reported: LanceDB stores
+ * `null` for those, so they need no repair.
+ *
+ * @param tableColumns - The column names the documents table has now
+ * @param metadataSchema - Zod schema defining the metadata fields
+ * @returns The columns to add, in schema order; empty when the table is current
+ */
+export function missingDocumentColumns(
+  tableColumns: readonly string[],
+  metadataSchema: ZodObject<ZodRawShape>,
+): MissingDocumentColumn[] {
+  const present = new Set(tableColumns);
+  // Serializing an empty document yields every metadata column at its sentinel.
+  const sentinels: Record<string, string | number> = serializeMetadata<Record<string, string | number>>(
+    {},
+    metadataSchema,
+  );
+  return Object.entries(sentinels)
+    .filter(([name]) => !present.has(name))
+    .map(([name, fill]) => ({ name, fill }));
+}
+
+/**
+ * A column as an Arrow schema reports it: its name and its data type's printed
+ * form (`Utf8`, `Float64`, …).
+ *
+ * The printed form is compared rather than the `DataType` object because that
+ * is also what the refusal message shows, and the two sides come from the same
+ * Arrow implementation (the stored table's schema and LanceDB's own inference
+ * over the record this build writes), so a printed type that differs is a type
+ * that differs.
+ */
+export interface DocumentColumn {
+  name: string;
+  type: string;
+}
+
+/** A column both the table and this build's record carry, typed differently by each. */
+export interface DocumentColumnTypeMismatch {
+  name: string;
+  /** The type the table's column has now */
+  storedType: string;
+  /** The type this build's record would be inferred to carry for it */
+  expectedType: string;
+}
+
+/**
+ * The columns a documents table shares with this build's record but types
+ * differently.
+ *
+ * A column can be PRESENT and still wrong: v0.1.42 stored a non-string,
+ * non-number frontmatter value as `JSON.stringify(value)` — a boolean became a
+ * Utf8 column holding `"true"`, a date a Utf8 column holding an ISO string —
+ * and a numeric-looking title a Float64 column. This build serializes a boolean
+ * as `1`/`0`, a date as epoch milliseconds and a title as a string. LanceDB
+ * does not refuse the mismatch on `add`: it casts, so `true` lands as `"1"` and
+ * reads back `false`, a title lands as null and reads back as absent — with no
+ * error, and permanently, since `addColumns` cannot retype a column. The only
+ * honest answer is to refuse the write before anything is deleted.
+ *
+ * Columns only one side has are not reported: a column the table lacks is the
+ * widening's to add, and a column the record lacks is stored as null.
+ *
+ * @param stored - The table's columns, as its schema reports them
+ * @param expected - The columns this build's record is inferred to carry
+ * @returns Every shared column whose types differ, in `expected` order
+ */
+export function mismatchedDocumentColumns(
+  stored: readonly DocumentColumn[],
+  expected: readonly DocumentColumn[],
+): DocumentColumnTypeMismatch[] {
+  const storedTypes = new Map(stored.map((column) => [column.name, column.type]));
+  const mismatches: DocumentColumnTypeMismatch[] = [];
+  for (const column of expected) {
+    const storedType = storedTypes.get(column.name);
+    if (storedType !== undefined && storedType !== column.type) {
+      mismatches.push({ name: column.name, storedType, expectedType: column.type });
+    }
+  }
+  return mismatches;
+}
+
+/**
+ * The refusal an adopter reads when {@link mismatchedDocumentColumns} found
+ * something: every offending column at once, both types, and the remedy.
+ *
+ * @param tableName - The documents table's name
+ * @param dbPath - Where the database lives, so the message names the store
+ * @param mismatches - What differs; must be non-empty
+ * @returns One message naming everything the adopter needs to act
+ */
+export function describeDocumentColumnMismatches(
+  tableName: string,
+  dbPath: string,
+  mismatches: readonly DocumentColumnTypeMismatch[],
+): string {
+  const columns = mismatches
+    .map((m) => `'${m.name}' is stored as ${m.storedType} but this build writes ${m.expectedType}`)
+    .join('; ');
+  return (
+    `The '${tableName}' table at ${dbPath} was written by a build that typed its columns differently: ${columns}. ` +
+    'Writing into it would silently coerce every new value into the stored type, so nothing was written. ' +
+    'Run `vat rag clear` (or `clear()`) and re-index.'
+  );
+}
+
+/**
  * Create a DocumentRecord for the rag_documents table.
  *
- * Builds the record from resource metadata, transformed content,
- * and overlays frontmatter fields using the metadata schema.
+ * Builds the record from resource metadata, transformed content, and every
+ * metadata field the schema declares — serialized exactly as chunk rows
+ * serialize theirs, sentinel included when the document's frontmatter lacks
+ * the field. The documents table's columns are inferred from the FIRST row
+ * written, so a record that carried only the keys its own document had gave
+ * the table the first document's shape, and any later document with a key the
+ * first lacked was refused at insert time.
  *
  * @param resource - Resource metadata (id, filePath, frontmatter)
  * @param content - Transformed content to store
@@ -77,7 +213,10 @@ export function createDocumentRecord(
   tokenCounter: TokenCounter,
   metadataSchema: ZodObject<ZodRawShape>,
 ): DocumentRecord {
-  const documentRecord: DocumentRecord = {
+  // Metadata first, core fields after, so a metadata schema that reuses a core
+  // column name cannot overwrite the core value — the same order chunk rows use.
+  return {
+    ...serializeMetadata(resource.frontmatter ?? {}, metadataSchema),
     resourceid: resource.id,
     filepath: resource.filePath,
     content,
@@ -86,17 +225,4 @@ export function createDocumentRecord(
     totalchunks: totalChunks,
     indexedat: Date.now(),
   };
-
-  if (resource.frontmatter) {
-    for (const key of Object.keys(metadataSchema.shape)) {
-      if (key in resource.frontmatter) {
-        const value = resource.frontmatter[key];
-        documentRecord[key.toLowerCase()] = typeof value === 'string' || typeof value === 'number'
-          ? value
-          : JSON.stringify(value);
-      }
-    }
-  }
-
-  return documentRecord;
 }

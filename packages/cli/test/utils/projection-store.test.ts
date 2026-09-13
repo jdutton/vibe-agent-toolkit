@@ -319,6 +319,11 @@ describe('projectionStoreSelected', () => {
 
   it.each([
     ['the root --no-cache flag, which exports this', '0'],
+    ['an operator spelling it out', 'false'],
+    ['an operator shouting it', 'FALSE'],
+    ['an operator saying no', 'no'],
+    ['an operator flipping it off', 'off'],
+    ['a value that arrived through a YAML block with whitespace', ' 0 '],
   ])('is false when %s turns the disk caches off', (_description, value) => {
     // The projection store IS one of VAT's disk caches, and `--no-cache` is
     // documented as "every cache off". Honouring the backend selector while
@@ -332,15 +337,20 @@ describe('projectionStoreSelected', () => {
     expect(projectionStoreSelected()).toBe(false);
   });
 
-  it('stays selected for a VAT_CACHE value that is not the off switch', () => {
-    // Exactly `'0'`, matching `ParseCache`'s `env['VAT_CACHE'] !== '0'`. A
-    // truthiness test here would read `VAT_CACHE=1` — the value an operator
-    // writes to turn caching ON — as a reason to decline the store.
-    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
-    process.env[CACHE_ENV] = '1';
+  it.each(['1', 'true', 'on', 'yes', 'maybe', '', '2'])(
+    'stays selected for VAT_CACHE=%j, which is not the off switch',
+    (value) => {
+      // A truthiness test here would read `VAT_CACHE=1` — the value an operator
+      // writes to turn caching ON — as a reason to decline the store. The
+      // unparsable values are in this list on purpose: `parseEnvBoolean`
+      // returns `undefined` for them and THIS caller reads that as "not a
+      // veto", because the veto has to be something the operator actually said.
+      process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+      process.env[CACHE_ENV] = value;
 
-    expect(projectionStoreSelected()).toBe(true);
-  });
+      expect(projectionStoreSelected()).toBe(true);
+    },
+  );
 
   it('reads the environment on every call rather than memoizing it at module load', () => {
     // 🪤 THE load-bearing test in this file. `vitest.setup.js` deletes every

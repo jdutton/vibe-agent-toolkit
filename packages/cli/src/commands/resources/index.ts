@@ -4,6 +4,8 @@
 
 import { Command, Option } from 'commander';
 
+import { collectRepeated } from '../../utils/repeatable-option.js';
+
 import { checkCommand } from './check.js';
 import { queryCommand } from './query.js';
 import { scanCommand } from './scan.js';
@@ -98,7 +100,14 @@ Examples:
     .command('query <sql> [path]')
     .description('Run one read-only SQL statement against the resource projection')
     .option('--debug', DEBUG_HELP)
-    .option('--param <values...>', 'Values bound in order to the ? placeholders in the statement')
+    // Repeatable, NOT variadic: a variadic option consumes every token up to the
+    // next flag, which on this command means the [path] positional. See
+    // collectRepeated for the incident.
+    .option(
+      '--param <value>',
+      'A value bound to the next ? placeholder in the statement (repeatable, bound in the order given)',
+      collectRepeated,
+    )
     .addOption(yamlOrJsonFormat())
     .action(queryCommand)
     .addHelpText(
@@ -160,8 +169,19 @@ Output Fields:
               0/1, a date and a JSON column as text. Values are NOT decoded,
               because decoding needs a table spec and arbitrary SQL has none
 
+Path Argument:
+  [path] says where to LOOK FOR the project -- root discovery walks up from
+  it -- and never narrows the corpus. The projection is always the whole
+  tracked tree, so \`vat resources query <sql> docs/\` answers about the same
+  tree as \`vat resources query <sql>\` (root in the document names it); a
+  WHERE clause on path is the only scope a statement has. This differs from
+  scan and validate, whose [path] restricts the crawl. A path that does not
+  exist, or is not a directory, is refused (exit 2).
+
 Exit Codes:
-  0 - The statement ran  |  2 - The statement was refused, or the crawl failed
+  0 - The statement ran
+  2 - The statement was refused (not a query, a second statement, a placeholder
+      with no --param behind it), [path] names no directory, or the crawl failed
 
 Requirements:
   projectRoot: optional (falls back to cwd with a warning)
@@ -248,7 +268,11 @@ Checks run over the TRACKED TREE, not your configured resource set:
   directory. A correct "every ADR carries frontmatter" check produced a real
   false finding on a frozen historical file nobody intends to fix.
 
-  Narrow the check itself -- a WHERE clause is the only scope it has:
+  Narrow the check itself -- a WHERE clause is the only scope it has. The
+  [path] argument does not narrow it either: it says where to LOOK FOR the
+  project (root discovery walks up from it), and a path that does not exist
+  or is not a directory is refused at exit 2 rather than resolved to
+  whatever project the current directory is in.
 
     sql: |
       SELECT path FROM resource_realizations
@@ -261,7 +285,13 @@ A check with NOTHING TO RUN OVER fails the same way:
   membersEnumerated is 0, that is reported as RESOURCE_CHECK_BROKEN at error
   and the run fails. Usual causes: a broad .gitignore pattern, a shallow or
   sparse CI checkout, or a root that resolved somewhere other than intended.
-  Declaring no checks at all is different -- that stays a warning and exit 0.
+
+A run with NO CHECKS AT ALL fails too:
+  Declaring none is reported the same way and for a stronger reason: a gate
+  that checked nothing produces the same document as a gate that was deleted,
+  so \`checksRun: 0\` is RESOURCE_CHECK_BROKEN at error and exit 1. If this
+  project deliberately has no checks, take the command out of the pipeline
+  rather than leaving a step that can only pass.
 
 A run that HANGS is killed and reported, not waited on:
   A check's SQL is adopter-authored and unbounded -- an accidental cross join
@@ -345,11 +375,13 @@ Output Fields:
 
 Exit Codes:
   0 - No error-severity findings
-  1 - At least one (a violation, a broken check, an empty corpus, a run killed
-      for making no progress within --budget, or a run whose child DIED)
-  2 - System error, an unknown --check name, an unusable --budget (an empty
-      one, one that means zero without being written 0, or one passed with
-      --cost-log), or a run interrupted before its population completed
+  1 - At least one (a violation, a broken check, an empty corpus, no check
+      having run at all, a run killed for making no progress within --budget,
+      or a run whose child DIED)
+  2 - System error, an unknown --check name, a [path] that names no directory,
+      an unusable --budget (an empty one, one that means zero without being
+      written 0, or one passed with --cost-log), or a run interrupted before
+      its population completed
 
 Examples:
   $ vat resources check
@@ -434,6 +466,11 @@ Output Fields (issues found):
           ({file, errors?, warnings?, info?, codes}). A zero bucket is omitted,
           and a file that emitted nothing has no row — filesScanned above stays
           the true denominator.
+
+  filesScanned: 0 is never a pass. A run that scanned no file (a --collection
+  that matched nothing, a path with no markdown, an enumeration emptied by
+  exclude or a sparse checkout) is reported as RESOURCE_CHECK_BROKEN at error
+  and exits 1 — the document is not a verdict, and the code is not overridable.
 
 Verbosity:
   -v, --verbose

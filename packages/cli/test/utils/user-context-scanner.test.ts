@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 
 
 import * as claudePaths from '@vibe-agent-toolkit/claude-marketplace';
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, removeScratchDir, safePath, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 
 import { scanUserContext } from '../../src/utils/user-context-scanner.js';
@@ -126,6 +126,28 @@ describe('scanUserContext', () => {
     const result = await scanUserContext();
 
     expect(result.plugins).toHaveLength(2);
+  });
+
+  // `~/.claude/plugins` is populated by sudo installs and macOS quarantine, so
+  // one directory the scan cannot list is ordinary there. The listing must keep
+  // every plugin it could read AND carry the gap — a shorter list is the defect,
+  // and so is aborting the whole listing for one directory.
+  it('keeps the readable plugins and reports the directory it could not list', async () => {
+    const openDir = safePath.join(mockPluginsDir, 'open');
+    const lockedDir = safePath.join(mockPluginsDir, 'locked');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
+    await mkdir(openDir);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
+    await mkdir(lockedDir);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
+    await writeFile(safePath.join(openDir, 'SKILL.md'), '# Open');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
+    await writeFile(safePath.join(lockedDir, 'SKILL.md'), '# Locked');
+
+    const result = await withReaddirSyncRefused(lockedDir, 'EACCES', () => scanUserContext());
+
+    expect(result.plugins.map((r) => r.relativePath)).toEqual([safePath.join('open', 'SKILL.md')]);
+    expect(result.unreadable.map((r) => [r.code, r.directory])).toEqual([['EACCES', lockedDir]]);
   });
 
   it('should find skills in nested directories', async () => {

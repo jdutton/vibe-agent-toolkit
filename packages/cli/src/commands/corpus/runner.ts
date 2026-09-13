@@ -15,13 +15,16 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { scan } from '@vibe-agent-toolkit/discovery';
 import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
+import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 import { isGitUrl, parseGitUrl } from '@vibe-agent-toolkit/utils/git';
 import * as yaml from 'yaml';
 
 import { createLogger } from '../../utils/logger.js';
+import { nothingCheckedFinding } from '../../utils/run-integrity.js';
 import { resolveVatBinPath } from '../../utils/vat-bin-path.js';
 import { withClonedRepo } from '../audit/git-url-clone.js';
 import { deriveScanRoot, getValidationResults } from '../audit.js';
@@ -45,6 +48,69 @@ const SKIPPED_REVIEW: ReviewOutcome = { status: 'skipped', duration_ms: 0 };
  */
 function summarizeRun(allIssues: readonly ValidationIssue[], filesScanned: number): AuditSummary {
   return { ...countBySeverity(allIssues), files_scanned: filesScanned };
+}
+
+/** The per-plugin audit document: one result per file, plus the run-level findings that belong to none. */
+export interface AuditDocument {
+  results: readonly ValidationResult[];
+  /** Present only when non-empty, so a clean run's document keeps its shape. */
+  issues?: readonly ValidationIssue[];
+}
+
+/**
+ * Derive one plugin's audit row and its document from the per-file results.
+ *
+ * 🚨 **An audit over zero files is an ERROR, not "an empty tree audits
+ * cleanly".** `summarizeRun` over zero results gives `files_scanned: 0` and
+ * zero findings, and zero findings is `success` — so a source that resolved to
+ * a tree with nothing to audit (a wrong subdirectory, a clone whose default
+ * branch holds no skill, an excluded tree) wrote the same `summary.yaml` row as
+ * a clean plugin. The review lane on the identical fixture already answered
+ * `error` ("No SKILL.md files found"); this is the same question one lane
+ * over, and it now gets the same answer, through the shared mechanism in
+ * `run-integrity.ts`: one non-overridable `RESOURCE_CHECK_BROKEN` at `error`,
+ * counted in the row's `errors` and `findings_emitted`, carried in the document
+ * under `issues` beside the (empty) per-file results.
+ *
+ * `unloadable` is deliberately NOT the status here. Unloadable means the audit
+ * could not run — a missing path, a failed clone. This audit ran, and found no
+ * file to run over; the difference is the difference between "no verdict
+ * possible" and "this verdict is vacuous", and `computeTotals` counts them
+ * apart.
+ *
+ * Pure, and exported for that reason: the runner's loop clones, writes and
+ * catches, and the refusal has to be pinned without any of that.
+ *
+ * @param results - One validation result per audited file
+ * @param durationMs - The row's measured duration
+ * @param outputPath - Where the document is written, relative to the run dir
+ * @returns The row's audit outcome and the document to write for it
+ */
+export function buildAuditOutcome(
+  results: readonly ValidationResult[],
+  durationMs: number,
+  outputPath: string,
+): { audit: AuditOutcome; document: AuditDocument } {
+  const fileIssues = results.flatMap((r) => r.issues);
+  const runIssues = nothingCheckedFinding(results.length, fileIssues, () =>
+    'The audit ran over 0 files, so this row is not a verdict: a plugin with nothing'
+    + ' to audit produces the same counts as a clean one. The source resolved to a tree'
+    + ' holding no auditable file — usually a wrong subdirectory, a clone whose default'
+    + ' branch carries no skill or plugin, or an excluded tree.'
+    + ' `vat audit <source>` over the same path shows what the scan enumerates.');
+  const allIssues = [...runIssues, ...fileIssues];
+  const summary = summarizeRun(allIssues, results.length);
+
+  return {
+    audit: {
+      status: calculateValidationStatus(allIssues),
+      duration_ms: durationMs,
+      summary,
+      findings_emitted: summary.errors + summary.warnings + summary.info,
+      output_path: outputPath,
+    },
+    document: { results, ...(runIssues.length === 0 ? {} : { issues: runIssues }) },
+  };
 }
 
 /**
@@ -94,20 +160,12 @@ async function auditAndRecord(
   try {
     // The corpus run root is the scanned plugin itself — one root per row.
     const results = await getValidationResults(scanPath, true, {}, logger, deriveScanRoot(scanPath));
-    const allIssues = results.flatMap(r => r.issues);
-    const summary = summarizeRun(allIssues, results.length);
-    const status = calculateValidationStatus(allIssues);
-    const auditYamlPath = safePath.join(opts.runDir, `${entry.name}-audit.yaml`);
+    const outputPath = `${entry.name}-audit.yaml`;
+    const outcome = buildAuditOutcome(results, Date.now() - start, outputPath);
+    const auditYamlPath = safePath.join(opts.runDir, outputPath);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed under run dir
-    writeFileSync(auditYamlPath, yaml.stringify({ results }, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
-
-    audit = {
-      status,
-      duration_ms: Date.now() - start,
-      summary,
-      findings_emitted: summary.errors + summary.warnings + summary.info,
-      output_path: `${entry.name}-audit.yaml`,
-    };
+    writeFileSync(auditYamlPath, yaml.stringify(outcome.document, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
+    audit = outcome.audit;
   } catch (err) {
     audit = {
       status: 'unloadable',
@@ -190,6 +248,37 @@ function summarizeReview(sections: readonly SkillReviewSection[]): ReviewSummary
 }
 
 /**
+ * One failed section per directory the review scan could not list.
+ *
+ * The review lane's population is what `scan` enumerates; a directory it could
+ * not enter is a set of skills that were never reviewed, and a review.md that
+ * omits them reads as one that covered the plugin. Filing the gap on the
+ * existing per-skill channel — `ok: false`, keyed by the directory — is what
+ * makes `buildReviewOutcome` grade the run `error` and the aggregate name the
+ * subtree, without inventing a second channel the report would have to learn.
+ *
+ * @param unreadable - What `ScanSummary.unreadable` carried
+ * @param scanPath - The plugin root every section is keyed relative to
+ * @returns Sections in the order the refusals were met
+ */
+export function unlistedDirectorySections(
+  unreadable: readonly DirectoryRefusal[],
+  scanPath: string,
+): SkillReviewSection[] {
+  return unreadable.map((refusal) => {
+    const relativePath = toForwardSlash(safePath.relative(scanPath, refusal.directory)) || '.';
+    const cause = refusal.transient
+      ? `${transientRefusalClause(refusal.code)} — re-run before investigating anything`
+      : `listing was refused with ${refusal.code}`;
+    return {
+      relativePath,
+      ok: false,
+      body: `Directory could not be listed (${cause}); every skill beneath it was not reviewed.`,
+    };
+  });
+}
+
+/**
  * Derive one plugin's `ReviewOutcome` from its per-skill sections.
  *
  * `status: 'ok'` requires `failed === 0` — every discovered skill reviewed to
@@ -247,8 +336,13 @@ async function runSkillReview(
   const skills = summary.results.filter(
     (r) => r.format === 'agent-skill' && !r.isGitIgnored
   );
+  // Directories the scan could not list hold skills this review never saw. They
+  // enter the aggregate as failed sections — see `unlistedDirectorySections` —
+  // so the outcome is `error` and the review names the gap, while every skill
+  // that WAS found is still reviewed below.
+  const unlisted = unlistedDirectorySections(summary.unreadable, scanPath);
 
-  if (skills.length === 0) {
+  if (skills.length === 0 && unlisted.length === 0) {
     return {
       status: 'error',
       duration_ms: Date.now() - start,
@@ -257,7 +351,7 @@ async function runSkillReview(
     };
   }
 
-  const sections: SkillReviewSection[] = [];
+  const sections: SkillReviewSection[] = [...unlisted];
   for (const skill of skills) {
     const skillDir = dirname(skill.path);
     sections.push(reviewOneSkill(bin, skillDir, skill.relativePath));

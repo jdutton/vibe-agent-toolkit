@@ -39,11 +39,6 @@
             "inferred"
           ],
           "description": "Whether this edge was authored, implied by the reader's rules, or inferred by a scoring lens"
-        },
-        "resolution": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Resolution tier — open vocabulary, e.g. \"resolved\", \"same-marketplace\", \"auth-required\", \"nonexistent\""
         }
       },
       "required": [
@@ -51,8 +46,7 @@
         "refOrdinal",
         "contextId",
         "kind",
-        "origin",
-        "resolution"
+        "origin"
       ],
       "additionalProperties": false,
       "description": "A row of the path-dependent `edges` table. Note: the implicit/refOrdinal correspondence is enforced by the Zod schema but not encoded in the generated JSON Schema."

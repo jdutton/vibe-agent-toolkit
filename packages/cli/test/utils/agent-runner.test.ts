@@ -20,7 +20,7 @@ import * as agentRunner from '../../src/utils/agent-runner.js';
 // Mock the Anthropic SDK
 vi.mock('@anthropic-ai/sdk', () => {
   return {
-    default: vi.fn().mockImplementation(() => ({
+    default: vi.fn().mockImplementation(function () { return {
       messages: {
         create: vi.fn().mockResolvedValue({
           content: [{ type: 'text', text: 'Mocked response' }],
@@ -31,7 +31,7 @@ vi.mock('@anthropic-ai/sdk', () => {
           stop_reason: 'end_turn',
         }),
       },
-    })),
+    }; }),
   };
 });
 

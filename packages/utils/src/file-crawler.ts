@@ -2,8 +2,26 @@ import fs from 'node:fs';
 
 import picomatch from 'picomatch';
 
+import {
+  type DirectoryRefusal,
+  directoryRefusalFor,
+  listingFailure,
+} from './fs-utils.js';
 import { gitFindRoot, gitLsFiles } from './git-utils.js';
+import { requireUnreadablePolicy, settleRefusal, type UnreadablePolicy } from './listing-refusal.js';
 import { toForwardSlash, safePath } from './path-utils.js';
+
+export type { DirectoryRefusal } from './fs-utils.js';
+// The refusal vocabulary lives in `listing-refusal.ts` so `git-utils.ts` can
+// share it without importing this module (which imports that one). Re-exported
+// here because `./crawl` is where every caller of the walk already looks.
+export {
+  DirectoryListingRefusedError,
+  type RefuseListingContext,
+  refusedListingMessage,
+  settleRefusal,
+  type UnreadablePolicy,
+} from './listing-refusal.js';
 
 /**
  * Options for directory crawling
@@ -42,6 +60,25 @@ export interface CrawlOptions {
    * committed yet"; `respectGitignore: false` is not, and costs the whole walk.
    */
   includeUntracked?: boolean;
+  /**
+   * What to do with a directory the walk could not LIST. Required, with no
+   * default: see {@link UnreadablePolicy} for the two answers and why the
+   * caller — not the crawler — is the one who knows which is honest here.
+   *
+   * A directory that VANISHED between being enumerated and being listed
+   * (`ENOENT` / `ENOTDIR`) is not a refusal: it is no longer in the population
+   * and is skipped without a call.
+   *
+   * **Both routes settle it.** The `git ls-files` route walks the working tree
+   * whenever {@link CrawlOptions.includeUntracked} is set (`--others`), and a
+   * directory git could not open arrives here too — read off git's stderr,
+   * where it is the only trace: git exits 0 and lists fewer files. A directory
+   * the `exclude` patterns drop is not reported on either route, because the
+   * walk never lists one. The tracked-only listing (`includeUntracked: false`)
+   * opens no directory at all — the index names every member — so it has no
+   * gap to report.
+   */
+  unreadable: UnreadablePolicy;
 }
 
 /**
@@ -197,12 +234,36 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     filesOnly = true,
     respectGitignore = true,
     includeUntracked = false,
+    unreadable,
   } = options;
+  requireUnreadablePolicy(unreadable, 'crawlDirectory');
 
   const picoOptions = PICOMATCH_OPTIONS;
 
   // Resolve base directory to absolute path
   const resolvedBaseDir = safePath.resolve(baseDir);
+
+  // Compiled once, ahead of the route choice, because BOTH routes ask it: the
+  // walk before it lists a directory, the git route before it reports one git
+  // could not list. One matcher is what keeps "is this directory excluded?"
+  // answered the same way on both sides of the fork.
+  const isExcluded = exclude.length > 0 ? picomatch(exclude, picoOptions) : (): boolean => false;
+
+  /**
+   * Check if a path should be excluded based on patterns
+   */
+  function shouldExclude(normalizedPath: string): boolean {
+    // Check explicit exclude patterns
+    return isExcluded(normalizedPath) || isExcluded(normalizedPath + '/');
+  }
+
+  /**
+   * A refused listing surfaces under the caller's policy — thrown, or handed
+   * over. Never a silent skip, on either route.
+   */
+  function raiseRefusal(refusal: DirectoryRefusal): void {
+    settleRefusal(unreadable, refusal);
+  }
 
   // Ensure base directory exists
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- baseDir is from controlled config, not user input
@@ -227,6 +288,22 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
       const gitFiles = gitLsFiles({
         cwd: resolvedBaseDir,
         includeUntracked,
+        // The SAME decision the walk makes, in the same order: a directory
+        // outside this crawl's base or dropped by `exclude` is never listed by
+        // the walk, so a refusal on it is not this crawl's gap; anything else
+        // is, and goes where the walk's would go.
+        // `degrade` from git's side only: the refusal is filtered to this
+        // crawl's territory and then settled under the CALLER's policy, which
+        // may well be `refuse`.
+        unreadable: {
+          degrade: (refusal) => {
+            // Strictly beneath the base: a repository is often an ancestor of
+            // the crawl, and git names every refusal in the whole worktree.
+            if (!toForwardSlash(refusal.directory).startsWith(`${toForwardSlash(resolvedBaseDir)}/`)) return;
+            if (shouldExclude(toForwardSlash(safePath.relative(resolvedBaseDir, refusal.directory)))) return;
+            raiseRefusal(refusal);
+          },
+        },
       });
 
       if (gitFiles !== null) {
@@ -268,7 +345,6 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   // Fall back to manual directory crawling (not in git repo or git ls-files failed)
   // Compile glob patterns using picomatch
   const isIncluded = picomatch(include, picoOptions);
-  const isExcluded = exclude.length > 0 ? picomatch(exclude, picoOptions) : (): boolean => false;
 
   const results: string[] = [];
 
@@ -291,20 +367,32 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   const visitedRealDirs = new Set<string>();
 
   /**
-   * Check if a path should be excluded based on patterns
-   */
-  function shouldExclude(normalizedPath: string): boolean {
-    // Check explicit exclude patterns
-    return isExcluded(normalizedPath) || isExcluded(normalizedPath + '/');
-  }
-
-  /**
    * Add a path to results if it matches include patterns
    */
   function addToResults(normalizedPath: string, fullPath: string, relativePath: string): void {
     if (isIncluded(normalizedPath)) {
       results.push(absolute ? fullPath : relativePath);
     }
+  }
+
+  /**
+   * What a failed `readdirSync` / `statSync` means for the walk.
+   *
+   * Absence (`ENOENT` / `ENOTDIR`) is an entry that vanished between being
+   * enumerated by its parent and being asked about itself — not in the
+   * population, nothing to report. Anything else is a refusal, and a refusal
+   * is a GAP: handed to the caller if it asked, thrown otherwise. Never a
+   * silent `return` — that is the shorter list this walk used to hand back.
+   *
+   * @param error - What the filesystem threw
+   * @param target - The directory (or link) it was asked about
+   * @returns True when the entry is simply gone and the walk should move on
+   */
+  function reportOrSkip(error: unknown, target: string): boolean {
+    const listing = listingFailure(error);
+    if (listing.outcome === 'absent') return true;
+    if (listing.outcome === 'unreadable') raiseRefusal(directoryRefusalFor(listing, target));
+    return false;
   }
 
   /**
@@ -347,8 +435,10 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     try {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated baseDir + entries
       targetStat = fs.statSync(fullPath);
-    } catch {
-      // Skip broken symlinks
+    } catch (error) {
+      // A broken symlink is absence and is skipped; a target the OS refused to
+      // stat is a gap, and goes the same way a refused listing does.
+      reportOrSkip(error, fullPath);
       return;
     }
 
@@ -392,8 +482,10 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     try {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated baseDir, recursively walking
       entries = fs.readdirSync(currentDir, { withFileTypes: true });
-    } catch {
-      // Skip directories we don't have permission to read
+    } catch (error) {
+      // 🚨 Not a silent skip. A directory that refused to be listed is a gap in
+      // the population this walk defines — see `reportOrSkip`.
+      reportOrSkip(error, currentDir);
       return;
     }
 

@@ -13,6 +13,7 @@
  */
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
+import { armLabel, laneNote } from '../../harness/lane.js';
 import { coordinateLines } from '../../harness/render.js';
 
 import type { PopulationComparisonResult } from './compare.js';
@@ -49,30 +50,6 @@ function pathLines(label: string, paths: readonly string[]): string[] {
 }
 
 /**
- * How a row's lane reads.
- *
- * A missing lane is spelled out rather than left blank: it means the measured
- * build does not report which enumerator ran, so the row cannot prove it is the
- * arm the caller intended.
- *
- * @param row - The command's row
- * @returns A phrase for the row line
- */
-function armOf(row: PopulationCommandStats): string | null {
-  if (row.lane === null) return null;
-  // The extent source QUALIFIES the lane rather than replacing it, and it is
-  // appended rather than given its own column so a reader seeing `projection`
-  // on both sides gets the qualifier in the same glance — the moment they can
-  // still notice the two arms are not the two they asked for. `null` is the
-  // walk, which has no extent to source, so that row reads bare.
-  return row.extentSource === null ? row.lane : `${row.lane} via ${row.extentSource}`;
-}
-
-function laneOf(row: PopulationCommandStats): string {
-  return armOf(row) ?? 'lane UNREPORTED by this build';
-}
-
-/**
  * How a row's stability reads.
  *
  * @param row - The command's row
@@ -104,7 +81,7 @@ function rowLines(row: PopulationCommandStats): string[] {
   if (row.failed) return [`  ${row.name}: NO POPULATION — ${row.failure ?? 'unknown'}`];
   const head =
     `  ${row.name}: ${String(row.count)} files ` +
-    `(${laneOf(row)}, ${String(row.runs)} runs, ${stabilityOf(row)}, ${referenceOf(row)})`;
+    `(${armLabel(row)}, ${String(row.runs)} runs, ${stabilityOf(row)}, ${referenceOf(row)})`;
   return [head, ...pathLines('off-git', row.offGit)];
 }
 
@@ -144,43 +121,27 @@ export function renderPopulationReport(report: ReportEnvelope<PopulationBody>): 
 }
 
 /**
- * The arm caveat for one command's pair of rows.
- *
- * Two sides that report the SAME arm are two runs of one enumerator, and their
- * agreement means nothing about the question the comparison was asked. That is
- * the failure this facet was built to make visible, so it is said on the row
- * rather than left to a reader holding two reports open.
- *
- * ⚠️ Keyed on the lane AND its extent source, because the lane alone was not
- * enough to identify an arm: the projection lane has two enumerators and
- * reports the same word for both, so an A/B varying only `VAT_EXTENT_SOURCE`
- * used to slip past this note reading as a genuine agreement.
- *
- * @param diff - The command's diff row
- * @returns A clause to append, or an empty string
- */
-function laneNote(diff: PopulationComparisonResult['commands'][number]): string {
-  const before = diff.before === null ? null : armOf(diff.before);
-  const after = diff.after === null ? null : armOf(diff.after);
-  if (before === null || after === null) return '';
-  if (before !== after) return ` [${before} → ${after}]`;
-  return ` [both sides ran the '${before}' arm — this compares one enumerator with itself]`;
-}
-
-/**
  * Lines describing what happened to a command between two reports.
+ *
+ * The arm caveat on the `changed` and `unchanged` lines is the shared
+ * `laneNote` — two sides that report the SAME arm are two runs of one
+ * enumerator, and their agreement means nothing about the question the
+ * comparison was asked. That is the failure this facet was built to make
+ * visible, and it is said on the row rather than left to a reader holding two
+ * reports open.
  *
  * @param diff - The command's diff row
  * @returns Lines
  */
 function verdictLines(diff: PopulationComparisonResult['commands'][number]): string[] {
   const verdict = diff.verdict;
+  const arms = laneNote(diff.before, diff.after);
   switch (verdict.kind) {
     case 'changed': {
       const head =
         `  ${diff.name}: CHANGED — ` +
         `+${String(verdict.added.length)} / −${String(verdict.removed.length)} / ` +
-        `~${String(verdict.changed.length)} content${laneNote(diff)}`;
+        `~${String(verdict.changed.length)} content${arms}`;
       return [
         head,
         ...pathLines('only in compared', verdict.added),
@@ -191,7 +152,7 @@ function verdictLines(diff: PopulationComparisonResult['commands'][number]): str
     case 'unchanged': {
       const count = diff.after?.count ?? 0;
       return [
-        `  ${diff.name}: unchanged — the same ${String(count)} files, same content${laneNote(diff)}`,
+        `  ${diff.name}: unchanged — the same ${String(count)} files, same content${arms}`,
       ];
     }
     case 'unmeasurable': {

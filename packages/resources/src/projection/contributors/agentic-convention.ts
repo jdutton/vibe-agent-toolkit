@@ -47,12 +47,16 @@
  *
  * - **Filesystem extent → ZERO realizations for a symlink's own path.** Neither
  *   enumerator ever hands the path over: `FilesystemCrawlSource` walks with
- *   `followSymlinks: false`, and `GitCrawlSource` is handed the mode-`120000`
- *   entry by git and drops it explicitly (`crawl-source.ts`, *"A SYMLINK IS NOT
- *   A MEMBER HERE"*). There is no second realization to reduce because there is
- *   no first one. Pinned per-enumerator, with a regular file planted alongside
- *   as the positive control, by
- *   `test/projection-filesystem-extent-symlink.test.ts`.
+ *   `followSymlinks: false`, and `GitCrawlSource` drops one at a single seam
+ *   serving both the half git described (mode `120000`) and the half it walked
+ *   (an `lstat` on the collapsed `ls-files --others` entries, which carry no
+ *   mode) — *"A SYMLINK IS NOT A MEMBER"* in `crawl-source.ts`. There is no
+ *   second realization to reduce because there is no first one. Pinned
+ *   per-enumerator, with a regular file planted alongside as the positive
+ *   control, by `test/projection-filesystem-extent-symlink.test.ts` for a
+ *   committed link and `test/projection-untracked-symlink-extent.test.ts` for an
+ *   untracked one — the case the committed fixtures were structurally unable to
+ *   reach, and the one this claim was false for until the seam became single.
  * - **Git extent → TWO realizations with two DISTINCT identities.** It does
  *   enumerate the link, but `canonicalPathFor` never reaches its `realpath`
  *   fallback: `GitTracker.indexPathFor` answers first, returning the path git

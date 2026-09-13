@@ -29,6 +29,13 @@ without this?"* Sentences that always go:
 Keep numbers only where the number changes a decision (a size limit, a version, a count that
 tells someone whether they are affected). Cut numbers that merely prove you did the work.
 
+**A performance number carries an implicit "versus the last stable release".** Before keeping one,
+name the other arm out loud. If it is an earlier commit on this branch rather than the last stable
+tag, the number is not adopter-facing at any length — **delete it and keep the behaviour change**.
+A within-branch speedup published as a release note tells the reader they will observe something
+they will not. (Caught 2026-09-09: "~105x faster, 23.16 s -> 0.22 s" for a check whose baseline
+implementation did not exist at the last stable tag at all.)
+
 ```
 ❌  **`vat foo` could write to the wrong repository.** The command builds a throwaway repo
     under the temp directory and runs init, checkout -b, add and commit in it — but an
@@ -60,7 +67,12 @@ accumulates until a stable bump stamps it.
 - **A bug introduced and fixed entirely within the current `-rc.*` line.** No released
   version ever exhibited it, so documenting it describes a defect no adopter could have
   hit. This is the single largest source of changelog bloat here.
-  - **Test before you write:** does the affected symbol/flag/field exist at the last stable
+  - **Ask the PACKAGE question first — it decides more than an hour of reading.** Which whole
+    packages did not exist at the baseline? `git ls-tree --name-only v<last-stable> packages/`.
+    A subsystem absent there makes every entry about it rc-only churn in one command. (On
+    2026-09-09 this deleted the single largest item in the file: a ~150-line `### Breaking`
+    entry describing an rc-to-rc schema change on tables with zero producers.)
+  - **Then test the symbol:** does the affected symbol/flag/field exist at the last stable
     tag? `git grep -l '<symbol>' v<last-stable> -- packages` — **use `-- packages`, not a
     `packages/*/src` glob**, which silently matches nothing and returns a confident zero for
     everything. Sanity-check with a symbol you know existed.
@@ -69,6 +81,9 @@ accumulates until a stable bump stamps it.
 - **Internal-only work**: refactors, test improvements, CI/tooling, lint config, dev-dep
   pins, doc reorganisation. Exception: it changes what an adopter observes, or it is
   security/dependency work (below).
+  - **Cheapest test: is the package `private: true`?** Nothing in a private package is
+    adopter-visible, ever. `packages/dev-tools` is private, so its guards, its test
+    infrastructure and its tooling never earn an entry however much work they took.
 - **Repo hygiene** that ships no behaviour change.
 
 ## What ALWAYS gets an entry

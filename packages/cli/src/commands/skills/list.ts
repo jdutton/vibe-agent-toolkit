@@ -13,7 +13,8 @@ import { basename, dirname } from 'node:path';
 import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { scan, type ScanSummary } from '@vibe-agent-toolkit/discovery';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 
 import { loadConfig } from '../../utils/config-loader.js';
 import { createLogger } from '../../utils/logger.js';
@@ -83,10 +84,14 @@ export function formatSkillsYaml(
   skills: readonly DiscoveredSkill[],
   context: string,
   root: string,
+  unreadable: readonly DirectoryRefusal[],
 ): string {
   const lines = [
     '---',
-    'status: success',
+    // `warning`, not `success`, when the scan could not list a directory: the
+    // count below is then a floor, not the answer, and the document a CI
+    // wrapper diffs is the place that has to say so — stderr is not.
+    `status: ${unreadable.length === 0 ? 'success' : 'warning'}`,
     `root: ${root}`,
     `context: ${context}`,
     `skillsFound: ${skills.length}`,
@@ -97,6 +102,19 @@ export function formatSkillsYaml(
     lines.push(`  - name: ${skill.name}`, `    path: ${skill.path}`, `    valid: ${skill.valid}`);
     if (skill.warning) {
       lines.push(`    warning: "${skill.warning}"`);
+    }
+  }
+
+  // Same root-relative coordinates as every skill path above, and REQUIRED of
+  // every caller (no default): a lane that inherited `[]` would publish
+  // `status: success` over a listing it knows to be short.
+  if (unreadable.length > 0) {
+    lines.push('unreadable:');
+    for (const refusal of unreadable) {
+      lines.push(
+        `  - path: ${toForwardSlash(safePath.relative(root, refusal.directory)) || '.'}`,
+        `    code: ${refusal.code}`,
+      );
     }
   }
 
@@ -114,9 +132,16 @@ export function formatSkillsYaml(
  */
 function outputSkillsHuman(
   skills: DiscoveredSkill[],
+  unreadable: readonly DirectoryRefusal[],
   logger: ReturnType<typeof createLogger>,
   options: SkillsListCommandOptions
 ): void {
+  // Absolute, like every other path on this channel — see the docstring.
+  for (const refusal of unreadable) {
+    logger.info(
+      `warning: could not list ${refusal.directory} (${refusal.code}); any skill beneath it is missing from this list.`,
+    );
+  }
   if (skills.length === 0) {
     logger.info(`\n   No skills found`);
     return;
@@ -189,8 +214,11 @@ async function listFromNpmSource(
     const skills = scanSkillsDir(resolved.skillsDir);
     // The extracted package's own skills dir is the base — the enclosing temp
     // directory is an implementation detail nobody can act on.
-    process.stdout.write(formatSkillsYaml(skills, 'npm', resolved.skillsDir));
-    outputSkillsHuman(skills, logger, options);
+    // `[]` is a statement, not a default: `scanSkillsDir` is a `readdirSync`
+    // over a tree this process just extracted, so there is no walk that can be
+    // refused short of the extraction itself failing.
+    process.stdout.write(formatSkillsYaml(skills, 'npm', resolved.skillsDir, []));
+    outputSkillsHuman(skills, [], logger, options);
     process.exit(0);
   } finally {
     for (const dir of resolved.tempDirs) {
@@ -221,12 +249,14 @@ export async function listCommand(
     // The ONE base every reported path is relative to. User and project runs
     // scan different trees, so each names its own.
     let root: string;
+    let unreadable: DirectoryRefusal[];
 
     if (options.user) {
       // User context: scan ~/.claude
       logger.info('📋 Listing user-installed skills');
 
-      const { plugins, skills: standaloneSkills } = await scanUserContext();
+      const { plugins, skills: standaloneSkills, unreadable: userUnreadable } = await scanUserContext();
+      unreadable = userUnreadable;
       const allResources = [...plugins, ...standaloneSkills];
       const discoveredSkills = discoverSkills(allResources);
       skills = processDiscoveredSkills(discoveredSkills);
@@ -252,13 +282,14 @@ export async function listCommand(
       skills = processDiscoveredSkills(discoveredSkills);
       context = 'project';
       root = safePath.resolve(rootDir);
+      unreadable = scanResult.unreadable;
     }
 
     // Output YAML to stdout
-    process.stdout.write(formatSkillsYaml(skills, context, root));
+    process.stdout.write(formatSkillsYaml(skills, context, root, unreadable));
 
     // Human-friendly output to stderr
-    outputSkillsHuman(skills, logger, options);
+    outputSkillsHuman(skills, unreadable, logger, options);
 
     process.exit(0);
   } catch (error) {

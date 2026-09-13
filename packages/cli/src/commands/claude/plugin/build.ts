@@ -45,7 +45,7 @@ import {
   verifyNoCaseCollidingPluginNames,
   verifyPluginDirCaseMatch,
 } from './plugin-validators.js';
-import { treeCopyPlugin } from './tree-copy.js';
+import { treeCopyPlugin, type TreeCopyResult } from './tree-copy.js';
 
 export interface PluginBuildCommandOptions {
   marketplace?: string;
@@ -72,6 +72,14 @@ interface PluginBuildResult {
   agentsCopied: number;
   mcpCopied: number;
   treeFilesCopied: number;
+  /**
+   * Source-relative paths of the in-tree FILE symlinks the tree-copy resolved
+   * and shipped BY CONTENT (each also counted in `treeFilesCopied`). Published
+   * because a bundle is a plain tree: the target's bytes travel under the
+   * link's name, and a count alone reads the same as a tree with no symlinks.
+   * Always present (`[]` when there were none), like the other tree-copy facts.
+   */
+  symlinksCopied: string[];
   explicitFilesCopied: number;
   localSkillsPackaged: number;
   /**
@@ -281,9 +289,12 @@ export async function runClaudePluginBuild(
   // project-wide: a file ANY skill declares as its eval suite is an answer key, so
   // a plugin-local skill's bundle must exclude the OTHER skills' suites too — not
   // just its own. Discovery is not free, hence once per run rather than per skill.
+  // `'refuse'`: a bundle assembled around a directory discovery could not
+  // list may ship another skill's answer key. The throw lands in this
+  // command's catch → `reportCommandError`, exit 2.
   const projectSkills = skillsConfig === undefined
     ? []
-    : collectDeclaredEvalSuites(skillsConfig, await discoverSkillsFromConfig(skillsConfig, configDir));
+    : collectDeclaredEvalSuites(skillsConfig, await discoverSkillsFromConfig(skillsConfig, configDir, 'refuse'));
   logger.debug(`Project declared eval suites: ${projectSkills.length}`);
 
   // Once per run for the same reason, and it is the costlier half: resolving a skill's
@@ -422,6 +433,7 @@ export async function runClaudePluginBuildPhase(
           agentsCopied: p.agentsCopied,
           mcpCopied: p.mcpCopied,
           treeFilesCopied: p.treeFilesCopied,
+          symlinksCopied: p.symlinksCopied,
           explicitFilesCopied: p.explicitFilesCopied,
           localSkillsPackaged: p.localSkillsPackaged,
           issueCounts: p.issueCounts,
@@ -449,7 +461,9 @@ export async function runClaudePluginBuildPhase(
 }
 
 async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<void> {
-  finishCommand(await runClaudePluginBuildPhase(options), writeYamlOutput);
+  // `undefined`: this command offers no `--format`, so its failure envelope is
+  // YAML like its report.
+  finishCommand(await runClaudePluginBuildPhase(options), writeYamlOutput, undefined);
 }
 
 /**
@@ -1281,7 +1295,10 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
     ...packagedLocalSkills.map(({ skillDirPath }) => skillDirPath),
     ...collidingSkills.map(({ skillDirPath }) => skillDirPath),
   ];
-  const treeResult = pluginSourceExists
+  // Typed as the tree-copy's own result so the no-source literal must carry
+  // EVERY field the copy returns: an untyped literal made `treeResult` a union
+  // that compiled while the reads below silently skipped a field only one arm had.
+  const treeResult: TreeCopyResult = pluginSourceExists
     ? await treeCopyPlugin({
         sourceDir: pluginSourceDir,
         destDir: pluginDir,
@@ -1300,7 +1317,11 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
         // in which `exclude:` is unambiguously dead the one configuration that
         // says nothing about it.
         unusedExcludePatterns: pluginDef.exclude ?? [],
+        symlinksCopied: [],
       };
+  for (const link of treeResult.symlinksCopied) {
+    logger.info(`         ${link} (symlink, copied by content)`);
+  }
 
   // Plugin-level findings: they belong to the plugin, not to any one skill, and
   // they are summed into the SAME `issueCounts` the skills' findings land in.
@@ -1374,6 +1395,7 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
     agentsCopied: treeResult.agentsCopied,
     mcpCopied: treeResult.mcpCopied,
     treeFilesCopied: treeResult.filesCopied,
+    symlinksCopied: treeResult.symlinksCopied,
     explicitFilesCopied,
     localSkillsPackaged,
     issueCounts: sumSeverityCounts([localSkillCounts, pluginIssueCounts]),

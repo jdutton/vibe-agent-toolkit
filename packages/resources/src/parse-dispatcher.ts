@@ -167,16 +167,27 @@ export interface ParsePoolPolicy {
    * across machines. Sized from the local core count, a 10-core box runs 4
    * workers and a 4-core box runs 3, so a cross-machine difference confounds
    * width with platform and neither reading can be attributed.
+   *
+   * "Verbatim" means a positive whole number: anything else is refused on this
+   * route exactly as it is on the environment's, because `NaN < 1` is false and
+   * a pool of `NaN` workers would otherwise be built rather than declined. See
+   * {@link resolveKnob}.
    */
   size?: number;
   /**
    * Parse-cache MISSES within this run before a pool is created.
    *
-   * Floored at 1, so a fully warm run — every document a hit, nothing ever
-   * parsed — can never reach it. Defaults to `VAT_PARSE_POOL_MIN_MISSES`, and
-   * failing that to {@link PARSES_BEFORE_SIZING} — which see, because the
-   * threshold is also the SAMPLE the width is estimated from, and lowering it
-   * makes that estimate noisier as well as earlier.
+   * At least 1, so a fully warm run — every document a hit, nothing ever parsed
+   * — can never reach it. Defaults to `VAT_PARSE_POOL_MIN_MISSES`, and failing
+   * that to {@link PARSES_BEFORE_SIZING} — which see, because the threshold is
+   * also the SAMPLE the width is estimated from, and lowering it makes that
+   * estimate noisier as well as earlier.
+   *
+   * ⚠️ That minimum used to be a `Math.max(1, Math.floor(...))` clamp, which
+   * does not hold it: `Math.max(1, NaN)` is `NaN`, and a `NaN` threshold
+   * compares false against every count, so it did not raise the bar but removed
+   * it — the fully warm run this sentence promises cannot activate was buying a
+   * pool. {@link resolveKnob} refuses the value instead of clamping it.
    */
   missThreshold?: number;
   /**
@@ -187,6 +198,11 @@ export interface ParsePoolPolicy {
    * what it trades. Environment-reachable for the reason that docstring gives:
    * it calls its own value provisional and the A/B that would settle it the next
    * step, and an experiment arm cannot vary a module constant.
+   *
+   * ⛔ **`0` is not "no look-ahead", it is a HANG** — `driveInOrder` claims
+   * nothing, so nothing ever settles and nothing is ever emitted. Refused, along
+   * with every other value that is not a positive whole, on this route and on
+   * the environment's alike; see {@link resolveKnob}.
    */
   lookAhead?: number;
   /**
@@ -322,13 +338,26 @@ export function tallyParsable<Target>(
 }
 
 /**
- * A positive whole number named by the environment, or `undefined`.
+ * The value, if it is a positive whole number, and `undefined` for anything else.
  *
  * ⚠️ Anything that is not one is `undefined` rather than a coerced value. A pool
- * built with `NaN` workers is not a smaller pool but an unusable one, and a
- * threshold of `NaN` compares false against every count so the pool would never
- * activate at all — both failures surface far from the typo that caused them, as
- * a command that hangs or as an experiment arm that silently measured nothing.
+ * built with `NaN` workers is not a smaller pool but an unusable one; a
+ * threshold of `NaN` compares false against every count, so it does not raise
+ * the bar but REMOVES it, buying a pool for a fully warm run that has parsed
+ * nothing; and a look-ahead of `0` or `NaN` makes `claimed - emitted < width x
+ * lookAhead` false on the first claim, so `driveInOrder` claims no target, its
+ * in-flight map stays empty and the race it awaits never settles — the command
+ * hangs FOREVER. Every one of those surfaces far from the value that caused it.
+ *
+ * @param value - The candidate, from any route
+ * @returns The value, or `undefined` when it is not a positive whole number
+ */
+function positiveWhole(value: number | undefined): number | undefined {
+  return value !== undefined && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+/**
+ * A positive whole number named by the environment, or `undefined`.
  *
  * @param name - The variable to read
  * @returns The value, or `undefined` when absent, empty or not a positive whole
@@ -336,8 +365,32 @@ export function tallyParsable<Target>(
 function positiveWholeFromEnv(name: string): number | undefined {
   const raw = process.env[name];
   if (raw === undefined || raw.trim() === '') return undefined;
-  const parsed = Number(raw);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+  return positiveWhole(Number(raw));
+}
+
+/**
+ * Resolve one numeric knob: policy, then environment, then the default.
+ *
+ * ⭐ **One validation step, on every route's value.** Each knob is reachable
+ * twice — a caller's {@link ParsePoolPolicy} and an environment variable — and
+ * checking only at the entry point that happened to be written first is how
+ * `lookAhead` shipped guarded on the environment and unguarded on the policy: a
+ * config carrying `parsePool: { lookAhead: 0 }` hung the command forever while
+ * `VAT_PARSE_LOOK_AHEAD=0` was quietly refused. Routing every route through
+ * `positiveWhole` here means a THIRD route — a config file, a CLI flag — is
+ * guarded by construction rather than by whoever adds it remembering to be.
+ *
+ * A refused value falls THROUGH to the next source rather than clamping to a
+ * legal one: the routes disagree about who decided, and coercing a typo into a
+ * working number is exactly how a value nobody chose ends up in a measurement.
+ *
+ * @param fromPolicy - What the caller named, if anything
+ * @param envName - The variable the lab varies this knob through
+ * @param fallback - The measured default, when no route names a usable value
+ * @returns The value in force
+ */
+function resolveKnob(fromPolicy: number | undefined, envName: string, fallback: number): number {
+  return positiveWhole(fromPolicy) ?? positiveWholeFromEnv(envName) ?? fallback;
 }
 
 /**
@@ -358,15 +411,24 @@ function positiveWholeFromEnv(name: string): number | undefined {
  */
 export class ParseDispatcher {
   readonly #cache: ParseCache;
-  readonly #policy: ParsePoolPolicy;
   readonly #enabled: boolean;
   readonly #transport: ParseTransport;
   readonly #missThreshold: number;
   readonly #baselineHits: number;
   readonly #baselineMisses: number;
-  /** `VAT_PARSE_POOL_SIZE`, read once; `undefined` when it names nothing usable. */
-  readonly #envSize: number | undefined;
+  /**
+   * The width someone NAMED — policy first, then `VAT_PARSE_POOL_SIZE` — or
+   * `undefined` when neither route named a usable one and the estimate decides.
+   *
+   * Both routes pass {@link positiveWhole} — the same test {@link resolveKnob}
+   * applies to the eager knobs — at construction, so no unvalidated policy value
+   * survives it: the raw policy is not held, which is what stops a later reader
+   * from finding one.
+   */
+  readonly #pinnedSize: number | undefined;
   readonly #lookAhead: number;
+  /** The pool factory in force — {@link ParsePoolPolicy.createPool}, or the real one. */
+  readonly #createPool: (options?: ParsePoolOptions) => ParsePool;
   /**
    * Documents this dispatcher has handed to {@link parse}, and their bytes, by
    * kind. The sample {@link considerActivation} prices the remainder from.
@@ -384,7 +446,6 @@ export class ParseDispatcher {
 
   constructor(cache: ParseCache, policy: ParsePoolPolicy) {
     this.#cache = cache;
-    this.#policy = policy;
     // Opt-IN, not opt-out. NOT because the pool loses — the 6.5x that decided
     // that was an instrument artifact and the truth is a ~29% improvement; see
     // {@link ParsePoolPolicy.enabled}. It stays opt-in because the shape is being
@@ -400,20 +461,23 @@ export class ParseDispatcher {
     const asked =
       policy.transport ?? (process.env['VAT_PARSE_TRANSPORT'] === 'cache' ? 'cache' : 'wire');
     this.#transport = cache.enabled ? asked : 'wire';
-    // Explicit policy BEATS the environment, for both knobs: a caller that has
-    // already decided must not have its decision overridden by an ambient
-    // variable it never saw. Read per construction, matching `enabled` above.
-    this.#missThreshold = Math.max(
-      1,
-      Math.floor(
-        policy.missThreshold ??
-          positiveWholeFromEnv('VAT_PARSE_POOL_MIN_MISSES') ??
-          PARSES_BEFORE_SIZING,
-      ),
+    // Explicit policy BEATS the environment, for every numeric knob: a caller
+    // that has already decided must not have its decision overridden by an
+    // ambient variable it never saw. Read per construction, matching `enabled`
+    // above — and every one of them through the SAME validation, so a knob
+    // cannot be guarded on one of its two routes and open on the other. See
+    // {@link resolveKnob}.
+    this.#missThreshold = resolveKnob(
+      policy.missThreshold,
+      'VAT_PARSE_POOL_MIN_MISSES',
+      PARSES_BEFORE_SIZING,
     );
-    this.#envSize = positiveWholeFromEnv('VAT_PARSE_POOL_SIZE');
-    this.#lookAhead =
-      policy.lookAhead ?? positiveWholeFromEnv('VAT_PARSE_LOOK_AHEAD') ?? PREPARATION_LOOK_AHEAD;
+    this.#lookAhead = resolveKnob(policy.lookAhead, 'VAT_PARSE_LOOK_AHEAD', PREPARATION_LOOK_AHEAD);
+    // The size has no eager default — the width it falls back to is priced from
+    // a sample this run has not taken yet — so its two named routes resolve here
+    // and `considerActivation` estimates only when neither named one.
+    this.#pinnedSize = positiveWhole(policy.size) ?? positiveWholeFromEnv('VAT_PARSE_POOL_SIZE');
+    this.#createPool = policy.createPool ?? createParsePool;
     // DELTAS, because `ParseCacheStats` is cumulative for the cache instance's
     // life and the default instance is process-wide: absolute counts would let
     // an earlier lane's misses activate this run's pool, and would price this
@@ -532,13 +596,14 @@ export class ParseDispatcher {
     // is the common path rather than the exotic one.
     this.#decided = true;
 
+    // `#pinnedSize` is already a positive whole or absent, so the `< 1` decline
+    // below is answering only the estimate: `workersFor` returns 0 for a
+    // remainder too small to pay for a thread.
     const size =
-      this.#policy.size ??
-      this.#envSize ??
-      workersFor(this.#estimateRemainingParseMs(remainingParsable()));
+      this.#pinnedSize ?? workersFor(this.#estimateRemainingParseMs(remainingParsable()));
     if (size < 1) return;
 
-    const create = this.#policy.createPool ?? createParsePool;
+    const create = this.#createPool;
     // `cacheDir` unconditionally, not only under cache transport: a pool is
     // built once and the transport is read per document, so a pool told nothing
     // would be the wrong pool the moment either changes. It costs one string in

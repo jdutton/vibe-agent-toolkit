@@ -378,6 +378,12 @@ const tools = {
 - [OpenAI Function Calling docs](https://platform.openai.com/docs/guides/function-calling) - Official guide
 - [Anthropic Tool Use](https://docs.anthropic.com/en/docs/build-with-claude/tool-use) - Claude-specific implementation
 
+## Worked comparison
+
+- **[Structured Output Patterns — Side by Side](./examples/structured-output-patterns.md)** — the
+  same use case (a cat adoption profile assistant) implemented three ways, so the trade-offs above
+  can be read as code rather than as prose.
+
 ## Examples in VAT
 
 - **Breed Advisor** (current): JSON every turn (to be refactored)

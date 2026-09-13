@@ -10,6 +10,7 @@ import {
 } from '../src/file-crawler.js';
 import { mkdirSyncReal, safePath, toForwardSlash } from '../src/path-utils.js';
 import { setupSyncTempDirSuite } from '../src/test-helpers.js';
+import { refuseUnreadableFixture } from '../src/testing.js';
 
 /**
  * `.turbo` — turborepo's per-package task-log and cache directory.
@@ -106,7 +107,7 @@ describe('.turbo is excluded by the crawler that ships, not just by the list', (
     writeFileSync(safePath.join(tempDir, 'docs', 'guide.md'), '# Guide');
     /* eslint-enable security/detect-non-literal-fs-filename */
 
-    const found = crawlDirectorySync({ baseDir: tempDir, respectGitignore: false }).map((p) =>
+    const found = crawlDirectorySync({ baseDir: tempDir, unreadable: refuseUnreadableFixture(tempDir), respectGitignore: false }).map((p) =>
       toForwardSlash(p),
     );
 

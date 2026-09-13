@@ -8,6 +8,7 @@ import { existsSync } from 'node:fs';
 
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { scan, type ScanResult } from '@vibe-agent-toolkit/discovery';
+import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 
 
 /**
@@ -33,8 +34,16 @@ export async function scanUserContext(): Promise<{
   plugins: ScanResult[];
   skills: ScanResult[];
   marketplaces: ScanResult[];
+  /**
+   * Directories under either tree that could not be listed — carried through
+   * from `ScanSummary.unreadable`, because a `~/.claude/plugins` with one
+   * root-owned directory is ordinary and every caller must say what it could
+   * not see rather than list fewer skills.
+   */
+  unreadable: DirectoryRefusal[];
 }> {
   const { pluginsDir, skillsDir } = getClaudeUserPaths();
+  const unreadable: DirectoryRefusal[] = [];
 
   // Scan plugins directory (SKILL.md and .claude-plugin directories)
   let plugins: ScanResult[] = [];
@@ -46,6 +55,7 @@ export async function scanUserContext(): Promise<{
       include: ['**/SKILL.md', '**/.claude-plugin/**'],
     });
     plugins = pluginsScan.results;
+    unreadable.push(...pluginsScan.unreadable);
   }
 
   // Scan skills directory (SKILL.md files)
@@ -58,6 +68,7 @@ export async function scanUserContext(): Promise<{
       include: ['**/SKILL.md'],
     });
     skills = skillsScan.results;
+    unreadable.push(...skillsScan.unreadable);
   }
 
   // Marketplaces reserved for future use
@@ -67,5 +78,6 @@ export async function scanUserContext(): Promise<{
     plugins,
     skills,
     marketplaces,
+    unreadable,
   };
 }

@@ -49,6 +49,7 @@
 import { performance } from 'node:perf_hooks';
 
 import {
+  allDerivedSpecs,
   buildResourceProjection,
   PROJECTION_TABLES,
   splitProjectionByScope,
@@ -56,6 +57,7 @@ import {
 
 import { gitTrackerForProjectRoot } from '../commands/audit/distributed-tree.js';
 
+import { evaluateAuthoredLenses } from './edge-lens-evaluation.js';
 import type { Logger } from './logger.js';
 import { populationWiring } from './population-wiring.js';
 import { openEphemeralQueryStore, withPopulationCache } from './projection-store.js';
@@ -157,6 +159,31 @@ export interface ProjectionProvenance {
    * every consumer a stable sub-phase vocabulary.
    */
   readonly populationMs: number;
+
+  /**
+   * What EVALUATING THE LENS cost, separately from populating the tree.
+   *
+   * Separate because the two answer different questions and a reader must be
+   * able to tell them apart. Population is work every verb pays and the store
+   * can make cheap; this is work the *edge relations* cost, it is paid on every
+   * run whether or not the caller's statement mentions them, and a store hit
+   * does NOT make it cheaper — the lens is evaluated over the served rows just
+   * as over derived ones. Folded into `populationMs` it would look like the
+   * store getting worse.
+   *
+   * ⚠️ **DISJOINT from `populationMs`, and that is enforced by where the
+   * population clock stops, not by convention.** It shipped overlapping: the
+   * population span ended after the lens write, so this value was contained in
+   * that one while all three docstrings said otherwise, and anyone adding the
+   * two over-counted wall time. If you move either clock, keep them disjoint —
+   * a reader comparing a served run against a derived one is the whole reason
+   * they are two fields.
+   *
+   * ⚠️ Published rather than merely measured, because an unconditional cost
+   * that is invisible is the one nobody can argue with. If this ever grows
+   * large enough to be worth a flag, this field is the evidence that says so.
+   */
+  readonly lensMs: number;
 }
 
 /**
@@ -199,6 +226,13 @@ export interface PopulationExtent {
   readonly membersEnumerated: number;
 }
 
+/** One statement a run intends to ask, with the values it will bind to it. */
+export interface PreflightStatement {
+  readonly sql: string;
+  /** Bound in order, one per `?`. Empty for a statement that binds nothing. */
+  readonly parameters: readonly string[];
+}
+
 /** Run one read-only statement against the populated projection. */
 export type AskProjection = (
   sql: string,
@@ -235,17 +269,24 @@ export type AskProjection = (
  * unbounded cost lives, and a preflight that ran `WITH RECURSIVE …` would hang
  * before the run it exists to make cheap had begun.
  *
- * @param statements - Every statement the run will ask, in any order
+ * ⚠️ Each statement comes WITH the values it will be bound to, because the
+ * placeholder count is part of what compiles: a `?` the caller forgot to bind is
+ * SQL NULL at run time, and the statement then selects nothing and reports
+ * success — the same silent class as a typo'd column, and worth the same early
+ * refusal. The backend does the counting; this only has to hand it the values.
+ *
+ * @param statements - Every statement the run will ask, in any order, each with
+ *   the values it will bind
  * @throws The same legible failure `ask` throws, for the first statement that
- *   does not compile
+ *   does not compile or does not pair its placeholders with its values
  */
-export async function assertQueriesCompile(statements: readonly string[]): Promise<void> {
+export async function assertQueriesCompile(statements: readonly PreflightStatement[]): Promise<void> {
   if (statements.length === 0) return;
   const probe = await openEphemeralQueryStore();
   try {
-    for (const sql of statements) {
+    for (const { sql, parameters } of statements) {
       try {
-        probe.assertCompiles(sql);
+        probe.assertCompiles(sql, parameters);
       } catch (error) {
         throw new Error(
           describeQueryFailure(sql, error instanceof Error ? error.message : String(error)),
@@ -274,7 +315,7 @@ export async function assertQueriesCompile(statements: readonly string[]): Promi
  * @returns Whatever `work` returned
  */
 export async function withQueriedProjection<T>(
-  options: { root: string; logger: Logger; preflight?: readonly string[] },
+  options: { root: string; logger: Logger; preflight?: readonly PreflightStatement[] },
   work: (
     ask: AskProjection,
     provenance: ProjectionProvenance,
@@ -343,8 +384,28 @@ export async function withQueriedProjection<T>(
       const { blobs, extent } = splitProjectionByScope(projection);
       await store.writeBlobFacts(blobs);
       await store.writeExtent({ rootId, treeHash: EPHEMERAL_TREE_HASH }, extent);
-      // The shared setup is done. Everything after this line is the caller's.
+      // 🚨 The population clock STOPS HERE, before the lens runs. It used to
+      // stop after, which made `populationSecs` silently CONTAIN `lensSecs`
+      // while this comment and both payloads said it did not. The two numbers
+      // are published side by side precisely so a reader can compare a served
+      // population against a derived one — and folding the lens into the
+      // population put its cost on the arm the store's value is argued from,
+      // which is the "store got worse" reading the separation exists to
+      // prevent. Overlapping spans also made `populationSecs + lensSecs`
+      // over-count wall time for anyone who added them.
       const populationMs = performance.now() - populationStart;
+
+      // The lens's output, alongside the tree's facts. Unconditional rather
+      // than behind a flag: the relations are the answer to questions the
+      // projection was built to support, and a surface that exists only when
+      // someone remembered a flag is one nobody writes a check against. What it
+      // costs is published as `lensSecs` rather than folded into the population
+      // — a caller who finds it too expensive can see the number they are
+      // paying, which a hidden cost never permits.
+      const lensStart = performance.now();
+      await store.writeDerived(evaluateAuthoredLenses(projection));
+      const lensMs = performance.now() - lensStart;
+      // The shared setup is done. Everything after this line is the caller's.
 
       const ask: AskProjection = (sql, ...parameters) => {
         try {
@@ -358,7 +419,7 @@ export async function withQueriedProjection<T>(
 
       return await work(
         ask,
-        { population: contributorRecords === 0 ? 'store' : 'derived', populationMs },
+        { population: contributorRecords === 0 ? 'store' : 'derived', populationMs, lensMs },
         // Read off the PROJECTION rather than counted back out of the store with
         // a `SELECT COUNT(*)`: a count that travelled through the same `ask` the
         // caller's statements do would be broken by the very schema drift it
@@ -411,16 +472,21 @@ export async function withQueriedProjection<T>(
 export function describeQueryFailure(sql: string, message: string): string {
   if (!NAME_NOT_FOUND.some((prefix) => message.includes(prefix))) return message;
 
+  // 🪤 The derived relations belong in this listing even though they are not
+  // projection tables. A user who mistypes `edge_resolution` gets "no such
+  // table" and a list of everything they could have meant — and a list that
+  // omitted the very relation they were reaching for would read as proof it
+  // does not exist. What the listing answers is "what can I name here", which
+  // is the queryable surface, not the registry.
+  const askable = [...Object.values(PROJECTION_TABLES), ...allDerivedSpecs()];
   const lowered = sql.toLowerCase();
-  const named = Object.values(PROJECTION_TABLES).filter((spec) =>
-    lowered.includes(spec.name.toLowerCase()),
-  );
+  const named = askable.filter((spec) => lowered.includes(spec.name.toLowerCase()));
   const surface = named.length > 0
     ? named.map((spec) => `  ${spec.name}(${spec.columns.join(', ')})`).join('\n')
-    : Object.values(PROJECTION_TABLES).map((spec) => `  ${spec.name}`).join('\n');
+    : askable.map((spec) => `  ${spec.name}`).join('\n');
   const heading = named.length > 0
     ? 'The tables this statement names hold these columns:'
-    : 'The projection holds these tables:';
+    : 'This tree is queryable through these relations:';
 
   return `${message}\n\n${heading}\n${surface}`;
 }

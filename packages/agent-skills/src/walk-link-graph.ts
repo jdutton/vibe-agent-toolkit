@@ -1036,25 +1036,47 @@ function walkLinkGraphBody(
     }
   }
 
-  // Promote only the unfollowed links whose targets the walk never bundled by
-  // any other route. Deferred artifacts count as accounted-for: the target will
-  // exist once the build materializes it, which is the same reason they are not
-  // `missing-target`.
+  // What actually SHIPPED, resolved once the walk is over. Deferred artifacts
+  // count as accounted-for: the target will exist once the build materializes
+  // it, which is the same reason they are not `missing-target`.
   const bundledPaths = new Set<string>([
     ...state.bundledAssetSet,
     ...state.deferredAssetSet,
     ...[...state.bundledResourceMap.values()].map(r => toForwardSlash(r.filePath)),
   ]);
+  const targetShipped = (r: LinkResolution): boolean => bundledPaths.has(toForwardSlash(r.path));
+
+  // 🔑 Two reasons ask ONE question — "did the target ship?" — and both can only
+  // answer it here, against the FINAL bundle, or the answer depends on queue
+  // order.
+  //
+  // `depth-exceeded` is recorded eagerly, at the moment an edge is refused, and
+  // that is correct: the refusal is a fact about the EDGE. It is not a fact
+  // about the TARGET, and `LINK_DROPPED_BY_DEPTH` claims the latter — "this link
+  // was not bundled". On any diamond the two diverge: the same reference cited
+  // from SKILL.md and again from a page one hop deeper ships via the shallow
+  // route and is refused on the deep one, and the finding used to fire anyway.
+  // Measured on `packages/vat-example-cat-agents`, whose
+  // `cat-breed-selection.md` is in the built bundle at depth 1 and was reported
+  // dropped for its depth-2 occurrence via `workflow-orchestration.md`. The
+  // remedy the message implies — raise `linkFollowDepth` — is a no-op for a link
+  // that already works.
+  //
+  // Filtered in place rather than held back and appended, so the surviving
+  // exclusions keep the order the walk found them in.
+  const excludedReferences = state.excludedReferences.filter(
+    (r) => r.excludeReason !== 'depth-exceeded' || !targetShipped(r),
+  );
   for (const unfollowed of state.unfollowedFromNonRoutable) {
-    if (!bundledPaths.has(toForwardSlash(unfollowed.path))) {
-      state.excludedReferences.push(unfollowed);
+    if (!targetShipped(unfollowed)) {
+      excludedReferences.push(unfollowed);
     }
   }
 
   return {
     bundledResources: [...state.bundledResourceMap.values()],
     bundledAssets: [...state.bundledAssetSet],
-    excludedReferences: state.excludedReferences,
+    excludedReferences,
     maxBundledDepth: state.maxBundledDepth,
     deferredAssets: [...state.deferredAssetSet],
   };

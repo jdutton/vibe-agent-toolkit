@@ -27,7 +27,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { runClaudePluginBuild } from '../../src/commands/claude/plugin/build.js';
@@ -457,5 +457,29 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
     const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
 
     expect(results[0]?.plugins[0]?.issueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
+    // No symlink in the fixture, so the tell is empty — and PRESENT, never undefined.
+    expect(results[0]?.plugins[0]?.symlinksCopied).toEqual([]);
+  });
+
+  // The tree-copy computed `symlinksCopied` and the build read every other count
+  // off the result and dropped this one: a link copied by content published as
+  // `treeFilesCopied: N, warnings: 0`, indistinguishable from a tree with no
+  // symlinks. The tell has to reach the plugin's published row.
+  it.skipIf(!symlinkCapability())('carries the in-tree file symlinks copied by content up to the plugin result', async () => {
+    const cap = symlinkCapability();
+    if (!cap) throw new Error('gated by skipIf');
+    tempDir = createTestTempDir('vat-plugin-symlink-tell-');
+    writeGuidedProjectFiles(tempDir, []);
+    const plugin = safePath.join(tempDir, 'plugins', GUIDED_PLUGIN);
+    mkdirSyncReal(safePath.join(plugin, 'hooks'), { recursive: true });
+    writeTestFile(safePath.join(plugin, 'hooks', 'hooks.json'), '{"events":{}}');
+    createSymlink(cap, 'hooks.json', safePath.join(plugin, 'hooks', 'alias.json'));
+    commitTestFixture(tempDir);
+
+    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
+
+    const row = results[0]?.plugins[0];
+    expect(row?.symlinksCopied).toEqual(['hooks/alias.json']);
+    expect(row?.treeFilesCopied).toBe(2);
   });
 });

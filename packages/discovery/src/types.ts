@@ -1,3 +1,5 @@
+import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
+
 /**
  * Format types that discovery can detect
  */
@@ -62,4 +64,19 @@ export interface ScanSummary {
 
   /** Build outputs (gitignored) */
   buildOutputs: ScanResult[];
+
+  /**
+   * Directories the recursive crawl could not LIST, so nothing beneath them is
+   * in `results`. Empty when every listing succeeded, and always empty for a
+   * non-recursive scan (nothing is walked).
+   *
+   * Carried rather than thrown because this scanner's callers are listings over
+   * trees they do not own — `~/.claude/plugins` above all, where one root-owned
+   * or quarantined directory is ordinary — and aborting the whole listing for
+   * it destroys every skill already found. Carried rather than dropped because
+   * a shorter `results` is indistinguishable from a complete one. Every caller
+   * owes the reader this list; a caller that discards it has reintroduced the
+   * silent shortfall.
+   */
+  unreadable: DirectoryRefusal[];
 }

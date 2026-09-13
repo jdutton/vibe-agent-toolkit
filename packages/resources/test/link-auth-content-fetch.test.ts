@@ -126,6 +126,37 @@ describe('fetchAuthenticated — short-circuit outcomes (no fetch, no cache)', (
     expect('outcome' in result && result.outcome).toBe('unverified');
     expect(calls()).toBe(0);
   });
+
+  /**
+   * A provider that claims the host and HAS a token but cannot build the
+   * request for this URL — a `to` template reading a declared capture that
+   * did not participate in the match — is neither "no provider claims this"
+   * nor "no token". It used to land on `unsupported`, the same answer an
+   * unclaimed host gets, with the reason dropped: a consumer falling back to
+   * an anonymous fetch on `unsupported` would have fetched a URL the adopter
+   * configured authentication for. The reason must survive, and the answer
+   * must differ from the unclaimed case pinned above.
+   */
+  it('returns { outcome: "provider-error", reason } when the provider cannot build a request for this URL', async () => {
+    const { fetchImpl, calls } = countingFetch();
+    const provider = githubProvider({
+      rewrite: [
+        {
+          when: String.raw`^https://github\.com/(?<path>[^?]*)(?<query>\?.*)?$`,
+          to: 'https://api.github.com/${path}${query}',
+        },
+      ],
+    });
+    const result = await fetchAuthenticated(GITHUB_BLOB_URL, configFor(provider), {
+      fetchImpl,
+      deps: DEFAULT_DEPS,
+    });
+    expect(result).toEqual({
+      outcome: 'provider-error',
+      reason: expect.stringMatching(/Template variable "query"/) as string,
+    });
+    expect(calls()).toBe(0);
+  });
 });
 
 describe('fetchAuthenticated — successful fetch (live, no cache)', () => {
@@ -271,6 +302,34 @@ describe('fetchAuthenticated — content cache integration', () => {
     expect(result.cached).toBe(false);
     // (no cache → nothing to read back; the assertion that matters is the
     //  absence of any side effect, captured by the next test on persisted tokens)
+  });
+
+  /**
+   * The write-through used to store every status, so a 500 from a flapping
+   * origin was served as a hit for the whole TTL and the (now healthy) server
+   * never saw the second call. The validator's status cache already refuses
+   * transient refusals; the content cache stores a body, and a body worth
+   * keeping is one the origin stood behind — 2xx, or the 3xx the transport
+   * returns when it stops following.
+   */
+  it.each([500, 502, 503, 429, 404, 401, 403])('does not cache a %i — the next call reaches the origin', async (status) => {
+    const { fetchImpl: failing } = bytesFetch(SAMPLE_BYTES, {}, status);
+    const first = await fetchOk(failing, { cache });
+    expect(first.metadata.status).toBe(status);
+    expect(await cache.get(GITHUB_CONTENTS_URL)).toBeNull();
+
+    const { fetchImpl: healthy } = bytesFetch(SAMPLE_BYTES_BINARY);
+    const second = await fetchOk(healthy, { cache });
+    expect(second.cached).toBe(false);
+    expect(second.metadata.status).toBe(200);
+    expect(second.bytes).toEqual(SAMPLE_BYTES_BINARY);
+  });
+
+  it.each([200, 203, 301])('caches a %i — a body the origin stood behind (a 301 with no Location is what the transport returns)', async (status) => {
+    const { fetchImpl } = bytesFetch(SAMPLE_BYTES, {}, status);
+    await fetchOk(fetchImpl, { cache });
+    const hit = await cache.get(GITHUB_CONTENTS_URL);
+    expect(hit?.metadata.status).toBe(status);
   });
 
   it('NEVER caches unverified outcomes even when cache is supplied (§6.3)', async () => {

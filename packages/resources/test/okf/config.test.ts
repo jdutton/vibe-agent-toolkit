@@ -10,6 +10,7 @@ import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { okfBundleRuns } from '../../src/okf/config.js';
+import { validateOkfBundle } from '../../src/okf/validate.js';
 import type { OkfConfig } from '../../src/schemas/project-config.js';
 
 /**
@@ -84,5 +85,65 @@ describe('okfBundleRuns', () => {
     const runs = okfBundleRuns(TWO_BUNDLES, CONFIG_DIR, { specVersion: '0.2' });
 
     expect(runs.map((run) => run.specVersion)).toEqual(['0.2', '0.2']);
+  });
+});
+
+/**
+ * 🪤 An `@`-scoped root used to THROW out of `okfBundleRuns`.
+ *
+ * `resolveAssetReference` reads `@scope/pkg/sub` as an npm bare specifier and,
+ * unlike the unscoped form, gives it no path fallback: a scoped specifier that
+ * does not resolve is rethrown as `Failed to resolve asset reference … run
+ * install in <baseDir>`. That message carried the absolute config directory —
+ * the developer's `$HOME` — and the throw escaped the whole command at exit 2,
+ * discarding every OTHER declared bundle's findings.
+ *
+ * Config is user data, and user data must reach a FINDING rather than a
+ * programming-error throw. That is the same ruling that already turned the
+ * unreadable root, the unreadable subdirectory and the unreadable document into
+ * findings in this lane.
+ */
+describe('a bundle root no installed package answers to', () => {
+  const SCOPED_ROOT = '@vat-okf-fixture/not-installed/bundle';
+
+  it('does not throw out of the run', () => {
+    expect(() => okfBundleRuns({ bundles: { scoped: { root: SCOPED_ROOT } } }, CONFIG_DIR))
+      .not.toThrow();
+  });
+
+  it('leaves every OTHER declared bundle in the run', () => {
+    const runs = okfBundleRuns(
+      { bundles: { knowledge: { root: './knowledge' }, scoped: { root: SCOPED_ROOT } } },
+      CONFIG_DIR,
+    );
+
+    expect(runs.map((run) => run.bundle)).toEqual(['knowledge', 'scoped']);
+  });
+
+  it('carries the specifier verbatim, so no absolute path is published', () => {
+    const runs = okfBundleRuns({ bundles: { scoped: { root: SCOPED_ROOT } } }, CONFIG_DIR);
+
+    expect(runs[0]?.rootSpecifier).toBe(SCOPED_ROOT);
+  });
+
+  it('resolves it against the config directory, like every other non-package root', () => {
+    const runs = okfBundleRuns({ bundles: { scoped: { root: SCOPED_ROOT } } }, CONFIG_DIR);
+
+    expect(runs[0]?.root).toBe(safePath.join(CONFIG_DIR, SCOPED_ROOT));
+  });
+
+  it('reports it as an unreadable root, naming the specifier and the remedy', async () => {
+    const runs = okfBundleRuns({ bundles: { scoped: { root: SCOPED_ROOT } } }, CONFIG_DIR);
+    const run = runs[0];
+    if (run === undefined) throw new Error('expected one run');
+
+    const report = await validateOkfBundle(run);
+
+    expect(report.findings.map((finding) => finding.code)).toEqual(['OKF_BUNDLE_ROOT_UNREADABLE']);
+    expect(report.findings[0]?.message).toContain(SCOPED_ROOT);
+    expect(report.root).toBe(SCOPED_ROOT);
+    // The whole point of the specifier field: nothing in the report names the
+    // directory the config file happens to sit in.
+    expect(report.findings[0]?.message).not.toContain(CONFIG_DIR);
   });
 });

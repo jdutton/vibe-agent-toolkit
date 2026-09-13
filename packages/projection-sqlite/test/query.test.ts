@@ -317,6 +317,77 @@ describe('the separator scan agrees with SQLite on all four quoting forms', () =
   });
 });
 
+/** Two anonymous slots, so the under- and over-bound cases have room on both sides. */
+const TWO_SLOTS = 'SELECT ? AS x, ? AS y';
+
+describe('every placeholder must be bound', () => {
+  // 🚨 The engine refuses ONE direction. Over-binding throws `column index out
+  // of range` at bind time; under-binding binds SQL NULL, every comparison
+  // against it is false, and the statement returns zero rows at exit 0 — which
+  // on a surface where "selected nothing" is success is a check that passes
+  // while asserting nothing. Measured through `vat resources query` before this
+  // gate existed: `WHERE "encoding" = ?` with no value reported `n: 0`,
+  // `status: success`. `StatementSync` exposes no parameter count (Node
+  // 24.13.1), so the count is derived by the same scanner the separator gate
+  // uses — which is what the literal-and-comment cases below are checking.
+  it('refuses an under-bound statement, naming both counts', () => {
+    expect(() => store.query('SELECT "contentKey" FROM "blobs" WHERE "encoding" = ?'))
+      .toThrow(/1 placeholder.*0 values? (was|were) bound/s);
+    expect(() => store.query(TWO_SLOTS, 'a'))
+      .toThrow(/2 placeholders.*1 value was bound/s);
+  });
+
+  it('refuses an over-bound statement with the same message, not the engine\'s', () => {
+    expect(() => store.query('SELECT ? AS x', 'a', 'b'))
+      .toThrow(/1 placeholder.*2 values were bound/s);
+  });
+
+  it('accepts a statement whose every placeholder is bound', () => {
+    expect(store.query(TWO_SLOTS, 'a', 'b')).toEqual([{ x: 'a', y: 'b' }]);
+  });
+
+  it.each([
+    ['a string literal', "SELECT '?' AS q, ? AS x"],
+    ['a doubled-quote escape inside a string literal', "SELECT 'it''s ?' AS q, ? AS x"],
+    ['double quotes', 'SELECT 1 AS "a?b", ? AS x'],
+    ['back-quotes', 'SELECT 1 AS `a?b`, ? AS x'],
+    ['brackets', 'SELECT 1 AS [a?b], ? AS x'],
+    ['a line comment', 'SELECT ? AS x -- was it ?\n'],
+    ['a block comment', 'SELECT /* ? or ? */ ? AS x'],
+  ])('does not count a ? inside %s', (_form, sql) => {
+    expect(store.query(sql, 'a').at(0)?.['x']).toBe('a');
+  });
+
+  it("agrees with SQLite's numbering for ?NNN", () => {
+    // `?2 … ?1` declares two slots however they are ordered, and `?3` alone
+    // declares three (slots 1 and 2 exist and are simply unused — measured:
+    // binding one value fills slot 1 and `?3` reads NULL). Under-counting would
+    // refuse a statement SQLite runs; over-counting would pass one it binds NULL
+    // into. Both are what "the driver's numbering" means.
+    expect(store.query('SELECT ?2 AS x, ?1 AS y', 'a', 'b')).toEqual([{ x: 'b', y: 'a' }]);
+    expect(store.query('SELECT ?3 AS x', 'a', 'b', 'c')).toEqual([{ x: 'c' }]);
+    expect(() => store.query('SELECT ?3 AS x', 'a')).toThrow(/3 placeholders.*1 value was bound/s);
+  });
+
+  it.each(['SELECT :a AS x', 'SELECT @a AS x', 'SELECT $a AS x'])(
+    'refuses a NAMED parameter, which positional values can never reach: %s',
+    (sql) => {
+      // Measured on Node 24.13.1: `StatementSync` binds positional values only
+      // into anonymous and `?NNN` slots, so a `:a` slot with one value thrown at
+      // it fails `column index out of range` — the engine's message, about a
+      // column, for a statement with no column problem. Said plainly instead.
+      expect(() => store.query(sql, 'a')).toThrow(/named parameter/);
+      expect(() => store.query(sql)).toThrow(/named parameter/);
+    },
+  );
+
+  it('refuses before stepping: assertCompiles applies the same count', () => {
+    expect(() => store.assertCompiles(TWO_SLOTS, ['a']))
+      .toThrow(/2 placeholders.*1 value was bound/s);
+    expect(() => store.assertCompiles('SELECT ? AS x', ['a'])).not.toThrow();
+  });
+});
+
 describe('query answers identically on the file-backed store', () => {
   let directory: string;
   let onDisk: SqlQueryableStore;

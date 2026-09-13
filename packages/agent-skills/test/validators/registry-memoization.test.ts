@@ -45,22 +45,22 @@ describe('crawlAndResolveRegistry — memoized per project root', () => {
   });
 
   it('returns the same registry instance for a repeated root', async () => {
-    const first = await crawlAndResolveRegistry(rootA);
-    const second = await crawlAndResolveRegistry(rootA);
+    const first = await crawlAndResolveRegistry(rootA, { unreadable: 'refuse' });
+    const second = await crawlAndResolveRegistry(rootA, { unreadable: 'refuse' });
 
     expect(second).toBe(first);
   });
 
   it('keys on the resolved path, so a non-normalized spelling still hits', async () => {
-    const first = await crawlAndResolveRegistry(rootA);
-    const viaDotSegment = await crawlAndResolveRegistry(`${rootA}/./`);
+    const first = await crawlAndResolveRegistry(rootA, { unreadable: 'refuse' });
+    const viaDotSegment = await crawlAndResolveRegistry(`${rootA}/./`, { unreadable: 'refuse' });
 
     expect(viaDotSegment).toBe(first);
   });
 
   it('does not share a registry across different roots', async () => {
-    const a = await crawlAndResolveRegistry(rootA);
-    const b = await crawlAndResolveRegistry(rootB);
+    const a = await crawlAndResolveRegistry(rootA, { unreadable: 'refuse' });
+    const b = await crawlAndResolveRegistry(rootB, { unreadable: 'refuse' });
 
     // Sharing across roots is the failure the caller-side cache guarded against:
     // every `getResource()` lookup would miss and the walker would walk an empty
@@ -133,7 +133,7 @@ function countingSource(
       root,
       enumerate: async () => {
         calls += 1;
-        return names.map((name) => safePath.join(root, name));
+        return { paths: names.map((name) => safePath.join(root, name)), conditions: [] };
       },
     },
     calls: () => calls,
@@ -163,10 +163,10 @@ describe('crawlAndResolveRegistry — a population never crosses between callers
     const root = rootWithMarkdown({ 'kept.md': '# Kept\n', 'hidden.md': '# Hidden\n' });
     const { source } = countingSource(root, ['kept.md']);
 
-    const sourced = await crawlAndResolveRegistry(root, { populationSource: source });
+    const sourced = await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: source });
     expect(sourced.getResource(safePath.resolve(root, 'hidden.md'))).toBeUndefined();
 
-    const walked = await crawlAndResolveRegistry(root);
+    const walked = await crawlAndResolveRegistry(root, { unreadable: 'refuse' });
 
     expect(walked).not.toBe(sourced);
     expect(walked.getResource(safePath.resolve(root, 'hidden.md'))).toBeDefined();
@@ -176,10 +176,10 @@ describe('crawlAndResolveRegistry — a population never crosses between callers
     const root = rootWithMarkdown({ 'kept.md': '# Kept\n', 'hidden.md': '# Hidden\n' });
     const { source } = countingSource(root, ['kept.md']);
 
-    const walked = await crawlAndResolveRegistry(root);
+    const walked = await crawlAndResolveRegistry(root, { unreadable: 'refuse' });
     expect(walked.getResource(safePath.resolve(root, 'hidden.md'))).toBeDefined();
 
-    const sourced = await crawlAndResolveRegistry(root, { populationSource: source });
+    const sourced = await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: source });
 
     expect(sourced).not.toBe(walked);
     expect(sourced.getResource(safePath.resolve(root, 'hidden.md'))).toBeUndefined();
@@ -190,8 +190,8 @@ describe('crawlAndResolveRegistry — a population never crosses between callers
     const first = countingSource(root, ['kept.md']);
     const second = countingSource(root, ['hidden.md']);
 
-    const fromFirst = await crawlAndResolveRegistry(root, { populationSource: first.source });
-    const fromSecond = await crawlAndResolveRegistry(root, { populationSource: second.source });
+    const fromFirst = await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: first.source });
+    const fromSecond = await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: second.source });
 
     expect(fromSecond).not.toBe(fromFirst);
     expect(fromFirst.getResource(safePath.resolve(root, 'kept.md'))).toBeDefined();
@@ -204,8 +204,8 @@ describe('crawlAndResolveRegistry — a population never crosses between callers
     const root = rootWithMarkdown({ 'kept.md': '# Kept\n' });
     const { source, calls } = countingSource(root, ['kept.md']);
 
-    const first = await crawlAndResolveRegistry(root, { populationSource: source });
-    const second = await crawlAndResolveRegistry(root, { populationSource: source });
+    const first = await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: source });
+    const second = await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: source });
 
     expect(second).toBe(first);
     expect(calls()).toBe(1);
@@ -215,12 +215,12 @@ describe('crawlAndResolveRegistry — a population never crosses between callers
     const root = rootWithMarkdown({ 'kept.md': '# Kept\n' });
     const { source, calls } = countingSource(root, ['kept.md']);
 
-    const before = await crawlAndResolveRegistry(root, { populationSource: source });
-    const walkedBefore = await crawlAndResolveRegistry(root);
+    const before = await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: source });
+    const walkedBefore = await crawlAndResolveRegistry(root, { unreadable: 'refuse' });
     resetPackagingRegistryCache();
 
-    expect(await crawlAndResolveRegistry(root, { populationSource: source })).not.toBe(before);
-    expect(await crawlAndResolveRegistry(root)).not.toBe(walkedBefore);
+    expect(await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: source })).not.toBe(before);
+    expect(await crawlAndResolveRegistry(root, { unreadable: 'refuse' })).not.toBe(walkedBefore);
     expect(calls()).toBe(2);
   });
 });
@@ -250,6 +250,7 @@ describe('validateSkillForPackaging — routes its private crawl through the sha
     const { source, calls } = countingSource(root, ['SKILL.md', 'b.md']);
 
     const result = await validateSkillForPackaging(skillPath, undefined, 'source', {
+      unreadable: 'refuse',
       populationSource: source,
     });
 

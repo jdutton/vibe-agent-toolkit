@@ -49,7 +49,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
 
-import { createTestMarkdownFile, setupLanceDBTestSuite } from './test-helpers.js';
+import {
+  createBareResource,
+  createStubEmbeddingProvider,
+  createTestMarkdownFile,
+  setupLanceDBTestSuite,
+} from './test-helpers.js';
 
 /**
  * What the next `parseFileCached` call throws, or nothing.
@@ -89,24 +94,8 @@ vi.mock('@lancedb/lancedb', () => {
   };
 });
 
-/**
- * Fixed-width vectors, so nothing in this suite loads an inference runtime.
- *
- * `maxInputTokens` is REQUIRED, not decoration: chunk sizing reads it, and a
- * provider that omits it fails every document with "leaves no room for
- * content" — which lands as an ordinary per-resource error and so reads here as
- * an extra unreadable document rather than as a broken stub. 256 matches the
- * local all-MiniLM-L6-v2 limit; any positive number would do, since this suite
- * asserts error ATTRIBUTION and never chunk boundaries.
- */
-const STUB_EMBEDDINGS: EmbeddingProvider = {
-  name: 'stub',
-  model: 'stub-model',
-  dimensions: 4,
-  maxInputTokens: 256,
-  embed: async () => [0, 0, 0, 1],
-  embedBatch: async (texts: string[]) => texts.map(() => [0, 0, 0, 1]),
-};
+/** Fixed-width vectors, so nothing in this suite loads an inference runtime. */
+const STUB_EMBEDDINGS: EmbeddingProvider = createStubEmbeddingProvider();
 
 const suite = setupLanceDBTestSuite();
 
@@ -142,31 +131,6 @@ function parserLoadFailure(): Error {
 }
 
 /**
- * Minimal resource metadata pointing at `filePath`.
- *
- * Hand-built rather than derived by parsing, because two of the three fixtures
- * below deliberately name a file that does not exist — deriving the metadata
- * would have to read it first.
- *
- * @param id - The resource id the error entry will be filed under
- * @param filePath - Absolute path the indexer will read and parse
- * @returns Metadata the indexing lane accepts
- */
-function resourceAt(id: string, filePath: string): ResourceMetadata {
-  return {
-    id,
-    filePath,
-    links: [],
-    headings: [],
-    frontmatter: {},
-    sizeBytes: 0,
-    estimatedTokenCount: 0,
-    modifiedAt: new Date(0),
-    checksum: `${id}-checksum`,
-  };
-}
-
-/**
  * Two resources naming files that were never written.
  *
  * Two, deliberately: the defect is "one entry per resource", so a single
@@ -176,8 +140,8 @@ function resourceAt(id: string, filePath: string): ResourceMetadata {
  */
 function missingResources(): ResourceMetadata[] {
   return [
-    resourceAt('gone-1', safePath.join(suite.tempDir, 'gone-1.md')),
-    resourceAt('gone-2', safePath.join(suite.tempDir, 'gone-2.md')),
+    createBareResource('gone-1', safePath.join(suite.tempDir, 'gone-1.md')),
+    createBareResource('gone-2', safePath.join(suite.tempDir, 'gone-2.md')),
   ];
 }
 
@@ -231,8 +195,8 @@ describe('an ordinary read failure during resource indexing', () => {
   it('indexes the readable resources in a batch that also has an unreadable one', async () => {
     const readablePath = await createTestMarkdownFile(suite.tempDir, 'ok.md', '# Ok\n\nSome prose to chunk.\n');
     const resources = [
-      resourceAt('gone-1', safePath.join(suite.tempDir, 'gone-1.md')),
-      resourceAt('ok', readablePath),
+      createBareResource('gone-1', safePath.join(suite.tempDir, 'gone-1.md')),
+      createBareResource('ok', readablePath),
     ];
 
     const result = await provider().indexResources(resources);

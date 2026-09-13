@@ -7,7 +7,7 @@
  * restating them.
  */
 
-import { compareCodeUnits, resolveAssetReference } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { OkfConfig } from '../schemas/project-config.js';
 
@@ -30,6 +30,51 @@ function unknownBundleError(requested: string, declared: string[]): Error {
 }
 
 /**
+ * Locate one declared bundle root, without ever throwing on adopter config.
+ *
+ * `root` goes through {@link resolveAssetReference} because that is the one
+ * resolver every config-supplied location in VAT goes through, and because its
+ * ordinary answer — a path resolved against the config file's directory — is
+ * the form every real bundle root takes.
+ *
+ * ⛔ **What it is NOT is a way to point a bundle at an npm-published subtree,
+ * and this docstring used to say it was.** A bundle root is a DIRECTORY, and
+ * npm resolution answers with a FILE: `require.resolve` walks the target
+ * package's `exports` map to a module, never to a subtree. A specifier that
+ * resolves therefore hands this lane a file path, and the very next thing that
+ * happens to it is a `readdir` that fails `ENOTDIR`. There is no shape of
+ * `exports` that makes the claim true.
+ *
+ * 🪤 **And a specifier that does NOT resolve used to throw out of the whole
+ * run.** `resolveAssetReference` has a path fallback for an unscoped bare
+ * specifier (`ops/playbooks` with no installed `ops` package) and deliberately
+ * none for a scoped one, so `@scope/pkg/bundle` rethrew — killing `vat okf
+ * validate` at exit 2, discarding every other declared bundle's findings, and
+ * printing `run install in <baseDir>`, i.e. the developer's `$HOME`, into the
+ * CI log. Adopter config is user data; user data reaching a programming-error
+ * throw is the defect, and this lane already answers it the same way three
+ * times over — `OKF_BUNDLE_ROOT_UNREADABLE`, `OKF_SUBDIRECTORY_UNREADABLE` and
+ * `OKF_DOCUMENT_UNREADABLE` are all findings that were once throws.
+ *
+ * So every resolution failure degrades to the same plain path resolution the
+ * unscoped fallback already performs. The root then does not exist, and
+ * `validateOkfBundle` reports `OKF_BUNDLE_ROOT_UNREADABLE` naming the specifier
+ * the adopter typed and the remedy for it — one bundle's finding, with the rest
+ * of the run intact.
+ *
+ * @param specifier - The `okf.bundles.<name>.root` value, exactly as written
+ * @param baseDir - Absolute directory holding the config file
+ * @returns An absolute path to try to list — never a throw
+ */
+function resolveBundleRoot(specifier: string, baseDir: string): string {
+  try {
+    return resolveAssetReference(specifier, baseDir);
+  } catch {
+    return safePath.resolve(baseDir, specifier);
+  }
+}
+
+/**
  * Build one validator run per declared bundle.
  *
  * ⛔ There is no include/exclude to translate, and adding one later would be a
@@ -37,9 +82,8 @@ function unknownBundleError(requested: string, declared: string[]): Error {
  * A bundle's population is spec-defined; a glob that matched fewer files would
  * let VAT certify a bundle while a file it never read broke conformance.
  *
- * `root` goes through `resolveAssetReference` like every other config-supplied
- * location, so an adopter can point a bundle at a subtree published as an npm
- * package without hardcoding that package's internal layout.
+ * Roots are located by {@link resolveBundleRoot}, which cannot throw: a root
+ * nothing answers to is this bundle's own finding, never the run's exit code.
  *
  * @param okf - The project's `okf` section, or undefined if it declares none
  * @param baseDir - Absolute directory holding the config file; roots resolve against it
@@ -68,7 +112,7 @@ export function okfBundleRuns(
     }
     return {
       bundle,
-      root: resolveAssetReference(config.root, baseDir),
+      root: resolveBundleRoot(config.root, baseDir),
       // Carried verbatim so the unreadable-root finding can quote the string the
       // adopter actually has to edit, rather than an absolute path that appears
       // nowhere in their repository (and would leak $HOME into a CI log).

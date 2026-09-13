@@ -89,4 +89,61 @@ describe('validateMarketplace', () => {
     expect(result.metadata?.description).toBe('A test marketplace');
     expect(result.metadata?.version).toBe('1.0.0');
   });
+
+  it('publishes how many entries the manifest declares, and how many are local', async () => {
+    // A string `source` is a relative path into the marketplace's own tree; an
+    // object `source` names a remote. The count and the source list are what
+    // let a consumer tell "validated no plugin because none is local" from
+    // "validated none of the ones that are" — the denominator `vat claude
+    // marketplace validate` was missing when it reported success over an absent
+    // `plugins/`.
+    const tempDir = getTempDir();
+    const marketplacePath = createTestMarketplace(tempDir, {
+      ...validMarketplaceData,
+      plugins: [
+        { name: 'local-a', source: './plugins/local-a' },
+        { name: 'local-b', source: './plugins/local-b' },
+        { name: 'remote', source: { source: 'github', repo: 'org/remote' } },
+      ],
+    });
+
+    const result = await validateMarketplace(marketplacePath);
+
+    assertValidationSuccess(result);
+    expect(result.metadata?.pluginEntries).toBe(3);
+    // The SOURCES, not a count: a count lets a walk of the wrong directories
+    // satisfy the denominator by number (`vat claude marketplace validate`
+    // shipped that — an undeclared `plugins/b` counted for a declared `a`).
+    // Verbatim, so the consumer resolves them against the root it chose.
+    expect(result.metadata?.localPluginSources).toEqual([
+      { name: 'local-a', source: './plugins/local-a' },
+      { name: 'local-b', source: './plugins/local-b' },
+    ]);
+  });
+
+  it.each([
+    ['an absolute source', '/etc'],
+    ['a backslash traversal', String.raw`plugins\..\..\x`],
+  ])('refuses %s at the manifest, and publishes NO local sources for a consumer to walk', async (_label, source) => {
+    // 🔑 `localPluginSources` is the list the CLI resolves against the root and
+    // ENTERS. A source that leaves the root must never reach it: the manifest
+    // is refused by name (field), the run is `error`, and there is no metadata
+    // at all — so the consumer that keys off it cannot walk the good sibling
+    // either, let alone the escaping one.
+    const tempDir = getTempDir();
+    const marketplacePath = createTestMarketplace(tempDir, {
+      ...validMarketplaceData,
+      plugins: [
+        { name: 'ok', source: './plugins/ok' },
+        { name: 'escapee', source },
+      ],
+    });
+
+    const result = await validateMarketplace(marketplacePath);
+
+    assertSingleError(result, 'MARKETPLACE_INVALID_SCHEMA');
+    expect(result.issues[0]?.field).toBe('plugins.1.source');
+    expect(result.issues[0]?.message).toContain('Claude Code');
+    expect(result.metadata).toBeUndefined();
+  });
 });

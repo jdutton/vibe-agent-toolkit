@@ -4,7 +4,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -14,8 +14,9 @@ import {
   removeScratchDir,
   resetProjectRootCaches,
   safePath,
+  toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
-import { GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, beforeEach, expect, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
@@ -77,6 +78,36 @@ export function createGitRepo(directory: string): string {
   // memo instead of seeing the repo we just created.
   resetProjectRootCaches();
   return directory;
+}
+
+/**
+ * A fresh temp directory initialised as a repository with ONE commit holding
+ * `files` and a `.gitignore` of `gitignore` — the tree every locked-directory
+ * suite starts from before it plants its untracked and ignored members.
+ *
+ * Identity is forced per repository so the commit does not depend on the
+ * host's global config. Returned forward-slashed, since the suites compare
+ * enumerated paths against it as strings.
+ *
+ * @param prefix - `mkdtemp` prefix naming the suite
+ * @param options - What the one commit holds
+ * @param options.files - Root-relative path → contents, all committed
+ * @param options.gitignore - The committed `.gitignore` body
+ * @returns The absolute, forward-slashed repository root
+ */
+export function createCommittedRepo(
+  prefix: string,
+  options: { files: Record<string, string>; gitignore: string },
+): string {
+  const root = toForwardSlash(mkdtempSync(safePath.join(normalizedTmpdir(), prefix)));
+  createGitRepo(root);
+  runGitOrThrow(['config', 'user.email', 'test@example.com'], { cwd: root });
+  runGitOrThrow(['config', 'user.name', 'Test'], { cwd: root });
+  for (const [relativePath, contents] of Object.entries(options.files)) writeFileIn(root, relativePath, contents);
+  writeFileIn(root, '.gitignore', options.gitignore);
+  runGitOrThrow(['add', '-A'], { cwd: root });
+  runGitOrThrow(['commit', '-qm', 'init'], { cwd: root });
+  return root;
 }
 
 /**

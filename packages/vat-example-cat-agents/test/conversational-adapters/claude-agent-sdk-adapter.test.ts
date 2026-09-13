@@ -60,13 +60,13 @@ function createMockAgent() {
 
 // Mock Anthropic SDK
 vi.mock('@anthropic-ai/sdk', () => ({
-  default: vi.fn().mockImplementation(() => ({
+  default: vi.fn().mockImplementation(function () { return {
     messages: {
       create: vi.fn().mockResolvedValue({
         content: [{ type: 'text', text: 'Mocked LLM response' }],
       }),
     },
-  })),
+  }; }),
 }));
 
 // Mock the breed advisor agent with realistic extraction

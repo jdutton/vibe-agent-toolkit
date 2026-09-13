@@ -166,7 +166,8 @@ describe('validateLink - git-ignore safety', () => {
     expect(result?.code).toBe('LINK_TO_GITIGNORED');
     expect(result?.message).toContain('gitignored');
     expect(result?.message).toContain(ignoredFile);
-    expect(result?.suggestion).toBeDefined();
+    expect(result?.fix).toBeTruthy();
+    expect(result).not.toHaveProperty('suggestion');
   });
 
   it('should allow ignored file to link to another ignored file', async () => {

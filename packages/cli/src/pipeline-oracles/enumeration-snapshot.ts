@@ -24,7 +24,7 @@ import {
   ORACLE_RESOURCE_ID,
   toEnumerationRow,
 } from './aliases.js';
-import type { LaneDefinition } from './lanes.js';
+import { type LaneDefinition, oracleRefuses } from './lanes.js';
 import type {
   CollisionRow,
   EnumerationRoute,
@@ -66,7 +66,17 @@ export async function captureEnumerationSnapshot(
 
   // Pre-deduplication, ordered. This is the crawl's own output — the registry
   // never retains it, because `addResources` folds duplicates away as it goes.
-  const crawled = await crawlDirectory(lane.crawlOptions(corpusRoot));
+  //
+  // `refuse`, deliberately: this list is the reference population the whole
+  // snapshot is judged against, and one enumerated around a directory the
+  // walk could not list is a measurement that did not run reporting a number
+  // anyway. The crawler throws `DirectoryListingRefusedError`; unlike
+  // `lane.build` below, which is recorded as `buildError`, there is no snapshot
+  // to record it INTO — the population is what a snapshot is made of.
+  const crawled = await crawlDirectory({
+    ...lane.crawlOptions(corpusRoot),
+    unreadable: oracleRefuses(corpusRoot),
+  });
   const enumerated: EnumerationRow[] = [];
   for (const absolutePath of crawled) {
     const realization = await collectRealization(absolutePath, ORACLE_RESOURCE_ID, {

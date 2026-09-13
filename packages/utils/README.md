@@ -219,6 +219,13 @@ They are nonetheless on their own [`./project`](#import-narrowly) entry rather t
 
 - `crawlDirectory()` / `crawlDirectorySync()` - gitignore-aware directory walks
 - `NEVER_CRAWL_GLOBS` / `BUILD_OUTPUT_GLOBS` - the standard exclusion sets
+- `UnreadablePolicy` - the REQUIRED `unreadable` option on every crawl (and on `gitLsFiles` /
+  `gitLsOthers` under `./git`): `{ refuse: { root, remedy } }` throws `DirectoryListingRefusedError`
+  with an adopter-facing, root-relative sentence when a directory cannot be listed;
+  `{ degrade: (refusal) => … }` keeps walking and hands the gap to you to report. There is no
+  default — a shorter list nothing can tell from a complete one is the failure this option exists
+  to prevent, so the caller states which answer is honest for its lane, and an omitted policy is
+  refused up front by name.
 
 Glob *pattern inspection* is a separate entry, `./glob`, and stays that way: `./glob` is dependency-free and reaches only `node:path`, whereas crawling reaches the filesystem, `git`, and `picomatch`.
 

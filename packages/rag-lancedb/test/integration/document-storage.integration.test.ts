@@ -332,4 +332,35 @@ Important security information about authentication.`
     expect(doc).not.toBeNull();
     expect(doc?.totalChunks).toBe(result.chunksCreated);
   });
+
+  /**
+   * The documents table's columns are inferred from the FIRST row written.
+   * A record that carried only the frontmatter keys its own document happened
+   * to have gave the table whatever shape the first document had, and every
+   * later document with a key the first lacked was refused ("Found field not in
+   * schema"). Chunk rows never had this problem: they write every metadata
+   * column on every row, sentinel or not, and document rows now do the same.
+   */
+  it('stores a later document whose frontmatter carries a field the first document did not', async () => {
+    suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, ...STORE_DOCS_CONFIG });
+
+    const bare = await createTestResource(
+      await createTestMarkdownFile(suite.tempDir, 'bare.md', '# Bare\n\nNo frontmatter at all.'),
+      'bare-doc',
+    );
+    const titled = await createTestResource(
+      await createTestMarkdownFile(suite.tempDir, 'titled.md', '---\ntitle: Titled\n---\n\n# Titled\n\nProse.'),
+      'titled-doc',
+    );
+
+    const result = await suite.provider.indexResources([bare, titled]);
+    expect(result.errors).toEqual([]);
+    expect(result.resourcesIndexed).toBe(2);
+
+    await reconnectProvider(suite);
+
+    expect((await suite.provider.getDocument('titled-doc'))?.metadata['title']).toBe('Titled');
+    // The bare document reports no title, not an empty one.
+    expect((await suite.provider.getDocument('bare-doc'))?.metadata).not.toHaveProperty('title');
+  });
 });

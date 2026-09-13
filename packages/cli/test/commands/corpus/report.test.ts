@@ -21,7 +21,6 @@ function makeTempOutDir(): string {
 
 function makeReport(rows: PluginRow[]): RunReport {
   return {
-    schema_version: 1,
     generated_at: FROZEN_TIMESTAMP,
     vat_version: '0.1.34-rc.4',
     vat_commit: 'bfba3329',
@@ -76,7 +75,9 @@ describe('writeRunReport', () => {
 
     const written = readSummary(runDir);
 
-    expect(written.schema_version).toBe(1);
+    // No `schema_version` — the package version is the only version this
+    // project has, and a reader's own strict schema is what decides readability.
+    expect(written).not.toHaveProperty('schema_version');
     expect(written.totals).toEqual({
       plugins: 3,
       audit_clean: 1,

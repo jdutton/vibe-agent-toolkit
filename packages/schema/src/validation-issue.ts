@@ -32,6 +32,7 @@ import path from 'node:path';
 
 import { z } from 'zod';
 
+import { escapeRegExpLiteral } from './regexp-escape.js';
 import {
   CODE_REGISTRY,
   type InfoCode,
@@ -81,26 +82,48 @@ export function customCheckCode(name: string): CustomCheckCode {
 }
 
 /**
+ * The rule "`CUSTOM:` then a name", as a regex fragment.
+ *
+ * 🔑 **A regex because the rule has TWO consumers, and one of them cannot call
+ * a function.** {@link isCustomCheckCode} below is the run-time acceptor;
+ * `schemas/validation-config.json` — which an adopter's editor and CI validate
+ * `vibe-agent-toolkit.config.yaml` against — is the second, and a JSON Schema
+ * can only carry a `pattern`. When the rule lived only in the predicate, the
+ * generated artifact carried NO key constraint at all and accepted
+ * `LNIK_OUTSIDE_PROJECT` that `loadConfig` then refused. Deriving both from this
+ * one source is what makes those two contracts unable to disagree.
+ *
+ * It is exactly as WIDE as the prefix test it replaces, which is the property
+ * that matters: `[\s\S]+` is any character including a newline, so a check named
+ * with dots, spaces or anything else `resources.checks` (`z.record(z.string())`)
+ * admits stays overridable. Narrowing this would make a legitimately-named check
+ * un-silenceable — an adopter told they could silence an inherited check,
+ * writing the only key that could, and having their whole config refused.
+ *
+ * Unanchored on purpose: `validation-config.ts` splices it into an alternation
+ * beside the registry codes, and anchors the whole thing.
+ */
+export const CUSTOM_CHECK_CODE_PATTERN_SOURCE
+  = escapeRegExpLiteral(CUSTOM_CHECK_CODE_PREFIX) + String.raw`[\s\S]+`;
+
+// eslint-disable-next-line security/detect-non-literal-regexp -- composed from CUSTOM_CHECK_CODE_PREFIX, a module constant; no input reaches it
+const CUSTOM_CHECK_CODE_PATTERN = new RegExp(`^${CUSTOM_CHECK_CODE_PATTERN_SOURCE}$`);
+
+/**
  * Whether a code names a user-authored check rather than a shipped one.
  *
- * Deliberately NOT a regex, and deliberately not stricter than
- * `resources.checks` itself. That record is keyed by `z.string()`, so a check
- * name may hold dots, spaces, anything non-empty; a pattern narrower than that
- * would make a legitimately-named check UN-OVERRIDABLE — an adopter told they
- * could silence an inherited check, writing the only key that could silence it,
- * and having their whole config refused. So the rule is exactly the minter's
- * shape read backwards: the prefix, then a name.
+ * The rule is exactly the minter's shape read backwards — the prefix, then a
+ * name — and it is read from {@link CUSTOM_CHECK_CODE_PATTERN_SOURCE} so that
+ * this predicate and the emitted JSON Schema's `pattern` cannot drift apart.
  *
- * The one thing it must still refuse is the bare prefix. `CUSTOM:` names no
- * check, and accepting it would let a typo sit in a config silently overriding
- * nothing.
+ * The one thing it must refuse is the bare prefix. `CUSTOM:` names no check, and
+ * accepting it would let a typo sit in a config silently overriding nothing.
  *
  * @param code - Any validation code
  * @returns True iff `code` is `CUSTOM:` followed by a non-empty name
  */
 export function isCustomCheckCode(code: string): code is CustomCheckCode {
-  return code.startsWith(CUSTOM_CHECK_CODE_PREFIX)
-    && code.length > CUSTOM_CHECK_CODE_PREFIX.length;
+  return CUSTOM_CHECK_CODE_PATTERN.test(code);
 }
 
 /** Full code space: registry codes (overridable) + info codes + structural/non-overridable codes + user checks. */

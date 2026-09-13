@@ -48,12 +48,19 @@ across two adopters — would produce one row, computed once, reused everywhere.
 generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` and
 `projection-resources.ts`. There is deliberately **no** contract-version constant: the hand-bumped
 `PROJECTION_SCHEMA_VERSION` is removed, and a *stored* projection would take a derived digest of the
-row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the pattern). **Population
-is still 🔷
-proposed** for all ten tables: nothing yet derives real rows from `ParseFacts` or
-`ResourceRegistry` at runtime. Four tables (`blobs`, `blob_references`, `blob_sections`,
-`blob_conditions`) and three (`roots`, `resources`, `edges`) have a partial source to populate
-from already — several columns (e.g. `wordCount`, `proseCodeUnits`, `codeBlockCodeUnits`, `sectionCount`,
+row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the pattern).
+
+**Population is ✅ real for the twelve shipped tables.** `populate()` derives rows from `ParseFacts`
+and `ResourceRegistry` at runtime, and `vat resources query` writes them into a per-run in-memory
+store. What remains 🔷 proposed is the REMAINDER described below: columns the parser does not yet
+carry, and the zone modeling several tables depend on.
+
+⚠️ `edges` was listed among the tables with a partial source and does **not** belong: it has **zero
+producers as a MATERIALISED TABLE**, and `edge_resolutions` alongside it. ⚠️ **They are not
+unimplemented.** `resolveEdges()` COMPUTES both per lens, and `vat resources query` /
+`vat resources check` expose them as derived relations beside `lens_contexts` — nothing *stores*
+them, something *evaluates* them (see [zones.md §5](zones.md#5-references-and-edges)
+and §9 item 3). Several columns (e.g. `wordCount`, `proseCodeUnits`, `codeBlockCodeUnits`, `sectionCount`,
 `slugOccurrence`, `column`, `inCodeSpan`, `inFence`) require new parser output that `ParseFacts`
 does not yet carry; `resource_realizations`, `resource_zones` beyond a single default "tree" zone, and
 zone-sourced `resource_tags` additionally depend on zone modeling (skill/plugin/marketplace
@@ -120,7 +127,11 @@ by default rather than skipped, so the gate does not hold and the bytes reach ad
 
 ## 3. Path-dependent tables (🔷 proposed) — rebuilt by joining, cheap, disposable
 
-None of the tables in this section exist in code today — continuing the proposed schema from §2. They
+Most of the tables in this section are 🔷 proposed, continuing the schema from §2 — with two
+exceptions, because saying "none" here contradicts §2. `roots`, `resources`, `resource_realizations`
+and `resource_tags` ship as real `PROJECTION_TABLES` entries and are populated at runtime; `edges`
+and `edge_resolutions` exist as **derived relations** (`DERIVED_TABLES`), computed per lens by
+`resolveEdges()` and never materialised. They
 carry everything that depends on *where* content lives, not what it is, and are designed to be cheap
 to rebuild by joining against the blob-keyed tables above, so they'd carry no durability promise of
 their own.
@@ -132,7 +143,7 @@ their own.
 | `resource_realizations` | `(resource_id, zone_id, path)` — one resource id can have many paths (e.g. a source registry and a build-output registry sharing node identity) |
 | `resource_zones` | `(resource_id, zone_kind, zone_id, role)`; `zone_kind ∈ {skill, plugin, marketplace, collection, package, tree}`; tree `role ∈ {source, dist, vendored}` |
 | `resource_tags` | `(resource_id, tag, value, source)`; `source ∈ {filename, config, frontmatter, zone, harness-convention}` |
-| `edges` | `(src, link_ordinal, zone_id, dst_resource, dst_anchor, kind, resolution)` — `zone_id` is part of the key, because link resolution is per-zone: the same link can resolve differently depending on which skill/plugin/collection is doing the resolving. |
+| `edges` + `edge_resolutions` | ⚠️ **This row previously described `edges` as carrying `dst_resource` / `dst_anchor` directly. That shape is wrong and the shipped schema rejects it** — a scalar destination cannot hold a many-candidate resolution, and choosing one winner *is* the last-write-wins defect per-lens resolution exists to remove. The destination lives on a separate `edge_resolutions` table, one row per candidate. See [zones.md §5](zones.md#5-references-and-edges), which is authoritative for this model; `packages/resources/src/schemas/projection-edges.ts` is the shipped shape. Resolution is per **resolution context**, not per zone id. |
 
 **`roots` is a table, so `path` alone is never an identifier.** Any SQL check's column contract must
 return a root (or a resource id), never a bare `path`, or a federated corpus with two roots sharing a
@@ -525,7 +536,9 @@ which a bare commit key cannot express.
 >   flatten to one dist slug, and that diagnostic currently survives only inside a `catch`.
 > - **`edges` splits into `edges` + `edge_resolutions`** with a candidate ordinal and a score. A scalar
 >   target cannot express ambiguous resolution or scored inference, and collapsing candidates to one
->   winner is the last-write-wins behaviour per-zone resolution exists to remove.
+>   winner is the last-write-wins behaviour per-**resolution-context** resolution exists to remove.
+>   (This line said "per-zone" and contradicted the corrected §3 row above; the shipped key is
+>   `contextId`, not a zone id.)
 > - **`edges` gains `origin`** (`authored` / `implicit` / `inferred`) and a nullable reference ordinal,
 >   because implicit edges have no blob row; `kind` opens.
 > - **`ZoneKindSchema` and `resource_tags.source` open**; `role` moves to the zone entity and loses its

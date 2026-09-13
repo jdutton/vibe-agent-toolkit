@@ -6,15 +6,35 @@
  * rewrite pipeline, resolve a token, build the auth headers, and return
  * everything the caller needs to issue an authenticated fetch.
  *
- * Three outcomes:
- *   - `{ fetchUrl, headers }`              — ready to fetch (provider claimed,
- *                                            rewrite matched, token resolved)
- *   - `{ outcome: 'unsupported' }`         — no provider claims the host, OR
- *                                            host matched but no rewrite did
- *                                            (per §4: "the provider does not
- *                                            claim the URL for rewriting")
- *   - `{ outcome: 'unverified', reason }`  — claimed and rewrote, but no token
- *                                            source resolved a non-empty value
+ * Four outcomes:
+ *   - `{ fetchUrl, headers }`                  — ready to fetch (provider claimed,
+ *                                                rewrite matched, token resolved)
+ *   - `{ outcome: 'unsupported' }`             — no provider claims the host, OR
+ *                                                host matched but no rewrite did
+ *                                                (per §4: "the provider does not
+ *                                                claim the URL for rewriting")
+ *   - `{ outcome: 'unverified', reason }`      — claimed and rewrote, but no token
+ *                                                source resolved a non-empty value
+ *   - `{ outcome: 'provider-error', reason }`  — the provider's own config threw
+ *                                                while building the request for
+ *                                                THIS url (see
+ *                                                `describeProviderFailure`)
+ *
+ * **This function does not throw.** Everything the engine can go wrong on —
+ * an uncompilable `match.host` glob, an uncompilable `when`, a malformed
+ * template, an unknown transform, a capture that did not participate — comes
+ * back as `provider-error`, because the only caller invokes it outside a
+ * try/catch and a throw there ends the whole validation run.
+ *
+ * 🔑 `provider-error` is NOT `unverified`, and the split is the point.
+ * `unverified` means "no token", and its registry remedy invites a token-less
+ * CI lane to set the code to `ignore`; a provider that could not build a
+ * request is a config defect, and reporting it under the ignorable code is how
+ * a broken provider produced a green run over links nothing had fetched. The
+ * statically knowable defects never reach here from `resources.linkAuth` —
+ * `buildLinkAuthEngineConfig` refuses them at config time (compile-check.ts);
+ * what arrives is a hand-built config, or a per-URL failure such as a declared
+ * capture group that did not participate in this match.
  *
  * Per design issue #113 §6.
  */
@@ -101,7 +121,8 @@ export type ResolveOutcome =
       readonly check: ProviderCheck;
     }
   | { readonly outcome: 'unsupported' }
-  | { readonly outcome: 'unverified'; readonly reason: string };
+  | { readonly outcome: 'unverified'; readonly reason: string }
+  | { readonly outcome: 'provider-error'; readonly reason: string };
 
 /**
  * Resolve an authenticated fetch plan for `url` against the configured providers.
@@ -114,40 +135,84 @@ export function resolveAuthenticatedUrl(
   config: LinkAuthConfig,
   deps?: Partial<TokenResolutionDeps>,
 ): ResolveOutcome {
-  const provider = selectProvider(url, config.providers);
-  if (provider === undefined) return { outcome: 'unsupported' };
+  // Declared outside the try: the catch names the provider in the reason.
+  // `selectProvider` runs INSIDE the try — it compiles adopter-authored
+  // `match.host` globs, and picomatch refuses an over-long pattern with a
+  // throw, which is a provider-config error like any other and must degrade
+  // one link, not end the run.
+  let provider: Provider | undefined;
+  try {
+    provider = selectProvider(url, config.providers);
+    if (provider === undefined) return { outcome: 'unsupported' };
 
-  const rewrite = rewriteUrl(url, provider.rewrite);
-  if (!rewrite.matched) return { outcome: 'unsupported' };
+    const rewrite = rewriteUrl(url, provider.rewrite);
+    if (!rewrite.matched) return { outcome: 'unsupported' };
 
-  const token = resolveToken(provider.token, deps);
-  // eslint-disable-next-line security/detect-possible-timing-attacks -- compare to undefined sentinel, not secret content
-  if (token === undefined) {
+    const token = resolveToken(provider.token, deps);
+    // eslint-disable-next-line security/detect-possible-timing-attacks -- compare to undefined sentinel, not secret content
+    if (token === undefined) {
+      return {
+        outcome: 'unverified',
+        reason: 'No token source resolved a non-empty value — configure `token` or log in.',
+      };
+    }
+
+    // Headers see captures + vars + the resolved token. The resolved token wins
+    // over any regex capture named "token" (later in Object.assign wins), so
+    // URL-derived data never leaks into Authorization values.
+    const headerContext = Object.create(null) as Record<string, string>;
+    Object.assign(headerContext, rewrite.context);
+    headerContext['token'] = token;
+
+    const headers = buildHeaders(provider.auth.headers, headerContext);
+    // Expand fetch.headers against the same context so the resolved token wins
+    // over any URL-captured "token" group here too — the precedence discipline
+    // applies to both header sets, not just auth.headers.
+    const fetchHeaders =
+      provider.fetch === undefined
+        ? undefined
+        : buildHeaders(provider.fetch.headers, headerContext);
     return {
-      outcome: 'unverified',
-      reason: 'No token source resolved a non-empty value — configure `token` or log in.',
+      fetchUrl: rewrite.rewrittenUrl,
+      headers,
+      ...(fetchHeaders === undefined ? {} : { fetchHeaders }),
+      check: provider.check,
     };
+  } catch (error) {
+    return { outcome: 'provider-error', reason: describeProviderFailure(provider, error) };
   }
+}
 
-  // Headers see captures + vars + the resolved token. The resolved token wins
-  // over any regex capture named "token" (later in Object.assign wins), so
-  // URL-derived data never leaks into Authorization values.
-  const headerContext = Object.create(null) as Record<string, string>;
-  Object.assign(headerContext, rewrite.context);
-  headerContext['token'] = token;
-
-  const headers = buildHeaders(provider.auth.headers, headerContext);
-  // Expand fetch.headers against the same context so the resolved token wins
-  // over any URL-captured "token" group here too — the precedence discipline
-  // applies to both header sets, not just auth.headers.
-  const fetchHeaders =
-    provider.fetch === undefined
-      ? undefined
-      : buildHeaders(provider.fetch.headers, headerContext);
-  return {
-    fetchUrl: rewrite.rewrittenUrl,
-    headers,
-    ...(fetchHeaders === undefined ? {} : { fetchHeaders }),
-    check: provider.check,
-  };
+/**
+ * Turn an engine-internal throw into the text of a `provider-error` outcome.
+ *
+ * 🚨 **This catch is the process boundary, not a convenience.**
+ * `ExternalLinkValidator.validateLink` calls `resolveAuthenticatedUrl` outside
+ * any try/catch, so anything escaping here ends `vat resources validate` and
+ * `vat audit` over the entire tree — for every adopter that configured
+ * `resources.linkAuth`, on account of one link. A provider that fails on one
+ * URL is a finding about that link; it is not a reason to stop validating the
+ * other several thousand.
+ *
+ * The validator surfaces the outcome as `LINK_AUTH_PROVIDER_ERROR` with this
+ * reason attached, which reaches stdout. **The reason quotes the template, the
+ * pattern or a name — never a substituted value.** Every error the try can
+ * catch is built that way (`InvalidRewriteRuleError` carries the pattern,
+ * `TemplateMissingVarError` / `TemplateSyntaxError` the template,
+ * `UnknownTransformError` the name, picomatch's `SyntaxError` a length, and
+ * `URIError` nothing), so the resolved token and the URL captures cannot enter
+ * this text. That property is pinned by test rather than guarded by a scrub:
+ * a scrub here had no input that could contain a token, and its guard test
+ * passed with the call deleted. Rendered header values meet outside error
+ * text in exactly one place, the transport, which owns that redaction.
+ */
+function describeProviderFailure(provider: Provider | undefined, error: unknown): string {
+  const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  // No provider means selection itself threw — a `match.host` glob picomatch
+  // refused — so there is no host to name yet.
+  const subject =
+    provider === undefined
+      ? 'linkAuth provider selection (a `match.host` glob) failed'
+      : `linkAuth provider for host "${provider.match.host}" could not build a request`;
+  return `${subject}: ${detail}`;
 }

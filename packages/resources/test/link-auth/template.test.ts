@@ -121,4 +121,44 @@ describe('renderTemplate', () => {
       expect(() => renderTemplate('${a${b}}', { a: '1', b: '2' })).toThrow(TemplateSyntaxError);
     });
   });
+
+  describe('substituted values are data, never template syntax', () => {
+    // The unterminated-`${` guard answers "did the AUTHOR write a broken
+    // template?". Asking it of the RENDERED string asks a different question —
+    // "did the adopter's DATA happen to contain two characters?" — and for a
+    // Backstage software-template URL the answer is yes, which threw a
+    // programming error straight out of `vat resources validate`.
+    const BACKSTAGE_PATH = 'skeleton/${{values.name}}/README.md';
+
+    it('renders a captured path containing ${{...}} instead of throwing', () => {
+      expect(
+        renderTemplate('https://api.github.com/repos/o/r/contents/${path}', {
+          path: BACKSTAGE_PATH,
+        }),
+      ).toBe(`https://api.github.com/repos/o/r/contents/${BACKSTAGE_PATH}`);
+    });
+
+    it.each([
+      ['bare dollar-brace', 'a${b'],
+      ['dollar-brace at end of value', 'trailing${'],
+      ['handlebars-ish', '${{values.name}}'],
+      ['shell-ish default', '${HOME:-/root}'],
+      ['two unterminated', '${x ${y'],
+    ])('a value containing %s is passed through verbatim', (_label, value) => {
+      expect(renderTemplate('prefix/${v}/suffix', { v: value })).toBe(`prefix/${value}/suffix`);
+    });
+
+    it('a substituted value is never re-scanned for transforms', () => {
+      // `${base64url(v)}` inside a VALUE must stay literal — re-scanning would
+      // turn adopter data into an expression language.
+      expect(renderTemplate('${v}', { v: '${base64url(v)}' })).toBe('${base64url(v)}');
+    });
+
+    it('still refuses a malformed TEMPLATE even when every value is clean', () => {
+      // The guard keeps its real job: this is an author bug, not adopter data.
+      expect(() => renderTemplate('https://x/${path', { path: 'ok' })).toThrow(
+        TemplateSyntaxError,
+      );
+    });
+  });
 });

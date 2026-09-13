@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
+import { LinkAuthConfigError } from '../src/link-auth/compile-check.js';
 import { resolveAuthenticatedUrl } from '../src/link-auth/resolve.js';
 import { buildLinkAuthEngineConfig } from '../src/link-auth-config-build.js';
 import type { LinkAuthProjectConfig } from '../src/schemas/link-auth.js';
 
 const INLINE_HOST = 'example.com';
+const BEARER_TOKEN_TEMPLATE = 'Bearer ${token}';
 const INLINE_PROVIDER = {
   match: { host: INLINE_HOST },
   rewrite: [{ when: '.*', to: 'https://api.example.com' }],
-  auth: { headers: { Authorization: 'Bearer ${token}' } },
+  auth: { headers: { Authorization: BEARER_TOKEN_TEMPLATE } },
   token: [{ env: 'TOK' }],
   check: { method: 'GET' as const, aliveStatus: [200], notFoundMeaning: 'dead' as const },
 };
@@ -44,7 +46,7 @@ describe('buildLinkAuthEngineConfig — macro expansion', () => {
     const [p] = engine.providers;
     expect(p?.match.host).toBe('github.com');
     expect(p?.check.notFoundMeaning).toBe('ambiguous');
-    expect(p?.auth.headers['Authorization']).toBe('Bearer ${token}');
+    expect(p?.auth.headers['Authorization']).toBe(BEARER_TOKEN_TEMPLATE);
   });
 
   it('{ use: "sharepoint" } expands to the sharepoint macro shape', () => {
@@ -166,5 +168,125 @@ describe('buildLinkAuthEngineConfig — prototype-pollution defense in macro ent
     // prototype and expanded the github macro — match.host would be 'github.com'.
     // With Object.hasOwn, the prototype is ignored and the inline values win.
     expect(engine.providers[0]?.match.host).toBe(INLINE_HOST);
+  });
+});
+
+/**
+ * A provider that cannot compile is a CONFIG error and is refused here, at
+ * config time, by name — not degraded per link.
+ *
+ * 🪤 It used to reach `resolveAuthenticatedUrl`, whose catch turned every one of
+ * these into `{ outcome: 'unverified' }`, which the validator reports as
+ * `LINK_AUTH_UNVERIFIED` — a *warning* whose registry remedy says to set it to
+ * `ignore` when running without a token is intentional. An adopter who took
+ * that advice for a token-less CI lane then had every provider-config typo
+ * swallowed: the link was neither authenticated nor checked anonymously, and
+ * the run was green with `linksChecked` counting links nothing had fetched.
+ * Every failure below is a fact about the config, knowable before any URL is
+ * seen, so the run refuses before it starts.
+ */
+const VALID_WHEN = String.raw`^https://example\.com/(?<owner>[^/]+)/(?<path>.+)$`;
+
+/** One inline provider with `overrides` applied, as a whole linkAuth config. */
+function provider(overrides: Partial<typeof INLINE_PROVIDER>): LinkAuthProjectConfig {
+  return { providers: [{ ...INLINE_PROVIDER, ...overrides }] };
+}
+
+describe('buildLinkAuthEngineConfig — refuses a provider that cannot compile', () => {
+  it.each([
+    [
+      'a `when` regex that does not compile',
+      provider({ rewrite: [{ when: '([unclosed', to: 'https://x/' }] }),
+      /rewrite\[0\]\.when/,
+    ],
+    [
+      'a `to` template with an unterminated ${',
+      provider({ rewrite: [{ when: VALID_WHEN, to: 'https://x/${path' }] }),
+      /rewrite\[0\]\.to/,
+    ],
+    [
+      'a `to` template naming a capture the rule does not declare',
+      provider({ rewrite: [{ when: VALID_WHEN, to: 'https://x/${nope}' }] }),
+      /rewrite\[0\]\.to.*"nope"/,
+    ],
+    [
+      'a `vars` entry referencing ${token}, which vars never see',
+      provider({ rewrite: [{ when: VALID_WHEN, vars: { t: '${token}' }, to: 'https://x/${t}' }] }),
+      /rewrite\[0\]\.vars\.t.*"token"/,
+    ],
+    [
+      'a `vars` name colliding with a capture',
+      provider({ rewrite: [{ when: VALID_WHEN, vars: { path: '${owner}' }, to: 'https://x/${path}' }] }),
+      /rewrite\[0\]\.vars\.path/,
+    ],
+    [
+      'a header template calling an unknown transform',
+      provider({ auth: { headers: { Authorization: 'Bearer ${rot13(token)}' } } }),
+      /auth\.headers\.Authorization.*rot13/,
+    ],
+    [
+      'a header template naming a capture no rule declares',
+      provider({
+        rewrite: [{ when: VALID_WHEN, to: 'https://x/${path}' }],
+        auth: { headers: { Authorization: BEARER_TOKEN_TEMPLATE, 'X-Owner': '${org}' } },
+      }),
+      /auth\.headers\.X-Owner.*"org"/,
+    ],
+    [
+      'a fetch header template with whitespace inside the expression',
+      provider({ fetch: { headers: { Accept: '${ token }' } } }),
+      /fetch\.headers\.Accept/,
+    ],
+    [
+      'a `match.host` glob longer than picomatch accepts',
+      provider({ match: { host: 'a'.repeat(70_000) } }),
+      /match\.host/,
+    ],
+    [
+      'a `match.excludeHost` glob longer than picomatch accepts',
+      provider({ match: { host: 'example.com', excludeHost: ['b'.repeat(70_000)] } }),
+      /match\.excludeHost\[0\]/,
+    ],
+  ])('refuses %s, naming providers[0] and the field', (_label, config, fieldPattern) => {
+    expect(() => buildLinkAuthEngineConfig(config)).toThrow(LinkAuthConfigError);
+    expect(() => buildLinkAuthEngineConfig(config)).toThrow(/resources\.linkAuth providers\[0\]/);
+    expect(() => buildLinkAuthEngineConfig(config)).toThrow(fieldPattern);
+  });
+
+  it('names the provider by host, so a multi-provider config says WHICH one', () => {
+    const config: LinkAuthProjectConfig = {
+      providers: [
+        INLINE_PROVIDER,
+        { ...INLINE_PROVIDER, match: { host: 'second.example' }, rewrite: [{ when: '(', to: 'x' }] },
+      ],
+    };
+    expect(() => buildLinkAuthEngineConfig(config)).toThrow(/providers\[1\] \(host "second\.example"\)/);
+  });
+
+  it('accepts every shipped macro (positive control: the check is not refusing everything)', () => {
+    expect(() =>
+      buildLinkAuthEngineConfig({ providers: [{ use: 'github' }, { use: 'sharepoint' }] }),
+    ).not.toThrow();
+  });
+
+  it('accepts a header that names a capture SOME rule declares, and a `to` that reads a var', () => {
+    // Headers render against whichever rule matched, so a capture declared by
+    // any rule is a legitimate name — the runtime lane reports the rule that
+    // matched without it. A `to` reads that rule's vars as well as its captures.
+    const config = provider({
+      rewrite: [
+        { when: VALID_WHEN, vars: { enc: '${urlencode(path)}' }, to: 'https://x/${enc}' },
+        { when: String.raw`^https://example\.com/(?<id>\d+)$`, to: 'https://x/id/${id}' },
+      ],
+      auth: { headers: { Authorization: BEARER_TOKEN_TEMPLATE, 'X-Owner': '${owner}', 'X-Id': '${id}' } },
+    });
+    expect(() => buildLinkAuthEngineConfig(config)).not.toThrow();
+  });
+
+  it('does not mistake an escaped "\\(?<" in a `when` for a capture declaration', () => {
+    // `\(?<x>` is an optional literal open-paren followed by literal `<x>` —
+    // no group named x exists, so a template reading it must be refused.
+    const config = provider({ rewrite: [{ when: String.raw`\(?<x>y`, to: 'https://x/${x}' }] });
+    expect(() => buildLinkAuthEngineConfig(config)).toThrow(/"x"/);
   });
 });

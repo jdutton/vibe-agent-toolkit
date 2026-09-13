@@ -30,6 +30,10 @@ export {
   type GitRunResult,
 } from './git-run.js';
 export { gitFindRoot, gitLsFiles, gitLsOthers, isGitIgnored } from './git-utils.js';
+// The listings' REQUIRED `unreadable` option, typed here so a `./git`-only
+// consumer can spell its policy without reaching for `./crawl`. The class is
+// on `./crawl`, where every thrower and catcher of it already lives.
+export type { RefuseListingContext, UnreadablePolicy } from './listing-refusal.js';
 export {
   gitTreeSnapshot,
   peekGitTreeSnapshot,

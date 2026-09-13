@@ -55,6 +55,12 @@ const PopulationEntrySchema = z.object({
   kind: z.literal('population'),
   population: z.union([z.literal('derived'), z.literal('store')]),
   populationMs: z.number(),
+  // Carried across the process boundary rather than recomputed, for the same
+  // reason every other field here is: a killed run's document is rebuilt from
+  // these lines alone, and a cost the parent cannot see is a cost it would have
+  // to invent or omit. Omitting it would make an interrupted run's report claim
+  // the lens was free.
+  lensMs: z.number(),
   membersEnumerated: z.number(),
 }).strict();
 

@@ -6,7 +6,7 @@ import { type SeverityCounts } from '@vibe-agent-toolkit/schema';
 import { type Command, Option } from 'commander';
 
 import { createLogger } from '../utils/logger.js';
-import { writeYamlOutput } from '../utils/output.js';
+import { writeJsonOutput, writeYamlOutput } from '../utils/output.js';
 
 /**
  * What one phase produced: the document it publishes, and the exit code it
@@ -382,17 +382,41 @@ export function phaseResultFromOutcome(name: string, outcome: PhaseOutcome): Pha
  * `phases[].report` instead.
  *
  * Three cases, and the middle one is the one to get right:
- *   - an unexpected failure publishes the shared envelope through
- *     `writeYamlOutput`, matching `handleCommandError`;
+ *   - an unexpected failure publishes the shared envelope in the format the
+ *     operator asked for, matching `handleCommandError`;
  *   - a command's own report goes through the command's own `render`;
  *   - no document at all (an unconfigured run, a dry run) publishes nothing.
  *
+ * 🔑 **`format` is REQUIRED, and that is the whole point of it being a
+ * parameter.** This arm hardcoded `writeYamlOutput`, and it is `vat resources
+ * validate`'s ONLY error exit — so `--format json` silently produced YAML on the
+ * one path a scripted consumer most needs to parse. The sibling
+ * `handleCommandError` has the same parameter as an OPTIONAL one carrying a
+ * docstring that says a caller with a `--format` option must pass it, and two
+ * commands added in the same change dropped it anyway: a docstring is not a
+ * mechanism. Here the type system asks, so a new caller cannot forget. A command
+ * that offers no `--format` passes `undefined` and says so at its call site.
+ *
+ * ⚠️ It governs the FAILURE envelope only. A command's own report still goes
+ * through `render`, which is what a `--format text` lane needs.
+ *
  * @param outcome - What the phase produced
  * @param render - How this command publishes its OWN report shape
+ * @param format - What the operator asked for: `json`, or anything else (and
+ *   `undefined`) for YAML — the same two-branch switch `handleCommandError` and
+ *   every success path use
  */
-export function finishCommand(outcome: PhaseOutcome, render: (document: unknown) => void): never {
+export function finishCommand(
+  outcome: PhaseOutcome,
+  render: (document: unknown) => void,
+  format: string | undefined,
+): never {
   if (outcome.failed === true) {
-    writeYamlOutput(outcome.document);
+    if (format === 'json') {
+      writeJsonOutput(outcome.document);
+    } else {
+      writeYamlOutput(outcome.document);
+    }
   } else if (outcome.document !== undefined) {
     render(outcome.document);
   }

@@ -56,6 +56,23 @@ All development tools are in the `packages/dev-tools/src/` directory:
 - `jscpd-check-new.ts` - Smart duplication checking with baseline
 - `jscpd-update-baseline.ts` - Update duplication baseline
 
+## Design Specifications & Research
+
+Design records, including for work that is approved but not yet built. They are committed so a
+design survives the worktree it was written in.
+
+- **[Result Envelope Design](./result-envelope-design.md)** — the complete specification for VAT
+  agent result envelopes: error constants, observability fields, and retry semantics.
+- **[Skill-Test Eval Runner (2026-06-24)](./research/2026-06-24-skill-test-eval-runner-design.md)**
+  — the approved tiered/parallel/cacheable eval-runner design, still to be executed; it carries
+  forward into [multi-runtime skill testing](./research/2026-06-25-multi-runtime-skill-testing-direction.md).
+- **[Claude Plugin Loader Semantics (2026-05-03)](./research/2026-05-03-claude-plugin-loader-semantics.md)**
+  — measured behaviour of the plugin loader.
+- **[Compat Empirical Harness v2 (2026-05-23)](./research/2026-05-23-compat-empirical-harness-v2-design.md)**
+  — design for the empirical compatibility harness.
+- **[State Persistence Patterns](./research/state-persistence-patterns.md)** — approaches to
+  session and conversation state.
+
 ## External Resources
 
 - [Bun Documentation](https://bun.sh/docs)

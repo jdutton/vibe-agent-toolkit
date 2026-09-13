@@ -6,9 +6,151 @@
 import { existsSync } from 'node:fs';
 import { dirname, parse } from 'node:path';
 
+import { directoryRefusalFor, listingFailure } from './fs-utils.js';
 import { lookupGitRoot, rememberGitRoot } from './git-root-cache.js';
 import { runGit } from './git-run.js';
+import { requireUnreadablePolicy, settleRefusal, type UnreadablePolicy } from './listing-refusal.js';
 import { safePath } from './path-utils.js';
+
+/**
+ * One line of git's stderr that means "I skipped this directory".
+ *
+ * `git ls-files --others` (and `--ignored`, and `git add --all`) walks the
+ * working tree to find untracked files. On a directory it cannot open it prints
+ * this warning, exits 0, and omits the subtree — so stdout alone is a shorter
+ * list that nothing can tell from a complete one. The path is spelled
+ * **relative to the worktree root** with a trailing slash, even when git was
+ * run from a subdirectory (measured: cwd `docs/open`, warning names
+ * `'docs/open/sub/'`).
+ *
+ * Anchored to the line so an unrelated warning naming a directory in passing
+ * is not read as a refusal. The reason after the colon is `strerror` text —
+ * see {@link STRERROR_TO_ERRNO}.
+ */
+const UNLISTABLE_DIRECTORY_LINE = /^warning: could not open directory '(.+?)\/?': (.*)$/gm;
+
+/**
+ * C-locale `strerror` text → errno, for the reasons git can print here.
+ *
+ * git does not print the errno name, only its message; every listing below
+ * runs with `LC_ALL=C` so the message is the C-locale one and this table can
+ * be short. An unlisted reason is still a refusal — it becomes `UNKNOWN`, the
+ * same answer `listingFailure` gives an error carrying no errno — because
+ * dropping the line would reinstate the silent gap for exactly the errnos
+ * nobody thought of.
+ *
+ * The two ABSENCE reasons are listed so that `listingFailure` — the one owner
+ * of the absent/unreadable split — can recognise them and the line can be
+ * skipped: git prints "No such file or directory" for an untracked directory
+ * deleted between its parent's `readdir` and its own `opendir` (a concurrent
+ * `rm -rf tmp/`), and the walk route treats that same race as "no longer in
+ * the population" rather than as a refusal. Left unmapped it read as an
+ * `UNKNOWN` refusal, and the git route aborted a run the walk completed.
+ */
+const STRERROR_TO_ERRNO: ReadonlyMap<string, string> = new Map([
+  ['Permission denied', 'EACCES'],
+  ['Too many open files', 'EMFILE'],
+  ['Too many open files in system', 'ENFILE'],
+  ['Too many levels of symbolic links', 'ELOOP'],
+  ['Resource temporarily unavailable', 'EAGAIN'],
+  ['Input/output error', 'EIO'],
+  ['Stale file handle', 'ESTALE'],
+  ['Stale NFS file handle', 'ESTALE'],
+  ['No such file or directory', 'ENOENT'],
+  ['Not a directory', 'ENOTDIR'],
+]);
+
+/**
+ * The directories a git listing was REFUSED, read off its stderr.
+ *
+ * Pure. Returns each refused directory once, worktree-relative and without
+ * git's trailing slash, with the errno its reason maps to. A directory git
+ * could not open because it no longer exists is not returned: that is the
+ * `absent` outcome of {@link listingFailure}, decided there and not here, so
+ * the two routes classify a vanished directory the same way.
+ *
+ * @param stderr - What the listing wrote to stderr
+ * @returns The refusals, in the order git printed them, deduplicated
+ */
+export function unlistableDirectoriesIn(stderr: string): { directory: string; code: string }[] {
+  const seen = new Set<string>();
+  const refusals: { directory: string; code: string }[] = [];
+  for (const match of stderr.matchAll(UNLISTABLE_DIRECTORY_LINE)) {
+    const directory = match[1] ?? '';
+    if (directory === '' || seen.has(directory)) continue;
+    seen.add(directory);
+    const listing = listingFailure({ code: STRERROR_TO_ERRNO.get((match[2] ?? '').trim()) });
+    if (listing.outcome === 'unreadable') refusals.push({ directory, code: listing.code });
+  }
+  return refusals;
+}
+
+/**
+ * The policy every working-tree listing here REQUIRES.
+ *
+ * A refused directory is otherwise invisible: git's exit status is 0 and its
+ * stdout is simply shorter. Each directory git could not open is settled as
+ * the SAME {@link DirectoryRefusal} the filesystem walk produces
+ * (`file-crawler.ts`) — absolute, forward-slashed, with `transient` derived
+ * beside the errno list in `fs-utils.ts` — under the same
+ * {@link UnreadablePolicy}, so a caller decides once for both routes.
+ *
+ * 🪤 This was `onUnreadable?`, and when it was omitted the refusals git printed
+ * were DROPPED — not thrown, as the walk did, but read off stderr and ignored.
+ * The one lane whose only witness to the gap is stderr was the one lane that
+ * defaulted to silence. There is no default now.
+ */
+export interface GitListingOptions {
+  /** What to do with a directory git could not open while walking the working tree. */
+  unreadable: UnreadablePolicy;
+}
+
+/**
+ * Run one NUL-delimited `ls-files` listing and report what git skipped.
+ *
+ * `LC_ALL=C` so the stderr reason is the C-locale `strerror` text the parser
+ * knows; `trim: false` because the output is NUL-delimited (see the callers).
+ *
+ * @param args - The `ls-files` argv
+ * @param cwd - Where to run it
+ * @param api - The entry point, for the sentence an omitted policy gets
+ * @param unreadable - What a skipped directory means to the caller
+ * @returns The listed paths, or null when git did not answer
+ */
+function runListing(
+  args: readonly string[],
+  cwd: string,
+  api: string,
+  unreadable: UnreadablePolicy | undefined,
+): string[] | null {
+  // Before the spawn: an omitted policy is a programming error, not a fact
+  // about the tree, and a tree with nothing unreadable must not hide it.
+  requireUnreadablePolicy(unreadable, api);
+  const result = runGit(args, { cwd, trim: false, env: { LC_ALL: 'C' } });
+
+  // Every failure means the same thing to this caller — no listing. That covers
+  // "not a repository" (128), git missing entirely, and a listing too large for
+  // the buffer, which `ok` folds in because a truncated answer here is files
+  // silently missing rather than a short list.
+  if (!result.ok) {
+    return null;
+  }
+
+  if (result.stderr !== '') {
+    // The warning is worktree-root-relative regardless of `cwd`.
+    const worktreeRoot = gitFindRoot(cwd) ?? cwd;
+    for (const { directory, code } of unlistableDirectoriesIn(result.stderr)) {
+      settleRefusal(
+        unreadable,
+        directoryRefusalFor({ outcome: 'unreadable', code }, safePath.resolve(worktreeRoot, directory)),
+      );
+    }
+  }
+
+  // NUL-separated (from -z), so no path can ever need quote-unescaping — a
+  // trailing NUL just produces one empty string at the end, dropped here.
+  return result.stdout.split('\0').filter((line) => line.length > 0);
+}
 
 
 /**
@@ -56,6 +198,8 @@ export function gitFindRoot(startDir: string): string | null {
  * @param options.cwd - Working directory (git repository root or subdirectory)
  * @param options.patterns - Optional glob patterns to filter files (e.g., '*.md', 'docs/**\/*.ts')
  * @param options.includeUntracked - Include untracked files that aren't gitignored (default: false)
+ * @param options.unreadable - See {@link GitListingOptions}. Only the untracked
+ *   listing walks the working tree, so only it can have skipped a directory
  * @returns Array of file paths relative to the git root, or null if not in a git repo
  *
  * @example
@@ -67,7 +211,7 @@ export function gitFindRoot(startDir: string): string | null {
  * const allFiles = gitLsFiles({ cwd: '/project', includeUntracked: true });
  * ```
  */
-export function gitLsFiles(options: {
+export function gitLsFiles(options: GitListingOptions & {
   cwd: string;
   patterns?: string[];
   includeUntracked?: boolean;
@@ -88,22 +232,10 @@ export function gitLsFiles(options: {
     args.push('--', ...options.patterns);
   }
 
-  // `trim: false` because the output is NUL-delimited: git sorts by byte value,
-  // so a path beginning with a space sorts FIRST and a trim would silently
-  // rename it to a path that does not exist.
-  const result = runGit(args, { cwd: options.cwd, trim: false });
-
-  // Every failure means the same thing to this caller — no listing. That covers
-  // "not a repository" (128), git missing entirely, and a listing too large for
-  // the buffer, which `ok` folds in because a truncated answer here is files
-  // silently missing rather than a short list.
-  if (!result.ok) {
-    return null;
-  }
-
-  // NUL-separated (from -z above), so no path can ever need quote-unescaping —
-  // a trailing NUL just produces one empty string at the end, dropped below.
-  return result.stdout.split('\0').filter((line) => line.length > 0);
+  // `trim: false` (inside `runListing`) because the output is NUL-delimited:
+  // git sorts by byte value, so a path beginning with a space sorts FIRST and a
+  // trim would silently rename it to a path that does not exist.
+  return runListing(args, options.cwd, 'gitLsFiles', options.unreadable);
 }
 
 /**
@@ -130,6 +262,13 @@ export function gitLsFiles(options: {
  *   untracked directory, since a directory with no files in it is invisible to
  *   `ls-files` and to any tree object
  * @param options.directory - Collapse a wholly-untracked directory to one entry
+ * @param options.unreadable - See {@link GitListingOptions}. ⚠️ The two
+ *   listings meet different refusals: without `--ignored`, git collapses a
+ *   WHOLLY-untracked directory without opening it, but it still opens a
+ *   non-ignored directory that holds tracked files (to look for untracked
+ *   siblings) and warns when it cannot; the `ignored` listing opens every
+ *   non-ignored directory and so meets every refusal the first one does and
+ *   more (measured on git 2.50)
  * @returns Paths relative to the git root, or null if git did not answer
  *
  * @example
@@ -139,7 +278,7 @@ export function gitLsFiles(options: {
  * // → ['dist/', 'node_modules/', '.turbo/', 'notes.local.md']
  * ```
  */
-export function gitLsOthers(options: {
+export function gitLsOthers(options: GitListingOptions & {
   cwd: string;
   ignored?: boolean;
   directory?: boolean;
@@ -159,13 +298,7 @@ export function gitLsOthers(options: {
 
   // See `gitLsFiles`: NUL-delimited output must not be trimmed, or a path
   // beginning with a space — which git sorts FIRST — comes back renamed.
-  const result = runGit(args, { cwd: options.cwd, trim: false });
-
-  if (!result.ok) {
-    return null;
-  }
-
-  return result.stdout.split('\0').filter((line) => line.length > 0);
+  return runListing(args, options.cwd, 'gitLsOthers', options.unreadable);
 }
 
 /**

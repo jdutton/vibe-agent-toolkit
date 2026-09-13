@@ -31,6 +31,17 @@ export interface ValidationResult {
     version?: string;
     lineCount?: number;
     referenceFiles?: number;
+    /** Marketplace only: every entry the manifest's `plugins` list declares. */
+    pluginEntries?: number;
+    /**
+     * Marketplace only: the entries whose `source` is a relative path — plugins
+     * the marketplace ships itself, each as the manifest wrote it. Published so
+     * a consumer can resolve each one against the marketplace root and validate
+     * THAT directory: a count in its place let a walk of `plugins/*` satisfy the
+     * denominator by number while the declared plugin went unlooked-at, and
+     * refused the co-located `source: "./"` shape, which lives in no `plugins/`.
+     */
+    localPluginSources?: Array<{ name: string; source: string }>;
   };
   /** Raw evidence records collected during validation. Rendered in --verbose. */
   evidence?: EvidenceRecord[];

@@ -4,6 +4,8 @@
 
 import type { IndexResult } from '@vibe-agent-toolkit/rag';
 import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
+import type { UnreadableResource } from '@vibe-agent-toolkit/resources';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
@@ -49,8 +51,9 @@ export interface IndexOutcome {
  * `indexResources` can fail a resource for any reason (unreadable file,
  * embedding-provider error, provider unavailable).
  *
- * `errors` is optional on `IndexResult`: the provider omits it entirely when
- * nothing failed, and can also return `[]`. Both are success.
+ * `errors` is optional on `IndexResult`'s schema, so a provider MAY omit it;
+ * `LanceDBRAGProvider` never does (it always carries `errors: []` when nothing
+ * failed). Both shapes are success here, because the schema allows both.
  *
  * @param indexResult - The result of the indexing run (only `errors` is read)
  * @returns The status to publish and the exit code that agrees with it
@@ -59,6 +62,39 @@ export function indexOutcome(indexResult: Pick<IndexResult, 'errors'>): IndexOut
   const failed = indexResult.errors?.length ?? 0;
 
   return failed > 0 ? { status: 'partial', exitCode: 1 } : { status: 'success', exitCode: 0 };
+}
+
+/** One entry of `IndexResult['errors']`. */
+type IndexError = NonNullable<IndexResult['errors']>[number];
+
+/**
+ * The resources the crawl enumerated but could not read, as index errors.
+ *
+ * Such a file never reaches `indexResources`: the crawl reads and parses every
+ * file itself, so an unreadable one is dropped before the provider sees it. It
+ * is therefore in none of the provider's counters and not in its `errors` —
+ * the registry keeps the reconciliation log (`getUnreadableResources()`), and
+ * this command did not read it, so a corpus with a document missing from the
+ * index was reported `status: success`, exit 0, on both crawl lanes. Folding
+ * the log into the same `errors` list the provider's failures land in is what
+ * lets one status and one exit code cover "did not index everything asked".
+ *
+ * The id is the path relative to the crawl root: the registry never assigned
+ * one (it could not read the file to), and the relative path is what an
+ * operator needs to find it.
+ *
+ * @param unreadable - The registry's read-failure log
+ * @param crawlRoot - The directory the crawl was rooted at
+ * @returns One error per unreadable file, in the order the crawl met them
+ */
+export function unreadableIndexErrors(
+  unreadable: readonly UnreadableResource[],
+  crawlRoot: string,
+): IndexError[] {
+  return unreadable.map((entry) => ({
+    resourceId: toForwardSlash(safePath.relative(crawlRoot, entry.filePath)),
+    error: `Enumerated by the crawl but could not be read, so it is not in the index: ${entry.reason}`,
+  }));
 }
 
 export async function indexCommand(
@@ -85,7 +121,15 @@ export async function indexCommand(
     const { registry } = await loadResourcesWithConfig(pathArg, crawlRoot, logger);
 
     const allResources = registry.getAllResources();
-    logger.debug(`Found ${allResources.length} resources to index`);
+    // The declared population is the admitted one PLUS what the crawl could not
+    // read; the second half is reported below, not dropped — see `unreadableIndexErrors`.
+    const unreadable = unreadableIndexErrors(registry.getUnreadableResources(), crawlRoot);
+    logger.debug(`Found ${allResources.length} resources to index (${unreadable.length} enumerated but unreadable)`);
+    for (const entry of unreadable) {
+      // On stderr as well, the way the provider reports its own per-resource
+      // failures, so a caller reading only the exit code still sees the name.
+      logger.warn(`[vat-rag] Failed to index resource '${entry.resourceId}': ${entry.error}`);
+    }
 
     // Create RAG provider in admin mode (readonly: false)
     const ragProvider = await LanceDBRAGProvider.create({
@@ -101,21 +145,23 @@ export async function indexCommand(
 
     const duration = Date.now() - startTime;
 
+    // One list for both kinds of failure — the provider's and the crawl's.
+    const errors = [...unreadable, ...(indexResult.errors ?? [])];
+
     // Status is DERIVED, never asserted: see `indexOutcome`.
-    const outcome = indexOutcome(indexResult);
+    const outcome = indexOutcome({ errors });
 
     // Output results as YAML
     writeYamlOutput({
       status: outcome.status,
       resourcesIndexed: indexResult.resourcesIndexed,
       resourcesSkipped: indexResult.resourcesSkipped,
+      resourcesEmpty: indexResult.resourcesEmpty,
       resourcesUpdated: indexResult.resourcesUpdated,
       chunksCreated: indexResult.chunksCreated,
       chunksDeleted: indexResult.chunksDeleted,
       duration: formatDuration(duration),
-      ...(indexResult.errors && indexResult.errors.length > 0
-        ? { errors: indexResult.errors }
-        : {}),
+      ...(errors.length > 0 ? { errors } : {}),
     });
 
     // The report is published FIRST and the failure signalled after, so a
