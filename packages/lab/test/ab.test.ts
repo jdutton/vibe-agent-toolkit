@@ -200,7 +200,6 @@ async function runFixture(options: FixtureOptions, label: string): Promise<Fixtu
  * @returns Its entries, sorted
  */
 async function sortedEntries(directory: string): Promise<readonly string[]> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from this suite's own mkdtemp scratch dir
   const entries = await readdir(directory);
   return entries.sort((left, right) => left.localeCompare(right));
 }

@@ -6,7 +6,6 @@
  * plugin whose `plugins/<plug>/skills/<name>/SKILL.md` exists on disk). The
  * shapes mirror production — never a real adopter skill.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- test helper builds synthetic fixtures at dynamic temp paths */
 import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 

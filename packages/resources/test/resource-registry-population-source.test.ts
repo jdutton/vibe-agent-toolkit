@@ -20,7 +20,8 @@
 import { existsSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 
-import { compareCodeUnits, normalizedTmpdir, safePath, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ResourcePopulationSource } from '../src/projection/resource-population.js';
@@ -32,7 +33,6 @@ const FIXTURE_NAMES = ['a.md', 'b.md', 'notes.txt'] as const;
 /** Write this file's fixture members into `root`. */
 async function writeFixture(root: string): Promise<void> {
   await Promise.all(FIXTURE_NAMES.map((name) =>
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture beneath a mkdtemp root
     writeFile(safePath.join(root, name), `# ${name}\n`, 'utf-8')));
 }
 
@@ -86,9 +86,8 @@ function memberPaths(root: string, resources: readonly { filePath: string }[]): 
  */
 function tempVolumeFoldsCase(): boolean {
   const probe = normalizedTmpdir();
-  /* eslint-disable security/detect-non-literal-fs-filename -- the OS temp directory, not caller input */
   return existsSync(probe.toUpperCase()) && existsSync(probe.toLowerCase());
-  /* eslint-enable security/detect-non-literal-fs-filename */
+   
 }
 
 describe('ResourceRegistry.crawl with a populationSource', () => {

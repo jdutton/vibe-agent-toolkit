@@ -1019,7 +1019,6 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     await this.close();
 
     // Delete entire database directory
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dbPath comes from validated config
     if (fs.existsSync(this.config.dbPath)) {
       fs.rmSync(this.config.dbPath, { recursive: true, force: true });
     }

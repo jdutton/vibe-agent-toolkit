@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code using temp directories */
 import fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -11,7 +10,7 @@ import {
   findProjectRoot,
   resetProjectRootCaches,
 } from '../src/project-utils.js';
-import { setupAsyncTempDirSuite } from '../src/test-helpers.js';
+import { setupAsyncTempDirSuite } from '../src/testing/temp-dir.js';
 
 import { createGitRepo } from './test-helpers.js';
 

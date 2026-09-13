@@ -352,7 +352,6 @@ function walkBundle(root: string): BundleWalk {
 /** Directory entries, recording a receipt when the directory cannot be read. */
 function readDirOrRecord(dir: string, root: string, acc: WalkAccumulator): Dirent[] {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied packaged output dir
     return readdirSync(dir, { withFileTypes: true });
   } catch (error) {
     acc.unweighed.push({
@@ -367,7 +366,6 @@ function readDirOrRecord(dir: string, root: string, acc: WalkAccumulator): Diren
 function weighEntry(full: string, rel: string, acc: WalkAccumulator): void {
   let stats;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- as above
     stats = statSync(full);
   } catch (error) {
     acc.unweighed.push({ path: rel, reason: `VAT could not stat it (${causeOf(error)})` });

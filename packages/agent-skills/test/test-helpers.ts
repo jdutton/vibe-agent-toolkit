@@ -1,10 +1,9 @@
-
-/* eslint-disable security/detect-non-literal-fs-filename -- test helpers use controlled temp directories */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { createSymlink, mkdirSyncReal,normalizedTmpdir, safePath, type SymlinkCapability } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, expect } from 'vitest';
+import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, type SymlinkCapability } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
+import { afterAll, afterEach, beforeAll, beforeEach, expect } from 'vitest';
 import type { z } from 'zod';
 
 import { validateSkill } from '../src/validators/skill-validator.js';
@@ -15,19 +14,11 @@ import type { LinkedFileValidationResult, ValidationResult } from '../src/valida
  * Automatically creates and cleans up temp dir before/after each test
  */
 export function setupTempDir(prefix: string): { getTempDir: () => string } {
-  let tempDir: string;
-
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
-  });
-
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  return {
-    getTempDir: () => tempDir,
-  };
+  const suite = setupSyncTempDirSuite(prefix);
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(suite.beforeEach);
+  return { getTempDir: suite.getTempDir };
 }
 
 /**
@@ -48,7 +39,7 @@ export function createSymlinkedDir(baseDir: string, cap: SymlinkCapability): { t
  * post-staging layout:
  *
  *  - `authoredDir` — the AUTHORED source, carrying `evals/evals.json`. The harness
- *    reads the suite from HERE, so this is what keeps the Step-4 bootstrap (exit 3)
+ *    reads the suite from HERE, so this is what keeps the Step-4 bootstrap (exit 2, `Reason: bootstrap`)
  *    from firing.
  *  - `stagedDir` — the staged subject, deliberately carrying NO eval suite. That is
  *    the invariant real staging now enforces: the answer key never reaches anything

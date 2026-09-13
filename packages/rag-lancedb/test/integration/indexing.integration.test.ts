@@ -215,7 +215,6 @@ More content in section 2.`
     expect(result.chunks).toBeDefined();
 
     // Should not be able to index
-    // eslint-disable-next-line sonarjs/no-duplicate-string -- Test assertions are clearer with inline strings
     await expect(provider.indexResources([resource])).rejects.toThrow('readonly mode');
 
     // Should not be able to delete

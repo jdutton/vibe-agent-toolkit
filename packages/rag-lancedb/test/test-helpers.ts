@@ -1,4 +1,3 @@
-
 /**
  * Shared test utilities for rag-lancedb tests.
  *
@@ -6,13 +5,14 @@
  * and resource metadata to avoid duplication across test files.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { rm, writeFile } from 'node:fs/promises';
 
 
 import type { EmbeddingProvider } from '@vibe-agent-toolkit/rag';
 import type { ContentTransformOptions, LinkType, ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { createTempDirAsync } from '@vibe-agent-toolkit/utils/testing';
 
 import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
 
@@ -26,7 +26,7 @@ import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
  * const dbPath = safePath.join(tempDir, 'db');
  */
 export async function createTempDir(): Promise<string> {
-  return await mkdtemp(safePath.join(normalizedTmpdir(), 'rag-lancedb-test-'));
+  return createTempDirAsync('rag-lancedb-test-');
 }
 
 /**
@@ -84,7 +84,6 @@ export async function createTestMarkdownFile(
   content: string
 ): Promise<string> {
   const filePath = safePath.join(tempDir, filename);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is controlled temp path
   await writeFile(filePath, content);
   return filePath;
 }

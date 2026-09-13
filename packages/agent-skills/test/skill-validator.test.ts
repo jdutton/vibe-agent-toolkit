@@ -205,7 +205,6 @@ describe('compat detectors in validateSkill', () => {
     const tmp = getTempDir();
     const skillPath = safePath.join(tmp, 'SKILL.md');
     const authPath = safePath.join(tmp, 'auth.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test uses controlled temp dir
     fs.writeFileSync(
       skillPath,
       [
@@ -217,7 +216,6 @@ describe('compat detectors in validateSkill', () => {
         'See [auth flow](./auth.md).',
       ].join('\n'),
     );
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test uses controlled temp dir
     fs.writeFileSync(
       authPath,
       [
@@ -237,7 +235,6 @@ describe('compat detectors in validateSkill', () => {
     const tmp = getTempDir();
     const skillPath = safePath.join(tmp, 'SKILL.md');
     const cliPath = safePath.join(tmp, 'cli.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test uses controlled temp dir
     fs.writeFileSync(
       skillPath,
       [
@@ -249,7 +246,6 @@ describe('compat detectors in validateSkill', () => {
         'See [cli usage](./cli.md).',
       ].join('\n'),
     );
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test uses controlled temp dir
     fs.writeFileSync(
       cliPath,
       [

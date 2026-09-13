@@ -1,5 +1,5 @@
 /**
- * Intent-aware skill-resource verdict engine (issue #129, slice 3).
+ * Intent-aware skill-resource verdict engine.
  *
  * Public surface: the {@link RuleContext} description, the pure {@link evaluate}
  * engine, and the registry-sourced {@link materializeIssue} constructor.

@@ -7,7 +7,9 @@
   },
   "references": [
     { "path": "../agent-runtime" },
-    { "path": "../claude-marketplace" }
+    { "path": "../claude-marketplace" },
+    { "path": "../dev-tools" },
+    { "path": "../test-agents" }
   ],
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "test"]

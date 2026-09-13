@@ -54,9 +54,22 @@ module.exports = {
   meta: {
     type: 'problem',
     docs: {
-      description: 'Ban unguarded fs.symlinkSync()/fs.symlink() — route tests through createSymlink()/createSymlinkAsync(), and guard shipped code against the Windows privilege requirement',
-      category: 'Cross-Platform',
-      recommended: true,
+      description:
+        'Ban unguarded fs.symlinkSync()/fs.symlink() — route tests through createSymlink()/createSymlinkAsync(), and guard shipped code against the Windows privilege requirement',
+      category: 'Filesystem and process',
+      bans: 'unguarded `fs.symlinkSync()` / `fs.promises.symlink()`',
+      useInstead: 'in tests: `createSymlink(cap, …)` / `createSymlinkAsync(cap, …)`; in shipped code: a win32 junction, or a `catch` naming the privilege',
+      subpath: '/testing',
+      // Not in `recommended`: half its advice is unreachable without a helper the
+      // consumer may not have. In a test file it points at `createSymlink()` /
+      // `createSymlinkAsync()` on THIS package's `./testing` subpath, routed through
+      // a probed capability token and the vitest-specific `skip()` idiom; an adopter
+      // on a different runner should not silently inherit that. Its shipped-code
+      // half (`unguardedSymlink`) is portable advice on its own — the two share one
+      // rule id and cannot be enabled separately, and the test half is what keeps
+      // the pair out. VAT enables the whole rule explicitly.
+      recommended: false,
+      recommendedSeverity: 'error',
     },
     fixable: null,
     schema: [EXEMPT_FILES_SCHEMA],

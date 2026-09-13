@@ -12,13 +12,14 @@ import * as readline from 'node:readline';
 
 import type { Message, RuntimeSession, SessionStore } from '@vibe-agent-toolkit/agent-runtime';
 import { SessionNotFoundError } from '@vibe-agent-toolkit/agent-runtime';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 
 import type { ConversationalFunction, Transport, TransportSessionContext } from './types.js';
 
 /**
  * Options for CLI transport.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic default for callers that carry no session state
 export interface CLITransportOptions<TState = any> {
   /** The conversational function to run */
   fn: ConversationalFunction<string, string, TState>;
@@ -46,7 +47,7 @@ export interface CLITransportOptions<TState = any> {
  * Manages a single local session and provides an interactive REPL.
  * Supports pluggable session stores for persistence.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic default for callers that carry no session state
 export class CLITransport<TState = any> implements Transport {
   private readonly fn: ConversationalFunction<string, string, TState>;
   private readonly sessionId: string;
@@ -144,7 +145,7 @@ export class CLITransport<TState = any> implements Transport {
 
     this.rl.on('close', () => {
       console.log(this.colorize('\nGoodbye!', 'yellow'));
-      process.exit(0);
+      process.exit(ExitCode.OK);
     });
 
     this.rl.prompt();

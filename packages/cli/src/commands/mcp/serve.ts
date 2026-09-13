@@ -7,6 +7,7 @@ import {
   ConsoleLogger,
   NoOpObservabilityProvider,
 } from '@vibe-agent-toolkit/gateway-mcp';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
@@ -68,7 +69,7 @@ export async function serveCommand(
       logger.info('Add this to ~/.claude/config.json:\n');
       console.log(generateClaudeDesktopConfig(packageOrPath));
       logger.info('\nThen restart Claude Desktop to load the MCP server.');
-      process.exit(0);
+      process.exit(ExitCode.OK);
     }
 
     // Resolve collection from package name or file path
@@ -97,7 +98,7 @@ export async function serveCommand(
     // Setup graceful shutdown
     process.on('SIGINT', () => {
       logger.info('Shutting down MCP gateway...');
-      process.exit(0);
+      process.exit(ExitCode.OK);
     });
 
     // Wait for stdin to close (stdio server lifetime = stdin lifetime)

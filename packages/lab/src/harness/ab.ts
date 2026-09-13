@@ -436,7 +436,7 @@ function judgeNoise<TBody, TComparison extends ComparisonLike>(
 /**
  * Fold every pair into one row per command.
  *
- * ⚠️ REVIEW FINDING 2026-08-14 — `effect = b.min - a.min` AGGREGATES PAIRED DATA
+ * ⚠️ REVIEW FINDING — `effect = b.min - a.min` AGGREGATES PAIRED DATA
  * UNPAIRED. Alternating arms exists to make drift cancel *within* a pair
  * (property #1 in this module's header); taking a min over all A and a min over
  * all B then throws that pairing away. Every per-pair value is already in
@@ -448,13 +448,13 @@ function judgeNoise<TBody, TComparison extends ComparisonLike>(
  * +803.9ms, while the paired mean is +643.5ms with a 95% CI of [77, 1210]. The
  * same 668ms attribution is "83% explained" against the first and "104%" against
  * the second. A control whose TRUE effect is zero (the seam compiled in but off,
- * measured 2026-08-14) gave per-pair deltas +383, -506, -598, -35, -101, +222 —
+ * measured) gave per-pair deltas +383, -506, -598, -35, -101, +222 —
  * s = 388ms, a ~816ms-wide band around zero.
  *
  * So `--noise-floor` is the floor for THIS statistic (min-difference) only, and
  * is ~4x finer than the per-pair spread. Quoting it against a paired claim
- * overstates the resolution. Adding a paired estimator is a reporting change, so:
- * Jeff's call.
+ * overstates the resolution. Adding a paired estimator is a reporting change —
+ * a product decision, not a fix to make in passing.
  *
  * @param spec - The A/B being run
  * @param outcomes - Every pair's outcome

@@ -8,7 +8,6 @@
  * - Schema layering use case
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 
 import { promises as fs } from 'node:fs';
 

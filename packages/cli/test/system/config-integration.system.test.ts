@@ -1,4 +1,3 @@
-/* eslint-disable sonarjs/no-duplicate-string */
 // Test data legitimately repeats file paths
 
 import { it, beforeAll, afterAll } from 'vitest';

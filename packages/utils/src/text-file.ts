@@ -39,7 +39,6 @@ import { decodeTextContent, type DecodedText } from './text-content.js';
  * ```
  */
 export async function readTextContent(filePath: string): Promise<DecodedText> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path, same trust level as the parsers this feeds
   return decodeTextContent(await readFile(filePath));
 }
 
@@ -51,6 +50,5 @@ export async function readTextContent(filePath: string): Promise<DecodedText> {
  * @throws Whatever `readFileSync` throws
  */
 export function readTextContentSync(filePath: string): DecodedText {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path, same trust level as the parsers this feeds
   return decodeTextContent(readFileSync(filePath));
 }

@@ -53,7 +53,7 @@ import { recordParseCacheHit, recordParseCacheMiss } from './parse-timing.js';
  *   validation, and the stringify moves onto the worker where it runs in
  *   parallel.
  *
- * ## 🔑 MEASURED 2026-08-25 — `cache` does what it promised and LOSES anyway
+ * ## 🔑 MEASURED — `cache` does what it promised and LOSES anyway
  *
  * Cold, `vat claude context` on a 103-skill adopter (1,805 documents, 31.9 MB,
  * 8 workers, 3 repeats, APFS), `wire` → `cache`:

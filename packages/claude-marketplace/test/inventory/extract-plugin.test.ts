@@ -16,7 +16,6 @@ const PLUGIN_JSON = 'plugin.json';
 function makePluginWithManifest(root: string, content: string): string {
 	const dir = safePath.join(root, CLAUDE_PLUGIN_DIR);
 	mkdirSyncReal(dir, { recursive: true });
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
 	writeFileSync(safePath.join(dir, PLUGIN_JSON), content);
 	return root;
 }
@@ -371,7 +370,6 @@ describe('extractClaudePluginInventory', () => {
 				safePath.join(tempDir, 'skills-file'),
 				JSON.stringify({ name: 'p' }),
 			);
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
 			writeFileSync(safePath.join(root, 'skills'), 'not a directory');
 
 			const inv = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
@@ -386,9 +384,7 @@ describe('extractClaudePluginInventory', () => {
 			);
 			const subDir = safePath.join(root, 'commands', 'sub');
 			mkdirSyncReal(subDir, { recursive: true });
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
 			writeFileSync(safePath.join(root, 'commands', 'top.md'), '# top');
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
 			writeFileSync(safePath.join(subDir, 'nested.md'), '# nested');
 
 			const inv = await extractClaudePluginInventory(root, { gitTrackerSource: NO_GIT_TRACKER });
@@ -448,7 +444,6 @@ function pluginWithOneSkill(root: string): string {
 	makePluginWithManifest(root, JSON.stringify({ name: 'p' }));
 	const skillDir = safePath.join(root, 'skills', 'alpha');
 	mkdirSyncReal(skillDir, { recursive: true });
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
 	writeFileSync(
 		safePath.join(skillDir, 'SKILL.md'),
 		'---\nname: alpha\ndescription: A skill the population source is asked about.\n---\n\n# Alpha\n',

@@ -19,7 +19,6 @@ The resources package supports per-collection frontmatter validation, allowing y
 Create `vibe-agent-toolkit.config.yaml` at project root:
 
 ```yaml
-version: 1
 resources:
   collections:
     guides:
@@ -272,7 +271,7 @@ When a collection's frontmatter schema declares a URI-family `format` on a field
 - Gitignore safety is enforced: non-ignored files cannot reference gitignored targets.
 - Absolute `http(s)://` URLs feed into the existing external URL health check (when `checkUrlLinks: true` is set on the collection); otherwise they're silently skipped.
 - `mailto:` values are silently skipped.
-- Unknown URI schemes (`tel:`, `javascript:`, etc.) emit `frontmatter_unknown_link`.
+- Unknown URI schemes (`tel:`, `javascript:`, etc.) emit `FRONTMATTER_UNKNOWN_LINK` (a `warning` by default).
 
 ### Recommended pattern
 
@@ -334,12 +333,12 @@ vat resources validate --no-check-frontmatter-links
 
 | Code | When |
 |---|---|
-| `frontmatter_link_broken` | relative path doesn't resolve |
-| `frontmatter_anchor_missing` | `#anchor` doesn't match a heading in target |
-| `frontmatter_link_to_gitignored` | non-ignored file → gitignored target |
-| `frontmatter_unknown_link` | unknown URI scheme (`tel:`, `javascript:`, etc.) |
+| `FRONTMATTER_LINK_BROKEN` | relative path doesn't resolve |
+| `FRONTMATTER_ANCHOR_MISSING` | `#anchor` doesn't match a heading in target |
+| `FRONTMATTER_LINK_TO_GITIGNORED` | non-ignored file → gitignored target |
+| `FRONTMATTER_UNKNOWN_LINK` | unknown URI scheme (`tel:`, `javascript:`, etc.) |
 
-Configure severity per code via `validation.severity.<code>` in `vibe-agent-toolkit.config.yaml`. See [`docs/validation-codes.md`](../validation-codes.md) for the full reference.
+Configure severity per code via `validation.severity.<CODE>` in `vibe-agent-toolkit.config.yaml` — keys are the UPPERCASE code names exactly as listed (the lowercase spelling is the doc anchor, not a config key). See [`docs/validation-codes.md`](../validation-codes.md) for the full reference.
 
 ## Error Messages
 
@@ -355,7 +354,7 @@ docs/guides/missing.md:1:1: error: Missing required property: 'title'
 
 ## Files Without Frontmatter
 
-Files without frontmatter are allowed unless the schema has `required` fields. Only files **with frontmatter** are validated.
+Files without frontmatter pass when the schema has no `required` fields; when it does, the file is reported as `FRONTMATTER_MISSING` (the message names the required fields). Files **with** frontmatter are validated against the whole schema.
 
 **Example**: README.md files often have no frontmatter - this is fine:
 
@@ -413,7 +412,7 @@ resources:
       include: [<glob-pattern>, ...]  # Required: File patterns to match (array)
       exclude: [<glob-pattern>, ...]  # Optional: Patterns to exclude
       validation:
-        frontmatterSchema: <path>     # Required: Path to JSON Schema file
+        frontmatterSchema: <path>     # Optional: Path to JSON Schema file (omit to skip frontmatter validation)
         mode: <strict|permissive>     # Optional: Default is 'permissive'
 ```
 
@@ -446,7 +445,7 @@ resources:
         frontmatterSchema: "@vibe-agent-toolkit/agent-skills/schemas/skill-frontmatter.json"
 ```
 
-Use bare specifiers when your schemas live in a published npm package and you don't want consumers hardcoding the package's internal `dist/` layout. Resolution failures (package not installed, subpath not exported) surface as `frontmatter_schema_error`.
+Use bare specifiers when your schemas live in a published npm package and you don't want consumers hardcoding the package's internal `dist/` layout. Resolution failures (package not installed, subpath not exported) surface as `FRONTMATTER_SCHEMA_ERROR`.
 
 ## Troubleshooting
 

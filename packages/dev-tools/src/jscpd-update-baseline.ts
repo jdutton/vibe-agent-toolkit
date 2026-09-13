@@ -47,7 +47,6 @@ const normalizedClones = currentClones.map((clone) => ({
 }));
 
 // Save as new baseline
-// eslint-disable-next-line security/detect-non-literal-fs-filename -- BASELINE_FILE is a constant path
 writeFileSync(BASELINE_FILE, JSON.stringify({ duplicates: normalizedClones }, null, 2));
 
 console.log('✅ Baseline updated!');

@@ -2,7 +2,6 @@
  * Integration tests for resource-loader - orchestration of resource loading with config
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test file uses dynamic temp paths */
 
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 

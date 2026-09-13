@@ -85,7 +85,6 @@ function entriesUnder(pack: CapturedPack, prefix: string): string[] {
  */
 function capturePack(packageDir: string, buildHint: string): CapturedPack {
   const distDir = safePath.join(packageDir, 'dist');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from this test file's own location, not from input
   if (!existsSync(distDir)) {
     throw new Error(
       `${distDir} does not exist, so "npm pack" would report a tarball with no build ` +

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-/* eslint-disable local/no-path-join -- standalone demo, no utils dependency */
+/* eslint-disable local/no-raw-node-path -- standalone demo, no utils dependency */
 /**
  * Photo Analysis Demo - demonstrates photo analyzer with actual test fixtures
  *
@@ -26,7 +26,6 @@
  *   USE_REAL_VISION=true bun examples/photo-analysis-demo.ts  # Real mode (not implemented yet)
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 // This demo script reads test fixture directories
 
 import { readdir } from 'node:fs/promises';

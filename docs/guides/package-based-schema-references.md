@@ -12,7 +12,6 @@ The `vat resources validate` command supports referencing JSON schemas from inst
 
 ```yaml
 # vibe-agent-toolkit.config.yaml
-version: 1
 resources:
   collections:
     skills:
@@ -194,7 +193,6 @@ frontmatterSchema: "schemas/custom-schema.json"
 
 ```yaml
 # vibe-agent-toolkit.config.yaml
-version: 1
 resources:
   collections:
     # Skills using package-provided schema
@@ -267,7 +265,6 @@ npm install @vibe-agent-toolkit/agent-skills
 
 # Reference in config
 cat > vibe-agent-toolkit.config.yaml <<EOF
-version: 1
 resources:
   collections:
     skills:
@@ -298,7 +295,6 @@ EOF
 
 # Reference in config
 cat > vibe-agent-toolkit.config.yaml <<EOF
-version: 1
 resources:
   collections:
     docs:

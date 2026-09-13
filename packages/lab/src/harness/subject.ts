@@ -332,7 +332,6 @@ export async function resolveSubject(source: SubjectSource): Promise<ResolvedSub
   // Fail here, loudly, rather than letting a typo'd path become an empty
   // snapshot: a fingerprint over zero files is a perfectly well-formed
   // coordinate, and every report carrying it would be silently meaningless.
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied subject path; existence is exactly what is being checked
   const stats = await stat(path).catch(() => null);
   if (stats?.isDirectory() !== true) {
     throw new Error(`Subject path is not an existing directory: ${path} (named as "${source.path}")`);

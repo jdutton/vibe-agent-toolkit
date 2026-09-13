@@ -58,19 +58,22 @@ import {
   DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS,
   sweepAlwaysLoadedBudgets,
   type BudgetSweep,
-  type StatedLimit,
 } from '@vibe-agent-toolkit/resources';
 import {
   applyAllowFilter,
-  calculateValidationStatus,
-  countBySeverity,
-  type SeverityCounts,
+  buildReport as buildEnvelope,
+  exitCodeForSeverityCounts,
+  type Finding,
+  type Report,
+  reportSchema,
+  toFindings,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import { findProjectRoot } from '@vibe-agent-toolkit/utils';
 import { Command, Option } from 'commander';
+import { z } from 'zod';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { handleReportCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import { contextBudgetIssues, scopeSweepToPaths } from '../../utils/context-budget-issues.js';
 import { targetPathWithin } from '../../utils/corpus-target.js';
@@ -100,38 +103,34 @@ export interface ClaudeBudgetOptions {
   debug?: boolean;
 }
 
+/** A signed bound on the measurement method, as `@vibe-agent-toolkit/resources` states it. */
+const StatedLimitSchema = z.object({
+  id: z.string(),
+  direction: z.enum(['over-report', 'under-report', 'scope', 'assumption']),
+  statement: z.string(),
+}).strict();
+
 /**
- * The report one run emits.
+ * What one run reports beyond its findings.
  *
- * The three sweep counters ride beside the findings and describe the WHOLE
- * tree, not the scope: a scope narrows what is reported, never what was
- * measured. Publishing them is what keeps an empty `findings` legible — "9
- * chains checked, none over budget" and "nothing was checked" are different
- * answers and must not render identically.
+ * The sweep counters describe the WHOLE tree, not the scope: a scope narrows
+ * what is reported, never what was measured. The envelope's `examined` is the
+ * working-location count for the same reason — "9 chains checked, none over
+ * budget" and "nothing was checked" are different answers and must not render
+ * identically.
  */
-export interface BudgetReport {
-  readonly root: string;
+export const BudgetDataSchema = z.object({
+  root: z.string(),
   /** The budget every chain was measured against, in tokens. */
-  readonly threshold: number;
+  threshold: z.number().int().nonnegative(),
   /** The root-relative directories asked about. `''` is the whole tree. */
-  readonly scope: readonly string[];
+  scope: z.array(z.string()),
   /** Requested paths that named no working location — see `scopeSweepToPaths`. */
-  readonly unmatchedScope: readonly string[];
-  readonly status: 'success' | 'warning' | 'error';
-  readonly issueCounts: SeverityCounts;
-  /** Working locations the sweep evaluated, across the whole tree. */
-  readonly workingLocations: number;
-  /** Distinct instruction chains among them — the queries the sweep really issued. */
-  readonly distinctChains: number;
+  unmatchedScope: z.array(z.string()),
+  /** Distinct instruction chains among the working locations — the queries the sweep really issued. */
+  distinctChains: z.number().int().nonnegative(),
   /** Locations whose representative the projection never realized. Counted, never zeroed. */
-  readonly skippedUnknownLocations: number;
-  /**
-   * One finding per over-budget chain — plus, ahead of them, the run-integrity
-   * refusal when part of what was asked about was never measured. See
-   * {@link buildReport}: the second kind is DERIVED here rather than passed in,
-   * so no report can carry an unmatched path and a clean status.
-   */
-  readonly findings: readonly ValidationIssue[];
+  skippedUnknownLocations: z.number().int().nonnegative(),
   /**
    * What this verdict does not settle, in either direction. Stated ONCE.
    *
@@ -140,10 +139,23 @@ export interface BudgetReport {
    * reads as though that chain had caveats of its own, and repeated across a
    * sweep it is pure byte-identical duplication.
    */
-  readonly boundsStatement: string;
+  boundsStatement: z.string(),
   /** The signed over/under-report bounds on the method. Stated ONCE. */
-  readonly limits: readonly StatedLimit[];
-}
+  limits: z.array(StatedLimitSchema),
+}).strict();
+
+export type BudgetData = z.infer<typeof BudgetDataSchema>;
+
+/** The document this command publishes. */
+export const BUDGET_REPORT_SCHEMA = reportSchema(BudgetDataSchema);
+
+/**
+ * The report one run emits: one finding per over-budget chain — plus, ahead of
+ * them, the run-integrity refusal when part of what was asked about was never
+ * measured. See {@link buildReport}: the second kind is DERIVED there rather
+ * than passed in, so no report can carry an unmatched path and a clean status.
+ */
+export type BudgetReport = Report<BudgetData>;
 
 /**
  * Create the `vat claude budget [paths...]` command.
@@ -199,11 +211,12 @@ Output:
                         A path that matched nothing was NOT checked, so it is
                         reported as a RESOURCE_CHECK_BROKEN error rather than
                         passing quietly -- and that code is not configurable
-  - status/issueCounts: the worst actionable severity, plus every severity
-  - workingLocations, distinctChains, skippedUnknownLocations: whole-tree
-                        facts, so an empty findings list is legible
+  - status/summary:     ok, findings, or error; plus the count per severity
+  - examined:           working locations evaluated across the WHOLE tree,
+                        so an empty findings list is legible
   - findings:           one per over-budget chain, ascending by directory
-  - limits/boundsStatement: what this verdict does not settle, signed
+  - data.distinctChains, data.skippedUnknownLocations: whole-tree facts
+  - data.limits/boundsStatement: what this verdict does not settle, signed
                         over-report or under-report. On the REPORT, never on a
                         finding — they bound the method, not any one chain, so
                         they are stated exactly once however many chains flag
@@ -258,16 +271,16 @@ export async function claudeBudgetCommand(
     );
     warnUnmatched(scoped.unmatchedScope, logger);
 
-    const report = buildReport({ root, threshold, scope, sweep, scoped, findings });
+    const report = { ...buildReport({ root, threshold, scope, sweep, scoped, findings }), durationMs: Date.now() - startTime };
     emit(report, options.format ?? 'text');
     // `error` gates, and it is reachable two ways: an adopter promoted
     // ALWAYS_LOADED_CONTEXT_BUDGET, or the run checked nothing — see
     // {@link nothingCheckedFindings}. At the code's `info` default the first
     // never fires, so the budget cannot fail a build unless an adopter asked it
     // to; the second is not a severity anybody may configure away.
-    process.exit(report.issueCounts.errors > 0 ? 1 : 0);
+    process.exit(exitCodeForSeverityCounts(report.summary));
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'claude budget', options.format);
+    handleReportCommandError(error, logger, startTime, 'claude budget', options.format);
   }
 }
 
@@ -313,20 +326,20 @@ export function buildReport(input: ReportInput): BudgetReport {
   // The run-integrity report LEADS: every budget finding beneath it is noise
   // until the operator knows part of what they asked about was never measured.
   const reported = [...nothingCheckedFindings(scoped.unmatchedScope), ...findings];
-  return {
-    root,
-    threshold,
-    scope,
-    unmatchedScope: scoped.unmatchedScope,
-    status: calculateValidationStatus(reported),
-    issueCounts: countBySeverity(reported),
-    workingLocations: sweep.evaluatedDirectories,
-    distinctChains: sweep.queriedDirectories,
-    skippedUnknownLocations: sweep.skippedUnknownLocations,
-    findings: reported,
-    boundsStatement: CLAUDE_CONTEXT_BOUNDS_STATEMENT,
-    limits: ALWAYS_LOADED_BUDGET_LIMITS,
-  };
+  return buildEnvelope<BudgetData>({
+    examined: sweep.evaluatedDirectories,
+    findings: toFindings(reported),
+    data: {
+      root,
+      threshold,
+      scope: [...scope],
+      unmatchedScope: [...scoped.unmatchedScope],
+      distinctChains: sweep.queriedDirectories,
+      skippedUnknownLocations: sweep.skippedUnknownLocations,
+      boundsStatement: CLAUDE_CONTEXT_BOUNDS_STATEMENT,
+      limits: [...ALWAYS_LOADED_BUDGET_LIMITS],
+    },
+  });
 }
 
 /**
@@ -473,14 +486,14 @@ function emit(report: BudgetReport, format: BudgetOutputFormat): void {
  */
 export function renderReportText(report: BudgetReport): string {
   const lines = [
-    `Always-loaded context budget at ${report.root}`,
-    `  budget ${count(report.threshold)} tokens`
-    + ` · ${count(report.workingLocations)} working locations`
-    + ` · ${count(report.distinctChains)} distinct chains`
-    + ` · ${count(report.skippedUnknownLocations)} unrealized`,
+    `Always-loaded context budget at ${report.data.root}`,
+    `  budget ${count(report.data.threshold)} tokens`
+    + ` · ${count(report.examined)} working locations`
+    + ` · ${count(report.data.distinctChains)} distinct chains`
+    + ` · ${count(report.data.skippedUnknownLocations)} unrealized`,
     '',
     ...findingLines(report.findings),
-    ...limitLines(report),
+    ...limitLines(report.data),
   ];
   return `${lines.join('\n')}\n`;
 }
@@ -497,12 +510,12 @@ export function renderReportText(report: BudgetReport): string {
  * report types, and the query additionally prints the modelled-behaviour
  * citations that no bound of this verdict rests on.
  *
- * @param report - The report carrying the bounds
+ * @param data - The report's data, carrying the bounds
  * @returns The section's lines
  */
-function limitLines(report: BudgetReport): string[] {
-  const lines = ['What this verdict does not settle', ...wrapped(report.boundsStatement, '  '), ''];
-  for (const limit of report.limits) {
+function limitLines(data: BudgetData): string[] {
+  const lines = ['What this verdict does not settle', ...wrapped(data.boundsStatement, '  '), ''];
+  for (const limit of data.limits) {
     lines.push(`  ${limit.direction}: ${limit.id}`);
     lines.push(...wrapped(limit.statement, '    '));
   }
@@ -547,7 +560,7 @@ function wrapped(text: string, indent: string): string[] {
  * @param findings - The reported findings
  * @returns The lines, blank-terminated
  */
-function findingLines(findings: readonly ValidationIssue[]): string[] {
+function findingLines(findings: readonly Finding[]): string[] {
   if (findings.length === 0) return ['Every instruction chain checked is within budget.', ''];
   const lines: string[] = [];
   for (const finding of findings) {

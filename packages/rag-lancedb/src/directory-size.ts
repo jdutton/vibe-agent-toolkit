@@ -21,7 +21,6 @@ import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 export function getDirectorySize(dirPath: string): number {
   let items: string[];
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirPath is from config, not user input
     items = fs.readdirSync(dirPath);
   } catch (error) {
     if (isPathAbsentError(error)) return 0;
@@ -33,7 +32,6 @@ export function getDirectorySize(dirPath: string): number {
     const itemPath = safePath.join(dirPath, item);
     let stats: fs.Stats;
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- itemPath is constructed from config, not user input
       stats = fs.statSync(itemPath);
     } catch (error) {
       if (isPathAbsentError(error)) continue;

@@ -282,14 +282,14 @@ Checks run over the TRACKED TREE, not your configured resource set:
 A check with NOTHING TO RUN OVER fails the same way:
   Zero findings is the pass condition, so a run whose projection enumerated no
   members passed every check while asserting nothing. If checks ran and
-  membersEnumerated is 0, that is reported as RESOURCE_CHECK_BROKEN at error
-  and the run fails. Usual causes: a broad .gitignore pattern, a shallow or
+  \`examined\` is 0, that is reported as RESOURCE_CHECK_BROKEN at error and the
+  run fails. Usual causes: a broad .gitignore pattern, a shallow or
   sparse CI checkout, or a root that resolved somewhere other than intended.
 
 A run with NO CHECKS AT ALL fails too:
   Declaring none is reported the same way and for a stronger reason: a gate
   that checked nothing produces the same document as a gate that was deleted,
-  so \`checksRun: 0\` is RESOURCE_CHECK_BROKEN at error and exit 1. If this
+  so \`data.checksRun: 0\` is RESOURCE_CHECK_BROKEN at error and exit 1. If this
   project deliberately has no checks, take the command out of the pipeline
   rather than leaving a step that can only pass.
 
@@ -349,29 +349,32 @@ A run that HANGS is killed and reported, not waited on:
   handler -- do not add one, a process blocked in synchronous SQLite survives
   SIGINT once a handler exists.
 
-Output Fields:
-  status, root, population, populationSecs, checksRun, membersEnumerated,
-  issueCounts, durationSecs, checks
-  checksRun: How many checks ran. Read it: no findings from four checks and no
+Output Fields (the shared report envelope; schema: packages/cli/schemas/resources-check.json):
+  status:    ok | findings | error -- a literal statement about \`findings\`
+  examined:  How many members the projection enumerated -- the corpus the
+             checks ran AGAINST, where data.checksRun is how many rules ran.
+             Four checks over 8,000 files and four over 0 are otherwise the
+             same document, and only one of them is a gate. It counts the
+             TRACKED TREE and not your configured resource set, so it is
+             legitimately far larger than scan's filesScanned -- see above
+  findings:  One row per violation ({code, severity, message, location?})
+  summary:   {errors, warnings, info} over findings; exit 1 iff errors > 0
+  durationMs: wall time of the whole run
+  data.checksRun:
+             How many checks ran. Read it: no findings from four checks and no
              findings from NO checks are otherwise the same document
-  membersEnumerated:
-             How many members the projection enumerated -- the corpus the
-             checks ran AGAINST, where checksRun is how many rules ran. Four
-             checks over 8,000 files and four over 0 are otherwise the same
-             document, and only one of them is a gate. It counts the TRACKED
-             TREE and not your configured resource set, so it is legitimately
-             far larger than scan's filesScanned -- see the section above
-  checks:    What each check COST -- {name, durationSecs, rows} per check, or
+  data.checks:
+             What each check COST -- {name, durationSecs, rows} per check, or
              {name, durationSecs, broken} for one whose statement threw. rows
              is what the statement SELECTED, and it is a memory signal: rows
              are fully materialised. It is not a finding count -- a severity
              override of 'ignore' drops findings the statement still selected,
-             so sum(rows) and issueCounts legitimately disagree
-  populationSecs:
-             What the shared population cost. It is NOT charged to any check:
-             every check's durationSecs is its own statement and nothing else,
-             so this is the term that reconciles them against durationSecs
-  issues:    One row per violation ({code, severity, message, path?})
+             so sum(rows) and summary legitimately disagree
+  data.populationSecs, data.lensSecs, data.population, data.root:
+             What the shared population cost, and where it came from. NOT
+             charged to any check: every check's durationSecs is its own
+             statement and nothing else, so populationSecs is the term that
+             reconciles them against durationMs
 
 Exit Codes:
   0 - No error-severity findings

@@ -73,6 +73,7 @@ const FINDINGS_NAMES = [
   'verify',
   'claude-budget',
   'skills-validate',
+  'audit',
 ];
 
 /** Every command documented as exiting 0 whatever it finds. */
@@ -83,7 +84,6 @@ const ALWAYS_ZERO_NAMES = [
   // and 2 when it was refused or the crawl failed. A 1 from it is not a verdict
   // about the tree, so accepting one would let a broken run count as measured.
   'resources-query',
-  'audit',
   'inventory',
   'skills-list',
   CONTEXT_SWEEP,

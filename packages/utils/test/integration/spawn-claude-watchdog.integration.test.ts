@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test file: dynamic fs paths point only at our own temp fixtures.
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
@@ -31,6 +30,7 @@ const LONG_WINDOW_MS = 5000;
 /** Upper bound proving the watchdog killed the child promptly (no hang). */
 const QUICK_MS = 3000;
 
+// win32: the fake `claude` is a shebang script (see the header) — Windows cannot execute it.
 describe.skipIf(process.platform === 'win32')('spawnHeadlessClaude watchdog', () => {
   let tempDir: string;
   let binPath: string;

@@ -94,6 +94,7 @@ import { readFile } from 'node:fs/promises';
 // pay for the parser, so it deliberately does not re-export this.
 import { parseMarkdownContent } from '@vibe-agent-toolkit/resources/link-parser';
 import { createMarkdownProcessor } from '@vibe-agent-toolkit/resources/markdown-processor';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecResult } from '@vibe-agent-toolkit/utils/process';
 
@@ -222,7 +223,6 @@ async function readCorpus(corpus: string): Promise<Document[]> {
       // Read bytes and decode, rather than asking for a string: `bytes` is then
       // the file's real on-disk length, which is what the corpus check compares
       // against vat's own byte figure.
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths come from vat's own scan of the corpus under measurement
       const raw = await readFile(absolute);
       return { content: raw.toString('utf-8'), bytes: raw.byteLength };
     }),
@@ -475,6 +475,6 @@ if (isEntrypoint(import.meta.url)) {
     await main();
   } catch (error: unknown) {
     log(`parser bake-off failed: ${error instanceof Error ? error.message : String(error)}`, 'red');
-    process.exitCode = 1;
+    process.exitCode = ExitCode.ERROR;
   }
 }

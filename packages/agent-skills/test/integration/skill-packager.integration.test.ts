@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';

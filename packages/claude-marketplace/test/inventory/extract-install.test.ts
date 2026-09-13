@@ -32,7 +32,6 @@ async function installWithFileWhereDirExpected(
 	const claudeDir = safePath.join(tempDir, fixtureName, '.claude');
 	const pluginsDir = safePath.join(claudeDir, 'plugins');
 	mkdirSyncReal(pluginsDir, { recursive: true });
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
 	writeFileSync(safePath.join(pluginsDir, occupied), 'not a dir');
 	return extractClaudeInstallInventory({
 		pathsOrRoot: claudeDir,
@@ -173,7 +172,6 @@ describe('extractClaudeInstallInventory', () => {
 			// Create a marketplace with a plugin-name dir but no version dirs.
 			mkdirSyncReal(safePath.join(cacheDir, 'mp-with-plugin', 'no-versions'), { recursive: true });
 			// Also include a non-directory file directly under cache; should be filtered.
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
 			writeFileSync(safePath.join(cacheDir, 'stray-file'), 'ignored');
 
 			const inv = await extractClaudeInstallInventory({ pathsOrRoot: claudeDir, gitTrackerSource: NO_GIT_TRACKER });

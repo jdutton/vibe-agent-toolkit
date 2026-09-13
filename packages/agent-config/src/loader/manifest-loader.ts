@@ -68,7 +68,6 @@ export async function loadAgentManifest(pathArg: string): Promise<LoadedAgentMan
     const manifestPath = await findManifestPath(pathArg);
 
     // Read file (manifestPath validated by findManifestPath)
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path validated above
     const content = await fs.readFile(manifestPath, 'utf-8');
 
     // Parse YAML

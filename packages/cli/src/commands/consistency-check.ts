@@ -10,6 +10,7 @@ import { existsSync } from 'node:fs';
 
 import { getPluginSourceDir } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig, SkillPackagingConfig } from '@vibe-agent-toolkit/resources';
+import type { Severity } from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
@@ -21,10 +22,8 @@ import type { DiscoveredSkill } from './skills/command-helpers.js';
 // Types
 // ---------------------------------------------------------------------------
 
-export type ConsistencyIssueSeverity = 'error' | 'warning' | 'info';
-
 export interface ConsistencyIssue {
-  severity: ConsistencyIssueSeverity;
+  severity: Severity;
   code: string;
   message: string;
   fix: string;
@@ -421,7 +420,6 @@ function readPackageJsonFilesAllowlist(packageDir: string): string[] {
  */
 function checkVendoredLicensing(projectRoot: string): ConsistencyIssue[] {
   const agentSkillsDir = safePath.join(projectRoot, 'packages/agent-skills');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- agentSkillsDir derived from trusted projectRoot
   if (!existsSync(agentSkillsDir)) {
     return []; // not in this monorepo — skip
   }
@@ -463,7 +461,6 @@ export function assertVendoredLicensingShipped(
   const attributionPath = safePath.join(packageDir, 'vendor/skill-creator/ATTRIBUTION.md');
 
   // (1) LICENSE.txt present on disk
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- packageDir is a trusted project root parameter
   if (!existsSync(licensePath)) {
     problems.push(
       'vendor/skill-creator/LICENSE.txt is missing — Apache-2.0 requires distributing the license with the code. Add the LICENSE.txt from the upstream skill-creator repository.',
@@ -471,7 +468,6 @@ export function assertVendoredLicensingShipped(
   }
 
   // (2) ATTRIBUTION.md present on disk
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- packageDir is a trusted project root parameter
   if (!existsSync(attributionPath)) {
     problems.push(
       'vendor/skill-creator/ATTRIBUTION.md is missing — attribution file must document the upstream source, pinned commit, and Apache-2.0 §4(b) modifications list.',
@@ -489,7 +485,6 @@ export function assertVendoredLicensingShipped(
   }
 
   // (4) LICENSE.txt not gitignored (best-effort; skip if git is unavailable)
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- licensePath is derived from trusted packageDir parameter
   if (existsSync(licensePath)) {
     const gitResult = runGit(['check-ignore', '--quiet', licensePath], { cwd: packageDir });
     // git check-ignore exits 0 if the path IS ignored, 1 if not ignored, error(-1) if git unavailable

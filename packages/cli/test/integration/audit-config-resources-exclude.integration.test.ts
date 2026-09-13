@@ -1,5 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-
 /**
  * Integration test: `vat audit` honors `resources.exclude` from config.
  *
@@ -26,11 +24,8 @@ import { runAudit } from '../test-helpers.js';
  * crawlDirectory (git ls-files mode) can find staged files.
  */
 function initGitRepo(dir: string): void {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo init in tests
   spawnSync('git', ['init', '-b', 'main', '--quiet', dir], { stdio: 'ignore' });
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo init in tests
   spawnSync('git', ['-C', dir, 'config', 'user.email', 'test@example.com'], { stdio: 'ignore' });
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo init in tests
   spawnSync('git', ['-C', dir, 'config', 'user.name', 'Test User'], { stdio: 'ignore' });
 }
 
@@ -38,7 +33,6 @@ function initGitRepo(dir: string): void {
  * Stage all files in a git repo so crawlDirectory (git ls-files mode) finds them.
  */
 function gitAddAll(dir: string): void {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for staging files in tests
   spawnSync('git', ['-C', dir, 'add', '.'], { stdio: 'ignore' });
 }
 

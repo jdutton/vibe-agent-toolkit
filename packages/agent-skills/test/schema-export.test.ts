@@ -5,7 +5,6 @@
  * and correctly validate SKILL.md frontmatter.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test files need to read fixtures dynamically
 
 import { existsSync, readFileSync } from 'node:fs';

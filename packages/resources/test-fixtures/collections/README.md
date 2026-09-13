@@ -34,13 +34,13 @@ collections/
 From the test fixture directory:
 
 ```bash
-# Validate all collections (should find 7 errors)
-vat resources validate . --config vibe-agent-toolkit.config.yaml
+# Validate all collections (should find 7 errors); the config is discovered from the directory
+vat resources validate .
 
 # Validate specific collection
-vat resources validate . --config vibe-agent-toolkit.config.yaml --collection guides
-vat resources validate . --config vibe-agent-toolkit.config.yaml --collection documentation
-vat resources validate . --config vibe-agent-toolkit.config.yaml --collection skills
+vat resources validate . --collection guides
+vat resources validate . --collection documentation
+vat resources validate . --collection skills
 ```
 
 ### Expected Results
@@ -134,13 +134,13 @@ Test files with length violations:
 Use these fixtures in system tests:
 
 ```typescript
-import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import { loadProjectConfig } from '@vibe-agent-toolkit/agent-config';
-import path from 'node:path';
+import { ResourceRegistry, loadConfig } from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
 
-// Load test fixtures
-const fixturesDir = path.join(__dirname, '../test-fixtures/collections');
-const config = await loadProjectConfig(fixturesDir);
+// Load test fixtures (loadConfig discovers vibe-agent-toolkit.config.yaml from the directory)
+const fixturesDir = safePath.join(__dirname, '../test-fixtures/collections');
+const config = await loadConfig(fixturesDir);
+if (!config) throw new Error('fixture config not found');
 
 // Create registry with config
 const registry = new ResourceRegistry({ config, baseDir: fixturesDir });

@@ -54,7 +54,7 @@
               "name",
               "path"
             ],
-            "additionalProperties": false,
+            "additionalProperties": true,
             "description": "VAT agent metadata for distribution"
           },
           "description": "VAT agents (agent.yaml based)"
@@ -86,7 +86,7 @@
                     "description": "CLI invocation pattern (e.g., \"vat-cat-agents haiku-validate\")"
                   }
                 },
-                "additionalProperties": false,
+                "additionalProperties": true,
                 "description": "Export mechanisms for this pure function"
               }
             },
@@ -94,7 +94,7 @@
               "name",
               "path"
             ],
-            "additionalProperties": false,
+            "additionalProperties": true,
             "description": "Pure function tool metadata for distribution"
           },
           "description": "Pure function tools"
@@ -105,12 +105,33 @@
             "type": "string"
           },
           "description": "Runtime adapters provided (e.g., \"vercel-ai-sdk\", \"langchain\")"
+        },
+        "replaces": {
+          "type": "object",
+          "properties": {
+            "plugins": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Old plugin names (without marketplace) this package used to publish under"
+            },
+            "flatSkills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Old skill names installed to ~/.claude/skills/<name> (the legacy flat location); each must be a single path segment"
+            }
+          },
+          "additionalProperties": false,
+          "description": "What `vat claude plugin install` removes before installing this package"
         }
       },
       "required": [
         "version"
       ],
-      "additionalProperties": false,
+      "additionalProperties": true,
       "description": "VAT package metadata (package.json \"vat\" field)"
     }
   },

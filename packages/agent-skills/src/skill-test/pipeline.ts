@@ -1,3 +1,5 @@
+import { VatError } from '@vibe-agent-toolkit/utils';
+
 /**
  * Generic, pure, unit-testable bounded-parallel pipeline runner.
  *
@@ -13,7 +15,11 @@
  */
 
 /** Thrown by a worker to back off (sleep) and retry the current item. */
-export class RateLimitSignal extends Error {}
+export class RateLimitSignal extends VatError {
+  constructor(message: string) {
+    super('RATE_LIMIT', message);
+  }
+}
 
 export interface RunPipelineOptions<T, R> {
   readonly items: readonly T[];

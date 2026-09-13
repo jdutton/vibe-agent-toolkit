@@ -242,7 +242,7 @@ describe('whatLoadsAt', () => {
     expect(answer.conditions.find((c) => c.code === 'CLOSURE_ROOT_ABSENT')?.severity).toBe('error');
   });
 
-  it('escalates a PATH-SHAPED unresolved import to warn and leaves a bare @token at info', async () => {
+  it('escalates a PATH-SHAPED unresolved import to warning and leaves a bare @token at info', async () => {
     // ⚠️ The two tokens are in DIFFERENT files on purpose.
     // `realization_conditions` is keyed `(extentId, path, code, resourceId)`
     // (`projection.ts`), so two unresolved references out of ONE file collapse
@@ -253,7 +253,7 @@ describe('whatLoadsAt', () => {
       '',
     );
 
-    expect(answer.conditions.find((c) => c.sourceRef === '@docs/missing.md')?.severity).toBe('warn');
+    expect(answer.conditions.find((c) => c.sourceRef === '@docs/missing.md')?.severity).toBe('warning');
     expect(answer.conditions.find((c) => c.sourceRef === '@jeff')?.severity).toBe('info');
   });
 

@@ -40,7 +40,6 @@ afterEach(() => {
 function corpusWithOneFile(): string {
   const root = safePath.resolve(createTempDir());
   mkdirSyncReal(safePath.join(root, 'docs'), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
   writeFileSync(safePath.join(root, 'docs', 'a.md'), '# a\n');
   return root;
 }

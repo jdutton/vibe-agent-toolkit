@@ -25,7 +25,6 @@
  * `vat validate` and `vat verify` consume, so the fold is exercised too.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 

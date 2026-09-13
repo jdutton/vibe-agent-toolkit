@@ -15,7 +15,7 @@
  *    the same.
  */
 
-import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { capturePopulation } from '../src/facets/population/capture.js';

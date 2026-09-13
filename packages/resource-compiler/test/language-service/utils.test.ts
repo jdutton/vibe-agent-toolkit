@@ -2,7 +2,6 @@
  * Tests for Language Service utility functions
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test files use dynamic paths */
 
 import { writeFileSync, unlinkSync } from 'node:fs';
 

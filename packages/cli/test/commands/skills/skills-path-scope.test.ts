@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is a temp dir the test owns */
 /**
  * `vat skills validate <path>` and `vat skills build <path>` must REFUSE a path
  * they cannot read a config from, not rescope the run to nothing and call that

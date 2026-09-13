@@ -7,6 +7,7 @@
 
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { buildJscpdArgs, runJscpd } from './common.js';
@@ -69,18 +70,15 @@ function checkNewDuplications() {
   const currentClones = currentReport.duplicates ?? [];
 
   // Load baseline
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- BASELINE_FILE is a constant path
   if (!existsSync(BASELINE_FILE)) {
     console.log('📝 No baseline found. Creating baseline from current state...');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- BASELINE_FILE is a constant path
     writeFileSync(BASELINE_FILE, JSON.stringify({ duplicates: currentClones }, null, 2));
     console.log(`✅ Baseline saved to ${BASELINE_FILE}`);
     console.log(`   Current duplication: ${String(currentReport.statistics.total.percentage.toFixed(2))}%`);
     console.log(`   (${String(currentClones.length)} clones)\n`);
-    process.exit(0);
+    process.exit(ExitCode.OK);
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- BASELINE_FILE is a constant path
   const baseline = JSON.parse(readFileSync(BASELINE_FILE, 'utf-8')) as { duplicates?: Clone[] };
   const baselineClones = baseline.duplicates ?? [];
 
@@ -97,7 +95,7 @@ function checkNewDuplications() {
     console.log('✅ No new code duplication detected!');
     console.log(`   Current: ${String(currentClones.length)} clones (${String(currentReport.statistics.total.percentage.toFixed(2))}%)`);
     console.log(`   Baseline: ${String(baselineClones.length)} clones\n`);
-    process.exit(0);
+    process.exit(ExitCode.OK);
   }
 
   // New duplications found - FAIL
@@ -120,7 +118,7 @@ function checkNewDuplications() {
   console.log('   2. Refactor to eliminate duplication');
   console.log('   3. Or update baseline: bun run duplication-update-baseline\n');
 
-  process.exit(1);
+  process.exit(ExitCode.FINDINGS);
 }
 
 checkNewDuplications();

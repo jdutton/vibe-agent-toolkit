@@ -149,10 +149,8 @@ function assertBuiltModuleIsCurrent(): void {
   const built = fileURLToPath(BUILT_MODULE_URL);
   const source = fileURLToPath(SOURCE_MODULE_URL);
   const remedy = 'run `bunx tsc --build packages/utils` first';
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- both paths are derived from this test file's own URL
   const builtStat = statSync(built, { throwIfNoEntry: false });
   expect(builtStat, `${built} is not built — ${remedy}`).toBeDefined();
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- both paths are derived from this test file's own URL
   const sourceStat = statSync(source);
   expect(
     builtStat === undefined ? 0 : builtStat.mtimeMs,
@@ -193,10 +191,8 @@ async function runWorker(options: Record<string, unknown>): Promise<WorkerReport
  */
 function readDumps(directory: string): Map<string, RaceDump> {
   const dumps = new Map<string, RaceDump>();
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- a mkdtemp directory this file created
   for (const name of readdirSync(directory)) {
     const file = safePath.join(directory, name);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a mkdtemp directory this file created
     dumps.set(name, JSON.parse(readFileSync(file, 'utf-8')) as RaceDump);
   }
   return dumps;
@@ -303,7 +299,6 @@ describe('writeTimingDump', () => {
     const stem = `${BASENAME}-${String(process.pid)}`;
     const taken = [`${stem}.json`, `${stem}-1.json`];
     for (const [index, name] of taken.entries()) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- a mkdtemp directory this file created
       writeFileSync(safePath.join(directory, name), `occupied-${String(index)}\n`, 'utf-8');
     }
 
@@ -311,7 +306,6 @@ describe('writeTimingDump', () => {
 
     expect(written).toBe(safePath.join(directory, `${stem}-2.json`));
     for (const [index, name] of taken.entries()) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- a mkdtemp directory this file created
       expect(readFileSync(safePath.join(directory, name), 'utf-8')).toBe(`occupied-${String(index)}\n`);
     }
     expect(stderrText()).toBe('');
@@ -321,7 +315,6 @@ describe('writeTimingDump', () => {
     const stem = `${BASENAME}-${String(process.pid)}`;
     for (let collision = 0; collision <= MAX_DUMP_COLLISIONS; collision += 1) {
       const suffix = collision === 0 ? '' : `-${String(collision)}`;
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- a mkdtemp directory this file created
       writeFileSync(safePath.join(directory, `${stem}${suffix}.json`), 'occupied\n', 'utf-8');
     }
 
@@ -333,7 +326,6 @@ describe('writeTimingDump', () => {
     // second.
     expect(stderrText()).toContain(String(MAX_DUMP_COLLISIONS));
     expect(stderrText()).toContain('claimed');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a mkdtemp directory this file created
     const last = readFileSync(safePath.join(directory, `${stem}-${String(MAX_DUMP_COLLISIONS)}.json`), 'utf-8');
     expect(last).toBe('occupied\n');
   });
@@ -355,7 +347,6 @@ describe('writeTimingDump', () => {
     expect(writeTimingDump(NOUN, directory, BASENAME, explode)).toBeNull();
 
     expect(stderrText()).toContain('accumulators exploded');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a mkdtemp directory this file created
     expect(readdirSync(directory)).toEqual([]);
   });
 

@@ -88,9 +88,7 @@ export function cloneGitSource(parsed: ParsedGitUrl, targetTempdir: string): Git
     }
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetDir = our tempdir + validated subpath
   if (!existsSync(targetDir)) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own tempdir
     const topLevel = readdirSync(targetTempdir).join(', ');
     throw new Error(
       `Subpath not found in cloned repo: ${subpath ?? '(none)'}. Repo root contains: ${topLevel}.`,

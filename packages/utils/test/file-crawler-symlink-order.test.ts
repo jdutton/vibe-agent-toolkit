@@ -5,7 +5,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 import { crawlDirectorySync } from '../src/file-crawler.js';
 import { mkdirSyncReal, safePath, toForwardSlash } from '../src/path-utils.js';
-import { createSymlink, setupSyncTempDirSuite, symlinkCapability } from '../src/test-helpers.js';
+import { createSymlink, symlinkCapability } from '../src/test-helpers.js';
+import { setupSyncTempDirSuite } from '../src/testing/temp-dir.js';
 import { refuseUnreadableFixture } from '../src/testing.js';
 
 /**
@@ -36,7 +37,6 @@ vi.mock('node:fs', async (importOriginal) => {
     default: {
       ...actual,
       readdirSync: ((dir: fs.PathLike, options?: unknown) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- delegating to the real implementation across its many overloads
         const entries = (actual.readdirSync as any)(dir, options);
         const forced = getForcedOrderDir();
         if (forced !== null && String(dir) === forced && Array.isArray(entries)) {
@@ -78,7 +78,6 @@ describe('file-crawler: symlink-vs-real-directory dedup ordering', () => {
     // real-dir/file.md, plus alias -> real-dir (same real path, two names).
     const realDir = safePath.join(testDir, 'real-dir');
     mkdirSyncReal(realDir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is a controlled temp directory
     writeFileSync(safePath.join(realDir, 'file.md'), '# file');
     createSymlink(cap, realDir, safePath.join(testDir, 'alias'), 'dir');
 

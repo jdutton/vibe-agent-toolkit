@@ -3,6 +3,8 @@ import type { ClientRequest, IncomingMessage } from 'node:http';
 import https from 'node:https';
 import { setTimeout as sleep } from 'node:timers/promises';
 
+import { VatError } from '@vibe-agent-toolkit/utils';
+
 const ANTHROPIC_API_BASE = 'https://api.anthropic.com';
 const ANTHROPIC_VERSION = '2023-06-01';
 const SKILLS_BETA_HEADER = 'skills-2025-10-02';
@@ -149,15 +151,14 @@ const ORIGIN_OUTCOME_UNKNOWN_STATUSES = new Set([502, 504]);
  * without a `cause` that rebuild dropped the original object and its stack —
  * asymmetric with {@link ApiTransportError}, which has always plumbed one.
  */
-export class ApiRequestError extends Error {
+export class ApiRequestError extends VatError {
   constructor(
     message: string,
     readonly statusCode: number | undefined,
     readonly retryAfterHeader: string | undefined,
     options?: { cause?: unknown },
   ) {
-    super(message, options);
-    this.name = 'ApiRequestError';
+    super('API_REQUEST', message, options);
   }
 }
 
@@ -180,7 +181,7 @@ export class ApiRequestError extends Error {
  * carries the evidence instead, and an error that never reached the transport is
  * simply not one of these.
  */
-export class ApiTransportError extends Error {
+export class ApiTransportError extends VatError {
   /**
    * True when THIS client gave up on a deadline it set, rather than the network
    * failing. A deadline has already waited its full budget, so replaying it just
@@ -195,8 +196,7 @@ export class ApiTransportError extends Error {
     readonly bytesSent: number,
     options?: { cause?: unknown; deadlineExceeded?: boolean },
   ) {
-    super(message, options);
-    this.name = 'ApiTransportError';
+    super('API_TRANSPORT', message, options);
     this.deadlineExceeded = options?.deadlineExceeded ?? false;
   }
 }
@@ -207,7 +207,11 @@ export class ApiTransportError extends Error {
  * A class rather than a message test, because the retry decision must rest on a
  * fact recorded where the decision was MADE, not on parsing the words back out.
  */
-class RequestDeadlineExceeded extends Error {}
+class RequestDeadlineExceeded extends VatError {
+  constructor(message: string) {
+    super('REQUEST_DEADLINE_EXCEEDED', message);
+  }
+}
 
 export type ApiResponseOutcome<T> =
   | { readonly ok: true; readonly value: T }

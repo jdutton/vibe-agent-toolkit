@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test writes to temp dirs from computed paths */
 import { readFile, stat } from 'node:fs/promises';
 
 import { afterAll, describe, expect, it } from 'vitest';

@@ -106,7 +106,7 @@ function insertAboveWithComments(fixer, sourceCode, node, text) {
  * PER-RULE rather than one shared `settings` key, because a seam does not have
  * to split its symbols the way this package does. The same adopter's narrow
  * entry carries `normalizedTmpdir`/`mkdirSyncReal` but NOT `safePath`, so their
- * `no-os-tmpdir` and `no-path-join` need different targets — the exact "path
+ * `no-os-tmpdir` and `no-raw-node-path` need different targets — the exact "path
  * rules here, fs rules there" case a single key cannot express.
  */
 const SAFE_MODULE_PROPERTY = Object.freeze({

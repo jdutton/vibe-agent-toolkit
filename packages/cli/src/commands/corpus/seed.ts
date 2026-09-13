@@ -13,7 +13,7 @@ import { z } from 'zod';
 const ValidationAllowEntrySchema = z.object({
   code: z.string().min(1),
   reason: z.string().min(1),
-});
+}).strict();
 
 const ValidationBlockSchema = z
   .object({
@@ -55,12 +55,10 @@ export type Seed = z.infer<typeof SeedSchema>;
  * `source` keys, or duplicate `name` labels.
  */
 export function loadSeedFile(path: string): Seed {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied seed file path
   if (!existsSync(path)) {
     throw new Error(`Seed file not found: ${path}`);
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied seed file path
   const raw = readFileSync(path, 'utf-8');
   const parsed = yaml.parse(raw);
   const seed = SeedSchema.parse(parsed);

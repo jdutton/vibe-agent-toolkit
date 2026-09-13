@@ -28,7 +28,37 @@
 
 import { fileURLToPath } from 'node:url';
 
+import { TestTierBudgetReporter } from './packages/dev-tools/src/test-tier-budget-reporter.js';
+
 const setupFilePath = fileURLToPath(new URL('./vitest.setup.js', import.meta.url));
+const repoRoot = fileURLToPath(new URL('./', import.meta.url));
+
+/**
+ * Per-tier, per-FILE duration budgets, enforced by a reporter in every tier —
+ * `packages/dev-tools/src/test-tier-budget-allowlist.ts` holds the budgets,
+ * the ratchet allowlist and the rationale.
+ *
+ * ⚠️ NOT wired on win32. The allowlist was seeded from macOS durations, and
+ * this repo's own gate measurements put Windows CI at 6–9× slower (CLAUDE.md:
+ * 4,750 s against 528–771 s), which is past the ~10× headroom an unlisted file
+ * has. A budget that has never been measured on a platform is not a ratchet
+ * there, it is a coin flip — so the reporter stays out until a Windows seed
+ * exists. To add one: run each tier uncached on the Windows box, then
+ * `bun run seed:test-tier-budget <tier>`.
+ */
+type ReporterEntry = string | readonly [string, Record<string, unknown>] | TestTierBudgetReporter;
+function tierBudgetReporters(base: readonly ReporterEntry[], options: { judgeStale?: boolean } = {}): ReporterEntry[] {
+  return process.platform === 'win32' ? [...base] : [...base, new TestTierBudgetReporter({ repoRoot, ...options })];
+}
+
+/**
+ * The root config's reporters — it inlines its own `test` block and runs
+ * SERIALLY (`test:coverage`, or a bare `bunx vitest run` from the root), where
+ * a heavy file reads up to 13× faster than under the per-package turbo runs the
+ * allowlist was seeded from. The stale side of the ratchet is judged only under
+ * turbo; here only the ceilings apply — see `JudgeOptions.judgeStale`.
+ */
+export const rootSerialReporters = tierBudgetReporters(['default'], { judgeStale: false });
 
 /**
  * Clear every mock's CALL HISTORY before each test, in all three tiers.
@@ -51,7 +81,26 @@ const setupFilePath = fileURLToPath(new URL('./vitest.setup.js', import.meta.url
  */
 const CLEAR_MOCKS_BEFORE_EACH_TEST = true;
 
-export const platformTestTimeout = process.platform === 'win32' ? 900_000 : 60_000; // 15min Windows, 1min Unix
+/**
+ * Per-TEST timeout for the integration tier (and the root config's coverage run).
+ * 15 min on Windows, 1 min on Unix. The unit tier has its own, tighter value below.
+ */
+export const platformTestTimeout = process.platform === 'win32' ? 900_000 : 60_000;
+
+/**
+ * Per-TEST timeout for the UNIT tier.
+ *
+ * Measured, not guessed: across one uncached run of all 697 unit files the
+ * slowest single test was 4.8 s (`resources` filesystem-arm enumeration
+ * positive control), and every test over 1 s lives in a file already on the
+ * duration-budget allowlist. 15 s is ~3× that ceiling. The previous 60 s was
+ * the integration tier's value applied by default, and it let a unit test hang
+ * for a minute before anything said so.
+ *
+ * Windows is UNMEASURED for the unit tier; 10× Unix follows the 6–9× gate ratio
+ * this repo has recorded (CLAUDE.md: 4,750 s against 528–771 s) with margin.
+ */
+export const unitTestTimeout = process.platform === 'win32' ? 150_000 : 15_000;
 
 export const unitPool = process.platform === 'win32' ? 'forks' : 'threads';
 
@@ -86,13 +135,16 @@ export const maxTestWorkers = 2;
  * legal, and a future move of Unix to forks should carry the cap with it.
  *
  * MEASURED, not guessed: `vitest run --pool=forks --logHeapUsage
- * --reporter=verbose` over all 635 unit files on this tree puts the heaviest at
- * **166MB** (`dev-tools/test/local-eslint-rule-enablement.test.ts`), with
- * `utils/test/eslint/rules.test.ts` at 152MB and
+ * --reporter=verbose` over every unit file on this tree (635 at the time; the
+ * tracked count has grown since and nothing here depends on it) put the heaviest
+ * at **166MB** (`dev-tools/test/local-eslint-rule-enablement.test.ts`), with the
+ * since-split monolithic ESLint rule suite at 152MB and
  * `cli/test/commands/resources-check-payload.test.ts` at 151MB behind it. 512MB
  * is ~3.1x that, which covers the fork-reuse variance the heap guard's own
  * budget comment describes (a fork is reused across files, so a file's reading
- * depends on what ran before it in the same fork).
+ * depends on what ran before it in the same fork). Re-measure with the same
+ * command if a suite approaches the cap; the number, not the file names, is
+ * what this constant rests on.
  *
  * Deliberately tighter than the 1024MB integration/system cap, because no unit
  * test loads a native ML model — a unit file approaching this ceiling is doing
@@ -152,7 +204,7 @@ export function createUnitTestConfig(overrides: UnitTestConfigOverrides = {}) {
       '**/*.system.test.ts',
     ],
     server: { deps: { inline: inlineDeps } },
-    testTimeout: platformTestTimeout,
+    testTimeout: unitTestTimeout,
     // NOTE: no hookTimeout override here on purpose. Unit hooks should fail
     // fast at vitest's 10s default — a unit hook that needs longer is doing
     // real I/O and belongs in the integration or system tier instead.
@@ -160,9 +212,12 @@ export function createUnitTestConfig(overrides: UnitTestConfigOverrides = {}) {
     pool: unitPool,
     maxWorkers: maxTestWorkers,
     execArgv: unitExecArgv,
+    reporters: tierBudgetReporters(['default']),
     coverage: {
       provider: 'v8' as const,
       reporter: ['text', 'json', 'html'] as const,
+      // Mirrors the root config's list minus the repo-wide paths; a per-package
+      // run is a convenience, the root `test:coverage` run is the gate.
       exclude: [
         '**/*.d.ts',
         '**/dist/**',
@@ -171,7 +226,6 @@ export function createUnitTestConfig(overrides: UnitTestConfigOverrides = {}) {
         '**/tests/**',
         '**/*.test.ts',
         '**/*.spec.ts',
-        '**/index.ts',
         '**/types.ts',
         ...(overrides.coverageExclude ?? []),
       ],
@@ -203,7 +257,34 @@ export function createIntegrationTestConfig(overrides: IntegrationTestConfigOver
     pool: integrationPool,
     maxWorkers: maxTestWorkers,
     execArgv: integrationExecArgv,
+    reporters: tierBudgetReporters(['default']),
   };
+}
+
+/**
+ * CLI system-test files that do not run on Windows, package-relative.
+ *
+ * They need symlinks (elevated privileges there), the bun wrapper (null exit
+ * status), MCP package resolution, or a whole-project scan (10–20× slower on the
+ * Windows runner). `skills-list-fixture` and `skills-validate-fixture` provide
+ * the Windows coverage for the two `skills` verbs instead.
+ *
+ * ONE list, consumed by both `packages/cli/vitest.system.config.ts` (as is) and
+ * the root `vitest.system.config.ts` (prefixed with the package path) — the two
+ * used to carry their own copies of these six paths.
+ */
+export const WINDOWS_EXCLUDED_CLI_SYSTEM_TESTS: readonly string[] = [
+  'test/system/bin-wrapper.system.test.ts',
+  'test/system/mcp-stdio-protocol.system.test.ts',
+  'test/system/skills-install-dev.system.test.ts',
+  'test/system/skills-list.system.test.ts',
+  'test/system/skills-uninstall.system.test.ts',
+  'test/system/skills-validate.system.test.ts',
+];
+
+/** The Windows exclusions for `packages/cli`, or nothing elsewhere. */
+export function windowsExcludedCliSystemTests(prefix = ''): string[] {
+  return process.platform === 'win32' ? WINDOWS_EXCLUDED_CLI_SYSTEM_TESTS.map((p) => `${prefix}${p}`) : [];
 }
 
 export interface SystemTestConfigOverrides {
@@ -229,7 +310,7 @@ export function createSystemTestConfig(overrides: SystemTestConfigOverrides = {}
     // ['default', { summary: false }] is the vitest v3 replacement for the
     // deprecated 'basic' reporter. Skipping the per-test streaming summary
     // reduces main<->worker RPC pressure.
-    reporters: [['default', { summary: false }]] as const,
+    reporters: tierBudgetReporters([['default', { summary: false }]]),
     // Tests emitting verbose console output pile RPC pressure onto the same
     // channel the onTaskUpdate heartbeat uses; write worker stdout directly instead.
     disableConsoleIntercept: true,

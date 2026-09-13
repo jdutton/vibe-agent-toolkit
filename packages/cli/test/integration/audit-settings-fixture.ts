@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 /**
  * Shared fixture for the `vat audit --compat --settings` integration suites: a
  * plugin whose skills declare a tool the fixture settings deny, and the parsed

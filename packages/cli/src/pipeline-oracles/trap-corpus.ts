@@ -758,7 +758,6 @@ export function materializeTrapCorpus(
   for (const relativePath of Object.keys(files).sort((a, b) => a.localeCompare(b))) {
     const absolutePath = safePath.join(absoluteRoot, relativePath);
     mkdirSyncReal(safePath.resolve(absolutePath, '..'), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths come from the frozen literal above
     writeFileSync(absolutePath, files[relativePath] ?? '', 'utf-8');
   }
 
@@ -766,7 +765,6 @@ export function materializeTrapCorpus(
     // The escape target lives OUTSIDE the corpus, which is the whole point of
     // that fixture — written here rather than in the files loop above, which
     // only ever writes under the root.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- basename is a frozen literal; parent derived from the caller's root
     writeFileSync(
       safePath.join(safePath.resolve(absoluteRoot, '..'), ESCAPE_TARGET_BASENAME),
       '# Outside\n\nReached only by a symlink that escapes the corpus root.\n',

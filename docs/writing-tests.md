@@ -30,11 +30,56 @@ packages/my-package/
 
 ### Test Types
 
-| Type | Location | Purpose | Speed | Dependencies |
-|------|----------|---------|-------|--------------|
-| **Unit** | `test/*.test.ts` | Test functions/classes in isolation | < 100ms | Mock external deps |
-| **Integration** | `test/integration/*.integration.test.ts` | Test multiple modules together | < 5s | Real file system, DBs |
-| **System** | `test/system/*.system.test.ts` | End-to-end workflows | < 30s | Real external services |
+| Type | Location | Purpose | Per-test aspiration | Per-FILE budget (enforced) | Per-test timeout | Dependencies |
+|------|----------|---------|---------------------|----------------------------|------------------|--------------|
+| **Unit** | `test/*.test.ts` | Test functions/classes in isolation | < 100 ms | 1,000 ms | 15 s (150 s Windows) | Mock external deps |
+| **Integration** | `test/integration/*.integration.test.ts` | Test multiple modules together | < 5 s | 5,000 ms | 60 s (15 min Windows) | Real file system, DBs |
+| **System** | `test/system/*.system.test.ts` | End-to-end workflows | < 30 s | 30,000 ms | 120 s | Real external services |
+
+### The per-file duration budget
+
+The per-test numbers are aspirations. What is **enforced** is a per-FILE budget: a vitest
+reporter (`packages/dev-tools/src/test-tier-budget-reporter.ts`, wired into every tier through
+`vitest.shared.ts`) fails the run when a spec file's duration exceeds its tier's budget — unless the
+file is on the ratchet allowlist in `packages/dev-tools/src/test-tier-budget-allowlist.ts`, which
+names the integration-shaped work each listed file does and what it measured when listed
+(`measuredMs`). The allowlist may only shrink, and an entry buys headroom, never exemption:
+
+- a file **not listed** that runs over its tier budget fails the run (`OVER BUDGET`);
+- a file **listed** that runs over `max(tier budget, 8 × measuredMs)` fails the run
+  (`OVER HEADROOM`) — fix the regression, or re-measure and update `measuredMs` with the reason;
+- a file **listed** that runs under 10 % of its own `measuredMs` fails the run (`STALE ENTRY`)
+  until its entry is deleted — judged only under the per-package turbo runs the allowlist was
+  seeded from (`bun run test:<tier>`); the root config's serial run (`test:coverage`, a bare
+  `bunx vitest run` from the root) judges the two ceilings only.
+
+Durations are noisy (2–4× between one serial vitest process and turbo's parallel workers for a
+small file, up to 13× for the heaviest, and 3–7× between a quiet turbo seed and a turbo run on
+a loaded box; more on CI), which is what the 8× headroom absorbs and why the stale line is not
+judged serially. An entry whose `8 × measuredMs`
+is within the tier budget bounds nothing an unlisted file is not already bound to; the allowlist
+test refuses such an entry and the seed script prints `DELIST` for one that has become so.
+
+**When the reporter fails your new or changed file:** first ask whether the file is in the right
+tier (a unit file that builds a real temp tree, spawns a process or inits a repo belongs in
+integration). The same question is asked at the desk by `local/no-io-in-unit-tier`, which flags
+`mkdtemp*`, `spawn*`, `exec*` and `child_process` imports in a unit-tier file; its `allowFiles`
+ratchet in `eslint.config.js` names today's 116 offenders and may only shrink. The two ratchets
+overlap by only a third — I/O is not the only thing that makes a file slow — so a file leaving one
+list should be checked against the other. If the work is legitimate for its tier, add an entry with the mechanism as its
+reason. To re-seed a tier after an uncached run: `bun run seed:test-tier-budget <tier>`
+prints an entry for every file over its budget and a refreshed one for every file already listed,
+from the turbo logs, with reasons classified from each file's source — never an entry for a file
+under budget. Review before pasting.
+
+The reporter is **not wired on Windows**: the allowlist was measured on macOS, and this repo's own
+Windows CI runs 6–9× slower, past the headroom. A Windows seed would enable it there.
+
+**Goldens (`UPDATE_DRIFT_GOLDEN=1`).** The two byte-golden suites — `packaged-output-drift`
+(system, `vat-development-agents`) and `pipeline-oracles` (integration, `cli`) — compare BUILT
+output. Their failure messages carry the regeneration command; the procedure is always **build
+first** (`bun run build`), then run the one file from its package directory with the env var set.
+Regenerating from a stale `dist/` writes a stale golden that passes.
 
 ### Test Classification Rules
 
@@ -58,6 +103,18 @@ describe.skipIf(!!process.env.CI)('ExternalLinkValidator (integration)', () => {
   // ...
 });
 ```
+
+Note that `bun run validate` (the full gate) runs with `CI=1` locally — see the two-tier gate in
+`vibe-validate.config.yaml` — so a suite gated this way runs only when its tier is invoked directly
+(`bun run test:integration`), never inside a gate.
+
+**Platform skips need a reason at the site.** Every `it.skipIf(process.platform === 'win32')` /
+`describe.skipIf(...)` carries a one-line comment naming the mechanism that cannot run there (a
+shebang fixture, a `bash -e -c` step, a whole-project scan), or points at the file header that does.
+A skip whose reason has stopped being true is deleted, not kept — two `safe-exec` skips that named
+`.cmd` handling came off when `shouldUseShell` landed. The six CLI system files that do not run on
+Windows are listed once, in `WINDOWS_EXCLUDED_CLI_SYSTEM_TESTS` in `vitest.shared.ts`, and consumed
+by both the root and the `packages/cli` system configs.
 
 ## Test Fixtures
 
@@ -246,7 +303,7 @@ export function setupResourceTestSuite(testPrefix: string): {
 
 #### Example 2: RAG System Tests
 
-From `packages/cli/test/system/test-helpers.ts`:
+From `packages/cli/test/system/test-helpers/rag-setup.ts`:
 
 ```typescript
 export function setupRagTestSuite(
@@ -588,12 +645,18 @@ it('should export all types', () => {
 });
 ```
 
-Both are caught by the `local/require-justified-skip` ESLint rule. A genuine
+Both are caught by the `local/require-justified-skip` ESLint rule. A third shape,
+`expect(IMPORTED_CONSTANT).toBe(literal)` / `expect(registry).toHaveLength(N)`, is caught by
+`local/no-registry-count-pin`: it re-types a number from `src` and detects change without checking
+anything. Assert the SET a count stands for, or the relationship the constant must hold; a
+genuinely MEASURED literal (an exit code, a calibration) keeps its number behind an
+`eslint-disable-next-line` that names the measurement. A genuine
 platform gate is a *condition*, not a skip — use `it.skipIf(...)` /
 `describe.runIf(...)`, or the ternary form `(NET ? describe : describe.skip)(...)`,
 neither of which is flagged. If a skip really must stay, annotate it with
 `// SKIP(#123): reason` (uppercase keyword, `#`-prefixed issue, non-empty reason)
-on the line above. See [custom-eslint-rules.md](custom-eslint-rules.md#require-justified-skip).
+on the line above. Both rules are in the generated table in
+[custom-eslint-rules.md](custom-eslint-rules.md#current-rules).
 
 ### Every assertion of absence needs a positive control
 
@@ -644,7 +707,9 @@ When writing tests:
 
 **Classification:**
 - [ ] Test is in the right tier (no network/ML/process spawning in unit tests)
+- [ ] The file runs inside its tier's per-file budget, or its allowlist entry names why it cannot
 - [ ] Network-dependent integration tests use `describe.skipIf(!!process.env.CI)` if needed
+- [ ] Every platform skip has a one-line reason at the site
 
 **Cross-platform:**
 - [ ] Used `toForwardSlash()` from utils for path comparisons

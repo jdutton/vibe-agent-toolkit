@@ -13,7 +13,7 @@ import { CatCharacteristicsSchema, type Haiku } from '../types/schemas.js';
 export const HaikuGeneratorInputSchema = z.object({
   characteristics: CatCharacteristicsSchema.describe('Cat characteristics to inspire the haiku'),
   mockable: z.boolean().optional().describe('Whether to use mock mode (default: true)'),
-});
+}).strict();
 
 export type HaikuGeneratorInput = z.infer<typeof HaikuGeneratorInputSchema>;
 

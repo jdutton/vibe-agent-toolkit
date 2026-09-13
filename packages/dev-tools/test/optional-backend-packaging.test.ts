@@ -57,7 +57,6 @@ describe('optional backend packaging (install-cost guard)', () => {
   const BUNDLED_BACKEND = '@vibe-agent-toolkit/projection-sqlite';
 
   const cliPkg = JSON.parse(
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- PROJECT_ROOT-derived path, not user input
     readFileSync(safePath.join(PROJECT_ROOT, 'packages/cli/package.json'), 'utf-8'),
   ) as {
     dependencies?: Record<string, string>;

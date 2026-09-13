@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 
-import { writeYamlOutput } from '../../src/utils/output.js';
+import { writeStructuredOutput, writeYamlOutput } from '../../src/utils/output.js';
 
 describe('output utilities', () => {
   let stdoutSpy: ReturnType<typeof vi.spyOn>;
@@ -37,5 +37,25 @@ describe('output utilities', () => {
     expect(output).toContain('errors:');
     expect(output).toContain('file: test.md');
     expect(output).toContain('line: 10');
+  });
+
+  describe('writeStructuredOutput', () => {
+    const data = { status: 'ok', examined: 3 };
+
+    it('writes one JSON document when the format is json', () => {
+      writeStructuredOutput(data, 'json');
+
+      const output = stdoutSpy.mock.calls.map((call) => call[0]).join('');
+      expect(JSON.parse(output)).toEqual(data);
+      expect(output).not.toContain('---');
+    });
+
+    it.each([['yaml'], [undefined]])('writes YAML for format %s', (format) => {
+      writeStructuredOutput(data, format);
+
+      const output = stdoutSpy.mock.calls.map((call) => call[0]).join('');
+      expect(output.startsWith('---\n')).toBe(true);
+      expect(output).toContain('examined: 3');
+    });
   });
 });

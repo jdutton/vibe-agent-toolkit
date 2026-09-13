@@ -3,7 +3,6 @@
  * Verifies read/write of known_marketplaces.json, installed_plugins.json, and installPlugin flow.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test helper — file paths are controlled by test code, not user input
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';

@@ -14,7 +14,6 @@ import {
   buildStaleDistWarningLines,
   DuplicateStagedSkillError,
   isAcknowledged,
-  mapErrorToExitCode,
   conventionalSuiteProbe,
   packageSkill,
   packagingConfigToPackageOptions,
@@ -23,11 +22,13 @@ import {
   SecurityAckError,
   SKILL_TEST_BUILTIN_CAPS,
   SkillBuildError,
-  SkillTestExitCode,
+  type SkillTestFailureReason,
+  skillTestFailureReason,
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig, SkillSourceDescriptor, TestConfig } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { findProjectRoot, prefixMessageOnce, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { Command } from 'commander';
 
@@ -202,7 +203,7 @@ type DeclaredExecutable = NonNullable<HarnessOpts['declaredExecutables']>[number
 
 /**
  * Map a resolved skill's packaging-config `executables` (SkillExecutableEntry[]) to
- * the grader's recognition-aid shape (issue #145 Phase T): each entry's stable NAME
+ * the grader's recognition-aid shape: each entry's stable NAME
  * is its `path` basename with the extension stripped (`scripts/csvsum.py` → `csvsum`),
  * carried alongside its `howInvoked`, `kind` and the declared `path` itself. Returns
  * undefined for absent/empty input so the harness omits the aid entirely (the grader
@@ -257,7 +258,7 @@ export function parseWithFlags(pairs: string[] | undefined): Record<string, Skil
   for (const pair of pairs) {
     const [name, spec] = parseWithPair(pair);
     // Fail closed on a repeated companion name rather than silently overwriting
-    // (last-wins would drop a companion the user asked for — the #153 no-op class).
+    // (last-wins would drop a companion the user asked for — a silent no-op).
     if (Object.hasOwn(record, name)) throw new DuplicateStagedSkillError(name);
     record[name] = spec;
   }
@@ -282,8 +283,8 @@ export function descriptorsToRecord(
   for (const d of list) {
     const name = descriptorName(d);
     // Two config descriptors deriving the same name (e.g. two `path:` entries with
-    // the same basename) would silently overwrite — the exact silent-drop #153
-    // targets, one layer above buildStageItems. Fail closed here instead.
+    // the same basename) would silently overwrite — the exact silent drop
+    // buildStageItems refuses, one layer above it. Fail closed here instead.
     if (Object.hasOwn(record, name)) throw new DuplicateStagedSkillError(name);
     record[name] = d;
   }
@@ -365,7 +366,7 @@ type SkillTestGlobalConfig = ProjectConfig['test'];
  * {@link loadTestConfig}, which reads the PER-SKILL `skills.config.<skill>.test`
  * block: graderModel/concurrency are global judge/pipeline settings that apply
  * across every skill's test run, not something a single skill's config should
- * override (issue #145).
+ * override.
  *
  * Undefined when there's no project root or no `test:` node. A broken config
  * throws {@link ConfigLoadError}, propagated the same way as loadTestConfig's
@@ -630,7 +631,7 @@ export interface ResolvedSubject {
   /**
    * Declared executables (name + kind + howInvoked) derived from the subject's
    * packaging config, forwarded to the WITH-arm grader as a tool recognition aid
-   * (issue #145 Phase T). Populated ONLY for a `buildable` subject (which carries
+   * Populated ONLY for a `buildable` subject (which carries
    * `packagingConfig`); a plain path/source subject leaves it undefined.
    */
   declaredExecutables?: DeclaredExecutable[];
@@ -695,7 +696,7 @@ export interface BuildFlags {
  * Project-aware subject resolution for `vat skill test run`. Resolves the subject
  * reference; for a declared skill, builds it (real entry points) and returns the
  * dist dir to stage; everything else is staged as-is. Throws SkillBuildError
- * (exit 2) for name-miss / not-found / --no-build-without-dist / build failure.
+ * (reason `preflight`) for name-miss / not-found / --no-build-without-dist / build failure.
  *
  * `memo` is the per-run build memo (see {@link BuildMemo}) — pass the SAME map used
  * for companion resolution so a skill that is both subject and companion builds once.
@@ -762,7 +763,6 @@ function resolveExistingDistOrThrow(
   ref: BuildableReference,
   flags: { noBuild: boolean; dryRun: boolean },
 ): BuildDeclaredSkillResult {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- expectedDistDir derived from project config
   if (existsSync(ref.expectedDistDir)) {
     if (flags.noBuild) {
       process.stderr.write(`Using existing dist (NOT rebuilt): ${ref.expectedDistDir}\n`);
@@ -825,7 +825,7 @@ export function buildMemoKey(ref: BuildableReference): string {
  * writes nothing (or writes an empty shell with no `SKILL.md`) would otherwise hand
  * back a path a required companion then fails opaquely at staging, or an OPTIONAL
  * one silently skips — the exact non-functional-companion-with-no-diagnostic
- * symptom of issue #158. Two distinct checks, two distinct messages, so the error
+ * symptom adopters reported. Two distinct checks, two distinct messages, so the error
  * tells the author which failure mode they hit:
  *   1. `expectedDistDir` itself is missing — "no output at all".
  *   2. `expectedDistDir` exists but has no `SKILL.md` — an empty/incomplete shell.
@@ -835,7 +835,6 @@ export function buildMemoKey(ref: BuildableReference): string {
  * and is always checked.
  */
 function verifyBuiltDist(ref: BuildableReference): BuildDeclaredSkillResult {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- expectedDistDir derived from project config
   if (!existsSync(ref.expectedDistDir)) {
     throw new SkillBuildError(
       `Skill build for '${ref.name}' reported success but produced no output at ${ref.expectedDistDir}. ` +
@@ -843,7 +842,6 @@ function verifyBuiltDist(ref: BuildableReference): BuildDeclaredSkillResult {
     );
   }
   const skillMdPath = safePath.join(ref.expectedDistDir, 'SKILL.md');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillMdPath derived from project config
   if (!existsSync(skillMdPath)) {
     throw new SkillBuildError(
       `Skill build for '${ref.name}' reported success but produced no SKILL.md at ${ref.expectedDistDir}. ` +
@@ -931,7 +929,7 @@ async function runDeclaredSkillBuild(ref: BuildableReference): Promise<void> {
  * the existing dist under --no-build/--dry-run. Shared by SUBJECT resolution
  * ({@link resolveBuildableSubject}) and `--with`/`--with-optional` COMPANION
  * resolution ({@link resolveCompanionSpec}) so a companion that maps to a declared
- * skill gets the exact same build treatment as the subject (issue #158) — its
+ * skill gets the exact same build treatment as the subject — its
  * `files:` injection runs before staging, instead of a raw, possibly
  * build-artifact-incomplete, source-tree copy.
  *
@@ -1075,11 +1073,12 @@ function isSurvivableCompanionFailure(
  * with several companions leaves the user unable to tell which flag to fix.
  *
  * The message is prefixed IN PLACE so the error's CLASS (and therefore its
- * `exitCode` / {@link mapErrorToExitCode} mapping) is unchanged — no new error class,
- * no re-wrapping. Prefixing is skipped when the message is ALREADY prefixed (starts
- * with `companion '`) — this makes the function idempotent against repeat rethrows of
- * the SAME error object, structurally, rather than relying on a hand-maintained
- * argument that no caught error class is ever cached/reused across companions.
+ * `reason` / {@link skillTestFailureReason} mapping) is unchanged — no new error class,
+ * no re-wrapping. Prefixing happens ONCE per error object (`prefixMessageOnce`
+ * remembers the object, never re-reads the message) — this makes the function
+ * idempotent against repeat rethrows of the SAME error object, structurally, rather
+ * than relying on a hand-maintained argument that no caught error class is ever
+ * cached/reused across companions.
  * {@link ConfigLoadError} instances ARE cached and re-thrown per config root by
  * `loadConfigCached`, so mutating one in place would otherwise corrupt the cache; the
  * already-prefixed check covers this case too (in practice `ConfigLoadError` is
@@ -1090,19 +1089,17 @@ function isSurvivableCompanionFailure(
  * Debug output that prints `.stack` can disagree with the prefixed text on stderr.
  */
 function rethrowNamingCompanion(err: unknown, alias: string, declaredName: string): never {
-  if (err instanceof Error && !err.message.startsWith("companion '")) {
-    err.message = `companion '${alias}' (declared skill '${declaredName}'): ${err.message}`;
-  }
+  prefixMessageOnce(err, `companion '${alias}' (declared skill '${declaredName}'): `);
   throw err;
 }
 
 /**
- * Companion analog of {@link resolveBuildableSubject} (issue #158): resolve every
+ * Companion analog of {@link resolveBuildableSubject}: resolve every
  * `--with`/`--with-optional` companion whose spec is a `{ path }` pointing at a
  * declared skill's SOURCE directory to that skill's BUILT dist, via the exact same
  * {@link buildDeclaredSkill} the subject uses. Anything else — workspace:/npm:/
- * url:/vendored specs, or a path outside this project's config — is "a different
- * story" (per the issue's own framing): left untouched, staged as today.
+ * url:/vendored specs, or a path outside this project's config — is a different
+ * story: left untouched, staged as today.
  *
  * The `test.build` hook used is the COMPANION's own — read from the config that
  * governs IT ({@link declaredSkillTestConfig}), not the subject's. The subject's hook
@@ -1207,7 +1204,7 @@ function warnIfPathTargetBypassesConfig(subject: ResolvedSubject): void {
 /**
  * Validate usage-level flags (auth values, numeric knobs) and load the subject's
  * persisted test config. Runs before the async harness work, so a bad flag exits
- * with a clean message + preflight code (2) instead of surfacing as an unhandled
+ * with a clean message + `Reason: preflight` instead of surfacing as an unhandled
  * promise rejection (raw stack trace, exit 1).
  */
 async function preflightKnobsAndConfig(
@@ -1229,27 +1226,51 @@ async function preflightKnobsAndConfig(
     };
   } catch (err) {
     process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
-    process.exit(SkillTestExitCode.Preflight);
+    exitWithReason('preflight');
   }
 }
 
 /**
- * Exit code for an error escaping EITHER phase of {@link runSkillTestRun}.
+ * End the run on `ERROR`, saying WHY on stderr.
+ *
+ * The reason used to be three exit codes (1 internal, 2 preflight, 3
+ * bootstrap). Under the one exit-code contract every verb shares, every way the
+ * harness could not run is `ERROR`, and the `Reason:` line is where a CI
+ * author reads "harness broke" apart from "my environment is wrong".
+ */
+function exitWithReason(reason: SkillTestFailureReason): never {
+  process.stderr.write(`Reason: ${reason}\n`);
+  process.exit(ExitCode.ERROR);
+}
+
+/**
+ * End the run on the harness's own verdict: the `Summary:` line on stdout (the
+ * one channel kept machine-readable), the `Reason:` line on stderr when the
+ * harness could not run, and the exit code the harness decided.
+ */
+function exitWithResult(result: Awaited<ReturnType<typeof runSkillTestHarness>>): never {
+  process.stdout.write(`Summary: ${result.summary}\n`);
+  if (result.reason !== undefined) process.stderr.write(`Reason: ${result.reason}\n`);
+  process.exit(result.exitCode);
+}
+
+/**
+ * The reason for an error escaping EITHER phase of {@link runSkillTestRun}.
  *
  * A broken governing config ({@link ConfigLoadError}) is a user-fixable PREFLIGHT
- * problem (exit 2), not an internal harness failure — {@link mapErrorToExitCode} has
- * no case for it and falls through to Internal (1). ONE helper shared by BOTH catch
+ * problem, not an internal harness failure — {@link skillTestFailureReason} has
+ * no case for it and falls through to `internal`. ONE helper shared by BOTH catch
  * blocks so the SUBJECT arm and the COMPANION arm can never drift: a companion's
  * governing config root can differ from the subject's, so a broken config is
- * reachable from either arm and must report the same code from both.
+ * reachable from either arm and must report the same reason from both.
  */
-function exitCodeForRunError(err: unknown): number {
+function reasonForRunError(err: unknown): SkillTestFailureReason {
   // A directory the governing `skills.include` reaches and the crawl cannot list
   // is the same class: discovery refuses it by name, and the remedy is `chmod` or
   // a narrower include pattern — the operator's, not the harness's.
   return err instanceof ConfigLoadError || err instanceof DirectoryListingRefusedError
-    ? SkillTestExitCode.Preflight
-    : mapErrorToExitCode(err);
+    ? 'preflight'
+    : skillTestFailureReason(err);
 }
 
 /**
@@ -1298,7 +1319,7 @@ export async function runSkillTestRun(
     dryRun: options.dryRun === true,
     acknowledgedRunsSkillCode: options.iUnderstandThisRunsSkillCode === true,
   });
-  // Shared by subject AND companion resolution (issue #158) so a --with/--with-optional
+  // Shared by subject AND companion resolution so a --with/--with-optional
   // companion that maps to a declared skill gets the exact same build GATING (no-build/
   // dry-run/security-ack) as the subject. The `test.build` hook is deliberately NOT in
   // here: it is per-skill (see BuildFlags), so the subject's own command is passed only
@@ -1318,10 +1339,10 @@ export async function runSkillTestRun(
     resolvedSubject = await resolveSubjectForTest(subject, process.cwd(), buildFlags, buildMemo, config?.build);
   } catch (err) {
     // A broken governing config surfacing during subject resolution is a preflight
-    // problem the user must fix (exit 2), not an internal harness failure (exit 1).
-    const exitCode = exitCodeForRunError(err);
+    // problem the user must fix, not an internal harness failure.
     process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
-    process.exit(exitCode);
+    // 🪤 `return` after a `never`: under test `process.exit` is a spy that RETURNS.
+    exitWithReason(reasonForRunError(err));
     return;
   }
 
@@ -1330,10 +1351,10 @@ export async function runSkillTestRun(
   try {
     // buildHarnessOpts assembles the companion records (--with/--with-optional and
     // config with:/optional:) and can throw DuplicateStagedSkillError on a repeated
-    // name — inside the try so it maps to exit 2 like every other preflight error.
+    // name — inside the try so it reads as preflight like every other preflight error.
     const harnessOpts = buildHarnessOpts(subject, options, knobs, config, globalTest);
     applyResolvedSubject(harnessOpts, resolvedSubject);
-    // Companion build resolution (issue #158): a --with/--with-optional companion
+    // Companion build resolution: a --with/--with-optional companion
     // whose source is a path into a declared skill gets built (its `files:`
     // injection runs) exactly like the subject, instead of a raw source-tree copy.
     const repoRoot = resolveRepoRoot();
@@ -1355,7 +1376,6 @@ export async function runSkillTestRun(
     // Asked of the PATH rather than re-derived from --keep/--out/--workdir on
     // purpose: the retention rule has ONE author (cleanupHarness), and a second copy
     // of its predicate here would drift from it. The filesystem cannot.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- harness root path returned by our own domain call
     if (existsSync(result.harnessPath)) {
       process.stderr.write(`Harness: ${result.harnessPath}\n`);
     }
@@ -1378,22 +1398,20 @@ export async function runSkillTestRun(
     if (result.workspacesPath !== undefined) {
       process.stderr.write(`Workspaces: ${result.workspacesPath}\n`);
     }
-    process.stdout.write(`Summary: ${result.summary}\n`);
-    process.exit(result.exitCode);
+    exitWithResult(result);
     return;
   } catch (err) {
-    // Same rule as the subject arm above (see {@link exitCodeForRunError}): companion
+    // Same rule as the subject arm above (see {@link reasonForRunError}): companion
     // resolution can surface a ConfigLoadError from a DIFFERENT config root than the
-    // subject's, and that must exit 2 (preflight), not 1 (internal).
-    const exitCode = exitCodeForRunError(err);
-    // BootstrapNeededError (exit 3) is the happy "wrote a template, fill it in
-    // and re-run" path — surface its message plainly, not as a hard `Error:`.
+    // subject's, and that must read as preflight, not internal.
+    // BootstrapNeededError is the happy "wrote a template, fill it in and
+    // re-run" path — surface its message plainly, not as a hard `Error:`.
     if (err instanceof BootstrapNeededError) {
       process.stderr.write(`${err.message}\n`);
     } else {
       process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
     }
-    process.exit(exitCode);
+    exitWithReason(reasonForRunError(err));
     return;
   }
 }
@@ -1453,7 +1471,7 @@ export function createSkillTestRunCommand(): Command {
     )
     .option(
       '--allow-eval-failure',
-      'Opt out of the fail-closed default: exit 0 even when an eval fails (for interactive use). By DEFAULT a failing eval exits 4, distinct from the harness-broke codes (1/2/3) so CI can gate on it.',
+      'Opt out of the fail-closed default: exit 0 even when an eval fails (for interactive use). By DEFAULT a failing eval exits 1, distinct from the harness-could-not-run exit 2 (with a Reason: line) so CI can gate on it.',
     )
     .option('--allow-unverified-skill-source', 'Skip the vendored manifest integrity check')
     .option('--i-understand-this-runs-skill-code', 'Acknowledge this command executes skill code (required)')
@@ -1538,23 +1556,24 @@ Model:
 
 Exit Codes:
   0 - Harness ran to completion and every eval passed (or --allow-eval-failure suppressed a failing verdict)
-  1 - Internal error (grader fragment absent/invalid, summary/expectations skew, executor/grader crash, stall/timeout)
-  2 - Preflight failed (missing binary, auth error, eval inputs absent, unsafe workdir, ack missing, broken project config, a required skill -- subject or --with companion -- failed to build, --no-build with no existing dist for one of them, or an OPTIONAL --with-optional companion hitting a non-survivable failure: a destructive plugin-local build failure, missing security ack, or broken config)
-  3 - Bootstrap needed: evals.json was absent, so VAT wrote a starter template next to the skill source. Fill it in and re-run.
-  4 - An eval FAILED (the harness completed and produced a valid grading.json; expectations did not all pass). This is the fail-closed DEFAULT -- suppress with --allow-eval-failure.
+  1 - An eval FAILED (the harness completed and produced a valid grading.json; expectations did not all pass). This is the fail-closed DEFAULT -- suppress with --allow-eval-failure.
+  2 - The harness could not run. A 'Reason: <reason>' line on stderr says why:
+        internal  - the harness broke (grader fragment absent/invalid, summary/expectations skew, executor/grader crash, stall/timeout)
+        preflight - the environment or inputs need fixing (missing binary, auth error, eval inputs absent, unsafe workdir, ack missing, broken project config, a required skill -- subject or --with companion -- failed to build, --no-build with no existing dist for one of them, or an OPTIONAL --with-optional companion hitting a non-survivable failure: a destructive plugin-local build failure, missing security ack, or broken config)
+        bootstrap - evals.json was absent, so VAT wrote a starter template next to the skill source. Fill it in and re-run.
 
-  The taxonomy is designed so a CI consumer can tolerate eval failures while
-  failing closed on every other (harness-broke) outcome:
+  The same three-way contract as every other vat command, so a CI consumer
+  can tolerate eval failures while failing closed on a harness that broke:
 
     vat skill test run my-skill --i-understand-this-runs-skill-code
     case $? in
       0) ;;              # all evals passed
-      4) ;;              # evals failed but the harness is healthy -- tolerate/warn
-      *) exit 1 ;;       # 1/2/3/unknown -- harness broke, fail the build
+      1) ;;              # evals failed but the harness is healthy -- tolerate/warn
+      *) exit 1 ;;       # harness could not run -- fail the build; read Reason:
     esac
 
   Which specific evals failed lives in grading.json, never in the exit code.
-  For interactive iteration, --allow-eval-failure downgrades 4 to 0.
+  For interactive iteration, --allow-eval-failure downgrades 1 to 0.
 
 Example:
   $ vat skill test run my-skill --i-understand-this-runs-skill-code

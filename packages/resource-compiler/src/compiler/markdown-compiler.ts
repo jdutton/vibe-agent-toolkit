@@ -88,7 +88,6 @@ async function compileSingleFile(
 
   try {
     // Read markdown file
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Controlled input from glob
     const markdownContent = readFileSync(sourcePath, 'utf-8');
 
     if (verbose) {
@@ -123,9 +122,7 @@ async function compileSingleFile(
     }
 
     // Write output files
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Controlled output path
     writeFileSync(jsPath, jsCode, 'utf-8');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Controlled output path
     writeFileSync(dtsPath, dtsCode, 'utf-8');
 
     if (verbose) {

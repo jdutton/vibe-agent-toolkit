@@ -3,7 +3,7 @@
  * work from, answered by a projection instead of by `crawlDirectory`.
  *
  * This is the second production caller of `populate()` and the first outside
- * `vat inventory`. It is the lane Jeff sequenced ahead of the git-lane work, for
+ * `vat inventory`. It is the lane sequenced ahead of the git-lane work, for
  * a reason worth restating where the code is: **validation is the only lane
  * where a wrong membership answer becomes an adopter-facing finding.**
  * `vat inventory` prints YAML nobody diffs; `vat resources validate` emits
@@ -71,7 +71,7 @@
  *
  * ## Cost
  *
- * Slower than `git ls-files`, structurally, and knowingly — the same trade Jeff
+ * Slower than `git ls-files`, structurally, and knowingly — the same trade
  * accepted for `vat inventory` (~5.3× there). The population is obtained by an
  * enumeration plus one `lstat` per surviving path (no byte is read; see
  * `contentDemand: 'deferred'` below), against one `ls-files` spawn.

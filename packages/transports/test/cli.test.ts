@@ -65,7 +65,6 @@ function expectSavedSessionStructure(mockStore: SessionStore<unknown>, expectedS
  * Start and stop a transport whose store rejects `load` with `error`; it must not throw.
  */
 async function startOverFailingLoad(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mockFn: ConversationalFunction<string, string, any>,
   error: unknown,
 ): Promise<void> {
@@ -86,7 +85,6 @@ async function startOverFailingLoad(
  * Helper to create a transport with a new session (not found in store)
  */
 function createTransportWithNewSession<TState>(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   mockFn: ConversationalFunction<string, string, any>,
   initialState: TState,
 ): { transport: CLITransport<TState>; mockStore: SessionStore<TState> } {
@@ -107,7 +105,6 @@ function createTransportWithNewSession<TState>(
 }
 
 describe('CLITransport', () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let mockFn: ConversationalFunction<string, string, any>;
   let transport: CLITransport;
 
@@ -177,7 +174,6 @@ describe('CLITransport', () => {
 });
 
 describe('CLITransport with SessionStore', () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let mockFn: ConversationalFunction<string, string, any>;
   let transport: CLITransport;
   let consoleLogSpy: ReturnType<typeof vi.spyOn>;

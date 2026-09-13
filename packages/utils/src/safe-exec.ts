@@ -2,6 +2,7 @@ import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
 
 import which from 'which';
 
+import { VatError } from './errors/vat-error.js';
 import { isPathAbsentError } from './fs-utils.js';
 import { runGit } from './git-run.js';
 import {
@@ -70,7 +71,7 @@ export interface SafeExecResult {
 /**
  * Error thrown when command execution fails
  */
-export class CommandExecutionError extends Error {
+export class CommandExecutionError extends VatError {
   public readonly status: number;
   public readonly stdout: Buffer | string;
   public readonly stderr: Buffer | string;
@@ -81,8 +82,7 @@ export class CommandExecutionError extends Error {
     stdout: Buffer | string,
     stderr: Buffer | string,
   ) {
-    super(message);
-    this.name = 'CommandExecutionError';
+    super('COMMAND_EXECUTION', message);
     this.status = status;
     this.stdout = stdout;
     this.stderr = stderr;

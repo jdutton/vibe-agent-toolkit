@@ -2,12 +2,12 @@
  * Tests for markdown cache with mtime-based invalidation
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
 import { chmodSync, rmSync, writeFileSync, utimesSync } from 'node:fs';
 
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import type { MarkdownResource } from '../../src/compiler/types.js';
@@ -22,8 +22,6 @@ import {
 const TEST_MD_CONTENT = '## Fragment\nContent';
 
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
-const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 // Test loader factory
 function createTestLoader(fragments: string): () => MarkdownResource {

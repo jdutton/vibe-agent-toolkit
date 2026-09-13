@@ -15,7 +15,8 @@ import { type Dirent, promises as fs } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import { parseCacheDirectory } from '@vibe-agent-toolkit/resources';
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { direntKind, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
@@ -226,7 +227,8 @@ export async function cacheClearCommand(options: CacheClearOptions = {}): Promis
     // `handleCommandError` instead would suppress the report entirely, which is
     // the defect this branch exists to fix: the operator most needs to know how
     // much of the cache survived precisely when the command did not finish.
-    process.exit(report.status === 'partial' ? 1 : 0);
+    // A partial clear is a run that did not finish, not a finding about the tree.
+    process.exit(report.status === 'partial' ? ExitCode.ERROR : ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'CacheClear');
   }
@@ -241,7 +243,6 @@ export async function cacheClearCommand(options: CacheClearOptions = {}): Promis
  */
 async function readdirOrNull(dir: string): Promise<Dirent[] | null> {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is the derived cache root or a caller-injected test directory
     return await fs.readdir(dir, { withFileTypes: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
@@ -257,9 +258,11 @@ async function measureEntries(
   const usages = await Promise.all(
     entries.map(async (entry) => {
       const child = safePath.join(dir, entry.name);
-      // Not `isFile()`: a symlink or socket is still an entry that is about to
-      // be removed, and counting only regular files would under-report it.
-      return entry.isDirectory() ? measureTree(child) : { entries: 1, bytes: await sizeOf(child) };
+      // Not `isFile()`, and NOT followed: a symlink or socket is still an entry
+      // that is about to be removed, and counting only regular files would
+      // under-report it — while walking INTO a linked directory would count a
+      // tree `rm -rf` leaves untouched.
+      return direntKind(entry) === 'directory' ? measureTree(child) : { entries: 1, bytes: await sizeOf(child) };
     })
   );
 
@@ -288,7 +291,6 @@ async function measureTree(dir: string): Promise<TreeUsage> {
  */
 async function sizeOf(target: string): Promise<number> {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is inside the cache root being measured
     const stats = await fs.lstat(target);
     return stats.size;
   } catch (error) {

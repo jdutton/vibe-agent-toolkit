@@ -35,7 +35,7 @@ not, and the architectural direction for each gap.
 
 ### File-based install: Claude Code CLI only
 
-`vat skills install` and `vat skills uninstall` operate exclusively on:
+`vat claude plugin install` / `vat claude plugin uninstall` operate exclusively on (`vat skills install --target <t> --scope <s>` writes a flat skills directory for one of seven targets and registers nothing):
 ```
 ~/.claude/
 ├── plugins/
@@ -68,10 +68,15 @@ vat skills install ./my-skills.zip
 
 ### Uninstall (current state)
 
-`vat skills uninstall` removes skills from `~/.claude/skills/` only. It does NOT
-remove plugin-system installs (the `~/.claude/plugins/` tree).
+`vat claude plugin uninstall <plugin@marketplace>` (or `--all` for every plugin the current npm
+package installed) reverses `installPlugin()`: the marketplace plugin directory, its cache dir, the
+`installed_plugins` / `known_marketplaces` registry entries and the settings entry. It does NOT
+remove skills installed flat into `~/.claude/skills/` — `vat claude plugin install <dir|zip>`,
+`--dev`, and `vat skills install` produce those, and they are not registered as plugins; delete
+the directory. There is no `vat skills uninstall`.
 
-**A full `vat plugins uninstall` command does not yet exist.** See design notes below.
+**A cross-target `vat plugins uninstall` that also sweeps flat installs does not exist.** See design
+notes below.
 
 ---
 
@@ -169,7 +174,7 @@ Uninstalling a plugin installed via the file-based method requires reversing 5 a
 - **Not-VAT-installed case**: if plugin directory exists but no registry entries, delete
   the directory and clean settings.json; emit a warning that the plugin was not
   installed via VAT
-- **`--dry-run`**: show what would be deleted without deleting (follow `vat skills uninstall` pattern)
+- **`--dry-run`**: show what would be deleted without deleting (follow the `vat claude plugin uninstall --dry-run` pattern)
 - **`--target`**: code-cli | desktop | all (default: code-cli until Desktop is implemented)
 - **`vat plugins list`**: companion command to show installed plugins — needed for
   discoverability before uninstalling

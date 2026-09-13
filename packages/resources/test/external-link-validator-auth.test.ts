@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { isSingleFsSegment, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ExternalLinkValidator, isTransientRefusal } from '../src/external-link-validator.js';
@@ -28,7 +29,6 @@ const BEARER_TOKEN_TEMPLATE = 'Bearer ${token}';
  * paths are tempDir-rooted, controlled by the test, not user input.
  */
 function fsExists(p: string): boolean {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
   return existsSync(p);
 }
 
@@ -429,7 +429,6 @@ describe('ExternalLinkValidator — auth cache scoping (#113 §6.3)', () => {
     const cacheFile = safePath.join(tempDir, 'auth-testuser', CACHE_FILE);
     expect(fsExists(cacheFile)).toBe(true);
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test reads its own write
     const cacheData = JSON.parse(readFileSync(cacheFile, 'utf8')) as Record<string, unknown>;
     const expectedKey = createHash('sha256').update(REWRITTEN).digest('hex');
     const originalKey = createHash('sha256').update(HOST).digest('hex');
@@ -518,9 +517,7 @@ describe('ExternalLinkValidator — auth cache scoping (#113 §6.3)', () => {
       // The auth dir name must not itself contain a path separator or `..`
       // (defense-in-depth — even if safePath.join cleaned, the persisted
       // directory name shouldn't carry traversal-shaped fragments).
-      expect(authDir.includes('/')).toBe(false);
-      expect(authDir.includes('\\')).toBe(false);
-      expect(authDir.includes('..')).toBe(false);
+      expect(isSingleFsSegment(authDir)).toBe(true);
       const full = safePath.join(tempDir, authDir);
       expect(statSync(full).isDirectory()).toBe(true);
     });
@@ -782,7 +779,6 @@ describe('ExternalLinkValidator — the token never reaches the emitted result (
     const authDir = safePath.join(tempDir, 'auth-leakcheck');
     const cachePath = safePath.join(authDir, CACHE_FILE);
     if (fsExists(cachePath)) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir-rooted path built by this test
       expect(readFileSync(cachePath, 'utf8')).not.toContain(LEAK_CANARY);
     }
   });

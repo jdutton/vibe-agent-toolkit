@@ -35,7 +35,6 @@ afterEach(() => {
 /** A project whose `skills.config` names one skill, so `dist/skills/<SKILL>` is the one candidate. */
 function projectWithOneCandidate(): string {
   const root = safePath.resolve(createTempDir());
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
   writeFileSync(
     safePath.join(root, 'vibe-agent-toolkit.config.yaml'),
     `version: 1\nskills:\n  include:\n    - "nothing/**/SKILL.md"\n  config:\n    ${SKILL}:\n      files: []\n`,

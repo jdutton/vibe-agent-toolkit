@@ -13,7 +13,8 @@
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { readSnapshot, snapshotPaths, writeSnapshot } from '../../src/qa-snapshot/store.js';
@@ -183,7 +184,6 @@ describe('qa-snapshot store', () => {
     const dir = snapshotDir();
     writeOneLaneSnapshot(dir);
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- artifact inside a mkdtemp-backed snapshot directory created by this test
     writeFileSync(artifactPath(dir, RESOURCES_ARTIFACT), 'a\r\nb\r\n', 'utf8');
 
     expect(readSnapshot(dir).artifacts.get(RESOURCES_ARTIFACT)).toBe('a\nb\n');
@@ -193,16 +193,13 @@ describe('qa-snapshot store', () => {
     const dir = snapshotDir();
     mkdirSyncReal(dir, { recursive: true });
     const stray = safePath.join(safePath.resolve(dir), 'notes.txt');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed basename inside a mkdtemp-backed directory created by this test
     writeFileSync(stray, STRAY_TEXT, 'utf8');
 
     expect(() => {
       writeSnapshot(dir, makeManifest(), new Map());
     }).toThrow(/not a snapshot directory/i);
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- mkdtemp-backed directory created by this test
     expect(readdirSync(safePath.resolve(dir))).toEqual(['notes.txt']);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed basename inside a mkdtemp-backed directory created by this test
     expect(readFileSync(stray, 'utf8')).toBe(STRAY_TEXT);
   });
 
@@ -218,13 +215,11 @@ describe('qa-snapshot store', () => {
         [AUDIT_ARTIFACT, AUDIT_TEXT],
       ]),
     );
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- artifact inside a mkdtemp-backed snapshot directory created by this test
     expect(existsSync(artifactPath(dir, AUDIT_ARTIFACT))).toBe(true);
 
     writeOneLaneSnapshot(dir);
 
     // A survivor would read to a later comparison as "unchanged".
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- artifact inside a mkdtemp-backed snapshot directory created by this test
     expect(existsSync(artifactPath(dir, AUDIT_ARTIFACT))).toBe(false);
     expect([...readSnapshot(dir).artifacts.keys()]).toEqual([RESOURCES_ARTIFACT]);
   });
@@ -247,7 +242,6 @@ describe('qa-snapshot store', () => {
     // sailed through as long as the number matched.
     const dir = snapshotDir();
     writeOneLaneSnapshot(dir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifest inside a mkdtemp-backed snapshot directory created by this test
     writeFileSync(
       snapshotPaths(dir).manifest,
       JSON.stringify({ ...makeManifest(), formatVersion: 2 }),
@@ -264,7 +258,6 @@ describe('qa-snapshot store', () => {
     const withoutPlatform = Object.fromEntries(
       Object.entries(makeManifest()).filter(([key]) => key !== 'platform'),
     );
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifest inside a mkdtemp-backed snapshot directory created by this test
     writeFileSync(snapshotPaths(dir).manifest, JSON.stringify(withoutPlatform), 'utf8');
 
     expect(() => readSnapshot(dir)).toThrow(/platform/);
@@ -274,7 +267,6 @@ describe('qa-snapshot store', () => {
     const dir = snapshotDir();
     writeOneLaneSnapshot(dir);
     const manifest = makeManifest({ lanes: [laneEntry('resources', RESOURCES_ARTIFACT)] });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifest inside a mkdtemp-backed snapshot directory created by this test
     writeFileSync(
       snapshotPaths(dir).manifest,
       JSON.stringify({

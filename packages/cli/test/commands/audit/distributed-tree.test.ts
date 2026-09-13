@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is a temp dir the test owns */
 /**
  * The provenance classifier behind `PACKAGED_AGENT_INSTRUCTION_FILE`'s audit lane.
  *

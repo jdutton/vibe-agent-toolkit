@@ -41,11 +41,9 @@ function expectSuccessfulAudit(result: Awaited<ReturnType<typeof executeCli>>): 
 function createLinkedSkill(baseDir: string): string {
   const skillDir = safePath.join(baseDir, 'test-skill');
   const resourcesDir = safePath.join(skillDir, 'resources');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test directory
   fs.mkdirSync(resourcesDir, { recursive: true });
 
   // SKILL.md with links to resources
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
   fs.writeFileSync(safePath.join(skillDir, 'SKILL.md'), `---
 name: test-linked-skill
 description: A test skill with linked markdown resources
@@ -58,20 +56,17 @@ description: A test skill with linked markdown resources
 `);
 
   // guide-a.md links to guide-c.md (transitive)
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
   fs.writeFileSync(safePath.join(resourcesDir, 'guide-a.md'), `# Guide A
 
 See also [Guide C](guide-c.md) for more details.
 `);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
   fs.writeFileSync(safePath.join(resourcesDir, 'guide-b.md'), `# Guide B
 
 Standalone reference document.
 `);
 
   // guide-c.md (transitively linked from guide-a)
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
   fs.writeFileSync(safePath.join(resourcesDir, 'guide-c.md'), `# Guide C
 
 Deep reference document.
@@ -110,7 +105,6 @@ describe.skipIf(process.platform === 'win32')('Audit Dogfooding (system test)', 
 
   it('should audit dist skills without errors', async () => {
     const distSkillsDir = safePath.join(projectRoot, 'packages/vat-development-agents/dist/skills');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- project path
     if (!fs.existsSync(distSkillsDir)) {
       // dist may not exist if build hasn't run — skip gracefully
       return;
@@ -164,10 +158,8 @@ describe.skipIf(process.platform === 'win32')('Audit Dogfooding (system test)', 
 
     it('should detect broken links via CLI', async () => {
       const brokenDir = safePath.join(tempDir, 'broken-skill');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test directory
       fs.mkdirSync(brokenDir, { recursive: true });
 
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
       fs.writeFileSync(safePath.join(brokenDir, 'SKILL.md'), `---
 name: broken-links-skill
 description: Skill with broken links
@@ -184,8 +176,8 @@ description: Skill with broken links
         { cwd: tempDir },
       );
 
-      // Audit is advisory only — always exits 0 even when errors are found
-      expect(result.status).toBe(0);
+      // Exit 1: the exit code follows `status`, and this tree has an error-severity finding.
+      expect(result.status).toBe(1);
 
       const files = parsed['files'] as Array<Record<string, unknown>> | undefined;
       const issues = files?.[0]?.['issues'] as Array<Record<string, unknown>> | undefined;
@@ -198,7 +190,6 @@ description: Skill with broken links
       const resourcesDir = safePath.join(skillDir, 'resources');
 
       // Add an orphaned file not linked from anywhere
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
       fs.writeFileSync(safePath.join(resourcesDir, 'orphan.md'), '# Orphan\n\nNot linked from anywhere.\n');
 
       const { result, parsed } = await executeCliAndParseYaml(
@@ -222,9 +213,7 @@ description: Skill with broken links
       const skillDir = createLinkedSkill(tempDir);
 
       // Add CLAUDE.md and README.md — should NOT be flagged
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
       fs.writeFileSync(safePath.join(skillDir, 'CLAUDE.md'), '# Claude\n');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
       fs.writeFileSync(safePath.join(skillDir, 'README.md'), '# Readme\n');
 
       const { parsed } = await executeCliAndParseYaml(

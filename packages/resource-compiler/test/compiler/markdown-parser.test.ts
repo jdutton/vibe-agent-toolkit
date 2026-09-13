@@ -23,7 +23,6 @@ const FIXTURE_EDGE_CASES = 'edge-cases.md';
  */
 function loadFixture(filename: string): string {
   const fixturePath = safePath.join(import.meta.dirname, FIXTURES_DIR, filename);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test helper with controlled input
   return readFileSync(fixturePath, 'utf-8');
 }
 

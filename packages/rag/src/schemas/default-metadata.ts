@@ -24,7 +24,7 @@ export const DefaultRAGMetadataSchema = z.object({
   headingLevel: z.number().optional().describe('Heading level (1-6) if chunk is under a heading'),
   startLine: z.number().optional().describe('Starting line number in source file'),
   endLine: z.number().optional().describe('Ending line number in source file'),
-});
+}).strict();
 
 /**
  * DefaultRAGMetadata TypeScript type (inferred from schema)

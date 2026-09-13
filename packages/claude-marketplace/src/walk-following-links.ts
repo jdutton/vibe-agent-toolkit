@@ -68,7 +68,6 @@ async function entryKind(
   let target: FileKind = entry;
   if (entry.isSymbolicLink()) {
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- trusted plugin dir
       target = await fs.stat(entryPath);
     } catch (error) {
       if (!isPathAbsentError(error)) unlistable.push({ path: entryPath, reason: reasonOf(error) });
@@ -92,11 +91,9 @@ export async function walkFollowingLinks(rootDir: string, options: WalkOptions =
   const visited = new Set<string>();
 
   async function listDir(dir: string): Promise<Dirent<string>[]> {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- trusted plugin dir
     const real = await fs.realpath(dir);
     if (visited.has(real)) return [];
     visited.add(real);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- trusted plugin dir
     return fs.readdir(dir, { withFileTypes: true, encoding: 'utf-8' });
   }
 

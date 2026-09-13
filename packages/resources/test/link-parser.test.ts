@@ -1,4 +1,3 @@
-
 /**
  * Tests for link-parser.ts
  *
@@ -11,12 +10,12 @@
  */
 
 /* eslint-disable @typescript-eslint/no-non-null-assertion -- tests use non-null assertions for expected values */
-/* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directory */
 
 import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises';
 
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 

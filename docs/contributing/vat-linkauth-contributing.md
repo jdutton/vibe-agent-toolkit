@@ -4,7 +4,10 @@ This guide is for developers working on the linkAuth feature inside VAT itself. 
 adopter documentation (how to configure `resources.linkAuth`), see the main README and
 `vibe-agent-toolkit.config.yaml` reference.
 
-Design: issue #113 in `jdutton/vibe-agent-toolkit`.
+Design: issue #113 in `jdutton/vibe-agent-toolkit`. Every `§n` cited in the source under
+`packages/resources/src/link-auth/` and `packages/resources/src/schemas/link-auth.ts` is a section
+of that issue (§4 vocabulary, §5 macros, §6 resolution, §6.2 fetch headers); the source names only
+the number so it does not carry a reference that decays.
 
 ## Architecture overview
 

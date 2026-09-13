@@ -1,6 +1,6 @@
 /**
  * Classify a response from an authenticated external-link fetch into one of
- * the outcomes defined in design issue #113 §7.
+ * the outcomes the linkAuth design §7 defines.
  *
  * Pure function: takes the HTTP status from a completed fetch plus the
  * matched provider's `check` block, returns the outcome name and the matching

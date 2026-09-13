@@ -9,7 +9,7 @@ import type {
 	McpRef,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
@@ -85,7 +85,6 @@ export async function extractClaudePluginInventory(
 	const { sharedRegistry, sharedPopulation, gitTrackerSource } = options;
 	const absolute = safePath.resolve(pluginPath);
 
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- absolute is resolved from caller-supplied path, safe for plugin extraction
 	if (!existsSync(absolute)) {
 		return new ClaudePluginInventory({
 			path: absolute,
@@ -104,7 +103,6 @@ export async function extractClaudePluginInventory(
 	const { rawManifest, manifest } = await readManifest(manifestFilePath, parseErrors);
 
 	const rootSkillMd = safePath.join(absolute, SKILL_MD);
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated absolute plugin root
 	const hasRootSkill = existsSync(rootSkillMd);
 	const shape: ClaudePluginInventory['shape'] =
 		rawManifest !== undefined && hasRootSkill ? SHAPE_SKILL_CLAUDE_PLUGIN : 'claude-plugin';
@@ -141,12 +139,10 @@ type ManifestResult = {
 };
 
 async function readManifest(manifestFilePath: string, parseErrors: ParseErrors): Promise<ManifestResult> {
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated absolute plugin root
 	if (!existsSync(manifestFilePath)) {
 		return { rawManifest: undefined, manifest: {} };
 	}
 
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- absolute path resolved from plugin root
 	const raw = await readFile(manifestFilePath, 'utf-8').catch((e: unknown) => {
 		parseErrors.push({ path: manifestFilePath, message: (e as Error).message });
 		return null;
@@ -202,7 +198,6 @@ function emptyDeclared(): ClaudePluginInventory['declared'] {
 
 function makeRef(base: string, manifestPath: string): ComponentRef {
 	const resolved = safePath.resolve(base, manifestPath);
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from manifest path relative to validated plugin root
 	return { manifestPath, resolvedPath: resolved, exists: existsSync(resolved) };
 }
 
@@ -440,6 +435,15 @@ function describePopulationFailure(absolute: string, error: unknown): string {
 }
 
 /**
+ * One `parseErrors[]` row, marked `unreadable` when the OS refused the path so
+ * the consumer files it as a refusal, not a defect: an `EACCES` on `skills/<name>`
+ * used to reach `vat audit` as `PLUGIN_INVALID_JSON` at error severity.
+ */
+function recordedFailure(path: string, message: string, cause: unknown): ParseErrors[number] {
+	return isFilesystemAccessError(cause) ? { path, message, unreadable: true } : { path, message };
+}
+
+/**
  * The entries of `dir`, or `[]` with the listing failure recorded against `dir`.
  *
  * Every listing this extractor performs goes through here, because each of the
@@ -451,14 +455,13 @@ function describePopulationFailure(absolute: string, error: unknown): string {
  */
 async function listOrRecord(dir: string, parseErrors: ParseErrors): Promise<Dirent<string>[]> {
 	try {
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated absolute plugin root
 		return await readdir(dir, { withFileTypes: true, encoding: 'utf8' });
 	} catch (e) {
 		// `skills/` and `commands/` are each listed twice — once by discovery and
 		// once by the whole-tree crawl behind `unexpected` — so one refusal is one row.
 		const message = (e as Error).message;
 		if (!parseErrors.some(row => row.path === dir && row.message === message)) {
-			parseErrors.push({ path: dir, message });
+			parseErrors.push(recordedFailure(dir, message, e));
 		}
 		return [];
 	}
@@ -478,12 +481,10 @@ async function collectSkillMdPaths(
 	if (shape === SHAPE_SKILL_CLAUDE_PLUGIN) paths.push(rootSkillMd);
 
 	const skillsDir = safePath.join(absolute, 'skills');
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated absolute plugin root
 	if (!existsSync(skillsDir)) return paths;
 
 	for (const { name: entry } of await listOrRecord(skillsDir, parseErrors)) {
 		const skillMd = safePath.join(skillsDir, entry, SKILL_MD);
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated skills directory
 		if (existsSync(skillMd)) paths.push(skillMd);
 	}
 
@@ -495,7 +496,6 @@ async function collectSkillMdPaths(
  * recursing into subdirectories. Every .md file in the tree is treated as a component ref.
  */
 async function discoverComponents(dir: string, parseErrors: ParseErrors): Promise<ComponentRef[]> {
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated absolute plugin root
 	if (!existsSync(dir)) return [];
 	const refs: ComponentRef[] = [];
 	const pluginRoot = safePath.resolve(safePath.join(dir, '..'));
@@ -560,14 +560,12 @@ async function collectAssetParseErrors(absolute: string, parseErrors: ParseError
 	];
 
 	for (const { path, label } of checks) {
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated absolute plugin root
 		if (!existsSync(path)) continue;
 		let raw: string;
 		try {
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated absolute plugin root
 			raw = await readFile(path, 'utf-8');
 		} catch (e) {
-			parseErrors.push({ path, message: `${label} could not be read: ${(e as Error).message}` });
+			parseErrors.push(recordedFailure(path, `${label} could not be read: ${(e as Error).message}`, e));
 			continue;
 		}
 		try {

@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 /**
  * The anchor contract, enforced against LIVE validator output.
  *

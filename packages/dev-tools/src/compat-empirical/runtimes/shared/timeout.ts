@@ -1,9 +1,13 @@
+import { VatError } from '@vibe-agent-toolkit/utils';
+
 /**
  * Run a promise with a timeout. Used by scripted drivers.
  */
 
-export class TimeoutError extends Error {
-  override readonly name = 'TimeoutError';
+export class TimeoutError extends VatError {
+  constructor(message: string) {
+    super('TIMEOUT', message);
+  }
 }
 
 export function withTimeout<T>(

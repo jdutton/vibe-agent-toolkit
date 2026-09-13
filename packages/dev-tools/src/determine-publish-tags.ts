@@ -22,12 +22,12 @@
  *   1 - Error (invalid version, network error, etc.)
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 // appendFileSync uses GITHUB_OUTPUT env var (controlled by GitHub Actions)
 // readFileSync reads from PROJECT_ROOT constant (controlled, not user input)
 
 import { appendFileSync, readFileSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import semver from 'semver';
 
@@ -71,9 +71,9 @@ Outputs (GitHub Actions format):
 
 Exit codes:
   0 - Success
-  1 - Error (invalid version, network error, etc.)
+  2 - Error (invalid version, network error, etc.)
   `);
-  process.exit(args.length === 0 ? 1 : 0);
+  process.exit(args.length === 0 ? ExitCode.ERROR : ExitCode.OK);
 }
 
 const version = args[0];
@@ -83,7 +83,7 @@ if (!version || !semver.valid(version)) {
   log(`✗ Invalid semver version: ${String(version ?? '(missing)')}`, 'red');
   log('  Expected format: X.Y.Z or X.Y.Z-prerelease', 'yellow');
   log('  Examples: 1.0.0, 2.0.0, 1.0.0-rc.1', 'yellow');
-  process.exit(1);
+  process.exit(ExitCode.ERROR);
 }
 
 // TypeScript now knows version is a valid string
@@ -184,4 +184,4 @@ setGitHubOutput('update_next', updateNext ? 'true' : 'false');
 log('✅ Tag determination complete', 'green');
 console.log('');
 
-process.exit(0);
+process.exit(ExitCode.OK);

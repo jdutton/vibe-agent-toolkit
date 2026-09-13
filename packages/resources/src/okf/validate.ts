@@ -21,6 +21,7 @@
  * only in part.
  */
 
+import type { Severity } from '@vibe-agent-toolkit/schema';
 import { FsLookupCache, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ParseResult } from '../link-parser.js';
@@ -35,7 +36,7 @@ import {
 } from './discovery.js';
 import { conceptFindings, indexFindings, type OkfFindingDraft } from './findings.js';
 import { BundleDirectoryIndex, linkFindings } from './links.js';
-import type { OkfBundleReport, OkfFinding, OkfFindingCode, OkfSeverity } from './types.js';
+import type { OkfBundleReport, OkfFinding, OkfFindingCode } from './types.js';
 
 /** What a bundle validation run needs to know. */
 export interface ValidateOkfBundleOptions {
@@ -55,8 +56,24 @@ export interface ValidateOkfBundleOptions {
    * with nothing better to name pass the string a human would have typed.
    */
   rootSpecifier: string;
-  /** Severity for this bundle's findings. Defaults to `error`. */
-  severity?: OkfSeverity;
+  /**
+   * The dial an adopter sets per bundle. Defaults to `error` — VAT is producer-side.
+   *
+   * ⛔ **It does not reach the three "could not look" codes, and that is not an
+   * exception carved for convenience.** `OKF_BUNDLE_ROOT_UNREADABLE`,
+   * `OKF_SUBDIRECTORY_UNREADABLE` and `OKF_DOCUMENT_UNREADABLE` all say that
+   * conformance was never assessed for some part of the bundle — nothing was
+   * opened there, nothing was judged. A conformance dial cannot downgrade "I
+   * could not look" without producing the green-without-running report this repo
+   * keeps rediscovering: a bundle lowered to `warning` whose root is a typo, or
+   * whose one interesting subtree is unreadable, would otherwise pass silently and
+   * forever.
+   *
+   * Every other code IS a judgement about content that VAT did read, including
+   * `OKF_DOCUMENT_ESCAPES_BUNDLE` — the entry was seen and found not to be a
+   * distributable member — so the dial reaches all of them.
+   */
+  severity?: Severity;
   /**
    * The OKF revision to cross-check a declared `okf_version` against.
    *
@@ -228,7 +245,7 @@ async function inspectDocument(
  * as this bundle's own finding keeps the rest of the run intact.
  *
  * The severity is hard `error` and does not read
- * {@link ValidateOkfBundleOptions.severity}: see {@link OkfSeverity} for why a
+ * {@link ValidateOkfBundleOptions.severity}: see that option for why a
  * conformance dial has no standing over a bundle whose conformance was never
  * assessed.
  *
@@ -267,7 +284,7 @@ function unreadableRootReport(
  *
  * Hard `error` for the same reason the root's is: a subtree nobody could open
  * was never assessed, and a conformance dial has no standing over "I could not
- * look" (see {@link OkfSeverity}).
+ * look" (see {@link ValidateOkfBundleOptions.severity}).
  *
  * @param entry - The directory and the errno discovery recorded
  * @returns A finding naming that subdirectory, not the bundle root
@@ -307,7 +324,7 @@ function unpackableDocumentDraft(entry: OkfUnpackableDocument): OkfFindingDraft 
  * The codes the per-bundle severity dial does not reach, enforced rather than
  * observed.
  *
- * `OkfSeverity`'s docstring states the rule — a conformance dial has no
+ * `ValidateOkfBundleOptions.severity`'s docstring states the rule — a conformance dial has no
  * standing over a finding that says conformance was never ASSESSED — and until
  * now the rule was kept by routing: three call sites built a finished
  * {@link OkfFinding} carrying its own `error`, and everything else built a
@@ -330,7 +347,7 @@ const UNASSESSED_CODES: ReadonlySet<OkfFindingCode> = new Set([
 ]);
 
 /** Stamp the bundle's dial on a draft — unless its code is out of the dial's reach. */
-function stamp(draft: OkfFindingDraft, severity: OkfSeverity): OkfFinding {
+function stamp(draft: OkfFindingDraft, severity: Severity): OkfFinding {
   return { ...draft, severity: UNASSESSED_CODES.has(draft.code) ? 'error' : severity };
 }
 
@@ -353,7 +370,7 @@ export async function validateOkfBundle(
   options: ValidateOkfBundleOptions,
 ): Promise<OkfBundleReport> {
   const root = safePath.resolve(options.root);
-  const severity: OkfSeverity = options.severity ?? 'error';
+  const severity: Severity = options.severity ?? 'error';
 
   let files: OkfBundleFiles;
   try {
@@ -386,7 +403,7 @@ export async function validateOkfBundle(
   }
 
   // The dial is stamped by `stamp`, which withholds it from the codes that say
-  // conformance was never ASSESSED — see UNASSESSED_CODES and OkfSeverity. The
+  // conformance was never ASSESSED — see UNASSESSED_CODES and the dial's doc. The
   // hard findings already carry their own `error` and are appended as built.
   const findings: OkfFinding[] = [
     ...drafts.map((draft) => stamp(draft, severity)),

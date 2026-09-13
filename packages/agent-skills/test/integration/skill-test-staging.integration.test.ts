@@ -29,7 +29,6 @@ function makeRealPlugin(srcRoot: string, pluginName: string, skillName: string):
   const pluginRoot = safePath.join(srcRoot, pluginName);
   const cp = safePath.join(pluginRoot, CLAUDE_PLUGIN_DIR);
   mkdirSyncReal(cp, { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own tmp src
   writeFileSync(safePath.join(cp, PLUGIN_JSON), `{"name":"${pluginName}"}\n`, 'utf8');
   const relPathUnderPlugin = `skills/${skillName}`;
   return { pluginRoot, relPathUnderPlugin, layout: { pluginRoot, relPathUnderPlugin } };
@@ -42,7 +41,6 @@ function makeFakeResolver(srcRoot: string) {
     const id = source.path ?? source.workspace ?? 'x';
     const dir = safePath.join(srcRoot, id.replaceAll(/[^a-z0-9]/gi, '_'));
     mkdirSyncReal(dir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fake resolver creates test fixture files
     writeFileSync(safePath.join(dir, 'SKILL.md'), `# ${id}\n`, 'utf8');
     return { stagedDir: dir, identity: `id-${id}` };
   };
@@ -90,7 +88,6 @@ describe('stageHarness (integration)', () => {
     });
     expect(result.pluginDirs).toHaveLength(2);
     const onDisk = StagedManifestSchema.parse(
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- reading test harness manifest from our own tmp root
       JSON.parse(readFileSync(safePath.join(root, 'staged.manifest.json'), 'utf8')),
     );
     expect(onDisk.entries.map(e => e.name).sort((a, b) => a.localeCompare(b))).toEqual(['skill-creator', 'subject']);
@@ -121,15 +118,13 @@ describe('stageHarness (integration)', () => {
     // Regression (#132): the harness root is reused on a deterministic key and
     // cpSync overlays source onto dest without removing files dropped from the
     // source. A stale staged evals/evals.json then makes the bootstrap check
-    // wrongly pass → spawn/exit-1 instead of re-scaffolding (exit 3). Each
+    // wrongly pass → spawn/`Reason: internal` instead of re-scaffolding (exit 2, `Reason: bootstrap`). Each
     // re-stage must be a clean mirror of source.
     const srcDir = safePath.join(srcRoot, 'subject');
     mkdirSyncReal(srcDir, { recursive: true });
     const evalsDir = safePath.join(srcDir, 'evals');
     mkdirSyncReal(evalsDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own tmp src
     writeFileSync(safePath.join(srcDir, 'SKILL.md'), '# subject\n', 'utf8');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own tmp src
     writeFileSync(safePath.join(evalsDir, 'evals.json'), '{}\n', 'utf8');
 
     // Resolver returns srcDir verbatim so we can mutate the source between runs.
@@ -139,7 +134,6 @@ describe('stageHarness (integration)', () => {
 
     const first = await stageHarness(opts);
     const stagedEvals = safePath.join(first.pluginDirs[0] as string, 'evals', 'evals.json');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
     expect(existsSync(stagedEvals)).toBe(true);
 
     // Drop evals/ from the SOURCE, then re-stage the same harnessRoot+item.
@@ -147,7 +141,6 @@ describe('stageHarness (integration)', () => {
     await stageHarness(opts);
 
     // The stale staged copy must be gone — re-stage mirrors source, not overlays.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
     expect(existsSync(stagedEvals)).toBe(false);
   });
 
@@ -179,9 +172,7 @@ describe('stageHarness (integration)', () => {
         const flat = safePath.join(srcRoot, 'flat-report');
         const scripts = safePath.join(flat, 'scripts');
         mkdirSyncReal(scripts, { recursive: true });
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own tmp src
         writeFileSync(safePath.join(flat, 'SKILL.md'), '# report\n', 'utf8');
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own tmp src
         writeFileSync(safePath.join(scripts, 'report.mjs'), '// report\n', 'utf8');
         return { stagedDir: flat, identity: 'id-report' };
       }) as never,
@@ -192,13 +183,10 @@ describe('stageHarness (integration)', () => {
     expect(result.subjectStagedDir).not.toBeNull();
     const stageRoot = result.pluginDirs[0] as string;
     // The plugin manifest is copied into the staged plugin root...
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
     expect(existsSync(safePath.join(stageRoot, CLAUDE_PLUGIN_DIR, PLUGIN_JSON))).toBe(true);
     // ...and the skill lands at its real nesting, scripts intact.
     const stagedSkill = safePath.join(stageRoot, relPathUnderPlugin);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
     expect(existsSync(safePath.join(stagedSkill, 'SKILL.md'))).toBe(true);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
     expect(existsSync(safePath.join(stagedSkill, 'scripts', 'report.mjs'))).toBe(true);
     // pluginDirs carries the PLUGIN ROOT (for --plugin-dir), not the inner skill dir.
     expect(toForwardSlash(stageRoot).startsWith(toForwardSlash(root))).toBe(true);
@@ -249,19 +237,15 @@ describe('stageHarness (integration)', () => {
     // the layout objects so changing skill names in the future doesn't duplicate literals.
     const stagedSubject = safePath.join(stageRoot, subjectLayout.relPathUnderPlugin);
     const stagedHelper = safePath.join(stageRoot, helperLayout.relPathUnderPlugin);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
     expect(existsSync(stagedSubject)).toBe(true); // was wiped without the fix
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
     expect(existsSync(stagedHelper)).toBe(true);
 
     // The subject's SKILL.md is readable (subjectStagedDir was not deleted).
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
     expect(existsSync(safePath.join(result.subjectStagedDir as string, 'SKILL.md'))).toBe(true);
     // subjectStagedDir points at the nested subject slot, not the plugin root.
     expect(toForwardSlash(result.subjectStagedDir as string)).toBe(toForwardSlash(stagedSubject));
 
     // Plugin manifest is present (copied once; not lost after second skill staged).
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
     expect(existsSync(safePath.join(stageRoot, CLAUDE_PLUGIN_DIR, PLUGIN_JSON))).toBe(true);
   });
 
@@ -271,10 +255,8 @@ describe('stageHarness (integration)', () => {
     const rootFwd = toForwardSlash(root);
     // Flat: the staged subject dir is a DIRECT child of the harness root.
     expect(toForwardSlash(safePath.join(staged, '..'))).toBe(rootFwd);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
     expect(existsSync(safePath.join(staged, 'SKILL.md'))).toBe(true);
     // No plugin manifest was synthesized for a standalone skill.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
     expect(existsSync(safePath.join(staged, CLAUDE_PLUGIN_DIR))).toBe(false);
   });
 });

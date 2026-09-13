@@ -17,12 +17,13 @@ import {
   type OkfBundleReport,
   type OkfFinding,
 } from '@vibe-agent-toolkit/resources';
-import type { SeverityCounts } from '@vibe-agent-toolkit/schema';
-import { findConfigFile } from '@vibe-agent-toolkit/utils';
+import { buildReport, exitCodeForSeverityCounts, reportSchema, type Finding, type Report } from '@vibe-agent-toolkit/schema';
+import { findConfigFile, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { z } from 'zod';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { handleReportCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
-import { writeJsonOutput, writeYamlOutput } from '../../utils/output.js';
+import { writeStructuredOutput } from '../../utils/output.js';
 
 export interface OkfValidateOptions {
   format?: 'yaml' | 'json';
@@ -30,91 +31,59 @@ export interface OkfValidateOptions {
   debug?: boolean;
 }
 
-/** The document this command publishes. */
-interface OkfValidateReport {
-  status: OkfValidateStatus;
-  bundles: OkfBundleReport[];
-  findingCount: number;
-  issueCounts: SeverityCounts;
-  /** Present only when there was nothing to check; says what to declare. */
-  notice?: string;
-}
+/** One checked bundle's `data` row: what was read, never the findings (those are the envelope's). */
+export const OkfBundleSummarySchema = z.object({
+  /** The `okf.bundles.<name>` key. */
+  bundle: z.string(),
+  /** The root as the config file wrote it — never the resolved absolute path. */
+  root: z.string(),
+  /** Every non-reserved `.md` beneath the root, bundle-relative and sorted. */
+  conceptDocuments: z.array(z.string()),
+  /** Every `index.md` / `log.md` beneath the root, bundle-relative and sorted. */
+  reservedDocuments: z.array(z.string()),
+  /** What the root `index.md` declares, when it declares a well-formed one. Reported, never obeyed. */
+  declaredOkfVersion: z.string().optional(),
+}).strict();
 
-/**
- * `no-bundles` is a third word on purpose, and it is not cosmetic.
- *
- * 🪤 This command used to print `status: passed`, `bundles: []`, exit 0 when a
- * project declared no `okf.bundles` at all — a report indistinguishable from a
- * bundle that was read in full and found conformant. A mistyped key
- * (`okf.bundle:`, `okf.Bundles:`) therefore reads as a clean bill of health,
- * which is the *green-without-running* shape this repo keeps rediscovering.
- *
- * `vat resources check` already answers the identical situation properly — "No
- * checks are declared. Add them under `resources.checks` …" — so this follows a
- * convention the repo holds rather than inventing one.
- *
- * The exit code stays 0: nothing failed, and failing a build for a feature the
- * project never opted into would be worse. It is the status *word* that must not
- * claim a pass, because that word is what a human and a CI log actually read.
- */
-export type OkfValidateStatus = 'passed' | 'failed' | 'no-bundles';
-
-/** The summary half of the report: pure, so the status rule is testable. */
-export interface OkfValidateSummary {
-  status: OkfValidateStatus;
-  findingCount: number;
+export const OkfValidateDataSchema = z.object({
+  bundles: z.array(OkfBundleSummarySchema),
   /**
-   * The severity distribution, published BESIDE the status rather than folded
-   * into it.
+   * Present only when there was nothing to check, and says what to declare or
+   * which root to look at.
    *
-   * Load-bearing here specifically because OKF severity is adopter-configurable
-   * per bundle (`okf.bundles.<name>.severity`). A project that lowers a bundle
-   * to `warning` gets `status: passed` and exit 0 for a bundle carrying real
-   * conformance findings — correct, and completely opaque from the status word
-   * alone. The distribution is the only thing in the report that distinguishes
-   * "nothing was found" from "everything found was downgraded".
+   * 🪤 The command used to print `status: passed`, `bundles: []`, exit 0 when a
+   * project declared no `okf.bundles` at all — a report indistinguishable from
+   * a bundle read in full and found conformant, so a mistyped key
+   * (`okf.bundle:`, `okf.Bundles:`) read as a clean bill of health. The
+   * envelope's REQUIRED `examined` now says `0` in that case, and this sentence
+   * says why. The exit code stays 0: nothing failed, and failing a build for a
+   * feature the project never opted into would be worse.
    */
-  issueCounts: SeverityCounts;
-  notice?: string;
-}
+  notice: z.string().optional(),
+}).strict();
 
-/**
- * Count one bundle set's findings by severity.
- *
- * Not `countBySeverity` from `@vibe-agent-toolkit/schema`: that takes
- * `ValidationIssue[]`, whose `code` is the shared `IssueCode` registry union,
- * and an OKF finding's code is drawn from the specification's own vocabulary
- * rather than that registry. The counts field is still typed as the shared
- * `SeverityCounts`, so the SHAPE stays checked against the canonical one and a
- * bucket cannot be added, renamed or dropped here alone.
- *
- * @param findings - Every finding across every bundle that was checked
- * @returns The per-severity distribution
- */
-function countOkfFindings(findings: readonly OkfFinding[]): SeverityCounts {
-  let errors = 0;
-  let warnings = 0;
-  let info = 0;
-  for (const finding of findings) {
-    if (finding.severity === 'error') {
-      errors += 1;
-    } else if (finding.severity === 'warning') {
-      warnings += 1;
-    } else {
-      info += 1;
-    }
-  }
-  return { errors, warnings, info };
+export type OkfBundleSummary = z.infer<typeof OkfBundleSummarySchema>;
+export type OkfValidateData = z.infer<typeof OkfValidateDataSchema>;
+
+/** The document this command publishes. */
+export const OKF_VALIDATE_REPORT_SCHEMA = reportSchema(OkfValidateDataSchema);
+
+export type OkfValidateReport = Report<OkfValidateData>;
+
+/** One bundle's report beside the absolute root it was read from. */
+export interface CheckedOkfBundle {
+  readonly report: OkfBundleReport;
+  /** The resolved absolute root, so a finding can name a project-relative file. */
+  readonly root: string;
 }
 
 /**
  * The bundles whose root was read successfully and held not one markdown file.
  *
- * 🪤 The same green-without-running shape the `no-bundles` notice exists for,
- * one level down. A `root:` typo that lands on a real-but-wrong directory, or a
- * root written one level too deep, produces `status: passed`, exit 0 and an
- * empty findings list — a report indistinguishable from a bundle that was read
- * in full and found conformant.
+ * 🪤 The same green-without-running shape the `notice` exists for, one level
+ * down. A `root:` typo that lands on a real-but-wrong directory, or a root
+ * written one level too deep, produces zero findings and an `examined` that
+ * only THIS bundle's rows explain — so the run says so in words too.
  *
  * A bundle carrying findings is excluded even when its document lists are empty:
  * that is the unreadable-root case, which already says the truthful thing in its
@@ -148,43 +117,86 @@ function vacuousNotice(vacuous: readonly string[]): string {
 }
 
 /**
- * Decide the status word and the counts for a set of bundle reports.
+ * The sentence a run carries when it examined less than a reader would assume.
  *
- * @param bundles - One report per bundle that was actually checked
- * @returns The status, the finding count and severity distribution, and a
- *   notice when nothing was declared or a declared bundle held nothing
+ * @param bundles - Every bundle report in the run
+ * @returns The notice, or nothing when every declared bundle held documents
  */
-export function summarizeOkfBundles(bundles: readonly OkfBundleReport[]): OkfValidateSummary {
-  const findings = bundles.flatMap((report) => report.findings);
-  const findingCount = findings.length;
-  const issueCounts = countOkfFindings(findings);
-
-  if (bundles.length === 0) {
-    return {
-      status: 'no-bundles',
-      findingCount,
-      issueCounts,
-      notice:
-        'No OKF bundles are declared, so nothing was checked. Declare one under `okf.bundles.<name>.root` in vibe-agent-toolkit.config.yaml; every non-reserved .md beneath that root is then checked for frontmatter carrying a non-empty `type`.',
-    };
-  }
-
-  // Status and exit code deliberately do NOT move: nothing failed, and failing a
-  // build over an empty directory would be worse than the silence. It is the
-  // report that must stop implying a bundle was read when it was not.
+function noticeFor(bundles: readonly OkfBundleReport[]): string | undefined {
+  if (bundles.length === 0) return NO_BUNDLES_NOTICE;
   const vacuous = vacuousBundles(bundles);
-  const status: OkfValidateStatus = issueCounts.errors > 0 ? 'failed' : 'passed';
+  return vacuous.length > 0 ? vacuousNotice(vacuous) : undefined;
+}
 
+const NO_BUNDLES_NOTICE =
+  'No OKF bundles are declared, so nothing was checked. Declare one under `okf.bundles.<name>.root` in vibe-agent-toolkit.config.yaml; every non-reserved .md beneath that root is then checked for frontmatter carrying a non-empty `type`.';
+
+/**
+ * A bundle's finding as the envelope publishes it: the same code, severity and
+ * message, with `location` the project-relative path of the document — the
+ * file you would open — rather than a bundle-relative `document` a reader had
+ * to join with the bundle's root by hand.
+ *
+ * @param finding - The lane's finding
+ * @param root - The bundle's absolute root
+ * @param projectRoot - What `location` is relative to
+ * @returns The published finding
+ */
+function toFinding(finding: OkfFinding, root: string, projectRoot: string): Finding {
   return {
-    status,
-    findingCount,
-    issueCounts,
-    ...(vacuous.length > 0 && { notice: vacuousNotice(vacuous) }),
+    code: finding.code,
+    severity: finding.severity,
+    message: finding.message,
+    location: issueLocation(safePath.join(root, finding.document), projectRoot),
+    ...(finding.link === undefined ? {} : { link: finding.link }),
+    ...(finding.line === undefined ? {} : { line: finding.line }),
   };
 }
 
 /**
- * Assemble the report for every selected bundle.
+ * Assemble the report for a set of checked bundles. Pure, so the status rule
+ * and the denominator are unit-testable.
+ *
+ * `examined` counts every document that was opened and judged — concept and
+ * reserved alike — across every bundle. A declared-but-empty bundle and an
+ * empty declaration both examine zero, and the notice tells them apart.
+ *
+ * @param checked - One report per bundle that was actually checked, with its root
+ * @param projectRoot - What every finding's `location` is relative to
+ * @returns The report
+ */
+export function summarizeOkfBundles(
+  checked: readonly CheckedOkfBundle[],
+  projectRoot: string,
+): OkfValidateReport {
+  const bundles = checked.map((entry) => entry.report);
+  const findings = checked.flatMap((entry) =>
+    entry.report.findings.map((finding) => toFinding(finding, entry.root, projectRoot)),
+  );
+  const examined = bundles.reduce(
+    (sum, report) => sum + report.conceptDocuments.length + report.reservedDocuments.length,
+    0,
+  );
+  const notice = noticeFor(bundles);
+
+  return buildReport<OkfValidateData>({
+    examined,
+    findings,
+    data: {
+      bundles: bundles.map((report) => ({
+        bundle: report.bundle,
+        root: report.root,
+        conceptDocuments: report.conceptDocuments,
+        reservedDocuments: report.reservedDocuments,
+        ...(report.declaredOkfVersion === undefined ? {} : { declaredOkfVersion: report.declaredOkfVersion }),
+      })),
+      ...(notice === undefined ? {} : { notice }),
+    },
+  });
+}
+
+/**
+ * Check every selected bundle and assemble the report.
  *
  * Separate from the action so the shape is testable without a process exit.
  *
@@ -201,17 +213,18 @@ export async function okfValidateReport(
   }
 
   const config = await parseConfigFile(configPath);
-  const runs = okfBundleRuns(config.okf, dirname(configPath), {
+  const projectRoot = dirname(configPath);
+  const runs = okfBundleRuns(config.okf, projectRoot, {
     ...(bundleArg !== undefined && { bundle: bundleArg }),
     ...(options.specVersion !== undefined && { specVersion: options.specVersion }),
   });
 
-  const bundles: OkfBundleReport[] = [];
+  const checked: CheckedOkfBundle[] = [];
   for (const run of runs) {
-    bundles.push(await validateOkfBundle(run));
+    checked.push({ report: await validateOkfBundle(run), root: run.root });
   }
 
-  return { ...summarizeOkfBundles(bundles), bundles };
+  return summarizeOkfBundles(checked, projectRoot);
 }
 
 /** Action handler for `vat okf validate [bundle]`. */
@@ -223,17 +236,13 @@ export async function okfValidateCommand(
   const startTime = Date.now();
 
   try {
-    const report = await okfValidateReport(bundleArg, options);
-    if (options.format === 'json') {
-      writeJsonOutput(report);
-    } else {
-      writeYamlOutput(report);
-    }
+    const report = { ...(await okfValidateReport(bundleArg, options)), durationMs: Date.now() - startTime };
+    writeStructuredOutput(report, options.format);
     // Read from the counts the report PUBLISHES, not from the status word: an
     // adopter who promotes or lowers a bundle's severity then gates on exactly
     // the number a reader can see.
-    process.exit(report.issueCounts.errors > 0 ? 1 : 0);
+    process.exit(exitCodeForSeverityCounts(report.summary));
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'OKF validate', options.format);
+    handleReportCommandError(error, logger, startTime, 'OKF validate', options.format);
   }
 }

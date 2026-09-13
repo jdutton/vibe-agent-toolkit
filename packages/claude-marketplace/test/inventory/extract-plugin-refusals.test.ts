@@ -11,8 +11,8 @@
 
 import { writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
-import { refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite , refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { extractClaudePluginInventory } from '../../src/inventory/extract-plugin.js';
@@ -23,7 +23,6 @@ const SKILL_MD = 'SKILL.md';
 
 function writeAt(dir: string, file: string, content: string): void {
 	mkdirSyncReal(dir, { recursive: true });
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
 	writeFileSync(safePath.join(dir, file), content);
 }
 

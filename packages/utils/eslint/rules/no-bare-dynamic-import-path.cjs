@@ -114,8 +114,12 @@ module.exports = {
     docs: {
       description:
         'Disallow dynamic `import()` of a filesystem path; wrap with `pathToFileURL(p).href`.',
-      category: 'Cross-platform compatibility',
+      category: 'URLs and dynamic imports',
+      bans: '`await import(absolutePath)`',
+      useInstead: '`dynamicImportPath()` / `pathToFileURL(p).href`',
+      subpath: '/fs',
       recommended: true,
+      recommendedSeverity: 'error',
     },
     messages: {
       useFileUrl:

@@ -224,7 +224,7 @@ function stabilityLine(row: IoCommandStats): string {
  * because it qualifies the numbers the same way they do: 436 user calls is a
  * measurement of *some* enumerator, and a reader who cannot see which one from
  * the line will infer it from a call-site signature — which is what the
- * 2026-09-11 git-vs-filesystem A/B had to do. A row whose output named no lane
+ * first git-vs-filesystem A/B had to do. A row whose output named no lane
  * says so in words rather than leaving a gap, since a gap reads as ordinary.
  *
  * @param row - The command's statistics

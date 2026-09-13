@@ -34,16 +34,13 @@ async function setupGitProject(tempDir: string): Promise<{
   createGitRepo(projectRoot);
 
   // Create .gitignore
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is from temp dir
   fs.writeFileSync(
     safePath.join(projectRoot, '.gitignore'),
     '# Test gitignore\nignored/\n*.secret\n'
   );
 
   // Create directory structure
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is from temp dir
   fs.mkdirSync(safePath.join(projectRoot, 'docs'));
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is from temp dir
   fs.mkdirSync(safePath.join(projectRoot, 'ignored'));
 
   // Create files
@@ -51,11 +48,8 @@ async function setupGitProject(tempDir: string): Promise<{
   const ignoredFile = safePath.join(projectRoot, 'ignored', 'secret.md');
   const nonIgnoredFile = safePath.join(projectRoot, 'docs', 'public.md');
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
   fs.writeFileSync(sourceFile, '# Guide\n[Link](../ignored/secret.md)\n');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
   fs.writeFileSync(ignoredFile, '# Secret\n');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
   fs.writeFileSync(nonIgnoredFile, '# Public\n');
 
   return { projectRoot, sourceFile, ignoredFile, nonIgnoredFile };
@@ -133,13 +127,11 @@ describe('isWithinProject', () => {
     // mount), isWithinProject must canonicalize BOTH sides. Otherwise a file
     // legitimately inside the project gets false-flagged as outside, surfacing
     // in resolveLocalHref as a bogus absolute_escapes_root for leading-/ links.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
     const realRoot = fs.realpathSync(suite.tempDir);
     const symlinkRoot = realRoot + '-symlink';
     createSymlink(cap, realRoot, symlinkRoot);
     try {
       const fileInsideRealRoot = safePath.join(realRoot, 'inside.md');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
       fs.writeFileSync(fileInsideRealRoot, '# inside\n');
       expect(isWithinProject(fileInsideRealRoot, symlinkRoot)).toBe(true);
     } finally {
@@ -172,12 +164,10 @@ describe('validateLink - git-ignore safety', () => {
 
     // Create another ignored file
     const anotherIgnoredFile = safePath.join(projectRoot, 'ignored', 'other.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is from temp dir
     fs.writeFileSync(anotherIgnoredFile, '# Other Secret\n');
 
     // Create a source file that is also ignored
     const ignoredSourceFile = safePath.join(projectRoot, 'ignored', 'index.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is from temp dir
     fs.writeFileSync(ignoredSourceFile, '# Index\n[Link](./secret.md)\n');
 
     const result = await validateWithGitIgnoreCheck(ignoredSourceFile, './secret.md', projectRoot);
@@ -192,7 +182,6 @@ describe('validateLink - git-ignore safety', () => {
 
     // Create ignored source file
     const ignoredSourceFile = safePath.join(projectRoot, 'ignored', 'index.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is from temp dir
     fs.writeFileSync(ignoredSourceFile, '# Index\n[Link](../docs/public.md)\n');
 
     const result = await validateWithGitIgnoreCheck(ignoredSourceFile, '../docs/public.md', projectRoot);
@@ -235,7 +224,6 @@ describe('validateLink - git-ignore safety', () => {
 
     // Create a file matching *.secret pattern
     const secretFile = safePath.join(projectRoot, 'docs', 'password.secret');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is from temp dir
     fs.writeFileSync(secretFile, 'secret-data\n');
 
     const result = await validateWithGitIgnoreCheck(sourceFile, './password.secret', projectRoot);

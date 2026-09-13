@@ -652,7 +652,6 @@ function pollIntervalMs(budgetMs: number): number {
  */
 function logSize(path: string): number {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path this process minted for this run
     return statSync(path).size;
   } catch (error) {
     if (isPathAbsentError(error)) return 0;
@@ -668,7 +667,6 @@ function logSize(path: string): number {
  */
 function readLog(path: string): string {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path this process minted for this run
     return readFileSync(path, 'utf-8');
   } catch (error) {
     if (isPathAbsentError(error)) return '';

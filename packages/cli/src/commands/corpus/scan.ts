@@ -36,7 +36,6 @@ function readVatVersion(): string {
   // packages/cli/dist/commands/corpus/scan.js → packages/cli/package.json
   // packages/cli/src/commands/corpus/scan.ts → packages/cli/package.json
   const pkgPath = safePath.resolve(__dirname, '../../../package.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- internal package.json path
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version?: string };
   return pkg.version ?? 'unknown';
 }
@@ -79,7 +78,7 @@ export async function corpusScanCommand(
     const seedPath = seedFileArg ?? DEFAULT_SEED_PATH;
     const seed = loadSeedFile(seedPath);
 
-    // eslint-disable-next-line local/no-fs-mkdirSync, security/detect-non-literal-fs-filename -- caller-supplied output dir; recursive create is correct here
+    // eslint-disable-next-line local/no-fs-mkdirSync -- caller-supplied output dir; recursive create is correct here
     mkdirSync(options.out, { recursive: true });
 
     // We need the run directory to write per-plugin files into during the
@@ -90,7 +89,7 @@ export async function corpusScanCommand(
     const vatCommit = readVatCommit();
     const runDirName = `${generatedAt.slice(0, 10)}-${vatCommit}`;
     const runDir = safePath.join(options.out, runDirName);
-    // eslint-disable-next-line local/no-fs-mkdirSync, security/detect-non-literal-fs-filename -- composed under user-supplied --out
+    // eslint-disable-next-line local/no-fs-mkdirSync -- composed under user-supplied --out
     mkdirSync(runDir, { recursive: true });
 
     const rows: PluginRow[] = [];

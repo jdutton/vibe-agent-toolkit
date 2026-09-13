@@ -15,7 +15,7 @@ import type { ConversationalFunction, Transport, TransportSessionContext } from 
 /**
  * Options for WebSocket transport.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic default for callers that carry no session state
 export interface WebSocketTransportOptions<TState = any> {
   /** The conversational function to run */
   fn: ConversationalFunction<string, string, TState>;
@@ -40,7 +40,7 @@ export interface WebSocketIncomingMessage {
 /**
  * WebSocket response format (server → client).
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic default for callers that carry no session state
 export interface WebSocketOutgoingMessage<TState = any> {
   type: 'message' | 'error';
   reply?: string;
@@ -63,7 +63,7 @@ interface WebSocketSession<TState> {
  * Each connection maintains its own isolated session.
  * Uses in-memory session management for MVP.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic default for callers that carry no session state
 export class WebSocketTransport<TState = any> implements Transport {
   private readonly fn: ConversationalFunction<string, string, TState>;
   private readonly port: number;

@@ -2,6 +2,7 @@
  * CLI watch command implementation
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { watch } from 'chokidar';
 import type { Command } from 'commander';
 
@@ -80,7 +81,7 @@ export function registerWatchCommand(program: Command): void {
         watcher.close().catch((error: unknown) => {
           console.error('Error closing watcher:', error instanceof Error ? error.message : String(error));
         });
-        process.exit(0);
+        process.exit(ExitCode.OK);
       });
     });
 }

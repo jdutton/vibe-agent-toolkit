@@ -13,7 +13,7 @@
  * The date above is when the table was written (commit 838e1a51); it has not been
  * re-confirmed since.
  *
- * The `verify=` instruction above was CORRECTED on 2026-07-30 without refreshing
+ * The `verify=` instruction above was later CORRECTED without refreshing
  * `reviewed=`, because the procedure it used to name could not produce the
  * evidence it claimed. It pointed at the empirical harness in
  * `packages/dev-tools/src/compat-empirical/` and said to "diff its observations
@@ -41,7 +41,7 @@
  * public support and platform docs FALSIFY several cells for free. Treat a do-not-re-investigate
  * note as an EXPIRING claim.
  *
- * ⚠️ Believed wrong as of 2026-08-27, from published docs rather than a probe — recorded here
+ * ⚠️ Believed wrong, from published docs rather than a probe — recorded here
  * rather than edited into the table, because changing a value on second-hand reading would make the
  * table wrong in a new direction without moving it any closer to verified:
  * - `claude-cowork.browser: 'no'` — Cowork drives a browser (embedded in Claude Desktop, or Claude
@@ -57,7 +57,7 @@
  *
  * 🔑 `network` and `customScripts` have NO readers anywhere in the repo. `verdict-engine.ts`
  * consults `localShell`, `browser` and `preinstalledBinaries` only. Fix the table or delete those
- * two columns — do not keep maintaining them. Tracked in issue #207.
+ * two columns — do not keep maintaining them.
  *
  * ⛔ Do NOT bump `reviewed=` for any of this. Nothing above was probed; falsifying a cell is not
  * verifying the table, and the date is the only watcher this claim has.

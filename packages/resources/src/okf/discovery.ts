@@ -161,7 +161,6 @@ type SymlinkVerdict = 'member' | 'outside' | 'dangling' | 'not-a-file' | { unrea
  */
 async function classifySymlink(root: string, candidate: string): Promise<SymlinkVerdict> {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- an entry name read from a bundle root the adopter's own config named
     if (!(await stat(candidate)).isFile()) return 'not-a-file';
   } catch (error) {
     // No target at all: nothing to pack, and nothing to parse either.
@@ -254,7 +253,6 @@ async function recordMarkdownEntry(
 async function walkInto(root: string, dir: string, found: OkfBundleFiles): Promise<void> {
   let entries: Dirent[];
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a bundle root the adopter's own config named, plus directory names read from it
     entries = await readdir(dir, { withFileTypes: true });
   } catch (error) {
     if (dir === root) throw error;
@@ -268,6 +266,13 @@ async function walkInto(root: string, dir: string, found: OkfBundleFiles): Promi
   for (const entry of entries) {
     const absolute = safePath.join(dir, entry.name);
 
+    // The link decision, on this binding, before the type test: a linked
+    // directory is not followed (see above); a linked `.md` is judged by
+    // {@link recordMarkdownEntry}, which classifies its target.
+    if (entry.isSymbolicLink()) {
+      if (isMarkdownFilename(entry.name)) await recordMarkdownEntry(root, absolute, entry, found);
+      continue;
+    }
     if (entry.isDirectory()) {
       await walkInto(root, absolute, found);
     } else if (isMarkdownFilename(entry.name)) {

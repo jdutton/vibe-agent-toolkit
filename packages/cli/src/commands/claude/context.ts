@@ -84,6 +84,7 @@ import {
   type RegionCost,
   type StatedLimit,
 } from '@vibe-agent-toolkit/resources';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { findProjectRoot } from '@vibe-agent-toolkit/utils';
 import { Command, Option } from 'commander';
 
@@ -421,7 +422,7 @@ export async function claudeContextCommand(
     // to be one — a number that fails a build is a number people learn to stop
     // reading. The explicit exit matches every other leaf here and guarantees the
     // process ends rather than waiting on whatever the population left behind.
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'claude context', options.format);
   }
@@ -1210,7 +1211,7 @@ function describeImport(admission: Extract<Admission, { kind: 'import' }>): stri
  */
 function conditionLine(condition: GradedCondition): string {
   const reference = condition.sourceRef === null ? '' : ` [${condition.sourceRef}]`;
-  return `  ${condition.severity.padEnd(5)} ${condition.code}`
+  return `  ${condition.severity.padEnd(7)} ${condition.code}`
     + ` at ${conditionLocation(condition)}${reference}: ${condition.message}`;
 }
 

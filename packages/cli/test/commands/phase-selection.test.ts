@@ -31,6 +31,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -306,7 +307,6 @@ describe('checkFilesConfigDests', () => {
     // unchanged" would be an argument rather than a check.
     const dir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-verify-no-skills-'));
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is this test's own mkdtemp dir
       writeFileSync(
         safePath.join(dir, 'vibe-agent-toolkit.config.yaml'),
         'version: 1\nresources:\n  include: ["docs/**/*.md"]\n',
@@ -375,10 +375,11 @@ describe('rejectRetiredOnly', () => {
     expect(exited).toBeUndefined();
   });
 
-  it('fails with exit 1 when --only was passed', async () => {
-    // Exit 1, not 0: a CI gate that was failing on a bad --only must keep
-    // failing across the removal rather than flip to green.
-    expect((await captureRetiredOnly('skills')).exited).toBe(1);
+  it('fails with ERROR when --only was passed', async () => {
+    // Non-zero, and the usage code: a CI gate that was failing on a bad --only
+    // must keep failing across the removal rather than flip to green, and a
+    // flag the command no longer has is a usage mistake, not a finding.
+    expect((await captureRetiredOnly('skills')).exited).toBe(ExitCode.ERROR);
   });
 
   /**

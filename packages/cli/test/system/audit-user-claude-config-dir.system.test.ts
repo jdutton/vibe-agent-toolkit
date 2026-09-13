@@ -1,4 +1,3 @@
-/* eslint-disable sonarjs/no-os-command-from-path -- node is required for CLI system tests */
 /**
  * System test: vat audit --user honors CLAUDE_CONFIG_DIR end-to-end.
  *
@@ -24,7 +23,6 @@ describe('vat audit --user honors CLAUDE_CONFIG_DIR', () => {
     overrideDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-claude-cfg-'));
     const skillDir = safePath.join(overrideDir, 'skills', 'marker-skill');
     mkdirSyncReal(skillDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tmpdir-derived path
     writeFileSync(
       safePath.join(skillDir, 'SKILL.md'),
       [

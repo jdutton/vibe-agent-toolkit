@@ -59,7 +59,6 @@ export function detectPackagedAgentInstructionFiles(
   locationRoot: string,
   declaredDests: readonly string[],
 ): ValidationIssue[] {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- rootDir is a validated build-output path
   if (!existsSync(rootDir)) return [];
 
   const declared = new Set(declaredDests.map((d) => normalizeRelPath(d)));

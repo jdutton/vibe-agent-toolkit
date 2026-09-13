@@ -35,7 +35,6 @@
  * "the cache clear must not be instrumented" is otherwise an untestable claim.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is derived from a controlled mkdtemp scratch dir */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 

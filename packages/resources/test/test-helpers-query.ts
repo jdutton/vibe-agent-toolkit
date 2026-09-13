@@ -27,10 +27,8 @@ export async function createAndAddResource(
   const dir = dirname(filePath);
 
   // Create parent directories if they don't exist
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
   await fs.mkdir(dir, { recursive: true });
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
   await fs.writeFile(filePath, content, 'utf-8');
   return await registry.addResource(filePath);
 }

@@ -177,8 +177,10 @@ describe('vat claude budget (integration)', () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]?.code).toBe(CODE);
     expect(findings[0]?.severity).toBe('info');
-    // `info` is not actionable, so the verdict is success and the run is green.
-    expect(parsed['status']).toBe('success');
+    // `info` is not actionable: the document says there are findings, the
+    // summary says none is an error, and the run is green.
+    expect(parsed['status']).toBe('findings');
+    expect(parsed['summary']).toEqual({ errors: 0, warnings: 0, info: 1 });
     expect(status).toBe(0);
   });
 
@@ -187,9 +189,10 @@ describe('vat claude budget (integration)', () => {
 
     expect(findings[0]?.message).toContain('4 working locations pay it');
     expect(findings[0]?.message).toContain('200-token budget');
-    expect(parsed['threshold']).toBe(LOW_THRESHOLD);
-    expect(parsed['workingLocations']).toBe(4);
-    expect(parsed['distinctChains']).toBe(1);
+    const data = parsed['data'] as Record<string, unknown>;
+    expect(data['threshold']).toBe(LOW_THRESHOLD);
+    expect(parsed['examined']).toBe(4);
+    expect(data['distinctChains']).toBe(1);
   });
 
   it('emits nothing when the tree is inside its budget', async () => {
@@ -218,7 +221,8 @@ describe('vat claude budget (integration)', () => {
     // silences fine and enforces nothing, and would report exit 0.
     expect(findings).toHaveLength(1);
     expect(findings[0]?.severity).toBe('error');
-    expect(parsed['status']).toBe('error');
+    expect(parsed['status']).toBe('findings');
+    expect((parsed['summary'] as Record<string, number>)['errors']).toBe(1);
     expect(status).toBe(1);
   });
 
@@ -256,8 +260,8 @@ describe('vat claude budget (integration)', () => {
     expect(missed.findings[0]?.code).toBe('RESOURCE_CHECK_BROKEN');
     expect(missed.findings[0]?.severity).toBe('error');
     expect(missed.findings[0]?.message).toContain(UNREALIZED);
-    expect(missed.parsed['status']).toBe('error');
-    expect(missed.parsed['unmatchedScope']).toEqual([UNREALIZED]);
+    expect(missed.parsed['status']).toBe('findings');
+    expect((missed.parsed['data'] as Record<string, unknown>)['unmatchedScope']).toEqual([UNREALIZED]);
     // Both channels still say it — stderr for a person, the document for a
     // parser. The defect was never the warning; it was the document disagreeing
     // with it on the half the exit code is computed from.

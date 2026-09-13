@@ -22,7 +22,6 @@ export const binPath = safePath.resolve(__dirname, '../dist/bin.js');
  * Safe for use in tests - binPath is resolved at module load time
  */
 export function runCliCommand(command: string, ...args: string[]): SpawnSyncReturns<string> {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- node is required for CLI integration tests
   return spawnSync('node', [binPath, command, ...args], {
     encoding: 'utf-8',
   });
@@ -71,17 +70,13 @@ export function runAuditCli(
  * place across fixture-based integration tests.
  */
 export function initTestGitRepo(dir: string): void {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo init in tests
   spawnSync('git', ['init', '-b', 'main', '--quiet', dir], { stdio: 'ignore' });
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo config in tests
   spawnSync('git', ['-C', dir, 'config', 'user.email', 'test@example.com'], { stdio: 'ignore' });
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo config in tests
   spawnSync('git', ['-C', dir, 'config', 'user.name', 'Test'], { stdio: 'ignore' });
 }
 
 /** Stage every file under a fixture git repo (so `git ls-files` walkers see them). */
 export function gitAddAll(dir: string): void {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for staging files in tests
   spawnSync('git', ['-C', dir, 'add', '.'], { stdio: 'ignore' });
 }
 
@@ -95,7 +90,6 @@ export function gitAddAll(dir: string): void {
 export function commitTestFixture(dir: string, message = 'fixture'): void {
   initTestGitRepo(dir);
   gitAddAll(dir);
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for fixture commit in tests
   spawnSync('git', ['-C', dir, 'commit', '-q', '-m', message], { stdio: 'ignore' });
 }
 

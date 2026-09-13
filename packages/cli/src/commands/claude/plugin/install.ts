@@ -19,7 +19,8 @@ import { basename } from 'node:path';
 
 import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import { getClaudeUserPaths, installPlugin, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
-import { isPathAbsentError, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { direntKindFollowingSync, isPathAbsentError, isSingleFsSegment, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
@@ -43,15 +44,17 @@ const PLUGIN_MARKETPLACES_SUBPATH = safePath.join('dist', '.claude', 'plugins', 
 const PACKAGE_JSON = 'package.json';
 
 /**
- * List immediate subdirectory names inside a directory.
+ * List immediate subdirectory names inside a directory, following links.
  * Returns empty array when the directory does not exist.
+ *
+ * Followed on purpose: a `--dev` install puts a plugin or marketplace here AS
+ * a symlink, and `Dirent.isDirectory()` is false for a link — so every dev
+ * install was invisible to the listing that uninstalls, lists and re-installs.
  */
 function listSubdirectories(dir: string): string[] {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller validates dir
   if (!existsSync(dir)) return [];
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller validates dir
   return readdirSync(dir, { withFileTypes: true })
-    .filter(d => d.isDirectory())
+    .filter(d => direntKindFollowingSync(dir, d) === 'directory')
     .map(d => d.name);
 }
 
@@ -95,14 +98,13 @@ async function installPluginTreeAndExit(
   logger: ReturnType<typeof createLogger>,
   dryRun?: boolean,
 ): Promise<never> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- rootDir from controlled source
   const pkgRaw = readFileSync(safePath.join(rootDir, PACKAGE_JSON), 'utf-8');
   const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string; vat?: { replaces?: PackageJsonVatReplaces } };
   const installedSkills = await copyPluginTree(marketplacesDir, packageJson, logger, dryRun);
 
   const duration = Date.now() - startTime;
   outputInstallSuccess(installedSkills, sourceLabel, sourceType, duration, logger, dryRun);
-  process.exit(0);
+  process.exit(ExitCode.OK);
 }
 
 /**
@@ -111,6 +113,27 @@ async function installPluginTreeAndExit(
  */
 function skillNameToFsPath(name: string): string {
   return name.replaceAll(':', '__');
+}
+
+/**
+ * A name about to become `join(skillsDir, name)` on a path that is deleted
+ * or overwritten. Refused unless it is ONE entry name — the sweep installed a
+ * SKILL.md declaring `name: ../victim` and watched `--force` delete
+ * `<skillsDir>/../victim`, exit 0, `status: success`.
+ *
+ * @param name - The declared name, exactly as it arrived
+ * @param origin - What declared it, for the refusal's wording
+ * @returns `name`, unchanged, when it is a single segment
+ * @throws When it is not
+ */
+export function assertSkillEntryName(name: string, origin: string): string {
+  if (!isSingleFsSegment(name)) {
+    throw new Error(
+      `Refusing to install "${name}" (${origin}): a skill name must be a single path segment ` +
+        `(no separators, not "." or "..").`,
+    );
+  }
+  return name;
 }
 
 export interface PluginInstallCommandOptions {
@@ -204,7 +227,7 @@ async function installCommand(
       process.stdout.write(`reason: "claude.ai org provisioning API not yet confirmed as public"\n`);
       process.stdout.write(`requestedTarget: claude.ai\n`);
       process.stdout.write(`guidance: "Use claude.ai admin console to upload a .zip manually, or use --target api.anthropic.com for workspace-scoped skill management"\n`);
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     }
 
     // Handle --build (implies --dev)
@@ -286,7 +309,6 @@ async function handleNpmInstall(
 
     // If the package ships a pre-built plugin tree, install via dumb copy.
     const marketplacesDir = safePath.join(extractedPath, PLUGIN_MARKETPLACES_SUBPATH);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from controlled extractedPath + constant subpath
     const hasPlugin = !options.userInstallWithoutPlugin && existsSync(marketplacesDir);
 
     if (hasPlugin) {
@@ -333,7 +355,7 @@ async function handleNpmInstall(
       options.dryRun
     );
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -356,14 +378,12 @@ async function handleLocalInstall(
 
   // Check for pre-built plugin tree first
   const marketplacesDir = safePath.join(sourcePath, PLUGIN_MARKETPLACES_SUBPATH);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- User-provided CLI argument
   if (!options.userInstallWithoutPlugin && existsSync(marketplacesDir)) {
     await installPluginTreeAndExit(sourcePath, marketplacesDir, `local:${sourcePath}`, 'local', startTime, logger, options.dryRun);
   }
 
   // Check if directory contains package.json with vat.skills
   const packageJsonPath = safePath.join(sourcePath, 'package.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- User-provided CLI argument
   const hasPackageJson = existsSync(packageJsonPath);
 
   let installed: Array<{ name: string; installPath: string }>;
@@ -399,7 +419,7 @@ async function handleLocalInstall(
 
   const duration = Date.now() - startTime;
   outputInstallSuccess(installed, `local:${sourcePath}`, 'local', duration, logger, options.dryRun);
-  process.exit(0);
+  process.exit(ExitCode.OK);
 }
 
 /**
@@ -415,7 +435,6 @@ async function handleZipInstall(
 
   logger.info(`📥 Installing skill from ZIP: ${sourcePath}`);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- User-provided CLI argument
   if (!existsSync(sourcePath)) {
     throw new Error(`ZIP file not found: ${sourcePath}`);
   }
@@ -440,7 +459,7 @@ async function handleZipInstall(
     options.dryRun
   );
 
-  process.exit(0);
+  process.exit(ExitCode.OK);
 }
 
 
@@ -459,7 +478,6 @@ async function handleTgzInstall(
 
   logger.info(`📥 Installing skill from tarball: ${sourcePath}`);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- User-provided CLI argument
   if (!existsSync(sourcePath)) {
     throw new Error(`Tarball not found: ${sourcePath}`);
   }
@@ -472,12 +490,10 @@ async function handleTgzInstall(
 
     // npm pack tarballs extract under package/ subdirectory
     const packageDir = safePath.join(tempDir, 'package');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is controlled
     const extractedDir = existsSync(packageDir) ? packageDir : tempDir;
 
     // Delegate to local install logic
     const marketplacesDir = safePath.join(extractedDir, PLUGIN_MARKETPLACES_SUBPATH);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is controlled
     if (!options.userInstallWithoutPlugin && existsSync(marketplacesDir)) {
       await installPluginTreeAndExit(extractedDir, marketplacesDir, sourcePath, 'tgz', startTime, logger, options.dryRun);
     }
@@ -501,7 +517,7 @@ async function handleTgzInstall(
       logger,
       options.dryRun
     );
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
@@ -516,23 +532,23 @@ async function prepareDevSymlinkDest(
   skillFsName: string,
   options: PluginInstallCommandOptions
 ): Promise<void> {
+  // The probe is the ONLY thing whose failure may read as "nothing there". A
+  // refusal on the probe, or a failed removal, stays loud: this used to catch
+  // everything and recognise its own throw by the words in its message.
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
     lstatSync(destPath);
-    if (!options.force) {
-      throw new Error(
-        `Skill "${skillFsName}" already installed at ${destPath}.\n` +
-          `Use --force to overwrite.`
-      );
-    }
-    if (!options.dryRun) {
-      await rm(destPath, { recursive: true, force: true });
-    }
   } catch (error) {
-    if (error instanceof Error && error.message.includes('already installed')) {
-      throw error;
-    }
-    // Does not exist — that's fine
+    if (isPathAbsentError(error)) return;
+    throw error;
+  }
+  if (!options.force) {
+    throw new Error(
+      `Skill "${skillFsName}" already installed at ${destPath}.\n` +
+        `Use --force to overwrite.`
+    );
+  }
+  if (!options.dryRun) {
+    await rm(destPath, { recursive: true, force: true });
   }
 }
 
@@ -551,7 +567,6 @@ async function symlinkDevSkill(
   const srcSkillPath = safePath.resolve(cwd, 'dist', 'skills', skillFsName);
   const destSkillPath = safePath.join(destSkillsDir, skillFsName);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
   if (!existsSync(srcSkillPath)) {
     logger.info(`   Warning: skill not built at ${srcSkillPath} — skipping symlink`);
     return null;
@@ -561,7 +576,7 @@ async function symlinkDevSkill(
 
   if (!options.dryRun) {
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-bare-symlink-in-tests -- eyes open: `handleDevInstall` refuses win32 upstream, so the Windows privilege hazard the rule names cannot be reached here.
+      // eslint-disable-next-line local/no-bare-symlink-in-tests -- eyes open: `handleDevInstall` refuses win32 upstream, so the Windows privilege hazard the rule names cannot be reached here.
       await symlink(srcSkillPath, destSkillPath, 'dir');
     } catch (error) {
       // ⚠️ POSIX-only in practice: `handleDevInstall` throws on win32 before
@@ -617,19 +632,18 @@ async function symlinkPluginSkills(
   const installed: Array<{ name: string; installPath: string; sourcePath: string }> = [];
   const srcSkillsDir = safePath.join(srcPluginDir, 'skills');
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
   if (!existsSync(srcSkillsDir)) {
     return installed;
   }
 
   const destSkillsDir = safePath.join(destPluginDir, 'skills');
   if (!options.dryRun) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
     await mkdir(destSkillsDir, { recursive: true });
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
-  const skillEntries = readdirSync(srcSkillsDir, { withFileTypes: true }).filter(d => d.isDirectory());
+  // Followed: a skill directory that is itself a link is still a skill to link.
+  const skillEntries = readdirSync(srcSkillsDir, { withFileTypes: true })
+    .filter(d => direntKindFollowingSync(srcSkillsDir, d) === 'directory');
   for (const skillEntry of skillEntries) {
     const result = await symlinkDevSkill(skillEntry.name, destSkillsDir, cwd, pluginName, options, logger);
     if (result) {
@@ -652,12 +666,10 @@ async function devInstallPlugin(
   const { mpName, pluginName, srcPluginDir, destPluginDir, packageName, version, paths } = ctx;
 
   if (!options.dryRun) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
     await mkdir(destPluginDir, { recursive: true });
   }
 
   // Copy non-skill entries (e.g. .claude-plugin/)
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
   for (const entry of readdirSync(srcPluginDir, { withFileTypes: true })) {
     if (entry.name !== 'skills' && !options.dryRun) {
       const srcEntry = safePath.join(srcPluginDir, entry.name);
@@ -693,13 +705,11 @@ async function devInstallMarketplace(
 
   if (!options.dryRun) {
     await rm(destMpDir, { recursive: true, force: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
     await mkdir(destMpDir, { recursive: true });
   }
   logger.info(`   Marketplace: ${mpName} → ${destMpDir}`);
 
   // Copy non-plugin content (e.g. .claude-plugin/marketplace.json)
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
   for (const entry of readdirSync(srcMpDir, { withFileTypes: true })) {
     if (entry.name !== 'plugins' && !options.dryRun) {
       const srcEntry = safePath.join(srcMpDir, entry.name);
@@ -763,7 +773,6 @@ async function handleDevInstall(
 
   // Check for pre-built plugin tree
   const marketplacesDir = safePath.join(cwd, PLUGIN_MARKETPLACES_SUBPATH);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- cwd from CLI option or process.cwd()
   if (!existsSync(marketplacesDir)) {
     throw new Error(
       `Plugin tree not found at ${marketplacesDir}\n` +
@@ -772,7 +781,6 @@ async function handleDevInstall(
   }
 
   // Read package.json for package name/version
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- cwd from CLI option or process.cwd()
   const pkgRaw = readFileSync(safePath.join(cwd, PACKAGE_JSON), 'utf-8');
   const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string; vat?: { replaces?: PackageJsonVatReplaces } };
   logger.info(`📥 Dev-installing plugin tree from ${packageJson.name}`);
@@ -795,7 +803,7 @@ async function handleDevInstall(
 
   const duration = Date.now() - startTime;
   outputDevSuccess(installed, packageJson.name, duration, logger, options.dryRun);
-  process.exit(0);
+  process.exit(ExitCode.OK);
 }
 
 /**
@@ -827,19 +835,17 @@ async function handleNpmPostinstall(
 
   if (!isGlobalNpmInstall()) {
     logger.info('   Skipping: Not a global npm install');
-    process.exit(0);
+    process.exit(ExitCode.OK);
   }
 
   const cwd = process.cwd();
 
   // Check for pre-built plugin tree (dist/.claude/plugins/marketplaces/)
   const marketplacesDir = safePath.join(cwd, PLUGIN_MARKETPLACES_SUBPATH);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated cwd and constant subpath
   const hasPluginTree = existsSync(marketplacesDir);
 
   if (!options.userInstallWithoutPlugin) {
     if (hasPluginTree) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated cwd and constant package.json name
       const pkgRaw = readFileSync(safePath.join(cwd, PACKAGE_JSON), 'utf-8');
       const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string; vat?: { replaces?: PackageJsonVatReplaces } };
       logger.info(`   Package: ${packageJson.name}@${packageJson.version ?? 'unknown'}`);
@@ -855,7 +861,7 @@ async function handleNpmPostinstall(
       logger.info(`   Skipping install — no skills registered.`);
     }
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   }
 
   // --user-install-without-plugin: install skills directly to ~/.claude/skills/
@@ -873,7 +879,7 @@ async function handleNpmPostinstall(
   logger.info(`✅ Installed ${skills.length} skill(s) from ${packageJson.name}`);
   logger.info(`   Duration: ${duration}ms`);
 
-  process.exit(0);
+  process.exit(ExitCode.OK);
 }
 
 /**
@@ -926,10 +932,12 @@ export async function executeReplaces(
 
   // Remove legacy flat-skill installs from ~/.claude/skills/<name>
   for (const skillName of replaces.flatSkills ?? []) {
-    const skillPath = safePath.join(paths.skillsDir, skillName);
+    // The entry comes from the INSTALLED package's package.json, and this is
+    // an `rm -rf` with no flag in front of it: `"../victim"` used to remove a
+    // sibling of the skills dir (with the default paths, `"../.."` is $HOME).
+    const skillPath = safePath.join(paths.skillsDir, assertSkillEntryName(skillName, 'vat.replaces.flatSkills'));
     let pathExists = false;
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from Claude user paths + skill name
       lstatSync(skillPath); // throws if path itself doesn't exist (doesn't follow symlinks)
       pathExists = true;
     } catch (error) {
@@ -980,7 +988,6 @@ async function copyPluginTree(
     // package do not persist in the user's Claude installation.
     logger.info(`   Copying marketplace: ${mpName} → ${destMpDir}`);
     await rm(destMpDir, { recursive: true, force: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Resolved from constant subpath
     await mkdir(destMpDir, { recursive: true });
     cpSync(srcMpDir, destMpDir, { recursive: true, force: true });
 
@@ -1010,11 +1017,12 @@ async function prepareInstallation(
   options: PluginInstallCommandOptions
 ): Promise<{ skillsDir: string; installPath: string }> {
   const skillsDir = options.skillsDir ?? getClaudeUserPaths().skillsDir;
-  const installPath = safePath.join(skillsDir, skillName);
+  // The declared name is author-controlled (SKILL.md `name:`, package.json
+  // `vat.skills[]`) and `--force` turns this path into an `rm -rf`.
+  const installPath = safePath.join(skillsDir, assertSkillEntryName(skillName, 'skill name'));
 
   let exists = false;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Install path from config
     lstatSync(installPath);
     exists = true;
   } catch (error) {
@@ -1034,7 +1042,6 @@ async function prepareInstallation(
   }
 
   if (!options.dryRun) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Skills directory path, safe
     await mkdir(skillsDir, { recursive: true });
   }
 
@@ -1050,7 +1057,6 @@ async function installSkillFromPath(
   options: PluginInstallCommandOptions,
   logger: ReturnType<typeof createLogger>
 ): Promise<void> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated path
   if (!existsSync(skillPath)) {
     throw new Error(`Skill path not found: ${skillPath}`);
   }

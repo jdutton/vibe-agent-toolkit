@@ -43,8 +43,8 @@ import { realpathSync } from 'node:fs';
 
 import { relativize } from '@vibe-agent-toolkit/resources';
 import {
-  isAbsolutePath,
   isPathAbsentError,
+  relativeEscapesRoot,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
@@ -277,7 +277,7 @@ function realPathOrSelf(absolutePath: string): string {
  */
 function isInside(real: string, corpusRoot: string): boolean {
   const rel = safePath.relative(corpusRoot, real);
-  return rel !== '' && !rel.startsWith('..') && !isAbsolutePath(rel);
+  return rel !== '' && !relativeEscapesRoot(rel);
 }
 
 /**

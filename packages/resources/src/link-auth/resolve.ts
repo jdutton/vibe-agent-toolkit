@@ -1,6 +1,11 @@
 /**
  * Public API for the linkAuth pure engine.
  *
+ * Every `§n` in this module family refers to a section of the linkAuth
+ * design document, which is indexed from
+ * `docs/contributing/vat-linkauth-contributing.md` (that guide names where
+ * the design lives; the numbers mean nothing without it).
+ *
  * `resolveAuthenticatedUrl(url, config)` is the single entry point per design
  * §6: select the first provider whose `match.host` claims the URL, run its
  * rewrite pipeline, resolve a token, build the auth headers, and return
@@ -36,7 +41,7 @@
  * what arrives is a hand-built config, or a per-URL failure such as a declared
  * capture group that did not participate in this match.
  *
- * Per design issue #113 §6.
+ * Per the linkAuth design §6.
  */
 
 import { buildHeaders } from './build-headers.js';
@@ -53,7 +58,7 @@ export interface ProviderAuth {
 }
 
 /**
- * Optional content-fetch header overrides (design issue #113 §6.2).
+ * Optional content-fetch header overrides (linkAuth design §6.2).
  *
  * Health-check and content retrieval often need different `Accept` (or other)
  * headers. The canonical example: GitHub's `application/vnd.github+json`

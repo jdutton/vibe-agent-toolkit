@@ -94,7 +94,6 @@ function setupSkillsPackageClaudeWebTestSuite() {
     hasResources: boolean;
   } => {
     const zipPath = `${outputDir}.zip`;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test verification of command output
     expect(existsSync(zipPath)).toBe(true);
     const entries = getZipEntries(zipPath);
     return {

@@ -137,10 +137,8 @@ describe('createProgressWriter', () => {
       const write = createProgressWriter(path);
 
       write(POPULATION);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
       const afterFirst = readFileSync(path, 'utf-8');
       write(FIRST_START);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
       const afterSecond = readFileSync(path, 'utf-8');
 
       expect(parseProgressLog(afterFirst)).toStrictEqual([POPULATION]);

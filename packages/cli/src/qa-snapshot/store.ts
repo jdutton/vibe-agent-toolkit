@@ -101,11 +101,9 @@ export function writeSnapshot(
     // inside one must not be able to write outside the snapshot directory.
     const file = safePath.joinUnderRoot(root, name);
     mkdirSyncReal(dirname(file), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is contained under root by joinUnderRoot
     writeFileSync(file, toLf(text), 'utf8');
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed filename under the snapshot root
   writeFileSync(paths.manifest, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 }
 
@@ -140,12 +138,9 @@ export function readSnapshot(dir: string): LoadedSnapshot {
  * @throws {Error} When the directory is non-empty and holds no manifest
  */
 function assertWritableSnapshotDir(root: string, manifestPath: string): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- the caller-supplied snapshot directory; its existence is the question being asked
   if (!existsSync(root)) return;
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed filename under the snapshot root
   if (existsSync(manifestPath)) return;
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- the caller-supplied snapshot directory, already known to exist
   const entries = readdirSync(root);
   if (entries.length === 0) return;
 
@@ -169,7 +164,6 @@ function assertWritableSnapshotDir(root: string, manifestPath: string): void {
  * @throws {Error} When it is absent, unparseable, or not this build's layout
  */
 function readManifest(root: string, manifestPath: string): SnapshotManifest {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed filename under the caller-supplied snapshot root
   if (!existsSync(manifestPath)) {
     throw new Error(
       `Not a snapshot directory: ${root}\n` +
@@ -177,7 +171,6 @@ function readManifest(root: string, manifestPath: string): SnapshotManifest {
     );
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed filename under the caller-supplied snapshot root
   const raw = readFileSync(manifestPath, 'utf8');
   let parsed: unknown;
   try {
@@ -238,7 +231,6 @@ function manifestArtifactNames(manifest: SnapshotManifest): string[] {
 function readArtifact(root: string, name: string): string {
   const file = safePath.joinUnderRoot(root, name);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is contained under root by joinUnderRoot
   if (!existsSync(file)) {
     throw new Error(
       `Snapshot at ${root} names an artifact that is not on disk: ${name}\n` +
@@ -246,7 +238,6 @@ function readArtifact(root: string, name: string): string {
     );
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is contained under root by joinUnderRoot and was just confirmed to exist
   return toLf(readFileSync(file, 'utf8'));
 }
 

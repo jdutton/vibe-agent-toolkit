@@ -21,6 +21,8 @@
 
 import { spawnSync } from 'node:child_process';
 
+import { VatError } from '@vibe-agent-toolkit/utils';
+
 /**
  * Options for the pre-stage build hook.
  *
@@ -40,11 +42,10 @@ export interface BuildHookOptions {
 }
 
 /** Thrown when the pre-stage build command exits with a non-zero code. Maps to preflight (exit 2). */
-export class BuildHookError extends Error {
-  readonly exitCode = 2 as const;
+export class BuildHookError extends VatError {
+  readonly reason = 'preflight' as const;
   constructor(message: string, public readonly buildExitCode: number) {
-    super(message);
-    this.name = 'BuildHookError';
+    super('BUILD_HOOK', message);
   }
 }
 

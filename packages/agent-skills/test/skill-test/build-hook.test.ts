@@ -80,9 +80,9 @@ describe('runPreStageBuild', () => {
     expect(err.message).toContain('2');
   });
 
-  it('maps to preflight (exit 2) via mapErrorToExitCode', async () => {
-    const { mapErrorToExitCode } = await import('../../src/skill-test/exit-codes.js');
+  it('declares the preflight reason, which skillTestFailureReason reads', async () => {
+    const { skillTestFailureReason } = await import('../../src/skill-test/failure-reason.js');
     const err = new BuildHookError('cmd failed with exit code 1: build', 1);
-    expect(mapErrorToExitCode(err)).toBe(2);
+    expect(skillTestFailureReason(err)).toBe('preflight');
   });
 });

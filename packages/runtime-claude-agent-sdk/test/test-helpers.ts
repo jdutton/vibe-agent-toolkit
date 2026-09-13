@@ -34,7 +34,6 @@ export async function executeToolHandler(
  */
 export function getRegisteredTools(server: ClaudeAgentMcpServer): Record<string, RegisteredTool> {
   // Claude Agent SDK's internal structure uses private _registeredTools
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (server.instance as any)._registeredTools;
 }
 

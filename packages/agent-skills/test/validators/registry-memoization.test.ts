@@ -33,9 +33,7 @@ describe('crawlAndResolveRegistry — memoized per project root', () => {
   beforeAll(() => {
     rootA = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-registry-memo-a-'));
     rootB = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-registry-memo-b-'));
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- mkdtempSync path
     writeFileSync(safePath.join(rootA, 'a.md'), '# A\n');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- mkdtempSync path
     writeFileSync(safePath.join(rootB, 'b.md'), '# B\n');
   });
 
@@ -94,7 +92,6 @@ function scratchRoot(prefix: string): string {
 function rootWithMarkdown(files: Record<string, string>): string {
   const root = scratchRoot('vat-registry-pop-');
   for (const [name, content] of Object.entries(files)) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- mkdtempSync path
     writeFileSync(safePath.join(root, name), content);
   }
   return root;

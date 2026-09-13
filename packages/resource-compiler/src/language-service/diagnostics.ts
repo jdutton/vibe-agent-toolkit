@@ -104,7 +104,6 @@ function checkMarkdownFileExists(
   const compilerOptions = info.project.getCompilerOptions();
   const absolutePath = resolveMarkdownPath(markdownPath, containingFile, compilerOptions);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Using validated path from TypeScript Language Service
   if (!absolutePath || !existsSync(absolutePath)) {
     return {
       file: node.getSourceFile(),

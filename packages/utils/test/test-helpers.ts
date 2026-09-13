@@ -53,7 +53,6 @@ export function stripCommentLines(source: string): string {
  * ```
  */
 export function createGitRepo(directory: string): string {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
   spawnSync('git', ['init'], { cwd: directory, stdio: 'pipe' });
   // `gitFindRoot()` memoizes `null` for any directory a prior walk climbed
   // through (e.g. before this repo existed). Without this reset, a later
@@ -93,9 +92,7 @@ export async function setupNestedDirectory(
 ): Promise<{ srcDir: string; destDir: string }> {
   const srcDir = safePath.join(tempDir, 'src');
   const destDir = safePath.join(tempDir, 'dest');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is controlled temp directory in tests
   await fs.mkdir(safePath.join(srcDir, subdir), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is controlled temp directory in tests
   await fs.writeFile(safePath.join(srcDir, subdir, nestedFile), nestedContent);
   return { srcDir, destDir };
 }
@@ -128,9 +125,7 @@ export function plantOpenAndLockedTree(root: string): { locked: string } {
   const locked = safePath.join(root, 'docs', 'locked');
   mkdirSyncReal(open, { recursive: true });
   mkdirSyncReal(locked, { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled temp fixture tree
   writeFileSync(safePath.join(open, 'ok.md'), '# ok\n');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled temp fixture tree
   writeFileSync(safePath.join(locked, 't.md'), '# t\n');
   return { locked };
 }

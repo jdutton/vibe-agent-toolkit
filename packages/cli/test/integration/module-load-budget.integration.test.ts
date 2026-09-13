@@ -36,7 +36,6 @@
  * hoisting it has already cost this saving twice.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is a temp dir this test created and owns */
 
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
@@ -117,7 +116,6 @@ function loadedScripts(
   // rather than os.tmpdir() for the same reason: 8.3 short names (RUNNER~1).
   const covDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-modload-'));
   try {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- node is required for CLI integration tests
     const result = spawnSync('node', [binPath, ...args], {
       encoding: 'utf-8',
       cwd: repoRoot,

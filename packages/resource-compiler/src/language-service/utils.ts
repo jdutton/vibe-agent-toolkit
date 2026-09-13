@@ -212,7 +212,6 @@ export function resolveMarkdownPath(
  */
 export function loadMarkdownResource(filePath: string): MarkdownResource {
   return getMarkdownResource(filePath, () => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Using validated path from TypeScript Language Service
     const content = readFileSync(filePath, 'utf-8');
     return toMarkdownResource(content);
   });

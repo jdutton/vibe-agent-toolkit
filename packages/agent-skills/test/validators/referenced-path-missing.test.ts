@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- fixture paths built from this test's own mkdtemp root, no external input */
 import * as fs from 'node:fs';
 
 import { applyAllowFilter } from '@vibe-agent-toolkit/schema';

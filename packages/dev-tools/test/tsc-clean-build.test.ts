@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 
-import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest';
 
 import {
@@ -10,9 +11,8 @@ import {
   pruneStaleEmit,
   parseArgs,
   stagingDir,
-} from '../src/tsc-clean-build.js';
+} from '../src/clean-build.js';
 
-/* eslint-disable security/detect-non-literal-fs-filename -- test file with dynamic temp paths */
 
 const EMPTY_MODULE = 'export {};';
 const BARREL_JS = 'index.js';
@@ -48,8 +48,6 @@ function emitGroup(
 }
 
 /** Only run where the OS actually enforces directory permissions. */
-const skipUnlessRealPermissions =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 describe('pruneStaleEmit', () => {
   const suite = setupSyncTempDirSuite('tsc-clean-build');
@@ -118,7 +116,7 @@ describe('pruneStaleEmit', () => {
     expect(pruneStaleEmit(tempDir)).toEqual([]);
   });
 
-  it.skipIf(skipUnlessRealPermissions)(
+  it.skipIf(CANNOT_DENY_READS)(
     'throws when the declaration map is refused, rather than passing stale output off as live',
     () => {
       // "Unreadable" above means the map is not JSON — a state the tool can leave
@@ -271,7 +269,7 @@ describe('promoteStagedEmit', () => {
     expect(fs.statSync(live.js).mtimeMs).toBe(before);
   });
 
-  it.skipIf(skipUnlessRealPermissions)(
+  it.skipIf(CANNOT_DENY_READS)(
     'copies in place, loudly, when the rename keeps being refused',
     () => {
       // Stands in for the Windows hazard the retry exists for: a rename onto a

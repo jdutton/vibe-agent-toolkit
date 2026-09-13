@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ContentCache } from '../src/content-cache.js';
@@ -389,12 +390,10 @@ describe('fetchAuthenticated — token never persisted (§8)', () => {
     // relying on JSON structure to know what's "secret"). Recursive so a
     // future ContentCache layout that shards into subdirs (e.g.
     // `<hash[0..2]>/<hash>.json`) is still covered by this test.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: lists files inside self-created tempDir
     const entries = await fs.readdir(tempDir, { recursive: true, withFileTypes: true });
     for (const entry of entries) {
-      if (!entry.isFile()) continue;
+      if (direntKindFollowingSync(entry.parentPath, entry) !== 'file') continue;
       const full = safePath.join(entry.parentPath, entry.name);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: reads files we just wrote inside self-created tempDir
       const raw = await fs.readFile(full);
       expect(raw.toString('utf-8')).not.toContain(TOKEN_DO_NOT_PERSIST);
     }

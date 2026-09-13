@@ -17,6 +17,7 @@
 
 import { mkdtemp } from 'node:fs/promises';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { InvalidArgumentError, type Option } from 'commander';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -24,9 +25,6 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   collectMeasuredCommand,
   createProgram,
-  EXIT_CHANGED,
-  EXIT_REFUSED,
-  EXIT_UNMEASURABLE,
   fastestRepeat,
   nonNegativeNumber,
   parseCacheMode,
@@ -309,13 +307,13 @@ describe('vat-lab <facet> ab — every facet gets the verb, not just the one tha
       '--control',
     ]);
 
-    expect(process.exitCode).toBe(EXIT_REFUSED);
+    expect(process.exitCode).toBe(ExitCode.ERROR);
   });
 
   it('refuses an A/B with only one arm, pointing at --control', async () => {
     await createProgram().parseAsync([...abArgv(), ARM_A_FLAG, ABSENT_TREE]);
 
-    expect(process.exitCode).toBe(EXIT_REFUSED);
+    expect(process.exitCode).toBe(ExitCode.ERROR);
   });
 
   it('refuses --control when the two arms carry DIFFERENT environments', async () => {
@@ -333,7 +331,7 @@ describe('vat-lab <facet> ab — every facet gets the verb, not just the one tha
       'VAT_PARSE_POOL=1',
     ]);
 
-    expect(process.exitCode).toBe(EXIT_REFUSED);
+    expect(process.exitCode).toBe(ExitCode.ERROR);
   });
 
   it('allows --control when both arms carry the SAME environment', async () => {
@@ -390,7 +388,7 @@ describe('vat-lab <facet> run — the cache default is per facet, not shared', (
 });
 
 describe('vat-lab perf compare — exit codes', () => {
-  it('exits EXIT_UNMEASURABLE, not 0, when every command is unmeasurable', async () => {
+  it('exits ERROR, not 0, when every command is unmeasurable', async () => {
     const before = await writePerfReport('unmeasurable-before', [failedRow('vat audit')]);
     const after = await writePerfReport('unmeasurable-after', [failedRow('vat audit')]);
 
@@ -400,10 +398,10 @@ describe('vat-lab perf compare — exit codes', () => {
     // what an all-unmeasurable comparison produced before, indistinguishable
     // from a genuinely clean run.
     expect(process.exitCode).not.toBe(0);
-    expect(process.exitCode).toBe(EXIT_UNMEASURABLE);
+    expect(process.exitCode).toBe(ExitCode.ERROR);
   });
 
-  it('still exits EXIT_CHANGED when a real change sits alongside an unmeasurable row', async () => {
+  it('still exits FINDINGS when a real change sits alongside an unmeasurable row', async () => {
     // Priority the fix chose: an actionable `changed` verdict must not be
     // masked by an `unmeasurable` one reported for a different command.
     const before = await writePerfReport('mixed-before', [
@@ -417,7 +415,7 @@ describe('vat-lab perf compare — exit codes', () => {
 
     await createProgram().parseAsync(['node', 'vat-lab', 'perf', 'compare', before, after]);
 
-    expect(process.exitCode).toBe(EXIT_CHANGED);
+    expect(process.exitCode).toBe(ExitCode.FINDINGS);
   });
 
   it('leaves the exit code at its default (0) for a genuinely clean comparison', async () => {

@@ -1,7 +1,7 @@
 /**
  * RuleContext — the intent-aware input to the skill-resource verdict engine.
  *
- * Issue #129 (slice 3). VAT decided "is this skill resource OK?" across three
+ * VAT used to decide "is this skill resource OK?" across three
  * diverged code paths (built / live-audit / wild-fallback), none of which
  * encoded the *intent* behind a file's inclusion. This module replaces the
  * per-path `excludeReason` mechanism with a description of the resource (or the
@@ -37,7 +37,7 @@ export type RuleScope = 'base-resource' | 'skill' | 'plugin';
 
 /**
  * Coarse classification of *what kind of thing* a resource is. `directory` is
- * the post-`stat` realization of #126's source-level `local_directory` link
+ * the post-`stat` realization of the source-level `local_directory` link
  * shape; `nav` is a navigation file (README.md, index.md, …) excluded from
  * bundles; `agent-instruction` is a repo-internal agent-guidance file
  * (CLAUDE.md, AGENTS.md, GEMINI.md), likewise excluded, but because it is not
@@ -86,7 +86,7 @@ export type RuleSubject = 'edge' | 'file';
  * pre-computed "reason").
  */
 export interface RuleContext {
-  // --- issue #129 RuleContext sketch ---------------------------------------
+  // --- RuleContext fields ---------------------------------------------------
   scope: RuleScope;
   fileKind: FileKind;
   reachableFromSkillMd: boolean;
@@ -116,7 +116,7 @@ export interface RuleContext {
   /**
    * The edge is a **typed single-file slot** (e.g. a packaging `files:` source
    * entry) — a directory target is an error here, whereas a navigational edge
-   * accepts a directory. #126's "typed single-file slot" ≡ this flag.
+   * accepts a directory.
    */
   typedSingleFileSlot: boolean;
   /** Edge targets another skill's SKILL.md (duplicate-definition risk). */

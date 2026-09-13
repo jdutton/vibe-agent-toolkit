@@ -196,7 +196,6 @@ const NO_FALLBACK_NOTE =
  * @returns Its canonical form
  */
 async function canonicalPath(path: string): Promise<string> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied instrument path; canonicalizing it is the point
   const real = safePath.resolve(await realpath(path));
   return process.platform === 'win32' ? real.toLowerCase() : real;
 }
@@ -213,7 +212,6 @@ async function canonicalPath(path: string): Promise<string> {
  */
 async function isRegularFile(path: string): Promise<boolean> {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied instrument path; probing it is the point
     const stats = await stat(path);
     return stats.isFile();
   } catch (error) {
@@ -269,7 +267,6 @@ function assertNotContextWrapper(binPath: string, kind: string): void {
 async function readManifestVersion(manifestPath: string, kind: string): Promise<string> {
   let raw: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifest located relative to the caller-supplied instrument path
     raw = await readFile(manifestPath, 'utf8');
   } catch {
     throw new Error(

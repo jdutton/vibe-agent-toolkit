@@ -25,9 +25,14 @@ module.exports = {
   meta: {
     type: 'problem',
     docs: {
-      description: 'Disallow using path.sep in string operations',
-      category: 'Cross-platform compatibility',
+      description:
+        'Disallow using path.sep in string operations',
+      category: 'Path handling',
+      bans: '`path.sep` embedded in a string literal',
+      useInstead: '`toForwardSlash()`',
+      subpath: '/path',
       recommended: true,
+      recommendedSeverity: 'error',
     },
     messages: {
       noPathSep:

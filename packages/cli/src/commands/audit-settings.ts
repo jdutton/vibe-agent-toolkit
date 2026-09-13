@@ -17,6 +17,7 @@ import {
   type SettingsFinding,
   type SettingsPathEntry,
 } from '@vibe-agent-toolkit/claude-marketplace';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
@@ -115,12 +116,12 @@ async function runShowPaths(startTime: number, logger: Logger): Promise<void> {
 
   if (issueCounts.errors > 0) {
     logger.error('Legacy managed-settings.json path detected — IT admin must migrate.');
-    process.exit(1);
+    process.exit(ExitCode.FINDINGS);
   }
   if (issueCounts.warnings > 0) {
     logger.warn(`${issueCounts.warnings} settings path(s) could not be checked.`);
   }
-  process.exit(0);
+  process.exit(ExitCode.OK);
 }
 
 async function runValidateFile(
@@ -149,13 +150,13 @@ async function runValidateFile(
 
   if (result.issueCounts.errors > 0) {
     logger.error(`Settings file is invalid: ${result.issueCounts.errors} error(s)`);
-    process.exit(1);
+    process.exit(ExitCode.FINDINGS);
   }
 
   logger.info(
     `Settings file is valid (${result.detectedType}, type ${result.typeConfidence})`,
   );
-  process.exit(0);
+  process.exit(ExitCode.OK);
 }
 
 function buildPermissionsSummary(
@@ -353,7 +354,7 @@ async function runShowEffective(startTime: number, logger: Logger): Promise<void
     );
   }
 
-  process.exit(0);
+  process.exit(ExitCode.OK);
 }
 
 export async function runAuditSettings(

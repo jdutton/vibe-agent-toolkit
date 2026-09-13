@@ -129,7 +129,8 @@ describe('vat validate command (system test)', () => {
     // still passes while the real CLI regresses to `unknown option '--only'`.
     const result = await suite.runValidate(tempDir, ['--only', 'skills']);
 
-    expect(result.status).toBe(1);
+    // ERROR: a flag the command no longer has is a usage mistake, not a finding.
+    expect(result.status).toBe(2);
     expect(result.stderr).not.toContain('unknown option');
     expect(result.stderr).toContain("'--only' was removed");
     expect(result.stderr).toContain('vat build --only');

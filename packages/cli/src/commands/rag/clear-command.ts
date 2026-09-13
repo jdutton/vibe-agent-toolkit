@@ -3,6 +3,7 @@
  */
 
 import type { RAGAdminProvider } from '@vibe-agent-toolkit/rag';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 
 import { writeYamlOutput } from '../../utils/output.js';
 
@@ -34,5 +35,5 @@ export async function clearCommand(options: ClearOptions): Promise<void> {
     duration: formatDuration(duration),
   });
 
-  process.exit(0);
+  process.exit(ExitCode.OK);
 }

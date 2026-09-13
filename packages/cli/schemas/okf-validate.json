@@ -1,0 +1,170 @@
+{
+  "$ref": "#/definitions/okf-validate",
+  "definitions": {
+    "okf-validate": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "findings",
+            "error"
+          ]
+        },
+        "examined": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "location": {
+                "type": "string"
+              },
+              "line": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              },
+              "field": {
+                "type": "string"
+              },
+              "link": {
+                "type": "string"
+              },
+              "fix": {
+                "type": "string"
+              },
+              "reference": {
+                "type": "string"
+              },
+              "suggestion": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ]
+              },
+              "column": {
+                "type": "integer",
+                "exclusiveMinimum": 0
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "severity"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "summary": {
+          "type": "object",
+          "properties": {
+            "errors": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "warnings": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "info": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "errors",
+            "warnings",
+            "info"
+          ],
+          "additionalProperties": false
+        },
+        "durationMs": {
+          "type": "number",
+          "minimum": 0
+        },
+        "error": {
+          "type": "string"
+        },
+        "data": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "bundles": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "bundle": {
+                        "type": "string"
+                      },
+                      "root": {
+                        "type": "string"
+                      },
+                      "conceptDocuments": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "reservedDocuments": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "declaredOkfVersion": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "bundle",
+                      "root",
+                      "conceptDocuments",
+                      "reservedDocuments"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "notice": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "bundles"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "status",
+        "examined",
+        "findings",
+        "summary",
+        "data"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

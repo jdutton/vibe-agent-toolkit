@@ -31,7 +31,6 @@ export interface RunAgentResult {
 async function loadPromptFile(manifestPath: string, promptRef: string): Promise<string> {
   const agentDir = path.dirname(manifestPath);
   const promptPath = safePath.resolve(agentDir, promptRef.replace(/^\.\//u, ''));
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path is derived from validated manifest
   return await fs.readFile(promptPath, 'utf-8');
 }
 

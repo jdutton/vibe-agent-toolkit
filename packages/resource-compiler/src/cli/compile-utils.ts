@@ -2,6 +2,7 @@
  * Shared utilities for CLI commands
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import type { Command } from 'commander';
 
 import type { CompileResult } from '../compiler/types.js';
@@ -51,7 +52,7 @@ export function printCompilationSummary(results: CompileResult[]): void {
  */
 export function exitWithResults(results: OperationResult[]): never {
   const failureCount = results.filter((r) => !r.success).length;
-  process.exit(failureCount > 0 ? 1 : 0);
+  process.exit(failureCount > 0 ? ExitCode.FINDINGS : ExitCode.OK);
 }
 
 /**

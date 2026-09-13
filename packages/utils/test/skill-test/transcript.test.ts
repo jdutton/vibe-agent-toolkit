@@ -341,7 +341,6 @@ describe('parseStreamJsonTranscript', () => {
  * which raises a degradation when it is non-zero.
  */
 describe('parseStreamJsonTranscript malformed-line accounting', () => {
-  // eslint-disable-next-line sonarjs/publicly-writable-directories -- fixture path, mirrors the real harness staging root
   const HARNESS_PATH = '/tmp/vat-skill-test/my-skill-abc12345/staged/s/SKILL.md';
 
   const TOOL_USE_EVENT = {

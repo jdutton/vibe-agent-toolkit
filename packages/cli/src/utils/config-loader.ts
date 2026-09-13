@@ -9,7 +9,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { parseConfigAllowingUnknownKeys, ProjectConfigSchema, type ProjectConfig } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, VatError } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
@@ -30,11 +30,10 @@ const warnedConfigPaths = new Set<string>();
  * `vat skill test`) should surface this; a bulk linter (`vat audit`) may catch
  * it and fall back to config-free validation.
  */
-export class ConfigLoadError extends Error {
+export class ConfigLoadError extends VatError {
   readonly projectRoot: string;
   constructor(projectRoot: string, cause: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause));
-    this.name = 'ConfigLoadError';
+    super('CONFIG_LOAD', cause instanceof Error ? cause.message : String(cause));
     this.projectRoot = projectRoot;
     if (cause instanceof Error) this.cause = cause;
   }
@@ -65,13 +64,11 @@ export function loadConfig(projectRoot: string): ProjectConfig | undefined {
   // Override for testing: VAT_TEST_CONFIG provides explicit config path
   const configPath = process.env['VAT_TEST_CONFIG'] ?? safePath.join(projectRoot, CONFIG_FILENAME);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- configPath is derived from projectRoot parameter or env override
   if (!existsSync(configPath)) {
     return undefined;
   }
 
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- configPath is derived from projectRoot parameter
     const content = readFileSync(configPath, 'utf-8');
     const parsed = yaml.parse(content);
 

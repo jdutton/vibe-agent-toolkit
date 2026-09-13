@@ -134,8 +134,17 @@ module.exports = {
       description:
         'Disallow a catch clause that neither reads its error nor throws — it absorbs a bug, a ' +
         'permission refusal, or a corrupt artifact into the same answer as the case it was written for',
-      category: 'Possible Errors',
+      category: 'Error handling',
+      bans: 'a `catch` that neither reads its error nor throws',
+      useInstead: 'narrow on the error and rethrow the rest, or carry it into the result',
+      // `warn`, not `error`: the same migration-volume criterion as
+      // `no-raw-node-path`, without the autofix. A blind `catch` has no
+      // mechanical rewrite — each site is a decision about WHICH failure the
+      // sentinel stands for — and the first run on an existing tree is a long
+      // list (202 sites on this repo's own ~200k lines). `warn` makes that a
+      // backlog to burn down rather than a wall; the hazard is real at every one.
       recommended: true,
+      recommendedSeverity: 'warn',
     },
     schema: [],
     messages: {

@@ -8,7 +8,6 @@
  * This system test focuses on CLI command parsing and option forwarding.
  */
 
-/* eslint-disable sonarjs/no-duplicate-string */
 
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -22,7 +21,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
  * Helper to run vat validation command.
  */
 function runValidate(binPathValue: string, cwd: string, args: string[]) {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- binPath from import.meta.url, safe
   return spawnSync('node', [binPathValue, ...args], {
     cwd,
     encoding: 'utf-8',
@@ -49,11 +47,9 @@ describe('External URL validation CLI flags (system test)', () => {
 
     // Create minimal test structure
     const docsDir = safePath.join(tempDir, 'docs');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtempSync, safe
     fs.mkdirSync(docsDir, { recursive: true });
 
     // File with no external links (ensures validation passes)
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtempSync, safe
     fs.writeFileSync(
       safePath.join(docsDir, 'test.md'),
       `# Test
@@ -70,7 +66,6 @@ resources:
     - "docs/**/*.md"
 `;
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtempSync, safe
     fs.writeFileSync(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), configContent);
   });
 
@@ -104,7 +99,6 @@ resources:
 
   it('should show help text mentioning external URL validation', () => {
     // Check help text
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- binPath from import.meta.url, safe
     const result = spawnSync('node', [binPath, 'resources', 'validate', '--help'], {
       encoding: 'utf-8',
       timeout: 5000,

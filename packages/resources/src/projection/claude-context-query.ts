@@ -73,6 +73,8 @@
  * the traversal refused rather than an admission the row is hiding.
  */
 
+import { strongerSeverity, type Severity } from '@vibe-agent-toolkit/schema';
+
 import { ExtentDeclarationSchema } from '../schemas/project-config.js';
 import type { BlobReferenceRow, BlobRow } from '../schemas/projection-blobs.js';
 import type {
@@ -80,7 +82,6 @@ import type {
   ResourceExtentRow,
   ResourceRealizationRow,
 } from '../schemas/projection-resources.js';
-import type { ProjectionConditionSeverity } from '../schemas/projection-shared.js';
 
 import { claudeAncestry } from './claude-context-ancestry.js';
 import { selectRules, type RuleAdmission } from './claude-context-rules.js';
@@ -126,13 +127,17 @@ export interface LoadedRow {
  * may raise and must never lower: `CLOSURE_ROOT_ABSENT` and
  * `REALIZATION_PATH_COLLISION` are both emitted at `error`, and a declared import
  * root the population never realized is a real misconfiguration — reporting it at
- * the same level as a `@jeff` mention would bury it. The stored vocabulary spells
- * the middle level `warning` (`ProjectionConditionSeveritySchema`); this report
- * spells it `warn`, and {@link strongerSeverity} is the one place the two meet.
+ * the same level as a `@jeff` mention would bury it. `strongerSeverity` from
+ * `@vibe-agent-toolkit/schema` is what raises it, and it cannot lower.
+ *
+ * 🪤 This report used to spell the middle level `warn` while the stored
+ * vocabulary spelled it `warning`, with a private translation function as "the
+ * one place the two meet" — the seventh severity vocabulary in the tree. There
+ * is one now, and it is the shared one.
  */
 export interface GradedCondition {
   readonly code: string;
-  readonly severity: 'info' | 'warn' | 'error';
+  readonly severity: Severity;
   readonly path: string;
   readonly sourcePath: string | null;
   readonly sourceLine: number | null;
@@ -803,44 +808,26 @@ function gradeConditions(
 }
 
 /**
- * The stronger of a condition's STORED severity and this report's escalation.
+ * The escalation this report applies to one condition, before its stored
+ * severity is taken into account — `strongerSeverity` takes the max of the two,
+ * which is what keeps this from ever LOWERING a row.
  *
- * ⛔ Grades UPWARD only. The stored severity is a floor: `CLOSURE_ROOT_ABSENT`
- * and `REALIZATION_PATH_COLLISION` are emitted at `error`, and re-deriving a
- * severity from the code alone silently demoted both to `info` — a declared
+ * ⛔ The stored severity is a floor: `CLOSURE_ROOT_ABSENT` and
+ * `REALIZATION_PATH_COLLISION` are emitted at `error`, and re-deriving a
+ * severity from the code alone once silently demoted both to `info` — a declared
  * import root the population never realized reported as quietly as a `@jeff`
  * mention. Escalation stays the report's job; demotion is never anybody's.
- *
- * The two vocabularies differ by one spelling — the stored enum says `warning`,
- * the report says `warn` — and this is the single place they are translated.
- *
- * @param stored - `realization_conditions.severity`, as the producer emitted it
- * @param escalated - What {@link severityFor} would raise this row to
- * @returns The stronger of the two, in the report's vocabulary
- */
-function strongerSeverity(
-  stored: ProjectionConditionSeverity,
-  escalated: 'info' | 'warn',
-): GradedCondition['severity'] {
-  if (stored === 'error') return 'error';
-  return stored === 'warning' || escalated === 'warn' ? 'warn' : 'info';
-}
-
-/**
- * The escalation this report applies to one condition, before its stored
- * severity is taken into account — see {@link strongerSeverity}, which is what
- * keeps this from ever LOWERING a row.
  *
  * @param row - The stored condition
  * @param shapeOf - Reference key → whether the token is path-shaped
  * @param keyOf - Root-relative path → its `contentKey`
- * @returns `warn` for a path-shaped in-root unresolved import, else `info`
+ * @returns `warning` for a path-shaped in-root unresolved import, else `info`
  */
 function severityFor(
   row: RealizationConditionRow,
   shapeOf: ReadonlyMap<string, boolean>,
   keyOf: ReadonlyMap<string, string>,
-): 'info' | 'warn' {
+): Severity {
   // ⛔ ONLY the unresolved code is ever escalated, which is what keeps
   // CLOSURE_REFERENCE_OUTSIDE_ROOT at `info` by construction rather than by a
   // second condition someone could later delete as redundant. §9.2 is emphatic
@@ -853,7 +840,7 @@ function severityFor(
   // being re-derived from the string: the columns are the fact, and a second
   // parse would be a heuristic wearing a column's authority.
   return shapeOf.get(joinKey(contentKey, row.sourceLine, row.sourceRef)) === true
-    ? 'warn'
+    ? 'warning'
     : 'info';
 }
 

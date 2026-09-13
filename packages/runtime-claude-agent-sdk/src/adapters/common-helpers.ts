@@ -73,7 +73,7 @@ export function createMcpServerWithTool<TInput, TOutput>(
       tool(
         manifest.name,
         manifest.description,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK boundary: the Claude Agent SDK's Zod type differs from this repo's
         inputSchema as any, // Claude Agent SDK accepts Zod schemas
         async (args, _extra) => {
           const validatedInput = inputSchema.parse(args);
@@ -255,7 +255,7 @@ export function createToolsFromConfigs<TInput, TOutput>(
       tool(
         key,
         manifest.description,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK boundary: the Claude Agent SDK's Zod type differs from this repo's
         config.inputSchema as any,
         createToolHandler(agent, config.inputSchema, config.outputSchema, () => contextFactory(key)),
       ),

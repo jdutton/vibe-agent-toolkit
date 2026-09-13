@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test file operations are confined to temp directories */
 /**
  * The collection-schema `catch` in `ResourceRegistry` speaks for the schema and
  * for nothing else.

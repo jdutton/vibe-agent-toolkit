@@ -35,13 +35,13 @@ export function resolveMarkdownPath(
 ): string | null {
   // Handle relative paths (normalize to forward slashes for cross-platform)
   const normalizedPath = toForwardSlash(modulePath);
+  // eslint-disable-next-line local/no-dotdot-containment -- this classifies an import SPECIFIER as relative (module-resolution grammar: `./` and `../` are the relative forms), not a path as contained; nothing here is a sink.
   if (normalizedPath.startsWith('./') || normalizedPath.startsWith('../')) {
     return resolveRelativePath(modulePath, containingFile);
   }
 
   // Handle absolute paths (rare, but possible)
   if (isAbsolute(modulePath)) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated absolute path from module resolution
     return existsSync(modulePath) ? modulePath : null;
   }
 
@@ -60,7 +60,6 @@ function resolveRelativePath(modulePath: string, containingFile: string): string
   const containingDir = dirname(containingFile);
   const absolutePath = safePath.resolve(containingDir, modulePath);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated path from module resolution
   return existsSync(absolutePath) ? absolutePath : null;
 }
 
@@ -107,7 +106,6 @@ function searchNodeModules(modulePath: string, containingFile: string): string |
   while (true) {
     const nodeModulesPath = safePath.join(currentDir, 'node_modules', modulePath);
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated path from module resolution
     if (existsSync(nodeModulesPath)) {
       return nodeModulesPath;
     }

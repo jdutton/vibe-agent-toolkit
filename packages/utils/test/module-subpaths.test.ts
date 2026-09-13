@@ -197,7 +197,7 @@ describe('whole-module subpath entries', () => {
   it('./eslint exposes the rule pack and its recommended config', async () => {
     const mod: unknown = await import('@vibe-agent-toolkit/utils/eslint');
     const plugin = (mod as { default: EslintPlugin }).default;
-    expect(typeof plugin.rules['no-path-join']?.create).toBe('function');
-    expect(plugin.configs.recommended.rules['@vibe-agent-toolkit/no-path-join']).toBe('warn');
+    expect(typeof plugin.rules['no-raw-node-path']?.create).toBe('function');
+    expect(plugin.configs.recommended.rules['@vibe-agent-toolkit/no-raw-node-path']).toBe('warn');
   });
 });

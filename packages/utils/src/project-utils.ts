@@ -32,7 +32,6 @@ export function findConfigFile(startDir: string): string | null {
   const root = parse(current).root;
   while (true) {
     const candidate = safePath.join(current, CONFIG_FILENAME);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- walk-up is intentional
     if (existsSync(candidate)) return candidate;
     if (current === root) return null;
     const parent = dirname(current);
@@ -55,7 +54,6 @@ export function findNodeWorkspaceRoot(startDir: string): string | null {
   let current = safePath.resolve(startDir);
   while (current !== dirname(current)) {
     const pkgPath = safePath.join(current, PACKAGE_JSON_FILENAME);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- walk-up is intentional
     if (existsSync(pkgPath)) {
       try {
         // Through the decoding seam: this is the ADOPTER's manifest, not ours,
@@ -140,7 +138,6 @@ function configWalkPhase(
     }
     visited.push(current);
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- walk-up is intentional
     if (existsSync(safePath.join(current, CONFIG_FILENAME))) {
       const entry = { configRoot: current };
       propagateCache(visited, entry);
@@ -161,7 +158,6 @@ function configWalkPhase(
 function gitWalkPhase(startDir: string, visited: ReadonlyArray<string>): string | null {
   let current = safePath.resolve(startDir);
   while (true) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- walk-up is intentional
     if (existsSync(safePath.join(current, '.git'))) {
       const entry = { configRoot: current };
       propagateCache(visited, entry);

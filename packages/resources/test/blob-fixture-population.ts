@@ -79,7 +79,6 @@ export async function writeBinaryFixture(
   relativePath: string,
   bytes: Uint8Array,
 ): Promise<void> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
   await writeFile(safePath.join(rootDir, relativePath), bytes);
 }
 

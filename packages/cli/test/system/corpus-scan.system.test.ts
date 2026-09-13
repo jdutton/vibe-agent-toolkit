@@ -34,7 +34,6 @@ const META = {
     async () => {
       const workspace = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-corpus-sys-'));
       const seedPath = safePath.join(workspace, 'seed.yaml');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled path
       writeFileSync(
         seedPath,
         yaml.stringify({
@@ -49,13 +48,11 @@ const META = {
       const result = executeCli(binPath, ['corpus', 'scan', seedPath, '--out', outDir]);
       expect(result.status).toBe(0);
 
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
       const runDirs = readdirSync(outDir);
       expect(runDirs).toHaveLength(1);
       const firstRun = runDirs[0];
       if (!firstRun) throw new Error('no run dir created');
       const summaryPath = safePath.join(outDir, firstRun, 'summary.yaml');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
       const summary = yaml.parse(readFileSync(summaryPath, 'utf-8')) as Record<string, unknown>;
       expect(summary.plugins as unknown[]).toHaveLength(1);
     },

@@ -17,8 +17,8 @@ import {
   populate,
   type Projection,
 } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, safePath, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
-import { refuseSyncFs } from '@vibe-agent-toolkit/utils/testing';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite , refuseSyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { MANIFEST_UNREADABLE, PluginExtentContributor } from '../src/projection/plugin-extent.js';
@@ -32,9 +32,7 @@ function plantPlugin(root: string, manifest: string): string {
   const manifestPath = safePath.join(root, MANIFEST_REL);
   mkdirSyncReal(safePath.join(root, 'plug', '.claude-plugin'), { recursive: true });
   mkdirSyncReal(safePath.join(root, 'plug', 'skills', 'x'), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
   writeFileSync(safePath.join(root, 'plug', 'skills', 'x', 'SKILL.md'), '---\nname: x\ndescription: fixture\n---\n# x\n');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
   writeFileSync(manifestPath, manifest);
   return manifestPath;
 }

@@ -201,7 +201,6 @@ describe('query cannot reach a database it was not opened on', () => {
 
     expect(() => store.query(`ATTACH DATABASE '${fresh}' AS smuggled`)).toThrow(/SELECT/);
     // A name this test built inside its own `mkdtempSync` directory moments ago.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- see above
     expect(existsSync(fresh), 'the attach ran and left a file behind').toBe(false);
   });
 

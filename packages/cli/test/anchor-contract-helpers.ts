@@ -100,7 +100,6 @@ export function anchorContractViolations(anchors: readonly AnchorSighting[], roo
       violations.push(`${anchor.trail} is not forward-slashed: ${anchor.value}`);
     } else if (hasParentTraversalSegment(anchor.value)) {
       violations.push(`${anchor.trail} escapes the root: ${anchor.value}`);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- root and value both come from our own audit run
     } else if (!fs.existsSync(safePath.join(root, anchor.value))) {
       violations.push(`${anchor.trail} does not resolve under root: ${anchor.value}`);
     }

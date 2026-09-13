@@ -39,12 +39,10 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
   const absolutePath = safePath.resolve(targetPath);
 
   // Check if target exists
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- absolutePath is validated user input
   if (!fs.existsSync(absolutePath)) {
     throw new Error(`Path does not exist: ${absolutePath}`);
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- absolutePath validated above
   const stat = fs.statSync(absolutePath);
 
   // Determine scan root for relative paths
@@ -72,10 +70,8 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
       });
     } else {
       // Non-recursive: only immediate children
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- absolutePath validated above
       filePaths = fs.readdirSync(absolutePath)
         .map(name => safePath.join(absolutePath, name))
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from validated directory
         .filter(p => fs.statSync(p).isFile());
     }
   } else {

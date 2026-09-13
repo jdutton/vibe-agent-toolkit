@@ -13,10 +13,12 @@ import { rm } from 'node:fs/promises';
 import type { ClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { HOSTILE_NAMES } from '@vibe-agent-toolkit/utils/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PackageJsonVatReplaces } from '../../../../src/commands/claude/plugin/helpers.js';
 import {
+  assertSkillEntryName,
   executeReplaces,
   logFlatSkillRemoval,
   removeOldPlugins,
@@ -88,7 +90,6 @@ async function runFlatSkillTest(
   skillName: string,
   dryRun: boolean
 ): Promise<ReturnType<typeof makeLogger>> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mock return value only needs to not throw
   vi.mocked(lstatSync).mockReturnValue({} as any);
   const replaces: PackageJsonVatReplaces = { flatSkills: [skillName] };
   const paths = makePaths();
@@ -250,6 +251,35 @@ describe('executeReplaces — flatSkills', () => {
     expect(rm).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(expect.stringContaining(DRY_RUN_PREFIX));
   });
+
+  // The sweep's fixture t6: `{"vat":{"replaces":{"flatSkills":["../victim"]}}}`
+  // in the INSTALLED package removed `<skillsDir>/../victim` with no flag in
+  // front of it. Every hostile spelling is refused by name, before lstat, and
+  // the refusal names the field so the author knows where to look.
+  it.each(HOSTILE_NAMES)('refuses flatSkills entry %j before examining anything', async (name) => {
+    vi.mocked(lstatSync).mockReturnValue({} as any);
+    await expect(
+      executeReplaces({ flatSkills: [name] }, [], makePaths(), false, makeLogger()),
+    ).rejects.toThrow(/vat\.replaces\.flatSkills/);
+    expect(lstatSync).not.toHaveBeenCalled();
+    expect(rm).not.toHaveBeenCalled();
+  });
+
+  it('still removes a flat skill whose name merely begins with two dots', async () => {
+    await runFlatSkillTest('..cache', false);
+    expect(rm).toHaveBeenCalledWith(safePath.join(SKILLS_DIR, '..cache'), { recursive: true, force: true });
+  });
+});
+
+describe('assertSkillEntryName', () => {
+  it.each(HOSTILE_NAMES)('refuses %j and names the origin', (name) => {
+    expect(() => assertSkillEntryName(name, 'SKILL.md name')).toThrow(/SKILL\.md name/);
+  });
+
+  it('returns a single-segment name unchanged', () => {
+    expect(assertSkillEntryName('my-skill', 'x')).toBe('my-skill');
+    expect(assertSkillEntryName('..cache', 'x')).toBe('..cache');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -277,7 +307,6 @@ describe('executeReplaces — edge cases', () => {
   });
 
   it('processes both plugins and flatSkills when both are provided', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mock return value only needs to not throw
     vi.mocked(lstatSync).mockReturnValue({} as any);
 
     const replaces: PackageJsonVatReplaces = {

@@ -21,10 +21,12 @@ wrong one.
 | Engineering practice — "how we do X" | `docs/guides/` | on demand | no |
 | Architectural shape and evolution plan | `docs/architecture/` | on demand | no |
 | Design rationale — why a shape was chosen, what was rejected, the measurement that decided it | [`docs/architecture/`](../architecture/README.md) beside the shape it explains, or the docstring of the module that enforces it | on demand | no |
+| The history of a rule — the issue/PR that raised it, the date it was decided, who decided | commit message and CHANGELOG (and `docs/contributing/` for the mechanism); the code comment keeps only the rule (enforced by: `local/no-decaying-referent`) | n/a | no |
 | Working-on-VAT-itself material (debugging, install internals) | `docs/contributing/` | on demand | no |
+| A trap — a failure that looks like something else, with the tell and the remedy | [`docs/contributing/traps.md`](traps.md), one `###` per trap, the mechanism only (no session logistics, no adopter names, a number only when it is the tell) | on demand | no |
 | Deep mechanics, worked examples, long code samples for one package | `packages/<pkg>/docs/<topic>.md` | on demand | no |
 | Author-facing capability | the skill — `SKILL.md` + `resources/` | on demand | **yes** |
-| One-run metric, personal attribution, PR reference, commit SHA, status date, implementation plan, phase state | **delete** — git history holds it | n/a | n/a |
+| One-run metric, personal attribution, PR reference, commit SHA, status date, implementation plan, phase state | **delete** — git history holds it (in source comments, enforced by: `local/no-decaying-referent`) | n/a | n/a |
 
 VAT has no ADR directory today — an architectural *decision* (as opposed to the current shape) has no
 dedicated home yet and currently lands as prose in `docs/architecture/*.md`, next to the shape it

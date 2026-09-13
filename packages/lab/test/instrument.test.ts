@@ -21,14 +21,12 @@
  * was on disk. A fixture that cannot make the two answers differ tests nothing.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is derived from a controlled mkdtemp scratch dir */
 
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 
 import {
   normalizedTmpdir,
-  removeScratchDir,
   resolveFromImportMeta,
   safePath,
   toForwardSlash,
@@ -36,6 +34,7 @@ import {
 import {
   runGitOrThrow,
 } from '@vibe-agent-toolkit/utils/git';
+import { removeScratchDir , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { resolveInstrument } from '../src/harness/instrument.js';
@@ -57,8 +56,6 @@ const CLI_WRAPPER = 'packages/cli/dist/bin/vat.js';
 const CLI_MANIFEST = 'packages/cli/package.json';
 
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
-const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 let scratch: string;
 

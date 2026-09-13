@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 /**
  * The compatibility analyzer reports what it could NOT read, itself, and reads
  * everything it can.
@@ -22,6 +21,7 @@
 import * as fs from 'node:fs/promises';
 
 import { safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { analyzeCompatibility } from '../src/compatibility-analyzer.js';
@@ -29,7 +29,6 @@ import type { CompatibilityResult } from '../src/types.js';
 
 import {
   BASH_SKILL,
-  CANNOT_DENY_READS,
   LINKED_SKILL_FILES,
   PLAIN_SKILL,
   SKILLS,

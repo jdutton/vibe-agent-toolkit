@@ -83,16 +83,13 @@ function collectPlugins(paths: ClaudeUserPaths): ListedPlugin[] {
 function collectLegacySkills(paths: ClaudeUserPaths): ListedLegacySkill[] {
   const legacySkills: ListedLegacySkill[] = [];
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
   if (!existsSync(paths.skillsDir)) return legacySkills;
 
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
     const entries = readdirSync(paths.skillsDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
       const skillPath = safePath.join(paths.skillsDir, entry.name);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated path
       const stat = lstatSync(skillPath);
       legacySkills.push({
         name: entry.name,

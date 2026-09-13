@@ -623,10 +623,14 @@ tags:
 Validate frontmatter against JSON Schema to enforce required fields and data types:
 
 ```typescript
-import { FrontmatterValidator } from '@vibe-agent-toolkit/resources';
+import {
+  compileFrontmatterSchema,
+  validateCompiledFrontmatter,
+  parseMarkdown,
+} from '@vibe-agent-toolkit/resources';
 
-// Create validator with JSON Schema
-const validator = new FrontmatterValidator({
+// Compile once per (schema, mode); reuse across every document
+const compiled = compileFrontmatterSchema({
   type: 'object',
   required: ['title', 'description'],
   properties: {
@@ -635,16 +639,24 @@ const validator = new FrontmatterValidator({
     category: { enum: ['guide', 'reference', 'tutorial', 'api'] },
     tags: { type: 'array', items: { type: 'string' } }
   }
-});
+}, 'permissive');
 
-// Validate a resource
-const resource = registry.getResource('./docs/guide.md');
-const result = validator.validate(resource);
+// Validate a document: issues are ValidationIssue[] with registry codes
+// (FRONTMATTER_MISSING, FRONTMATTER_SCHEMA_ERROR, ...); empty means valid
+const { frontmatter } = await parseMarkdown('./docs/guide.md');
+const issues = validateCompiledFrontmatter(frontmatter, compiled, 'docs/guide.md');
 
-if (!result.valid) {
-  console.error('Validation errors:', result.errors);
+if (issues.length > 0) {
+  console.error('Validation issues:', issues);
 }
+
+// One-shot form (compiles per call) when you validate a single document:
+// validateFrontmatter(frontmatter, schema, 'docs/guide.md', 'permissive')
 ```
+
+Inside a project, prefer declaring the schema on a collection
+(`resources.collections.<name>.validation.frontmatterSchema`) and running
+`vat resources validate` — the registry then applies it to every matching file.
 
 ### Schema Design Patterns
 

@@ -11,4 +11,10 @@ export {
   type PureFunctionTestConfig,
 } from './runtime-test-helpers.js';
 
-export { createJsonSchemaWriter } from './json-schema-writer.js';
+export {
+  findEmittedSchemaDrift,
+  renderEmittedSchema,
+  writeEmittedSchemas,
+  type EmittedSchemaDrift,
+  type EmittedSchemaTarget,
+} from './pin-emitted-schemas.js';

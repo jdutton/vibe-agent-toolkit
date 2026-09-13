@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import {
@@ -6,10 +5,10 @@ import {
   normalizedTmpdir,
   safePath,
   toForwardSlash,
-  withReaddirSyncRefused,
 } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { withReaddirSyncRefused , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../src/projection/content-cache.js';
@@ -485,7 +484,7 @@ function unlistableRowFor(path: string): RealizationConditionRow {
 }
 
 describe('unlistableRowStillHolds', () => {
-  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  it.skipIf(CANNOT_DENY_READS)(
     'holds while the directory still refuses a listing (POSIX, not root)',
     () => {
       // A real mode bit: the check reads through a named `readdirSync` import,

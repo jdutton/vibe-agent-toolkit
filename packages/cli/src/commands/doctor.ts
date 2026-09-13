@@ -10,6 +10,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import {
   findConfigFile,
   isFilesystemAccessError,
@@ -159,7 +160,6 @@ const CHECK_NAME_COMMAND_MODULES = 'Command modules';
 function requiredNodeRange(): { range: string } | { problem: 'unreadable' | 'undeclared' } {
   let raw: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a URL built from import.meta.url, not from input
     raw = readFileSync(CLI_MANIFEST_URL, 'utf8');
   } catch (error) {
     // Distinguished from `undeclared` deliberately. This module's own doctrine says a
@@ -310,7 +310,6 @@ export function checkGitRepository(): DoctorCheckResult {
 
     // Loop until we reach root (works on both Unix / and Windows C:\)
     while (currentDir !== previousDir) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path walking is required for git repo detection
       if (existsSync(safePath.join(currentDir, '.git'))) {
         return {
           name: CHECK_NAME_GIT_REPOSITORY,
@@ -389,7 +388,6 @@ function checkSchemaFiles(
       schemaFiles.push(schemaPath);
       try {
         const absoluteSchemaPath = resolveAssetReference(schemaPath, configDir);
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- absoluteSchemaPath resolved via resolveAssetReference
         if (!existsSync(absoluteSchemaPath)) {
           missingSchemas.push(schemaPath);
         }
@@ -523,7 +521,6 @@ export async function checkVatVersion(
 ): Promise<DoctorCheckResult> {
   try {
     // Get current version from package.json
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Package.json path is trusted static import
     const packageJson = JSON.parse(readFileSync(CLI_MANIFEST_URL, 'utf8'));
     const currentVersion = packageJson.version;
 
@@ -589,12 +586,10 @@ function isVatSourceTree(projectRoot: string | null): boolean {
   if (!projectRoot) return false;
 
   const cliPackagePath = safePath.join(projectRoot, 'packages/cli/package.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path for VAT source detection
   if (!existsSync(cliPackagePath)) return false;
 
   let raw: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path for VAT source detection
     raw = readFileSync(cliPackagePath, 'utf8');
   } catch (error) {
     // Gone since the existence check: not the source tree. Anything else is
@@ -729,13 +724,11 @@ export function checkCliBuildSync(projectRoot: string | null): DoctorCheckResult
     }
 
     // Get running version
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Static import path is safe
     const runningPackage = JSON.parse(readFileSync(CLI_MANIFEST_URL, 'utf8'));
     const runningVersion = runningPackage.version;
 
     // Get source version
     const sourcePackagePath = safePath.join(projectRoot, 'packages/cli/package.json');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Project root path construction
     const sourcePackage = JSON.parse(readFileSync(sourcePackagePath, 'utf8'));
     const sourceVersion = sourcePackage.version;
 
@@ -934,9 +927,10 @@ More details: vat --help --verbose or see packages/cli/docs/doctor.md
         const result = await runDoctor(options);
         displayResults(result, options.verbose);
       } catch (error) {
-        console.error('❌ Doctor check failed:');
+        // The command crashed: not a failed check, a run that produced no verdict.
+        console.error('❌ Doctor could not run:');
         console.error(error instanceof Error ? error.message : String(error));
-        process.exit(1);
+        process.exit(ExitCode.ERROR);
       }
     });
 }
@@ -981,6 +975,6 @@ function displayResults(result: DoctorResult, verbose: boolean): void {
   }
 
   if (result.outcomeCounts.fail > 0) {
-    process.exit(1);
+    process.exit(ExitCode.FINDINGS);
   }
 }

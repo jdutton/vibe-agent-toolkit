@@ -53,7 +53,6 @@ describe('writeArdManifest', () => {
   it('writes pretty-printed JSON, creating parent directories', async () => {
     const outputPath = safePath.join(workDir, 'nested', 'out', 'ard.json');
     await writeArdManifest(buildArdManifest([entry]), outputPath);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is built from a test temp dir
     const text = readFileSync(outputPath, 'utf-8');
     expect(text.endsWith('\n')).toBe(true);
     expect(text).toContain('\n  "entries"');
@@ -64,7 +63,6 @@ describe('writeArdManifest', () => {
     const outputPath = safePath.join(workDir, 'roundtrip.json');
     const manifest = buildArdManifest([entry]);
     await writeArdManifest(manifest, outputPath);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is built from a test temp dir
     expect(JSON.parse(readFileSync(outputPath, 'utf-8'))).toEqual(manifest);
   });
 });

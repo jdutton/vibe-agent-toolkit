@@ -11,12 +11,7 @@ const config: KnipConfig = {
   ignoreDependencies: [
     // @types/* are used for TypeScript compilation, not runtime imports
     '@types/.*',
-    // tsx used for build scripts in package.json, not imported
-    'tsx',
   ],
-
-  // Vitest setup files and TS compiler plugins that knip can't resolve
-  ignoreUnresolved: ['./vitest.setup.js'],
 
   workspaces: {
     '.': {
@@ -25,9 +20,6 @@ const config: KnipConfig = {
         'jscpd',
         'secretlint',
         '@secretlint/.*',
-        // Root deps to fix transitive dependency resolution
-        '@lancedb/lancedb',
-        'apache-arrow',
         // Used by dev-tools scripts (invoked via tsx, not direct imports from root)
         'adm-zip',
         'semver',
@@ -60,8 +52,6 @@ const config: KnipConfig = {
     'packages/cli': {
       entry: ['src/bin.ts'],
       ignoreDependencies: [
-        // Installed as dep so vat-development-agents skill is available at runtime
-        '@vibe-agent-toolkit/vat-development-agents',
         // build script shells out to dev-tools/src/prepare-bin.ts via tsx (not a
         // static import) — declared so turbo's dependency graph knows cli#build
         // depends on dev-tools#build
@@ -105,16 +95,14 @@ const config: KnipConfig = {
     // utils: the `./eslint` subpath is hand-written CommonJS outside src/. Its
     // entry point and rules are `.cjs` and are only ever loaded by ESLint itself,
     // so they need naming explicitly or knip never walks them.
+    // `eslint` is an OPTIONAL peer here (for adopters of the `./eslint` subpath) and
+    // a ROOT devDependency for this repo's own rule suites — the per-package devDep
+    // was a duplicate and is gone. The hand-written `index.d.cts` types the subpath
+    // against `eslint`, so knip reads a "referenced optional peer" — intentional,
+    // the same shape blessed for `openai` in packages/rag above.
     'packages/utils': {
       entry: ['src/index.ts', 'eslint/index.cjs', 'eslint/rules/*.cjs'],
       project: [SRC_TS, 'eslint/*.cjs', 'eslint/rules/*.cjs'],
-      // The `eslint` devDep IS used — `test/eslint/*` imports `RuleTester` and the
-      // integration test drives `ESLint` — but `project` above covers no `test/**`,
-      // so knip cannot see those imports and would report it unused. Ignored for
-      // that reason, NOT because nothing needs it: deleting the devDep breaks the
-      // rule suites, and this entry means knip will not warn you. (The rule modules
-      // themselves genuinely never require('eslint') — that is what makes the peer
-      // optional — but it is not why this line is here.)
       ignoreDependencies: ['eslint'],
     },
 

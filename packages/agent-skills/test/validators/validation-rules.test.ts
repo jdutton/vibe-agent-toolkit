@@ -19,12 +19,24 @@ import {
 } from '../../src/validators/validation-rules.js';
 
 describe('VALIDATION_THRESHOLDS', () => {
-	it('should have correct research-based thresholds', () => {
-		expect(VALIDATION_THRESHOLDS.RECOMMENDED_SKILL_LINES).toBe(500);
-		expect(VALIDATION_THRESHOLDS.MAX_TOTAL_LINES).toBe(2000);
-		expect(VALIDATION_THRESHOLDS.MAX_FILE_COUNT).toBe(6);
-		expect(VALIDATION_THRESHOLDS.MAX_REFERENCE_DEPTH).toBe(2);
-		expect(VALIDATION_THRESHOLDS.MIN_DESCRIPTION_LENGTH).toBe(50);
+	// Not "equals the number in the source" — that re-types the constant and
+	// proves nothing an intentional change would not re-type. The thresholds'
+	// documented RELATIONSHIPS are what a bad edit would break.
+	it('holds the ordering the validators assume between the line thresholds', () => {
+		expect(VALIDATION_THRESHOLDS.RECOMMENDED_SKILL_LINES).toBeGreaterThan(0);
+		expect(VALIDATION_THRESHOLDS.MAX_TOTAL_LINES).toBeGreaterThan(VALIDATION_THRESHOLDS.RECOMMENDED_SKILL_LINES);
+	});
+
+	it('keeps every threshold a positive integer', () => {
+		for (const [name, value] of Object.entries(VALIDATION_THRESHOLDS)) {
+			expect(Number.isInteger(value), name).toBe(true);
+			expect(value, name).toBeGreaterThan(0);
+		}
+	});
+
+	it('allows a reference tree at least one level deep and a bundle of more than one file', () => {
+		expect(VALIDATION_THRESHOLDS.MAX_REFERENCE_DEPTH).toBeGreaterThanOrEqual(1);
+		expect(VALIDATION_THRESHOLDS.MAX_FILE_COUNT).toBeGreaterThan(1);
 	});
 });
 
@@ -155,12 +167,10 @@ describe('toAnyDepthGlobs', () => {
 
 describe('VALIDATION_RULES', () => {
 	it('should define all required rules', () => {
-		expect(VALIDATION_RULES.BROKEN_INTERNAL_LINK).toBeDefined();
-		expect(VALIDATION_RULES.CIRCULAR_REFERENCE).toBeDefined();
-		expect(VALIDATION_RULES.OUTSIDE_PROJECT_BOUNDARY).toBeDefined();
-		expect(VALIDATION_RULES.WINDOWS_BACKSLASH_IN_PATH).toBeDefined();
-		// FILENAME_COLLISION is NOT asserted here: it belongs to CODE_REGISTRY and
-		// is emitted by the packager. Its coverage lives in skill-packager.test.ts.
+		expect(VALIDATION_RULES.LINK_TARGETS_DIRECTORY).toBeDefined();
+		// FILENAME_COLLISION and the link-integrity codes are NOT asserted here:
+		// they belong to CODE_REGISTRY and are emitted by the packager / link
+		// validator. Their coverage lives beside those emitters.
 	});
 
 	it('should define all best practice rules', () => {
@@ -168,15 +178,12 @@ describe('VALIDATION_RULES', () => {
 		expect(VALIDATION_RULES.SKILL_TOTAL_SIZE_LARGE).toBeDefined();
 		expect(VALIDATION_RULES.SKILL_TOO_MANY_FILES).toBeDefined();
 		expect(VALIDATION_RULES.REFERENCE_TOO_DEEP).toBeDefined();
-		expect(VALIDATION_RULES.LINKS_TO_NAVIGATION_FILES).toBeDefined();
 		expect(VALIDATION_RULES.DESCRIPTION_TOO_VAGUE).toBeDefined();
 		expect(VALIDATION_RULES.NO_PROGRESSIVE_DISCLOSURE).toBeDefined();
 	});
 
 	it('should have required rules with category "required"', () => {
-		expect(VALIDATION_RULES.BROKEN_INTERNAL_LINK.category).toBe('required');
-		expect(VALIDATION_RULES.CIRCULAR_REFERENCE.category).toBe('required');
-		expect(VALIDATION_RULES.OUTSIDE_PROJECT_BOUNDARY.category).toBe('required');
+		expect(VALIDATION_RULES.LINK_TARGETS_DIRECTORY.category).toBe('required');
 	});
 
 	it('should have best practice rules with category "best_practice"', () => {
@@ -206,13 +213,13 @@ describe('VALIDATION_RULES', () => {
 
 describe('createIssue', () => {
 	it('should create basic issue from rule', () => {
-		const rule = VALIDATION_RULES.WINDOWS_BACKSLASH_IN_PATH;
+		const rule = VALIDATION_RULES.LINK_TARGETS_DIRECTORY;
 		const issue = createIssue(rule);
 
 		expect(issue.severity).toBe('error');
-		expect(issue.code).toBe('WINDOWS_BACKSLASH_IN_PATH');
-		expect(issue.message).toBe('Path uses Windows backslashes');
-		expect(issue.fix).toBe('Use forward slashes for cross-platform compatibility');
+		expect(issue.code).toBe('LINK_TARGETS_DIRECTORY');
+		expect(issue.message).toBe("files: source 'unknown' resolves to a directory; a typed single-file slot requires a file");
+		expect(issue.fix).toBe('Point the files: source (or other single-file reference) at a specific file, not a directory.');
 	});
 
 	it('should create issue with context variables', () => {
@@ -223,25 +230,18 @@ describe('createIssue', () => {
 	});
 
 	it('should create issue with location', () => {
-		const rule = VALIDATION_RULES.BROKEN_INTERNAL_LINK;
-		const issue = createIssue(rule, { href: 'missing.md' }, '/path/to/SKILL.md');
+		const rule = VALIDATION_RULES.LINK_TARGETS_DIRECTORY;
+		const issue = createIssue(rule, { source: 'docs/' }, '/path/to/SKILL.md');
 
 		expect(issue.location).toBe('/path/to/SKILL.md');
-		expect(issue.message).toBe('Link target not found: missing.md');
-	});
-
-	it('should handle multiple context variables', () => {
-		const rule = VALIDATION_RULES.CIRCULAR_REFERENCE;
-		const issue = createIssue(rule, { chain: 'A → B → C → A' });
-
-		expect(issue.message).toBe('Circular reference detected: A → B → C → A');
+		expect(issue.message).toBe("files: source 'docs/' resolves to a directory; a typed single-file slot requires a file");
 	});
 
 	it('should handle unknown context values gracefully', () => {
-		const rule = VALIDATION_RULES.BROKEN_INTERNAL_LINK;
-		const issue = createIssue(rule, {}); // Missing 'href' context
+		const rule = VALIDATION_RULES.LINK_TARGETS_DIRECTORY;
+		const issue = createIssue(rule, {}); // Missing 'source' context
 
-		expect(issue.message).toBe('Link target not found: unknown');
+		expect(issue.message).toContain("'unknown'");
 	});
 });
 
@@ -279,12 +279,6 @@ describe('Rule message context interpolation', () => {
 		const rule = VALIDATION_RULES.REFERENCE_TOO_DEEP;
 		const message = rule.message({ depth: 4 });
 		expect(message).toBe('Link chain is 4 hops deep (recommended ≤2). Each linked file\'s own links create additional hops.');
-	});
-
-	it('LINKS_TO_NAVIGATION_FILES should show file list', () => {
-		const rule = VALIDATION_RULES.LINKS_TO_NAVIGATION_FILES;
-		const message = rule.message({ files: 'README.md, index.md' });
-		expect(message).toBe('Links to navigation files: README.md, index.md');
 	});
 
 	it('DESCRIPTION_TOO_VAGUE should show length', () => {

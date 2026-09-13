@@ -6,6 +6,7 @@
 import { cpSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 export interface CopyResourcesOptions {
@@ -60,14 +61,12 @@ export function copyResources(options: CopyResourcesOptions): void {
   }
 
   // Validate source exists
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- sourceDir is from build config, not user input
   if (!existsSync(sourceDir)) {
     throw new Error(`Source directory does not exist: ${sourceDir}`);
   }
 
   // Ensure target parent directory exists
   const targetParent = dirname(targetDir);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetDir is from build config, not user input
   if (!existsSync(targetParent)) {
     mkdirSyncReal(targetParent, { recursive: true });
   }
@@ -120,6 +119,6 @@ export function createPostBuildScript(options: {
     });
   } catch (error) {
     console.error(`Error in post-build script:`, error);
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   }
 }

@@ -70,7 +70,6 @@ export interface InstallPluginOptions {
 function readRegistryFile(filePath: string): unknown {
   let raw: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
     raw = readFileSync(filePath, 'utf-8');
   } catch (error) {
     if (isPathAbsentError(error)) return undefined;
@@ -97,7 +96,6 @@ export function readKnownMarketplaces(paths: ClaudeUserPaths): KnownMarketplaces
  */
 export function writeKnownMarketplaces(paths: ClaudeUserPaths, data: KnownMarketplaces): void {
   mkdirSyncReal(dirname(paths.knownMarketplacesPath), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
   writeFileSync(paths.knownMarketplacesPath, JSON.stringify(data, null, 2));
 }
 
@@ -116,7 +114,6 @@ export function readInstalledPlugins(paths: ClaudeUserPaths): InstalledPlugins {
  */
 export function writeInstalledPlugins(paths: ClaudeUserPaths, data: InstalledPlugins): void {
   mkdirSyncReal(dirname(paths.installedPluginsPath), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
   writeFileSync(paths.installedPluginsPath, JSON.stringify(data, null, 2));
 }
 
@@ -208,6 +205,5 @@ function updateUserSettings(paths: ClaudeUserPaths, pluginKey: string): void {
   settingsData['enabledPlugins'] = { ...existingEnabled, [pluginKey]: true };
 
   mkdirSyncReal(dirname(paths.userSettingsPath), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
   writeFileSync(paths.userSettingsPath, JSON.stringify(settingsData, null, 2));
 }

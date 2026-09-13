@@ -1,5 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 
@@ -294,7 +292,7 @@ describe('vat skills install — local directory source', () => {
         cwd: projectDir,
         name: '../../etc',
       }),
-    ).rejects.toThrow(/path separators/);
+    ).rejects.toThrow(/Invalid skill name "\.\.\/\.\.\/etc" \(--name\)/);
   });
 
   it('rejects --name containing forward slash', async () => {
@@ -309,7 +307,7 @@ describe('vat skills install — local directory source', () => {
         cwd: projectDir,
         name: 'foo/bar',
       }),
-    ).rejects.toThrow(/path separators/);
+    ).rejects.toThrow(/Invalid skill name "foo\/bar" \(--name\)/);
   });
 });
 

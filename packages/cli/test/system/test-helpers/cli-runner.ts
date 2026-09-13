@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test helpers legitimately use dynamic paths
 
 /**
@@ -64,7 +63,6 @@ export function executeCli(
 
   let result: ReturnType<typeof spawnSync>;
   try {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path
     result = spawnSync('node', [binPath, ...args], {
       cwd: options?.cwd,
       env: options?.env,
@@ -200,7 +198,6 @@ export function testConfigError(
 
   fs.writeFileSync(safePath.join(projectDir, 'docs/test.md'), '# Test');
 
-  // eslint-disable-next-line sonarjs/no-os-command-from-path
   return spawnSync('node', [binPath, 'resources', 'scan'], {
     encoding: 'utf-8',
     cwd: projectDir,
@@ -248,7 +245,8 @@ export function executeCliAndParseYaml(
 ): { status: number | null; stdout: string; stderr: string; parsed: Record<string, unknown> } {
   const result = executeCli(binPath, args, options);
   let parsed: Record<string, unknown> = {};
-  if (result.status === 0 && result.stdout.includes('---')) {
+  // A completed run publishes its document on OK and on FINDINGS alike.
+  if ((result.status === 0 || result.status === 1) && result.stdout.includes('---')) {
     parsed = parseYamlOutput(result.stdout);
   }
   return { ...result, parsed };

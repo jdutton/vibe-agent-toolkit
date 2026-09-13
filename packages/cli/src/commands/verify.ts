@@ -48,7 +48,6 @@ import { runMarketplaceValidatePhase } from './claude/marketplace/validate.js';
 import {
   runConsistencyChecks,
   type ConsistencyIssue,
-  type ConsistencyIssueSeverity,
 } from './consistency-check.js';
 import {
   addRetiredOnlyOption,
@@ -249,7 +248,6 @@ interface BuiltSkillOutputs {
  */
 function isDirectory(dir: string): boolean {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputDir is resolved from config, not user input
     return statSync(dir).isDirectory();
   } catch (error) {
     if (isPathAbsentError(error)) return false;
@@ -414,7 +412,6 @@ export function checkFilesConfigDests(
     const missing: string[] = [];
     for (const entry of mergedFiles) {
       const destPath = safePath.resolve(outputDir, entry.dest);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- destPath resolved from config
       if (!existsSync(destPath)) {
         missing.push(entry.dest);
       }
@@ -730,9 +727,9 @@ export function formatVerifyAnnouncement(
 
 /** An in-process phase's finding as it appears in the archived YAML. */
 interface PublishedIssue {
-  // Widened from ConsistencyIssueSeverity: `packaged-content` publishes real
-  // ValidationIssues, whose severity vocabulary also carries 'ignore'.
-  severity: ValidationIssue['severity'] | ConsistencyIssueSeverity;
+  // `packaged-content` publishes real ValidationIssues, whose severity
+  // vocabulary also carries 'ignore'; the consistency phase's carry `Severity`.
+  severity: ValidationIssue['severity'];
   code: string;
   message: string;
   fix: string;
@@ -987,15 +984,16 @@ async function verifyTopLevelCommand(
   // problem for anyone running the old invocation outside a project.
   rejectRetiredOnly(options.only, COMMAND_NAME, VERIFY_FULL_RUN_SECONDS);
 
-  // Spec §7: `vat verify` requires a projectRoot.
-  const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
-
   const { logger, startTime } = createPhaseContext(options.debug);
 
   try {
     // Inside the try, deliberately: phase selection used to throw from out here
     // (on an unroutable `--only`), so the user got a raw Node stack trace and
-    // zero bytes of the structured document a scripted caller parses.
+    // zero bytes of the structured document a scripted caller parses — and so
+    // did "no project here", at Node's default exit 1, which the contract reads
+    // as FINDINGS.
+    // Spec §7: `vat verify` requires a projectRoot.
+    const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
     const { config, error: configError } = loadConfigTolerant(projectRoot);
     const phases = applyPhaseSelection(
       selectVerifyPhases(config, configError, options.verbose),

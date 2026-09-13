@@ -16,6 +16,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
+import { FollowedWalk } from './dirent-kind.js';
+import { VatError } from './errors/vat-error.js';
+import { isUnderRoot } from './path-containment.js';
 import { toForwardSlash, toNfc } from './path-core.js';
 import { safePath } from './path-utils.js';
 
@@ -255,12 +258,10 @@ export class FsLookupCache {
     if (cached !== undefined) return cached;
 
     this.#probeMisses++;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-validated path
     const exists = nodeFs.existsSync(targetPath);
     let isDirectory: boolean | null = null;
     if (exists) {
       try {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-validated path
         isDirectory = nodeFs.statSync(targetPath).isDirectory();
       } catch (error) {
         // Present to `existsSync` but unstattable — a permission change or a
@@ -430,7 +431,6 @@ export class FsLookupCache {
     const cached = this.#listings.get(dirPath);
     if (cached !== undefined) return cached;
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-validated path
     const listed = fs.readdir(dirPath);
     const pending = listed
       .then((names): DirectoryListing => ({ outcome: 'listed', names }))
@@ -465,8 +465,30 @@ export class FsLookupCache {
   }
 }
 
+/** Thrown when a link inside the tree being copied points outside it. */
+export class CopyLinkEscapesSourceError extends VatError {
+  constructor(link: string, src: string) {
+    super(
+      'COPY_LINK_ESCAPES_SOURCE',
+      `Refusing to copy ${link}: it is a symlink to a path outside ${src}. ` +
+        'A copy follows links, so this would ship content the source tree does not own — ' +
+        'replace the link with the files, or point it inside the tree.',
+    );
+  }
+}
+
 /**
- * Recursively copy a directory
+ * Recursively copy a directory, following symlinks — contained to `src`.
+ *
+ * A link is copied as what it points at (a linked directory as its tree, a
+ * linked file as its bytes; a dangling link fails loudly in `stat`). Two
+ * refusals bound that: a link whose target is not under `src` throws
+ * {@link CopyLinkEscapesSourceError} — `scripts/etc -> /etc` used to copy
+ * `/etc` into `dist` — and a link that leads the walk back into a directory
+ * it already entered throws `DirectoryWalkRevisitedError` (`scripts/loop -> .`
+ * used to create `dest/loop/loop/…` until `ENAMETOOLONG`, writing every file
+ * at every level first). Adopter-authored trees reach this through
+ * `vat agent build`, so neither shape is exotic.
  *
  * @param src - Source directory path
  * @param dest - Destination directory path
@@ -475,17 +497,33 @@ export class FsLookupCache {
  * await copyDirectory('/source/dir', '/dest/dir');
  */
 export async function copyDirectory(src: string, dest: string): Promise<void> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Paths from validated sources
+  const walk = new FollowedWalk();
+  walk.enter(src);
+  await copyTree(src, dest, src, walk);
+}
+
+/** One level of {@link copyDirectory}; every directory it recurses into has been `enter`ed. */
+async function copyTree(src: string, dest: string, root: string, walk: FollowedWalk): Promise<void> {
   await fs.mkdir(dest, { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Paths from validated sources
   const entries = await fs.readdir(src, { withFileTypes: true });
 
   for (const entry of entries) {
     const srcPath = safePath.join(src, entry.name);
     const destPath = safePath.join(dest, entry.name);
 
-    if (entry.isDirectory()) {
-      await copyDirectory(srcPath, destPath);
+    // (Inline rather than `direntKindFollowing`: that module imports this one.)
+    let isDirectory = entry.isDirectory();
+    if (entry.isSymbolicLink()) {
+      isDirectory = (await fs.stat(srcPath)).isDirectory();
+      // Revisit first, so a link back into the tree is named as the loop it
+      // is; then containment, so a link out is named as the escape it is.
+      if (isDirectory) walk.enter(srcPath);
+      if (isUnderRoot(root, srcPath) !== 'inside') throw new CopyLinkEscapesSourceError(srcPath, root);
+    } else if (isDirectory) {
+      walk.enter(srcPath);
+    }
+    if (isDirectory) {
+      await copyTree(srcPath, destPath, root, walk);
     } else {
       await fs.copyFile(srcPath, destPath);
     }

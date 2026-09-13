@@ -27,8 +27,9 @@
  *
  * ## Emit, never depend
  *
- * ARD is v0.91, status **Proposal** (as fetched 2026-09-06 — an external fact,
- * recorded, never a constant that decides validity). Nothing in VAT reads an
+ * ARD is v0.91, status **Proposal** (as of the fetch date recorded in
+ * `docs/external/ard/README.md` — an external fact, recorded there, never a
+ * constant that decides validity). Nothing in VAT reads an
  * ARD entry back, and no VAT behaviour is derived from one.
  */
 

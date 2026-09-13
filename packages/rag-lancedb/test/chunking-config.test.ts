@@ -51,7 +51,6 @@ const CLOUD_LIMIT = 8192;
  * @returns The LanceDB provider's own source text
  */
 async function readProviderSource(): Promise<string> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed path relative to this test file
   return readFile(new URL('../src/lancedb-rag-provider.ts', import.meta.url), 'utf8');
 }
 

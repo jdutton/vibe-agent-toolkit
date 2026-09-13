@@ -329,7 +329,6 @@ async function marketplaceReportFor(root: string): Promise<Record<string, unknow
 /** Write a fixture JSON file, creating its directory chain. */
 function writeJsonFixture(filePath: string, value: unknown): void {
   mkdirSyncReal(safePath.resolve(filePath, '..'), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
   writeFileSync(filePath, JSON.stringify(value));
 }
 
@@ -343,7 +342,6 @@ describe('marketplace validate — every producer anchored at the stated root', 
     projectRoot = safePath.resolve(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-mp-anchor-')));
     // What makes the project root discoverable — and therefore what makes the
     // wrong anchor a DIFFERENT string from the right one.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
     writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
 
     marketplaceRoot = safePath.join(projectRoot, 'mp');
@@ -359,7 +357,6 @@ describe('marketplace validate — every producer anchored at the stated root', 
     // necessarily names a path that does not resolve, which would drown the
     // signal this suite is reading.
     for (const file of ['LICENSE', 'README.md', 'CHANGELOG.md']) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
       writeFileSync(safePath.join(marketplaceRoot, file), 'x\n');
     }
 
@@ -423,7 +420,6 @@ describe('packages/cli/docs/resources.md — the shipped scan reference', () => 
   const docPath = safePath.resolve(
     safePath.join(fileURLToPath(new URL('.', import.meta.url)), '../../docs/resources.md'),
   );
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from this test file's own location
   const doc = readFileSync(docPath, 'utf8');
   const scanSection = doc.slice(
     doc.indexOf('### vat resources scan'),

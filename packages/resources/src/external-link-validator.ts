@@ -30,7 +30,7 @@ function resolveOsUser(): string {
     if ((error as { code?: unknown }).code !== 'ERR_SYSTEM_ERROR') throw error;
   }
   // Use `||` (not `??`) so an empty-string USER/USERNAME also falls through.
-  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- || on purpose: an empty-string USER must fall through to USERNAME
   const fromEnv = process.env['USER'] || process.env['USERNAME'];
   if (fromEnv) return fromEnv;
   // Last resort: two distinct OS users on the same host both end up here
@@ -255,7 +255,7 @@ export interface ExternalLinkValidatorOptions {
 	/** User agent string for requests (default: generic) */
 	userAgent?: string;
 	/**
-	 * Optional linkAuth config (per issue #113). When set, URLs whose host is
+	 * Optional linkAuth config. When set, URLs whose host is
 	 * claimed by a provider in this config bypass the anonymous markdown-link-check
 	 * path and use an authenticated direct fetch instead. URLs no provider claims
 	 * continue to use markdown-link-check.
@@ -281,7 +281,7 @@ export interface ExternalLinkValidatorOptions {
 	 */
 	sleep?: (ms: number) => Promise<void>;
 	/**
-	 * OS user to scope the authenticated cache by (#113 §6.3). Defaults to
+	 * OS user to scope the authenticated cache by (design §6.3). Defaults to
 	 * `os.userInfo().username` with env-var fallbacks. Tests inject a fixed
 	 * value; production callers omit.
 	 */
@@ -303,7 +303,7 @@ export interface LinkValidationResult {
 	/** Whether result came from cache */
 	cached: boolean;
 	/**
-	 * Set when the authenticated branch classified the response (issue #113 §7).
+	 * Set when the authenticated branch classified the response (design §7).
 	 * Consumers use this directly instead of mapping `statusCode` to a code, so
 	 * `notFoundMeaning`-dependent routing (404 → `LINK_AUTH_DEAD` vs
 	 * `LINK_AUTH_DEAD_OR_UNAUTHORIZED`) reflects the matched provider's config.
@@ -342,7 +342,7 @@ export class ExternalLinkValidator {
 	private readonly cache: ExternalLinkCache;
 	/**
 	 * Auth-branch cache — scoped to a per-OS-user subdirectory of `cacheDir`
-	 * (#113 §6.3) so two users on a shared machine never read each other's
+	 * (design §6.3) so two users on a shared machine never read each other's
 	 * authenticated results. Distinct from `cache` (the anonymous cache, which
 	 * stays shared across users for the markdown-link-check path).
 	 */
@@ -380,7 +380,7 @@ export class ExternalLinkValidator {
 		// keyed by stringified argv so each unique token-resolution command runs
 		// at most once per validator instance. Validating N links to the same
 		// host previously re-resolved the token N times — including subprocess
-		// spawns for `command` sources. Per #125 review: treat all token
+		// spawns for `command` sources. Treat all token
 		// resolvers as expensive; the memo's lifetime equals one validate() run.
 		this.linkAuthDeps = wrapLinkAuthDepsWithMemo(options.linkAuthDeps);
 		this.sleep = options.sleep;
@@ -399,7 +399,7 @@ export class ExternalLinkValidator {
 	 * @returns Validation result
 	 */
 	async validateLink(url: string): Promise<LinkValidationResult> {
-		// Authenticated branch (issue #113): if a provider in linkAuthConfig
+		// Authenticated branch: if a provider in linkAuthConfig
 		// claims this URL's host, bypass markdown-link-check and do a direct
 		// authenticated fetch + per-§7 classify.
 		if (this.linkAuthConfig) {
@@ -507,7 +507,7 @@ export class ExternalLinkValidator {
 	/**
 	 * Issue an authenticated fetch for `originalUrl` using the engine's plan
 	 * (rewritten URL + auth headers + provider's check config), classify the
-	 * response per #113 §7, and write a status-cache entry. Cache is keyed by
+	 * response per design §7, and write a status-cache entry. Cache is keyed by
 	 * the *rewritten* URL (§6.3) — the original `blob/` URL 404s, so caching
 	 * by original would poison results.
 	 */

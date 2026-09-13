@@ -141,7 +141,7 @@ export function runDirectoryName(report: RunReport): string {
  */
 export async function writeRunReport(report: RunReport, outDir: string): Promise<string> {
   const runDir = safePath.join(outDir, runDirectoryName(report));
-  // eslint-disable-next-line local/no-fs-mkdirSync, security/detect-non-literal-fs-filename -- the corpus output dir is caller-supplied; mkdir-recursive is the right call here
+  // eslint-disable-next-line local/no-fs-mkdirSync -- the corpus output dir is caller-supplied; mkdir-recursive is the right call here
   mkdirSync(runDir, { recursive: true });
 
   const totals = computeTotals(report);
@@ -156,7 +156,6 @@ export async function writeRunReport(report: RunReport, outDir: string): Promise
   };
 
   const summaryPath = safePath.join(runDir, 'summary.yaml');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- summaryPath composed under our run dir
   writeFileSync(summaryPath, yaml.stringify(dump, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
 
   return runDir;

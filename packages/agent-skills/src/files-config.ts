@@ -67,7 +67,7 @@ function partitionNeverPackaged(matches: readonly string[]): { kept: string[]; d
  * pointing at a DIRECTORY is never a directory to it and arrives here as an
  * ordinary match. `copyFile` on that link then throws a raw `ENOTSUP` which, on
  * macOS, renders as "operation not supported on socket" and misdescribes the
- * object outright (issue #183).
+ * object outright.
  *
  * Two simpler predicates were rejected:
  *
@@ -147,11 +147,9 @@ async function mapWithConcurrency<T, R>(
  */
 async function isCopyableFile(absPath: string): Promise<boolean> {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- match of a validated config glob
     const linkStat = await lstat(absPath);
     if (linkStat.isFile()) return true;
     if (!linkStat.isSymbolicLink()) return false;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- match of a validated config glob
     return (await stat(absPath)).isFile();
   } catch (error) {
     // Unreadable or dangling. Not copyable is the honest answer, and the caller
@@ -252,8 +250,8 @@ export interface AppliedFilesConfig {
    * Reported for the same reason as `dropped` — the bundle holds less than the
    * config asked for and a CI consumer must be able to see it — but kept as its
    * own population because the cause and the remedy differ (see
-   * {@link GlobExpansion.nonRegular}). Before this existed, the copy died on a raw
-   * `ENOTSUP` naming neither the entry nor the path (issue #183).
+   * {@link GlobExpansion.nonRegular}). Without it, the copy dies on a raw
+   * `ENOTSUP` naming neither the entry nor the path.
    */
   skipped: DroppedGlobMatch[];
 }
@@ -536,7 +534,6 @@ export function verifyFilesIntegrity(
     // missing; anything else is the filesystem refusing the path, and is rethrown
     // for the caller to attribute to the `files:` entry.
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths from validated config
       statSync(absDest);
     } catch (error) {
       if ((error as { code?: string }).code !== 'ENOENT') throw error;
@@ -636,7 +633,6 @@ async function copyNonGlobEntry(
   // names the entry.
   let sourceStat;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
     sourceStat = statSync(absoluteSource);
   } catch (error) {
     if ((error as { code?: string }).code !== 'ENOENT') throw error;
@@ -652,7 +648,6 @@ async function copyNonGlobEntry(
   // joinUnderRoot rejects a dest that escapes the skill output dir (absolute /
   // drive-letter / '..'), defense-in-depth beyond the schema refine.
   const absoluteDest = safePath.joinUnderRoot(skillOutputDir, entry.dest);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest path from validated config
   await mkdir(dirname(absoluteDest), { recursive: true });
   await copyFile(absoluteSource, absoluteDest);
   return { relDest: normalizeRelPath(entry.dest), absSource: absoluteSource, absDest: absoluteDest };
@@ -866,7 +861,6 @@ async function copyGlobEntry(
     // it would change the artifact behind their back. A non-regular match can
     // never be packaged at all, which is why that one degrades instead.
     await attributed(entry, absSource, projectRoot, async () => {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest path from validated config
       await mkdir(dirname(absDest), { recursive: true });
       await copyFile(absSource, absDest);
     });

@@ -1,4 +1,3 @@
-/* eslint-disable sonarjs/no-duplicate-string, sonarjs/no-os-command-from-path */
 import { spawnSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 
@@ -209,9 +208,9 @@ claude:
     expect(tmpRepoPath).not.toBe('');
 
     // Verify the .mjs script file survived the compose→cpSync pipeline
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path from CLI output
+    // A link is an entry the publish placed too; listed as one, not followed.
     const allFiles = readdirSync(tmpRepoPath, { recursive: true, withFileTypes: true })
-      .filter(entry => entry.isFile() && !entry.parentPath.includes('.git'))
+      .filter(entry => (entry.isSymbolicLink() || entry.isFile()) && !entry.parentPath.includes('.git'))
       .map(entry => safePath.relative(tmpRepoPath, safePath.join(entry.parentPath, entry.name)));
 
     const mjsFiles = allFiles.filter(f => f.endsWith('.mjs'));

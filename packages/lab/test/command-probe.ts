@@ -157,7 +157,6 @@ export function setupProbe(prefix = 'lab-probe-'): Probe {
   const cwd = mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
   createdProbeDirs.push(cwd);
   const script = safePath.join(cwd, 'probe.cjs');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture under a fresh temp dir
   writeFileSync(script, PROBE_SOURCE, 'utf-8');
 
   return {
@@ -193,7 +192,6 @@ export function cleanupProbes(): void {
 function readProbeLog(cwd: string): ProbeEntry[] {
   let raw: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture under a fresh temp dir
     raw = readFileSync(safePath.join(cwd, PROBE_LOG), 'utf-8');
   } catch (error) {
     // No file at all is the "nothing ran" case, which a test asserts on.

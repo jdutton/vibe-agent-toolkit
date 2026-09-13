@@ -4,11 +4,14 @@
 
 import fs from 'node:fs/promises';
 
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
 import { validateAndGetScopeLocation } from '../../utils/scope-locations.js';
+
+import { agentInstallPath } from './install-path.js';
 
 export interface UninstallOptions {
   scope?: 'user' | 'project';
@@ -32,7 +35,9 @@ export async function uninstallAgent(
     // Validate scope and get target location
     const targetLocation = validateAndGetScopeLocation(runtime, scope);
 
-    const installPath = safePath.join(targetLocation, agentName);
+    // Refused by name before anything is examined: the positional is the one
+    // thing on this path the user typed, and `rm -rf` is where it ends up.
+    const installPath = agentInstallPath(targetLocation, agentName);
 
     // Check if installed
     try {
@@ -42,11 +47,10 @@ export async function uninstallAgent(
       // command's error handler, not as an install that does not exist.
       if (!isPathAbsentError(error)) throw error;
       logger.error(`\n${agentName} is not installed at ${installPath}\n`);
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     }
 
     // Check if symlink
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from validated scope + agent name
     const stats = await fs.lstat(installPath);
     const isSymlink = stats.isSymbolicLink();
 
@@ -62,7 +66,7 @@ export async function uninstallAgent(
     const duration = Date.now() - startTime;
     logger.debug(`Uninstall completed in ${duration}ms`);
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'Uninstall');
   }

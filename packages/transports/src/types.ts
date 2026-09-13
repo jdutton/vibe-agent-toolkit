@@ -33,7 +33,7 @@ export interface TransportSessionContext<TState = unknown> {
  * @template TOutput - Output type (e.g., string for text, object for structured)
  * @template TState - Session state type
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic defaults for callers that carry no typed input/output/state
 export type ConversationalFunction<TInput = any, TOutput = any, TState = any> = (
   input: TInput,
   context: TransportSessionContext<TState>

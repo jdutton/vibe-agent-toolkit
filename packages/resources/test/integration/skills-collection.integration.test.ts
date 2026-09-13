@@ -10,11 +10,9 @@ import { setupResourceTestSuite } from '../test-helpers.js';
  */
 async function createSkillFile(tempDir: string, content: string): Promise<string> {
   const skillsDir = safePath.join(tempDir, 'resources', 'skills');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
   await fs.mkdir(skillsDir, { recursive: true });
 
   const skillPath = safePath.join(skillsDir, 'SKILL.md');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
   await fs.writeFile(skillPath, content, 'utf-8');
 
   return skillPath;
@@ -48,9 +46,7 @@ See [documentation](../../docs/README.md) for details.
 
       // Create referenced doc
       const docsDir = safePath.join(suite.tempDir, 'docs');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
       await fs.mkdir(docsDir, { recursive: true });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
       await fs.writeFile(safePath.join(docsDir, 'README.md'), '# Documentation\n\nMain docs.', 'utf-8');
 
       // Crawl and validate

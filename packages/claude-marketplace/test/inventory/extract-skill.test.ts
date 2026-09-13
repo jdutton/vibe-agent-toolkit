@@ -3,8 +3,6 @@ import { dirname } from 'node:path';
 
 import { type ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import {
-  __readCrawlTimingSnapshot,
-  __setCrawlTimingForTest,
   CRAWL_PASS_INSIDE,
   CRAWL_REGISTRY_ADMIT_ID,
   CRAWL_REGISTRY_ENUMERATE_ID,
@@ -12,11 +10,15 @@ import {
   mkdirSyncReal,
   resetProjectRootCaches,
   safePath,
-  setupAsyncTempDirSuite,
-  withReaddirSyncRefused,
 } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import {
+  __readCrawlTimingSnapshot,
+  __setCrawlTimingForTest,
+  setupAsyncTempDirSuite,
+  withReaddirSyncRefused,
+} from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -53,7 +55,6 @@ const DIVERGENT_SKILL_MD = [
 /** Write one file into the temp fixture repository, creating its directory. */
 function writeRepoFile(root: string, relative: string, contents: string): void {
 	mkdirSyncReal(root, { recursive: true });
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- a path composed under this suite's own temp root
 	writeFileSync(safePath.join(root, relative), contents, 'utf-8');
 }
 

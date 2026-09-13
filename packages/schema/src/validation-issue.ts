@@ -1,7 +1,10 @@
 /**
  * Unified validation issue type.
  *
- * `ValidationIssue` is the single shape every VAT validator emits. Its `code`
+ * `ValidationIssue` is the shape the shared validators (skills, resources,
+ * plugins, marketplaces) emit, and the element `report.ts`'s published
+ * `Finding` is built from; lanes with a private finding shape are the ones
+ * still being folded onto it. Its `code`
  * spans the FULL code space: registry codes (overridable via config), plus
  * `InfoCode` and `NonOverridableCode` (structural reports / prerequisites that
  * bypass the severity-override framework).
@@ -18,7 +21,11 @@
  * | `field`    | Dotted pointer INSIDE that document                          | `frontmatter.description` |
  * | `link`     | A link href / target the issue is about (never the file to open) | `./refs/missing.md` |
  *
- * `location` is **always relative** — enforced by the schema refinement below.
+ * `location` must be **relative**. The schema refinement below refuses an
+ * absolute one — but only where an issue is PARSED, and producers build issues
+ * as plain objects, so the refinement binds a consumer's `safeParse`, not a
+ * producer's constructor. The producer-side guard is `issueLocation`; a
+ * producer that joins an absolute root itself is not caught by anything here.
  * Absolute paths leak the developer's home directory into CI logs and make the
  * `validation.allow` globs (which match against `location`) unwritable. A
  * consumer can therefore resolve every `location` against one known root and
@@ -35,6 +42,7 @@ import { z } from 'zod';
 import { escapeRegExpLiteral } from './regexp-escape.js';
 import {
   CODE_REGISTRY,
+  IssueSeveritySchema,
   type InfoCode,
   type IssueCode,
   type IssueSeverity,
@@ -141,7 +149,7 @@ function isAbsoluteAnyPlatform(p: string): boolean {
 
 export const ValidationIssueSchema = z.object({
   code: z.string(),                                  // full code space; narrowed in the TS type below
-  severity: z.enum(['error', 'warning', 'info', 'ignore']),
+  severity: IssueSeveritySchema,
   message: z.string(),
   location: z.string()
     .refine((v) => !isAbsoluteAnyPlatform(v), {
@@ -210,7 +218,7 @@ export interface SeverityCounts {
  * adopter's own `validation.allow` config, and counting them would resurrect
  * something they deliberately silenced.
  */
-export function countBySeverity(issues: readonly ValidationIssue[]): SeverityCounts {
+export function countBySeverity(issues: readonly Pick<ValidationIssue, 'severity'>[]): SeverityCounts {
   let errors = 0;
   let warnings = 0;
   let info = 0;
@@ -241,7 +249,7 @@ export function countBySeverity(issues: readonly ValidationIssue[]): SeverityCou
  * status becomes the silence it used to be.
  */
 export function calculateValidationStatus(
-  issues: readonly ValidationIssue[],
+  issues: readonly Pick<ValidationIssue, 'severity'>[],
 ): 'success' | 'warning' | 'error' {
   const { errors, warnings } = countBySeverity(issues);
   if (errors > 0) {

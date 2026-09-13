@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- tmpdir paths constructed in test setup */
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, statSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';

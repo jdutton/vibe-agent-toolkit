@@ -2,7 +2,10 @@
 
 This directory ships the `vibe-agent-toolkit` Claude Code plugin. Follow the
 boundaries below so each sub-skill keeps a single, sharp trigger and the set
-covers VAT's user-facing surface without overlap.
+covers VAT's user-facing surface without overlap. The router `SKILL.md` is the
+owner of the "which skill for which task" table; this inventory adds only the
+ownership boundaries, so a new skill is added to BOTH (the golden drift test
+reds the plugin output either way).
 
 ## Skill inventory and boundaries
 
@@ -18,6 +21,8 @@ covers VAT's user-facing surface without overlap.
 | `vat-rag` | `vat rag index`, `vat rag query`, native embedding/vector store support, extension points | Markdown collection authoring (knowledge-resources owns) | `vat rag` |
 | `vat-skill-review` | Pre-publication review rubric, validation-code reference, best-practices integration | The validators themselves (live in code) | `vat skill review` |
 | `vat-enterprise-org` | Anthropic Admin API: org users, cost/usage, workspace skills, `ANTHROPIC_ADMIN_API_KEY` | Per-user runtime auth | `vat claude org` |
+| `vat-skill-testing` | `vat skill test run`/`configure`, friction triage, the harness's isolation and auth model, security acknowledgement | Authoring the evals themselves (skill-authoring owns `evals/`) | `vat skill test` |
+| `markdown-rewriting` | Programmatic markdown/frontmatter edits: moving files, updating references, batch renames, schema-evolution migrations via the comment-preserving `FrontmatterEditor` + `rewriteBodyLinks` | Validation of the result (knowledge-resources owns `vat resources validate`) | — |
 | `coherence-audit` | Auditing a subsystem's internal consistency: one-contract question, failure-direction tell, bounding a class honestly, testing the tests, vendor-claim staleness | VAT-specific rules or CLI behavior (deliberately generic) | — |
 
 ## Cross-cutting: `vibe-agent-toolkit.config.yaml`
@@ -106,6 +111,11 @@ bun run vat audit packages/vat-development-agents
 # Full validation
 bun run validate
 ```
+
+Editing any skill here reds `test/system/packaged-output-drift.system.test.ts` two gate phases
+later. Regenerate **after building**: `bun run build && cd packages/vat-development-agents &&
+UPDATE_DRIFT_GOLDEN=1 bunx vitest run --config vitest.system.config.ts test/system/packaged-output-drift.system.test.ts`,
+then review the golden diff in your PR.
 
 Watch for:
 - `RESERVED_WORD_IN_NAME` (warning) — naming policy violation

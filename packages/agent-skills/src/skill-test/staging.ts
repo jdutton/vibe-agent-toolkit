@@ -223,17 +223,14 @@ export function stagedDirName(name: string): string {
 export function computeDirContentHash(dir: string): string {
   const hash = createHash('sha256');
   const walk = (current: string, rel: string): void => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own staged dir
     for (const name of readdirSync(current).sort((a, b) => a.localeCompare(b))) {
       const abs = safePath.join(current, name);
       const childRel = rel ? `${rel}/${name}` : name;
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own staged dir
       const st = statSync(abs);
       if (st.isDirectory()) {
         walk(abs, childRel);
       } else {
         hash.update(childRel);
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own staged dir
         hash.update(readFileSync(abs));
       }
     }
@@ -244,10 +241,8 @@ export function computeDirContentHash(dir: string): string {
 
 function readExistingManifest(harnessRoot: string): StagedManifest | null {
   const manifestPath = safePath.joinUnderRoot(harnessRoot, 'staged.manifest.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own harness root
   if (!existsSync(manifestPath)) return null;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own harness root
     return StagedManifestSchema.parse(JSON.parse(readFileSync(manifestPath, 'utf8')));
   } catch (error) {
     // Corrupt or tampered (not JSON, or JSON of the wrong shape) → null, which
@@ -358,7 +353,6 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
     .update(entries.map(e => `${e.name}:${e.identity}:${e.contentHash}`).join('|'))
     .digest('hex');
   const manifest: StagedManifest = { fingerprint, entries };
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own harness root
   writeFileSync(
     safePath.joinUnderRoot(opts.harnessRoot, 'staged.manifest.json'),
     JSON.stringify(manifest, null, 2) + '\n',

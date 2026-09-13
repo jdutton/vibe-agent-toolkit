@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test code writes into its own temp dirs */
 import { mkdir, writeFile } from 'node:fs/promises';
 
 import type { SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';

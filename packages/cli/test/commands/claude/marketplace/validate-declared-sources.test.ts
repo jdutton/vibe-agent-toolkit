@@ -80,7 +80,6 @@ interface PluginRow { name: string; source: string; path: string; status: string
 /** Write a JSON file, creating its directory chain. */
 function writeJson(filePath: string, value: unknown): void {
   mkdirSyncReal(safePath.resolve(filePath, '..'), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
   writeFileSync(filePath, JSON.stringify(value));
 }
 
@@ -91,7 +90,6 @@ function writeJson(filePath: string, value: unknown): void {
  */
 function writeHygieneFiles(root: string): void {
   for (const file of ['LICENSE', 'README.md', 'CHANGELOG.md']) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
     writeFileSync(safePath.join(root, file), 'x\n');
   }
 }
@@ -214,7 +212,6 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     const root = safePath.join(tmp, 'file-source');
     writeMarketplace(root, [DECLARED_A]);
     mkdirSyncReal(safePath.join(root, 'plugins'), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
     writeFileSync(safePath.join(root, 'plugins', 'a'), 'not a directory\n');
 
     const { exitCode, doc } = await validate(root, true);
@@ -468,7 +465,6 @@ describe.skipIf(SYMLINK_CAP === null)('marketplace validate — containment hold
     tmp = safePath.resolve(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-mp-deep-contained-')));
     outsideSkills = safePath.join(tmp, 'outside', 'skills');
     mkdirSyncReal(safePath.join(outsideSkills, 'leak'), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
     writeFileSync(safePath.join(outsideSkills, 'leak', 'SKILL.md'), LEAKY_SKILL_MD);
     outsidePluginJson = safePath.join(tmp, 'outside', PLUGIN_JSON);
     writeJson(outsidePluginJson, { name: 'a', version: '1.0.0' });
@@ -561,7 +557,6 @@ describe.skipIf(SYMLINK_CAP === null)('marketplace validate — containment hold
     const { root, plugin } = containedPluginRoot('skills-dir-in');
     const realSkills = safePath.join(root, 'real-skills');
     mkdirSyncReal(safePath.join(realSkills, 'leak'), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
     writeFileSync(safePath.join(realSkills, 'leak', 'SKILL.md'), LEAKY_SKILL_MD);
     createSymlink(cap, realSkills, safePath.join(plugin, 'skills'), 'dir');
 

@@ -18,11 +18,11 @@
  * A real repository and a real `chmod 000`: the git arm's refusal comes from
  * git's own walk, which no `readdir` spy reaches. POSIX-only, not as root.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { chmodSync, existsSync, rmSync } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ContributorRegistry } from '../src/projection/contributor.js';
@@ -37,8 +37,6 @@ import { FakeProjectionStore } from './fake-projection-store.js';
 import { createCommittedRepo, writeFileIn } from './test-helpers.js';
 
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
-const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 const OPEN_FILE = 'docs/ok.md';
 const IGNORED_LOCKED_DIR = 'build/locked';

@@ -1,6 +1,6 @@
 /**
  * tier-plan.ts — pure, unit-testable tier grouping + gate policy for the
- * cost-tiered fail-fast eval loop (issue #145 Phase G).
+ * cost-tiered fail-fast eval loop.
  *
  * Evals carry an optional `tier` (ascending, 0 = cheapest/foundational — see
  * eval-inputs.ts). The harness runs tiers in ascending order, bounded-parallel

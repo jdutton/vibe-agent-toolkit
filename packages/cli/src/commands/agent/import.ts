@@ -3,6 +3,7 @@
  */
 
 import { importSkillToAgent } from '@vibe-agent-toolkit/agent-skills';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 
@@ -50,7 +51,7 @@ export async function importCommand(
 
       writeYamlOutput(output);
       logger.error(`Import failed: ${result.error}`);
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     }
 
     // Import successful
@@ -62,7 +63,7 @@ export async function importCommand(
 
     writeYamlOutput(output);
     logger.info(`Successfully imported Agent Skill to: ${result.agentPath}`);
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'AgentImport');
   }

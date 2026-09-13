@@ -25,7 +25,8 @@
 
 import * as fs from 'node:fs';
 
-import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { updateSkillTestConfig } from '../../src/commands/skill/test/configure.js';
@@ -51,7 +52,6 @@ const SKILLS_BLOCK = 'skills:\n  include:\n    - "skills/**/SKILL.md"\n';
 /** Write a config file into `dir` and return its path. */
 function writeConfig(dir: string, content: string | Buffer): string {
   const configPath = safePath.join(dir, CONFIG_FILENAME);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
   fs.writeFileSync(configPath, content);
   return configPath;
 }

@@ -68,9 +68,14 @@ module.exports = {
   meta: {
     type: 'problem',
     docs: {
-      description: 'Disallow direct path.startsWith() without normalization',
-      category: 'Cross-platform compatibility',
+      description:
+        'Disallow direct path.startsWith() without normalization',
+      category: 'Path handling',
+      bans: '`path.startsWith()` on a raw path',
+      useInstead: '`toForwardSlash()` first',
+      subpath: '/path',
       recommended: true,
+      recommendedSeverity: 'error',
     },
     messages: {
       useNormalizeHelper:

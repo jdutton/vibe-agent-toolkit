@@ -3,7 +3,8 @@ import { promises as fs } from 'node:fs';
 import type * as FsPromises from 'node:fs/promises';
 
 
-import { setupAsyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest';
 
 import { ResourceRegistry } from '../src/resource-registry.js';
@@ -76,7 +77,6 @@ describe('ResourceRegistry with checksum', () => {
 
   it('should calculate checksum when adding resource', async () => {
     const testFile = safePath.join(tempDir, 'test.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(testFile, '# Test\n\nContent here.', 'utf-8');
 
     const metadata = await registry.addResource(testFile);
@@ -99,9 +99,7 @@ describe('ResourceRegistry with checksum', () => {
   it('should return different checksums for different content', async () => {
     const file1 = safePath.join(tempDir, 'file1.md');
     const file2 = safePath.join(tempDir, 'file2.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(file1, '# Content A', 'utf-8');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(file2, '# Content B', 'utf-8');
 
     const metadata1 = await registry.addResource(file1);
@@ -112,7 +110,6 @@ describe('ResourceRegistry with checksum', () => {
 
   it('reads and stats each file exactly once', async () => {
     const testFile = safePath.join(tempDir, 'read-once.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(testFile, '# Once\n\n[a](./a.md)\n', 'utf-8');
 
     // `node:fs`'s `promises` object is a DIFFERENT object from the mocked
@@ -151,16 +148,13 @@ describe('ResourceRegistry with checksum', () => {
     // real defect: `sizeBytes` reaches packaged-output accounting via
     // content-transform.ts and adopter-visible rule variables.
     const testFile = safePath.join(tempDir, 'malformed.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(
       testFile,
       Uint8Array.from([...Buffer.from('# Bad\n'), 0xff, ...Buffer.from('\n')]),
     );
 
     const [decoded, stats] = await Promise.all([
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
       fs.readFile(testFile, 'utf-8'),
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
       fs.stat(testFile),
     ]);
 

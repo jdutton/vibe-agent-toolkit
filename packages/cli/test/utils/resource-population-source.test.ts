@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is under a per-test temp directory */
 /**
  * `withResourcePopulationSource` — the one seam that puts a command which does
  * NOT go through `loadResourcesWithConfig` onto the projection lane.

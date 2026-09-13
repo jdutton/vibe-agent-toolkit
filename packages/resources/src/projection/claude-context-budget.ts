@@ -21,7 +21,7 @@
  * stands; that figure is a historical measurement and must never be written in
  * the present tense.
  *
- * **The re-measurement (2026-08-23, this worktree).** `vat claude context --all
+ * **The re-measurement (on this repo, after the root `CLAUDE.md` shrank).** `vat claude context --all
  * --format json` over this repo — 6,234 answers, 80.7 s, exit 0 — with this
  * module's inclusion rule applied offline gives **819 directories; median 8,184;
  * p90 9,255; max 14,195**. At 10,000: **39 of 819** flagged (5%). At 12,000:

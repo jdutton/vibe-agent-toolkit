@@ -16,7 +16,7 @@
  * ## Why this lives in the harness and not in one facet
  *
  * `population` needed it first, because a population without its lane is a set
- * whose arm is unproven. `io` needed it second, the hard way: a 2026-09-11 A/B
+ * whose arm is unproven. `io` needed it second, the hard way: the first A/B
  * of the git-vs-filesystem extent source had to INFER which arm each side ran
  * from a call-site signature (`realizations.js:51` at 0 calls versus 12,003),
  * because its rows carried counts and nothing about the arm that produced them.
@@ -101,7 +101,7 @@ export const LaneFieldsSchema = z.object({
   // entirely on a build too old to report it. Rejecting the null would refuse
   // every walk-lane document.
   extentSource: z.string().min(1).nullable().optional(),
-});
+}).strip(); /* a document ANOTHER vat build printed: keep only the fields this facet reads, refuse none of the rest */
 
 /**
  * Read one of the two fields, leniently.

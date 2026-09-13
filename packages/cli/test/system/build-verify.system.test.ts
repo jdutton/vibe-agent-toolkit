@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- All file paths are in temp directories controlled by tests */
 /**
  * System tests for vat build and vat verify commands (with --cwd flag)
  *

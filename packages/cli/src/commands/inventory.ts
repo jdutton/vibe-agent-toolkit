@@ -17,6 +17,7 @@ import {
 	type SharedPopulationSource,
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { type PopulationCache } from '@vibe-agent-toolkit/resources';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
@@ -87,7 +88,7 @@ export async function inventoryCommand(
 			? serializeInventoryShallow(inv, format)
 			: serializeInventory(inv, format);
 		process.stdout.write(out);
-		process.exit(0);
+		process.exit(ExitCode.OK);
 	} catch (error) {
 		handleCommandError(error, logger, startTime, 'Inventory', options.format);
 	}
@@ -112,9 +113,9 @@ export async function routeInventory(
 	if (options.user === true) {
 		// The tracker source is REQUIRED here now, and this is the lane it matters
 		// most on: `--user` walks every cached plugin under ~/.claude/plugins/cache,
-		// and until 2026-08-15 every one of those skills answered its gitignore
-		// questions with a `git check-ignore` spawn per link target because the
-		// obligation stopped at `extract-plugin.ts`.
+		// and without it every one of those skills answers its gitignore
+		// questions with a `git check-ignore` spawn per link target (which is
+		// what happened while the obligation stopped at `extract-plugin.ts`).
 		return extractClaudeInstallInventory({
 			pathsOrRoot: getClaudeUserPaths(),
 			gitTrackerSource: gitTrackerForProjectRoot,
@@ -141,9 +142,7 @@ export async function routeInventory(
 		return extractClaudeSkillInventory(absolute, { gitTrackerSource: gitTrackerForProjectRoot });
 	}
 	const claudePluginDir = safePath.join(absolute, '.claude-plugin');
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- absolute is caller-resolved, used for presence check only
 	const hasMarketplace = existsSync(safePath.join(claudePluginDir, 'marketplace.json'));
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- absolute is caller-resolved, used for presence check only
 	const hasPlugin = existsSync(safePath.join(claudePluginDir, 'plugin.json'));
 	// A directory with marketplace.json but no plugin.json is a marketplace root.
 	// When both are present, the plugin extractor takes precedence (plugin is installed,
@@ -162,7 +161,7 @@ export async function routeInventory(
 		// match no skill and answer nothing; rooted per plugin it is not shared. So this
 		// subject shape keeps the walk, and **the flip is plugin-directory-only** — as are
 		// the `--user` and single-`SKILL.md` lanes above, for the same rootedness reason.
-		// Measured 2026-08-15 on three real marketplace roots (35/51/29 skills): both arms
+		// Measured on three real marketplace roots (35/51/29 skills): both arms
 		// filed only the walker's `crawl` stratum, no `base`/`closure`, so their identical
 		// output is the two arms agreeing about ONE lane, not evidence about the flip.
 		return extractClaudeMarketplaceInventory(absolute, {

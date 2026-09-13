@@ -139,7 +139,7 @@ export class ExternalLinkCache {
 	 * Why no error propagation: `vat resources validate` should keep running
 	 * when the cache file isn't reachable (read-only filesystem, permission
 	 * mismatch, full disk) — a missing cache costs an extra network round-trip,
-	 * an exception costs the whole run. Per #125 review.
+	 * an exception costs the whole run.
 	 */
 	private async loadCache(): Promise<CacheData> {
 		if (this.cache !== null) {
@@ -147,10 +147,9 @@ export class ExternalLinkCache {
 		}
 
 		try {
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheDir is constructor parameter, controlled by caller
 			await fs.mkdir(this.cacheDir, { recursive: true, mode: CACHE_DIR_MODE });
 			 
-			// eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-raw-text-decode -- reading back this cache's own JSON, written as UTF-8 by `save()` below
+			// eslint-disable-next-line local/no-raw-text-decode -- reading back this cache's own JSON, written as UTF-8 by `save()` below
 			const data = await fs.readFile(this.cacheFile, 'utf-8');
 			this.cache = readEntries(JSON.parse(data));
 			return this.cache;
@@ -176,9 +175,7 @@ export class ExternalLinkCache {
 		}
 
 		try {
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheDir is constructor parameter, controlled by caller
 			await fs.mkdir(this.cacheDir, { recursive: true, mode: CACHE_DIR_MODE });
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheFile is derived from cacheDir
 			await fs.writeFile(this.cacheFile, JSON.stringify(this.cache, null, 2), 'utf-8');
 		} catch (error) {
 			// No-op on IO failure. The in-memory cache (`this.cache`) is still

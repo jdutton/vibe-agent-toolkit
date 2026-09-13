@@ -65,7 +65,6 @@ const REQUIRED_FLAGS = [
 const UNVERIFIABLE_FLAGS = ['--max-turns'] as const;
 
 function checkExists(label: string, paths: string[]): PreflightCheck {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own resolved absolute paths
   const missing = paths.filter(p => !existsSync(p));
   return missing.length === 0
     ? { name: label, passed: true, message: `all ${paths.length} present` }

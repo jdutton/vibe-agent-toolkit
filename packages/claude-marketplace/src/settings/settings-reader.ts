@@ -35,7 +35,6 @@ export interface ReadSettingsOptions {
 
 async function tryReadJson(filePath: string): Promise<unknown> {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are system-controlled
     const content = await fs.readFile(filePath, 'utf-8');
     return JSON.parse(content) as unknown;
   } catch (err) {

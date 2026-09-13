@@ -48,12 +48,13 @@ describe('resolveAuth', () => {
     ).toThrow(AuthPreflightError);
   });
 
-  it('AuthPreflightError carries exitCode 2', () => {
-    expect.assertions(1);
+  it('AuthPreflightError declares the preflight reason (what the CLI prints as Reason:)', () => {
+    expect.assertions(2);
     try {
       resolveAuth({ mode: 'api-key', sourceEnv: { CLAUDE_CONFIG_DIR: '/c' }, probe: realisticProbe });
     } catch (e) {
-      expect((e as AuthPreflightError).exitCode).toBe(2);
+      expect((e as AuthPreflightError).reason).toBe('preflight');
+      expect((e as AuthPreflightError).code).toBe('AUTH_PREFLIGHT');
     }
   });
 

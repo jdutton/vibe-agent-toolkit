@@ -1,319 +1,55 @@
 # Vibe Agent Toolkit Packages
 
-This directory contains all packages in the vibe-agent-toolkit monorepo. This README documents each package, its purpose, dependencies, and npm distribution.
-
-## Package Overview
-
-| Package | npm Package | Status | Purpose |
-|---------|-------------|--------|---------|
-| schema | `@vibe-agent-toolkit/schema` | Published | JSON Schema definitions and TypeScript types for agent manifests |
-| utils | `@vibe-agent-toolkit/utils` | Published | Core utility functions, plus the ESLint rules enforcing them on `/eslint` (no internal dependencies) |
-| discovery | `@vibe-agent-toolkit/discovery` | Published | Intelligent file discovery for agents and Agent Skills |
-| resources | `@vibe-agent-toolkit/resources` | Published | Markdown resource parsing, validation, and link integrity |
-| rag | `@vibe-agent-toolkit/rag` | Published | Abstract RAG interfaces and shared implementations |
-| rag-lancedb | `@vibe-agent-toolkit/rag-lancedb` | Published | LanceDB implementation of RAG interfaces |
-| agent-config | `@vibe-agent-toolkit/agent-config` | Published | Agent manifest loading and validation |
-| agent-skills | `@vibe-agent-toolkit/agent-skills` | Published | Build and package VAT agents as Agent Skills |
-| cli | `@vibe-agent-toolkit/cli` | Published | Command-line interface (provides `vat` binary) |
-| vat-development-agents | `@vibe-agent-toolkit/vat-development-agents` | Published | VAT development agents (agent bundle) |
-| vibe-agent-toolkit | `vibe-agent-toolkit` | Published | Umbrella package (installs everything) |
-| dev-tools | `@vibe-agent-toolkit/dev-tools` | **Private** | Development tools for the monorepo |
-
-## Dependency Graph
-
-The packages follow a progressive dependency structure from low-level utilities to high-level orchestration:
-
-```mermaid
-graph TD
-    %% Foundation Layer
-    schema["schema<br/>(no deps)"]
-    utils["utils<br/>(no deps)"]
-
-    %% File & Resource Layer
-    discovery["discovery"]
-    resources["resources"]
-    rag["rag<br/>(opt: openai)"]
-
-    %% RAG Implementation
-    rag-lancedb["rag-lancedb<br/>(+ apache-arrow,<br/>@lancedb/lancedb)"]
-
-    %% Configuration & Runtime
-    agent-config["agent-config"]
-    agent-skills["agent-skills"]
-
-    %% CLI & Distribution
-    cli["cli"]
-    vibe-agent-toolkit["vibe-agent-toolkit<br/>(umbrella)"]
-
-    %% Separate Hierarchies
-    vat-development-agents["vat-development-agents<br/>(agent bundle)"]
-    dev-tools["dev-tools<br/>(private)"]
-
-    %% Dependencies
-    utils --> discovery
-    utils --> resources
-    utils --> rag
-
-    resources --> rag-lancedb
-    rag --> rag-lancedb
-    utils --> rag-lancedb
-
-    schema --> agent-config
-    utils --> agent-config
-    rag --> agent-config
-
-    agent-config --> agent-skills
-    resources --> agent-skills
-    utils --> agent-skills
-
-    agent-config --> cli
-    discovery --> cli
-    rag --> cli
-    rag-lancedb --> cli
-    resources --> cli
-    agent-skills --> cli
-    utils --> cli
-
-    cli --> vibe-agent-toolkit
-
-    %% Separate dependencies
-    schema --> vat-development-agents
-    utils --> dev-tools
-
-    %% Styling
-    classDef foundation fill:#e1f5ff,stroke:#0288d1,stroke-width:2px
-    classDef fileResource fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
-    classDef ragImpl fill:#fff3e0,stroke:#f57c00,stroke-width:2px
-    classDef config fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
-    classDef cliDist fill:#fce4ec,stroke:#c2185b,stroke-width:2px
-    classDef separate fill:#f5f5f5,stroke:#616161,stroke-width:2px
-    classDef private fill:#ffebee,stroke:#d32f2f,stroke-width:2px,stroke-dasharray: 5 5
-
-    class schema,utils foundation
-    class discovery,resources,rag fileResource
-    class rag-lancedb ragImpl
-    class agent-config,agent-skills config
-    class cli,vibe-agent-toolkit cliDist
-    class vat-development-agents separate
-    class dev-tools private
-```
-
-## Package Details
-
-### Foundation Layer
-
-#### schema
-**npm**: `@vibe-agent-toolkit/schema`
-
-JSON Schema definitions and TypeScript types for VAT agent manifest format. Uses Zod for type-safe schema definitions that generate both TypeScript types and JSON Schema.
-
-**Dependencies**:
-- External: `zod`, `zod-to-json-schema`
-- Internal: None
-
-**Exports**:
-- TypeScript types derived from Zod schemas
-- Generated JSON Schema files in `schemas/` directory
-
----
-
-#### utils
-**npm**: `@vibe-agent-toolkit/utils`
-
-Core utility functions with minimal external dependencies. Provides cross-platform file operations, process spawning, path handling, and gitignore support. This package has no internal dependencies by design - all other packages can depend on it safely.
-
-The 21 ESLint rules that enforce those safety helpers ship on the **`/eslint` subpath** — a safety
-API without its enforcement is half a product, and one install means a rule can never name a helper
-signature the installed `utils` no longer has. CommonJS rule modules under `packages/utils/eslint/`,
-no build step, and they reach nothing at all: the rules emit import *text* naming `utils` and never
-load it, and never `require('eslint')` either, which is why `eslint` is an *optional* peer and the
-other twelve subpaths are unaffected. This repo dogfoods it via the root `eslint.config.js`.
-See [the rule README](./utils/eslint/README.md) for the rule table.
-
-**Dependencies**:
-- External: `ignore`, `picomatch`, `which`; `eslint` (optional peer, >=9, for `/eslint` only)
-- Internal: None
-
----
-
-### File & Resource Layer
-
-#### discovery
-**npm**: `@vibe-agent-toolkit/discovery`
-
-Intelligent file discovery for VAT agents and Agent Skills. Finds agent manifests, skill files, and resources with pattern matching and gitignore support.
-
-**Dependencies**:
-- External: `picomatch`
-- Internal: `utils`
-
----
-
-#### resources
-**npm**: `@vibe-agent-toolkit/resources`
-
-Markdown resource parsing, validation, and link integrity checking. Parses markdown files using remark, validates internal links and anchors, detects broken references.
-
-**Dependencies**:
-- External: `picomatch`, `remark-frontmatter`, `remark-gfm`, `remark-parse`, `unified`, `unist-util-visit`, `zod`
-- Internal: `utils`
-
----
-
-### RAG Layer
-
-#### rag
-**npm**: `@vibe-agent-toolkit/rag`
-
-Abstract RAG (Retrieval-Augmented Generation) interfaces and shared implementations. Provides chunking strategies, embedding providers (local and OpenAI), and abstract RAG provider interface.
-
-**Dependencies**:
-- External: `onnxruntime-web`, `gpt-tokenizer`, `zod`, `zod-to-json-schema`
-- External (optional): `openai`
-- Internal: `resources`, `utils`
-
----
-
-#### rag-lancedb
-**npm**: `@vibe-agent-toolkit/rag-lancedb`
-
-LanceDB implementation of RAG interfaces for vibe-agent-toolkit. Provides vector storage and similarity search using LanceDB with Apache Arrow for efficient data handling.
-
-**Dependencies**:
-- External: `@lancedb/lancedb`, `apache-arrow`
-- Internal: `rag`, `resources`, `utils`
-
-**Note**: Requires `apache-arrow@18.1.0` for compatibility with `@lancedb/lancedb@0.23.0` and Bun runtime.
-
----
-
-### Configuration & Runtime Layer
-
-#### agent-config
-**npm**: `@vibe-agent-toolkit/agent-config`
-
-Agent manifest loading and validation. Loads agent YAML manifests, validates against JSON Schema, resolves file paths, and provides typed access to agent configuration.
-
-**Dependencies**:
-- External: `yaml`
-- Internal: `schema`, `utils`, `rag`
-
----
-
-#### agent-skills
-**npm**: `@vibe-agent-toolkit/agent-skills`
-
-Build and package VAT agents as Agent Skills. Converts VAT agent manifests to Agent Skill format, bundles resources, generates JSON Schema from Zod definitions, and produces installable skill packages.
-
-**Dependencies**:
-- External: `yaml`, `zod`, `zod-to-json-schema`
-- Internal: `agent-config`, `resources`, `utils`
-
----
-
-### CLI & Distribution Layer
-
-#### cli
-**npm**: `@vibe-agent-toolkit/cli`
-
-Command-line interface for vibe-agent-toolkit. Provides the `vat` binary for building, validating, and managing VAT agents.
-
-**Binary**: `vat`
-
-**Commands**:
-- `vat agent build` - Build agents for target runtimes
-- `vat agent validate` - Validate agent manifests
-- `vat resources scan` - Discover markdown resources
-- `vat resources validate` - Validate markdown resources
-- `vat audit` - Audit Claude plugins and marketplace
-- `vat doctor` - Diagnostic checks for VAT environment
-
-**Dependencies**:
-- External: `@anthropic-ai/sdk`, `commander`, `js-yaml`, `semver`, `zod`
-- Internal: `agent-config`, `discovery`, `rag`, `rag-lancedb`, `resources`, `agent-skills`, `utils`
-
-**Note**: The CLI is a "dumb orchestrator" - it coordinates other packages but contains minimal business logic itself.
-
----
-
-#### vibe-agent-toolkit
-**npm**: `vibe-agent-toolkit`
-
-Umbrella package that installs everything. This is the simplest way for users to get started with VAT - it provides the complete toolkit including the `vat` CLI.
-
-**Binary**: `vat` (via dependency on `@vibe-agent-toolkit/cli`)
-
-**Dependencies**:
-- Internal: `cli` (which transitively pulls in all other packages)
-
-**Installation**:
-```bash
-npm install -g vibe-agent-toolkit    # Everything
-npm install -g @vibe-agent-toolkit/cli  # Just CLI
-```
-
----
-
-### Agent Bundles
-
-#### vat-development-agents
-**npm**: `@vibe-agent-toolkit/vat-development-agents`
-
-VAT development agents - dogfooding the vibe-agent-toolkit. Contains example agents built using VAT, demonstrating best practices and serving as development tools for the toolkit itself.
-
-**Type**: `agent-bundle`
-
-**Agents**:
-- `agent-generator` - Generate new VAT agents
-- `resource-optimizer` - Optimize resource usage
-
-**Dependencies**:
-- External: `yaml`
-- Internal: `schema`
-
----
-
-### Development Tools (Private)
-
-#### dev-tools
-**Package**: `@vibe-agent-toolkit/dev-tools` (NOT PUBLISHED)
-
-Development tools for the monorepo. Contains scripts for version bumping, pre-publish checks, CLI documentation generation, and other build-time utilities.
-
-**Status**: Private (not published to npm)
-
-**Dependencies**:
-- External: `semver`, `which`
-- Internal: `utils`
-
-**Scripts**:
-- `bump-version.ts` - Unified version management
-- `pre-publish-check.ts` - Pre-publish validation
-- `generate-cli-docs.ts` - Generate CLI documentation
-- `prepare-bin.ts` - Prepare CLI binary for publication
-
----
+Every package in the monorepo, with its npm name, whether it publishes, and the workspace packages
+it depends on (`dependencies` only — `workspace:*` edges as declared in each `package.json`). The
+publish order is derived from those edges by `publishedPackagesInDependencyOrder()` in
+`packages/dev-tools/src/workspace-graph.ts`; the layered
+shape and the evolution plan are in [`docs/architecture/README.md`](../docs/architecture/README.md).
+All packages share one version ([`docs/publishing.md`](../docs/publishing.md)).
+
+| Package | npm name | Ships | Purpose | Depends on (workspace) |
+|---|---|---|---|---|
+| [`schema`](./schema/README.md) | `@vibe-agent-toolkit/schema` | yes | JSON Schema definitions and TypeScript types for the VAT agent manifest format; the validation-code registry | — |
+| [`utils`](./utils/README.md) | `@vibe-agent-toolkit/utils` | yes | Core utilities shared by every package, plus the ESLint rule pack on the `/eslint` subpath | — |
+| [`discovery`](./discovery/README.md) | `@vibe-agent-toolkit/discovery` | yes | File discovery for VAT agents and Agent Skills | utils |
+| [`resources`](./resources/README.md) | `@vibe-agent-toolkit/resources` | yes | Markdown resource parsing, validation, link integrity, the resource projection | schema, utils |
+| [`projection-sqlite`](./projection-sqlite/README.md) | `@vibe-agent-toolkit/projection-sqlite` | yes | SQLite-backed projection store on Node's built-in `node:sqlite` | resources, utils |
+| [`resource-compiler`](./resource-compiler/README.md) | `@vibe-agent-toolkit/resource-compiler` | yes | Compile markdown resources to TypeScript with full IDE support | resources, utils |
+| [`rag`](./rag/README.md) | `@vibe-agent-toolkit/rag` | yes | Abstract RAG interfaces and shared implementations | resources, utils |
+| [`rag-lancedb`](./rag-lancedb/README.md) | `@vibe-agent-toolkit/rag-lancedb` | yes | LanceDB implementation of the RAG interfaces (opt-in backend) | rag, resources, utils |
+| [`agent-config`](./agent-config/README.md) | `@vibe-agent-toolkit/agent-config` | yes | Agent manifest loading and validation | schema, utils |
+| [`agent-runtime`](./agent-runtime/README.md) | `@vibe-agent-toolkit/agent-runtime` | yes | Runtime framework for building and executing portable agents | schema, utils |
+| [`runtime-claude-agent-sdk`](./runtime-claude-agent-sdk/README.md) | `@vibe-agent-toolkit/runtime-claude-agent-sdk` | yes | Claude Agent SDK runtime adapter | agent-runtime, claude-marketplace |
+| [`runtime-langchain`](./runtime-langchain/README.md) | `@vibe-agent-toolkit/runtime-langchain` | yes | LangChain.js runtime adapter | agent-runtime |
+| [`runtime-openai`](./runtime-openai/README.md) | `@vibe-agent-toolkit/runtime-openai` | yes | OpenAI SDK runtime adapter | agent-runtime |
+| [`runtime-vercel-ai-sdk`](./runtime-vercel-ai-sdk/README.md) | `@vibe-agent-toolkit/runtime-vercel-ai-sdk` | yes | Vercel AI SDK runtime adapter | agent-runtime |
+| [`agent-skills`](./agent-skills/README.md) | `@vibe-agent-toolkit/agent-skills` | yes | Build, validate and package skills in the Agent Skills format | agent-config, resources, schema, utils |
+| [`claude-marketplace`](./claude-marketplace/) | `@vibe-agent-toolkit/claude-marketplace` | yes | Claude plugin marketplace tools: compatibility analysis, provenance, enterprise settings (no README yet) | agent-skills, resources, schema, utils |
+| [`transports`](./transports/README.md) | `@vibe-agent-toolkit/transports` | yes | Transport adapters for conversational agents | agent-runtime |
+| [`gateway-mcp`](./gateway-mcp/README.md) | `@vibe-agent-toolkit/gateway-mcp` | yes | MCP gateway exposing VAT agents through the Model Context Protocol | schema |
+| [`cli`](./cli/README.md) | `@vibe-agent-toolkit/cli` | yes | The `vat` command-line interface — orchestrates the packages above | agent-config, agent-skills, claude-marketplace, discovery, gateway-mcp, projection-sqlite, resources, schema, utils |
+| [`vat-development-agents`](./vat-development-agents/README.md) | `@vibe-agent-toolkit/vat-development-agents` | yes | The `vibe-agent-toolkit` plugin of agent-facing skills — VAT dogfooding itself | cli, schema |
+| [`vat-example-cat-agents`](./vat-example-cat-agents/README.md) | `@vibe-agent-toolkit/vat-example-cat-agents` | yes | Example agents demonstrating VAT patterns across every runtime adapter | agent-runtime, schema, transports |
+| [`vibe-agent-toolkit`](./vibe-agent-toolkit/README.md) | `vibe-agent-toolkit` | yes | Umbrella package — installs the CLI and the development agents | cli, vat-development-agents |
+| [`dev-tools`](./dev-tools/) | `@vibe-agent-toolkit/dev-tools` | **private** | Monorepo tooling: validation gates, version bumps, publishing, duplication checks (no README; `src/` is the index) | agent-skills, claude-marketplace, resources, utils |
+| [`lab`](./lab/README.md) | `@vibe-agent-toolkit/lab` | **private** | Quality lab — `vat-lab`: report on a project and compare across projects, versions and vat builds | utils |
+| [`test-agents`](./test-agents/README.md) | `@vibe-agent-toolkit/test-agents` | **private** | Minimal agents for exercising the runtime adapters in tests | agent-runtime |
+
+The dependency direction is one way: `utils`/`schema` at the bottom, `resources` and the runtime
+core above them, `agent-skills`/`claude-marketplace` above those, and `cli` at the top — no package
+depends on `cli` except the two that ship it (`vat-development-agents`, the umbrella).
 
 ## Installation
 
-See the [root README](../README.md) for installation instructions for end users, package consumers, and contributors.
+```bash
+npm install -g vibe-agent-toolkit          # everything, including the vat CLI
+npm install -g @vibe-agent-toolkit/cli     # the CLI alone
+```
 
-## Versioning
+RAG backends are opt-in: `@vibe-agent-toolkit/rag-lancedb` installs separately (see the
+[RAG usage guide](../docs/guides/rag-usage-guide.md)).
 
-All packages in this monorepo share the same version number (unified versioning). When any package changes, all packages are bumped together. This ensures compatibility and simplifies dependency management.
+## Adding a package
 
-**Current version**: See individual package.json files or run `vat --version`
-
-## Publishing
-
-Packages are published to npm with the `@vibe-agent-toolkit` scope, except for:
-- `vibe-agent-toolkit` (unscoped umbrella package)
-- `@vibe-agent-toolkit/dev-tools` (private, not published)
-
-Publishing is automated via GitHub Actions when version tags are pushed.
-
-## More Information
-
-- [Root README](../README.md) - Project overview
-- [Architecture Docs](../docs/architecture/README.md) - Detailed architecture
-- [CLAUDE.md](../CLAUDE.md) - Development guidelines
+[`docs/contributing/extending-the-monorepo.md`](../docs/contributing/extending-the-monorepo.md) —
+including the standard script set and generated tsconfig references `validate-structure` enforces.

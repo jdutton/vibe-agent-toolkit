@@ -1,7 +1,7 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { ExtentContribution } from '../src/projection/contributor.js';
@@ -227,7 +227,7 @@ describe('PackageExtentContributor — a refusal is not "not a package"', () => 
     expect(contribution.contexts.map((row) => row.contextId)).toContain(extentIdFor(ROOT_PKG));
   });
 
-  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  it.skipIf(CANNOT_DENY_READS)(
     'refuses a workspaces parent the OS will not list (POSIX, not root)',
     async () => {
       // A real mode bit rather than a patched `readdirSync`: the contributor
@@ -251,7 +251,7 @@ describe('PackageExtentContributor — a refusal is not "not a package"', () => 
     expect(contribution.contexts.map((row) => row.contextId)).not.toContain(extentIdFor(WORKSPACE_PKG));
   });
 
-  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  it.skipIf(CANNOT_DENY_READS)(
     'refuses a manifest the OS will not hand over (POSIX, not root)',
     async () => {
       const manifest = safePath.join(root, WORKSPACE_DIR, MANIFEST);

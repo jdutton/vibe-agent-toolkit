@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test file - all file operations are in temp directories
 import { mkdir, writeFile } from 'node:fs/promises';
 

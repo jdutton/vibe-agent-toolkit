@@ -22,7 +22,6 @@
  *   show up as `processes: 2` and doubled milliseconds rather than as nothing.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is derived from a controlled mkdtemp scratch dir */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 

@@ -155,7 +155,6 @@ try {
   const document = serializeProjection(projection);
   const { tables } = exportProjection(projection);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- the parent supplies this path, beneath its own mkdtemp root
   writeFileSync(
     outputPath,
     JSON.stringify({

@@ -175,11 +175,9 @@ beforeEach(() => {
   directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-projection-sqlite-share-'));
   childOrdinal = 0;
   mkdirSyncReal(corpusPath('skills/foo'), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture paths beneath this test's own mkdtemp root
   for (const file of CORPUS) writeFileSync(corpusPath(file.path), file.content, 'utf-8');
   // No encoding argument: these are BYTES, and routing them through a string
   // would let the NUL this fixture exists for be re-encoded away.
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath this test's own mkdtemp root
   writeFileSync(corpusPath(BINARY_ASSET.path), BINARY_ASSET.bytes);
 });
 
@@ -259,7 +257,6 @@ async function runPopulation(question: Question, treeHash: string = TREE_HASH): 
  * @returns What it reported
  */
 function readPopulation(outcome: ChildOutcome): Population {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path this file composed, beneath its own mkdtemp root
   return JSON.parse(readFileSync(outcome.outputPath, 'utf-8')) as Population;
 }
 

@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test file - all file operations are in temp directories
 import { writeFile } from 'node:fs/promises';
 
@@ -22,8 +21,11 @@ async function setupRegistryWithExternalLink(tempDir: string, url: string): Prom
   return registry;
 }
 
-// Network-dependent tests: skip in CI where egress restrictions cause flaky failures
-describe.skipIf(!!process.env.CI)('ResourceRegistry external URL validation', () => {
+// Network-gated — set `NET_AVAILABLE=1` to enable. Gated on `!CI` before, which
+// stopped meaning "locally" once the integration tier itself ran under `CI=1`.
+const NET_AVAILABLE = process.env['NET_AVAILABLE'] === '1';
+
+describe.skipIf(!NET_AVAILABLE)('ResourceRegistry external URL validation', () => {
   const suite = setupTempDirTestSuite('registry-external-urls-');
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);

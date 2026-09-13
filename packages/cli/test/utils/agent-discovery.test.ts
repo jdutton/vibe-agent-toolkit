@@ -1,8 +1,7 @@
-
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code using temp directories */
 import fs from 'node:fs/promises';
 
-import { setupAsyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {

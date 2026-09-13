@@ -3,12 +3,12 @@
  * Tests the core functionality without CLI process.exit calls
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 
-import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { glob } from 'glob';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 

@@ -29,7 +29,7 @@ describe('Error scenarios (system test)', () => {
     const result = testConfigError(
       tempDir,
       'invalid-config',
-      'version: 999\n', // Invalid version
+      'resources: 42\n', // a section of the wrong type refuses
       binPath
     );
 

@@ -279,7 +279,6 @@ rebuild the database from your markdown source files.
 RAG respects the same `vibe-agent-toolkit.config.yaml` patterns as other commands:
 
 ```yaml
-version: 1
 resources:
   include:
     - "docs/**/*.md"

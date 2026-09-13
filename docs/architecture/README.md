@@ -412,6 +412,20 @@ When using `--user` flag:
 - **Structured output**: YAML to stdout, errors to stderr
 - **CI/CD friendly**: Clear exit codes and parseable output
 
+### `__internal` — the test-facing seam
+
+A module that exports helpers only so its unit tests can reach them collects them under one
+`export const __internal = { … } as const` at its foot and stops exporting them individually; tests
+`import { __internal }` and destructure. Types stay exported (an object cannot carry them). Two
+lines are held by `packages/dev-tools/test/internal-seam.test.ts`: no barrel re-exports `__internal`
+(by name or by `export *` of a seam module), and nothing under `src/` imports it — a src consumer
+means the name is API and belongs as an ordinary export. Worked example:
+`packages/agent-skills/src/skill-test/run-harness.ts` (63 exports → 18 + one seam). "Is this API?"
+is then a grep, not a JSDoc: on the barrel = API; in `__internal` = test-only; neither = look
+harder. Adopting the seam is by review, not by gate: `bun run unused-exports` counts only exports
+that nothing in `src/**` or any vitest entry file reaches, so an export a spec imports directly is
+"used" to it and never surfaces there.
+
 ---
 
 ## Current Status

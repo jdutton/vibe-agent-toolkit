@@ -144,7 +144,6 @@ function specEntries(): readonly [ProjectionTableName, (typeof PROJECTION_TABLES
  * type and `_def.shape()` is how a `ZodObject` holds its literal, neither of
  * which is `innerType()` or `.shape`.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- reaching into Zod's internals on purpose
 function declaredColumns(schema: any): readonly string[] {
   const def = schema._def as { schema?: unknown; shape?: () => Record<string, unknown> };
   if (def.schema !== undefined) {

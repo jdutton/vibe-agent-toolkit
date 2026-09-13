@@ -19,7 +19,8 @@ import type * as FsPromises from 'node:fs/promises';
 import { mkdtemp, readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ensureModelFiles } from '../../src/embedding-providers/onnx-utils.js';
@@ -113,7 +114,6 @@ describe('ensureModelFiles publication', () => {
     // ...and the temp we wrote is the one we renamed.
     expect(fsCalls.writeFilePaths).toContain(publish?.from);
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp file
     const published = await readFile(modelPath);
     expect(published.byteLength).toBe(MODEL_BODY.byteLength);
   });
@@ -127,7 +127,6 @@ describe('ensureModelFiles publication', () => {
     await expect(ensureModelFiles(MODEL_ID, cacheDir, true)).rejects.toThrow(/incomplete|length/i);
 
     const modelPath = safePath.join(cacheDir, MODEL_ID.replaceAll('/', '_'), MODEL_FILE);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp file
     await expect(stat(modelPath)).rejects.toThrow();
   });
 
@@ -149,7 +148,6 @@ describe('ensureModelFiles publication', () => {
     const { modelPath, vocabPath } = await ensureModelFiles(MODEL_ID, cacheDir, true);
 
     const byName = (a: string, b: string): number => a.localeCompare(b);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     const entries = await readdir(dirname(modelPath));
     expect([...entries].sort(byName)).toEqual([MODEL_FILE, basename(vocabPath)].sort(byName));
   });

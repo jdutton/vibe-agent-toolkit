@@ -55,7 +55,6 @@ export async function applyPluginFiles(args: ApplyPluginFilesArgs): Promise<void
 
   for (const entry of entries) {
     const sourceAbs = safePath.resolve(projectRoot, entry.source);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from project root
     if (!existsSync(sourceAbs)) {
       // Project-relative, never absolute: this throw is reported as a build
       // failure on machine-readable stdout, where an absolute path publishes the
@@ -67,12 +66,10 @@ export async function applyPluginFiles(args: ApplyPluginFilesArgs): Promise<void
     }
     const destAbs = validateDest(entry.dest, pluginOutputDir);
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- validated above
     if (existsSync(destAbs) && info) {
       info(`plugin files[]: overwriting existing ${toForwardSlash(entry.dest)}`);
     }
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- validated dest
     await mkdir(dirname(destAbs), { recursive: true });
     await copyFile(sourceAbs, destAbs);
   }

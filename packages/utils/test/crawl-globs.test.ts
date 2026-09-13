@@ -9,7 +9,7 @@ import {
   NEVER_CRAWL_GLOBS,
 } from '../src/file-crawler.js';
 import { mkdirSyncReal, safePath, toForwardSlash } from '../src/path-utils.js';
-import { setupSyncTempDirSuite } from '../src/test-helpers.js';
+import { setupSyncTempDirSuite } from '../src/testing/temp-dir.js';
 import { refuseUnreadableFixture } from '../src/testing.js';
 
 /**
@@ -98,14 +98,13 @@ describe('.turbo is excluded by the crawler that ships, not just by the list', (
    */
   it('a default crawl walks past .turbo and still finds real content', () => {
     const tempDir = suite.getTempDir();
-    /* eslint-disable security/detect-non-literal-fs-filename -- tempDir is a controlled mkdtemp directory */
     mkdirSyncReal(safePath.join(tempDir, '.turbo'), { recursive: true });
     writeFileSync(safePath.join(tempDir, '.turbo', 'turbo-build.log'), 'cache hit');
     mkdirSyncReal(safePath.join(tempDir, '.turbo', 'cache', 'abc123'), { recursive: true });
     writeFileSync(safePath.join(tempDir, '.turbo', 'cache', 'abc123', 'SKILL.md'), '# copy');
     mkdirSyncReal(safePath.join(tempDir, 'docs'), { recursive: true });
     writeFileSync(safePath.join(tempDir, 'docs', 'guide.md'), '# Guide');
-    /* eslint-enable security/detect-non-literal-fs-filename */
+     
 
     const found = crawlDirectorySync({ baseDir: tempDir, unreadable: refuseUnreadableFixture(tempDir), respectGitignore: false }).map((p) =>
       toForwardSlash(p),

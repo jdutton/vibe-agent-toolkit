@@ -189,7 +189,6 @@ interface PathObservation {
  */
 function statObservation(absolutePath: string): PathObservation {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- enumerated corpus path
     const link = lstatSync(absolutePath);
     if (!link.isSymbolicLink()) {
       return {
@@ -201,7 +200,6 @@ function statObservation(absolutePath: string): PathObservation {
       };
     }
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- enumerated corpus path
       const target = statSync(absolutePath);
       return {
         exists: true,

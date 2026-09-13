@@ -111,7 +111,8 @@ describe('claude plugin list command (system test)', () => {
 
     const { status, parsed } = await runPluginList(binPath, fakeHome, ['--target', 'claude.ai']);
 
-    expect(status).toBe(1);
+    // ERROR: the command cannot do what was asked; it is not a finding about a plugin.
+    expect(status).toBe(2);
     expect(parsed.status).toBe('not-available');
   });
 });

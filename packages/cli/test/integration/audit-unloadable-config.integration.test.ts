@@ -1,9 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-/* eslint-disable sonarjs/file-permissions -- `chmod 000` on a throwaway temp config IS the
-   fixture: the EACCES case below exists to prove the scan asks the filesystem question, and there
-   is no way to produce a genuinely unreadable file without making one. Same rationale, same
-   temp-directory scope, as `audit-unreadable-path.integration.test.ts`. */
-
 /**
  * Integration test: an UNLOADABLE governing config degrades the scan, it does
  * not destroy it — and says so on BOTH channels.
@@ -46,6 +40,7 @@
 import fs from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { runAuditCli } from '../test-helpers.js';
@@ -191,8 +186,6 @@ describe('vat audit with an unloadable governing config', () => {
  * `chmod 000` denies nothing to uid 0, and means nothing on Windows — the same
  * guard `audit-unreadable-path.integration.test.ts` carries, for the same reason.
  */
-const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 const UNREADABLE = 0o000;
 const READABLE = 0o644;

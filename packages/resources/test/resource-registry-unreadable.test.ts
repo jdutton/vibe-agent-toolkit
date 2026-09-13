@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 /**
  * RESOURCE_UNREADABLE issue shape.
  *
@@ -15,14 +14,9 @@
  */
 import { chmodSync, writeFileSync } from 'node:fs';
 
-import {
-  mkdirSyncReal,
-  safePath,
-  setupAsyncTempDirSuite,
-  toForwardSlash,
-  withReaddirSyncRefused,
-} from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type DirectoryRefusal, DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
+import { setupAsyncTempDirSuite, withReaddirSyncRefused , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { type RegistryUnreadablePolicy, ResourceRegistry } from '../src/resource-registry.js';
@@ -33,8 +27,6 @@ const OPEN_FILE = 'docs/open/ok.md';
 const LOCKED_TARGET = 'docs/sub/target.md';
 
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
-const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 /** Register a nonexistent file under `tempDir` and return its RESOURCE_UNREADABLE issue. */
 async function unreadableIssue(tempDir: string): Promise<ValidationIssue | undefined> {

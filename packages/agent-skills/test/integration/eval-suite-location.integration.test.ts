@@ -29,8 +29,6 @@
  * Neither half may point the executor back at the suite directory: that hands it
  * a sibling path to `evals.json` and reopens the leak.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- every path derives from
-   this test's own temp dir. */
 import { existsSync, statSync } from 'node:fs';
 
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';

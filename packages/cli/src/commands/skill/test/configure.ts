@@ -189,7 +189,6 @@ async function configureCommand(
     if (options.print) {
       process.stdout.write(updatedYaml);
     } else {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- configPath constructed from trusted projectRoot
       writeFileSync(configPath, updatedYaml, 'utf-8');
       logger.info(`Updated ${configPath}`);
     }

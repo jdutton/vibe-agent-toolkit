@@ -38,9 +38,7 @@ class FakeChild extends EventEmitter {
 const baseOpts = {
   prompt: 'hello\n',
   pluginDirs: [],
-  // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
   sandboxDir: '/tmp/sandbox',
-  // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
   cwd: '/tmp/sandbox',
   env: process.env,
   timeoutMs: 60_000,

@@ -130,7 +130,7 @@ describe('ResourceRealizationRowSchema', () => {
   });
 
   it('rejects a row with no contentState — a null key that says nothing is the defect being fixed', () => {
-    // eslint-disable-next-line sonarjs/no-unused-vars
+    // eslint-disable-next-line sonarjs/no-unused-vars -- destructured out to build the row WITHOUT the key; the binding is the discard
     const { contentState: _contentState, ...withoutState } = base;
     expect(ResourceRealizationRowSchema.safeParse({ ...withoutState, contentKey: null }).success).toBe(false);
   });
@@ -153,7 +153,7 @@ describe('ResourceRealizationRowSchema', () => {
   });
 
   it('rejects a row with no extentId — a path is meaningless without the zone it lives in', () => {
-    // eslint-disable-next-line sonarjs/no-unused-vars
+    // eslint-disable-next-line sonarjs/no-unused-vars -- destructured out to build the row WITHOUT the key; the binding is the discard
     const { extentId: _extentId, ...withoutExtent } = base;
     expect(ResourceRealizationRowSchema.safeParse(withoutExtent).success).toBe(false);
   });
@@ -227,7 +227,7 @@ describe('RealizationConditionRowSchema', () => {
   });
 
   it('rejects a row that omits a provenance column rather than nulling it', () => {
-    // eslint-disable-next-line sonarjs/no-unused-vars
+    // eslint-disable-next-line sonarjs/no-unused-vars -- destructured out to build the row WITHOUT the column; the binding is the discard
     const { targetExists: _omitted, ...withoutColumn } = refusal;
     expect(RealizationConditionRowSchema.safeParse(withoutColumn).success).toBe(false);
   });

@@ -30,6 +30,7 @@ import { CODE_REGISTRY, createRegistryIssue, type ValidationIssue } from '@vibe-
 import { describe, expect, it } from 'vitest';
 
 import {
+  BUDGET_REPORT_SCHEMA,
   buildReport,
   createBudgetCommand,
   renderReportText,
@@ -147,7 +148,7 @@ describe('vat claude budget — the bounds ride on the REPORT', () => {
     const firstStatement = ALWAYS_LOADED_BUDGET_LIMITS[0]?.statement ?? '';
 
     expect(occurrences(serialized, JSON.stringify(firstStatement).slice(1, -1))).toBe(1);
-    expect(report.limits).toBe(ALWAYS_LOADED_BUDGET_LIMITS);
+    expect(report.data.limits).toEqual(ALWAYS_LOADED_BUDGET_LIMITS);
   });
 
   it('publishes the bounds even when nothing was over budget', () => {
@@ -162,8 +163,14 @@ describe('vat claude budget — the bounds ride on the REPORT', () => {
       findings: [],
     });
 
-    expect(report.limits.length).toBeGreaterThan(0);
-    expect(report.boundsStatement).toBe(CLAUDE_CONTEXT_BOUNDS_STATEMENT);
+    expect(report.data.limits.length).toBeGreaterThan(0);
+    expect(report.data.boundsStatement).toBe(CLAUDE_CONTEXT_BOUNDS_STATEMENT);
+  });
+
+  it('builds a document its own published schema accepts', () => {
+    // The Zod object matches what the command WRITES — the drift test only
+    // proves the JSON file matches the Zod object.
+    expect(BUDGET_REPORT_SCHEMA.safeParse(reportOverThreeChains()).success).toBe(true);
   });
 
   it('puts no limit field on any finding', () => {

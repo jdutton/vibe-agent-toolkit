@@ -22,7 +22,6 @@ import { OkfConceptFrontmatterSchema } from '../../src/schemas/okf-concept.js';
 /** Every `additionalProperties` value in the committed JSON Schema artifact. */
 function committedAdditionalProperties(): unknown[] {
   const path = safePath.join(import.meta.dirname, '..', '..', 'schemas', 'okf-concept-frontmatter.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path built from this test file's own location
   const artifact: unknown = JSON.parse(readFileSync(path, 'utf8'));
 
   const values: unknown[] = [];
@@ -107,7 +106,6 @@ describe('OkfConceptFrontmatterSchema', () => {
 
     it('carries the non-empty type constraint that a transform would have dropped', () => {
       const path = safePath.join(import.meta.dirname, '..', '..', 'schemas', 'okf-concept-frontmatter.json');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path built from this test file's own location
       const artifact = readFileSync(path, 'utf8');
 
       expect(artifact).toContain(String.raw`"pattern": "\\S"`);

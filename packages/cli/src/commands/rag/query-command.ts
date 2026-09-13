@@ -2,6 +2,7 @@
  * RAG query command - search the vector database
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { writeYamlOutput } from '../../utils/output.js';
@@ -139,5 +140,5 @@ export async function queryCommand(
     })
   );
 
-  process.exit(0);
+  process.exit(ExitCode.OK);
 }

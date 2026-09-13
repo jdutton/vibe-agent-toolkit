@@ -74,7 +74,7 @@ export const PackagingOptionsSchema = z.object({
           'Context: {{link.text}}, {{link.href}}, {{link.fragment}}, {{link.type}}, {{link.resource.id}}, {{link.resource.fileName}}, {{link.resource.relativePath}}, {{skill.name}}\n' +
           'Default: "{{link.text}}"'
         ),
-    })).optional().default([])
+    }).passthrough() /* adopter-authored package.json `vat` block: a key stripped until now must not become a refusal */).optional().default([])
       .describe('Ordered rules evaluated first-match. Each rule matches file paths and specifies a rewrite template.'),
     defaultTemplate: z.string()
       .optional()
@@ -83,8 +83,8 @@ export const PackagingOptionsSchema = z.object({
         'Context: {{link.text}}, {{link.href}}, {{link.fragment}}, {{link.type}}, {{link.resource.id}}, {{link.resource.fileName}}, {{link.resource.relativePath}}, {{skill.name}}\n' +
         'Default: "{{link.text}}"'
       ),
-  }).optional(),
-}).describe('Packaging options for skill distribution');
+  }).passthrough() /* adopter-authored package.json `vat` block: a key stripped until now must not become a refusal */.optional(),
+}).passthrough() /* adopter-authored package.json `vat` block: a key stripped until now must not become a refusal */.describe('Packaging options for skill distribution');
 
 export type PackagingOptions = z.infer<typeof PackagingOptionsSchema>;
 
@@ -122,7 +122,7 @@ export const VatAgentMetadataSchema = z
       .string()
       .optional()
       .describe('Agent archetype (optional, e.g., "llm-analyzer", "pure-function")'),
-  })
+  }).passthrough() /* adopter-authored package.json `vat` block: a key stripped until now must not become a refusal */
   .describe('VAT agent metadata for distribution');
 
 export type VatAgentMetadata = z.infer<typeof VatAgentMetadataSchema>;
@@ -152,10 +152,10 @@ export const VatPureFunctionMetadataSchema = z
           .string()
           .optional()
           .describe('CLI invocation pattern (e.g., "vat-cat-agents haiku-validate")'),
-      })
+      }).passthrough() /* adopter-authored package.json `vat` block: a key stripped until now must not become a refusal */
       .optional()
       .describe('Export mechanisms for this pure function'),
-  })
+  }).passthrough() /* adopter-authored package.json `vat` block: a key stripped until now must not become a refusal */
   .describe('Pure function tool metadata for distribution');
 
 export type VatPureFunctionMetadata = z.infer<typeof VatPureFunctionMetadataSchema>;
@@ -197,7 +197,15 @@ export const VatPackageMetadataSchema = z
       .array(z.string())
       .optional()
       .describe('Runtime adapters provided (e.g., "vercel-ai-sdk", "langchain")'),
-  })
+    replaces: z
+      .object({
+        plugins: z.array(z.string()).optional().describe('Old plugin names (without marketplace) this package used to publish under'),
+        flatSkills: z.array(z.string()).optional().describe('Old skill names installed to ~/.claude/skills/<name> (the legacy flat location); each must be a single path segment'),
+      })
+      .strict()
+      .optional()
+      .describe('What `vat claude plugin install` removes before installing this package'),
+  }).passthrough() /* adopter-authored package.json `vat` block: a key stripped until now must not become a refusal */
   .describe('VAT package metadata (package.json "vat" field)');
 
 export type VatPackageMetadata = z.infer<typeof VatPackageMetadataSchema>;

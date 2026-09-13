@@ -34,7 +34,6 @@
  * apart (4 vs 16) that a stray probe cannot be mistaken for the quadratic.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import type * as NodeFs from 'node:fs';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 

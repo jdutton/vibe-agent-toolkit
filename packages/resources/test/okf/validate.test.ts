@@ -65,12 +65,10 @@ async function withUnreadable(
   body: () => Promise<void>,
   mode = 0o000,
 ): Promise<void> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path inside a bundle this test just planted under mkdtemp
   chmodSync(path, mode);
   try {
     await body();
   } finally {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- the same literal-derived path, restored so teardown can descend
     chmodSync(path, 0o755);
   }
 }

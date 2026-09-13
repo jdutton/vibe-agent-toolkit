@@ -89,7 +89,6 @@ function installProviderMocks(firstBatch: () => TokenizedBatch): void {
   mockTokenizeBatch = firstBatch;
   mockFromVocabFile.mockResolvedValue({
     tokenizeBatch: (...args: unknown[]) => mockTokenizeBatch(...args),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- mocked module surface
   } as any);
   mockSessionCreate.mockResolvedValue({ run: mockRun, release: mockRelease });
   mockRun.mockResolvedValue({

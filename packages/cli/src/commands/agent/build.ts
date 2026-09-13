@@ -3,6 +3,7 @@
  */
 
 import { buildAgentSkill } from '@vibe-agent-toolkit/agent-skills';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { handleCommandError } from '../../utils/command-error.js';
@@ -64,7 +65,7 @@ export async function buildCommand(
 
     logger.info(`Build completed in ${duration}ms`);
     logger.info(`Output: ${result.outputPath}`);
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'AgentBuild');
   }

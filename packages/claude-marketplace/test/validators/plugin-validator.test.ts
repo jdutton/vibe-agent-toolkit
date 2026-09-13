@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test sandbox paths derived from tmp dirs */
 import fs from 'node:fs';
 
 import { countBySeverity } from '@vibe-agent-toolkit/schema';
@@ -287,6 +286,9 @@ describe('validatePlugin', () => {
 		const issue = result.issues.find((i) => i.code === 'PLUGIN_TOPLEVEL_BIN_DIR');
 		expect(issue?.severity).toBe('warning');
 		expect(result.issues.some((i) => i.severity === 'error')).toBe(false);
+		// The anchor contract: `location` is relative to the anchor root (the
+		// plugin directory when no `locationRoot` is given), never absolute.
+		expect(issue?.location).toBe('bin');
 	});
 
 });

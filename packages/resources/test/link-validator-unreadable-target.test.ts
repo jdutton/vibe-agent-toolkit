@@ -23,7 +23,8 @@
  * stands in for one that was refused: what the judge sees is the declaration,
  * not the mode bits.
  */
-import { FsLookupCache, safePath, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { FsLookupCache, safePath } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {

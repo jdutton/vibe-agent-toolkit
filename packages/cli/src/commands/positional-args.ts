@@ -6,6 +6,8 @@
  * it and have no path-shaped subject at all.
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+
 /**
  * Fail the run when a caller passed a positional argument to a command that
  * takes none, naming the argument and where to take it instead.
@@ -55,5 +57,5 @@ export function rejectPositionalArguments(
       `  vibe-agent-toolkit.config.yaml.\n` +
       `  To inspect ONE skill or bundle by path, use: vat skill review <path>\n`,
   );
-  process.exit(2);
+  process.exit(ExitCode.ERROR);
 }

@@ -44,7 +44,6 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 export function resolveVatBinPath(): string {
   // Compiled tree: packages/cli/dist/utils/vat-bin-path.js → packages/cli/dist/bin.js
   const compiled = safePath.resolve(HERE, '../bin.js');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- internal path
   if (existsSync(compiled)) return compiled;
   // Source tree (vitest): packages/cli/src/utils/vat-bin-path.ts → packages/cli/dist/bin.js
   return safePath.resolve(HERE, '../../dist/bin.js');

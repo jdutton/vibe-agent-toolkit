@@ -99,7 +99,8 @@ describe('vat audit — inventory detector codes (system test)', () => {
 		const fixturePath = safePath.join(fixturesBase, 'marketplace-missing-source');
 		const { result } = await executeCliAndParseYaml(ctx.binPath, ['audit', fixturePath]);
 
-		expect(result.status).toBe(0);
+		// Exit 1: the exit code follows `status`, and this tree has an error-severity finding.
+		expect(result.status).toBe(1);
 		expect(result.stdout).toContain('MARKETPLACE_PLUGIN_SOURCE_MISSING');
 	});
 

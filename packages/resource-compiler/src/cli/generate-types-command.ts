@@ -2,10 +2,10 @@
  * CLI generate-types command implementation
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- CLI tool with user-provided paths */
 
 import { readFileSync, writeFileSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import type { Command } from 'commander';
 import { glob } from 'glob';
@@ -141,7 +141,7 @@ export function registerGenerateTypesCommand(program: Command): void {
         exitWithResults(results);
       } catch (error) {
         console.error('Type generation error:', error instanceof Error ? error.message : String(error));
-        process.exit(1);
+        process.exit(ExitCode.ERROR);
       }
     });
 }

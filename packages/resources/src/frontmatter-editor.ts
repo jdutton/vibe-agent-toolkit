@@ -11,14 +11,14 @@
  * parsed value is identical.
  */
 
+import { VatError } from '@vibe-agent-toolkit/utils';
 import { Document, parseDocument } from 'yaml';
 
-export class FrontmatterParseError extends Error {
+export class FrontmatterParseError extends VatError {
   public override readonly cause: unknown;
 
   constructor(message: string, cause: unknown) {
-    super(message);
-    this.name = 'FrontmatterParseError';
+    super('FRONTMATTER_PARSE', message);
     this.cause = cause;
   }
 }

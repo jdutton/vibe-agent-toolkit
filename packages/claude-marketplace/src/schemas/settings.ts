@@ -10,10 +10,10 @@ import { SandboxConfigSchema } from './sandbox-config.js';
  * Uses .passthrough() per Postel's Law — liberal reading of external settings files.
  */
 export const MarketplaceSourceSchema = z.discriminatedUnion('source', [
-  z.object({ source: z.literal('github'), repo: z.string(), ref: z.string().optional(), sha: z.string().optional() }),
-  z.object({ source: z.literal('url'), url: z.string(), ref: z.string().optional() }),
-  z.object({ source: z.literal('npm'), package: z.string(), version: z.string().optional(), registry: z.string().optional() }),
-  z.object({ source: z.literal('hostPattern'), hostPattern: z.string() }),
+  z.object({ source: z.literal('github'), repo: z.string(), ref: z.string().optional(), sha: z.string().optional() }).passthrough() /* Claude Code settings — Anthropic owns the marketplace-source shape */,
+  z.object({ source: z.literal('url'), url: z.string(), ref: z.string().optional() }).passthrough() /* Claude Code settings — Anthropic owns the marketplace-source shape */,
+  z.object({ source: z.literal('npm'), package: z.string(), version: z.string().optional(), registry: z.string().optional() }).passthrough() /* Claude Code settings — Anthropic owns the marketplace-source shape */,
+  z.object({ source: z.literal('hostPattern'), hostPattern: z.string() }).passthrough() /* Claude Code settings — Anthropic owns the marketplace-source shape */,
 ]).and(z.object({}).passthrough());
 
 export type MarketplaceSource = z.infer<typeof MarketplaceSourceSchema>;

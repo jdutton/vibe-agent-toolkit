@@ -36,9 +36,14 @@ module.exports = {
   meta: {
     type: 'problem',
     docs: {
-      description: 'Disallow splitting strings by hardcoded path separators',
-      category: 'Cross-platform compatibility',
+      description:
+        'Disallow splitting strings by hardcoded path separators',
+      category: 'Path handling',
+      bans: "`split('/')` / `split('\\\\')` on a path",
+      useInstead: '`path.basename()`, or `toForwardSlash()` first',
+      subpath: '/path',
       recommended: true,
+      recommendedSeverity: 'error',
     },
     messages: {
       noHardcodedSplit:

@@ -4,14 +4,14 @@
  * Shared code to eliminate duplication across tool scripts.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 // File paths derived from PROJECT_ROOT constant (controlled, not user input)
 
 import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { direntKindFollowingSync, isPathAbsentError, isSingleFsSegment, safePath } from '@vibe-agent-toolkit/utils';
 import { CommandExecutionError, safeExecResult, safeExecSync } from '@vibe-agent-toolkit/utils/process';
 
 export { safeExecSync, safeExecResult } from '@vibe-agent-toolkit/utils/process';
@@ -82,7 +82,7 @@ export function runJscpd<TClone = unknown>(args: string[]): JscpdReport<TClone> 
     safeExecSync('npx', ['jscpd', ...args], { encoding: 'utf-8', stdio: 'pipe' });
   } catch (error) {
     // Verify it's the expected failure (not a critical error like ENOENT)
-    if (error instanceof Error && error.message.includes('ENOENT')) {
+    if (isPathAbsentError(error)) {
       throw new Error('jscpd executable not found. Install with: npm install -g jscpd', { cause: error });
     }
     // Otherwise continue - duplications found, but report still generated below.
@@ -214,10 +214,11 @@ export function processWorkspacePackages<T extends PackageProcessResult>(
 
   try {
     const packages = readdirSync(packagesDir, { withFileTypes: true })
-      .filter(dirent => dirent.isDirectory())
+      // Followed: a workspace package reached through a link is still a package.
+      .filter(dirent => direntKindFollowingSync(packagesDir, dirent) === 'directory')
       .map(dirent => dirent.name)
-      // Security: Filter out path traversal attempts and invalid names
-      .filter(name => !name.includes('..') && !name.includes('/') && !name.includes('\\') && name.length > 0)
+      // A readdir name is one segment by construction; the guard states it.
+      .filter(name => isSingleFsSegment(name))
       .sort((a, b) => a.localeCompare(b));
 
     for (const pkg of packages) {
@@ -239,13 +240,13 @@ export function processWorkspacePackages<T extends PackageProcessResult>(
           onError(pkg, error as Error);
         } else {
           log(`  ✗ ${pkg}: ${(error as Error).message}`, 'red');
-          process.exit(1);
+          process.exit(ExitCode.ERROR);
         }
       }
     }
   } catch (error) {
     log(`✗ Failed to read packages directory: ${(error as Error).message}`, 'red');
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   }
 
   return { processed: processedCount, skipped: skippedCount };
@@ -272,7 +273,7 @@ export function findPublishablePackages(
   const entries = readdirSync(packagesDir, { withFileTypes: true });
 
   for (const entry of entries) {
-    if (!entry.isDirectory()) {
+    if (direntKindFollowingSync(packagesDir, entry) !== 'directory') {
       continue;
     }
 

@@ -218,14 +218,26 @@ describe('blob-fact statements', () => {
 });
 
 describe('the registry drives everything', () => {
-  it('covers all twelve tables', () => {
-    expect(allSpecs()).toHaveLength(12);
+  // The SETS, not their sizes: a count still reads twelve when one table is
+  // dropped and another added, which is the change this exists to notice.
+  const EXTENT_SCOPED = [
+    'roots',
+    'resources',
+    'resourceRealizations',
+    'resourceExtents',
+    'resourceTags',
+    'realizationConditions',
+    'resolutionContexts',
+    'zoneProvenance',
+  ];
+  const BLOB_SCOPED = ['blobs', 'blobReferences', 'blobSections', 'blobConditions'];
+
+  it('covers every projection table, in registry order', () => {
+    expect(allSpecs().map((spec) => spec.key)).toEqual([...EXTENT_SCOPED, ...BLOB_SCOPED]);
   });
 
-  it('splits them four blob-scoped, eight extent-scoped', () => {
-    const blob = allSpecs().filter((spec) => spec.scope === 'blob');
-    expect(blob.map((spec) => spec.key))
-      .toEqual(['blobs', 'blobReferences', 'blobSections', 'blobConditions']);
-    expect(allSpecs().filter((spec) => spec.scope === 'extent')).toHaveLength(8);
+  it('splits them blob-scoped and extent-scoped', () => {
+    expect(allSpecs().filter((spec) => spec.scope === 'blob').map((spec) => spec.key)).toEqual(BLOB_SCOPED);
+    expect(allSpecs().filter((spec) => spec.scope === 'extent').map((spec) => spec.key)).toEqual(EXTENT_SCOPED);
   });
 });

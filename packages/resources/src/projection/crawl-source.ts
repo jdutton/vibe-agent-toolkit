@@ -438,7 +438,6 @@ function walkedCandidate(absolutePath: string): CrawlCandidate {
  */
 function symlinkShape(absolutePath: string): 'symlink' | null {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path git just listed, resolved against the repository root
     return lstatSync(absolutePath).isSymbolicLink() ? 'symlink' : null;
   } catch (error) {
     // The filesystem would not answer: the entry stays a member and
@@ -568,7 +567,7 @@ export class GitCrawlSource implements CrawlSource {
     for (const entry of snapshot.entries) {
       // A snapshot covers the whole REPOSITORY, which may be an ancestor of the
       // corpus root. Narrowing is this caller's job — see `gitTreeSnapshot`.
-      if (!isUnderRoot(entry.absolutePath, this.#root)) continue;
+      if (!isPathUnderRoot(entry.absolutePath, this.#root)) continue;
       if (!admits(entry.absolutePath)) continue;
 
       // A symlink is REPORTED here, never dropped here. This is the only code
@@ -714,7 +713,7 @@ export class GitCrawlSource implements CrawlSource {
       directory: true,
       unreadable: {
         degrade: (refusal) => {
-          if (isUnderRoot(refusal.directory, this.#root) && admitsUnderRoot(refusal.directory, this.#root)) {
+          if (isPathUnderRoot(refusal.directory, this.#root) && admitsUnderRoot(refusal.directory, this.#root)) {
             settleRefusal(this.#refusals.inPopulation, refusal);
           }
         },
@@ -735,7 +734,7 @@ export class GitCrawlSource implements CrawlSource {
         repositoryRoot,
         isDirectory ? relativePath.slice(0, -1) : relativePath,
       );
-      if (isUnderRoot(absolutePath, this.#root)) {
+      if (isPathUnderRoot(absolutePath, this.#root)) {
         entries.push({ absolutePath, isDirectory, shape: symlinkShape(absolutePath) });
       }
     }
@@ -839,13 +838,16 @@ function parentOf(absolutePath: string): string {
 }
 
 /**
- * Whether a path lies strictly beneath a root.
+ * Whether a path lies strictly beneath a root — lexically, over already
+ * canonical paths. Not the utils `isPathUnderRoot(root, candidate)` sink helper
+ * (which asks the filesystem, and takes its arguments the other way round);
+ * the two are named apart so an import swap cannot silently invert them.
  *
  * @param absolutePath - Path to test
  * @param root - Root it must be under
  * @returns True when the path is a strict descendant
  */
-function isUnderRoot(absolutePath: string, root: string): boolean {
+function isPathUnderRoot(absolutePath: string, root: string): boolean {
   return toForwardSlash(absolutePath).startsWith(`${toForwardSlash(safePath.resolve(root))}/`);
 }
 
@@ -910,7 +912,7 @@ export function crawlSourceSelector(): string | undefined {
  * **Defaults to git wherever there is a git working tree** — the end state §3.3
  * specifies, taken now that the population was compared on real corpora rather
  * than reasoned about. Both arms enumerate `tracked ∪ (untracked ∧ ¬ignored)`;
- * measured 2026-09-11 on an 8,548-file adopter tree (`vat-lab io run --command
+ * measured on an 8,548-file adopter tree (`vat-lab io run --command
  * resources-scan`, warm, 3 runs, both arms load-clean) the git arm costs
  * **8,760** filesystem calls against the filesystem arm's **21,684**, and 6 git
  * spawns against 1. The per-site delta closes exactly: −12,003 `lstat` in
@@ -922,8 +924,8 @@ export function crawlSourceSelector(): string | undefined {
  *
  * The 447 is the whole cost of {@link symlinkShape}: bounded by the number of
  * COLLAPSED entries, not by the corpus. An earlier reading of 7,705 against
- * 18,454 (2026-08-20) predates it and was taken on a smaller tree — the arms are
- * compared against EACH OTHER at one date, never against the older pair.
+ * 18,454 predates it and was taken on a smaller tree — the arms are
+ * compared against EACH OTHER in one run, never against the older pair.
  *
  * ⚠️ Outside a git working tree this is not a preference but a REQUIREMENT to
  * fall back — see the guard in {@link gitExtentSelected}.
@@ -993,10 +995,8 @@ export function crawlSourceFor(root: string): CrawlSource {
 function gitMarkerIsReadable(gitRoot: string): boolean {
   const marker = safePath.join(gitRoot, '.git');
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from a resolved corpus root
     const stat = statSync(marker);
     if (stat.isDirectory()) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from a resolved corpus root
       return existsSync(safePath.join(marker, 'HEAD'));
     }
 
@@ -1009,7 +1009,6 @@ function gitMarkerIsReadable(gitRoot: string): boolean {
       .find((line) => line.startsWith(GITDIR_PREFIX));
     if (pointer === undefined) return false;
     const target = safePath.resolve(gitRoot, pointer.slice(GITDIR_PREFIX.length).trim());
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from a resolved corpus root
     return existsSync(safePath.join(target, 'HEAD'));
   } catch (error) {
     // The filesystem refusing the marker is the same answer as absent: do not

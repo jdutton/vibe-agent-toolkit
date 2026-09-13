@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
 import { writeFile } from 'node:fs/promises';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';

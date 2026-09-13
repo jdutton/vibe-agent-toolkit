@@ -1,12 +1,12 @@
 import * as fs from 'node:fs';
 
-import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 
 import { prepareBinaries } from '../src/prepare-bin.js';
 
-/* eslint-disable security/detect-non-literal-fs-filename -- test file with dynamic temp paths */
 
 describe('prepareBinaries', () => {
   const suite = setupSyncTempDirSuite('prepare-bin');

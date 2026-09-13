@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 
-import { isPathAbsentError, normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -209,7 +210,6 @@ function setupParseCacheTestSuite(): ParseCacheTestSuite {
   afterEach(async () => {
     // Restore write permission first: a test that dropped it would otherwise
     // leave a directory `rm` cannot descend into.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: self-created tempDir
     await fs.chmod(tempDir, MODE_RW_OWNER).catch(() => undefined);
     await removeScratchDir(tempDir);
   });
@@ -230,16 +230,13 @@ function setupParseCacheTestSuite(): ParseCacheTestSuite {
 }
 
 async function readEntry(entryPath: string): Promise<Record<string, unknown>> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: path under self-created tempDir
   const raw = await fs.readFile(entryPath, 'utf-8');
   return JSON.parse(raw) as Record<string, unknown>;
 }
 
 async function writeEntry(entryPath: string, body: string): Promise<void> {
   const shardDir = entryPath.slice(0, entryPath.lastIndexOf('/'));
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: path under self-created tempDir
   await fs.mkdir(shardDir, { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: path under self-created tempDir
   await fs.writeFile(entryPath, body, 'utf-8');
 }
 
@@ -288,7 +285,6 @@ function withoutKeys(
 
 async function exists(target: string): Promise<boolean> {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: path under self-created tempDir
     await fs.stat(target);
     return true;
   } catch (error) {
@@ -589,7 +585,6 @@ describe('ParseCache round trip', () => {
     await suite.makeCache().set(keyed, freshParse(keyed));
 
     const shardDir = safePath.join(suite.dir(), keyed.key.slice(-SHARD_LENGTH));
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: path under self-created tempDir
     const names = await fs.readdir(shardDir);
 
     expect(names).toEqual([`${keyed.key}.json`]);
@@ -732,7 +727,6 @@ describe('ParseCache fail-soft writes', () => {
 
   it.skipIf(isWindows)('treats an unwritable cache directory as a no-op', async () => {
     const keyed = keyedFromText(SIMPLE_DOC);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: self-created tempDir
     await fs.chmod(suite.dir(), MODE_RO_OWNER);
 
     const cache = suite.makeCache();
@@ -749,7 +743,6 @@ describe('ParseCache fail-soft writes', () => {
     'counts a failed write in writeFailures, so it stays distinguishable from a cold cache',
     async () => {
       const keyed = keyedFromText(SIMPLE_DOC);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: self-created tempDir
       await fs.chmod(suite.dir(), MODE_RO_OWNER);
 
       const cache = suite.makeCache();
@@ -772,9 +765,7 @@ describe('ParseCache fail-soft writes', () => {
       // Simulate another local user pre-creating the shard directory, wide
       // open, before VAT ever touches it. `mkdir`'s mode is masked by the
       // process umask, so force it with an explicit `chmod`.
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: path under self-created tempDir
       await fs.mkdir(shardDir, { recursive: true, mode: MODE_WORLD_WRITABLE });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename, sonarjs/file-permissions -- test-only: intentionally world-writable to simulate a hostile pre-created shard dir
       await fs.chmod(shardDir, MODE_WORLD_WRITABLE);
 
       await cache.set(keyed, freshParse(keyed));
@@ -850,7 +841,6 @@ describe('ParseCache maintenance', () => {
     const cacheDir = safePath.join(suite.dir(), 'nested', 'parse');
     await suite.makeCache({ cacheDir }).set(keyed, freshParse(keyed));
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: path under self-created tempDir
     const stats = await fs.stat(safePath.join(cacheDir, keyed.key.slice(-SHARD_LENGTH)));
 
     expect(stats.mode & PERMISSION_BITS).toBe(MODE_RW_OWNER);

@@ -59,7 +59,6 @@ describe('skills validate command (system test)', () => {
   const fixtureDir = getFixturePath(import.meta.url, 'skills-minimal');
 
   it('should show help text', () => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
     const result = spawnSync('node', [binPath, 'skills', 'validate', '--help'], {
       encoding: 'utf-8',
     });
@@ -173,7 +172,6 @@ describe('skills validate command (system test)', () => {
   });
 
   it('should include excludedReferences in verbose output', () => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
     const result = spawnSync('node', [binPath, 'skills', 'validate', fixtureDir, '--verbose'], {
       encoding: 'utf-8',
     });
@@ -215,13 +213,9 @@ const makeSkillMd = (name: string, bodySuffix = 'This is a test skill.') =>
  * `isGitIgnored` (which uses git check-ignore) can report ignored targets.
  */
 function initGitRepo(dir: string, filesToAdd: string[]): void {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo init in tests
   spawnSync('git', ['init'], { cwd: dir, stdio: 'pipe' });
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo init in tests
   spawnSync('git', ['config', 'user.email', 'test@test.com'], { cwd: dir, stdio: 'pipe' });
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo init in tests
   spawnSync('git', ['config', 'user.name', 'Test'], { cwd: dir, stdio: 'pipe' });
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for staging files in tests
   spawnSync('git', ['add', ...filesToAdd], { cwd: dir, stdio: 'pipe' });
 }
 

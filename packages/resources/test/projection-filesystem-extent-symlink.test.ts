@@ -35,7 +35,6 @@
  * control before it can be mistaken for a confirmed absence.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { lstatSync } from 'node:fs';
 
 import { safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';

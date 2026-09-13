@@ -37,7 +37,8 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 
-import { isPathAbsentError, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import type { Severity } from '@vibe-agent-toolkit/schema';
+import { direntKindFollowingSync, isPathAbsentError, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { readTextContentSync } from '@vibe-agent-toolkit/utils/fs';
 import { z } from 'zod';
 
@@ -46,7 +47,7 @@ import type {
   ResourceRealizationRow,
   ResourceRow,
 } from '../../schemas/projection-resources.js';
-import type { JsonValue, ProjectionConditionSeverity } from '../../schemas/projection-shared.js';
+import type { JsonValue } from '../../schemas/projection-shared.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../contributor.js';
 import type { ProjectionBase } from '../projection.js';
 import { collectRealization, relativize } from '../realizations.js';
@@ -77,7 +78,7 @@ const MANIFEST = 'package.json';
 const NODE_MODULES = 'node_modules';
 
 /** Severity per condition code. A missing dependency is a fact, not a fault. */
-const CONDITION_SEVERITY: Readonly<Record<string, ProjectionConditionSeverity>> = {
+const CONDITION_SEVERITY: Readonly<Record<string, Severity>> = {
   [PACKAGE_NOT_INSTALLED]: 'info',
   [PACKAGE_SUBPATH_NOT_EXPORTED]: 'info',
   [PACKAGE_SUBPATH_ABSENT]: 'warning',
@@ -302,7 +303,6 @@ function resolveSpecifier(
   } catch (error) {
     return { failure: failureCodeFor(error) };
   }
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Node-resolved target of a manifest-declared specifier
   return existsSync(resolved) ? { path: toForwardSlash(resolved) } : { failure: failureCodeFor(undefined) };
 }
 
@@ -439,9 +439,9 @@ function expandWorkspacePattern(root: string, pattern: string): string[] {
  */
 function childDirectories(parent: string): string[] {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a workspaces-declared directory under the corpus root
     return readdirSync(parent, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
+      // Followed: a linked package directory (an npm link) is a package.
+      .filter((entry) => direntKindFollowingSync(parent, entry) === 'directory')
       .map((entry) => safePath.join(parent, entry.name));
   } catch (error) {
     if (!isPathAbsentError(error)) throw error;

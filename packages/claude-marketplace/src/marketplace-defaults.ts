@@ -60,7 +60,6 @@ export async function readMarketplaceDefaultTargets(
     const manifestPath = safePath.join(currentDir, '.claude-plugin', 'marketplace.json');
     let raw: string | undefined;
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safePath.join
       raw = await readFile(manifestPath, 'utf8');
     } catch (error) {
       // Not present here — keep walking. Anything else stays loud.

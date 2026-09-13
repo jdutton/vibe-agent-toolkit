@@ -119,7 +119,6 @@ async function extractChangelogDelta(
     );
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config
   await writeFile(safePath.join(outputDir, 'CHANGELOG.md'), rawChangelog);
 
   return stampedSection === '' ? unreleasedSection : stampedSection;
@@ -132,7 +131,6 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
 
   // 1. Verify build output exists
   const buildDir = safePath.join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', marketplaceName);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config
   if (!existsSync(buildDir)) {
     throw new Error(
       `Marketplace build output not found at ${buildDir}. Run "vat build" first.`,
@@ -149,7 +147,6 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
   //     just observe it here. Defensive parsing because marketplace.json is
   //     build output, not validated input at this layer.
   const marketplaceJsonPath = safePath.join(outputDir, '.claude-plugin', 'marketplace.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config
   const marketplaceJsonRaw = readFileSync(marketplaceJsonPath, 'utf-8');
   const marketplaceJson = JSON.parse(marketplaceJsonRaw) as { plugins?: PublishedPluginInfo[] };
   // Plugins without a resolved version don't contribute to the label — skip them.
@@ -172,9 +169,7 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
   // 4. Process readme
   if (options.readme) {
     const readmePath = safePath.resolve(configDir, options.readme.sourcePath);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from validated config
     const readmeContent = readFileSync(readmePath, 'utf-8');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config
     await writeFile(safePath.join(outputDir, 'README.md'), readmeContent);
     files.push('README.md');
   }
@@ -191,7 +186,6 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
     } else {
       licenseContent = readLicenseFile(options.license.filePath, configDir);
     }
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config
     await writeFile(safePath.join(outputDir, 'LICENSE'), licenseContent);
     files.push('LICENSE');
   }

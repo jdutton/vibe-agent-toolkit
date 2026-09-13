@@ -21,7 +21,6 @@ describe('validateShippedPluginSkillLinks', () => {
     const cwd = createTempDir();
     const skillDir = skillDirPath(cwd, 'mp1', 'plugin-a', 'skill-a');
     mkdirSyncReal(skillDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
     await writeFile(
       safePath.join(skillDir, 'SKILL.md'),
       '---\nname: skill-a\ndescription: test\n---\n\nSee [missing](./missing.md).\n',
@@ -38,11 +37,8 @@ describe('validateShippedPluginSkillLinks', () => {
     const cwd = createTempDir();
     const skillDir = skillDirPath(cwd, 'mp1', 'plugin-a', 'skill-a');
     mkdirSyncReal(skillDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
     await mkdir(safePath.join(skillDir, 'docs'), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
     await writeFile(safePath.join(skillDir, 'docs', 'guide.md'), '# Guide\n');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
     await writeFile(
       safePath.join(skillDir, 'SKILL.md'),
       '---\nname: skill-a\ndescription: test\n---\n\nSee [guide](./docs/guide.md).\n',
@@ -71,13 +67,9 @@ describe('validateShippedPluginSkillLinks', () => {
     const skillA = skillDirPath(cwd, 'mp1', 'plugin-a', 'skill-a');
     const skillB = skillDirPath(cwd, 'mp1', 'plugin-a', 'skill-b');
     mkdirSyncReal(skillA, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
     await mkdir(safePath.join(skillB, 'refs'), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
     await writeFile(safePath.join(skillB, 'refs', 'guide.md'), '# Guide\n');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
     await writeFile(safePath.join(skillB, 'SKILL.md'), '---\nname: skill-b\ndescription: test\n---\n\n# skill-b\n');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
     await writeFile(
       safePath.join(skillA, 'SKILL.md'),
       '---\nname: skill-a\ndescription: test\n---\n\nSee [guide](../skill-b/refs/guide.md).\n',

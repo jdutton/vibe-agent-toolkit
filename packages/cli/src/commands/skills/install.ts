@@ -13,16 +13,20 @@ import { mkdtemp } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import { validateSkill } from '@vibe-agent-toolkit/agent-skills';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import {
+  direntKindFollowingSync,
+  isSingleFsSegment,
   mkdirSyncReal,
   normalizedTmpdir,
   resolveSkillTarget,
   safePath,
-  toForwardSlash,
-  SKILL_TARGET_NAMES,
   SKILL_SCOPE_NAMES,
-  type SkillTarget,
+  SKILL_TARGET_NAMES,
   type SkillScope,
+  type SkillTarget,
+  toForwardSlash,
+  VatError,
 } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
@@ -40,10 +44,9 @@ import {
 /**
  * Expected install failure (exit 1).
  */
-export class InstallError extends Error {
+export class InstallError extends VatError {
   constructor(message: string) {
-    super(message);
-    this.name = 'InstallError';
+    super('INSTALL', message);
   }
 }
 
@@ -76,19 +79,16 @@ interface DiscoveredSkill {
  */
 function discoverSkillDirs(sourceDir: string): string[] {
   const rootSkillMd = safePath.join(sourceDir, 'SKILL.md');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller validated source
   if (existsSync(rootSkillMd)) {
     return [sourceDir];
   }
 
   // Scan immediate subdirectories for any that contain a SKILL.md.
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller validated source
   const entries = readdirSync(sourceDir, { withFileTypes: true });
   const dirs: string[] = [];
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    if (direntKindFollowingSync(sourceDir, entry) !== 'directory') continue;
     const candidate = safePath.join(sourceDir, entry.name);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from source
     if (existsSync(safePath.join(candidate, 'SKILL.md'))) {
       dirs.push(candidate);
     }
@@ -108,10 +108,10 @@ function discoverSkillDirs(sourceDir: string): string[] {
  * author-controlled and an npm: or ZIP source is not trusted input.
  */
 function assertInstallableName(name: string, origin: string): void {
-  if (name.includes('/') || name.includes('\\') || name.includes('..')) {
+  if (!isSingleFsSegment(name)) {
     throw new InstallError(
       `Invalid skill name "${name}" (${origin}). ` +
-        `Name must not contain path separators or "..".`,
+        `Name must be a single path segment: no separators, not "." or "..".`,
     );
   }
 }
@@ -182,7 +182,6 @@ function buildInstallPlan(
 ): InstallPlan {
   const installPath = safePath.join(installDir, skill.name);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- install path derived from args
   const alreadyExists = existsSync(installPath);
 
   if (alreadyExists && !options.force && !options.dryRun) {
@@ -248,17 +247,14 @@ async function extractZipToTemp(zipPath: string): Promise<string> {
  * top-level directory (e.g. `my-skill/SKILL.md`) or have SKILL.md at the root.
  */
 function findSkillRootInExtracted(extractedDir: string): string {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- temp path we just created
   if (existsSync(safePath.join(extractedDir, 'SKILL.md'))) {
     return extractedDir;
   }
   // Otherwise look for a single subdirectory containing SKILL.md
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- temp path
   const entries = readdirSync(extractedDir, { withFileTypes: true });
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    if (direntKindFollowingSync(extractedDir, entry) !== 'directory') continue;
     const candidate = safePath.join(extractedDir, entry.name);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- temp path
     if (existsSync(safePath.join(candidate, 'SKILL.md'))) {
       return candidate;
     }
@@ -287,11 +283,9 @@ async function resolveSource(source: string): Promise<ResolvedSource> {
   }
 
   const sourcePath = safePath.resolve(source);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- user-provided CLI arg
   if (!existsSync(sourcePath)) {
     throw new InstallError(`Source path not found: ${sourcePath}`);
   }
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- validated above
   const stat = lstatSync(sourcePath);
 
   if (stat.isFile() && sourcePath.endsWith('.zip')) {
@@ -417,10 +411,14 @@ export function createInstallCommand(): Command {
         const opts = command.optsWithGlobals<InstallCommandOptions>();
         await installCommand(source, opts);
       } catch (err) {
-        if (err instanceof InstallError) {
-          process.exit(1);
+        // An `InstallError` is the command refusing on its own terms (a bad
+        // source, a skill already present); anything else is a crash. Both are
+        // the command failing to do its job — neither is a finding about a
+        // skill — so both end on `ERROR`, and the message is what tells them apart.
+        if (!(err instanceof InstallError)) {
+          process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
         }
-        process.exit(2);
+        process.exit(ExitCode.ERROR);
       }
     })
     .addHelpText(

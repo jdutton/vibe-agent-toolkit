@@ -40,9 +40,9 @@
  * That claim covers VAT's own code and **not** the parsers VAT depends on, and
  * it is stated here so it is not read wider than it holds. This package declares
  * `remark-parse ^11.0.0`, `yaml ^2.6.1`, `parse5 ^7.3.0` and
- * `github-slugger ^2.0.0` — four semver **ranges**, not four pins (analysed
- * 2026-08-17, re-read off `packages/resources/package.json` 2026-09-05 and all
- * four are still ranges). Two machines installing the *identical* VAT release
+ * `github-slugger ^2.0.0` — four semver **ranges**, not four pins (read off
+ * `packages/resources/package.json`; re-check there, this sentence is not
+ * derived from it). Two machines installing the *identical* VAT release
  * can therefore resolve different minors of any of them, share one namespace,
  * and write disagreeing facts under identical keys.
  *
@@ -149,7 +149,7 @@ function readVersion(moduleDir: string): string {
       const manifestPath = safePath.join(moduleDir, relative);
       // VAT's OWN published manifest, not corpus content: npm writes it, this
       // repo commits it, and its encoding is not an adopter's choice.
-      // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-raw-text-decode -- path derived from this module's own location; own manifest, so the encoding is not discovered
+      // eslint-disable-next-line local/no-raw-text-decode -- path derived from this module's own location; own manifest, so the encoding is not discovered
       const parsed: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
       if (typeof parsed === 'object' && parsed !== null) {
         const version = (parsed as { version?: unknown }).version;

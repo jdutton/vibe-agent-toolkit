@@ -1,3 +1,4 @@
+import { VatError } from '../errors/vat-error.js';
 import { safeExecResult } from '../safe-exec.js';
 
 import { buildForwardedEnv } from './env-scrub.js';
@@ -30,11 +31,10 @@ export interface ResolvedAuth {
 }
 
 /** A preflight auth failure — maps to exit code 2. */
-export class AuthPreflightError extends Error {
-  readonly exitCode = 2 as const;
+export class AuthPreflightError extends VatError {
+  readonly reason = 'preflight' as const;
   constructor(message: string) {
-    super(message);
-    this.name = 'AuthPreflightError';
+    super('AUTH_PREFLIGHT', message);
   }
 }
 

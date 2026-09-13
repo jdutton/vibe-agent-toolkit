@@ -1,5 +1,4 @@
 #!/usr/bin/env tsx
-/* eslint-disable security/detect-non-literal-fs-filename */
 // File paths derived from packageDir parameter (controlled directory scanning)
 /**
  * Fix Workspace Dependencies Script
@@ -11,7 +10,7 @@
 
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, safePath } from '@vibe-agent-toolkit/utils';
 
 import { log } from './common.js';
 
@@ -60,7 +59,8 @@ function main(): void {
   log('─'.repeat(60), 'blue');
 
   const packageDirs = readdirSync(PACKAGES_DIR, { withFileTypes: true })
-    .filter((dirent) => dirent.isDirectory())
+    // Followed: a workspace package reached through a link is still a package.
+    .filter((dirent) => direntKindFollowingSync(PACKAGES_DIR, dirent) === 'directory')
     .map((dirent) => dirent.name);
 
   const totalFixed = packageDirs.reduce((total, packageDir) => total + processPackage(packageDir), 0);

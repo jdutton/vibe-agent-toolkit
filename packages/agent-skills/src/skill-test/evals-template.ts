@@ -1,5 +1,5 @@
 /**
- * evals-template.ts — scaffold a starter `evals.json` on bootstrap (exit 3).
+ * evals-template.ts — scaffold a starter `evals.json` on bootstrap (exit 2, `Reason: bootstrap`).
  *
  * When a subject skill has no `evals/evals.json`, the harness writes an
  * annotated template the user can fill in and re-run. The shape mirrors
@@ -74,9 +74,7 @@ export function writeEvalsTemplate(evalsPath: string, skillName: string): string
   mkdirSyncReal(parent, { recursive: true });
   // Defensive: never clobber an authored eval suite. Callers only reach here when
   // the suite is absent, but guard so a stray call can never destroy real evals.
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own resolved scaffold path
   if (!existsSync(evalsPath)) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own resolved scaffold path
     writeFileSync(evalsPath, buildEvalsTemplate(skillName), 'utf8');
   }
   return evalsPath;

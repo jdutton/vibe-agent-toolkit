@@ -1,4 +1,3 @@
-/* eslint-disable sonarjs/no-duplicate-string */
 /**
  * System tests for `vat skill test run`.
  *
@@ -20,7 +19,7 @@
  *   exercising the real eval-resolution path (no manual seeding into the root).
  *
  *   When a fixture skill has NO evals/, the harness scaffolds an evals.json
- *   template next to the subject source (the fixture skill dir) and exits 3.
+ *   template next to the subject source (the fixture skill dir) and exits 2 with `Reason: bootstrap`.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -44,13 +43,11 @@ import {
 // spawn failure in `.error` and leaves `.status` null, which reads as "no
 // claude" below without a catch.
 const hasClaude = (() => {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- probing for claude CLI presence; not user-supplied
   return spawnSync('claude', ['--version'], { stdio: 'ignore' }).status === 0;
 })();
 
 const authed = (() => {
   if (!hasClaude) return false;
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- probing claude auth status; not user-supplied
   const r = spawnSync('claude', ['auth', 'status', '--json'], { encoding: 'utf8' });
   if (r.status !== 0) return false;
   try {
@@ -237,7 +234,7 @@ const COMPANION_ARTIFACT_BODY = '#!/usr/bin/env node\nprocess.stdout.write("comp
  * declared skill was BUILT rather than tree-copied from source (issue #158).
  *
  * NO skill ships evals/, so the run stops at the harness's bootstrap check
- * (exit 3) — which fires AFTER companion build + staging but BEFORE preflight and
+ * (exit 2, `Reason: bootstrap`) — which fires AFTER companion build + staging but BEFORE preflight and
  * any Claude spawn. That keeps this guard deterministic and token-free in
  * credential-less CI, which is exactly where it has to bite.
  *
@@ -332,9 +329,7 @@ function stagedPath(outDir: string, alias: string, relPath: string): string {
 /** Assert `results/provenance.json` exists under `outDir` and return its parsed contents. */
 function readProvenance(outDir: string): Record<string, unknown> {
   const provenancePath = safePath.join(outDir, 'results', 'provenance.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
   expect(fs.existsSync(provenancePath)).toBe(true);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
   return JSON.parse(fs.readFileSync(provenancePath, 'utf-8')) as Record<string, unknown>;
 }
 
@@ -422,11 +417,10 @@ describe('vat skill test run (system)', () => {
 
     // Confirm grading.json was NOT written inside the harness root.
     const gradingPath = safePath.join(outDir, 'results', 'grading.json');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
     expect(fs.existsSync(gradingPath)).toBe(false);
   });
 
-  it('exits 3 and scaffolds an evals.json template when the skill has no evals/', async () => {
+  it('exits 2 with `Reason: bootstrap` and scaffolds an evals.json template when the skill has no evals/', async () => {
     const tempDir = ctx.createTempDir();
     // Build a fixture skill WITHOUT evals/ so the bootstrap path fires.
     const skillDir = buildFixtureSkillDir(tempDir, 'poc-skill', false);
@@ -443,9 +437,11 @@ describe('vat skill test run (system)', () => {
       outDir,
     ]);
 
-    expectStatus(result, 3);
+    // ERROR with `Reason: bootstrap` — the run stopped before any spawn.
+    expectStatus(result, 2);
+    expect(result.stderr).toContain('Reason: bootstrap');
 
-    // Bootstrap (exit 3) is the happy "wrote a template, fill it in" path — it
+    // Bootstrap is the happy "wrote a template, fill it in" path — it
     // must NOT be printed as a hard error. The message reaches the user without
     // the `Error:` prefix and points at the scaffolded template.
     expect(result.stderr).not.toContain('Error: Wrote');
@@ -453,15 +449,13 @@ describe('vat skill test run (system)', () => {
 
     // The scaffold must persist next to the subject source (the fixture skill dir).
     const scaffoldPath = safePath.join(skillDir, 'evals', 'evals.json');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
     expect(fs.existsSync(scaffoldPath)).toBe(true);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
     const template = JSON.parse(fs.readFileSync(scaffoldPath, 'utf-8')) as Record<string, unknown>;
     expect(template['skill_name']).toBe('poc-skill');
     expect(Array.isArray(template['evals'])).toBe(true);
   });
 
-  it('--dry-run with no evals/ describes the scaffold path WITHOUT writing it (exit 3)', async () => {
+  it('--dry-run with no evals/ describes the scaffold path WITHOUT writing it (Reason: bootstrap)', async () => {
     const tempDir = ctx.createTempDir();
     // Fixture skill WITHOUT evals/ so the bootstrap path fires — but under
     // --dry-run, which must never touch the filesystem. (Bootstrap fires before
@@ -482,11 +476,11 @@ describe('vat skill test run (system)', () => {
 
     // Same bootstrap-needed signal as a real run — the precondition (no eval
     // suite) is identical; only the side effect differs.
-    expectStatus(result, 3);
+    expectStatus(result, 2);
+    expect(result.stderr).toContain('Reason: bootstrap');
 
     const scaffoldPath = safePath.join(skillDir, 'evals', 'evals.json');
     // The whole point: --dry-run must NOT scaffold the template on disk.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
     expect(fs.existsSync(scaffoldPath)).toBe(false);
 
     // Instead it must say what a real run WOULD write, and where.
@@ -560,10 +554,12 @@ describe('vat skill test run (system)', () => {
       { cwd: projectRoot },
     );
 
-    // Exit 3 = the subject ships no evals/, so the harness stopped at its bootstrap
-    // check. That check runs AFTER companion resolution + staging and BEFORE
-    // preflight/spawn — no claude binary, no auth, no tokens, same result in CI.
-    expectStatus(result, 3);
+    // ERROR + `Reason: bootstrap` = the subject ships no evals/, so the harness
+    // stopped at its bootstrap check. That check runs AFTER companion resolution
+    // + staging and BEFORE preflight/spawn — no claude binary, no auth, no
+    // tokens, same result in CI.
+    expectStatus(result, 2);
+    expect(result.stderr).toContain('Reason: bootstrap');
 
     // THE CLAIM: each companion's `files:`-injected build artifact is a real file
     // under its staged dir. It exists in the built dist ONLY — nothing copies it
@@ -571,9 +567,7 @@ describe('vat skill test run (system)', () => {
     // BOTH arms: `--with` and `--with-optional` resolve through separate call sites.
     for (const alias of [DECLARED_COMPANION_ALIAS, OPTIONAL_COMPANION_ALIAS]) {
       const artifactPath = stagedPath(outDir, alias, COMPANION_ARTIFACT_DEST);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
       expect(fs.existsSync(artifactPath), `injected artifact missing at ${artifactPath}`).toBe(true);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
       expect(fs.readFileSync(artifactPath, 'utf-8')).toBe(COMPANION_ARTIFACT_BODY);
     }
 
@@ -582,10 +576,8 @@ describe('vat skill test run (system)', () => {
     // assertions above are not passing merely because staging happened at all) and
     // it must NOT carry the injected artifact.
     const rawSkillMd = stagedPath(outDir, UNDECLARED_COMPANION_ALIAS, 'SKILL.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
     expect(fs.existsSync(rawSkillMd), `undeclared companion not staged at ${rawSkillMd}`).toBe(true);
     const rawArtifact = stagedPath(outDir, UNDECLARED_COMPANION_ALIAS, COMPANION_ARTIFACT_DEST);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
     expect(fs.existsSync(rawArtifact)).toBe(false);
   });
 
@@ -626,7 +618,6 @@ describe('vat skill test run (system)', () => {
       expect(result.stderr).toContain('Model: claude-opus-4-8');
       // grading.json must NOT exist — dry-run does not spawn Claude.
       const gradingPath = safePath.join(outDir, 'results', 'grading.json');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
       expect(fs.existsSync(gradingPath)).toBe(false);
     });
 
@@ -640,14 +631,12 @@ describe('vat skill test run (system)', () => {
       // Must say it fell back to source since no dist exists yet
       expect(result.stdout).toContain('fell back to the source dir');
       // grading.json must NOT be written
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
       expect(fs.existsSync(safePath.join(outDir, 'results', 'grading.json'))).toBe(false);
       // Provenance must NOT exist: a dry run names the path it WOULD write and writes
       // nothing under results/. (It used to be written ahead of the dry-run
       // short-circuit, which is also what let a dry run wipe a previous real run's
       // artifacts — see the --dry-run must not touch results/ suite.)
       const provenancePath = safePath.join(outDir, 'results', 'provenance.json');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
       expect(fs.existsSync(provenancePath)).toBe(false);
       // …but the summary must still tell the operator where it would go, and still
       // report the staged fingerprint (which now comes from the summary, not from disk).
@@ -709,10 +698,8 @@ describe('vat skill test run (system)', () => {
 
       // grading.json must exist and be parseable with the expected shape.
       const gradingPath = safePath.join(outDir, 'results', 'grading.json');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
       expect(fs.existsSync(gradingPath)).toBe(true);
 
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
       const raw = JSON.parse(fs.readFileSync(gradingPath, 'utf-8')) as Record<string, unknown>;
       // Validate the top-level shape expected by parseGradingJson.
       expect(Array.isArray(raw['expectations'])).toBe(true);
@@ -753,13 +740,12 @@ describe('vat skill test run (system)', () => {
       );
 
       // Exit 0 = built, staged (with the overlaid eval suite), and graded the dist.
-      // Specifically NOT exit 3 — the overlay means it never bootstraps.
+      // Specifically NOT `Reason: bootstrap` — the overlay means it never bootstraps.
       expect(result.status).toBe(0);
 
       // provenance.json records what was staged + tested; rebuilt MUST be true here.
       expect(readProvenance(outDir)['rebuilt']).toBe(true);
       const gradingPath = safePath.join(outDir, 'results', 'grading.json');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
       expect(fs.existsSync(gradingPath)).toBe(true);
     });
 

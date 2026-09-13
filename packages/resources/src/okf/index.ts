@@ -20,5 +20,4 @@ export {
   type OkfBundleReport,
   type OkfFinding,
   type OkfFindingCode,
-  type OkfSeverity,
 } from './types.js';

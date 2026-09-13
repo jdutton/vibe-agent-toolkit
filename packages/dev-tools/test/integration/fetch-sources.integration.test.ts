@@ -8,7 +8,6 @@
  * tag ref tracks the upstream move.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- harness-controlled tmpdir paths */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';

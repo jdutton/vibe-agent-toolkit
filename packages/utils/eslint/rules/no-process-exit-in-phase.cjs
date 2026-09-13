@@ -93,8 +93,18 @@ module.exports = {
     docs: {
       description:
         'Forbid process.exit() inside a phase entry point, where it would end the whole orchestrated run',
-      category: 'Agentic Code Safety',
-      recommended: true,
+      category: 'Process control',
+      bans: '`process.exit()` inside a function named `…Phase`',
+      useInstead: 'return the exit code from the phase; only the command wrapper exits',
+      // Not in `recommended`: it keys on a NAMING CONVENTION that is VAT's, not a
+      // portable fact. The hazard is real and general (an in-process orchestrator
+      // whose step calls `process.exit()` silently skips every later step), but
+      // the marker is the `…Phase` suffix, and an adopter with an unrelated
+      // `computeRenderPhase()` that legitimately exits would get a finding they
+      // cannot act on. VAT enables it explicitly, repo-wide, so a NEW phase is
+      // covered the moment it is named like one.
+      recommended: false,
+      recommendedSeverity: 'error',
     },
     fixable: null,
     schema: [],

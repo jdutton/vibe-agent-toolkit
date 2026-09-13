@@ -11,7 +11,6 @@
  * the default export, so it cannot answer "how many probes".
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import type * as NodeFs from 'node:fs';
 import * as fs from 'node:fs';
 

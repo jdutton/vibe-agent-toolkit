@@ -142,12 +142,20 @@ Use this before a release to determine which surfaces each plugin supports.
 
 ## Exit Codes
 
-`vat audit` is **advisory** — it reports every issue it detects but never blocks on validation severity:
+The three-way contract every `vat` command shares — the exit code follows the report's `status`:
 
-- `0` — always, when the audit completes, regardless of errors or warnings in the report.
-- `2` — system error (path not found, permission denied, etc.) — the audit could not run.
+- `0` — the audit completed with nothing at error severity. Warnings and informational findings are
+  in the report, not the exit code.
+- `1` — the audit completed and reports `status: error`: at least one error-severity finding, or
+  zero files audited. A path inside the tree the scan could not read is `SCAN_PATH_UNREADABLE`
+  (warning) — the run degrades, and the refused path is `summary.pathsUnreadable`, not a scanned
+  file; a run that audited zero files is one non-overridable `RESOURCE_CHECK_BROKEN`.
+- `2` — the run itself could not happen: the root path does not exist or is a file no lane
+  recognises, bad usage, a URL that failed to clone, an internal crash. There is no report.
 
-For gated checks that exit `1` on validation errors, use `vat skills validate` or `vat skills build` instead. Those commands apply `validation.severity` and honor `validation.allow` from config.
+Audit reports every finding: it ignores `validation.allow` and reads `validation.severity` from three
+scopes, so `severity` is the dial that decides what gates. For a check that honors `validation.allow`,
+use `vat skills validate` or `vat skills build` instead.
 
 ## CI Usage
 
@@ -165,9 +173,11 @@ root: /abs/path/you/pointed/audit/at   # the ONE absolute path in the document
 status: warning
 summary:
   filesScanned: 23
-  success: 21
-  warnings: 2
-  errors: 0
+  filesPassed: 21
+  filesWithWarnings: 2
+  filesWithErrors: 0
+  pathsUnreadable: 0                      # refused paths, outside filesScanned
+issueCounts: { errors: 0, warnings: 2, info: 0 }   # every issue, split by severity
 files:
   - path: plugins/my-plugin                                          # relative to root
     issues:
@@ -180,7 +190,7 @@ Severity taxonomy in audit output:
 - **Errors:** Missing required frontmatter, broken links, invalid plugin.json schema, link integrity violations
 - **Warnings:** Skill too long, description too short, best practice violations
 
-Audit always exits `0` regardless — surface-level severity drives display grouping only.
+A code at `error` severity moves the exit code to `1`; `warning` and `info` do not.
 
 **Hiding codes from audit output.** Audit ignores `validation.allow` by design (it is the read-only report), but it does honor `validation.severity`. Set a code to `ignore` in `vibe-agent-toolkit.config.yaml` to suppress it from the audit output:
 

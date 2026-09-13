@@ -13,7 +13,7 @@ import { CatCharacteristicsSchema, type NameSuggestion } from '../types/schemas.
 export const NameGeneratorInputSchema = z.object({
   characteristics: CatCharacteristicsSchema.describe('Cat characteristics to base name suggestions on'),
   mockable: z.boolean().optional().describe('Whether to use mock mode (default: true)'),
-});
+}).strict();
 
 export type NameGeneratorInput = z.infer<typeof NameGeneratorInputSchema>;
 

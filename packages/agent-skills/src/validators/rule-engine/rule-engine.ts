@@ -1,5 +1,5 @@
 /**
- * The skill-resource verdict engine (issue #129, slice 3).
+ * The skill-resource verdict engine.
  *
  * `evaluate(ctx)` is a **pure** function: it takes an intent-aware
  * {@link RuleContext} and returns at most one validation code (or `null` when
@@ -55,7 +55,7 @@ function evaluateEdge(ctx: RuleContext): IssueCode | null {
 
   // Directory targets: an ERROR only for a typed single-file slot (the contract
   // demanded a file). A navigational directory link is still a valid target
-  // (#126) — but valid is not the same as unreportable, and it used to return
+  // — but valid is not the same as unreportable, and it used to return
   // `null` here, which made the drop invisible: the directory never travels, so
   // the packaged link points at nothing and the author heard nothing about it.
   // The two arms are two different findings, not one finding at two severities.
@@ -126,7 +126,7 @@ function evaluateWalkDecision(ctx: RuleContext): IssueCode | null {
  */
 function evaluateFile(ctx: RuleContext): IssueCode | null {
   // Plugin artifacts are exempt from skill self-containment expectations
-  // (issue #129 AC4): never apply skill orphan rules to a plugin-level copy.
+  // never apply skill orphan rules to a plugin-level copy.
   if (ctx.copyRole === 'plugin-artifact') return null;
 
   // Referenced (by link or documented mention) or explicitly declared in

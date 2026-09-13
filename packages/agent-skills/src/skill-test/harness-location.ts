@@ -1,14 +1,13 @@
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, statSync } from 'node:fs';
 
-import { isAbsolutePath, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, relativeEscapesRoot, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
 /** Harness-location failure — maps to exit code 2. */
-export class HarnessLocationError extends Error {
-  readonly exitCode = 2 as const;
+export class HarnessLocationError extends VatError {
+  readonly reason = 'preflight' as const;
   constructor(message: string) {
-    super(message);
-    this.name = 'HarnessLocationError';
+    super('HARNESS_LOCATION', message);
   }
 }
 
@@ -56,11 +55,9 @@ export function assertSafeWorkdir(dir: string, stopAt?: string): void {
   let current = safePath.resolve(dir);
   let previous = '';
   while (current !== previous && current !== boundary) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- ancestry walk over a user-supplied workdir
     if (existsSync(safePath.join(current, 'CLAUDE.md'))) {
       throw new HarnessLocationError(`--workdir is inside a project: CLAUDE.md found at ${current}. Use an OS-tmp location.`);
     }
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- ancestry walk over a user-supplied workdir
     if (existsSync(safePath.join(current, '.claude'))) {
       throw new HarnessLocationError(`--workdir is inside a project: .claude/ found at ${current}. Use an OS-tmp location.`);
     }
@@ -82,20 +79,16 @@ export function assertSafeWorkdir(dir: string, stopAt?: string): void {
  * assertSafeHarnessRoot's platform guard).
  */
 export function prepareHarnessRoot(dir: string): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
   if (!existsSync(dir)) return;
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
   const ls = lstatSync(dir);
   if (ls.isSymbolicLink()) {
     throw new HarnessLocationError(`Refusing to use a symlinked harness root: ${dir}.`);
   }
 
   if (process.platform !== 'win32') {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
     const mode = statSync(dir).mode & 0o777;
     if (mode !== 0o700) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
       chmodSync(dir, 0o700);
     }
   }
@@ -105,7 +98,7 @@ export function prepareHarnessRoot(dir: string): void {
 function isStrictlyUnder(root: string, child: string): boolean {
   if (child === root) return false;
   const rel = safePath.relative(root, child);
-  return rel !== '' && rel !== '..' && !rel.startsWith('../') && !isAbsolutePath(rel);
+  return rel !== '' && !relativeEscapesRoot(rel);
 }
 
 /**
@@ -135,9 +128,7 @@ function harnessAncestry(leaf: string, trustedRoot: string): string[] {
  * skipped (no real uids); the symlink refusal still applies.
  */
 function assertComponentSafe(component: string, currentUid: number): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness path component
   if (!existsSync(component)) return;
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness path component
   const ls = lstatSync(component);
   if (ls.isSymbolicLink()) {
     throw new HarnessLocationError(`Refusing to use a symlinked harness path component: ${component}.`);
@@ -180,9 +171,7 @@ export function assertSafeHarnessRoot(
 
   // Leaf-only 0700 check (intermediates are created 0700 by recursive mkdir and
   // need only the symlink/ownership guarantees above). Skipped on win32.
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
   if (!existsSync(resolved)) return; // not yet created — caller creates it 0700
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
   const mode = statSync(resolved).mode & 0o777;
   if (mode !== 0o700 && process.platform !== 'win32') {
     throw new HarnessLocationError(`Harness root ${resolved} must be 0700 (found ${mode.toString(8)}).`);

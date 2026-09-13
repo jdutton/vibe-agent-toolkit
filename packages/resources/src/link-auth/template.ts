@@ -22,6 +22,8 @@
  * two carry different function names for that reason, not only different paths.
  */
 
+import { VatError } from '@vibe-agent-toolkit/utils';
+
 import { applyTransform, assertKnownTransform } from './transforms.js';
 
 const IDENTIFIER = /^[a-zA-Z_]\w*$/;
@@ -33,10 +35,9 @@ const EXPRESSION = /\$\{([^}]*)\}/g;
  * Message names the missing variable and includes the full template for
  * caller-side debugging.
  */
-export class TemplateMissingVarError extends Error {
+export class TemplateMissingVarError extends VatError {
   constructor(varName: string, template: string) {
-    super(`Template variable "${varName}" not in context. Template: ${template}`);
-    this.name = 'TemplateMissingVarError';
+    super('TEMPLATE_MISSING_VAR', `Template variable "${varName}" not in context. Template: ${template}`);
   }
 }
 
@@ -44,10 +45,9 @@ export class TemplateMissingVarError extends Error {
  * Thrown when a template contains syntactically invalid content inside `${...}`
  * (empty expression, whitespace, unrecognized form) or an unterminated `${`.
  */
-export class TemplateSyntaxError extends Error {
+export class TemplateSyntaxError extends VatError {
   constructor(detail: string, template: string) {
-    super(`Invalid template syntax — ${detail}. Template: ${template}`);
-    this.name = 'TemplateSyntaxError';
+    super('TEMPLATE_SYNTAX', `Invalid template syntax — ${detail}. Template: ${template}`);
   }
 }
 

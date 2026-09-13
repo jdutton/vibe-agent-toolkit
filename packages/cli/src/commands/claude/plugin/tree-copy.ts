@@ -24,7 +24,7 @@ import { copyFile, lstat, mkdir, readdir, realpath, stat } from 'node:fs/promise
 import { dirname } from 'node:path';
 
 import { AGENT_INSTRUCTION_FILE_PATTERNS, toAnyDepthGlobs } from '@vibe-agent-toolkit/agent-skills';
-import { isGlob, isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isGlob, isPathAbsentError, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, crawlPathFilter } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 import picomatch from 'picomatch';
@@ -164,18 +164,18 @@ function describeRefusal(entry: RefusedSymlink): string {
  * build host's absolute paths, and names the remedy — the `exclude:` knob — in
  * the same terms the listing refusal does.
  */
-export class PluginSymlinkRefusedError extends Error {
+export class PluginSymlinkRefusedError extends VatError {
   readonly refused: readonly RefusedSymlink[];
 
   constructor(refused: readonly RefusedSymlink[]) {
     const lines = refused.map((entry) => `  - '${entry.path}' ${describeRefusal(entry)}`);
     super(
+      'PLUGIN_SYMLINK_REFUSED',
       `Refusing to copy the plugin source: ${refused.length} symbolic link(s) cannot be shipped in a bundle,`
         + ` so nothing was copied.\n${lines.join('\n')}\n`
         + 'Replace each link with the file it points at, or name it in the plugin\'s `exclude:` list to leave'
         + ' it out of the bundle deliberately.',
     );
-    this.name = 'PluginSymlinkRefusedError';
     this.refused = refused;
   }
 }
@@ -185,7 +185,7 @@ export class PluginSymlinkRefusedError extends Error {
  *
  * The agent-instruction list ONLY. `NEVER_PACKAGE_IN_SKILL_BUNDLE` also carries
  * the navigation patterns, and importing that here would strip the front page off
- * three in five real plugins: measured 2026-08-02, 50 of 86 installed plugins ship
+ * three in five real plugins: measured, 50 of 86 installed plugins ship
  * a plugin-root `README.md` (57 of 94 when first measured — the population moves as
  * plugins come and go; the ratio is what carries the argument, so re-measure rather
  * than cite this as current), and `copyDistributionFiles` copies READMEs to the marketplace root
@@ -303,7 +303,6 @@ async function partitionByLstat(
   const links: SourceEntry[] = [];
   for (const abs of files) {
     const entry = { abs, rel: toForwardSlash(safePath.relative(sourceDir, abs)) };
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path returned by the crawl of sourceDir
     const info = await lstat(abs);
     (info.isSymbolicLink() ? links : regular).push(entry);
   }
@@ -338,7 +337,6 @@ async function sweepSymlinks(
 ): Promise<SourceEntry[]> {
   const found: SourceEntry[] = [];
   const walk = async (dir: string): Promise<void> => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- walking beneath the validated sourceDir
     const entries = await readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
       const abs = safePath.join(dir, entry.name);
@@ -382,7 +380,6 @@ async function classifySymlink(
 ): Promise<RefusedSymlink | 'file'> {
   let real: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a symlink the crawl of sourceDir returned
     real = toForwardSlash(await realpath(link.abs));
   } catch (error) {
     // 'unresolvable' is what the message says it is: dangling, or a loop. A
@@ -393,7 +390,6 @@ async function classifySymlink(
     return { path: link.rel, reason: 'unresolvable' };
   }
   if (!isUnderSource(real, realSource)) return { path: link.rel, reason: 'escapes-source' };
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- canonical path proven to sit under sourceDir
   if ((await stat(real)).isDirectory()) return { path: link.rel, reason: 'directory' };
   const target = toForwardSlash(safePath.relative(realSource, real));
   return shipped.has(target) ? 'file' : { path: link.rel, reason: 'target-excluded', target };
@@ -417,7 +413,6 @@ async function judgeSymlinks(
   const copyable: SourceEntry[] = [];
   const refused: RefusedSymlink[] = [];
   if (links.length === 0) return { copyable, refused };
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- sourceDir resolved from config
   const realSource = toForwardSlash(await realpath(sourceDir));
   for (const link of [...links].toSorted((a, b) => a.rel.localeCompare(b.rel))) {
     const verdict = await classifySymlink(link, realSource, shipped);
@@ -442,13 +437,11 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
     symlinksCopied: [],
   };
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- sourceDir resolved from config
   if (!existsSync(sourceDir)) {
     return result;
   }
 
   const authorMarketplaceJson = safePath.join(sourceDir, '.claude-plugin', 'marketplace.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
   if (existsSync(authorMarketplaceJson) && warn) {
     warn(
       `Ignoring ${toForwardSlash(authorMarketplaceJson)}: marketplace.json is VAT-generated ` +
@@ -521,7 +514,6 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
 
   for (const entry of [...shippedRegular, ...copyable]) {
     const target = safePath.join(destDir, entry.rel);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest resolved from sourceDir+relative
     await mkdir(dirname(target), { recursive: true });
     // `copyFile` follows a symlink, which is the point for the in-tree file
     // links that reach here: the bundle carries the target's bytes.

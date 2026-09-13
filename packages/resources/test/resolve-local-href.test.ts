@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
 /**
  * Unit tests for resolveLocalHref — shared href → filesystem path resolution.
  *

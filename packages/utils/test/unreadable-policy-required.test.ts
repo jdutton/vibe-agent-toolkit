@@ -20,7 +20,6 @@
  * silently. What each arm DOES is pinned beside the walk and the git route in
  * `file-crawler-refused-listing.test.ts` / `file-crawler-git-refused-listing.test.ts`.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { writeFileSync } from 'node:fs';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -28,7 +27,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { crawlDirectorySync } from '../src/file-crawler.js';
 import { gitLsFiles, gitLsOthers } from '../src/git-utils.js';
 import { mkdirSyncReal, safePath } from '../src/path-utils.js';
-import { setupSyncTempDirSuite } from '../src/test-helpers.js';
+import { setupSyncTempDirSuite } from '../src/testing/temp-dir.js';
 
 import { createGitRepo } from './test-helpers.js';
 

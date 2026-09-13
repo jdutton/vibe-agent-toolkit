@@ -140,7 +140,6 @@ If checks fail, doctor provides specific suggestions:
 Create `vibe-agent-toolkit.config.yaml` at project root:
 
 ```yaml
-version: 1
 resources:
   include:
     - "docs/**/*.md"

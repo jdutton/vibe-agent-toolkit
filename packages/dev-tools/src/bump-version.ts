@@ -1,10 +1,10 @@
 /**
  * Version Bump Script
  *
- * Updates version in ALL package.json files (root + all workspace packages) AND
- * resolves workspace:* dependencies to actual version numbers for npm publishing.
- *
- * This ensures consistent versioning across the monorepo and prepares packages for publishing.
+ * Updates the `version` field in the root `package.json` and every workspace
+ * package manifest, updates `bun.lock`, and — for a STABLE version — stamps
+ * `CHANGELOG.md`: the `[Unreleased]` body plus every `.changes/*.md` fragment
+ * moves under a new `## [X.Y.Z] - date` heading and the fragments are deleted.
  *
  * Usage:
  *   tsx tools/bump-version.ts <version|increment>
@@ -16,25 +16,43 @@
  *   tsx tools/bump-version.ts minor        # Increment minor (1.0.0 -> 1.1.0)
  *   tsx tools/bump-version.ts major        # Increment major (1.0.0 -> 2.0.0)
  *
- * What it does:
- *   1. Updates "version" field in all package.json files
- *   2. Resolves "workspace:*" → actual version for @vibe-agent-toolkit/* packages
+ * A manifest already at the target version is left untouched (not rewritten
+ * byte-for-byte), so a re-run is a no-op diff.
+ *
+ * `workspace:*` specifiers are NOT rewritten here — and NOT by Bun at publish
+ * time either, whatever an older comment here said: `npm publish` ships the
+ * manifest verbatim, which is how `@vibe-agent-toolkit/cli@0.2.0-rc.3` reached
+ * the registry with raw `workspace:*` entries npm cannot install. The publish
+ * workflow runs `resolve-workspace-deps` for that, on a checkout nobody commits.
+ *
+ * 🔑 Why every manifest still carries its own `version` (the readers, so the
+ * next person can make the per-package field a publish-time stamp instead):
+ *   1. `npm publish` — reads the manifest in each package directory; never the tag.
+ *   2. `validate-version.ts` — asserts all manifests agree (a check that exists
+ *      only because there are 26 copies).
+ *   3. `packages/cli/src/version.ts` — `vat --version` reads its own manifest at runtime.
+ *   4. `packages/resources/src/cache-namespace.ts` — the parse cache is namespaced
+ *      by the package version, so every bump invalidates every adopter's cache.
+ * The first three are satisfied by a stamp written at publish time (where
+ * `resolve-workspace-deps` already rewrites every manifest); the fourth reads
+ * whatever the manifest says at publish, which is the same stamp.
  *
  * Exit codes:
  *   0 - Success
  *   1 - Error (invalid version, file not found, etc.)
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 // File paths derived from PROJECT_ROOT (controlled, not user input)
 
 import { existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { direntKindFollowingSync, safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import semver from 'semver';
 
+import { deleteFragments, mergeFragmentsIntoBody, readFragments } from './changelog-fragments.js';
 import { PROJECT_ROOT, log, processWorkspacePackages, type PackageProcessResult } from './common.js';
 
 const PACKAGE_JSON = 'package.json';
@@ -87,16 +105,16 @@ Examples:
 
 Exit codes:
   0 - Success
-  1 - Error (invalid version, file not found, etc.)
+  2 - Error (invalid version, file not found, etc.)
   `);
-  process.exit(args.length === 0 ? 1 : 0);
+  process.exit(args.length === 0 ? ExitCode.ERROR : ExitCode.OK);
 }
 
 // After help check, we know args.length > 0
 const versionArg = args[0];
 if (!versionArg) {
   log('✗ Version argument is required', 'red');
-  process.exit(1);
+  process.exit(ExitCode.ERROR);
 }
 
 // Helper to increment version
@@ -144,7 +162,7 @@ if (['patch', 'minor', 'major'].includes(versionArg)) {
 
     if (!currentVersion) {
       log('✗ Could not determine current version from root package.json', 'red');
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     }
 
     newVersion = incrementVersion(currentVersion, versionArg);
@@ -153,7 +171,7 @@ if (['patch', 'minor', 'major'].includes(versionArg)) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log(`✗ Failed to read current version: ${message}`, 'red');
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   }
 } else {
   // Explicit version provided
@@ -164,7 +182,7 @@ if (['patch', 'minor', 'major'].includes(versionArg)) {
     log(`✗ Invalid version format: ${newVersion}`, 'red');
     log('  Expected format: X.Y.Z or X.Y.Z-prerelease', 'yellow');
     log('  Examples: 1.0.0, 2.0.0, 1.0.0-beta.1, patch, minor, major', 'yellow');
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   }
 }
 
@@ -181,19 +199,26 @@ if (!isPrerelease) {
     if (existingPattern.test(content)) {
       log(`✗ CHANGELOG.md already has an entry for [${newVersion}]. Refusing to stamp to avoid corruption.`, 'red');
       console.log('  If you need to re-stamp, manually remove the existing entry first.');
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     }
 
-    if (!body.trim()) {
-      log('✗ CHANGELOG.md has no content under [Unreleased]. Add release notes before bumping to a stable version.', 'red');
-      process.exit(1);
+    const { fragments, problems } = readFragments(PROJECT_ROOT);
+    if (problems.length > 0) {
+      log('✗ Malformed changelog fragment(s) under .changes/ — fix them before stamping:', 'red');
+      for (const problem of problems) console.log(`  ${problem.reason}`);
+      process.exit(ExitCode.ERROR);
     }
 
-    log('✓ CHANGELOG.md pre-flight check passed', 'green');
+    if (!body.trim() && fragments.length === 0) {
+      log('✗ CHANGELOG.md has no content under [Unreleased] and .changes/ holds no fragments. Add release notes before bumping to a stable version.', 'red');
+      process.exit(ExitCode.ERROR);
+    }
+
+    log(`✓ CHANGELOG.md pre-flight check passed (${fragments.length} fragment(s) to fold in)`, 'green');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log(`✗ Failed to validate CHANGELOG.md: ${message}`, 'red');
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   }
 }
 
@@ -224,15 +249,13 @@ function updatePackageVersion(filePath: string, newVersion: string): VersionUpda
 
     pkg.version = newVersion;
 
-    // Preserve original formatting by replacing only the version line
+    // Preserve original formatting by replacing only the version line.
+    // `workspace:*` specifiers stay as they are — see the header for who
+    // resolves them, and when.
     const updatedContent = content.replace(
       /"version":\s*"[^"]+"/,
       `"version": "${newVersion}"`
     );
-
-    // NOTE: workspace:* dependencies are NOT replaced here
-    // They remain as workspace:* in git for CI compatibility
-    // Bun automatically replaces workspace:* with actual versions during npm publish
 
     writeFileSync(filePath, updatedContent, 'utf8');
 
@@ -259,7 +282,7 @@ try {
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   log(`  ✗ ${message}`, 'red');
-  process.exit(1);
+  process.exit(ExitCode.ERROR);
 }
 
 console.log('');
@@ -270,7 +293,7 @@ log('Updating workspace packages...', 'blue');
 const packagesDir = safePath.join(PROJECT_ROOT, 'packages');
 const hasPackages =
   existsSync(packagesDir) &&
-  readdirSync(packagesDir, { withFileTypes: true }).some((dirent) => dirent.isDirectory());
+  readdirSync(packagesDir, { withFileTypes: true }).some((dirent) => direntKindFollowingSync(packagesDir, dirent) === 'directory');
 
 if (hasPackages) {
   // Update all workspace packages
@@ -325,16 +348,22 @@ if (isPrerelease) {
     const today = new Date().toISOString().split('T')[0] ?? '';
     const versionHeading = `## [${newVersion}] - ${today}`;
 
+    // Pre-flight already refused malformed fragments, so only fragments are left.
+    const { fragments } = readFragments(PROJECT_ROOT);
+    const merged = mergeFragmentsIntoBody(body.replace(/^\n/, ''), fragments);
+
     const before = content.slice(0, afterHeading);
     const after = content.slice(afterHeading + nextSectionOffset);
-    const updatedChangelog = `${before}\n\n${versionHeading}\n${body.replace(/^\n/, '')}${after}`;
+    const updatedChangelog = `${before}\n\n${versionHeading}\n${merged}${after}`;
 
     writeFileSync(CHANGELOG_PATH, updatedChangelog, 'utf8');
-    log(`✓ CHANGELOG.md stamped for v${newVersion}`, 'green');
+    deleteFragments(PROJECT_ROOT, fragments);
+    const folded = fragments.length > 0 ? ` (${fragments.length} fragment(s) folded in and deleted)` : '';
+    log(`✓ CHANGELOG.md stamped for v${newVersion}${folded}`, 'green');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log(`✗ Failed to stamp CHANGELOG.md: ${message}`, 'red');
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   }
 }
 
@@ -354,4 +383,4 @@ if (isPrerelease) {
 }
 console.log('');
 
-process.exit(0);
+process.exit(ExitCode.OK);

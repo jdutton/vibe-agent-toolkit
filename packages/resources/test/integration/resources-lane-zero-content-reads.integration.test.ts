@@ -72,7 +72,6 @@
  * overwrote the first.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is a temp fixture this file created */
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';

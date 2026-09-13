@@ -367,6 +367,22 @@ describe('ProjectConfigSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  describe('the `version` key is accepted and ignored', () => {
+    // The npm package version is the only version this project has: the strict
+    // schema decides whether a config can be read, and no integer in the file
+    // gets a vote. A stale `version: 1` in an adopter config is harmless; so is
+    // its absence, and so is any other value.
+    it.each([
+      ['absent', {}],
+      ['the historical 1', { version: 1 }],
+      ['another number', { version: 2 }],
+      ['a string', { version: 'banana' }],
+      ['null', { version: null }],
+    ])('parses with the key %s', (_label, config) => {
+      expect(ProjectConfigSchema.safeParse(config).success).toBe(true);
+    });
+  });
+
   it('rejects unknown top-level keys', () => {
     const result = ProjectConfigSchema.safeParse({
       version: 1,
@@ -394,7 +410,6 @@ describe('ProjectConfigSchema', () => {
   });
 
   it('parses the vat-development-agents config from disk', async () => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only fixture path resolved from known monorepo location
     const content = await readFile(VAT_DEV_AGENTS_CONFIG, 'utf-8');
     const parsed = parseYaml(content);
 

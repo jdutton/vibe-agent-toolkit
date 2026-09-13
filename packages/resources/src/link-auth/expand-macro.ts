@@ -11,12 +11,13 @@
  * runtime `fs.readFileSync(new URL('./macros.yaml', import.meta.url))`
  * resolves in both source-mode (vitest) and built-mode (dist).
  *
- * Per design issue #113 §5 (macros are config, not a privileged code path).
+ * Per the linkAuth design §5 (macros are config, not a privileged code path).
  */
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { VatError } from '@vibe-agent-toolkit/utils';
 import { parse as parseYaml } from 'yaml';
 
 let macrosCache: Record<string, Record<string, unknown>> | undefined;
@@ -47,7 +48,7 @@ function getMacros(): Record<string, Record<string, unknown>> {
   // the lazy-load note above documents that tests elsewhere mock
   // `readFileSync`, and routing this through another module's import of it is
   // gratuitous risk for a file whose bytes we control.
-  // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-raw-text-decode -- our own published asset; writer is this package
+  // eslint-disable-next-line local/no-raw-text-decode -- our own published asset; writer is this package
   const macrosFileContent = readFileSync(macrosPath, 'utf8');
   const parsed = parseYaml(macrosFileContent) as unknown;
 
@@ -63,10 +64,9 @@ function getMacros(): Record<string, Record<string, unknown>> {
  * Thrown when a `use: <name>` references a macro not in the shipped set.
  * Message lists the available macros so a typo surfaces clearly.
  */
-export class UnknownMacroError extends Error {
+export class UnknownMacroError extends VatError {
   constructor(name: string, available: readonly string[]) {
-    super(`Unknown macro "${name}". Available: ${available.join(', ')}.`);
-    this.name = 'UnknownMacroError';
+    super('UNKNOWN_MACRO', `Unknown macro "${name}". Available: ${available.join(', ')}.`);
   }
 }
 

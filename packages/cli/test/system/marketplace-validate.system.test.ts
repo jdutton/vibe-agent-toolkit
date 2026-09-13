@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 
 

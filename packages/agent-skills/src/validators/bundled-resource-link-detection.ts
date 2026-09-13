@@ -28,12 +28,11 @@
  * parsed out: that approach was tried and rejected as too fragile.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- skill paths validated upstream */
 
 import { readdirSync } from 'node:fs';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { isPathAbsentError, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, FollowedWalk, isPathAbsentError, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { CLAUDE_WEB_REFERENCES_SUBDIR, TARGET_SUBDIR_CATEGORIES } from '../content-type-routing.js';
 
@@ -59,7 +58,7 @@ const MAX_LISTED_FILES = 5;
  * this check's "nothing bundled, nothing to say", and a listing the OS would
  * not hand over has not established that.
  */
-function listFilesRelative(dir: string, baseDir: string): string[] {
+function listFilesRelative(dir: string, baseDir: string, walk?: FollowedWalk): string[] {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -67,13 +66,19 @@ function listFilesRelative(dir: string, baseDir: string): string[] {
     if (isPathAbsentError(error)) return [];
     throw error;
   }
+  const guard = walk ?? new FollowedWalk();
+  if (walk === undefined) guard.enter(dir);
   const found: string[] = [];
   for (const entry of entries) {
     const child = safePath.join(dir, entry.name);
-    if (entry.isFile()) {
+    // Followed: a linked resource is a bundled resource for link purposes. A
+    // link back into the tree is refused by the walk guard, not recursed.
+    const kind = direntKindFollowingSync(dir, entry);
+    if (kind === 'file') {
       found.push(safePath.relative(baseDir, child));
-    } else if (entry.isDirectory()) {
-      found.push(...listFilesRelative(child, baseDir));
+    } else if (kind === 'directory') {
+      guard.enter(child);
+      found.push(...listFilesRelative(child, baseDir, guard));
     }
   }
   return found;

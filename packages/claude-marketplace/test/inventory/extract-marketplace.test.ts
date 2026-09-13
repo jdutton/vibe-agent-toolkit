@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { detectMarketplacePluginSourceMissing } from '@vibe-agent-toolkit/agent-skills';
-import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, normalizedTmpdir, relativeEscapesRoot, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { refuseSyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -18,7 +18,6 @@ const CLAUDE_PLUGIN_DIR = '.claude-plugin';
 function writeMarketplaceJson(root: string, content: string): string {
 	const dir = safePath.join(root, CLAUDE_PLUGIN_DIR);
 	mkdirSyncReal(dir, { recursive: true });
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
 	writeFileSync(safePath.join(dir, 'marketplace.json'), content);
 	return root;
 }
@@ -236,9 +235,7 @@ describe('extractClaudeMarketplaceInventory', () => {
 function writePluginDir(dir: string, name: string): string {
 	mkdirSyncReal(safePath.join(dir, CLAUDE_PLUGIN_DIR), { recursive: true });
 	mkdirSyncReal(safePath.join(dir, 'skills', 'x'), { recursive: true });
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
 	writeFileSync(safePath.join(dir, CLAUDE_PLUGIN_DIR, 'plugin.json'), JSON.stringify({ name, version: '1.0.0' }));
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
 	writeFileSync(safePath.join(dir, 'skills', 'x', 'SKILL.md'), '---\nname: x\ndescription: fixture\n---\n# x\n');
 	return dir;
 }
@@ -274,7 +271,7 @@ async function expectRefusedWithoutLeaving(root: string, outside: string, source
 	expect(inv.discovered.plugins).toEqual([]);
 	for (const p of everyPublishedPath(inv)) {
 		expect(p.startsWith(outside)).toBe(false);
-		expect(safePath.relative(root, p).startsWith('..')).toBe(false);
+		expect(relativeEscapesRoot(safePath.relative(root, p))).toBe(false);
 	}
 	const ref = inv.declared.plugins.find(p => p.manifestPath === source);
 	expect(ref?.source).toBe('path');
@@ -381,7 +378,6 @@ describe('a declared source never leaves the marketplace root', () => {
 	it('refuses a source that is a regular FILE, by name, and never walks it as a plugin', async () => {
 		const root = marketplaceDeclaring(safePath.join(tempDir, 'file-src'), [{ name: 'f', source: 'plugins/afile' }]);
 		mkdirSyncReal(safePath.join(root, 'plugins'), { recursive: true });
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
 		writeFileSync(safePath.join(root, 'plugins', 'afile'), 'not a directory\n');
 
 		await expectRefusedByName(root, 'plugins/afile', 'not a directory');

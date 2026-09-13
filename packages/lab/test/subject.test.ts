@@ -27,8 +27,9 @@
 
 import { chmodSync, rmSync } from 'node:fs';
 
-import { safePath, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
+import { setupSyncTempDirSuite , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { type SubjectVersion, SubjectVersionSchema } from '../src/envelope/coordinate.js';
@@ -48,8 +49,6 @@ const CONCRETE_SHA = /^[0-9a-f]{40}$/;
 const LOCKED_DIR = 'locked';
 const LOCKED_FILE = `${LOCKED_DIR}/secret.txt`;
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
-const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 const suite = setupSyncTempDirSuite('lab-subject');
@@ -367,14 +366,12 @@ describe.skipIf(CANNOT_DENY_READS)('resolveSubject — a directory the crawl cou
   const lockedDirs: string[] = [];
 
   afterEach(() => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- unlocking this suite's own fixture directories
     for (const path of lockedDirs.splice(0)) chmodSync(path, 0o755);
   });
 
   /** `chmod 000` a fixture path, remembering to unlock it for the temp-dir sweep. */
   function lock(root: string, relativePath: string): void {
     const absolute = safePath.join(root, relativePath);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled temp fixture tree
     chmodSync(absolute, 0o000);
     lockedDirs.push(absolute);
   }

@@ -9,13 +9,12 @@
 import fs from 'node:fs';
 import { dirname } from 'node:path';
 
-import { normalizedTmpdir, safePath, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
-import { withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite , withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { getDirectorySize } from '../src/directory-size.js';
 
-/* eslint-disable security/detect-non-literal-fs-filename -- test file with dynamic temp paths */
 
 const suite = setupSyncTempDirSuite('lancedb-dir-size');
 let root: string;

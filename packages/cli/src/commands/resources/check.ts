@@ -166,20 +166,24 @@ import { performance } from 'node:perf_hooks';
 
 import { issuesFromCheckRows, type ResourceCheck } from '@vibe-agent-toolkit/resources';
 import {
-  calculateValidationStatus,
-  countBySeverity,
+  buildReport,
   CUSTOM_CHECK_CODE_PREFIX,
+  ExitCode,
   isCustomCheckCode,
+  reportSchema,
+  toFindings,
+  type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { z } from 'zod';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { handleReportCommandError } from '../../utils/command-error.js';
 import { loadConfigCached } from '../../utils/config-loader.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { resolveIssueSeverity, type SeverityOverrides } from '../../utils/issue-severity.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { writeJsonOutput, writeStdoutSync, writeYamlOutput } from '../../utils/output.js';
+import { writeStdoutSync, writeStructuredOutput } from '../../utils/output.js';
 import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
 import {
   withQueriedProjection,
@@ -287,6 +291,45 @@ export interface CheckPayloadInput extends CheckOutcome {
   durationMs: number;
 }
 
+/** What one rule cost, as the document publishes it. */
+const PublishedCheckCostSchema = z.object({
+  name: z.string(),
+  /** Three significant figures, so a 0.4 ms rule serializes as 0.0004 rather than a zero that reads as "not measured". */
+  durationSecs: z.number().nonnegative(),
+  /** Rows the statement returned. ABSENT, never 0, when the statement did not complete. */
+  rows: z.number().int().nonnegative().optional(),
+  broken: z.literal(true).optional(),
+}).strict();
+
+/**
+ * What the check run reports beyond its findings.
+ *
+ * The envelope's `examined` is `membersEnumerated` — what the rules ran
+ * AGAINST. `checksRun` is the other denominator, the number of RULES, and both
+ * are needed: zero findings is the pass condition and either number at zero
+ * makes that pass vacuous.
+ */
+export const CheckDataSchema = z.object({
+  root: z.string(),
+  /** Whether the projection was derived this run or read from the store. */
+  population: z.enum(['derived', 'store']),
+  /** What the population cost — charged to no check, see `CheckCost`. */
+  populationSecs: z.number().nonnegative(),
+  /** What evaluating the lens cost, paid before the first statement ran. */
+  lensSecs: z.number().nonnegative(),
+  /** The number of rules that EXECUTED. Derived from `checks`, never carried beside it. */
+  checksRun: z.number().int().nonnegative(),
+  /** What each rule cost, directly under the denominator it is the breakdown of. */
+  checks: z.array(PublishedCheckCostSchema),
+}).strict();
+
+export type CheckData = z.infer<typeof CheckDataSchema>;
+
+/** The document this command publishes. */
+export const CHECK_REPORT_SCHEMA = reportSchema(CheckDataSchema);
+
+export type CheckReport = Report<CheckData>;
+
 /**
  * The refusal for a run in which NO check executed.
  *
@@ -357,7 +400,7 @@ function noCheckRanFinding(
  * account for it cannot disagree.
  *
  * 🚨 `populationSecs` and the per-check `durationSecs` do not overlap and do not
- * sum to `durationSecs`. The population is paid once and shared by every check;
+ * sum to `durationMs`. The population is paid once and shared by every check;
  * see {@link CheckCost} for why it is charged to none of them.
  *
  * 🔑 A denominator of zero is refused HERE rather than published — see
@@ -365,77 +408,63 @@ function noCheckRanFinding(
  * passes through, so deriving the refusal in it is what makes "checked nothing,
  * status clean" unrepresentable rather than merely unwritten.
  *
+ * 🪤 The findings are NOT run through `relativizePathEntries`. Every other
+ * payload builder re-bases here because its producer keeps absolute paths
+ * internally; these arrive project-relative instead, and re-basing an
+ * already-relative path would resolve it against the wrong base and silently
+ * corrupt it. The guarantee is `locationOf` in `sql-checks.ts` — the one place
+ * a projection column becomes a finding's `location`, and which refuses an
+ * absolute or backslashed value there. Nothing on this path parses findings
+ * through the schema at runtime, and do not "fix" that by parsing at this
+ * boundary: it would convert a slip in `locationOf` from "this finding loses
+ * its anchor" into "the whole run throws", which is strictly worse for a gate.
+ *
  * @param input - The findings and the provenance of the run behind them
  * @returns The document to serialize
  */
-export function buildCheckOutputData(input: CheckPayloadInput): Record<string, unknown> {
+export function buildCheckOutputData(input: CheckPayloadInput): CheckReport {
   const issues = [...noCheckRanFinding(input.costs, input.issues), ...input.issues];
-  return {
-    status: calculateValidationStatus(issues),
-    root: input.root,
-    population: input.population,
-    // Beside the origin, because a `population: store` a reader cannot price is
-    // a label taken on faith. Charged to no check — see {@link CheckCost}.
-    populationSecs: formatDurationSecs(input.populationMs),
-    // Published here too, and not only by `query`, because this verb pays it
-    // identically — the lens is evaluated before the first statement runs. A
-    // document that priced the population but not the lens would attribute the
-    // lens's cost to whichever rule the reader happened to be looking at, which
-    // is the same defect `populationSecs` exists to prevent.
-    lensSecs: formatDurationSecs(input.lensMs),
-    // The denominator. See above: without it an empty findings list is
-    // ambiguous. Derived from `checks`, never carried beside it.
-    checksRun: input.costs.length,
+  return buildReport<CheckData>({
     // The OTHER denominator, and the one whose absence shipped a green gate over
     // an empty repository. `checksRun` counts rules; this counts what they ran
-    // against. Both are needed, because zero findings is the pass condition and
-    // either number at zero makes that pass vacuous.
-    membersEnumerated: input.membersEnumerated,
-    issueCounts: countBySeverity(issues),
-    durationSecs: formatDurationSecs(input.durationMs),
-    // What each rule cost, directly under the total it is a breakdown of. A SQL
-    // surface is an unbounded cost — a project can declare a statement that
-    // scans every row of every table — and a single total attributes nothing:
-    // ten seconds is one expensive rule, a slow population, or forty cheap
-    // rules, and only this list tells them apart.
-    //
-    // 🪤 `rows` and `broken` are spread conditionally rather than defaulted.
-    // `rows: 0` on a statement that never returned would read as a clean pass,
-    // which is the exact confusion `RESOURCE_CHECK_BROKEN` exists to prevent —
-    // so a check that threw publishes no row count at all.
-    checks: input.costs.map((cost) => ({
-      name: cost.name,
-      // Three significant figures, so a 0.4 ms rule serializes as 0.0004 rather
-      // than rounding to a zero that reads as "not measured".
-      durationSecs: formatDurationSecs(cost.durationMs),
-      ...(cost.rows === undefined ? {} : { rows: cost.rows }),
-      ...(cost.broken === undefined ? {} : { broken: cost.broken }),
-    })),
-    // 🪤 NOT run through `relativizePathEntries`. Every other payload builder
-    // re-bases here because its producer keeps absolute paths internally; these
-    // arrive project-relative instead, and re-basing an already-relative path
-    // would resolve it against the wrong base and silently corrupt it.
-    //
-    // 🪤 The guarantee is `locationOf` in `sql-checks.ts` — the one place a
-    // projection column becomes a finding's `location`, and which refuses an
-    // absolute or backslashed value there. It is NOT the type: nothing on this
-    // path parses issues through `ValidationIssueSchema` (this module imports the
-    // `ValidationIssue` TYPE only, and the schema's sole consumers are in
-    // `packages/schema/test/`), so the refinement is documentation here rather
-    // than enforcement. Do not "fix" that by parsing at this boundary: it would
-    // convert a slip in `locationOf` from "this finding loses its anchor" into
-    // "the whole run throws", which is strictly worse for a gate.
-    //
-    // A finding may also carry no path at all (an aggregate check has no file to
-    // name), which `PathEntry` cannot represent — one more reason this list is
-    // not that shape.
-    issues: issues.map((issue) => ({
-      code: issue.code,
-      severity: issue.severity,
-      message: issue.message,
-      ...(issue.location === undefined ? {} : { path: issue.location }),
-    })),
-  };
+    // against.
+    examined: input.membersEnumerated,
+    findings: toFindings(issues),
+    durationMs: input.durationMs,
+    data: {
+      root: input.root,
+      population: input.population,
+      // Beside the origin, because a `population: store` a reader cannot price is
+      // a label taken on faith. Charged to no check — see {@link CheckCost}.
+      populationSecs: formatDurationSecs(input.populationMs),
+      // Published here too, and not only by `query`, because this verb pays it
+      // identically — the lens is evaluated before the first statement runs. A
+      // document that priced the population but not the lens would attribute the
+      // lens's cost to whichever rule the reader happened to be looking at, which
+      // is the same defect `populationSecs` exists to prevent.
+      lensSecs: formatDurationSecs(input.lensMs),
+      // The denominator of rules. Derived from `checks`, never carried beside it.
+      checksRun: input.costs.length,
+      // What each rule cost, directly under the denominator it is a breakdown
+      // of. A SQL surface is an unbounded cost — a project can declare a
+      // statement that scans every row of every table — and a single total
+      // attributes nothing: ten seconds is one expensive rule, a slow
+      // population, or forty cheap rules, and only this list tells them apart.
+      //
+      // 🪤 `rows` and `broken` are spread conditionally rather than defaulted.
+      // `rows: 0` on a statement that never returned would read as a clean pass,
+      // which is the exact confusion `RESOURCE_CHECK_BROKEN` exists to prevent —
+      // so a check that threw publishes no row count at all.
+      checks: input.costs.map((cost) => ({
+        name: cost.name,
+        // Three significant figures, so a 0.4 ms rule serializes as 0.0004 rather
+        // than rounding to a zero that reads as "not measured".
+        durationSecs: formatDurationSecs(cost.durationMs),
+        ...(cost.rows === undefined ? {} : { rows: cost.rows }),
+        ...(cost.broken === undefined ? {} : { broken: cost.broken }),
+      })),
+    },
+  });
 }
 
 /**
@@ -1148,7 +1177,7 @@ function noPopulationMessage(ending: CheckRunEnding): string {
  * honest value — and inventing `membersEnumerated: 0` would be worse than a
  * blank, because that value already MEANS "this gate ran over an empty corpus",
  * which is a different and wrong claim. The throw becomes an operator error
- * (exit 2) through the same `handleCommandError` path everything else here uses.
+ * (exit 2) through the same `handleReportCommandError` path everything else here uses.
  *
  * @param options - The wreckage
  * @param options.entries - What `parseProgressLog` recovered
@@ -1282,12 +1311,8 @@ export function runDeclaredChecks(options: {
  * @param payload - The document
  * @param format - `json`, or anything else for YAML
  */
-function emitCheckDocument(payload: Record<string, unknown>, format: string | undefined): void {
-  if (format === 'json') {
-    writeJsonOutput(payload);
-  } else {
-    writeYamlOutput(payload);
-  }
+function emitCheckDocument(payload: CheckReport, format: string | undefined): void {
+  writeStructuredOutput(payload, format);
 }
 
 /**
@@ -1323,7 +1348,7 @@ function childArgs(
 /** What a supervised run decided to publish. */
 type SupervisedEnding =
   | { readonly forward: string; readonly code: number }
-  | { readonly payload: Record<string, unknown> };
+  | { readonly payload: CheckReport };
 
 /**
  * Run the checks in a child bounded by `budgetSecs`, and report either what it
@@ -1450,9 +1475,12 @@ export async function checkCommand(
         process.exit(ending.code);
       }
       emitCheckDocument(ending.payload, options.format);
-      // ⛔ Never 0. A run that did not finish — killed by the watchdog OR dead of
-      // its own memory — must not look like a pass.
-      process.exit(1);
+      // ⛔ Never OK. A run that did not finish — killed by the watchdog OR dead of
+      // its own memory — must not look like a pass. FINDINGS, because the
+      // document it just published says `status: findings` with the killed
+      // check named as one: the checks that completed are kept, and the exit
+      // code follows the document, as everywhere else.
+      process.exit(ExitCode.FINDINGS);
     }
 
     const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
@@ -1497,9 +1525,9 @@ export async function checkCommand(
     });
     emitCheckDocument(payload, options.format);
 
-    process.exit(payload['status'] === 'error' ? 1 : 0);
+    process.exit(payload.summary.errors > 0 ? ExitCode.FINDINGS : ExitCode.OK);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'Check', options.format);
+    handleReportCommandError(error, logger, startTime, 'Check', options.format);
   }
 }
 

@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- tmpdir paths constructed in test setup */
 import { readdirSync, statSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';

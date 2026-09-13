@@ -1,5 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- harness-controlled tmpdir paths */
-
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -54,7 +52,6 @@ function runValidationCase(
 describe('loadManifest', () => {
   it('parses and validates a well-formed manifest', () => {
     const manifest = loadManifest(safePath.join(fixturesDir, 'manifest-valid.yaml'));
-    expect(manifest.version).toBe(1);
     expect(manifest.entries).toHaveLength(2);
     expect(manifest.entries[0]?.id).toBe('skill-one');
     expect(manifest.entries[1]?.source.kind).toBe('git');
@@ -85,7 +82,7 @@ describe('indexPromptsById', () => {
     const prompts = loadTriggerPrompts(safePath.join(fixturesDir, TRIGGER_PROMPTS_FIXTURE));
     const first = prompts.prompts[0];
     if (!first) throw new Error('test fixture must contain at least one prompt');
-    const dup = { version: 1 as const, prompts: [...prompts.prompts, first] };
+    const dup = { prompts: [...prompts.prompts, first] };
     expect(() => indexPromptsById(dup)).toThrow();
   });
 });
@@ -95,8 +92,7 @@ const MISSING_KIND_PATTERN = /must reference at least one positive and one negat
 describe('loadManifest cross-file validation', () => {
   it('rejects an entry with no negative prompt', () => {
     runValidationCase(
-      `version: 1
-entries:
+      `entries:
   - id: skill-a
     bucket: own
     source: { kind: local, path: ./skills/a }
@@ -104,8 +100,7 @@ entries:
     expectedCapabilities: []
     triggerPromptRefs: [pos-1, pos-2]
 `,
-      `version: 1
-prompts:
+      `prompts:
   - id: pos-1
     forSkillId: skill-a
     prompt: do the thing
@@ -125,8 +120,7 @@ prompts:
 
   it('rejects an entry with no positive prompt', () => {
     runValidationCase(
-      `version: 1
-entries:
+      `entries:
   - id: skill-b
     bucket: own
     source: { kind: local, path: ./skills/b }
@@ -134,8 +128,7 @@ entries:
     expectedCapabilities: []
     triggerPromptRefs: [neg-1, neg-2]
 `,
-      `version: 1
-prompts:
+      `prompts:
   - id: neg-1
     forSkillId: skill-b
     prompt: don't do the thing
@@ -155,8 +148,7 @@ prompts:
 
   it('accepts an entry with at least one positive and one negative prompt', () => {
     runValidationCase(
-      `version: 1
-entries:
+      `entries:
   - id: skill-c
     bucket: own
     source: { kind: local, path: ./skills/c }
@@ -164,8 +156,7 @@ entries:
     expectedCapabilities: []
     triggerPromptRefs: [pos-1, neg-1]
 `,
-      `version: 1
-prompts:
+      `prompts:
   - id: pos-1
     forSkillId: skill-c
     prompt: do the thing

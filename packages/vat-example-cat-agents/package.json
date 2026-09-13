@@ -1,7 +1,7 @@
 {
   "name": "@vibe-agent-toolkit/vat-example-cat-agents",
   "version": "0.2.0-rc.7",
-  "description": "Example agents: 8 quirky cat agents demonstrating VAT patterns",
+  "description": "Example agents: quirky cat agents demonstrating VAT patterns",
   "type": "module",
   "exports": {
     ".": {
@@ -21,51 +21,38 @@
     "build:code": "bun run generate:resources && tsx ../dev-tools/src/tsc-clean-build.ts && bun scripts/post-build.ts",
     "build": "bun run build:code",
     "build:skills": "node ../cli/dist/bin/vat.js skills build",
-    "lint": "eslint src/ test/ examples/",
-    "duplication-check": "echo 'Duplication check not applicable to example packages'",
-    "validate-structure": "echo 'Structure validation not applicable to example packages'",
-    "pre-publish": "echo 'Pre-publish checks not applicable to example packages'",
     "test:unit": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "typecheck": "tsc --noEmit",
     "demo:photos": "bun examples/photo-analysis-demo.ts",
     "demo:conversation": "bun examples/conversational-demo.ts",
     "demo:resources": "bun run build && bun examples/resource-demo.ts",
-    "postinstall": "vat skills install --npm-postinstall || exit 0"
+    "postinstall": "vat skills install --npm-postinstall || exit 0",
+    "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },
   "dependencies": {
     "@vibe-agent-toolkit/agent-runtime": "workspace:*",
     "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/transports": "workspace:*",
     "syllable": "^5.0.1",
-    "zod": "^3.24.1"
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "@ai-sdk/openai": "^3.0.18",
     "@anthropic-ai/sdk": "^0.36.0",
     "@langchain/openai": "^1.5.11",
-    "@types/node": "^22.10.5",
     "@vibe-agent-toolkit/resource-compiler": "workspace:*",
     "@vibe-agent-toolkit/runtime-claude-agent-sdk": "workspace:*",
     "@vibe-agent-toolkit/runtime-langchain": "workspace:*",
     "@vibe-agent-toolkit/runtime-openai": "workspace:*",
-    "@vitest/coverage-v8": "^4.1.11",
     "ai": "^6.0.48",
-    "openai": "^4.77.3",
-    "typescript": "^5.7.3",
-    "vitest": "^4.1.11"
+    "openai": "^4.77.3"
   },
   "vat": {
     "version": "1.0",
-    "type": "agent-bundle",
     "skills": [
-      {
-        "name": "vat-example-cat-agents",
-        "source": "./resources/skills/SKILL.md",
-        "path": "./dist/skills/vat-example-cat-agents"
-      }
+      "vat-example-cat-agents"
     ]
   },
   "keywords": [

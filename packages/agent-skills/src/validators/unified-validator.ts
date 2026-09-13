@@ -1,5 +1,5 @@
 import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation } from '@vibe-agent-toolkit/utils';
+import { issueLocation, VatError } from '@vibe-agent-toolkit/utils';
 
 import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
 import { detectResourceFormat } from './format-detection.js';
@@ -42,10 +42,9 @@ export interface UnifiedValidateOptions extends AnchorRootOptions {
 	validatePlugin?: (path: string, options: AnchorRootOptions) => Promise<ValidationResult>;
 }
 
-class ProgrammerError extends Error {
+class ProgrammerError extends VatError {
 	constructor(message: string) {
-		super(message);
-		this.name = 'ProgrammerError';
+		super('PROGRAMMER', message);
 	}
 }
 

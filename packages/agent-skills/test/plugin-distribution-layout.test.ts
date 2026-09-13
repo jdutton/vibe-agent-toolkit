@@ -1,9 +1,9 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test sandbox paths derived from controlled tmp dirs */
 import { writeFileSync } from 'node:fs';
 
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, safePath, toForwardSlash, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
+import { withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import {

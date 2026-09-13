@@ -35,6 +35,7 @@ providing actionable suggestions for any problems found.
 **Exit Codes:**
 - `0` - No check failed (an undetermined check is reported in the output, not fatal)
 - `1` - One or more checks failed
+- `2` - Doctor itself could not run (an internal failure, an unknown flag); no verdict was produced
 
 **Output:** Human-friendly formatted text with emojis. The summary always prints the
 full outcome distribution and, when the concise view hides checks, how many it hid —

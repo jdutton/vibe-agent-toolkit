@@ -49,8 +49,8 @@ describe('Audit User Plugins Fixture (system test)', () => {
         fixtureDir,
       ]);
 
-      // Audit is advisory only — always exits 0 even when errors are found
-      expect(status).toBe(0);
+      // Exit 1: the exit code follows `status`, and this tree has an error-severity finding.
+      expect(status).toBe(1);
 
       // Parse YAML output
       const output = parseYamlOutput(stdout);
@@ -108,8 +108,8 @@ describe('Audit User Plugins Fixture (system test)', () => {
         safePath.join(fixtureDir, 'marketplaces/claude-plugins-official'),
       ]);
 
-      // Marketplace validation now works — should succeed
-      expect(status).toBe(0);
+      // Exit 1: the exit code follows `status`, and this tree has an error-severity finding.
+      expect(status).toBe(1);
 
       const output = parseYamlOutput(stdout);
 

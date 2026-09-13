@@ -120,7 +120,7 @@ function zodV4TypeToV3Name(v4Type: string): string {
  * ```
  */
 export function getZodTypeName(zodType: unknown): string | undefined {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reading Zod's private _def across major versions; no public type names it
   const def = (zodType as any)?._def;
   if (!def) return undefined;
 
@@ -188,7 +188,7 @@ export function unwrapZodType(zodType: unknown): unknown {
   const typeName = getZodTypeName(zodType);
 
   if (typeName === ZodTypeNames.OPTIONAL || typeName === ZodTypeNames.NULLABLE) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reading Zod's private _def across major versions; no public type names it
     const inner = (zodType as any).unwrap?.() ?? (zodType as any)._def?.innerType;
     return inner ? unwrapZodType(inner) : zodType;
   }

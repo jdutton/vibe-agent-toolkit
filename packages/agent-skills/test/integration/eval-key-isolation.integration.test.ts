@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test paths are our own controlled temp dirs */
 /**
  * THE CANARY: the eval answer key must never exist on the executor's filesystem.
  *
@@ -26,7 +25,7 @@
 
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runSkillTestHarness, type RunHarnessOptions } from '../../src/skill-test/run-harness.js';
@@ -73,8 +72,9 @@ function walkFiles(root: string): string[] {
   const visit = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const abs = safePath.join(dir, entry.name);
-      if (entry.isDirectory()) visit(abs);
-      else if (entry.isFile()) out.push(abs);
+      const kind = direntKindFollowingSync(dir, entry);
+      if (kind === 'directory') visit(abs);
+      else if (kind === 'file') out.push(abs);
     }
   };
   visit(statSync(root).isDirectory() ? root : safePath.join(root, '..'));

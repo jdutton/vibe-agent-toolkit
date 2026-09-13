@@ -2,7 +2,7 @@
  * Security-gate test for the §12 acknowledgment in runSkillTestHarness.
  *
  * The invariant under test: when preflight PASSES but the run-skill-code ack is
- * ABSENT, the harness must return exitCode 2 ("Security acknowledgment required")
+ * ABSENT, the harness must return ERROR with reason `preflight` ("Security acknowledgment required")
  * AND must NEVER reach the executor→grader pipeline. The existing system test only
  * ever exits 2 because `claude` is absent in CI — it fails at preflight (Step 5)
  * and never reaches the ack gate (Step 6), so the gate itself was unverified.
@@ -14,10 +14,10 @@
  * be a gate breach.
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { spawnHeadlessClaude } from '@vibe-agent-toolkit/utils/skill-test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { SkillTestExitCode } from '../../src/skill-test/exit-codes.js';
 import { runSkillTestHarness } from '../../src/skill-test/run-harness.js';
 import { stageHarness } from '../../src/skill-test/staging.js';
 import { setupStubbedHarnessSubject } from '../test-helpers.js';
@@ -28,7 +28,7 @@ vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('./pref
 
 // Stub staging so the orchestrator reaches the ack gate without real resolution.
 // subjectStagedDir is filled per-test with a real temp dir that carries an eval
-// suite (so the Step-4 bootstrap does not fire exit 3).
+// suite (so the Step-4 bootstrap does not fire exit 2 with `Reason: bootstrap`).
 vi.mock('../../src/skill-test/staging.js', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, stageHarness: vi.fn() };
@@ -43,7 +43,7 @@ vi.mock('@vibe-agent-toolkit/utils/skill-test', async (importOriginal) => {
 describe('runSkillTestHarness — security ack gate', () => {
   // Shared lifecycle: fresh temp dir + an AUTHORED subject dir carrying evals (the
   // harness reads the suite from there, never from the staged tree) so bootstrap
-  // (exit 3) does not fire before the ack gate (exit 2), and stageHarness stubbed.
+  // (exit 2, `Reason: bootstrap`) does not fire before the ack gate (exit 2), and stageHarness stubbed.
   const { getTempDir, getAuthoredDir } = setupStubbedHarnessSubject('vat-ack-gate-', vi.mocked(stageHarness));
 
   beforeEach(() => {
@@ -61,8 +61,8 @@ describe('runSkillTestHarness — security ack gate', () => {
       // acknowledgedRunsSkillCode intentionally absent; dryRun absent.
     });
 
-    expect(result.exitCode).toBe(SkillTestExitCode.Preflight);
-    expect(result.exitCode).toBe(2);
+    expect(result.exitCode).toBe(ExitCode.ERROR);
+    expect(result.reason).toBe('preflight');
     expect(result.summary).toContain('Security acknowledgment required');
     // The gate must short-circuit BEFORE any executor/grader spawn.
     expect(vi.mocked(spawnHeadlessClaude)).not.toHaveBeenCalled();

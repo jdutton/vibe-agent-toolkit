@@ -8,7 +8,8 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -130,7 +131,6 @@ let tokenizer: BertTokenizer;
 /** Write a vocab file into the shared temp directory and return its path. */
 async function writeVocab(fileName: string, content: string): Promise<string> {
   const filePath = safePath.join(vocabDir, fileName);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp file
   await writeFile(filePath, content, 'utf8');
   return filePath;
 }
@@ -138,7 +138,6 @@ async function writeVocab(fileName: string, content: string): Promise<string> {
 beforeAll(async () => {
   vocabDir = safePath.join(normalizedTmpdir(), `onnx-utils-test-${Date.now().toString()}`);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
   await mkdir(vocabDir, { recursive: true });
 
   vocabPath = await writeVocab('vocab.txt', buildTestVocab());

@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 

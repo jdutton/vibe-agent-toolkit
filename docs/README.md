@@ -9,9 +9,30 @@ Welcome to the Vibe Agent Toolkit documentation.
 
 ## Development
 
-- **[CLAUDE.md](../CLAUDE.md)** - Comprehensive development guidelines, testing conventions, and code standards
+- **[CLAUDE.md](../CLAUDE.md)** - The rules for working in this repo, each tagged with its enforcer
+- **[Writing Tests](./writing-tests.md)** - Test pyramid, helpers, fixtures, per-tier budgets, duplication avoidance
+- **[Build System](./build-system.md)** - `tsc --build`, composite projects, workspace protocol
+- **[Best Practices](./best-practices.md)** - Engineering standards, approved libraries, error handling
+- **[Custom ESLint Rules](./custom-eslint-rules.md)** - The `local/` rule pack and how to add a rule
 - **[Adding Runtime Adapters](./adding-runtime-adapters.md)** - Best practices for creating new runtime adapters
-- **[Publishing Guide](./publishing.md)** - How to prepare and publish packages to npm
+- **[Demo Guidelines](./demo-guidelines.md)** - Every demo runs through a runtime adapter
+- **[Publishing Guide](./publishing.md)** - Version bumps, tagging, npm publishing, licensing conventions
+
+## Contributing to VAT itself
+
+Material for people working on VAT, not for people using it — [`contributing/`](./contributing/):
+
+- **[Content Routing](./contributing/content-routing.md)** - Where a new statement belongs (root CLAUDE.md, a rule file, a doc, a docstring, or deleted)
+- **[Traps](./contributing/traps.md)** - Failures that look like something else: the tell and the remedy, one entry each
+- **[Extending the Monorepo](./contributing/extending-the-monorepo.md)** - Adding a package, a utility, a schema, a CLI command
+- **[No Version Constants](./contributing/no-version-constants.md)** - Why a hand-bumped integer never decides data validity, and what replaces it
+- **[Command → Enumeration Lane](./contributing/command-lane-table.md)** - Which of the 72 commands walk the filesystem, through which entry point
+- **[Debugging VAT](./contributing/vat-debugging.md)** - Reproducing bugs, `VAT_ROOT_DIR` adopter testing, failing-test-first fixes
+- **[Install Architecture](./contributing/vat-install-architecture.md)** - Design landscape for install/uninstall surfaces
+- **[linkAuth Engine](./contributing/vat-linkauth-contributing.md)** - Working on authenticated external-link resolution
+- **[Plugin Distribution Findings](./contributing/plugin-distribution-findings.md)** - Evidence log behind the plugin-shape rules (DOCUMENTED vs OBSERVED)
+- **[Baseline Control Adopter Response](./contributing/baseline-control-adopter-response.md)** - The `vat skill test --baseline` control-arm contamination record
+- **[Cowork Driver Spike](./contributing/cowork-driver-spike.md)** - Closed spike report on driving Claude Cowork from the skill-test harness
 
 ## Validation & Quality Framework
 
@@ -31,7 +52,11 @@ See also: [Skill Packaging Shapes](./architecture/skill-packaging.md) for the ar
 ## Guides
 
 - **[Collection Validation](./guides/collection-validation.md)** - Per-collection frontmatter validation with JSON Schemas
-- **[Writing Tests](./writing-tests.md)** - Test conventions, helpers, and duplication avoidance
+- **[Distributing VAT Skills](./guides/distributing-vat-skills.md)** - Orientation for publishing skills as an npm package; the runbook is the `vat-skill-distribution` skill
+- **[Marketplace Distribution](./guides/marketplace-distribution.md)** - Publishing a Claude plugin marketplace branch
+- **[Skill Files and Routing](./guides/skill-files-and-routing.md)** - How file types route into packaged-skill subdirectories
+- **[Agent Skills Best Practices](./guides/agent-skills-best-practices.md)** - Authoring guidance for SKILL.md
+- **[Package-Based Schema References](./guides/package-based-schema-references.md)** - Referencing schemas published in npm packages
 - **[RAG Usage Guide](./guides/rag-usage-guide.md)** - Using the RAG package for semantic search
 - **[Resource Compiler](./guides/resource-compiler/README.md)** - Compiling markdown to TypeScript for type-safe content packages
 - **[Embedding Providers](./embedding-providers.md)** - How embedding providers work and creating custom providers
@@ -50,11 +75,9 @@ See also: [Skill Packaging Shapes](./architecture/skill-packaging.md) for the ar
 
 ## Development Tools
 
-All development tools are in the `packages/dev-tools/src/` directory:
-- `common.ts` - Shared utilities for tools
-- `duplication-check.ts` - Code duplication detection
-- `jscpd-check-new.ts` - Smart duplication checking with baseline
-- `jscpd-update-baseline.ts` - Update duplication baseline
+All development tools are TypeScript under `packages/dev-tools/src/` (never shell scripts); the
+root `package.json` `scripts` block is the index of what runs them. The list in the root
+[`CLAUDE.md`](../CLAUDE.md#where-the-rest-lives) is generated from the directory.
 
 ## Design Specifications & Research
 
@@ -93,23 +116,18 @@ bun run lint              # Lint code
 bun run typecheck         # Type checking
 
 # Testing (do NOT use 'bun test' directly)
-vv validate               # Full validation (recommended)
+bun run validate          # Full validation — the gate (vv validate is the same binary)
 bun run test:unit         # Unit tests only
 bun run test:watch        # Watch mode for development
 bun run test:integration  # Integration tests
 bun run test:system       # System tests
 
 # Quality Checks
-bun run validate     # Run full validation
-bun run pre-commit   # Pre-commit checks
 bun run duplication-check  # Check for code duplication
-
-# Testing
-bun test                    # Unit tests
-bun test:integration        # Integration tests
-bun test:system            # System tests
-bun run test:coverage      # Coverage report
+bun run test:coverage      # Unit tests with coverage report
 ```
+
+Never `bun test` — it ignores `vitest.config.ts` and runs every tier in one process.
 
 ### File Locations
 
@@ -119,6 +137,6 @@ bun run test:coverage      # Coverage report
 - **CI/CD**: `.github/workflows/`
 - **Config**: Root directory
 
-## Contributing
+## Where to start
 
-See [CLAUDE.md](../CLAUDE.md) for comprehensive development guidelines, code standards, and testing conventions.
+[CLAUDE.md](../CLAUDE.md) holds the rules; [`contributing/`](./contributing/) holds the how and the why for people changing VAT itself; the [architecture index](./architecture/README.md) holds the shape.

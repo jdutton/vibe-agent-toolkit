@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { mkdtempSync, writeFileSync } from 'node:fs';
 
 import {

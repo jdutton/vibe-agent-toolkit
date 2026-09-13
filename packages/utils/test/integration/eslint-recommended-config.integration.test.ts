@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code writing into its own temp project */
 /**
  * `configs.recommended`, exercised through the PUBLISHED artifact.
  *
@@ -40,7 +39,7 @@
  * same flat config through the same resolver.
  */
 
-import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
 import { ESLint, type Linter } from 'eslint';
@@ -129,7 +128,7 @@ export function base() {
  */
 const TS_CONSUMER = `import vat from '@vibe-agent-toolkit/utils/eslint';
 
-const severity: string | undefined = vat.configs.recommended.rules['@vibe-agent-toolkit/no-path-join'];
+const severity: string | undefined = vat.configs.recommended.rules['@vibe-agent-toolkit/no-raw-node-path'];
 const ruleNames: string[] = Object.keys(vat.rules);
 const pluginName: string = vat.meta.name;
 
@@ -289,15 +288,22 @@ describe('the ./eslint subpath ships', () => {
   it('includes the rule pack in the published file set', () => {
     expect(project.packedFiles).toContain('eslint/index.cjs');
     expect(project.packedFiles).toContain('eslint/rules/no-os-tmpdir.cjs');
-    // 27 registered rules + three shared factories (`eslint-rule-factory`,
-    // `path-function-rule-factory`, `no-command-direct-factory`) + `exempt-path-matcher`
-    // + `safe-import` (the autofix target and the already-bound check)
-    // + `dead-import` (removing the binding a fixer orphaned).
-    // Exact, not a floor: a floor lets rules silently fall out of the tarball.
-    // npm reports manifest paths POSIX-style; normalize anyway so the count cannot
-    // quietly become zero on a platform that reports them otherwise.
-    const rules = project.packedFiles.filter((file) => toForwardSlash(file).startsWith('eslint/rules/'));
-    expect(rules).toHaveLength(33);
+    // Exactly the `.cjs` files under `eslint/rules/` on disk — rules, factories
+    // and helpers alike. A set, not a count: a count let rules silently fall
+    // out of the tarball as long as something else fell in, and the literal
+    // it was pinned to had to be retyped on every addition. npm reports
+    // manifest paths POSIX-style; normalize anyway so the comparison cannot
+    // quietly become empty on a platform that reports them otherwise.
+    const shipped = project.packedFiles
+      .filter((file) => toForwardSlash(file).startsWith('eslint/rules/'))
+      .map((file) => toForwardSlash(file))
+      .sort((a, b) => a.localeCompare(b));
+    const onDisk = readdirSync(safePath.join(PACKAGE_DIR, 'eslint', 'rules'))
+      .filter((file) => file.endsWith('.cjs'))
+      .map((file) => `eslint/rules/${file}`)
+      .sort((a, b) => a.localeCompare(b));
+    expect(shipped).toStrictEqual(onDisk);
+    expect(shipped.length).toBeGreaterThan(10);
   });
 
   it('ships the hand-written types alongside them', () => {
@@ -333,10 +339,9 @@ describe('configs.recommended (published artifact)', () => {
   it('applies the severity split recommended declares', async () => {
     const messages = await lintProjectFile(project, VIOLATIONS_FILE, project.configPath);
     const byRule = severityByRule(messages);
-
-    // warn — the high-churn auto-fixable path rules. The criterion is migration
-    // volume, not how real the finding is (see RECOMMENDED_WARN in index.cjs).
-    expect(byRule.get('@vibe-agent-toolkit/no-path-join')).toBe(SEVERITY.warn);
+    // warn — the high-churn auto-fixable path rule. The criterion is migration
+    // volume, not how real the finding is (its meta.docs.recommendedSeverity says why).
+    expect(byRule.get('@vibe-agent-toolkit/no-raw-node-path')).toBe(SEVERITY.warn);
 
     // error — everything else in the safety core, including the rules whose value is
     // shifting a static-analysis finding left of a merge rather than catching a crash.
@@ -351,27 +356,26 @@ describe('configs.recommended (published artifact)', () => {
   });
 
   /**
-   * Three rules ship without riding in `recommended`, for two different reasons.
-   * `no-test-scoped-functions` and `require-justified-skip` are positions on test
-   * style. `no-unsafe-root-join` is excluded on CORRECTNESS: it keys on whether an
-   * identifier's name ends in `root` rather than on taint, so it fires on
-   * all-literal calls and stays silent on `safePath.join(base, userInput)` — the
-   * shape it exists to catch. Measured on a 4,670-file adopter tree: 108 findings,
-   * none autofixable.
+   * Three of the rules that ship without riding in `recommended`, through the
+   * published artifact. `no-test-scoped-functions` and `require-justified-skip`
+   * are positions on test style; `no-unsafe-root-join` is excluded on
+   * CORRECTNESS (it keys on a name ending in `root`, not on taint). Each states
+   * its reason beside `recommended: false` in its own source; the full derived
+   * set is asserted by the unit-tier `rule-manifest.test.ts`.
    */
-  it('omits the three opt-in rules', async () => {
+  it('omits three of the opt-in rules', async () => {
     const eslint = new ESLint({ cwd: project.dir, overrideConfigFile: project.configPath });
     const config = (await eslint.calculateConfigForFile(
       safePath.join(project.dir, VIOLATIONS_FILE),
     )) as { rules: Record<string, unknown> };
 
-    expect(config.rules['@vibe-agent-toolkit/no-path-join']).toBeDefined();
+    expect(config.rules['@vibe-agent-toolkit/no-raw-node-path']).toBeDefined();
     expect(config.rules['@vibe-agent-toolkit/no-test-scoped-functions']).toBeUndefined();
     expect(config.rules['@vibe-agent-toolkit/require-justified-skip']).toBeUndefined();
     expect(config.rules['@vibe-agent-toolkit/no-unsafe-root-join']).toBeUndefined();
   });
 
-  // The pack still SHIPS all three — they are opt-in, not withdrawn.
+  // The pack still SHIPS them — they are opt-in, not withdrawn.
   it('still ships the opt-in rules for explicit enabling', () => {
     expect(project.packedFiles).toContain('eslint/rules/no-unsafe-root-join.cjs');
     expect(project.packedFiles).toContain('eslint/rules/no-test-scoped-functions.cjs');

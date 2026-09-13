@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test paths are our own controlled temp dirs */
 /**
  * Integration test for the FULL `runSkillTestHarness` executor→grader pipeline
  * (issue #145 Task 9). A trivial fixture skill (2 evals) is staged into a REAL
@@ -9,16 +8,17 @@
  * Asserts the load-bearing Task-9 invariants end to end:
  *  - VAT (not the model) writes grading.json + friction.json to results/;
  *  - the vat-only grader dir is OUTSIDE the skill's harness sandbox (forgery-proof);
- *  - all-pass → exit 0; an executor CLEAN failure + failing fragment → exit 4;
+ *  - all-pass → exit 0; an executor CLEAN failure + failing fragment → exit FINDINGS;
  *  - a forged grader-fragment nonce → exit 1 (never laundered into a verdict).
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { mapErrorToExitCode } from '../../src/skill-test/exit-codes.js';
+import { skillTestFailureReason } from '../../src/skill-test/failure-reason.js';
 import { runSkillTestHarness, type RunHarnessOptions } from '../../src/skill-test/run-harness.js';
 import { isUnderRoot, makeHarnessFakeSpawn } from '../skill-test/spawn-stub.js';
 
@@ -66,12 +66,12 @@ function harnessOpts(skillDir: string, spawn: RunHarnessOptions['spawn']): RunHa
 }
 
 /** Run the harness, mapping a thrown harness error to its exit code (mirrors run.ts). */
-async function runToExit(opts: RunHarnessOptions): Promise<{ exitCode: number; summary: string }> {
+async function runToExit(opts: RunHarnessOptions): Promise<{ exitCode: number; reason?: string; summary: string }> {
   try {
     const result = await runSkillTestHarness(opts);
-    return { exitCode: result.exitCode, summary: result.summary };
+    return { exitCode: result.exitCode, ...(result.reason === undefined ? {} : { reason: result.reason }), summary: result.summary };
   } catch (err) {
-    return { exitCode: mapErrorToExitCode(err), summary: err instanceof Error ? err.message : String(err) };
+    return { exitCode: ExitCode.ERROR, reason: skillTestFailureReason(err), summary: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -125,18 +125,18 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
     }
   });
 
-  it('an executor CLEAN failure + failing fragment exits EvalFailure (4), never exit 1', async () => {
+  it('an executor CLEAN failure + failing fragment exits FINDINGS, never ERROR', async () => {
     const skillDir = writeFixtureSkill();
     const fake = makeHarnessFakeSpawn({ executorStatus: 1, graderPassed: false });
     const result = await runToExit(harnessOpts(skillDir, fake.spawn));
     expect(result.summary).toBe('FAIL 0/2');
-    expect(result.exitCode).toBe(4);
+    expect(result.exitCode).toBe(ExitCode.FINDINGS);
   });
 
-  it('composite verdict FAILs (exit 4) when output passes but a tool verdict fails, and VAT writes tool-eval.json', async () => {
+  it('composite verdict FAILs (FINDINGS) when output passes but a tool verdict fails, and VAT writes tool-eval.json', async () => {
     // One eval declaring toolExpectations. The fake grader passes the output
     // expectation but emits a FAILING tool verdict → output all-green but the
-    // COMPOSITE verdict FAILs → exit 4, with the verdict living in tool-eval.json.
+    // COMPOSITE verdict FAILs → exit FINDINGS, with the verdict living in tool-eval.json.
     const skillDir = writeFixtureSkillWithEvals([
       { id: 'gamma', prompt: 'do gamma', expectations: ['gamma works'], toolExpectations: { mustRun: ['csvsum'] } },
     ]);
@@ -145,7 +145,7 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
 
     // Output counts read all-green (1/1) but the tool suffix explains the composite FAIL.
     expect(result.summary).toBe('FAIL 1/1 (1 tool)');
-    expect(result.exitCode).toBe(4);
+    expect(result.exitCode).toBe(ExitCode.FINDINGS);
 
     const resultsDir = safePath.join(tempDir, 'harness', 'results');
     const toolEvalPath = safePath.join(resultsDir, 'tool-eval.json');
@@ -159,7 +159,7 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
     expect(JSON.stringify(grading)).not.toContain('mustRun');
   });
 
-  it('tier-0 FAILURE gates tier 1: tier-1 evals are SKIPPED (not passed), exit 4, summary names the skipped tier', async () => {
+  it('tier-0 FAILURE gates tier 1: tier-1 evals are SKIPPED (not passed), exit 1 (FINDINGS), summary names the skipped tier', async () => {
     // Two tiers: a cheap foundational eval (tier 0) that FAILS, and an expensive
     // eval (tier 1) that WOULD pass. The gate must stop the run after tier 0 so
     // tier 1 never grades — its eval is SKIPPED (a distinct state, never passed).
@@ -170,8 +170,8 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
     const fake = makeHarnessFakeSpawn({ graderPassedFor: (id) => (id === 'foundational' ? false : true) });
     const result = await runToExit(harnessOpts(skillDir, fake.spawn));
 
-    // Fail-fast run = eval FAILURE → exit 4, and the summary names the skipped tier.
-    expect(result.exitCode).toBe(4);
+    // Fail-fast run = eval FAILURE → exit FINDINGS, and the summary names the skipped tier.
+    expect(result.exitCode).toBe(ExitCode.FINDINGS);
     expect(result.summary).toContain('FAIL');
     expect(result.summary).toContain('SKIPPED (fail-fast): tier 1 and above (1 eval) — gated by tier 0 failure');
 
@@ -220,7 +220,8 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
     // so the finally cannot echo a prior run's friction as if it were this run's.
     const fake = makeHarnessFakeSpawn({ forgeNonce: true });
     const result = await runToExit(harnessOpts(skillDir, fake.spawn));
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(ExitCode.ERROR);
+    expect(result.reason).toBe('internal');
     expect(existsSync(frictionPath)).toBe(false);
   });
 });

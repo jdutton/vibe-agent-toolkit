@@ -7,7 +7,7 @@
  * A `git` child inherits `GIT_DIR`, `GIT_INDEX_FILE`, `GIT_PREFIX` and friends
  * from any ancestor `git` process, and **those override the `cwd` you passed**.
  * The result is not an error — it is a well-formed answer about a different
- * repository, at exit 0. Measured 2026-08-16 against real pre-commit hooks:
+ * repository, at exit 0. Measured against real pre-commit hooks:
  *
  * - `git status --porcelain` at a caller-supplied path reported the *committing*
  *   repository's status, exit 0.

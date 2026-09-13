@@ -82,7 +82,6 @@ export function git(args: readonly string[], cwd: string): void {
 export function writeFixtureFile(root: string, relativePath: string, content: string): void {
   const absolute = safePath.join(root, relativePath);
   mkdirSyncReal(dirname(absolute), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path built from a suite's temp dir
   writeFileSync(absolute, content, 'utf8');
 }
 

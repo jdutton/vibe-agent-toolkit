@@ -14,6 +14,7 @@
 
 import { existsSync, statSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 /** The name `loadConfig` looks for in the directory these commands are pointed at. */
@@ -55,13 +56,10 @@ export function unscopableSkillsPath(pathArg: string | undefined): string | unde
   if (pathArg === undefined) return undefined;
 
   const resolved = safePath.resolve(pathArg);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- a CLI argument is the subject of this check
   if (!existsSync(resolved)) return 'no such directory';
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- ditto; existence was just established
   if (!statSync(resolved).isDirectory()) return 'not a directory';
 
   if (process.env['VAT_TEST_CONFIG'] !== undefined) return undefined;
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- ditto
   if (!existsSync(safePath.join(resolved, CONFIG_FILENAME))) {
     return `no ${CONFIG_FILENAME} there`;
   }
@@ -111,5 +109,5 @@ export function rejectUnscopablePath(
   if (reason === undefined) return;
 
   process.stderr.write(unscopablePathMessage(subject, String(pathArg), reason));
-  process.exit(2);
+  process.exit(ExitCode.ERROR);
 }

@@ -212,9 +212,10 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<vo
     cpSync(publishDir, tmpRepo, { recursive: true });
 
     // Log what cpSync placed in the temp repo (filesystem truth before git touches it)
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tmpRepo is a controlled temp directory
+    // A link is an entry cpSync placed and git will add, so it is listed as
+    // one — this is a record of the tree, not a walk into it.
     const tmpRepoFiles = readdirSync(tmpRepo, { recursive: true, withFileTypes: true })
-      .filter(entry => entry.isFile() && !entry.parentPath.includes('.git'))
+      .filter(entry => (entry.isSymbolicLink() || entry.isFile()) && !entry.parentPath.includes('.git'))
       .map(entry => safePath.join(entry.parentPath, entry.name))
       .map(p => safePath.relative(tmpRepo, p));
     logger.debug(`   Files in tmpRepo after cpSync (${tmpRepoFiles.length}):\n${tmpRepoFiles.join('\n')}`);

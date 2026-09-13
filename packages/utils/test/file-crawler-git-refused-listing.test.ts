@@ -18,10 +18,10 @@
  * (`EACCES`) on POSIX only, so the suite skips itself on Windows and as root —
  * the same rule `audit-unreadable-path.integration.test.ts` applies.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { chmodSync, writeFileSync } from 'node:fs';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+
 
 import {
   crawlDirectorySync,
@@ -31,13 +31,12 @@ import {
 } from '../src/file-crawler.js';
 import { runGitOrThrow } from '../src/git-run.js';
 import { mkdirSyncReal, safePath, toForwardSlash } from '../src/path-utils.js';
-import { setupSyncTempDirSuite } from '../src/test-helpers.js';
+import { CANNOT_DENY_READS } from '../src/testing/platform-gates.js';
+import { setupSyncTempDirSuite } from '../src/testing/temp-dir.js';
 
 import { createGitRepo } from './test-helpers.js';
 
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
-const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 const OPEN_FILE = 'docs/open/ok.md';
 const LOCKED_DIR = 'docs/locked';

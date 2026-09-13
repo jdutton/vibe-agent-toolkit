@@ -55,7 +55,7 @@ import type {
  * silently — the cache corrupts it, every golden stays green, and the gate
  * reports success for the one thing it was built to catch.
  *
- * That is not hypothetical. `anchors` was uncovered until 2026-08-07, and it is
+ * That is not hypothetical. `anchors` shipped uncovered for weeks, and it is
  * the input to `ResourceRegistry.buildFragmentIndex` — i.e. to every
  * `file.md#fragment` check in VAT.
  *

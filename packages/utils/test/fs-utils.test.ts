@@ -1,10 +1,10 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code using temp directories */
 import nodeFs from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
 
 import {
   copyDirectory,
@@ -19,7 +19,9 @@ import {
 import type { DirectoryListing, RealpathTable } from '../src/fs-utils.js';
 import { toForwardSlash } from '../src/path-core.js';
 import type { SymlinkCapability } from '../src/test-helpers.js';
-import { createSymlinkAsync, setupAsyncTempDirSuite, symlinkCapability } from '../src/test-helpers.js';
+import { createSymlinkAsync, symlinkCapability } from '../src/test-helpers.js';
+import { PERMISSIONS_ENFORCED } from '../src/testing/platform-gates.js';
+import { setupAsyncTempDirSuite } from '../src/testing/temp-dir.js';
 
 import { setupNestedDirectory } from './test-helpers.js';
 
@@ -40,7 +42,6 @@ const PLANTED_PATH = 'one/two/three.md';
  * below pass against the very bug they exist to catch. Both halves are the
  * guard; skipping only on Windows leaves the test vacuous where CI runs as root.
  */
-const PERMISSIONS_ENFORCED = process.platform !== 'win32' && process.getuid?.() !== 0;
 
 /**
  * Owner `--x`: traversable, so a file below still opens — and NOT listable.

@@ -4,7 +4,7 @@
  * These tests mock `runSkillTestHarness` entirely so no real binary, staging,
  * or filesystem work runs. The goal is to verify that:
  *   - exit 0  on happy-path success
- *   - exit 3  when BootstrapNeededError is thrown
+ *   - exit 2 with `Reason: bootstrap`  when BootstrapNeededError is thrown
  *   - exit 2  when a preflight-class error is thrown (HarnessLocationError)
  *   - exit 1  when an internal/parse-failure error is thrown (InternalHarnessError)
  */
@@ -13,7 +13,9 @@ import { chmodSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import * as harness from '@vibe-agent-toolkit/agent-skills';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as yaml from 'yaml';
 
@@ -25,7 +27,7 @@ import * as yaml from 'yaml';
 // three modules are asserted about DIRECTLY (their contract is the exit code and
 // the published schema), so they come from src, exactly as agent-skills' own unit
 // tests import them.
-import { mapErrorToExitCode } from '../../agent-skills/src/skill-test/exit-codes.js';
+import { skillTestFailureReason } from '../../agent-skills/src/skill-test/failure-reason.js';
 import { GradingReportJsonSchema, GradingSummarySchema } from '../../agent-skills/src/skill-test/grading-schema.js';
 import { HarnessLockBusyError } from '../../agent-skills/src/skill-test/lock.js';
 import * as pluginBuild from '../src/commands/claude/plugin/build.js';
@@ -146,7 +148,6 @@ function renderFullHelpFlat(command: ReturnType<typeof createSkillTestRunCommand
 
 /** Write a minimal SKILL.md into a mock-built dist dir (verifyBuiltDist requires it). */
 function writeDistSkillMd(distDir: string): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture path from mock build output
   writeFileSync(
     safePath.join(distDir, 'SKILL.md'),
     '---\nname: dist-skill\ndescription: Synthetic built SKILL.md for mock dist verification.\n---\n\nBody.\n',
@@ -299,45 +300,33 @@ describe('vat skill test run (orchestration)', () => {
     expect(exit).toHaveBeenCalledWith(0);
   });
 
-  it('exits 3 on guided bootstrap', async () => {
-    const { BootstrapNeededError } = await import('@vibe-agent-toolkit/agent-skills');
-    vi.spyOn(harness, 'runSkillTestHarness').mockRejectedValue(
-      new BootstrapNeededError('/h/evals/evals.json'),
-    );
+  // The three ways the harness cannot run all end on ERROR; the `Reason:` line on
+  // stderr is where a CI author reads them apart. This used to be three codes
+  // (3 bootstrap, 2 preflight, 1 internal).
+  it.each([
+    ['guided bootstrap', 'BootstrapNeededError', ['/h/evals/evals.json'], 'bootstrap'],
+    ['a preflight-class error (HarnessLocationError)', 'HarnessLocationError', ['harness root is unsafe'], 'preflight'],
+    ['an internal harness error (InternalHarnessError)', 'InternalHarnessError', ['grading.json missing'], 'internal'],
+  ] as const)('exits ERROR on %s and says Reason: %s', async (_label, className, args, reason) => {
+    const classes = await import('@vibe-agent-toolkit/agent-skills');
+    const Ctor = classes[className] as new (...a: string[]) => Error;
+    vi.spyOn(harness, 'runSkillTestHarness').mockRejectedValue(new Ctor(...args));
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
     await runSkillTestRun(PATH_SUBJECT, {});
-    expect(exit).toHaveBeenCalledWith(3);
+    expect(exit).toHaveBeenCalledWith(ExitCode.ERROR);
+    expect(stderr.mock.calls.map((c) => String(c[0]))).toContain(`Reason: ${reason}\n`);
   });
 
-  it('exits 2 on preflight-class error (HarnessLocationError)', async () => {
-    const { HarnessLocationError } = await import('@vibe-agent-toolkit/agent-skills');
-    vi.spyOn(harness, 'runSkillTestHarness').mockRejectedValue(
-      new HarnessLocationError('harness root is unsafe'),
-    );
-    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    await runSkillTestRun(PATH_SUBJECT, {});
-    expect(exit).toHaveBeenCalledWith(2);
-  });
-
-  it('exits 1 on internal harness error (InternalHarnessError)', async () => {
-    const { InternalHarnessError } = await import('@vibe-agent-toolkit/agent-skills');
-    vi.spyOn(harness, 'runSkillTestHarness').mockRejectedValue(
-      new InternalHarnessError('grading.json missing'),
-    );
-    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    await runSkillTestRun(PATH_SUBJECT, {});
-    expect(exit).toHaveBeenCalledWith(1);
-  });
-
-  it('surfaces the harness EvalFailure exit code (4) unchanged — not remapped or swallowed', async () => {
+  it('surfaces the harness FINDINGS exit code unchanged — not remapped or swallowed', async () => {
     vi.spyOn(harness, 'runSkillTestHarness').mockResolvedValue({
       harnessPath: '/h',
-      exitCode: 4,
+      exitCode: ExitCode.FINDINGS,
       summary: 'FAIL 1/2',
     });
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     await runSkillTestRun(PATH_SUBJECT, {});
-    expect(exit).toHaveBeenCalledWith(4);
+    expect(exit).toHaveBeenCalledWith(ExitCode.FINDINGS);
   });
 
   // A bad usage flag is validated BEFORE the async harness work. Without the
@@ -498,7 +487,6 @@ const FLAG_GRADER_MODEL = 'flag-grader';
 function stubGlobalTestConfig(testNode: Record<string, unknown>): void {
   const dir = createTestTempDir('vat-global-test-config-');
   const configPath = safePath.join(dir, CONFIG_FILENAME);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path from createTestTempDir
   writeFileSync(configPath, yaml.stringify({ version: 1, test: testNode }));
   process.env['VAT_TEST_CONFIG'] = configPath;
 }
@@ -647,9 +635,7 @@ describe('vat skill test run (output routing)', () => {
   // contents the operator has to guess at, so the artifact dir is named outright.
   it('names the results dir on stderr when the harness reports one', async () => {
     const { stderrCalls } = await runAndCaptureStreams({
-      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
       harnessPath: '/tmp/h',
-      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
       resultsPath: '/tmp/h/results',
       exitCode: 0,
       summary: 'PASS 2/2',
@@ -663,7 +649,6 @@ describe('vat skill test run (output routing)', () => {
   // operator to a path that was never created.
   it('omits the results line when the run reported no results dir', async () => {
     const { stderrCalls } = await runAndCaptureStreams({
-      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
       harnessPath: '/tmp/h',
       exitCode: 2,
       summary: 'Security acknowledgment required.',
@@ -677,9 +662,7 @@ describe('vat skill test run (output routing)', () => {
   // Under --keep they survive holding everything the evals produced.
   it('names the workspaces dir on stderr when the harness reports one', async () => {
     const { stderrCalls } = await runAndCaptureStreams({
-      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
       harnessPath: '/tmp/h',
-      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
       workspacesPath: '/tmp/vat-skill-test-ws-abc',
       exitCode: 0,
       summary: 'PASS 2/2',
@@ -694,9 +677,7 @@ describe('vat skill test run (output routing)', () => {
   // anyway would send the operator to a directory that no longer exists.
   it('omits the workspaces line when the run reported no workspaces dir', async () => {
     const { stderrCalls } = await runAndCaptureStreams({
-      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
       harnessPath: '/tmp/h',
-      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
       resultsPath: '/tmp/h/results',
       exitCode: 0,
       summary: 'PASS 2/2',
@@ -707,7 +688,6 @@ describe('vat skill test run (output routing)', () => {
 
   it('does not write Summary: to stderr on non-zero exit', async () => {
     const { stdoutCalls, stderrCalls } = await runAndCaptureStreams({
-      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
       harnessPath: '/tmp/h',
       exitCode: 1,
       summary: 'FAIL 1/3',
@@ -805,7 +785,6 @@ describe('vat skill test run (path-target config-blind warning — #7)', () => {
 
   it('warns on stderr that a config-blind path maps to no declared skill', async () => {
     const { stderrCalls } = await runAndCaptureStreams({
-      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
       harnessPath: '/tmp/h',
       exitCode: 0,
       summary: 'PASS 1/1',
@@ -1278,7 +1257,7 @@ describe('resolveCompanionSpec (the OPTIONAL catch is narrow, and failures name 
 
     const error = await companionBuildError(dirname(fx.poolSkillMd(DECLARED_POOL)), fx.root, false);
 
-    // Same class (so mapErrorToExitCode still yields 2) — only the message is prefixed.
+    // Same class (so skillTestFailureReason still reads preflight) — only the message is prefixed.
     expect(error).toBeInstanceOf(SkillBuildError);
     expect(errorMessage(error)).toContain(`companion '${COMPANION_ALIAS}'`);
     expect(errorMessage(error)).toContain(DECLARED_POOL);
@@ -1646,7 +1625,6 @@ function setupNameBasenameMismatchFixture(buildHook: string): { root: string; sk
   const root = safePath.resolve(createTestTempDir('vat-skill-name-mismatch-'));
   const skillDir = safePath.join(root, 'skills', MISMATCH_DIR_NAME);
   mkdirSyncReal(skillDir, { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture path from createTestTempDir
   writeFileSync(
     safePath.join(skillDir, 'SKILL.md'),
     `---\nname: ${MISMATCH_SKILL_NAME}\ndescription: Synthetic skill whose declared name differs from its directory basename.\n---\n\n# ${MISMATCH_SKILL_NAME}\n\nBody.\n`,
@@ -1658,7 +1636,6 @@ function setupNameBasenameMismatchFixture(buildHook: string): { root: string; sk
       config: { [MISMATCH_SKILL_NAME]: { test: { build: buildHook } } },
     },
   };
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture path from createTestTempDir
   writeFileSync(safePath.join(root, CONFIG_FILENAME), yaml.stringify(config));
   return { root, skillDir };
 }
@@ -1679,9 +1656,9 @@ describe('loadTestConfig (source-dir subject resolves test: config by the EXACT 
   });
 });
 
-// Exit-code symmetry between the two phases of runSkillTestRun. A ConfigLoadError is
-// a user-fixable PREFLIGHT problem (exit 2), but mapErrorToExitCode has no case for it
-// and falls through to Internal (1) — the SUBJECT arm special-cased it, the COMPANION
+// Reason symmetry between the two phases of runSkillTestRun. A ConfigLoadError is
+// a user-fixable PREFLIGHT problem, but skillTestFailureReason has no case for it
+// and falls through to internal — the SUBJECT arm special-cased it, the COMPANION
 // arm did not. That gap is reachable precisely because a companion's governing config
 // root can differ from the subject's: here the subject resolves against the (valid)
 // outer config while the companion's NESTED config is broken.
@@ -1696,7 +1673,6 @@ describe('runSkillTestRun (a broken COMPANION config exits 2, not 1)', () => {
     resetSkillDiscoveryCache();
     const nested = nestedOf(fx);
     // Break ONLY the nested config (unparseable YAML: an unterminated flow sequence).
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture path from createTestTempDir
     writeFileSync(safePath.join(nested.root, CONFIG_FILENAME), 'version: 1\nskills: [unclosed\n');
     vi.spyOn(process, 'cwd').mockReturnValue(fx.root);
     const harnessSpy = vi.spyOn(harness, 'runSkillTestHarness');
@@ -1719,20 +1695,17 @@ describe('runSkillTestRun (a broken COMPANION config exits 2, not 1)', () => {
 // The same symmetry for the OTHER user-fixable preflight condition discovery can
 // raise: a directory the companion's `skills.include` reaches that the crawl cannot
 // list. Discovery refuses it (`DirectoryListingRefusedError`) so the test never runs
-// against a shorter skill list — but `mapErrorToExitCode` has no case for that class
-// either, so it fell through to Internal (1) and told the operator a harness bug had
+// against a shorter skill list — but `skillTestFailureReason` has no case for that class
+// either, so it fell through to internal and told the operator a harness bug had
 // occurred when the fix was `chmod` or a narrower include pattern.
 //
 // `chmod 000` denies nothing to uid 0 and means nothing on Windows — the same guard
 // `audit-unreadable-path.integration.test.ts` carries, for the same reason.
-const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 describe.skipIf(CANNOT_DENY_READS)('runSkillTestRun (a refused directory under a COMPANION config exits 2, not 1)', () => {
   let lockedDir: string | undefined;
 
   afterEach(() => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- restoring a throwaway fixture directory so it can be removed
     if (lockedDir !== undefined) chmodSync(lockedDir, 0o755);
     lockedDir = undefined;
     vi.restoreAllMocks();
@@ -1748,7 +1721,6 @@ describe.skipIf(CANNOT_DENY_READS)('runSkillTestRun (a refused directory under a
     // A sibling the nested config's `skills/*/SKILL.md` reaches and cannot list.
     lockedDir = safePath.join(nested.root, 'skills', 'locked');
     mkdirSyncReal(lockedDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- the unreadable directory IS the fixture
     chmodSync(lockedDir, 0o000);
     vi.spyOn(process, 'cwd').mockReturnValue(fx.root);
     const harnessSpy = vi.spyOn(harness, 'runSkillTestHarness');
@@ -1954,15 +1926,15 @@ describe('--refresh help tells the truth about the flag being inert', () => {
 // separate lane; what must not ALSO be wrong is the exit code, because the published
 // CI recipe reads 1 as "the harness broke, fail the build" while this is the most
 // user-correctable preflight condition there is: delete the file.
-describe('HarnessLockBusyError is a preflight condition (exit 2), not an internal failure', () => {
+describe('HarnessLockBusyError is a preflight condition, not an internal failure', () => {
   const LOCK_PATH = '/var/folders/xy/vat-skill-test/my-skill/.vat-skill-test.lock';
 
-  it('carries exitCode 2 like every other user-correctable preflight error', () => {
-    expect(new HarnessLockBusyError(LOCK_PATH).exitCode).toBe(2);
+  it('declares the preflight reason like every other user-correctable preflight error', () => {
+    expect(new HarnessLockBusyError(LOCK_PATH).reason).toBe('preflight');
   });
 
-  it('maps to Preflight (2) rather than falling through to Internal (1)', () => {
-    expect(mapErrorToExitCode(new HarnessLockBusyError(LOCK_PATH))).toBe(2);
+  it('reads as preflight rather than falling through to internal', () => {
+    expect(skillTestFailureReason(new HarnessLockBusyError(LOCK_PATH))).toBe('preflight');
   });
 
   it('names the lock path and how to clear it, so the operator can act without reading the source', () => {

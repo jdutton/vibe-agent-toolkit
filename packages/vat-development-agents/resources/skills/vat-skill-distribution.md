@@ -168,8 +168,6 @@ You will not see an error. Claude Code simply loads the first-registered skill w
 ## Step 2: vibe-agent-toolkit.config.yaml
 
 ```yaml
-version: 1
-
 skills:
   include:
     - "resources/skills/**/SKILL.md"
@@ -182,9 +180,10 @@ claude:
       plugins:
         - name: my-plugin             # installable unit
           description: My plugin description
+          skills: "*"                 # REQUIRED: "*" (every built skill) or a list of skill names
 ```
 
-The top-level `skills:` section drives standalone skill builds (output: `dist/skills/`). The `claude:` section defines plugins, which are assembled from their own `plugins/<name>/` directories (plugin-local skills under `plugins/<name>/skills/**/SKILL.md`). Each marketplace has `owner` and `plugins` fields (strict schema — no extra fields).
+The top-level `skills:` section drives standalone skill builds (output: `dist/skills/`). The `claude:` section defines plugins. Every plugin entry must carry a `skills:` selector — `"*"` for all skills the `skills:` section built, or an explicit list of names — and may also have its own `plugins/<name>/` directory (plugin-local skills under `plugins/<name>/skills/**/SKILL.md`, packaged automatically). Each marketplace has `owner` and `plugins` fields (strict schema — no extra fields).
 
 **Naming convention:** marketplace = org identity (e.g. `acme`), plugin = this package
 (e.g. `acme-tools`). Registers as `my-plugin@my-marketplace` in Claude's plugin registry.
@@ -200,16 +199,19 @@ List all skills in `vat.skills` for npm discoverability:
 }
 ```
 
-Each skill lives as a subdirectory of the plugin under `plugins/<name>/skills/<skill>/SKILL.md`:
+Then either select them per plugin in the marketplace config:
 
-```
-plugins/my-plugin/
-  skills/
-    my-linting/SKILL.md
-    my-testing/SKILL.md
+```yaml
+claude:
+  marketplaces:
+    my-marketplace:
+      owner: { name: My Organization }
+      plugins:
+        - name: my-plugin
+          skills: [my-linting, my-testing]   # or "*" for every built skill
 ```
 
-All plugin-local skills found under `plugins/<name>/skills/` are packaged into the plugin automatically — no per-plugin selector is needed or supported. Skill names must be globally unique across all plugins.
+or keep each skill as a subdirectory of the plugin under `plugins/<name>/skills/<skill>/SKILL.md` — plugin-local skills are packaged into that plugin automatically, in addition to whatever `skills:` selects. Skill names must be globally unique across all plugins.
 
 ## Step 3: Build
 
@@ -261,10 +263,11 @@ claude:
       plugins:
         - name: my-plugin
           description: My plugin description
+          skills: "*"
       publish:
-        github:
-          repo: owner/repo          # GitHub repo to publish to
-          branch: claude-marketplace # branch that stores the installable artifacts
+        branch: claude-marketplace  # branch that stores the installable artifacts (default)
+        remote: origin              # remote name, or a full URL for cross-repo publishing (default: origin)
+        # optional: changelog, readme, license, sourceRepo — the schema is strict; nothing else is accepted
 ```
 
 ### Publish workflow
@@ -401,14 +404,9 @@ If no `dist/.claude/plugins/marketplaces/` directory exists (package wasn't buil
 
 Skills are then available in Claude Code as `/plugin-name:skill-name`.
 
-## managed-settings.json Validation (Enterprise)
+## managed-settings.json (Enterprise)
 
-```yaml
-claude:
-  managedSettings: managed-settings.json
-```
-
-`vat verify` validates this file against the ManagedSettings schema. Catches typos and schema errors before deployment. Does NOT deploy the file — deployment is a separate concern.
+The config schema accepts `claude.managedSettings: <path>`, but **no command reads it today** — `vat verify` does not validate the file. To check a managed settings file, run `vat audit settings --file <path>` (see the `vat-audit` skill). Deployment is a separate concern either way.
 
 ## --target claude-web (ZIP Upload)
 

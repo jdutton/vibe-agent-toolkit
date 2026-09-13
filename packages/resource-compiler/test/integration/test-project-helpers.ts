@@ -2,7 +2,6 @@
  * Shared helpers for setting up test projects in integration tests
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
 import { writeFileSync } from 'node:fs';
 

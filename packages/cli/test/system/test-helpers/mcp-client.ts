@@ -109,7 +109,6 @@ export class MCPTestClient {
   ): Promise<MCPTestClient> {
     const readyTimeout = options?.readyTimeout ?? 10_000;
 
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Test spawns CLI process intentionally
     const proc = spawn('node', [binPath, ...args], {
       env: { ...process.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],

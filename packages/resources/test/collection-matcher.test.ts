@@ -1,4 +1,3 @@
-/* eslint-disable sonarjs/no-duplicate-string */
 // Test file - duplicated test paths are acceptable for clarity
 import { describe, expect, it } from 'vitest';
 

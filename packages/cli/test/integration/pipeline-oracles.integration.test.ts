@@ -21,8 +21,6 @@
  * another for reasons that are not defects. The walk route gets a set-and-
  * attributes golden plus a within-host order-stability assertion instead.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- every path is derived
-   from this file's own URL or from a mkdtemp root created here. */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +45,18 @@ import {
 const PACKAGE_ROOT = toForwardSlash(fileURLToPath(new URL('../../', import.meta.url)));
 const GOLDEN_DIR = safePath.join(PACKAGE_ROOT, 'test', 'golden', 'pipeline-oracles');
 const UPDATING = process.env.UPDATE_DRIFT_GOLDEN === '1';
+
+/**
+ * Printed on BOTH the missing-golden and the drift branch: the drift branch is
+ * the one a change actually hits, and it used to say only "golden drift".
+ */
+const ORACLE_UPDATE_HINT =
+  'If the change is INTENDED, regenerate and review the diff as part of your PR.\n' +
+  'Build FIRST — the oracles run against the built @vibe-agent-toolkit/* packages, so a stale dist/\n' +
+  'regenerates a stale golden:\n' +
+  '    bun run build\n' +
+  '    cd packages/cli && UPDATE_DRIFT_GOLDEN=1 bunx vitest run --config vitest.integration.config.ts test/integration/pipeline-oracles.integration.test.ts\n' +
+  'If it is NOT intended, an enumeration or parse-fact lane changed its population.';
 
 /** Corpus labels — they are printed into the goldens, so they must not drift. */
 const GIT_CORPUS = 'trap/git';
@@ -83,8 +93,8 @@ function expectGolden(name: string, actual: string): void {
     writeFileSync(goldenPath, actual, 'utf-8');
     return;
   }
-  expect(existsSync(goldenPath), `missing golden ${name} — regenerate with UPDATE_DRIFT_GOLDEN=1`).toBe(true);
-  expect(readFileSync(goldenPath, 'utf-8'), `golden drift in ${name}`).toBe(actual);
+  expect(existsSync(goldenPath), `missing golden ${name}.\n${ORACLE_UPDATE_HINT}`).toBe(true);
+  expect(readFileSync(goldenPath, 'utf-8'), `golden drift in ${name}.\n${ORACLE_UPDATE_HINT}`).toBe(actual);
 }
 
 /** A disposable corpus root, outside any repository until asked otherwise. */

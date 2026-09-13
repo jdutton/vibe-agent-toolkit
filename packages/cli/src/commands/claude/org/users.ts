@@ -1,6 +1,7 @@
 /**
  * `vat claude org users` — manage organization users via Admin API.
  */
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { Command } from 'commander';
 
 import { addPaginationOptions, buildPaginationParams, executeOrgCommand } from './helpers.js';
@@ -78,7 +79,7 @@ Example:
     .requiredOption('--role <role>', 'New role (user, developer, admin)')
     .action(() => {
       writeNotYetImplementedStub('org users update');
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     });
 
   // remove (stub)
@@ -88,7 +89,7 @@ Example:
     .argument('<user-id>', 'User ID')
     .action(() => {
       writeNotYetImplementedStub('org users remove');
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     });
 
   command.addCommand(listCmd);

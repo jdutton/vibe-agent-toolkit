@@ -1,5 +1,5 @@
 /**
- * Auth-safe HTTP transport for the linkAuth feature (design issue #113 §5.2, §8).
+ * Auth-safe HTTP transport for the linkAuth feature (linkAuth design §5.2, §8).
  *
  * Lower-level than the public `fetchAuthenticated` primitive — this transport
  * does not know about providers, token resolution, or caching. It takes a URL
@@ -29,6 +29,8 @@
 
 import buffer from 'node:buffer';
 import { inspect } from 'node:util';
+
+import { VatError } from '@vibe-agent-toolkit/utils';
 
 import { redactSecretsInText, sensitiveHeaderValues } from './link-auth/build-headers.js';
 
@@ -161,10 +163,9 @@ export async function authTransport(
  * re-open exactly the hole this closes, so the original object is dropped and
  * its `name` + redacted `message` are folded into the text instead.
  */
-export class AuthTransportError extends Error {
+export class AuthTransportError extends VatError {
   constructor(message: string) {
-    super(message);
-    this.name = 'AuthTransportError';
+    super('AUTH_TRANSPORT', message);
   }
 }
 

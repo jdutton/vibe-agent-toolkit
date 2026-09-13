@@ -1,7 +1,8 @@
 import { chmod, mkdir, mkdtemp } from 'node:fs/promises';
 
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { removeScratchDir , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
 // Everything under test comes from `src`, never from this package's own name.
@@ -23,8 +24,6 @@ import {
 } from '../../src/session/test-helpers/index.js';
 
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
-const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 describe('FileSessionStore', () => {
   let suiteDir: string;
@@ -36,7 +35,6 @@ describe('FileSessionStore', () => {
     setup: async () => {
       testCounter++;
       tempDir = safePath.join(suiteDir, `test-${testCounter}`);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtemp
       await mkdir(tempDir, { recursive: true });
       suite.store = new FileSessionStore<{ count: number }>({
         baseDir: tempDir,
@@ -151,12 +149,10 @@ describe('FileSessionStore', () => {
         // to see. Only a path that is not there is absent.
         const sessionId = await suite.store.create();
         const sessionDir = safePath.join(tempDir, sessionId);
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- locking this test's own fixture
         await chmod(sessionDir, 0o000);
         try {
           await expect(suite.store.exists(sessionId)).rejects.toMatchObject({ code: 'EACCES' });
         } finally {
-          // eslint-disable-next-line security/detect-non-literal-fs-filename -- unlocking this test's own fixture
           await chmod(sessionDir, 0o700);
         }
       },

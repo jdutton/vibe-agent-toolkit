@@ -76,7 +76,6 @@
  * characters.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture trees */
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
@@ -138,7 +137,6 @@ const IS_WINDOWS = process.platform === 'win32';
  * @returns True when `sed` ran and did what was asked of it
  */
 function sedAvailable(): boolean {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- capability probe, deliberately from PATH
   const probe = spawnSync('sed', ['-e', 's/a/b/'], { input: 'a\n', encoding: 'utf-8' });
   return probe.status === 0 && probe.stdout === 'b\n';
 }
@@ -149,7 +147,6 @@ function sedAvailable(): boolean {
  * @returns True when the `lfs` subcommand exists
  */
 function lfsAvailable(): boolean {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- capability probe, deliberately from PATH
   return spawnSync('git', ['lfs', 'version'], { encoding: 'utf-8' }).status === 0;
 }
 
@@ -274,7 +271,6 @@ function newRepo(prefix: string): Fixture {
   };
 
   const git = (...args: readonly string[]): string => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- fixture setup uses git from PATH, as every git fixture in this package does
     const result = spawnSync('git', [...args], { cwd: repo, env, encoding: 'utf-8' });
     if (result.status !== 0) {
       throw new Error(`git ${args.join(' ')} exited ${String(result.status)}\n${result.stderr}`);
@@ -358,7 +354,6 @@ function stagedIndex(fixture: Fixture): Map<string, { mode: string; oid: string 
  * @returns The blob's raw bytes
  */
 function blobBytes(fixture: Fixture, oid: string): Buffer {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- fixture inspection uses git from PATH
   const result = spawnSync('git', ['cat-file', 'blob', oid], { cwd: fixture.repo });
   if (result.status !== 0) throw new Error(`git cat-file blob ${oid} failed`);
   return result.stdout;

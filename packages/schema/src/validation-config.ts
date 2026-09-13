@@ -1,11 +1,9 @@
 import { z } from 'zod';
 
 import { escapeRegExpLiteral } from './regexp-escape.js';
-import { IssueCodeSchema, type IssueCode } from './validation-codes.js';
+import { IssueCodeSchema, IssueSeveritySchema, type IssueCode, type IssueSeverity } from './validation-codes.js';
 import { CUSTOM_CHECK_CODE_PATTERN_SOURCE, type CustomCheckCode } from './validation-issue.js';
 
-export const SeverityLevelSchema = z.enum(['error', 'warning', 'info', 'ignore']);
-export type SeverityLevel = z.infer<typeof SeverityLevelSchema>;
 
 export const AllowEntrySchema = z.object({
   paths: z.array(z.string().min(1)).min(1).default(['**/*']),
@@ -80,7 +78,7 @@ export interface ValidationThresholds {
 // this repo enables: Zod infers an optional field as `T | undefined`, and without
 // the union the annotation is narrower than the schema it describes.
 export interface ValidationConfig {
-  severity?: Partial<Record<IssueCode | CustomCheckCode, SeverityLevel>> | undefined;
+  severity?: Partial<Record<IssueCode | CustomCheckCode, IssueSeverity>> | undefined;
   allow?: Partial<Record<IssueCode, AllowEntry[]>> | undefined;
   thresholds?: ValidationThresholds | undefined;
 }
@@ -97,7 +95,7 @@ export interface ValidationConfig {
  * that `resources.validation.severity` could downgrade or ignore an inherited
  * check. Zod parses record KEYS through the key schema, so `CUSTOM:my-check` was
  * an `invalid_enum_value`; that failed `ProjectConfigSchema`, which failed
- * `loadConfig`, which every command calls. The user's reward for doing what
+ * `loadConfig`, which every config-reading command calls. The user's reward for doing what
  * three docs told them was `exit 2` and a dump of the ~150-entry registry enum,
  * on `vat resources scan` as readily as on `check`.
  *
@@ -221,7 +219,7 @@ export const SeverityOverrideCodeSchema = z.string({
 // typed value would have no reason to parse it. Typing the input narrower would
 // only let a caller skip the check the schema exists to perform.
 export const ValidationConfigSchema: z.ZodType<ValidationConfig, z.ZodTypeDef, unknown> = z.object({
-  severity: z.record(SeverityOverrideCodeSchema, SeverityLevelSchema).optional(),
+  severity: z.record(SeverityOverrideCodeSchema, IssueSeveritySchema).optional(),
   // 🔑 `allow` stays keyed by the REGISTRY enum, and the asymmetry with
   // `severity` above is the decision, not an oversight. `severity` reaches a
   // check's findings for real: `resolveIssueSeverity` is code-agnostic and

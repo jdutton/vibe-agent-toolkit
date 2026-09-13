@@ -764,7 +764,7 @@ than take on faith:
   repo's root `package.json`) is **dev-time only** — used to orchestrate `bun run validate` locally,
   never shipped as a dependency of any published VAT package.
 - The **umbrella** `vibe-validate` package has a genuine **runtime** dependency back on
-  `vibe-agent-toolkit` (`packages/vibe-validate/package.json`, `dependencies.vibe-agent-toolkit`).
+  `vibe-agent-toolkit` (in the vibe-validate repository, `packages/vibe-validate/package.json` → `dependencies.vibe-agent-toolkit` — a different repo, not a path in this one).
   Depending on that umbrella package from VAT at runtime would be a real cycle.
 - `@vibe-validate/git` specifically does not have that problem: its own dependencies are
   `@vibe-validate/utils` and `yaml` only (confirmed via both its source `package.json` and

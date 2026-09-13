@@ -744,7 +744,6 @@ function absoluteOf(base: ProjectionBase, relativePath: string): string {
 function readJson(absolutePath: string): { value: unknown } | { reason: string } {
   let text: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a manifest path the base projection already enumerated
     text = readFileSync(absolutePath, 'utf8');
   } catch (error) {
     return { reason: error instanceof Error ? error.message : String(error) };

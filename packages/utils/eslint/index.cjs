@@ -9,7 +9,7 @@
  * than in CI on a different OS.
  *
  * They ship as a SUBPATH rather than a separate package because an ESLint plugin
- * is data, not code that runs: every module below exports a plain rule object and
+ * is data, not code that runs: every rule module exports a plain rule object and
  * none of them `require('eslint')`. So this entry resolves — and the other twelve
  * subpaths keep resolving — whether or not ESLint is installed, which is why
  * `eslint` is declared as an OPTIONAL peer dependency. One install, one version,
@@ -20,6 +20,28 @@
  * entry point can be both `require()`d from an `eslint.config.cjs` and `import`ed
  * from an `eslint.config.js`/`.mjs`.
  *
+ * ## The manifest is the directory
+ *
+ * There is no hand-maintained list of rules here. Every `rules/*.cjs` whose
+ * export carries a `meta` object IS a rule, keyed by its basename; the modules
+ * that export a factory or a helper object (`eslint-rule-factory`,
+ * `no-command-direct-factory`, `exempt-path-matcher`, `safe-import`,
+ * `dead-import`) have no `meta` and are skipped. Each rule then declares its own
+ * place in `configs.recommended` through `meta.docs.recommended` and
+ * `meta.docs.recommendedSeverity`, beside the rule it describes — so adding a
+ * rule is one file, and the README/docs table is generated from the same
+ * metadata (`bun run generate:eslint-rules-doc` in `packages/utils`).
+ *
+ * The last hand list here held 27 entries and was mirrored by three literal
+ * counts in two test files and two prose counts in two docs, every one of which
+ * had drifted at least once. A directory listing cannot drift.
+ *
+ * `node:fs` and `node:path` are the ONLY external modules this subpath reaches,
+ * and only from this file: the rule modules themselves still require nothing —
+ * `test/eslint/subpath-purity.test.ts` pins both halves. Two builtins that ship
+ * with every Node install do not change the optional-peer property, which was
+ * only ever about `eslint` and third-party packages.
+ *
  * Rules whose exemptions name a file (the ONE implementation file allowed to call
  * the primitive) take an `exemptFiles` option — see README.md. The shipped
  * defaults are EMPTY: an exemption is a claim about a specific repo's layout, and
@@ -29,181 +51,75 @@
 
 'use strict';
 
-const rules = {
-  'no-child-process-execSync': require('./rules/no-child-process-execSync.cjs'),
-  'no-hardcoded-path-split': require('./rules/no-hardcoded-path-split.cjs'),
-  'no-path-startswith': require('./rules/no-path-startswith.cjs'),
-  'no-unix-shell-commands': require('./rules/no-unix-shell-commands.cjs'),
-  'no-os-tmpdir': require('./rules/no-os-tmpdir.cjs'),
-  'no-fs-mkdirSync': require('./rules/no-fs-mkdirSync.cjs'),
-  'no-fs-realpathSync': require('./rules/no-fs-realpathSync.cjs'),
-  'no-manual-path-normalize': require('./rules/no-manual-path-normalize.cjs'),
-  'no-path-sep-in-strings': require('./rules/no-path-sep-in-strings.cjs'),
-  'no-path-operations-in-comparisons': require('./rules/no-path-operations-in-comparisons.cjs'),
-  'no-path-join': require('./rules/no-path-join.cjs'),
-  'no-path-resolve': require('./rules/no-path-resolve.cjs'),
-  'no-path-relative': require('./rules/no-path-relative.cjs'),
-  'no-test-scoped-functions': require('./rules/no-test-scoped-functions.cjs'),
-  'no-fs-promises-cp': require('./rules/no-fs-promises-cp.cjs'),
-  'no-url-pathname-for-fs': require('./rules/no-url-pathname-for-fs.cjs'),
-  'no-bare-dynamic-import-path': require('./rules/no-bare-dynamic-import-path.cjs'),
-  'no-file-url-string-concat': require('./rules/no-file-url-string-concat.cjs'),
-  'prefer-startswith-over-regex': require('./rules/prefer-startswith-over-regex.cjs'),
-  'no-unsafe-root-join': require('./rules/no-unsafe-root-join.cjs'),
-  'no-raw-text-decode': require('./rules/no-raw-text-decode.cjs'),
-  'no-self-package-import': require('./rules/no-self-package-import.cjs'),
-  'require-justified-skip': require('./rules/require-justified-skip.cjs'),
-  'no-bare-symlink-in-tests': require('./rules/no-bare-symlink-in-tests.cjs'),
-  'no-process-exit-in-phase': require('./rules/no-process-exit-in-phase.cjs'),
-  'no-fragile-entrypoint-guard': require('./rules/no-fragile-entrypoint-guard.cjs'),
-  'no-blind-catch': require('./rules/no-blind-catch.cjs'),
-};
+const { readdirSync } = require('node:fs');
+const path = require('node:path');
+
+const RULES_DIR = path.join(__dirname, 'rules');
 
 /**
- * Rules deliberately LEFT OUT of `configs.recommended`.
- *
- * `recommended` is the cross-platform-safety core: every rule in it flags a call
- * that is wrong (or unportable) regardless of how the adopting project likes to
- * write tests. The two below are neither — they encode a position on TEST STYLE:
- *
- * - `require-justified-skip` — a specific annotation grammar (`SKIP(#123): reason`)
- *   for a disabled test, plus a view on what counts as a tautological assertion.
- * - `no-test-scoped-functions` — a view on WHERE a test helper may be declared
- *   (module scope, never inside `describe`/`it`).
- *
- * Someone installing this package for `safePath.join()` should not silently
- * inherit either. Both ship in `rules` and stay enabled explicitly:
- *
- *   '@vibe-agent-toolkit/require-justified-skip': 'error',
- *
- * That is exactly what VAT's own `eslint.config.js` does — it does not consume
- * `configs.recommended` at all, so this exclusion changes nothing about how this
- * repo lints itself.
+ * The two values `recommendedSeverity` may take. A rule that is not
+ * recommended may still declare one — it is the severity the rule WOULD ride
+ * at, and the generated docs table prints it — but `off` is not a spelling: a
+ * rule that wants to be off is a rule with `recommended: false`.
  */
-const RECOMMENDED_EXCLUDE = new Set([
-  'require-justified-skip',
-  'no-test-scoped-functions',
-  // Excluded for a DIFFERENT reason than the two above: not a style opinion, but
-  // an unsound heuristic. It keys on whether an identifier's name ends in `root`
-  // rather than on whether any segment is caller-controlled, which makes it
-  // simultaneously noisy and blind. Measured on a 4,670-file adopter tree: 108
-  // findings, 0 autofixable, and every one of these verified by execution here:
-  //
-  //   FIRES   safePath.join(repoRoot, 'docs', 'product')  <- all literals, cannot escape
-  //   FIRES   safePath.resolve(packageRoot, '..', '..')   <- escaping IS the intent; the fix breaks it
-  //   FIRES   safePath.join(repoRoot)                     <- one argument, no segment at all
-  //   silent  safePath.join(base, userInput)              <- THE dangerous shape, missed
-  //
-  // A rule that misses the case it exists to catch must not ride in a config
-  // named `recommended` at any severity — a safety core that cries wolf teaches
-  // people to ignore it, which costs the true positives too. It still ships, and
-  // it still earns `error` where scoped to directories in which a path escape is
-  // a security boundary (this repo scopes it to the skill-test staging code).
-  // Re-include it when it keys on taint rather than on naming.
-  'no-unsafe-root-join',
-  // Excluded because it names a seam that does not exist until a consumer builds
-  // one. `decodeTextContent()` is VAT's module, in VAT's repo; an adopter who
-  // installed this package for `safePath.join()` has no content-decoding seam to
-  // be pointed at, so `recommended` would hand them a rule whose every message
-  // advises importing from `your content-decoding module`. It ships in `rules`
-  // and is enabled — with `safeModule` naming the real seam and `exemptFiles`
-  // naming the file that implements it — by whoever has one. VAT itself does
-  // exactly that, scoped to the directories that read corpus documents.
-  'no-raw-text-decode',
-  // Excluded for two reasons, either of which would be enough. It REQUIRES a
-  // `packageName` option — it will not read a `package.json` to find out, because
-  // that would mean `require('node:fs')` and break the empty-external-set property
-  // this whole subpath rests on — and a rule with a required option cannot ride in
-  // a config that supplies none. And the directories it must not fire in are a
-  // property of the adopter's `tsconfig`, not of this package: a self-import only
-  // breaks the build in files the package actually COMPILES, while test and
-  // example trees import their own package by name on purpose, to exercise the
-  // public entry point the way a consumer does. This repo has ~10 such imports
-  // across `utils`, `agent-skills`, `claude-marketplace` and
-  // `vat-example-cat-agents`, every one of them correct. It ships in `rules`, and
-  // `eslint.config.js` generates one scoped block per workspace package.
-  'no-self-package-import',
-  // Excluded for its TEST half only, which is the honest way to say it. That
-  // half names a vitest-specific idiom (`skip()` from the per-test context) and
-  // a replacement — `createSymlink()` / `createSymlinkAsync()` /
-  // `symlinkCapability()` — living on THIS package's own `./testing` subpath
-  // rather than on a seam every consumer already has. An adopter using a
-  // different test runner, or no symlink-heavy tests at all, should not
-  // silently inherit an opinion about vitest control flow.
-  //
-  // ⚠️ The rule now covers SHIPPED code too, and that half (`unguardedSymlink`)
-  // has neither dependency: it names the Windows privilege and a junction, both
-  // portable facts. So this exclusion is weaker than it reads — the two halves
-  // share one rule id and cannot be enabled separately, and the test half is
-  // what keeps the pair out. Splitting the rule would let the production half
-  // ride in `recommended`; that is a public-API change and has not been made.
-  // VAT enables the whole rule explicitly, scoped to its own conventions.
-  'no-bare-symlink-in-tests',
-  // Excluded because it keys on a NAMING CONVENTION that is VAT's, not a
-  // portable fact — the same reason `no-unsafe-root-join` is excluded above. The
-  // hazard it guards is real and general (an in-process orchestrator whose step
-  // calls `process.exit()` silently skips every later step), but the marker is
-  // the `…Phase` suffix, and an adopter with an unrelated `computeRenderPhase()`
-  // that legitimately exits would get a finding they cannot act on. It ships in
-  // `rules` and VAT enables it explicitly, scoped to its own orchestrators.
-  'no-process-exit-in-phase',
-  // Excluded because ONE of its two halves is a claim about the CONSUMER's Node
-  // floor rather than a portable fact. `import.meta.main` shipped in Node 24.2 /
-  // 22.18; an adopter whose floor is at or above that writes it correctly and
-  // would get a finding they cannot act on. This package's own floor is `>=22`,
-  // which spans 22.13–22.17 where the property is `undefined` — so the hazard is
-  // real for some adopters and absent for others, and only they know which.
-  //
-  // The rule's OTHER half (`rawEntrypointCompare`) has no such dependency: a raw
-  // string compare against `pathToFileURL(argv[1]).href` misses a symlinked
-  // entry on every Node there has ever been. The two share one rule id and
-  // cannot be enabled separately, and the floor-dependent half is what keeps the
-  // pair out — the same trade already recorded for `no-bare-symlink-in-tests`.
-  // VAT enables the whole rule explicitly, because VAT's floor is 22.13.0.
-  'no-fragile-entrypoint-guard',
-]);
+const RECOMMENDED_SEVERITIES = new Set(['error', 'warn']);
 
 /**
- * Default severities for `configs.recommended`.
- *
- * `error` is the default: every rule below flags a call whose replacement is a
- * one-line swap, and a wrong answer is a real bug on some platform.
- *
- * `warn` is reserved for the case where a fresh adopter's first run would
- * otherwise be a wall of blocking errors they cannot triage in one sitting:
- * `no-path-join` / `no-path-resolve` / `no-path-relative`, the highest-churn
- * rules by far (they fire on every raw `node:path` call in the codebase).
- * Measured on a 4,670-file adopter tree: 3,963 + 372 + 1 findings, **all
- * autofixable**. All three auto-fix, so `warn` lets a project run `--fix` and
- * burn the list down incrementally instead of blocking CI on day one.
- *
- * Raise them to `error` once the backlog is clear — that is what VAT itself does.
- *
- * The criterion for `warn` is MIGRATION VOLUME, not how real the finding is. Every
- * rule in this pack either prevents a bug or shifts a static-analysis finding left of
- * a merge, and both are worth blocking on; what `warn` buys is a first run that reads
- * as a backlog to `--fix` rather than a wall. `prefer-startswith-over-regex` was
- * briefly graded on a different axis ("style, not a defect") and demoted — that was
- * wrong twice over: avoiding a SonarQube S6557 at lint time instead of at merge time
- * is a real saving, and the rule's matcher rejects any regex containing a
- * metacharacter, so it only fires on true literal prefixes and has near-zero churn.
- * It is `error`.
+ * Read a rule's `meta.docs` and refuse anything a rule in this pack must not ship
+ * without. Thrown at load time, so a malformed rule fails every consumer's
+ * `eslint` run at startup rather than silently landing outside `recommended`.
  */
-const RECOMMENDED_WARN = new Set([
-  'no-path-join',
-  'no-path-resolve',
-  'no-path-relative',
-  // Same criterion, without the autofix: a blind `catch` has no mechanical
-  // rewrite — each site is a decision about WHICH failure the sentinel stands
-  // for — and the first run on an existing tree is a long list. Measured on
-  // this repo's own ~200k-line tree: 202 sites. `warn` makes that a backlog to
-  // burn down rather than a wall; the hazard is real at every one of them.
-  'no-blind-catch',
-]);
+function validateRuleDocs(name, rule) {
+  if (typeof rule.create !== 'function') {
+    throw new TypeError(`eslint rule '${name}' exports a meta but no create function`);
+  }
+  const docs = rule.meta.docs;
+  if (typeof docs?.description !== 'string' || docs.description.length === 0) {
+    throw new TypeError(`eslint rule '${name}' has no meta.docs.description`);
+  }
+  if (typeof docs.recommended !== 'boolean') {
+    throw new TypeError(`eslint rule '${name}' must declare meta.docs.recommended as a boolean`);
+  }
+  if (docs.recommendedSeverity !== undefined && !RECOMMENDED_SEVERITIES.has(docs.recommendedSeverity)) {
+    throw new TypeError(`eslint rule '${name}' declares meta.docs.recommendedSeverity outside 'error' | 'warn'`);
+  }
+  if (docs.recommended && docs.recommendedSeverity === undefined) {
+    throw new TypeError(`eslint rule '${name}' is recommended but declares no meta.docs.recommendedSeverity`);
+  }
+}
+
+/**
+ * Every rule module under `rules/`, keyed by basename, in directory order
+ * (which `readdirSync` returns sorted on every platform this package supports).
+ *
+ * Distinguished from the factories and helpers by a `meta` export, not by
+ * filename: a naming convention is a claim nobody checks, and a factory that
+ * happened to be named `no-…` would otherwise be registered as a rule whose
+ * `create` is a function that builds rules.
+ */
+function discoverRules(rulesDir = RULES_DIR) {
+  const rules = {};
+  for (const file of readdirSync(rulesDir)) {
+    if (!file.endsWith('.cjs')) {
+      continue;
+    }
+    // eslint-disable-next-line security/detect-non-literal-require -- the directory listing IS the manifest; every entry is a file this package ships
+    const candidate = require(path.join(rulesDir, file));
+    if (typeof candidate !== 'object' || candidate === null || typeof candidate.meta !== 'object') {
+      continue;
+    }
+    const name = file.slice(0, -'.cjs'.length);
+    validateRuleDocs(name, candidate);
+    rules[name] = candidate;
+  }
+  return rules;
+}
+
+const rules = discoverRules();
 
 /**
  * Plugin namespace an adopter gets from `configs.recommended`, and therefore the
- * prefix on every rule id (`@vibe-agent-toolkit/no-path-join`).
+ * prefix on every rule id (`@vibe-agent-toolkit/no-raw-node-path`).
  *
  * Deliberately the SCOPE, not the full subpath specifier: rule ids are the surface
  * adopters type into `rules`, `eslint-disable` comments and CI baselines, and they
@@ -218,15 +134,41 @@ const plugin = {
   },
   rules,
   configs: {},
+  /** Test seam: the discovery walk over an arbitrary directory, so the load-time refusals can be exercised on a fixture. */
+  __internal: { discoverRules },
 };
 
+/**
+ * `configs.recommended` is the cross-platform-safety core: every rule whose
+ * `meta.docs.recommended` is true, at the severity it declares.
+ *
+ * `error` is the norm: every such rule flags a call whose replacement is a
+ * one-line swap, and a wrong answer is a real bug on some platform. `warn` is
+ * reserved for the case where a fresh adopter's first run would otherwise be a
+ * wall of blocking errors they cannot triage in one sitting — the criterion is
+ * MIGRATION VOLUME, not how real the finding is. A rule whose findings were
+ * doubted would be out of `recommended` entirely, not demoted.
+ *
+ * Each rule that opts OUT states why beside its own `recommended: false`. The
+ * reasons fall into a few families — a position on TEST STYLE
+ * (`require-justified-skip`, `no-test-scoped-functions`), a heuristic that keys
+ * on a NAMING CONVENTION rather than the property it cares about
+ * (`no-unsafe-root-join`, `no-process-exit-in-phase`), a SEAM that only exists
+ * once the consumer writes it (`no-raw-text-decode`), a REQUIRED OPTION this
+ * config cannot supply (`no-self-package-import`), and a claim about the
+ * CONSUMER's environment that is right for some and wrong for others
+ * (`no-fragile-entrypoint-guard`, `no-bare-symlink-in-tests`). Someone installing
+ * this package for `safePath.join()` should not silently inherit any of them.
+ * All still ship in `rules` and are enabled by naming them — which is what
+ * VAT's own `eslint.config.js` does; it does not consume `configs.recommended`.
+ */
 plugin.configs.recommended = {
   name: '@vibe-agent-toolkit/utils/eslint/recommended',
   plugins: { [NAMESPACE]: plugin },
   rules: Object.fromEntries(
-    Object.keys(rules)
-      .filter((name) => !RECOMMENDED_EXCLUDE.has(name))
-      .map((name) => [`${NAMESPACE}/${name}`, RECOMMENDED_WARN.has(name) ? 'warn' : 'error']),
+    Object.entries(rules)
+      .filter(([, rule]) => rule.meta.docs.recommended)
+      .map(([name, rule]) => [`${NAMESPACE}/${name}`, rule.meta.docs.recommendedSeverity]),
   ),
 };
 

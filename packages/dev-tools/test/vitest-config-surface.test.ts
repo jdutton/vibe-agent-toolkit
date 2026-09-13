@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -57,15 +57,12 @@ function isCommentLine(line: string): boolean {
  */
 function findVitestConfigFiles(): string[] {
   const isConfig = (name: string): boolean => name.startsWith('vitest.') && name.endsWith('.ts');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- PROJECT_ROOT-derived, not user input
   const rootFiles = readdirSync(PROJECT_ROOT).filter((name) => isConfig(name)).map((name) => safePath.join(PROJECT_ROOT, name));
   const packagesDir = safePath.join(PROJECT_ROOT, 'packages');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- PROJECT_ROOT-derived, not user input
   const packageFiles = readdirSync(packagesDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
+    .filter((entry) => direntKindFollowingSync(packagesDir, entry) === 'directory')
     .flatMap((entry) => {
       const dir = safePath.join(packagesDir, entry.name);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- PROJECT_ROOT-derived, not user input
       return readdirSync(dir).filter((name) => isConfig(name)).map((name) => safePath.join(dir, name));
     });
   return [...rootFiles, ...packageFiles];
@@ -104,7 +101,6 @@ describe('vitest pool surface (v3 knobs are silently ignored, not rejected)', ()
 
     it.each(REMOVED_POOL_KEYS)('declares no `%s` outside comments', (key) => {
       const offenders = configFiles.filter((file) => {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- from findVitestConfigFiles, PROJECT_ROOT-derived
         const source = readFileSync(file, 'utf-8');
         return source.split('\n').some((line) => !isCommentLine(line) && line.includes(key));
       });

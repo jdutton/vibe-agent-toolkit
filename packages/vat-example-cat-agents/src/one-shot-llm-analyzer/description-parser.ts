@@ -15,7 +15,7 @@ import { extractFurColor as extractFurColorUtil } from '../utils/color-extractio
 export const DescriptionParserInputSchema = z.object({
   description: z.string().describe('Text description of the cat (structured or unstructured)'),
   mockable: z.boolean().optional().describe('Whether to use mock mode (default: true)'),
-});
+}).strict();
 
 export type DescriptionParserInput = z.infer<typeof DescriptionParserInputSchema>;
 

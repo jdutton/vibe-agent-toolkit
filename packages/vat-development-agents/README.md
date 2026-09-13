@@ -63,15 +63,17 @@ vat skills install npm:@vibe-agent-toolkit/vat-development-agents
 
 **Install from local directory (development):**
 ```bash
-vat skills install ./packages/vat-development-agents
+# From the monorepo root — builds, then symlinks the built plugin into Claude Code
+vat claude plugin install --build --cwd packages/vat-development-agents
 ```
 
 **Verify installation:**
 ```bash
-vat skills list --installed
+vat claude plugin list
+vat skills list --user
 ```
 
-The `vibe-agent-toolkit` skill will be installed to `~/.claude/plugins/vibe-agent-toolkit/` and will appear in Claude Code after restarting or running `/reload-plugins`.
+The plugin lands under `~/.claude/plugins/marketplaces/vibe-agent-toolkit/…` and its skills appear in Claude Code after restarting or running `/reload-plugins`.
 
 **What the skill includes:**
 - VAT overview and use cases
@@ -84,8 +86,18 @@ The `vibe-agent-toolkit` skill will be installed to `~/.claude/plugins/vibe-agen
 
 ### As NPM Package
 
-```javascript
-import agentGenerator from '@vibe-agent-toolkit/vat-development-agents/agents/agent-generator';
+The package's `exports` map exposes the agent manifests as files, not modules —
+`./agents/agent-generator` resolves to `agent.yaml`, so a plain `import` fails in Node. Load it
+through the manifest loader:
+
+```typescript
+import { createRequire } from 'node:module';
+import { loadAgentManifest } from '@vibe-agent-toolkit/agent-config';
+
+const manifestPath = createRequire(import.meta.url).resolve(
+  '@vibe-agent-toolkit/vat-development-agents/agents/agent-generator',
+);
+const manifest = await loadAgentManifest(manifestPath);
 ```
 
 ### Direct Agent Access

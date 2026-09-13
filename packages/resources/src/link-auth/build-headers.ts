@@ -24,7 +24,7 @@
  * ⚠️ If a future caller does need to serialize a header MAP, reinstate a
  * structural masker — but wire it to a real call site in the same change.
  *
- * Per design issue #113 §4 (auth.headers vocabulary) and §8.
+ * Per the linkAuth design §4 (auth.headers vocabulary) and §8.
  */
 
 import { inspect } from 'node:util';

@@ -11,7 +11,6 @@ const SUMMARY_FILE = 'summary.yaml';
 
 /** Read the summary index written into `runDir`. */
 function readSummary(runDir: string): Record<string, unknown> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled path
   return yaml.parse(readFileSync(safePath.join(runDir, SUMMARY_FILE), 'utf-8')) as Record<string, unknown>;
 }
 
@@ -70,7 +69,6 @@ describe('writeRunReport', () => {
     const runDir = await writeRunReport(report, outDir);
 
     const summaryPath = safePath.join(runDir, SUMMARY_FILE);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled path
     expect(statSync(summaryPath).isFile()).toBe(true);
 
     const written = readSummary(runDir);

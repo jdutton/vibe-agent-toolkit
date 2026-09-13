@@ -39,7 +39,6 @@ describe('prepareHarnessRoot', () => {
     mkdirSyncReal(dir, { mode: 0o700 });
     expect(() => prepareHarnessRoot(dir)).not.toThrow();
     if (process.platform !== 'win32') {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture, controlled directory
       expect(statSync(dir).mode & 0o777).toBe(0o700);
     }
   });
@@ -51,12 +50,10 @@ describe('prepareHarnessRoot', () => {
       const dir = safePath.join(tmpBase, 'wide');
       mkdirSyncReal(dir, { mode: 0o755 });
       // Confirm starting mode
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture, controlled directory
       expect(statSync(dir).mode & 0o777).toBe(0o755);
 
       expect(() => prepareHarnessRoot(dir)).not.toThrow();
 
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture, controlled directory
       expect(statSync(dir).mode & 0o777).toBe(0o700);
     },
   );
@@ -74,14 +71,11 @@ describe('prepareHarnessRoot', () => {
       const dir = safePath.join(tmpBase, 'narrow');
       mkdirSyncReal(dir, { mode: 0o755 });
       // Force a different weird mode
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture, controlled directory
       chmodSync(dir, 0o644);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture, controlled directory
       expect(statSync(dir).mode & 0o777).toBe(0o644);
 
       expect(() => prepareHarnessRoot(dir)).not.toThrow();
 
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture, controlled directory
       expect(statSync(dir).mode & 0o777).toBe(0o700);
     },
   );

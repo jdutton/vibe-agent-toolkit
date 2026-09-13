@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- tests use controlled temp directories */
 /**
  * Unit tests for eval-suite-isolation.ts — the rule that keeps the eval answer key
  * off the executor's filesystem. Real fs throughout (the module's whole job is

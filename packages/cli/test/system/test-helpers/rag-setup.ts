@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test helpers legitimately use dynamic paths
 
 /**
@@ -9,9 +8,11 @@ import * as fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
+import { createTestTempDir } from '../test-common.js';
+
 import type { CliResult } from './cli-runner.js';
 import { executeAndParseYaml } from './cli-runner.js';
-import { createTestTempDir, setupTestProject } from './project-setup.js';
+import { setupTestProject } from './project-setup.js';
 
 /**
  * Setup RAG test project with markdown files
@@ -102,12 +103,12 @@ export function setupIndexedRagTest(
  *
  * @param testName - Name of the test suite (e.g., 'stats', 'query', 'clear')
  * @param binPath - Path to CLI binary
- * @param getTestOutputDir - Function from @vibe-agent-toolkit/utils
+ * @param getTestOutputDir - Function from @vibe-agent-toolkit/utils/testing
  * @returns Object with refs that will be populated during beforeAll
  *
  * @example
  * ```typescript
- * import { getTestOutputDir } from '@vibe-agent-toolkit/utils';
+ * import { getTestOutputDir } from '@vibe-agent-toolkit/utils/testing';
  * const binPath = getBinPath(import.meta.url);
  * const suite = setupRagTestSuite('stats', binPath, getTestOutputDir);
  *
@@ -170,12 +171,10 @@ export function executeRagQueryAndExpectSuccess(
   cwd: string
 ): {
   result: CliResult;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   output: any;
 } {
   const { result, parsed } = executeAndParseYaml(binPath, args, { cwd });
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const output = parsed as any;
 
   // Common assertions for successful RAG query

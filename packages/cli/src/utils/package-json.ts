@@ -28,7 +28,6 @@ import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
 export function readPackageJsonOrAbsent(pkgPath: string): Record<string, unknown> | undefined {
   let raw: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a manifest path the caller derived from its project root
     raw = readFileSync(pkgPath, 'utf-8');
   } catch (error) {
     if (isPathAbsentError(error)) return undefined;

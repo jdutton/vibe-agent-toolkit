@@ -50,7 +50,6 @@ export function loadGitignoreRules(gitRoot: string, baseDir?: string): Ignore | 
   // Load .gitignore files from git root down to baseDir
   for (const dir of dirsToCheck) {
     const gitignorePath = safePath.join(dir, '.gitignore');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from validated gitRoot and baseDir
     if (fs.existsSync(gitignorePath)) {
       try {
         // Through the decoding seam. A `.gitignore` written by PowerShell's `>`

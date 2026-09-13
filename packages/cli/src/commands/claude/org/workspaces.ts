@@ -1,6 +1,7 @@
 /**
  * `vat claude org workspaces` — manage organization workspaces via Admin API.
  */
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { Command } from 'commander';
 
 import { addPaginationOptions, buildPaginationParams, executeOrgCommand } from './helpers.js';
@@ -79,7 +80,7 @@ function createMembersSubgroup(): Command {
     .requiredOption('--role <role>', 'Role (workspace_user, workspace_developer, workspace_admin)')
     .action(() => {
       writeNotYetImplementedStub('org workspaces members add');
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     });
 
   // update (stub)
@@ -91,7 +92,7 @@ function createMembersSubgroup(): Command {
     .requiredOption('--role <role>', 'New role')
     .action(() => {
       writeNotYetImplementedStub('org workspaces members update');
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     });
 
   // remove (stub)
@@ -102,7 +103,7 @@ function createMembersSubgroup(): Command {
     .requiredOption(USER_ID_FLAG, USER_ID_DESC)
     .action(() => {
       writeNotYetImplementedStub('org workspaces members remove');
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     });
 
   members.addCommand(listCmd);
@@ -170,7 +171,7 @@ Example:
     .requiredOption('--name <name>', 'Workspace name')
     .action(() => {
       writeNotYetImplementedStub('org workspaces create');
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     });
 
   // archive (stub)
@@ -180,7 +181,7 @@ Example:
     .argument(WS_ID_ARG, WS_ID_DESC)
     .action(() => {
       writeNotYetImplementedStub('org workspaces archive');
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     });
 
   command.addCommand(listCmd);

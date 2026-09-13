@@ -5,6 +5,7 @@
 import type { Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import yaml from 'yaml';
 
@@ -60,7 +61,7 @@ export async function installedCommand(options: InstalledCommandOptions): Promis
       };
       console.log(yaml.stringify(output));
 
-      process.exit(0);
+      process.exit(ExitCode.OK);
       return;
     }
 
@@ -92,7 +93,7 @@ export async function installedCommand(options: InstalledCommandOptions): Promis
     };
     console.log(yaml.stringify(output));
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'Installed');
   }
@@ -118,7 +119,6 @@ async function scanForInstalledSkills(
       if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
 
       const skillPath = safePath.join(location, entry.name);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from validated scope + entry name
       const stats = await fs.lstat(skillPath);
       const isSymlink = stats.isSymbolicLink();
 
@@ -142,7 +142,6 @@ async function scanForInstalledSkills(
  */
 async function listScopeLocation(location: string): Promise<Dirent[] | null> {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from validated scope location
     return await fs.readdir(location, { withFileTypes: true });
   } catch (error) {
     if (isPathAbsentError(error)) return null;

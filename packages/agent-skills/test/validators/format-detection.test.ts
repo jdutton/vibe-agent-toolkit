@@ -1,5 +1,3 @@
-
-/* eslint-disable security/detect-non-literal-fs-filename -- test helpers use controlled temp directories */
 import * as fs from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
@@ -263,7 +261,6 @@ describe('detectResourceFormat', () => {
 				expect(result.reason).toBeDefined();
 			} finally {
 				// Restore permissions for cleanup
-				// eslint-disable-next-line sonarjs/file-permissions -- restoring permissions after test
 				fs.chmodSync(restrictedDir, 0o755);
 			}
 		});

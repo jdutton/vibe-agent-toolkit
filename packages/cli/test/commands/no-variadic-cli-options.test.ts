@@ -29,7 +29,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 /** `packages/cli/src`, from this test file. */
@@ -44,10 +44,9 @@ const SRC_DIR = safePath.resolve(import.meta.dirname, '../../src');
 const VARIADIC_OPTION = /(['"`])(--?[^'"`\n]*\.{3}[>\]])\1/g;
 
 function* walkTypeScript(dir: string): Generator<string> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- dir descends from this package's own src/
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = safePath.join(dir, entry.name);
-    if (entry.isDirectory()) {
+    if (direntKindFollowingSync(dir, entry) === 'directory') {
       yield* walkTypeScript(full);
     } else if (entry.name.endsWith('.ts')) {
       yield full;
@@ -73,7 +72,6 @@ function findVariadicOptions(): string[] {
   const found: string[] = [];
   for (const file of walkTypeScript(SRC_DIR)) {
     const relative = toForwardSlash(safePath.relative(SRC_DIR, file));
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- file came from the walk above
     for (const line of readFileSync(file, 'utf8').split('\n')) {
       if (isCommentLine(line)) continue;
       for (const match of line.matchAll(VARIADIC_OPTION)) {

@@ -1,4 +1,3 @@
-version: 1
 prompts:
   - id: skill-one-default
     forSkillId: skill-one

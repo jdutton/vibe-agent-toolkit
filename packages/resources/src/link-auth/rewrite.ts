@@ -8,9 +8,11 @@
  * context flows out so downstream header templates can interpolate the
  * same variables.
  *
- * Per design issue #113 §4 (vocabulary) and §5.2 (fragment/query
+ * Per the linkAuth design §4 (vocabulary) and §5.2 (fragment/query
  * stripping must precede a greedy `(?<path>.+)` capture).
  */
+
+import { VatError } from '@vibe-agent-toolkit/utils';
 
 import { renderTemplate } from './template.js';
 
@@ -31,11 +33,10 @@ export type RewriteOutcome =
 /**
  * Thrown when a rule's `when` field is not a compilable regex.
  */
-export class InvalidRewriteRuleError extends Error {
+export class InvalidRewriteRuleError extends VatError {
   constructor(pattern: string, cause: unknown) {
     const reason = cause instanceof Error ? cause.message : String(cause);
-    super(`Invalid rewrite rule "when" regex: ${pattern}. ${reason}`);
-    this.name = 'InvalidRewriteRuleError';
+    super('INVALID_REWRITE_RULE', `Invalid rewrite rule "when" regex: ${pattern}. ${reason}`);
   }
 }
 
@@ -44,12 +45,12 @@ export class InvalidRewriteRuleError extends Error {
  * Adopter must rename one — vars cannot shadow captures (the design's
  * intent is captures + vars in a single namespace).
  */
-export class VarCaptureCollisionError extends Error {
+export class VarCaptureCollisionError extends VatError {
   constructor(name: string) {
     super(
+      'VAR_CAPTURE_COLLISION',
       `Rewrite var "${name}" collides with a regex capture of the same name. Rename one.`,
     );
-    this.name = 'VarCaptureCollisionError';
   }
 }
 
@@ -96,7 +97,7 @@ export function compileWhen(pattern: string): RegExp {
   try {
     // Rule patterns originate in trusted config (see design §8); runtime
     // compilation is intentional, not user-input regex injection.
-    // eslint-disable-next-line security/detect-non-literal-regexp
+    // eslint-disable-next-line security/detect-non-literal-regexp -- pattern comes from trusted config, not user input
     return new RegExp(pattern);
   } catch (e) {
     throw new InvalidRewriteRuleError(pattern, e);

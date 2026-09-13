@@ -115,7 +115,7 @@
  *
  * ⚠️ A rollup that sums a stratum's rows without regard to pass double-counts
  * every nested bracket. That is a real reading hazard, not a hypothetical: it is
- * what `packages/lab/src/facets/crawl/dump.ts` did until 2026-08-15, and it
+ * what `packages/lab/src/facets/crawl/dump.ts` used to do, and it
  * inflated the two arms by DIFFERENT factors, because they nest to different
  * depths. That reader now implements the rule above — `crawlRowRole` there is
  * the executable copy of it — so anyone adding a bracket to this seam should
@@ -204,8 +204,8 @@
  * It carries the process's own wall and CPU lifetime, like the parse dump, and
  * for the same reason: these brackets are wall-timed, so a reader has to be able
  * to see that the process spent its life waiting. It does **not** invite that
- * figure to be summed across processes. `parse-timing.ts`'s review finding of
- * 2026-08-14 records that the lab sums `process.wallMs` across dumps, which
+ * figure to be summed across processes. `parse-timing.ts`'s review finding
+ * records that the lab sums `process.wallMs` across dumps, which
  * double-counts real time under a multi-process verb because the parent
  * orchestrator's lifetime contains every child's. The reader for THIS dump
  * publishes one lifetime per process and never a total — see

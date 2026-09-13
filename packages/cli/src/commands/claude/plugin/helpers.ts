@@ -67,9 +67,7 @@ export function detectSource(input: string): SkillSource {
   // Check filesystem
   const absolutePath = safePath.resolve(input);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- User-provided CLI argument
   if (existsSync(absolutePath)) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- User-provided CLI argument, validated above
     const stat = statSync(absolutePath);
 
     if (stat.isDirectory()) {
@@ -98,12 +96,10 @@ export async function readPackageJsonVatMetadata(
 ): Promise<{ packageJson: PackageJson; skills: string[] }> {
   const packageJsonPath = safePath.join(dir, 'package.json');
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Directory path validated by caller
   if (!existsSync(packageJsonPath)) {
     throw new Error(`package.json not found in: ${dir}`);
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Directory path validated by caller
   const content = await readFile(packageJsonPath, 'utf-8');
   const packageJson = JSON.parse(content) as PackageJson;
 
@@ -147,7 +143,6 @@ export function downloadNpmPackage(packageName: string, tempDir: string): string
   const tarballName = packOutput.toString().trim();
   const tarballPath = safePath.join(tempDir, tarballName);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path is constructed from temp dir
   if (!existsSync(tarballPath)) {
     throw new Error(`npm pack succeeded but tarball not found: ${tarballPath}`);
   }
@@ -162,7 +157,6 @@ export function downloadNpmPackage(packageName: string, tempDir: string): string
 
   const packageDir = safePath.join(tempDir, 'package');
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path is constructed from temp dir
   if (!existsSync(packageDir)) {
     throw new Error(`npm tarball extracted but package/ directory not found`);
   }

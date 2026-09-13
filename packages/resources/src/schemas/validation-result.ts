@@ -19,6 +19,6 @@ export const ValidationResultSchema = z.object({
   hasErrors: z.boolean().describe('True when any emitted issue has resolved severity "error"'),
   durationMs: z.number().nonnegative().describe('Validation duration in milliseconds'),
   timestamp: z.date().describe('When validation was performed'),
-}).describe('Complete results from validating a collection of resources');
+}).strict().describe('Complete results from validating a collection of resources');
 
 export type ValidationResult = z.infer<typeof ValidationResultSchema>;

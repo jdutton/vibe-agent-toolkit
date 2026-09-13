@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- all paths are temp dirs the test owns */
 /**
  * A1 — the documented escape hatch has to actually work.
  *

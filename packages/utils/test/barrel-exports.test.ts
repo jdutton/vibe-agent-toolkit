@@ -1,40 +1,23 @@
+/**
+ * The `.` barrel's runtime export set — a ratchet, both ways. How to react when
+ * this fails is written on `findBarrelDrift` in
+ * `packages/dev-tools/src/pin-barrel-exports.ts`; in one line: a removal is a
+ * breaking change (restore it, or record it in CHANGELOG.md), an addition is
+ * deliberate and needs a consumer outside this package before it is added here.
+ */
+
 import { describe, expect, it } from 'vitest';
 
-/**
- * The `.` barrel's runtime export set, sorted.
- *
- * **How to react when this test fails.**
- *
- * - A **removal** (a name in this list that the barrel no longer exports) is a
- *   BREAKING CHANGE. There are ~500 in-repo importers plus published adopters
- *   reaching for these names. Do not "fix" the test by deleting the line: either
- *   restore the export, or — if the removal is intended under the pre-1.0 policy —
- *   delete the line AND add a `### Removed` / breaking-change entry to
- *   `CHANGELOG.md` naming every symbol dropped and where it moved to.
- * - An **addition** is fine to accept. Add the name in sorted position; no
- *   changelog obligation beyond the usual "Added" note for a new public helper.
- *
- * This guard exists because the subpath work moved seven pure path helpers off
- * `./fs` and nothing noticed: no test enumerated any entry's export set, so a
- * published subpath silently lost half its surface. Enumerating the barrel — the
- * entry with the most consumers — makes that class of change impossible to ship
- * unremarked.
- *
- * **An addition here is not automatically fine.** This list and
- * `subpath-purity.test.ts`'s `index.ts` row are two halves of one rule: a module
- * that brings a third-party dependency — directly, or transitively through
- * anything it imports — belongs on a subpath. Adding such a name to the barrel
- * reddens the purity row, and the fix is a subpath entry, not a longer list
- * here. Names whose modules reach only `node:*` are the ones this list is for.
- *
- * Type-only exports do not appear here: this is the runtime namespace.
- */
+import { findBarrelDrift } from '../../dev-tools/src/pin-barrel-exports.js';
+
+// This list and `subpath-purity.test.ts`'s `index.ts` row are two halves of one
+// rule: a module that brings a third-party dependency — directly, or
+// transitively through anything it imports — belongs on a subpath. Adding such
+// a name here reddens the purity row, and the fix is a subpath entry, not a
+// longer list. Names whose modules reach only `node:*` are the ones this list
+// is for. Test scaffolding (the temp-dir suite family, the fs-refusal fakes,
+// the crawl-timing `__*ForTest` seams) is on `./testing`, never here.
 const BARREL_EXPORTS = [
-  '__readCrawlTimingSnapshot',
-  '__setCrawlTimingForTest',
-  '__writeCrawlTimingDumpForTest',
-  'compareCodeUnits',
-  'copyDirectory',
   'CRAWL_BLOB_POPULATE_ID',
   'CRAWL_CLOSURE_CONTRIBUTE_ID',
   'CRAWL_CLOSURE_RESOLVE_ID',
@@ -49,12 +32,28 @@ const BARREL_EXPORTS = [
   'CRAWL_STRATA',
   'CRAWL_WALKER_GITIGNORE_ID',
   'CRAWL_WALKER_ID',
+  'CopyLinkEscapesSourceError',
+  'DirectorySpellingIndex',
+  'DirectoryWalkRevisitedError',
+  'FollowedWalk',
+  'FsLookupCache',
+  'INHERITED_GIT_ENV',
+  'PathEscapesRootError',
+  'SKILL_SCOPE_NAMES',
+  'SKILL_TARGETS',
+  'SKILL_TARGET_NAMES',
+  'VatError',
+  'ZodTypeNames',
+  'compareCodeUnits',
+  'copyDirectory',
   'crawlTimingStart',
   'createSymlink',
   'createSymlinkAsync',
   'decodeTextContent',
   'detachGitEnv',
-  'DirectorySpellingIndex',
+  'direntKind',
+  'direntKindFollowing',
+  'direntKindFollowingSync',
   'dynamicImportPath',
   'ensureTimingDirectory',
   'errnoError',
@@ -64,30 +63,30 @@ const BARREL_EXPORTS = [
   'findConfigFile',
   'findNodeWorkspaceRoot',
   'findProjectRoot',
-  'FsLookupCache',
   'getRelativePath',
-  'getTestOutputBase',
-  'getTestOutputDir',
   'getZodTypeName',
   'globMagicRemainder',
   'hasParentTraversalSegment',
-  'INHERITED_GIT_ENV',
   'isAbsoluteAnyPlatform',
   'isAbsolutePath',
   'isFilesystemAccessError',
   'isGlob',
   'isPathAbsentError',
-  'issueLocation',
+  'isSingleFsSegment',
+  'isUnderRoot',
+  'isVatError',
   'isZodNullable',
   'isZodOptional',
   'isZodType',
+  'issueLocation',
   'mkdirSyncReal',
-  'normalizedTmpdir',
   'normalizePath',
   'normalizeTimingDirectory',
+  'normalizedTmpdir',
   'parseEnvBoolean',
   'parseWholeNumberAtLeast',
   'pathSpellingFrom',
+  'prefixMessageOnce',
   'readTextContent',
   'readTextContentSync',
   'readTimingProcess',
@@ -96,19 +95,12 @@ const BARREL_EXPORTS = [
   'recordCrawlPass',
   'recordRegistryPass',
   'recordSharedPass',
-  'refuseAsyncFs',
-  'refuseSyncFs',
-  'removeScratchDir',
+  'relativeEscapesRoot',
   'resetProjectRootCaches',
   'resolveAssetReference',
   'resolveFromImportMeta',
   'resolveSkillTarget',
   'safePath',
-  'setupAsyncTempDirSuite',
-  'setupSyncTempDirSuite',
-  'SKILL_SCOPE_NAMES',
-  'SKILL_TARGET_NAMES',
-  'SKILL_TARGETS',
   'spellingWalkRoot',
   'staticGlobBase',
   'symlinkCapability',
@@ -119,27 +111,11 @@ const BARREL_EXPORTS = [
   'unwrapZodType',
   'withContributorStratum',
   'withOuterBracket',
-  'withReaddirSyncRefused',
-  'withSyncFsRefused',
   'writeTimingDump',
-  'ZodTypeNames',
 ];
 
-describe('the `.` barrel export surface', () => {
-  it('exports exactly the recorded set — a removal is a breaking change', async () => {
-    const barrel: Record<string, unknown> = await import('../src/index.js');
-    const actual = Object.keys(barrel).sort((a, b) => a.localeCompare(b));
-
-    expect(actual).toEqual(BARREL_EXPORTS);
-  });
-
-  // Named separately so a removal reports as "missing X" rather than as a diff of
-  // two 85-element arrays, which is the failure mode people skim past.
-  it('has dropped no previously exported name', async () => {
-    const barrel: Record<string, unknown> = await import('../src/index.js');
-    const actual = new Set(Object.keys(barrel));
-    const removed = BARREL_EXPORTS.filter((name) => !actual.has(name));
-
-    expect(removed).toEqual([]);
+describe('@vibe-agent-toolkit/utils — the `.` barrel export surface', () => {
+  it('exports exactly the recorded set, sorted — nothing added, dropped, or out of order', async () => {
+    expect(findBarrelDrift(await import('../src/index.js'), BARREL_EXPORTS)).toEqual({ added: [], removed: [], unsorted: [] });
   });
 });

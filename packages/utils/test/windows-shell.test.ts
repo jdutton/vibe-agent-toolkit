@@ -460,7 +460,6 @@ describe('resolveShellCommandToken', () => {
     const srcDir = resolveFromImportMeta(import.meta.url, '..', 'src');
 
     for (const file of ['safe-exec.ts', 'spawn-hardened.ts']) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from srcDir
       const source = readFileSync(safePath.join(srcDir, file), 'utf8');
       expect(source, `${file} must select its shell command token via the shared helper`).toContain(
         'resolveShellCommandToken(command,',

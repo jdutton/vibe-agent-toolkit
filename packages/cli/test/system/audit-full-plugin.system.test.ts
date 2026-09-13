@@ -1,4 +1,3 @@
-/* eslint-disable sonarjs/no-duplicate-string */
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -36,7 +35,8 @@ describe('vat audit (parse-only checks for full-plugin assets)', () => {
     writeTestFile(safePath.join(pluginRoot, 'hooks', 'hooks.json'), '{not json');
 
     const result = await executeCli(binPath, ['audit', pluginRoot], { cwd: tempDir });
-    expect(result.status).toBe(0);
+    // Exit 1: the exit code follows `status`, and this tree has an error-severity finding.
+    expect(result.status).toBe(1);
     expect(result.stdout).toContain('hooks.json');
     expect(result.stdout).toMatch(/severity:\s*error/);
   });
@@ -47,7 +47,8 @@ describe('vat audit (parse-only checks for full-plugin assets)', () => {
     writeTestFile(safePath.join(pluginRoot, '.mcp.json'), 'bogus');
 
     const result = await executeCli(binPath, ['audit', pluginRoot], { cwd: tempDir });
-    expect(result.status).toBe(0);
+    // Exit 1: the exit code follows `status`, and this tree has an error-severity finding.
+    expect(result.status).toBe(1);
     expect(result.stdout).toContain('.mcp.json');
     expect(result.stdout).toMatch(/severity:\s*error/);
   });

@@ -1,7 +1,7 @@
-/* eslint-disable sonarjs/no-duplicate-string, security/detect-non-literal-fs-filename */
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { validateFrontmatterLinks } from '../src/frontmatter-link-validator.js';

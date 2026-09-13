@@ -13,7 +13,7 @@ import { z } from 'zod';
 export const SimpleNameInputSchema = z.object({
   adjective: z.string().describe('An adjective to describe the subject'),
   noun: z.string().describe('A noun representing the subject'),
-});
+}).strict();
 
 export type SimpleNameInput = z.infer<typeof SimpleNameInputSchema>;
 
@@ -23,7 +23,7 @@ export type SimpleNameInput = z.infer<typeof SimpleNameInputSchema>;
 export const SimpleNameOutputSchema = z.object({
   name: z.string().describe('Generated name combining the inputs'),
   reasoning: z.string().describe('Brief explanation of the name choice'),
-});
+}).strict();
 
 export type SimpleNameOutput = z.infer<typeof SimpleNameOutputSchema>;
 
@@ -34,7 +34,7 @@ export const SimpleValidationInputSchema = z.object({
   line1: z.string().describe('First line of haiku'),
   line2: z.string().describe('Second line of haiku'),
   line3: z.string().describe('Third line of haiku'),
-});
+}).strict();
 
 export type SimpleValidationInput = z.infer<typeof SimpleValidationInputSchema>;
 
@@ -48,10 +48,10 @@ export const SimpleValidationOutputSchema = z.object({
       line1: z.number().describe('Syllable count for line 1'),
       line2: z.number().describe('Syllable count for line 2'),
       line3: z.number().describe('Syllable count for line 3'),
-    })
+    }).strict()
     .optional()
     .describe('Syllable counts for each line'),
   errors: z.array(z.unknown()).optional().describe('Validation errors if any'),
-});
+}).strict();
 
 export type SimpleValidationOutput = z.infer<typeof SimpleValidationOutputSchema>;

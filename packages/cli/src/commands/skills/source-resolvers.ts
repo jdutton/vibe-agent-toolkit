@@ -40,7 +40,6 @@ export async function extractTarballToTemp(
   mkdirSyncReal(tempDir, { recursive: true });
   await tar.extract({ file: tarballPath, cwd: tempDir });
   const packageDir = safePath.join(tempDir, 'package');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- temp path we just created
   if (!existsSync(packageDir)) {
     throw new Error(
       `Tarball does not contain a package/ directory: ${tarballPath}`,
@@ -55,7 +54,6 @@ export async function extractTarballToTemp(
  */
 export function findSkillsDirInNpmPackage(packageDir: string): string {
   const distSkills = safePath.join(packageDir, 'dist', 'skills');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- temp path
   if (existsSync(distSkills)) {
     return distSkills;
   }

@@ -78,13 +78,16 @@ describe('vat skill review (system test)', () => {
     expect(result.stderr).toContain('Reviewing skill: clean-skill');
   });
 
-  it('exits 1 when a skill has warnings and reports findings under the correct section', async () => {
+  it('exits 0 on warnings alone (1 under --strict) and reports findings under the correct section', async () => {
     const tempDir = ctx.createTempDir();
     const skillDir = setupProblemSkillDir(tempDir);
 
     const result = await executeCli(ctx.binPath, ['skill', 'review', skillDir]);
 
-    expect(result.status).toBe(1);
+    // Warnings are in the report, not the exit code — the same contract as
+    // every sibling. `--strict` is the dial that promotes them.
+    expect(result.status).toBe(0);
+    expect((await executeCli(ctx.binPath, ['skill', 'review', skillDir, '--strict'])).status).toBe(1);
     // Filler-opener warning should be emitted in the Description section
     expect(result.stderr).toContain('SKILL_DESCRIPTION_FILLER_OPENER');
     expect(result.stderr).toContain('Description');
@@ -103,28 +106,32 @@ describe('vat skill review (system test)', () => {
     expect(result.stdout.startsWith('---\n')).toBe(true);
     expect(result.stdout).toContain('skill: clean-skill');
     expect(result.stdout).toContain('manual:');
-    // A clean skill publishes `success` WITH the distribution beside it, so
-    // `success` reads as "nothing to act on" rather than "nothing was looked at".
-    expect(result.stdout).toContain('status: success');
-    expect(result.stdout).toContain('issueCounts:');
+    // A clean skill publishes `ok` WITH the denominator and the distribution
+    // beside it, so `ok` reads as "one skill looked at, nothing found" rather
+    // than "nothing was looked at".
+    expect(result.stdout).toContain('status: ok');
+    expect(result.stdout).toContain('examined: 1');
+    expect(result.stdout).toContain('summary:');
     expect(result.stdout).toContain('errors: 0');
     expect(result.stdout).toContain('warnings: 0');
   });
 
-  it('--yaml status agrees with the exit code — a warning-bearing review is not `success`', async () => {
-    // Two channels, one run: `status: success` alongside exit 1 meant a CI job
-    // parsing the YAML and a CI job reading `$?` disagreed about the same skill.
+  it('--yaml status names the findings a warning-bearing review carries, beside exit 0', async () => {
+    // Two channels, one run, two questions: `status: findings` says the list
+    // is non-empty (a warning is a finding), and `$?` says whether the gate
+    // failed (it did not — warnings need `--strict`). A CI job reads the
+    // number it needs from `summary` rather than decoding the word.
     const tempDir = ctx.createTempDir();
     const skillDir = setupProblemSkillDir(tempDir);
 
     const result = await executeCli(ctx.binPath, ['skill', 'review', skillDir, '--yaml']);
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain('status: warning');
-    expect(result.stdout).not.toContain('status: success');
-    // The distribution rides beside the status, so `warning` is readable as
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('status: findings');
+    expect(result.stdout).not.toContain('status: ok');
+    // The distribution rides beside the status, so `findings` is readable as
     // "N warnings" rather than an unquantified mood.
-    expect(result.stdout).toContain('issueCounts:');
+    expect(result.stdout).toContain('summary:');
     expect(result.stdout).toMatch(/warnings: [1-9]/);
   });
 

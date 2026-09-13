@@ -1,12 +1,9 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { DeferredArtifacts } from '@vibe-agent-toolkit/resources';
 import type { ResourceLink, ResourceMetadata, SkillFileEntry } from '@vibe-agent-toolkit/resources';
 import {
-  __readCrawlTimingSnapshot,
-  __setCrawlTimingForTest,
   CRAWL_PASS_INSIDE,
   CRAWL_WALKER_GITIGNORE_ID,
   CRAWL_WALKER_ID,
@@ -16,6 +13,7 @@ import {
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import type { PathProbe } from '@vibe-agent-toolkit/utils';
+import { __readCrawlTimingSnapshot, __setCrawlTimingForTest } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { walkerExclusionsToIssues } from '../src/validators/walker-to-issues.js';

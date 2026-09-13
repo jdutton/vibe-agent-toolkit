@@ -221,7 +221,6 @@ describe('readVatSkillsFromPackageJson', () => {
   });
 
   it('returns the declared list', () => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
     writeFileSync(safePath.join(workDir, 'package.json'), '{"vat":{"skills":["a","b"]}}');
 
     expect(readVatSkillsFromPackageJson(workDir)).toEqual(['a', 'b']);
@@ -234,7 +233,6 @@ describe('readVatSkillsFromPackageJson', () => {
   it('refuses a package.json that is not JSON rather than reading it as "nothing declared"', () => {
     // "Nothing declared" skips the cross-check. A broken manifest used to skip
     // it the same way, so `vat verify` verified nothing and reported nothing.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
     writeFileSync(safePath.join(workDir, 'package.json'), '{"vat":');
 
     expect(() => readVatSkillsFromPackageJson(workDir)).toThrow(/package\.json is not valid JSON/);

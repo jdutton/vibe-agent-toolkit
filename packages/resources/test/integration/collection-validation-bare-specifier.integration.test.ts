@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- temp dir paths constructed in test setup */
 import { mkdir } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';

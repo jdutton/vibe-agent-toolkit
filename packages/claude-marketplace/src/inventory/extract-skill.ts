@@ -51,7 +51,7 @@ export type SharedRegistrySource =
  * question into an O(1) active-set lookup instead of a `git check-ignore`
  * subprocess per distinct target.
  *
- * Measured 2026-08-09 — **two different corpora, kept apart on purpose, because
+ * Measured — **two different corpora, kept apart on purpose, because
  * quoting them side by side reads as one run:**
  *
  * - *A 1,484-document adopter monorepo.* `vat audit` spawned 786 `check-ignore`
@@ -192,7 +192,6 @@ async function parseFrontmatterFields(
 	let name = '';
 	let description: string | undefined;
 	try {
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- absolute is resolved from caller-supplied path, safe for skill extraction
 		const raw = await readFile(absolute, 'utf-8');
 		const parsed = parseFrontmatter(raw);
 		if (parsed.success) {
@@ -307,7 +306,8 @@ async function walkLinkedFiles(
 ): Promise<string[]> {
 	const linked: string[] = [];
 	try {
-		// Library fallback to skill dir; see plan 2026-05-17 / spec §7.
+		// Library fallback to skill dir keeps this null-safe; the CLI boundary owns
+		// any user-facing warning about a missing project root.
 		const projectRoot = findProjectRoot(dirname(absolute)) ?? dirname(absolute);
 
 		// The projection lane, when one was supplied for exactly this root. Ahead of

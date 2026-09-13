@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is a temp dir the test owns */
 /**
  * `vat audit --user` must audit each installed subject ONCE.
  *

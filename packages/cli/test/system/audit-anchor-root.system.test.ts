@@ -35,9 +35,7 @@ function seedProject(scanRoot: string, project: string): void {
   const projectDir = safePath.join(scanRoot, project);
   const pluginDir = safePath.join(projectDir, 'plugins', 'plugin-x');
   const skillDir = safePath.join(pluginDir, 'skills', 'example');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are controlled in tests
   fs.mkdirSync(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are controlled in tests
   fs.mkdirSync(skillDir, { recursive: true });
 
   writeTestFile(safePath.join(projectDir, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
@@ -79,8 +77,9 @@ describe('vat audit — YAML states one root and re-bases every path onto it (sy
     cleanupTestTempDir(scanRoot);
   });
 
-  it('exits 0 and states the scan root as the only absolute path in the document', () => {
-    expect(exitStatus).toBe(0);
+  it('exits 1 (the tree has findings) and states the scan root as the only absolute path in the document', () => {
+    // Exit 1: the exit code follows `status`, and this tree has an error-severity finding.
+    expect(exitStatus).toBe(1);
     expect(parsed['root']).toBe(toForwardSlash(scanRoot));
 
     const anchors = anchorsBelowRoot(parsed);

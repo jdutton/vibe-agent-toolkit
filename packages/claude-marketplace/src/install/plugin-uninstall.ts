@@ -72,7 +72,6 @@ async function removePluginDirs(
   }
 
   const cachePluginDir = safePath.join(paths.pluginsCacheDir, marketplace, pluginName);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
   const cacheDir = existsSync(cachePluginDir);
   if (cacheDir && !dryRun) await rm(cachePluginDir, { recursive: true, force: true });
 
@@ -123,7 +122,6 @@ export async function uninstallPlugin(opts: UninstallPluginOptions): Promise<Uni
   const emptyArtifacts = { pluginDir: false, cacheDir: false, installedPlugins: false, knownMarketplaces: false, settings: false };
 
   const mpPluginDir = safePath.join(paths.marketplacesDir, marketplace, 'plugins', pluginName);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
   const mpPluginExists = existsSync(mpPluginDir);
 
   const installedPlugins = readInstalledPlugins(paths);
@@ -187,7 +185,6 @@ async function removeFromSettings(paths: ClaudeUserPaths, pluginKey: string, dry
     delete ep[pluginKey];
     settingsData['enabledPlugins'] = ep;
     mkdirSyncReal(dirname(paths.userSettingsPath), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
     writeFileSync(paths.userSettingsPath, JSON.stringify(settingsData, null, 2));
   }
   return true;

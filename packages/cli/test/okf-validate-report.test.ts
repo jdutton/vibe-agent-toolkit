@@ -1,59 +1,69 @@
 /**
- * Unit tests for the `vat okf validate` report summary.
+ * Unit tests for the `vat okf validate` report.
  *
  * 🪤 The defect these exist for: with no `okf.bundles` declared, the command
  * printed `status: passed`, `bundles: []`, and exited 0 — saying nothing at all
  * about the fact that it had checked nothing. A mistyped config key
- * (`okf.bundle:`, `okf.Bundles:`) therefore reads as a clean bill of health,
+ * (`okf.bundle:`, `okf.Bundles:`) therefore read as a clean bill of health,
  * which is the *green-without-running* shape this repo keeps finding.
  *
- * `vat resources check` already had the right answer for the identical
- * situation — it prints "No checks are declared. Add them under
- * `resources.checks` …" — so this is bringing one command in line with a
- * convention the repo already holds, not inventing a policy.
- *
- * Exit code stays 0 on purpose: nothing failed. It is the *status word* that
- * must not claim a pass, because that word is what a human and a CI log reader
- * actually see.
+ * The report envelope's REQUIRED `examined` is what closes it now: a run that
+ * checked nothing says `examined: 0`, and the notice says why. Exit code stays
+ * 0 on purpose: nothing failed.
  */
-import type { OkfBundleReport, OkfFinding } from '@vibe-agent-toolkit/resources';
+import type { OkfFinding } from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { createOkfCommand } from '../src/commands/okf/index.js';
-import { summarizeOkfBundles } from '../src/commands/okf/validate.js';
+import { OKF_VALIDATE_REPORT_SCHEMA, summarizeOkfBundles, type CheckedOkfBundle } from '../src/commands/okf/validate.js';
 
-function finding(severity: OkfFinding['severity']): OkfFinding {
+// Built from the cwd rather than a `/`-rooted literal, so the root has a drive
+// letter on Windows and `issueLocation` relativizes it the same way everywhere.
+const PROJECT_ROOT = safePath.resolve('okf-project');
+
+function finding(severity: OkfFinding['severity'], document = 'concepts/a.md'): OkfFinding {
   return {
     code: 'OKF_FRONTMATTER_MISSING',
     severity,
     message: 'no frontmatter',
-    document: 'concepts/a.md',
+    document,
   };
 }
 
-function report(bundle: string, findings: OkfFinding[] = []): OkfBundleReport {
+function report(bundle: string, findings: OkfFinding[] = []): CheckedOkfBundle {
   return {
-    bundle,
-    // The specifier, as the config wrote it — the report never carries the
-    // resolved absolute path (that leak is pinned in the resources suite).
-    root: `./bundles/${bundle}`,
-    conceptDocuments: ['concepts/a.md'],
-    reservedDocuments: [],
-    findings,
-    hasErrors: findings.some((f) => f.severity === 'error'),
+    report: {
+      bundle,
+      // The specifier, as the config wrote it — the report never carries the
+      // resolved absolute path (that leak is pinned in the resources suite).
+      root: `./bundles/${bundle}`,
+      conceptDocuments: ['concepts/a.md'],
+      reservedDocuments: [],
+      findings,
+      hasErrors: findings.some((f) => f.severity === 'error'),
+    },
+    root: safePath.join(PROJECT_ROOT, 'bundles', bundle),
   };
 }
 
 /** A bundle whose root was read successfully and held not one markdown file. */
-function emptyReport(bundle: string): OkfBundleReport {
+function emptyReport(bundle: string): CheckedOkfBundle {
   return {
-    bundle,
-    root: `./bundles/${bundle}`,
-    conceptDocuments: [],
-    reservedDocuments: [],
-    findings: [],
-    hasErrors: false,
+    report: {
+      bundle,
+      root: `./bundles/${bundle}`,
+      conceptDocuments: [],
+      reservedDocuments: [],
+      findings: [],
+      hasErrors: false,
+    },
+    root: safePath.join(PROJECT_ROOT, 'bundles', bundle),
   };
+}
+
+function summarize(checked: readonly CheckedOkfBundle[]) {
+  return summarizeOkfBundles(checked, PROJECT_ROOT);
 }
 
 /** The `validate` subcommand, with Commander's process.exit disabled. */
@@ -67,71 +77,108 @@ function validateSubcommand() {
 }
 
 describe('summarizeOkfBundles', () => {
-  it('reports no-bundles, not passed, when nothing was declared', () => {
-    const summary = summarizeOkfBundles([]);
+  it('examined zero, not passed, when nothing was declared', () => {
+    const summary = summarize([]);
 
-    expect(summary.status).toBe('no-bundles');
-    expect(summary.findingCount).toBe(0);
-    expect(summary.issueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
+    expect(summary.status).toBe('ok');
+    expect(summary.examined).toBe(0);
+    expect(summary.findings).toEqual([]);
+    expect(summary.summary).toEqual({ errors: 0, warnings: 0, info: 0 });
+    expect(summary.data.bundles).toEqual([]);
   });
 
   it('names the config key to add, so the fix does not need a docs lookup', () => {
-    const summary = summarizeOkfBundles([]);
+    const summary = summarize([]);
 
-    expect(summary.notice).toBeDefined();
-    expect(summary.notice).toContain('okf.bundles');
+    expect(summary.data.notice).toBeDefined();
+    expect(summary.data.notice).toContain('okf.bundles');
   });
 
-  it('passes when a declared bundle produced no findings', () => {
-    const summary = summarizeOkfBundles([report('knowledge')]);
+  it('is ok, with the documents it read as the denominator, when a bundle produced no findings', () => {
+    const summary = summarize([report('knowledge')]);
 
-    expect(summary.status).toBe('passed');
-    expect(summary.notice).toBeUndefined();
+    expect(summary.status).toBe('ok');
+    expect(summary.examined).toBe(1);
+    expect(summary.data.notice).toBeUndefined();
   });
 
-  it('fails on an error-severity finding', () => {
-    const summary = summarizeOkfBundles([report('knowledge', [finding('error')])]);
+  it('reports findings, with the file to open as a project-relative location', () => {
+    const summary = summarize([report('knowledge', [finding('error')])]);
 
-    expect(summary.status).toBe('failed');
-    expect(summary.issueCounts.errors).toBe(1);
-    expect(summary.findingCount).toBe(1);
+    expect(summary.status).toBe('findings');
+    expect(summary.summary.errors).toBe(1);
+    expect(summary.findings).toEqual([{
+      code: 'OKF_FRONTMATTER_MISSING',
+      severity: 'error',
+      message: 'no frontmatter',
+      location: 'bundles/knowledge/concepts/a.md',
+    }]);
   });
 
-  it('passes, but still counts, when every finding is below error', () => {
+  it('builds a document its own published schema accepts, findings or none', () => {
+    // The drift test proves `schemas/okf-validate.json` matches the Zod object;
+    // this proves the Zod object matches what the command WRITES. A producer
+    // adding a key to `findings[]` (strict at every level) reds here, not in
+    // an adopter's validator.
+    expect(OKF_VALIDATE_REPORT_SCHEMA.safeParse(summarize([])).success).toBe(true);
+    expect(OKF_VALIDATE_REPORT_SCHEMA.safeParse(summarize([report('knowledge', [finding('error')])])).success).toBe(true);
+  });
+
+  it('names the bundle root itself for the root-unreadable finding', () => {
+    const summary = summarize([report('knowledge', [finding('error', '.')])]);
+
+    expect(summary.findings[0]?.location).toBe('bundles/knowledge');
+  });
+
+  it('counts every finding below error too', () => {
     // THE case the counts block exists for. A bundle lowered to `warning` via
-    // `okf.bundles.<name>.severity` reports `passed` and exits 0 while carrying
-    // real conformance findings — so the whole distribution is asserted, not
-    // just the error bucket. Assert it as one object: checking only
-    // `errors === 0` would pass just as happily if the warning and info
-    // findings had been dropped on the floor instead of counted.
-    const summary = summarizeOkfBundles([
+    // `okf.bundles.<name>.severity` exits 0 while carrying real conformance
+    // findings — so the whole distribution is asserted, not just the error
+    // bucket. Checking only `errors === 0` would pass just as happily if the
+    // warning and info findings had been dropped on the floor instead of counted.
+    const summary = summarize([
       report('knowledge', [finding('warning'), finding('info')]),
     ]);
 
-    expect(summary.status).toBe('passed');
-    expect(summary.issueCounts).toEqual({ errors: 0, warnings: 1, info: 1 });
-    expect(summary.findingCount).toBe(2);
+    expect(summary.status).toBe('findings');
+    expect(summary.summary).toEqual({ errors: 0, warnings: 1, info: 1 });
+    expect(summary.findings).toHaveLength(2);
   });
 
   it('counts across every bundle, not just the first', () => {
-    const summary = summarizeOkfBundles([
+    const summary = summarize([
       report('a', [finding('error')]),
       report('b', [finding('error'), finding('warning')]),
     ]);
 
-    expect(summary.issueCounts).toEqual({ errors: 2, warnings: 1, info: 0 });
-    expect(summary.findingCount).toBe(3);
-    expect(summary.status).toBe('failed');
+    expect(summary.summary).toEqual({ errors: 2, warnings: 1, info: 0 });
+    expect(summary.examined).toBe(2);
+    expect(summary.findings.map((f) => f.location)).toEqual([
+      'bundles/a/concepts/a.md',
+      'bundles/b/concepts/a.md',
+      'bundles/b/concepts/a.md',
+    ]);
+  });
+
+  it('keeps the per-bundle rows free of findings — the envelope carries them once', () => {
+    const summary = summarize([report('a', [finding('error')])]);
+
+    expect(summary.data.bundles).toEqual([{
+      bundle: 'a',
+      root: './bundles/a',
+      conceptDocuments: ['concepts/a.md'],
+      reservedDocuments: [],
+    }]);
   });
 
   it('distinguishes an empty declaration from a declared-but-empty bundle', () => {
     // A bundle root that exists and holds no concept documents is a real,
-    // checked result. It must NOT collapse into the same word as "you declared
-    // nothing" — that collapse is what made the original defect invisible.
-    const summary = summarizeOkfBundles([emptyReport('empty-but-declared')]);
+    // checked result. Both examine zero; the rows and the notice tell them apart.
+    const summary = summarize([emptyReport('empty-but-declared')]);
 
-    expect(summary.status).toBe('passed');
-    expect(summary.status).not.toBe('no-bundles');
+    expect(summary.status).toBe('ok');
+    expect(summary.examined).toBe(0);
+    expect(summary.data.bundles).toHaveLength(1);
   });
 
   describe('a bundle root holding no markdown at all', () => {
@@ -144,36 +191,38 @@ describe('summarizeOkfBundles', () => {
     // nothing failed — but the report now says so out loud.
 
     it('says so in the notice, naming the bundle', () => {
-      const summary = summarizeOkfBundles([emptyReport('empty')]);
+      const summary = summarize([emptyReport('empty')]);
 
-      expect(summary.notice).toBeDefined();
-      expect(summary.notice).toContain("'empty'");
-      expect(summary.status).toBe('passed');
+      expect(summary.data.notice).toBeDefined();
+      expect(summary.data.notice).toContain("'empty'");
+      expect(summary.status).toBe('ok');
     });
 
     it('names every empty bundle, not just the first', () => {
-      const summary = summarizeOkfBundles([emptyReport('one'), emptyReport('two')]);
+      const summary = summarize([emptyReport('one'), emptyReport('two')]);
 
-      expect(summary.notice).toContain("'one'");
-      expect(summary.notice).toContain("'two'");
+      expect(summary.data.notice).toContain("'one'");
+      expect(summary.data.notice).toContain("'two'");
     });
 
     it('stays silent when the bundle held documents', () => {
       // The negative control: a notice attached unconditionally would satisfy
       // both assertions above and mean nothing.
-      const summary = summarizeOkfBundles([report('knowledge')]);
+      const summary = summarize([report('knowledge')]);
 
-      expect(summary.notice).toBeUndefined();
+      expect(summary.data.notice).toBeUndefined();
     });
 
     it('counts a reserved-only bundle as read, not as empty', () => {
       // An index.md is a document that WAS opened and judged (§8/§12), so the
       // run is not vacuous even with no concept documents.
-      const summary = summarizeOkfBundles([
-        { ...emptyReport('index-only'), reservedDocuments: ['index.md'] },
+      const only = emptyReport('index-only');
+      const summary = summarize([
+        { ...only, report: { ...only.report, reservedDocuments: ['index.md'] } },
       ]);
 
-      expect(summary.notice).toBeUndefined();
+      expect(summary.data.notice).toBeUndefined();
+      expect(summary.examined).toBe(1);
     });
   });
 });

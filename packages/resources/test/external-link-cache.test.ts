@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { ExternalLinkCache } from '../src/external-link-cache.js';
 import { ExternalLinkCacheEntrySchema } from '../src/schemas/external-link-cache.js';
 import { schemaShapeSource } from '../src/schemas/parse-facts.js';
+
+import { setupTempDirTestSuite } from './test-helpers.js';
 
 const EXAMPLE_URL = 'https://example.com';
 const GITHUB_URL = 'https://github.com';
@@ -27,22 +29,21 @@ function entryKey(url: string): string {
  * public API would prove nothing.
  */
 async function writeRawCache(dir: string, contents: unknown): Promise<void> {
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- dir comes from mkdtemp in beforeEach
 	await fs.writeFile(safePath.join(dir, CACHE_FILE), JSON.stringify(contents));
 }
 
 describe('ExternalLinkCache', () => {
 	let tempDir: string;
+	const suite = setupTempDirTestSuite('link-cache-test-');
 	let cache: ExternalLinkCache;
 
 	beforeEach(async () => {
-		tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'link-cache-test-'));
+		await suite.beforeEach();
+		tempDir = suite.tempDir;
 		cache = new ExternalLinkCache(tempDir, 24);
 	});
 
-	afterEach(async () => {
-		await removeScratchDir(tempDir);
-	});
+	afterEach(suite.afterEach);
 
 	it('should store and retrieve link status', async () => {
 		await cache.set(EXAMPLE_URL, 200, 'OK');
@@ -155,7 +156,6 @@ describe('ExternalLinkCache', () => {
 			await cache.set(EXAMPLE_URL, 200, 'OK');
 
 			const cacheFile = safePath.join(tempDir, CACHE_FILE);
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtemp
 			const written: unknown = JSON.parse(await fs.readFile(cacheFile, 'utf-8'));
 			const entries = Object.values(written as Record<string, Record<string, unknown>>);
 
@@ -320,7 +320,6 @@ describe('ExternalLinkCache', () => {
 	it('should handle corrupted cache file gracefully', async () => {
 		// Write invalid JSON to cache file
 		const cacheFile = safePath.join(tempDir, CACHE_FILE);
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtemp, safe
 		await fs.writeFile(cacheFile, 'invalid json {{{');
 
 		// Should handle gracefully and return null
@@ -350,7 +349,6 @@ describe('ExternalLinkCache', () => {
 			// the next get() call should return null rather than throw EACCES.
 			await cache.set(EXAMPLE_URL, 200, 'OK');
 			const cacheFile = safePath.join(tempDir, CACHE_FILE);
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: revokes perms on self-created tempDir to simulate EACCES
 			await fs.chmod(cacheFile, MODE_NO_PERMS);
 			try {
 				// Fresh instance to force re-read from disk.
@@ -359,7 +357,6 @@ describe('ExternalLinkCache', () => {
 				expect(result).toBeNull();
 			} finally {
 				// Restore perms so afterEach cleanup succeeds.
-				// eslint-disable-next-line security/detect-non-literal-fs-filename, sonarjs/file-permissions -- test-only: restore RW (0o644) on file inside self-created tempDir so cleanup runs
 				await fs.chmod(cacheFile, MODE_RW_FILE);
 			}
 		},
@@ -371,12 +368,10 @@ describe('ExternalLinkCache', () => {
 			// Read-only parent dir → mkdir/writeFile fail with EACCES. set()
 			// must complete without throwing; the in-memory cache still holds
 			// the entry for the rest of this run, but the disk write is lost.
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: read-only mode on tempDir to simulate EACCES
 			await fs.chmod(tempDir, MODE_RO_OWNER);
 			try {
 				await expect(cache.set(EXAMPLE_URL, 200, 'OK')).resolves.toBeUndefined();
 			} finally {
-				// eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: restore RW on tempDir for cleanup
 				await fs.chmod(tempDir, MODE_RW_OWNER);
 			}
 		},

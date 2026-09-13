@@ -33,4 +33,11 @@ module.exports = factory({
     'Use cpSync() from {{safeModule}} instead of cp() from node:fs/promises. ' +
     'Node 22 async cp({ recursive: true }) silently drops files in nested directories. ' +
     'cpSync() works correctly across all Node versions.',
+  docs: {
+    category: 'Filesystem and process',
+    bans: '`cp()` from `node:fs/promises` (drops nested files on Node 22)',
+    useInstead: '`cpSync()` from `node:fs`',
+    recommended: true,
+    recommendedSeverity: 'error',
+  },
 });

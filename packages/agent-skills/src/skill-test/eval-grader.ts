@@ -8,7 +8,7 @@ import {
 
 import { EvalFragmentError, parseEvalFragment, type EvalFragment } from './eval-fragment.js';
 import type { ToolExpectations } from './eval-inputs.js';
-import { InternalHarnessError } from './exit-codes.js';
+import { InternalHarnessError } from './failure-reason.js';
 import { assertGraderPromptInvariants, buildGraderPrompt } from './grader-prompt.js';
 import { sanitizeGraderText } from './grader-text.js';
 import { GradingNonceError } from './grading-adapter.js';
@@ -23,7 +23,7 @@ export interface RunGraderInput {
   /** Path to the vendored skill-creator grader rubric (references/grader.md). */
   rubricPath: string;
   /**
-   * The eval's declared tool expectations (issue #145 Phase T). Optional — when
+   * The eval's declared tool expectations. Optional — when
    * absent, `buildGraderPrompt` emits no tool-verdict instruction and the
    * returned fragment omits `tool`. See `grader-prompt.ts`'s
    * `BuildGraderPromptOptions.toolExpectations`.
@@ -69,9 +69,9 @@ export interface RunGraderInput {
 /**
  * Run ONE eval's grader: a blind `claude -p` spawn (grader model, NO
  * skill/plugin loaded) that reads the executor's captured transcript via its
- * prompt and writes a nonce'd fragment JSON to `graderOutDir` (issue #145
- * Task 8). `graderOutDir` is vat-only and separate from the skill sandbox the
- * executor ran in (Task 7) — the grader's `sandboxDir` --add-dir is
+ * prompt and writes a nonce'd fragment JSON to `graderOutDir`.
+ * `graderOutDir` is vat-only and separate from the skill sandbox the
+ * executor ran in — the grader's `sandboxDir` --add-dir is
  * `graderOutDir` itself, and `pluginDirs: []` means no skill code ever runs
  * inside the grader's process, so skill code cannot forge or tamper with the
  * fragment this run trusts.
@@ -237,7 +237,8 @@ export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragm
  * value. A failed unlink is not a run failure (end-of-run cleanup removes the
  * whole dir) but it IS the one degradation this design exists to prevent, so it
  * is reported through `onWarn` rather than swallowed: the operator learns the
- * fragment lingered, with the errno. True isolation from same-uid code is #149.
+ * fragment lingered, with the errno. True isolation from same-uid code is a
+ * separate, unbuilt mechanism (a different uid or a sandbox), not this unlink.
  */
 function readAndConsumeFragmentFile(
   fragmentOut: string,
@@ -245,7 +246,6 @@ function readAndConsumeFragmentFile(
   status: number,
   onWarn: (message: string) => void,
 ): unknown {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fragmentOut is our own derived path (joinUnderRoot-guarded)
   if (!existsSync(fragmentOut)) {
     throw new InternalHarnessError(
       `Grader exited (status ${status}) without writing a fragment at ${fragmentOut} for eval "${evalId}".`,
@@ -253,7 +253,6 @@ function readAndConsumeFragmentFile(
   }
   let raw: unknown;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fragmentOut is our own derived path (joinUnderRoot-guarded)
     raw = JSON.parse(readFileSync(fragmentOut, 'utf-8'));
   } catch (err) {
     // V8 embeds a VERBATIM slice of the offending bytes in its SyntaxError

@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdir, realpath, writeFile } from 'node:fs/promises';
 
@@ -7,10 +6,10 @@ import {
   mkdirSyncReal,
   safePath,
   symlinkCapability,
-  withReaddirSyncRefused,
 } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {

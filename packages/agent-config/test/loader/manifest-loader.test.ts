@@ -1,5 +1,3 @@
-
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with safe temp directories */
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 

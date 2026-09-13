@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- every path written below is joined onto a caller-supplied `mkdtemp` root and the relative paths come from a test's own literal fixture map */
 /**
  * A REAL on-disk Claude tree, built once per integration suite.
  *

@@ -92,7 +92,6 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
   const outputPath = safePath.join(baseOutputPath, manifest.metadata.name);
 
   // Ensure output directory exists
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from validated manifest
   await fs.mkdir(outputPath, { recursive: true });
 
   const files: string[] = [];
@@ -110,7 +109,6 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
   // an unreadable entry) fails the build rather than shipping a bundle that
   // silently lacks its scripts.
   const scriptsPath = safePath.join(agentDir, 'scripts');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from the validated agent dir
   if (existsSync(scriptsPath)) {
     const outputScriptsPath = safePath.join(outputPath, 'scripts');
     await copyDirectory(scriptsPath, outputScriptsPath);
@@ -119,7 +117,6 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
 
   // Copy LICENSE.txt if it exists — same rule: absence skips, a failed copy throws.
   const licensePath = safePath.join(agentDir, 'LICENSE.txt');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from the validated agent dir
   if (existsSync(licensePath)) {
     const outputLicensePath = safePath.join(outputPath, 'LICENSE.txt');
     await fs.copyFile(licensePath, outputLicensePath);
@@ -178,7 +175,6 @@ async function generateSkillFile(
   }
 
   const fullSystemPromptPath = safePath.resolve(agentDir, systemPromptRef);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from manifest reference
   const systemPrompt = await fs.readFile(fullSystemPromptPath, 'utf-8');
 
   // Build SKILL.md with frontmatter
@@ -231,7 +227,6 @@ spec:
 
   // Write SKILL.md
   const skillPath = safePath.join(outputPath, 'SKILL.md');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Output path is validated
   await fs.writeFile(skillPath, skillContent, 'utf-8');
 
   return skillPath;
@@ -606,7 +601,6 @@ spec:
 `;
 
   const guidePath = safePath.join(outputPath, 'agent-manifest-guide.md');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Output path is validated
   await fs.writeFile(guidePath, guide, 'utf-8');
 
   return guidePath;
@@ -632,7 +626,6 @@ function findAgentPackageRoot(manifestPath: string): string {
   // Walk up until we find a package.json or hit the filesystem root
   while (currentDir !== path.dirname(currentDir)) {
     const packageJsonPath = safePath.join(currentDir, 'package.json');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Searching for package.json
     if (existsSync(packageJsonPath)) {
       return currentDir;
     }

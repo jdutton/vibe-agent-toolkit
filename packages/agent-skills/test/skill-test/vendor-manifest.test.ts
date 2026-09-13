@@ -13,9 +13,7 @@ describe('vendored manifest', () => {
   beforeEach(() => {
     dir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-vendor-'));
     mkdirSyncReal(safePath.join(dir, 'agents'));
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture setup, controlled directory
     writeFileSync(safePath.join(dir, 'agents', 'grader.md'), '# grader\n', 'utf8');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture setup, controlled directory
     writeFileSync(safePath.join(dir, 'LICENSE.txt'), 'Apache License 2.0\n', 'utf8');
   });
   afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
@@ -27,7 +25,6 @@ describe('vendored manifest', () => {
 
   it('verify fails when a vendored file is mutated after the manifest is written', () => {
     regenerateVendoredManifest(dir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture mutation, controlled directory
     writeFileSync(safePath.join(dir, 'agents', 'grader.md'), '# tampered\n', 'utf8');
     expect(verifyVendoredManifest(dir)).toBe(false);
   });
@@ -41,14 +38,12 @@ describe('vendored manifest', () => {
     expect(verifyVendoredManifest(dir)).toBe(true);
     // Corrupt the manifest into invalid JSON — the JSON.parse throw must be
     // caught and treated as tampering (false), never silently accepted.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture mutation, controlled directory
     writeFileSync(safePath.join(dir, MANIFEST_FILE), '{ this is not json', 'utf8');
     expect(verifyVendoredManifest(dir)).toBe(false);
   });
 
   it('verify fails (fail-closed) when the manifest is JSON of the wrong shape', () => {
     regenerateVendoredManifest(dir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture mutation, controlled directory
     writeFileSync(safePath.join(dir, MANIFEST_FILE), JSON.stringify({ files: 'nope' }), 'utf8');
     expect(verifyVendoredManifest(dir)).toBe(false);
   });
@@ -75,7 +70,6 @@ describe('vendored manifest', () => {
     regenerateVendoredManifest(dir);
     expect(verifyVendoredManifest(dir)).toBe(true);
     // Inject a file not present when the manifest was generated.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture mutation, controlled directory
     writeFileSync(safePath.join(dir, 'agents', 'injected.md'), '# injected\n', 'utf8');
     expect(verifyVendoredManifest(dir)).toBe(false);
   });

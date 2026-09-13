@@ -10,7 +10,6 @@
  * root's extent. The last two tests here go red against that spelling.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';

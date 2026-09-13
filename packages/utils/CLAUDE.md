@@ -1,8 +1,20 @@
 # Utils Package Guidelines
 
+## Package rules
+
+- `utils` is layer 0: it depends on no other internal package (external npm dependencies such as
+  Zod are fine).
+- Add a utility only when another package needs it now — never speculatively, and no string/array/
+  object helpers without a concrete caller. Examples of the right kind: cross-platform process
+  spawning, schema validation helpers, path helpers.
+- Every addition gets a test and a line in `README.md`; the barrel surface is pinned by
+  `test/barrel-exports.test.ts`, so exporting it is a deliberate diff.
+- Custom ESLint rules live in `eslint/` and ship on the `@vibe-agent-toolkit/utils/eslint` subpath —
+  see `docs/custom-eslint-rules.md` for how to add one.
+
 ## Path Functions: Forward-Slash Standard
 
-As of v0.1.24, all path functions in `@vibe-agent-toolkit/utils` follow a consistent separator convention.
+All path functions in `@vibe-agent-toolkit/utils` follow one separator convention.
 
 ### Forward-slash functions (for string operations, display, comparisons, Map keys, globs)
 
@@ -31,7 +43,7 @@ If you need forward slashes from these, wrap with `toForwardSlash()`.
 
 ### ESLint enforcement
 
-Raw `path.join()`, `path.resolve()`, and `path.relative()` are banned by ESLint rules (`no-path-join`, `no-path-resolve`, `no-path-relative`). Use `safePath.*` instead. The implementation files are exempt: `path-core.ts` (which holds the pure `safePath` definitions) and `path-utils.ts` (the filesystem-touching helpers), plus `path-utils.test.ts`, which tests platform-native behavior.
+Raw `path.join()`, `path.resolve()`, and `path.relative()` are banned by the `local/no-raw-node-path` ESLint rule (its `functions` option table maps each to its `safePath.*` replacement and carries the autofix). Use `safePath.*` instead. The implementation files are exempt: `path-core.ts` (which holds the pure `safePath` definitions) and `path-utils.ts` (the filesystem-touching helpers), plus `path-utils.test.ts`, which tests platform-native behavior.
 
 ### When adding new path functions
 

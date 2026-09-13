@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 
-import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import {
@@ -39,7 +40,6 @@ resources:
       include:
         - "docs/**/*.md"
 `;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, configContent);
 
     const result = loadConfig(tempDir);
@@ -49,11 +49,19 @@ resources:
 
   it('should throw on invalid config schema', () => {
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
-    const configContent = `version: 2\n`; // Invalid version
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
+    const configContent = `resources: 42\n`; // a section of the wrong type refuses
     fs.writeFileSync(configPath, configContent);
 
     expect(() => loadConfig(tempDir)).toThrow();
+  });
+
+  it('ignores the `version` key whatever its value', () => {
+    // The npm package version is the only version VAT has; a stale
+    // `version: 1` (or any other value) in an adopter config is not read.
+    const configPath = safePath.join(tempDir, CONFIG_FILENAME);
+    fs.writeFileSync(configPath, `version: 2\nresources:\n  exclude: ['node_modules/**']\n`);
+
+    expect(loadConfig(tempDir)?.resources?.exclude).toEqual(['node_modules/**']);
   });
 
   it('WARNS about a key VAT removed, in words the adopter can act on, and loads anyway', () => {
@@ -68,7 +76,6 @@ resources:
     // read the section it sat in. Every assertion about the MESSAGE is kept —
     // that half was the point — and only the outcome changed.
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, 'version: 1\nresources:\n  metadata:\n    frontmatter: true\n');
 
     const warnings: string[] = [];
@@ -105,7 +112,6 @@ resources:
     // act on a config it misunderstood, which is a different thing from a word
     // it does not know.
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, 'version: 1\nskills:\n  include: not-an-array\n');
 
     expect(() => loadConfig(tempDir)).toThrow(/Expected array/);
@@ -114,7 +120,6 @@ resources:
   it('should throw on invalid YAML syntax', () => {
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
     const configContent = `invalid: yaml: syntax:\n`;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, configContent);
 
     expect(() => loadConfig(tempDir)).toThrow();
@@ -138,7 +143,6 @@ resources:
       validation:
         mode: permissive
 `;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, configContent);
 
     const result = loadConfig(tempDir);
@@ -164,7 +168,6 @@ claude:
           description: My tools plugin
           skills: "*"
 `;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, configContent);
 
     const result = loadConfig(tempDir);
@@ -195,7 +198,6 @@ claude:
           description: VAT development agents plugin
           skills: "*"
 `;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, configContent);
 
     const result = loadConfig(tempDir);
@@ -212,7 +214,6 @@ const VALID_CONFIG_YAML = 'version: 1\n';
 
 function writeConfigToDir(dir: string, content: string): string {
   const configPath = safePath.join(dir, CACHED_CONFIG_FILENAME);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
   fs.writeFileSync(configPath, content, 'utf-8');
   return configPath;
 }
@@ -309,7 +310,9 @@ describe('loadConfigCached (Layer 2 cache — spec §8 / §13.5)', () => {
     // A present-but-broken config is a hard error, distinct from an absent one:
     // silently returning undefined here is what regressed `vat skill review` and
     // would let `vat skill test` stage the wrong subject.
-    writeConfigToDir(tempDir, 'version: not-a-number\n');
+    // `version:` is accepted whatever its value, so the broken shape is a
+    // section of the wrong type.
+    writeConfigToDir(tempDir, 'resources: 42\n');
 
     expect(() => loadConfigCached(tempDir)).toThrow(ConfigLoadError);
 
@@ -320,6 +323,6 @@ describe('loadConfigCached (Layer 2 cache — spec §8 / §13.5)', () => {
 
     // After a reset, the now-valid file parses cleanly.
     resetLoadedConfigCache();
-    expect(loadConfigCached(tempDir)?.version).toBe(1);
+    expect(loadConfigCached(tempDir)).toBeDefined();
   });
 });

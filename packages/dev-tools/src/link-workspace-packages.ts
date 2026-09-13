@@ -18,10 +18,9 @@
  * This runs automatically via postinstall hook in root package.json
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- All paths derived from curated WORKSPACE_PACKAGES list */
-/* eslint-disable local/no-path-join, local/no-path-resolve -- Runs at postinstall before build; cannot import safePath from utils */
+/* eslint-disable local/no-raw-node-path -- Runs at postinstall before build; cannot import safePath from utils */
 
-import { existsSync, mkdirSync, symlinkSync, unlinkSync, lstatSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, statSync, symlinkSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -34,29 +33,27 @@ const WORKSPACE_SCOPE = '@vibe-agent-toolkit';
 const PACKAGES_DIR = join(REPO_ROOT, 'packages');
 const NODE_MODULES_DIR = join(REPO_ROOT, 'node_modules');
 
-// All workspace packages that need Node.js-compatible symlinks
-const WORKSPACE_PACKAGES = [
-  'agent-config',
-  'agent-runtime',
-  'schema',
-  'agent-skills',
-  'cli',
-  'dev-tools',
-  'discovery',
-  'gateway-mcp',
-  'rag',
-  'rag-lancedb',
-  'resource-compiler',
-  'resources',
-  'runtime-claude-agent-sdk',
-  'runtime-langchain',
-  'runtime-openai',
-  'runtime-vercel-ai-sdk',
-  'transports',
-  'utils',
-  'vat-development-agents',
-  'vat-example-cat-agents',
-];
+/**
+ * Every workspace package, read from the directory rather than typed in.
+ *
+ * The hand list this replaced said "All workspace packages" and was four short
+ * (`claude-marketplace`, `lab`, `projection-sqlite`, `test-agents` were added
+ * to `packages/` over seven months and never here), which only worked because
+ * Bun happens to place per-dependent links under `packages/<x>/node_modules/`.
+ * A directory with a `package.json` is a workspace; nothing else is.
+ *
+ * Dependency-free on purpose: this runs at postinstall, before any package is
+ * built, so it cannot reach the workspace-graph reader in this same package.
+ */
+function listWorkspacePackages(): string[] {
+  return readdirSync(PACKAGES_DIR, { withFileTypes: true })
+    // Followed, inline: this runs before `@vibe-agent-toolkit/utils` is built,
+    // so `direntKindFollowingSync` is out of reach here.
+    .filter((entry) => (entry.isSymbolicLink() ? statSync(join(PACKAGES_DIR, entry.name)).isDirectory() : entry.isDirectory())
+      && existsSync(join(PACKAGES_DIR, entry.name, 'package.json')))
+    .map((entry) => entry.name)
+    .sort((a, b) => a.localeCompare(b));
+}
 
 function ensureScopeDirectory(scopeDir: string): void {
   if (!existsSync(scopeDir)) {
@@ -119,14 +116,15 @@ function main() {
   const scopeDir = join(NODE_MODULES_DIR, WORKSPACE_SCOPE);
   ensureScopeDirectory(scopeDir);
 
+  const workspacePackages = listWorkspacePackages();
   let linked = 0;
-  for (const packageName of WORKSPACE_PACKAGES) {
+  for (const packageName of workspacePackages) {
     if (linkPackage(packageName, scopeDir)) {
       linked++;
     }
   }
 
-  const total = WORKSPACE_PACKAGES.length;
+  const total = workspacePackages.length;
   const skipped = total - linked;
 
   console.log(`✅ Linked ${linked}/${total} workspace package(s)`);

@@ -74,7 +74,6 @@ function baseInput(graderOutDir: string, overrides: Partial<RunGraderInput> = {}
 function writeFragment(graderOutDir: string, fragment: Record<string, unknown> | string): void {
   const fragmentOut = safePath.join(graderOutDir, `${EVAL_ID}.json`);
   const body = typeof fragment === 'string' ? fragment : JSON.stringify(fragment);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
   writeFileSync(fragmentOut, body);
 }
 
@@ -133,7 +132,6 @@ describe('runGraderForEval', () => {
 
     // Windows has no POSIX mode bits — the 0o700 request is a no-op there.
     if (process.platform !== 'win32') {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
       expect(statSync(armDir).mode & 0o777).toBe(0o700);
     }
   });

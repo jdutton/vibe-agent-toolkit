@@ -45,7 +45,6 @@ function realpathOrSelf(target: string): string {
     if (!isPathAbsentError(error)) throw error;
   }
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- the same path the native call was just asked about
     return realpathSync(target);
   } catch (error) {
     if (isPathAbsentError(error)) return target;
@@ -172,7 +171,6 @@ export function mkdirSyncReal(
   dirPath: string,
   options?: Parameters<typeof mkdirSync>[1]
 ): string {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- This IS the mkdirSyncReal() implementation
   mkdirSync(dirPath, options);
 
   return realpathOrSelf(dirPath);

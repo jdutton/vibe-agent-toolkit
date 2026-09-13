@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- fixture paths built from this test's own mkdtemp root, no external input */
 import * as fs from 'node:fs';
 
 import { applyAllowFilter, CODE_REGISTRY } from '@vibe-agent-toolkit/schema';
@@ -52,8 +51,10 @@ describe('API_SKILL_MAX_UPLOAD_BYTES', () => {
   // onto 30 MiB. Pinned so it cannot drift back to decimal, which would re-introduce
   // a false-positive warning on every bundle between 30.0 and 31.4 MB.
   it('is 30 MiB, the measured ceiling — not the decimal reading of "30 MB"', () => {
-    expect(API_SKILL_MAX_UPLOAD_BYTES).toBe(31_457_280);
-    expect(API_SKILL_MAX_UPLOAD_BYTES).not.toBe(30_000_000);
+    const MIB = 1024 * 1024;
+    const DECIMAL_MB = 1000 * 1000;
+    expect(API_SKILL_MAX_UPLOAD_BYTES).toBe(30 * MIB);
+    expect(API_SKILL_MAX_UPLOAD_BYTES).not.toBe(30 * DECIMAL_MB);
   });
 });
 

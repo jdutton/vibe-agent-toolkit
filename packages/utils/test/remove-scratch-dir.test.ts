@@ -7,7 +7,6 @@
  * would pass equally well for the bare `rm` this replaced.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is derived from a controlled mkdtemp scratch dir */
 
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
@@ -22,7 +21,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 // for exactly this reason; only the barrel/subpath tests use the package name,
 // because the resolution IS what they assert.
 import { normalizedTmpdir, safePath } from '../src/path-utils.js';
-import { removeScratchDir } from '../src/test-helpers.js';
+import { removeScratchDir } from '../src/testing/temp-dir.js';
 
 let scratch: string;
 

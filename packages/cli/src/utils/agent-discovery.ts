@@ -4,7 +4,7 @@
 
 import fs from 'node:fs/promises';
 
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
 export interface DiscoveredAgent {
@@ -33,10 +33,11 @@ export async function discoverAgents(): Promise<DiscoveredAgent[]> {
 async function discoverAgentsInPath(searchPath: string): Promise<DiscoveredAgent[]> {
   try {
     const absolutePath = safePath.resolve(process.cwd(), searchPath);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path is from predefined constant list
     const entries = await fs.readdir(absolutePath, { withFileTypes: true });
 
-    const directories = entries.filter(entry => entry.isDirectory());
+    // Followed: a `--dev` install is a symlinked agent directory and is discovered.
+    const kinds = await Promise.all(entries.map(entry => direntKindFollowing(absolutePath, entry)));
+    const directories = entries.filter((_, i) => kinds[i] === 'directory');
     const agentPromises = directories.map(entry =>
       discoverAgentInDirectory(safePath.join(absolutePath, entry.name))
     );
@@ -84,7 +85,6 @@ async function parseAgentManifest(
   agentDir: string
 ): Promise<DiscoveredAgent | null> {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifestPath from findManifest, trusted
     const content = await fs.readFile(manifestPath, 'utf-8');
     const data = yaml.parse(content) as {
       metadata?: { name?: string; version?: string };

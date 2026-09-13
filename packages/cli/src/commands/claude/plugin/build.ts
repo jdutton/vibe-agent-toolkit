@@ -14,7 +14,7 @@ import { basename } from 'node:path';
 import { conventionalSuiteProbe, createProjectRegistry, getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { countBySeverity, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { readSkillName } from '../../../commands/skills/skill-discovery.js';
@@ -192,14 +192,13 @@ Example:
 async function discoverBuiltSkills(configDir: string): Promise<string[]> {
   const skillsDir = safePath.join(configDir, 'dist', 'skills');
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from config
   if (!existsSync(skillsDir)) {
     return [];
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from config
   const entries = await readdir(skillsDir, { withFileTypes: true });
-  return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+  const kinds = await Promise.all(entries.map((entry) => direntKindFollowing(skillsDir, entry)));
+  return entries.filter((_, i) => kinds[i] === 'directory').map((entry) => entry.name);
 }
 
 /**
@@ -480,7 +479,6 @@ async function copyDistributionFiles(
   for (const file of ['LICENSE', 'README.md', 'CHANGELOG.md']) {
     const override = overrides[file];
     const srcPath = override ? safePath.join(configDir, override) : safePath.join(configDir, file);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- file is from static list or config
     if (existsSync(srcPath)) {
       cpSync(srcPath, safePath.join(marketplaceDir, file));
       if (override) {
@@ -530,7 +528,6 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
     'marketplaces',
     name,
   );
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from config
   if (existsSync(marketplaceBaseDir)) {
     await rm(marketplaceBaseDir, { recursive: true, force: true });
   }
@@ -577,7 +574,6 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
   // Generate .claude-plugin/marketplace.json
   const marketplaceDir = marketplaceBaseDir;
   const claudePluginDir = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await mkdir(claudePluginDir, { recursive: true });
 
   // Each BUILT entry's author is the plugin's own MERGED author (see
@@ -604,7 +600,6 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
     ],
   });
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await writeFile(safePath.join(claudePluginDir, 'marketplace.json'), JSON.stringify(marketplaceJson, null, 2));
   logger.info(`   .claude-plugin/marketplace.json`);
 
@@ -686,13 +681,11 @@ function readAuthorPluginJson(
   pluginSourceDir: string,
 ): (Record<string, unknown> & { version?: string }) | undefined {
   const authorPluginJsonPath = safePath.join(pluginSourceDir, CLAUDE_PLUGIN_DIRNAME, 'plugin.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
   if (!existsSync(authorPluginJsonPath)) {
     return undefined;
   }
   try {
     return JSON.parse(
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
       readFileSync(authorPluginJsonPath, 'utf-8'),
     ) as Record<string, unknown>;
   } catch (e) {
@@ -711,7 +704,6 @@ async function writeMergedPluginJson(
   logger: ReturnType<typeof createLogger>,
 ): Promise<Record<string, unknown>> {
   const pluginJsonDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await mkdir(pluginJsonDir, { recursive: true });
 
   const { merged, author, warnings } = mergePluginJson({
@@ -724,7 +716,6 @@ async function writeMergedPluginJson(
     authorJson,
   });
   for (const w of warnings) logger.info(`warning: ${w}`);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await writeFile(safePath.join(pluginJsonDir, 'plugin.json'), JSON.stringify(merged, null, 2));
   logger.info(`         .claude-plugin/plugin.json`);
   return author;
@@ -758,7 +749,6 @@ async function copyPoolSkills(
 
   for (const skillName of selected) {
     const skillDistPath = safePath.join(configDir, 'dist', 'skills', skillName);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from config
     if (!existsSync(skillDistPath)) {
       throw new Error(
         `Skill "${skillName}" not built at ${skillDistPath}. ` +
@@ -768,7 +758,6 @@ async function copyPoolSkills(
 
     const fsPath = destOverrides.get(skillName) ?? skillNameToFsPath(skillName);
     const destPath = safePath.join(pluginDir, 'skills', fsPath);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
     await mkdir(destPath, { recursive: true });
     cpSync(skillDistPath, destPath, { recursive: true });
     copied.push(fsPath);
@@ -908,7 +897,7 @@ export async function packagePluginLocalSkills(input: {
   // `outputPath`/`skill`/`files`, so consumers would report a file count for a bundle
   // that is not on disk).
   //
-  // Why it matters concretely: a `vat build` on a 90-skill adopter (2026-07-30) hit 3
+  // Why it matters concretely: a `vat build` on a 90-skill adopter hit 3
   // filename collisions across three separate skills and, thanks to `packageSkills`'
   // containment, still built the other 87. This lane would have thrown all 90 away.
   //
@@ -956,7 +945,7 @@ export async function packagePluginLocalSkills(input: {
     // failures.
     //
     // That promotion is now MEASURABLE rather than open-ended. On the 90-skill adopter
-    // (2026-07-30) this lane's ledger drains to 17 unused allow entries, against 14 in
+    // this lane's ledger drains to 17 unused allow entries, against 14 in
     // the `vat skills build` (`skills`) lane — so the work this comment gates is a
     // bounded 17-entry reconciliation, not an unbounded one. UNVERIFIED how much of the
     // 17 - 14 delta is the false-positive class described above versus genuinely dead
@@ -1175,7 +1164,6 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
   // Phase 1: validators.
   await verifyPluginDirCaseMatch(configDir, pluginDef.name);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
   const pluginSourceExists = existsSync(pluginSourceDir);
   const hasExplicitFiles = (pluginDef.files?.length ?? 0) > 0;
   const hasPoolSkills =
@@ -1195,7 +1183,6 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
   if (pluginSourceExists) {
     await parsePluginJsonFiles(pluginSourceDir);
   }
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await mkdir(pluginDir, { recursive: true });
 
   // Phase 1.4: discover the plugin's own skills ONCE (recursive; git-visible only),

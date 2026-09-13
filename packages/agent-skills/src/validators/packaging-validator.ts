@@ -102,7 +102,7 @@ export interface SkillPackagingConfig {
   targets?: ReadonlyArray<'claude-chat' | 'claude-cowork' | 'claude-code'>;
   /**
    * Declared executables the skill ships (name-stable references for eval
-   * `toolExpectations` + launch-guidance linting — issue #145 Phase T/L). The
+   * `toolExpectations` + launch-guidance linting). The
    * config merge (`mergeSkillPackagingConfig`) copies this through generically;
    * declaring it here lets consumers (e.g. `vat skill test run`) read it typed.
    */
@@ -239,7 +239,6 @@ function validateFilesConfig(
     // Check if an existing source resolves to a directory — a typed single-file
     // slot cannot be satisfied by a directory.
     const resolvedSource = safePath.resolve(safePath.join(projectRoot, entry.source));
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolvedSource derived from config-supplied path
     if (existsSync(resolvedSource) && statSync(resolvedSource).isDirectory()) {
       // Anchor at the resolved source, expressed in the run's ONE coordinate
       // system — not the raw config value, which is project-relative and so
@@ -261,7 +260,7 @@ function validateFilesConfig(
  * anchored at a project-relative `location`.
  *
  * Thin wrapper over the shared {@link materializeIssue} so severity / fix /
- * reference come from the single CODE_REGISTRY source (issue #129 dedup); the
+ * reference come from the single CODE_REGISTRY source; the
  * caller supplies a fully-formed `message`.
  *
  * Deliberately NOT named `createRegistryIssue`: `@vibe-agent-toolkit/schema`
@@ -352,7 +351,7 @@ function replayRefusals(
  * registry when the caller does not supply a shared one.
  *
  * Crawls markdown AND HTML (`.html`/`.htm`) so the live audit/validate path
- * sees the same link graph the built path does (issue #129 AC2). The registry
+ * sees the same link graph the built path does. The registry
  * parses HTML via parse5 and surfaces its `local_file` links, so the walker
  * traverses HTML references and catches HTML broken links at source time — not
  * just at build time. (Previously the crawl was markdown-only, so source HTML
@@ -795,7 +794,7 @@ export async function validateSkillForPackaging(
   // Validation-POLICY boundary (config root -> git root -> skill dir): what is
   // "outside the project", where `files:` sources resolve from, what the
   // registry crawls. Library fallback to skill dir keeps callers null-safe; CLI
-  // command boundary owns any user-facing warning. See plan 2026-05-17.
+  // command boundary owns any user-facing warning.
   const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
   // ANCHOR base — deliberately a separate variable from projectRoot above.
   // Every emitted location is relative to this ONE root, computed once before
@@ -962,7 +961,6 @@ export async function validateSkillForPackaging(
   let totalLines = skillLines;
   for (const bundledFile of bundledFiles) {
     if (bundledFile.endsWith('.md')) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- bundledFile resolved from markdown parser
       const content = await readFile(bundledFile, 'utf-8');
       totalLines += content.split('\n').length;
       // Anchor contract: never hand a producer an absolute path as `location`.
@@ -1574,7 +1572,6 @@ export function getResolvedMarkdownLinks(
     }
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from parsed markdown
   return [...candidates].filter(candidate => existsSync(candidate));
 }
 

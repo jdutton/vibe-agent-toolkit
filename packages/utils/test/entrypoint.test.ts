@@ -48,10 +48,10 @@ import { safePath } from '../src/path-core.js';
 import { mkdirSyncReal, normalizedTmpdir } from '../src/path-utils.js';
 import {
   createSymlink,
-  removeScratchDir,
   type SymlinkCapability,
   symlinkCapability,
 } from '../src/test-helpers.js';
+import { removeScratchDir } from '../src/testing/temp-dir.js';
 
 /** This module's own location, in both spaces the function deals in. */
 const THIS_URL = import.meta.url;
@@ -61,7 +61,6 @@ const THIS_BASENAME = 'entrypoint.test.ts';
 
 /** Write a real file so a negative control is a file, not a dangling name. */
 function writeRealFile(at: string, what: string): string {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path built here from this suite's own temp root; no input reaches it
   writeFileSync(at, `// ${what}\n`);
   return at;
 }

@@ -1,7 +1,7 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test reads and writes temp dirs from computed paths */
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { computeContentKey, type ParsableContent } from '../src/content-key.js';

@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- mkdtempSync paths */
 /**
  * `crawlAndResolveRegistry` memoizes ONE crawl per project root, and two
  * callers of one root may hold different `unreadable` rulings — `vat audit`
@@ -11,8 +10,14 @@
  */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils';
+import {
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
 import { type DirectoryRefusal, DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
+import { withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { crawlAndResolveRegistry, resetPackagingRegistryCache } from '../../src/validators/packaging-validator.js';

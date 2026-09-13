@@ -82,7 +82,7 @@ export function convertConversationalAssistantToFunction<TInput, TOutput>(
     const callLLM = async (messages: Message[]) => {
       const vercelMessages = convertToVercelFormat(messages);
 
-      // eslint-disable-next-line @typescript-eslint/await-thenable
+      // eslint-disable-next-line @typescript-eslint/await-thenable -- streamText() returns a thenable-like result object across SDK versions; the await is deliberate
       const result = await streamText({
         model: llmConfig.model,
         // `!== undefined`, not truthiness — see the note in llm-analyzer.ts:

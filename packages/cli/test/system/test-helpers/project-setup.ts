@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test helpers legitimately use dynamic paths
 
 /**
@@ -8,7 +7,7 @@
 import * as fs from 'node:fs';
 
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 
 /**
  * Create a temporary test project directory
@@ -54,9 +53,3 @@ export function setupTestProject(
   return projectDir;
 }
 
-/**
- * Create a temporary directory for tests
- */
-export function createTestTempDir(prefix: string): string {
-  return fs.mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
-}

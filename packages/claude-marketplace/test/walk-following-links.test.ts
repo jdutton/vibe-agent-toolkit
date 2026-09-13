@@ -9,11 +9,15 @@
  * lanes with no row saying so.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- every path is under this suite's own temp root */
 import * as fs from 'node:fs/promises';
 
-import { createSymlinkAsync, normalizedTmpdir, removeScratchDir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
-import { refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
+import {
+  createSymlinkAsync,
+  normalizedTmpdir,
+  safePath,
+  symlinkCapability,
+} from '@vibe-agent-toolkit/utils';
+import { removeScratchDir , refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { walkFollowingLinks } from '../src/walk-following-links.js';

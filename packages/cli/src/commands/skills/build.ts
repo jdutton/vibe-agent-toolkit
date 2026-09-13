@@ -1062,7 +1062,6 @@ export async function beginStagedBuild(
 ): Promise<BuildStaging> {
   const distDir = safePath.resolve(cwd, 'dist');
   const skillsDir = safePath.join(distDir, 'skills');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
   await mkdir(distDir, { recursive: true });
   const root = toForwardSlash(await mkdtemp(safePath.join(distDir, '.vat-skills-')));
 
@@ -1077,9 +1076,7 @@ export async function beginStagedBuild(
   const promoteToParent = subPath === undefined ? distDir : skillsDir;
   const parked = `${root}.previous`;
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
   const hadPreviousOutput = existsSync(promoteTo);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
   if (hadPreviousOutput) await rename(promoteTo, parked);
 
   // Flipped the instant this run's bundles reach `promoteTo`, so a later failure
@@ -1103,11 +1100,8 @@ export async function beginStagedBuild(
       // staging root always exists, so a run that built nothing promotes an
       // empty dist/skills — an accurate statement of "this build produced no
       // bundles", where the old delete-up-front flow left the path absent.)
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
       if (existsSync(promoteFrom)) {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
         await mkdir(promoteToParent, { recursive: true });
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
         await rename(promoteFrom, promoteTo);
       }
       promoted = true;
@@ -1119,23 +1113,17 @@ export async function beginStagedBuild(
     abort: async () => {
       await rm(root, { recursive: true, force: true });
       if (!hadPreviousOutput) return;
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
       await mkdir(promoteToParent, { recursive: true });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
       await rename(parked, promoteTo);
     },
     recover: async () => {
       const residue: StagingResidue[] = [];
       let restoredPrevious = false;
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
       const targetFree = !existsSync(promoteTo);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
       if (hadPreviousOutput && existsSync(parked)) {
         if (targetFree) {
           try {
-            // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
             await mkdir(promoteToParent, { recursive: true });
-            // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
             await rename(parked, promoteTo);
             restoredPrevious = true;
           } catch (error) {

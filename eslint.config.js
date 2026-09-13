@@ -1,6 +1,7 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 
 import eslint from '@eslint/js';
+import eslintComments from '@eslint-community/eslint-plugin-eslint-comments';
 import tseslint from '@typescript-eslint/eslint-plugin';
 import tsparser from '@typescript-eslint/parser';
 import localRules from '@vibe-agent-toolkit/utils/eslint';
@@ -47,14 +48,256 @@ const PATH_UTILS_EXEMPT = { exemptFiles: ['packages/utils/src/path-utils.ts'] };
 const SAFE_EXEC_EXEMPT = { exemptFiles: ['packages/utils/src/safe-exec.ts'] };
 
 /**
+ * Ratchet for `local/no-io-in-unit-tier`: the unit-tier test FILES that today
+ * spawn a process or mint a temp directory (185 sites when seeded). The list
+ * may only SHRINK — an entry leaves when its file moves to the tier it belongs
+ * to (`test/integration/*.integration.test.ts` / `test/system/*.system.test.ts`)
+ * or stops CALLING the I/O directly; a new offender is a lint error, not a new
+ * line here. Both directions are asserted: `dev-tools/test/eslint-allowlist-ratchets.test.ts`
+ * lints every listed file with the exemption lifted and fails on one the rule
+ * no longer fires on.
+ *
+ * ⚠️ The rule measures SYNTAX. I/O routed through a helper (`setupTempDirTestSuite`,
+ * `createTempDirTracker`) is invisible to it, so a file can leave this list
+ * with its temp tree intact — two files did exactly that. The per-file
+ * duration reporter is the backstop for the cost the helper hides.
+ *
+ * ⚠️ Deliberately NOT unified with the per-file DURATION allowlist in
+ * `packages/dev-tools/src/test-tier-budget-allowlist.ts`, although both ratchet
+ * the same tier: measured when seeded, only 37 of the 118 files then listed were on the duration list
+ * (81 do I/O and are still fast; 70 duration entries are slow for reasons this
+ * rule cannot see, e.g. real timers, parse pools). Two questions, two lists —
+ * and `eslint.config.js` cannot import a `.ts` module under Node 22 anyway.
+ * A file that leaves one list usually leaves the other; check both.
+ */
+const UNIT_TIER_IO_RATCHET = { allowFiles: [
+  'packages/agent-config/test/loader/manifest-loader.test.ts',
+  'packages/agent-config/test/validator/agent-validator.test.ts',
+  'packages/agent-runtime/test/session/file-session-store.test.ts',
+  'packages/agent-skills/test/files-config.test.ts',
+  'packages/agent-skills/test/skill-identity.test.ts',
+  'packages/agent-skills/test/skill-source/content-hash.test.ts',
+  'packages/agent-skills/test/skill-source/fetch-cache.test.ts',
+  'packages/agent-skills/test/skill-source/git-clone-env.test.ts',
+  'packages/agent-skills/test/skill-source/git-clone.test.ts',
+  'packages/agent-skills/test/skill-source/stage.test.ts',
+  'packages/agent-skills/test/skill-source/url-source.test.ts',
+  'packages/agent-skills/test/skill-source/vendored-source.test.ts',
+  'packages/agent-skills/test/skill-test/eval-grader.test.ts',
+  'packages/agent-skills/test/skill-test/eval-inputs.test.ts',
+  'packages/agent-skills/test/skill-test/harness-location.test.ts',
+  'packages/agent-skills/test/skill-test/harness-root-prepare.test.ts',
+  'packages/agent-skills/test/skill-test/lock.test.ts',
+  'packages/agent-skills/test/skill-test/vendor-manifest.test.ts',
+  'packages/agent-skills/test/validators/packaged-size-limit.test.ts',
+  'packages/agent-skills/test/validators/plugin-hosted-shape.test.ts',
+  'packages/agent-skills/test/validators/referenced-path-missing.test.ts',
+  'packages/agent-skills/test/validators/registry-memo-refusal-replay.test.ts',
+  'packages/agent-skills/test/validators/registry-memoization.test.ts',
+  'packages/agent-skills/test/zip-size-validation.test.ts',
+  'packages/claude-marketplace/test/compatibility-analyzer.test.ts',
+  'packages/claude-marketplace/test/inventory/extract-install.test.ts',
+  'packages/claude-marketplace/test/inventory/extract-marketplace.test.ts',
+  'packages/claude-marketplace/test/inventory/extract-plugin.test.ts',
+  'packages/claude-marketplace/test/marketplace-defaults.test.ts',
+  'packages/claude-marketplace/test/plugin-registry.test.ts',
+  'packages/claude-marketplace/test/settings-auditor.test.ts',
+  'packages/claude-marketplace/test/settings-compat-checker.test.ts',
+  'packages/claude-marketplace/test/walk-following-links.test.ts',
+  'packages/cli/test/ard-emit.test.ts',
+  'packages/cli/test/commands/audit/nothing-audited.test.ts',
+  'packages/cli/test/commands/audit/resources-severity.test.ts',
+  'packages/cli/test/commands/cache-control.test.ts',
+  'packages/cli/test/commands/claude/marketplace/publish-tree.test.ts',
+  'packages/cli/test/commands/claude/marketplace/validate-declared-sources.test.ts',
+  'packages/cli/test/commands/consistency-check.test.ts',
+  'packages/cli/test/commands/corpus/report.test.ts',
+  'packages/cli/test/commands/corpus/runner.test.ts',
+  'packages/cli/test/commands/corpus/seed.test.ts',
+  'packages/cli/test/commands/inventory-shared-registry.test.ts',
+  'packages/cli/test/commands/payload-path-coordinates.test.ts',
+  'packages/cli/test/commands/phase-selection.test.ts',
+  'packages/cli/test/commands/resources/validate-refusal-stderr.test.ts',
+  'packages/cli/test/commands/run-scoped-suite-probe.test.ts',
+  'packages/cli/test/commands/skills/validate-non-skill-discovered.test.ts',
+  'packages/cli/test/commands/skills/validate-nothing-checked.test.ts',
+  'packages/cli/test/org-skill-upload-payload.test.ts',
+  'packages/cli/test/utils/agent-runner.test.ts',
+  'packages/cli/test/utils/resource-population-source.test.ts',
+  'packages/cli/test/utils/user-context-scanner.test.ts',
+  'packages/cli/test/verify-vendor-licensing.test.ts',
+  'packages/dev-tools/test/common.test.ts',
+  'packages/dev-tools/test/compat-empirical/judge-replay.test.ts',
+  'packages/dev-tools/test/compat-empirical/load-manifest.test.ts',
+  'packages/dev-tools/test/compat-empirical/manual-driver.test.ts',
+  'packages/dev-tools/test/compat-empirical/run-loop.test.ts',
+  'packages/dev-tools/test/contraband-scan.test.ts',
+  'packages/dev-tools/test/engine-floor-agreement.test.ts',
+  'packages/dev-tools/test/validate-repo-structure.test.ts',
+  'packages/discovery/test/local-scanner.test.ts',
+  'packages/lab/test/ab.test.ts',
+  'packages/lab/test/crawl-dump.test.ts',
+  'packages/lab/test/instrument.test.ts',
+  'packages/lab/test/io-capture.test.ts',
+  'packages/lab/test/io-counter.test.ts',
+  'packages/lab/test/io-dump.test.ts',
+  'packages/lab/test/parse-capture.test.ts',
+  'packages/lab/test/parse-dump.test.ts',
+  'packages/lab/test/store.test.ts',
+  'packages/lab/test/vat-lab-cli.test.ts',
+  'packages/projection-sqlite/test/derived-tables.test.ts',
+  'packages/projection-sqlite/test/ephemeral-store.test.ts',
+  'packages/projection-sqlite/test/query.test.ts',
+  'packages/projection-sqlite/test/store.test.ts',
+  'packages/rag/test/embedding-providers/onnx-model-download.test.ts',
+  'packages/resource-compiler/test/cli/stdio-blocking.test.ts',
+  'packages/resources/test/ard/ard-manifest.test.ts',
+  'packages/resources/test/cache-namespace.test.ts',
+  'packages/resources/test/checksum-utils.test.ts',
+  'packages/resources/test/content-key.test.ts',
+  'packages/resources/test/external-link-validator-auth.test.ts',
+  'packages/resources/test/external-link-validator-os-user.test.ts',
+  'packages/resources/test/frontmatter-link-validator.test.ts',
+  'packages/resources/test/link-auth-content-fetch.test.ts',
+  'packages/resources/test/link-parser.test.ts',
+  'packages/resources/test/parse-cache.test.ts',
+  'packages/resources/test/parse-pool.test.ts',
+  'packages/resources/test/parse-timing.test.ts',
+  'packages/resources/test/parse-tokenize-probe.test.ts',
+  'packages/resources/test/projection-content-cache.test.ts',
+  'packages/resources/test/projection-context-id.test.ts',
+  'packages/resources/test/projection-crawl-source-refused-listing.test.ts',
+  'packages/resources/test/projection-extent-selection.test.ts',
+  'packages/resources/test/projection-filesystem-extent.test.ts',
+  'packages/resources/test/projection-git-extent.test.ts',
+  'packages/resources/test/projection-identity.test.ts',
+  'packages/resources/test/projection-package-extent.test.ts',
+  'packages/resources/test/projection-realizations.test.ts',
+  'packages/resources/test/resolve-local-href.test.ts',
+  'packages/utils/test/asset-reference.test.ts',
+  'packages/utils/test/crawl-timing-shared.test.ts',
+  'packages/utils/test/entrypoint.test.ts',
+  'packages/utils/test/git-snapshot-cache.test.ts',
+  'packages/utils/test/git-tracker-snapshot-priming.test.ts',
+  'packages/utils/test/git-tracker.test.ts',
+  'packages/utils/test/git-utils.test.ts',
+  'packages/utils/test/gitignore-checker.test.ts',
+  'packages/utils/test/remove-scratch-dir.test.ts',
+  'packages/utils/test/safe-exec-tool-probe.test.ts',
+  'packages/utils/test/skill-test/spawn-claude-registry.test.ts',
+  'packages/utils/test/text-content.test.ts',
+  'packages/utils/test/timing-dump.test.ts',
+] };
+
+/**
+ * Ratchet for `local/commands-import-boundary`: the command modules under
+ * `packages/cli/src/commands/` that still import `node:fs` (59 sites in 45
+ * files when seeded). A command's job is to parse arguments, call
+ * a seam and render a report; one that opens the tree itself is an
+ * enumeration lane nobody documented — `vat audit` carried a ~700-line walker
+ * beside the four declared lanes until it was moved onto `crawlDirectory`.
+ * Every other command file is held to the rule at `error` today, so a NEW
+ * `node:fs` import in a command is a desk-time failure. The list may only
+ * SHRINK: an entry leaves when its file routes the I/O through a seam in
+ * `@vibe-agent-toolkit/utils` / `@vibe-agent-toolkit/resources` (or the I/O
+ * moves to the library package it belongs to); never add one.
+ *
+ * Each entry names WHAT the file still does with `fs`, so the next reader can
+ * tell an enumeration (`ENUM` — a `readdir`, the shape the rule exists for)
+ * from a probe or a copy, and retire the enumerations first.
+ */
+const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
+  'packages/cli/src/commands/agent/install.ts',                       // access/mkdir/lstat/rm/symlink — install-dir mutation
+  'packages/cli/src/commands/agent/installed.ts',                     // ENUM: readdir of the install dir
+  'packages/cli/src/commands/agent/uninstall.ts',                     // access/lstat/rm — install-dir mutation
+  'packages/cli/src/commands/ard/emit.ts',                            // existsSync probe
+  'packages/cli/src/commands/audit.ts',                               // existsSync/stat probes only — the walker is gone (audit/scan-population.ts)
+  'packages/cli/src/commands/audit/git-url-clone.ts',                 // mkdtemp/rm — clone scratch dir
+  'packages/cli/src/commands/build.ts',                               // ENUM: readdir for phase output; existsSync probes
+  'packages/cli/src/commands/cache/clear.ts',                         // ENUM: readdir of the cache dir; rm
+  'packages/cli/src/commands/claude/marketplace/changelog-utils.ts',  // readFileSync
+  'packages/cli/src/commands/claude/marketplace/git-publish.ts',      // ENUM: readdirSync of the publish tree; mkdtemp/cp/rm
+  'packages/cli/src/commands/claude/marketplace/license-utils.ts',    // readFileSync
+  'packages/cli/src/commands/claude/marketplace/publish-tree.ts',     // writeFile/cp/readFileSync — publish tree assembly
+  'packages/cli/src/commands/claude/marketplace/publish.ts',          // mkdtempSync
+  'packages/cli/src/commands/claude/marketplace/validate.ts',         // ENUM: readdirSync over plugins/ and skills/ (lane table: raw-readdir)
+  'packages/cli/src/commands/claude/org/skills.ts',                   // ENUM: readdirSync collectFiles + node_modules listing (lane table: raw-readdir)
+  'packages/cli/src/commands/claude/plugin/build.ts',                 // ENUM: readdir; mkdir/cp/writeFile — marketplace build
+  'packages/cli/src/commands/claude/plugin/helpers.ts',               // existsSync/stat probes, readFile
+  'packages/cli/src/commands/claude/plugin/install.ts',               // ENUM: readdirSync ×4; rm/mkdir/cp/symlink — registry + tree copy (audit-A §1.2)
+  'packages/cli/src/commands/claude/plugin/plugin-changelog.ts',      // existsSync probes
+  'packages/cli/src/commands/claude/plugin/plugin-files.ts',          // existsSync/mkdir/copyFile
+  'packages/cli/src/commands/claude/plugin/plugin-validators.ts',     // ENUM: readdir; readFile
+  'packages/cli/src/commands/claude/plugin/tree-copy.ts',             // ENUM: readdir; realpath/lstat/copyFile — tree copy
+  'packages/cli/src/commands/claude/plugin/uninstall.ts',             // readFileSync
+  'packages/cli/src/commands/consistency-check.ts',                   // existsSync probes
+  'packages/cli/src/commands/corpus/report.ts',                       // mkdirSync/writeFileSync — report output
+  'packages/cli/src/commands/corpus/runner.ts',                       // writeFileSync/existsSync
+  'packages/cli/src/commands/corpus/scan.ts',                         // mkdirSync/readFileSync
+  'packages/cli/src/commands/corpus/seed.ts',                         // existsSync/readFileSync
+  'packages/cli/src/commands/doctor.ts',                              // readFileSync/existsSync probes
+  'packages/cli/src/commands/inventory.ts',                           // existsSync probes
+  'packages/cli/src/commands/resources/check-progress.ts',            // appendFileSync — cost log
+  'packages/cli/src/commands/resources/check-supervisor.ts',          // stat/readFileSync/mkdtemp/rm — child supervision (audit-A §1.2)
+  'packages/cli/src/commands/resources/validate.ts',                  // readFile
+  'packages/cli/src/commands/skill/review.ts',                        // existsSync/stat probes
+  'packages/cli/src/commands/skill/test/configure.ts',                // readFileSync/writeFileSync — config edit
+  'packages/cli/src/commands/skill/test/run.ts',                      // existsSync probes
+  'packages/cli/src/commands/skills/build.ts',                        // mkdir/rename/rm/mkdtemp — staging
+  'packages/cli/src/commands/skills/install.ts',                      // ENUM: readdirSync ×2; rm/cp/mkdtemp/lstat
+  'packages/cli/src/commands/skills/list.ts',                         // ENUM: readdirSync of ~/.claude/skills under --user (lane table: raw-readdir)
+  'packages/cli/src/commands/skills/package.ts',                      // existsSync/stat probes
+  'packages/cli/src/commands/skills/scope-guard.ts',                  // existsSync/stat probes
+  'packages/cli/src/commands/skills/shared.ts',                       // existsSync probes, readFile
+  'packages/cli/src/commands/skills/skill-discovery.ts',              // existsSync probe
+  'packages/cli/src/commands/skills/source-resolvers.ts',             // mkdtemp/existsSync/rm — source staging
+  'packages/cli/src/commands/verify.ts',                              // stat/existsSync probes
+] };
+
+/**
+ * Files still carrying `@typescript-eslint/no-unsafe-member-access` /
+ * `no-unsafe-assignment` findings, with the count measured when the ratchet was seeded. A
+ * ratchet: the block that consumes this list applies both rules at `error` to
+ * every OTHER `src` file, so an entry here is the only way a finding survives.
+ * Remove the entry when the file is clean; never add one without the count.
+ */
+export const NO_UNSAFE_BACKLOG = [
+  'packages/agent-skills/src/skill-test/pipeline.ts', // 1
+  'packages/cli/src/bin.ts', // 1
+  'packages/cli/src/commands/corpus/seed.ts', // 1
+  'packages/cli/src/commands/doctor.ts', // 9
+  'packages/cli/src/commands/resources/validate.ts', // 1
+  'packages/cli/src/utils/config-loader.ts', // 1
+  'packages/cli/src/version.ts', // 3
+  'packages/dev-tools/src/bump-version.ts', // 15
+  'packages/dev-tools/src/determine-publish-tags.ts', // 3
+  'packages/dev-tools/src/pre-publish-check.ts', // 3
+  'packages/rag/src/embedding-providers/openai-embedding-provider.ts', // 2
+  'packages/resource-compiler/src/language-service/completions.ts', // 20
+  'packages/resource-compiler/src/language-service/definitions.ts', // 15
+  'packages/resource-compiler/src/language-service/diagnostics.ts', // 38
+  'packages/resource-compiler/src/language-service/hover.ts', // 18
+  'packages/resource-compiler/src/language-service/plugin.ts', // 11
+  'packages/resource-compiler/src/language-service/utils.ts', // 65
+  'packages/resources/src/link-auth/expand-macro.ts', // 1
+  'packages/utils/src/yaml/surgical-yaml.ts', // 2
+  'packages/utils/src/zod-introspection.ts', // 9
+  'packages/vat-example-cat-agents/src/mcp-collections.ts', // 1
+  'packages/vat-example-cat-agents/src/one-shot-llm-analyzer/description-parser.ts', // 1
+  'packages/vat-example-cat-agents/src/one-shot-llm-analyzer/photo-analyzer.ts', // 1
+];
+
+/**
  * One `local/no-self-package-import` block per workspace package, each naming
  * that package and scoped to the sources it compiles.
  *
- * The rule does not read `package.json` itself on purpose. Every module on the
- * `./eslint` subpath requires nothing at all — not `eslint`, not a third-party
- * package, not even a Node builtin — which is what keeps `eslint` an optional
- * peer dependency and the pack shippable as a subpath of a runtime package
- * (`packages/utils/test/eslint/subpath-purity.test.ts` asserts the empty set).
+ * The rule does not read `package.json` itself on purpose. Every RULE module on
+ * the `./eslint` subpath requires nothing at all — not `eslint`, not a
+ * third-party package, not even a Node builtin — which is what keeps `eslint` an
+ * optional peer dependency and the pack shippable as a subpath of a runtime
+ * package (`packages/utils/test/eslint/subpath-purity.test.ts` asserts the empty
+ * set for the rules, and exactly `node:fs` + `node:path` for the entry point
+ * that lists them).
  * This file is not on that subpath: it already runs in full Node, so reading the
  * manifests here costs the invariant nothing.
  *
@@ -69,19 +312,18 @@ function selfImportConfigs() {
   // died with `ENOENT: scandir 'packages'` before linting a line. Not a finding
   // and not a lint error: a config load failure, exit 2, in every package.
   //
-  // A `URL` rather than a `path.join`: this file is subject to the `no-path-join`
+  // A `URL` rather than a `path.join`: this file is subject to the `no-raw-node-path`
   // rule it declares two functions below, and a relative `URL` needs no exemption
   // to be correct on Windows either. The `files:` globs stay strings because flat
   // config already resolves those against the config file's own directory.
   const packagesDir = new URL('packages/', import.meta.url);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- a URL built from this file's own location and a literal segment; no input reaches it.
   return readdirSync(packagesDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
+    // Followed inline (this file cannot import the utils helper): a workspace
+    // package reached through a link is still a package with a name to guard.
+    .filter((entry) => (entry.isSymbolicLink() ? statSync(new URL(`${entry.name}/`, packagesDir)).isDirectory() : entry.isDirectory()))
     .flatMap((entry) => {
       const manifest = new URL(`${entry.name}/package.json`, packagesDir);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- the path is a workspace directory name read from `packages/` moments earlier, not user input.
       if (!existsSync(manifest)) return [];
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- same path, existence just confirmed above.
       const { name } = JSON.parse(readFileSync(manifest, 'utf8'));
       if (typeof name !== 'string' || name.length === 0) return [];
       return [{
@@ -104,9 +346,10 @@ const localRulesConfig = {
   'local/no-manual-path-normalize': 'error',
   'local/no-path-sep-in-strings': 'error',
   'local/no-path-operations-in-comparisons': 'error',
-  'local/no-path-join': ['error', PATH_IMPL_EXEMPT],
-  'local/no-path-resolve': ['error', PATH_IMPL_EXEMPT],
-  'local/no-path-relative': ['error', PATH_IMPL_EXEMPT],
+  // One rule over `join`/`resolve`/`relative` (its `functions` option; the
+  // default table is all three). `error` here, `warn` in the pack's own
+  // `recommended`: this tree has no backlog left to burn down.
+  'local/no-raw-node-path': ['error', PATH_IMPL_EXEMPT],
   'local/no-test-scoped-functions': 'error',
   'local/no-fs-promises-cp': 'error',
   'local/no-url-pathname-for-fs': 'error',
@@ -153,6 +396,49 @@ const localRulesConfig = {
   // caller that swallowed it. Repo-wide, tests included: a test that swallows
   // is a test that cannot see the failure it is there to catch.
   'local/no-blind-catch': 'error',
+  // The two test-tier ratchets. `no-io-in-unit-tier` reads the FILE list above;
+  // `no-registry-count-pin` has no backlog — its eleven sites were fixed by
+  // pinning the SET a count stood for, or, for the two MEASURED literals (a
+  // Node abort code, a calibrated token default), by a disable that names the
+  // measurement. The next constant-equals-itself assertion is an error at the desk.
+  'local/no-io-in-unit-tier': ['error', UNIT_TIER_IO_RATCHET],
+  'local/no-registry-count-pin': ['error', { minLiteral: 5 }],
+  // ONE exit-code contract. Every `process.exit(…)` names a member of
+  // `ExitCode` (`@vibe-agent-toolkit/schema`): 0 ok, 1 findings, 2 error.
+  // Five vocabularies used to coexist (skill test read 1 as "the harness
+  // broke", audit exited 0 over `status: error`, the lab had a 3) and the
+  // orchestrator read all of them as one. No backlog: 176 sites were migrated
+  // the day this was enabled. `allow` is not a ratchet of product code — it
+  // names the three EXAMPLE scripts that are not vat verbs and would otherwise
+  // take a dependency on `schema` for one line each.
+  'local/no-literal-process-exit': ['error', { allow: [
+    'packages/gateway-mcp/examples/example-helpers.ts',
+    'packages/vat-development-agents/agents/agent-generator/validate-agent.ts',
+    'packages/vat-example-cat-agents/examples/photo-analysis-demo.ts',
+  ] }],
+  // The containment trio, from the sweep that watched a delete, a copy and an
+  // uninstall walk out of their root. No backlog and no ratchet: every site
+  // was fixed the day these were enabled, so the next `startsWith('..')`, the
+  // next `Dirent` walk that drops a symlink on the floor, and the next
+  // `z.literal(<number>)` on a `version` field are errors at the desk. The two
+  // lexical helpers the first rule points every caller at
+  // (`hasParentTraversalSegment`, `relativeEscapesRoot`) carry the only
+  // sanctioned disables, with the reason inline.
+  'local/no-dotdot-containment': 'error',
+  'local/dirent-type-needs-symlink-check': 'error',
+  'local/no-version-literal': ['error', { allowNames: [] }],
+  // The command/library boundary, as a ratchet (see the list's own comment).
+  // `commandGlobs` is the rule's default (`packages/cli/src/commands/`);
+  // `forbiddenModules` stays at its default too — no command imports a
+  // `@vibe-agent-toolkit/resources/<subpath>` today and the local walker the
+  // rule was written against no longer exists.
+  'local/commands-import-boundary': ['error', COMMANDS_IMPORT_BOUNDARY_RATCHET],
+  // Comments under `src/` may not cite an issue/PR number, an ISO date or a
+  // named person: the rule stays in the comment, the history goes to the
+  // commit, the CHANGELOG or docs/contributing/. No backlog and no ratchet —
+  // 175 blocks were rewritten when this was enabled. The one date shape it
+  // leaves alone is `@vendor-claim reviewed=…`, which a freshness gate reads.
+  'local/no-decaying-referent': ['error', { names: ['Jeff'], allowDates: false }],
 };
 
 // Import organization. Apply to both TS and JS source.
@@ -207,14 +493,20 @@ const unicornRulesConfig = {
   'unicorn/prefer-code-point': 'error',
 };
 
-// Ban legacy YAML / frontmatter libraries — see CLAUDE.md yaml-lib rule.
-// Applied to both TS and JS blocks below.
+// This block is the ONE owner of "which YAML / frontmatter library". `yaml`
+// (eemeli) is the library: it round-trips comments and key order, which the
+// frontmatter rewriter depends on, and it is the only YAML parser in the
+// dependency graph. `js-yaml` and `gray-matter` are banned here — not by a
+// CLAUDE.md rule (an earlier version of this comment cited one that never
+// existed), and not by a table in `docs/best-practices.md` (which once
+// approved `js-yaml`; the lint rule is the durable record, so the docs point
+// here). Applied to both TS and JS blocks below.
 const OPEN_FRONTMATTER_MESSAGE = 'Use openFrontmatter from @vibe-agent-toolkit/resources — preserves comments.';
 const noRestrictedImportsConfig = ['error', {
   paths: [
     {
       name: 'js-yaml',
-      message: 'Use `yaml` (eemeli) per CLAUDE.md yaml-lib rule. Frontmatter writes: openFrontmatter from @vibe-agent-toolkit/resources.',
+      message: 'Use `yaml` (eemeli) — the one YAML library in this repo; see noRestrictedImportsConfig in eslint.config.js. Frontmatter writes: openFrontmatter from @vibe-agent-toolkit/resources.',
     },
     { name: 'gray-matter', message: OPEN_FRONTMATTER_MESSAGE },
     { name: 'front-matter', message: OPEN_FRONTMATTER_MESSAGE },
@@ -238,9 +530,22 @@ const generalRulesConfig = {
     allowTaggedTemplates: false,
   }],
   'security/detect-object-injection': 'off',
+  // VAT is a filesystem tool: nearly every fs call takes a computed path, so
+  // this rule fired on all of them. It had accumulated 1,361 disable
+  // directives (82% of every directive in the repo) and in 93 commits of
+  // history not one removal was a code fix — every one was the call being
+  // deleted or moved. Containment is enforced where it matters instead:
+  // `local/no-unsafe-root-join` at the harness roots and the containment
+  // helpers in `@vibe-agent-toolkit/utils`.
+  'security/detect-non-literal-fs-filename': 'off',
   'sonarjs/cognitive-complexity': ['error', 15],
   'sonarjs/no-duplicate-string': 'warn',
   'n/no-path-concat': 'error',
+  // Every `eslint-disable*` carries a `-- reason`. The `--` grammar was a
+  // convention with no enforcement; 38 src and 127 test directives had none
+  // when this landed, and a bare directive is a suppression nobody can review.
+  // `eslint-enable` is exempt: the matching disable holds the reason.
+  'eslint-comments/require-description': ['error', { ignore: ['eslint-enable'] }],
 };
 
 export default [
@@ -263,9 +568,7 @@ export default [
       'vitest.*.config.ts',
       'vitest.shared.ts',
       'vitest.setup.js',
-      '.worktrees/',  // Git worktrees
       '.claude/worktrees/',  // Claude Code worktrees
-      'docs/**/*.ts',  // Documentation scripts (not part of build)
       '**/test-fixtures/**',  // Test fixture data (third-party code)
       '**/test/fixtures/**',  // Test fixture data (emulates user/3p content)
       '**/transformer-fixtures/**',  // Transformer test fixtures (sample code)
@@ -286,7 +589,7 @@ export default [
     // match it, so a `.cts` file is silently unlinted. That is the same hole
     // the `.cjs` block below was added to close; the CommonJS-specific
     // overrides at the end of this file re-apply to `.cts` for the same reason.
-    files: ['**/*.ts', '**/*.tsx', '**/*.cts'],
+    files: ['**/*.ts', '**/*.cts'],
     languageOptions: {
       parser: tsparser,
       parserOptions: {
@@ -307,6 +610,7 @@ export default [
       security,
       n: pluginNode,
       import: importPlugin,
+      'eslint-comments': eslintComments,
       local: localRules,
     },
     rules: {
@@ -350,16 +654,91 @@ export default [
         allowAny: false,
         allowNullish: false,
       }],
-      // Note: no-unsafe-member-access and no-unsafe-assignment are too
-      // noisy (260+ warnings) — valuable for new code, too much to fix
-      // in the existing codebase right now.
+      // `no-unsafe-member-access` / `no-unsafe-assignment` are enabled as a
+      // RATCHET in the `packages/*/src` block below, not here: see
+      // `NO_UNSAFE_BACKLOG`.
     },
+  },
+
+  // `@typescript-eslint/no-unsafe-*` — a ratchet over `src/`.
+  //
+  // This pair sat in a "too noisy (260+ warnings) … right now" note from
+  // 2026-02 for seven months with no expiry, which is a decision to never do it.
+  // Re-measured when this ratchet was seeded over `packages/*/src/**/*.ts`: 222 findings in 23
+  // files, 167 of them in `resource-compiler/src/language-service/` (the TS
+  // Language Service plugin API is `any`-typed at its boundary). So: `error`
+  // for every OTHER src file from today, and the 23 are listed here with their
+  // counts. The list may only shrink — delete an entry when its file is clean.
+  // Lint cannot tell you when that is (the rules apply only to files NOT
+  // listed); `dev-tools/test/integration/no-unsafe-backlog-ratchet.integration.test.ts`
+  // lints each listed file type-aware with the exemption lifted and fails on
+  // one that is clean. Adding a file here is the thing this block exists to
+  // make visible.
+  {
+    files: ['packages/*/src/**/*.ts'],
+    ignores: NO_UNSAFE_BACKLOG,
+    rules: {
+      '@typescript-eslint/no-unsafe-member-access': 'error',
+      '@typescript-eslint/no-unsafe-assignment': 'error',
+    },
+  },
+
+  // Contracts, over `src/` only.
+  //
+  // `explicit-zod-strictness`: every `z.object(…)` says what it does with a key
+  // it does not declare — `.strict()` (the default here; the reader's strict
+  // schema is what CLAUDE.md retired every version integer in favour of) or
+  // `.passthrough()` with a comment naming the external owner of the shape
+  // (a Claude settings file, a plugin manifest, an npm `package.json`, an
+  // adopter config sub-tree that once silently stripped keys and cannot be
+  // made strict without bricking those adopters). Zod's silent-strip default
+  // is the one answer this repo cannot afford. `src` only: tests build schemas
+  // as fixtures, and 125 of them would be noise. No backlog — 74 sites were
+  // annotated the day this was enabled.
+  //
+  // `no-restricted-syntax`: no dispatch on error PROSE. `err.message.includes(…)`
+  // held exactly until someone reworded the sentence; three packages recognised
+  // a root escape that way. Every VAT error extends `VatError` and carries a
+  // `code` — dispatch on `isVatError(err, code)`, `instanceof`, or an errno
+  // predicate (`isPathAbsentError`). No backlog of the SHAPE: all 21 direct
+  // sites were rewritten. The selectors see only `x.message.<method>(` and
+  // `re.test(x.message)`; a message copied into a local first
+  // (`const message = err.message; pattern.test(message)`) is invisible to
+  // them and is caught by review, not by lint — one such site exists
+  // legitimately (vendor prose in `claude/org/skills.ts`).
+  {
+    files: ['packages/*/src/**/*.ts'],
+    rules: {
+      'local/explicit-zod-strictness': ['error', { allowDefaultStripIn: [] }],
+      'no-restricted-syntax': ['error',
+        {
+          selector: "CallExpression[callee.type='MemberExpression'][callee.object.type='MemberExpression'][callee.object.property.name='message'][callee.property.name=/^(includes|startsWith|endsWith|match|search)$/]",
+          message: 'Do not dispatch on an error message. Dispatch on its code (`isVatError(err, code)`), its class (`instanceof`), or an errno predicate (`isPathAbsentError`) — prose is for humans and changes when it is improved.',
+        },
+        {
+          selector: "CallExpression[callee.type='MemberExpression'][callee.property.name='test'][arguments.0.type='MemberExpression'][arguments.0.property.name='message']",
+          message: 'Do not test a regex against an error message. Dispatch on its code (`isVatError(err, code)`), its class (`instanceof`), or an errno predicate (`isPathAbsentError`).',
+        },
+        // Every VAT error carries a `code`: a class that extends the bare
+        // `Error` has none, and the contract above has nothing to dispatch on.
+        // One such class survived the sweep by being added after it.
+        {
+          selector: "ClassDeclaration[superClass.name='Error']",
+          message: 'Extend `VatError` from @vibe-agent-toolkit/utils (with a SCREAMING_SNAKE code), not the bare `Error` — every VAT error carries a code a catch block can dispatch on.',
+        },
+      ],
+    },
+  },
+  // The base class itself is the one legitimate `extends Error` in `src`.
+  {
+    files: ['packages/utils/src/errors/vat-error.ts'],
+    rules: { 'no-restricted-syntax': 'off' },
   },
 
   // Plain JS / CJS / MJS files (eslint configs, dev-tools scripts, the rule
   // pack in `packages/utils/eslint/rules/*.cjs`). These
   // files were previously unlinted because the TS block above only globs
-  // **/*.ts and **/*.tsx — letting findings like SonarCloud's S6324
+  // **/*.ts and **/*.cts — letting findings like SonarCloud's S6324
   // (`prefer-set-has`) and S7773 (`prefer-string-raw`) only surface
   // post-merge. Mirrors the TS block's rule set, dropping rules that
   // require @typescript-eslint type information.
@@ -380,6 +759,7 @@ export default [
       security,
       n: pluginNode,
       import: importPlugin,
+      'eslint-comments': eslintComments,
       local: localRules,
     },
     rules: {
@@ -426,6 +806,25 @@ export default [
       // activate — a static ESM import would load it whether or not the counter
       // is switched on.
       '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
+
+  // Test tier. CLAUDE.md has promised "complexity 20 for tests" and "any
+  // allowed in tests" since the repo began; until this ratchet landed no block
+  // implemented either, and 929 test-file directives (94.5% of the test
+  // tier's total) existed for the five rules relaxed here. Tests are held to
+  // every other production rule.
+  {
+    files: ['packages/*/test/**/*.ts', 'test/**/*.ts'],
+    rules: {
+      'sonarjs/cognitive-complexity': ['error', 20],
+      '@typescript-eslint/no-explicit-any': 'off',
+      // Test bodies spawn `git`/`node`/`bun` by bare name and build fixture
+      // strings that repeat; those are the fixture, not a smell.
+      'sonarjs/no-os-command-from-path': 'off',
+      'sonarjs/no-duplicate-string': 'off',
+      'sonarjs/publicly-writable-directories': 'off',
+      'sonarjs/file-permissions': 'off',
     },
   },
 
@@ -540,7 +939,7 @@ export default [
   // hazard is a build-time resolution failure, so this is the whole surface where
   // it can bite. Test and example trees are excluded from every package build and
   // import their own package by name deliberately — see the rule's header and the
-  // `RECOMMENDED_EXCLUDE` note in `packages/utils/eslint/index.cjs`.
+  // `recommended: false` note in `packages/utils/eslint/rules/no-self-package-import.cjs`.
   ...selfImportConfigs(),
 
   // Scoped: enforce safePath.joinUnderRoot() for security-root path joins

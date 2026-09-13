@@ -242,7 +242,6 @@ let tracker: GitTracker;
  * into a comparison of two "not ignored" answers. Fail loudly instead.
  */
 function runGit(cwd: string, args: readonly string[]): void {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
   const result = spawnSync('git', [...args], { cwd, stdio: 'pipe', encoding: 'utf-8' });
   if (result.status !== 0) {
     throw new Error(
@@ -268,7 +267,6 @@ function commitPaths(directory: string, paths: readonly string[], message: strin
 function createSubmoduleOrigin(directory: string): void {
   mkdirSyncReal(directory, { recursive: true });
   initRepoWithIdentity(directory);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- directory is a temp directory created by this suite
   writeFileSync(safePath.join(directory, 'sub-file.md'), '# Inside a submodule\n');
   commitPaths(directory, ['sub-file.md'], 'submodule fixture');
 }
@@ -312,7 +310,6 @@ function tryCreateDirectorySymlink(root: string): boolean {
  * reddening the whole suite.
  */
 function createFixtureRepo(root: string, outsideDir: string, submoduleOrigin: string): void {
-  /* eslint-disable security/detect-non-literal-fs-filename -- root/outsideDir are temp directories created by this suite */
   mkdirSyncReal(safePath.join(root, 'docs'), { recursive: true });
   mkdirSyncReal(safePath.join(root, 'dist'), { recursive: true });
   mkdirSyncReal(safePath.join(root, 'real'), { recursive: true });
@@ -325,7 +322,7 @@ function createFixtureRepo(root: string, outsideDir: string, submoduleOrigin: st
   writeFileSync(safePath.join(root, 'real', 'deep.md'), '# Reached through a symlink\n');
   writeFileSync(safePath.join(outsideDir, 'notes.md'), '# Outside the repo\n');
   writeFileSync(safePath.join(root, 'café.md'), '# Non-ASCII filename\n');
-  /* eslint-enable security/detect-non-literal-fs-filename */
+   
 
   initRepoWithIdentity(root);
 

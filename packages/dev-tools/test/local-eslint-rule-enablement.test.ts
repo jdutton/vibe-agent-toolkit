@@ -8,8 +8,9 @@
  * deliberately smaller set: eight rules are excluded from it because they depend
  * on a fact about the CONSUMER (their Node floor, their package layout, their
  * decoding seam) rather than a fact that holds everywhere. That exclusion is
- * itself pinned — `packages/utils/test/eslint/rules.test.ts` asserts the exact
- * excluded set — so those eight reach this repo's own source through exactly one
+ * itself pinned — `packages/utils/test/eslint/rule-manifest.test.ts` asserts that
+ * `configs.recommended` equals the set each rule's `meta.docs.recommended`
+ * declares — so those rules reach this repo's own source through exactly one
  * artifact: a severity line in the root `eslint.config.js`.
  *
  * Deleting such a line is invisible. Every unit test still passes (they exercise
@@ -87,6 +88,25 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   // Deliberately scoped to the skill-test staging code, so it needs its own.
   'no-unsafe-root-join': 'packages/utils/src/skill-test/spawn-claude.ts',
   'require-justified-skip': REPO_WIDE_PROBE,
+  // The two test-tier ratchets are declared in the repo-wide block too; a unit
+  // spec file is the surface they govern.
+  'no-io-in-unit-tier': 'packages/utils/test/barrel-exports.test.ts',
+  'no-registry-count-pin': 'packages/utils/test/barrel-exports.test.ts',
+  // Scoped by its own `commandGlobs` option to the CLI's command modules; the
+  // probe is one that is NOT on the ratchet's allowlist.
+  'commands-import-boundary': 'packages/cli/src/commands/audit/scan-population.ts',
+  // Declared repo-wide; the rule itself scopes to non-test files under `src/`.
+  'no-decaying-referent': REPO_WIDE_PROBE,
+  // The containment trio, declared repo-wide with no ratchet: every site was
+  // fixed when they were enabled.
+  'no-dotdot-containment': REPO_WIDE_PROBE,
+  'dirent-type-needs-symlink-check': REPO_WIDE_PROBE,
+  'no-version-literal': REPO_WIDE_PROBE,
+  // The exit-code contract, declared repo-wide with no ratchet of product code
+  // (its `allow` names three example scripts that are not vat verbs).
+  'no-literal-process-exit': REPO_WIDE_PROBE,
+  // Scoped to `packages/*/src/**`: tests build schemas as fixtures.
+  'explicit-zod-strictness': REPO_WIDE_PROBE,
 };
 
 /** `error` as ESLint normalizes it out of `calculateConfigForFile`. */

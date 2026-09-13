@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is a temp dir the test owns */
 /**
  * One agent-instruction file must produce ONE finding per `vat audit` run, no
  * matter how many skills sit above it.

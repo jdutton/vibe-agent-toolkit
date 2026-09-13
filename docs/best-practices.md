@@ -35,10 +35,14 @@ parsing logic when no suitable library exists, and document why in a code commen
 |---|---|---|
 | Markdown AST parsing | `unified` + `remark-parse` + `remark-gfm` + `remark-frontmatter` | Standard markdown pipeline |
 | Markdown heading → anchor slug | `github-slugger` | GitHub-compatible slug generation |
-| YAML | `js-yaml` | Used for config and frontmatter |
+| YAML | `yaml` | The one YAML library; frontmatter *writes* go through `openFrontmatter` from `@vibe-agent-toolkit/resources` (comment-preserving) |
 | JSON Schema validation | `ajv` | Validating user-provided schemas only |
 | TypeScript schemas + types | `zod` | Internal schemas; convert to JSON Schema via `zod-to-json-schema` |
-| Path operations | Node.js `path` built-in | No third-party needed |
+| Path operations | `safePath.*` from `@vibe-agent-toolkit/utils` | Wraps Node's `path` and always returns forward slashes; raw `path.join/resolve/relative` are banned by the `local/no-raw-node-path` ESLint rule |
+
+**The banned list is owned by `noRestrictedImportsConfig` in `eslint.config.js`** (`js-yaml`,
+`gray-matter`, `front-matter` today), not by this table: a lint rule is the durable record, and its
+message names the replacement. If this table and the config disagree, the config wins — fix the table.
 
 ### Adding a New Library
 

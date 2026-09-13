@@ -37,18 +37,13 @@
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "clean": "rimraf dist *.tsbuildinfo"
+    "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },
   "dependencies": {
     "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "zod": "^3.23.8",
-    "zod-to-json-schema": "^3.23.5"
-  },
-  "devDependencies": {
-    "rimraf": "^6.0.1",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "zod": "^3.25.0",
+    "zod-to-json-schema": "^3.24.5"
   },
   "publishConfig": {
     "access": "public"

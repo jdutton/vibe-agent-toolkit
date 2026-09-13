@@ -185,7 +185,6 @@ describe('skills build command (system test)', () => {
     // Verify output directory was created
     const outputPath = safePath.join(tempDir, 'dist', 'skills', TEST_SKILL_NAME);
     const skillMd = safePath.join(outputPath, 'SKILL.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
     expect(readFileSync(skillMd, 'utf-8')).toContain(TEST_SKILL_NAME);
   });
 
@@ -206,14 +205,12 @@ describe('skills build command (system test)', () => {
 
     // Verify only skill-b was built
     const outputPathB = safePath.join(tempDir, 'dist', 'skills', SKILL_B_NAME);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
     expect(readFileSync(safePath.join(outputPathB, 'SKILL.md'), 'utf-8')).toContain(SKILL_B_NAME);
 
     // Skill A should not exist (only skill-b was built). Asserted directly rather
     // than via a try/catch whose `catch` block ended in `expect(true).toBe(true)` —
     // that shape passed on ANY throw, including a bug in the path construction.
     const outputPathA = safePath.join(tempDir, 'dist', 'skills', SKILL_A_NAME);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
     expect(existsSync(safePath.join(outputPathA, 'SKILL.md'))).toBe(false);
   });
 
@@ -271,7 +268,6 @@ describe('skills build command (system test)', () => {
 
     // The declared file should exist in the packaged skill output
     const expectedDest = safePath.join(tempDir, 'dist', 'skills', TEST_SKILL_NAME, 'scripts', 'tool.mjs');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
     const content = readFileSync(expectedDest, 'utf-8');
     expect(content).toContain('console.log("tool")');
   });

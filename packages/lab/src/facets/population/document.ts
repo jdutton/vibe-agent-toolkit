@@ -55,7 +55,7 @@ const ScanDocumentSchema = LaneFieldsSchema.extend({
       z.object({
         path: z.string().min(1),
         checksum: z.string(),
-      }),
+      }).strip(), /* a row ANOTHER vat build printed: keep only the two fields a population compares on */
     )
     .optional(),
 });

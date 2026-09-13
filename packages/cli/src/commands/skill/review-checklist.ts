@@ -157,8 +157,9 @@ export function sectionForCode(code: string): ChecklistSection {
 }
 
 /**
- * Judgment-call checklist items (no automated code). Synced from the
- * checklist file as of 2026-04-18. Update when the checklist changes.
+ * Judgment-call checklist items (no automated code). Hand-synced from the
+ * checklist file — nothing derives one from the other — so update this when
+ * the checklist changes.
  *
  * Items are phrased as questions the reviewer should answer. `[A]` flags
  * items that directly mirror Anthropic guidance; `[VAT]` flags VAT-opinionated

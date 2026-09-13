@@ -95,24 +95,24 @@ excerpt to read.
 
 ## Exit Codes
 
+The same three-way contract as every other `vat` command; when the harness could not run, a `Reason: <reason>` line on stderr says why.
+
 | Code | Meaning |
 |---|---|
 | `0` | Harness ran to completion and **every eval passed** (`PASS N/N`) — or a failing verdict was suppressed with `--allow-eval-failure`. Read the printed summary and `results/grading.json` for detail. |
-| `4` | An eval **FAILED** — the harness completed and produced valid results, but the **composite verdict** did not all pass. This covers three cases: an output expectation failed, a declared `toolExpectations` verdict failed (`FAIL N/M (K tool)`), or a cheaper cost tier failed and gated the higher tiers (their evals are **SKIPPED**, never passed). The **fail-closed default** — suppress with `--allow-eval-failure` for interactive iteration. |
-| `3` | Bootstrap: no `evals.json` found — VAT wrote a template. **Not a failure.** Fill in the template and re-run. |
-| `2` | Preflight / env failure: missing `claude` binary, auth error, declared inputs or deps absent, unsafe `--workdir`, `--require-auth` mismatch, or the `--i-understand-this-runs-skill-code` acknowledgment was not given. |
-| `1` | Internal (harness) failure **on the treatment arm** — its executor or grader spawn stalled/timed out/errored, its grader exited without a valid fragment, or a fragment's nonce was missing/wrong. On that arm a **stall, timeout, spawn error, or nonce/skew failure is authoritative and always exit 1** — it is never laundered into a PASS or a FAIL, even if a `grading.json` is present on disk (hardening against skill code that writes a fake grade then hangs). The **control** arm of a `--baseline` run is the exception, and it is not a small one — read the next paragraph before writing a CI gate. |
+| `1` | An eval **FAILED** — the harness completed and produced valid results, but the **composite verdict** did not all pass. This covers three cases: an output expectation failed, a declared `toolExpectations` verdict failed (`FAIL N/M (K tool)`), or a cheaper cost tier failed and gated the higher tiers (their evals are **SKIPPED**, never passed). The **fail-closed default** — suppress with `--allow-eval-failure` for interactive iteration. |
+| `2` | The harness **could not run**. `Reason: bootstrap` — no `evals.json` found, VAT wrote a template; **not a failure**, fill it in and re-run. `Reason: preflight` — missing `claude` binary, auth error, declared inputs or deps absent, unsafe `--workdir`, `--require-auth` mismatch, or the `--i-understand-this-runs-skill-code` acknowledgment was not given. `Reason: internal` — a harness failure **on the treatment arm**: its executor or grader spawn stalled/timed out/errored, its grader exited without a valid fragment, or a fragment's nonce was missing/wrong. On that arm a **stall, timeout, spawn error, or nonce/skew failure is authoritative and always `internal`** — it is never laundered into a PASS or a FAIL, even if a `grading.json` is present on disk (hardening against skill code that writes a fake grade then hangs). The **control** arm of a `--baseline` run is the exception, and it is not a small one — read the next paragraph before writing a CI gate. |
 
-> **A dead control arm does not change the exit code.** In a `--baseline` run every failure listed under `1` above — executor spawn error, stall, wall-clock timeout, grader non-zero exit, grader wrote no fragment, unparseable fragment, nonce mismatch, grader returning the wrong number of expectations — is **recorded and survived** on the skill-withheld arm rather than thrown. That is deliberate: `grading.json` *is* the treatment arm, and destroying a completed, already-billed treatment run because the control half died costs more than losing the comparison. The consequence for CI is sharp, and it has been measured: a control executor that hits the watchdog timeout, and a control grader that exits status `3` writing no fragment, **both finish `exitCode 0`, `PASS 2/2`**. The `case $?` block below cannot see either. What you get instead is a stderr warning as it happens, `"delta": null` in `baselineDelta`, and an entry in `baselineIntegrity.controlArmFailures` naming the eval and the failure.
+> **A dead control arm does not change the exit code.** In a `--baseline` run every failure listed under `internal` above — executor spawn error, stall, wall-clock timeout, grader non-zero exit, grader wrote no fragment, unparseable fragment, nonce mismatch, grader returning the wrong number of expectations — is **recorded and survived** on the skill-withheld arm rather than thrown. That is deliberate: `grading.json` *is* the treatment arm, and destroying a completed, already-billed treatment run because the control half died costs more than losing the comparison. The consequence for CI is sharp, and it has been measured: a control executor that hits the watchdog timeout, and a control grader that exits status `3` writing no fragment, **both finish `exitCode 0`, `PASS 2/2`**. The `case $?` block below cannot see either. What you get instead is a stderr warning as it happens, `"delta": null` in `baselineDelta`, and an entry in `baselineIntegrity.controlArmFailures` naming the eval and the failure.
 
-The taxonomy separates "evals failed" (`4`) from "the harness broke" (`1`/`2`/`3`) so a CI consumer can tolerate the former while failing closed on the latter:
+The contract separates "evals failed" (`1`) from "the harness could not run" (`2`) so a CI consumer can tolerate the former while failing closed on the latter:
 
 ```bash
 vat skill test run my-skill --i-understand-this-runs-skill-code
 case $? in
   0) ;;              # all evals passed
-  4) ;;              # evals failed but the harness is healthy — tolerate/warn
-  *) exit 1 ;;       # 1/2/3/unknown — harness broke, fail the build
+  1) ;;              # evals failed but the harness is healthy — tolerate/warn
+  *) exit 1 ;;       # harness could not run — fail the build; read Reason: on stderr
 esac
 ```
 
@@ -120,7 +120,7 @@ esac
 
 Which specific evals failed lives in `results/grading.json`, never in the exit code.
 
-> **A timed-out run may leave `results/` incomplete or a `grading.json` unparseable.** Any consumer reading `grading.json` must treat an unparseable or missing file as a **failure**, not crash on it. The exit code (1) already tells you the run did not complete; do not trust a partial artifact.
+> **A timed-out run may leave `results/` incomplete or a `grading.json` unparseable.** Any consumer reading `grading.json` must treat an unparseable or missing file as a **failure**, not crash on it. The exit code (2, `Reason: internal`) already tells you the run did not complete; do not trust a partial artifact.
 >
 > **The default `--timeout` scales with the suite's declared eval count** (roughly `2min + 2min/eval`, floored at 5min, capped at 1h) so a correctly-configured multi-eval suite is not truncated by a flat budget. An explicit `--timeout` always overrides. If a run times out, the message names the declared eval count — raise `--timeout` (and `--stall`) for large suites.
 
@@ -154,13 +154,13 @@ skills:
 
 Precedence for the global knobs: **flag > top-level `test:` config > built-in default**.
 
-## Bootstrap Flow (Exit 3)
+## Bootstrap Flow (`Reason: bootstrap`)
 
 First run with no `evals.json`:
 
 ```bash
 vat skill test run ./dist/skills/my-skill/ --i-understand-this-runs-skill-code
-# Exit 3 — VAT scaffolds evals.json template next to the skill source
+# Exit 2, "Reason: bootstrap" — VAT scaffolds evals.json template next to the skill source
 ```
 
 Edit `evals.json` to fill in expected behaviors, then re-run. The template includes annotated comments explaining each field.
@@ -481,7 +481,7 @@ High-severity items block real-world usability. Medium and low items are quality
 ## Common Commands
 
 ```bash
-# First run — bootstrap evals.json template (exit 3)
+# First run — bootstrap evals.json template (exit 2, Reason: bootstrap)
 vat skill test run ./dist/skills/my-skill/ --i-understand-this-runs-skill-code
 
 # Run evals after filling in evals.json
@@ -493,8 +493,8 @@ vat skill test run ./dist/skills/my-skill/ --i-understand-this-runs-skill-code
 # baselineIntegrity you are about to read. Costs ~2x a normal run.
 vat skill test run my-skill --baseline --i-understand-this-runs-skill-code
 
-# CI gate: a failing eval exits 4 by default (no flag needed). For interactive
-# iteration, --allow-eval-failure downgrades that 4 to 0.
+# CI gate: a failing eval exits 1 by default (no flag needed). For interactive
+# iteration, --allow-eval-failure downgrades that 1 to 0.
 vat skill test run ./dist/skills/my-skill/ --allow-eval-failure --i-understand-this-runs-skill-code
 
 # Force subscription auth, fail fast if none logged in
@@ -530,4 +530,4 @@ The `Results:` line on stderr names the directory. There are no executor transcr
 read — the transcript is never written to disk (see **Anti-forgery model** above); the grader's
 `evidence` strings in `grading.json` are the excerpts from it.
 
-A `FAIL N/M` (exit 4) means the harness worked but the composite verdict did not all pass. Fix the skill, rebuild (`vat build`), and re-run.
+A `FAIL N/M` (exit 1) means the harness worked but the composite verdict did not all pass. Fix the skill, rebuild (`vat build`), and re-run.

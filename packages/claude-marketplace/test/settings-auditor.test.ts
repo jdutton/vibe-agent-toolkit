@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 /**
  * Unit tests for the settings auditor's answer shapes.
  *
@@ -8,8 +7,8 @@
 
 import * as fs from 'node:fs/promises';
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
-import { refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { removeScratchDir , refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {

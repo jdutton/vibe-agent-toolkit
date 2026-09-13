@@ -7,6 +7,7 @@
  * vat config at all.
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { parseWholeNumberAtLeast, safePath } from '@vibe-agent-toolkit/utils';
 import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
 import { Command, InvalidArgumentError } from 'commander';
@@ -53,26 +54,17 @@ import { resolveSubject } from '../harness/subject.js';
 import type { CacheMode, InstrumentSource, ResolvedInstrument } from '../harness/types.js';
 import { readReport, writeReport } from '../store.js';
 
-/**
- * Exit code used when a comparison is refused rather than merely negative.
- *
- * Exported (with the other two exit codes) so a test can assert against the
- * real constant instead of a duplicated literal.
+/*
+ * Exit codes are the one contract every VAT process shares (`ExitCode` in
+ * `@vibe-agent-toolkit/schema`): a comparison that found a significant change
+ * ends on `FINDINGS`; a refused comparison — and one that completed but could
+ * not measure at least one command — ends on `ERROR`. The lab used to reserve a
+ * third code (3) for "unmeasurable"; under the shared contract that is a run
+ * the lab could not do, and the rendered per-command comparison on stdout is
+ * where a reader learns which command produced no usable measurement. What the
+ * fold keeps is the property that mattered: neither case exits 0, so a CI job
+ * cannot read "nothing could be measured" as "nothing changed".
  */
-export const EXIT_REFUSED = 2;
-/** Exit code used when a comparison found a significant change. */
-export const EXIT_CHANGED = 1;
-/**
- * Exit code used when the comparison completed but at least one command could
- * not be measured.
- *
- * Distinct from both other codes on purpose: `EXIT_REFUSED` means the whole
- * comparison could not be attempted, and a run where every command is
- * `unmeasurable` still produces a rendered, per-command comparison — it is not
- * a refusal. But it is not a clean run either, and defaulting to exit `0`
- * would let a CI job read "nothing could be measured" as "nothing changed".
- */
-export const EXIT_UNMEASURABLE = 3;
 
 /**
  * Parse an instrument specifier into a source.
@@ -506,23 +498,20 @@ async function resolveAbArms(
  * Set the exit code an `ab` run earned.
  *
  * Shares the mapping with `compare` — see {@link abExitCondition} for why an
- * unstable verdict lands on `EXIT_UNMEASURABLE` rather than on either answer the
- * pairs gave.
+ * unstable verdict lands on `ERROR` (unmeasurable) rather than on either answer
+ * the pairs gave.
  *
  * @param result - A completed A/B
  */
 function applyAbExitCode(result: Parameters<typeof abExitCondition>[0]): void {
   switch (abExitCondition(result)) {
-    case 'refused': {
-      process.exitCode = EXIT_REFUSED;
-      return;
-    }
     case 'changed': {
-      process.exitCode = EXIT_CHANGED;
+      process.exitCode = ExitCode.FINDINGS;
       return;
     }
+    case 'refused':
     case 'unmeasurable': {
-      process.exitCode = EXIT_UNMEASURABLE;
+      process.exitCode = ExitCode.ERROR;
       return;
     }
     case 'clean': {
@@ -623,15 +612,15 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
         if (trust.length > 0) process.stdout.write(`${trust.join('\n')}\n`);
         process.stdout.write(`${wiring.renderComparison(comparison)}\n`);
         if (comparison.commands.some((command) => command.verdict.kind === CHANGED_VERDICT)) {
-          process.exitCode = EXIT_CHANGED;
+          process.exitCode = ExitCode.FINDINGS;
         } else if (
           comparison.commands.some((command) => command.verdict.kind === UNMEASURABLE_VERDICT)
         ) {
           // No real change, but not a clean run either — at least one command
           // produced no usable measurement. Exiting 0 here would be
           // indistinguishable from a genuinely clean comparison to anything
-          // reading `$?`.
-          process.exitCode = EXIT_UNMEASURABLE;
+          // reading `$?`, and it is not a finding: the lab could not do its job.
+          process.exitCode = ExitCode.ERROR;
         }
       },
     );
@@ -711,7 +700,7 @@ export function fastestRepeat(row: {
  */
 function refuse(refusal: string): void {
   process.stderr.write(`${refusal}\n`);
-  process.exitCode = EXIT_REFUSED;
+  process.exitCode = ExitCode.ERROR;
 }
 
 /**
@@ -780,7 +769,7 @@ export function createProgram(): Command {
         renderReport: renderParseReport,
         renderComparison: renderParseComparison,
         // The MINIMUM repeat, via the shared `fastestRepeat` — not the median
-        // this row otherwise reports. Review finding 2026-08-14, now fixed: the
+        // this row otherwise reports. A review finding, now fixed: the
         // one facet the mandatory-`estimate` contract was written to protect was
         // the facet violating it, and nothing caught it because `ab.test.ts`
         // supplies a STUB estimate — no test exercises any real one.

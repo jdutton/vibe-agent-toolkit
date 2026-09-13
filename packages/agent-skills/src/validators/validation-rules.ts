@@ -31,17 +31,12 @@ export type RuleCategory = 'required' | 'best_practice';
  */
 export type ValidationRuleCode =
   // Required rules (non-overridable)
-  | 'BROKEN_INTERNAL_LINK'
-  | 'CIRCULAR_REFERENCE'
-  | 'OUTSIDE_PROJECT_BOUNDARY'
-  | 'WINDOWS_BACKSLASH_IN_PATH'
   | 'LINK_TARGETS_DIRECTORY'
   // Best practice rules (overridable)
   | 'SKILL_LENGTH_EXCEEDS_RECOMMENDED'
   | 'SKILL_TOTAL_SIZE_LARGE'
   | 'SKILL_TOO_MANY_FILES'
   | 'REFERENCE_TOO_DEEP'
-  | 'LINKS_TO_NAVIGATION_FILES'
   | 'DESCRIPTION_TOO_VAGUE'
   | 'NO_PROGRESSIVE_DISCLOSURE'
   | 'PACKAGED_UNREFERENCED_FILE';
@@ -64,35 +59,13 @@ export interface ValidationRule {
  */
 export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
   // Required rules (non-overridable)
-  BROKEN_INTERNAL_LINK: {
-    code: 'BROKEN_INTERNAL_LINK',
-    category: 'required',
-    message: (ctx) => `Link target not found: ${(ctx['href'] as string) ?? 'unknown'}`,
-    fix: 'Fix link path or restore missing file',
-  },
-  CIRCULAR_REFERENCE: {
-    code: 'CIRCULAR_REFERENCE',
-    category: 'required',
-    message: (ctx) => `Circular reference detected: ${(ctx['chain'] as string) ?? 'unknown'}`,
-    fix: 'Remove circular link dependency',
-  },
-  OUTSIDE_PROJECT_BOUNDARY: {
-    code: 'OUTSIDE_PROJECT_BOUNDARY',
-    category: 'required',
-    message: (ctx) => `Link points outside project: ${(ctx['href'] as string) ?? 'unknown'}`,
-    fix: 'Keep skills self-contained - move referenced files into the project',
-  },
-  // FILENAME_COLLISION is deliberately absent: it lives in CODE_REGISTRY and is
-  // emitted by the packager (see `filenameCollisionIssue` in skill-packager.ts).
-  // The entry that used to sit here was never emitted by anything and its fix
-  // hint named `packagingOptions.usePathNames`, an option that does not exist —
-  // a second, stale definition of one code is worse than none.
-  WINDOWS_BACKSLASH_IN_PATH: {
-    code: 'WINDOWS_BACKSLASH_IN_PATH',
-    category: 'required',
-    message: () => 'Path uses Windows backslashes',
-    fix: 'Use forward slashes for cross-platform compatibility',
-  },
+  //
+  // Only the rows something EMITS live here. FILENAME_COLLISION, the broken /
+  // circular / outside-project link codes and the Windows-backslash code used
+  // to sit in this table too; none was emitted through it (the link checks go
+  // through CODE_REGISTRY as LINK_INTEGRITY_BROKEN / LINK_OUTSIDE_PROJECT, the
+  // collision through `filenameCollisionIssue` in skill-packager.ts), and a
+  // second, stale definition of one code is worse than none.
   LINK_TARGETS_DIRECTORY: {
     code: 'LINK_TARGETS_DIRECTORY',
     category: 'required',
@@ -136,13 +109,6 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
     fix: 'Reduce transitive link chains by moving deep content to RAG search or using linkFollowDepth configuration',
     example: 'SKILL.md → reference.md (1 hop), SKILL.md → advanced.md → details.md (2 hops, OK)',
   },
-  LINKS_TO_NAVIGATION_FILES: {
-    code: 'LINKS_TO_NAVIGATION_FILES',
-    category: 'best_practice',
-    message: (ctx) => `Links to navigation files: ${(ctx['files'] as string) ?? 'unknown'}`,
-    fix: 'Link directly to specific topic documents instead of navigation indexes',
-    example: '[Operators](patterns/calculations/operators.md) not [Overview](patterns/README.md)',
-  },
   DESCRIPTION_TOO_VAGUE: {
     code: 'DESCRIPTION_TOO_VAGUE',
     category: 'best_practice',
@@ -181,7 +147,7 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
  * listing truncates. MAX_TOTAL_LINES, MAX_FILE_COUNT, MAX_REFERENCE_DEPTH and
  * MIN_DESCRIPTION_LENGTH are VAT-originated.
  *
- * Re-verified against the live page on 2026-07-30. That pass sharpened two of
+ * Re-verified against the live page (the `reviewed=` date above). That pass sharpened two of
  * those verdicts from "unsupported" to "contradicted", which is a stronger claim:
  *
  * - MAX_REFERENCE_DEPTH (2) is CONTRADICTED, not merely VAT-originated. Anthropic:
@@ -289,7 +255,7 @@ export const AGENT_INSTRUCTION_FILE_PATTERNS = [
  * - {@link AGENT_INSTRUCTION_FILE_PATTERNS} — never packaged on ANY surface.
  * - {@link NAVIGATION_FILE_PATTERNS} — never packaged into a *skill bundle*, and
  *   **only** there. A plugin-root `README.md` is the plugin's front page (measured
- *   2026-08-02: 50 of 86 installed plugins ship one; 57 of 94 when first measured),
+ *   twice on installed plugins: 50 of 86 ship one; 57 of 94 the first time),
  *   so the plugin tree-copy must import the agent-instruction list alone. Merging
  *   the two lists would strip the front page off three in five real plugins. The
  *   population moves as plugins are installed and removed — the ratio is the load-

@@ -41,8 +41,29 @@ module.exports = {
     docs: {
       description:
         'Enforce safePath.joinUnderRoot() for joins whose first arg is a security root variable (name ends in "Root").',
-      category: 'Security',
-      recommended: true,
+      category: 'Path handling',
+      bans: '`safePath.join(someRoot, x)` where `x` can escape',
+      useInstead: '`safePath.joinUnderRoot()`',
+      subpath: '/path',
+      // Not in `recommended`: an unsound heuristic, pending a rewrite. It keys on
+      // whether an identifier's NAME ends in `root` rather than on whether any
+      // segment is caller-controlled, so it is noisy and blind at once — measured
+      // on a 4,670-file adopter tree: 108 findings, 0 autofixable, and every one
+      // of these verified by execution:
+      //
+      //   FIRES   safePath.join(repoRoot, 'docs', 'product')  <- all literals, cannot escape
+      //   FIRES   safePath.resolve(packageRoot, '..', '..')   <- escaping IS the intent
+      //   FIRES   safePath.join(repoRoot)                     <- one argument, no segment
+      //   silent  safePath.join(base, userInput)              <- THE dangerous shape, missed
+      //
+      // A rule that misses the case it exists to catch must not ride in a config
+      // named `recommended` at any severity — a safety core that cries wolf
+      // teaches people to ignore it, which costs the true positives too. It still
+      // earns `error` where scoped to directories in which a path escape is a
+      // security boundary (VAT scopes it to the skill-test staging code).
+      // Re-include it when it keys on taint rather than on naming.
+      recommended: false,
+      recommendedSeverity: 'error',
     },
     messages: {
       useJoinUnderRoot:

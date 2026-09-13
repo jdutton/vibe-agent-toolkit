@@ -88,12 +88,11 @@ export {
   BootstrapNeededError,
   DuplicateStagedSkillError,
   InternalHarnessError,
-  mapErrorToExitCode,
   SecurityAckError,
   SkillBuildError,
-  SkillTestExitCode,
-  type SkillTestExitCodeValue,
-} from './exit-codes.js';
+  type SkillTestFailureReason,
+  skillTestFailureReason,
+} from './failure-reason.js';
 export { BuildHookError, runPreStageBuild } from './build-hook.js';
 export { DEFAULT_CONCURRENCY, DEFAULT_GRADER_MODEL } from './grader-model.js';
 export { RateLimitSignal, runPipeline, type RunPipelineOptions } from './pipeline.js';

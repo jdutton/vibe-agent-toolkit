@@ -226,7 +226,6 @@ function buildFixtureCorpus(): string {
   for (const [relative, contents] of Object.entries(FIXTURE_FILES)) {
     const absolute = safePath.join(root, relative);
     mkdirSyncReal(safePath.join(absolute, '..'), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path this function just composed under its own mkdtemp root
     writeFileSync(absolute, contents, 'utf-8');
   }
   runGitOrThrow(['init', '-q'], { cwd: root });

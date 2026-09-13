@@ -5,11 +5,11 @@
  * ## The measurement that shapes this
  *
  * ⚠️ **The original argument's premise is GONE, and the conclusion survived it.**
- * Measured on VAT's own tree 2026-08-23: a `whatLoadsAt` query cost ~**11.7 ms**,
+ * Measured on VAT's own tree: a `whatLoadsAt` query cost ~**11.7 ms**,
  * so querying all 589 directories would have spent ~9.6 s of pure repetition to
  * compute **9** distinct answers. That 11.7 ms was itself a defect — the query
  * rebuilt the whole projection's indexes on every call, making per-query cost
- * proportional to the TREE rather than to the answer. Fixed 2026-08-24
+ * proportional to the TREE rather than to the answer. Fixed
  * (`claude-context-query.ts`), and re-measured on the same tree a query is now
  * ~**0.24 ms**: a 47× drop.
  *

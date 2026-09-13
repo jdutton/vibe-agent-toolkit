@@ -15,7 +15,6 @@
  * trusts the driver to give each attempt a clean slate.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- observations dir is harness-controlled */
 
 import { writeFileSync } from 'node:fs';
 

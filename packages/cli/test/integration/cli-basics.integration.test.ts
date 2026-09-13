@@ -9,7 +9,6 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const binPath = safePath.resolve(__dirname, '../../dist/bin.js');
 
 function runVat(...args: string[]): SpawnSyncReturns<string> {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- node is required for CLI integration tests
   return spawnSync('node', [binPath, ...args], { encoding: 'utf-8' });
 }
 

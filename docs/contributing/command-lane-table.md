@@ -2,46 +2,18 @@
 
 Which of VAT's commands read the filesystem to build a resource population, and through which
 entry point. This exists to replace the standing claim *"~70 commands, 5 examined"* with a bounded
-list, so the four-phase pipeline work knows exactly whose behaviour it must preserve.
+list, so any change to enumeration knows exactly whose behaviour it must preserve.
 
 **Population: 72 commands** — 71 leaves plus `vat audit`, the only command group that is also
 runnable in its own right (`vat audit [git-url-or-path]` alongside its `settings` subcommand).
+The population is re-derived from the built CLI by the method at the end of this page; do not
+correct the count by hand — re-run the recursion and replace the list.
 
-**29 enumerate. 43 do not.**
+**25 enumerate. 47 do not.**
 
-⚠️ It read *"69 commands — 68 leaves, 27 enumerate"* until 2026-09-06. Three leaves were added
-across two branches that landed together:
+## The enumeration entry points
 
-- `vat okf validate` (`packages/cli/src/commands/okf/index.ts › createOkfCommand()`) —
-  **enumerates**, and does so through a **fourth** entry point, see below.
-- `vat ard emit` (`.../commands/ard/index.ts › createArdCommand()`) — does **not**: it reads
-  `vibe-agent-toolkit.config.yaml` plus the skill manifests that config already names, and never
-  walks a tree to discover a population.
-- `vat claude org skills versions add` (`.../commands/claude/org/skills.ts ›
-  createOrgSkillsCommand()`) — **enumerates**: it recursively walks a built skill directory and
-  uploads those bytes as a new version of an existing skill, the same lane and the same consequence
-  as `vat claude org skills install`, which until that command landed was the only org verb with a
-  file population.
-
-⚠️ It read *"67 commands — 66 leaves, 25 enumerate"* until 2026-09-01. Two leaves were added that
-day, both at `packages/cli/src/commands/resources/index.ts › createResourcesCommand()`:
-`vat resources query` and `vat resources check`. Both enumerate, and both go through
-`buildResourceProjection()` — the first commands on the projection lane that do **not** run under
-`contentDemand: 'deferred'` / `CONTENT_PARSING_SKIP`, because a question about headings, links or
-sections needs the blob rows the other resources lanes deliberately never pay for.
-
-⚠️ It read *"66 commands — 65 leaves, 24 enumerate"* until 2026-08-23. The leaf added is
-`vat claude budget`, registered at `packages/cli/src/commands/claude/index.ts ›
-createClaudeCommand()`, which took the always-loaded budget check out of `vat resources validate`
-and gave it its own verb.
-
-The population was re-derived by the method below on 2026-08-22 and had gone **stale**: it read
-*"65 commands — 64 leaves"*, and the leaf it was missing is `vat cache clear`, registered at
-`packages/cli/src/bin.ts` via `commands/cache/index.ts › createCacheCommand()`. It landed after this
-table was written and two revisions missed it. Nothing here re-derives itself, so the count is only
-as fresh as the last person who ran the recursion.
-
-## The four enumeration entry points
+Four declared lanes:
 
 | Lane | Entry point | Defined in |
 |---|---|---|
@@ -49,75 +21,62 @@ as fresh as the last person who ran the recursion.
 | `registry-md` | `createProjectRegistry` (include `**/*.md`) | `packages/agent-skills/src/skill-packager.ts` |
 | `registry-md-html` | `crawlAndResolveRegistry` (include md **+ html**) | `packages/agent-skills/src/validators/packaging-validator.ts` |
 | `okf-bundle-walk` | `discoverOkfBundle` — bare recursive `readdir` | `packages/resources/src/okf/discovery.ts` |
+**`okf-bundle-walk` is deliberate, and the reason generalises.** It does **not** route through
+`crawlDirectory`, because both of that function's narrowings are correctness holes inside an OKF
+bundle root: it answers from `git ls-files` by default, so an untracked concept document is
+invisible (the `git-route-hides-untracked` trap), and `NEVER_CRAWL_GLOBS` drops whole subtrees on a
+relevance judgement that has no standing there. OKF's conformance population is spec-defined and
+**maximal** — every non-reserved `.md` beneath the root — so a walk that sees fewer files lets VAT
+certify a bundle while a file it never opened breaks conformance. Any future population defined by
+an external specification rather than by VAT's own relevance rules belongs here too, not in `crawl`.
 
-⚠️ **The fourth lane is deliberate, and the reason generalises.** It was added 2026-09-06 and does
-**not** route through `crawlDirectory`, because both of that function's narrowings are correctness
-holes inside an OKF bundle root: it answers from `git ls-files` by default, so an untracked concept
-document is invisible (the `git-route-hides-untracked` trap), and `NEVER_CRAWL_GLOBS` drops whole
-subtrees on a relevance judgement that has no standing there. OKF's conformance population is
-spec-defined and **maximal** — every non-reserved `.md` beneath the root — so a walk that sees fewer
-files lets VAT certify a bundle while a file it never opened breaks conformance.
-
-Read that before routing this lane into `crawl` for consistency: any future population that is
-defined by an external specification rather than by VAT's own relevance rules belongs here too, not
-in `crawl`.
-
-`scanDirectory` is still not an entry point of its own — the discovery package reaches
-`crawlDirectory` underneath.
 That the two registry builders crawl *different include sets* and observably disagree is a known
 defect, tracked separately; this table records which commands are exposed to it.
 
-**The projection lane sits across this taxonomy rather than inside it, and the taxonomy predates
-it.** A projection's `filesystem` extent enumerates through
+**Raw `readdir` populations that reach no lane** are recorded per row below as `raw-readdir` with
+the function that owns them. They are populations in every sense that matters (a symlink or an
+unreadable directory changes what the command sees) and they are un-modelled by every lane above.
+
+### The projection lane sits across this taxonomy
+
+A projection's `filesystem` extent enumerates through
 `packages/resources/src/projection/crawl-source.ts › crawlSourceFor()`, which hands back one of two
-sources, and neither is a clean fourth sink:
+sources, and neither is a clean fifth sink:
 
 - `GitCrawlSource` is the one that normally runs, and it is a **hybrid**. It is not opted into:
   `› gitExtentSelected()` returns false only when `VAT_EXTENT_SOURCE` is exactly `filesystem` — an
   opt-**out** — or when no `.git` at or above the root has a readable `HEAD`, so the choice is a
-  function of the ROOT as much as of the environment, and `crawlSourceFor`'s own JSDoc reads
-  *"Defaults to git wherever there is a git working tree"*. The constant `EXTENT_SOURCE_GIT` is
-  exported but never tested in production; there is no `=git` selector to set. Its primary
-  enumerator is a git tree snapshot plus two `ls-files --others --directory` listings — the ignored
-  side and the untracked side — and **that half is un-modelled here**, which under this default
-  means the normal case is the un-modelled one. It reaches sink 1 only for territory git declines
-  to describe: `› expandDirectory()` — *"Walk one directory that git declined to enumerate"* —
-  calls `crawlDirectory`, once per submodule (a submodule's files belong to its own repository) and
-  once per collapsed **ignored** directory, that one guarded by `isDirectory` and by the entry not
-  being a symlink. Untracked-but-not-ignored territory contributes the collapsed entry alone and
-  takes no descent. So a repository with no submodule and no collapsed ignored directory reaches
-  sink 1 **not at all** on this arm. It does make one filesystem call of its own outside every sink:
-  `› symlinkShape()` `lstat`s each collapsed entry, because that listing carries no mode bits and a
-  symlink's own path must not become a member. That is a per-collapsed-entry cost, discovers no
-  paths, and so adds no sink.
+  function of the ROOT as much as of the environment. Its primary enumerator is a git tree snapshot
+  plus two `ls-files --others --directory` listings — the ignored side and the untracked side — and
+  **that half is un-modelled here**, which under this default means the normal case is the
+  un-modelled one. It reaches `crawl` only for territory git declines to describe:
+  `› expandDirectory()` calls `crawlDirectory` once per submodule and once per collapsed **ignored**
+  directory (guarded by `isDirectory` and by the entry not being a symlink). Untracked-but-not-ignored
+  territory contributes the collapsed entry alone and takes no descent. So a repository with no
+  submodule and no collapsed ignored directory reaches `crawl` **not at all** on this arm. It makes
+  one filesystem call of its own outside every sink: `› symlinkShape()` `lstat`s each collapsed
+  entry, because that listing carries no mode bits and a symlink's own path must not become a member.
 - `FilesystemCrawlSource` runs outside a git working tree, on an unreadable git marker, or under
-  the `VAT_EXTENT_SOURCE=filesystem` opt-out. It calls `crawlDirectory`, so that arm does land
-  squarely in sink 1 — several hops and two packages from the command's own module, as the
-  `vat claude context` row's `Via` chain spells out.
+  the `VAT_EXTENT_SOURCE=filesystem` opt-out. It calls `crawlDirectory`, so that arm lands squarely
+  in `crawl` — several hops and two packages from the command's own module.
 
 Either way the command reports the enumerator that RAN, not the one the environment asked for. So a
 projection row's `crawl` mark is true but partial: it names a sink the lane can reach, not the
-enumerator doing the work, and how much work reaches that sink depends on which source
-`crawlSourceFor` returned for that root and what the tree contains. **Nine rows carry a projection**,
-and each takes it by default unless its escape hatch is set: `vat resources scan`,
-`vat resources validate` and `vat rag index` through
+enumerator doing the work. **Nine rows carry a projection**, each by default unless its escape hatch
+is set: `vat resources scan`, `vat resources validate` and `vat rag index` through
 `packages/cli/src/utils/resource-loader.ts › loadResourcesWithConfig()`; `vat skills validate`,
 `vat skills build` and `vat claude plugin build` for their link registries through
 `› withResourcePopulationSource()` — both gated by `› resourcesProjectionCrawlSelected()`, which is
-`!== 'walk'`; `vat inventory` on a plugin directory; and `vat claude context` and `vat claude budget`, neither of
-which has a walk arm at all. Four more inherit one: `vat build`, `vat validate` and `vat verify` through the phases they
-spawn, and `vat skill test run` by re-entering `vat claude plugin build`.
+`!== 'walk'`; `vat inventory` on a plugin directory; and `vat claude context` and `vat claude budget`,
+neither of which has a walk arm at all. Four more inherit one: `vat build`, `vat validate` and
+`vat verify` through the phases they spawn, and `vat skill test run` by re-entering
+`vat claude plugin build`.
 
-⚠️ **No command carries two projections in one process any more**, and one briefly did. Between
-2026-08-22 and 2026-08-23 `vat resources validate` built the resource population from
-`loadResourcesWithConfig()` *and* a claude-context population for a default-on
-`ALWAYS_LOADED_CONTEXT_BUDGET` check. That check now has its own verb — `vat claude budget` — so
-each command holds exactly one population again. The two populations still answer different
-questions (*what files are here* versus *what does the harness load*) and still derive differently
-(the resource population skips content keying and the blob stage; the context population needs
-both), which is why they were never merged into one; what changed is that they no longer run in the
-same process. The raw `readdir` populations several commands build for themselves are un-modelled
-here on the same terms.
+No command carries two projections in one process: `vat claude budget` owns the always-loaded
+context-budget check that `vat resources validate` used to run beside its resource population. The
+two populations answer different questions (*what files are here* versus *what does the harness
+load*) and derive differently (the resource population skips content keying and the blob stage; the
+context population needs both), which is why they were never merged into one.
 `docs/architecture/command-population-matrix.md` §2–§5 is the accounting for the projection lane and
 those other routes — their selectors, extents and content stages; this table is deliberately not a
 second copy of it, and records only which enumeration entry point a command's route reaches.
@@ -131,7 +90,7 @@ process" — a cross-process cache is the only kind that can help them.
 
 | Command | Lane | Via |
 |---|---|---|
-| `vat audit [path]` | `crawl` + `registry-md-html` | `audit.ts` |
+| `vat audit [path]` | `crawl` + `registry-md-html` | `audit.ts` → `audit/scan-population.ts › enumerateAuditPopulation()` → `crawlDirectory` for the subject tree (git route with untracked files by default; the walk route under `--include-artifacts` or when the scan root is itself gitignored — `NEVER_CRAWL_GLOBS` applies on both); `crawlAndResolveRegistry` once per project root it finds for the link graph. Against a bare skills directory only the crawl runs |
 | `vat build` | *spawns* `skills build`, `claude plugin build` | `build.ts` → `runPhase` |
 | `vat validate` | *spawns* `resources validate`, `skills validate` | `validate.ts` → `runPhase` |
 | `vat verify` | `crawl`, *plus spawns* `resources validate`, `skills validate` | `verify.ts` → `runPhase` |
@@ -142,70 +101,56 @@ process" — a cross-process cache is the only kind that can help them.
 | `vat skill test run` | `crawl` + `registry-md` + `registry-md-html` | `skill/test/run.ts` |
 | `vat skills validate` | `crawl` + `registry-md-html` | `skills/validate-command.ts` |
 | `vat skill review` | `crawl` + `registry-md-html` | `skill/review.ts` |
-| `vat corpus scan` | `crawl` + `registry-md-html` | `corpus/index.ts` (inline; see limits) |
-| `vat resources check` | `crawl`, *in a spawned child* | `resources/check.ts` — one population, same lane as `resources query` below; both reach it through `packages/cli/src/utils/projection-query.ts › withQueriedProjection()`. ⚠️ Since `--budget` landed, the crawl happens in a CHILD process by default: the parent spawns `dist/bin.js resources check … --cost-log <path>` and enumerates nothing itself, so it can kill a run that stops making progress (a check's SQL is adopter-authored and a runaway statement cannot be interrupted in process). `--budget 0` keeps everything in one process. This makes it the fourth spawning command, but unlike the three orchestrators above it spawns ITSELF, exactly once, and its lane is unchanged |
-| `vat resources query` | `crawl` | `resources/query.ts` — one population, via `packages/resources/src/projection/resource-population.ts › buildResourceProjection()`. The same registry and the same `DECLINE_IGNORED` parameter set as `resources scan`/`validate`, with content parsing ON. ⚠️ Its ROW SET is a strict superset of what `scan`/`validate` see: those post-filter directories, non-existent rows and gitignored rows out of the population, so `SELECT COUNT(*) FROM resource_realizations` counts directories a validate run never looks at |
+| `vat corpus scan` | `crawl` + `registry-md-html` (`?`) | `corpus/index.ts` (inline; see limits) |
+| `vat okf validate` | `okf-bundle-walk` | `okf/validate.ts` → `discoverOkfBundle` |
+| `vat resources check` | `crawl`, *in a spawned child* | `resources/check.ts` — one population, same lane as `resources query`; both reach it through `packages/cli/src/utils/projection-query.ts › withQueriedProjection()`. With a `--budget` (the default), the crawl happens in a CHILD process: the parent spawns `dist/bin.js resources check … --cost-log <path>` and enumerates nothing itself, so it can kill a run that stops making progress (a check's SQL is adopter-authored and a runaway statement cannot be interrupted in process). `--budget 0` keeps everything in one process. It spawns ITSELF, exactly once, and its lane is unchanged |
+| `vat resources query` | `crawl` | `resources/query.ts` — one population, via `packages/resources/src/projection/resource-population.ts › buildResourceProjection()`. Same registry and same `DECLINE_IGNORED` parameter set as `resources scan`/`validate`, with content parsing ON. ⚠️ Its ROW SET is a strict superset of what `scan`/`validate` see: those post-filter directories, non-existent rows and gitignored rows out of the population, so `SELECT COUNT(*) FROM resource_realizations` counts directories a validate run never looks at |
 | `vat resources scan` | `crawl` | `resources/scan.ts` |
-| `vat resources validate` | `crawl` ×1 | `resources/validate.ts` — one crawl, for the resource population, via `packages/cli/src/utils/resource-loader.ts › loadResourcesWithConfig()`. Read `crawl` ×3 until 2026-08-22 and `crawl` ×2 until 2026-08-23, when the second population — built for the then-default-on `ALWAYS_LOADED_CONTEXT_BUDGET` check — moved out to `vat claude budget`. This command has no knowledge of the context budget at all now: no check, no flag in either direction |
-| `vat skills list` | `crawl` | `skills/list.ts` |
+| `vat resources validate` | `crawl` ×1 | `resources/validate.ts` — one crawl, for the resource population, via `loadResourcesWithConfig()`. It has no knowledge of the context budget: no check, no flag in either direction (that lives in `vat claude budget`) |
+| `vat skills list` | `crawl`, or `raw-readdir` under `--user` | `skills/list.ts` — project mode goes through the discovery package's `scan`; `--user` mode is `› scanSkillsDir()`'s own `readdirSync` over `~/.claude/skills` |
 | `vat rag index` | `crawl` | `rag/index-command.ts` |
-| `vat claude context [paths...]` | `crawl` ×1 | `claude/context.ts` → `buildClaudeContextPopulation` → `› sharedEnumeration()` → `crawlSourceFor` → `GitCrawlSource` **by default**, or `FilesystemCrawlSource` → `crawlDirectory` (this cell named only the filesystem source until 2026-08-22, and read `crawl` ×2 until 2026-08-23). Two `populate()` passes, ONE crawl: both `FilesystemExtentContributor` registrations are handed the same enumeration |
-| `vat claude budget [paths...]` | `crawl` ×1 | `claude/budget.ts` → `buildClaudeContextPopulation` → the same route, the same double `populate()` and the same single crawl as the `vat claude context` row above. It is the SAME lane and the SAME population; only the question differs — `context` reports what one path loads, `budget` sweeps every working location and applies a threshold (`packages/resources/src/projection/claude-context-budget-sweep.ts › sweepAlwaysLoadedBudgets()`), and the sweep is nine `whatLoadsAt` queries on this repository rather than 589 |
-| `vat inventory [path]` | `crawl`, **or** the projection's `filesystem` extent on a plugin directory (the default there) | `inventory.ts` → `routeInventory()`; the walk at `packages/claude-marketplace/src/inventory/extract-skill.ts › crawlSkillLinkRegistry()` → `crawlDirectory`; the projection at `inventory.ts › populationProviderFor()` → `buildInventoryPopulation` → `FilesystemExtentContributor` → `crawlSourceFor` → `crawlDirectory` or `GitCrawlSource` |
-| `vat claude marketplace validate` | `crawl` | `claude/marketplace/validate.ts` |
-| `vat claude org skills list` | `crawl` | `claude/org/skills.ts` |
-| `vat claude org skills install` | `crawl` | `claude/org/skills.ts` |
-| `vat claude org skills delete` | `crawl` | `claude/org/skills.ts` |
-| `vat claude org skills versions list` | `crawl` | `claude/org/skills.ts` |
-| `vat claude org skills versions add` | `crawl` | `claude/org/skills.ts` — recursively walks the built skill directory named by `<source>` and **uploads those bytes** as a new version of an existing skill. Same population, same consequence and the same undeclared git-blindness as `vat claude org skills install`; the only difference is that the id is given rather than minted |
-| `vat claude org skills versions delete` | `crawl` | `claude/org/skills.ts` |
+| `vat claude context [paths...]` | `crawl` ×1 | `claude/context.ts` → `buildClaudeContextPopulation` → `› sharedEnumeration()` → `crawlSourceFor` → `GitCrawlSource` **by default**, or `FilesystemCrawlSource` → `crawlDirectory`. Two `populate()` passes, ONE crawl: both `FilesystemExtentContributor` registrations are handed the same enumeration |
+| `vat claude budget [paths...]` | `crawl` ×1 | `claude/budget.ts` → the same route, the same double `populate()` and the same single crawl as `vat claude context`. SAME lane, SAME population; only the question differs — `context` reports what one path loads, `budget` sweeps every working location and applies a threshold (`packages/resources/src/projection/claude-context-budget-sweep.ts › sweepAlwaysLoadedBudgets()`) |
+| `vat inventory [path]` | `crawl`, **or** the projection's `filesystem` extent on a plugin directory (the default there) | `inventory.ts` → `routeInventory()`; the walk at `packages/claude-marketplace/src/inventory/extract-skill.ts › crawlSkillLinkRegistry()` → `crawlDirectory`; the projection at `inventory.ts › populationProviderFor()` → `buildInventoryPopulation` → `FilesystemExtentContributor` → `crawlSourceFor` → `crawlDirectory` or `GitCrawlSource`. Two extractors also `readdir` trees of their own (`extract-plugin.ts`, three sites; `extract-install.ts`) — `raw-readdir` |
+| `vat claude marketplace validate` | `crawl` + `raw-readdir` | `claude/marketplace/validate.ts` — `readdirSync` over `plugins/` and each plugin's `skills/` (`› listPluginDirs`, the skill-entry loop), then the packaging validator's registry crawl per skill |
+| `vat claude org skills install` | `raw-readdir` | `claude/org/skills.ts › collectFiles()` — recursively `readdirSync`s the skill directory (or the `dist/skills/` of a downloaded npm package, found through `› listNodeModulePackages()` / `› findSkillsDir()`) and **uploads those bytes**. Not `crawlDirectory`: the walk has no gitignore awareness, so an untracked file in the source directory ships |
+| `vat claude org skills versions add` | `raw-readdir` | `claude/org/skills.ts` — the same `collectFiles()` walk and the same consequence as `install`; only the id is given rather than minted |
 
 `vat claude context` and `vat claude budget` each **populate** twice, and that doubling is
-structural rather than incidental:
-`ContributorRegistry` keys on `id` and partitions on `kind` before any `contribute` runs, so
-`discoverImportRoots` must run once — under `CONTENT_PARSING_SKIP`, with `'deferred'` content,
-reading no bytes — purely to name the `@`-import contributors the real population then registers.
-⚠️ It does **not** crawl twice, and this paragraph said it did until 2026-08-23. The registration
-ordering is what is structural; the second walk never was. `sharedEnumeration()` performs one crawl
-and both passes replay it, which is sound only because both now ask the extent the same question —
-same source, same `DECLINE_IGNORED` parameter set — differing solely in `contentDemand`, which
-decides what a row SAYS rather than which paths exist. Documented at the head of
-`claude-context-population.ts`. Its enumeration reaches
-`GitCrawlSource` rather than `FilesystemCrawlSource` wherever `gitExtentSelected` holds — which this
-paragraph called an "opt-in" until 2026-08-22 and is not one: git is the default and `filesystem` is
-the opt-out, as the bullets above set out, and the same is true of every row in this table that goes
-through `crawlSourceFor`.
+structural rather than incidental: `ContributorRegistry` keys on `id` and partitions on `kind`
+before any `contribute` runs, so `discoverImportRoots` must run once — under `CONTENT_PARSING_SKIP`,
+with `'deferred'` content, reading no bytes — purely to name the `@`-import contributors the real
+population then registers. It does **not** crawl twice: `sharedEnumeration()` performs one crawl and
+both passes replay it, which is sound only because both ask the extent the same question — same
+source, same `DECLINE_IGNORED` parameter set — differing solely in `contentDemand`, which decides
+what a row SAYS rather than which paths exist. Documented at the head of
+`claude-context-population.ts`.
 
-`vat inventory` sat under *Commands that do not enumerate* until 2026-08-22, and the header read
-*"23 enumerate. 42 do not."* — wrong on **both** of that command's routes. `routeInventory()`
-dispatches four subject shapes and only one of them takes the projection. A marketplace root and
-`--user` fan out through `extractClaudePluginInventory` to one `extractClaudeSkillInventory` per
-skill, supplying neither a shared registry nor a shared population, so each skill's link walk builds
-its own registry through `crawlSkillLinkRegistry()` — `crawlDirectory`, sink 1, this table's own —
-and a single `SKILL.md` reaches the same walk directly. A plugin directory takes the projection
-unless `VAT_INVENTORY_CRAWL=walker` says otherwise. The projection arm is not unconditional even
-there: `populationProviderFor()` returns `undefined` when `findProjectRoot` finds no root, and
-`packages/claude-marketplace/src/inventory/extract-skill.ts › membersFromPopulation()` returns
-`undefined` for a skill the supplied population holds no extent for — either fallback lands back on
-`crawlSkillLinkRegistry`. `crawl` is therefore the lane every shape can reach and the projection is
-the extra one, which is why the row carries both rather than choosing between them. Two of the
-extractors also `readdir` trees of their own, which is a population of the un-modelled kind described
-above: `extract-plugin.ts` (three sites) and `extract-install.ts`. `extract-marketplace.ts` is not
-one of them — it reads manifests with `existsSync` and `readFile` and reaches a directory listing
-only through the plugin extractor it fans out to.
+`vat inventory` carries both lanes because `routeInventory()` dispatches four subject shapes and
+only one of them takes the projection. A marketplace root and `--user` fan out through
+`extractClaudePluginInventory` to one `extractClaudeSkillInventory` per skill, supplying neither a
+shared registry nor a shared population, so each skill's link walk builds its own registry through
+`crawlSkillLinkRegistry()` — `crawlDirectory` — and a single `SKILL.md` reaches the same walk
+directly. A plugin directory takes the projection unless `VAT_INVENTORY_CRAWL=walker` says otherwise,
+and even there `populationProviderFor()` returns `undefined` when `findProjectRoot` finds no root,
+and `membersFromPopulation()` returns `undefined` for a skill the population holds no extent for —
+either fallback lands back on `crawlSkillLinkRegistry`. `crawl` is therefore the lane every shape can
+reach and the projection is the extra one.
 
 ## Commands that do not enumerate
 
-The 42 remaining. The bulk are Admin-API calls over HTTPS — `claude org *` is 27 commands in all, of
-which 21 appear here once the six `skills` commands above are excluded — plus process-level commands
-that read JSON layers or a manifest rather than crawling.
+The 47 remaining. The bulk are Admin-API calls over HTTPS — `claude org *` is 27 commands, of which
+25 appear here once `skills install` and `skills versions add` above are excluded — plus
+process-level commands that read JSON layers or a manifest rather than crawling.
 
 `agent`: `import`, `install`, `installed`, `list`, `run`, `uninstall`, `validate` ·
+`ard emit` ·
 `audit settings` ·
 `cache clear` ·
 `claude marketplace publish` ·
 `claude org`: `api-keys list`, `api-keys update`, `code-analytics`, `cost`, `info`,
-`invites create`, `invites delete`, `invites list`, `usage`, `users get`, `users list`,
+`invites create`, `invites delete`, `invites list`, `skills delete`, `skills list`,
+`skills versions delete`, `skills versions list`, `usage`, `users get`, `users list`,
 `users remove`, `users update`, `workspaces archive`, `workspaces create`, `workspaces get`,
 `workspaces list`, `workspaces members add`, `workspaces members list`, `workspaces members remove`,
 `workspaces members update` ·
@@ -215,14 +160,21 @@ that read JSON layers or a manifest rather than crawling.
 `rag`: `clear`, `query`, `stats` ·
 `skill test configure` · `skills install`
 
-`vat cache clear` is on that list on a technicality worth stating: it reaches none of the three
-sinks, but it does build a population — a raw `fs.readdir` walk of `<tmpdir>/.vat-cache` at
-`packages/cli/src/commands/cache/clear.ts › readdirOrNull()`, driven from `› clearCacheDirectory()`.
-That is exactly the un-modelled route described above, and the sibling matrix carries it as a §3 row
-rather than as an absence. "Does not enumerate" in this table means "reaches no sink named here",
-which is narrower than "builds no population".
+Three of these are on the list on a technicality worth stating — "does not enumerate" here means
+"reaches no lane named above", which is narrower than "builds no population":
 
-## How this was derived
+- `vat cache clear` builds a raw `fs.readdir` population of `<tmpdir>/.vat-cache` at
+  `packages/cli/src/commands/cache/clear.ts › readdirOrNull()`, driven from `› clearCacheDirectory()`.
+- `vat claude plugin install` `readdirSync`s the source tree it copies (four sites in
+  `claude/plugin/install.ts`) and `vat agent installed` `readdir`s the install directory.
+- `vat ard emit` reads `vibe-agent-toolkit.config.yaml` plus the skill manifests that config already
+  names, and never walks a tree to discover a population.
+- The `claude org skills list` / `delete` / `versions list` / `versions delete` verbs are pure
+  HTTPS: their handlers in `claude/org/skills.ts` reach neither `collectFiles()` nor any `readdir`.
+  An earlier revision of this table marked them `crawl` by joining each leaf to its registrar file
+  — the second rejected method below.
+
+## How this is derived
 
 **Population — from the built CLI, never from source.** `--help` is recursed on
 `packages/cli/dist/bin.js`, and a node with no `Commands:` block is a leaf. A grep for
@@ -230,26 +182,32 @@ which is narrower than "builds no population".
 Two parsing details, because the recursion is re-run by hand and must land on the same number twice:
 a `Commands:` block ends at the first blank line — read past it and the `addHelpText('after', …)`
 prose on `audit`, `rag`, `agent` and `cache` parses as phantom subcommands — and Commander's
-built-in `help`, which only `mcp` prints, is not a leaf. The 2026-08-22 re-derivation on that basis
-returns **65 leaves**, one more than the count this table shipped with.
+built-in `help`, which only `mcp` prints, is not a leaf.
+
+```bash
+walk() { local out; out=$(node packages/cli/dist/bin.js $1 --help 2>/dev/null)
+  local subs; subs=$(echo "$out" | awk '/^Commands:/{f=1;next} f&&/^$/{exit} f&&/^  [a-z]/{print $1}' | sed 's/|.*//' | grep -v '^help$')
+  if [ -z "$subs" ]; then echo "LEAF: vat $1"; else for s in $subs; do walk "$1 $s"; done; fi; }
+walk ""
+```
 
 **Lanes — barrel-aware static analysis, cross-checked at runtime.** For each command, the module
 implementing its handler is resolved (delegated `.action(handler)` → the handler's module; inline
 `new Command('x'); …action(async () => {…})` → the registrar itself), then that module is checked
-for reachability to the three sinks.
-
-Then the sinks in `dist/` were patched to write a marker to stderr and 22 real invocations were run
-against real inputs, recording which sinks actually fired.
+for reachability to the sinks. Then the sinks in `dist/` were patched to write a marker to stderr
+and real invocations were run against real inputs, recording which sinks actually fired. Rows
+corrected since that derivation cite the code site that decided them.
 
 ### Two methods that were tried and rejected — do not repeat them
 
 1. **Naive module-level import reachability.** It reported `vat claude org cost` — an HTTPS call —
    as reaching all three sinks, and 45 of 98 command modules as reaching all three. Barrels are why:
-   `utils/index.ts` has 26 exports and `agent-skills/index.ts` has 37, so importing one helper marks
-   every sink in that package reachable. The graph was right; the question was wrong.
+   importing one helper from `utils` or `agent-skills` marks every sink in that package reachable.
+   The graph was right; the question was wrong.
 2. **Joining a leaf to its registrar file.** Wherever a group `index.ts` registers several leaves,
-   each leaf inherits the union of its siblings' lanes — `vat agent list` read as crawling, while a
-   runtime probe shows it reaching no sink on an exit-0 run.
+   each leaf inherits the union of its siblings' lanes — `vat agent list` read as crawling, and the
+   four HTTPS-only `claude org skills` verbs read as `crawl`, while a runtime probe shows them
+   reaching no sink.
 
 ### What the runtime cross-check caught that static analysis could not
 
@@ -263,26 +221,16 @@ instrumented run saw it. Any future revision of this table must keep the runtime
 - **`vat corpus scan` is marked `?`.** Its action is inline in a group `index.ts`, so its lane is
   that file's, which is the union over its imports — this row may over-attribute. It is the only
   such row.
-- **A runtime probe proves presence, never absence.** `vat audit` fired no sink against a scratch
-  directory holding two markdown files and no skill, and `crawlAndResolveRegistry`×2 against this
-  repo. A `NONE` in this table means "no reachable sink under static analysis", corroborated by
+- **A runtime probe proves presence, never absence.** `vat audit` fired the `crawl` sink against a
+  scratch directory holding two markdown files and no skill (its subject population), and
+  `crawlAndResolveRegistry`×2 against this repo. A `NONE` in this table means "no reachable sink under static analysis", corroborated by
   runtime where a credential-free invocation exists — not "proven never to enumerate".
-- **The `claude org *` commands were not run** (they need `ANTHROPIC_ADMIN_API_KEY`; the probe
-  recorded them `INCONCLUSIVE`, exit 2, before doing work). Their `NONE` rests on static analysis
-  plus the inline HTTPS bodies being directly readable.
+- **The `claude org *` commands were not run** (they need `ANTHROPIC_ADMIN_API_KEY`). Their rows
+  rest on static analysis plus the inline HTTPS bodies being directly readable.
 - **Lanes are per command, not per invocation.** `vat audit` reaches the registry lane against a
-  project root and only `crawl` against a bare skills directory. The table is the upper bound.
-- **The `vat inventory` row is a correction, and the method above did not produce it.** Its walk arm
-  reaches sink 1 in one hop through `crawlSkillLinkRegistry()`, which alone makes the `NONE` it
-  carried an under-report by the static leg rather than a lane this table cannot express. Its
-  projection arm reaches sink 1 only conditionally — through `FilesystemCrawlSource` where that
-  source is chosen, and on the git default only through `expandDirectory()`'s two descents, so a
-  repository with neither a submodule nor a collapsed ignored directory does not reach it at all.
-  **Which edge the static leg declined to follow is not recoverable**: the derivation was a one-off
-  and no script for it is committed. What can be said is
-  that both of `inventory.ts`'s routes to a sink leave the CLI package through a barrel import,
+  project root and only the crawl against a bare skills directory. The table is the upper bound.
+- **The `vat inventory` row was read out of `routeInventory()` and the two providers it gates**, not
+  produced by the method above: both of its routes leave the CLI package through a barrel import,
   which is exactly the edge rejected method 1's fix stopped attributing — its cure for barrel
-  *over*-reporting has an under-reporting direction, and nothing in the derivation bounds it. The
-  runtime leg cannot exonerate it either: 22 invocations against 67 commands, and a probe proves
-  presence, never absence. This row was read out of `routeInventory()` and the two providers it
-  gates.
+  *over*-reporting has an under-reporting direction, and nothing in the derivation bounds it. No
+  script for the static leg is committed, so which edge it declined to follow is not recoverable.

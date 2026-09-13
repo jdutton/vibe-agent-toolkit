@@ -120,7 +120,7 @@
 import { promises as fs, type Stats } from 'node:fs';
 import { threadId } from 'node:worker_threads';
 
-import { isFilesystemAccessError, isPathAbsentError, parseEnvBoolean, safePath } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, isPathAbsentError, parseEnvBoolean, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
 import { parseCacheDirectory } from './cache-namespace.js';
 import { CONTENT_KEY_PATTERN, type KeyedContent, type ParsableContent, readContentWithKey } from './content-key.js';
@@ -449,7 +449,7 @@ export class ParseCache {
     const readStartedAt = parseTimingStart();
     try {
 
-      // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-raw-text-decode -- reading back this cache's own entry, written as UTF-8 by `set()`; a corpus document never lands here
+      // eslint-disable-next-line local/no-raw-text-decode -- reading back this cache's own entry, written as UTF-8 by `set()`; a corpus document never lands here
       raw = await fs.readFile(this.entryPath(keyed.key), 'utf-8');
     } catch (error) {
       // ENOENT (never written), EACCES (perms), EISDIR — all a miss. A bug in
@@ -558,11 +558,8 @@ export class ParseCache {
     const entry: StoredEntry = { facts: dehydrate(result) };
 
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is cacheDir + a charset-validated content key
       await fs.mkdir(shardDir, { recursive: true, mode: CACHE_DIR_MODE });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is cacheDir + a charset-validated content key
       await fs.writeFile(tempPath, JSON.stringify(entry), 'utf-8');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- both paths are cacheDir + a charset-validated content key
       await fs.rename(tempPath, this.entryPath(key));
     } catch (error) {
       // Fail-soft: EACCES on the directory, ENOSPC on the disk, EROFS on a
@@ -715,12 +712,7 @@ const PARSER_UNAVAILABLE_CODE = 'VAT_PARSER_UNAVAILABLE';
  * a test, or an embedder that goes looking; the message is the shipped channel,
  * which is why the errno has to be in it.
  */
-export class ParserUnavailableError extends Error {
-  /**
-   * Never an errno. See {@link PARSER_UNAVAILABLE_CODE} before changing this.
-   */
-  readonly code = PARSER_UNAVAILABLE_CODE;
-
+export class ParserUnavailableError extends VatError {
   /**
    * The loader's own failure, verbatim. Deliberately NOT `cause` — see the class
    * docstring; `cause` is walked by the very predicate this type must not match.
@@ -733,12 +725,13 @@ export class ParserUnavailableError extends Error {
    * @param loaderError - Whatever the module loader threw
    */
   constructor(kind: DocumentParserKind, specifier: string, loaderError: unknown) {
+    // The code is never an errno. See {@link PARSER_UNAVAILABLE_CODE} before changing it.
     super(
+      PARSER_UNAVAILABLE_CODE,
       `Cannot load VAT's ${kind} parser module (${specifier}): ${describeLoaderError(loaderError)}. ` +
         'This is a broken VAT installation — the parser itself could not be read or evaluated. ' +
         'No document being scanned is at fault. Reinstall or rebuild VAT.',
     );
-    this.name = 'ParserUnavailableError';
     this.loaderError = loaderError;
   }
 }
@@ -808,8 +801,9 @@ function describeLoaderError(error: unknown): string {
  *
  * ## Why the load is DEFERRED and not hoisted
  *
- * Called from exactly one place: {@link parseKeyed}, past its cache-hit return.
- * That position is the whole point. The remark stack behind
+ * Called from two places, both past a cache decision: {@link parseKeyed} after
+ * its cache-hit return, and the parse worker (`parse-worker.ts`) once it has
+ * been handed a document to parse. That position is the whole point. The remark stack behind
  * `parseMarkdownContent` costs ~730 ms of module load on Windows, and a fully
  * warm run — every document a hit, nothing ever parsed — must not pay it.
  * Measured on a warm `vat resources scan docs/contributing`: 779 scripts loaded
@@ -1129,7 +1123,6 @@ const UNSAFE_WRITE_BITS = 0o022;
 async function isSafeShardDir(dir: string): Promise<boolean> {
   let stats: Stats;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is cacheDir + a charset-validated content key
     stats = await fs.lstat(dir);
   } catch (error) {
     // Absent: `mkdir` will create it fresh, owned by this process.

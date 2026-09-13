@@ -23,7 +23,7 @@ import {
   type UnreadablePolicy,
 } from '../src/file-crawler.js';
 import { toForwardSlash } from '../src/path-utils.js';
-import { setupSyncTempDirSuite } from '../src/test-helpers.js';
+import { setupSyncTempDirSuite } from '../src/testing/temp-dir.js';
 
 import { plantOpenAndLockedTree } from './test-helpers.js';
 

@@ -77,8 +77,12 @@ module.exports = {
     docs: {
       description:
         'Disallow `.pathname` on a URL built from `import.meta.url`; use `fileURLToPath()` instead.',
-      category: 'Cross-platform compatibility',
+      category: 'URLs and dynamic imports',
+      bans: '`new URL(x, import.meta.url).pathname` as a filesystem path',
+      useInstead: '`resolveFromImportMeta()` / `fileURLToPath()`',
+      subpath: '/fs',
       recommended: true,
+      recommendedSeverity: 'error',
     },
     messages: {
       useFileURLToPath:

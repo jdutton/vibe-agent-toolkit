@@ -20,18 +20,24 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
 import {
+  buildReport,
   calculateValidationStatus,
   countBySeverity,
+  exitCodeForSeverityCounts,
+  reportSchema,
+  toFindings,
+  type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
-import * as yaml from 'yaml';
+import { z } from 'zod';
 
 import { resolveProjectDeclaredEvalSuites, resolveSkillPackagingConfig } from '../../skill-resolution/packaging-config.js';
-import { handleCommandError } from '../../utils/command-error.js';
+import { handleReportCommandError } from '../../utils/command-error.js';
 import { formatIssueAnchor } from '../../utils/issue-anchor.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
+import { writeYamlOutput } from '../../utils/output.js';
 import { projectRootOrNull } from '../../utils/project-root-policy.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
@@ -45,8 +51,52 @@ import {
 
 export interface SkillReviewCommandOptions {
   yaml?: boolean;
+  /** Treat warnings as failing: end on `FINDINGS` when any warning is present. */
+  strict?: boolean;
   debug?: boolean;
 }
+
+/** One checklist section: which automated findings landed in it, and what a reviewer walks through by hand. */
+const ReviewSectionSchema = z.object({
+  section: z.string(),
+  /** Codes of the envelope's findings that belong to this section, in finding order. */
+  codes: z.array(z.string()),
+  /** The judgment-call items a reviewer completes for this section. */
+  manual: z.array(z.string()),
+}).strict();
+
+/** What the review reports beyond its findings. */
+export const SkillReviewDataSchema = z.object({
+  skill: z.string(),
+  /** The path the caller named. */
+  source: z.string(),
+  metadata: z.object({
+    skillLines: z.number().int().nonnegative(),
+    totalLines: z.number().int().nonnegative(),
+    fileCount: z.number().int().nonnegative(),
+    directFileCount: z.number().int().nonnegative(),
+    maxLinkDepth: z.number().int().nonnegative(),
+    excludedReferenceCount: z.number().int().nonnegative(),
+    excludedReferences: z.array(z.object({
+      path: z.string(),
+      reason: z.string(),
+      matchedPattern: z.string().optional(),
+    }).strict()),
+  }).strict(),
+  /**
+   * Every checklist section, in rubric order — including the ones no finding
+   * landed in, because the manual items are the point of a review and a
+   * section with nothing automated still has to be walked through.
+   */
+  sections: z.array(ReviewSectionSchema),
+}).strict();
+
+export type SkillReviewData = z.infer<typeof SkillReviewDataSchema>;
+
+/** The document `--yaml` publishes. */
+export const SKILL_REVIEW_REPORT_SCHEMA = reportSchema(SkillReviewDataSchema);
+
+export type SkillReviewReport = Report<SkillReviewData>;
 
 /**
  * Resolve the caller's argument to the absolute path of a skill markdown file.
@@ -63,12 +113,10 @@ export interface SkillReviewCommandOptions {
 export function resolveSkillPath(pathArg: string): string {
   const absolute = safePath.resolve(pathArg);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- user-supplied path
   if (!existsSync(absolute)) {
     throw new Error(`Path does not exist: ${pathArg}`);
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- user-supplied path
   const stat = statSync(absolute);
 
   if (stat.isFile()) {
@@ -82,7 +130,6 @@ export function resolveSkillPath(pathArg: string): string {
 
   if (stat.isDirectory()) {
     const candidate = safePath.join(absolute, 'SKILL.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- candidate constructed from validated dir
     if (!existsSync(candidate)) {
       throw new Error(
         `No SKILL.md found in directory: ${pathArg}. Point at the skill directory (containing SKILL.md) or the SKILL.md file directly.`,
@@ -120,7 +167,7 @@ function groupIssuesBySection(
 
 /**
  * Render the human-readable review report to stderr (logger). Structured
- * output goes to stdout via {@link outputYaml}.
+ * output goes to stdout via {@link buildReviewReport}.
  */
 function renderHumanReport(
   result: PackagingValidationResult,
@@ -185,54 +232,45 @@ function renderIssue(issue: ValidationIssue, logger: Logger): void {
 }
 
 /**
- * Emit a machine-readable review payload to stdout as YAML. Used by --yaml
- * (e.g. CI consumption).
+ * The machine-readable review, for `--yaml` (e.g. CI consumption).
+ *
+ * `examined` is 1: a review looks at ONE skill, and the denominator says so
+ * rather than leaving a reader to infer it from `skill`. Pure, so the shape is
+ * unit-testable without a validator run.
+ *
+ * @param result - The validator's result
+ * @param skillPath - The path the caller named
+ * @param grouped - The findings by checklist section
+ * @returns The report
  */
-function outputYaml(
+export function buildReviewReport(
   result: PackagingValidationResult,
   skillPath: string,
-  grouped: Map<ChecklistSection, ValidationIssue[]>,
-): void {
-  const automated: Record<string, unknown[]> = {};
-  for (const section of CHECKLIST_SECTIONS) {
-    const issues = grouped.get(section) ?? [];
-    if (issues.length === 0) continue;
-    automated[section] = issues.map(i => ({
-      code: i.code,
-      severity: i.severity,
-      message: i.message,
-      ...(i.location === undefined ? {} : { location: i.location }),
-      ...(i.line === undefined ? {} : { line: i.line }),
-      ...(i.field === undefined ? {} : { field: i.field }),
-      ...(i.fix === undefined ? {} : { fix: i.fix }),
-    }));
-  }
-
-  const manual: Record<string, readonly string[]> = {};
-  for (const section of CHECKLIST_SECTIONS) {
-    const items = MANUAL_CHECKLIST_ITEMS[section];
-    if (items.length > 0) {
-      manual[section] = items;
-    }
-  }
-
-  const payload = {
-    skill: result.skillName,
-    source: skillPath,
-    // NOT `result.status`: that is the packaging GATE verdict, two-valued by
-    // design, so a review holding only warnings published `status: success`
-    // while the very same run exited 1. Review treats a warning as a finding
-    // you must look at (that is its documented exit-code contract), so the
-    // status channel has to be able to say so.
-    status: calculateValidationStatus(result.allErrors),
-    issueCounts: countBySeverity(result.allErrors),
-    metadata: result.metadata,
-    automated,
-    manual,
-  };
-
-  process.stdout.write('---\n');
-  process.stdout.write(yaml.stringify(payload, { indent: 2, lineWidth: 120, aliasDuplicateObjects: false }));
+  grouped: ReadonlyMap<ChecklistSection, readonly ValidationIssue[]>,
+): SkillReviewReport {
+  const findings = CHECKLIST_SECTIONS.flatMap((section) => toFindings(grouped.get(section) ?? []));
+  const sections = CHECKLIST_SECTIONS.map((section) => ({
+    section,
+    codes: toFindings(grouped.get(section) ?? []).map((issue) => issue.code),
+    manual: [...MANUAL_CHECKLIST_ITEMS[section]],
+  }));
+  return buildReport<SkillReviewData>({
+    examined: 1,
+    findings,
+    data: {
+      skill: result.skillName,
+      source: skillPath,
+      metadata: {
+        ...result.metadata,
+        excludedReferences: result.metadata.excludedReferences.map((detail) => ({
+          path: detail.path,
+          reason: detail.reason,
+          ...(detail.matchedPattern === undefined ? {} : { matchedPattern: detail.matchedPattern }),
+        })),
+      },
+      sections,
+    },
+  });
 }
 
 /** Footer: share the checklist link when any skill-level finding fires. */
@@ -269,7 +307,7 @@ export async function reviewCommand(
     // `'refuse'` on both: a review that cannot tell whether this skill is
     // declared, or which suites are the project's, would report against the
     // wrong rules at exit 0. The throw lands in the catch below →
-    // `handleCommandError`, exit 2.
+    // `handleReportCommandError`, exit 2.
     const packagingConfig = (await resolveSkillPackagingConfig(skillPath, 'refuse')) ?? undefined;
     // Project-wide test input: a review of skill A must not count skill B's eval
     // suite as content A ships. Memoized per config root; `[]` in wild mode.
@@ -292,7 +330,7 @@ export async function reviewCommand(
     const grouped = groupIssuesBySection(result.allErrors);
 
     if (options.yaml) {
-      outputYaml(result, skillPath, grouped);
+      writeYamlOutput({ ...buildReviewReport(result, skillPath, grouped), durationMs: Date.now() - startTime });
     } else {
       renderHumanReport(result, skillPath, grouped, logger);
     }
@@ -300,11 +338,12 @@ export async function reviewCommand(
     renderFooter(result, logger);
 
     // Same counts the status channel is derived from, so the two agree by
-    // construction: exit 1 ⟺ status is `warning` or `error`.
-    const counts = countBySeverity(result.allErrors);
-    process.exit(counts.errors > 0 || counts.warnings > 0 ? 1 : 0);
+    // construction. Errors fail; warnings fail only under `--strict` — this
+    // used to exit 1 on a warning while every sibling exited 1 on errors only,
+    // so the one verb meant for a human's review was the strictest gate.
+    process.exit(exitCodeForSeverityCounts(countBySeverity(result.allErrors), { strict: options.strict === true }));
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'SkillReview');
+    handleReportCommandError(error, logger, startTime, 'SkillReview');
   }
 }
 
@@ -315,6 +354,7 @@ export function createSkillReviewCommand(): Command {
     .description('Deep-review a single skill: automated findings plus a manual rubric walkthrough')
     .argument('<path>', 'Path to a SKILL.md file, a single-file skill (.md), or a skill directory containing SKILL.md')
     .option('--yaml', 'Emit machine-readable YAML on stdout (for CI consumption)')
+    .option('--strict', 'Exit 1 on warnings as well as errors')
     .option('--debug', 'Enable debug logging')
     .action(reviewCommand)
     .addHelpText(
@@ -333,14 +373,16 @@ Description:
   Output:
     Default: human-readable report to stderr (automated findings grouped by
              checklist section, then the manual walkthrough).
-    --yaml:  structured YAML to stdout with automated + manual sections, plus
-             status (success | warning | error) and issueCounts
-             {errors, warnings, info}. The status agrees with the exit code by
-             construction: exit 1 iff status is 'warning' or 'error'.
+    --yaml:  the report envelope as YAML on stdout — status (ok | findings),
+             examined (always 1), findings, summary {errors, warnings, info},
+             and data.sections: every checklist section with the codes of
+             the findings that landed in it and its manual items. The exit
+             code is derived from the same summary: exit 1 iff
+             summary.errors + summary.warnings > 0.
 
 Exit Codes:
-  0 - No errors and no warnings emitted (an info-only review is 'success')
-  1 - At least one error or warning present (errors and warnings treated equally — this is a review, not a gate)
+  0 - No error-severity finding (warnings and info are in the report; --strict promotes warnings)
+  1 - At least one error present, or any warning under --strict
   2 - System error (path missing, internal failure)
 
 Requirements:

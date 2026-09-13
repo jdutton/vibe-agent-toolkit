@@ -1,5 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-
 /**
  * The cache control surface: root `--no-cache`, and `vat cache clear`.
  *

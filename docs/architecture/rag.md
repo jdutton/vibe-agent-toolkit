@@ -298,8 +298,6 @@ vat rag clear
 Create `vibe-agent-toolkit.config.yaml`:
 
 ```yaml
-version: 1
-
 resources:
   collections:
     project-docs:
@@ -392,8 +390,6 @@ rag:
 ### Complete Config Example
 
 ```yaml
-version: 1
-
 # Resource collections (reusable)
 resources:
   defaults:

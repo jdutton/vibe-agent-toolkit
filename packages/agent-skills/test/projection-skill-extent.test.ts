@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is under a per-test temp directory */
 /**
  * zones.md §17 risk 3, run as an experiment rather than argued.
  *

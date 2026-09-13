@@ -23,10 +23,8 @@ const srcDir = safePath.join(pkgRoot, 'src');
 const distDir = safePath.join(pkgRoot, 'dist');
 
 function walk(dir: string): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- walks calling package's own src/ tree, not user input
   for (const entry of readdirSync(dir)) {
     const full = safePath.join(dir, entry);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is a filesystem-walk result, not user input
     if (statSync(full).isDirectory()) {
       walk(full);
     } else if (entry.endsWith('.yaml') || entry.endsWith('.yml')) {

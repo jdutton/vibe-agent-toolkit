@@ -192,6 +192,22 @@ export function writeJsonOutput(data: unknown): void {
 }
 
 /**
+ * Write one structured document in the format a `--format` option selected:
+ * `json` → {@link writeJsonOutput}; anything else (including an absent option)
+ * → {@link writeYamlOutput}, the CLI's default document format.
+ *
+ * @param data - The document
+ * @param format - The selected format (`json`, or anything else for YAML)
+ */
+export function writeStructuredOutput(data: unknown, format: string | undefined): void {
+  if (format === 'json') {
+    writeJsonOutput(data);
+  } else {
+    writeYamlOutput(data);
+  }
+}
+
+/**
  * Write a test-format finding to stderr.
  *
  * Format: `file:line:column: severity: message` — the GCC/ESLint-compact

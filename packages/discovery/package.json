@@ -19,14 +19,12 @@
     "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
     "test:unit": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },
   "dependencies": {
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "picomatch": "^4.0.2"
-  },
-  "devDependencies": {
-    "@types/picomatch": "^4.0.2"
+    "picomatch": "^4.0.3"
   },
   "repository": {
     "type": "git",

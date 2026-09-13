@@ -29,6 +29,7 @@
  * well-formed.
  */
 
+import { VatError } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 import type { Provider } from './resolve.js';
@@ -40,14 +41,13 @@ import { templateReferences } from './template.js';
  * message names the provider (index and host), the field, and the underlying
  * error, so the reader is sent to one line of their config.
  */
-export class LinkAuthConfigError extends Error {
+export class LinkAuthConfigError extends VatError {
   /** The offending field, as a path under the provider: `rewrite[0].when`. */
   readonly field: string;
 
   constructor(providerLabel: string, field: string, cause: unknown) {
     const detail = cause instanceof Error ? cause.message : String(cause);
-    super(`resources.linkAuth ${providerLabel}: ${field} — ${detail}`);
-    this.name = 'LinkAuthConfigError';
+    super('LINK_AUTH_CONFIG', `resources.linkAuth ${providerLabel}: ${field} — ${detail}`);
     this.field = field;
   }
 }

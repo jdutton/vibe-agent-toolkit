@@ -17,23 +17,16 @@
   ],
   "scripts": {
     "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
-    "build:watch": "tsc --build --watch",
-    "clean": "rm -rf dist",
+    "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:watch": "vitest watch",
-    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "yaml": "^2.3.4"
-  },
-  "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "~5.7.2",
-    "vitest": "^4.1.11"
+    "yaml": "^2.9.0"
   },
   "keywords": [
     "ai",

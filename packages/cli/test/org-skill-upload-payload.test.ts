@@ -1,5 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-
 /**
  * What `vat claude org skills install` publishes, refuses, and reports.
  *

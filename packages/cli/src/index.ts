@@ -22,9 +22,8 @@ export {
   writeStdoutSync,
 } from './utils/output.js';
 export { loadConfig } from './utils/config-loader.js';
-export {
-  ProjectConfigSchema,
-  type ProjectConfig,
-  type ResourcesConfig,
-  type CollectionConfig as ResourceCollection,
-} from '@vibe-agent-toolkit/resources';
+// `ProjectConfigSchema`, `ProjectConfig`, `ResourcesConfig` and `CollectionConfig`
+// are `@vibe-agent-toolkit/resources`' API and are imported from there. They were
+// re-exported here (one under an alias) — the exact "re-export types for
+// convenience" the pre-1.0 policy forbids, on the one barrel adopters import
+// for programmatic use.

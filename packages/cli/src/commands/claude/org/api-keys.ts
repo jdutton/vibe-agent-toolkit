@@ -1,6 +1,7 @@
 /**
  * `vat claude org api-keys` — manage organization API keys via Admin API.
  */
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { Command } from 'commander';
 
 import { addPaginationOptions, buildPaginationParams, executeOrgCommand } from './helpers.js';
@@ -74,7 +75,7 @@ Example:
     .requiredOption('--name <name>', 'New name for the API key')
     .action(() => {
       writeNotYetImplementedStub('org api-keys update');
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     });
 
   command.addCommand(listCmd);

@@ -10,13 +10,11 @@
       }
     ]
   },
-  "include": [
-    "src/**/*",
-    "resources/**/*.md"
-  ],
+  "include": ["src/**/*", "resources/**/*.md"],
   "references": [
-    { "path": "../utils" },
+    { "path": "../cli" },
+    { "path": "../resource-compiler" },
     { "path": "../schema" },
-    { "path": "../resource-compiler" }
+    { "path": "../utils" }
   ]
 }

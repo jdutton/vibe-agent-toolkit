@@ -14,12 +14,10 @@ const FIXTURE_ARRAY_ITEM_COMMENTS = 'array-with-item-comments.md';
 const ARRAY_FIELD_NAME = 'adrs-cited';
 
 function readFixture(name: string): string {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path is test-controlled
   return readFileSync(safePath.join(FIXTURES_DIR, name), 'utf-8');
 }
 
 describe('FrontmatterEditor — round-trip identity', () => {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture dir is test-controlled
   const fixtureFiles = readdirSync(FIXTURES_DIR).filter((f) => f.endsWith('.md'));
 
   for (const fixture of fixtureFiles) {

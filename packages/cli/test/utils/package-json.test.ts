@@ -7,10 +7,10 @@
  * first means "absent". These tests pin that the other two are told apart.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- every path is inside this suite's temp dir */
 import { readFileSync, writeFileSync } from 'node:fs';
 
-import { safePath, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { readPackageJsonOrAbsent } from '../../src/utils/package-json.js';

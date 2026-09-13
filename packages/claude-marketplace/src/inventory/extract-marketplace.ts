@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 import type { PluginInventory, PluginRef } from '@vibe-agent-toolkit/agent-skills';
 import { MarketplaceManifestSchema } from '@vibe-agent-toolkit/agent-skills';
-import { isPathAbsentError, normalizePath, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { hasParentTraversalSegment, isPathAbsentError, isVatError, normalizePath, PathEscapesRootError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { extractClaudePluginInventory } from './extract-plugin.js';
 import type { GitTrackerSource } from './extract-skill.js';
@@ -53,7 +53,6 @@ export async function extractClaudeMarketplaceInventory(
 	const parseErrors: ParseErrors = [];
 	const manifestFilePath = safePath.join(absolute, '.claude-plugin', MARKETPLACE_JSON);
 
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- absolute is resolved from caller-supplied path
 	if (!existsSync(manifestFilePath)) {
 		parseErrors.push({ path: manifestFilePath, message: 'marketplace.json not found' });
 		return new ClaudeMarketplaceInventory({
@@ -67,7 +66,6 @@ export async function extractClaudeMarketplaceInventory(
 
 	let raw: unknown;
 	try {
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- absolute path resolved from marketplace root
 		raw = JSON.parse(await readFile(manifestFilePath, 'utf-8'));
 	} catch (e) {
 		parseErrors.push({ path: manifestFilePath, message: (e as Error).message });
@@ -214,7 +212,7 @@ function containedSourceDir(
 ): { resolved: string; exists: boolean } | SourceRefusal {
 	const forward = toForwardSlash(source);
 	if (forward === '') return shapeRefusal('is empty');
-	if (forward.split('/').includes('..')) return shapeRefusal('carries a ".." segment');
+	if (hasParentTraversalSegment(forward)) return shapeRefusal('carries a ".." segment');
 	let resolved: string;
 	try {
 		resolved = safePath.joinUnderRoot(root.path, forward);
@@ -224,7 +222,6 @@ function containedSourceDir(
 	}
 	let isDirectory: boolean;
 	try {
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- contained under the marketplace root by joinUnderRoot
 		isDirectory = statSync(resolved).isDirectory();
 	} catch (error) {
 		// Absent — a missing path, a dangling link, a file where a directory
@@ -263,12 +260,11 @@ function shapeRefusal(refused: string): SourceRefusal {
 /**
  * Whether `error` is `safePath.joinUnderRoot` refusing a path that leaves its
  * root — the one failure that lane throws by design, and the only one the
- * refusal above may absorb. It throws a plain `Error` with no class of its own,
- * so the prefix it stamps on every message is the seam; anything else (a
- * `TypeError` from a bad argument) is a bug and stays loud.
+ * refusal above may absorb; anything else (a `TypeError` from a bad argument)
+ * is a bug and stays loud.
  */
 function isRootEscape(error: unknown): boolean {
-	return error instanceof Error && error.message.startsWith('safePath.joinUnderRoot:');
+	return isVatError(error, PathEscapesRootError.code);
 }
 
 /**

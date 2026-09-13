@@ -42,11 +42,9 @@ function collectFiles(dir: string, baseDir: string): string[] {
   const results: string[] = [];
 
   const walk = (current: string): void => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- vendorDir is our own asset directory
     const entries = readdirSync(current).sort((a, b) => a.localeCompare(b));
     for (const name of entries) {
       const abs = safePath.join(current, name);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- vendorDir is our own asset directory
       const st = statSync(abs);
       if (st.isDirectory()) {
         walk(abs);
@@ -63,7 +61,6 @@ function collectFiles(dir: string, baseDir: string): string[] {
 
 /** Compute SHA-256 hex of a single file's bytes. */
 function hashFile(absPath: string): string {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- absPath is derived from our own vendorDir walk
   const bytes = readFileSync(absPath);
   return createHash('sha256').update(bytes).digest('hex');
 }
@@ -93,7 +90,6 @@ export function regenerateVendoredManifest(vendorDir: string): void {
 
   const manifest: VendoredManifest = { files };
   const manifestPath = safePath.join(vendorDir, MANIFEST_FILENAME);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifestPath is derived from our own vendorDir
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
 }
 
@@ -110,14 +106,12 @@ export function regenerateVendoredManifest(vendorDir: string): void {
  */
 export function verifyVendoredManifest(vendorDir: string): boolean {
   const manifestPath = safePath.join(vendorDir, MANIFEST_FILENAME);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifestPath is derived from our own vendorDir
   if (!existsSync(manifestPath)) {
     return false;
   }
 
   let manifest: VendoredManifest;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifestPath is derived from our own vendorDir
     const raw = readFileSync(manifestPath, 'utf8');
     manifest = VendoredManifestSchema.parse(JSON.parse(raw));
   } catch (error) {
@@ -131,7 +125,6 @@ export function verifyVendoredManifest(vendorDir: string): boolean {
 
   for (const [rel, expectedHash] of Object.entries(manifest.files)) {
     const abs = safePath.join(vendorDir, rel);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- abs is derived from our own vendorDir + manifest-listed path
     if (!existsSync(abs)) {
       return false;
     }

@@ -17,9 +17,11 @@ import {
   writeArdManifest,
   type ShadowedArdOverrideKey,
 } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { buildReport, ExitCode, reportSchema, type Finding, type Report } from '@vibe-agent-toolkit/schema';
+import { safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { z } from 'zod';
 
-import { handleCommandError, handleExpectedFailure } from '../../utils/command-error.js';
+import { handleReportCommandError, handleReportExpectedFailure } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeJsonOutput } from '../../utils/output.js';
@@ -52,13 +54,12 @@ const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 export type ArdConfigAbsence = 'no-project-root' | 'no-config-file' | 'no-ard-block';
 
 /** No manifest could be built, and this says which absence caused it. */
-export class ArdConfigMissingError extends Error {
+export class ArdConfigMissingError extends VatError {
   readonly projectRoot: string;
   readonly absence: ArdConfigAbsence;
 
   constructor(projectRoot: string, absence: ArdConfigAbsence) {
-    super(ABSENCE_MESSAGES[absence](projectRoot));
-    this.name = 'ArdConfigMissingError';
+    super('ARD_CONFIG_MISSING', ABSENCE_MESSAGES[absence](projectRoot));
     this.projectRoot = projectRoot;
     this.absence = absence;
   }
@@ -137,7 +138,6 @@ function readProjectVersion(projectRoot: string): string | undefined {
  */
 export async function runArdEmit(options: ArdEmitOptions): Promise<ArdEmitResult> {
   const projectRoot = options.projectRoot ?? process.cwd();
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is the caller's declared root
   if (!existsSync(projectRoot)) {
     throw new ArdConfigMissingError(projectRoot, 'no-project-root');
   }
@@ -180,46 +180,89 @@ export async function runArdEmit(options: ArdEmitOptions): Promise<ArdEmitResult
 }
 
 /**
- * Whether the manifest this run wrote advertises anything at all.
- *
- * `empty` is a separate word for the same reason `vat okf validate` spells
- * `no-bundles` rather than `passed`: a run that wrote `{"entries":[]}` and one
- * that wrote a full catalogue both ended at exit 0 with a cheerful line on
- * stdout, and nothing a machine could read told them apart. A CI step that
- * emits and publishes was therefore green over a discovery document advertising
- * nothing.
+ * The codes this run's findings carry. Not registry codes: nothing here is a
+ * validation an adopter tunes through `validation.severity` — a skipped
+ * surface is a fact about what the manifest could not advertise, and its
+ * severity is the run's to decide.
  */
-export type ArdEmitStatus = 'written' | 'empty';
+export const ARD_EMIT_CODES = {
+  /** A configured surface that became no entry, and why — the thing `--strict` gates. */
+  SURFACE_SKIPPED: 'ARD_SURFACE_SKIPPED',
+  /**
+   * A bare `ard.entries` key a qualified key for the same surface outranked.
+   * Not a failure — the precedence is deterministic and documented — but the
+   * losing block is dead config, and an author cannot see that from the file.
+   */
+  OVERRIDE_KEY_SHADOWED: 'ARD_OVERRIDE_KEY_SHADOWED',
+} as const;
+
+/**
+ * What the run reports beyond its findings.
+ *
+ * 🪤 `entryCount: 0` is the empty manifest. A run that wrote `{"entries":[]}`
+ * and one that wrote a full catalogue both used to end at exit 0 with a
+ * cheerful line on stdout, and nothing a machine could read told them apart —
+ * so a CI step that emits and publishes was green over a discovery document
+ * advertising nothing. The envelope's `examined` is every configured surface
+ * the run considered, so "nothing declared" (`examined: 0`) and "everything
+ * declared was skipped" (`examined: N`, `entryCount: 0`) read differently too.
+ */
+export const ArdEmitDataSchema = z.object({
+  outputPath: z.string(),
+  entryCount: z.number().int().nonnegative(),
+  /**
+   * Counts BESIDE the findings. The count is what a CI step gates on without
+   * a JSON path into an array; the finding is what the human it pages then
+   * acts on. Publishing only one of them answers "how many" or "which", never
+   * both.
+   */
+  skippedCount: z.number().int().nonnegative(),
+  shadowedCount: z.number().int().nonnegative(),
+}).strict();
+
+export type ArdEmitData = z.infer<typeof ArdEmitDataSchema>;
 
 /** The document `--format json` publishes. */
-export interface ArdEmitReport {
-  readonly status: ArdEmitStatus;
-  readonly outputPath: string;
-  readonly entryCount: number;
-  /**
-   * Counts BESIDE the lists, as `vat okf validate` publishes `issueCounts`.
-   *
-   * The count is what a CI step gates on without a JSON path into an array;
-   * the list is what the human it pages then acts on. Publishing only one of
-   * them answers "how many" or "which", never both.
-   */
-  readonly skippedCount: number;
-  readonly shadowedCount: number;
-  readonly skipped: readonly SkippedArdSurface[];
-  readonly shadowed: readonly ShadowedArdOverrideKey[];
+export const ARD_EMIT_REPORT_SCHEMA = reportSchema(ArdEmitDataSchema);
+
+export type ArdEmitReport = Report<ArdEmitData>;
+
+/** The finding one skipped surface becomes. Its text is the stderr line, so the two channels agree. */
+function skippedFinding(item: SkippedArdSurface): Finding {
+  return {
+    code: ARD_EMIT_CODES.SURFACE_SKIPPED,
+    severity: 'warning',
+    message: `skipped ${item.kind} "${item.name}": ${item.reason}`,
+  };
+}
+
+/** The finding one shadowed override key becomes, pointing at the dead config block. */
+function shadowedFinding(item: ShadowedArdOverrideKey): Finding {
+  return {
+    code: ARD_EMIT_CODES.OVERRIDE_KEY_SHADOWED,
+    severity: 'info',
+    message:
+      `ignored \`ard.entries.${item.shadowedKey}\`: the ${item.kind} "${item.name}" is also named ` +
+      `by \`ard.entries."${item.winningKey}"\`, and the kind-qualified key wins. Nothing in the ` +
+      'bare block was read — fold it into the qualified one or delete it.',
+    field: `ard.entries.${item.shadowedKey}`,
+  };
 }
 
 /** Pure: the report a result becomes, so the status rule is unit-testable. */
 export function buildArdEmitReport(result: ArdEmitResult): ArdEmitReport {
-  return {
-    status: result.entryCount > 0 ? 'written' : 'empty',
-    outputPath: result.outputPath,
-    entryCount: result.entryCount,
-    skippedCount: result.skipped.length,
-    shadowedCount: result.shadowed.length,
-    skipped: result.skipped,
-    shadowed: result.shadowed,
-  };
+  return buildReport<ArdEmitData>({
+    // Every configured surface the run considered: the ones that became
+    // entries and the ones it had to skip.
+    examined: result.entryCount + result.skipped.length,
+    findings: [...result.skipped.map(skippedFinding), ...result.shadowed.map(shadowedFinding)],
+    data: {
+      outputPath: result.outputPath,
+      entryCount: result.entryCount,
+      skippedCount: result.skipped.length,
+      shadowedCount: result.shadowed.length,
+    },
+  });
 }
 
 /**
@@ -232,15 +275,16 @@ export function buildArdEmitReport(result: ArdEmitResult): ArdEmitReport {
  * see, and the empty document that is the limit case of that.
  */
 function strictFailure(report: ArdEmitReport): string | undefined {
-  if (report.skippedCount > 0) {
+  const { skippedCount, entryCount } = report.data;
+  if (skippedCount > 0) {
     const surfaces =
-      report.skippedCount === 1 ? '1 configured surface was' : `${report.skippedCount} configured surfaces were`;
+      skippedCount === 1 ? '1 configured surface was' : `${skippedCount} configured surfaces were`;
     // Not "see above": in `--format json` the reasons are IN the report, not on
     // stderr, so a message naming a position would be wrong on one of the two
     // channels.
-    return `--strict: ${surfaces} not advertised — each is named, with its reason, in this run's \`skipped\` report.`;
+    return `--strict: ${surfaces} not advertised — each is named, with its reason, in this run's \`findings\`.`;
   }
-  if (report.status === 'empty') {
+  if (entryCount === 0) {
     return '--strict: the manifest advertises nothing. Nothing this project declares became an ARD entry.';
   }
   return undefined;
@@ -248,19 +292,11 @@ function strictFailure(report: ArdEmitReport): string | undefined {
 
 /** The human rendering: findings on stderr, the one summary line on stdout. */
 function writeArdEmitText(report: ArdEmitReport): void {
-  for (const item of report.skipped) {
-    process.stderr.write(`skipped ${item.kind} "${item.name}": ${item.reason}\n`);
+  for (const finding of report.findings) {
+    process.stderr.write(`${finding.message}\n`);
   }
-  for (const item of report.shadowed) {
-    process.stderr.write(
-      `ignored \`ard.entries.${item.shadowedKey}\`: the ${item.kind} "${item.name}" is also named ` +
-        `by \`ard.entries."${item.winningKey}"\`, and the kind-qualified key wins. Nothing in the ` +
-        'bare block was read — fold it into the qualified one or delete it.\n'
-    );
-  }
-  process.stdout.write(
-    `Wrote ${report.entryCount} ARD entr${report.entryCount === 1 ? 'y' : 'ies'} to ${report.outputPath}\n`
-  );
+  const { entryCount, outputPath } = report.data;
+  process.stdout.write(`Wrote ${entryCount} ARD entr${entryCount === 1 ? 'y' : 'ies'} to ${outputPath}\n`);
 }
 
 /** Action handler for `vat ard emit`. */
@@ -268,7 +304,7 @@ export async function ardEmitCommand(options: ArdEmitOptions): Promise<void> {
   const logger = createLogger(options.debug === true ? { debug: true } : {});
   const startTime = Date.now();
   try {
-    const report = buildArdEmitReport(await runArdEmit(options));
+    const report = { ...buildArdEmitReport(await runArdEmit(options)), durationMs: Date.now() - startTime };
     if (options.format === 'json') {
       // The report carries every skipped and shadowed surface in full, so the
       // stderr lines would be the same facts twice on two channels.
@@ -279,7 +315,7 @@ export async function ardEmitCommand(options: ArdEmitOptions): Promise<void> {
     const failure = options.strict === true ? strictFailure(report) : undefined;
     if (failure !== undefined) {
       process.stderr.write(`${failure}\n`);
-      process.exit(1);
+      process.exit(ExitCode.FINDINGS);
     }
   } catch (error) {
     // 🔑 THE RULE, in one sentence: **exit 1 means VAT read this project and
@@ -296,12 +332,12 @@ export async function ardEmitCommand(options: ArdEmitOptions): Promise<void> {
     // repositories which have not opted into ARD keys on exactly that split.
     //
     // Exit 2 is also what `vat okf validate` documents for the same conditions,
-    // and what an invalid config already did here through `handleCommandError`.
+    // and what an invalid config already did here through `handleReportCommandError`.
     // The old split had a missing config file exiting 1 and an invalid one
     // exiting 2 while the help called 2 "Unexpected internal failure" — so a CI
     // job reading 2 as a crash was paged for a typo.
     //
-    // ⚠️ Both endings publish their document through `handleExpectedFailure`,
+    // ⚠️ Both endings publish their document through `handleReportExpectedFailure`,
     // in the format the operator asked for. Written inline they published
     // NOTHING — a `--format json` run of the commonest case of all, a
     // repository that never opted into ARD, wrote zero bytes to stdout and left
@@ -312,16 +348,16 @@ export async function ardEmitCommand(options: ArdEmitOptions): Promise<void> {
     // and the run records a second exit — the same reason the inline endings
     // this replaced each carried a `return`.
     if (error instanceof ArdConfigMissingError) {
-      return handleExpectedFailure(
+      return handleReportExpectedFailure(
         error.message,
-        error.absence === 'no-ard-block' ? 1 : 2,
+        error.absence === 'no-ard-block' ? ExitCode.FINDINGS : ExitCode.ERROR,
         startTime,
         options.format
       );
     }
     if (error instanceof ArdDerivationError) {
-      return handleExpectedFailure(error.message, 1, startTime, options.format);
+      return handleReportExpectedFailure(error.message, ExitCode.FINDINGS, startTime, options.format);
     }
-    handleCommandError(error, logger, startTime, 'ARD emit', options.format);
+    handleReportCommandError(error, logger, startTime, 'ARD emit', options.format);
   }
 }

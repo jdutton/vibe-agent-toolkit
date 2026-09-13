@@ -5,7 +5,6 @@
  * model snapshot and the system-prompt file's git SHA in RunMetadata.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- system prompt path is constant */
 
 import { readFileSync, writeFileSync } from 'node:fs';
 

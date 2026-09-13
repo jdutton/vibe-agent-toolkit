@@ -19,7 +19,6 @@
  * what a rehydrated object can get wrong.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directories */
 
 import { promises as fs } from 'node:fs';
 

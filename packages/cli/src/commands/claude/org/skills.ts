@@ -31,6 +31,7 @@ import type {
 import { createAllowUsageLedger, runValidationFramework } from '@vibe-agent-toolkit/schema';
 import type { ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
+  direntKindFollowingSync,
   isAbsoluteAnyPlatform,
   isFilesystemAccessError,
   normalizedTmpdir,
@@ -1045,7 +1046,6 @@ async function declaredTestInputPaths(skillDir: string): Promise<ReadonlySet<str
 function resolvesToDirectory(entry: Dirent, fullPath: string, relativePath: string): boolean {
 	if (!entry.isSymbolicLink()) return false;
 	try {
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- collected from dir walk
 		return statSync(fullPath).isDirectory();
 	} catch (error) {
 		const cause = error instanceof Error ? error.message : String(error);
@@ -1094,7 +1094,6 @@ function collectFiles(
 	testInput: ReadonlySet<string>,
 	collected: CollectedUploadFiles,
 ): void {
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- dir from CLI arg
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
 		const fullPath = safePath.join(dir, entry.name);
 		const relativePath = safePath.relative(base, fullPath);
@@ -1165,7 +1164,6 @@ async function prepareSkillUpload(
 	logger: UploadLogger,
 ): Promise<PreparedUpload> {
 	const skillMdPath = safePath.join(skillDir, 'SKILL.md');
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from CLI arg
 	if (!existsSync(skillMdPath)) {
 		throw new Error(`SKILL.md not found in ${skillDir}. Is this a built skill directory?`);
 	}
@@ -1181,7 +1179,6 @@ async function prepareSkillUpload(
 	const files: MultipartFile[] = [];
 
 	for (const file of collected.files) {
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- collected from dir walk
 		const content = readFileSync(file.absolutePath);
 		files.push({
 			fieldName: 'files[]',
@@ -1369,18 +1366,17 @@ async function uploadSkillVersionDir(
  * any report said so.
  */
 export function listNodeModulePackages(nodeModulesDir: string): string[] {
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
 	if (!existsSync(nodeModulesDir)) return [];
 
 	const results: string[] = [];
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
+	// Followed: a workspace package under node_modules IS a symlink, and a walk
+	// that tested `isDirectory()` on the link skipped every one of them.
 	for (const entry of readdirSync(nodeModulesDir, { withFileTypes: true })) {
-		if (!entry.isDirectory()) continue;
+		if (direntKindFollowingSync(nodeModulesDir, entry) !== 'directory') continue;
 		if (entry.name.startsWith('@')) {
 			const scopeDir = safePath.join(nodeModulesDir, entry.name);
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
 			for (const scopedEntry of readdirSync(scopeDir, { withFileTypes: true })) {
-				if (scopedEntry.isDirectory()) results.push(safePath.join(scopeDir, scopedEntry.name));
+				if (direntKindFollowingSync(scopeDir, scopedEntry) === 'directory') results.push(safePath.join(scopeDir, scopedEntry.name));
 			}
 		} else {
 			results.push(safePath.join(nodeModulesDir, entry.name));
@@ -1395,13 +1391,11 @@ export function listNodeModulePackages(nodeModulesDir: string): string[] {
  */
 export function findSkillsDir(packageDir: string): string | undefined {
 	const direct = safePath.join(packageDir, 'dist', 'skills');
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
 	if (existsSync(direct)) return direct;
 
 	const candidates = listNodeModulePackages(safePath.join(packageDir, 'node_modules'));
 	for (const pkgDir of candidates) {
 		const candidate = safePath.join(pkgDir, 'dist', 'skills');
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
 		if (existsSync(candidate)) return candidate;
 	}
 
@@ -1473,9 +1467,9 @@ async function installFromNpm(
 		}
 		logger.info(`Found skills at: ${safePath.relative(packageDir, skillsDir) || 'dist/skills/'}`);
 
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
+		// Followed: a built skill directory that is a link is still a skill to upload.
 		const skillDirs = readdirSync(skillsDir, { withFileTypes: true })
-			.filter(e => e.isDirectory())
+			.filter(e => direntKindFollowingSync(skillsDir, e) === 'directory')
 			.map(e => e.name);
 
 		if (skillDirs.length === 0) {
@@ -1524,12 +1518,10 @@ export async function installFromLocal(
 ): Promise<object> {
 	const sourcePath = resolveSourceArgument(source);
 
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg
 	if (!existsSync(sourcePath)) {
 		throw new Error(`Source not found: ${sourcePath}`);
 	}
 
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg
 	const stat = statSync(sourcePath);
 
 	// Case-INSENSITIVE. `endsWith('.zip')` refused `MySkill.ZIP` as "not a directory
@@ -1573,7 +1565,6 @@ async function installZipArchive(
 	// `basename(path, ext)` matches the extension exactly, so the literal '.zip'
 	// leaves `.ZIP` on the title. Slice the length instead.
 	const displayTitle = titleOverride ?? basename(sourcePath).slice(0, -'.zip'.length);
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg
 	const zipContent = readFileSync(sourcePath);
 	const files: MultipartFile[] = [{
 		fieldName: 'files[]',
@@ -2152,9 +2143,7 @@ Example:
 		.action(async (skillId: string, source: string, options: { debug?: boolean }) => {
 			await executeOrgCommand('OrgSkillsVersionsAdd', options.debug, async ({ client, logger }) => {
 				const resolved = resolveSourceArgument(source);
-				// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg
 				if (!existsSync(resolved)) throw new Error(`Source not found: ${resolved}`);
-				// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg
 				if (!statSync(resolved).isDirectory()) {
 					// Name the asymmetry IN the refusal, not only in --help. `install`
 					// accepts a ZIP and this verb does not, so the operator most likely to

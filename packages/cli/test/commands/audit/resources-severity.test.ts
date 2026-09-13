@@ -21,7 +21,6 @@
  * test of the merge function.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/schema';

@@ -1,9 +1,11 @@
+import { VatError } from '@vibe-agent-toolkit/utils';
+
 /**
  * Transform allowlist for linkAuth rewrite templates.
  *
  * Rewrite `to:` templates may call transforms over named regex captures —
  * e.g. `${base64url(u)}` for Microsoft Graph share-ids. The allowed set is
- * frozen in this file: adding a transform requires a VAT PR (see issue #113
+ * frozen in this file: adding a transform requires a VAT PR (linkAuth
  * design §4.1). There is no arbitrary-evaluation path.
  *
  * v1 inputs are assumed to be ASCII URL host/path captures. Non-ASCII edge
@@ -34,10 +36,9 @@ export const ALLOWED_TRANSFORMS: readonly TransformName[] = Object.freeze(
  * allowlist. The message names the bad transform and the full allowlist so
  * a misconfigured macro surfaces a clear error at load time.
  */
-export class UnknownTransformError extends Error {
+export class UnknownTransformError extends VatError {
   constructor(name: string) {
-    super(`Unknown transform "${name}". Allowed: ${ALLOWED_TRANSFORMS.join(', ')}.`);
-    this.name = 'UnknownTransformError';
+    super('UNKNOWN_TRANSFORM', `Unknown transform "${name}". Allowed: ${ALLOWED_TRANSFORMS.join(', ')}.`);
   }
 }
 

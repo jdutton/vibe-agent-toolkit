@@ -195,7 +195,16 @@ module.exports = {
     docs: {
       description:
         String.raw`Prefer String#startsWith / String#endsWith over /^literal/.test() — including escaped literals such as \/ and \*, and regexes held in a const`,
+      category: 'Code and test hygiene',
+      bans: '`/^foo/.test(s)`, `` /^\\*glob/.test(s) ``, `const RE = /^foo/; RE.test(s)`',
+      useInstead: "`s.startsWith('foo')`",
+      // `error`, deliberately. This rule was briefly graded on a different axis
+      // ("style, not a defect") and demoted to `warn` — wrong twice over: avoiding
+      // a SonarQube S6557 at lint time instead of at merge time is a real saving,
+      // and the matcher rejects any regex containing a metacharacter, so it only
+      // fires on true literal prefixes and has near-zero churn.
       recommended: true,
+      recommendedSeverity: 'error',
     },
     messages: {
       // `{{pattern}}` carries its FLAGS. Rendering `/^abc/` for a source

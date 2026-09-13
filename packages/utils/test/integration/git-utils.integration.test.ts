@@ -6,7 +6,8 @@ import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { gitFindRoot, gitLsFiles, isGitIgnored } from '../../src/git-utils.js';
 import { normalizedTmpdir } from '../../src/path-utils.js';
-import { createSymlink, setupSyncTempDirSuite, symlinkCapability } from '../../src/test-helpers.js';
+import { createSymlink, symlinkCapability } from '../../src/test-helpers.js';
+import { setupSyncTempDirSuite } from '../../src/testing/temp-dir.js';
 import { refuseUnreadableFixture } from '../../src/testing.js';
 import { createGitRepo } from '../test-helpers.js';
 
@@ -18,9 +19,7 @@ const GITIGNORE_FILENAME = '.gitignore';
 function setupGitRepo(tempDir: string): void {
   createGitRepo(tempDir);
   const gitPath = 'git';
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
   spawnSync(gitPath, ['config', 'user.email', 'test@example.com'], { cwd: tempDir, stdio: 'pipe' });
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
   spawnSync(gitPath, ['config', 'user.name', 'Test User'], { cwd: tempDir, stdio: 'pipe' });
 }
 
@@ -64,7 +63,6 @@ describe('gitFindRoot', () => {
 
     // Create subdirectory
     const subDir = safePath.join(tempDir, 'src', 'components');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.mkdirSync(subDir, { recursive: true });
 
     const result = gitFindRoot(subDir);
@@ -112,15 +110,11 @@ describe('gitLsFiles', () => {
     const file1 = safePath.join(tempDir, 'README.md');
     const file2 = safePath.join(tempDir, 'src', 'index.ts');
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.writeFileSync(file1, '# Test');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.mkdirSync(safePath.join(tempDir, 'src'));
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.writeFileSync(file2, 'export {}');
 
     // Add files to git
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
     spawnSync('git', ['add', '.'], { cwd: tempDir, stdio: 'pipe' });
 
     const result = listFixture();
@@ -132,13 +126,10 @@ describe('gitLsFiles', () => {
 
   it('should filter by patterns', () => {
     // Create files
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.writeFileSync(safePath.join(tempDir, 'README.md'), '# Test');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.writeFileSync(safePath.join(tempDir, 'test.txt'), 'test');
 
     // Add files to git
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
     spawnSync('git', ['add', '.'], { cwd: tempDir, stdio: 'pipe' });
 
     const result = listFixture({ patterns: ['*.md'] });
@@ -150,13 +141,10 @@ describe('gitLsFiles', () => {
 
   it('should include untracked files when requested', () => {
     // Create tracked file
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.writeFileSync(safePath.join(tempDir, TRACKED_FILE), '# Tracked');
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
     spawnSync('git', ['add', TRACKED_FILE], { cwd: tempDir, stdio: 'pipe' });
 
     // Create untracked file
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.writeFileSync(safePath.join(tempDir, 'untracked.md'), '# Untracked');
 
     const result = listFixture({ includeUntracked: true });
@@ -191,9 +179,7 @@ describe('gitLsFiles', () => {
     // back as `"caf\\303\\251.md"` unless the `-z` flag is used. Without `-z`,
     // this filename is unusable to any exact-string lookup against it.
     const nonAsciiFile = 'café.md';
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.writeFileSync(safePath.join(tempDir, nonAsciiFile), '# Café\n');
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
     spawnSync('git', ['add', nonAsciiFile], { cwd: tempDir, stdio: 'pipe' });
 
     const result = listFixture();
@@ -216,9 +202,7 @@ describe('isGitIgnored', () => {
 
   it('should return true for gitignored file', () => {
     // Create .gitignore
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.writeFileSync(safePath.join(tempDir, GITIGNORE_FILENAME), 'node_modules/\n');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.mkdirSync(safePath.join(tempDir, 'node_modules'));
 
     const result = isGitIgnored(safePath.join(tempDir, 'node_modules', 'test.js'), tempDir);
@@ -227,7 +211,6 @@ describe('isGitIgnored', () => {
   });
 
   it('should return false for non-gitignored file', () => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.writeFileSync(safePath.join(tempDir, GITIGNORE_FILENAME), 'node_modules/\n');
 
     const result = isGitIgnored(safePath.join(tempDir, 'src', 'test.js'), tempDir);
@@ -237,7 +220,6 @@ describe('isGitIgnored', () => {
 
   it('should handle absolute paths', () => {
     const gitignorePath = safePath.join(tempDir, GITIGNORE_FILENAME);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.writeFileSync(gitignorePath, '.worktrees/\n');
 
     const result = isGitIgnored(safePath.join(tempDir, '.worktrees', 'feat'), tempDir);
@@ -254,14 +236,10 @@ describe('isGitIgnored', () => {
     const externalDir = safePath.join(tempDir, 'external-content');
     const linkedDir = safePath.join(dataDir, 'linked-content');
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.mkdirSync(dataDir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.mkdirSync(externalDir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.writeFileSync(safePath.join(externalDir, 'doc.md'), '# Test');
     createSymlink(cap, externalDir, linkedDir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
     fs.writeFileSync(safePath.join(tempDir, GITIGNORE_FILENAME), 'data/\n');
 
     const result = isGitIgnored(safePath.join(tempDir, 'data', 'linked-content', 'doc.md'), tempDir);

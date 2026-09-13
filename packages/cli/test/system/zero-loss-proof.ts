@@ -21,6 +21,7 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { type FindingTuple, collectFindings } from './audit-test-helpers.js';
@@ -57,7 +58,6 @@ function diff(a: Map<string, number>, b: Map<string, number>): string[] {
 async function main(): Promise<void> {
   const corpus = await getTestFixturesPath();
   const snapshotPath = safePath.join(__dirname, '../fixtures/legacy-audit-snapshot.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is constructed internally
   const baseline = JSON.parse(readFileSync(snapshotPath, 'utf-8')) as FindingTuple[];
   const fresh = await collectFindings(corpus);
 
@@ -68,7 +68,7 @@ async function main(): Promise<void> {
   if (delta.length > 0) {
     console.error(`FAIL: (path, code, severity, field) multisets differ in ${delta.length.toString()} place(s):`);
     for (const line of delta) console.error(line);
-    process.exit(1);
+    process.exit(ExitCode.FINDINGS);
   }
 
   console.log('PASS: (path, code, severity, field) multisets are identical — zero findings lost, zero added.');

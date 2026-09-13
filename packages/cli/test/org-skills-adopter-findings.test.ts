@@ -94,7 +94,6 @@ describe('inspectZipArchive', () => {
 
   it('says WHY it could not read an archive rather than blocking the publish', async () => {
     const notAZip = safePath.join(tempDir, 'corrupt.zip');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own temp dir
     writeFileSync(notAZip, 'this is not a zip archive');
 
     // VAT failing to parse an archive is not grounds to refuse an upload the API
@@ -186,13 +185,11 @@ describe('inspectZipArchive', () => {
    */
   it('survives an entry it cannot decompress, keeping the size total it read from headers', async () => {
     const goodPath = writeZip('unsupported-method-source.zip', [[SKILL_MD, skillMdBytes('demo')]]);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own temp dir
     const bytes = readFileSync(goodPath);
     const centralDirectory = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
     expect(centralDirectory).toBeGreaterThan(0);
     bytes.writeUInt16LE(99, centralDirectory + 10);
     const zipPath = safePath.join(tempDir, 'unsupported-method.zip');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own temp dir
     writeFileSync(zipPath, bytes);
 
     const inspected = await inspectZipArchive(zipPath);

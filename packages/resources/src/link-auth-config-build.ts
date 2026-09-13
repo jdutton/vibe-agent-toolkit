@@ -16,7 +16,7 @@
  * passthrough doesn't relax: missing required fields, and wrong types on
  * declared fields (e.g. `notFoundMeaning: 'totally-invalid'`).
  *
- * Per design issue #113 §5 (macros are config, not a privileged code path)
+ * Per the linkAuth design §5 (macros are config, not a privileged code path)
  * and §4 (engine vocabulary).
  */
 

@@ -182,6 +182,7 @@ describe('vat claude context --help', () => {
   });
 });
 
+// win32: each populating call is a whole-project scan (10–20× slower there) — see the header.
 describe.skipIf(process.platform === 'win32')('vat claude context', () => {
   let answer: ContextDocument;
   let envelope: ContextEnvelope;
@@ -382,6 +383,7 @@ describe('vat claude context with several paths', () => {
  * the block is repeated once per region, which is precisely the burial this
  * command already shipped once in json.
  */
+// win32: whole-project scan, same as the block above — see the header.
 describe.skipIf(process.platform === 'win32')('vat claude context --all', () => {
   let text = '';
   let textStatus: number | null = null;

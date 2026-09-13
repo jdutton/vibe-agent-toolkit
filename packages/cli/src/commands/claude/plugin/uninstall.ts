@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 
 import { findPluginsByPackage, getClaudeUserPaths, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
@@ -78,10 +79,10 @@ async function pluginUninstallCommand(
         process.stdout.write(`pluginsRemoved: 0\n`);
         process.stdout.write(`plugins: []\n`);
         process.stdout.write(`duration: ${Date.now() - startTime}ms\n`);
-        process.exit(0);
+        process.exit(ExitCode.OK);
       }
       logger.error('No plugins found to uninstall');
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     }
 
     const results: Array<{ key: string; removed: boolean; warning?: string }> = [];
@@ -114,7 +115,7 @@ async function pluginUninstallCommand(
       if (r.warning) process.stdout.write(`    warning: "${r.warning}"\n`);
     }
     process.stdout.write(`duration: ${Date.now() - startTime}ms\n`);
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'PluginUninstall');
   }
@@ -127,7 +128,6 @@ function resolvePluginKeys(
 ): string[] {
   if (options.all) {
     const cwd = process.cwd();
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated cwd and constant package.json name
     const pkgRaw = readFileSync(safePath.join(cwd, 'package.json'), 'utf-8');
     const pkg = JSON.parse(pkgRaw) as { name: string };
     logger.info(`📦 Finding all plugins from ${pkg.name}...`);

@@ -5,7 +5,6 @@
  * gate on a human pasting the runtime's response back through a readline.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- bundle path is harness-controlled */
 
 import { cpSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 

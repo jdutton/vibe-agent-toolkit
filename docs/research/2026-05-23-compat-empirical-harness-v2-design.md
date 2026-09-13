@@ -586,7 +586,7 @@ improvements are unfalsifiable.
         │       │
         │       ├── corpus authoring (manifest.yaml + trigger-prompts.yaml)
         │       ├── first real run (claude-code first; chat/cowork as operator capacity allows)
-        │       └── docs/runtime-compatibility-empirical.md  ─── closes issue #100
+        │       └── docs/runtime-compatibility-empirical.md  ─── planned, not yet written
         │
         ├── PR-2 ──────── cowork spike (§4a; docs/contributing/cowork-driver-spike.md)
         │                 may land in parallel with PR-1; no dependency
@@ -612,7 +612,7 @@ The original brief's three deliverables become downstream of PR-1:
    automated), with chat and cowork covered as operator capacity allows.
    The report's coverage stats (from §3) make partial coverage honest.
 
-3. **`docs/runtime-compatibility-empirical.md`** — the failure-mode
+3. **`docs/runtime-compatibility-empirical.md`** (a deliverable of this design; not yet written) — the failure-mode
    taxonomy and ≥3 detector-improvement proposals, each citing specific
    matrix cells per the rule-addition bar in
    `docs/validation-rule-design.md`.

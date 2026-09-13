@@ -10,7 +10,6 @@ import {
 
 function loadRegistryFixture(name: string): unknown {
   const fixturePath = safePath.resolve(__dirname, '../fixtures/registries', name);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test helper loading fixtures from known directory
   return JSON.parse(readFileSync(fixturePath, 'utf-8'));
 }
 

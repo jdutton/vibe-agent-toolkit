@@ -970,7 +970,7 @@ export function gitIgnoreSafetyIssue(
   //
   // ⚠️ **The out-of-root path is not cheap, and this comment used to claim it
   // was** ("safe for the rare out-of-project case", unmeasured). Measured
-  // 2026-08 on the D9 parity fixture: an out-of-root path costs **185–427 ms**
+  // on the D9 parity fixture: an out-of-root path costs **185–427 ms**
   // against **12–28 ms** for every in-repo path — an order of magnitude, per
   // path. `isIgnoredByActiveSet` delegates to `isIgnored` outside the project
   // root, and `isIgnored`'s exit-128 recovery walk spawns `git check-ignore`

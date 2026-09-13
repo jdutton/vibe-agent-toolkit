@@ -12,7 +12,7 @@
  * happily matches dots — e.g. `*.sharepoint.com` claims both
  * `contoso.sharepoint.com` and `foo.bar.sharepoint.com`.
  *
- * Per design issue #113 §4 (vocabulary item 1: match.host + excludeHost).
+ * Per the linkAuth design §4 (vocabulary item 1: match.host + excludeHost).
  */
 
 import picomatch from 'picomatch';

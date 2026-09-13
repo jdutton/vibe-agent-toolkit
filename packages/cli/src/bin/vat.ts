@@ -22,6 +22,7 @@ import { createRequire } from 'node:module';
 import {  dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import {
   findNodeWorkspaceRoot,
   isPathAbsentError,
@@ -71,7 +72,8 @@ function spawnCli(binPath: string, context: Context, contextPath?: string): neve
     env,
   });
 
-  process.exit(result.status ?? 1);
+  // A child that died of a signal has no status; that is not a finding.
+  process.exit(result.status ?? ExitCode.ERROR);
 }
 
 /**
@@ -86,14 +88,11 @@ function getDevModeBinary(projectRoot: string): string | null {
   const binPath = safePath.join(projectRoot, 'packages/cli/dist/bin.js');
 
   if (process.env['VAT_DEBUG'] === '1') {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- checking project structure files for debug
     console.error(`[vat debug] Dev check - wrapper: ${wrapperPath} (${existsSync(wrapperPath)})`);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- checking project structure files for debug
     console.error(`[vat debug] Dev check - bin: ${binPath} (${existsSync(binPath)})`);
   }
 
   // Both files must exist to confirm we're in vibe-agent-toolkit repo
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- checking project structure files
   if (existsSync(wrapperPath) && existsSync(binPath)) {
     return binPath;
   }
@@ -107,7 +106,7 @@ function getDevModeBinary(projectRoot: string): string | null {
  * Resolved through Node's OWN resolver rather than by probing a path, because the
  * path this used to probe —
  * `<dir>/node_modules/@vibe-agent-toolkit/cli/dist/bin.js` — assumes npm's flat
- * layout and **does not exist under pnpm** (issue #172). An adopter depending on
+ * layout and **does not exist under pnpm**. An adopter depending on
  * the umbrella `vibe-agent-toolkit` package gets no top-level
  * `node_modules/@vibe-agent-toolkit/` directory at all; the real CLI lives under
  * `node_modules/.pnpm/@vibe-agent-toolkit+cli@<ver>_<hash>/…`. So priority 3 never
@@ -133,7 +132,7 @@ function getDevModeBinary(projectRoot: string): string | null {
  * `vibe-agent-toolkit` package — the documented way to adopt VAT — the CLI is a
  * TRANSITIVE dependency and is deliberately unreachable from the adopter root.
  * Resolving from the adopter alone would still miss it, which is the umbrella case
- * the issue actually describes. It IS reachable from the umbrella package's own
+ * adopters actually hit. It IS reachable from the umbrella package's own
  * directory, so that package is resolved first (it is a direct dependency, hence
  * visible) and used as the base for the second hop.
  *
@@ -154,7 +153,6 @@ function findLocalInstall(projectRoot: string): string | null {
     // Still existence-checked: a dependency can be installed without having been
     // built (a fresh workspace checkout, a partial install), and spawning a
     // missing file would fail far from its cause.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- checking for local install
     if (existsSync(localBin)) return localBin;
   }
   return null;
@@ -193,11 +191,9 @@ function isResolutionNotFound(error: unknown): boolean {
  */
 function readVersion(packageJsonPath: string): string | null {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- reading version from package.json
     if (!existsSync(packageJsonPath)) {
       return null;
     }
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- reading version from package.json
     const content = readFileSync(packageJsonPath, 'utf-8');
     const pkg = JSON.parse(content) as { version?: string };
     return pkg.version ?? null;
@@ -230,7 +226,6 @@ function main(): void {
   // Priority 1: Explicit override via VAT_ROOT_DIR
   if (process.env['VAT_ROOT_DIR']) {
     const binPath = safePath.join(process.env['VAT_ROOT_DIR'], 'packages/cli/dist/bin.js');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dynamic path from env is expected
     if (existsSync(binPath)) {
       if (debug) {
         console.error('[vat debug] Using VAT_ROOT_DIR override');

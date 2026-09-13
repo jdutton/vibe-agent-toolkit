@@ -10,7 +10,6 @@
  * (`process.platform !== 'win32'`).
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- tests use controlled temp directories */
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 

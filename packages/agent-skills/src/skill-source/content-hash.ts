@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, FollowedWalk, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 /**
  * Deterministic SHA-256 content hash of a directory tree.
@@ -15,7 +15,9 @@ import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
  * @returns 64-char lowercase hex SHA-256.
  */
 export async function hashDirectory(dir: string): Promise<string> {
-  const files = await collectFiles(dir, dir);
+  const walk = new FollowedWalk();
+  walk.enter(dir);
+  const files = await collectFiles(dir, dir, walk);
   files.sort((a, b) => {
     if (a.rel < b.rel) return -1;
     if (a.rel > b.rel) return 1;
@@ -26,7 +28,6 @@ export async function hashDirectory(dir: string): Promise<string> {
   for (const { rel, abs } of files) {
     hash.update(rel, 'utf-8');
     hash.update('\0');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- abs derived from caller-provided dir
     hash.update(await readFile(abs));
     hash.update('\0');
   }
@@ -36,16 +37,28 @@ export async function hashDirectory(dir: string): Promise<string> {
 async function collectFiles(
   root: string,
   current: string,
+  walk: FollowedWalk,
 ): Promise<Array<{ rel: string; abs: string }>> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- current derived from caller-provided root
   const entries = await readdir(current, { withFileTypes: true });
   const out: Array<{ rel: string; abs: string }> = [];
   for (const entry of entries) {
     const abs = safePath.join(current, entry.name);
-    if (entry.isDirectory()) {
-      out.push(...(await collectFiles(root, abs)));
-    } else if (entry.isFile()) {
-      out.push({ rel: toForwardSlash(safePath.relative(root, abs)), abs });
+    // The hash covers what ships, so a link is followed to its bytes. A
+    // dangling link or a special file has no bytes to hash and contributes
+    // nothing — decided here, by name, rather than by falling off the end.
+    // A link back into the tree is refused by the walk guard rather than
+    // followed until the stack gives out.
+    switch (await direntKindFollowing(current, entry)) {
+      case 'directory':
+        walk.enter(abs);
+        out.push(...(await collectFiles(root, abs, walk)));
+        break;
+      case 'file':
+        out.push({ rel: toForwardSlash(safePath.relative(root, abs)), abs });
+        break;
+      case 'dangling':
+      case 'other':
+        break;
     }
   }
   return out;

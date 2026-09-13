@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- validation functions access controlled paths */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 

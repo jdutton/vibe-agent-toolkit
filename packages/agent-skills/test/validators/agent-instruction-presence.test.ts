@@ -1,8 +1,8 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { mkdirSyncReal, safePath, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { detectPackagedAgentInstructionFiles } from '../../src/validators/agent-instruction-presence.js';

@@ -22,7 +22,6 @@
  * observed by the second — that is the race being closed".
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is built from a controlled mkdtemp directory */
 
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -42,7 +41,6 @@ const COMMITTED = 'committed.md';
 const created: string[] = [];
 
 function git(cwd: string, ...args: string[]): void {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
   const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
   if (result.status !== 0) {
     throw new Error(`git ${args.join(' ')} failed: ${result.stderr ?? result.error?.message}`);

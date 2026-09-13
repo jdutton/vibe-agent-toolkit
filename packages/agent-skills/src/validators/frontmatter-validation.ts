@@ -86,7 +86,7 @@ export function validateFrontmatterSchema(
 				field: FRONTMATTER_NAME_FIELD,
 				fix: 'Change name to lowercase alphanumeric with hyphens (e.g., "my-skill")',
 			});
-		} else if (field === 'description' && error.message.includes('1024')) {
+		} else if (field === 'description' && error.code === 'too_big') {
 			issues.push({
 				severity: 'error',
 				code: 'SKILL_DESCRIPTION_TOO_LONG',

@@ -2,12 +2,12 @@
  * Integration tests for markdown compiler orchestrator
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 
-import { mkdirSyncReal, setupSyncTempDirSuite, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { compileMarkdownResources } from '../../src/compiler/markdown-compiler.js';

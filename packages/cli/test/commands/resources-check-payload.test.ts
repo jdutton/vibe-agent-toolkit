@@ -29,6 +29,8 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ProgressEntry } from '../../src/commands/resources/check-progress.js';
 import {
   buildCheckOutputData,
+  CHECK_REPORT_SCHEMA,
+  type CheckReport,
   requireDeclaredCheck,
   runDeclaredChecks,
   warnUndeclaredOverrides,
@@ -226,6 +228,9 @@ function payloadInput(overrides: Partial<CheckPayloadInput> = {}): CheckPayloadI
     // to something else is visibly asserting about the population's cost rather
     // than inheriting a placeholder.
     populationMs: 40,
+    // Required by `ProjectionProvenance`; omitted, `lensSecs` published as NaN
+    // — which the schema assertion below is what caught.
+    lensMs: 3,
     // A NON-ZERO default on purpose: every case that does not care about the
     // corpus is a case that ran over one, so a case that sets this to 0 is
     // visibly asserting something about emptiness rather than inheriting it.
@@ -269,21 +274,17 @@ function runWithClock(options: {
 /** One entry of the document's `checks` list, as a reader sees it. */
 type PublishedCheck = { name: string; durationSecs: number; rows?: number; broken?: true };
 
-/** One entry of the document's `issues` list, as a reader sees it. */
-type PublishedIssue = { code: string; severity: string; message: string; path?: string };
+/** One entry of the document's `findings` list, as a reader sees it. */
+type PublishedIssue = { code: string; severity: string; message: string; location?: string };
 
 /**
  * The document's findings, narrowed to what a reader actually gets.
  *
- * The builder returns `Record<string, unknown>` on purpose — the document's
- * shape is the contract, not a type — so every case that reads a finding out of
- * it needs the same cast. Named once, so the cast is not repeated per case.
- *
  * @param payload - A built document
- * @returns Its `issues` list
+ * @returns Its `findings` list
  */
-function publishedIssues(payload: Record<string, unknown>): PublishedIssue[] {
-  return payload['issues'] as PublishedIssue[];
+function publishedIssues(payload: CheckReport): PublishedIssue[] {
+  return payload.findings as PublishedIssue[];
 }
 
 /**
@@ -297,13 +298,23 @@ function publishedIssues(payload: Record<string, unknown>): PublishedIssue[] {
  * @returns The document, and its `checks` list already narrowed
  */
 function documentFor(options: Parameters<typeof runWithClock>[0]): {
-  payload: Record<string, unknown>;
+  payload: CheckReport;
   checks: PublishedCheck[];
 } {
   const { issues, costs } = runWithClock(options);
   const payload = buildCheckOutputData(payloadInput({ issues, costs }));
-  return { payload, checks: payload['checks'] as PublishedCheck[] };
+  return { payload, checks: payload.data.checks as PublishedCheck[] };
 }
+
+describe('buildCheckOutputData — the published schema', () => {
+  it('builds a document its own published schema accepts', () => {
+    // The Zod object matches what the command WRITES — the drift test only
+    // proves the JSON file matches the Zod object.
+    const { payload } = documentFor({ checks: [] });
+    const parsed = CHECK_REPORT_SCHEMA.safeParse(payload);
+    expect(parsed.success ? [] : parsed.error.issues).toEqual([]);
+  });
+});
 
 describe('runDeclaredChecks — the loop', () => {
   it('runs EVERY declared check, not just the first', () => {
@@ -487,7 +498,7 @@ describe('a check severity override does not silence a BROKEN check', () => {
     expect(issues[0]?.code).toBe('RESOURCE_CHECK_BROKEN');
     expect(issues[0]?.severity).toBe('error');
     // And the document derived from it fails the run.
-    expect(buildCheckOutputData(payloadInput({ issues, costs }))['status']).toBe('error');
+    expect(buildCheckOutputData(payloadInput({ issues, costs })).summary.errors).toBeGreaterThan(0);
   });
 
   it('still reports it at error when the check is merely DEMOTED to warning', () => {
@@ -503,7 +514,7 @@ describe('a check severity override does not silence a BROKEN check', () => {
     });
 
     expect(issues[0]?.severity).toBe('error');
-    expect(buildCheckOutputData(payloadInput({ issues, costs }))['status']).toBe('error');
+    expect(buildCheckOutputData(payloadInput({ issues, costs })).summary.errors).toBeGreaterThan(0);
   });
 
   it('still applies the override to the check\'s own VIOLATIONS', () => {
@@ -662,18 +673,18 @@ describe('the check payload', () => {
     const ran = buildCheckOutputData(payloadInput({ costs: costsOf(2) }));
     const none = buildCheckOutputData(payloadInput({ costs: [] }));
 
-    expect(ran['checksRun']).toBe(2);
-    expect(none['checksRun']).toBe(0);
-    expect(ran['status']).toBe('success');
+    expect(ran.data.checksRun).toBe(2);
+    expect(none.data.checksRun).toBe(0);
+    expect(ran.status).toBe('ok');
     // Two documents that differ ONLY in the denominator. Drop the field and
     // these become equal, which is the ambiguity it exists to remove.
     expect(ran).not.toStrictEqual(none);
   });
 
   it('reports where the population came from, which is the only cache tell', () => {
-    expect(buildCheckOutputData(payloadInput({ population: 'store' }))['population'])
+    expect(buildCheckOutputData(payloadInput({ population: 'store' })).data.population)
       .toBe('store');
-    expect(buildCheckOutputData(payloadInput({ population: 'derived' }))['population'])
+    expect(buildCheckOutputData(payloadInput({ population: 'derived' })).data.population)
       .toBe('derived');
   });
 
@@ -686,15 +697,15 @@ describe('the check payload', () => {
       ],
     }));
 
-    expect(payload['issues']).toStrictEqual([
-      { code: 'CUSTOM:a', severity: 'error', message: 'bad', path: 'docs/a.md' },
-      // 🪤 The key is ABSENT, not `path: undefined`. An aggregate check has no
-      // file to name, and a `path: null` in YAML would read as one it could not
-      // resolve.
+    expect(payload.findings).toStrictEqual([
+      { code: 'CUSTOM:a', severity: 'error', message: 'bad', location: 'docs/a.md' },
+      // 🪤 The key is ABSENT, not `location: undefined`. An aggregate check has
+      // no file to name, and a `location: null` in YAML would read as one it
+      // could not resolve.
       { code: 'CUSTOM:b', severity: 'warning', message: 'meh' },
     ]);
-    expect(payload['status']).toBe('error');
-    expect(payload['issueCounts']).toStrictEqual({ errors: 1, warnings: 1, info: 0 });
+    expect(payload.status).toBe('findings');
+    expect(payload.summary).toStrictEqual({ errors: 1, warnings: 1, info: 0 });
   });
 
   it('leaves an already-relative location alone', () => {
@@ -707,17 +718,17 @@ describe('the check payload', () => {
       issues: [{ code: 'CUSTOM:a', severity: 'error', message: 'bad', location: 'docs/a.md' }],
     }));
 
-    const [issue] = payload['issues'] as { path?: string }[];
-    expect(issue?.path).toBe('docs/a.md');
+    const [issue] = payload.findings;
+    expect(issue?.location).toBe('docs/a.md');
   });
 
-  it('reports success with a formatted duration when nothing was found', () => {
+  it('reports ok with the run duration when nothing was found', () => {
     const payload = buildCheckOutputData(payloadInput({ costs: costsOf(3), durationMs: 1500 }));
 
-    expect(payload['status']).toBe('success');
-    expect(payload['root']).toBe('/corpus');
-    expect(payload['issueCounts']).toStrictEqual({ errors: 0, warnings: 0, info: 0 });
-    expect(payload['durationSecs']).toBeDefined();
+    expect(payload.status).toBe('ok');
+    expect(payload.data.root).toBe('/corpus');
+    expect(payload.summary).toStrictEqual({ errors: 0, warnings: 0, info: 0 });
+    expect(payload.durationMs).toBe(1500);
   });
 });
 
@@ -761,7 +772,7 @@ describe('the check payload publishes what each rule cost', () => {
 
     expect(checks).toStrictEqual([{ name: 'broken', durationSecs: 0.002, broken: true }]);
     // The run still fails on the finding, which the cost record does not replace.
-    expect(payload['status']).toBe('error');
+    expect(payload.summary.errors).toBeGreaterThan(0);
   });
 
   it('derives checksRun from the very list it publishes, so the two cannot drift', () => {
@@ -773,7 +784,7 @@ describe('the check payload publishes what each rule cost', () => {
         checks: TWO_VIOLATED, ask: ASK_NO_ROWS, ...(only === undefined ? {} : { only }),
       });
 
-      expect(payload['checksRun']).toBe(checks.length);
+      expect(payload.data.checksRun).toBe(checks.length);
       expect(checks.map((check) => check.name))
         .toStrictEqual(only === undefined ? [FIRST, SECOND] : [SECOND]);
     }
@@ -783,7 +794,7 @@ describe('the check payload publishes what each rule cost', () => {
     const { payload, checks } = documentFor({ checks: {}, ask: ASK_NO_ROWS });
 
     expect(checks).toStrictEqual([]);
-    expect(payload['checksRun']).toBe(0);
+    expect(payload.data.checksRun).toBe(0);
   });
 
   it('charges the shared population to NOBODY, and publishes it beside them', () => {
@@ -797,9 +808,9 @@ describe('the check payload publishes what each rule cost', () => {
     });
     const payload = buildCheckOutputData(payloadInput({ issues, costs, populationMs: 1230 }));
 
-    expect(payload['populationSecs']).toBeCloseTo(1.23, 10);
+    expect(payload.data.populationSecs).toBeCloseTo(1.23, 10);
     // Untouched by the population, and not summed with it.
-    expect((payload['checks'] as PublishedCheck[]).map((check) => check.durationSecs))
+    expect(payload.data.checks.map((check) => check.durationSecs))
       .toStrictEqual([0.005, 0.005]);
   });
 
@@ -807,11 +818,14 @@ describe('the check payload publishes what each rule cost', () => {
     // Field order is the whole readability argument: origin then its price,
     // total then its breakdown. A reader who has to scroll to pair them will
     // not pair them.
-    const keys = Object.keys(buildCheckOutputData(payloadInput({ costs: costsOf(1) })));
+    const report = buildCheckOutputData(payloadInput({ costs: costsOf(1) }));
+    const keys = Object.keys(report.data);
 
     expect(keys.indexOf('populationSecs')).toBe(keys.indexOf('population') + 1);
-    expect(keys.indexOf('checks')).toBe(keys.indexOf('durationSecs') + 1);
-    expect(keys.indexOf('checks')).toBeLessThan(keys.indexOf('issues'));
+    expect(keys.indexOf('checks')).toBe(keys.indexOf('checksRun') + 1);
+    // The envelope leads: the verdict and its denominator before the command's own data.
+    const envelope = Object.keys(report);
+    expect(envelope.indexOf('examined')).toBeLessThan(envelope.indexOf('data'));
   });
 });
 
@@ -851,8 +865,8 @@ describe('a corpus of zero members is a failure, not a pass', () => {
     expect(costs).toHaveLength(2);
     expect(issues).toHaveLength(1);
     expect(issues[0]?.severity).toBe('error');
-    expect(buildCheckOutputData(payloadInput({ issues, costs, membersEnumerated: 0 }))['status'])
-      .toBe('error');
+    expect(buildCheckOutputData(payloadInput({ issues, costs, membersEnumerated: 0 })).summary.errors)
+      .toBeGreaterThan(0);
   });
 
   it('carries the non-overridable run-integrity code, not a check\'s own code', () => {
@@ -900,8 +914,8 @@ describe('a corpus of zero members is a failure, not a pass', () => {
 
     expect(costs).toHaveLength(2);
     expect(issues).toStrictEqual([]);
-    expect(buildCheckOutputData(payloadInput({ issues, costs, membersEnumerated: 1 }))['status'])
-      .toBe('success');
+    expect(buildCheckOutputData(payloadInput({ issues, costs, membersEnumerated: 1 })).status)
+      .toBe('ok');
   });
 
   it('does not double-report when the project declares no checks at all', () => {
@@ -966,8 +980,8 @@ describe('a run that ran no checks at all is a failure, not a pass', () => {
     // produces.
     const payload = buildCheckOutputData(payloadInput({ costs: [] }));
 
-    expect(payload['checksRun']).toBe(0);
-    expect(payload['status']).toBe('error');
+    expect(payload.data.checksRun).toBe(0);
+    expect(payload.summary.errors).toBeGreaterThan(0);
   });
 
   it('fails end to end, from a loop that was handed no declared checks', () => {
@@ -977,7 +991,7 @@ describe('a run that ran no checks at all is a failure, not a pass', () => {
     const { payload, checks } = documentFor({ checks: {}, ask: ASK_NO_ROWS });
 
     expect(checks).toStrictEqual([]);
-    expect(payload['status']).toBe('error');
+    expect(payload.summary.errors).toBeGreaterThan(0);
   });
 
   it('carries the non-overridable run-integrity code at error', () => {
@@ -1011,8 +1025,8 @@ describe('a run that ran no checks at all is a failure, not a pass', () => {
     // gate that asserted nothing over a perfectly healthy corpus.
     const payload = buildCheckOutputData(payloadInput({ costs: [], membersEnumerated: 8000 }));
 
-    expect(payload['membersEnumerated']).toBe(8000);
-    expect(payload['status']).toBe('error');
+    expect(payload.examined).toBe(8000);
+    expect(payload.summary.errors).toBeGreaterThan(0);
   });
 
   it('stays silent the moment a single check ran', () => {
@@ -1021,8 +1035,8 @@ describe('a run that ran no checks at all is a failure, not a pass', () => {
     // every adopter repository starts reporting an error.
     const payload = buildCheckOutputData(payloadInput({ costs: costsOf(1) }));
 
-    expect(payload['issues']).toStrictEqual([]);
-    expect(payload['status']).toBe('success');
+    expect(payload.findings).toStrictEqual([]);
+    expect(payload.status).toBe('ok');
   });
 });
 
@@ -1037,8 +1051,8 @@ describe('the check payload publishes the corpus it ran over', () => {
     }));
     const none = buildCheckOutputData(payloadInput({ costs: costsOf(2), membersEnumerated: 0 }));
 
-    expect(over['membersEnumerated']).toBe(8000);
-    expect(none['membersEnumerated']).toBe(0);
+    expect(over.examined).toBe(8000);
+    expect(none.examined).toBe(0);
     // Two documents that differ ONLY in the corpus size. Drop the field and
     // these become equal, which is precisely the ambiguity that shipped.
     expect(over).not.toStrictEqual(none);

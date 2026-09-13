@@ -4,6 +4,8 @@
  * Executes an agent with user input and displays the response.
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { runAgent } from '../../utils/agent-runner.js';
 import { handleCommandError } from '../../utils/command-error.js';
@@ -58,7 +60,7 @@ export async function runCommand(
       );
     }
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'AgentRun');
   }

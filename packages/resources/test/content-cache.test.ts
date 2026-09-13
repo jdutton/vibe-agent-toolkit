@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ContentCache } from '../src/content-cache.js';
 import { type ContentMetadata } from '../src/schemas/content-cache.js';
+
+import { setupTempDirTestSuite } from './test-helpers.js';
 
 // External constants — used as inputs and as expected outputs. Tests must
 // never assert `f(x) === f(y)`; comparisons always go against constants.
@@ -56,24 +58,22 @@ async function writeRawEntry(
   const key = hashKey(url);
   const jsonPath = safePath.join(tempDir, `${key}.json`);
   const binPath = safePath.join(tempDir, `${key}.bin`);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: write inside self-created tempDir
   await fs.writeFile(jsonPath, jsonContent);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: write inside self-created tempDir
   await fs.writeFile(binPath, Buffer.from(bytes));
 }
 
 describe('ContentCache — round-trip', () => {
   let tempDir: string;
+  const suite = setupTempDirTestSuite('content-cache-test-');
   let cache: ContentCache;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'content-cache-test-'));
+    await suite.beforeEach();
+    tempDir = suite.tempDir;
     cache = new ContentCache(tempDir, 30);
   });
 
-  afterEach(async () => {
-    await removeScratchDir(tempDir);
-  });
+  afterEach(suite.afterEach);
 
   it('stores and retrieves bytes + metadata for the same URL', async () => {
     const metadata = makeMetadata();
@@ -121,14 +121,14 @@ describe('ContentCache — round-trip', () => {
 
 describe('ContentCache — TTL expiry (§6.3 30-min default)', () => {
   let tempDir: string;
+  const suite = setupTempDirTestSuite('content-cache-ttl-');
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'content-cache-ttl-'));
+    await suite.beforeEach();
+    tempDir = suite.tempDir;
   });
 
-  afterEach(async () => {
-    await removeScratchDir(tempDir);
-  });
+  afterEach(suite.afterEach);
 
   it('at exactly the TTL the entry is still valid (boundary: `>` not `>=`)', async () => {
     vi.useFakeTimers();
@@ -181,14 +181,14 @@ describe('ContentCache — TTL expiry (§6.3 30-min default)', () => {
  */
 describe('ContentCache — shape validation at the read boundary', () => {
   let tempDir: string;
+  const suite = setupTempDirTestSuite('content-cache-shape-');
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'content-cache-shape-'));
+    await suite.beforeEach();
+    tempDir = suite.tempDir;
   });
 
-  afterEach(async () => {
-    await removeScratchDir(tempDir);
-  });
+  afterEach(suite.afterEach);
 
   it('treats an entry carrying the removed `version` field as a miss', async () => {
     // Every entry written before the constant was removed looks exactly like
@@ -256,14 +256,14 @@ describe('ContentCache — shape validation at the read boundary', () => {
 
 describe('ContentCache — fail-soft IO (per #125 review)', () => {
   let tempDir: string;
+  const suite = setupTempDirTestSuite('content-cache-io-');
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'content-cache-io-'));
+    await suite.beforeEach();
+    tempDir = suite.tempDir;
   });
 
-  afterEach(async () => {
-    await removeScratchDir(tempDir);
-  });
+  afterEach(suite.afterEach);
 
   it('treats corrupted JSON as a miss', async () => {
     await writeRawEntry(tempDir, EXAMPLE_URL, 'not-valid-json{', SAMPLE_BYTES);
@@ -278,13 +278,11 @@ describe('ContentCache — fail-soft IO (per #125 review)', () => {
       await cache.set(EXAMPLE_URL, SAMPLE_BYTES, makeMetadata());
       const key = hashKey(EXAMPLE_URL);
       const jsonPath = safePath.join(tempDir, `${key}.json`);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: revokes perms on self-created tempDir to simulate EACCES
       await fs.chmod(jsonPath, MODE_NO_PERMS);
       try {
         const fresh = new ContentCache(tempDir, 30);
         expect(await fresh.get(EXAMPLE_URL)).toBeNull();
       } finally {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename, sonarjs/file-permissions -- test-only: restore RW for cleanup
         await fs.chmod(jsonPath, MODE_RW_FILE);
       }
     },
@@ -294,12 +292,10 @@ describe('ContentCache — fail-soft IO (per #125 review)', () => {
     'treats EACCES on cache directory as a no-op set (fail-soft IO; POSIX-only)',
     async () => {
       const cache = new ContentCache(tempDir, 30);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: read-only mode to simulate EACCES
       await fs.chmod(tempDir, MODE_RO_OWNER);
       try {
         await expect(cache.set(EXAMPLE_URL, SAMPLE_BYTES, makeMetadata())).resolves.toBeUndefined();
       } finally {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: restore RW for cleanup
         await fs.chmod(tempDir, MODE_RW_OWNER);
       }
     },
@@ -311,14 +307,16 @@ describe('ContentCache — a bug is not a miss', () => {
   // corrupt entry, and metadata the schema rejects (all pinned above). A
   // `TypeError` from inside the read or write path is none of those.
   let tempDir: string;
+  const suite = setupTempDirTestSuite('content-cache-bug-');
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'content-cache-bug-'));
+    await suite.beforeEach();
+    tempDir = suite.tempDir;
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    await removeScratchDir(tempDir);
+    await suite.afterEach();
   });
 
   it('get() propagates a non-filesystem error from the metadata read', async () => {
@@ -358,16 +356,16 @@ describe('ContentCache — a bug is not a miss', () => {
 
 describe('ContentCache — security disciplines (§6.3, §8)', () => {
   let tempDir: string;
+  const suite = setupTempDirTestSuite('content-cache-sec-');
   let cache: ContentCache;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'content-cache-sec-'));
+    await suite.beforeEach();
+    tempDir = suite.tempDir;
     cache = new ContentCache(tempDir, 30);
   });
 
-  afterEach(async () => {
-    await removeScratchDir(tempDir);
-  });
+  afterEach(suite.afterEach);
 
   it('never serializes fields outside ContentMetadata into the .json file', async () => {
     // Defense in depth: even if a caller smuggles an Authorization-like field
@@ -381,7 +379,6 @@ describe('ContentCache — security disciplines (§6.3, §8)', () => {
 
     const key = hashKey(EXAMPLE_URL);
     const jsonPath = safePath.join(tempDir, `${key}.json`);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: reads file we just wrote inside self-created tempDir
     const raw = await fs.readFile(jsonPath, 'utf-8');
     expect(raw).not.toContain('SECRET_TOKEN_DO_NOT_PERSIST');
     expect(raw).not.toContain('gh_pat_DO_NOT_PERSIST');
@@ -399,7 +396,6 @@ describe('ContentCache — security disciplines (§6.3, §8)', () => {
 
     const key = hashKey(EXAMPLE_URL);
     const jsonPath = safePath.join(tempDir, `${key}.json`);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: reads file we just wrote inside self-created tempDir
     const parsed: unknown = JSON.parse(await fs.readFile(jsonPath, 'utf-8'));
     const keys = Object.keys(parsed as Record<string, unknown>).sort((a, b) => a.localeCompare(b));
 

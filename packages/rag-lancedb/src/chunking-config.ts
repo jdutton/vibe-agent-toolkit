@@ -34,7 +34,7 @@ import type { ChunkingConfig, EmbeddingProvider, TokenCounter } from '@vibe-agen
  * exactly, so the safety margin is sized against the top of a measured range.
  *
  * ⚠️ **A ratio whose operands are unstated is not a measurement.** The range this
- * 1.18 comes from is **`chars/4` → WordPiece**, measured 2026-08 across four
+ * 1.18 comes from is **`chars/4` → WordPiece**, measured across four
  * corpora: **1.13-1.18x at p50, 1.30-1.41x at p90**. `chars/4` is
  * {@link FastTokenCounter}; the counter the shipped LanceDB path passes in is
  * {@link ApproximateTokenCounter}, which counts in **cl100k** (gpt-tokenizer).

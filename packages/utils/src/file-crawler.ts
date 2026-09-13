@@ -266,13 +266,11 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   }
 
   // Ensure base directory exists
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- baseDir is from controlled config, not user input
   if (!fs.existsSync(resolvedBaseDir)) {
     throw new Error(`Base directory does not exist: ${resolvedBaseDir}`);
   }
 
   // Ensure base directory is actually a directory
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved path validated above
   const baseStat = fs.statSync(resolvedBaseDir);
   if (!baseStat.isDirectory()) {
     throw new Error(`Base path is not a directory: ${resolvedBaseDir}`);
@@ -437,7 +435,6 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     // Resolve symlink and check if it's a directory or file
     let targetStat: fs.Stats;
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated baseDir + entries
       targetStat = fs.statSync(fullPath);
     } catch (error) {
       // A broken symlink is absence and is skipped; a target the OS refused to
@@ -484,7 +481,6 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     let entries: fs.Dirent[];
 
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated baseDir, recursively walking
       entries = fs.readdirSync(currentDir, { withFileTypes: true });
     } catch (error) {
       // 🚨 Not a silent skip. A directory that refused to be listed is a gap in

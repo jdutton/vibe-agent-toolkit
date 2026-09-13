@@ -17,6 +17,8 @@
  * [Facets](../../docs/facets.md).
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+
 /** What one vat command was asked to do. */
 export interface MeasuredCommandSpec {
   /** Stable artifact name, appearing in the report and any diff. */
@@ -55,7 +57,7 @@ export interface MeasuredCommandSpec {
  * `0` alone: the conservative reading, and the one that cannot turn a crash into
  * a data point without someone opting in.
  */
-export const DEFAULT_COMPLETED_EXIT_CODES: readonly number[] = Object.freeze([0]);
+export const DEFAULT_COMPLETED_EXIT_CODES: readonly number[] = Object.freeze([ExitCode.OK]);
 
 /**
  * The codes accepted for a command whose findings are reported by exit code.
@@ -63,7 +65,7 @@ export const DEFAULT_COMPLETED_EXIT_CODES: readonly number[] = Object.freeze([0]
  * `0` (nothing to report) and `1` (findings). Never `2` — that is vat's
  * system-error code, and a system error is a run that did not complete.
  */
-const FINDINGS_COMPLETED_EXIT_CODES: readonly number[] = Object.freeze([0, 1]);
+const FINDINGS_COMPLETED_EXIT_CODES: readonly number[] = Object.freeze([ExitCode.OK, ExitCode.FINDINGS]);
 
 /**
  * Which exit codes denote a completed run for this command.
@@ -149,7 +151,9 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   audit: Object.freeze({
     name: 'audit',
     args: Object.freeze(['audit', '{subject}']),
-    // Documented as "0 - Always (even when validation errors are surfaced)".
+    // Exits 1 over `status: error` like every other gate; both codes audited
+    // the whole tree.
+    completedExitCodes: FINDINGS_COMPLETED_EXIT_CODES,
   }),
   inventory: Object.freeze({
     name: 'inventory',

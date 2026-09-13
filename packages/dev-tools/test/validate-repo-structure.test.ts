@@ -16,6 +16,7 @@ import {
 import {
   runGitOrThrow,
 } from '@vibe-agent-toolkit/utils/git';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -76,6 +77,27 @@ describe('classifySeverityCountsLane — regression guards', () => {
       const status = calculateValidationStatus(rows);
     `);
     expect(result).toEqual({ isLane: true, publishesCounts: true });
+  });
+
+  it('sees a lane that builds the shared report envelope, and reads it as publishing counts', () => {
+    // `buildReport()` derives `status` AND `summary` from the findings in one
+    // place, so a lane migrated onto the envelope spells neither a status
+    // literal nor a counts property — the migration that FIXED the lane erased
+    // it from the population (three commands went "stale" the day they moved).
+    const result = classifySeverityCountsLane(`
+      return buildReport<CheckData>({ examined, findings, data });
+    `);
+    expect(result).toEqual({ isLane: true, publishesCounts: true });
+  });
+
+  it('sees a lane that imports the envelope builder under an alias', () => {
+    // The alias is arbitrary, so the IMPORT is the structural fact the
+    // recogniser keys on, not the call.
+    const aliased = `
+      import { buildReport as buildEnvelope } from '@vibe-agent-toolkit/schema';
+      const r = buildEnvelope({ examined: 1, findings, data });
+    `;
+    expect(classifySeverityCountsLane(aliased)).toEqual({ isLane: true, publishesCounts: true });
   });
 
   it('sees a literal-status lane and marks it nonconforming without counts', () => {
@@ -213,7 +235,6 @@ function repoWithStagingStates(): string {
     runGitOrThrow(args, { cwd: root });
   };
   const write = (relPath: string, body: string): void => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is derived from this suite's own mkdtemp scratch dir
     writeFileSync(safePath.join(root, relPath), body, UTF8);
   };
 
@@ -267,8 +288,6 @@ describe('contrabandPopulation — what the confidentiality gate is allowed to m
 });
 
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
-const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 /**
  * The content rules read every tracked file. A file that is absent from the
@@ -291,9 +310,7 @@ describe('readTrackedFile — what an unreadable tracked file does to the gate',
   it.skipIf(CANNOT_DENY_READS)('returns null and records the refusal, naming the errno, for a file it may not read', async () => {
     const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'read-tracked-'));
     const locked = safePath.join(root, 'locked.ts');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- this suite's own scratch file
     writeFileSync(locked, '// locked\n', UTF8);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- locking this suite's own scratch file
     chmodSync(locked, 0o000);
     const recorded: string[] = [];
 
@@ -301,7 +318,6 @@ describe('readTrackedFile — what an unreadable tracked file does to the gate',
       const bytes = await readTrackedFile(locked, (reason) => recorded.push(reason));
       expect(bytes).toBeNull();
     } finally {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- unlocking this suite's own scratch file
       chmodSync(locked, 0o600);
     }
     expect(recorded).toHaveLength(1);
@@ -327,15 +343,12 @@ describe('walkDirectory — a directory the walk could not list', () => {
     const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'walk-dir-'));
     const locked = safePath.join(root, 'locked');
     mkdirSyncReal(locked, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- this suite's own scratch file
     writeFileSync(safePath.join(locked, 'inside.ts'), '// inside\n', UTF8);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- locking this suite's own scratch dir
     chmodSync(locked, 0o000);
 
     try {
       await expect(walkDirectory(locked, 'locked', {})).rejects.toMatchObject({ code: 'EACCES' });
     } finally {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- unlocking this suite's own scratch dir
       chmodSync(locked, 0o700);
     }
   });

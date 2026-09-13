@@ -80,7 +80,6 @@ async function parseSkillFrontmatter(
 ): Promise<{ frontmatter: SkillFrontmatter } | { reason: string }> {
   let content: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from trusted plugin dir
     content = await fs.readFile(skillPath, 'utf-8');
   } catch (error) {
     return { reason: reasonOf(error) };

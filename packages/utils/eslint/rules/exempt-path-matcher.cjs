@@ -23,7 +23,7 @@
  * - `isTestFile` — "is this a test file?" (a category, anchored on the basename's
  *   extension rather than on a path segment)
  *
- * `eslint-rule-factory.cjs`, `path-function-rule-factory.cjs`,
+ * `eslint-rule-factory.cjs`, `no-raw-node-path.cjs`,
  * `no-command-direct-factory.cjs` and `no-unix-shell-commands.cjs` all use these.
  * Do not re-implement any of them: the sibling-factory copy is how the bug
  * shipped four times in the first place.

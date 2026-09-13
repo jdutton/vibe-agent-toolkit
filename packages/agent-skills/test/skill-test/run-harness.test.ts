@@ -13,23 +13,38 @@
  * does NOT widen the public package surface.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- tests use controlled temp directories */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { EvalFragment } from '../../src/skill-test/eval-fragment.js';
 import { EvalInputError, type EvalEntry } from '../../src/skill-test/eval-inputs.js';
-import { DuplicateStagedSkillError, SkillTestExitCode } from '../../src/skill-test/exit-codes.js';
+import { DuplicateStagedSkillError } from '../../src/skill-test/failure-reason.js';
 import type { FrictionItem } from '../../src/skill-test/friction-schema.js';
 import type { GradingVerdict } from '../../src/skill-test/grading-adapter.js';
 import {
+  buildDryRunSummary,
+  buildStaleDistWarningLines,
+  formatFrictionReport,
+  isAcknowledged,
+  verdictExitCode,
+  type ContaminationCtx,
+  type DryRunSummaryInput,
+  type RunHarnessOptions,
+  __internal,
+} from '../../src/skill-test/run-harness.js';
+import type { SkippedEvalsSummary } from '../../src/skill-test/tier-plan.js';
+import type { ToolEvalReport } from '../../src/skill-test/tool-eval-schema.js';
+import { createTestPlugin, setupTempDir } from '../test-helpers.js';
+
+/** The test-facing seam — see `__internal` in run-harness.ts. */
+const {
   assertVatWroteArtifacts,
   buildContaminationInput,
   buildContaminationSignalsInput,
-  buildDryRunSummary,
   buildEvalWorkItems,
   buildFlagParseProbe,
   buildPreflightInput,
@@ -37,50 +52,40 @@ import {
   buildRunSummary,
   buildRunSummaryWithSkips,
   buildStageItems,
-  buildStaleDistWarningLines,
   cleanupHarness,
-  emitFrictionReport,
   computeCompositeVerdict,
   detectItemPluginLayout,
+  emitFrictionReport,
   FLAG_PROBE_SENTINEL,
   formatBaselineReport,
-  formatFrictionReport,
   formatRunCostSuffix,
   gradedCounts,
   helpTextDeclaresFlag,
-  isAcknowledged,
   makeStageItem,
   mintArmWorkspaceDirs,
   partitionFragmentsByArm,
-  renderPreflightSummary,
   recordSessionCost,
   rejectedArtifactPath,
   removeVatOnlyDir,
+  renderPreflightSummary,
   resolveArtifactPaths,
   resolveCompositeAllPassed,
   resolveGraderOutDir,
   resolveHarnessLocation,
   resolveKnobs,
   resolvePerEvalWorkspaceDir,
-  resolveSkillContentNeedles,
-  resolveWorkspacesRoot,
   resolveScaffoldEvalsPath,
+  resolveSkillContentNeedles,
   resolveStallMs,
   resolveTimeoutMs,
+  resolveWorkspacesRoot,
   RETAINED_RESULTS_DIRNAME,
   stageWorkspacesForRun,
   subjectSkillName,
   swallowCleanupFailure,
-  verdictExitCode,
   wipeStaleArtifacts,
   withoutGraderContamination,
-  type ContaminationCtx,
-  type DryRunSummaryInput,
-  type RunHarnessOptions,
-} from '../../src/skill-test/run-harness.js';
-import type { SkippedEvalsSummary } from '../../src/skill-test/tier-plan.js';
-import type { ToolEvalReport } from '../../src/skill-test/tool-eval-schema.js';
-import { createTestPlugin, setupTempDir } from '../test-helpers.js';
+} = __internal;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1679,17 +1684,17 @@ describe('removeVatOnlyDir', () => {
 });
 
 describe('verdictExitCode', () => {
-  it('returns Ok when all expectations passed (regardless of tolerance)', () => {
-    expect(verdictExitCode(true, false)).toBe(SkillTestExitCode.Ok);
-    expect(verdictExitCode(true, true)).toBe(SkillTestExitCode.Ok);
+  it('returns OK when all expectations passed (regardless of tolerance)', () => {
+    expect(verdictExitCode(true, false)).toBe(ExitCode.OK);
+    expect(verdictExitCode(true, true)).toBe(ExitCode.OK);
   });
 
-  it('escalates a failing verdict to EvalFailure by DEFAULT (fail-closed)', () => {
-    expect(verdictExitCode(false, false)).toBe(SkillTestExitCode.EvalFailure);
+  it('escalates a failing verdict to FINDINGS by DEFAULT (fail-closed)', () => {
+    expect(verdictExitCode(false, false)).toBe(ExitCode.FINDINGS);
   });
 
-  it('downgrades a failing verdict to Ok when eval failure is tolerated (opt-out)', () => {
-    expect(verdictExitCode(false, true)).toBe(SkillTestExitCode.Ok);
+  it('downgrades a failing verdict to OK when eval failure is tolerated (opt-out)', () => {
+    expect(verdictExitCode(false, true)).toBe(ExitCode.OK);
   });
 });
 

@@ -8,12 +8,17 @@
   },
   "include": ["src/**/*"],
   "references": [
-    { "path": "../utils" },
-    { "path": "../resources" },
-    { "path": "../rag" },
-    { "path": "../rag-lancedb" },
     { "path": "../agent-config" },
     { "path": "../agent-skills" },
-    { "path": "../claude-marketplace" }
+    { "path": "../claude-marketplace" },
+    { "path": "../dev-tools" },
+    { "path": "../discovery" },
+    { "path": "../gateway-mcp" },
+    { "path": "../projection-sqlite" },
+    { "path": "../rag" },
+    { "path": "../rag-lancedb" },
+    { "path": "../resources" },
+    { "path": "../schema" },
+    { "path": "../utils" }
   ]
 }

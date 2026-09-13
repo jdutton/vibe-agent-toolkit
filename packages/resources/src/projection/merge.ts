@@ -67,6 +67,7 @@ import {
   recordContributorInvocation,
   recordCrawlPass,
   safePath,
+  VatError,
   withContributorStratum,
 } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
@@ -118,7 +119,7 @@ const BASE_STRATUM_PASS = 1;
 /**
  * Closure passes allowed before {@link populate} gives up.
  *
- * **Measured 2026-08-13, and this number is four times the measurement.** A
+ * **Measured, and this number is four times the measurement.** A
  * whole-corpus population of the vibe-agent-toolkit repository with all six
  * shipped contributors registered — 61 skill extents, plus plugin and
  * marketplace, 66 contributors in total — reached its fixed point on **pass 2**:
@@ -481,7 +482,7 @@ function reportContributorTiming(
  * reported as complete is a confident wrong answer, and every consumer of a
  * projection reads it as a complete one.
  */
-export class ClosureNonConvergenceError extends Error {
+export class ClosureNonConvergenceError extends VatError {
   /**
    * Contributors whose digest still changed on the final pass.
    *
@@ -505,12 +506,12 @@ export class ClosureNonConvergenceError extends Error {
   constructor(contributorIds: readonly string[], iterations: number) {
     const moving = contributorIds.length > 0 ? contributorIds.join(', ') : '(none recorded)';
     super(
+      'CLOSURE_NON_CONVERGENCE',
       `The closure stratum did not converge after ${iterations} pass(es) over it.`
       + ` Still moving: ${moving}.`
       + ' Returning the extent reached so far would report a truncated extent as a complete one,'
       + ' so this is an error rather than a capped result.',
     );
-    this.name = 'ClosureNonConvergenceError';
     this.contributorIds = [...contributorIds];
     this.iterations = iterations;
   }

@@ -20,11 +20,11 @@ import type { ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import { delimiter } from 'node:path';
 
-import { isPathAbsentError, setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { spawnHardened } from '@vibe-agent-toolkit/utils/process';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 
-/* eslint-disable security/detect-non-literal-fs-filename -- fixture paths under a temp dir */
 
 const TSC_CLEAN_BUILD = safePath.resolve(import.meta.dirname, '../../src/tsc-clean-build.ts');
 /** The fixture lives outside the repo, so `tsc` has to be put on its PATH explicitly. */

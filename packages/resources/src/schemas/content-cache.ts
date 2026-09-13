@@ -115,7 +115,7 @@ export const ContentMetadataSchema = z
       .string()
       .min(1)
       .describe('The rewritten URL the bytes were fetched from (§6.3 cache-key discipline)'),
-  })
+  }).strip() // the write-side whitelist: dropping an undeclared key IS the discipline (see the module docstring)
   .describe('Response metadata for one cached authenticated fetch');
 
 /**

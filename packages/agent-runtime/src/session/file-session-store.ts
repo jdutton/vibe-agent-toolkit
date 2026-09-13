@@ -8,7 +8,7 @@
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import { SessionNotFoundError } from './errors.js';
 import {
@@ -58,7 +58,6 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
     const sessionPath = this.getSessionPath(sessionId);
 
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- sessionId validated by getSessionPath
       const data = await readFile(sessionPath, 'utf-8');
       const session = JSON.parse(data) as RuntimeSession<TState>;
 
@@ -95,18 +94,15 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
     const sessionDir = safePath.join(this.baseDir, session.id);
 
     // Ensure directory exists
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- session.id validated by getSessionPath
     await mkdir(sessionDir, { recursive: true });
 
     // Write session data
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- sessionPath validated by getSessionPath
     await writeFile(sessionPath, JSON.stringify(session, null, 2), 'utf-8');
   }
 
   async delete(sessionId: string): Promise<void> {
     const sessionPath = this.getSessionPath(sessionId);
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- sessionPath validated by getSessionPath
       await unlink(sessionPath);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -117,7 +113,6 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
 
   async exists(sessionId: string): Promise<boolean> {
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- sessionId validated by getSessionPath
       return (await stat(this.getSessionPath(sessionId))).isFile();
     } catch (error) {
       // Only a path that is not there is "no session". A refusal (EACCES) or
@@ -130,9 +125,10 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
 
   async list(): Promise<string[]> {
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- baseDir set in constructor
       const entries = await readdir(this.baseDir, { withFileTypes: true });
-      return entries.filter(e => e.isDirectory()).map(e => e.name);
+      // A symlinked session directory is a session: follow it rather than drop it.
+      const kinds = await Promise.all(entries.map(e => direntKindFollowing(this.baseDir, e)));
+      return entries.filter((_, i) => kinds[i] === 'directory').map(e => e.name);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return [];

@@ -45,8 +45,11 @@ module.exports = {
     docs: {
       description:
         'Disallow constructing `file://` URLs by string concatenation; use `pathToFileURL()` from `node:url`.',
-      category: 'Cross-platform compatibility',
+      category: 'URLs and dynamic imports',
+      bans: '`` `file://${p}` ``',
+      useInstead: '`pathToFileURL(p).href`',
       recommended: true,
+      recommendedSeverity: 'error',
     },
     messages: {
       useFileUrlBuilder:

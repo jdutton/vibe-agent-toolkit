@@ -1,7 +1,11 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test file: every path is this suite's own mkdtemp scratch dir or a path derived from this file's location */
-
 /**
- * Executes the shell in `.github/workflows/node-floor.yml` instead of reading it.
+ * Executes the shell of the Node-floor steps instead of reading it.
+ *
+ * The DERIVE step lives in `.github/actions/setup/action.yml` (every workflow
+ * installs its toolchain through that composite action, so the floor is
+ * derived in one place); the ASSERT step lives in `node-floor.yml`, the one
+ * workflow that then proves the runner is on that floor. Both files are under
+ * test here.
  *
  * Two defects lived in that file and both were invisible to any assertion about
  * its text:
@@ -39,10 +43,17 @@ import { parse as parseYaml } from 'yaml';
 import { createTestTempDir, cleanupTestTempDir } from '../test-helpers.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const WORKFLOW_PATH = safePath.join(__dirname, '../../../../.github/workflows/node-floor.yml');
+const GITHUB_DIR = safePath.join(__dirname, '../../../../.github');
+const WORKFLOW_PATH = safePath.join(GITHUB_DIR, 'workflows/node-floor.yml');
+const SETUP_ACTION_PATH = safePath.join(GITHUB_DIR, 'actions/setup/action.yml');
 
-/** The expression whose textual interpolation into a `run:` block is the defect. */
-const FLOOR_EXPRESSION = 'steps.floor.outputs.version';
+/**
+ * The expressions whose textual interpolation into a `run:` block is the
+ * defect: the composite action's own derived floor, and the output the
+ * workflow reads it back through.
+ */
+const FLOOR_EXPRESSIONS = ['steps.floor.outputs.version', 'steps.setup.outputs.node-version'];
+const FLOOR_EXPRESSION_PATTERN = /\$\{\{\s*steps\.(?:floor\.outputs\.version|setup\.outputs\.node-version)\s*\}\}/g;
 
 /** Name fragments identifying the two steps under test. */
 const ASSERT_STEP = 'Assert the runner';
@@ -59,15 +70,21 @@ interface Workflow {
   jobs: Record<string, { steps: WorkflowStep[] }>;
 }
 
+interface CompositeAction {
+  runs: { steps: WorkflowStep[] };
+}
+
+/** Every step of the workflow AND of the composite action it installs through. */
 function loadSteps(): WorkflowStep[] {
   const workflow = parseYaml(readFileSync(WORKFLOW_PATH, 'utf8')) as Workflow;
-  return Object.values(workflow.jobs).flatMap((job) => job.steps);
+  const action = parseYaml(readFileSync(SETUP_ACTION_PATH, 'utf8')) as CompositeAction;
+  return [...Object.values(workflow.jobs).flatMap((job) => job.steps), ...action.runs.steps];
 }
 
 function stepNamed(fragment: string): WorkflowStep {
   const step = loadSteps().find((candidate) => candidate.name?.includes(fragment));
   if (step === undefined) {
-    throw new Error(`No step in node-floor.yml has a name containing ${JSON.stringify(fragment)}`);
+    throw new Error(`No step in node-floor.yml or actions/setup/action.yml has a name containing ${JSON.stringify(fragment)}`);
   }
   return step;
 }
@@ -93,14 +110,14 @@ function runStep(
   if (step.run === undefined) throw new Error(`Step ${step.name ?? '<unnamed>'} has no run: script`);
 
   const floorValue = options.floorValue ?? '';
-  const script = step.run.replaceAll(/\$\{\{\s*steps\.floor\.outputs\.version\s*\}\}/g, floorValue);
+  const script = step.run.replaceAll(FLOOR_EXPRESSION_PATTERN, floorValue);
 
   // Whatever the step declares in `env:` that references the derived floor gets
   // that value, the way the runner would resolve it.
   const declaredEnv = Object.fromEntries(
     Object.entries(step.env ?? {}).map(([key, value]) => [
       key,
-      value.includes(FLOOR_EXPRESSION) ? floorValue : value,
+      FLOOR_EXPRESSIONS.some((expression) => value.includes(expression)) ? floorValue : value,
     ]),
   );
 
@@ -149,7 +166,10 @@ const NEWLINE_INJECTION = '>=22.13\n::add-mask::supersecret\n::error::attacker-c
 /** Workflow-command fragments that must never survive into the step's output. */
 const FORGED_COMMANDS = ['::add-mask::', 'attacker-controlled'];
 
-describe.skipIf(process.platform === 'win32')('node-floor.yml', () => {
+// win32: every step is executed through `bash -e -c` (see runStep), the shell the
+// workflow's ubuntu-only job runs under. A Git-Bash pass on Windows would prove
+// nothing about that job, and its `$GITHUB_OUTPUT` path handling differs.
+describe.skipIf(process.platform === 'win32')('node-floor.yml + actions/setup', () => {
   let tempDir: string;
   let githubOutput: string;
 
@@ -194,7 +214,7 @@ describe.skipIf(process.platform === 'win32')('node-floor.yml', () => {
     it('passes the derived floor to the assertion through env:, not through the script', () => {
       const assertion = stepNamed(ASSERT_STEP);
 
-      expect(Object.values(assertion.env ?? {}).join(' ')).toContain(FLOOR_EXPRESSION);
+      expect(Object.values(assertion.env ?? {}).join(' ')).toContain('steps.setup.outputs.node-version');
       expect(assertion.run).toContain('"$FLOOR"');
     });
   });

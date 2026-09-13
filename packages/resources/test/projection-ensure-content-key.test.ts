@@ -44,7 +44,6 @@ interface RowState {
 }
 
 async function writeDoc(path: string, content: string): Promise<void> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
   await writeFile(safePath.join(suite.tempDir, path), content, 'utf-8');
 }
 

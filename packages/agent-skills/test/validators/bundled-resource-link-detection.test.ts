@@ -1,5 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test helpers use controlled temp directories */
-
 import * as fs from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';

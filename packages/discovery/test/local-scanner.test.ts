@@ -1,8 +1,8 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test file uses controlled temp directory */
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 
-import { setupSyncTempDirSuite, safePath, toForwardSlash, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 
@@ -88,11 +88,8 @@ describe('scan', () => {
   it('should detect gitignored files', async () => {
     // Initialize git repo for git check-ignore to work
     const gitPath = 'git';
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
     spawnSync(gitPath, ['init'], { cwd: tempDir, stdio: 'pipe' });
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
     spawnSync(gitPath, ['config', 'user.email', 'test@example.com'], { cwd: tempDir, stdio: 'pipe' });
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
     spawnSync(gitPath, ['config', 'user.name', 'Test User'], { cwd: tempDir, stdio: 'pipe' });
 
     fs.writeFileSync(safePath.join(tempDir, '.gitignore'), 'dist/\n');

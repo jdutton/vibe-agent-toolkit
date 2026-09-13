@@ -7,7 +7,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { crawlDirectory, crawlDirectorySync } from '../../src/file-crawler.js';
 import { mkdirSyncReal, toForwardSlash } from '../../src/path-utils.js';
-import { createSymlink, setupSyncTempDirSuite, symlinkCapability } from '../../src/test-helpers.js';
+import { createSymlink, symlinkCapability } from '../../src/test-helpers.js';
+import { setupSyncTempDirSuite } from '../../src/testing/temp-dir.js';
 import { refuseUnreadableFixture } from '../../src/testing.js';
 import { createGitRepo } from '../test-helpers.js';
 
@@ -21,12 +22,11 @@ const NO_SYMLINKS = 'SKIPPED: host cannot create symlinks (needs Developer Mode 
  * `dot: false` default cannot see through.
  */
 function createDotDirStructure(dir: string): void {
-  /* eslint-disable security/detect-non-literal-fs-filename -- dir is a controlled temp directory */
   mkdirSyncReal(safePath.join(dir, '.claude', 'rules'), { recursive: true });
   writeFileSync(safePath.join(dir, CLAUDE_RULE.slice(1)), '# Rules');
   mkdirSyncReal(safePath.join(dir, '.github'));
   writeFileSync(safePath.join(dir, GITHUB_DOC.slice(1)), '# Contributing');
-  /* eslint-enable security/detect-non-literal-fs-filename */
+   
 }
 
 /**
@@ -50,7 +50,6 @@ function createGuideSymlink(testDir: string): boolean {
  * Helper to create test file structure
  */
 function createTestStructure(testDir: string): void {
-  /* eslint-disable security/detect-non-literal-fs-filename -- testDir is controlled temp directory from mkdtemp */
   // Root files
   writeFileSync(safePath.join(testDir, 'README.md'), '# Root README');
   writeFileSync(safePath.join(testDir, 'package.json'), '{}');
@@ -72,7 +71,7 @@ function createTestStructure(testDir: string): void {
   // node_modules (should be excluded by default)
   mkdirSyncReal(safePath.join(testDir, 'node_modules'));
   writeFileSync(safePath.join(testDir, 'node_modules', 'package.md'), '# Should be excluded');
-  /* eslint-enable security/detect-non-literal-fs-filename */
+   
 }
 
 describe('file-crawler', () => {
@@ -198,7 +197,6 @@ describe('file-crawler', () => {
 
     it('should throw error when baseDir is a file', () => {
       const filePath = safePath.join(testDir, 'file.txt');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
       writeFileSync(filePath, 'content');
 
       expect(() =>
@@ -293,7 +291,6 @@ describe('file-crawler', () => {
         // a/note.md, plus a/loop -> a. Walking `loop` re-enters `a`.
         const dir = safePath.join(testDir, 'a');
         mkdirSyncReal(dir);
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is a controlled temp directory
         writeFileSync(safePath.join(dir, 'note.md'), '# note');
         createSymlink(cap, dir, safePath.join(dir, 'loop'), 'dir');
 
@@ -326,7 +323,6 @@ describe('file-crawler', () => {
         // also cover: no cycle exists, yet the blob is enumerated twice.
         const real = safePath.join(testDir, 'real');
         mkdirSyncReal(real);
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is a controlled temp directory
         writeFileSync(safePath.join(real, 'doc.md'), '# doc');
         createSymlink(cap, real, safePath.join(testDir, 'alias-one'), 'dir');
         createSymlink(cap, real, safePath.join(testDir, 'alias-two'), 'dir');
@@ -419,11 +415,9 @@ describe('file-crawler', () => {
 
       // Create .gitignore file
       const gitignorePath = safePath.join(testDir, GITIGNORE);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
       writeFileSync(gitignorePath, 'docs/\n*.log\n');
 
       // Track only non-ignored files (git ls-files returns tracked files)
-      // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
       spawnSync('git', ['add', 'src/', 'README.md'], { cwd: testDir, stdio: 'pipe' });
 
       const files = crawlDirectorySync({
@@ -446,7 +440,6 @@ describe('file-crawler', () => {
 
       // Create .gitignore file
       const gitignorePath = safePath.join(testDir, GITIGNORE);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
       writeFileSync(gitignorePath, 'docs/\n');
 
       const files = crawlDirectorySync({
@@ -472,11 +465,9 @@ describe('file-crawler', () => {
       createTestStructure(testDir);
       createGitRepo(testDir);
 
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
       writeFileSync(safePath.join(testDir, GITIGNORE), 'docs/\n');
       // Only src/ is committed: README.md and package.json stay untracked,
       // docs/ is ignored outright.
-      // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
       spawnSync('git', ['add', 'src/'], { cwd: testDir, stdio: 'pipe' });
 
       const files = crawlDirectorySync({
@@ -525,7 +516,6 @@ describe('file-crawler', () => {
 
       // Same tree, now tracked — `git ls-files` answers instead.
       createGitRepo(testDir);
-      // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
       spawnSync('git', ['add', '-A'], { cwd: testDir, stdio: 'pipe' });
 
       const tracked = crawl();

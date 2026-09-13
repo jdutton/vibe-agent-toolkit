@@ -73,8 +73,6 @@
  * the test fails closed if a `dist/` is missing entirely, but it cannot detect
  * staleness, so build first if you are running it on its own.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- Every path is derived from
-   this file's own URL and a directory listing under it; nothing is caller-controlled. */
 import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -113,8 +111,10 @@ const BUILD_HINT =
   ' `bun run validate` does it for you before the test phases.)';
 
 const UPDATE_HINT =
-  'If this change is INTENDED, regenerate the golden and review the diff as part of your PR:\n' +
-  '    UPDATE_DRIFT_GOLDEN=1 bun run test:system\n' +
+  'If this change is INTENDED, regenerate the golden and review the diff as part of your PR.\n' +
+  'Build FIRST — the golden is taken from dist/, and a stale dist/ regenerates a stale golden:\n' +
+  '    bun run build\n' +
+  '    cd packages/vat-development-agents && UPDATE_DRIFT_GOLDEN=1 bunx vitest run --config vitest.system.config.ts test/system/packaged-output-drift.system.test.ts\n' +
   'If it is NOT intended, a packager/rewriter change altered shipped bundle content.';
 
 function builtSkillsDirFor(bundle: GoldenBundle): string {

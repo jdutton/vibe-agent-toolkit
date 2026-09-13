@@ -491,10 +491,8 @@ function unlistableDirectoryCondition(
  */
 export function unlistableRowStillHolds(row: RealizationConditionRow, root: string): boolean {
   const directory = safePath.resolve(root, row.path);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- a stored root-relative path, resolved against the corpus root
   if (!existsSync(directory)) return false;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- same path, one listing attempt per stored row
     readdirSync(directory);
     return false;
   } catch (error) {

@@ -65,7 +65,6 @@ function isNode(value: unknown): value is JsonNode {
  */
 function readCommitted(name: string): JsonNode {
   const path = safePath.join(SCHEMAS_DIR, `${name}.json`);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is built from JSON_SCHEMA_TARGETS, a module-private list of literals
   return JSON.parse(readFileSync(path, 'utf8')) as JsonNode;
 }
 

@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- all paths are temp dirs the test owns */
 /**
  * B1: `vat audit` crawls a DISTRIBUTED skill tree for agent-instruction files.
  *

@@ -41,15 +41,12 @@ beforeAll(suite.beforeAll);
 afterAll(suite.afterAll);
 beforeEach(async () => {
   await suite.beforeEach();
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture directory beneath a mkdtemp root
   await mkdir(safePath.join(suite.tempDir, 'docs'), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
   await writeFile(
     safePath.join(suite.tempDir, ROOT_DOC),
     `# Root\n\nSee [the linked doc](${LINKED_DOC}).\n`,
     'utf-8',
   );
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
   await writeFile(safePath.join(suite.tempDir, LINKED_DOC), '# Linked\n\nLeaf.\n', 'utf-8');
 });
 

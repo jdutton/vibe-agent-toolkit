@@ -82,7 +82,6 @@ function formatActionableError(specifier: string, baseDir: string, cause: unknow
   if (code === 'MODULE_NOT_FOUND' && missingPath && missingPath !== specifier && isAbsolutePath(missingPath)) {
     // `existsSync` answers false for every failure and never throws, so no
     // guard around it: the question here is only whether the file is there.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- missingPath is a Node-resolved exports target, used only to refine the error message
     if (!existsSync(missingPath)) {
       return (
         `Failed to resolve asset reference '${specifier}': ` +

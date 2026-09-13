@@ -29,7 +29,6 @@
  * from git's own walk, which no `readdir` spy reaches; so POSIX-only, and not as
  * root — the same rule `audit-unreadable-path.integration.test.ts` applies.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 
 import {
@@ -37,10 +36,10 @@ import {
   normalizedTmpdir,
   safePath,
   toForwardSlash,
-  withReaddirSyncRefused,
 } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError, type DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { withReaddirSyncRefused , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { ExtentContribution } from '../src/projection/contributor.js';
@@ -59,8 +58,6 @@ import { ResourceRegistry } from '../src/resource-registry.js';
 import { createCommittedRepo, writeFileIn } from './test-helpers.js';
 
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
-const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 const OPEN_FILE = 'docs/open/ok.md';
 const LOCKED_DIR = 'docs/locked';

@@ -81,6 +81,11 @@ function writeChecks(checks: string, moreResources = ''): void {
   writeChecksIn(projectDir, checks, moreResources);
 }
 
+/** The command's own `data`, beside the envelope's status/examined/findings/summary. */
+function data(doc: Record<string, unknown>): Record<string, unknown> {
+  return (doc['data'] ?? {}) as Record<string, unknown>;
+}
+
 /** What one spawn of the verb produced. */
 interface CheckRun {
   status: number | null;
@@ -130,8 +135,8 @@ function expectRunIntegrityFailure(...args: string[]): CheckFinding {
   const { status, doc } = check(...args);
 
   expect(status).toBe(1);
-  expect(doc['status']).toBe('error');
-  const [issue] = doc['issues'] as CheckFinding[];
+  expect(doc['status']).toBe('findings');
+  const [issue] = doc['findings'] as CheckFinding[];
   expect(issue?.code).toBe('RESOURCE_CHECK_BROKEN');
 
   return issue as CheckFinding;
@@ -155,15 +160,15 @@ describe('vat resources check', () => {
     const { status, doc } = check();
 
     expect(status).toBe(0);
-    expect(doc['status']).toBe('success');
-    expect(doc['checksRun']).toBe(1);
-    expect(doc['issues']).toStrictEqual([]);
+    expect(doc['status']).toBe('ok');
+    expect(data(doc)['checksRun']).toBe(1);
+    expect(doc['findings']).toStrictEqual([]);
     // 🔑 The other denominator, and the half a pure test cannot reach: that the
     // number published came off a REAL population rather than a plausible
     // constant. The fixture has two markdown files, so a truthful measure is
     // above zero here — and it is what makes the empty-corpus block below a
     // contrast rather than an assertion about nothing.
-    expect(doc['membersEnumerated']).toBeGreaterThan(0);
+    expect(doc['examined']).toBeGreaterThan(0);
   });
 
   it('fails the run and names the file when a check is violated', () => {
@@ -172,13 +177,13 @@ describe('vat resources check', () => {
     const { status, doc } = check();
 
     expect(status).toBe(1);
-    expect(doc['status']).toBe('error');
-    const issues = doc['issues'] as { code: string; severity: string; path?: string }[];
+    expect(doc['status']).toBe('findings');
+    const issues = doc['findings'] as { code: string; severity: string; location?: string }[];
     expect(issues.length).toBeGreaterThanOrEqual(2);
     expect(issues[0]?.code).toBe('CUSTOM:no-markdown');
     expect(issues[0]?.severity).toBe('error');
     // The `path` column anchored the finding to a file a reader can open.
-    expect(issues.map((i) => i.path)).toContain('docs/a.md');
+    expect(issues.map((i) => i.location)).toContain('docs/a.md');
   });
 
   it('honours a declared warning severity without failing the run', () => {
@@ -187,8 +192,8 @@ describe('vat resources check', () => {
     const { status, doc } = check();
 
     expect(status).toBe(0);
-    expect(doc['status']).toBe('warning');
-    expect((doc['issueCounts'] as { errors: number }).errors).toBe(0);
+    expect(doc['status']).toBe('findings');
+    expect((doc['summary'] as { errors: number }).errors).toBe(0);
   });
 
   it('FAILS a check whose SQL will not run, rather than skipping it', () => {
@@ -219,8 +224,8 @@ describe('vat resources check', () => {
 
     const { doc } = check('--check', 'second');
 
-    expect(doc['checksRun']).toBe(1);
-    expect(doc['issues']).toStrictEqual([]);
+    expect(data(doc)['checksRun']).toBe(1);
+    expect(doc['findings']).toStrictEqual([]);
   });
 
   it('runs BOTH checks in one invocation and reports both sets of findings', () => {
@@ -236,8 +241,8 @@ describe('vat resources check', () => {
     const { status, doc } = check();
 
     expect(status).toBe(1);
-    expect(doc['checksRun']).toBe(2);
-    const codes = new Set((doc['issues'] as { code: string }[]).map((i) => i.code));
+    expect(data(doc)['checksRun']).toBe(2);
+    const codes = new Set((doc['findings'] as { code: string }[]).map((i) => i.code));
     expect([...codes].sort((a, b) => a.localeCompare(b)))
       .toStrictEqual(['CUSTOM:no-headings', 'CUSTOM:no-markdown']);
 
@@ -253,7 +258,7 @@ describe('vat resources check', () => {
     // exactly what `formatDurationSecs`' three SIGNIFICANT figures exist to
     // preserve. No upper bound per rule and no ordering between the two: both
     // are process noise at this size.
-    const costs = doc['checks'] as { name: string; durationSecs: number; rows: number }[];
+    const costs = data(doc)['checks'] as { name: string; durationSecs: number; rows: number }[];
     expect(costs.map((c) => c.name).sort((a, b) => a.localeCompare(b)))
       .toStrictEqual(['no-headings', NO_MD_KEY]);
     for (const cost of costs) {
@@ -268,9 +273,9 @@ describe('vat resources check', () => {
       // comparing one rule to it keeps the healthy margin at roughly two orders
       // of magnitude, where a sum would narrow it once enough rules are declared
       // and eventually flake on nothing but arithmetic.
-      expect(cost.durationSecs).toBeLessThan(doc['populationSecs'] as number);
+      expect(cost.durationSecs).toBeLessThan(data(doc)['populationSecs'] as number);
     }
-    expect(doc['populationSecs']).toBeLessThanOrEqual(doc['durationSecs'] as number);
+    expect((data(doc)['populationSecs'] as number) * 1000).toBeLessThanOrEqual(doc['durationMs'] as number);
   });
 
   it('accepts the documented CUSTOM: severity override instead of refusing the config', () => {
@@ -292,8 +297,8 @@ describe('vat resources check', () => {
     expect(status).toBe(0);
     // Ignored means EXECUTED and then dropped, never "not run": `checksRun` is
     // what makes those two distinguishable.
-    expect(doc['checksRun']).toBe(1);
-    expect(doc['issues']).toStrictEqual([]);
+    expect(data(doc)['checksRun']).toBe(1);
+    expect(doc['findings']).toStrictEqual([]);
   });
 
   it('a check set to `ignore` STILL fails the run when its SQL is broken', () => {
@@ -322,6 +327,7 @@ describe('vat resources check', () => {
 
     // 2, not 1: a mistyped flag is an operator error, not a content violation.
     expect(status).toBe(2);
+    // The command-error document, not the report envelope: nothing ran.
     expect(doc['status']).toBe('error');
     // The typo AND the valid set, so the operator does not go read the config.
     expect(doc['error']).toContain('declared-none');
@@ -341,7 +347,7 @@ describe('vat resources check', () => {
 
     expect(status).toBe(2);
     expect(stderr).toContain('Path does not exist');
-    expect(doc['checksRun']).toBeUndefined();
+    expect(data(doc)['checksRun']).toBeUndefined();
   });
 
   it('FAILS a check whose SQL carries a placeholder nothing can bind', () => {
@@ -374,9 +380,9 @@ describe('vat resources check', () => {
     const { status, doc, stderr } = check();
 
     expect(status).toBe(1);
-    expect(doc['status']).toBe('error');
-    expect(doc['checksRun']).toBe(0);
-    const [issue] = doc['issues'] as CheckFinding[];
+    expect(doc['status']).toBe('findings');
+    expect(data(doc)['checksRun']).toBe(0);
+    const [issue] = doc['findings'] as CheckFinding[];
     expect(issue?.code).toBe('RESOURCE_CHECK_BROKEN');
     expect(issue?.severity).toBe('error');
     expect(stderr).toContain('No checks are declared');
@@ -410,7 +416,6 @@ describe('vat resources check over an emptied corpus', () => {
     fs.writeFileSync(safePath.join(emptyDir, '.gitignore'), '*\n', 'utf-8');
     // A git repository, because the ignore oracle is `gitTrackerForProjectRoot`
     // and without one `.gitignore` is just a file.
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- fixture setup
     spawnSync('git', ['init', '--quiet'], { cwd: emptyDir });
     writeChecksIn(
       emptyDir,
@@ -428,16 +433,16 @@ describe('vat resources check over an emptied corpus', () => {
     // called that a pass.
     const { status, doc } = checkIn(emptyDir);
 
-    expect(doc['membersEnumerated']).toBe(0);
-    expect(doc['checksRun']).toBe(2);
-    expect(doc['status']).not.toBe('success');
+    expect(doc['examined']).toBe(0);
+    expect(data(doc)['checksRun']).toBe(2);
+    expect(doc['status']).not.toBe('ok');
     expect(status).not.toBe(0);
   });
 
   it('reports it under the non-overridable run-integrity code, at error', () => {
     const { doc } = checkIn(emptyDir);
 
-    const issues = doc['issues'] as { code: string; severity: string; message: string }[];
+    const issues = doc['findings'] as { code: string; severity: string; message: string }[];
     expect(issues[0]?.code).toBe('RESOURCE_CHECK_BROKEN');
     expect(issues[0]?.severity).toBe('error');
     // Actionable, not merely true: the count, the consequence, and the first

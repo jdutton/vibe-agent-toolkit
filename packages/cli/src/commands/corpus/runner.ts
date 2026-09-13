@@ -127,7 +127,6 @@ export async function auditOnePlugin(
 }
 
 async function runLocalEntry(entry: PluginEntry, opts: RunnerOptions): Promise<PluginRow> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied seed entry
   if (!existsSync(entry.source)) {
     return unloadableRow(entry, `Source path not found: ${entry.source}`, 0);
   }
@@ -163,7 +162,6 @@ async function auditAndRecord(
     const outputPath = `${entry.name}-audit.yaml`;
     const outcome = buildAuditOutcome(results, Date.now() - start, outputPath);
     const auditYamlPath = safePath.join(opts.runDir, outputPath);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed under run dir
     writeFileSync(auditYamlPath, yaml.stringify(outcome.document, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
     audit = outcome.audit;
   } catch (err) {
@@ -359,7 +357,6 @@ async function runSkillReview(
 
   const aggregated = renderAggregatedReview(entry, sections, summarizeReview(sections));
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed under run dir
   writeFileSync(reviewPath, aggregated, 'utf-8');
 
   return buildReviewOutcome(sections, `${entry.name}-review.md`, Date.now() - start);
@@ -384,7 +381,6 @@ function applyValidationOverlay(entry: PluginEntry, scanPath: string): boolean {
       },
     },
   };
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed under audit target
   writeFileSync(overlayPath, yaml.stringify(overlay, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
   return true;
 }

@@ -21,23 +21,22 @@
  * reproduction; POSIX-only, not as root), and a mocked listing that hands the
  * tracker a refusal directly so the seam is exercised on every platform.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { chmodSync, writeFileSync } from 'node:fs';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
 
 import { runGitOrThrow } from '../src/git-run.js';
 import { GitTracker } from '../src/git-tracker.js';
 import * as gitUtils from '../src/git-utils.js';
 import { settleRefusal } from '../src/listing-refusal.js';
 import { mkdirSyncReal, safePath, toForwardSlash } from '../src/path-utils.js';
-import { setupSyncTempDirSuite } from '../src/test-helpers.js';
+import { CANNOT_DENY_READS } from '../src/testing/platform-gates.js';
+import { setupSyncTempDirSuite } from '../src/testing/temp-dir.js';
 
 import { createGitRepo } from './test-helpers.js';
 
 /** `chmod` denies nothing to uid 0 and binds nothing on Windows. */
-const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 const UNLISTABLE_DIR = 'x-untracked';
 const UNLISTABLE_FILE = `${UNLISTABLE_DIR}/u.md`;

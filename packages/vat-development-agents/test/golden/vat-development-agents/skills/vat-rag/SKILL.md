@@ -105,8 +105,6 @@ The RAG interfaces are small on purpose. If something isn't supported natively, 
 ## Configuration
 
 ```yaml
-version: 1
-
 rag:
   stores:
     default:

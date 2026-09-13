@@ -1,4 +1,4 @@
-import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import type { ResourceCollectionInterface } from '../src/resource-collection-interface.js';

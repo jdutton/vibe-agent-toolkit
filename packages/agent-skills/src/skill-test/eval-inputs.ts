@@ -1,27 +1,26 @@
 import { cpSync, existsSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { sanitizeGraderText, sanitizeTextPreservingLines } from './grader-text.js';
 
 /**
  * Raised for any eval-input problem (bad JSON, schema failure, missing input file).
- * Maps to exit 2.
+ * Reason `preflight`.
  *
  * The FIELD is what makes that sentence true, and until it was added only one of this
  * class's two routes delivered it. `attemptStageWorkspaces` catches the staging
  * instance and maps it explicitly; the instance thrown from {@link armDirSegment}
  * fires deep in the eval loop, outside that handler, and reached
- * `mapErrorToExitCode`'s Internal default — reporting 1 for a preflight-class
- * problem while the docblock above claimed 2. Exit 2 for the internal-invariant case
- * too is consistent with every sibling in this feature.
+ * `skillTestFailureReason`'s `internal` default — reporting a harness bug for a
+ * preflight-class problem while the docblock above claimed otherwise. `preflight`
+ * for the internal-invariant case too is consistent with every sibling in this feature.
  */
-export class EvalInputError extends Error {
-  readonly exitCode = 2 as const;
+export class EvalInputError extends VatError {
+  readonly reason = 'preflight' as const;
   constructor(message: string) {
-    super(message);
-    this.name = 'EvalInputError';
+    super('EVAL_INPUT', message);
   }
 }
 
@@ -196,7 +195,7 @@ export const EvalEntrySchema = z
         mustRun: z.array(z.string().min(1)).optional(),
         mustNotRun: z.array(z.string().min(1)).optional(),
         // Each named executable must have RUN and its invoking tool_result must
-        // NOT be an error (feature #148). Judged from the transcript by the
+        // NOT be an error. Judged from the transcript by the
         // grader — see tool-eval-schema.ts's ToolSucceedCheckSchema.
         mustSucceed: z.array(z.string().min(1)).optional(),
         sequence: z.array(z.string().min(1)).optional(),
@@ -234,7 +233,7 @@ export type EvalEntry = z.infer<typeof EvalEntrySchema>;
 export type EvalSuite = z.infer<typeof EvalSuiteSchema>;
 
 /**
- * The declared tool expectations of ONE eval (issue #145 Phase T). Derived from
+ * The declared tool expectations of ONE eval. Derived from
  * {@link EvalEntry} so the grader input + prompt builder share the EXACT shape the
  * parser produces — no drift, and no duplicated inline `{ mustRun?; mustNotRun?;
  * sequence? }` literal across those consumers.
@@ -387,7 +386,6 @@ function stageEvalWorkspacesForArm(input: StageEvalWorkspacesInput, arm: EvalArm
             quoteSuiteText((err as Error).message),
         );
       }
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- src is contained under evalsDir via joinUnderRoot; suite is developer-authored
       if (!existsSync(src)) {
         throw new EvalInputError(
           `eval ${entry.id} declares input file "${quoteSuiteText(rel)}" but it is absent at ${quoteSuiteText(src)}`,

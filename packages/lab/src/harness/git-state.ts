@@ -62,7 +62,7 @@ export function runGit(args: readonly string[], cwd: string): GitOutcome {
  * unlike a dirty tree there is nothing the caller can do to make the answer
  * meaningful.
  *
- * ⚠️ REVIEW FINDING 2026-08-14 — WHAT THIS CANNOT SEE, for the instrument axis.
+ * ⚠️ REVIEW FINDING — WHAT THIS CANNOT SEE, for the instrument axis.
  * This samples the tree at RESOLVE time, not at BUILD time, and what an
  * instrument actually runs is `dist/`. Two live false negatives follow, both
  * stamping a confident `dirty: false` over a binary the commit does not

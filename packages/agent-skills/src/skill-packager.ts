@@ -48,12 +48,15 @@ import {
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import {
+  direntKindFollowingSync,
   findProjectRoot,
   isGlob,
+  isSingleFsSegment,
   issueLocation,
   resolveAssetReference,
-  toForwardSlash,
   safePath,
+  toForwardSlash,
+  VatError,
 } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import {
@@ -684,7 +687,6 @@ export async function packageSkill(
   // 7. Clean stale output (skip when source SKILL.md lives inside the output, e.g. builder flow)
   const resolvedOutput = safePath.resolve(outputPath);
   const sourceInOutput = safePath.resolve(skillPath).startsWith(resolvedOutput + '/');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputPath is validated
   if (!sourceInOutput && existsSync(resolvedOutput)) {
     await rm(resolvedOutput, { recursive: true });
   }
@@ -777,7 +779,6 @@ export async function packageSkill(
   // same shape as the copiers, at the step before any of them run.
   await withFsAttribution(
     `skill '${skillMetadata.name}' output directory ${issueLocation(outputPath, projectRoot) || '.'}`,
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputPath is validated
     () => mkdir(outputPath, { recursive: true }),
     'created',
   );
@@ -872,8 +873,8 @@ export async function packageSkill(
     // path a reader can open is its source path.
     ...droppedGlobMatchesToIssues(appliedFiles.dropped, projectRoot),
     // The same receipt, for matches that are not copyable files at all. Anchored
-    // identically and for the identical reason. Until issue #183 this population
-    // had no channel because the build died on the first one it met.
+    // identically and for the identical reason. Without a channel of its own this
+    // population is invisible: the build used to die on the first one it met.
     ...skippedGlobMatchesToIssues(appliedFiles.skipped, projectRoot),
     // Presence-side backstop for agent-instruction files. The walker excludes
     // them from link-following, but a `files:` glob can still copy one in, and
@@ -1006,7 +1007,7 @@ function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger
  *
  * ## 🚨 This lane's link graph is EMPTY — and that is the NORMAL case
  *
- * Measured 2026-08 on a probe fixture (one skill, one `reference.md` reachable by
+ * Measured on a probe fixture (one skill, one `reference.md` reachable by
  * a single relative link from `SKILL.md`), run three ways with ONE variable —
  * where the packaged output lands:
  *
@@ -1029,7 +1030,7 @@ function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger
  * `${CLAUDE_PLUGIN_ROOT}` invocation inside a bundled reference is caught at
  * source and CANNOT be caught in the built artifact.
  *
- * 🔑 Measured vs inferred. The three rows are MEASURED (2026-08, that probe).
+ * 🔑 Measured vs inferred. The three rows are MEASURED (that probe).
  * That the finding is still LIVE is inferred from this function's own body: it
  * passes only the built `SKILL.md` path, with no registry and no population
  * source rooted at the output tree, so `validateSkillForPackaging` resolves
@@ -1214,7 +1215,6 @@ async function loadCollectionSchemas(
     if (schemaPath === undefined) continue;
     try {
       const resolvedPath = resolveAssetReference(schemaPath, baseDir);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- schema path from validated config
       const content = await readFile(resolvedPath, 'utf-8');
       schemas.set(collectionId, JSON.parse(content) as object);
     } catch (error) {
@@ -1498,7 +1498,6 @@ function applyFilesEntriesToPathMap(
     // have helped. A wrong diagnosis with a confident wrong remedy attached.
     // Only ENOENT is absence; a refusal is reported as itself, naming the entry.
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
       statSync(absoluteSource);
     } catch (error) {
       if ((error as { code?: string }).code !== 'ENOENT') {
@@ -2095,7 +2094,6 @@ async function copyAndRewriteFile(
 
   // Ensure target directory exists
   await withFsAttribution(subject, async () => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
     await mkdir(dirname(targetPath), { recursive: true });
   });
 
@@ -2167,7 +2165,6 @@ async function copyAndRewriteFile(
     );
     await withFsAttribution(
       subject,
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
       () => writeFile(targetPath, content, 'utf-8'),
       WRITE_ACTION,
     );
@@ -2191,7 +2188,6 @@ async function copyAndRewriteFile(
     });
     await withFsAttribution(
       subject,
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
       () => writeFile(targetPath, rewritten, 'utf-8'),
       WRITE_ACTION,
     );
@@ -2244,7 +2240,6 @@ async function copyAndRewriteFile(
 
   await withFsAttribution(
     subject,
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
     () => writeFile(targetPath, editor.toString(), 'utf-8'),
     WRITE_ACTION,
   );
@@ -2311,10 +2306,10 @@ function buildHrefRewriter(
  * but this check acts as a safety net in case files are introduced through other means.
  */
 async function validateNoNestedSkillMd(outputPath: string, skillName: string): Promise<void> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputPath is validated
   const entries = readdirSync(outputPath, { recursive: true, withFileTypes: true });
   const nestedSkillMds = entries
-    .filter(entry => entry.isFile() && entry.name === 'SKILL.md')
+    // Followed: a symlinked nested SKILL.md is a nested skill marker all the same.
+    .filter(entry => entry.name === 'SKILL.md' && direntKindFollowingSync(entry.parentPath, entry) === 'file')
     .map(entry => safePath.relative(outputPath, safePath.join(entry.parentPath, entry.name)))
     .filter(relativePath => relativePath !== 'SKILL.md'); // Exclude the root SKILL.md
 
@@ -2523,17 +2518,17 @@ const ZIP_SIZE_ERROR_BYTES = 8 * 1024 * 1024;
  * Thrown when a claude-web ZIP exceeds the 8MB Claude.ai upload limit.
  * The CLI catches this and exits with code 1.
  */
-export class ZipSizeLimitError extends Error {
+export class ZipSizeLimitError extends VatError {
   readonly sizeBytes: number;
   readonly limitBytes: number;
 
   constructor(sizeBytes: number, limitBytes: number) {
     const mb = (sizeBytes / 1024 / 1024).toFixed(1);
     super(
+      'ZIP_SIZE_LIMIT',
       `ZIP size ${mb}MB exceeds 8MB limit for Claude.ai upload. ` +
       `Reduce the number of linked resources or use --target claude-code.`
     );
-    this.name = 'ZipSizeLimitError';
     this.sizeBytes = sizeBytes;
     this.limitBytes = limitBytes;
   }
@@ -2546,7 +2541,6 @@ export class ZipSizeLimitError extends Error {
  * @param zipPath - Path to the ZIP file
  */
 function validateZipSize(zipPath: string): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- zipPath is constructed from validated outputPath
   const stats = statSync(zipPath);
   const bytes = stats.size;
 
@@ -2651,7 +2645,6 @@ async function createNpmPackage(
   };
 
   const packageJsonPath = safePath.join(outputPath, PACKAGE_JSON_FILENAME);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path is constructed from validated outputPath
   await writeFile(
     packageJsonPath,
     JSON.stringify(packageJson, null, 2),
@@ -2686,7 +2679,6 @@ async function createMarketplaceManifest(
   };
 
   const manifestPath = safePath.join(dirname(outputPath), `${metadata.name}.marketplace.json`);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path is constructed from validated outputPath
   await writeFile(
     manifestPath,
     JSON.stringify(manifest, null, 2),
@@ -2706,6 +2698,18 @@ async function createMarketplaceManifest(
  * @returns Default output path
  */
 function getDefaultSkillOutputPath(skillPath: string, skillName: string): string {
+  // The name may have come from the H1 title when frontmatter carries none,
+  // and the directory this returns is `rm -rf`'d before the package is
+  // written: a SKILL.md headed `# ../../../canary` used to delete `<root>/canary`
+  // through the public `packageSkill` export, issues empty, `hasErrors` false.
+  if (!isSingleFsSegment(skillName)) {
+    throw new VatError(
+      'SKILL_NAME_NOT_A_SEGMENT',
+      `Cannot derive an output directory from skill name "${skillName}": a name must be a single ` +
+        `path segment (no separators, not "." or ".."). Declare \`name:\` in the SKILL.md frontmatter ` +
+        `or pass an explicit outputPath.`,
+    );
+  }
   const skillPackageRoot = findPackageRoot(skillPath);
   return safePath.join(skillPackageRoot, 'dist', 'skills', skillName);
 }
@@ -2726,7 +2730,6 @@ function findPackageRoot(skillPath: string, fallbackToSkillDir = false): string 
   // Walk up until we find a package.json or hit the filesystem root
   while (currentDir !== dirname(currentDir)) {
     const packageJsonPath = safePath.join(currentDir, PACKAGE_JSON_FILENAME);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Searching for package.json
     if (existsSync(packageJsonPath)) {
       return currentDir;
     }

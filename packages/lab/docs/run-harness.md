@@ -224,8 +224,8 @@ observation. Across a handful of samples, one cold repeat is enough to move a me
 
 **Every pair's verdict is reported, and so is whether they agreed.** A single pair settles nothing —
 two pairs in a prior session actively contradicted each other. Disagreement prints as
-`⚠ PAIRS DISAGREE` and exits `EXIT_UNMEASURABLE`; it is never averaged into a consensus no pair
-reported.
+`⚠ PAIRS DISAGREE` and exits `ExitCode.ERROR` (unmeasurable); it is never averaged into a
+consensus no pair reported.
 
 **`--control` runs the same instrument as both arms**, which measures the machine rather than a
 difference between builds, and whatever effect it reports *is* the noise floor. Feed the largest of
@@ -246,8 +246,9 @@ A command declares its own, as `completedExitCodes`; absent means `[0]`. vat's c
 success, `1` validation findings, `2` system error — so `validate`, `verify` and `resources-validate`
 accept `[0, 1]`, because a validator exiting 1 ran the whole corpus and merely had something to
 report at the end of it. Without that, those three were unmeasurable on any real project: every real
-project has findings, so every repeat "failed" and every row was poisoned. `resources-scan` and
-`audit` keep the `[0]` default — both are documented as exiting 0 whatever they find.
+project has findings, so every repeat "failed" and every row was poisoned. `audit` accepts `[0, 1]`
+for the same reason; `resources-scan` keeps the `[0]` default — it is documented as exiting 0
+whatever it finds.
 
 Exit `2` is never accepted. That run did not complete, and its duration is the duration of giving
 up — fast enough that timing it reads as an improvement.

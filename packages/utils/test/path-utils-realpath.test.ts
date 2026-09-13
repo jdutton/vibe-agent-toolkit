@@ -13,13 +13,13 @@
  * usual reason (`chmod` reaches one errno, only where POSIX modes bind, and not
  * as root). The symlink-cycle case is real where the host can make symlinks.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import fs from 'node:fs';
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { mkdirSyncReal, normalizedTmpdir, normalizePath, safePath, toForwardSlash } from '../src/path-utils.js';
-import { createSymlink, setupSyncTempDirSuite, symlinkCapability } from '../src/test-helpers.js';
+import { createSymlink, symlinkCapability } from '../src/test-helpers.js';
+import { setupSyncTempDirSuite } from '../src/testing/temp-dir.js';
 
 import { errnoOf } from './test-helpers.js';
 

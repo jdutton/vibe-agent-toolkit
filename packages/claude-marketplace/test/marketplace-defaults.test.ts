@@ -57,7 +57,6 @@ function writeManifest(dir: string, contents: string): string {
   const claudePluginDir = safePath.join(dir, '.claude-plugin');
   mkdirSyncReal(claudePluginDir, { recursive: true });
   const manifestPath = safePath.join(claudePluginDir, 'marketplace.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
   writeFileSync(manifestPath, contents, 'utf8');
   return manifestPath;
 }

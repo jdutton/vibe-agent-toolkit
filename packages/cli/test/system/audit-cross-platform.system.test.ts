@@ -28,7 +28,6 @@ describe('Audit Cross-Platform (system test)', () => {
     binPath = getBinPath(import.meta.url);
     tempDir = createTestTempDir('vat-audit-platform-');
     testResourcesDir = safePath.join(tempDir, 'resources');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- testResourcesDir is controlled in tests
     fs.mkdirSync(testResourcesDir, { recursive: true });
 
     // Create a valid skill for testing (note: must be named SKILL.md)
@@ -53,7 +52,6 @@ Test content.
   it('should expand ~ to home directory on current platform', async () => {
     // Create a skill in a subdirectory of temp
     const skillDir = safePath.join(tempDir, 'home-test');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillDir is controlled in tests
     fs.mkdirSync(skillDir, { recursive: true });
     writeTestFile(
       safePath.join(skillDir, 'SKILL.md'),

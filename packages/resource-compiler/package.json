@@ -32,26 +32,20 @@
   },
   "scripts": {
     "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
-    "build:clean": "tsc --build --clean && tsc --build",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
-    "lint": "eslint src/ test/",
-    "typecheck": "tsc --build --dry --force"
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },
   "dependencies": {
     "@vibe-agent-toolkit/resources": "workspace:*",
+    "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "chokidar": "^3.6.0",
-    "commander": "^11.1.0",
+    "commander": "^12.1.0",
     "github-slugger": "^2.0.0",
     "glob": "^10.3.10"
-  },
-  "devDependencies": {
-    "@types/node": "^25.0.0",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
   },
   "files": [
     "dist",

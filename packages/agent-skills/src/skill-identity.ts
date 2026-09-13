@@ -32,7 +32,6 @@ import { parseFrontmatter } from './parsers/frontmatter-parser.js';
 export function readDeclaredSkillName(skillMdPath: string): string | undefined {
   let content: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied skill path
     content = readFileSync(skillMdPath, 'utf-8');
   } catch (error) {
     if (isPathAbsentError(error)) return undefined;

@@ -35,10 +35,8 @@ const EVALS_SUBPATH = 'evals/evals.json';
 function inventory(root: string): string[] {
   const found: string[] = [];
   const walk = (dir: string): void => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own tmp root
     for (const name of readdirSync(dir)) {
       const abs = safePath.join(dir, name);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own tmp root
       if (statSync(abs).isDirectory()) walk(abs);
       else found.push(toForwardSlash(safePath.relative(root, abs)));
     }
@@ -51,7 +49,6 @@ function inventory(root: string): string[] {
 function writeUnder(dir: string, relPath: string, content: string): void {
   const abs = safePath.join(dir, relPath);
   mkdirSyncReal(safePath.join(abs, '..'), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own tmp fixture
   writeFileSync(abs, content, 'utf8');
 }
 

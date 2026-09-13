@@ -373,7 +373,6 @@ export async function readContentWithKey<K extends ParserKind>(
   // Read as bytes and decode here, rather than letting readFile decode: the key
   // must be over what was on disk, the decode is lossy, and `readFile(path,
   // 'utf-8')` offers no BOM or encoding handling at all.
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path, same trust level as the parsers this feeds
   const bytes = await readFile(filePath);
   // `decodeTextContent` is the ONE decoder — see `utils`' text-content.ts. The
   // bytes handed to `computeContentKey` are the same ones, undecoded, on purpose:

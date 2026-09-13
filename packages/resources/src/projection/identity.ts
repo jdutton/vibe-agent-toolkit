@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 
-import { isFilesystemAccessError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 /** Hex characters kept from a SHA-256 digest. 128 bits — collision-free at any corpus size. */
@@ -301,7 +301,7 @@ function tryRealPath(absolutePath: string): string | null {
  */
 function relativeTo(realRoot: string, absolutePath: string): string {
   const rel = safePath.relative(realRoot, absolutePath);
-  if (rel === '' || rel.startsWith('..')) {
+  if (rel === '' || relativeEscapesRoot(rel)) {
     return toForwardSlash(absolutePath);
   }
   return toForwardSlash(rel);

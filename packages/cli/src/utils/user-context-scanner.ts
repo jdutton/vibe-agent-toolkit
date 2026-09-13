@@ -47,7 +47,6 @@ export async function scanUserContext(): Promise<{
 
   // Scan plugins directory (SKILL.md and .claude-plugin directories)
   let plugins: ScanResult[] = [];
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- User's home directory is safe
   if (existsSync(pluginsDir)) {
     const pluginsScan = await scan({
       path: pluginsDir,
@@ -60,7 +59,6 @@ export async function scanUserContext(): Promise<{
 
   // Scan skills directory (SKILL.md files)
   let skills: ScanResult[] = [];
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- User's home directory is safe
   if (existsSync(skillsDir)) {
     const skillsScan = await scan({
       path: skillsDir,

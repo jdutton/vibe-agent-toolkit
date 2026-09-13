@@ -313,7 +313,6 @@ export async function validateSettingsFile(
   let raw: unknown;
 
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- user-provided path
     const content = await fs.readFile(filePath, 'utf-8');
     raw = JSON.parse(content) as unknown;
   } catch (err) {
@@ -397,7 +396,6 @@ export async function getSettingsFileFields(
 async function readSettingsObject(filePath: string): Promise<Record<string, unknown> | null> {
   let content: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- user-provided path
     content = await fs.readFile(filePath, 'utf-8');
   } catch (error) {
     if (isPathAbsentError(error)) return null;

@@ -6,7 +6,7 @@ import {
 } from '@vibe-agent-toolkit/utils/skill-test';
 
 import { assertExecutorPromptInvariants, buildExecutorPrompt } from './executor-prompt.js';
-import { InternalHarnessError } from './exit-codes.js';
+import { InternalHarnessError } from './failure-reason.js';
 import { RateLimitSignal } from './pipeline.js';
 
 export interface RunExecutorInput {
@@ -55,7 +55,7 @@ export interface ExecutorOutcome {
 
 /**
  * Run ONE eval's executor: a blind `claude -p` spawn that performs `task`
- * against the staged subject (issue #145). The executor's entire stream-json
+ * against the staged subject. The executor's entire stream-json
  * stdout is accumulated in memory (never written to a skill-writable disk
  * path — the "stop discarding stdout" fix) and echoed to `onProgress` chunk
  * by chunk for visibility.

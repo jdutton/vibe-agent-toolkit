@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
 // Test fixtures legitimately use dynamic file paths
 
 /**

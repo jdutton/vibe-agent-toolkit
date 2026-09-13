@@ -59,7 +59,6 @@ describe('validate-version', () => {
     setupPackages(tempDir, { pkg1: '0.1.0', pkg2: '0.1.0' });
     const brokenDir = safePath.join(tempDir, 'packages', 'pkg3');
     mkdirSyncReal(brokenDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- this test's own scratch dir
     writeFileSync(safePath.join(brokenDir, 'package.json'), '{ not json');
 
     let failure: unknown;

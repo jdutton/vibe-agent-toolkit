@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- tempDir paths are test-generated, safe in test context */
 /**
  * The fill/judge split in link validation.
  *
@@ -45,12 +44,8 @@
 import nodeFs from 'node:fs';
 import fs from 'node:fs/promises';
 
-import {
-  FsLookupCache,
-  type PathSpelling,
-  safePath,
-  setupAsyncTempDirSuite,
-} from '@vibe-agent-toolkit/utils';
+import { FsLookupCache, type PathSpelling, safePath } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {

@@ -14,12 +14,10 @@ export function prepareBinaries(packageRoot: string): void {
   const sourcePath = safePath.join(distBinDir, 'vat.js');
   const targetPath = safePath.join(distBinDir, 'vat');
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are constructed from packageRoot parameter
   if (!existsSync(distBinDir)) {
     throw new Error(`dist/bin directory not found at ${distBinDir}`);
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are constructed from packageRoot parameter
   if (!existsSync(sourcePath)) {
     throw new Error(`vat.js not found at ${sourcePath}`);
   }
@@ -30,7 +28,6 @@ export function prepareBinaries(packageRoot: string): void {
   // Make executable (cross-platform)
   // On Windows, this is a no-op but doesn't error
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are constructed from packageRoot parameter
     chmodSync(targetPath, 0o755);
   } catch (error) {
     // Ignore chmod errors on Windows

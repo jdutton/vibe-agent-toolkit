@@ -2,7 +2,12 @@
  * System tests for vat audit default artifact excludes.
  *
  * Verifies that vat audit does NOT descend into node_modules/, dist/, or
- * .claude/worktrees/ by default. The --include-artifacts flag opts back in.
+ * .claude/worktrees/ by default. `--include-artifacts` opts back into the
+ * GITIGNORED territory the `crawl` lane can see (`dist/`), and no further:
+ * `node_modules/` and `.claude/worktrees/` are on the lane's never-crawl list
+ * (`NEVER_CRAWL_GLOBS`), which no flag lifts. The audit used to carry its own
+ * walk that honoured no such list, so the flag once meant "walk everything";
+ * it now means what it says — include the artifacts git told us to ignore.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -25,11 +30,9 @@ import {
 // validation output if scanned.
 function buildProject(parentDir: string, rootName: string): string {
   const rootDir = safePath.join(parentDir, rootName);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled test path
   fs.mkdirSync(rootDir, { recursive: true });
 
   // Initialize a git repo so gitignore-aware scanning works
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is required for gitignore tests
   spawnSync('git', ['init'], { cwd: rootDir, stdio: 'pipe' });
 
   // Create .gitignore to mark artifact directories
@@ -57,7 +60,6 @@ echo hello
     '.claude/worktrees/wt-abc/skills/hello',
   ]) {
     const skillDir = safePath.join(rootDir, relSkillDir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled test path
     fs.mkdirSync(skillDir, { recursive: true });
     writeTestFile(safePath.join(skillDir, 'SKILL.md'), skillBody);
   }
@@ -103,7 +105,7 @@ describe('Audit default artifact excludes (system test)', () => {
     expect(paths.some(p => p.includes('.claude/worktrees'))).toBe(false);
   });
 
-  it('--include-artifacts scans node_modules and dist', async () => {
+  it('--include-artifacts scans dist, and still never node_modules or a worktree', async () => {
     const rootDir = buildProject(tempDir, 'exclude-opt-in');
     const { result, parsed } = await executeCliAndParseYaml(binPath, [
       'audit',
@@ -112,21 +114,21 @@ describe('Audit default artifact excludes (system test)', () => {
     ]);
 
     expect(result.status).toBe(0);
-    // All four skill copies get scanned when the flag is set.
-    expect(parsed['summary']).toMatchObject({ filesScanned: 4 });
+    // The source skill and its gitignored dist/ mirror — 2, not 4: the two
+    // copies under never-crawl directories stay out whatever the flag says.
+    expect(parsed['summary']).toMatchObject({ filesScanned: 2 });
 
     const files = parsed['files'] as Array<{ path: string }>;
     const paths = files.map(f => f.path);
-    expect(paths.some(p => p.includes('node_modules'))).toBe(true);
     expect(paths.some(p => DIST_SEGMENT.test(p))).toBe(true);
-    expect(paths.some(p => p.includes('.claude/worktrees'))).toBe(true);
+    expect(paths.some(p => p.includes('node_modules'))).toBe(false);
+    expect(paths.some(p => p.includes('.claude/worktrees'))).toBe(false);
   });
 
   it('--exclude adds to default excludes (does not replace them)', async () => {
     const rootDir = buildProject(tempDir, 'exclude-additive');
     // Add one extra skill in an unusual location.
     const customDir = safePath.join(rootDir, 'vendor/skill-copy');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled test path
     fs.mkdirSync(customDir, { recursive: true });
     writeTestFile(
       safePath.join(customDir, 'SKILL.md'),
