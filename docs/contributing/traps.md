@@ -668,3 +668,17 @@ marker or an "accepted" argument in the PR leaves the smell counted. The only th
 number is removing the smell at its cause.
 **Tell:** a smell still listed after the directive landed.
 **Remedy:** fix the cause; the bar is New, Accepted and Security Hotspots all zero in the PR comment.
+
+### A subpath module's re-exports flap by platform under knip
+
+A package that publishes subpaths (`./fs`, `./path`, `./testing`) but names only `src/index.ts` as a
+knip entry has every other subpath module judged as an ordinary file. A symbol that module re-exports
+is then attributed through the re-export chain in a walk order that differs by platform: the same
+tree reported `fs.ts › isPathAbsentError` unused on macOS and used on Linux, and a both-ways
+allowlist made the disagreement a red on whichever side did not seed the entry. Breaking an import
+cycle in the package did not change the answer.
+**Tell:** an unused-exports STALE/NEW pair on CI only, naming a re-export in a file that is a
+`package.json` `exports` target.
+**Remedy:** derive the workspace's knip `entry` from `exports` (`sourceEntriesFromExports` in
+`packages/dev-tools/knip.config.ts`) — a public entry's exports are API surface and are never
+reported — then `bun run unused-exports --prune`.

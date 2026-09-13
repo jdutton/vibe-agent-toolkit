@@ -17,6 +17,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # No `node-version`, so the setup action installs the exact Node floor it
+      # derives from root package.json `engines.node`. This is the ONE tier that
+      # runs the unit suite on the floor (validate.yml's matrix runs Node 24;
+      # node-floor.yml only smoke-tests), so a floor-only red shows up here and
+      # nowhere else.
       - name: Setup toolchain
         uses: ./.github/actions/setup
 

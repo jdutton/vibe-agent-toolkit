@@ -1,7 +1,29 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import type { KnipConfig } from 'knip';
 
 /** Every package's TypeScript source lives here; several workspaces below name it. */
 const SRC_TS = 'src/**/*.ts';
+
+/**
+ * The source behind every `package.json` `exports` target under `dist/`
+ * (`./dist/fs.js` → `src/fs.ts`): each is a public entry, so its exports are
+ * API surface, never "unused". Why it is derived and not listed by hand:
+ * `docs/contributing/traps.md`, "A subpath module's re-exports flap by platform".
+ */
+function sourceEntriesFromExports(packageDir: string): string[] {
+  const manifestPath = fileURLToPath(new URL(`../${packageDir}/package.json`, import.meta.url));
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { exports?: Record<string, unknown> };
+  const entries: string[] = [];
+  for (const target of Object.values(manifest.exports ?? {})) {
+    const value = typeof target === 'string' ? target : (target as Record<string, unknown>)['import'];
+    if (typeof value !== 'string') continue;
+    const match = /^\.\/dist\/(.+)\.js$/.exec(value);
+    if (match?.[1] !== undefined) entries.push(`src/${match[1]}.ts`);
+  }
+  return entries;
+}
 
 const config: KnipConfig = {
   // Only report dependency issues (not unused files/exports/types)
@@ -82,9 +104,22 @@ const config: KnipConfig = {
       ignoreDependencies: ['openai'],
     },
 
-    // resource-compiler has CLI entry points beyond index.ts
+    // resource-compiler has CLI entry points beyond index.ts, plus four subpath exports.
+    // A workspace named here does not inherit the `packages/*` block above, so
+    // each restates `project` — otherwise test helpers are judged as source.
     'packages/resource-compiler': {
-      entry: ['src/cli/*.ts'],
+      entry: ['src/cli/*.ts', ...sourceEntriesFromExports('resource-compiler')],
+      project: [SRC_TS],
+    },
+
+    'packages/resources': {
+      entry: sourceEntriesFromExports('resources'),
+      project: [SRC_TS],
+    },
+
+    'packages/agent-runtime': {
+      entry: sourceEntriesFromExports('agent-runtime'),
+      project: [SRC_TS],
     },
 
     // Runtime adapters: some deps provide types or are used in tests/examples
@@ -101,7 +136,7 @@ const config: KnipConfig = {
     // against `eslint`, so knip reads a "referenced optional peer" — intentional,
     // the same shape blessed for `openai` in packages/rag above.
     'packages/utils': {
-      entry: ['src/index.ts', 'eslint/index.cjs', 'eslint/rules/*.cjs'],
+      entry: [...sourceEntriesFromExports('utils'), 'eslint/index.cjs', 'eslint/rules/*.cjs'],
       project: [SRC_TS, 'eslint/*.cjs', 'eslint/rules/*.cjs'],
       ignoreDependencies: ['eslint'],
     },
@@ -121,6 +156,8 @@ const config: KnipConfig = {
 
     // Example package: devDeps used in examples/ directory (outside knip src/ project scope)
     'packages/vat-example-cat-agents': {
+      entry: sourceEntriesFromExports('vat-example-cat-agents'),
+      project: [SRC_TS],
       ignoreDependencies: [
         '@ai-sdk/openai',
         '@anthropic-ai/sdk',

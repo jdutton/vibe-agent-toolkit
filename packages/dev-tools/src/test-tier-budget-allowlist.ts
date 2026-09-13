@@ -181,6 +181,8 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/utils/test/git-run.test.ts', measuredMs: 1686, mechanisms: [MECHANISM.git, MECHANISM.spawn] },
   { file: 'packages/discovery/test/local-scanner.test.ts', measuredMs: 1591, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal, MECHANISM.spawn] },
   { file: 'packages/rag-lancedb/test/barrel-exports.test.ts', measuredMs: 1432, mechanisms: [MECHANISM.nativeModel], note: 'importing the barrel loads the native lancedb runtime' },
+  // Seeded from the serial, coverage-instrumented CI run (`test:coverage`).
+  { file: 'packages/cli/test/org-skills-adopter-findings.test.ts', measuredMs: 1242, mechanisms: [MECHANISM.tempTree], note: 'hover entry: import of the org/skills command module dominates' },
   { file: 'packages/projection-sqlite/test/barrel-exports.test.ts', measuredMs: 1160, mechanisms: [MECHANISM.unclassified], note: 'importing the barrel opens node:sqlite' },
   { file: 'packages/lab/test/repeat.test.ts', measuredMs: 1166, mechanisms: [MECHANISM.unclassified], note: 'spawns a probe child process per repeat to record clear/run ordering' },
   { file: 'packages/projection-sqlite/test/store.test.ts', measuredMs: 1126, mechanisms: [MECHANISM.tempTree, MECHANISM.git] },

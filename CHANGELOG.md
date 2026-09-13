@@ -392,7 +392,9 @@ with a regression test.
 
 - **`vat resources query <sql> [path]`** — runs one read-only SQL statement (`SELECT`, `WITH` or
   `VALUES`; writes and multi-statement text are refused, exit 2) against the tree's projection.
-  `--param <value>` binds `?` placeholders, one flag per value; an unbound placeholder is refused.
+  `--param <value>` binds bare `?` placeholders in order, one flag per value; an unbound placeholder
+  is refused, and so is a `?NNN`, `:name`, `@name` or `$name` placeholder — positional values cannot
+  reach those on every Node this package supports (Node 22.13–22.14 refuse `?NNN` outright).
   `[path]` locates the project and never narrows the corpus — a `WHERE` clause is the only scope.
 
 - **`vat resources check [path]`** — runs the SQL assertions declared under `resources.checks`
