@@ -1,7 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- tmpdir paths constructed in test setup */
 import { readdirSync, statSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { resolveWorkspaceSource } from '../../src/skill-source/sources/workspace-source.js';
@@ -48,7 +48,8 @@ describe('resolveWorkspaceSource', () => {
     vi.stubEnv('TMPDIR', privateTmp);
     vi.stubEnv('TEMP', privateTmp);
     vi.stubEnv('TMP', privateTmp);
-    expect(normalizedTmpdir()).toBe(privateTmp);
+    // `normalizedTmpdir()` is realpath'd in the OS's own spelling (backslashes on Windows).
+    expect(toForwardSlash(normalizedTmpdir())).toBe(privateTmp);
 
     const result = await resolveWorkspaceSource('bar', suite.ctx, {
       skillPath: safePath.join(skillDir, 'SKILL.md'),
