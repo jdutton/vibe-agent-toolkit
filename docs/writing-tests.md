@@ -72,7 +72,7 @@ overlap by only a third — I/O is not the only thing that makes a file slow —
 list should be checked against the other. If the work is legitimate for its tier, add an entry with the mechanism as its
 reason. To re-seed a tier: save the serial root run's output — the coverage job's log
 (`gh api repos/<owner>/<repo>/actions/jobs/<id>/logs`), or locally
-`bunx vitest run --config vitest.<tier>.config.ts > <log>` — then
+`bun run test:<tier>:serial > <log>` — then
 `bun run seed:test-tier-budget <tier> <log>` prints an entry for every file over its budget and a
 refreshed one for every file already listed, with reasons classified from each file's source —
 never an entry for a file under budget (listing one can only widen its ceiling). Prefer the CI

@@ -47,7 +47,7 @@
  *     gh api repos/<owner>/<repo>/actions/jobs/<coverage job id>/logs > cov.log
  *     bun run seed:test-tier-budget unit cov.log   # or integration / system
  *
- * (locally, `bunx vitest run --config vitest.<tier>.config.ts > <log>` — but
+ * (locally, `bun run test:<tier>:serial > <log>` — but
  * the floor's numbers are the ones judged, so prefer the CI log). The seed
  * script prints, in this file's shape, every file that measured OVER its tier
  * budget plus every file already listed (with its fresh measurement),
@@ -163,12 +163,17 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/resources/test/projection-filesystem-extent.test.ts', measuredMs: 1120, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal] },
   { file: 'packages/projection-sqlite/test/store.test.ts', measuredMs: 1025, mechanisms: [MECHANISM.tempTree, MECHANISM.git] },
   { file: 'packages/cli/test/commands/resources-check-payload.test.ts', measuredMs: 1024, mechanisms: [MECHANISM.unclassified], note: 'import of the resources command module dominates; the 56 cases touch no disk' },
-  // Integration and system: bootstrapped from a local serial run of the root configs; the
-  // first coverage-job run on the floor is the measurement to re-seed from.
   { file: 'packages/lab/test/population-capture.test.ts', measuredMs: 1021, mechanisms: [MECHANISM.unclassified], note: 'captures a real projection population; local serial run; 836 ms on the floor' },
-  { file: 'packages/cli/test/integration/cli-basics.integration.test.ts', measuredMs: 7281, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
-  { file: 'packages/dev-tools/test/integration/no-unsafe-backlog-ratchet.integration.test.ts', measuredMs: 5715, mechanisms: [MECHANISM.eslint] },
-  { file: 'packages/cli/test/integration/multi-plugin-marketplace.integration.test.ts', measuredMs: 5312, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn] },
-  { file: 'packages/cli/test/integration/module-load-budget.integration.test.ts', measuredMs: 5286, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
+  // Integration: seeded from the coverage job's first serial run on the floor.
+  { file: 'packages/cli/test/integration/cli-basics.integration.test.ts', measuredMs: 11713, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
+  { file: 'packages/dev-tools/test/integration/no-unsafe-backlog-ratchet.integration.test.ts', measuredMs: 10688, mechanisms: [MECHANISM.eslint] },
+  { file: 'packages/cli/test/integration/projection-skill-extent-corpus.integration.test.ts', measuredMs: 7876, mechanisms: [MECHANISM.git, MECHANISM.projection] },
+  { file: 'packages/claude-marketplace/test/integration/inventory-extent-corpus.integration.test.ts', measuredMs: 6584, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.projection] },
+  { file: 'packages/cli/test/integration/module-load-budget.integration.test.ts', measuredMs: 6102, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
+  { file: 'packages/cli/test/integration/claude-budget.integration.test.ts', measuredMs: 5810, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
+  { file: 'packages/rag-lancedb/test/integration/indexing.integration.test.ts', measuredMs: 5483, mechanisms: [MECHANISM.tempTree, MECHANISM.nativeModel] },
+  { file: 'packages/cli/test/integration/multi-plugin-marketplace.integration.test.ts', measuredMs: 5312, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn], note: 'local serial run; 4671 ms on the floor' },
+  // System: bootstrapped from a local serial run; the coverage job's system step (after the
+  // integration step first passes) is the measurement to re-seed from.
   { file: 'packages/rag-lancedb/test/system/large-scale-filtering.system.test.ts', measuredMs: 43119, mechanisms: [MECHANISM.nativeModel] },
 ];

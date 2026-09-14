@@ -73,13 +73,13 @@ jobs:
       # report. NET_AVAILABLE as in validate.yml: the network suites run here
       # too, so their durations are measured where they are judged.
       - name: Per-file duration ratchet — integration tier (serial, on the floor)
-        run: bunx vitest run --config vitest.integration.config.ts
+        run: bun run test:integration:serial
         env:
           GH_TOKEN: ${{ github.token }}
           NET_AVAILABLE: "1"
 
       - name: Per-file duration ratchet — system tier (serial, on the floor)
-        run: bunx vitest run --config vitest.system.config.ts
+        run: bun run test:system:serial
         env:
           GH_TOKEN: ${{ github.token }}
           NET_AVAILABLE: "1"

@@ -6,9 +6,9 @@
  * read the same instrument.
  *
  * Run: `bun run seed:test-tier-budget <unit|integration|system> <log>`
- * where `<log>` is the captured stdout of `bunx vitest run --config
- * vitest[.<tier>].config.ts` (locally) or the CI coverage job's log for the
- * same command (`gh api repos/<owner>/<repo>/actions/jobs/<id>/logs`) — the
+ * where `<log>` is the captured stdout of `bun run test:<tier>:serial`
+ * (locally) or the CI coverage job's log for the same configs
+ * (`gh api repos/<owner>/<repo>/actions/jobs/<id>/logs`) — the
  * floor's numbers are the ones the ratchet is judged against, so prefer them.
  * A per-package turbo log is NOT a source: under turbo a file's duration is
  * the contention of every other package's workers, not its cost.

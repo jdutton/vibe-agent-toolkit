@@ -381,7 +381,7 @@ with a regression test.
   of it), judged only by the three serial root configs — in CI, the coverage job, which now also
   runs the integration and system tiers serially on the floor — and never in a per-package turbo
   lane, where a 200 ms file read as 1–3 s and six CI runs each crossed a different handful of
-  files; the allowlist is re-seeded from the serial runs (112 → 28 entries) and
+  files; the allowlist is re-seeded from the serial runs (112 → 32 entries) and
   `bun run seed:test-tier-budget <tier> <log>` reads that run's saved output instead of turbo
   logs; `no-io-in-unit-tier` and `no-registry-count-pin` on the test tier.
 
