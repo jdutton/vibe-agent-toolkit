@@ -181,6 +181,8 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/utils/test/git-run.test.ts', measuredMs: 1686, mechanisms: [MECHANISM.git, MECHANISM.spawn] },
   { file: 'packages/discovery/test/local-scanner.test.ts', measuredMs: 1591, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal, MECHANISM.spawn] },
   { file: 'packages/rag-lancedb/test/barrel-exports.test.ts', measuredMs: 1432, mechanisms: [MECHANISM.nativeModel], note: 'importing the barrel loads the native lancedb runtime' },
+  // Seeded from the parallel CI validate run: 234 ms serial (coverage job), 5.6× under turbo contention.
+  { file: 'packages/projection-sqlite/test/query.test.ts', measuredMs: 1312, mechanisms: [MECHANISM.unclassified], note: 'opens an ephemeral node:sqlite store and writes two blobs per test, 67 tests' },
   // Seeded from the serial, coverage-instrumented CI run (`test:coverage`).
   { file: 'packages/cli/test/org-skills-adopter-findings.test.ts', measuredMs: 1242, mechanisms: [MECHANISM.tempTree], note: 'hover entry: import of the org/skills command module dominates' },
   { file: 'packages/projection-sqlite/test/barrel-exports.test.ts', measuredMs: 1160, mechanisms: [MECHANISM.unclassified], note: 'importing the barrel opens node:sqlite' },
@@ -219,6 +221,8 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/cli/test/org-skill-upload-payload.test.ts', measuredMs: 367, mechanisms: [MECHANISM.tempTree] },
   { file: 'packages/cli/test/integration/cli-basics.integration.test.ts', measuredMs: 8109, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
   { file: 'packages/cli/test/integration/multi-plugin-marketplace.integration.test.ts', measuredMs: 6135, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn] },
+  // Seeded from a local full gate at load 7: 800 ms alone, 7× under the parallel integration run.
+  { file: 'packages/resources/test/integration/crawl-source-parity.integration.test.ts', measuredMs: 5601, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.projection], note: 'populates a projection over a real temp tree through both crawl sources, 31 cases' },
   { file: 'packages/cli/test/integration/module-load-budget.integration.test.ts', measuredMs: 5489, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
   { file: 'packages/claude-marketplace/test/integration/inventory-extent-corpus.integration.test.ts', measuredMs: 5019, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.projection] },
   { file: 'packages/cli/test/integration/audit-git-url.integration.test.ts', measuredMs: 3833, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn] },

@@ -145,6 +145,17 @@ cstmp.sparseimage && hdiutil attach cstmp.sparseimage -mountpoint "$PWD/csmnt"`,
 `TMPDIR="$PWD/csmnt" bunx vitest run <file>` — every `normalizedTmpdir()` fixture lands on the
 case-sensitive volume with no test change.
 
+### A POSIX-absolute literal is not absolute on Windows
+
+A fixture root written as `'/proj'` has no drive letter, so `safePath.resolve('/proj', x)` on the
+Windows runner yields `D:/proj/x` and every expectation spelled `/proj/...` fails there and only
+there. Nothing local reproduces it, and a Windows run that dies at an earlier gate step hides it
+until that step is green.
+**Tell:** Windows-only red whose diff is the same path with a drive prefix on the received side.
+**Remedy:** build the root from the real temp root — `safePath.join(normalizedTmpdir(), '<name>')`
+— and derive the expectation with `safePath.join(root, …)`, never a template literal. Model:
+`packages/resources/test/okf/config.test.ts`.
+
 ## Builds and `dist/`
 
 ### `tsc --build` emits `dist/` despite type errors

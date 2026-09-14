@@ -10,6 +10,7 @@
  */
 
 import type * as VatUtils from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
 import { okfBundleRuns } from '../../src/okf/config.js';
@@ -27,7 +28,9 @@ vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
   return { ...actual, resolveAssetReference };
 });
 
-const CONFIG_DIR = '/proj';
+// 🪤 NOT a `/proj` literal — see `config.test.ts`: a POSIX-absolute literal gains
+// the CWD's drive under `safePath.resolve` on Windows and fails there only.
+const CONFIG_DIR = safePath.join(normalizedTmpdir(), 'vat-okf-resolution-fixture');
 const SCOPED_ROOT = '@vat-okf-fixture/not-installed/bundle';
 
 function runsFor(): ReturnType<typeof okfBundleRuns> {
@@ -57,7 +60,7 @@ describe('resolveBundleRoot — what may degrade to a path', () => {
   ])("degrades the resolver's own refusal for %s", (_case, code) => {
     const root = withResolverThrowing(wrappedResolverRefusal(code), () => runsFor()[0]?.root);
 
-    expect(root).toBe(`${CONFIG_DIR}/${SCOPED_ROOT}`);
+    expect(root).toBe(safePath.join(CONFIG_DIR, SCOPED_ROOT));
   });
 
   it('propagates a throw that is not the resolver refusing', () => {
