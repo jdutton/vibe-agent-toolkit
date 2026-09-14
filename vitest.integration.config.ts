@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-import { createIntegrationTestConfig } from './vitest.shared.js';
+import { createIntegrationTestConfig, rootSerialReporters } from './vitest.shared.js';
 
 export default defineConfig({
   test: {
@@ -12,5 +12,10 @@ export default defineConfig({
       'packages/*/test/**/*.integration.test.ts',
       'packages/*/src/**/*.integration.test.ts',
     ],
+    // One file at a time, by construction: this config is the per-file duration
+    // ratchet's judge, and a duration is only a measurement when nothing else is
+    // running — see `rootSerialReporters` in vitest.shared.ts.
+    fileParallelism: false,
+    reporters: rootSerialReporters(['default']),
   },
 });

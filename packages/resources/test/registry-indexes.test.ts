@@ -1,7 +1,8 @@
 import { promises as fs } from 'node:fs';
 
 
-import { setupAsyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { ResourceRegistry } from '../src/resource-registry.js';
@@ -13,7 +14,6 @@ import { ResourceRegistry } from '../src/resource-registry.js';
  * filesystem actually stored, not what the test typed.
  */
 async function registerCrawled(registry: ResourceRegistry, dir: string): Promise<void> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
   const entries = await fs.readdir(dir);
   await registry.addResources(entries.map((entry) => safePath.join(dir, entry)));
 }
@@ -41,7 +41,6 @@ describe('ResourceRegistry indexes', () => {
 
     it('should return resources by filename', async () => {
       const file = safePath.join(tempDir, 'test.md');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
       await fs.writeFile(file, '# Test', 'utf-8');
       await registry.addResource(file);
 
@@ -53,13 +52,9 @@ describe('ResourceRegistry indexes', () => {
     it('should return multiple resources with same name in different directories', async () => {
       const dir1 = safePath.join(tempDir, 'dir1');
       const dir2 = safePath.join(tempDir, 'dir2');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
       await fs.mkdir(dir1);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
       await fs.mkdir(dir2);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
       await fs.writeFile(safePath.join(dir1, 'README.md'), '# Dir 1', 'utf-8');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
       await fs.writeFile(safePath.join(dir2, 'README.md'), '# Dir 2', 'utf-8');
 
       // Use baseDir so same-named files get unique path-relative IDs
@@ -100,7 +95,6 @@ describe('ResourceRegistry indexes', () => {
       // each other is settled at authoring time and pins nothing.
       expect(ON_DISK).not.toBe(ON_DISK.normalize('NFC'));
       expect(ON_DISK.normalize('NFC')).toBe(IN_HREF);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
       await fs.writeFile(safePath.join(tempDir, ON_DISK), '# Target\n', 'utf-8');
     });
 
@@ -118,7 +112,6 @@ describe('ResourceRegistry indexes', () => {
     ];
 
     it.each(HREF_FORMS)('resolves a $label link href to the same file', async ({ href }) => {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
       await fs.writeFile(safePath.join(tempDir, 'source.md'), `[t](./${href})\n`, 'utf-8');
       const baseDirRegistry = new ResourceRegistry({ baseDir: tempDir });
       await registerCrawled(baseDirRegistry, tempDir);
@@ -142,14 +135,12 @@ describe('ResourceRegistry indexes', () => {
   describe('getResourcesByChecksum', () => {
     it('should return empty array for non-existent checksum', () => {
       const fakeChecksum = 'a'.repeat(64);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const resources = registry.getResourcesByChecksum(fakeChecksum as any);
       expect(resources).toEqual([]);
     });
 
     it('should return resource by checksum', async () => {
       const file = safePath.join(tempDir, 'test.md');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename
       await fs.writeFile(file, '# Test Content', 'utf-8');
       const metadata = await registry.addResource(file);
 
@@ -162,8 +153,8 @@ describe('ResourceRegistry indexes', () => {
       const identicalContent = '# Identical Content';
       const file1 = safePath.join(tempDir, 'file1.md');
       const file2 = safePath.join(tempDir, 'file2.md');
-      await fs.writeFile(file1, identicalContent, 'utf-8'); // eslint-disable-line security/detect-non-literal-fs-filename
-      await fs.writeFile(file2, identicalContent, 'utf-8'); // eslint-disable-line security/detect-non-literal-fs-filename
+      await fs.writeFile(file1, identicalContent, 'utf-8');  
+      await fs.writeFile(file2, identicalContent, 'utf-8');  
 
       const meta1 = await registry.addResource(file1);
       await registry.addResource(file2);

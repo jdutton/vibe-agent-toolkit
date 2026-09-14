@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 /**
  * Tests for GitTracker - git-ignore checking with caching
  */

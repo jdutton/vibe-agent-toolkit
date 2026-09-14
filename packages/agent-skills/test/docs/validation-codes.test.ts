@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test file reads a fixture path computed from __dirname — not user input
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

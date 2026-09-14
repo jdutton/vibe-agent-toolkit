@@ -33,16 +33,11 @@
  */
 
 
-import {
-  __readCrawlTimingSnapshot,
-  __setCrawlTimingForTest,
-  CRAWL_STORE_READ_ID,
-  CRAWL_STORE_WRITE_ID,
-  safePath,
-} from '@vibe-agent-toolkit/utils';
+import { CRAWL_STORE_READ_ID, CRAWL_STORE_WRITE_ID, safePath } from '@vibe-agent-toolkit/utils';
 import {
   GitTracker,
 } from '@vibe-agent-toolkit/utils/git';
+import { __readCrawlTimingSnapshot, __setCrawlTimingForTest } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ContributorRegistry } from '../src/projection/contributor.js';

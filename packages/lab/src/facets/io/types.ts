@@ -180,7 +180,7 @@ export interface IoCommandStats {
    * **The value the subject PRINTED, never the env var the caller set.** An A/B
    * of two enumerators is selected by `VAT_RESOURCES_CRAWL` / `VAT_EXTENT_SOURCE`,
    * and the variable proves only what was asked for. Before this field existed,
-   * the 2026-09-11 git-vs-filesystem A/B had to infer which arm each side ran
+   * the first git-vs-filesystem A/B had to infer which arm each side ran
    * from a call-site signature (`realizations.js:51` at 0 calls versus 12,003)
    * — a call count is a measurement of *some* arm, and nothing on the row said
    * which. Read by the shared `harness/lane.ts` reader, so the two facets

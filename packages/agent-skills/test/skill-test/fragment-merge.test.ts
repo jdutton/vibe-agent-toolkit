@@ -7,7 +7,9 @@ import {
   mergeFragmentsToToolEval,
 } from '../../src/skill-test/fragment-merge.js';
 import { GradingArmError, GradingNonceError, reconcileGrading } from '../../src/skill-test/grading-adapter.js';
-import { partitionFragmentsByArm } from '../../src/skill-test/run-harness.js';
+import { __internal } from '../../src/skill-test/run-harness.js';
+
+const { partitionFragmentsByArm } = __internal;
 
 const nonce = 'run-nonce-1';
 /** A nonce that is NOT this run's — the signature of a forged or left-behind fragment. */

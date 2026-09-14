@@ -56,7 +56,6 @@ let root: string;
  * @param contents - What to write
  */
 function write(path: string, contents: string): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed under this test's own mkdtemp root
   writeFileSync(path, contents, 'utf8');
 }
 

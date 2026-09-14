@@ -36,7 +36,6 @@ export async function stageDirInto(
   const dest = safePath.join(ctx.stagingRoot, key);
   assertOwnedIfExists(dest, currentUid);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest under our 0700 staging root
   await mkdir(dest, { recursive: true });
   await copyTreeNoSymlinks(srcDir, dest);
   return toForwardSlash(dest);
@@ -48,14 +47,12 @@ function ensureOwned0700Dir(dir: string, currentUid: number): void {
   assertOwnedIfExists(dir, currentUid);
   // Re-enforce 0700 in case the dir already existed with looser permissions.
   // assertOwnedIfExists above confirms we own it (if it exists), so chmod is safe.
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own staging root confirmed owned above
   chmodSync(dir, 0o700);
 }
 
 function assertOwnedIfExists(dir: string, currentUid: number): void {
   let st;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- ownership probe on our own staging path
     st = statSync(dir);
   } catch (err) {
     // Only an absent path is safe to ignore. A different error (e.g. EACCES on
@@ -73,13 +70,11 @@ function assertOwnedIfExists(dir: string, currentUid: number): void {
 
 /** Recursively copy `src` into `dest`, refusing any symlinked entry. */
 async function copyTreeNoSymlinks(src: string, dest: string): Promise<void> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- src is a resolved source dir
   const entries = readdirSync(src, { withFileTypes: true });
   for (const entry of entries) {
     const srcPath = safePath.join(src, entry.name);
     const destPath = safePath.join(dest, entry.name);
     // lstat (not stat) so a symlink is detected, never followed.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- srcPath under caller-provided src
     const st = lstatSync(srcPath);
     if (st.isSymbolicLink()) {
       throw new Error(
@@ -87,7 +82,6 @@ async function copyTreeNoSymlinks(src: string, dest: string): Promise<void> {
       );
     }
     if (st.isDirectory()) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- destPath under our 0700 staging root
       await mkdir(destPath, { recursive: true });
       await copyTreeNoSymlinks(srcPath, destPath);
     } else if (st.isFile()) {

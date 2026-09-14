@@ -12,12 +12,12 @@
  * (e.g. token rotation between runs) construct a fresh validator / primitive
  * call and get a fresh memo.
  *
- * Lifted out of `external-link-validator.ts` (where it shipped first in #125)
- * so the slice-3 content-fetch primitive shares the same implementation —
+ * Lifted out of `external-link-validator.ts` (where it shipped first)
+ * so the content-fetch primitive shares the same implementation —
  * see CLAUDE.md "code duplication policy" (jscpd would flag a clone).
  *
- * Per design issue #113 review on PR #125 (memoize all token sources, not
- * just `command` sources).
+ * Memoizes ALL token sources, not just `command` sources: every resolver is
+ * treated as expensive.
  */
 
 import { defaultRunCommand } from './link-auth/resolve-token.js';

@@ -54,7 +54,7 @@
  *
  * ## What declining bought
  *
- * Measured on VAT's own repository on 2026-08-23, through `vat resources
+ * Measured on VAT's own repository, through `vat resources
  * validate`, which then ran this lane for a default-on always-loaded budget
  * check. ⚠️ It no longer does — that check is now `vat claude budget`, and
  * validate has no knowledge of the budget at all — so the harness below is

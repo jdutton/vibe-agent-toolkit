@@ -7,7 +7,7 @@ Simple test agents for validating runtime adapter functionality.
 This package provides minimal, focused agents specifically designed for testing runtime adapters. Unlike the rich example agents in `vat-example-cat-agents`, these agents are intentionally simple to:
 
 - Test adapter functionality without domain complexity
-- Avoid circular dependencies (this package has no internal dependencies)
+- Avoid circular dependencies (this package depends only on `@vibe-agent-toolkit/agent-runtime`, never on a runtime adapter)
 - Provide fast, predictable test execution
 - Serve as minimal examples of agent patterns
 
@@ -69,7 +69,7 @@ describe('Runtime Adapter', () => {
 |---------|-------------|------------------------|
 | Purpose | Test adapters | Demonstrate VAT patterns |
 | Complexity | Minimal | Rich/realistic |
-| Dependencies | None | Runtime packages (for demos) |
+| Dependencies | `agent-runtime` only | `agent-runtime`, `schema`, `transports` (adapters for the demos) |
 | Domain | Generic | Cat breeding |
 | Use Case | Testing | Learning & examples |
 

@@ -3,6 +3,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { NODE_EXECUTABLE, gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 
 import type { AuditCommandOptions } from '../src/commands/audit.js';
 import { deriveScanRoot, getValidationResults, resetAuditCaches } from '../src/commands/audit.js';
@@ -22,8 +23,7 @@ export const binPath = safePath.resolve(__dirname, '../dist/bin.js');
  * Safe for use in tests - binPath is resolved at module load time
  */
 export function runCliCommand(command: string, ...args: string[]): SpawnSyncReturns<string> {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- node is required for CLI integration tests
-  return spawnSync('node', [binPath, command, ...args], {
+  return spawnSync(NODE_EXECUTABLE, [binPath, command, ...args], {
     encoding: 'utf-8',
   });
 }
@@ -71,18 +71,14 @@ export function runAuditCli(
  * place across fixture-based integration tests.
  */
 export function initTestGitRepo(dir: string): void {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo init in tests
-  spawnSync('git', ['init', '-b', 'main', '--quiet', dir], { stdio: 'ignore' });
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo config in tests
-  spawnSync('git', ['-C', dir, 'config', 'user.email', 'test@example.com'], { stdio: 'ignore' });
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo config in tests
-  spawnSync('git', ['-C', dir, 'config', 'user.name', 'Test'], { stdio: 'ignore' });
+  spawnSync(gitExecutable(), ['init', '-b', 'main', '--quiet', dir], { stdio: 'ignore' });
+  spawnSync(gitExecutable(), ['-C', dir, 'config', 'user.email', 'test@example.com'], { stdio: 'ignore' });
+  spawnSync(gitExecutable(), ['-C', dir, 'config', 'user.name', 'Test'], { stdio: 'ignore' });
 }
 
 /** Stage every file under a fixture git repo (so `git ls-files` walkers see them). */
 export function gitAddAll(dir: string): void {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for staging files in tests
-  spawnSync('git', ['-C', dir, 'add', '.'], { stdio: 'ignore' });
+  spawnSync(gitExecutable(), ['-C', dir, 'add', '.'], { stdio: 'ignore' });
 }
 
 /**
@@ -95,8 +91,7 @@ export function gitAddAll(dir: string): void {
 export function commitTestFixture(dir: string, message = 'fixture'): void {
   initTestGitRepo(dir);
   gitAddAll(dir);
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for fixture commit in tests
-  spawnSync('git', ['-C', dir, 'commit', '-q', '-m', message], { stdio: 'ignore' });
+  spawnSync(gitExecutable(), ['-C', dir, 'commit', '-q', '-m', message], { stdio: 'ignore' });
 }
 
 /**

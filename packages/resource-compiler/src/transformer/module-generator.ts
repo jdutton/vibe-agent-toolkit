@@ -30,7 +30,6 @@ export function generateModuleReplacement(
   resolvedPath: string,
 ): ts.VariableStatement {
   // Read and parse the markdown file
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated path from import resolution
   const markdownContent = readFileSync(resolvedPath, 'utf-8');
   const resource = toMarkdownResource(markdownContent);
 

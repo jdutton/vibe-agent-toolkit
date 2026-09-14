@@ -90,19 +90,19 @@
     "README.md"
   ],
   "scripts": {
-    "build": "rimraf --glob dist \"*.tsbuildinfo\" && tsc",
+    "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "clean": "rimraf dist *.tsbuildinfo"
+    "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },
   "dependencies": {
     "@vibe-validate/git": "0.20.1",
     "ignore": "^7.0.5",
     "picomatch": "^4.0.3",
     "which": "^5.0.0",
-    "yaml": "^2.6.1"
+    "yaml": "^2.9.0"
   },
   "peerDependencies": {
     "eslint": ">=9.0.0"
@@ -113,12 +113,7 @@
     }
   },
   "devDependencies": {
-    "@types/picomatch": "^4.0.2",
     "@types/which": "^3.0.4",
-    "eslint": "^9.39.5",
-    "rimraf": "^6.0.1",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.11",
     "zod": "^3.25.0"
   },
   "publishConfig": {

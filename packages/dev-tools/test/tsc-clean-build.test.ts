@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 
-import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest';
 
 import {
@@ -10,9 +11,8 @@ import {
   pruneStaleEmit,
   parseArgs,
   stagingDir,
-} from '../src/tsc-clean-build.js';
+} from '../src/clean-build.js';
 
-/* eslint-disable security/detect-non-literal-fs-filename -- test file with dynamic temp paths */
 
 const EMPTY_MODULE = 'export {};';
 const BARREL_JS = 'index.js';
@@ -46,6 +46,8 @@ function emitGroup(
   }
   return { js, declaration };
 }
+
+/** Only run where the OS actually enforces directory permissions. */
 
 describe('pruneStaleEmit', () => {
   const suite = setupSyncTempDirSuite('tsc-clean-build');
@@ -113,6 +115,24 @@ describe('pruneStaleEmit', () => {
   it('is a no-op when dist does not exist', () => {
     expect(pruneStaleEmit(tempDir)).toEqual([]);
   });
+
+  it.skipIf(CANNOT_DENY_READS)(
+    'throws when the declaration map is refused, rather than passing stale output off as live',
+    () => {
+      // "Unreadable" above means the map is not JSON — a state the tool can leave
+      // alone, because the map says nothing. A map the OS will not let it read
+      // says nothing for a different reason, and treating the two alike lets a
+      // permissions accident keep dead emit alive indefinitely.
+      emitGroup(tempDir, 'index', { withSource: false });
+      const map = safePath.join(tempDir, 'dist', 'index.d.ts.map');
+      fs.chmodSync(map, 0o000);
+      try {
+        expect(() => pruneStaleEmit(tempDir)).toThrow(/EACCES/);
+      } finally {
+        fs.chmodSync(map, 0o600);
+      }
+    },
+  );
 
   it('does not touch files outside dist', () => {
     const source = safePath.join(tempDir, 'src-marker.ts');
@@ -182,10 +202,6 @@ function distPath(packageRoot: string, relativePath: string): string {
   return safePath.join(packageRoot, 'dist', relativePath);
 }
 
-/** Only run where the OS actually enforces directory permissions. */
-const skipUnlessRealPermissions =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
-
 describe('promoteStagedEmit', () => {
   const suite = setupSyncTempDirSuite('tsc-promote-staged');
   let tempDir: string;
@@ -253,7 +269,7 @@ describe('promoteStagedEmit', () => {
     expect(fs.statSync(live.js).mtimeMs).toBe(before);
   });
 
-  it.skipIf(skipUnlessRealPermissions)(
+  it.skipIf(CANNOT_DENY_READS)(
     'copies in place, loudly, when the rename keeps being refused',
     () => {
       // Stands in for the Windows hazard the retry exists for: a rename onto a

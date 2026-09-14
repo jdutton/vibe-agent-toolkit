@@ -19,9 +19,7 @@ describe('agent validate command (integration)', () => {
 
   it('should validate correct agent manifest', () => {
     const agentDir = safePath.join(tempDir, 'valid-agent');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
     fs.mkdirSync(agentDir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
     fs.writeFileSync(
       safePath.join(agentDir, 'agent.yaml'),
       `metadata:
@@ -45,9 +43,7 @@ spec:
 
   it('should show validation errors for invalid manifest', () => {
     const agentDir = safePath.join(tempDir, 'invalid-agent');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
     fs.mkdirSync(agentDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
     fs.writeFileSync(
       safePath.join(agentDir, 'agent.yaml'),
       `metadata:

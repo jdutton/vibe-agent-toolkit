@@ -144,8 +144,8 @@ export function blobRowFor(
   // runs. Deliberately shared rather than re-implemented here: two walkers over
   // one tree is the shape that drifts, and `blobs.sectionCount ===
   // count(blob_sections)` is then true by construction instead of by
-  // coincidence. (It held by coincidence until 2026-08-13, when a private
-  // `countHeadings` here was deleted in favour of this call.)
+  // coincidence. (It held by coincidence while a private `countHeadings`
+  // lived here; that was deleted in favour of this call.)
   const headingCount = flattenHeadings(parsed.headings).length;
 
   return {

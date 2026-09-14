@@ -1,11 +1,10 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- temp dir paths constructed in test setup */
 import { rmSync, writeFileSync } from 'node:fs';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { resolveAssetReference } from '../../src/asset-reference.js';
 import { mkdirSyncReal, safePath, toForwardSlash } from '../../src/path-utils.js';
-import { setupSyncTempDirSuite } from '../../src/test-helpers.js';
+import { setupSyncTempDirSuite } from '../../src/testing/temp-dir.js';
 
 /**
  * Regression test for the actual issue #102 root cause: when a package's

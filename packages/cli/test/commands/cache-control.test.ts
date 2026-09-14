@@ -1,5 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-
 /**
  * The cache control surface: root `--no-cache`, and `vat cache clear`.
  *
@@ -255,6 +253,41 @@ describe('clearCacheDirectory', () => {
       expect(report.bytesRemoved).toBeLessThan(fake.totalBytes);
     } finally {
       rm.mockRestore();
+    }
+  });
+
+  it('measures a file that vanished mid-walk as nothing, and one the OS refuses as a failure', async () => {
+    // A concurrent run pruning its own temp file is the case the 0 is for. A
+    // refused stat used to read as the same 0 — an entry that is still there,
+    // reported as reclaimed, and about to fail the delete anyway.
+    const fake = await createFakeCache(workDir);
+    const realLstat = fs.lstat;
+    const vanished = safePath.join(fake.root, 'parse', 'gone.bin');
+    await fs.writeFile(vanished, Buffer.alloc(64));
+    const lstat = vi.spyOn(fs, 'lstat').mockImplementation(async (target, ...rest) => {
+      if (String(target) === vanished) {
+        throw Object.assign(new Error('ENOENT: vanished'), { code: 'ENOENT' });
+      }
+      return (realLstat as (...args: unknown[]) => Promise<never>)(target, ...rest);
+    });
+    try {
+      const report = await clearCacheDirectory(fake.root);
+      expect(report.status).toBe('success');
+      // The vanished file was listed (so it counts as an entry) but weighs nothing.
+      expect(report.entriesRemoved).toBe(fake.fileCount + 1);
+      expect(report.bytesRemoved).toBe(fake.totalBytes);
+    } finally {
+      lstat.mockRestore();
+    }
+
+    const refused = await createFakeCache(workDir);
+    const denied = vi.spyOn(fs, 'lstat').mockRejectedValue(
+      Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }),
+    );
+    try {
+      await expect(clearCacheDirectory(refused.root)).rejects.toMatchObject({ code: 'EACCES' });
+    } finally {
+      denied.mockRestore();
     }
   });
 

@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- tempDir paths are test-generated, safe in test context */
 /**
  * What `validateLink` looks up on disk while resolving a `local_file` /
  * `local_directory` link — and, as of the pass-1′ work, what it no longer does.
@@ -42,9 +41,9 @@ import {
   createSymlinkAsync,
   FsLookupCache,
   safePath,
-  setupAsyncTempDirSuite,
   symlinkCapability,
 } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { fragmentIndex, validateLink } from '../src/link-validator.js';

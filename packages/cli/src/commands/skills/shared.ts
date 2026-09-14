@@ -5,6 +5,7 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { createLogger } from '../../utils/logger.js';
@@ -28,12 +29,10 @@ export interface PackageJson {
 export async function readPackageJson(cwd: string): Promise<PackageJson> {
 	const packageJsonPath = safePath.join(cwd, 'package.json');
 
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- Reading from validated current directory
 	if (!existsSync(packageJsonPath)) {
 		throw new Error(`package.json not found in current directory: ${cwd}`);
 	}
 
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- Reading from validated current directory
 	const content = await readFile(packageJsonPath, 'utf-8');
 	return JSON.parse(content) as PackageJson;
 }
@@ -49,10 +48,9 @@ export function validateSkillSourcePath(
 	skillPath: string,
 	logger: ReturnType<typeof createLogger>
 ): string {
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from config-driven glob discovery
 	if (!existsSync(skillPath)) {
 		logger.error(`Skill source not found: ${skillPath}`);
-		process.exit(1);
+		process.exit(ExitCode.ERROR);
 	}
 
 	return skillPath;

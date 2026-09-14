@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test helpers legitimately use dynamic paths
 
 /**
@@ -10,6 +9,7 @@ import * as fs from 'node:fs';
 
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { expect } from 'vitest';
 import * as yaml from 'yaml';
 
@@ -62,34 +62,31 @@ export function executeCli(
   const stdoutFd = fs.openSync(stdoutFile, 'w');
   const stderrFd = fs.openSync(stderrFile, 'w');
 
+  let result: ReturnType<typeof spawnSync>;
   try {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path
-    const result = spawnSync('node', [binPath, ...args], {
+    result = spawnSync(NODE_EXECUTABLE, [binPath, ...args], {
       cwd: options?.cwd,
       env: options?.env,
       stdio: ['inherit', stdoutFd, stderrFd],
     });
-
-    // Close file descriptors before reading
+  } finally {
+    // Closed exactly once, here, whether or not the spawn threw — so there is
+    // no second close to absorb an EBADF from.
     fs.closeSync(stdoutFd);
     fs.closeSync(stderrFd);
+  }
 
-    // Read output from files
-    const stdout = fs.readFileSync(stdoutFile, 'utf-8');
-    const stderr = fs.readFileSync(stderrFile, 'utf-8');
-
+  try {
     return {
       status: result.status,
-      stdout,
-      stderr,
+      stdout: fs.readFileSync(stdoutFile, 'utf-8'),
+      stderr: fs.readFileSync(stderrFile, 'utf-8'),
     };
   } finally {
-    // Close FDs if not already closed (e.g., spawnSync threw before closeSync)
-    try { fs.closeSync(stdoutFd); } catch { /* already closed */ }
-    try { fs.closeSync(stderrFd); } catch { /* already closed */ }
-    // Cleanup temp files
-    try { fs.unlinkSync(stdoutFile); } catch { /* ignore */ }
-    try { fs.unlinkSync(stderrFile); } catch { /* ignore */ }
+    // `force: true` tolerates a file that is already gone, which is the only
+    // failure the old bare catches were written for.
+    fs.rmSync(stdoutFile, { force: true });
+    fs.rmSync(stderrFile, { force: true });
   }
 }
 
@@ -202,8 +199,7 @@ export function testConfigError(
 
   fs.writeFileSync(safePath.join(projectDir, 'docs/test.md'), '# Test');
 
-  // eslint-disable-next-line sonarjs/no-os-command-from-path
-  return spawnSync('node', [binPath, 'resources', 'scan'], {
+  return spawnSync(NODE_EXECUTABLE, [binPath, 'resources', 'scan'], {
     encoding: 'utf-8',
     cwd: projectDir,
   });
@@ -250,7 +246,8 @@ export function executeCliAndParseYaml(
 ): { status: number | null; stdout: string; stderr: string; parsed: Record<string, unknown> } {
   const result = executeCli(binPath, args, options);
   let parsed: Record<string, unknown> = {};
-  if (result.status === 0 && result.stdout.includes('---')) {
+  // A completed run publishes its document on OK and on FINDINGS alike.
+  if ((result.status === 0 || result.status === 1) && result.stdout.includes('---')) {
     parsed = parseYamlOutput(result.stdout);
   }
   return { ...result, parsed };

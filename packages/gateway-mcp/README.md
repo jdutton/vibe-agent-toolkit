@@ -33,7 +33,7 @@ Expose a single VAT agent via MCP stdio transport:
 
 ```typescript
 import { StdioMCPGateway, NoOpObservabilityProvider } from '@vibe-agent-toolkit/gateway-mcp';
-import { haikuValidator } from '@vibe-agent-toolkit/vat-example-cat-agents';
+import { haikuValidatorAgent } from '@vibe-agent-toolkit/vat-example-cat-agents';
 
 const gateway = new StdioMCPGateway({
   name: 'haiku-validator-server',
@@ -62,7 +62,7 @@ Expose multiple agents through one MCP server:
 
 ```typescript
 import { StdioMCPGateway, NoOpObservabilityProvider } from '@vibe-agent-toolkit/gateway-mcp';
-import { haikuValidator, photoAnalyzer } from '@vibe-agent-toolkit/vat-example-cat-agents';
+import { haikuValidatorAgent, photoAnalyzerAgent } from '@vibe-agent-toolkit/vat-example-cat-agents';
 
 const gateway = new StdioMCPGateway({
   name: 'vat-agents',
@@ -361,7 +361,7 @@ For complete architecture and future phases, see:
 - [State Persistence Patterns](../../docs/research/state-persistence-patterns.md)
 - [VAT Architecture](../../docs/architecture/README.md)
 
-**Note:** Detailed design documents (requirements, implementation plans) are kept in `docs/plans/` (gitignored). Architectural decisions and constraints are documented here in the README.
+**Note:** Architectural decisions and constraints are documented here in the README and in [`docs/architecture/`](../../docs/architecture/README.md); there is no separate committed design-document directory for this package.
 
 ## License
 

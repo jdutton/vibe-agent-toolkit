@@ -232,7 +232,7 @@ Always use forward slashes (`/`), never backslashes (`\`):
 Before committing, run:
 
 ```bash
-vat agent audit my-skill/SKILL.md
+vat audit my-skill/SKILL.md
 ```
 
 **4. Avoid external URLs in skill instructions**
@@ -357,10 +357,10 @@ Always validate skills before sharing or deploying:
 
 ```bash
 # Validate single skill
-vat agent audit my-skill/SKILL.md
+vat audit my-skill/SKILL.md
 
 # Validate all skills
-vat agent audit skills/ --recursive
+vat audit skills/
 
 # Import to VAT format
 vat agent import my-skill/SKILL.md
@@ -372,7 +372,7 @@ Add to your `.husky/pre-commit` hook:
 
 ```bash
 #!/bin/sh
-vat agent audit skills/ --recursive
+vat audit skills/
 if [ $? -eq 1 ]; then
   echo "Skill validation failed. Fix errors before committing."
   exit 1
@@ -387,7 +387,7 @@ Add to GitHub Actions workflow:
 - name: Validate Agent Skills
   run: |
     npm install -g vibe-agent-toolkit
-    vat agent audit skills/ --recursive
+    vat audit skills/
 ```
 
 ## Common Pitfalls
@@ -432,7 +432,7 @@ See [API Documentation](./reference/api.md)
 
 ❌ Bad: Committing without checking links
 
-✅ Good: Running `vat agent audit` before every commit
+✅ Good: Running `vat audit` before every commit
 
 ### 6. Using Reserved Words
 
@@ -514,7 +514,7 @@ Schedule periodic validation:
 
 ```bash
 # Weekly skill audit
-vat agent audit skills/ --recursive > audit-report.yaml
+vat audit skills/ > audit-report.yaml
 ```
 
 ## Testing Skills
@@ -589,7 +589,7 @@ This guide is based on the specification but adds VAT-specific best practices an
 
 ## Related Documentation
 
-- [Audit Command](../cli/audit.md) - Validation rules and error codes
+- [Audit Command](../../packages/cli/docs/audit.md) - `vat audit` usage; codes in [validation-codes.md](../validation-codes.md)
 - [Import Command](../cli/import.md) - Converting skills to VAT format
 - [agent-skills Package](../../packages/agent-skills/README.md) - Validation API
 

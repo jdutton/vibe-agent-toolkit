@@ -339,7 +339,7 @@ describe('buildInterruptedCheckInput', () => {
     // error-severity finding.
     const payload = buildCheckOutputData(killed());
 
-    expect(payload['status']).toBe('error');
+    expect(payload.summary.errors).toBeGreaterThan(0);
   });
 
   it('gets ONE run-integrity report when it died before any check completed', () => {
@@ -352,10 +352,10 @@ describe('buildInterruptedCheckInput', () => {
     // survives; the builder's derived refusal stands down when a run-integrity
     // finding is already on the document.
     const payload = buildCheckOutputData(killed([POPULATION]));
-    const issues = payload['issues'] as { code: string }[];
+    const issues = payload.findings;
 
-    expect(payload['checksRun']).toBe(0);
-    expect(payload['status']).toBe('error');
+    expect(payload.data.checksRun).toBe(0);
+    expect(payload.summary.errors).toBeGreaterThan(0);
     expect(issues.map((issue) => issue.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN']);
   });
 
@@ -582,7 +582,7 @@ describe('the document a SILENT completion publishes', () => {
     diedOf({ kind: 'no-output', code: ABORT_EXIT_CODE });
 
   it('fails the run, exactly as the signal death does', () => {
-    expect(buildCheckOutputData(aborted())['status']).toBe('error');
+    expect(buildCheckOutputData(aborted()).summary.errors).toBeGreaterThan(0);
   });
 
   it('gives the IDENTICAL heap remedy a SIGABRT reader gets', () => {
@@ -610,6 +610,7 @@ describe('the document a SILENT completion publishes', () => {
     // agrees with itself: it passed on Windows against 150 while Node was
     // emitting 134, and the system case failed on the real platform instead.
     // 134 is measured on macOS, Linux AND `windows-latest`.
+    // eslint-disable-next-line local/no-registry-count-pin -- the literal IS the measurement; deriving it (128 + SIGABRT) is the round-trip bug this test exists to refuse
     expect(NODE_FATAL_ABORT_EXIT_CODE).toBe(134);
   });
 
@@ -630,7 +631,7 @@ describe('the document a run that DIED publishes', () => {
   it('fails the run rather than publishing an empty pass', () => {
     // ⛔ The whole point of the critical fix: an abnormal death must reach the
     // same fail-closed document a watchdog kill does, never `exit(0)`.
-    expect(buildCheckOutputData(died(ABORTED))['status']).toBe('error');
+    expect(buildCheckOutputData(died(ABORTED)).summary.errors).toBeGreaterThan(0);
   });
 
   it('reports it under the non-overridable run-integrity code', () => {

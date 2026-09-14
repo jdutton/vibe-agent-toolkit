@@ -22,7 +22,7 @@
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist *.tsbuildinfo"
+    "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },
   "keywords": [
     "vat",
@@ -31,10 +31,11 @@
     "profiling"
   ],
   "dependencies": {
+    "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "commander": "^12.1.0",
     "which": "^5.0.0",
-    "zod": "^3.23.8"
+    "zod": "^3.25.0"
   },
   "license": "MIT",
   "devDependencies": {

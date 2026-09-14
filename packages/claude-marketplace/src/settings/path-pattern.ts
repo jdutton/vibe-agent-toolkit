@@ -61,8 +61,9 @@
  * node-ignore's is an artefact of compiling to a regex. The permissions page
  * names the gitignore spec, so the spec wins.
  *
- * - `[!bc]` / `[^bc]` NEGATE the class here; node-ignore@6 reads them as the
- *   literal set `{!, b, c}` / `{^, b, c}`.
+ * - `[!bc]` / `[^bc]` NEGATE the class here. node-ignore@6 read them as the
+ *   literal set `{!, b, c}` / `{^, b, c}`; node-ignore@7 negates them too, so
+ *   this one is no longer a divergence — the suite pins the agreement.
  * - An unterminated `[` is a literal `[` here; node-ignore's regex fails to
  *   compile and it answers `false`. `[]` and `[!]` are the literal characters
  *   here rather than regex accidents.

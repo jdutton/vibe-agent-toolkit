@@ -17,13 +17,11 @@
   ],
   "scripts": {
     "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
-    "build:watch": "tsc --build --watch",
-    "clean": "rm -rf dist *.tsbuildinfo",
+    "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:system": "vitest run --config vitest.system.config.ts",
-    "test:watch": "vitest watch",
-    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -31,14 +29,11 @@
     "@vibe-agent-toolkit/agent-skills": "workspace:*",
     "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "zod": "^3.24.1",
+    "zod": "^3.25.0",
     "zod-to-json-schema": "^3.24.5"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "ignore": "^6.0.0",
-    "typescript": "~5.7.2",
-    "vitest": "^4.1.11"
+    "ignore": "^7.0.5"
   },
   "keywords": [
     "claude",

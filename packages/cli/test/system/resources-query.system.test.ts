@@ -47,6 +47,8 @@
 
 import { spawnSync } from 'node:child_process';
 
+import { direntKindFollowingSync } from '@vibe-agent-toolkit/utils';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
@@ -206,7 +208,7 @@ function databasesUnder(directory: string): string[] {
   const walk = (current: string): void => {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const child = safePath.join(current, entry.name);
-      if (entry.isDirectory()) {
+      if (direntKindFollowingSync(current, entry) === 'directory') {
         walk(child);
       } else if (entry.name === PROJECTION_DATABASE) {
         found.push(safePath.relative(directory, child));
@@ -256,8 +258,7 @@ function createCommittedCorpus(options: {
     fs.writeFileSync(safePath.join(root, options.directory, name), content, 'utf-8');
   }
   const git = (args: string[]): void => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- fixture setup
-    spawnSync('git', args, { cwd: root });
+    spawnSync(gitExecutable(), args, { cwd: root });
   };
   git(['init', '--quiet']);
   git(['add', '-A']);

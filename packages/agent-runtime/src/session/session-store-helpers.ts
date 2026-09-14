@@ -5,6 +5,8 @@
  * and FileSessionStore by providing common validation and state management logic.
  */
 
+import { isSingleFsSegment } from '@vibe-agent-toolkit/utils';
+
 import type { RuntimeSession } from './types.js';
 
 /**
@@ -12,12 +14,12 @@ import type { RuntimeSession } from './types.js';
  * @throws Error if session ID is invalid
  */
 export function validateSessionId(sessionId: string): void {
-  // Prevent path traversal attacks
-  if (sessionId.includes('/') || sessionId.includes('\\') || sessionId.includes('..')) {
-    throw new Error(`Invalid session ID: contains path separators`);
+  // A session id becomes `join(sessionsDir, id)`: it must be ONE entry name.
+  if (!isSingleFsSegment(sessionId)) {
+    throw new Error(`Invalid session ID: must be a single path segment`);
   }
-  // Prevent empty or unreasonably long IDs
-  if (sessionId.length === 0 || sessionId.length > 255) {
+  // Unreasonably long: `isSingleFsSegment` already refuses the empty string.
+  if (sessionId.length > 255) {
     throw new Error(`Invalid session ID: invalid length`);
   }
 }

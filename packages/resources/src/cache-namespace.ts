@@ -40,9 +40,9 @@
  * That claim covers VAT's own code and **not** the parsers VAT depends on, and
  * it is stated here so it is not read wider than it holds. This package declares
  * `remark-parse ^11.0.0`, `yaml ^2.6.1`, `parse5 ^7.3.0` and
- * `github-slugger ^2.0.0` — four semver **ranges**, not four pins (analysed
- * 2026-08-17, re-read off `packages/resources/package.json` 2026-09-05 and all
- * four are still ranges). Two machines installing the *identical* VAT release
+ * `github-slugger ^2.0.0` — four semver **ranges**, not four pins (read off
+ * `packages/resources/package.json`; re-check there, this sentence is not
+ * derived from it). Two machines installing the *identical* VAT release
  * can therefore resolve different minors of any of them, share one namespace,
  * and write disagreeing facts under identical keys.
  *
@@ -119,7 +119,13 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import { normalizedTmpdir, resolveFromImportMeta, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  isPathAbsentError,
+  normalizedTmpdir,
+  resolveFromImportMeta,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
 
 import { parseFactsShapeSource } from './schemas/parse-facts.js';
 
@@ -143,16 +149,19 @@ function readVersion(moduleDir: string): string {
       const manifestPath = safePath.join(moduleDir, relative);
       // VAT's OWN published manifest, not corpus content: npm writes it, this
       // repo commits it, and its encoding is not an adopter's choice.
-      // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-raw-text-decode -- path derived from this module's own location; own manifest, so the encoding is not discovered
+      // eslint-disable-next-line local/no-raw-text-decode -- path derived from this module's own location; own manifest, so the encoding is not discovered
       const parsed: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
       if (typeof parsed === 'object' && parsed !== null) {
         const version = (parsed as { version?: unknown }).version;
         if (typeof version === 'string' && version !== '') return version;
       }
-    } catch {
-      // Try the next candidate. A package with no readable manifest falls
-      // through to the caller's 'unknown', which still yields a usable (if
-      // uninformative) namespace rather than throwing on a cache lookup.
+    } catch (error) {
+      // No manifest at this candidate: try the next. A package with no
+      // manifest at either falls through to 'unknown', which still yields a
+      // usable (if uninformative) namespace rather than throwing on a cache
+      // lookup. A manifest that IS there but cannot be read or is not JSON is
+      // our own install being broken, and that stays loud.
+      if (!isPathAbsentError(error)) throw error;
     }
   }
   return 'unknown';

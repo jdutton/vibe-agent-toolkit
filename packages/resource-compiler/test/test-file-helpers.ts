@@ -3,7 +3,6 @@
  * Used across multiple test files to reduce duplication
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test helper with controlled inputs */
 
 import { writeFileSync } from 'node:fs';
 

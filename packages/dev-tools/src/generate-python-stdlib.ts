@@ -154,7 +154,6 @@ for (const result of results) {
 // eslint-disable-next-line sonarjs/no-alphabetical-sort -- see above
 const modules = [...union].sort();
 
-// eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from import.meta.url
 writeFileSync(OUTPUT_PATH, renderArtifact(results, modules), 'utf8');
 
 console.log(`\nWrote ${modules.length} modules to ${OUTPUT_PATH}`);

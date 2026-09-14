@@ -10,6 +10,7 @@ import { mkdtempSync } from 'node:fs';
 
 
 import type { ClaudeMarketplaceConfig } from '@vibe-agent-toolkit/resources';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
@@ -262,7 +263,7 @@ async function marketplacePublishCommand(_options: MarketplacePublishOptions, co
       published: results,
     });
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'MarketplacePublish');
   }

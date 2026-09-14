@@ -31,7 +31,6 @@
  * wrongly included it would still be equal.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import {

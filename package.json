@@ -50,7 +50,8 @@
     "lodash": "4.18.1",
     "turbo": "2.10.12",
     "ws": "8.21.1",
-    "handlebars": "4.7.9"
+    "handlebars": "4.7.9",
+    "vibe-agent-toolkit": "workspace:*"
   },
   "scripts": {
     "build": "turbo run build && turbo run build:skills",
@@ -61,20 +62,30 @@
     "test:unit": "turbo run test:unit",
     "test:cli": "bun --filter @vibe-agent-toolkit/cli run test:unit",
     "test:watch": "vitest",
-    "test:coverage": "vibe-validate run \"vitest run --coverage --no-file-parallelism\"",
-    "test:integration": "vibe-validate run \"turbo run test:integration --concurrency=1\"",
-    "test:system": "vibe-validate run \"turbo run test:system --concurrency=1\"",
+    "test:coverage": "vitest run --coverage",
+    "test:unit:serial": "vitest run --config vitest.config.ts",
+    "test:integration:serial": "vitest run --config vitest.integration.config.ts",
+    "test:system:serial": "vitest run --config vitest.system.config.ts",
+    "test:integration": "vibe-validate run \"turbo run test:integration --concurrency=4 --continue\"",
+    "test:system": "vibe-validate run \"turbo run test:system --concurrency=4 --continue\"",
     "validate-links": "vibe-validate run \"vitest run --config vitest.system.config.ts\"",
     "lint": "eslint . --cache --cache-location .eslintcache --ignore-pattern '**/dist/**' --ignore-pattern '**/*.config.ts' --max-warnings=0",
     "lint:fix": "eslint . --cache --cache-location .eslintcache --ignore-pattern '**/dist/**' --ignore-pattern '**/*.config.ts' --fix",
     "typecheck": "turbo run typecheck",
     "dependency-check": "bunx knip --config packages/dev-tools/knip.config.ts",
+    "unused-exports": "tsx packages/dev-tools/src/unused-exports.ts",
+    "comment-density": "tsx packages/dev-tools/src/comment-density.ts",
+    "print-failed-step-output": "tsx packages/dev-tools/src/print-failed-step-output.ts",
     "duplication-check": "tsx packages/dev-tools/src/duplication-check.ts",
     "duplication-update-baseline": "tsx packages/dev-tools/src/jscpd-update-baseline.ts",
+    "generate:claude-md": "bun run --cwd packages/dev-tools generate:claude-md",
     "generate:python-stdlib": "tsx packages/dev-tools/src/generate-python-stdlib.ts",
+    "generate:tsconfig-refs": "bun run --cwd packages/dev-tools generate:tsconfig-refs",
+    "generate:workflow": "bun run --cwd packages/dev-tools generate:workflow",
     "guard:audit-quality": "tsx packages/dev-tools/src/audit-quality-gate.ts",
     "guard:test-heap": "tsx packages/dev-tools/src/check-test-heap-budget.ts",
-    "validate": "vibe-validate validate",
+    "seed:test-tier-budget": "tsx packages/dev-tools/src/test-tier-budget-seed.ts",
+    "validate": "CI=1 vibe-validate validate --force",
     "validate-structure": "tsx packages/dev-tools/src/validate-repo-structure.ts",
     "validate-version": "tsx packages/dev-tools/src/validate-version.ts",
     "pre-commit": "vibe-validate pre-commit",
@@ -99,6 +110,7 @@
     "bakeoff:parsers": "tsx packages/dev-tools/src/parser-bakeoff.ts"
   },
   "devDependencies": {
+    "@eslint-community/eslint-plugin-eslint-comments": "^4.8.1",
     "@eslint/js": "^9.39.5",
     "@secretlint/secretlint-rule-preset-recommend": "^11.7.1",
     "@types/adm-zip": "^0.5.8",
@@ -129,10 +141,6 @@
     "vibe-validate": "0.20.1",
     "vitest": "4.1.11",
     "yaml": "2.9.0"
-  },
-  "dependencies": {
-    "@lancedb/lancedb": "0.22.3",
-    "apache-arrow": "15.0.2"
   },
   "patchedDependencies": {
     "@jscpd/finder@4.0.4": "patches/@jscpd%2Ffinder@4.0.4.patch"

@@ -27,7 +27,6 @@ export function loadVerboseHelp(section?: string): string {
   const helpPath = safePath.join(packageRoot, 'docs', filename);
 
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is constructed from known safe components
     const content = readFileSync(helpPath, 'utf-8');
     return content;
   } catch (error) {

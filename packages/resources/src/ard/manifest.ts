@@ -51,8 +51,6 @@ export async function writeArdManifest(
   manifest: ArdManifest,
   outputPath: string
 ): Promise<void> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputPath is the caller's declared destination; this function's whole purpose is to write there
   await mkdir(dirname(outputPath), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputPath is the caller's declared destination; this function's whole purpose is to write there
   await writeFile(outputPath, `${JSON.stringify(manifest, undefined, 2)}\n`, 'utf-8');
 }

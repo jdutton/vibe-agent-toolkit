@@ -3,12 +3,12 @@
  * Tests the core functionality without CLI process.exit calls
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 
-import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { glob } from 'glob';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
@@ -22,7 +22,7 @@ import { createMultipleMarkdownFiles, verifyOperationResults } from '../test-fil
 async function generateTypesForDirectory(
   inputDir: string,
   pattern: string,
-): Promise<Array<{ sourcePath: string; declarationPath: string; success: boolean }>> {
+): Promise<Array<{ sourcePath: string; declarationPath: string; success: boolean; error?: string }>> {
   const files = await glob(pattern, {
     cwd: inputDir,
     absolute: true,
@@ -45,12 +45,13 @@ async function generateTypesForDirectory(
         declarationPath,
         success: true,
       });
-    } catch {
-      // Silently ignore errors and mark as failed
+    } catch (error) {
+      // Carried into the result so a failing case shows WHY, not just that.
       results.push({
         sourcePath: filePath,
         declarationPath: getDeclarationPath(filePath),
         success: false,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   }

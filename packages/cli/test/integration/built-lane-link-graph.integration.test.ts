@@ -36,7 +36,6 @@
  * exclusion as its own correctness proof. When it is fixed, the middle row's
  * assertions flip in the change that fixes them.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- every path derives from a mkdtemp root created here. */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 

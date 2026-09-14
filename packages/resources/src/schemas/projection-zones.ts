@@ -57,7 +57,7 @@ export type TreeRole = z.infer<typeof TreeRoleSchema>;
  * ## Why this table exists at all
  *
  * A naive "one zone instance per directory" for the `claude-context` lens
- * gives 466 instances in this repository (measured 2026-08-12: 466
+ * gives 466 instances in this repository (measured: 466
  * directories contain at least one tracked file). All 466 share extent,
  * resolution semantics, interpretation, and every part of traversal policy
  * except the ancestry chain — they differ *only in entry point*. With the

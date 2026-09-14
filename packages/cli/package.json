@@ -18,18 +18,20 @@
   "files": [
     "dist",
     "docs",
+    "schemas",
     "README.md",
     "!dist/pipeline-oracles",
     "!dist/qa-snapshot"
   ],
   "scripts": {
-    "build": "tsx src/utils/validate-help-files.ts && tsx ../dev-tools/src/tsc-clean-build.ts && tsx ../dev-tools/src/prepare-bin.ts",
+    "build": "tsx src/utils/validate-help-files.ts && tsx ../dev-tools/src/tsc-clean-build.ts && bun run generate:schemas && tsx ../dev-tools/src/prepare-bin.ts",
+    "generate:schemas": "tsx scripts/generate-json-schemas.ts",
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:system": "vitest run --config vitest.system.config.ts",
     "typecheck": "tsc --noEmit",
-    "clean": "rimraf dist *.tsbuildinfo"
+    "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },
   "keywords": [
     "cli",
@@ -43,7 +45,7 @@
   "engines": {
     "node": ">=22.13.0"
   },
-  "//dependencies-note": "DO NOT add example agent packages or adopter packages here. Adopter packages (like vat-development-agents) depend on the CLI binary at build time \u2014 declaring them as deps creates a circular build dependency. They are built in a second turbo pass via package#task overrides in turbo.json.",
+  "//dependencies-note": "DO NOT add example agent packages or adopter packages here. Adopter packages (like vat-development-agents) depend on the CLI binary at build time — declaring them as deps creates a circular build dependency. They are built in a second turbo pass via package#task overrides in turbo.json.",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
     "@vibe-agent-toolkit/agent-config": "workspace:*",
@@ -58,23 +60,16 @@
     "adm-zip": "^0.6.0",
     "commander": "^12.1.0",
     "picomatch": "^4.0.3",
-    "semver": "^7.7.3",
+    "semver": "^7.8.5",
     "tar": "^7.5.7",
-    "yaml": "^2.6.1",
-    "zod": "^3.24.1"
+    "yaml": "^2.9.0",
+    "zod": "^3.25.0"
   },
   "devDependencies": {
-    "@types/adm-zip": "^0.5.7",
-    "@types/node": "^22.10.5",
-    "@types/picomatch": "^4.0.2",
-    "@types/semver": "^7.7.1",
     "@types/tar": "^6.1.13",
     "@vibe-agent-toolkit/dev-tools": "workspace:*",
     "@vibe-agent-toolkit/rag": "workspace:*",
-    "@vibe-agent-toolkit/rag-lancedb": "workspace:*",
-    "rimraf": "^6.0.1",
-    "typescript": "^5.7.3",
-    "vitest": "^4.1.11"
+    "@vibe-agent-toolkit/rag-lancedb": "workspace:*"
   },
   "publishConfig": {
     "access": "public"

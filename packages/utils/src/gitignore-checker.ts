@@ -11,6 +11,7 @@ import path from 'node:path';
 
 import ignore, { type Ignore } from 'ignore';
 
+import { isPathAbsentError } from './errors/errno.js';
 import { safePath , toForwardSlash } from './path-utils.js';
 import { readTextContentSync } from './text-file.js';
 
@@ -49,7 +50,6 @@ export function loadGitignoreRules(gitRoot: string, baseDir?: string): Ignore | 
   // Load .gitignore files from git root down to baseDir
   for (const dir of dirsToCheck) {
     const gitignorePath = safePath.join(dir, '.gitignore');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from validated gitRoot and baseDir
     if (fs.existsSync(gitignorePath)) {
       try {
         // Through the decoding seam. A `.gitignore` written by PowerShell's `>`
@@ -57,8 +57,13 @@ export function loadGitignoreRules(gitRoot: string, baseDir?: string): Ignore | 
         // string of NUL-interleaved garbage — every pattern silently wrong, with
         // no error anywhere.
         ig.add(readTextContentSync(gitignorePath).text);
-      } catch {
-        // Skip gitignore files we can't read
+      } catch (error) {
+        // Gone between `existsSync` and the read: no rules here. A `.gitignore`
+        // the OS refuses to read (`EACCES`), or one that is a directory
+        // (`EISDIR`), holds rules this checker cannot honour — and a crawl that
+        // quietly proceeded without them enumerated the ignored tree with
+        // nothing anywhere saying so. Those stay loud.
+        if (!isPathAbsentError(error)) throw error;
       }
     }
   }

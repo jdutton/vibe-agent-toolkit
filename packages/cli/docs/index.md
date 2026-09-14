@@ -106,6 +106,7 @@ Diagnose vat setup and environment health
 
 - `0` - No check failed (a check that could not be determined is reported as ❓, not fatal)
 - `1` - One or more checks failed
+- `2` - Doctor itself could not run (an internal failure; no verdict was produced)
 
 **Creates/modifies:** None (read-only diagnostics)
 
@@ -169,7 +170,7 @@ Execute agent locally for testing
 **Exit codes:**
 
 - `0` - Execution succeeded
-- `1` - Execution failed
+- `2` - Execution failed (the agent could not run, or threw)
 
 **Creates/modifies:** Depends on agent behavior
 
@@ -198,9 +199,8 @@ Run a packaged skill's eval suite in a headless, context-isolated Claude session
 **Exit codes:**
 
 - `0` - Run completed, all expectations passed
-- `1` - Harness broke (internal error, stall, timeout)
-- `2` - Preflight failure (bad config, unresolvable required companion, auth guard)
-- `3` - Bootstrap failure
+- `1` - Run completed and at least one eval failed
+- `2` - The harness could not run; a `Reason: internal | preflight | bootstrap` line on stderr says why
 - `4` - Eval failure (run completed, expectations did not all pass)
 
 **Creates/modifies:** A harness directory (removed unless `--keep`)
@@ -237,7 +237,8 @@ Create vector embeddings for semantic search over documentation
 **Exit codes:**
 
 - `0` - Indexing succeeded
-- `1` - Indexing failed
+- `1` - Indexing completed but some resources could not be indexed (the report names them)
+- `2` - Indexing could not run (no provider, unreadable config)
 
 **Creates/modifies:**
 
@@ -268,7 +269,7 @@ Search indexed documentation semantically
 **Exit codes:**
 
 - `0` - Search succeeded
-- `1` - Search failed (no index, query error)
+- `2` - Search could not run (no index, query error)
 
 **Creates/modifies:** None (read-only query)
 
@@ -428,7 +429,6 @@ its policy. The full matrix and rationale live in
 Place `vibe-agent-toolkit.config.yaml` at project root:
 
 ```yaml
-version: 1
 resources:
   include:
     - "docs/**/*.md"
@@ -440,9 +440,17 @@ resources:
 
 ## Exit Code Summary
 
-- `0` - Success (validation passed, scan completed, build succeeded)
-- `1` - Expected failures (validation errors, broken links, build failures)
-- `2` - System errors (invalid config, directory not found, missing dependencies)
+One contract, every command:
+
+- `0` - **OK.** The command ran and found nothing at error severity. Warnings and informational findings are in the document, not the exit code (a command that offers `--strict` promotes warnings).
+- `1` - **Findings.** The command ran to completion and what it examined failed its gate: an error-severity finding, a failed eval, a broken link, a partial index.
+- `2` - **Error.** The command could not do its job: a usage mistake (unknown flag or verb, a retired `--only`), a root path that does not exist or is not something the verb can act on, an unreadable config, a missing dependency, an internal failure (a crash anywhere in a command ends on `2`, never on Node's default `1`). Where a verb has more than one such cause it says which on stderr (`vat skill test run` prints `Reason: …`) — never in a fourth exit code. A path INSIDE a tree that the command cannot read is a finding, not an error: `vat audit` degrades it to `SCAN_PATH_UNREADABLE` and exits `0` or `1` on what it could read.
+
+A CI wrapper reads `$?` the same way for every verb:
+
+```bash
+case $? in 0) ;; 1) echo findings ;; *) echo broken; exit 1 ;; esac
+```
 
 ## Output Formats
 

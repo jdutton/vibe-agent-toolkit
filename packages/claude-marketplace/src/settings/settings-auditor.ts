@@ -12,6 +12,7 @@ import {
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
+import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
 
 import { getClaudeProjectPaths, getClaudeUserPaths } from '../paths/claude-paths.js';
 import {
@@ -312,7 +313,6 @@ export async function validateSettingsFile(
   let raw: unknown;
 
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- user-provided path
     const content = await fs.readFile(filePath, 'utf-8');
     raw = JSON.parse(content) as unknown;
   } catch (err) {
@@ -368,28 +368,53 @@ export interface SettingsFileField {
 /**
  * Get summary of fields present in a settings file (for --file output).
  *
- * Returns `null` when the file could not be read, parsed, or is not an object.
- * `[]` means the file parsed and genuinely declares no fields — the two were the
- * same empty array before, so "I could not look" was reported as "there is
- * nothing there".
+ * Returns `null` when there is nothing to list: the file is not there, is not
+ * JSON, or is not an object. `[]` means the file parsed and genuinely declares
+ * no fields — the two were the same empty array before, so "I could not look"
+ * was reported as "there is nothing there".
+ *
+ * A file that IS there and the OS refuses (`EACCES`, `EISDIR`) is neither, and
+ * propagates: `null` for it would report a permission bit as an empty settings
+ * file. `validateSettingsFile` on the same path already carries the OS message
+ * as an error finding, and the CLI's error path names it.
  */
 export async function getSettingsFileFields(
   filePath: string
 ): Promise<SettingsFileField[] | null> {
-  let raw: unknown;
+  const raw = await readSettingsObject(filePath);
+  if (raw === null) return null;
 
+  const fields: SettingsFileField[] = [];
+  summarizeFields(raw, fields);
+  return fields;
+}
+
+/**
+ * The parsed object at `filePath`, or `null` when there is nothing to list —
+ * absent, not JSON, or JSON that is not an object. A refusal propagates.
+ */
+async function readSettingsObject(filePath: string): Promise<Record<string, unknown> | null> {
+  let content: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- user-provided path
-    const content = await fs.readFile(filePath, 'utf-8');
+    content = await fs.readFile(filePath, 'utf-8');
+  } catch (error) {
+    if (isPathAbsentError(error)) return null;
+    throw error;
+  }
+
+  let raw: unknown;
+  try {
     raw = JSON.parse(content) as unknown;
-  } catch {
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
     return null;
   }
 
   if (typeof raw !== 'object' || raw === null) return null;
+  return raw as Record<string, unknown>;
+}
 
-  const obj = raw as Record<string, unknown>;
-  const fields: SettingsFileField[] = [];
+function summarizeFields(obj: Record<string, unknown>, fields: SettingsFileField[]): void {
 
   for (const [key, value] of Object.entries(obj)) {
     if (Array.isArray(value)) {
@@ -406,8 +431,6 @@ export async function getSettingsFileFields(
       fields.push({ key, value: String(value) });
     }
   }
-
-  return fields;
 }
 
 export {type EffectiveSettings, type SettingsLayer} from './settings-merger.js';

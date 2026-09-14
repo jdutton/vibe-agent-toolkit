@@ -2,6 +2,7 @@
  * Agent list command - discovers and lists all agents
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { discoverAgents, type DiscoveredAgent } from '../../utils/agent-discovery.js';
@@ -76,7 +77,7 @@ export async function listCommand(options: ListCommandOptions): Promise<void> {
       }
     }
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'AgentList');
   }

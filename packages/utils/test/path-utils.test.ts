@@ -10,7 +10,9 @@ import {
   hasParentTraversalSegment,
   isAbsoluteAnyPlatform,
   isAbsolutePath,
+  isSingleFsSegment,
   normalizePath,
+  relativeEscapesRoot,
   resolveFromImportMeta,
   safePath,
   toAbsolutePath,
@@ -131,6 +133,69 @@ describe('path-utils', () => {
     });
   });
 
+  describe('relativeEscapesRoot', () => {
+    it('is true for the parent itself and for anything that climbs through it', () => {
+      expect(relativeEscapesRoot('..')).toBe(true);
+      expect(relativeEscapesRoot('../sibling')).toBe(true);
+      expect(relativeEscapesRoot('../../etc/passwd')).toBe(true);
+    });
+
+    it('is true for an absolute answer on either platform (a cross-drive relative on Windows)', () => {
+      expect(relativeEscapesRoot('/etc/passwd')).toBe(true);
+      expect(relativeEscapesRoot('C:/other/drive')).toBe(true);
+      expect(relativeEscapesRoot(String.raw`\\server\share`)).toBe(true);
+    });
+
+    it('is false for a member, and for a name that merely BEGINS with two dots', () => {
+      expect(relativeEscapesRoot('docs/guide.md')).toBe(false);
+      expect(relativeEscapesRoot('..notes.md')).toBe(false);
+      expect(relativeEscapesRoot('..cache/x')).toBe(false);
+      expect(relativeEscapesRoot('a..b')).toBe(false);
+      // A colon inside a later segment is not a drive letter.
+      expect(relativeEscapesRoot('docs/D:notes.md')).toBe(false);
+    });
+
+    it('is false for the root itself (the empty relative) — equality is the caller\'s question', () => {
+      expect(relativeEscapesRoot('')).toBe(false);
+    });
+
+    it('takes the forward-slashed spelling safePath.relative produces, not a raw backslash one', () => {
+      // A `..\x` is not a `../x` to this function; callers normalize first,
+      // which is what `safePath.relative` already does.
+      expect(relativeEscapesRoot(toForwardSlash(String.raw`..\x`))).toBe(true);
+    });
+  });
+
+  describe('isSingleFsSegment', () => {
+    it('accepts an ordinary entry name, including one with two dots inside or in front', () => {
+      expect(isSingleFsSegment('my-skill')).toBe(true);
+      expect(isSingleFsSegment('a..b')).toBe(true);
+      expect(isSingleFsSegment('..cache')).toBe(true);
+      expect(isSingleFsSegment('.hidden')).toBe(true);
+    });
+
+    it('refuses the two directory pseudo-entries and the empty name', () => {
+      expect(isSingleFsSegment('')).toBe(false);
+      expect(isSingleFsSegment('.')).toBe(false);
+      expect(isSingleFsSegment('..')).toBe(false);
+    });
+
+    it('refuses anything carrying a separator on either platform', () => {
+      expect(isSingleFsSegment('a/b')).toBe(false);
+      expect(isSingleFsSegment(String.raw`a\b`)).toBe(false);
+      expect(isSingleFsSegment('/abs')).toBe(false);
+      expect(isSingleFsSegment('../victim')).toBe(false);
+    });
+
+    it('refuses a NUL byte, which the OS refuses too but later and less legibly', () => {
+      expect(isSingleFsSegment('a\0b')).toBe(false);
+    });
+
+    it('refuses a Windows drive spelling, which is absolute on that platform', () => {
+      expect(isSingleFsSegment('C:')).toBe(false);
+    });
+  });
+
   describe('toAbsolutePath', () => {
     it('should convert relative path to absolute', () => {
       const result = toAbsolutePath(TEST_DOCS_README, TEST_PROJECT_PATH);
@@ -146,7 +211,6 @@ describe('path-utils', () => {
     });
 
     it('should resolve parent directory references', () => {
-      // eslint-disable-next-line sonarjs/no-duplicate-string -- test-specific path fragment repeated across related test cases
       const result = toAbsolutePath('../README.md', `${TEST_PROJECT_PATH}/docs`);
       expect(result).toBe(toForwardSlash(path.resolve(`${TEST_PROJECT_PATH}/docs`, '../README.md')));
     });
@@ -264,7 +328,6 @@ describe('path-utils', () => {
 
   describe('safePath', () => {
     describe('safePath.join', () => {
-      // eslint-disable-next-line sonarjs/no-duplicate-string -- expected output string repeated across related Windows path test cases
       it('should return forward slashes on all platforms', () => {
         const result = safePath.join(String.raw`C:\Users`, 'docs', 'file.md');
         expect(result).not.toContain('\\');
@@ -362,7 +425,6 @@ describe('path-utils', () => {
       const result = resolveFromImportMeta(import.meta.url);
       expect(typeof result).toBe('string');
       expect(path.isAbsolute(result)).toBe(true);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test asserts real file
       const contents = readFileSync(result, 'utf8');
       expect(contents).toContain('returns the absolute path of the current test file');
     });
@@ -370,7 +432,6 @@ describe('path-utils', () => {
     it('resolves relative segments against the module URL', () => {
       const result = resolveFromImportMeta(import.meta.url, SIBLING_SOURCE);
       expect(path.isAbsolute(result)).toBe(true);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test asserts real file
       expect(existsSync(result)).toBe(true);
       expect(result.endsWith('path-utils.ts')).toBe(true);
     });
@@ -378,7 +439,6 @@ describe('path-utils', () => {
     it('composes multiple segments portably', () => {
       const result = resolveFromImportMeta(import.meta.url, '..', 'src', 'path-utils.ts');
       expect(path.isAbsolute(result)).toBe(true);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test asserts real file
       expect(existsSync(result)).toBe(true);
     });
 

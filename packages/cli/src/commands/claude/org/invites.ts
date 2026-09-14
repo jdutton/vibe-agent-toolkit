@@ -1,6 +1,7 @@
 /**
  * `vat claude org invites` — manage organization invites via Admin API.
  */
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { Command } from 'commander';
 
 import { addPaginationOptions, buildPaginationParams, executeOrgCommand } from './helpers.js';
@@ -62,7 +63,7 @@ Example:
     .requiredOption('--role <role>', 'Role for the invitee (user, developer, admin)')
     .action(() => {
       writeNotYetImplementedStub('org invites create');
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     });
 
   // delete (stub)
@@ -72,7 +73,7 @@ Example:
     .argument('<invite-id>', 'Invite ID')
     .action(() => {
       writeNotYetImplementedStub('org invites delete');
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     });
 
   command.addCommand(listCmd);

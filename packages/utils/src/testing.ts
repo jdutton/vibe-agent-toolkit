@@ -29,6 +29,20 @@ import { normalizedTmpdir, safePath } from './path-utils.js';
 // `setupSyncTempDirSuite` and every sibling from a published subpath. A module
 // that is both a definition site and a barrel loses the barrel first.
 export * from './test-helpers.js';
+// The crawl-timing recorder's test seams: read the snapshot, point it at a
+// directory, flush a dump. Test scaffolding, so they live on this subpath and
+// not on the runtime barrel that publishes the recorder itself.
+export {
+  __readCrawlTimingSnapshot,
+  __setCrawlTimingForTest,
+  __writeCrawlTimingDumpForTest,
+} from './crawl-timing.js';
+// The three fixture modules the sinks' suites share: the ONE temp-dir family,
+// the host gates, and the hostile tree every sink is tested against.
+export * from './testing/executables.js';
+export * from './testing/hostile-tree.js';
+export * from './testing/platform-gates.js';
+export * from './testing/temp-dir.js';
 
 /** A planted fixture tree and the means to remove it. */
 export interface TempCorpus {
@@ -62,7 +76,6 @@ export function createTempCorpus(
 ): TempCorpus {
   const root = mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
   for (const [name, content] of Object.entries(corpus)) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a fixture name from the caller's own literal corpus, under this call's fresh mkdtemp root
     writeFileSync(safePath.join(root, name), content, 'utf8');
   }
   return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };

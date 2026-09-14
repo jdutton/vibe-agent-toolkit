@@ -442,7 +442,7 @@ This package powers these CLI commands:
 - `vat agent audit` - Validates skills using `validateSkill()`
 - `vat agent import` - Imports skills using `importSkillToAgent()`
 
-See [CLI Documentation](../../docs/cli/audit.md) for command usage.
+See the [audit command reference](../cli/docs/audit.md) for command usage.
 
 ### CI/CD Integration
 
@@ -491,9 +491,6 @@ The package exports all types for TypeScript users:
 import type {
   ValidateOptions,
   ValidationResult,
-  ValidationIssue,
-  IssueCode,
-  IssueSeverity,
   AgentSkillFrontmatter,
   VATAgentSkillFrontmatter,
   ImportOptions,
@@ -501,6 +498,9 @@ import type {
   BuildOptions,
   BuildResult,
 } from '@vibe-agent-toolkit/agent-skills';
+
+// The issue shape and the code/severity vocabularies live in the schema package:
+import type { ValidationIssue, IssueCode, IssueSeverity } from '@vibe-agent-toolkit/schema';
 ```
 
 ## Error Handling
@@ -573,7 +573,7 @@ Tested on:
 
 ## Related Documentation
 
-- [Audit Command](../../docs/cli/audit.md) - CLI validation command
+- [Audit Command](../cli/docs/audit.md) - CLI validation command
 - [Import Command](../../docs/cli/import.md) - CLI import command
 - [Agent Skills Best Practices](../../docs/guides/agent-skills-best-practices.md) - Comprehensive guide
 - [Agent Skills Specification](https://agentskills.io/specification) - Official spec

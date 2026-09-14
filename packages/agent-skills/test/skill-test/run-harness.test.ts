@@ -13,22 +13,38 @@
  * does NOT widen the public package surface.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- tests use controlled temp directories */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { EvalFragment } from '../../src/skill-test/eval-fragment.js';
 import { EvalInputError, type EvalEntry } from '../../src/skill-test/eval-inputs.js';
-import { DuplicateStagedSkillError, SkillTestExitCode } from '../../src/skill-test/exit-codes.js';
+import { DuplicateStagedSkillError } from '../../src/skill-test/failure-reason.js';
 import type { FrictionItem } from '../../src/skill-test/friction-schema.js';
 import type { GradingVerdict } from '../../src/skill-test/grading-adapter.js';
 import {
+  buildDryRunSummary,
+  buildStaleDistWarningLines,
+  formatFrictionReport,
+  isAcknowledged,
+  verdictExitCode,
+  type ContaminationCtx,
+  type DryRunSummaryInput,
+  type RunHarnessOptions,
+  __internal,
+} from '../../src/skill-test/run-harness.js';
+import type { SkippedEvalsSummary } from '../../src/skill-test/tier-plan.js';
+import type { ToolEvalReport } from '../../src/skill-test/tool-eval-schema.js';
+import { createTestPlugin, setupTempDir } from '../test-helpers.js';
+
+/** The test-facing seam — see `__internal` in run-harness.ts. */
+const {
   assertVatWroteArtifacts,
   buildContaminationInput,
   buildContaminationSignalsInput,
-  buildDryRunSummary,
   buildEvalWorkItems,
   buildFlagParseProbe,
   buildPreflightInput,
@@ -36,48 +52,40 @@ import {
   buildRunSummary,
   buildRunSummaryWithSkips,
   buildStageItems,
-  buildStaleDistWarningLines,
   cleanupHarness,
   computeCompositeVerdict,
   detectItemPluginLayout,
+  emitFrictionReport,
   FLAG_PROBE_SENTINEL,
   formatBaselineReport,
-  formatFrictionReport,
   formatRunCostSuffix,
   gradedCounts,
   helpTextDeclaresFlag,
-  isAcknowledged,
   makeStageItem,
   mintArmWorkspaceDirs,
   partitionFragmentsByArm,
-  renderPreflightSummary,
   recordSessionCost,
   rejectedArtifactPath,
+  removeVatOnlyDir,
+  renderPreflightSummary,
   resolveArtifactPaths,
   resolveCompositeAllPassed,
   resolveGraderOutDir,
   resolveHarnessLocation,
   resolveKnobs,
   resolvePerEvalWorkspaceDir,
-  resolveSkillContentNeedles,
-  resolveWorkspacesRoot,
   resolveScaffoldEvalsPath,
+  resolveSkillContentNeedles,
   resolveStallMs,
   resolveTimeoutMs,
+  resolveWorkspacesRoot,
   RETAINED_RESULTS_DIRNAME,
   stageWorkspacesForRun,
   subjectSkillName,
   swallowCleanupFailure,
-  verdictExitCode,
   wipeStaleArtifacts,
   withoutGraderContamination,
-  type ContaminationCtx,
-  type DryRunSummaryInput,
-  type RunHarnessOptions,
-} from '../../src/skill-test/run-harness.js';
-import type { SkippedEvalsSummary } from '../../src/skill-test/tier-plan.js';
-import type { ToolEvalReport } from '../../src/skill-test/tool-eval-schema.js';
-import { createTestPlugin, setupTempDir } from '../test-helpers.js';
+} = __internal;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -225,6 +233,26 @@ describe('buildFlagParseProbe', () => {
   it('reports every flag unsupported when claude --help is unreachable', () => {
     const probe = buildFlagParseProbe(() => null);
     expect(probe(PLUGIN_DIR_FLAG)).toBe(false);
+  });
+
+  // The spawn is the probe's whole cost. Built eagerly it ran once per harness
+  // run whether or not preflight ever asked — a stubbed preflight still paid for
+  // a real `claude --help` — so it runs on the first query, and once.
+  it('runs --help on the first query, not when built, and only once', () => {
+    const runHelp = vi.fn(() => HELP_FIXTURE);
+    const probe = buildFlagParseProbe(runHelp);
+    expect(runHelp).not.toHaveBeenCalled();
+    expect(probe(PLUGIN_DIR_FLAG)).toBe(true);
+    expect(probe('--max-turns')).toBe(false);
+    expect(runHelp).toHaveBeenCalledTimes(1);
+  });
+
+  it('remembers an unreachable --help rather than retrying it per flag', () => {
+    const runHelp = vi.fn(() => null);
+    const probe = buildFlagParseProbe(runHelp);
+    expect(probe(PLUGIN_DIR_FLAG)).toBe(false);
+    expect(probe('--max-turns')).toBe(false);
+    expect(runHelp).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -553,6 +581,8 @@ function writeArtifacts(
   return paths;
 }
 
+const NOT_JSON = '{ not json';
+
 describe('assertVatWroteArtifacts', () => {
   const { getTempDir } = setupTempDir('vat-artifact-gate-');
 
@@ -631,14 +661,31 @@ describe('assertVatWroteArtifacts', () => {
     expect(() => assertVatWroteArtifacts(paths, true)).toThrow(/\.rejected/);
   });
 
+  // Quarantine is best-effort on the way OUT of a failing run, so a refused rename
+  // must not replace the diagnosis. It used to fall through two blind catches to
+  // '' — the operator read "not valid JSON" and found the file still sitting there
+  // under its authoritative name with nothing saying why. The refusals now ride
+  // the same message.
+  it('says so in the error when the artifact could neither be moved aside nor removed', async () => {
+    const paths = writeArtifacts(getTempDir());
+    writeFileSync(paths.gradingOut, NOT_JSON, 'utf-8');
+
+    await withSyncFsRefused('renameSync', paths.gradingOut, 'EPERM', () =>
+      withSyncFsRefused('rmSync', paths.gradingOut, 'EBUSY', () => {
+        expect(() => assertVatWroteArtifacts(paths, false)).toThrow(/could not be moved aside \(.*EPERM.*\) or removed \(.*EBUSY.*\)/);
+      }),
+    );
+    expect(existsSync(paths.gradingOut), 'the refusals were real: the file is still there').toBe(true);
+  });
+
   it('quarantines an unparseable artifact too, not only a schema-invalid one', () => {
     const resultsDir = getTempDir();
     const paths = writeArtifacts(resultsDir);
-    writeFileSync(paths.gradingOut, '{ not json', 'utf-8');
+    writeFileSync(paths.gradingOut, NOT_JSON, 'utf-8');
 
     expect(() => assertVatWroteArtifacts(paths, false)).toThrow(/grading\.json/);
     expect(existsSync(paths.gradingOut)).toBe(false);
-    expect(readFileSync(rejectedArtifactPath(paths.gradingOut), 'utf-8')).toBe('{ not json');
+    expect(readFileSync(rejectedArtifactPath(paths.gradingOut), 'utf-8')).toBe(NOT_JSON);
   });
 });
 
@@ -728,21 +775,29 @@ describe('swallowCleanupFailure', () => {
 
   // Swallowed, not silent: a lockfile that could not be removed breaks the NEXT run
   // with a "busy" error, and an operator who saw nothing here cannot connect the two.
-  it('reports the failure on stderr', () => {
-    const written: string[] = [];
-    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
-      written.push(String(chunk));
-      return true;
-    });
-    try {
+  it('reports the failure on stderr', async () => {
+    const written = await captureStderr(() => {
       swallowCleanupFailure(() => { throw new Error('EROFS: read-only file system'); });
-    } finally {
-      spy.mockRestore();
-    }
-    expect(written.join('')).toContain('EROFS: read-only file system');
-    expect(written.join('')).toContain('the run\'s result stands');
+    });
+    expect(written).toContain('EROFS: read-only file system');
+    expect(written).toContain('the run\'s result stands');
   });
 });
+
+/** Everything `body` wrote to `process.stderr`, with the real stream left untouched. */
+async function captureStderr(body: () => void | Promise<void>): Promise<string> {
+  const written: string[] = [];
+  const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
+    written.push(String(chunk));
+    return true;
+  });
+  try {
+    await body();
+  } finally {
+    spy.mockRestore();
+  }
+  return written.join('');
+}
 
 /**
  * The SINGLE derivation behind both `baselineIntegrity.skew` (which reads `total`)
@@ -940,7 +995,7 @@ describe('resolveSkillContentNeedles', () => {
     expect(asDir).toEqual(asFile);
   });
 
-  it('returns [] when the staged SKILL.md cannot be read', () => {
+  it('returns [] when there is no staged SKILL.md (absence: the signal is unarmed, not clean)', () => {
     expect(
       resolveSkillContentNeedles(safePath.join(getTempDir(), 'nope'), [], {
         workspacesRoot: getTempDir(),
@@ -948,11 +1003,70 @@ describe('resolveSkillContentNeedles', () => {
       }),
     ).toEqual([]);
   });
+
+  // `[]` means "unarmed". A SKILL.md that is THERE but refused used to read as
+  // unarmed too, so a permission problem on vat's own staged copy silently
+  // disarmed the contamination signal for the whole run.
+  it('rethrows when the staged SKILL.md is refused rather than reporting the signal unarmed', async () => {
+    const root = getTempDir();
+    const subject = safePath.join(root, 'staged');
+    mkdirSyncReal(subject, { recursive: true });
+    const skillMd = safePath.join(subject, 'SKILL.md');
+    writeFileSync(skillMd, NEEDLE_SKILL_MD, 'utf8');
+    await withSyncFsRefused('readFileSync', skillMd, 'EACCES', () => {
+      expect(() =>
+        resolveSkillContentNeedles(subject, [], { workspacesRoot: root, armDirs: { with: ARM_SEGMENT } }),
+      ).toThrow(/EACCES/);
+    });
+  });
+
+  it('skips a declared fixture that was never staged (absence), leaving the needles armed', () => {
+    // Staging does `existsSync` then `cpSync`, so a declared file that did not exist
+    // at the source is simply not there in the arm's workspace.
+    expect(needlesFor(getTempDir(), ['never-staged.md'], {})).toContain(QUOTED.toLowerCase());
+  });
+
+  it('rethrows when a staged fixture is refused rather than silently narrowing the exclusion set', async () => {
+    const root = getTempDir();
+    const fixture = safePath.join(root, ARM_SEGMENT, 'e1', 'input.md');
+    await withSyncFsRefused('readFileSync', fixture, 'EACCES', () => {
+      expect(() => needlesFor(root, ['input.md'], { 'input.md': `${QUOTED}\n` })).toThrow(/EACCES/);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
 // Friction report formatter
 // ---------------------------------------------------------------------------
+
+describe('emitFrictionReport', () => {
+  const { getTempDir } = setupTempDir('vat-friction-emit-');
+
+  it('emits nothing for an absent or empty report', async () => {
+    const empty = safePath.join(getTempDir(), 'friction.json');
+    writeFileSync(empty, JSON.stringify({ items: [] }), 'utf-8');
+    expect(await captureStderr(() => emitFrictionReport(undefined))).toBe('');
+    expect(await captureStderr(() => emitFrictionReport(safePath.join(getTempDir(), 'nope.json')))).toBe('');
+    expect(await captureStderr(() => emitFrictionReport(empty))).toBe('');
+  });
+
+  // vat is the sole writer of friction.json. A copy it wrote and cannot read back
+  // used to emit nothing — indistinguishable from "no friction" on stderr.
+  it('warns, rather than staying silent, when the report is there but unreadable or malformed', async () => {
+    const bad = safePath.join(getTempDir(), 'friction.json');
+    writeFileSync(bad, NOT_JSON, 'utf-8');
+    expect(await captureStderr(() => emitFrictionReport(bad))).toMatch(/warning: could not read the friction report/);
+
+    writeFileSync(bad, JSON.stringify({ items: 'not-an-array' }), 'utf-8');
+    expect(await captureStderr(() => emitFrictionReport(bad))).toMatch(/warning: the friction report .* does not match its schema/);
+
+    writeFileSync(bad, JSON.stringify({ items: [] }), 'utf-8');
+    const refused = await captureStderr(() =>
+      withSyncFsRefused('readFileSync', bad, 'EACCES', () => { emitFrictionReport(bad); }),
+    );
+    expect(refused).toMatch(/warning: could not read the friction report.*EACCES/);
+  });
+});
 
 describe('formatFrictionReport', () => {
   const highItem: FrictionItem = {
@@ -1538,6 +1652,20 @@ describe('cleanupHarness', () => {
     expect(() => cleanupHarness(root, { keep: false, created: true })).not.toThrow();
   });
 
+  // Best-effort from a `finally` is right; SILENT was not. A harness dir the OS
+  // refused to remove is staged untrusted bytes left in tmp, and the operator who
+  // saw nothing cannot connect the leftover to this run.
+  it('reports a refused removal on stderr (the run\'s result stands) instead of swallowing it', async () => {
+    const root = makeHarnessDir(getTempDir(), 'refused');
+    const written = await captureStderr(() =>
+      withSyncFsRefused('rmSync', root, 'EPERM', () => {
+        expect(() => cleanupHarness(root, { keep: false, created: true })).not.toThrow();
+      }),
+    );
+    expect(written).toMatch(/harness cleanup step failed.*EPERM/);
+    expect(written).toContain("the run's result stands");
+  });
+
   it(
     'does not follow a symlinked root — leaves the link target intact',
     ({ skip }) => {
@@ -1553,18 +1681,40 @@ describe('cleanupHarness', () => {
   );
 });
 
+describe('removeVatOnlyDir', () => {
+  const { getTempDir } = setupTempDir('vat-remove-vat-only-');
+
+  it('removes the dir, and is a no-op on an absent one or undefined', () => {
+    const dir = makeHarnessDir(getTempDir(), 'gone');
+    removeVatOnlyDir(dir);
+    expect(existsSync(dir)).toBe(false);
+    expect(() => removeVatOnlyDir(safePath.join(getTempDir(), 'missing'))).not.toThrow();
+    expect(() => removeVatOnlyDir(undefined)).not.toThrow();
+  });
+
+  it('reports a refused removal on stderr instead of swallowing it', async () => {
+    const dir = makeHarnessDir(getTempDir(), 'refused');
+    const written = await captureStderr(() =>
+      withSyncFsRefused('rmSync', dir, 'EACCES', () => {
+        expect(() => removeVatOnlyDir(dir)).not.toThrow();
+      }),
+    );
+    expect(written).toMatch(/harness cleanup step failed.*EACCES/);
+  });
+});
+
 describe('verdictExitCode', () => {
-  it('returns Ok when all expectations passed (regardless of tolerance)', () => {
-    expect(verdictExitCode(true, false)).toBe(SkillTestExitCode.Ok);
-    expect(verdictExitCode(true, true)).toBe(SkillTestExitCode.Ok);
+  it('returns OK when all expectations passed (regardless of tolerance)', () => {
+    expect(verdictExitCode(true, false)).toBe(ExitCode.OK);
+    expect(verdictExitCode(true, true)).toBe(ExitCode.OK);
   });
 
-  it('escalates a failing verdict to EvalFailure by DEFAULT (fail-closed)', () => {
-    expect(verdictExitCode(false, false)).toBe(SkillTestExitCode.EvalFailure);
+  it('escalates a failing verdict to FINDINGS by DEFAULT (fail-closed)', () => {
+    expect(verdictExitCode(false, false)).toBe(ExitCode.FINDINGS);
   });
 
-  it('downgrades a failing verdict to Ok when eval failure is tolerated (opt-out)', () => {
-    expect(verdictExitCode(false, true)).toBe(SkillTestExitCode.Ok);
+  it('downgrades a failing verdict to OK when eval failure is tolerated (opt-out)', () => {
+    expect(verdictExitCode(false, true)).toBe(ExitCode.OK);
   });
 });
 

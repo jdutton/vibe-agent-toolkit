@@ -43,7 +43,7 @@ Ask yourself:
 3. **"Does this involve file paths/resolution?"** → Probably belongs in utils or the consumer package
 4. **"Is this domain logic?"** → Belongs in the domain package (agent-config, rag, runtime-*, etc.)
 
-`vat audit`'s scanning logic is an intentional exception to "reuse everything" — see
+`vat audit`'s subject CLASSIFICATION is its own; its enumeration is the `crawl` lane — see
 [`.claude/rules/audit-scanning-independence.md`](../../.claude/rules/audit-scanning-independence.md),
 which fires automatically when you touch the audit command.
 

@@ -18,8 +18,8 @@ export interface BuildExecutorPromptOptions {
 }
 
 /**
- * Build the prompt handed to the blind executor subagent (issue #145 —
- * transcript-grounded eval rewrite). The executor is a real worker, not a
+ * Build the prompt handed to the blind executor subagent (the
+ * transcript-grounded eval design). The executor is a real worker, not a
  * participant in an eval: it receives the task and its working context ONLY,
  * phrased exactly as a genuine user request. It must NEVER be told (directly
  * or by implication) that it is being tested, evaluated, or graded — that

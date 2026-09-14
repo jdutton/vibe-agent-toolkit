@@ -1,9 +1,10 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { PROJECT_ROOT } from '../src/common.js';
+import { readWorkspaceGraph } from '../src/workspace-graph.js';
 
 /**
  * Regression guard for silently-dead test suites.
@@ -27,8 +28,6 @@ import { PROJECT_ROOT } from '../src/common.js';
  * added config or a newly added test file is covered the moment it lands.
  */
 
-const PACKAGES_DIR = safePath.join(PROJECT_ROOT, 'packages');
-
 /** Suite kinds this guard covers: their config file, npm script, and the test-file suffix that signals "this suite exists". */
 const SUITE_CONFIGS = [
   {
@@ -49,14 +48,6 @@ interface SuiteWiring {
   script: string | undefined;
 }
 
-function readScripts(packageJsonPath: string): Record<string, string> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- PROJECT_ROOT-derived path, not user input
-  const parsed = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as {
-    scripts?: Record<string, string>;
-  };
-  return parsed.scripts ?? {};
-}
-
 /**
  * Recursively collect every filename under `dir` (basenames only — the caller
  * only needs to check a suffix). Returns `[]` for a directory that doesn't
@@ -64,14 +55,15 @@ function readScripts(packageJsonPath: string): Record<string, string> {
  * error).
  */
 function walkFilenames(dir: string): string[] {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- PROJECT_ROOT-derived path, not user input
   if (!existsSync(dir)) {
     return [];
   }
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- PROJECT_ROOT-derived path, not user input
   const entries = readdirSync(dir, { withFileTypes: true });
   const names: string[] = [];
   for (const entry of entries) {
+    // A linked test tree is not this package's suite; skip it rather than
+    // follow it (and never silently drop it as neither file nor directory).
+    if (entry.isSymbolicLink()) continue;
     const full = safePath.join(dir, entry.name);
     if (entry.isDirectory()) {
       names.push(...walkFilenames(full));
@@ -89,37 +81,26 @@ function hasMatchingTestFiles(pkgDir: string, testFileSuffix: string): boolean {
 }
 
 /**
- * Scan `packagesDir` and collect one {@link SuiteWiring} per (package, suite
- * kind) pair that qualifies as "this suite exists" — EITHER the config file is
+ * Scan `<repoRoot>/packages` (through the same workspace reader every derived
+ * list uses) and collect one {@link SuiteWiring} per (package, suite kind)
+ * pair that qualifies as "this suite exists" — EITHER the config file is
  * present OR a matching test file is present under `test/`. A package that has
  * neither signal for a suite kind is genuinely out of scope for that kind (e.g.
  * `schema` ships no integration tests at all) and is not included.
  *
- * Exported (and parameterized on `packagesDir`) so the detection logic itself
- * — not just the final assertions — is unit-testable against a synthetic
+ * Exported (and parameterized on `repoRoot`) so the detection logic itself —
+ * not just the final assertions — is unit-testable against a synthetic
  * fixture, independent of this monorepo's real `packages/` contents.
  */
-export function collectSuiteWirings(packagesDir: string): SuiteWiring[] {
+export function collectSuiteWirings(repoRoot: string): SuiteWiring[] {
   const wirings: SuiteWiring[] = [];
+  const packagesDir = safePath.join(repoRoot, 'packages');
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- PROJECT_ROOT-derived path, not user input
-  const packageDirs = readdirSync(packagesDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort((a, b) => a.localeCompare(b));
-
-  for (const pkg of packageDirs) {
+  for (const { dir: pkg, manifest } of readWorkspaceGraph(repoRoot).packages) {
     const pkgDir = safePath.join(packagesDir, pkg);
-    const packageJsonPath = safePath.join(pkgDir, 'package.json');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- PROJECT_ROOT-derived path, not user input
-    if (!existsSync(packageJsonPath)) {
-      continue;
-    }
-
-    const scripts = readScripts(packageJsonPath);
+    const scripts = (manifest['scripts'] ?? {}) as Record<string, string>;
 
     for (const { configFile, scriptName, testFileSuffix } of SUITE_CONFIGS) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- PROJECT_ROOT-derived path, not user input
       const hasConfig = existsSync(safePath.join(pkgDir, configFile));
       const hasTestFiles = hasMatchingTestFiles(pkgDir, testFileSuffix);
       if (!hasConfig && !hasTestFiles) {
@@ -133,7 +114,7 @@ export function collectSuiteWirings(packagesDir: string): SuiteWiring[] {
 }
 
 describe('vitest suite wiring (dead-suite guard)', () => {
-  const wirings = collectSuiteWirings(PACKAGES_DIR);
+  const wirings = collectSuiteWirings(PROJECT_ROOT);
 
   it('finds packages with a qualifying suite (config or matching test files)', () => {
     // Sanity check: if this ever hits 0 the it.each below becomes vacuous and

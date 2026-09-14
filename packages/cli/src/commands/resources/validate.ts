@@ -52,7 +52,6 @@ interface CollectionStatWithErrors {
 async function loadSchema(schemaPath: string): Promise<object> {
   const resolvedPath = resolveAssetReference(schemaPath, process.cwd());
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- schemaPath resolved via resolveAssetReference
   const content = await readFile(resolvedPath, 'utf-8');
   const ext = path.extname(resolvedPath).toLowerCase();
 
@@ -85,7 +84,7 @@ interface FileIssues {
     line: number;
     column: number;
     code: string;
-    severity: string;
+    severity: IssueSeverity;
     message: string;
   }>;
 }

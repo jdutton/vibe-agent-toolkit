@@ -28,7 +28,7 @@
  *
  * ## Computed, never materialised — and that is a ruling, not an oversight
  *
- * Jeff ruled on 2026-08-22 that the discoverability lens is built computed. The
+ * The discoverability lens is built computed, by product decision. The
  * `edges` table `zones.md` §5.2 specifies would be its natural home and is a
  * DEFERRAL with a designed target, not a refusal: §5.2 names "a rules file
  * matching by `paths:`" as `origin: 'implicit'`, and §2 is explicit that caching
@@ -83,7 +83,7 @@
  *   and handed it to the path resolver — a document nobody wrote, reported.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
 
 import { resolveLocalHref } from '../utils.js';
 
@@ -329,7 +329,7 @@ function resolveTarget(
   // rather than by a leading slash, which `resolveLocalHref` does not treat as
   // an escape because a relative reference has no root to escape from. The
   // containment decision belongs to the caller that HAS the root, and this is it.
-  if (relative === '' || relative.startsWith('..')) return { path: rawRef, reach: OUTSIDE_ROOT };
+  if (relative === '' || relativeEscapesRoot(relative)) return { path: rawRef, reach: OUTSIDE_ROOT };
   return { path: relative, reach: UNREALIZED };
 }
 

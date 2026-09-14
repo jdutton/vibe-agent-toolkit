@@ -26,7 +26,7 @@ export function renderHandlebarsTemplate(
   let compiled = templateCache.get(template);
   if (!compiled) {
     // Safe: templates render markdown/plaintext, not HTML. No XSS risk.
-    // eslint-disable-next-line sonarjs/disabled-auto-escaping
+    // eslint-disable-next-line sonarjs/disabled-auto-escaping -- templates render markdown/plaintext, never HTML; escaping would corrupt the output
     compiled = Handlebars.compile(template, { noEscape: true });
     templateCache.set(template, compiled);
   }

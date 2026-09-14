@@ -456,4 +456,4 @@ justified by real consumers + dogfooding, not speculation.
 - Compat stance: `docs/architecture/compatibility.md`,
   `docs/skill-quality-and-compatibility.md`, `docs/validation-rule-design.md`.
 - Lazy-loaded provider precedent: PR #124. Cache model precedent: `vibe-validate` `vv run --force`.
-- Brainstorm origin (uncommitted): `docs/superpowers/specs/2026-06-25-skill-compat-testing-runner-adapters-design.md`.
+- Brainstorm origin: a gitignored working-directory spec that is not in the repository; this document is the committed record.

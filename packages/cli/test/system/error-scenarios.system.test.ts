@@ -1,3 +1,4 @@
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { it, beforeAll, afterAll } from 'vitest';
 
 import { describe, expect, fs, getBinPath, safePath, spawnSync } from './test-common.js';
@@ -29,7 +30,7 @@ describe('Error scenarios (system test)', () => {
     const result = testConfigError(
       tempDir,
       'invalid-config',
-      'version: 999\n', // Invalid version
+      'resources: 42\n', // a section of the wrong type refuses
       binPath
     );
 
@@ -129,7 +130,7 @@ describe('Error scenarios (system test)', () => {
       '# Test\n\n[]()' // Empty link - valid markdown, but edge case
     );
 
-    const result = spawnSync('node', [binPath, 'resources', 'scan', projectDir], {
+    const result = spawnSync(NODE_EXECUTABLE, [binPath, 'resources', 'scan', projectDir], {
       encoding: 'utf-8',
     });
 
@@ -167,7 +168,7 @@ describe('Error scenarios (system test)', () => {
 
     fs.writeFileSync(safePath.join(projectDir, 'docs/test.md'), '# Test');
 
-    const result = spawnSync('node', [binPath, 'resources', 'scan', projectDir, '--debug'], {
+    const result = spawnSync(NODE_EXECUTABLE, [binPath, 'resources', 'scan', projectDir, '--debug'], {
       encoding: 'utf-8',
     });
 
@@ -186,7 +187,7 @@ describe('Error scenarios (system test)', () => {
     // now). Assert on a line only the SUBCOMMAND's own logger can write.
     expect(result.stderr).toContain('[DEBUG] Crawling ');
 
-    const withoutDebug = spawnSync('node', [binPath, 'resources', 'scan', projectDir], {
+    const withoutDebug = spawnSync(NODE_EXECUTABLE, [binPath, 'resources', 'scan', projectDir], {
       encoding: 'utf-8',
     });
 

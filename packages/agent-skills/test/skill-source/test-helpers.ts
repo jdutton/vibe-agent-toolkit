@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- tmpdir paths constructed in test setup */
 /**
  * Shared test helpers for skill-source unit tests.
  *

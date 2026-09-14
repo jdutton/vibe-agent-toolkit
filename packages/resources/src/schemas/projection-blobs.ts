@@ -1,6 +1,7 @@
+import { SeveritySchema } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
-import { ContentKeySchema, JsonValueSchema, ProjectionConditionSeveritySchema } from './projection-shared.js';
+import { ContentKeySchema, JsonValueSchema } from './projection-shared.js';
 
 const BLOB_FK_DESC = 'Foreign key to blobs.contentKey';
 
@@ -339,7 +340,7 @@ export type BlobSectionRow = z.infer<typeof BlobSectionRowSchema>;
 export const BlobConditionRowSchema = z.object({
   blob: ContentKeySchema.describe(BLOB_FK_DESC),
   code: z.string().min(1).describe('An enum member, or "PARSE_ODDITY" for an unclassified oddity'),
-  severity: ProjectionConditionSeveritySchema,
+  severity: SeveritySchema,
   message: z.string(),
   line: z.number().int().positive().nullable(),
 }).strict().describe('A row of the blob-keyed `blob_conditions` table');

@@ -21,4 +21,12 @@ module.exports = factory({
   // No baked-in exemption: the file that implements normalizedTmpdir() is
   // repo-specific. Consumers declare it as { exemptFiles: [...] }.
   checkMemberExpression: true, // Catch os.tmpdir() pattern
+  docs: {
+    category: 'Filesystem and process',
+    bans: '`os.tmpdir()` (8.3 short names on Windows)',
+    useInstead: '`normalizedTmpdir()`',
+    subpath: '/fs',
+    recommended: true,
+    recommendedSeverity: 'error',
+  },
 });

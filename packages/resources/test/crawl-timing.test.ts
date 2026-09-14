@@ -28,9 +28,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 
 import {
-  __readCrawlTimingSnapshot,
-  __setCrawlTimingForTest,
-  __writeCrawlTimingDumpForTest,
   CRAWL_BLOB_POPULATE_ID,
   CRAWL_CLOSURE_CONTRIBUTE_ID,
   CRAWL_CLOSURE_RESOLVE_ID,
@@ -44,6 +41,11 @@ import {
   type CrawlTimingEntry,
   safePath,
 } from '@vibe-agent-toolkit/utils';
+import {
+  __readCrawlTimingSnapshot,
+  __setCrawlTimingForTest,
+  __writeCrawlTimingDumpForTest,
+} from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -176,7 +178,6 @@ function keysOf(dump: CrawlTimingDump): string[] {
 
 /** Read a written dump back off disk. */
 async function readDump(path: string): Promise<CrawlTimingDump> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path returned by the seam under test
   return JSON.parse(await readFile(path, 'utf-8')) as CrawlTimingDump;
 }
 
@@ -522,7 +523,6 @@ describe('crawl timing seam', () => {
       const second = __writeCrawlTimingDumpForTest();
 
       expect(second).not.toBe(first);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- directory this suite created
       await expect(readdir(dumpDir())).resolves.toHaveLength(2);
       // The first dump saw one population; the second saw two.
       expect(entryOf(await readDump(first ?? ''), FILESYSTEM_DRIVER_ID, 1).calls).toBe(1);

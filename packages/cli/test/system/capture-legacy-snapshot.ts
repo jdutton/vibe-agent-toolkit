@@ -36,6 +36,7 @@ import * as fsSync from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { type FindingTuple, collectFindings } from './audit-test-helpers.js';
@@ -85,13 +86,12 @@ async function main(): Promise<void> {
 		sorted = await collectFindings(corpus);
 	} catch (err) {
 		console.error(`FATAL: audit crashed on corpus root: ${String(err)}`);
-		process.exit(1);
+		process.exit(ExitCode.ERROR);
 	}
 
 	console.error(`audit returned ${sorted.length.toString()} finding tuples`);
 
 	// Write snapshot
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path is constructed internally
 	fsSync.writeFileSync(snapshotPath, `${JSON.stringify(sorted, null, 2)}\n`, 'utf-8');
 
 	const elapsed = ((Date.now() - start) / 1000).toFixed(1);

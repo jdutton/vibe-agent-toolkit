@@ -10,7 +10,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { analyzeCompatibility } from '../../src/compatibility-analyzer.js';
@@ -19,7 +19,6 @@ import type { CompatibilityResult } from '../../src/types.js';
 const PLUGINS_DIR = safePath.resolve(homedir(), '.claude', 'plugins', 'cache');
 
 describe('analyzeCompatibility against local plugins', () => {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- PLUGINS_DIR derived from homedir(), safe
   const hasPlugins = existsSync(PLUGINS_DIR);
 
   it('resolves plugins cache path', () => {
@@ -27,28 +26,25 @@ describe('analyzeCompatibility against local plugins', () => {
   });
 
   it.skipIf(!hasPlugins)('analyzes all locally installed plugins without errors', async () => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- PLUGINS_DIR derived from homedir(), safe
+    // Followed throughout: a `--dev` install puts these here as links.
     const marketplaces = readdirSync(PLUGINS_DIR, { withFileTypes: true })
-      .filter(d => d.isDirectory());
+      .filter(d => direntKindFollowingSync(PLUGINS_DIR, d) === 'directory');
 
     const results: CompatibilityResult[] = [];
 
     for (const marketplace of marketplaces) {
       const mDir = safePath.resolve(PLUGINS_DIR, marketplace.name);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- mDir derived from PLUGINS_DIR + readdir entry
       const plugins = readdirSync(mDir, { withFileTypes: true })
-        .filter(d => d.isDirectory());
+        .filter(d => direntKindFollowingSync(mDir, d) === 'directory');
 
       for (const plugin of plugins) {
         const pDir = safePath.resolve(mDir, plugin.name);
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- pDir derived from PLUGINS_DIR + readdir entries
         const versions = readdirSync(pDir, { withFileTypes: true })
-          .filter(d => d.isDirectory());
+          .filter(d => direntKindFollowingSync(pDir, d) === 'directory');
         const lastVersion = versions.at(-1);
         if (!lastVersion) continue;
         const latestDir = safePath.resolve(pDir, lastVersion.name);
 
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- latestDir derived from PLUGINS_DIR + readdir entries
         if (!existsSync(safePath.resolve(latestDir, '.claude-plugin/plugin.json'))) continue;
 
         const result = await analyzeCompatibility(latestDir, latestDir);

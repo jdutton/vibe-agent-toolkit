@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
+import { installLastResortExit } from '@vibe-agent-toolkit/schema';
+
 import { runCLI } from '../dist/cli/index.js';
 
-runCLI().catch((error) => {
-  console.error('CLI error:', error);
-  process.exit(1);
-});
+// A throw nothing below caught ends on ExitCode.ERROR, never Node's default 1.
+installLastResortExit();
+await runCLI();

@@ -140,11 +140,8 @@ whether that is the intended answer or an accident of there being no oracle.
 ### Is the raw readdir route intended, or is it drift?
 
 Most commands whose population source names it enumerate with no git awareness at all, so neither
-selector nor `.gitignore` reaches them — and `vat audit` proves the route does not require that: the
-same `fs.readdir` recursion in `packages/cli/src/commands/audit.ts › scanDirectory()`, but pruning
-gitignored paths through its own `GitTracker` in `› buildGitIgnoreMap()`, reachable by no selector
-either way. So the route is one mechanism carrying several behaviours, and nothing says which of them
-a new command should reach for.
+selector nor `.gitignore` reaches them. The route is one mechanism carrying several behaviours, and
+nothing says which of them a new command should reach for.
 
 ### Should vat audit be on the projection lane?
 

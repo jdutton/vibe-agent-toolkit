@@ -36,10 +36,10 @@ import {
   type ContentTransformOptions,
   type ResourceMetadata,
 } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape } from 'zod';
 
 import { resolveChunkingConfig } from './chunking-config.js';
+import { getDirectorySize } from './directory-size.js';
 import {
   createDocumentRecord,
   describeDocumentColumnMismatches,
@@ -116,37 +116,6 @@ export interface LanceDBConfig<_TMetadata extends Record<string, unknown> = Defa
    * @default false
    */
   storeDocuments?: boolean;
-}
-
-/**
- * Calculate total size of a directory recursively
- * @param dirPath - Path to directory
- * @returns Total size in bytes
- */
-function getDirectorySize(dirPath: string): number {
-  let totalSize = 0;
-
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirPath is from config, not user input
-    const items = fs.readdirSync(dirPath);
-
-    for (const item of items) {
-      const itemPath = safePath.join(dirPath, item);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- itemPath is constructed from config, not user input
-      const stats = fs.statSync(itemPath);
-
-      if (stats.isDirectory()) {
-        totalSize += getDirectorySize(itemPath);
-      } else {
-        totalSize += stats.size;
-      }
-    }
-  } catch {
-    // If directory doesn't exist or can't be read, return 0
-    return 0;
-  }
-
-  return totalSize;
 }
 
 /**
@@ -1050,7 +1019,6 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     await this.close();
 
     // Delete entire database directory
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dbPath comes from validated config
     if (fs.existsSync(this.config.dbPath)) {
       fs.rmSync(this.config.dbPath, { recursive: true, force: true });
     }

@@ -48,6 +48,7 @@ import {
   crawlTimingStart,
   FsLookupCache,
   recordCrawlPass,
+  relativeEscapesRoot,
   toForwardSlash,
   safePath,
 } from '@vibe-agent-toolkit/utils';
@@ -252,7 +253,7 @@ function resolveHrefToPath(hrefWithoutAnchor: string, sourceFilePath: string, pr
 
 /** Check if a link targets a file outside the project boundary */
 function isOutsideProject(targetPath: string, projectRoot: string): boolean {
-  return safePath.relative(projectRoot, targetPath).startsWith('..');
+  return relativeEscapesRoot(safePath.relative(projectRoot, targetPath));
 }
 
 // Navigation / agent-instruction classification is the shared, case-insensitive
@@ -321,7 +322,7 @@ interface WalkState {
    *
    * That scoping costs most of the collapse on the packager lane, and the
    * trade is worth stating rather than rediscovering. Measured on VAT's own
-   * tree, 2026-08-09: `vat audit .` asks 42 questions over 9 distinct targets
+   * tree: `vat audit .` asks 42 questions over 9 distinct targets
    * (4.7×, because one walk revisits the same shared docs), while
    * `vat skills build` asks 26 over 24 — 13 skills, one probe each, and
    * targets almost never repeat inside a single skill's walk. Sharing one
@@ -552,7 +553,7 @@ function classifyGitignoredTarget(
  * rather than one per reference. The memo cannot change the answer: both
  * oracles are pure functions of the tree, and the memo's lifetime is one walk.
  *
- * ⛔ **Measured on VAT's own tree, 2026-08-09, and the result is a NEGATIVE —
+ * ⛔ **Measured on VAT's own tree, and the result is a NEGATIVE —
  * do not sell this as a performance win.** Counting asks vs. memo misses in the
  * built lane: `vat audit .` = 3 asks / 2 distinct, `vat skills build` = 0 / 0,
  * `vat inventory .` = 0 / 0. **One** oracle call avoided across all three.

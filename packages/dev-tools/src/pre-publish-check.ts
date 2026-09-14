@@ -7,7 +7,7 @@
  * 3. No uncommitted changes (clean working tree)
  * 4. No untracked files (except allowed patterns)
  * 5. All validation checks pass
- * 6. Package list synchronized with publish script
+ * 6. The workspace graph (package.json) yields a publish order — no cycle, every manifest readable
  * 7. All packages are built
  * 8. Workspace dependencies are correct
  * 9. All packages have proper "files" field
@@ -16,37 +16,39 @@
  *
  * Release-readiness checks (--release-readiness only):
  * 12. Marketplace publish dry-run (validates build artifacts, changelog, tree composition)
- * 13. Tag doesn't already exist on remote
+ * 13. Tag doesn't already exist on remote — or, with `--tag <version>` (the publish
+ *     workflow, which runs AFTER the tag push), the pushed tag names the manifest
+ *     version and exists on the remote
  * 14. No stale unreleased content (stable versions only)
  * 15. CHANGELOG section non-empty (stable versions only)
  *
  * Usage:
- *   tsx tools/pre-publish-check.ts [--allow-branch BRANCH] [--skip-git-checks] [--release-readiness]
- *   bun run pre-publish [--allow-branch BRANCH] [--skip-git-checks] [--release-readiness]
+ *   tsx packages/dev-tools/src/pre-publish-check.ts [--allow-branch BRANCH] [--skip-git-checks] [--release-readiness] [--tag VERSION]
+ *   bun run pre-publish [--allow-branch BRANCH] [--skip-git-checks] [--release-readiness] [--tag VERSION]
  *
  * Exit codes:
  *   0 - Ready to publish
  *   1 - Not ready (with explanation)
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 // File paths derived from PROJECT_ROOT and packagesDir constants (controlled, not user input)
 
 import { readdirSync, existsSync, readFileSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { direntKindFollowingSync, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import { PROJECT_ROOT, log, safeExecSync } from './common.js';
 import { DEPENDENCY_FIELDS } from './resolve-workspace-deps.js';
-import { validatePackageList } from './validate-package-list.js';
+import { publishedPackagesInDependencyOrder } from './workspace-graph.js';
 
 /**
  * Detect if running in CI environment
  */
 function isCI(): boolean {
   // Using || for boolean coercion of env vars (empty string should be falsy)
-  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing
+  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- || on purpose: an empty-string CI variable must read as unset
   return !!(process.env['CI'] || process.env['GITHUB_ACTIONS'] || process.env['GITLAB_CI'] || process.env['CIRCLECI'] || process.env['TRAVIS'] || process.env['JENKINS_URL']);
 }
 
@@ -61,7 +63,8 @@ function getPublishablePackages(packagesDir: string): Array<{ name: string; pkgJ
   }
 
   const packages = readdirSync(packagesDir, { withFileTypes: true })
-    .filter(dirent => dirent.isDirectory())
+    // Followed: a workspace package reached through a link is still a package.
+    .filter(dirent => direntKindFollowingSync(packagesDir, dirent) === 'directory')
     .map(dirent => dirent.name);
 
   for (const pkg of packages) {
@@ -89,6 +92,8 @@ let allowedBranch = 'main';
 let allowCustomBranch = false;
 let skipGitChecks = false;
 let releaseReadiness = false;
+/** The version the pushed tag names, when running inside the publish workflow. */
+let publishingTag: string | undefined;
 
 let i = 0;
 while (i < args.length) {
@@ -96,6 +101,10 @@ while (i < args.length) {
   if (args[i] === '--allow-branch' && nextArg) {
     allowedBranch = nextArg;
     allowCustomBranch = true;
+    i += 2;
+    continue;
+  } else if (args[i] === '--tag' && nextArg) {
+    publishingTag = nextArg.startsWith('v') ? nextArg.slice(1) : nextArg;
     i += 2;
     continue;
   } else if (args[i] === '--skip-git-checks') {
@@ -107,7 +116,7 @@ while (i < args.length) {
 Pre-Publish Validation Check
 
 Usage:
-  tsx tools/pre-publish-check.ts [OPTIONS]
+  tsx packages/dev-tools/src/pre-publish-check.ts [OPTIONS]
   bun run pre-publish [OPTIONS]
 
 Options:
@@ -119,17 +128,21 @@ Options:
                            - Tag doesn't already exist on remote
                            - No stale unreleased content
                            - CHANGELOG section non-empty
+  --tag VERSION          The pushed tag's version (publish workflow only). Replaces the
+                         "tag absent" check with: the tag names the manifest version and
+                         EXISTS on the remote — the release is the tag that was pushed.
   --help, -h             Show this help message
 
 Exit codes:
   0 - Ready to publish
   1 - Not ready (with explanation)
+  2 - The check itself could not run (git or bun missing, unreadable manifest)
     `);
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } else {
     console.error(`Unknown option: ${String(args[i] ?? 'unknown')}`);
-    console.error('Usage: tsx tools/pre-publish-check.ts [OPTIONS]');
-    process.exit(1);
+    console.error('Usage: tsx packages/dev-tools/src/pre-publish-check.ts [OPTIONS]');
+    process.exit(ExitCode.ERROR);
   }
   i++;
 }
@@ -147,11 +160,10 @@ try {
   log('✓ Git repository detected', 'green');
 } catch (error) {
   log('✗ Not a git repository', 'red');
-  const message = error instanceof Error ? error.message : '';
-  if (message.includes('ENOENT')) {
+  if (isPathAbsentError(error)) {
     console.log('  Git executable not found. Please install git.');
   }
-  process.exit(1);
+  process.exit(ExitCode.ERROR);
 }
 
 // Check 2: Current branch (skip in CI - uses detached HEAD on tag checkout)
@@ -167,11 +179,8 @@ if (IS_CI || skipGitChecks) {
     currentBranch = result.stdout.toString().trim();
   } catch (error) {
     log('✗ Failed to determine current branch', 'red');
-    const message = error instanceof Error ? error.message : '';
-    if (message.includes('HEAD')) {
-      console.log('  You may be in a detached HEAD state. Check git status.');
-    }
-    process.exit(1);
+    if (error instanceof Error) console.log(`  ${error.message}`);
+    process.exit(ExitCode.ERROR);
   }
 
   if (currentBranch !== allowedBranch) {
@@ -179,7 +188,7 @@ if (IS_CI || skipGitChecks) {
     console.log(
       `  Tip: Run 'git checkout ${allowedBranch}', or pass the branch explicitly: --allow-branch ${currentBranch}`,
     );
-    process.exit(1);
+    process.exit(ExitCode.FINDINGS);
   }
 
   if (allowCustomBranch && currentBranch !== 'main') {
@@ -209,7 +218,7 @@ if (IS_CI || skipGitChecks) {
     }
 
     console.log('  Please commit or stash your changes before publishing');
-    process.exit(1);
+    process.exit(ExitCode.FINDINGS);
   }
   log('✓ No uncommitted changes', 'green');
 }
@@ -249,7 +258,7 @@ if (IS_CI || skipGitChecks) {
       }
       console.log('');
       console.log('  Please add these files to git or .gitignore before publishing');
-      process.exit(1);
+      process.exit(ExitCode.FINDINGS);
     }
   }
   log('✓ No untracked files', 'green');
@@ -269,56 +278,31 @@ if (skipGitChecks) {
     console.log('');
     log('✗ Validation failed', 'red');
     console.log('  Check the output above and fix all issues before publishing');
-    const message = error instanceof Error ? error.message : '';
-    if (message.includes('ENOENT')) {
+    if (isPathAbsentError(error)) {
       console.log('  (bun not found - install bun to run validation)');
     }
-    process.exit(1);
+    process.exit(isPathAbsentError(error) ? ExitCode.ERROR : ExitCode.FINDINGS);
   }
 }
 
-// Check 6: Package list synchronization
+// Check 6: The workspace graph yields a publish order
 console.log('');
-console.log('Checking package list synchronization...');
+console.log('Checking the workspace graph...');
 
 const packagesDir = safePath.join(PROJECT_ROOT, 'packages');
 
+// The publish order is DERIVED from package.json (every non-private package,
+// dependencies first), so there is no hand list to fall out of sync. What can
+// still go wrong is the input: a manifest that does not parse, or a dependency
+// cycle that has no publish order. Both throw here, before anything is published.
 try {
-  const validation = validatePackageList(PROJECT_ROOT);
-  const hasErrors = validation.undeclared.length > 0 || validation.phantom.length > 0;
-
-  if (hasErrors) {
-    log('✗ Package list out of sync!', 'red');
-    console.log('');
-
-    if (validation.undeclared.length > 0) {
-      console.log('  The following packages exist in packages/ but are not declared:');
-      for (const pkg of validation.undeclared) {
-        console.log(`    ${pkg}`);
-      }
-      console.log('');
-    }
-
-    if (validation.phantom.length > 0) {
-      console.log('  The following packages are declared but do not exist in packages/:');
-      for (const pkg of validation.phantom) {
-        console.log(`    ${pkg}`);
-      }
-      console.log('');
-    }
-
-    console.log('  Update packages/dev-tools/src/package-lists.ts:');
-    console.log('    - Add undeclared packages to PUBLISHED_PACKAGES or SKIP_PACKAGES');
-    console.log('    - Remove phantom packages from PUBLISHED_PACKAGES and SKIP_PACKAGES');
-    process.exit(1);
-  }
-
-  log('✓ All packages accounted for', 'green');
+  const publishOrder = publishedPackagesInDependencyOrder(PROJECT_ROOT);
+  log(`✓ Publish order derives from package.json: ${publishOrder.length} packages`, 'green');
 } catch (error) {
-  log('✗ Failed to check package list', 'red');
+  log('✗ Could not derive the publish order from package.json', 'red');
   const message = error instanceof Error ? error.message : String(error);
   console.error(message);
-  process.exit(1);
+  process.exit(ExitCode.FINDINGS);
 }
 
 // Check 7: Packages are built
@@ -347,7 +331,7 @@ try {
   log('✗ Failed to check package builds', 'red');
   const message = error instanceof Error ? error.message : String(error);
   console.error(message);
-  process.exit(1);
+  process.exit(ExitCode.ERROR);
 }
 
 if (missingBuilds.length > 0) {
@@ -356,7 +340,7 @@ if (missingBuilds.length > 0) {
     console.log(pkg);
   }
   console.log('  Run \'bun run build\' to build all packages');
-  process.exit(1);
+  process.exit(ExitCode.FINDINGS);
 }
 log('✓ All packages built', 'green');
 
@@ -393,7 +377,7 @@ try {
   log('✗ Failed to check workspace dependencies', 'red');
   const message = error instanceof Error ? error.message : String(error);
   console.error(message);
-  process.exit(1);
+  process.exit(ExitCode.ERROR);
 }
 
 // Check 9: Packages have proper "files" field for npm publish
@@ -461,7 +445,7 @@ try {
     }
     console.log('\nAdd "files" field to package.json:');
     console.log('  "files": ["dist", "README.md"]');
-    process.exit(1);
+    process.exit(ExitCode.FINDINGS);
   }
 
   log('✓ All packages have proper "files" configuration', 'green');
@@ -469,7 +453,7 @@ try {
   log('✗ Failed to check package files configuration', 'red');
   const message = error instanceof Error ? error.message : String(error);
   console.error(message);
-  process.exit(1);
+  process.exit(ExitCode.ERROR);
 }
 
 // Check 10: Required package metadata (repository, author, license)
@@ -528,7 +512,7 @@ try {
     console.log('    },');
     console.log('    "author": "Jeff Dutton",');
     console.log('    "license": "MIT"');
-    process.exit(1);
+    process.exit(ExitCode.FINDINGS);
   }
 
   log('✓ All packages have required metadata', 'green');
@@ -536,7 +520,7 @@ try {
   log('✗ Failed to check package metadata', 'red');
   const message = error instanceof Error ? error.message : String(error);
   console.error(message);
-  process.exit(1);
+  process.exit(ExitCode.ERROR);
 }
 
 // Check 11: CHANGELOG.md has entry for current version (content check, always runs)
@@ -561,7 +545,7 @@ try {
   log('✗ Failed to read version from umbrella package', 'red');
   const message = error instanceof Error ? error.message : String(error);
   console.error(message);
-  process.exit(1);
+  process.exit(ExitCode.ERROR);
 }
 
 try {
@@ -570,7 +554,7 @@ try {
   if (!existsSync(changelogPath)) {
     log('✗ CHANGELOG.md not found', 'red');
     console.log('  Create CHANGELOG.md to document releases');
-    process.exit(1);
+    process.exit(ExitCode.FINDINGS);
   }
 
   // Skip CHANGELOG check for prerelease versions (RC, alpha, beta, etc.)
@@ -595,7 +579,7 @@ try {
       console.log('  2. Document changes under the version header');
       console.log('  3. Run pre-publish-check again');
       console.log('');
-      process.exit(1);
+      process.exit(ExitCode.FINDINGS);
     }
 
     log(`✓ CHANGELOG.md has entry for version ${currentVersion}`, 'green');
@@ -604,7 +588,7 @@ try {
   log('✗ Failed to check CHANGELOG.md', 'red');
   const message = error instanceof Error ? error.message : String(error);
   console.error(message);
-  process.exit(1);
+  process.exit(ExitCode.ERROR);
 }
 
 // Release-readiness checks (only when --release-readiness is passed)
@@ -631,27 +615,49 @@ if (releaseReadiness) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`  ${message}`);
       console.log('  Ensure vat build has run and marketplace changelog has [Unreleased] content');
-      process.exit(1);
+      process.exit(ExitCode.FINDINGS);
     }
   } else {
     log('⊘ Marketplace dry-run skipped (no vat-development-agents config)', 'yellow');
   }
 
-  // Check 13: Tag doesn't already exist on remote
+  // Check 13: the remote tag. Two opposite questions, by who is asking.
+  //
+  // Locally (`bun run pre-release`, BEFORE tagging) the tag must be absent: a
+  // present one means this version already shipped. In the publish workflow
+  // (`--tag`, AFTER the push that triggered it) the tag must be PRESENT and must
+  // name the manifest version — `npm publish` reads the manifest, never the
+  // tag, so a tag naming a different version would publish the wrong number
+  // under the right dist-tag.
   console.log('');
   console.log(`Checking remote tag v${currentVersion}...`);
 
   {
     const tagResult = runGit(['ls-remote', '--tags', 'origin', `refs/tags/v${currentVersion}`]);
+    const tagOnRemote = tagResult.ok && tagResult.stdout.toString().trim().length > 0;
 
-    if (tagResult.ok && tagResult.stdout.toString().trim().length > 0) {
-      log(`✗ v${currentVersion} tag already exists on remote`, 'red');
-      console.log(`  The tag v${currentVersion} has already been pushed to the remote.`);
-      console.log('  Bump the version before releasing.');
-      process.exit(1);
+    if (publishingTag === undefined) {
+      if (tagOnRemote) {
+        log(`✗ v${currentVersion} tag already exists on remote`, 'red');
+        console.log(`  The tag v${currentVersion} has already been pushed to the remote.`);
+        console.log('  Bump the version before releasing.');
+        process.exit(ExitCode.FINDINGS);
+      }
+      log(`✓ v${currentVersion} tag does not exist on remote`, 'green');
+    } else {
+      if (publishingTag !== currentVersion) {
+        log(`✗ Publishing tag v${publishingTag} but the manifests declare ${currentVersion}`, 'red');
+        console.log('  npm publishes the manifest version; the tag would name a different release.');
+        console.log('  Delete the tag, bump with `bun run bump-version`, and tag the commit that carries that version.');
+        process.exit(ExitCode.FINDINGS);
+      }
+      if (!tagOnRemote) {
+        log(`✗ v${currentVersion} is not on the remote, but --tag says it was pushed`, 'red');
+        console.log('  The publish workflow runs on a pushed tag; a tag the remote cannot see is not a release.');
+        process.exit(ExitCode.FINDINGS);
+      }
+      log(`✓ Pushed tag v${publishingTag} names the manifest version and exists on remote`, 'green');
     }
-
-    log(`✓ v${currentVersion} tag does not exist on remote`, 'green');
   }
 
   // Check 14 & 15: CHANGELOG content checks (stable versions only)
@@ -664,7 +670,9 @@ if (releaseReadiness) {
 
     // Check 14: No stale unreleased content
     // If the version IS stamped (has ## [version] heading) but no tag exists on remote,
-    // and [Unreleased] has content, warn.
+    // and [Unreleased] has content, FAIL — a stable release must carry everything
+    // above it; docs/contributing/pull-request-checklist.md names this check as
+    // the enforcer, so it enforces.
     console.log('');
     console.log('Checking for stale unreleased content...');
 
@@ -679,7 +687,8 @@ if (releaseReadiness) {
         const unreleasedMatch = /^## \[Unreleased\]([\s\S]*?)(?=^## \[|$)/m.exec(changelogContent);
         const unreleasedContent = unreleasedMatch?.[1]?.trim() ?? '';
         if (unreleasedContent.length > 0) {
-          log(`⚠ v${currentVersion} is stamped but not yet released. New changes should go under [${currentVersion}], not [Unreleased].`, 'yellow');
+          log(`✗ v${currentVersion} is stamped but [Unreleased] still has content. Move it under [${currentVersion}] (or a later section) before releasing.`, 'red');
+          process.exit(ExitCode.FINDINGS);
         } else {
           log('✓ No stale unreleased content', 'green');
         }
@@ -702,7 +711,7 @@ if (releaseReadiness) {
       if (sectionContent.length === 0) {
         log(`✗ CHANGELOG section for v${currentVersion} is empty`, 'red');
         console.log('  Add at least one entry under the version heading before releasing.');
-        process.exit(1);
+        process.exit(ExitCode.FINDINGS);
       }
 
       log(`✓ CHANGELOG section for v${currentVersion} has content`, 'green');
@@ -727,4 +736,4 @@ if (releaseReadiness) {
 }
 console.log('');
 
-process.exit(0);
+process.exit(ExitCode.OK);

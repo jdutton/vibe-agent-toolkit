@@ -4,7 +4,6 @@
  * fixture builder could not express a `skills.config.<name>.files` entry at
  * all, so no unit test could reproduce the leak class).
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- reading fixture files at dynamic temp paths */
 import { existsSync, readFileSync } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';

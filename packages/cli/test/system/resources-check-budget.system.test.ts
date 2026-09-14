@@ -159,6 +159,11 @@ function writeChecks(...entries: readonly (readonly [string, string])[]): void {
   );
 }
 
+/** The command's own `data`, beside the envelope's status/examined/findings/summary. */
+function data(doc: Record<string, unknown>): Record<string, unknown> {
+  return (doc['data'] ?? {}) as Record<string, unknown>;
+}
+
 /** What one spawn produced, and how long the whole thing took. */
 interface BudgetRun {
   status: number | null;
@@ -244,9 +249,9 @@ describe('vat resources check --budget', () => {
     const { status, doc } = check('--budget', '0');
 
     expect(status).toBe(0);
-    expect(doc['status']).toBe('success');
-    expect(doc['checksRun']).toBe(1);
-    expect(doc['membersEnumerated']).toBeGreaterThan(0);
+    expect(doc['status']).toBe('ok');
+    expect(data(doc)['checksRun']).toBe(1);
+    expect(doc['examined']).toBeGreaterThan(0);
   });
 
   it('KILLS a statement that never finishes, and fails the run naming it', () => {
@@ -258,9 +263,9 @@ describe('vat resources check --budget', () => {
 
     // ⛔ Never 0, and never a document that reads as a pass.
     expect(status).toBe(1);
-    expect(doc['status']).toBe('error');
+    expect(doc['status']).toBe('findings');
 
-    const [finding] = doc['issues'] as CheckFinding[];
+    const [finding] = doc['findings'] as CheckFinding[];
     // The non-overridable run-integrity code, so the project whose SQL hung
     // cannot silence the news with a severity entry.
     expect(finding?.code).toBe('RESOURCE_CHECK_BROKEN');
@@ -283,13 +288,13 @@ describe('vat resources check --budget', () => {
     const { status, doc } = check('--budget', String(budgetSeconds));
 
     expect(status).toBe(1);
-    const checks = doc['checks'] as PublishedCheck[];
+    const checks = data(doc)['checks'] as PublishedCheck[];
     expect(checks.map((entry) => entry.name)).toStrictEqual(['quick']);
     // Two markdown files in the fixture, so a truthful count is above zero — a
     // `rows: 0` here would mean the list was reconstructed rather than recovered.
     expect(checks[0]?.rows).toBeGreaterThan(0);
     // And the population the child actually reported, never a fabricated one.
-    expect(doc['membersEnumerated']).toBeGreaterThan(0);
+    expect(doc['examined']).toBeGreaterThan(0);
   });
 
   it('FAILS a run whose child died of memory, and never reports it as a pass', () => {
@@ -303,9 +308,9 @@ describe('vat resources check --budget', () => {
 
     // ⛔ Never 0, and never an empty document.
     expect(status).toBe(1);
-    expect(doc['status']).toBe('error');
+    expect(doc['status']).toBe('findings');
 
-    const [finding] = doc['issues'] as CheckFinding[];
+    const [finding] = doc['findings'] as CheckFinding[];
     expect(finding?.code).toBe('RESOURCE_CHECK_BROKEN');
     // The signal, because SIGABRT and SIGKILL point at different remedies.
     expect(finding?.message).toContain('SIGABRT');

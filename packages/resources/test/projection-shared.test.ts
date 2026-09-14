@@ -4,7 +4,6 @@ import * as projectionShared from '../src/schemas/projection-shared.js';
 import {
   ContentKeySchema,
   JsonValueSchema,
-  ProjectionConditionSeveritySchema,
 } from '../src/schemas/projection-shared.js';
 
 describe('the removed contract version', () => {
@@ -22,17 +21,10 @@ describe('the removed contract version', () => {
   });
 });
 
-describe('ProjectionConditionSeveritySchema', () => {
-  it('accepts the three parse/population-time severities', () => {
-    for (const severity of ['error', 'warning', 'info']) {
-      expect(ProjectionConditionSeveritySchema.safeParse(severity).success).toBe(true);
-    }
-  });
-
-  it('rejects "ignore" — a config-resolution state, not a condition severity', () => {
-    expect(ProjectionConditionSeveritySchema.safeParse('ignore').success).toBe(false);
-  });
-});
+// A condition row's severity is the ONE shared vocabulary from
+// `@vibe-agent-toolkit/schema` (`SeveritySchema`: error | warning | info, never
+// `ignore`); its acceptance and refusal are pinned in that package's
+// `report.test.ts`, once, for every lane that reads it.
 
 describe('ContentKeySchema', () => {
   it('accepts a well-formed key', () => {

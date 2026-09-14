@@ -86,7 +86,6 @@ describeIfLLMTests('LLM Regression Tests', () => {
         maxLength: 50,
       };
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const result = await (tool.execute as any)(validInput, {} as any);
 
       expect(result).toBeDefined();

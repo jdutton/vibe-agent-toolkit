@@ -1,6 +1,6 @@
 /**
- * Per-entry content cache for the linkAuth content-fetch primitive (design
- * issue #113 §6.2 + §6.3).
+ * Per-entry content cache for the linkAuth content-fetch primitive (design:
+ * `docs/contributing/vat-linkauth-contributing.md`, "Content cache").
  *
  * Layout: under `cacheDir/` each entry is two files keyed by `sha256(url).hex`:
  *   - `<hash>.json` — metadata (status, content-type, etag/last-modified,
@@ -22,7 +22,7 @@
  * stale entries fall out naturally on TTL expiry, and `forceRefresh` covers
  * "I authenticated as the wrong identity" per §6.3.
  *
- * **Fail-soft IO** per #125 review: ENOENT/EACCES/EROFS/corrupted-JSON all
+ * **Fail-soft IO**: ENOENT/EACCES/EROFS/corrupted-JSON all
  * degrade to a miss (for reads) or a no-op (for writes). A non-persisted
  * entry costs an extra fetch on the next run; an exception costs the whole
  * current run.
@@ -45,7 +45,8 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, safePath } from '@vibe-agent-toolkit/utils';
+import { ZodError } from 'zod';
 
 import {
   ContentMetadataSchema,
@@ -101,13 +102,12 @@ export class ContentCache {
       // Whitelist exactly the declared ContentMetadata fields — defense in
       // depth against a caller that smuggles extra structurally-typed fields,
       // so a future regression in the primitive cannot accidentally persist a
-      // token through this cache. `ContentMetadataSchema` is non-strict, so an
+      // token through this cache. `ContentMetadataSchema` is an explicit `.strip()`, so an
       // extra key is dropped rather than refused; a *malformed declared* field
       // throws and lands in the fail-soft catch below, which is the outcome we
       // want — an entry the read boundary would reject is not worth writing.
       const stored = ContentMetadataSchema.parse(metadata);
 
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheDir is constructor parameter, controlled by caller
       await fs.mkdir(this.cacheDir, { recursive: true });
       // Write order matters: .bin first, then .json. The reader checks .json
       // first (shape + TTL); a partially-written entry where .bin lands but
@@ -116,15 +116,15 @@ export class ContentCache {
       // for the same URL would serve old bytes under new metadata. Writing
       // .json second guarantees that whenever .json reflects the new entry,
       // .bin already does too.
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- binPath derived from cacheDir
       await fs.writeFile(binPath, Buffer.from(bytes));
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- jsonPath derived from cacheDir
       await fs.writeFile(jsonPath, JSON.stringify(stored), 'utf-8');
-    } catch {
-      // Fail-soft per #125 review: a write IO failure (EACCES on the dir,
+    } catch (error) {
+      // Fail-soft: a write IO failure (EACCES on the dir,
       // ENOSPC on the disk, EROFS on read-only mounts) — or metadata this
       // build cannot validate — becomes a no-op. The current run still has the
-      // fresh bytes; only the disk persistence is lost.
+      // fresh bytes; only the disk persistence is lost. Anything else is a bug
+      // in this class or its caller, and a bug is not a persistence failure.
+      if (!isFilesystemAccessError(error) && !(error instanceof ZodError)) throw error;
     }
   }
 
@@ -146,28 +146,32 @@ export class ContentCache {
   private async readMetadata(jsonPath: string): Promise<ContentMetadata | null> {
     try {
        
-      // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-raw-text-decode -- reading back an entry THIS class wrote as UTF-8; the encoding is chosen here, not discovered
+      // eslint-disable-next-line local/no-raw-text-decode -- reading back an entry THIS class wrote as UTF-8; the encoding is chosen here, not discovered
       const raw = await fs.readFile(jsonPath, 'utf-8');
       const validated = StoredContentMetadataSchema.safeParse(JSON.parse(raw));
       // A shape this build cannot account for is a miss, on the same footing
       // as corruption: we have no standing to interpret the other fields of a
       // file we did not write. See `schemas/content-cache.ts`.
       return validated.success ? validated.data : null;
-    } catch {
+    } catch (error) {
       // ENOENT (never written), EACCES (perms revoked), SyntaxError
       // (corrupted JSON) — all degrade to a miss. The next fetch repopulates.
+      // A TypeError from our own code is not a miss and stays loud.
+      if (!isFilesystemAccessError(error) && !(error instanceof SyntaxError)) throw error;
       return null;
     }
   }
 
   private async readBytes(binPath: string): Promise<Uint8Array | null> {
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- binPath derived from cacheDir
       const buf = await fs.readFile(binPath);
       // Return a fresh Uint8Array view that does not alias the Node Buffer's
       // underlying ArrayBuffer slab — callers may mutate or store the bytes.
       return new Uint8Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-    } catch {
+    } catch (error) {
+      // The `.json` half was readable and fresh but the `.bin` half is not
+      // there or cannot be opened: a miss, on the same fail-soft footing.
+      if (!isFilesystemAccessError(error)) throw error;
       return null;
     }
   }

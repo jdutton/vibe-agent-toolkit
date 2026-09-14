@@ -186,11 +186,15 @@ export const gitTrackerForProjectRoot: GitTrackerSource = async (projectRoot) =>
   if (gitRoot === null) {
     return undefined;
   }
-  try {
-    return await getOrCreateGitTracker(gitRoot);
-  } catch {
-    return undefined;
-  }
+  // No catch, deliberately. "Not a repository" and "git did not answer" are
+  // both absorbed INSIDE `GitTracker.initialize()` (a null listing, a tracker
+  // that says so), and a refused directory is recorded on the tracker under the
+  // degrade policy it is handed — so nothing environmental can throw from here.
+  // A throw is a defect, and the `catch { return undefined }` that used to sit
+  // here turned it into "no tracker": every gitignore question then fell back
+  // to a `git check-ignore` subprocess per file, silently, in the one lane
+  // measured at 786 of 786 such spawns.
+  return getOrCreateGitTracker(gitRoot);
 };
 
 /**

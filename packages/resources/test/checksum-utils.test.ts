@@ -1,5 +1,3 @@
-
-
 import { promises as fs } from 'node:fs';
 
 
@@ -15,9 +13,7 @@ async function createTwoFiles(tempDirPrefix: string, content1: string, content2:
   const tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), tempDirPrefix));
   const file1 = safePath.join(tempDir, 'file1.txt');
   const file2 = safePath.join(tempDir, 'file2.txt');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
   await fs.writeFile(file1, content1, 'utf-8');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
   await fs.writeFile(file2, content2, 'utf-8');
   return { tempDir, file1, file2 };
 }
@@ -28,7 +24,6 @@ describe('calculateChecksum', () => {
   it('should calculate SHA-256 checksum for file content', async () => {
     const tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), TEMP_DIR_PREFIX));
     const testFile = safePath.join(tempDir, 'test.txt');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(testFile, 'Hello, World!', 'utf-8');
 
     const checksum = await calculateChecksum(testFile);

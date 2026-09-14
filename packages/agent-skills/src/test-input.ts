@@ -31,7 +31,7 @@ import { dirname } from 'node:path';
 
 import type { SkillPackagingConfig } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { isGlob, issueLocation, safePath, staticGlobBase, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isGlob, issueLocation, relativeEscapesRoot, safePath, staticGlobBase, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { type SkillFileEntry } from './files-config.js';
 import { DEFAULT_EVALS_SUBPATH } from './skill-test/eval-suite-isolation.js';
@@ -85,7 +85,6 @@ export function conventionalSuiteProbe(): ConventionalSuiteProbe {
     const suitePath = safePath.resolve(skillDir, DEFAULT_EVALS_SUBPATH);
     const cached = answers.get(suitePath);
     if (cached !== undefined) return cached;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillDir is VAT's own resolved skill directory
     const found = existsSync(suitePath);
     answers.set(suitePath, found);
     return found;
@@ -154,7 +153,7 @@ export interface DeclaredEvalSuite {
  * the walker bundled it — with no exclusion and no `PACKAGED_TEST_INPUT` receipt,
  * because nothing under the subject's config named that path.
  *
- * Observed ACTIVE on a 90-skill adopter (2026-07-30, `vat skills build`): a built
+ * Observed ACTIVE on a 90-skill adopter (`vat skills build`): a built
  * bundle contained a file byte-identical to a DIFFERENT skill's real eval suite,
  * carried under that bundle's own subtree. The answer key shipped. A basename
  * collision between two such suites does not save anyone — a FILENAME_COLLISION is
@@ -177,7 +176,7 @@ export interface DeclaredEvalSuite {
  * SCOPE OF THE CROSS-SKILL HALF — another skill's suite dir travels to this build only
  * when it lies INSIDE that skill's own directory. A `test.evals` pointing at a SHARED
  * directory already strips that whole directory from the declaring skill's bundle
- * (issue #166); honouring it project-wide would turn one skill's over-broad
+ * (by design); honouring it project-wide would turn one skill's over-broad
  * declaration into a project-wide strip of a directory no single skill owns. The
  * declaring skill's own build is unchanged — the `config`/`skillDir` pair above is
  * still taken at face value — so this narrows nothing that worked before.
@@ -222,7 +221,7 @@ function projectRelativeTestInputDirs(
   const inside: string[] = [];
   for (const dir of testInputDirs) {
     const rel = toForwardSlash(safePath.relative(projectRoot, dir));
-    if (rel === '' || rel.startsWith('../')) continue;
+    if (rel === '' || relativeEscapesRoot(rel)) continue;
     inside.push(dir);
   }
   return inside;

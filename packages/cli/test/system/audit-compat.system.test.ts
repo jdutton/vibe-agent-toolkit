@@ -34,7 +34,6 @@ function createMinimalPlugin(
 ): string {
   const pluginDir = safePath.join(parentDir, pluginName);
   const metaDir = safePath.join(pluginDir, '.claude-plugin');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test helper, paths are controlled
   fs.mkdirSync(metaDir, { recursive: true });
 
   writeTestFile(
@@ -63,7 +62,6 @@ This is a test skill.
     for (const [relativePath, content] of Object.entries(extraFiles)) {
       const fullPath = safePath.join(pluginDir, relativePath);
       const fileDir = safePath.join(fullPath, '..');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test helper, paths are controlled
       fs.mkdirSync(fileDir, { recursive: true });
       writeTestFile(fullPath, content);
     }
@@ -125,7 +123,6 @@ describe('Audit --compat flag (system test)', () => {
 
   it('--compat produces compatibility analysis for a claude plugin', () => {
     const testDir = safePath.join(tempDir, 'single-plugin');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test, path is controlled
     fs.mkdirSync(testDir, { recursive: true });
 
     createMinimalPlugin(testDir, 'my-test-plugin');
@@ -143,7 +140,6 @@ describe('Audit --compat flag (system test)', () => {
 
   it('--compat with multiple plugins produces analysis for each', () => {
     const testDir = safePath.join(tempDir, 'multi-plugin');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test, path is controlled
     fs.mkdirSync(testDir, { recursive: true });
 
     createMinimalPlugin(testDir, 'plugin-alpha');
@@ -163,12 +159,10 @@ describe('Audit --compat flag (system test)', () => {
 
   it('--compat without a plugin (skill only) produces no compatibility data', () => {
     const testDir = safePath.join(tempDir, 'skill-only');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test, path is controlled
     fs.mkdirSync(testDir, { recursive: true });
 
     // Create a standalone SKILL.md (not a plugin directory)
     const skillDir = safePath.join(testDir, 'my-skill');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test, path is controlled
     fs.mkdirSync(skillDir, { recursive: true });
     writeTestFile(
       safePath.join(skillDir, 'SKILL.md'),
@@ -192,7 +186,6 @@ This skill has no plugin.json so no compat analysis applies.
 
   it('--compat works with --no-recursive flag', () => {
     const testDir = safePath.join(tempDir, 'no-recurse-compat');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test, path is controlled
     fs.mkdirSync(testDir, { recursive: true });
 
     createMinimalPlugin(testDir, 'top-level-plugin');
@@ -206,7 +199,6 @@ This skill has no plugin.json so no compat analysis applies.
     // Create a fake HOME with a .claude/plugins directory containing a plugin
     const fakeHome = safePath.join(tempDir, 'fake-home-compat');
     const pluginsDir = safePath.join(fakeHome, '.claude', 'plugins');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test, path is controlled
     fs.mkdirSync(pluginsDir, { recursive: true });
 
     createMinimalPlugin(pluginsDir, 'user-compat-plugin');

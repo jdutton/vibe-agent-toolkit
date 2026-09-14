@@ -426,7 +426,6 @@ describe('Zod Introspection', () => {
 
       it('should return non-Zod input unchanged', () => {
         const notZod = { not: 'zod' };
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const unwrapped = unwrapZodType(notZod as any);
         expect(unwrapped).toBe(notZod);
       });

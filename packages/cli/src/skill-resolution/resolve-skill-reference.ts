@@ -22,7 +22,7 @@
  *   1. kind-prefixed / `vendored`                          → { kind: 'source', source }
  *      EXCEPT `path:<dir>`, which is a spelling of a definite path (the prefix only
  *      disambiguates path-vs-name) and so continues at rung 2 below.
- *   2a. definite path AT a declared skill's SOURCE dir      → buildable (same contract as a bare name; #159/#158)
+ *   2a. definite path AT a declared skill's SOURCE dir      → buildable (same contract as a bare name)
  *   2b. definite path, otherwise                            → { kind: 'source', source: { path } }  (as-is; the `./<name>` escape lands here)
  *   3. bare name, no governing config     → existing dir ? source : not-found
  *   4. bare name matching a declared skill → buildable (preferred even on a dir collision; note the `./` escape —
@@ -49,7 +49,6 @@ import { getDiscoveredSkillsByPath, resolveSkillPackagingConfig } from './packag
 import type { BuildableReference, DeclaredSkillLink, SkillDistribution, SkillReference } from './types.js';
 
 function existingDir(p: string): boolean {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- user-supplied reference
   return existsSync(p);
 }
 
@@ -171,7 +170,7 @@ export async function findDeclaredSkillForSourceDir(
  * Rung 2 of the disambiguation ladder: a definite path (absolute, has `/`, or
  * starts `.` — or the `path:<dir>` spelling of one, which routes here from
  * {@link resolveSkillReference}). A path AT a declared skill's SOURCE dir resolves to `buildable`,
- * exactly like the bare-name form (#159's contract, extended from the companion
+ * exactly like the bare-name form (the bare-name contract, extended from the companion
  * side to the subject side: source != dist for every declared skill, so a real
  * run must build it, not tree-copy raw source). `--no-build` remains the escape
  * hatch. Otherwise the path is staged AS-IS (never rebuilt), but if it points at

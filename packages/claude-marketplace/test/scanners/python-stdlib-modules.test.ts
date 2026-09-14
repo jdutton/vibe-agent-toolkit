@@ -69,17 +69,18 @@ function readLiveInterpreter(): LiveInterpreter | undefined {
   const result = safeExecResult('python3', ['-c', program]);
   if (!result.success) return undefined;
 
+  let parsed: { version: string; minor: number; modules: string[] | null };
   try {
-    const parsed = JSON.parse(result.stdout.toString()) as {
-      version: string;
-      minor: number;
-      modules: string[] | null;
-    };
-    if (parsed.modules === null || parsed.minor < MIN_LIVE_MINOR) return undefined;
-    return { version: parsed.version, minor: parsed.minor, modules: parsed.modules };
-  } catch {
+    parsed = JSON.parse(result.stdout.toString()) as typeof parsed;
+  } catch (error) {
+    // An interpreter that printed something other than the JSON above (a
+    // site-customize banner, a locale warning) is "no usable interpreter";
+    // anything but a parse failure is a bug in this file and stays loud.
+    if (!(error instanceof SyntaxError)) throw error;
     return undefined;
   }
+  if (parsed.modules === null || parsed.minor < MIN_LIVE_MINOR) return undefined;
+  return { version: parsed.version, minor: parsed.minor, modules: parsed.modules };
 }
 
 describe('python-stdlib-modules.generated.ts (committed artifact)', () => {

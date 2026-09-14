@@ -16,7 +16,6 @@
  *    it without coupling to another module's API.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import {

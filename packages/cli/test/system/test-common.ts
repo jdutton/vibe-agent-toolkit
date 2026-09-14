@@ -9,8 +9,9 @@ import * as fs from 'node:fs';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { fileURLToPath as urlFileURLToPath } from 'node:url';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { createTempDir, removeTempDir, tempDirTracker } from '@vibe-agent-toolkit/utils/testing';
 import { expect } from 'vitest';
 import * as yaml from 'yaml';
 
@@ -68,19 +69,19 @@ export function getMonorepoRoot(testFileUrl: string): string {
  * Automatically generates a unique directory name
  */
 export function createTestTempDir(prefix: string): string {
-  return fs.mkdtempSync(pathJoin(normalizedTmpdir(), prefix));
+  return createTempDir(prefix);
 }
 
 /**
- * Clean up a temporary directory
- * Safe wrapper around fs.rmSync with proper error handling
+ * Clean up a temporary directory.
+ *
+ * `force: true` already tolerates a directory that is gone, and the retries
+ * are Node's own remedy for the transient `EBUSY` / `EPERM` a just-closed
+ * handle produces on Windows. Anything left after that is a real failure of
+ * the teardown, and a teardown that swallows it hides a leaking fixture.
  */
 export function cleanupTestTempDir(tempDir: string): void {
-  try {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  } catch {
-    // Ignore cleanup errors in tests
-  }
+  removeTempDir(tempDir);
 }
 
 /**
@@ -100,22 +101,8 @@ export function createTempDirTracker(prefix: string): {
   createTempDir: () => string;
   cleanupTempDirs: () => void;
 } {
-  const tempDirs: string[] = [];
-
-  const createTempDir = () => {
-    const dir = createTestTempDir(prefix);
-    tempDirs.push(dir);
-    return dir;
-  };
-
-  const cleanupTempDirs = () => {
-    for (const dir of tempDirs) {
-      cleanupTestTempDir(dir);
-    }
-    tempDirs.length = 0;
-  };
-
-  return { createTempDir, cleanupTempDirs };
+  const tracker = tempDirTracker(prefix);
+  return { createTempDir: tracker.create, cleanupTempDirs: tracker.cleanupAll };
 }
 
 /**
@@ -179,7 +166,6 @@ export function createPackageAndHomeContext(tempDir: string): {
  * Path is controlled by test code, so security warning is suppressed
  */
 export function writeTestFile(filePath: string, content: string): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is controlled in tests
   fs.writeFileSync(filePath, content, 'utf-8');
 }
 

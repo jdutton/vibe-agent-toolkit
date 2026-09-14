@@ -24,12 +24,12 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 
 | Subpath | Contents | Node builtins reached | Third-party | Resolves with zero deps installed? |
 |---|---|---|---|---|
-| `./path` | `safePath`, `toForwardSlash`, `toNfc`, `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `toAbsolutePath`, `getRelativePath`, `issueLocation` | `path` only | — | **yes** |
+| `./path` | `safePath`, `toForwardSlash`, `toNfc`, `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `relativeEscapesRoot`, `isSingleFsSegment`, `toAbsolutePath`, `getRelativePath`, `issueLocation` | `path` only | — | **yes** |
 | `./text` | `decodeTextContent` — the one bytes-to-text seam: BOM-announced UTF-8/UTF-16LE/UTF-16BE/UTF-32LE/UTF-32BE, BOM stripped, UTF-8 assumed otherwise; reports the encoding, whether it was a BOM fact or an assumption, and how many U+FFFD the decode substituted | **none** | — | **yes** |
 | `./zod` | `ZodTypeNames`, `getZodTypeName`, `isZodType`, `unwrapZodType`, `isZodOptional`, `isZodNullable` | **none** | — | **yes** |
 | `./glob` | `isGlob`, static base extraction, magic remainder | `path` only | — | **yes** |
 | `./fs` | `normalizePath`, `normalizedTmpdir`, `mkdirSyncReal`, `resolveFromImportMeta`, `dynamicImportPath`, `copyDirectory`, `fillPathSpellings`, `pathSpellingFrom`, `DirectorySpellingIndex`, `spellingWalkRoot`, `fillRealpaths`, `realpathFrom`, `FsLookupCache`, `readTextContent`, `readTextContentSync` | `fs`, `fs/promises`, `os`, `path`, `url`, `util` | — | **yes** |
-| `./testing` | `getTestOutputDir`, `getTestOutputBase`, `setupAsyncTempDirSuite`, `setupSyncTempDirSuite`, `removeScratchDir`, `symlinkCapability`, `createSymlink`, `createSymlinkAsync` | `crypto`, `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
+| `./testing` | `getTestOutputDir`, `getTestOutputBase`, `setupAsyncTempDirSuite`, `setupSyncTempDirSuite`, `removeScratchDir`, `createTempDir`, `removeTempDir`, `tempDirTracker`, `CANNOT_DENY_READS`, `buildHostileTree`, `HOSTILE_NAMES`, `symlinkCapability`, `createSymlink`, `createSymlinkAsync` | `crypto`, `fs`, `fs/promises`, `os`, `path`, `url` | — | **yes** |
 | `./asset` | `resolveAssetReference` — paths and npm bare specifiers | `fs`, `module`, `os`, `path`, `url` | — | **yes** |
 | `./yaml` | `updateYamlIn`, `verifyConfinedYamlEdit` — byte-surgical YAML edits | **none** | `yaml` | no — needs `yaml` |
 | `./process` | `safeExecSync`, `safeExecResult`, `safeExecFromString`, `isToolAvailable`, `getToolVersion`, `hasShellSyntax`, `CommandExecutionError`, `spawnHardened`, `shouldUseShell`, `windowsShellQuote`, `buildWindowsShellLine`, `resolveShellCommandToken`, `isPathLike`, `makeStdioBlocking`, `describeStdioBlocking` | `child_process`, `path` | `@vibe-validate/git`, `which` | no — needs both |
@@ -134,6 +134,8 @@ These always return forward slashes on every platform, so they are safe for comp
 - `getRelativePath()` - relative path between two absolute paths
 - `isAbsolutePath()` / `isAbsoluteAnyPlatform()` - absolute-path predicates
 - `hasParentTraversalSegment()` - detect `..` segments before using a caller-supplied path
+- `relativeEscapesRoot()` - classify a root-relative path (`safePath.relative(root, p)`) as escaping the root: `..`, `../x`, or an absolute answer (Windows cross-drive). Lexical, for identities and reports; a sink asks `isUnderRoot()` instead
+- `isSingleFsSegment()` - true when a caller-supplied NAME can only ever be one entry directly under whatever it is joined to (no separators, not `.`/`..`, no NUL, no drive spelling). `..cache` passes; `../victim` does not
 - `issueLocation()` - format a `file:line`-style location relative to a project root
 
 ⚠️ **`toNfc()` produces a comparison key, never a path to open.** The same visible filename has two
@@ -158,7 +160,11 @@ These return **OS-native** separators, because they resolve real filesystem iden
 - `mkdirSyncReal()` - create a directory and return its real path
 - `resolveFromImportMeta()` - resolve paths relative to an `import.meta.url`
 - `dynamicImportPath()` - `import()` an absolute path (works on Windows, which rejects bare absolute paths)
-- `copyDirectory()`
+- `copyDirectory()` - recursive copy that follows a symlinked directory into the tree it points at — contained: a link whose target is outside the source throws `CopyLinkEscapesSourceError`, and a link back into the tree throws `DirectoryWalkRevisitedError`
+- `isUnderRoot(root, candidate)` - the containment verdict a delete/copy/uninstall sink asks, answered by the filesystem: `'inside'` (a strict descendant, realpath-judged), `'outside'` (including the root itself and any symlink that leaves it), or `'absent'` (nothing there yet, and creating it would land inside). Both sides are canonicalized from their deepest existing ancestor, so a root reached through a symlink still contains its members; a refused path throws rather than reading as absent
+- `direntKind(entry)` - what a `Dirent` itself is: `'file' | 'directory' | 'symlink' | 'other'` — the link question asked first, for walks that must not follow (a delete, a size count)
+- `direntKindFollowing(dir, entry)` / `direntKindFollowingSync()` - what a `Dirent` resolves to, one `stat` for a link: `'file' | 'directory' | 'dangling' | 'other'` — for walks over a trusted tree where a link is how the entry got there. Both exist because `isFile()` and `isDirectory()` are BOTH false for a symlink, so a walk that tests only those drops every link silently (`local/dirent-type-needs-symlink-check` refuses that shape)
+- `FollowedWalk` - the cycle guard every following walk holds: `enter(dir)` on the root and each directory recursed into; a directory reached again under a second spelling (a link back into the tree) throws `DirectoryWalkRevisitedError` instead of recursing until the path length runs out
 - `fillPathSpellings(requests, fsCache)` - pass 1 of the case-exact existence check: walk each
   `{ referrer, target }` from the deepest directory the two share, listing every directory on the way
   down exactly once. The only I/O in the pair
@@ -199,6 +205,10 @@ These return **OS-native** separators, because they resolve real filesystem iden
 ### Test helpers — `@vibe-agent-toolkit/utils/testing`
 
 - `setupAsyncTempDirSuite()` / `setupSyncTempDirSuite()` - per-suite temp directories with cleanup
+- `createTempDir()` / `createTempDirAsync()` / `removeTempDir()` / `tempDirTracker()` - the per-call temp-directory primitives; `removeTempDir` refuses, by name, anything not inside the host tmpdir as the filesystem sees it
+- `CANNOT_DENY_READS` / `PERMISSIONS_ENFORCED` - whether a `chmod 000` denies anything on this host (Windows and uid 0 read everything); route through `skip()` so the skip is visible
+- `NODE_EXECUTABLE` / `gitExecutable()` / `resolveExecutable(name)` / `executableCandidates(name, platform, pathext)` - absolute paths for the binaries a fixture spawns: the running node, and `git` found by walking `PATH` once for the first regular executable file (`PATHEXT` names on Windows) and cached. A fixture spawns these instead of a bare `'git'` or `'node'`, so no writable directory on `PATH` decides what runs.
+- `buildHostileTree(base)` / `hostileTreePerTest(prefix)` / `HOSTILE_NAMES` - the one hostile fixture every sink is tested against: a root with a member, a `..`-named member, a symlink pointing out, one pointing in, a dangling one, an alias link to the root, an unreadable directory, a 200-character name, plus a sibling `victim/secret.txt` outside the root; and the table of names (`../victim`, `..`, `.`, `''`, `/victim`, `C:\victim`, a NUL byte, …) a sink must refuse. Fields the host cannot build are `null`
 - `getTestOutputDir()` / `getTestOutputBase()` - isolated test output paths
 - `symlinkCapability()` - probes once (memoized per process) whether this host can create symlinks (Windows needs Developer Mode or `SeCreateSymbolicLinkPrivilege`), returning a `SymlinkCapability` token or `null`
 - `createSymlink()` / `createSymlinkAsync()` - the sanctioned way to create a symlink in test code; both require a `SymlinkCapability` from `symlinkCapability()`, so a test cannot reach the raw syscall without first proving the host supports it (or explicitly skipping via vitest's `skip()`)
@@ -214,6 +224,15 @@ These are CLI-boundary functions: inner libraries should take a root as a parame
 **These four are VAT-shaped — read this before reaching for them.** `findProjectRoot()` looks for `vibe-agent-toolkit.config.yaml` and then `.git/`; if your repo's notion of "root" is a `pnpm-workspace.yaml`, a `turbo.json`, or a lockfile, that ladder is not your ladder — and for a *published* package, keying anything on `.git/` is a bug, since it will not be there at install time. `findNodeWorkspaceRoot()` is narrower still: it needs a `package.json` carrying a `"workspaces"` key, which pnpm and Bun workspaces do not have. `findConfigFile()` hardcodes VAT's config filename. If you want a git root, take `gitFindRoot()` from [`./git`](#git--vibe-agent-toolkitutilsgit); if you want your own marker, a six-line walk-up is more honest than a helper whose ladder you have to work around.
 
 They are nonetheless on their own [`./project`](#import-narrowly) entry rather than the barrel alone. The entry was briefly withdrawn on the grounds that the functions fit few repos — which is true, and is what the paragraph above says — but that answered the wrong question. What decides whether an *entry* exists is how heavy the only remaining door is, and barrel-only these four once cost five third-party packages to reach while their own code imports nothing but `node:fs` and `node:path`. Publishing the entry is not a claim that the ladder fits you — only that finding out shouldn't cost a dependency graph. The barrel is dependency-free now, which is that same rule applied everywhere rather than a reason to fold `./project` back in.
+
+### Errors — `@vibe-agent-toolkit/utils` (barrel only)
+
+- `VatError` - the base of every error VAT throws on purpose: `new VatError(code, message, { cause })`. `code` is a stable `SCREAMING_SNAKE` identity a catch block dispatches on; `name` is taken from the subclass.
+- `isVatError(error, code?)` - the dispatch predicate. Reads a `Symbol.for('vat.error')` brand plus `code`, never the prototype chain, so a `dist` copy of a class still matches a `src` instance. A foreign error carrying a `code` (every `node:fs` errno) answers `false`.
+- `prefixMessageOnce(error, prefix)` - prefix a message in place, once per error object — for a seam a retried item passes through more than once, without re-reading the message to find out.
+- `PathEscapesRootError` (on `./path` too) - what `safePath.joinUnderRoot` throws; recognise it with `isVatError(error, PathEscapesRootError.code)`.
+
+Never dispatch on `error.message` — the repo's ESLint config refuses `.message.includes(…)` and friends under `packages/*/src`. Prose is for humans and changes when it is improved; a code changes only when the meaning does.
 
 ### Directory crawling — `@vibe-agent-toolkit/utils/crawl`
 

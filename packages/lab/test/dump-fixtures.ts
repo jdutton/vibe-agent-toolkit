@@ -11,7 +11,6 @@ import { mkdir, writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is composed under a caller-supplied temp root */
 
 /**
  * Write raw files into a fresh directory under a temp root.

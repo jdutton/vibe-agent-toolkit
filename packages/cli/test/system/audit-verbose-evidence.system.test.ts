@@ -32,7 +32,6 @@ az login
 
 function createTestSkill(parentDir: string, skillName: string): string {
   const skillDir = safePath.join(parentDir, skillName);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test, paths controlled
   fs.mkdirSync(skillDir, { recursive: true });
   const skillPath = safePath.join(skillDir, 'SKILL.md');
   writeTestFile(skillPath, SKILL_CONTENT);

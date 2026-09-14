@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { CODE_REGISTRY, IssueCodeSchema, type IssueCode } from '../src/validation-codes.js';
+import { CODE_REGISTRY, CONSISTENCY_CODES, IssueCodeSchema, type ConsistencyCode, type IssueCode } from '../src/validation-codes.js';
 
 describe('CODE_REGISTRY', () => {
   it('contains every overridable code with a default severity', () => {
@@ -192,5 +192,27 @@ describe('CODE_REGISTRY — installed-plugins registry drift', () => {
 describe('IssueCodeSchema', () => {
   it('IssueCodeSchema enumerates exactly the registry keys', () => {
     expect(new Set(IssueCodeSchema.options)).toEqual(new Set(Object.keys(CODE_REGISTRY)));
+  });
+});
+
+describe('CONSISTENCY_CODES', () => {
+  // The verify-time consistency check emits these with a fixed per-code
+  // severity; they are documented beside the registry but are NOT
+  // validation.severity keys, so they must stay out of CODE_REGISTRY.
+  it('names every consistency code and none of them is a registry key', () => {
+    const expected: ConsistencyCode[] = [
+      'CONFIG_REFERENCES_UNKNOWN_SKILL',
+      'PUBLISHED_SKILL_NOT_IN_PACKAGE_JSON',
+      'PACKAGE_JSON_LISTS_UNKNOWN_SKILL',
+      'UNPUBLISHED_SKILL_IN_PACKAGE_JSON',
+      'PUBLISHED_SKILL_NOT_IN_PLUGIN',
+      'PLUGIN_REFERENCES_UNKNOWN_SKILL',
+      'SKILL_UNPUBLISHED',
+      'VENDORED_LICENSING_MISSING',
+    ];
+    expect(new Set(CONSISTENCY_CODES)).toEqual(new Set(expected));
+    for (const code of CONSISTENCY_CODES) {
+      expect(code in CODE_REGISTRY, `${code} must not be overridable`).toBe(false);
+    }
   });
 });

@@ -1,10 +1,10 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import { chmodSync, existsSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
 
 import { allowUnusedIssues, createAllowUsageLedger, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { buildHostileTree, HOSTILE_NAMES , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { getResourceSubdirForFile } from '../src/content-type-routing.js';
@@ -677,10 +677,8 @@ describe('packageSkill - binary file copy', () => {
 // ============================================================================
 
 describe('packageSkill - unreadable/unwritable linked file attribution', () => {
-  const skipUnlessRealPermissions =
-    process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
-  it.skipIf(skipUnlessRealPermissions)(
+  it.skipIf(CANNOT_DENY_READS)(
     'attributes an unreadable linked asset instead of a bare EACCES (registerBundledAssets)',
     async () => {
       const dir = getTempDir();
@@ -701,7 +699,7 @@ describe('packageSkill - unreadable/unwritable linked file attribution', () => {
     },
   );
 
-  it.skipIf(skipUnlessRealPermissions)(
+  it.skipIf(CANNOT_DENY_READS)(
     'attributes an unwritable output subdirectory instead of a bare EACCES (copyAndRewriteFile write)',
     async () => {
       const dir = getTempDir();
@@ -909,6 +907,39 @@ describe('packageSkill - source-in-output check', () => {
     // Stale file should be gone
     expect(existsSync(safePath.join(outDir, 'stale.md'))).toBe(false);
   });
+
+  // The library-reachable sink: no `outputPath`, no frontmatter `name`, so the
+  // H1 title names the directory that is then `rm -rf`'d. `# ../../../canary`
+  // used to delete `<package-root>/canary` with issues empty and exit 0.
+  it.each(HOSTILE_NAMES.filter((n) => n.trim() !== '' && !n.includes(String.fromCodePoint(0))))(
+    'refuses to derive a default output directory from the hostile title %j, and the victim survives',
+    async (title) => {
+      const tmp = getTempDir();
+      const tree = buildHostileTree(tmp);
+      try {
+        const skillDir = safePath.join(tree.root, 'pkg', 'skills', 'x');
+        await mkdir(skillDir, { recursive: true });
+        await writeFile(safePath.join(tree.root, 'pkg', 'package.json'), '{"name":"pkg"}');
+        const sp = safePath.join(skillDir, 'SKILL.md');
+        await writeFile(sp, `# ${title}\n\nA skill with no frontmatter name.`);
+        // The path a bare `join(<pkg>/dist/skills, title)` would reach — the
+        // one an escaped `rm -rf` lands on. Planted with a secret when it is
+        // somewhere this test may write (an absolute spelling is not), so the
+        // survival assertion is on the directory the sink would actually hit,
+        // not on a decorative `outside/victim` no title resolves to.
+        const reached = safePath.resolve(safePath.join(tree.root, 'pkg', 'dist', 'skills'), title);
+        const plantable = reached.startsWith(`${tmp}/`);
+        if (plantable) {
+          await mkdir(reached, { recursive: true });
+          await writeFile(safePath.join(reached, 'secret.txt'), 'TOKEN=abc\n');
+        }
+        await expect(packageSkill(sp)).rejects.toMatchObject({ code: 'SKILL_NAME_NOT_A_SEGMENT' });
+        if (plantable) expect(existsSync(safePath.join(reached, 'secret.txt'))).toBe(true);
+      } finally {
+        tree.cleanup();
+      }
+    },
+  );
 });
 
 describe('packageSkill - nested SKILL.md integrity check', () => {
@@ -1195,7 +1226,6 @@ describe('packageSkill - gitignored files: source (build path)', () => {
 
     const result = await packWithOutput(skillPath, {
       files: [{ source: gitIgnoredSource, dest: 'config/secret.env' }],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test stub
       gitTracker: tracker as any,
     });
 

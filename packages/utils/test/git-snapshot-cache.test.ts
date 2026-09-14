@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is a temp dir this test owns */
 /**
  * `withGitSnapshotCache` — the bracket that makes one command take one snapshot.
  *

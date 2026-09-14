@@ -38,7 +38,6 @@ interface VendoredSchema {
 }
 
 export function loadVendoredArdSchema(): VendoredSchema {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derives from import.meta.url, not from input
   return JSON.parse(readFileSync(VENDORED_ARD_SCHEMA_PATH, 'utf-8')) as VendoredSchema;
 }
 

@@ -52,7 +52,6 @@ export function plantOkfBundle(files: BundleLiteral): string {
   for (const [name, content] of Object.entries(files)) {
     const target = safePath.joinUnderRoot(root, name);
     mkdirSyncReal(safePath.join(target, '..'), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- same literal-derived path, same enforced root
     writeFileSync(target, content, 'utf8');
   }
 

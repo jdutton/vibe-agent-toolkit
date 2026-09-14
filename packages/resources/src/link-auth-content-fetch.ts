@@ -1,5 +1,5 @@
 /**
- * Public content-fetch primitive for the linkAuth feature (design issue #113 §6.2).
+ * Public content-fetch primitive for the linkAuth feature (linkAuth design §6.2).
  *
  * Ships as a standalone primitive — no consumer wiring (asset-references,
  * bundling) lands in this slice. The shape and security disciplines are

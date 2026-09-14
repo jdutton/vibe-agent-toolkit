@@ -55,7 +55,7 @@ export type LinkNodeType = z.infer<typeof LinkNodeTypeSchema>;
 export const HtmlParseErrorSchema = z.object({
   message: z.string().describe('parse5 error code (e.g. "missing-end-tag")'),
   line: z.number().int().positive().optional().describe('1-based source line, when known'),
-}).describe('HTML well-formedness diagnostic');
+}).strip().describe('HTML well-formedness diagnostic'); // .strip(): a parse-cache ELEMENT — a stale key here is a field this build no longer reads; see parse-facts.ts "Nested schemas are NOT strict, on purpose"
 
 export type HtmlParseError = z.infer<typeof HtmlParseErrorSchema>;
 
@@ -98,7 +98,7 @@ export const HeadingNodeSchema: z.ZodType<HeadingNode> = z.lazy(() =>
     slug: z.string().describe('GitHub-style slug for anchor links (lowercase, hyphenated)'),
     line: z.number().int().positive().optional().describe('Line number in source file'),
     children: z.array(HeadingNodeSchema).optional().describe('Nested child headings'),
-  }).describe('Heading node in the document\'s table of contents'))
+  }).strip().describe('Heading node in the document\'s table of contents')) // .strip(): a parse-cache ELEMENT — a stale key here is a field this build no longer reads; see parse-facts.ts "Nested schemas are NOT strict, on purpose"
 );
 
 /**
@@ -120,7 +120,7 @@ export const ResourceLinkSchema = z.object({
   anchorTarget: z.string().optional().describe('Target heading slug (for anchor links)'),
   resolvedId: z.string().optional().describe('Resolved resource ID in the collection (for local_file links)'),
   nodeType: LinkNodeTypeSchema.optional().describe('AST node type: link, linkReference, or definition'),
-}).describe('Link found in a markdown resource');
+}).strip().describe('Link found in a markdown resource'); // .strip(): a parse-cache ELEMENT — a stale key here is a field this build no longer reads; see parse-facts.ts "Nested schemas are NOT strict, on purpose"
 
 export type ResourceLink = z.infer<typeof ResourceLinkSchema>;
 
@@ -138,7 +138,7 @@ export type ResourceLink = z.infer<typeof ResourceLinkSchema>;
 export const UnresolvedReferenceSchema = z.object({
   label: z.string().describe('The reference label as written (pre-normalization)'),
   line: z.number().int().positive().describe('1-based line number of the reference occurrence'),
-}).describe('A reference-style link occurrence with no matching definition');
+}).strip().describe('A reference-style link occurrence with no matching definition'); // .strip(): a parse-cache ELEMENT — a stale key here is a field this build no longer reads; see parse-facts.ts "Nested schemas are NOT strict, on purpose"
 
 export type UnresolvedReference = z.infer<typeof UnresolvedReferenceSchema>;
 

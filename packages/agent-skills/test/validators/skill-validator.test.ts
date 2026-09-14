@@ -128,10 +128,8 @@ describe('transitive link traversal — boundary escape', () => {
     const tempDir = getTempDir();
     const skillDir = safePath.join(tempDir, 'skill');
     mkdirSyncReal(skillDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir path
     writeFileSync(safePath.join(tempDir, 'sibling.md'), '# Sibling\n');
     const skillPath = safePath.join(skillDir, 'SKILL.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir path
     writeFileSync(skillPath, skillWithLink('../sibling.md', 'sibling'));
 
     const result = await validateSkill({ skillPath, rootDir: skillDir });
@@ -472,7 +470,6 @@ describe('kebab-case detection — skill', () => {
 
   it('emits SKILL_NAME_NOT_KEBAB_CASE alongside schema error for invalid names', async () => {
     const skillPath = safePath.join(getTempDir(), 'SKILL.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath is a controlled temp dir
     writeFileSync(
       skillPath,
       [

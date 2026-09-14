@@ -16,7 +16,6 @@ export {
   ArdConfigMissingError,
   DEFAULT_ARD_OUTPUT,
   type ArdEmitReport,
-  type ArdEmitStatus,
 } from './emit.js';
 export { collectArdSurfaces, type ArdSurfaceCollection, type SkippedArdSurface } from './surfaces.js';
 
@@ -86,9 +85,10 @@ Requirements:
 Exit Codes:
   0 - Manifest written — INCLUDING one that advertises nothing. An empty
       \`entries\` list is a legal ARD document, and skipped surfaces are reported
-      on stderr at this exit code. Gate on \`--format json\` (\`status\`,
-      \`entryCount\`, \`skippedCount\`), or make both conditions fail with
-      \`--strict\`
+      on stderr at this exit code. Gate on \`--format json\` (the report
+      envelope: \`examined\`, \`findings\`, \`summary\`, \`data.entryCount\`,
+      \`data.skippedCount\`; schema: packages/cli/schemas/ard-emit.json), or
+      make both conditions fail with \`--strict\`
   1 - No \`ard:\` block in the config, or a surface could not be derived. Under
       \`--strict\`, also an empty manifest or a skipped surface
   2 - System error (no project root, no config file, invalid config, unexpected

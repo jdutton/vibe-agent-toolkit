@@ -177,7 +177,6 @@ describe('writeReport and readReport', () => {
 
   it('refuses a file that is not valid JSON rather than throwing', async () => {
     const bad = safePath.join(tempDir, 'broken.json');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture under a temp dir
     await writeFile(bad, '{ not json', 'utf-8');
     const result = await readReport(bad);
     expect(result.ok).toBe(false);

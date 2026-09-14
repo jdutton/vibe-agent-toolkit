@@ -105,7 +105,7 @@ export const INVENTORY_CRAWL_WALKER = 'walker';
 /**
  * Whether this process should answer inventory membership from a projection.
  *
- * ## The projection is the DEFAULT as of 2026-08-15 — this predicate is inverted
+ * ## The projection is the DEFAULT — this predicate is inverted
  *
  * It shipped gated OFF, as a second implementation kept beside the first so the
  * two could be measured against each other in one process. Everything that
@@ -116,7 +116,7 @@ export const INVENTORY_CRAWL_WALKER = 'walker';
  * as an unordered set comparison.
  *
  * ⚠️ **It is measurably SLOWER and that was accepted deliberately, not
- * overlooked** (Jeff, 2026-08-15). ~5.3× on that adopter: 522 ms of link walk
+ * overlooked** — a product decision, recorded in the CHANGELOG. ~5.3× on that adopter: 522 ms of link walk
  * against 2,751 ms of projection, warm, on a clean machine. The cost is not the
  * membership traversal — that is 2.5% of the projection's own time — but the
  * substrate beneath it, which enumerates the whole tree (20,965 paths against

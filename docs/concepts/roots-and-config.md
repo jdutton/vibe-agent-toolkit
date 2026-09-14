@@ -171,9 +171,8 @@ questions.
 When code crosses the CLI boundary and joins or resolves filesystem paths, it
 uses `safePath.join` / `safePath.resolve` / `safePath.relative` from
 `@vibe-agent-toolkit/utils`. These wrappers always return forward slashes so
-Windows and Unix behave identically. Local ESLint rules (`no-path-join`,
-`no-path-resolve`, `no-path-relative`) enforce this — see the repository
-[`CLAUDE.md`](../../CLAUDE.md) for the rationale.
+Windows and Unix behave identically. The `no-raw-node-path` ESLint rule enforces this — see the
+repository [`CLAUDE.md`](../../CLAUDE.md) for the rationale.
 
 ## See also
 

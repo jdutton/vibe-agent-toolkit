@@ -1,38 +1,23 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test helper functions - file paths are controlled by test code, not user input
-/* eslint-disable security/detect-unsafe-regex */
+/* eslint-disable security/detect-unsafe-regex -- the fixtures here deliberately carry the regexes the rule flags */
 // Simple semver validation regex for test purposes only
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 
 
-import { mkdirSyncReal, normalizePath, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { createTempDir, removeTempDir } from '@vibe-agent-toolkit/utils/testing';
 
 export interface TestTempDirOptions {
   prefix?: string;
 }
 
 export function createTestTempDir(options: TestTempDirOptions = {}): string {
-  const prefix = options.prefix ?? 'vat-test-';
-  const tempBase = normalizedTmpdir();
-  const tempDir = mkdtempSync(safePath.join(tempBase, prefix));
-  return safePath.resolve(tempDir);
+  return createTempDir(options.prefix ?? 'vat-test-');
 }
 
 export function cleanupTestTempDir(dir: string): void {
-  // Security: Ensure the directory is actually in the system temp directory
-  const normalizedDir = toForwardSlash(normalizePath(dir));
-  const normalizedTempBase = toForwardSlash(normalizePath(normalizedTmpdir()));
-
-  if (!normalizedDir.startsWith(normalizedTempBase)) {
-    throw new Error(`Security: Refusing to delete directory outside temp: ${dir}`);
-  }
-
-  try {
-    rmSync(normalizedDir, { recursive: true, force: true });
-  } catch {
-    // Ignore cleanup errors - test directories may already be deleted
-  }
+  removeTempDir(dir);
 }
 
 export interface MockPackageOptions {

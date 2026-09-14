@@ -1,3 +1,5 @@
+import { VatError } from '@vibe-agent-toolkit/utils';
+
 import { sanitizeGraderText } from './grader-text.js';
 import { GradingReportSchema } from './grading-schema.js';
 
@@ -7,14 +9,15 @@ import { GradingReportSchema } from './grading-schema.js';
  * limp along on malformed grading data — a wrong shape silently flowing
  * downstream causes confusing failures far from the real cause.
  */
-export class GradingSkewError extends Error {
+export class GradingSkewError extends VatError {
+  readonly reason = 'internal' as const;
   constructor(message: string) {
     super(
+      'GRADING_SKEW',
       `grading.json shape skew: ${message}. Expected skill-creator's grading.json shape ` +
         '(a single flat object with top-level `expectations` and `summary`); see ' +
         'docs/skill-test-grading-schema.md. Re-sync the vendored skill-creator / adopted shapes.',
     );
-    this.name = 'GradingSkewError';
   }
 }
 
@@ -49,15 +52,16 @@ export interface NormalizedGrading {
  * prompted — most likely forged or left behind by untrusted skill code in the
  * shared sandbox — so the verdict merged from it cannot be trusted.
  */
-export class GradingNonceError extends Error {
+export class GradingNonceError extends VatError {
+  readonly reason = 'internal' as const;
   constructor(message: string) {
     super(
+      'GRADING_NONCE',
       `grader integrity check failed: ${message}. The harness stamps a secret per-run ` +
         'nonce into each grader prompt (delivered only via stdin, never written to disk) ' +
         'and requires every per-eval grader fragment to echo it; a missing or wrong nonce ' +
         'means the fragment was not produced by the grader we prompted and is rejected.',
     );
-    this.name = 'GradingNonceError';
   }
 }
 
@@ -72,16 +76,17 @@ export class GradingNonceError extends Error {
  * so the merge refuses rather than emit a mislabelled artifact that downstream
  * readers would take as authoritative.
  */
-export class GradingArmError extends Error {
+export class GradingArmError extends VatError {
+  readonly reason = 'internal' as const;
   constructor(message: string) {
     super(
+      'GRADING_ARM',
       `grader fragment arm mismatch: ${message}. Each --baseline arm is merged into its own ` +
         'artifact (grading.json = the WITH arm, baseline.json = the WITHOUT/control arm), and ' +
         'every fragment merged into one must come from that arm — a fragment with no `arm` ' +
         "belongs to the default 'with' arm. Mixing arms would make the merged pass count a " +
         'measurement of neither.',
     );
-    this.name = 'GradingArmError';
   }
 }
 

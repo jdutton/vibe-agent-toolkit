@@ -34,7 +34,6 @@
  * exercised end to end pins both.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';

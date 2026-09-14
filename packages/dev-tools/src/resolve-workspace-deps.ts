@@ -1,5 +1,4 @@
 #!/usr/bin/env tsx
-/* eslint-disable security/detect-non-literal-fs-filename */
 // File paths derived from PACKAGES_DIR constant (controlled directory scanning)
 
 /**
@@ -24,6 +23,7 @@
 
 import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { isEntrypoint, log } from './common.js';
@@ -173,7 +173,7 @@ function main(): void {
     log('❌ Error: Version argument required', 'red');
     console.log('Usage: bun run resolve-workspace-deps <version>');
     console.log('Example: bun run resolve-workspace-deps 0.1.0-rc.7');
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   }
 
   log(`\n🔧 Resolving workspace:* dependencies to ${version}...`, 'blue');

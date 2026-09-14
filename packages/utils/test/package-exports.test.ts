@@ -27,7 +27,6 @@ function asConditions(entry: ExportEntry | undefined): { types?: string; import?
 }
 
 const manifestPath = resolveFromImportMeta(import.meta.url, '..', 'package.json');
-// eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from import.meta.url
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Manifest;
 
 /** What `files: ["dist"]` publishes. */
@@ -217,7 +216,6 @@ describe('utils package manifest', () => {
       const target = asConditions(entry).import;
       if (!target?.startsWith(DIST)) continue;
       const relative = `${target.slice(DIST.length, -'.js'.length)}.ts`;
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from srcDir
       if (!existsSync(safePath.join(srcDir, relative))) missing.push(key);
     }
 
@@ -249,17 +247,14 @@ describe('utils package manifest', () => {
   it('ships no compiled module whose source has been withdrawn', () => {
     const srcDir = resolveFromImportMeta(import.meta.url, '..', 'src');
     expect(
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from import.meta.url
       existsSync(distDir),
       `${distDir} does not exist — build the package before running this test`,
     ).toBe(true);
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from import.meta.url
     const outputs = readdirSync(distDir, { recursive: true, withFileTypes: false })
       .map((entry) => toForwardSlash(String(entry)));
 
     const orphans = orphanedOutputs(outputs, (relative) =>
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from srcDir
       existsSync(safePath.join(srcDir, relative)),
     );
 

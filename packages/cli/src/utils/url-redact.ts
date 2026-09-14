@@ -27,12 +27,10 @@
  * @returns The input with any URL-format credentials removed.
  */
 export function redactUrlCredentials(url: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return url;
-  }
+  // Not a URL: nothing to redact. Asked as a question rather than caught as a
+  // throw, so the only thing that reads as "not a URL" is exactly that.
+  if (!URL.canParse(url)) return url;
+  const parsed = new URL(url);
 
   if (parsed.username === '' && parsed.password === '') {
     return url;

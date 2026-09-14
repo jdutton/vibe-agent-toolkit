@@ -263,9 +263,8 @@ export type TemplateMetadata = z.infer<typeof TemplateMetadataSchema>;
 
 ```typescript
 // scripts/validate-metadata.ts
+import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 import { glob } from 'glob';
-import matter from 'gray-matter';
-import { readFileSync } from 'node:fs';
 import { PromptMetadataSchema, TemplateMetadataSchema } from '../src/schemas/metadata';
 
 const schemaMap = {
@@ -280,8 +279,7 @@ async function validateAllMetadata() {
     const files = await glob(`resources/${collection}/**/*.md`);
 
     for (const file of files) {
-      const content = readFileSync(file, 'utf-8');
-      const { data } = matter(content);
+      const { frontmatter: data } = await parseMarkdown(file);
 
       try {
         schema.parse(data);

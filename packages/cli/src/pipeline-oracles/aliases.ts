@@ -11,7 +11,7 @@
  */
 
 import { realPathOrNull, type ResourceRealizationRow } from '@vibe-agent-toolkit/resources';
-import { isAbsolutePath, safePath } from '@vibe-agent-toolkit/utils';
+import { relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { EnumerationRow } from './types.js';
 
@@ -98,5 +98,5 @@ function resolveInsideRoot(absolutePath: string, corpusRoot: string): boolean | 
     return null;
   }
   const rel = safePath.relative(corpusRoot, real);
-  return rel !== '' && !rel.startsWith('..') && !isAbsolutePath(rel);
+  return rel !== '' && !relativeEscapesRoot(rel);
 }

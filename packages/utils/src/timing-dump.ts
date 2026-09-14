@@ -38,7 +38,7 @@
  *    figure is per process, and the only honest aggregate over several is the
  *    per-process ratio read one dump at a time. The `crawl` facet keeps one
  *    record per dump and publishes no total for exactly this reason; `parse`
- *    still sums, which is review finding F2 (2026-08-14) and is annotated at
+ *    still sums, which is a known review finding annotated at
  *    `facets/parse/dump.ts`. This list is where both seams learn what makes a
  *    dump trustworthy, so the hazard belongs here rather than only beside the
  *    consumer that already fixed it.
@@ -224,7 +224,6 @@ function claimTimingDump(directory: string, basename: string, contents: string):
   for (let collision = 0; collision <= MAX_DUMP_COLLISIONS; collision += 1) {
     const candidate = timingDumpCandidate(directory, stem, collision);
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- operator-supplied diagnostic directory from a VAT_*_TIMING variable
       writeFileSync(candidate, contents, { encoding: 'utf-8', flag: EXCLUSIVE_CREATE });
       return { outcome: 'written', path: candidate };
     } catch (error) {

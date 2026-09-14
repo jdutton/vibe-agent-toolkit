@@ -1,9 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-/* eslint-disable sonarjs/file-permissions -- `chmod 000` on a throwaway temp path IS the fixture:
-   these cases prove the two compat lanes stay honest over a path the filesystem refuses, and
-   there is no way to produce one without setting the mode. Everything is under `mkdtemp` and
-   restored before removal. */
-
 /**
  * `vat audit --compat --settings` over a plugin the run could not fully read
  * says so, in BOTH blocks, at exit 0 — never silence.
@@ -31,7 +25,9 @@
 
 import fs from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { createSymlink, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -43,8 +39,6 @@ import {
 } from './audit-settings-fixture.js';
 
 /** `chmod 000` denies nothing to uid 0 and nothing on Windows. */
-const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 const PLAIN_SKILL = 'skills/plain/SKILL.md';
 const LINKED_DIR = 'linked-dir';
@@ -75,9 +69,18 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit --compat --settings over a plugin 
     fs.chmodSync(locked, 0o000);
     restoreModes.push(locked);
 
-    const { exit, stderr, plugin } = auditWithSettings(pluginDir, settingsFile);
+    const { exit, stderr, plugin, report } = auditWithSettings(pluginDir, settingsFile);
 
-    expect(exit).toBe(0);
+    // Exit 0: a path the OS refused is the RUN degrading, not a defect of the
+    // plugin. It is filed once as `SCAN_PATH_UNREADABLE` (warning) — never as
+    // `PLUGIN_INVALID_JSON` (error), which is what an `EACCES` on a skill
+    // directory used to become through the plugin inventory's `parseErrors`.
+    expect(exit).toBe(ExitCode.OK);
+    // Once across the whole document — on the skill's own row for a locked
+    // SKILL.md, on the plugin's row for a locked skill directory.
+    const codes = report.files.flatMap((f) => f.issues ?? []).map((i) => i.code);
+    expect(codes.filter((c) => c === 'SCAN_PATH_UNREADABLE')).toHaveLength(1);
+    expect(codes).not.toContain('PLUGIN_INVALID_JSON');
     // The analyzer analyzed everything it could read: the readable sibling's
     // `allowed-tools: Bash` is observed, and the refused path is named under
     // `compatibility.unchecked` — not the whole plugin reported `analyzed: false`

@@ -1,4 +1,3 @@
-
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -9,7 +8,6 @@ import path from 'node:path';
  * using real test fixtures.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directory */
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';

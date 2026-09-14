@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test paths are our own controlled temp dirs */
 /**
  * Integration test: declared test input never reaches a built skill.
  *
@@ -20,7 +19,7 @@
 
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { packageSkill, packagingConfigToPackageOptions } from '../../src/skill-packager.js';
@@ -152,7 +151,7 @@ function outputFiles(dir: string): string[] {
   const visit = (current: string): void => {
     for (const entry of readdirSync(current, { withFileTypes: true })) {
       const abs = safePath.join(current, entry.name);
-      if (entry.isDirectory()) visit(abs);
+      if (direntKindFollowingSync(current, entry) === 'directory') visit(abs);
       else out.push(safePath.relative(dir, abs));
     }
   };

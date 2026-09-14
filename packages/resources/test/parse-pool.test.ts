@@ -28,7 +28,8 @@
 import { promises as fs } from 'node:fs';
 import { availableParallelism } from 'node:os';
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { computeContentKey, type KeyedContent } from '../src/content-key.js';
@@ -335,7 +336,6 @@ describe('ParsePool.parse', () => {
   it('rejects clearly when a worker dies unexpectedly', async () => {
     const directory = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-pool-death-'));
     const entry = safePath.join(directory, 'suicidal-worker.mjs');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path beneath this test's own mkdtemp root
     await fs.writeFile(
       entry,
       "import { parentPort } from 'node:worker_threads';\nparentPort.on('message', () => { process.exit(3); });\n",
@@ -387,7 +387,6 @@ describe('ParsePool.parseIntoCache', () => {
     const root = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-pool-nocache-'));
     cacheRoots.push(root);
     const blocked = safePath.join(root, 'not-a-directory');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path built from this test's own mkdtemp root
     await fs.writeFile(blocked, 'occupied', 'utf-8');
 
     const pool = createParsePool({ size: 1, cacheDir: blocked });
@@ -488,7 +487,6 @@ describe('the parse-timing seam', () => {
       await pool.parse('markdown', MARKDOWN_RICH, Buffer.byteLength(MARKDOWN_RICH));
       await pool.shutdown();
 
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- this test's own mkdtemp root
       const beforeWriting = await fs.readdir(directory);
       // The worker files nothing of its own. A second, partial file would report
       // this process's whole lifetime a second time.
@@ -496,7 +494,6 @@ describe('the parse-timing seam', () => {
 
       const path = __writeParseTimingDumpForTest();
       expect(path).not.toBeNull();
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- the path the seam just returned
       const dump = JSON.parse(await fs.readFile(path ?? '', 'utf-8')) as ParseTimingDump;
 
       // Two records in ONE file: the writer, which dispatched but parsed

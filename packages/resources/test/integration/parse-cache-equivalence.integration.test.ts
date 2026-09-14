@@ -15,7 +15,6 @@
  * see it.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directories */
 
 import { promises as fs } from 'node:fs';
 

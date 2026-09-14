@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
 /**
  * Unit tests for resolveLocalHref — shared href → filesystem path resolution.
  *
@@ -475,9 +474,10 @@ describe('symlinked project root (real-filesystem)', () => {
     // by TIMEOUT rather than by assertion. Reaching the expect at all is half of
     // what it asserts.
     const spy = vi.spyOn(nodeFs, 'realpathSync').mockImplementation((() => {
-      // Not ENOENT: EACCES and ELOOP land in the same catch, and the walk is
-      // deliberately errno-blind.
-      throw new Error('EACCES: permission denied');
+      // Not ENOENT: EACCES and ELOOP walk to the ancestor exactly as ENOENT
+      // does — the errno decides only that it WAS the filesystem refusing
+      // (a `code`-less throw is a bug and propagates; see the test below).
+      throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
     }) as unknown as typeof nodeFs.realpathSync);
     try {
       const fsRoot = toForwardSlash(path.parse(safePath.resolve(baseDir)).root);
@@ -487,6 +487,21 @@ describe('symlinked project root (real-filesystem)', () => {
       // only answer available, and the right one when no component exists.
       expect(canonicalizeSync(missing)).toBe(missing);
       expect(spy.mock.calls.length).toBeGreaterThan(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('propagates a realpath failure that is not the filesystem refusing', () => {
+    // The `no-blind-catch` split: the ancestor walk answers a REFUSED path;
+    // a `TypeError` from inside `realpathSync` is a bug, and walking up from it
+    // would mint a confident canonical path for a call that never ran.
+    const bug = new TypeError('simulated defect inside realpathSync');
+    const spy = vi.spyOn(nodeFs, 'realpathSync').mockImplementation((() => {
+      throw bug;
+    }) as unknown as typeof nodeFs.realpathSync);
+    try {
+      expect(() => canonicalizeSync(safePath.join(baseDir, 'a', 'b.md'))).toThrow(bug);
     } finally {
       spy.mockRestore();
     }

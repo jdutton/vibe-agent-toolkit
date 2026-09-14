@@ -42,11 +42,9 @@ function collectFiles(dir: string, baseDir: string): string[] {
   const results: string[] = [];
 
   const walk = (current: string): void => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- vendorDir is our own asset directory
     const entries = readdirSync(current).sort((a, b) => a.localeCompare(b));
     for (const name of entries) {
       const abs = safePath.join(current, name);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- vendorDir is our own asset directory
       const st = statSync(abs);
       if (st.isDirectory()) {
         walk(abs);
@@ -63,7 +61,6 @@ function collectFiles(dir: string, baseDir: string): string[] {
 
 /** Compute SHA-256 hex of a single file's bytes. */
 function hashFile(absPath: string): string {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- absPath is derived from our own vendorDir walk
   const bytes = readFileSync(absPath);
   return createHash('sha256').update(bytes).digest('hex');
 }
@@ -93,7 +90,6 @@ export function regenerateVendoredManifest(vendorDir: string): void {
 
   const manifest: VendoredManifest = { files };
   const manifestPath = safePath.join(vendorDir, MANIFEST_FILENAME);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifestPath is derived from our own vendorDir
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
 }
 
@@ -101,7 +97,8 @@ export function regenerateVendoredManifest(vendorDir: string): void {
  * Verify the integrity of `vendorDir` against its stored manifest.
  *
  * Fail-closed: returns `false` when:
- *   - `vendored.manifest.json` is absent or unparseable
+ *   - `vendored.manifest.json` is absent, unparseable, or of the wrong shape
+ *     (a manifest the OS REFUSES to read throws instead — that is not tampering)
  *   - Any listed file is missing on disk
  *   - Any listed file's current hash differs from the stored hash
  *   - Any on-disk file (other than the manifest itself) is NOT listed in the
@@ -109,23 +106,25 @@ export function regenerateVendoredManifest(vendorDir: string): void {
  */
 export function verifyVendoredManifest(vendorDir: string): boolean {
   const manifestPath = safePath.join(vendorDir, MANIFEST_FILENAME);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifestPath is derived from our own vendorDir
   if (!existsSync(manifestPath)) {
     return false;
   }
 
   let manifest: VendoredManifest;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifestPath is derived from our own vendorDir
     const raw = readFileSync(manifestPath, 'utf8');
     manifest = VendoredManifestSchema.parse(JSON.parse(raw));
-  } catch {
-    return false;
+  } catch (error) {
+    // Not JSON, or JSON of the wrong shape: tampered, fail closed. A manifest the
+    // OS refused to hand over has not been shown to be either — `false` here
+    // fails preflight with the word "tampered" and sends the operator to reinstall
+    // bytes that are fine — so a refusal propagates with its errno.
+    if (error instanceof SyntaxError || error instanceof z.ZodError) return false;
+    throw error;
   }
 
   for (const [rel, expectedHash] of Object.entries(manifest.files)) {
     const abs = safePath.join(vendorDir, rel);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- abs is derived from our own vendorDir + manifest-listed path
     if (!existsSync(abs)) {
       return false;
     }

@@ -216,18 +216,31 @@ ws.on('message', (data) => {
 Transports work with any runtime adapter that implements the conversational function signature:
 
 ```typescript
+import { openai } from '@ai-sdk/openai';
+import { convertConversationalAssistantToFunction } from '@vibe-agent-toolkit/runtime-vercel-ai-sdk';
 import { CLITransport } from '@vibe-agent-toolkit/transports';
-import { createAgentSkillAdapter } from '@vibe-agent-toolkit/agent-skills';
+import { breedAdvisorAgent, BreedAdvisorInputSchema, BreedAdvisorOutputSchema } from '@vibe-agent-toolkit/vat-example-cat-agents';
 
-// Create adapter from agent skill
-const adapter = createAgentSkillAdapter({
-  skillDir: './my-skill',
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+// A runtime adapter turns the agent into a conversational function …
+const breedAdvisor = convertConversationalAssistantToFunction(
+  breedAdvisorAgent, BreedAdvisorInputSchema, BreedAdvisorOutputSchema,
+  { model: openai('gpt-4o-mini') },
+);
 
-// Run with CLI transport
+// … and the transport drives it. The transport hands the function a
+// TransportSessionContext (sessionId, conversationHistory, state); the adapter
+// wants { history, state } and returns the agent's output, whose `reply` is
+// what the CLI prints. A fuller bridge with persistence lives in
+// packages/vat-example-cat-agents/examples/conversational-demo.ts.
 const transport = new CLITransport({
-  fn: adapter.conversationalFn,
+  fn: async (message, ctx) => {
+    const turn = await breedAdvisor(
+      { message, sessionState: ctx.state ?? {} },
+      { history: ctx.conversationHistory },
+    );
+    ctx.state = turn.sessionState;
+    return turn.reply;
+  },
 });
 
 await transport.start();
@@ -272,8 +285,10 @@ import type {
   Transport,
   ConversationalFunction,
   Session,
-  Message,
+  TransportSessionContext,
 } from '@vibe-agent-toolkit/transports';
+// `Message` is agent-runtime's type; transports consumes it and does not re-export it
+import type { Message } from '@vibe-agent-toolkit/agent-runtime';
 ```
 
 ## License

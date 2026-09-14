@@ -66,7 +66,6 @@ describe('packagePluginLocalSkills — shared registry', () => {
 
     expect(packageSkillSpy).toHaveBeenCalledTimes(2);
     for (const call of packageSkillSpy.mock.calls) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- reading a spied call's options bag
       expect((call as any)[1]?.registry).toBe(registry);
     }
   });

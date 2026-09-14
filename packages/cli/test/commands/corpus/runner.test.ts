@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
@@ -37,7 +38,6 @@ function makePluginDir(skillBody: string): string {
   const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-corpus-runner-'));
   const skillDir = safePath.join(root, 'plugins', 'foo');
   mkdirSyncReal(skillDir, { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed test fixture path
   writeFileSync(
     safePath.join(skillDir, 'SKILL.md'),
     `---\nname: foo\ndescription: ${skillBody}\n---\n\n# foo\n\nBody.\n`,
@@ -54,7 +54,6 @@ function makePluginDir(skillBody: string): string {
  */
 function makeReviewablePluginDir(name: string, skillBody: string): string {
   const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-corpus-review-'));
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed test fixture path
   writeFileSync(
     safePath.join(root, 'SKILL.md'),
     `---\nname: ${name}\ndescription: ${skillBody}\n---\n\n# ${name}\n\nBody.\n`,
@@ -95,8 +94,7 @@ describe('auditOnePlugin — local source', () => {
 });
 
 function git(args: string[], cwd: string): void {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is a standard system command
-  const r = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+  const r = spawnSync(gitExecutable(), args, { cwd, encoding: 'utf-8' });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
 }
 
@@ -112,7 +110,6 @@ function makeBareRepoWithSkill(): string {
 
   const skillDir = safePath.join(work, 'plugins', 'foo');
   mkdirSyncReal(skillDir, { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed test fixture path
   writeFileSync(
     safePath.join(skillDir, 'SKILL.md'),
     `---\nname: foo\ndescription: A test skill for the URL-source runner unit test that exercises shallow clone end to end.\n---\n\n# foo\n\nBody.\n`,
@@ -176,7 +173,6 @@ describe('auditOnePlugin — validation overlay', () => {
     expect(row.validation_applied).toBe(true);
 
     const overlayPath = safePath.join(pluginDir, 'vibe-agent-toolkit.config.yaml');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
     const written = yaml.parse(readFileSync(overlayPath, 'utf-8')) as Record<string, unknown>;
     expect((written.skills as Record<string, unknown>).defaults).toEqual({
       validation: { severity: { LINK_TO_NAVIGATION_FILE: 'ignore' } },
@@ -195,7 +191,6 @@ describe('auditOnePlugin — validation overlay', () => {
 
     expect(row.validation_applied).toBe(false);
     const overlayPath = safePath.join(pluginDir, 'vibe-agent-toolkit.config.yaml');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
     expect(existsSync(overlayPath)).toBe(false);
   });
 });
@@ -205,7 +200,6 @@ function makeMultiSkillPluginDir(skillNames: string[]): string {
   for (const name of skillNames) {
     const skillDir = safePath.join(root, 'plugins', name);
     mkdirSyncReal(skillDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed test fixture path
     writeFileSync(
       safePath.join(skillDir, 'SKILL.md'),
       `---\nname: ${name}\ndescription: Multi-skill plugin tree fixture skill ${name} that exercises the per-skill review enumeration code path.\n---\n\n# ${name}\n\nBody.\n`,
@@ -238,9 +232,7 @@ describe('auditOnePlugin — --with-review', () => {
     );
     const reviewPath = await runReviewedAudit(pluginDir, 'reviewed');
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
     expect(existsSync(reviewPath)).toBe(true);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
     const contents = readFileSync(reviewPath, 'utf-8');
     expect(contents).toContain('# Skill review: reviewed');
     expect(contents).toContain('Reviewed 1 of 1 skills');
@@ -251,7 +243,6 @@ describe('auditOnePlugin — --with-review', () => {
     const pluginDir = makeMultiSkillPluginDir(['alpha', 'beta']);
     const reviewPath = await runReviewedAudit(pluginDir, 'multi');
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
     const contents = toForwardSlash(readFileSync(reviewPath, 'utf-8'));
     expect(contents).toContain('Reviewed 2 of 2 skills');
     expect(contents).toContain('## plugins/alpha/SKILL.md');
@@ -277,7 +268,6 @@ describe('auditOnePlugin — --with-review', () => {
     expect(row.audit.findings_emitted).toBe(1);
     // The finding itself lives in the per-plugin audit document, beside the
     // (empty) per-file results, so the row's counts are backed by a message.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
     const auditDoc = yaml.parse(readFileSync(safePath.join(runDir, 'empty-audit.yaml'), 'utf-8')) as {
       results: unknown[];
       issues: Array<{ code: string; severity: string; message: string }>;

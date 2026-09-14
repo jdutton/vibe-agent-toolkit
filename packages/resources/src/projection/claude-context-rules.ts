@@ -36,7 +36,7 @@
  * same for every directory in a repo carries no information, and the stated
  * `directory-glob` limit kept it from being a lie without making it useful.
  *
- * The split is Jeff's:
+ * The split, a product decision:
  *
  * - **∀ — `glob-rule-covers-dir`.** Some pattern covers every path under the
  *   query directory, so the rule is a second `CLAUDE.md` for it in all but name.

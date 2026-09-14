@@ -6,7 +6,7 @@
  * - Read/Edit path rules: gitignore-style patterns, matched by the linear scanner in `path-pattern.ts`
  *
  * Sources: the Bash lane is now built to the PUBLISHED behavior table at
- * <https://code.claude.com/docs/en/permissions> (read 2026-09-06), which is quoted
+ * <https://code.claude.com/docs/en/permissions>, which is quoted
  * inline at each rule it decides and pinned by the `published table — …` suites.
  * The path lane and the rule-shape parsing still trace to a decompile of Claude
  * Code v2.1.52 (`nA0()`), which nothing here re-confirms.
@@ -15,8 +15,8 @@
  * documents, not what the binary does, so a passing suite means "we match the
  * docs", never "we match `nA0()`".
  *
- * ⛔ `reviewed=` is 2026-04-08 and stays there until someone decompiles a current binary. It was
- * briefly bumped to 2026-09-06 on a table re-read — in the same commit that rewrote the instruction
+ * ⛔ `reviewed=` records the last DECOMPILE and stays there until someone decompiles a current
+ * binary. It was briefly bumped on a table re-read — in the same commit that rewrote the instruction
  * forbidding exactly that, so nothing outside the change ever adjudicated the rule. Restored. The
  * 90-day warning this now raises is correct: nobody has confirmed equivalence to `nA0()` since.
  *
@@ -117,14 +117,12 @@
  *
  * Also reported and not re-measured here: allow-vs-deny depth asymmetry for single-segment relative
  * patterns, and a leading `/` anchoring at the settings source rather than cwd.
- *
- * Remaining work is tracked in issue #207.
  */
 
 import { homedir } from 'node:os';
 import path from 'node:path';
 
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { collapseParentSegments, compilePathPattern, matchesPathPattern, witnessOf } from './path-pattern.js';
 
@@ -1473,7 +1471,7 @@ function splitPathPrefix(spelling: string, cwd: string): { root: string; rest: s
  */
 export function relativePathUnderRoot(root: string, filePath: string, platform: typeof path): string | undefined {
   const relative = toForwardSlash(platform.relative(root, platform.resolve(root, filePath)));
-  if (relative === '..' || relative.startsWith('../') || platform.isAbsolute(relative)) return undefined;
+  if (relativeEscapesRoot(relative)) return undefined;
   return relative;
 }
 

@@ -59,18 +59,3 @@ export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
 export const ContentKeySchema = z.string().regex(CONTENT_KEY_PATTERN)
   .describe('A parser-kind-qualified content key: "<markdown|html>.<sha256>"');
 
-/**
- * Severity for a projection condition row — `blob_conditions` (parse-time)
- * and `realization_conditions` (population-time) share it.
- *
- * A fresh, local definition, not a reuse of `schema`'s `SeverityLevelSchema`
- * (`'error' | 'warning' | 'info' | 'ignore'`): that schema's fourth member,
- * `'ignore'`, is a config-resolution state and doesn't apply to something
- * that already happened. A parse that already produced an oddity, or a
- * contributor that already refused to write a colliding realization, cannot
- * retroactively be "ignored" the way a resolved config value can.
- */
-export const ProjectionConditionSeveritySchema = z.enum(['error', 'warning', 'info'])
-  .describe('Severity of a projection condition row');
-
-export type ProjectionConditionSeverity = z.infer<typeof ProjectionConditionSeveritySchema>;

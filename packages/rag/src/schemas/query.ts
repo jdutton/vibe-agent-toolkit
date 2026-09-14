@@ -176,9 +176,9 @@ export const RAGResultSchema = z.object({
     embedding: z.object({
       model: z.string().describe('Embedding model used'),
       tokensUsed: z.number().optional().describe('Tokens used for embedding (if applicable)'),
-    }).optional().describe('Embedding statistics'),
-  }).describe('Search statistics'),
-});
+    }).strict().optional().describe('Embedding statistics'),
+  }).strict().describe('Search statistics'),
+}).strict();
 
 /**
  * RAGResult TypeScript type

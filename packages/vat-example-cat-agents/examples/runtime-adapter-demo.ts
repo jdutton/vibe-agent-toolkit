@@ -33,17 +33,17 @@ export interface RuntimeAdapter {
   name: string;
 
   /** Convert a pure function agent to runtime-specific tool */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- one interface spans four runtime adapters whose converter signatures differ
   convertPureFunctionToTool: (...args: any[]) => {
     metadata: { name: string; description: string; version: string; archetype: string };
   } & Record<string, unknown>;
 
   /** Convert multiple pure function agents to tools */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same: adapter-specific argument lists
   convertPureFunctionsToTools: (...args: any[]) => Record<string, unknown>;
 
   /** Convert LLM analyzer agent to executable function */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same: adapter-specific argument lists
   convertLLMAnalyzerToFunction: <TInput, TOutput>(...args: any[]) => (input: TInput) => Promise<TOutput>;
 
   /** Create LLM config for primary provider (e.g., OpenAI GPT-4o-mini) */
@@ -63,7 +63,7 @@ export interface RuntimeAdapter {
  * Run the runtime-agnostic demo
  * Demo functions are allowed to be more complex for educational purposes
  */
-// eslint-disable-next-line sonarjs/cognitive-complexity
+// eslint-disable-next-line sonarjs/cognitive-complexity -- a demo walks every archetype in one function on purpose
 export async function runCommonDemo(adapter: RuntimeAdapter): Promise<void> {
   console.log(`${colors.bright}${colors.magenta}`);
   console.log('╔══════════════════════════════════════════════════════════════════════╗');
@@ -227,7 +227,7 @@ If it's not valid, explain what's wrong.`,
 
   log('Info', 'Creating name generator function...', colors.cyan);
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the demo feeds a free-form photo description; the analyzer types its own input
   const generateName = adapter.convertLLMAnalyzerToFunction<any, NameSuggestion>(
     nameGeneratorAgent,
     NameGeneratorInputSchema,
@@ -270,7 +270,7 @@ If it's not valid, explain what's wrong.`,
     console.log(`${colors.dim}  Testing with secondary provider...${colors.reset}\n`);
 
     log('Setup', 'Creating name generator with secondary provider...', colors.cyan);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- same as above, against the secondary provider
     const generateNameSecondary = adapter.convertLLMAnalyzerToFunction<any, NameSuggestion>(
       nameGeneratorAgent,
       NameGeneratorInputSchema,

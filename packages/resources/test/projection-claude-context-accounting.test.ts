@@ -335,7 +335,33 @@ describe('the stated limits', () => {
     // grows or shrinks, which is what caught a draft that reused a published
     // slot. It cannot see an assumption made elsewhere in the lane and never
     // written down — see the by-name assertions below for what it is paired with.
-    expect(CLAUDE_CONTEXT_LIMITS).toHaveLength(23);
+    // The id SET rather than a count of 23: a count still reads 23 when a
+    // draft reuses a published slot, which is the very change this caught.
+    expect(CLAUDE_CONTEXT_LIMITS.map((limit) => limit.id)).toEqual([
+      'claude-md-excludes',
+      'setting-sources',
+      'html-comments',
+      'glob-dialect',
+      'directory-glob',
+      'auto-memory',
+      'managed-claude-md-key',
+      'user-and-managed-scope',
+      'add-dir',
+      'unresolved-conditions-collapse',
+      'variable-imports-unfollowed',
+      'gitignored-not-realized',
+      'existential-needs-a-file',
+      'discovery-one-hop',
+      'main-conversation-only',
+      'version-gated',
+      'outside-root-is-not-external',
+      'context-window-scope',
+      'cliff-scope',
+      'token-estimate',
+      'root-claude-md-order',
+      'dot-matching',
+      'nested-rule-trigger',
+    ]);
     const directions = new Set(CLAUDE_CONTEXT_LIMITS.map((limit) => limit.direction));
     expect(directions.has('over-report')).toBe(true);
     expect(directions.has(UNDER_REPORT)).toBe(true);

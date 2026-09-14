@@ -1,10 +1,10 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code using temp directories */
 import nodeFs from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
 
 import {
   copyDirectory,
@@ -19,7 +19,9 @@ import {
 import type { DirectoryListing, RealpathTable } from '../src/fs-utils.js';
 import { toForwardSlash } from '../src/path-core.js';
 import type { SymlinkCapability } from '../src/test-helpers.js';
-import { createSymlinkAsync, setupAsyncTempDirSuite, symlinkCapability } from '../src/test-helpers.js';
+import { createSymlinkAsync, symlinkCapability } from '../src/test-helpers.js';
+import { PERMISSIONS_ENFORCED } from '../src/testing/platform-gates.js';
+import { setupAsyncTempDirSuite } from '../src/testing/temp-dir.js';
 
 import { setupNestedDirectory } from './test-helpers.js';
 
@@ -40,7 +42,6 @@ const PLANTED_PATH = 'one/two/three.md';
  * below pass against the very bug they exist to catch. Both halves are the
  * guard; skipping only on Windows leaves the test vacuous where CI runs as root.
  */
-const PERMISSIONS_ENFORCED = process.platform !== 'win32' && process.getuid?.() !== 0;
 
 /**
  * Owner `--x`: traversable, so a file below still opens — and NOT listable.
@@ -531,6 +532,38 @@ describe('fs-utils', () => {
       // link-graph walker's classifier depends on exactly this: a target it
       // cannot read is `missing-target`, not a present file.
       expect(cache.probe(dangling)).toEqual({ exists: false, isDirectory: null });
+    });
+
+    it('records a present path the OS refuses to stat as "no kind answer", which the link walker reports', async () => {
+      // `existsSync` says yes, `statSync` is refused: a permission change racing
+      // between the two calls. `isDirectory: null` is what the walker turns into
+      // an `unreadable-target` exclusion, so this IS a reported outcome.
+      const filePath = safePath.join(tempDir, 'refused-stat.txt');
+      await fs.writeFile(filePath, '');
+      const spy = vi.spyOn(nodeFs, 'statSync').mockImplementation(() => {
+        throw Object.assign(new Error('EACCES: simulated, stat'), { code: 'EACCES' });
+      });
+      try {
+        expect(new FsLookupCache().probe(filePath)).toEqual({ exists: true, isDirectory: null });
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('lets a bug thrown from under the stat stay loud instead of recording it as unreadable', async () => {
+      // The catch used to be blind: a TypeError from a validator two frames down
+      // became `isDirectory: null`, and the walker reported the link target as
+      // unreadable — a defect reported as an environment problem.
+      const filePath = safePath.join(tempDir, 'bug-under-stat.txt');
+      await fs.writeFile(filePath, '');
+      const spy = vi.spyOn(nodeFs, 'statSync').mockImplementation(() => {
+        throw new TypeError('stats.isDirectory is not a function');
+      });
+      try {
+        expect(() => new FsLookupCache().probe(filePath)).toThrow(TypeError);
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     it('keeps probe entries per instance, so a fresh run re-probes', async () => {

@@ -2,6 +2,7 @@
  * CLI compile command implementation
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import type { Command } from 'commander';
 
 import { compileMarkdownResources } from '../compiler/markdown-compiler.js';
@@ -35,7 +36,7 @@ export function registerCompileCommand(program: Command): void {
         exitWithResults(results);
       } catch (error) {
         console.error('Compilation error:', error instanceof Error ? error.message : String(error));
-        process.exit(1);
+        process.exit(ExitCode.ERROR);
       }
     });
 }

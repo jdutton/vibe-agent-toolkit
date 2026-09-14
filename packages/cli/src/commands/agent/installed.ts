@@ -2,9 +2,11 @@
  * List installed agents command
  */
 
+import type { Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import yaml from 'yaml';
 
 import { handleCommandError } from '../../utils/command-error.js';
@@ -59,7 +61,7 @@ export async function installedCommand(options: InstalledCommandOptions): Promis
       };
       console.log(yaml.stringify(output));
 
-      process.exit(0);
+      process.exit(ExitCode.OK);
       return;
     }
 
@@ -91,7 +93,7 @@ export async function installedCommand(options: InstalledCommandOptions): Promis
     };
     console.log(yaml.stringify(output));
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'Installed');
   }
@@ -110,21 +112,13 @@ async function scanForInstalledSkills(
     const location = scopeLocations[currentScope];
     if (!location) continue;
 
-    try {
-      await fs.access(location);
-    } catch {
-      // Directory doesn't exist, skip
-      continue;
-    }
-
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from validated scope location
-    const entries = await fs.readdir(location, { withFileTypes: true });
+    const entries = await listScopeLocation(location);
+    if (entries === null) continue;
 
     for (const entry of entries) {
       if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
 
       const skillPath = safePath.join(location, entry.name);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from validated scope + entry name
       const stats = await fs.lstat(skillPath);
       const isSymlink = stats.isSymbolicLink();
 
@@ -138,4 +132,19 @@ async function scanForInstalledSkills(
   }
 
   return skills;
+}
+
+/**
+ * The entries of one scope location, or `null` when there is no such directory.
+ *
+ * Only an ABSENCE is `null`. A scope directory the OS refuses to list is not an
+ * empty one, and reading it as empty would list fewer installs than there are.
+ */
+async function listScopeLocation(location: string): Promise<Dirent[] | null> {
+  try {
+    return await fs.readdir(location, { withFileTypes: true });
+  } catch (error) {
+    if (isPathAbsentError(error)) return null;
+    throw error;
+  }
 }

@@ -80,8 +80,9 @@ function formatActionableError(specifier: string, baseDir: string, cause: unknow
   // but a build step in the target package didn't run (or produced different
   // output). Name the missing file explicitly and point at the publisher.
   if (code === 'MODULE_NOT_FOUND' && missingPath && missingPath !== specifier && isAbsolutePath(missingPath)) {
-    const fileExists = safeExistsSync(missingPath);
-    if (!fileExists) {
+    // `existsSync` answers false for every failure and never throws, so no
+    // guard around it: the question here is only whether the file is there.
+    if (!existsSync(missingPath)) {
       return (
         `Failed to resolve asset reference '${specifier}': ` +
         `the package's "exports" map points to '${missingPath}', but that file does not exist on disk.\n` +
@@ -122,15 +123,6 @@ function extractMissingModulePath(cause: unknown): string | undefined {
   if (!(cause instanceof Error)) return undefined;
   const match = CANNOT_FIND_MODULE_RE.exec(cause.message);
   return match?.[1];
-}
-
-function safeExistsSync(filePath: string): boolean {
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is a Node-resolved exports target, used only to refine the error message
-    return existsSync(filePath);
-  } catch {
-    return false;
-  }
 }
 
 function isBareSpecifier(value: string): boolean {

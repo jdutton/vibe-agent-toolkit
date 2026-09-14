@@ -1,8 +1,9 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { packageSkill } from '../../src/skill-packager.js';
 
 import { buildExampleSkill } from './packager-test-helpers.js';
 
@@ -94,5 +95,63 @@ describe('packager rewrites frontmatter URI-refs with body parity (Gap 3)', () =
     // Inline comments on the rewritten fields survived.
     expect(builtSkill).toContain('# primary parent');
     expect(builtSkill).toContain('# storage decision');
+  });
+});
+
+/**
+ * The build's receipt when the collection schema cannot be loaded.
+ *
+ * `loadCollectionSchemas` used to swallow every failure — a missing file, a file
+ * that is not JSON, a permission refusal — on the theory that `vat validate`
+ * reports it elsewhere. `vat build` then shipped a SKILL.md whose frontmatter
+ * URI-refs still named source-tree paths, with `hasErrors: false` and nothing to
+ * say why. The failure now lands in the build's own issue list under the same
+ * code `vat validate` uses for the same config.
+ */
+/** A project whose one collection declares `schemas/spec.schema.json`, written (or not) as given. */
+function writeProjectWithSchema(schemaFileContent: string | undefined): string {
+  const projectRoot = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-packager-fmt-broken-'));
+  mkdirSyncReal(safePath.join(projectRoot, 'schemas'), { recursive: true });
+  mkdirSyncReal(safePath.join(projectRoot, 'skills', 'example'), { recursive: true });
+  writeFileSync(
+    safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'),
+    [
+      'version: 1',
+      'resources:',
+      '  collections:',
+      '    specs:',
+      '      include: ["skills/**/SKILL.md"]',
+      '      validation:',
+      '        frontmatterSchema: schemas/spec.schema.json',
+      '',
+    ].join('\n'),
+  );
+  if (schemaFileContent !== undefined) {
+    writeFileSync(safePath.join(projectRoot, 'schemas', 'spec.schema.json'), schemaFileContent);
+  }
+  writeFileSync(
+    safePath.join(projectRoot, 'skills', 'example', 'SKILL.md'),
+    '---\nname: example\ndescription: A skill whose collection schema is broken.\n---\n# Example\n',
+  );
+  return projectRoot;
+}
+
+describe('packager reports a collection schema it could not load', () => {
+  it.each([
+    ['is missing', undefined],
+    ['is not JSON', '{ not json'],
+  ])('carries a FRONTMATTER_SCHEMA_ERROR issue naming the schema when it %s', async (_case, content) => {
+    const projectRoot = writeProjectWithSchema(content);
+    const skillPath = safePath.join(projectRoot, 'skills', 'example', 'SKILL.md');
+    const result = await packageSkill(skillPath, {
+      outputPath: safePath.join(projectRoot, 'dist', 'example'),
+      formats: ['directory'],
+    });
+    const schemaIssues = (result.postBuildIssues ?? []).filter((i) => i.code === 'FRONTMATTER_SCHEMA_ERROR');
+    expect(result.hasErrors).toBe(true);
+    expect(schemaIssues).toHaveLength(1);
+    expect(schemaIssues[0]?.message).toContain('schemas/spec.schema.json');
+    expect(schemaIssues[0]?.message).toContain('"specs"');
+    rmSync(projectRoot, { recursive: true, force: true });
   });
 });

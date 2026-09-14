@@ -28,7 +28,7 @@ vat audit [git-url-or-path] [options]
 ### Options
 
 - `--user` - Audit user-level Claude plugins installation (`~/.claude/plugins`)
-- `-r, --recursive` - Scan directories recursively for all resource types
+- `--no-recursive` - Scan the top level only (recursive scanning is the default; there is no `--recursive` flag)
 - `--compat` - Run compatibility analysis for each plugin; adds a `compatibility:` block to its entry (see [Compatibility and settings blocks](#compatibility-and-settings-blocks))
 - `--settings [file]` - Check each plugin against Claude settings (auto-discovered, or the given file); adds a `settings:` block. Requires `--compat`
 - `--debug` - Enable debug logging (outputs to stderr)
@@ -207,19 +207,13 @@ hierarchical:
                   message: Skill exceeds recommended length
 ```
 
-## Two verdicts: `status` and the exit code
+## `status` and the exit code
 
-`vat audit` publishes two verdicts, and they answer different questions.
-
-| Verdict | Answers | Where to read it |
-|---|---|---|
-| `status` in the YAML report | **What was found** — the worst actionable severity across the findings | stdout |
-| The process exit code | **Whether the run completed** | `$?` |
-
-So a tree with errors produces `status: error` beside **exit 0**, and both are
-correct. That pair surprises people because `status` means something wider
-everywhere else in this CLI, where it moves with the exit code. Here it does not,
-because this command is a report rather than a gate.
+The YAML `status` describes the findings — the worst actionable severity across
+them — and the exit code follows it, exactly as in every other command of this
+CLI. `vat audit` used to be the one exception ("advisory": exit 0 over
+`status: error`), which a CI author reading the shared contract got wrong on
+exactly this verb.
 
 A run that audited **zero files** is refused, not passed. An existing directory
 with nothing auditable in it — plugins that moved, a wrong subdirectory, an
@@ -227,26 +221,25 @@ excluded tree, files no lane recognises — used to publish `status: success`
 beside `filesScanned: 0`, which is the same document a clean tree produces. It
 now publishes `status: error` with one non-overridable `RESOURCE_CHECK_BROKEN`
 finding under a top-level `issues:` key (the claim is about the run, so it is
-not a `files[]` row and does not count toward `filesScanned`). The exit code is
-still `0`: the run completed; it just is not a verdict.
+not a `files[]` row and does not count toward `filesScanned`), and exits `1`.
 
-**Gate CI on the report, never on this command's exit code** — read `status` and
-`issueCounts` out of the YAML (see [CI/CD Integration](#cicd-integration) for a
-worked example), or reach for a command whose exit code *is* the verdict:
-`vat skills validate` and `vat skills build` exit `1` on validation errors, and
-`vat skills validate` also exits `1` when its `skills.include` globs discover no
-skill — so a typo'd glob fails the gate there instead of passing it.
+What still sets audit apart from `vat skills validate` is not the exit code but
+what it shows: audit ignores `validation.allow` (every finding is reported and
+counted) and reads `validation.severity` from three scopes. `validation.severity`
+is therefore the dial that decides what gates — set a code to `warning` and it
+stops moving the exit code; set it to `ignore` and it disappears from the report.
 
 ## Exit Codes
 
-`vat audit` is **advisory by design** — it reports every issue it detects but does not block on validation severity. Use `vat skills validate` or `vat skills build` for gated checks (those commands exit `1` on validation errors).
+The three-way contract every command shares:
 
-- **0** - Always, when the audit completes — including when the report says `status: error`. The findings are in the report; check `status` and `summary` in the YAML output to decide whether action is needed. That includes the environment refusing part of the subject: a path that does not exist or is not a recognisable resource is reported as `UNKNOWN_FORMAT` (error), and a directory or file the scan could not read — permission denied, a vanished mount — as `SCAN_PATH_UNREADABLE` (warning), with every readable sibling still validated. A governing `vibe-agent-toolkit.config.yaml` that cannot be loaded, or whose `skills.include` reaches a directory the crawl cannot list, is warned about once on stderr and filed as `SCAN_PATH_UNREADABLE` on the config file or the directory; the skills it governs are validated config-free rather than dropped. Degrading beats destroying, and the report says where it degraded.
-- **2** - The audit could not run at all, so there is no report to read: `--user` with no Claude config directory installed, a git URL that could not be cloned, or an internal failure (a validator defect). Invalid config, missing paths and permission problems are **not** exit 2 — they are findings, above.
+- **0** - The audit completed with nothing at error severity. Warnings and informational findings are in the report, not the exit code.
+- **1** - The audit completed and reports `status: error`: at least one error-severity finding, or zero files audited. A directory or file INSIDE the tree that the scan could not read — permission denied, a vanished mount — is `SCAN_PATH_UNREADABLE` (warning): the run is degraded, not failed, every readable sibling is still validated, and the refused path is reported under `summary.pathsUnreadable` rather than counted in `filesScanned` — so a root with nothing readable audited zero files and is refused like an empty tree. A governing `vibe-agent-toolkit.config.yaml` that cannot be loaded, or whose `skills.include` reaches a directory the crawl cannot list, is warned about once on stderr and filed as `SCAN_PATH_UNREADABLE` on the config file or the directory; the skills it governs are validated config-free rather than dropped. Degrading beats destroying, and the report says where it degraded.
+- **2** - The audit could not run at all, so there is no report to read: the path does not exist or is a file no audit lane recognises (the same ending `vat resources validate` and `vat skill review` give that argument), `--user` with no Claude config directory installed, a git URL that could not be cloned, an unknown flag, or an internal failure (a validator defect). An invalid config and a permission problem inside the tree are **not** exit 2 — they are findings, above.
 
 ## Validation Configuration
 
-Audit honors `validation.severity` from `vibe-agent-toolkit.config.yaml`: setting a code to `ignore` hides it from the report, and every other level is applied as written — a code raised to `error` is reported as an error, a code lowered to `warning` as a warning. It changes **which findings are reported and at what severity**, never whether the command fails (see [Two verdicts](#two-verdicts-status-and-the-exit-code)). Audit does **not** apply `validation.allow` (per-path allow entries); for that, use `vat skills validate` or `vat skills build`.
+Audit honors `validation.severity` from `vibe-agent-toolkit.config.yaml`: setting a code to `ignore` hides it from the report, and every other level is applied as written — a code raised to `error` is reported as an error, a code lowered to `warning` as a warning. It changes **which findings are reported and at what severity**, and through them the exit code — a code at `error` gates, one lowered to `warning` does not (see [`status` and the exit code](#status-and-the-exit-code)). Audit does **not** apply `validation.allow` (per-path allow entries); for that, use `vat skills validate` or `vat skills build`.
 
 Three scopes are read, least specific first — a more specific one naming the same code wins:
 
@@ -282,16 +275,15 @@ Errors prevent the resource from being used correctly:
 - **Missing manifests/frontmatter**: Resource structure is invalid
 - **Schema validation failures**: Manifest/frontmatter doesn't match expected format
 - **Broken links**: Links to non-existent files (Skills only)
-- **Reserved words in names**: Using reserved words like "help", "exit" (Skills only)
+- **Reserved words in names**: `anthropic` or `claude` in a skill name (`RESERVED_WORD_IN_NAME`, a warning — Claude Code rejects non-certified skills using them)
 - **XML tags in frontmatter**: XML-like tags in name/description (Skills only)
-- **Windows-style backslashes**: Path separators should be forward slashes (Skills only)
 
 ### Warnings (Should Fix)
 
 Warnings indicate potential issues but don't prevent usage:
 
 - **Skill exceeds recommended length**: Over 5000 lines (Skills only)
-- **Compat smells**: Skill requires a runtime capability that isn't available on every surface (browser auth, local shell, external CLI) — see `COMPAT_*` codes in `docs/validation-codes.md`.
+- **Capability observations**: Skill requires a runtime capability that isn't available on every surface — `CAPABILITY_BROWSER_AUTH`, `CAPABILITY_LOCAL_SHELL`, `CAPABILITY_EXTERNAL_CLI` (info); with `--compat`, the per-target verdicts `COMPAT_TARGET_INCOMPATIBLE` / `COMPAT_TARGET_NEEDS_REVIEW` (warning) and `COMPAT_TARGET_UNDECLARED` (info). See `docs/validation-codes.md`.
 
 ## Error Codes Reference
 
@@ -327,13 +319,12 @@ Warnings indicate potential issues but don't prevent usage:
 | `SKILL_MISSING_NAME` | error | `name` field missing from frontmatter | Add `name` field |
 | `SKILL_MISSING_DESCRIPTION` | error | `description` field missing from frontmatter | Add `description` field |
 | `SKILL_NAME_INVALID` | error | Name contains invalid characters | Use only letters, numbers, hyphens, underscores |
-| `SKILL_DESCRIPTION_TOO_LONG` | error | Description exceeds 500 characters | Shorten description |
+| `SKILL_DESCRIPTION_TOO_LONG` | error | Description exceeds 1024 characters (the frontmatter schema limit; `SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT` warns earlier at 250, where the Claude Code `/skills` listing truncates) | Shorten description |
 | `RESERVED_WORD_IN_NAME` | warning | Name contains `anthropic` or `claude`; Claude Code rejects non-certified skills using these words | Rename the skill to avoid these words |
 | `SKILL_NAME_XML_TAGS` | error | Name contains XML-like tags | Remove XML tags from name |
 | `SKILL_DESCRIPTION_XML_TAGS` | error | Description contains XML-like tags | Remove XML tags from description |
 | `SKILL_DESCRIPTION_EMPTY` | error | Description is empty or whitespace | Provide meaningful description |
 | `SKILL_MISCONFIGURED_LOCATION` | error | Standalone skill in `~/.claude/plugins/` won't be recognized | Move to `~/.claude/skills/` for standalone skills, or add `.claude-plugin/plugin.json` for a proper plugin |
-| `PATH_STYLE_WINDOWS` | error | Windows-style backslashes in paths | Use forward slashes (/) instead |
 | `LINK_INTEGRITY_BROKEN` | error | Link to non-existent file | Fix or remove broken link |
 
 ### Skill Warnings
@@ -341,9 +332,12 @@ Warnings indicate potential issues but don't prevent usage:
 | Code | Severity | Description | Fix |
 |------|----------|-------------|-----|
 | `SKILL_TOO_LONG` | warning | Skill exceeds 5000 lines | Consider splitting into multiple skills |
-| `COMPAT_REQUIRES_BROWSER_AUTH` | warning | Skill needs browser login (MSAL, SSO, OAuth) | See `docs/validation-codes.md#compat_requires_browser_auth` |
-| `COMPAT_REQUIRES_LOCAL_SHELL` | warning | Skill needs local shell/environment tools (Bash, Edit, Write, NotebookEdit) | See `docs/validation-codes.md#compat_requires_local_shell` |
-| `COMPAT_REQUIRES_EXTERNAL_CLI` | warning | Skill invokes unbundled CLI (az, aws, gcloud, etc.) | See `docs/validation-codes.md#compat_requires_external_cli` |
+| `CAPABILITY_BROWSER_AUTH` | info | Skill needs browser login (MSAL, SSO, OAuth) | See `docs/validation-codes.md#capability_browser_auth` |
+| `CAPABILITY_LOCAL_SHELL` | info | Skill needs local shell/environment tools (Bash, Edit, Write, NotebookEdit) | See `docs/validation-codes.md#capability_local_shell` |
+| `CAPABILITY_EXTERNAL_CLI` | info | Skill invokes an unbundled CLI (az, aws, gcloud, etc.) | See `docs/validation-codes.md#capability_external_cli` |
+| `COMPAT_TARGET_INCOMPATIBLE` | warning | With `--compat`: a declared target cannot run the skill | See `docs/validation-codes.md#compat_target_incompatible` |
+| `COMPAT_TARGET_NEEDS_REVIEW` | warning | With `--compat`: a declared target may not run the skill | See `docs/validation-codes.md#compat_target_needs_review` |
+| `COMPAT_TARGET_UNDECLARED` | info | With `--compat`: the skill declares no `targets` | See `docs/validation-codes.md#compat_target_undeclared` |
 
 ### Format Detection Errors
 
@@ -361,10 +355,12 @@ Structured YAML report for programmatic parsing:
 root: /abs/path/to/scan/root   # The ONE absolute path in the document
 status: success | warning | error
 summary:
-  filesScanned: number
+  filesScanned: number        # Files the audit READ — never a path it could not
   filesPassed: number         # Files with no ACTIONABLE issues (info-only counts as passed)
   filesWithWarnings: number   # Files whose worst actionable severity is warning
   filesWithErrors: number     # Files carrying at least one error
+  pathsUnreadable: number     # `files[]` rows that are a refused path (SCAN_PATH_UNREADABLE),
+                              #   outside every count above: files.length === filesScanned + pathsUnreadable
 issueCounts:                  # FINDINGS, not files — same field name and meaning
   errors: number              #   as the `issueCounts` on each entry below,
   warnings: number            #   plus the run-level `issues` when present
@@ -529,7 +525,7 @@ This scans:
 Scan directory tree for all resources:
 
 ```bash
-vat audit ./resources --recursive
+vat audit ./resources
 ```
 
 Finds and validates:
@@ -546,21 +542,17 @@ Use in CI pipeline:
 #!/bin/bash
 set -e
 
-# Audit all resources (always exits 0 unless system error)
-vat audit --recursive > audit-report.yaml
-
-# Check YAML status field — audit itself doesn't fail on validation errors
-STATUS=$(grep '^status:' audit-report.yaml | awk '{print $2}')
-if [ "$STATUS" = "error" ]; then
-  echo "Audit report contains validation errors"
+# Audit all resources: exit 1 on an error-severity finding, 2 if the audit could not run
+if ! vat audit > audit-report.yaml; then
+  echo "Audit found errors (or could not run) — see the report"
   cat audit-report.yaml
   exit 1
 fi
 
-echo "Audit clean — no validation errors in report"
+echo "Audit clean — no error-severity findings"
 ```
 
-To gate on validation errors directly (exits `1` automatically), use `vat skills validate` instead:
+To gate with `validation.allow` honoured (audit ignores it), use `vat skills validate` instead:
 
 ```bash
 #!/bin/bash
@@ -582,7 +574,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
       - run: npm install -g vibe-agent-toolkit
-      - run: vat audit --recursive
+      - run: vat audit
 ```
 
 ## Troubleshooting
@@ -601,7 +593,7 @@ jobs:
 - Ensure plugin has `.claude-plugin/plugin.json` or `.claude-plugin/marketplace.json`
 - Ensure registry files are named `installed_plugins.json` or `known_marketplaces.json`
 - Ensure skill files are named `SKILL.md`
-- Use `--recursive` to scan subdirectories
+- Scanning is recursive by default; make sure you did not pass `--no-recursive`
 
 ### "Permission denied" on Windows
 
@@ -616,7 +608,7 @@ jobs:
 **Solution**: Redirect stdout to file, only show stderr:
 
 ```bash
-vat audit --recursive > audit.yaml 2>&1
+vat audit > audit.yaml 2>&1
 if [ $? -ne 0 ]; then
   echo "Audit failed, see audit.yaml"
   exit 1
@@ -706,10 +698,10 @@ governing context rather than a single top-level `projectRoot`:
   reported as ungoverned (an audit finding, not a fatal error). This lets `vat
   audit` work on external community trees, downloaded plugin bundles, and
   monorepos with multiple sub-package configs.
-- **Config**: accept defaults. Per-skill `validation.severity` and
-  `validation.allow` overrides come from whichever
-  `vibe-agent-toolkit.config.yaml` each skill walks up to. The audit itself
-  always exits 0 (advisory) regardless of severity outcomes.
+- **Config**: accept defaults. Per-skill `validation.severity` overrides come
+  from whichever `vibe-agent-toolkit.config.yaml` each skill walks up to;
+  `validation.allow` is not applied by audit (see the config section above).
+  The exit code follows the report's `status`, like every other command.
 
 The per-skill walk-up is cached via a module-level two-layer cache and pre-warmed
 during top-down descent for efficiency on large trees.
@@ -717,11 +709,10 @@ during top-down descent for efficiency on large trees.
 See [Roots and Config — Canonical Concepts](../../../docs/concepts/roots-and-config.md)
 for the `projectRoot` ladder and the audit walk-up model. See
 [`docs/skill-quality-and-compatibility.md`](../../../docs/skill-quality-and-compatibility.md)
-for VAT's advisory-audit stance.
+for VAT's audit stance.
 
 ## Related Commands
 
-- `vat agent audit <path>` - Legacy skill-only audit (deprecated)
 - `vat doctor` - Check environment and installation health
 - `vat resources validate` - Validate markdown resources (links, anchors)
 

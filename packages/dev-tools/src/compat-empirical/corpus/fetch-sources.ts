@@ -10,7 +10,6 @@
  *           tar-fs/tar-stream (not a shell-out) when the first user lands.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- staging paths derive from validated manifest */
 
 import { cpSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';

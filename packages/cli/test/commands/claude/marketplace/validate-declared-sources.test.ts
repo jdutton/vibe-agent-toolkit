@@ -26,7 +26,7 @@
  * resolution — the half that was wrong — is what is under test.
  */
 
-import { cpSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
 import type { SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import {
@@ -37,9 +37,15 @@ import {
   symlinkCapability,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { runMarketplaceValidatePhase } from '../../../../src/commands/claude/marketplace/validate.js';
+import { errno, realBehind, refusingOnly } from '../../../helpers/refusal-doubles.js';
+
+// `statSync` is a named import in the command, so the one refused-source case
+// injects at the module seam. Every other case stats for real through it.
+vi.mock('node:fs', async (importOriginal) =>
+  (await import('../../../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['statSync']));
 
 const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
 /**
@@ -74,7 +80,6 @@ interface PluginRow { name: string; source: string; path: string; status: string
 /** Write a JSON file, creating its directory chain. */
 function writeJson(filePath: string, value: unknown): void {
   mkdirSyncReal(safePath.resolve(filePath, '..'), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
   writeFileSync(filePath, JSON.stringify(value));
 }
 
@@ -85,7 +90,6 @@ function writeJson(filePath: string, value: unknown): void {
  */
 function writeHygieneFiles(root: string): void {
   for (const file of ['LICENSE', 'README.md', 'CHANGELOG.md']) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
     writeFileSync(safePath.join(root, file), 'x\n');
   }
 }
@@ -208,7 +212,6 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     const root = safePath.join(tmp, 'file-source');
     writeMarketplace(root, [DECLARED_A]);
     mkdirSyncReal(safePath.join(root, 'plugins'), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
     writeFileSync(safePath.join(root, 'plugins', 'a'), 'not a directory\n');
 
     const { exitCode, doc } = await validate(root, true);
@@ -218,6 +221,27 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     expect(doc['pluginsValidated']).toBe(0);
     expect(issues.map((i) => i.code)).toEqual([RUN_INTEGRITY_CODE]);
     expect(doc['undeclared']).toEqual([]);
+  });
+
+  it('refuses the RUN when the OS refuses a declared source, rather than reporting it as unresolved', async () => {
+    // "Does not resolve" sends the reader to create a directory. This one is
+    // there; the process cannot examine it. That is the run's problem and the
+    // command says so by errno at exit 2, like every other verb.
+    const root = safePath.join(tmp, 'refused-source');
+    writeMarketplace(root, [DECLARED_A]);
+    writePlugin(safePath.join(root, PLUGIN_A), 'a');
+    vi.mocked(statSync).mockImplementation(
+      refusingOnly(safePath.join(root, PLUGIN_A), errno('EACCES'), realBehind(statSync)),
+    );
+
+    try {
+      const { exitCode, doc } = await validate(root, true);
+
+      expect(exitCode).toBe(2);
+      expect(String(doc['error'])).toContain('EACCES');
+    } finally {
+      vi.mocked(statSync).mockRestore();
+    }
   });
 
   it('reports a declared directory with no plugin manifest as a plugin finding, not a refusal', async () => {
@@ -441,7 +465,6 @@ describe.skipIf(SYMLINK_CAP === null)('marketplace validate — containment hold
     tmp = safePath.resolve(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-mp-deep-contained-')));
     outsideSkills = safePath.join(tmp, 'outside', 'skills');
     mkdirSyncReal(safePath.join(outsideSkills, 'leak'), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
     writeFileSync(safePath.join(outsideSkills, 'leak', 'SKILL.md'), LEAKY_SKILL_MD);
     outsidePluginJson = safePath.join(tmp, 'outside', PLUGIN_JSON);
     writeJson(outsidePluginJson, { name: 'a', version: '1.0.0' });
@@ -534,7 +557,6 @@ describe.skipIf(SYMLINK_CAP === null)('marketplace validate — containment hold
     const { root, plugin } = containedPluginRoot('skills-dir-in');
     const realSkills = safePath.join(root, 'real-skills');
     mkdirSyncReal(safePath.join(realSkills, 'leak'), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
     writeFileSync(safePath.join(realSkills, 'leak', 'SKILL.md'), LEAKY_SKILL_MD);
     createSymlink(cap, realSkills, safePath.join(plugin, 'skills'), 'dir');
 

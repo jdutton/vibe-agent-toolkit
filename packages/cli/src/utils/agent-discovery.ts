@@ -4,7 +4,7 @@
 
 import fs from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
 export interface DiscoveredAgent {
@@ -33,19 +33,24 @@ export async function discoverAgents(): Promise<DiscoveredAgent[]> {
 async function discoverAgentsInPath(searchPath: string): Promise<DiscoveredAgent[]> {
   try {
     const absolutePath = safePath.resolve(process.cwd(), searchPath);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path is from predefined constant list
     const entries = await fs.readdir(absolutePath, { withFileTypes: true });
 
-    const directories = entries.filter(entry => entry.isDirectory());
+    // Followed: a `--dev` install is a symlinked agent directory and is discovered.
+    const kinds = await Promise.all(entries.map(entry => direntKindFollowing(absolutePath, entry)));
+    const directories = entries.filter((_, i) => kinds[i] === 'directory');
     const agentPromises = directories.map(entry =>
       discoverAgentInDirectory(safePath.join(absolutePath, entry.name))
     );
 
     const agents = await Promise.all(agentPromises);
     return agents.filter((agent): agent is DiscoveredAgent => agent !== null);
-  } catch {
-    // Path doesn't exist or not accessible - return empty array
-    return [];
+  } catch (error) {
+    // No such search path: nothing here. Only an ABSENCE reads as empty — a
+    // directory the OS refuses to list is not one with no agents in it, and
+    // answering "no agents" for it is how `agent install x` said "not found"
+    // about a tree it never opened.
+    if (isPathAbsentError(error)) return [];
+    throw error;
   }
 }
 
@@ -66,8 +71,9 @@ async function findManifest(dir: string): Promise<string | null> {
     try {
       await fs.access(manifestPath);
       return manifestPath;
-    } catch {
-      // Continue
+    } catch (error) {
+      // Not this candidate. Anything but an absence stays loud.
+      if (!isPathAbsentError(error)) throw error;
     }
   }
 
@@ -79,7 +85,6 @@ async function parseAgentManifest(
   agentDir: string
 ): Promise<DiscoveredAgent | null> {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifestPath from findManifest, trusted
     const content = await fs.readFile(manifestPath, 'utf-8');
     const data = yaml.parse(content) as {
       metadata?: { name?: string; version?: string };
@@ -93,8 +98,11 @@ async function parseAgentManifest(
         manifestPath,
       };
     }
-  } catch {
-    // Invalid manifest - skip
+  } catch (error) {
+    // A manifest that is not YAML is skipped — the documented shape of "not an
+    // agent". A manifest that vanished since the probe is the same. A manifest
+    // the OS refuses to read is neither, and stays loud.
+    if (!(error instanceof yaml.YAMLParseError) && !isPathAbsentError(error)) throw error;
   }
 
   return null;

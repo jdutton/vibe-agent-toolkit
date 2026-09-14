@@ -136,7 +136,6 @@ async function crawlOneBase(
   projectRoot: string,
   unreadable: DiscoveryUnreadablePolicy,
 ): Promise<string[]> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- base derived from validated config
   if (!existsSync(base)) {
     return [];
   }

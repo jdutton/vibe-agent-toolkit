@@ -1,38 +1,27 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+/**
+ * Network-gated — set `NET_AVAILABLE=1` to enable, as the other network suites
+ * in this repo are (turbo hashes the variable, so a run with it set is its own
+ * cache key).
+ *
+ * It was gated on `!process.env.CI`, and by a `beforeAll` reachability probe
+ * read through `describe.skipIf` — which evaluates its argument at COLLECTION,
+ * before any `beforeAll` runs, so the flag was always `false` and the suite
+ * never ran anywhere. Then the gate moved the integration tier under `CI=1`
+ * (`bun run validate` sets it too), which closed the last door the `CI` check
+ * left open. A suite that structurally cannot run is a green count of zero.
+ */
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ExternalLinkValidator } from '../../src/external-link-validator.js';
 import { setupExternalLinkValidatorSuite } from '../test-helpers.js';
 
-// Use httpbin.org — designed for automated HTTP testing, no bot detection
-const WORKING_URL = 'https://httpbin.org/status/200';
+// GitHub's canonical demo repo — the same host the corpus-scan system test clones
+const WORKING_URL = 'https://github.com/octocat/Hello-World';
 const BROKEN_URL = 'https://this-domain-definitely-does-not-exist-12345.com';
 
-/**
- * Quick reachability check before running network-dependent tests.
- * Returns false if network is unavailable or httpbin.org is down.
- */
-async function isNetworkAvailable(): Promise<boolean> {
-	try {
-		const response = await fetch('https://httpbin.org/status/200', {
-			method: 'HEAD',
-			signal: AbortSignal.timeout(3000),
-		});
-		return response.ok;
-	} catch {
-		return false;
-	}
-}
+const NET_AVAILABLE = process.env['NET_AVAILABLE'] === '1';
 
-let networkAvailable = false;
-
-beforeAll(async () => {
-	// Skip entirely in CI (egress restrictions) or when network is unreachable
-	if (process.env.CI) return;
-	networkAvailable = await isNetworkAvailable();
-});
-
-// Skip in CI or when network pre-check fails
-describe.skipIf(!networkAvailable || !!process.env.CI)('ExternalLinkValidator (integration)', () => {
+describe.skipIf(!NET_AVAILABLE)('ExternalLinkValidator (integration)', () => {
 	const suite = setupExternalLinkValidatorSuite('link-validator-integration-');
 
 	beforeEach(suite.beforeEach);

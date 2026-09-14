@@ -25,7 +25,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { claudeBudgetCommand } from '../../src/commands/claude/budget.js';
@@ -138,7 +138,6 @@ describe('every handleCommandError caller that has a --format passes it', () => 
   it('finds no call site that drops the format its command accepts', () => {
     const offenders: string[] = [];
     for (const file of typeScriptFilesUnder(CLI_SRC)) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- walking this package's own src tree
       const source = readFileSync(file, 'utf8');
       if (!source.includes('handleCommandError(')) continue;
       // The command reads a `--format` option, so its failure document has a
@@ -190,10 +189,9 @@ function callsMissingFormatArgument(source: string): string[] {
  */
 function typeScriptFilesUnder(directory: string): string[] {
   const found: string[] = [];
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- walking this package's own src tree
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const full = safePath.join(directory, entry.name);
-    if (entry.isDirectory()) found.push(...typeScriptFilesUnder(full));
+    if (direntKindFollowingSync(directory, entry) === 'directory') found.push(...typeScriptFilesUnder(full));
     else if (entry.name.endsWith('.ts')) found.push(full);
   }
   return found;

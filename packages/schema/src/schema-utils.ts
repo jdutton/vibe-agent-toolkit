@@ -36,7 +36,7 @@ export interface JsonSchemaOptions extends Partial<Options> {
  * This function wraps zod-to-json-schema with sensible defaults and
  * toolkit-specific enhancements:
  *
- * - Sets $schema to JSON Schema Draft 2020-12 by default
+ * - Sets $schema to JSON Schema draft/2020-12 by default
  * - Uses inline refs (no $ref strategy) for simpler schemas
  * - Optionally injects toolkit version metadata
  * - Provides a stable interface for future enhancements

@@ -23,7 +23,7 @@
     "test:unit": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist *.tsbuildinfo"
+    "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },
   "keywords": [
     "vat",
@@ -34,15 +34,11 @@
   ],
   "dependencies": {
     "picomatch": "^4.0.3",
-    "zod": "^3.23.8",
-    "zod-to-json-schema": "^3.23.5"
+    "zod": "^3.25.0",
+    "zod-to-json-schema": "^3.24.5"
   },
   "devDependencies": {
-    "@types/picomatch": "^4.0.2",
-    "@vibe-agent-toolkit/utils": "workspace:*",
-    "tsx": "^4.21.0",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.11"
+    "@vibe-agent-toolkit/utils": "workspace:*"
   },
   "repository": {
     "type": "git",

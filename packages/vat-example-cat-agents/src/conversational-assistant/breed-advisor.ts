@@ -148,10 +148,14 @@ async function extractFromConversation<T>(
   const extractionHistory: Message[] = [...history, { role: 'user', content: extractionPrompt }];
   const extractionResponse = await callLLM(extractionHistory);
 
+  const cleaned = stripMarkdownFences(extractionResponse);
   try {
-    const cleaned = stripMarkdownFences(extractionResponse);
     return JSON.parse(cleaned) as T;
-  } catch {
+  } catch (error) {
+    // A model that answered in prose instead of JSON is the case the default
+    // stands in for. JSON.parse throws nothing but SyntaxError, so anything
+    // else here is a bug in this code and stays loud.
+    if (!(error instanceof SyntaxError)) throw error;
     return defaultValue;
   }
 }

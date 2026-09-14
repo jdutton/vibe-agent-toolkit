@@ -108,8 +108,6 @@ here:
 **vibe-agent-toolkit.config.yaml**:
 
 ```yaml
-version: 1
-
 resources:
   include:
     - docs/**/*.md
@@ -137,8 +135,6 @@ crawl.
 **Config**:
 
 ```yaml
-version: 1
-
 resources:
   include:
     - docs/**/*.md
@@ -173,8 +169,6 @@ not decide what gets indexed — the `--db` + path pairs below do that.
 **Config**:
 
 ```yaml
-version: 1
-
 resources:
   exclude:
     - '**/node_modules/**'
@@ -225,8 +219,6 @@ to see what was discovered.
 **Config**:
 
 ```yaml
-version: 1
-
 resources:
   exclude:
     - '**/node_modules/**'
@@ -697,8 +689,6 @@ my-knowledge-base/
 **Config**:
 
 ```yaml
-version: 1
-
 resources:
   include:
     - notes/**/*.md
@@ -739,8 +729,6 @@ team-docs/
 **Config**:
 
 ```yaml
-version: 1
-
 resources:
   include:
     - onboarding/**/*.md

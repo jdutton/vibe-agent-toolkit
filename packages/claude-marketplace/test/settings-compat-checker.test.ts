@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 /**
  * Unit tests for the settings compatibility checker's tool-blocking verdict.
  *

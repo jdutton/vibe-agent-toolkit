@@ -1,5 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-
 /**
  * Integration test: config-layer `targets` flow through to `vat audit --compat`.
  *

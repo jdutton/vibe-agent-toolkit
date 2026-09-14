@@ -22,9 +22,6 @@
  *   bookkeeping*, never for its ordering; `readdirSync` order is a property of
  *   the filesystem and is not comparable across hosts.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- every path in this
-   file is a mkdtemp root this file created, or a frozen basename joined under
-   one. None comes from a caller, a config, or the corpus itself. */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 

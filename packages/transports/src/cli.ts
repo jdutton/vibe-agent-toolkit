@@ -11,13 +11,15 @@
 import * as readline from 'node:readline';
 
 import type { Message, RuntimeSession, SessionStore } from '@vibe-agent-toolkit/agent-runtime';
+import { SessionNotFoundError } from '@vibe-agent-toolkit/agent-runtime';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 
 import type { ConversationalFunction, Transport, TransportSessionContext } from './types.js';
 
 /**
  * Options for CLI transport.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic default for callers that carry no session state
 export interface CLITransportOptions<TState = any> {
   /** The conversational function to run */
   fn: ConversationalFunction<string, string, TState>;
@@ -45,7 +47,7 @@ export interface CLITransportOptions<TState = any> {
  * Manages a single local session and provides an interactive REPL.
  * Supports pluggable session stores for persistence.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- generic default for callers that carry no session state
 export class CLITransport<TState = any> implements Transport {
   private readonly fn: ConversationalFunction<string, string, TState>;
   private readonly sessionId: string;
@@ -143,7 +145,7 @@ export class CLITransport<TState = any> implements Transport {
 
     this.rl.on('close', () => {
       console.log(this.colorize('\nGoodbye!', 'yellow'));
-      process.exit(0);
+      process.exit(ExitCode.OK);
     });
 
     this.rl.prompt();
@@ -161,7 +163,13 @@ export class CLITransport<TState = any> implements Transport {
 
   /**
    * Load session from store if available.
-   * Falls back to initial history/state if session not found.
+   *
+   * Falls back to the initial history/state when the store has no session
+   * under this id — the expected case for a new session, so it is silent. Any
+   * OTHER failure (a corrupt session file, a permission refusal) also falls
+   * back, but says so: `stop()` will write the fresh session over whatever is
+   * there, and the warning is the only thing that tells the user a session
+   * they could not see is about to be replaced.
    */
   private async loadSessionIfNeeded(): Promise<void> {
     if (this.sessionLoaded || !this.sessionStore) {
@@ -174,9 +182,16 @@ export class CLITransport<TState = any> implements Transport {
       this.state = session.state;
       console.log(this.colorize(`✓ Resumed session: ${this.sessionId}`, 'green'));
       console.log(this.colorize(`  ${session.history.length} messages in history`, 'gray'));
-    } catch {
-      // Session not found or error loading - use initial values
-      // This is expected for new sessions
+    } catch (error) {
+      if (!(error instanceof SessionNotFoundError)) {
+        const reason = error instanceof Error ? error.message : String(error);
+        console.error(
+          this.colorize(
+            `Warning: Failed to load session ${this.sessionId}: ${reason} — starting a new session in its place`,
+            'yellow',
+          ),
+        );
+      }
     }
 
     this.sessionLoaded = true;

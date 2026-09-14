@@ -20,7 +20,7 @@
  * would couple `vat validate` to a prior `vat build` and overlap `vat verify`.
  * Keeping it build-free makes `vat validate` safe for pre-commit / CI-before-
  * build. If a single "validate the whole shippable thing" command is later
- * wanted, fold the marketplace phase in here (mirror verify.ts) — see #128.
+ * wanted, fold the marketplace phase in here (mirror verify.ts).
  */
 
 import { type ProjectConfig } from '@vibe-agent-toolkit/resources';
@@ -58,8 +58,8 @@ const VALIDATE_VOCABULARY: PhaseVocabulary = {
   verb: 'validate',
   validNames: VALID_SURFACES,
   noop: {
-    // A bare run with nothing configured is a clean no-op (exit 0, per issue
-    // #128's "doesn't check what it doesn't know about") — but silent success
+    // A bare run with nothing configured is a clean no-op (exit 0: the command
+    // doesn't check what it doesn't know about) — but silent success
     // on stdout alone is indistinguishable, to anyone watching only the exit
     // code, from a run that actually validated something. Warn on stderr so a
     // config typo (e.g. `recources:`) doesn't masquerade as "all good."
@@ -212,14 +212,15 @@ async function validateTopLevelCommand(
   // problem for anyone running the old invocation outside a project.
   rejectRetiredOnly(options.only, COMMAND_NAME, VALIDATE_FULL_RUN_SECONDS);
 
-  // requireProjectRoot returns the discovered root; read config from there so a
-  // subdirectory invocation doesn't load an empty config and falsely pass.
-  const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
-
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
   try {
+    // Inside the try: outside it, "no project here" was an unhandled rejection,
+    // Node's default exit 1 — which the exit-code contract reads as FINDINGS.
+    // requireProjectRoot returns the discovered root; read config from there so a
+    // subdirectory invocation doesn't load an empty config and falsely pass.
+    const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
     const phases = applyPhaseSelection(
       selectValidateSurfaces(loadConfig(projectRoot), options.verbose === true),
       logger,

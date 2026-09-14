@@ -2,6 +2,8 @@ import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
 
 import which from 'which';
 
+import { isPathAbsentError } from './errors/errno.js';
+import { VatError } from './errors/vat-error.js';
 import { runGit } from './git-run.js';
 import {
   buildWindowsShellLine,
@@ -69,7 +71,7 @@ export interface SafeExecResult {
 /**
  * Error thrown when command execution fails
  */
-export class CommandExecutionError extends Error {
+export class CommandExecutionError extends VatError {
   public readonly status: number;
   public readonly stdout: Buffer | string;
   public readonly stderr: Buffer | string;
@@ -80,8 +82,7 @@ export class CommandExecutionError extends Error {
     stdout: Buffer | string,
     stderr: Buffer | string,
   ) {
-    super(message);
-    this.name = 'CommandExecutionError';
+    super('COMMAND_EXECUTION', message);
     this.status = status;
     this.stdout = stdout;
     this.stderr = stderr;
@@ -298,9 +299,24 @@ export function isToolAvailable(toolName: string): boolean {
   try {
     safeExecSync(toolName, ['--version'], { stdio: 'ignore' });
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (isToolUnusable(error)) return false;
+    throw error;
   }
+}
+
+/**
+ * Whether a failed version probe means the tool is not usable — the two
+ * failures every caller reads as "not installed": the binary is not on PATH
+ * (`which` and `spawn` both say `ENOENT`), or it ran and exited non-zero (a
+ * binary that does not answer `--version`). The OS refusing to execute a file
+ * `which` had just found (`EACCES`), a spawn that could not start for any other
+ * reason, or a bug in this module are none of those; `vat doctor` reporting
+ * "not installed" for an `EACCES` sends the adopter to reinstall a tool that is
+ * there, so those stay loud.
+ */
+function isToolUnusable(error: unknown): boolean {
+  return isPathAbsentError(error) || error instanceof CommandExecutionError;
 }
 
 /**
@@ -328,8 +344,9 @@ function probeVersion(toolName: string, versionArg: string): string | null {
       stdio: 'pipe',
     });
     return (version as string).trim();
-  } catch {
-    return null;
+  } catch (error) {
+    if (isToolUnusable(error)) return null;
+    throw error;
   }
 }
 

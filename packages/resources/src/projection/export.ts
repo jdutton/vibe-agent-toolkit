@@ -49,7 +49,7 @@
  * same corpus agree by construction rather than by both happening to be right.
  */
 
-import { compareCodeUnits } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, VatError } from '@vibe-agent-toolkit/utils';
 
 import type { Projection } from './projection.js';
 import {
@@ -109,7 +109,7 @@ type KeyPart = string | number | boolean | null;
  * backend read, so a column this export knows about and they do not is the same
  * drift one layer along.
  */
-export class UnregisteredProjectionColumnError extends Error {
+export class UnregisteredProjectionColumnError extends VatError {
   /** The table's snake_case name, as the registry and SQL spell it. */
   readonly table: string;
 
@@ -122,12 +122,12 @@ export class UnregisteredProjectionColumnError extends Error {
    */
   constructor(table: string, columns: readonly string[]) {
     super(
+      'UNREGISTERED_PROJECTION_COLUMN',
       `Table "${table}" carries column(s) the projection table registry does not declare:`
       + ` ${columns.join(', ')}.`
       + ' Declare them on the table\'s row schema rather than dropping them here —'
       + ' the registry is what the storage backends and the JSON Schema generator read.',
     );
-    this.name = 'UnregisteredProjectionColumnError';
     this.table = table;
     this.columns = columns;
   }

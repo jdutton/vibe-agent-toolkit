@@ -51,7 +51,7 @@ export type SharedRegistrySource =
  * question into an O(1) active-set lookup instead of a `git check-ignore`
  * subprocess per distinct target.
  *
- * Measured 2026-08-09 — **two different corpora, kept apart on purpose, because
+ * Measured — **two different corpora, kept apart on purpose, because
  * quoting them side by side reads as one run:**
  *
  * - *A 1,484-document adopter monorepo.* `vat audit` spawned 786 `check-ignore`
@@ -192,7 +192,6 @@ async function parseFrontmatterFields(
 	let name = '';
 	let description: string | undefined;
 	try {
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- absolute is resolved from caller-supplied path, safe for skill extraction
 		const raw = await readFile(absolute, 'utf-8');
 		const parsed = parseFrontmatter(raw);
 		if (parsed.success) {
@@ -307,7 +306,8 @@ async function walkLinkedFiles(
 ): Promise<string[]> {
 	const linked: string[] = [];
 	try {
-		// Library fallback to skill dir; see plan 2026-05-17 / spec §7.
+		// Library fallback to skill dir keeps this null-safe; the CLI boundary owns
+		// any user-facing warning about a missing project root.
 		const projectRoot = findProjectRoot(dirname(absolute)) ?? dirname(absolute);
 
 		// The projection lane, when one was supplied for exactly this root. Ahead of
@@ -398,10 +398,10 @@ async function registryFor(
  * the source returns `undefined` for this root, or it throws. A source that
  * fails is a MISSING OPTIMIZATION, not a bad skill: the walk still produces its
  * answer, one `git check-ignore` per link target instead of an active-set
- * lookup. So the throw is swallowed here rather than allowed to reach
- * `walkLinkedFiles`'s catch, which would file it as a `link walk failed`
- * parseError against the skill's own path — a fabricated defect in a file that
- * has none.
+ * lookup. So the throw is absorbed here — said on stderr, never silently —
+ * rather than allowed to reach `walkLinkedFiles`'s catch, which would file it
+ * as a `link walk failed` parseError against the skill's own path — a
+ * fabricated defect in a file that has none.
  *
  * ⚠️ Both remaining routes produce the SAME walk the missing argument used to,
  * so required-ness narrows who can arrive here by accident; it does not close
@@ -413,7 +413,18 @@ async function gitTrackerFor(
 ): Promise<GitTracker | undefined> {
 	try {
 		return await gitTrackerSource(projectRoot);
-	} catch {
+	} catch (error) {
+		// Degraded, not silent. The shipped CLI source keeps its own contract and
+		// answers `undefined` for "not a repository" and "tracker could not be
+		// built", so what arrives here is a source that BROKE its contract — a bug
+		// in the caller's source, or a caller that never wrapped it — and a run
+		// paying one `git check-ignore` per link target is told why. Same posture
+		// as the population lane in `extract-plugin.ts`: stderr, not `parseErrors`,
+		// because `audit.ts` renders every parse error as a defect in the skill.
+		console.warn(
+			`[vat] Warning: the git tracker source failed for ${projectRoot}, so this skill's`
+			+ ` link walk asks git per link target instead of an active-set lookup: ${String(error)}`,
+		);
 		return undefined;
 	}
 }

@@ -9,7 +9,6 @@ const TEST_PLUGIN_NAME = 'test-plugin';
 
 function loadPluginFixture(name: string): unknown {
   const fixturePath = safePath.resolve(__dirname, '../../../agent-skills/test/fixtures/plugins', name);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test helper loading fixtures from known directory
   return JSON.parse(readFileSync(fixturePath, 'utf-8'));
 }
 

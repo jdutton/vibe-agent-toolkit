@@ -3,6 +3,8 @@ import type { ClientRequest, IncomingMessage } from 'node:http';
 import https from 'node:https';
 import { setTimeout as sleep } from 'node:timers/promises';
 
+import { VatError } from '@vibe-agent-toolkit/utils';
+
 const ANTHROPIC_API_BASE = 'https://api.anthropic.com';
 const ANTHROPIC_VERSION = '2023-06-01';
 const SKILLS_BETA_HEADER = 'skills-2025-10-02';
@@ -149,15 +151,14 @@ const ORIGIN_OUTCOME_UNKNOWN_STATUSES = new Set([502, 504]);
  * without a `cause` that rebuild dropped the original object and its stack —
  * asymmetric with {@link ApiTransportError}, which has always plumbed one.
  */
-export class ApiRequestError extends Error {
+export class ApiRequestError extends VatError {
   constructor(
     message: string,
     readonly statusCode: number | undefined,
     readonly retryAfterHeader: string | undefined,
     options?: { cause?: unknown },
   ) {
-    super(message, options);
-    this.name = 'ApiRequestError';
+    super('API_REQUEST', message, options);
   }
 }
 
@@ -180,7 +181,7 @@ export class ApiRequestError extends Error {
  * carries the evidence instead, and an error that never reached the transport is
  * simply not one of these.
  */
-export class ApiTransportError extends Error {
+export class ApiTransportError extends VatError {
   /**
    * True when THIS client gave up on a deadline it set, rather than the network
    * failing. A deadline has already waited its full budget, so replaying it just
@@ -195,8 +196,7 @@ export class ApiTransportError extends Error {
     readonly bytesSent: number,
     options?: { cause?: unknown; deadlineExceeded?: boolean },
   ) {
-    super(message, options);
-    this.name = 'ApiTransportError';
+    super('API_TRANSPORT', message, options);
     this.deadlineExceeded = options?.deadlineExceeded ?? false;
   }
 }
@@ -207,7 +207,11 @@ export class ApiTransportError extends Error {
  * A class rather than a message test, because the retry decision must rest on a
  * fact recorded where the decision was MADE, not on parsing the words back out.
  */
-class RequestDeadlineExceeded extends Error {}
+class RequestDeadlineExceeded extends VatError {
+  constructor(message: string) {
+    super('REQUEST_DEADLINE_EXCEEDED', message);
+  }
+}
 
 export type ApiResponseOutcome<T> =
   | { readonly ok: true; readonly value: T }
@@ -223,15 +227,26 @@ function quoteBody(responseText: string): string {
   return `${trimmed.slice(0, MAX_QUOTED_BODY_CHARS)}… (truncated, ${String(trimmed.length)} characters)`;
 }
 
+/**
+ * `JSON.parse`, or `undefined` when the text is not JSON — an edge proxy's HTML,
+ * a bare gateway error, an empty body. ONLY a `SyntaxError` is that case: it is
+ * the one thing `JSON.parse` throws for bad input, and anything else is a fault
+ * in this process that must not be reported as a malformed body from the API.
+ */
+function parseJsonOrUndefined(text: string): { parsed: unknown } | undefined {
+  try {
+    return { parsed: JSON.parse(text) };
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+    return undefined;
+  }
+}
+
 /** The API's own error message when the error body is JSON; the raw body otherwise. */
 function errorDetail(responseText: string): string {
-  try {
-    const parsed: unknown = JSON.parse(responseText);
-    const message = (parsed as { error?: { message?: unknown } } | null)?.error?.message;
-    if (typeof message === 'string' && message !== '') return message;
-  } catch {
-    // Not JSON: an edge proxy's HTML, or a bare gateway error. Fall through to the body.
-  }
+  const body = parseJsonOrUndefined(responseText);
+  const message = (body?.parsed as { error?: { message?: unknown } } | null | undefined)?.error?.message;
+  if (typeof message === 'string' && message !== '') return message;
   return quoteBody(responseText);
 }
 
@@ -263,14 +278,14 @@ export function interpretApiResponse<T>(
   if (responseText.trim() === '') {
     return { ok: true, value: undefined as T };
   }
-  try {
-    return { ok: true, value: JSON.parse(responseText) as T };
-  } catch {
+  const body = parseJsonOrUndefined(responseText);
+  if (body === undefined) {
     return {
       ok: false,
       message: `Failed to parse API response (HTTP ${String(statusCode)}): ${quoteBody(responseText)}`,
     };
   }
+  return { ok: true, value: body.parsed as T };
 }
 
 /** The single `Retry-After` value, if the response carried one. */
@@ -846,10 +861,13 @@ export class OrgApiClient {
 
       req.on('error', (error: Error) => {
         clearConnectDeadline();
-        reject(new ApiTransportError(error.message, meter.bytesSent(), {
+        // Annotated `Error` so an analyser that cannot resolve `VatError` (a
+        // workspace import) still sees a rejection reason that is one.
+        const failure: Error = new ApiTransportError(error.message, meter.bytesSent(), {
           cause: error,
           deadlineExceeded: error instanceof RequestDeadlineExceeded,
-        }));
+        });
+        reject(failure);
       });
       if (body) {
         req.write(body);

@@ -14,11 +14,11 @@
  * drivers handle human-in-the-loop steps.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- CLI option paths are user-controlled */
 
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
@@ -450,7 +450,7 @@ function main(): void {
     if (process.env['VAT_EMPIRICAL_TRACE']) {
       console.error(err);
     }
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   });
 }
 

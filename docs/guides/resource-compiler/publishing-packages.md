@@ -764,10 +764,9 @@ Define a schema and validate it:
 
 ```typescript
 // scripts/validate-frontmatter.ts
-import { z } from 'zod';
+import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 import { glob } from 'glob';
-import matter from 'gray-matter';
-import { readFileSync } from 'node:fs';
+import { z } from 'zod';
 
 const PromptMetadataSchema = z.object({
   title: z.string(),
@@ -780,11 +779,11 @@ const PromptMetadataSchema = z.object({
 const files = await glob('resources/**/*.md');
 
 for (const file of files) {
-  const content = readFileSync(file, 'utf-8');
-  const { data } = matter(content);
+  // parseMarkdown reads the file and returns its frontmatter (undefined when absent).
+  const { frontmatter } = await parseMarkdown(file);
 
   try {
-    PromptMetadataSchema.parse(data);
+    PromptMetadataSchema.parse(frontmatter ?? {});
   } catch (error) {
     console.error(`❌ Invalid frontmatter in ${file}:`, error);
     process.exit(1);

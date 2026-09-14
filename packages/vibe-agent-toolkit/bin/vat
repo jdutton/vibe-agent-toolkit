@@ -9,6 +9,11 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import { installLastResortExit } from '@vibe-agent-toolkit/schema';
+
+// A throw nothing below caught ends on ExitCode.ERROR, never Node's default 1.
+installLastResortExit();
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
 
@@ -18,4 +23,4 @@ const cliRoot = dirname(cliPkg);
 const wrapperPath = join(cliRoot, 'dist/bin/vat.js');
 
 // Execute CLI wrapper (use file:// URL for Windows compatibility with Node.js v24+)
-import(pathToFileURL(wrapperPath).href);
+await import(pathToFileURL(wrapperPath).href);

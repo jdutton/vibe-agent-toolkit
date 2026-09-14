@@ -19,7 +19,7 @@
  * literal.
  *
  * ⚠️ That rule got HARDER to keep, not easier, when the seam moved from
- * `resources` down into `utils` on 2026-08-15. `utils` is a runtime dependency
+ * `resources` down into `utils`. `utils` is a runtime dependency
  * of the lab, where `resources` was only a devDependency — so the seam's
  * constants are now one import away in every file here, and reaching for them
  * would compile perfectly and quietly destroy the ability to measure an older
@@ -47,8 +47,8 @@
  *
  * ## Rows are summed across processes, but NOT all of them across each other
  *
- * Summing a stratum's rows regardless of how they nest is what this reader did
- * until 2026-08-15, and it inflated both arms of the side-by-side by different
+ * Summing a stratum's rows regardless of how they nest is what this reader
+ * used to do, and it inflated both arms of the side-by-side by different
  * factors: the incumbent's gitignore oracle sits inside its walk, and the
  * projection's `contribute` bracket sits inside the driver's bracket for the
  * same invocation with its per-reference resolution inside that. Every figure

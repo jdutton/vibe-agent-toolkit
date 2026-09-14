@@ -65,8 +65,8 @@ function dialectFor(schema: object): (typeof DIALECT_BUILDS)[number] | undefined
  * meta-schema under its canonical `https` `$id` only, and resolves a schema's
  * `$schema` by exact string match — so `http://json-schema.org/draft/2020-12/schema`
  * still fails inside Ajv with the same "no schema with key or ref" error even once
- * Ajv2020 is doing the compiling. The `http` spelling is not canonical for 2019-09
- * or 2020-12 (it was for draft-07, which is where the habit comes from), but it is
+ * Ajv2020 is doing the compiling. The `http` spelling is not canonical for draft/2019-09
+ * or draft/2020-12 (it was for draft-07, which is where the habit comes from), but it is
  * unambiguous in intent, and this project's rule for reading the outside world is
  * to be liberal. Aliasing is preferred over rewriting the caller's `$schema`, which
  * would mutate an input we do not own.

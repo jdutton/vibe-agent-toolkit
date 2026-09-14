@@ -54,7 +54,7 @@ const EMPTY_SWEEP: BudgetSweep = {
 const MISSING_PATH = 'no/such/dir';
 
 /** The verdict a run that checked nothing must never reach. */
-const SUCCESS = 'success';
+const SUCCESS = 'ok';
 
 /** The code the run-integrity refusal carries, shared with `vat resources check`. */
 const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
@@ -84,9 +84,9 @@ describe('a budget run that checked nothing does not report success', () => {
     const report = reportWithUnmatched([MISSING_PATH]);
 
     expect(report.status).not.toBe(SUCCESS);
-    expect(report.status).toBe('error');
+    expect(report.status).toBe('findings');
     // The exit code the handler computes from the report — `errors > 0 ? 1 : 0`.
-    expect(report.issueCounts.errors).toBeGreaterThan(0);
+    expect(report.summary.errors).toBeGreaterThan(0);
   });
 
   it('names the unchecked paths in the finding, in every format', () => {
@@ -113,8 +113,8 @@ describe('a budget run that checked nothing does not report success', () => {
 
     const report = reportWithUnmatched(scoped.unmatchedScope);
 
-    expect(report.status).toBe('error');
-    expect(report.issueCounts.errors).toBeGreaterThan(0);
+    expect(report.status).toBe('findings');
+    expect(report.summary.errors).toBeGreaterThan(0);
   });
 
   it('carries the refusal ONCE however many paths went unmatched', () => {
@@ -132,7 +132,7 @@ describe('a budget run that checked nothing does not report success', () => {
     const report = reportWithUnmatched([]);
 
     expect(report.status).toBe(SUCCESS);
-    expect(report.issueCounts.errors).toBe(0);
+    expect(report.summary.errors).toBe(0);
     expect(report.findings).toEqual([]);
     expect(renderReportText(report)).toContain('Every instruction chain checked is within budget.');
   });

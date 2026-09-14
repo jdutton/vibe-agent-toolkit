@@ -68,9 +68,16 @@ module.exports = {
   meta: {
     type: 'suggestion',
     docs: {
-      description: 'Disallow function declarations inside test blocks (SonarQube S1515)',
-      category: 'Best Practices',
-      recommended: true,
+      description:
+        'Disallow function declarations inside test blocks (SonarQube S1515)',
+      category: 'Code and test hygiene',
+      bans: 'helper functions declared inside `describe`/`it`',
+      useInstead: 'module scope',
+      // Not in `recommended`: a position on TEST STYLE, not a portability or
+      // correctness fact. Someone installing this package for `safePath.join()`
+      // should not silently inherit a test convention. Enable it by name.
+      recommended: false,
+      recommendedSeverity: 'error',
     },
     messages: {
       moveToModuleScope:

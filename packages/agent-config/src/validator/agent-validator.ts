@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import { loadAgentManifest, type LoadedAgentManifest } from '../loader/manifest-loader.js';
 
@@ -73,6 +73,33 @@ export async function validateAgent(pathArg: string): Promise<ValidationResult> 
 }
 
 /**
+ * Push an error when `fullPath` cannot be reached.
+ *
+ * An absent path reports `${subject} not found`, plus `absentHint` when there
+ * is a remedy to name. Any OTHER refusal — `EACCES`, `ELOOP`, a component that
+ * the OS will not traverse — is reported with the OS message, because "not
+ * found" would send the reader to create a file that is already there.
+ */
+async function requireReachable(
+  fullPath: string,
+  subject: string,
+  shown: string,
+  errors: string[],
+  absentHint = ''
+): Promise<void> {
+  try {
+    await fs.access(fullPath);
+  } catch (error) {
+    if (isPathAbsentError(error)) {
+      errors.push(`${subject} not found: ${shown}${absentHint}`);
+      return;
+    }
+    const reason = error instanceof Error ? error.message : String(error);
+    errors.push(`${subject} could not be checked: ${shown} (${reason})`);
+  }
+}
+
+/**
  * Validate RAG configuration
  */
 async function validateRAGConfig(
@@ -84,15 +111,7 @@ async function validateRAGConfig(
   // Check if RAG database exists
   // Default location is .rag-db in agent directory
   const ragDbPath = safePath.join(agentDir, '.rag-db');
-
-  try {
-    await fs.access(ragDbPath);
-    // Database exists - good!
-  } catch {
-    errors.push(
-      `RAG database not found: ${ragDbPath}. Run 'vat rag index' to create database.`
-    );
-  }
+  await requireReachable(ragDbPath, 'RAG database', ragDbPath, errors, ". Run 'vat rag index' to create database.");
 
   // Warn if no RAG sources defined
   if (manifest.spec.rag) {
@@ -135,12 +154,7 @@ async function validateSingleResource(
   errors: string[]
 ): Promise<void> {
   const fullPath = safePath.resolve(agentDir, resourcePath);
-
-  try {
-    await fs.access(fullPath);
-  } catch {
-    errors.push(`Resource '${resourceId}' not found: ${resourcePath}`);
-  }
+  await requireReachable(fullPath, `Resource '${resourceId}'`, resourcePath, errors);
 }
 
 /**
@@ -157,13 +171,8 @@ async function validateNestedResources(
       continue;
     }
 
-    const resourcePath = safePath.resolve(agentDir, nestedResource.path as string);
-
-    try {
-      await fs.access(resourcePath);
-    } catch {
-      errors.push(`Resource '${resourceId}.${nestedId}' not found: ${nestedResource.path as string}`);
-    }
+    const shown = nestedResource.path as string;
+    await requireReachable(safePath.resolve(agentDir, shown), `Resource '${resourceId}.${nestedId}'`, shown, errors);
   }
 }
 
@@ -179,20 +188,12 @@ async function validatePrompts(
   if (!manifest.spec.prompts) return;
 
   if (manifest.spec.prompts.system) {
-    const systemPath = safePath.resolve(agentDir, manifest.spec.prompts.system.$ref);
-    try {
-      await fs.access(systemPath);
-    } catch {
-      errors.push(`System prompt not found: ${manifest.spec.prompts.system.$ref}`);
-    }
+    const ref = manifest.spec.prompts.system.$ref;
+    await requireReachable(safePath.resolve(agentDir, ref), 'System prompt', ref, errors);
   }
 
   if (manifest.spec.prompts.user) {
-    const userPath = safePath.resolve(agentDir, manifest.spec.prompts.user.$ref);
-    try {
-      await fs.access(userPath);
-    } catch {
-      errors.push(`User prompt not found: ${manifest.spec.prompts.user.$ref}`);
-    }
+    const ref = manifest.spec.prompts.user.$ref;
+    await requireReachable(safePath.resolve(agentDir, ref), 'User prompt', ref, errors);
   }
 }

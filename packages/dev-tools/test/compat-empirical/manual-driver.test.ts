@@ -11,7 +11,6 @@
  * install().
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- harness-controlled tmpdir paths */
 
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 

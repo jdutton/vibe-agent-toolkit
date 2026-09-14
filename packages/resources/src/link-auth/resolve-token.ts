@@ -20,7 +20,7 @@
  * value — the caller's `resolveAuthenticatedUrl` translates that to the
  * `unverified` outcome (surfaced as `LINK_AUTH_UNVERIFIED` by the validator).
  *
- * Per design issue #113 §4 (token vocabulary) and §6.1 (command execution,
+ * Per the linkAuth design §4 (token vocabulary) and §6.1 (command execution,
  * `safeExecSync`-backed, `shell: false`).
  */
 

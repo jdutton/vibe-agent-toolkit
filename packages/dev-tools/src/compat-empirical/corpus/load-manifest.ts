@@ -2,7 +2,6 @@
  * Parse and validate the corpus manifest and trigger-prompts YAML files.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- inputs are user-supplied manifest paths */
 
 import { readFileSync } from 'node:fs';
 

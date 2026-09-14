@@ -1,0 +1,151 @@
+# The ONE place CI installs Bun, Node and dependencies.
+#
+# Every workflow used to copy five setup steps by hand, and the copies had
+# drifted: three different Node literals ('22', '22', '24'), a SHA-pinned
+# setup-bun in two files and a floating `@v2` in three, `--frozen-lockfile` in
+# one of five. Each literal was a second place a human had to remember when the
+# real declaration moved, and nothing failed when they forgot.
+#
+# The versions are READ, never restated:
+#   - Node: root `package.json` `engines.node`, stripped to the exact floor —
+#     unless the caller passes `node-version` (the validation matrix does, from
+#     `vibe-validate.config.yaml`, which owns the matrix the way `engines` owns
+#     the floor).
+#   - Bun: root `package.json` `packageManager`, via setup-bun's own
+#     `bun-version-file` input.
+#   - Dependencies: `bun.lock`, frozen. Bun does NOT freeze on `CI=true` by
+#     itself, so an unfrozen install here would re-resolve on every run and a
+#     green CI could be testing versions the lockfile never named.
+#
+# Checkout is the caller's step: a composite action cannot run before the tree
+# that contains it exists.
+name: Setup toolchain
+description: Bun + Node + frozen install (+ build), from the versions the repo declares
+
+inputs:
+  node-version:
+    description: >-
+      Node version to install. Empty (the default) means the exact floor derived
+      from root package.json engines.node.
+    required: false
+    default: ''
+  build:
+    description: Run `bun run build` after installing.
+    required: false
+    default: 'true'
+  registry-url:
+    description: >-
+      Passed through to setup-node, which then writes the .npmrc that makes
+      NODE_AUTH_TOKEN reach `npm publish`. Empty (the default) writes nothing.
+    required: false
+    default: ''
+
+outputs:
+  node-version:
+    description: The Node version this action asked setup-node for.
+    value: ${{ steps.node.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    # Derived, never hardcoded. A literal here would be one more place a human
+    # has to remember when the floor moves, and nothing would fail if they
+    # forgot. `validate-repo-structure.ts` enforces that every package agrees
+    # with this same root value, so there is one source and this reads it.
+    #
+    # ⚠️ The derived value must be a FULL x.y.z, and this step is where that is
+    # decided. node-floor.yml compares it to `process.versions.node` for exact
+    # string equality, so a legal-but-partial floor — `>=22`, `22.x`,
+    # `>=22.13.0 <25` — would derive to something setup-node happily resolves
+    # to a different patch release, and that assertion would then fail saying
+    # the RUNNER is wrong. Refusing here is the only place the message can name
+    # the real cause.
+    #
+    # Both values are read out of the file by `node`, never interpolated into
+    # this script, so nothing a pull request writes in `engines.node` becomes
+    # shell source text.
+    #
+    # ⚠️ Runs BEFORE "Setup Node.js", so it uses whatever `node` the runner
+    # already has: fine on GitHub-hosted runners (Node is preinstalled); a
+    # self-hosted or `container:` job with no system Node fails here with
+    # `node: not found` rather than a floor message. That is deliberate — the
+    # floor decides which Node to set up, so it cannot be read by the Node it
+    # sets up — and the remedy is a base image that carries any `node` at all.
+    - name: Derive the declared Node floor from the root manifest
+      id: floor
+      shell: bash
+      run: |
+        DECLARED=$(node -p "require('./package.json').engines?.node ?? ''")
+        FLOOR=$(node -p "(require('./package.json').engines?.node ?? '').replace(/^[^0-9]*/, '')")
+        if [ -z "$FLOOR" ]; then
+          echo "::error::Could not derive a Node floor from root package.json engines.node"
+          exit 1
+        fi
+        if [[ ! "$FLOOR" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          # ⛔ Collapse to ONE LINE before echoing. A runner reads stdout line
+          # by line and treats any line starting `::` as a workflow command,
+          # and these two values are the pull request's own `engines.node` —
+          # so a value carrying newlines does not merely appear in this
+          # message, its later lines ARE workflow commands.
+          DECLARED_LINE=$(printf '%s' "$DECLARED" | head -1)
+          FLOOR_LINE=$(printf '%s' "$FLOOR" | head -1)
+          echo "::error::Root package.json declares engines.node \"$DECLARED_LINE\", which derives to \"$FLOOR_LINE\" — not a full x.y.z version. setup-node would resolve that to some other patch release and the floor assertion would then fail while blaming the runner. Declare an exact floor, e.g. \">=22.13.0\"."
+          exit 1
+        fi
+        echo "Declared floor: $FLOOR"
+        echo "version=$FLOOR" >> "$GITHUB_OUTPUT"
+
+    # The caller's choice wins when it made one; otherwise the floor.
+    - name: Choose the Node version
+      id: node
+      shell: bash
+      env:
+        REQUESTED: ${{ inputs.node-version }}
+        FLOOR: ${{ steps.floor.outputs.version }}
+      run: |
+        if [ -n "$REQUESTED" ]; then
+          echo "version=$REQUESTED" >> "$GITHUB_OUTPUT"
+        else
+          echo "version=$FLOOR" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ steps.node.outputs.version }}
+        registry-url: ${{ inputs.registry-url }}
+
+    # Pinned to a full commit SHA, not a moving `@v2` tag: a tag is mutable and
+    # this is a third-party action, so `@v2` is a standing agreement to run
+    # whatever that owner points it at next. The SHA is v2.2.0. `actions/*`
+    # stay on tags — they are first-party and exempt from the same rule.
+    #
+    # `bun-version-file` reads `packageManager` from the root manifest, so the
+    # Bun that runs CI is the Bun the lockfile was written with.
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+      with:
+        bun-version-file: package.json
+
+    # `--ignore-scripts` blocks lifecycle scripts from DEPENDENCIES, which is
+    # the actual exposure: arbitrary code from the registry running at install
+    # time. It is the only install mode this action has — a plain install was
+    # an input option until the security scanner flagged it, and no caller
+    # needed it. It does not mean the caller needs no lifecycle script — it
+    # needs exactly one, and the next step runs it explicitly.
+    - name: Install dependencies (no lifecycle scripts)
+      shell: bash
+      run: bun install --frozen-lockfile --ignore-scripts
+
+    # ⚠️ Load-bearing, and NOT boilerplate to be dropped alongside the flag
+    # above. Bun's workspace resolution is internal and invisible to Node, so
+    # this repo's own postinstall symlinks the workspace packages into
+    # node_modules/@vibe-agent-toolkit/ for anything spawned with `node`.
+    - name: Link workspace packages for Node resolution
+      shell: bash
+      run: bun run postinstall
+
+    - name: Build packages
+      if: inputs.build == 'true'
+      shell: bash
+      run: bun run build

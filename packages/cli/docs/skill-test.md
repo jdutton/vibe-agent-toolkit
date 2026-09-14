@@ -161,21 +161,22 @@ The suite is never copied into anything the executor can reach. Each eval's decl
 
 ## Exit codes
 
-The harness deliberately separates "the evals failed" from "the harness broke", so
-CI can tolerate one and gate on the other.
+The same three-way contract as every other `vat` command, so a CI consumer can
+tolerate eval failures while failing closed on a harness that could not run.
 
-- `0` - Run completed, all expectations passed
-- `1` - Harness broke (internal error, stall, timeout, grader nonce failure)
-- `2` - Preflight failure (bad config, unresolvable required companion, auth guard, `build` hook failed)
-- `3` - Bootstrap failure
-- `4` - **Eval failure** — the run completed but expectations did not all pass
+- `0` - Run completed, all expectations passed (or `--allow-eval-failure` suppressed a failing verdict)
+- `1` - **Eval failure** — the run completed and produced a valid `grading.json`; expectations did not all pass
+- `2` - The harness could not run. A `Reason: <reason>` line on stderr says why:
+  - `internal` — the harness broke (executor/grader crash, stall, timeout, grader nonce failure)
+  - `preflight` — the environment or inputs need fixing (bad config, unresolvable required companion, auth guard, missing security ack, `build` hook failed)
+  - `bootstrap` — `evals.json` was absent, so VAT wrote a starter template next to the skill source; fill it in and re-run
 
 ```bash
 vat skill test run my-skill --i-understand-this-runs-skill-code
 case $? in
   0) ;;
-  4) echo "evals failed (tolerated)" ;;
-  *) exit 1 ;;    # harness broke — fail the build
+  1) echo "evals failed (tolerated)" ;;
+  *) exit 1 ;;    # harness could not run — fail the build; read Reason: on stderr
 esac
 ```
 

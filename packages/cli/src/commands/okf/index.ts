@@ -96,8 +96,20 @@ Description:
   reported: §4.1 has no central registry and forbids rejecting extra keys.
 
   The okf_version a bundle-root index.md declares is a CROSS-CHECK, never an
-  input. It is reported as declaredOkfVersion; pass --spec-version to have a
-  disagreement reported as a finding.
+  input. It is reported as data.bundles[].declaredOkfVersion; pass
+  --spec-version to have a disagreement reported as a finding.
+
+Output (the shared report envelope; schema: packages/cli/schemas/okf-validate.json):
+  status:    ok | findings | error
+  examined:  every document opened and judged, across every bundle. Zero with
+             a data.notice means nothing was checked: no okf.bundles declared,
+             or a declared root that holds no .md at all (a root one level too
+             deep reads exactly like this)
+  findings:  {code, severity, message, location, line?, link?} — location is
+             the project-relative path of the document to open
+  summary:   {errors, warnings, info}; exit 1 iff errors > 0
+  data.bundles[]: {bundle, root, conceptDocuments, reservedDocuments,
+             declaredOkfVersion?} — root as the config wrote it, never absolute
 
 Exit Codes:
   0 - No error-severity findings

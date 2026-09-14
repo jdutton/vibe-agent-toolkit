@@ -11,7 +11,7 @@ import { dirname } from 'node:path';
 
 import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, FollowedWalk, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { type PackagingTarget } from './content-type-routing.js';
 import { normalizeRelPath } from './files-config.js';
@@ -59,13 +59,18 @@ function stripCodeBlocks(content: string): string {
 /**
  * Recursively collect all file paths in a directory.
  */
-function walkDir(dir: string): string[] {
+function walkDir(dir: string, walk?: FollowedWalk): string[] {
+  const guard = walk ?? new FollowedWalk();
+  if (walk === undefined) guard.enter(dir);
   const files: string[] = [];
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- dir from validated output path
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const fullPath = safePath.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...walkDir(fullPath));
+    // Output tree: a link is how the entry got there, so follow it. A dangling
+    // one is still an entry the package ships, and is listed like any file. A
+    // link back into the tree is refused by the walk guard, not recursed.
+    if (direntKindFollowingSync(dir, entry) === 'directory') {
+      guard.enter(fullPath);
+      files.push(...walkDir(fullPath, guard));
     } else {
       files.push(fullPath);
     }
@@ -118,7 +123,6 @@ async function extractLocalHrefs(filePath: string): Promise<string[]> {
       .filter(href => href.length > 0);
   }
   // Markdown: read content and regex-match
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath from walkDir
   const content = await readFile(filePath, 'utf-8');
   return extractLocalLinks(content);
 }
@@ -192,7 +196,6 @@ function collectBrokenLinkIssues(
       // (`concepts/`) survived rewrite verbatim and landed here pointing at a
       // directory the output does not have — failing the build under
       // PACKAGED_BROKEN_LINK, whose remediation text blames a VAT bug.
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved is a normalized path from a validated output directory
       const isExistingDirectory = statSync(resolved, { throwIfNoEntry: false })?.isDirectory() === true;
       if (isExistingDirectory) {
         continue;
@@ -242,7 +245,6 @@ async function collectReferencedPaths(
     if (visited.has(normalized)) continue;
     visited.add(normalized);
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath from walkDir output
     if (!existsSync(filePath)) continue;
 
     const hrefs = await extractLocalHrefs(filePath);
@@ -287,7 +289,6 @@ async function addMentionReferences(
   }
 
   const contents = await Promise.all(
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- contentFile from walkDir
     contentFiles.map(f => readFile(f, 'utf-8')),
   );
   const haystack = contents.join('\n');

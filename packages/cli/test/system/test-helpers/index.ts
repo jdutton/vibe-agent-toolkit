@@ -19,9 +19,9 @@ export {
 } from './cli-runner.js';
 export type { CliResult } from './cli-runner.js';
 
+export { createTestTempDir } from '../test-common.js';
 export {
   createTempProject,
-  createTestTempDir,
   setupTestProject,
 } from './project-setup.js';
 export type { TestProjectOptions } from './project-setup.js';

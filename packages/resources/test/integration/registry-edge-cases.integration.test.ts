@@ -3,12 +3,12 @@
  * Focuses on coverage gaps: constructor optionals, error handling, validation edge cases
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 import { promises as fs } from 'node:fs';
 
 
-import { setupAsyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { beforeEach, describe, expect, it, beforeAll, afterAll } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';

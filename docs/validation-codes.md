@@ -4,7 +4,7 @@ For the project's *stance* on what each category of code exists to enforce — t
 
 See [validation-rule-design.md](./validation-rule-design.md) for the rule-addition policy, default-severity guidance, and graduation path that governs every code in this reference.
 
-This reference lists every overridable validation code VAT emits, plus the two meta-codes. Use it to interpret CLI output, configure `validation.severity` / `validation.allow`, and understand default behavior.
+This reference lists every validation code VAT emits: the overridable ones (each a `validation.severity` / `validation.allow` key, with a section per code), the two meta-codes, and — at the end — the codes emitted by lanes with their own severity rules, which are documented but are not `validation.severity` keys. Use it to interpret CLI output and to configure overrides.
 
 ## Severity Model
 
@@ -96,7 +96,7 @@ is dynamic (the headline plus per-issue detail such as the link href) and is not
 asserted here. The longer "why / when it's fine / how to override" prose lives
 once in each code's section below (linked from the `Code` cell).
 
-<!-- BEGIN:rule-catalog (generated from CODE_REGISTRY; cells are asserted equal by the docs test) -->
+<!-- BEGIN:rule-catalog (cells are asserted equal to CODE_REGISTRY by packages/agent-skills/test/docs/validation-codes.test.ts; nothing regenerates this block yet — edit the registry, then the row, and the test says when they disagree) -->
 
 | Code | Severity | Description | Fix headline |
 |---|---|---|---|
@@ -854,7 +854,7 @@ Best-practice checks about skill shape and content.
 - **Fix:** For `claude-plugin-root`, `claude-skill-dir`, `api-skill-mount` and `absolute-script-path`, reference bundled files by a path relative to the skill directory (e.g. `scripts/run.mjs`) — never an env-var anchor, a host mount point, or an absolute path. A relative path resolves on every target because the **model** resolves it against the skill directory, not because cwd happens to be right; when a process genuinely needs an absolute path, instruct the agent to `cd` into the skill directory first rather than reaching for another variable. See the `vibe-agent-toolkit:vat-skill-authoring` skill → "Referencing bundled scripts and assets". `claude-project-dir` is different — see the note below.
 - **The `claude-project-dir` variant has no mechanical fix.** `CLAUDE_PROJECT_DIR` is not an asset reference — it denotes the *user's repository*, the thing the skill operates **on**, not something it ships, and no skill-relative path can express it. Do not "fix" it by substituting a relative path; that changes the meaning and can re-anchor user artifacts onto the plugin install directory. If the skill genuinely operates on the user's project, take the location as an explicit parameter with `$CLAUDE_PROJECT_DIR` as a fallback, and ensure the skill's declared `targets` reflect the Claude Code dependency. The variant is retained because the coupling is real and worth surfacing — but it is a portability *fact*, not a defect.
 - **Overriding:** because every variant emits this one code, a single `validation.allow` entry (or severity override) silences the **whole family** for a file — adding an esoteric variant never multiplies the override surface. Allow `paths` match the offending file's location, so an intentional mention (e.g. a doc teaching the anti-pattern) can be scoped to that doc.
-- **Extending:** add a variant by appending a `{ label, pattern, fix }` row to `NON_PORTABLE_ASSET_VARIANTS` in `packaging-validator.ts` — no new top-level code. (Absolute Windows paths are covered separately by `PATH_STYLE_WINDOWS`.)
+- **Extending:** add a variant by appending a `{ label, pattern, fix }` row to `NON_PORTABLE_ASSET_VARIANTS` in `packaging-validator.ts` — no new top-level code. (An absolute Windows path in a link is reported by the link-integrity lane, not by this family.)
 
 ### `NON_PORTABLE_COMMAND`
 
@@ -1095,6 +1095,134 @@ Describe the state of the validation config itself.
 - **What:** A `validation.allow` entry did not match any emitted issue; the allow entry is dead weight.
 - **Why it matters:** Unused allow entries indicate that the underlying issue was fixed, the path pattern no longer matches, or the entry was added in error. Dead entries in the config create false confidence that issues are being tracked when they are not.
 - **Fix:** Remove the entry or fix the pattern. Upgrade severity to `error` to block on unused allow entries.
+
+## Codes outside the overridable framework
+
+Everything above is a `CODE_REGISTRY` entry: a default severity that `validation.severity` can
+move and `validation.allow` can waive per path. The codes below are also emitted by VAT — they reach
+the same terminal and the same `--json` output — but **none of them is a `validation.severity`
+key**: each is owned by a lane with its own severity rule, named per table. This section exists so
+that "every code VAT emits" is true of this document; the test
+`packages/schema/test/docs/emitted-codes-documented.test.ts` fails when a `code:` literal in
+`packages/*/src` has no row or section here.
+
+### Structural prerequisites (never overridable)
+
+Emitted by the skill, plugin, marketplace and registry validators when the artifact cannot be
+judged at all — no frontmatter, no manifest, unparseable JSON. Declared as `NonOverridableCode` in
+`packages/schema/src/validation-codes.ts`. Always `error` unless the row says otherwise; not a
+`validation.severity` key because a run that could not read its subject has no legitimate `ignore`.
+
+| Code | Severity | What | Fix |
+|---|---|---|---|
+| `SKILL_MISSING_FRONTMATTER` | error | The SKILL.md has no YAML frontmatter block, or the file does not exist or could not be parsed | Add YAML frontmatter with `name` and `description` fields |
+| `SKILL_MISSING_NAME` | error | Required frontmatter field `name` is missing | Add a `name` field to the frontmatter |
+| `SKILL_MISSING_DESCRIPTION` | error | Required frontmatter field `description` is missing | Add a `description` field to the frontmatter |
+| `SKILL_NAME_INVALID` | error | `name` is not lowercase alphanumeric with hyphens, or exceeds the length limit | Change the name to lowercase alphanumeric with hyphens (e.g. `my-skill`) |
+| `SKILL_NAME_XML_TAGS` | error | `name` contains `<` or `>` | Remove `<` and `>` characters from the name |
+| `SKILL_DESCRIPTION_XML_TAGS` | error | `description` contains `<` or `>` | Remove `<` and `>` characters from the description |
+| `SKILL_DESCRIPTION_TOO_LONG` | error | `description` exceeds 1024 characters (the frontmatter schema limit; the softer 250-character Claude Code listing limit is `SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT` above) | Reduce the description to 1024 characters or less |
+| `SKILL_DESCRIPTION_EMPTY` | error | `description` is empty or whitespace | Add a description explaining what the skill does and when to use it |
+| `SKILL_MISCONFIGURED_LOCATION` | error | A standalone skill sits under `~/.claude/plugins/`, where Claude Code will not recognise it (`vat audit --user`) | Move it to `~/.claude/skills/`, or add `.claude-plugin/plugin.json` to make it a plugin |
+| `LINK_INTEGRITY_BROKEN` | error | A link target in the skill's link graph does not exist, or exists but could not be parsed | Fix or remove the link, or repair the target file |
+| `DUPLICATE_FILES_DEST` | error | Two `files:` entries declare the same `dest` | Give each `files:` entry a unique `dest` |
+| `RESOURCE_CHECK_BROKEN` | error | A declared check could not run, or a gate examined nothing (a scan over zero files, a budget over no matched path, a verify over zero bundles) — the run's green would mean nothing | Fix the check or the population; this code cannot be downgraded, by design |
+| `PLUGIN_MISSING_MANIFEST` | error | No `.claude-plugin/plugin.json` | Create `.claude-plugin/plugin.json` with `name`, `description`, `version` |
+| `PLUGIN_INVALID_JSON` | error | `plugin.json` is not valid JSON | Fix the JSON syntax |
+| `PLUGIN_INVALID_SCHEMA` | error | `plugin.json` fails schema validation (the message names the field) | Correct the named field |
+| `PLUGIN_MISSING_VERSION` | error | `plugin.json` has no `version`; Claude Code caches the plugin as `unknown/`, so upgrades resolve stale skills | Add a semver `version` |
+| `MARKETPLACE_MISSING_MANIFEST` | error | No `.claude-plugin/marketplace.json` | Create it with `name`, `owner`, `plugins` |
+| `MARKETPLACE_INVALID_JSON` | error | `marketplace.json` is not valid JSON | Fix the JSON syntax |
+| `MARKETPLACE_INVALID_SCHEMA` | error | `marketplace.json` fails schema validation | Correct the named field |
+| `MARKETPLACE_MISSING_LICENSE` | error | The marketplace root has no `LICENSE` (`vat claude marketplace validate`) | Add a `LICENSE` — required for distribution |
+| `MARKETPLACE_MISSING_README` | warning | The marketplace root has no `README.md` | Add one — recommended for documentation |
+| `MARKETPLACE_MISSING_CHANGELOG` | warning | The marketplace root has no `CHANGELOG.md` | Add one — recommended for tracking changes |
+| `REGISTRY_MISSING_FILE` | error | The named registry file (`installed_plugins.json`, `known_marketplaces.json`) does not exist | Create it at the given path |
+| `REGISTRY_INVALID_JSON` | error | The registry file is not valid JSON | Fix the JSON syntax |
+| `REGISTRY_INVALID_SCHEMA` | error | The registry file fails schema validation | Correct the named field |
+| `UNKNOWN_FORMAT` | error | `vat audit` could not classify the path as a plugin, marketplace, registry file or skill | Point it at a valid plugin directory, marketplace directory, registry file or `SKILL.md` |
+| `SKILL_TOO_LONG` | warning | The skill's markdown exceeds 5000 lines | Split it into smaller skills or reference files |
+
+### Structural reports (info, always emitted)
+
+Declared as `InfoCode` beside the list above. Display-only inventory rows; never fail a run.
+
+| Code | What |
+|---|---|
+| `SKILL_IMPLICIT_REFERENCE` | A file is referenced by a bare path in prose rather than a markdown link; tooling cannot follow it — consider a `[text](path)` link |
+| `SKILL_UNREFERENCED_FILE` | A markdown file in the skill directory is reachable from no link in the SKILL.md link graph (`--warn-unreferenced-files`) — link it or remove it |
+
+### Verify-time consistency codes
+
+Emitted by `vat verify`'s consistency check (`packages/cli/src/commands/consistency-check.ts`),
+which treats config.yaml discovery as the source of truth and `package.json` as the suspect.
+Declared as `ConsistencyCode` in `packages/schema/src/validation-codes.ts`. Severity is fixed per
+code; `publish: false` on a skill opts it out of the distribution-consistency rows (the first six),
+never out of packaging validation.
+
+| Code | Severity | What | Fix |
+|---|---|---|---|
+| `CONFIG_REFERENCES_UNKNOWN_SKILL` | error | `skills.config.<name>` names a skill no discovered SKILL.md declares | Fix the typo in `vibe-agent-toolkit.config.yaml`; the key must equal a discovered frontmatter `name` |
+| `PUBLISHED_SKILL_NOT_IN_PACKAGE_JSON` | error | A published skill (`publish` defaults to `true`) is absent from `package.json` `vat.skills` | Add the name to `vat.skills`, or set `skills.config.<name>.publish: false` |
+| `PACKAGE_JSON_LISTS_UNKNOWN_SKILL` | error | `vat.skills` names a skill the config globs did not discover | Remove it from `vat.skills`, or make `skills.include` match its SKILL.md |
+| `UNPUBLISHED_SKILL_IN_PACKAGE_JSON` | warning | A `publish: false` skill is still listed in `vat.skills` — contradictory | Remove it from `vat.skills`, or drop the `publish: false` |
+| `PUBLISHED_SKILL_NOT_IN_PLUGIN` | error | A published skill is assigned to no plugin under `claude.marketplaces` | Add it to a plugin's `skills:` selector, or set `publish: false` |
+| `PLUGIN_REFERENCES_UNKNOWN_SKILL` | error | A plugin's `skills:` selector matches no discovered skill | Fix the selector in `claude.marketplaces.<mp>.plugins` |
+| `SKILL_UNPUBLISHED` | info | A skill is `publish: false` and so is not distributed | To publish it, remove the `publish: false` setting |
+| `VENDORED_LICENSING_MISSING` | error | The vendored `skill-creator` tree in `agent-skills` lacks its `LICENSE.txt` / `ATTRIBUTION.md`, or `vendor/` is not in the package's `files` (VAT's own repository only) | Restore the licensing files and the `files` entry |
+
+### OKF conformance codes
+
+Emitted by `vat okf validate` (`packages/resources/src/okf/`), declared as `OKF_FINDING_CODES` in
+`packages/resources/src/okf/types.ts`, each naming the OKF specification clause it enforces.
+**Severity is a per-bundle dial, not a per-code one**: `okf.bundles.<name>.severity` (`error` |
+`warning` | `info`, default `error`) stamps every finding of that bundle; the three `*_UNREADABLE`
+codes say conformance was *not assessed* rather than that a document is non-conformant.
+
+| Code | Spec | What | Fix |
+|---|---|---|---|
+| `OKF_FRONTMATTER_MISSING` | §11.1 | A non-reserved `.md` has no YAML frontmatter block (`index.md` and `log.md` are exempt) | Add a frontmatter block with at least `type` |
+| `OKF_FRONTMATTER_UNPARSEABLE` | §11.1 | The frontmatter YAML does not parse | Fix the YAML |
+| `OKF_FRONTMATTER_NOT_A_MAPPING` | §4.1 | The frontmatter parses to a sequence or scalar, so no keys can be read | Remove the leading dashes, or indent the list under a key |
+| `OKF_TYPE_MISSING` | §4.1 | The frontmatter carries no `type`, the one always-required key | Add a descriptive `type` |
+| `OKF_TYPE_INVALID` | §11.2 | `type` is not a non-empty string (an unquoted scalar decoded to a number or boolean) | Quote the value |
+| `OKF_INDEX_FRONTMATTER_NOT_PERMITTED` | §8 | `index.md` carries frontmatter beyond the one permitted key | Remove the frontmatter from the index |
+| `OKF_VERSION_MALFORMED` | §12 | `okf_version` is not a quoted `<major>.<minor>` string | Write `okf_version: "0.2"` |
+| `OKF_VERSION_MISMATCH` | §12 | The bundle declares an `okf_version` other than the one this run checks | Update the declaration, or target the revision VAT checks |
+| `OKF_LINK_ESCAPES_BUNDLE` | §2 | A cross-link resolves outside the bundle root, so it does not travel with the bundle | Move the target inside the root, or link an absolute URL |
+| `OKF_ROOT_RELATIVE_LINK_UNRESOLVED` | §6.1 | A `/`-anchored link resolves against the bundle root and points at nothing | Re-anchor it relative to the document, or move the target into the bundle |
+| `OKF_BROKEN_CROSS_LINK` | §6.1 | A cross-link target does not exist in the bundle | Create the target or fix the link — the publisher is the one party who can |
+| `OKF_LINK_CASE_MISMATCH` | — | The target exists under a different case; opens on the publisher's machine, 404s on a case-sensitive filesystem | Re-spell the link to the on-disk path, or rename the file |
+| `OKF_LINK_NORMALIZATION_MISMATCH` | — | The target resolves only after Unicode normalization; same visible name, different bytes | Normalize both link and filename to NFC |
+| `OKF_DOCUMENT_ESCAPES_BUNDLE` | §2 | A `.md` entry is a symlink out of the bundle and is excluded from the conformance population | Copy the file into the root, or remove the link |
+| `OKF_BUNDLE_ROOT_UNREADABLE` | — | `okf.bundles.<name>.root` is not a readable directory, so the bundle was not checked at all | Point the root at the directory holding the concept documents |
+| `OKF_SUBDIRECTORY_UNREADABLE` | — | A directory beneath the root could not be listed, so nothing beneath it was checked (also: a cross-link whose target directory refused a listing was not judged) | Fix its permissions, or move it outside the bundle root |
+| `OKF_DOCUMENT_UNREADABLE` | — | A document inside the bundle could not be read, so its conformance was not assessed | Fix its permissions, or remove it from the bundle root |
+
+### Projection blob conditions
+
+Rows of the resource projection's `blob_conditions` table
+(`packages/resources/src/projection/blob-facts.ts`), queryable with `vat resources query` and
+`vat resources check`. This is an **open vocabulary** by design (`architecture/resource-projection.md`
+§2) — a new diagnostic adds a row kind, never a column — but every kind emitted today is listed here.
+Severity is fixed per row; nothing overrides it.
+
+| Code | Severity | What |
+|---|---|---|
+| `HTML_PARSE_ERROR` | warning | An HTML blob produced a parse5 error; `message` is the parse5 error code (e.g. `missing-end-tag`) and `line` the position |
+| `UNRESOLVED_REFERENCE` | warning | A markdown reference-style link (`[text][label]`) has no matching definition, so it is not a link at all; `message` is the label as authored |
+
+### QA-snapshot invariants
+
+Internal to the pipeline-oracle harness under `packages/cli/src/qa-snapshot/` (the union in
+`types.ts`, produced only by `invariants.ts`). They are violations of a capture, not findings about
+an adopter's tree, and surface only when a maintainer runs the oracle harness.
+
+| Code | What |
+|---|---|
+| `BUILD_ERROR` | A lane's production builder threw; its counts are 0 because nothing ran, not because the corpus is empty |
+| `RESTATEMENT_DRIFT` | The crawl restated in `pipeline-oracles/lanes.ts` disagrees with the builder it claims to describe |
+| `KEY_DISAGREEMENT` | Paths sharing one content key produced parses that disagree — a content-addressed cache over this pipeline would be unsound |
 
 ## Migration from `ignoreValidationErrors`
 

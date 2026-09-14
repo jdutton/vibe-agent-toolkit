@@ -39,7 +39,6 @@ const ROOT_MANIFEST = 'package.json';
  */
 function readRootFloor(): string {
   const manifestPath = safePath.join(PROJECT_ROOT, ROOT_MANIFEST);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- PROJECT_ROOT-derived path, not user input
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
     engines?: { node?: string };
   };
@@ -272,7 +271,6 @@ function emptyRoot(): string {
 }
 
 function write(path: string, contents: string): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path under this file's own mkdtemp root
   writeFileSync(path, contents, 'utf8');
 }
 

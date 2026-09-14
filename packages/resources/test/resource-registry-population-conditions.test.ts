@@ -17,10 +17,10 @@
  *
  * Control: one collection ⇒ no finding; a source with no conditions ⇒ none.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 import { writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { CONDITION_WITHOUT_REFERENCE } from '../src/index.js';

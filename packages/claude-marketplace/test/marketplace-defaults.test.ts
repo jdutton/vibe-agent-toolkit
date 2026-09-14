@@ -1,9 +1,11 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 
 import { readMarketplaceDefaultTargets, resolveEffectiveTargets } from '../src/marketplace-defaults.js';
+
 
 const CHAT = 'claude-chat' as const;
 const COWORK = 'claude-cowork' as const;
@@ -51,12 +53,12 @@ describe('resolveEffectiveTargets', () => {
   });
 });
 
-function writeManifest(dir: string, contents: string): void {
+function writeManifest(dir: string, contents: string): string {
   const claudePluginDir = safePath.join(dir, '.claude-plugin');
   mkdirSyncReal(claudePluginDir, { recursive: true });
   const manifestPath = safePath.join(claudePluginDir, 'marketplace.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
   writeFileSync(manifestPath, contents, 'utf8');
+  return manifestPath;
 }
 
 describe('readMarketplaceDefaultTargets', () => {
@@ -134,6 +136,28 @@ describe('readMarketplaceDefaultTargets', () => {
     writeManifest(parent, '{ this is : not json');
 
     // Does not throw; returns undefined.
+    await expect(readMarketplaceDefaultTargets(parent)).resolves.toBeUndefined();
+  });
+
+  it('propagates a marketplace.json the OS refuses to read, rather than walking past it', async () => {
+    const parent = safePath.join(tempDir, 'refused-marketplace');
+    const plugin = safePath.join(parent, 'my-plugin');
+    mkdirSyncReal(plugin, { recursive: true });
+    const manifestPath = writeManifest(parent, JSON.stringify({ name: 'locked', defaults: { targets: [CODE] } }));
+
+    const restore = refuseAsyncFs('readFile', manifestPath, 'EACCES');
+    try {
+      await expect(readMarketplaceDefaultTargets(parent)).rejects.toThrow(/EACCES/);
+    } finally {
+      restore();
+    }
+  });
+
+  it('returns undefined when marketplace.json is JSON that is not an object', async () => {
+    const parent = safePath.join(tempDir, 'null-marketplace');
+    mkdirSyncReal(safePath.join(parent, 'my-plugin'), { recursive: true });
+    writeManifest(parent, 'null');
+
     await expect(readMarketplaceDefaultTargets(parent)).resolves.toBeUndefined();
   });
 

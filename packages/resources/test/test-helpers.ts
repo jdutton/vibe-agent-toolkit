@@ -1,4 +1,3 @@
-
 /**
  * Shared test helpers for resources package tests
  */
@@ -9,14 +8,15 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
+  isPathAbsentError,
   mkdirSyncReal,
   normalizedTmpdir,
-  removeScratchDir,
   resetProjectRootCaches,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { gitExecutable, removeScratchDir, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, expect, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
@@ -51,7 +51,6 @@ import type { HeadingNode, ResourceLink, ValidationIssue } from '../src/types.js
 export function writeFileIn(rootDir: string, relativePath: string, contents: string): void {
   const absolutePath = safePath.resolve(rootDir, relativePath);
   mkdirSyncReal(safePath.resolve(absolutePath, '..'), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a caller-owned temp root
   writeFileSync(absolutePath, contents, 'utf-8');
 }
 
@@ -70,8 +69,7 @@ export function writeFileIn(rootDir: string, relativePath: string, contents: str
  * ```
  */
 export function createGitRepo(directory: string): string {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
-  spawnSync('git', ['init'], { cwd: directory, stdio: 'pipe' });
+  spawnSync(gitExecutable(), ['init'], { cwd: directory, stdio: 'pipe' });
   // `gitFindRoot()` memoizes `null` for any directory a prior walk climbed
   // through (e.g. before this repo existed). Without this reset, a later
   // crawl in the same process silently keeps answering from that stale
@@ -127,14 +125,15 @@ function findPackageDirectory(
   while (currentDir !== path.dirname(currentDir)) {
     try {
       const pkgPath = safePath.join(currentDir, 'package.json');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path is safe in test helper, pkgPath constructed from trusted directory traversal
       const pkgContent = readFileSync(pkgPath, 'utf-8');
       const pkg = JSON.parse(pkgContent) as { name: string; workspaces?: unknown };
       if (predicate(pkg)) {
         return currentDir;
       }
-    } catch {
-      // Keep searching upward
+    } catch (error) {
+      // No manifest at this level: keep searching upward. A manifest that is
+      // there but unreadable or not JSON is a broken checkout, and stays loud.
+      if (!isPathAbsentError(error)) throw error;
     }
     currentDir = path.dirname(currentDir);
   }
@@ -243,17 +242,21 @@ export function setupTempDirTestSuite(testPrefix: string): {
   beforeEach: () => Promise<void>;
   afterEach: () => Promise<void>;
 } {
-  const suite = {
-    tempDir: '',
+  // One suite directory with a numbered subdirectory per test, from utils'
+  // canonical helper; the per-test `mkdtemp`/`rm` pair this used to carry was
+  // the eleventh copy of it in the repo. `tempDir` reads through to the
+  // current test's directory, so existing suites keep reading `suite.tempDir`.
+  const inner = setupAsyncTempDirSuite(testPrefix);
+  return {
+    get tempDir(): string {
+      return inner.getTempDir();
+    },
     beforeEach: async () => {
-      suite.tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), testPrefix));
+      await inner.beforeAll();
+      await inner.beforeEach();
     },
-    afterEach: async () => {
-      await rm(suite.tempDir, { recursive: true, force: true });
-    },
+    afterEach: inner.afterAll,
   };
-
-  return suite;
 }
 
 /**
@@ -300,7 +303,6 @@ export function setupSubdirTestSuite(suitePrefix: string): {
     beforeEach: async () => {
       testCounter++;
       suite.tempDir = safePath.join(suite.suiteDir, `test-${testCounter}`);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- suite.tempDir is constructed from mkdtemp output, safe in test context
       await mkdir(suite.tempDir, { recursive: true });
     },
   };
@@ -486,7 +488,6 @@ export async function writeAndParse(
 ): Promise<Awaited<ReturnType<typeof parseMarkdown>>> {
   const { filePath, content, assertions } = options;
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is provided by test caller, safe in test context
   await writeFile(filePath, content, 'utf-8');
   const parsedResult = await parseMarkdown(filePath);
   await assertions(parsedResult);
@@ -575,7 +576,6 @@ export async function writeMarkdownFileWithFrontmatter(
       .join('\n');
     frontmatterBlock = `---\n${entries}\n---\n\n`;
   }
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is from test caller, safe in test context
   await writeFile(filePath, frontmatterBlock + body, 'utf-8');
 }
 
@@ -591,7 +591,6 @@ export async function createSchemaFile(
   filename: string,
   schema: object
 ): Promise<void> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir and filename are from test caller, safe in test context
   await writeFile(
     safePath.join(tempDir, filename),
     JSON.stringify(schema),
@@ -665,9 +664,7 @@ export async function createTwoFilesWithSameContent(
 ): Promise<{ file1: string; file2: string }> {
   const file1 = safePath.join(tempDir, 'file1.md');
   const file2 = safePath.join(tempDir, 'file2.md');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test helper
   await writeFile(file1, content, 'utf-8');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test helper
   await writeFile(file2, content, 'utf-8');
   return { file1, file2 };
 }
@@ -754,12 +751,10 @@ export async function writeCorpusFiles(
   corpus: readonly CorpusFile[],
 ): Promise<void> {
   for (const directory of directories) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture directory beneath a mkdtemp root
     await mkdir(safePath.join(root, directory), { recursive: true });
   }
   await Promise.all(
     corpus.map((file) =>
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
       writeFile(safePath.join(root, file.path), file.content, 'utf-8'),
     ),
   );
@@ -923,7 +918,6 @@ export function scratchFixtureWriter(prefix: string): ScratchFixtureWriter {
       const dir = await mkdtemp(safePath.join(normalizedTmpdir(), prefix));
       dirs.push(dir);
       const file = safePath.join(dir, name);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only: self-created scratch dir
       await writeFile(file, data);
       return file;
     },

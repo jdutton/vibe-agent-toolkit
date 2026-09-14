@@ -18,7 +18,8 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 
 
-import { getTestOutputDir, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { getTestOutputDir, NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
@@ -60,8 +61,7 @@ function executeCliCommand(
   timeout?: number
 ): unknown {
   // Use 'node' from PATH - safe in test context where PATH is controlled by test environment
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- node executable from PATH is required for CLI testing
-  const result = spawnSync('node', [binPath, ...args], {
+  const result = spawnSync(NODE_EXECUTABLE, [binPath, ...args], {
     encoding: 'utf-8',
     cwd: projectRoot,
     timeout,
@@ -158,13 +158,11 @@ describe('RAG CLI (Node.js dogfooding)', () => {
 
   beforeAll(async () => {
     // Ensure CLI is built
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- binPath is from controlled projectRoot constant
     if (!existsSync(binPath)) {
       throw new Error('CLI not built. Run: bun run build');
     }
 
     // Clean up any existing test database
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDbPath is from controlled projectRoot constant
     if (existsSync(testDbPath)) {
       await rm(testDbPath, { recursive: true, force: true });
     }
@@ -172,7 +170,6 @@ describe('RAG CLI (Node.js dogfooding)', () => {
 
   afterAll(async () => {
     // Clean up test database
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDbPath is from controlled projectRoot constant
     if (existsSync(testDbPath)) {
       await rm(testDbPath, { recursive: true, force: true });
     }
@@ -259,7 +256,6 @@ describe('RAG CLI (Node.js dogfooding)', () => {
     expect(output.status).toBe('success');
 
     // Verify database is gone
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDbPath is from controlled projectRoot constant
     expect(existsSync(testDbPath)).toBe(false);
   });
 });

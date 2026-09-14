@@ -58,7 +58,7 @@ export const ClaudePluginSchema = z
         name: z.string().optional(),
         email: z.string().email().optional(),
         url: z.string().url().optional(),
-      })
+      }).passthrough() /* Claude Code plugin manifest — Anthropic owns this shape; an unknown key is theirs to add */
       .optional()
       .describe('Plugin author information'),
 

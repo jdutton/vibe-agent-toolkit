@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is a temp dir this test owns */
 /**
  * `projection-store` — selecting a backend, keying a tree, and scoping the
  * store's lifetime.

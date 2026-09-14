@@ -206,7 +206,7 @@ Verbatim:
 >
 > Unix-style paths work across all platforms, while Windows-style paths cause errors on Unix systems.
 
-This is the vendor grounding for VAT's `WINDOWS_BACKSLASH_IN_PATH` (required, non-overridable).
+VAT emits no validation code for this today; the `WINDOWS_BACKSLASH_IN_PATH` row that once claimed this grounding was never emitted and has been removed.
 
 ### MCP tool references must be fully qualified
 

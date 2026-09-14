@@ -13,7 +13,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { loadLocalRuleModule } from './rule-test-harness.js';
+import { loadLocalRuleModule } from './rule-tester.js';
 
 interface RuleContextLike {
   options: unknown[];

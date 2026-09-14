@@ -266,13 +266,11 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   }
 
   // Ensure base directory exists
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- baseDir is from controlled config, not user input
   if (!fs.existsSync(resolvedBaseDir)) {
     throw new Error(`Base directory does not exist: ${resolvedBaseDir}`);
   }
 
   // Ensure base directory is actually a directory
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved path validated above
   const baseStat = fs.statSync(resolvedBaseDir);
   if (!baseStat.isDirectory()) {
     throw new Error(`Base path is not a directory: ${resolvedBaseDir}`);
@@ -400,18 +398,22 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
    *
    * Identity is `realpathSync.native`, not the traversal path: two names for
    * one directory must collide here or the alias is enumerated twice. A
-   * directory whose real path cannot be read is treated as already-walked —
-   * refusing to descend into something we cannot identify is the safe side of
-   * a guard whose whole job is bounding traversal.
+   * directory whose real path cannot be read is not descended into — refusing
+   * to walk something we cannot identify is the safe side of a guard whose
+   * whole job is bounding traversal — but it is NOT silently "already walked":
+   * a directory that vanished is skipped like any other absence, and one the
+   * OS refused to canonicalise is a gap, surfaced under the caller's policy
+   * exactly as a refused listing is (see `reportOrSkip`).
    *
    * @param dir - Directory about to be walked
-   * @returns True when this directory has been walked before
+   * @returns True when this directory must not be walked (seen before, gone, or refused)
    */
   function alreadyWalked(dir: string): boolean {
     let realPath: string;
     try {
       realPath = fs.realpathSync.native(dir);
-    } catch {
+    } catch (error) {
+      reportOrSkip(error, dir);
       return true;
     }
 
@@ -433,7 +435,6 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     // Resolve symlink and check if it's a directory or file
     let targetStat: fs.Stats;
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated baseDir + entries
       targetStat = fs.statSync(fullPath);
     } catch (error) {
       // A broken symlink is absence and is skipped; a target the OS refused to
@@ -480,7 +481,6 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     let entries: fs.Dirent[];
 
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated baseDir, recursively walking
       entries = fs.readdirSync(currentDir, { withFileTypes: true });
     } catch (error) {
       // 🚨 Not a silent skip. A directory that refused to be listed is a gap in

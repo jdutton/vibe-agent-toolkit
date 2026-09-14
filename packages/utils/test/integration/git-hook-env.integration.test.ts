@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
 /**
  * Every git helper that takes a caller-supplied path must survive the
  * environment a git hook exports into it.

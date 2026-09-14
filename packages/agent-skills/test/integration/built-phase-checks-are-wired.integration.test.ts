@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test paths are our own controlled temp dirs */
 /**
  * The WIRING of the two built-phase checks, through the real `packageSkill`.
  *

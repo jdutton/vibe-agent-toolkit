@@ -96,7 +96,13 @@ const PluginInstallationSchema = z
  */
 export const InstalledPluginsRegistrySchema = z
   .object({
-    version: z.literal(2).describe('Registry format version (currently 2)'),
+    // Claude Code's file, Claude Code's number: `installed_plugins.json` is
+    // written by another vendor and declares its own format version. Reading
+    // it is an external fact, like `ANTHROPIC_VERSION`, not a VAT version
+    // constant — a registry at a format VAT has never seen should be refused
+    // by name rather than parsed on hope.
+    // eslint-disable-next-line local/no-version-literal -- external format version declared by Claude Code's own file, not a VAT constant
+    version: z.literal(2).describe('Registry format version as Claude Code writes it (currently 2)'),
 
     plugins: z
       .record(

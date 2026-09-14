@@ -37,19 +37,16 @@ describe('Resource Naming Strategies', () => {
     mkdirSyncReal(kbDir, { recursive: true });
 
     // Create test files
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test fixture creation
     writeFileSync(
       safePath.join(kbDir, OVERVIEW_MD),
       '# Quickstart Overview\n\nContent here.'
     );
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test fixture creation
     writeFileSync(
       safePath.join(testProjectDir, KB_PATH, GUIDES_PATH, OVERVIEW_MD),
       '# Guides Overview\n\nContent here.'
     );
 
     // Create SKILL.md that links to both
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test fixture creation
     writeFileSync(
       safePath.join(testProjectDir, SKILL_MD),
       `---
@@ -108,7 +105,6 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       });
 
       // Files should be flattened with kebab-case names under resources/
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       const files = readdirSync(safePath.join(outputPath, RESOURCES_DIR));
       expect(files).toContain('knowledge-base-guides-overview.md');
       expect(files).toContain('knowledge-base-guides-topics-quickstart-overview.md');
@@ -126,7 +122,6 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       });
 
       // Prefix should be stripped, no leading dash
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       const files = readdirSync(safePath.join(outputPath, RESOURCES_DIR));
       expect(files).toContain('guides-overview.md');
       expect(files).toContain('guides-topics-quickstart-overview.md');
@@ -160,9 +155,7 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       });
 
       // Both should produce same result
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       const files1 = readdirSync(safePath.join(output1, RESOURCES_DIR)).sort((a, b) => a.localeCompare(b));
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       const files2 = readdirSync(safePath.join(output2, RESOURCES_DIR)).sort((a, b) => a.localeCompare(b));
       expect(files1).toEqual(files2);
       expect(files1).toContain('guides-overview.md');
@@ -181,9 +174,7 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       });
 
       // Directory structure should be preserved under resources/
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       expect(existsSync(safePath.join(outputPath, RESOURCES_DIR, KB_PATH, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       expect(existsSync(safePath.join(outputPath, RESOURCES_DIR, KB_PATH, GUIDES_PATH, 'topics', 'quickstart', OVERVIEW_MD))).toBe(true);
     });
 
@@ -199,13 +190,10 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       });
 
       // Prefix should be stripped from paths under resources/
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       expect(existsSync(safePath.join(outputPath, RESOURCES_DIR, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       expect(existsSync(safePath.join(outputPath, RESOURCES_DIR, GUIDES_PATH, 'topics', 'quickstart', OVERVIEW_MD))).toBe(true);
 
       // Should NOT have knowledge-base directory under resources/
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       expect(existsSync(safePath.join(outputPath, RESOURCES_DIR, KB_PATH))).toBe(false);
     });
 
@@ -231,9 +219,7 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       });
 
       // Both should produce same structure under resources/
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       expect(existsSync(safePath.join(output1, RESOURCES_DIR, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       expect(existsSync(safePath.join(output2, RESOURCES_DIR, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
     });
   });
@@ -250,7 +236,6 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
         excludeNavigationFiles: false,
       });
 
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       const files = readdirSync(safePath.join(outputPath, RESOURCES_DIR));
       // Should strip both knowledge-base and guides
       expect(files).toContain(OVERVIEW_MD);
@@ -268,7 +253,6 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
         excludeNavigationFiles: false,
       });
 
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       const files = readdirSync(safePath.join(outputPath, RESOURCES_DIR));
       // Prefix didn't match, so full path should remain
       expect(files).toContain('knowledge-base-guides-overview.md');

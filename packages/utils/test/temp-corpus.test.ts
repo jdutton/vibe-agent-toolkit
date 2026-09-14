@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- every path read here is a root this file's own `mkdtemp` just minted */
 /**
  * The literal-corpus fixture primitives, which are themselves fixtures — so a
  * defect here is invisible in its own consumers' failures rather than reported

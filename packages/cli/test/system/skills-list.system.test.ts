@@ -11,6 +11,7 @@
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { beforeAll, describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
@@ -40,24 +41,21 @@ describe('skills list command (system test)', () => {
 
   beforeAll(() => {
     // Run the default scan once (~15-20s) and share across tests
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
-    defaultResult = spawnSync('node', [binPath, 'skills', 'list'], {
+    defaultResult = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'list'], {
       encoding: 'utf-8',
       cwd: process.cwd(),
     });
     defaultParsed = yaml.parse(defaultResult.stdout) as SkillsListOutput;
 
     // Run the verbose scan once
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
-    verboseResult = spawnSync('node', [binPath, 'skills', 'list', '--verbose'], {
+    verboseResult = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'list', '--verbose'], {
       encoding: 'utf-8',
       cwd: process.cwd(),
     });
   }, 60_000); // Two full-project scans (~15-20s each)
 
   it('should show help text', () => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
-    const result = spawnSync('node', [binPath, 'skills', 'list', '--help'], {
+    const result = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'list', '--help'], {
       encoding: 'utf-8',
     });
 
@@ -118,8 +116,7 @@ describe('skills list command (system test)', () => {
     // Resolved relative to this test file (not process.cwd()) so it works whether
     // vitest is invoked from the monorepo root or from packages/cli directly.
     const catAgentsPath = safePath.join(getMonorepoRoot(import.meta.url), 'packages/vat-example-cat-agents');
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
-    const result = spawnSync('node', [binPath, 'skills', 'list', catAgentsPath], {
+    const result = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'list', catAgentsPath], {
       encoding: 'utf-8',
       cwd: process.cwd(),
     });

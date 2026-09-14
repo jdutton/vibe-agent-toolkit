@@ -50,9 +50,7 @@ const suite = setupSubdirTestSuite('resource-population-');
 /** Write one fixture file, creating its parent directory. */
 async function write(relativePath: string, content: string): Promise<void> {
   const absolute = safePath.join(suite.tempDir, relativePath);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
   await mkdir(dirname(absolute), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
   await writeFile(absolute, content, 'utf-8');
 }
 

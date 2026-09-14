@@ -1,4 +1,3 @@
-version: 1
 prompts:
   # --- vat-audit ---
   - id: vat-audit-pos

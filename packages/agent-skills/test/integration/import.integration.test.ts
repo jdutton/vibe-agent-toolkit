@@ -1,5 +1,3 @@
-
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test file requires dynamic paths for fixtures and temporary files
 import * as fs from 'node:fs';
 

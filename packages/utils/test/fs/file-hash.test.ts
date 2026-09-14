@@ -1,11 +1,10 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code using temp directories */
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { fileContentHash, safePath } from '../../src/index.js';
-import { setupSyncTempDirSuite } from '../../src/test-helpers.js';
+import { setupSyncTempDirSuite } from '../../src/testing/temp-dir.js';
 
 describe('fileContentHash', () => {
   const suite = setupSyncTempDirSuite('file-hash');

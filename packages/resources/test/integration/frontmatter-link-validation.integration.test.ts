@@ -5,7 +5,6 @@
  * is exercised end-to-end through ResourceRegistry.validate().
  */
 
-/* eslint-disable sonarjs/no-duplicate-string -- issue type constants repeated across tests */
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -37,13 +36,10 @@ function buildProject(tempDir: string, spec: ProjectSpec): ProjectResult {
   createGitRepo(tempDir);
 
   if (spec.gitignore) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from test helper
     fs.writeFileSync(safePath.join(tempDir, '.gitignore'), spec.gitignore);
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from test helper
   fs.mkdirSync(safePath.join(tempDir, 'schemas'), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from test helper
   fs.writeFileSync(
     safePath.join(tempDir, 'schemas', 'prd.schema.json'),
     JSON.stringify(spec.schema, null, 2),
@@ -53,9 +49,7 @@ function buildProject(tempDir: string, spec: ProjectSpec): ProjectResult {
 
   for (const [relPath, content] of Object.entries(spec.files)) {
     const abs = safePath.join(tempDir, relPath);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- abs is constructed from trusted tempDir
     fs.mkdirSync(path.dirname(abs), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- abs is constructed from trusted tempDir
     fs.writeFileSync(abs, content);
     if (relPath.endsWith('.md')) {
       markdownFiles.push(abs);

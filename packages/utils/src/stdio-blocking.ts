@@ -17,23 +17,23 @@ export interface StdioBlockingResult {
 /**
  * Switch one stream's underlying handle into blocking mode.
  *
- * @returns `true` only if `setBlocking` was present AND completed without
- * throwing. Both failure modes are real: a handle can be absent (stdio replaced,
- * or a shape libuv does not wrap), and `setBlocking` can throw on a handle type
- * that does not support it.
+ * @returns `true` only if `setBlocking` was present AND reported success. Both
+ * failure modes are real: a handle can be absent (stdio replaced, or a shape
+ * libuv does not wrap), and libuv can refuse the switch for a handle type that
+ * does not support it. It reports that refusal as a negative errno RETURN VALUE
+ * — `LibuvStreamWrap::SetBlocking` hands back `uv_stream_set_blocking`'s int,
+ * and a Windows TTY answers `UV_EINVAL` — never as a throw. This used to sit in
+ * a `try` that read a throw as the failure and the return value as nothing, so
+ * a refused switch reported `true` and the debug line said truncation could
+ * not happen on a stream it could happen on. A throw from in here would be a
+ * bug in Node's internals, and stays loud.
  */
 function setStreamBlocking(stream: NodeJS.WriteStream): boolean {
-	try {
-		const handle = (
-			stream as unknown as { _handle?: { setBlocking?: (blocking: boolean) => void } }
-		)._handle;
-		if (typeof handle?.setBlocking !== 'function') return false;
-		handle.setBlocking(true);
-		return true;
-	} catch {
-		// Best-effort: never let a startup nicety take down the process.
-		return false;
-	}
+	const handle = (
+		stream as unknown as { _handle?: { setBlocking?: (blocking: boolean) => unknown } }
+	)._handle;
+	if (typeof handle?.setBlocking !== 'function') return false;
+	return handle.setBlocking(true) === 0;
 }
 
 /**

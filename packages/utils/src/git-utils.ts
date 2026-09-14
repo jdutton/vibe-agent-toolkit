@@ -181,7 +181,6 @@ export function gitFindRoot(startDir: string): string | null {
     climbed.push(currentDir);
 
     const gitDir = safePath.join(currentDir, '.git');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- walking up from validated startDir
     if (existsSync(gitDir)) {
       return rememberGitRoot(climbed, currentDir);
     }

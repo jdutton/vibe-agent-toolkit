@@ -1,20 +1,20 @@
 import { closeSync, openSync, rmSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, VatError } from '@vibe-agent-toolkit/utils';
 
 /**
  * The harness root for a subject set is already locked.
  *
- * Exit 2 (PREFLIGHT), not 1. This is the most user-correctable condition in the
- * command — the remedy is "wait, or delete one file" — and it was the ONE error
- * class in this feature with no `exitCode`, so it fell through
- * `mapErrorToExitCode`'s default to Internal (1). The published CI recipe reads 1
- * as "the harness broke, fail the build", which is exactly the wrong verdict for a
- * lock held by the operator's own second terminal.
+ * Reason `preflight`, not `internal`. This is the most user-correctable condition in
+ * the command — the remedy is "wait, or delete one file" — and it was the ONE error
+ * class in this feature with no declared reason, so it fell through
+ * `skillTestFailureReason`'s default to `internal`. The published CI recipe reads
+ * `internal` as "the harness broke, fail the build", which is exactly the wrong
+ * verdict for a lock held by the operator's own second terminal.
  *
- * The field below is what `mapErrorToExitCode` READS — it is not decoration
+ * The field below is what `skillTestFailureReason` READS — it is not decoration
  * mirroring an `instanceof` row, which is what it was when it was added. Deleting it
- * turns this back into an exit 1.
+ * turns this back into `internal`.
  *
  * The message names `lockPath` because the lockfile is created `O_EXCL` in the
  * DETERMINISTIC harness root and released only on normal exit or SIGINT/SIGTERM —
@@ -24,16 +24,16 @@ import { safePath } from '@vibe-agent-toolkit/utils';
  * and saying to delete it IS the escape hatch, so it belongs in the message rather
  * than in a doc the operator is not currently reading.
  */
-export class HarnessLockBusyError extends Error {
-  readonly exitCode = 2 as const;
+export class HarnessLockBusyError extends VatError {
+  readonly reason = 'preflight' as const;
   constructor(public readonly lockPath: string) {
     super(
+      'HARNESS_LOCK_BUSY',
       `Another vat skill test run holds the harness lock: ${lockPath}. ` +
         'Wait for it to finish, or use a different subject set. ' +
         'If no other run is in progress the lock is stale (a previous run was killed, ' +
         `crashed, or ran out of memory) — delete ${lockPath} and re-run.`,
     );
-    this.name = 'HarnessLockBusyError';
   }
 }
 
@@ -86,7 +86,6 @@ export function acquireHarnessLock(harnessRoot: string, opts: { wait?: boolean }
   let fd: number;
   try {
     // 'wx' = O_CREAT | O_EXCL — fails with EEXIST if the lockfile already exists.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
     fd = openSync(lockPath, 'wx');
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
@@ -109,6 +108,7 @@ export function acquireHarnessLock(harnessRoot: string, opts: { wait?: boolean }
               `${err instanceof Error ? err.message : String(err)}. ` +
               'The next run of this skill will report the lock as busy until it is deleted.\n',
           );
+          // eslint-disable-next-line local/no-blind-catch -- the REPORTING channel (fd 2) is what threw; there is no surface left to carry the error to, and a rethrow from a `finally` would destroy a good harness result
         } catch {
           // The REPORTING channel is what failed — an EBADF/EPIPE on a file- or
           // TTY-backed fd 2 throws synchronously out of `write`. There is nowhere

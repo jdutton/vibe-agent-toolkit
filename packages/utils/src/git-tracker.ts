@@ -366,7 +366,7 @@ export class GitTracker {
    *
    * ## ⚠️ The out-of-root fallback costs an order of magnitude more per path
    *
-   * Measured 2026-08 in the D9 parity fixture: an out-of-root path costs
+   * Measured in the D9 parity fixture: an out-of-root path costs
    * **185–427 ms**, against **12–28 ms** for every in-repo path — ≈7–36× on
    * those ranges.
    *
@@ -439,7 +439,6 @@ export class GitTracker {
 
     // Absent from the active set. That means "ignored" only for a path that is
     // actually there; otherwise the set has no opinion and git must be asked.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path, read-only existence probe
     const present = knownToExist ?? existsSync(normalized);
     if (!present) {
       return this.isIgnored(absolutePath);

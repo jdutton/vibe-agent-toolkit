@@ -253,8 +253,14 @@ module.exports = {
     docs: {
       description:
         'Require a tracking-issue justification for skipped tests, and ban tautological assertions',
-      category: 'Best Practices',
-      recommended: true,
+      category: 'Code and test hygiene',
+      bans: 'unannotated `it.skip`/`it.todo`, tautological assertions, empty test bodies',
+      useInstead: 'a `SKIP(#123): reason` annotation, or a real assertion',
+      // Not in `recommended`: a position on TEST STYLE, not a portability or
+      // correctness fact. Someone installing this package for `safePath.join()`
+      // should not silently inherit a test convention. Enable it by name.
+      recommended: false,
+      recommendedSeverity: 'error',
     },
     schema: [],
     messages: {

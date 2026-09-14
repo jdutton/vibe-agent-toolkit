@@ -14,24 +14,7 @@
  * while still calling the bundle OKF.
  */
 
-/**
- * The dial an adopter sets per bundle. Defaults to `error` — VAT is producer-side.
- *
- * ⛔ **It does not reach the three "could not look" codes, and that is not an
- * exception carved for convenience.** `OKF_BUNDLE_ROOT_UNREADABLE`,
- * `OKF_SUBDIRECTORY_UNREADABLE` and `OKF_DOCUMENT_UNREADABLE` all say that
- * conformance was never assessed for some part of the bundle — nothing was
- * opened there, nothing was judged. A conformance dial cannot downgrade "I
- * could not look" without producing the green-without-running report this repo
- * keeps rediscovering: a bundle lowered to `warning` whose root is a typo, or
- * whose one interesting subtree is unreadable, would otherwise pass silently and
- * forever.
- *
- * Every other code IS a judgement about content that VAT did read, including
- * `OKF_DOCUMENT_ESCAPES_BUNDLE` — the entry was seen and found not to be a
- * distributable member — so the dial reaches all of them.
- */
-export type OkfSeverity = 'error' | 'warning' | 'info';
+import type { Severity } from '@vibe-agent-toolkit/schema';
 
 /**
  * Every conformance finding this lane can emit.
@@ -116,7 +99,7 @@ export const OKF_FINDING_CODES = [
    * one mistyped root cannot discard every other bundle's real findings, and it
    * is one of the three "could not look" codes the per-bundle severity dial does
    * not reach (with `OKF_SUBDIRECTORY_UNREADABLE` and `OKF_DOCUMENT_UNREADABLE`):
-   * see {@link OkfSeverity}.
+   * see `ValidateOkfBundleOptions.severity`.
    */
   'OKF_BUNDLE_ROOT_UNREADABLE',
   /**
@@ -164,7 +147,7 @@ export type OkfFindingCode = (typeof OKF_FINDING_CODES)[number];
 /** One conformance finding, addressed to the bundle's publisher. */
 export interface OkfFinding {
   code: OkfFindingCode;
-  severity: OkfSeverity;
+  severity: Severity;
   /** What is wrong, and what the specification says instead. */
   message: string;
   /**

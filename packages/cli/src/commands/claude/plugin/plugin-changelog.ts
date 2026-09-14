@@ -22,10 +22,8 @@ export function resolvePluginChangelogPath(
 ): string | undefined {
   if (entry.changelog) {
     const configured = safePath.join(pluginSourceDir, entry.changelog);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     return existsSync(configured) ? configured : undefined;
   }
   const defaulted = safePath.join(pluginSourceDir, 'CHANGELOG.md');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
   return existsSync(defaulted) ? defaulted : undefined;
 }

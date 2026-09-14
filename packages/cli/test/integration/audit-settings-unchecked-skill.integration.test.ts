@@ -20,6 +20,7 @@
 
 import fs from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -70,7 +71,11 @@ describe('vat audit --compat --settings with a skill whose frontmatter cannot be
   it('still finds the real conflict on the skill it COULD read', () => {
     const { exit, plugin } = auditPlugin(mixedPluginDir);
 
-    expect(exit).toBe(0);
+    // Exit 1, not 0: malformed frontmatter is the SKILL's defect
+    // (`SKILL_MISSING_FRONTMATTER`, error severity), and the audit exits 1 on
+    // any error-severity finding. Only a path the OS REFUSED is "degraded" at
+    // exit 0 — that case is `audit-settings-unreachable-skill`.
+    expect(exit).toBe(ExitCode.FINDINGS);
     expect(plugin?.settings?.conflicts.map((c) => c.type)).toContain('tool-blocked');
   });
 
@@ -88,8 +93,10 @@ describe('vat audit --compat --settings with a skill whose frontmatter cannot be
   // THE defect: zero conflicts found, because the only skill that declares a
   // denied tool could not be read — and "zero conflicts" rendered as compatible.
   it('does not report a plugin compatible when its only skill went unchecked', () => {
-    const { plugin, report } = auditPlugin(lonelyPluginDir);
+    const { exit, plugin, report } = auditPlugin(lonelyPluginDir);
 
+    // The unparseable skill is an error-severity finding on its own, so the run gates.
+    expect(exit).toBe(ExitCode.FINDINGS);
     expect(issueCodes(report)).toContain('SKILL_MISSING_FRONTMATTER');
     expect(plugin?.settings?.conflicts).toEqual([]);
     expect(plugin?.settings?.compatible).toBe(false);

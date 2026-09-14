@@ -115,7 +115,7 @@ describe('Tag Determination Logic', () => {
 
     it('should reject invalid semver versions', () => {
       // Note: '1.0.0.0' flagged by sonarjs/no-hardcoded-ip but is a semver test case
-      // eslint-disable-next-line sonarjs/no-hardcoded-ip
+      // eslint-disable-next-line sonarjs/no-hardcoded-ip -- '1.0.0.0' is an invalid-semver fixture, not an address
       const invalidVersions = ['1.0', '1.0.0.0', 'invalid', ''];
 
       for (const version of invalidVersions) {

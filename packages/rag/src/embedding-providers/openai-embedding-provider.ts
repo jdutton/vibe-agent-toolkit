@@ -94,7 +94,7 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
     // so we throw an error if the import fails and provide installation instructions
     try {
       // Dynamic import in constructor context - this will fail at runtime if openai isn't installed
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- optional peer loaded lazily in a constructor; a static import would make openai required
       const { OpenAI } = require('openai');
       this.client = new OpenAI({ apiKey: config.apiKey });
     } catch {

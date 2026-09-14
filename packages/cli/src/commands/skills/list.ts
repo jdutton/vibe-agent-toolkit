@@ -7,13 +7,13 @@
  */
 
 import { existsSync, readdirSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { scan, type ScanSummary } from '@vibe-agent-toolkit/discovery';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { direntKindFollowingSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 
 import { loadConfig } from '../../utils/config-loader.js';
@@ -22,7 +22,7 @@ import { relativizePathEntries } from '../../utils/relativize-paths.js';
 import { discoverSkills, validateSkillFilename } from '../../utils/skill-discovery.js';
 import { scanUserContext } from '../../utils/user-context-scanner.js';
 
-import { isNpmOrTarballSource, resolveNpmOrTarballSource } from './source-resolvers.js';
+import { isNpmOrTarballSource, removeResolvedTempDirs, resolveNpmOrTarballSource } from './source-resolvers.js';
 
 export interface SkillsListCommandOptions {
   user?: boolean;
@@ -172,15 +172,14 @@ function outputSkillsHuman(
  * Each immediate subdirectory that contains a SKILL.md is treated as one skill.
  */
 function scanSkillsDir(skillsDir: string): DiscoveredSkill[] {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- temp path from trusted source
   const entries = readdirSync(skillsDir, { withFileTypes: true });
   const skills: DiscoveredSkill[] = [];
 
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    // Followed: a `--dev` install is a symlinked skill directory and is listed.
+    if (direntKindFollowingSync(skillsDir, entry) !== 'directory') continue;
     const candidate = safePath.join(skillsDir, entry.name);
     const skillMd = safePath.join(candidate, 'SKILL.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from temp path
     if (existsSync(skillMd)) {
       const filenameCheck = validateSkillFilename(skillMd);
       const skill: DiscoveredSkill = {
@@ -219,16 +218,14 @@ async function listFromNpmSource(
     // refused short of the extraction itself failing.
     process.stdout.write(formatSkillsYaml(skills, 'npm', resolved.skillsDir, []));
     outputSkillsHuman(skills, [], logger, options);
-    process.exit(0);
   } finally {
-    for (const dir of resolved.tempDirs) {
-      try {
-        await rm(dir, { recursive: true, force: true });
-      } catch {
-        // best-effort cleanup
-      }
-    }
+    // AFTER the exit below used to sit inside the `try`, which meant this
+    // `finally` never ran on the success path — `process.exit` does not unwind
+    // — and every `vat skills list npm:…` left its extracted package in the
+    // temp dir.
+    await removeResolvedTempDirs(resolved.tempDirs, logger);
   }
+  process.exit(ExitCode.OK);
 }
 
 export async function listCommand(
@@ -241,7 +238,7 @@ export async function listCommand(
     // npm: or .tgz/.tar.gz source — inspect without installing
     if (pathArg !== undefined && isNpmOrTarballSource(pathArg)) {
       await listFromNpmSource(pathArg, logger, options);
-      return; // process.exit(0) called inside listFromNpmSource
+      return; // process.exit(ExitCode.OK) called inside listFromNpmSource
     }
 
     let skills: DiscoveredSkill[];
@@ -291,10 +288,10 @@ export async function listCommand(
     // Human-friendly output to stderr
     outputSkillsHuman(skills, unreadable, logger, options);
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error(`Failed to list skills: ${errorMessage}`);
-    process.exit(2);
+    process.exit(ExitCode.ERROR);
   }
 }

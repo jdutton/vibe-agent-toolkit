@@ -1,5 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-
 import fs from 'node:fs';
 import { dirname } from 'node:path';
 

@@ -89,18 +89,18 @@ CHANGELOG.md uses a strict format. **RC/prerelease versions NEVER get their own 
    bun run bump-version 0.1.0       # For stable
    ```
 
-3. **Build and run pre-publish check** (catches CHANGELOG, version, metadata issues):
+3. **Build and run the release-readiness check** (catches CHANGELOG, version, metadata and tag issues):
    ```bash
    bun run build
-   bun run pre-publish
+   bun run pre-release
    ```
-   This runs full validation AND checks:
-   - CHANGELOG has entry for current version (stable releases)
-   - All packages built, versions synchronized
-   - Package metadata complete (repository, author, license)
-   - No uncommitted changes or untracked files
+   `pre-release` is `pre-publish` (full validation, CHANGELOG entry for the current version on a
+   stable release, all packages built and version-synchronized, package metadata complete, no
+   uncommitted or untracked files) plus the release-readiness checks: a marketplace publish
+   dry-run, no tag of this version already on the remote, and on a stable release a non-empty
+   stamped CHANGELOG section with nothing left under `[Unreleased]`.
 
-   **Do NOT skip this step** - the CI publish workflow runs the same check and will fail if it finds issues.
+   **Do NOT skip this step** - the CI publish workflow runs the same check against the pushed tag and will fail if it finds issues.
 
 4. **Commit and tag**:
    ```bash
@@ -139,7 +139,7 @@ bun run bump-version <version>
 bun run build
 
 # Run pre-publish checks
-bun run pre-publish-check
+bun run pre-publish
 
 # Publish with rollback safety
 bun run publish-with-rollback <version>
@@ -149,9 +149,9 @@ bun run publish-with-rollback <version>
 
 The `vat` command uses smart wrapper with context detection:
 
-**Dev Mode** (in this repo):
-- Uses: `packages/cli/dist/bin.js`
-- Shows version: `0.1.0-rc.1-dev`
+**Dev Mode** (in this repo — `bun run vat` runs `packages/cli/dist/bin/vat.js`):
+- Dispatches to: `packages/cli/dist/bin.js` (the unpackaged dev build; `VAT_ROOT_DIR` points it at another checkout)
+- Shows version: the package version with a `-dev` suffix and the repo path, e.g. `0.2.0-rc.7-dev (/path/to/repo)`
 
 **Local Install** (project has @vibe-agent-toolkit/cli):
 - Uses: `node_modules/@vibe-agent-toolkit/cli/dist/bin.js`
@@ -169,20 +169,20 @@ npm install -g vibe-agent-toolkit          # Everything
 
 ## Package Publishing Order
 
-Packages are published in dependency order:
+Publish order is `publishedPackagesInDependencyOrder()` in
+`packages/dev-tools/src/workspace-graph.ts`: every `private: false` package, ordered by its runtime
+`workspace:` edges — dependencies first, the umbrella `vibe-agent-toolkit` package last. There is no
+hand list; make a package `private: true` to hold it back from publishing.
 
-1. schema, utils (parallel - no deps)
-2. discovery, resources (parallel - depend on utils)
-3. rag (depends on resources, utils)
-4. rag-lancedb, agent-config (parallel)
-5. agent-runtime (depends on utils)
-6. runtime-claude-agent-sdk, agent-skills, runtime-langchain, runtime-openai, runtime-vercel-ai-sdk (parallel - runtime adapters)
-7. transports (depends on agent-runtime)
-8. cli
-9. gateway-mcp (depends on schema, utils, vat-example-cat-agents)
-10. vat-development-agents
-11. vat-example-cat-agents
-12. vibe-agent-toolkit (umbrella - published last)
+The publish workflow asserts that the pushed tag equals the root `package.json` version before it
+builds anything, then runs `bun run pre-publish -- --release-readiness --tag <version>` (in CI the
+remote tag must exist and name the manifest version; locally, without `--tag`, it must be absent).
+
+### Changelog fragments
+
+Changes may land as fragments under `.changes/` instead of editing `CHANGELOG.md` directly — see
+[`.changes/README.md`](../.changes/README.md) for the shape. A **stable** `bun run bump-version` folds
+every fragment into the new version heading and deletes it; RC bumps leave fragments in place.
 
 ## Rollback Safety
 
@@ -200,4 +200,29 @@ bun run build
 
 # Clean build
 bun run build:clean
+```
+
+## Licensing Conventions
+
+Use the license field that matches the package's intended distribution:
+
+| Package type | `"license"` value | Also set | Files to add |
+|---|---|---|---|
+| Open source (MIT, Apache, etc.) | `"MIT"` | — | `LICENSE` |
+| Proprietary / enterprise internal | `"SEE LICENSE IN LICENSE"` | `"private": true` | `LICENSE` |
+| Not yet licensed | `"UNLICENSED"` | `"private": true` | — |
+
+`"UNLICENSED"` signals "the author forgot to add a license" to npm tooling — do not use it for an
+intentionally proprietary package.
+
+Standard enterprise proprietary `LICENSE` template (for `private: true` packages owned by an
+organization):
+
+```
+Copyright (c) [YEAR] [Organization Name]. All rights reserved.
+
+This software is proprietary to [Organization Name] and is made available
+solely for use by authorized personnel and contractors under applicable
+confidentiality obligations. Redistribution, modification, or use outside
+this scope requires written consent from [Organization Name].
 ```

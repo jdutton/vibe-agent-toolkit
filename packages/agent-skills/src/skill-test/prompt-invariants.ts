@@ -1,17 +1,19 @@
+import { VatError } from '@vibe-agent-toolkit/utils';
+
 /**
  * Thrown when a vat-generated prompt (executor or grader) violates one of its
  * required invariants — a missing required directive, or the presence of a
  * forbidden phrase (e.g. an executor "blinding breaker").
  *
  * Shared across the `*-prompt.ts` modules in `skill-test/` so
- * `exit-codes.ts`'s `mapErrorToExitCode` maps all of them to the same
+ * `failure-reason.ts`'s `skillTestFailureReason` maps all of them to the same
  * user-correctable preflight exit code (2), regardless of which prompt
  * builder raised it.
  */
-export class PromptInvariantError extends Error {
+export class PromptInvariantError extends VatError {
+  readonly reason = 'preflight' as const;
   constructor(message: string) {
-    super(`Prompt invariant violated: ${message}`);
-    this.name = 'PromptInvariantError';
+    super('PROMPT_INVARIANT', `Prompt invariant violated: ${message}`);
   }
 }
 

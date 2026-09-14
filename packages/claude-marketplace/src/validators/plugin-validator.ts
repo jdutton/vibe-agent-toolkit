@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- File paths are validated before use */
 import { existsSync, readFileSync } from 'node:fs';
 
 import {
@@ -211,7 +210,7 @@ export async function validatePlugin(
 	// or not the schema parsed. Deliberately NOT escalated by `strict`: the
 	// hosted-sync behaviour it reports is observed, not documented by Anthropic,
 	// and `bin/` remains a supported CLI feature — see plugin-hosted-shape.ts.
-	issues.push(...detectHostedIncompatibleShape(pluginPath));
+	issues.push(...detectHostedIncompatibleShape(pluginPath, anchorRoot));
 
 	const validationResult: ValidationResult = {
 		path: pluginPath,

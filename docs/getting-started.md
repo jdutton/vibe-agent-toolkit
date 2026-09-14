@@ -288,13 +288,13 @@ Validate Agent Skills for quality and compatibility:
 
 ```bash
 # Audit a single skill
-vat agent audit my-skill/SKILL.md
+vat audit my-skill/SKILL.md
 
 # Audit all skills in a directory
-vat agent audit skills/ --recursive
+vat audit skills/
 
 # View detailed validation errors
-vat agent audit my-skill/SKILL.md --debug
+vat audit my-skill/SKILL.md --debug
 ```
 
 The audit command checks for:
@@ -304,7 +304,7 @@ The audit command checks for:
 - Link integrity (broken links, invalid paths)
 - Console compatibility (tool availability)
 
-See [Audit Command Documentation](./cli/audit.md) for complete validation rules.
+See the [audit command reference](../packages/cli/docs/audit.md) and [validation codes](./validation-codes.md) for complete validation rules.
 
 ### Importing Skills
 
@@ -328,7 +328,7 @@ Typical workflow:
 vim my-skill/SKILL.md
 
 # 2. Validate before import
-vat agent audit my-skill/SKILL.md
+vat audit my-skill/SKILL.md
 
 # 3. Import to VAT format
 vat agent import my-skill/SKILL.md

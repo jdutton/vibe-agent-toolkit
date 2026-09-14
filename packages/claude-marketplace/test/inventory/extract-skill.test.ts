@@ -3,8 +3,6 @@ import { dirname } from 'node:path';
 
 import { type ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import {
-  __readCrawlTimingSnapshot,
-  __setCrawlTimingForTest,
   CRAWL_PASS_INSIDE,
   CRAWL_REGISTRY_ADMIT_ID,
   CRAWL_REGISTRY_ENUMERATE_ID,
@@ -12,12 +10,16 @@ import {
   mkdirSyncReal,
   resetProjectRootCaches,
   safePath,
-  setupAsyncTempDirSuite,
-  withReaddirSyncRefused,
 } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  __readCrawlTimingSnapshot,
+  __setCrawlTimingForTest,
+  setupAsyncTempDirSuite,
+  withReaddirSyncRefused,
+} from '@vibe-agent-toolkit/utils/testing';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
 	crawlSkillLinkRegistry,
@@ -53,7 +55,6 @@ const DIVERGENT_SKILL_MD = [
 /** Write one file into the temp fixture repository, creating its directory. */
 function writeRepoFile(root: string, relative: string, contents: string): void {
 	mkdirSyncReal(root, { recursive: true });
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- a path composed under this suite's own temp root
 	writeFileSync(safePath.join(root, relative), contents, 'utf-8');
 }
 
@@ -167,20 +168,37 @@ describe('extractClaudeSkillInventory git-tracker source', () => {
 		expect(parseErrors).toEqual([]);
 	});
 
-	it('degrades to the untracked walk when the source throws, without inventing a parse error', async () => {
-		const { linked, parseErrors } = await extractWith(SKILL_MD, registry, () => {
-			throw new Error('git ls-files unavailable');
-		});
+	it('degrades to the untracked walk when the source throws, without inventing a parse error — and says so on stderr', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		try {
+			const { linked, parseErrors } = await extractWith(SKILL_MD, registry, () => {
+				throw new Error('git ls-files unavailable');
+			});
 
-		expect(linked).toEqual(baseline);
-		expect(parseErrors).toEqual([]);
+			expect(linked).toEqual(baseline);
+			expect(parseErrors).toEqual([]);
+			// Degraded, not silent: the source failing is a missing optimization, and
+			// a run paying one `git check-ignore` per link target is told why.
+			expect(warn.mock.calls.map(call => String(call[0]))).toEqual([
+				expect.stringMatching(/^\[vat\] Warning: .*git tracker.*git ls-files unavailable/s),
+			]);
+			expect(String(warn.mock.calls[0]?.[0])).toContain(projectRoot);
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
-	it('degrades to the untracked walk when the source declines to answer for a root', async () => {
-		const { linked, parseErrors } = await extractWith(SKILL_MD, registry, async () => undefined);
+	it('degrades to the untracked walk when the source declines to answer for a root, silently', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		try {
+			const { linked, parseErrors } = await extractWith(SKILL_MD, registry, async () => undefined);
 
-		expect(linked).toEqual(baseline);
-		expect(parseErrors).toEqual([]);
+			expect(linked).toEqual(baseline);
+			expect(parseErrors).toEqual([]);
+			expect(warn).not.toHaveBeenCalled();
+		} finally {
+			warn.mockRestore();
+		}
 	});
 });
 

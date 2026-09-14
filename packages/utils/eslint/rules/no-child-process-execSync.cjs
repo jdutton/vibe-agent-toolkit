@@ -20,4 +20,12 @@ module.exports = factory({
   message: 'Use safeExecSync() from {{safeModule}} instead of child_process.execSync() to prevent command injection (security + cross-platform)',
   // No baked-in exemption: the file that implements safeExecSync() is
   // repo-specific. Consumers declare it as { exemptFiles: [...] }.
+  docs: {
+    category: 'Filesystem and process',
+    bans: '`child_process.execSync()`',
+    useInstead: '`safeExecSync()`',
+    subpath: '/process',
+    recommended: true,
+    recommendedSeverity: 'error',
+  },
 });

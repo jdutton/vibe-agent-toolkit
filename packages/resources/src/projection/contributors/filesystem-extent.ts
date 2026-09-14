@@ -112,7 +112,7 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 
-import { safePath, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
@@ -491,13 +491,14 @@ function unlistableDirectoryCondition(
  */
 export function unlistableRowStillHolds(row: RealizationConditionRow, root: string): boolean {
   const directory = safePath.resolve(root, row.path);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- a stored root-relative path, resolved against the corpus root
   if (!existsSync(directory)) return false;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- same path, one listing attempt per stored row
     readdirSync(directory);
     return false;
-  } catch {
-    return true;
+  } catch (error) {
+    // Gone between the `existsSync` and the listing: not a true row either.
+    // Anything else — EACCES, ELOOP, a dead mount — is the refusal the row
+    // records, still refusing.
+    return !isPathAbsentError(error);
   }
 }

@@ -180,12 +180,28 @@ describe('killProcessTree', () => {
     }
   });
 
-  it.skipIf(!onPosix)('swallows ESRCH when the group is already gone', () => {
+  it.skipIf(!onPosix).each(['ESRCH', 'EPERM'])('reads %s as "the group is already gone" and says nothing', (code) => {
+    // ESRCH: no such group. EPERM: the group id has been recycled to a process
+    // this uid may not signal — which, for a group WE created and would have
+    // permission over, also means every process of ours in it has exited.
     const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
-      throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+      throw Object.assign(new Error(code), { code });
     });
     try {
       expect(() => killProcessTree({ pid: 9999 })).not.toThrow();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.skipIf(!onPosix)('lets anything else thrown by the kill stay loud instead of reporting the tree reaped', () => {
+    // The catch used to be blind: a bug here read as "already dead", and an
+    // in-flight `claude` kept billing tokens with the reaper reporting success.
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw new TypeError('kill is not a function');
+    });
+    try {
+      expect(() => killProcessTree({ pid: 9999 })).toThrow(TypeError);
     } finally {
       spy.mockRestore();
     }

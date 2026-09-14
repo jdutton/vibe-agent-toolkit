@@ -2,7 +2,6 @@
  * Unit tests for packaging validation
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import * as fs from 'node:fs';
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/schema';

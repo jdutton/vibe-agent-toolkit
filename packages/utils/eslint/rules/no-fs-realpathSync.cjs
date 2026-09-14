@@ -20,4 +20,12 @@ module.exports = factory({
   message: 'Use normalizePath() from {{safeModule}} instead of fs.realpathSync() for consistent Windows 8.3 path resolution',
   // No baked-in exemption: the file that implements normalizePath() is
   // repo-specific. Consumers declare it as { exemptFiles: [...] }.
+  docs: {
+    category: 'Filesystem and process',
+    bans: '`fs.realpathSync()`',
+    useInstead: '`normalizePath()`',
+    subpath: '/fs',
+    recommended: true,
+    recommendedSeverity: 'error',
+  },
 });

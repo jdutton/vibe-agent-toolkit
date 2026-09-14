@@ -31,7 +31,7 @@ import {
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
@@ -48,7 +48,6 @@ import { runMarketplaceValidatePhase } from './claude/marketplace/validate.js';
 import {
   runConsistencyChecks,
   type ConsistencyIssue,
-  type ConsistencyIssueSeverity,
 } from './consistency-check.js';
 import {
   addRetiredOnlyOption,
@@ -236,19 +235,23 @@ interface BuiltSkillOutputs {
 }
 
 /**
- * Whether `dir` is a directory — `false` for a file, for nothing, and for a
- * path the process cannot stat. All three are "no bundle here": a bundle is a
- * tree, and a regular FILE sitting where one should be passed `existsSync`,
- * was counted as built, and the packaged-content crawl then threw `Base path is
- * not a directory: /abs/…` out of the whole command — exit 2, no document, an
- * absolute path on stderr — where the missing-bundle lane names it at exit 1.
+ * Whether `dir` is a directory — `false` for a file and for nothing. Both are
+ * "no bundle here": a bundle is a tree, and a regular FILE sitting where one
+ * should be passed `existsSync`, was counted as built, and the packaged-content
+ * crawl then threw `Base path is not a directory: /abs/…` out of the whole
+ * command — exit 2, no document, an absolute path on stderr — where the
+ * missing-bundle lane names it at exit 1.
+ *
+ * A path the process cannot stat is NOT "no bundle here" and throws: reading a
+ * refused `dist/skills/x` as missing would name it under `missing` with a
+ * remedy ("run vat build") that cannot help.
  */
 function isDirectory(dir: string): boolean {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputDir is resolved from config, not user input
     return statSync(dir).isDirectory();
-  } catch {
-    return false;
+  } catch (error) {
+    if (isPathAbsentError(error)) return false;
+    throw error;
   }
 }
 
@@ -329,60 +332,62 @@ function collectBuiltSkillOutputs(
   discovered: readonly DiscoveredSkill[],
 ): BuiltSkillOutputs {
   const outputs: BuiltSkillOutputs = { built: [], expected: 0, missing: [] };
-  try {
-    const config = loadConfig(cwd);
-    if (!config) return outputs;
+  // No `try`, deliberately. The config was already loaded by the command (see
+  // `loadConfigTolerant`) and the in-process phases run only when it loaded, so
+  // `loadConfig` here answers from cache. The `catch { return outputs }` that
+  // used to wrap this whole body could only ever absorb a DEFECT — and it
+  // absorbed it into an empty candidate list, which every phase below then
+  // verified against: zero bundles, zero findings, exit 0.
+  const config = loadConfig(cwd);
+  if (!config) return outputs;
 
-    const skillsConfig = config.skills;
-    const defaults = skillsConfig?.defaults as Record<string, unknown> | undefined;
+  const skillsConfig = config.skills;
+  const defaults = skillsConfig?.defaults as Record<string, unknown> | undefined;
 
-    // Dedup guard: key = `skillName\0outputDir`
-    const seen = new Set<string>();
+  // Dedup guard: key = `skillName\0outputDir`
+  const seen = new Set<string>();
 
-    // --- Pool skills: candidate dir is dist/skills/<fsName> ---
-    // Expected only when discovered: `vat skills build` builds every discovered
-    // skill and nothing else (see BuiltSkillOutputs.expected).
-    const discoveredNames = new Set(discovered.map((skill) => skill.name));
-    const poolNames = new Set<string>([...discoveredNames, ...Object.keys(skillsConfig?.config ?? {})]);
-    for (const skillName of poolNames) {
-      const perSkill = skillsConfig?.config?.[skillName] as Record<string, unknown> | undefined;
-      const outputDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
-      addCheckCandidate(
-        outputs,
-        seen,
-        cwd,
-        { skillName, outputDir, packaging: mergeSkillPackagingConfig(defaults, perSkill) },
-        discoveredNames.has(skillName),
-      );
-    }
-
-    // --- Tree-copy skills: candidate dirs are plugin output skill dirs ---
-    // Always expected: every location here is a plugin-local skill the claude
-    // build phase packages into the plugin tree.
-    for (const loc of computeTreeCopiedSkillLocations(config, cwd)) {
-      // Per-skill config is keyed by the skill's declared NAME. `skillDirPath` is a
-      // path (`group/nested-skill` for a nested skill), so try its trailing segment
-      // too — the spelling that matches for every skill whose dir is named after it.
-      const dirLeaf = basename(loc.skillDirPath);
-      const perSkill = (skillsConfig?.config?.[loc.skillDirPath] ?? skillsConfig?.config?.[dirLeaf]) as
-        Record<string, unknown> | undefined;
-      addCheckCandidate(
-        outputs,
-        seen,
-        cwd,
-        {
-          skillName: loc.skillDirPath,
-          outputDir: loc.skillOutputDir,
-          packaging: mergeSkillPackagingConfig(defaults, perSkill),
-        },
-        true,
-      );
-    }
-
-    return outputs;
-  } catch {
-    return { built: [], expected: 0, missing: [] };
+  // --- Pool skills: candidate dir is dist/skills/<fsName> ---
+  // Expected only when discovered: `vat skills build` builds every discovered
+  // skill and nothing else (see BuiltSkillOutputs.expected).
+  const discoveredNames = new Set(discovered.map((skill) => skill.name));
+  const poolNames = new Set<string>([...discoveredNames, ...Object.keys(skillsConfig?.config ?? {})]);
+  for (const skillName of poolNames) {
+    const perSkill = skillsConfig?.config?.[skillName] as Record<string, unknown> | undefined;
+    const outputDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
+    addCheckCandidate(
+      outputs,
+      seen,
+      cwd,
+      { skillName, outputDir, packaging: mergeSkillPackagingConfig(defaults, perSkill) },
+      discoveredNames.has(skillName),
+    );
   }
+
+  // --- Tree-copy skills: candidate dirs are plugin output skill dirs ---
+  // Always expected: every location here is a plugin-local skill the claude
+  // build phase packages into the plugin tree.
+  for (const loc of computeTreeCopiedSkillLocations(config, cwd)) {
+    // Per-skill config is keyed by the skill's declared NAME. `skillDirPath` is a
+    // path (`group/nested-skill` for a nested skill), so try its trailing segment
+    // too — the spelling that matches for every skill whose dir is named after it.
+    const dirLeaf = basename(loc.skillDirPath);
+    const perSkill = (skillsConfig?.config?.[loc.skillDirPath] ?? skillsConfig?.config?.[dirLeaf]) as
+      Record<string, unknown> | undefined;
+    addCheckCandidate(
+      outputs,
+      seen,
+      cwd,
+      {
+        skillName: loc.skillDirPath,
+        outputDir: loc.skillOutputDir,
+        packaging: mergeSkillPackagingConfig(defaults, perSkill),
+      },
+      true,
+    );
+  }
+
+  return outputs;
 }
 
 /**
@@ -407,7 +412,6 @@ export function checkFilesConfigDests(
     const missing: string[] = [];
     for (const entry of mergedFiles) {
       const destPath = safePath.resolve(outputDir, entry.dest);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- destPath resolved from config
       if (!existsSync(destPath)) {
         missing.push(entry.dest);
       }
@@ -723,9 +727,9 @@ export function formatVerifyAnnouncement(
 
 /** An in-process phase's finding as it appears in the archived YAML. */
 interface PublishedIssue {
-  // Widened from ConsistencyIssueSeverity: `packaged-content` publishes real
-  // ValidationIssues, whose severity vocabulary also carries 'ignore'.
-  severity: ValidationIssue['severity'] | ConsistencyIssueSeverity;
+  // `packaged-content` publishes real ValidationIssues, whose severity
+  // vocabulary also carries 'ignore'; the consistency phase's carry `Severity`.
+  severity: ValidationIssue['severity'];
   code: string;
   message: string;
   fix: string;
@@ -980,15 +984,16 @@ async function verifyTopLevelCommand(
   // problem for anyone running the old invocation outside a project.
   rejectRetiredOnly(options.only, COMMAND_NAME, VERIFY_FULL_RUN_SECONDS);
 
-  // Spec §7: `vat verify` requires a projectRoot.
-  const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
-
   const { logger, startTime } = createPhaseContext(options.debug);
 
   try {
     // Inside the try, deliberately: phase selection used to throw from out here
     // (on an unroutable `--only`), so the user got a raw Node stack trace and
-    // zero bytes of the structured document a scripted caller parses.
+    // zero bytes of the structured document a scripted caller parses — and so
+    // did "no project here", at Node's default exit 1, which the contract reads
+    // as FINDINGS.
+    // Spec §7: `vat verify` requires a projectRoot.
+    const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
     const { config, error: configError } = loadConfigTolerant(projectRoot);
     const phases = applyPhaseSelection(
       selectVerifyPhases(config, configError, options.verbose),

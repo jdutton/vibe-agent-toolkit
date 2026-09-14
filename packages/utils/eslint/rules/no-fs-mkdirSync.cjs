@@ -20,4 +20,12 @@ module.exports = factory({
   message: 'Use mkdirSyncReal() from {{safeModule}} instead of fs.mkdirSync() for Windows path normalization',
   // No baked-in exemption: the file that implements mkdirSyncReal() is
   // repo-specific. Consumers declare it as { exemptFiles: [...] }.
+  docs: {
+    category: 'Filesystem and process',
+    bans: '`fs.mkdirSync()`',
+    useInstead: '`mkdirSyncReal()`',
+    subpath: '/fs',
+    recommended: true,
+    recommendedSeverity: 'error',
+  },
 });

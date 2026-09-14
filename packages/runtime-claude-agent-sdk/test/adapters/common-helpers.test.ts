@@ -125,7 +125,7 @@ describe('formatMessagesForAnthropic', () => {
       // Bug #3: Last conversational message should be assistant, not empty
       // Claude API requires last message to be user or assistant
       expect(result.conversationMessages.length).toBeGreaterThan(0);
-      // eslint-disable-next-line unicorn/prefer-at
+      // eslint-disable-next-line unicorn/prefer-at -- the index arithmetic IS the subject; .at(-1) would hide the off-by-one this guards
       const lastMessage = result.conversationMessages[result.conversationMessages.length - 1];
       expect(lastMessage?.role).toBe('assistant'); // Should be the actual last user/assistant message
 
@@ -196,7 +196,6 @@ describe('extractTextFromResponse', () => {
       ],
     };
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = extractTextFromResponse(response as any);
 
     expect(result).toBe('Hello, world!');
@@ -210,7 +209,6 @@ describe('extractTextFromResponse', () => {
       ],
     };
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = extractTextFromResponse(response as any);
 
     expect(result).toBe('First block');
@@ -223,7 +221,6 @@ describe('extractTextFromResponse', () => {
       ],
     };
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = extractTextFromResponse(response as any);
 
     expect(result).toBe('');
@@ -234,7 +231,6 @@ describe('extractTextFromResponse', () => {
       content: [],
     };
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = extractTextFromResponse(response as any);
 
     // Bug scenario: Claude returns empty content array
@@ -248,7 +244,6 @@ describe('extractTextFromResponse', () => {
       ],
     };
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = extractTextFromResponse(response as any);
 
     expect(result).toBe('');

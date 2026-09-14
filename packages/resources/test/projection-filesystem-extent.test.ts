@@ -1,15 +1,14 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import {
   mkdirSyncReal,
   normalizedTmpdir,
   safePath,
   toForwardSlash,
-  withReaddirSyncRefused,
 } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { withReaddirSyncRefused , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { RunContentCache } from '../src/projection/content-cache.js';
@@ -17,12 +16,18 @@ import { extentDigest, type ExtentContribution } from '../src/projection/contrib
 import { extentContextId } from '../src/projection/contributors/context-id.js';
 import {
   DECLINE_IGNORED,
+  EXTENT_DIRECTORY_UNLISTABLE,
   FilesystemExtentContributor,
+  unlistableRowStillHolds,
 } from '../src/projection/contributors/filesystem-extent.js';
 import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 import type { ContentDemand } from '../src/projection/realizations.js';
-import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
+import {
+  CONDITION_WITHOUT_REFERENCE,
+  type RealizationConditionRow,
+  type ResourceRealizationRow,
+} from '../src/schemas/projection-resources.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
 import { expectContributionRowsValid } from './test-helpers.js';
@@ -462,5 +467,56 @@ describe('FilesystemExtentContributor refuses a population it could not enumerat
 
   it('enumerates the whole tree when nothing refuses (positive control)', async () => {
     expect(pathsOf(await contribute())).toContain(NESTED_FILE);
+  });
+});
+
+/** A stored refusal row about `path`, as the driver would hand it back. */
+function unlistableRowFor(path: string): RealizationConditionRow {
+  return {
+    extentId: 'extent:test',
+    path,
+    code: EXTENT_DIRECTORY_UNLISTABLE,
+    severity: 'warning',
+    message: 'stored',
+    resourceId: null,
+    ...CONDITION_WITHOUT_REFERENCE,
+  };
+}
+
+describe('unlistableRowStillHolds', () => {
+  it.skipIf(CANNOT_DENY_READS)(
+    'holds while the directory still refuses a listing (POSIX, not root)',
+    () => {
+      // A real mode bit: the check reads through a named `readdirSync` import,
+      // which `withReaddirSyncRefused`'s patch on the default object does not reach.
+      const locked = safePath.join(root, NESTED_DIR);
+      chmodSync(locked, 0o000);
+      try {
+        expect(unlistableRowStillHolds(unlistableRowFor(NESTED_DIR), root)).toBe(true);
+      } finally {
+        chmodSync(locked, 0o755);
+      }
+    },
+  );
+
+  it('does not hold once the directory lists', () => {
+    expect(unlistableRowStillHolds(unlistableRowFor(NESTED_DIR), root)).toBe(false);
+  });
+
+  it('does not hold for a directory that is gone', () => {
+    rmSync(safePath.join(root, NESTED_DIR), { recursive: true, force: true });
+
+    expect(unlistableRowStillHolds(unlistableRowFor(NESTED_DIR), root)).toBe(false);
+  });
+
+  it('does not hold for a path that is now a FILE — ENOTDIR is absence, not a refusal', () => {
+    // The `no-blind-catch` split: `existsSync` is true for a file, and
+    // `readdirSync` on it throws — ENOTDIR. Read as "still refusing", the
+    // stored row would be served about a directory that no longer exists,
+    // which is exactly the stale population the check is there to prevent.
+    rmSync(safePath.join(root, NESTED_DIR), { recursive: true, force: true });
+    writeFileSync(safePath.join(root, NESTED_DIR), 'a file where the directory was');
+
+    expect(unlistableRowStillHolds(unlistableRowFor(NESTED_DIR), root)).toBe(false);
   });
 });

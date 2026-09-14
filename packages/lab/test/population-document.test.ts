@@ -33,6 +33,16 @@ function scanDocument(overrides: Record<string, unknown> = {}): string {
   });
 }
 
+/** What this runtime's JSON.parse says about `text` — the wording differs by engine. */
+function parseFailureReason(text: string): string {
+  try {
+    JSON.parse(text);
+  } catch (error) {
+    return (error as SyntaxError).message;
+  }
+  throw new Error('expected the text not to parse');
+}
+
 describe('readPopulationDocument', () => {
   it('reads the root, the lane and the files', () => {
     const result = readPopulationDocument(scanDocument());
@@ -171,12 +181,16 @@ describe('readPopulationDocument', () => {
     expect(result.document.files).toEqual([]);
   });
 
-  it('REFUSES output that is not JSON at all', () => {
-    const result = readPopulationDocument('---\nstatus: success\nfilesScanned: 2\n');
+  it('REFUSES output that is not JSON at all, carrying the parser\'s reason', () => {
+    const yaml = '---\nstatus: success\nfilesScanned: 2\n';
+    const result = readPopulationDocument(yaml);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.refusal).toContain('no JSON document');
+    // The parser's own reason travels with the refusal, so a reader can tell
+    // YAML from truncated JSON without re-running the command.
+    expect(result.refusal).toContain(parseFailureReason(yaml));
   });
 
   it('REFUSES a JSON document that is not a scan document', () => {

@@ -13,22 +13,29 @@
 
 import { readFileSync } from 'node:fs';
 
+import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
+
 import { parseFrontmatter } from './parsers/frontmatter-parser.js';
 
 /**
  * Read the name a SKILL.md declares for itself.
  *
- * Returns `undefined` when the file is unreadable, has no frontmatter, or
- * declares no usable `name` — callers decide whether that is fatal or whether
- * some fallback (typically the directory leaf) applies.
+ * Returns `undefined` when there is no file at the path, it has no frontmatter,
+ * or it declares no usable `name` — callers decide whether that is fatal or
+ * whether some fallback (typically the directory leaf) applies.
+ *
+ * A file that IS there but could not be read (a permission refusal, a path
+ * component that is a directory) throws: `undefined` means "declares no name",
+ * and a refusal has not established that — a caller falling back to the
+ * directory leaf would otherwise rename the skill on the operator's behalf.
  */
 export function readDeclaredSkillName(skillMdPath: string): string | undefined {
   let content: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied skill path
     content = readFileSync(skillMdPath, 'utf-8');
-  } catch {
-    return undefined;
+  } catch (error) {
+    if (isPathAbsentError(error)) return undefined;
+    throw error;
   }
   return declaredSkillNameIn(content);
 }

@@ -33,9 +33,14 @@ module.exports = {
   meta: {
     type: 'problem',
     docs: {
-      description: 'Disallow manual path normalization patterns',
-      category: 'Cross-platform compatibility',
+      description:
+        'Disallow manual path normalization patterns',
+      category: 'Path handling',
+      bans: "hand-rolled `.replace(/\\\\/g, '/')`",
+      useInstead: '`toForwardSlash()`',
+      subpath: '/path',
       recommended: true,
+      recommendedSeverity: 'error',
     },
     fixable: 'code',
     messages: {

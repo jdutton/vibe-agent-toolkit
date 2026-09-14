@@ -1,3 +1,4 @@
+import { VatError } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { BaselineContaminationHitSchema, BaselineScanDegradationSchema } from './baseline-integrity.js';
@@ -15,7 +16,7 @@ export const EvalFragmentExpectationSchema = z.object({
 export type EvalFragmentExpectation = z.infer<typeof EvalFragmentExpectationSchema>;
 
 /**
- * Strict shape of a single grader subagent's output (issue #145 Task 4). One
+ * Strict shape of a single grader subagent's output. One
  * GRADER spawn grades ONE eval's expectations from that eval's captured
  * transcript and writes exactly one fragment matching this schema; vat reads
  * every eval's fragment back and merges them into the run's aggregate grading
@@ -28,7 +29,7 @@ export type EvalFragmentExpectation = z.infer<typeof EvalFragmentExpectationSche
  * `arm` distinguishes a WITH/WITHOUT baseline run's fragment; absent means the
  * default 'with' (skill present) arm.
  *
- * `tool` (issue #145 Phase T) carries this eval's tool-expectation verdict —
+ * `tool` carries this eval's tool-expectation verdict —
  * a SEPARATE channel from `expectations[]` and from `friction` (see
  * tool-eval-schema.ts). It is {@link ToolVerdictBodySchema}, i.e. a
  * {@link import('./tool-eval-schema.js').ToolVerdict} WITHOUT `evalId`: the
@@ -80,10 +81,10 @@ export type EvalFragment = z.infer<typeof EvalFragmentSchema>;
  * should point at the offending eval, not at "Re-sync the vendored
  * skill-creator".
  */
-export class EvalFragmentError extends Error {
+export class EvalFragmentError extends VatError {
+  readonly reason = 'internal' as const;
   constructor(message: string) {
-    super(message);
-    this.name = 'EvalFragmentError';
+    super('EVAL_FRAGMENT', message);
   }
 }
 
@@ -116,7 +117,7 @@ const UNSANITIZED_FRAGMENT_KEYS: ReadonlySet<string> = new Set(['runNonce']);
  * Sanitize ONLY the (non-verdict-bearing) `friction` field before the strict
  * fragment parse. Friction is auxiliary advisory data, not a verdict channel —
  * so a grader that wobbles on the friction shape (e.g. emits bare strings, the
- * common failure mode — PR #147) must NOT be allowed to discard the
+ * common failure mode) must NOT be allowed to discard the
  * verdict-bearing grading for the whole run. We drop friction items that don't
  * match {@link FrictionItemSchema} (and a `friction` that isn't an array at
  * all), then hand the rest to the STRICT fragment parse — so the verdict

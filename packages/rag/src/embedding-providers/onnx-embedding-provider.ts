@@ -354,12 +354,15 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
     }
     const pending = this.initPromise;
     this.initPromise = null;
-    try {
-      const { session } = await pending;
-      await session.release();
-    } catch {
-      // Never successfully initialized — no session to release. The original
-      // initialization failure already surfaced to whoever awaited embed()/embedBatch().
+    // Settle the load either way, without a catch: a load that failed has no
+    // session to release, and its failure already reached the embed() call
+    // that started it (initialize() runs only from embedBatch()). What must
+    // NOT be absorbed is a release() that fails — the WASM backend has no
+    // finalizer, so that is a leak for the life of the process, and it
+    // propagates.
+    const [outcome] = await Promise.allSettled([pending]);
+    if (outcome.status === 'fulfilled') {
+      await outcome.value.session.release();
     }
   }
 

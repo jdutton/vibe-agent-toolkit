@@ -119,9 +119,7 @@ export {
 export {
   ContentKeySchema,
   JsonValueSchema,
-  ProjectionConditionSeveritySchema,
   type JsonValue,
-  type ProjectionConditionSeverity,
 } from './schemas/projection-shared.js';
 
 export {
@@ -592,7 +590,7 @@ export {
   type TestConfig,
 } from './schemas/project-config.js';
 
-// linkAuth content-fetch primitive (issue #113 slice 3). Ships standalone;
+// linkAuth content-fetch primitive. Ships standalone;
 // callers wire it into asset-reference / bundling consumers as they need.
 export {
   fetchAuthenticated,
@@ -622,7 +620,7 @@ export { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
 // compile — named, so a caller can tell a config error from an engine bug.
 export { LinkAuthConfigError } from './link-auth/compile-check.js';
 
-// linkAuth pure engine — public API only (issue #113).
+// linkAuth pure engine — public API only.
 // Internal helpers (rewrite, build-headers, etc.) stay module-private.
 export {
   type LinkAuthConfig,
@@ -1068,7 +1066,6 @@ export {
   type OkfBundleRunOptions,
   type OkfFinding,
   type OkfFindingCode,
-  type OkfSeverity,
   type ValidateOkfBundleOptions,
 } from './okf/index.js';
 

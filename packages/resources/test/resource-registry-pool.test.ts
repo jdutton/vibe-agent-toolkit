@@ -79,7 +79,6 @@ const explodeOn = (content: string): Error =>
  */
 const plant = async (name: string, content: string): Promise<string> => {
   const absolute = safePath.join(suite.tempDir, name);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
   await writeFile(absolute, content, 'utf-8');
   return absolute;
 };

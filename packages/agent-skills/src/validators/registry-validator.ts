@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- File paths are validated before use */
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 

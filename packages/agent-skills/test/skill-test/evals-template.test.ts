@@ -64,9 +64,7 @@ describe('writeEvalsTemplate', () => {
     const returned = writeEvalsTemplate(evalsPath, SKILL_NAME);
 
     expect(toForwardSlash(returned)).toBe(toForwardSlash(evalsPath));
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled temp path
     expect(existsSync(evalsPath)).toBe(true);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled temp path
     expect(readFileSync(evalsPath, 'utf8')).toBe(buildEvalsTemplate(SKILL_NAME));
   });
 
@@ -75,14 +73,12 @@ describe('writeEvalsTemplate', () => {
     const authored = '{ "skill_name": "real", "evals": [{ "id": 1 }] }\n';
     // First call creates the parent dir; then simulate the user's authored suite.
     writeEvalsTemplate(evalsPath, SKILL_NAME);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled temp path
     writeFileSync(evalsPath, authored, 'utf8');
 
     const returned = writeEvalsTemplate(evalsPath, SKILL_NAME);
 
     expect(toForwardSlash(returned)).toBe(toForwardSlash(evalsPath));
     // The authored content must survive — the writer must not clobber it.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled temp path
     expect(readFileSync(evalsPath, 'utf8')).toBe(authored);
   });
 });

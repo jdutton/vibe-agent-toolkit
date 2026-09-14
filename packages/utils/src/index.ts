@@ -23,8 +23,16 @@
  * and has to be an argued edit rather than an unnoticed one.
  */
 
+// The base of every error VAT throws on purpose; `code` is what a catch
+// block dispatches on, never `message`.
+export * from './errors/vat-error.js';
+
 // Cross-platform path utilities
 export * from './path-utils.js';
+// The filesystem-backed containment verdict every delete/copy/uninstall sink asks.
+export * from './path-containment.js';
+// The Dirent classifiers a walk uses instead of a bare isFile()/isDirectory().
+export * from './dirent-kind.js';
 
 // THE content-decoding seam: bytes to text, in one place. `decodeTextContent` is
 // pure and also reachable from the dependency-free `./text` entry; the two
@@ -78,10 +86,11 @@ export * from './asset-reference.js';
 // symptom is a type that cannot be imported, which surfaces the first time
 // someone tries — not a silent break in existing code.
 // The lookups themselves, plus the memo every fill shares.
+export { isFilesystemAccessError, isPathAbsentError } from './errors/errno.js';
 export {
   copyDirectory,
+  CopyLinkEscapesSourceError,
   FsLookupCache,
-  isFilesystemAccessError,
   transientRefusalClause,
 } from './fs-utils.js';
 // The two fill+judge pairs, in the order the note above lists them, plus the
@@ -111,8 +120,22 @@ export type {
 // CLI-boundary use only — see docs/concepts/roots-and-config.md.
 export * from './project-utils.js';
 
-// Test helpers for isolated test output directories
-export * from './test-helpers.js';
+// The runtime half of `test-helpers.ts`: symlink creation with its host
+// capability probe, and the git-environment detachment every child process
+// needs. Named rather than `export *` because the SAME module also holds the
+// fs-refusal fakes (`refuseSyncFs` and siblings), which are test scaffolding
+// and reach adopters on the `./testing` subpath only. A published runtime
+// barrel that carried them — eight such names, once — was the audit's finding,
+// and an `export *` here is how they got in.
+export {
+  createSymlink,
+  createSymlinkAsync,
+  detachGitEnv,
+  errnoError,
+  INHERITED_GIT_ENV,
+  symlinkCapability,
+  type SymlinkCapability,
+} from './test-helpers.js';
 
 // Zod type introspection (version-agnostic)
 export * from './zod-introspection.js';
@@ -177,10 +200,8 @@ export {
   type CrawlTimingDump,
   type CrawlTimingEntry,
   type CrawlTimingProcess,
-  __readCrawlTimingSnapshot,
-  __setCrawlTimingForTest,
-  __writeCrawlTimingDumpForTest,
 } from './crawl-timing.js';
+// The three `__*ForTest` seams of the same module are on `./testing`, not here.
 
 // The on-disk plumbing both timing seams share. Exported because
 // `resources`' `parse-timing.ts` is the other consumer and now sits a package

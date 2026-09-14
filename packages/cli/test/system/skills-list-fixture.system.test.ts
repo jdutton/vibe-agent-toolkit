@@ -6,6 +6,7 @@
 
 import { spawnSync } from 'node:child_process';
 
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
@@ -20,8 +21,7 @@ describe('skills list command - fixture tests (system test)', () => {
   const fixtureDir = getFixturePath(import.meta.url, 'skills-minimal');
 
   it('should list skills in fixture directory', () => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
-    const result = spawnSync('node', [binPath, 'skills', 'list', fixtureDir], {
+    const result = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'list', fixtureDir], {
       encoding: 'utf-8',
     });
 

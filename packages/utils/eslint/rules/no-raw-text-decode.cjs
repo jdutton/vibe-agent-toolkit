@@ -209,8 +209,17 @@ module.exports = {
         'Disallow decoding bytes to text outside the one content-decoding seam; '
         + 'raw `toString(encoding)` / `TextDecoder` / `readFile(path, encoding)` '
         + 'ignore byte-order marks and cannot express UTF-16BE at all.',
-      category: 'Correctness',
+      category: 'Content decoding',
+      bans: "`buf.toString('utf-8')`, `new TextDecoder(…)`, `readFile(p, 'utf-8')`",
+      useInstead: 'one project-owned decoding seam',
+      // Not in `recommended`: it names a SEAM that does not exist until a consumer
+      // builds one. `decodeTextContent()` is VAT's module, in VAT's repo; an adopter
+      // who installed this package for `safePath.join()` has no content-decoding
+      // seam to be pointed at, so every message would advise importing from `your
+      // content-decoding module`. Enabled — with `safeModule` naming the real seam
+      // and `exemptFiles` naming the file that implements it — by whoever has one.
       recommended: false,
+      recommendedSeverity: 'error',
     },
     schema: [withSafeModuleOption(EXEMPT_FILES_SCHEMA)],
     messages: {

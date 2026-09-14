@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- All file paths are in temp directories controlled by tests */
 /**
  * `vat verify`'s `packaged-content` phase over a PARTIALLY built `dist/`.
  *

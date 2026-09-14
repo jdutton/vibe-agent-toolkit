@@ -8,7 +8,6 @@
  *      JudgeResult against an optionally different model + system prompt.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- harness-controlled tmpdir paths */
 
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 

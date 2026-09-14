@@ -1,8 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-/* eslint-disable sonarjs/file-permissions -- `chmod 000` on a throwaway temp path IS the fixture:
-   the suites on this fixture prove a lane reports a path it could not read, and there is no way
-   to produce one without setting the mode. Everything is under `mkdtemp` and restored before
-   removal. */
 /**
  * A plugin directory whose skills the filesystem refuses, or reaches only
  * through a symlink — the fixture BOTH compat lanes are held to.
@@ -20,10 +15,6 @@ import * as fs from 'node:fs/promises';
 
 import { createSymlinkAsync, normalizedTmpdir, safePath, type SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll } from 'vitest';
-
-/** `chmod 000` denies nothing to uid 0 and nothing on Windows. */
-export const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 export const BASH_SKILL = (name: string): string =>
   `---\nname: ${name}\ndescription: declares Bash\nallowed-tools: Bash\n---\n# ${name}\n`;
@@ -85,7 +76,7 @@ export function setupRefusedSkillFixture(prefix: string): () => RefusedSkillFixt
   });
 
   afterAll(async () => {
-    for (const p of locked) await fs.chmod(p, 0o755).catch(() => undefined);
+    for (const p of locked) await fs.chmod(p, 0o700).catch(() => undefined);
     if (fixture !== undefined) await fs.rm(fixture.root, { recursive: true, force: true });
   });
 

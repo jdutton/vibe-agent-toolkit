@@ -14,9 +14,16 @@ export * from './output-envelopes.js';
 // Canonical validation code registry
 export * from './validation-codes.js';
 
+// The one severity vocabulary, the one finding, the one report envelope
+export * from './severity.js';
+export * from './report.js';
+
 // Unified validation issue + framework
 export * from './validation-issue.js';
 export * from './validation-framework.js';
+
+// The one exit-code contract every VAT process ends on
+export * from './exit-code.js';
 
 // Core schemas
 export {
@@ -91,10 +98,8 @@ export {
 
 export {
   AllowEntrySchema,
-  SeverityLevelSchema,
   ValidationConfigSchema,
   type AllowEntry,
-  type SeverityLevel,
   type ValidationConfig,
 } from './validation-config.js';
 // `ValidationConfig` is the single canonical config type: the hand-written type

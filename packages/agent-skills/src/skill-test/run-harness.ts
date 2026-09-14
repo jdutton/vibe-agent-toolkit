@@ -3,7 +3,7 @@
  *
  * Implements the full harness sequence as a pure async function (no process.exit):
  *   lock → assert safe workdir + harness root → stage → resolve staged-subject
- *   eval path → bootstrap-check (scaffold template + exit 3 if absent)
+ *   eval path → bootstrap-check (scaffold template + exit 2 with `Reason: bootstrap` if absent)
  *   → preflight (return early exitCode 2 on failure) → ack enforcement
  *   → dry-run short-circuit → build per-eval work items → run the vat-owned
  *   executor→grader pipeline (bounded-parallel) → merge grader fragments →
@@ -12,15 +12,19 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, type Dirent } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
+import { ExitCode, type ExitCodeValue } from '@vibe-agent-toolkit/schema';
 import {
+  direntKind,
+  isPathAbsentError,
   mkdirSyncReal,
   normalizedTmpdir,
+  prefixMessageOnce,
   resolveAssetReference,
   safePath,
   toForwardSlash,
@@ -82,9 +86,8 @@ import {
   BootstrapNeededError,
   DuplicateStagedSkillError,
   InternalHarnessError,
-  SkillTestExitCode,
-  type SkillTestExitCodeValue,
-} from './exit-codes.js';
+  type SkillTestFailureReason,
+} from './failure-reason.js';
 import { mergeFragmentsToFriction, mergeFragmentsToGrading, mergeFragmentsToToolEval } from './fragment-merge.js';
 import { FrictionReportSchema, type FrictionItem } from './friction-schema.js';
 import { DEFAULT_CONCURRENCY, DEFAULT_GRADER_MODEL } from './grader-model.js';
@@ -102,7 +105,7 @@ import { acquireHarnessLock, installSignalCleanup } from './lock.js';
 import { RateLimitSignal, runPipeline } from './pipeline.js';
 import { detectPluginLayout } from './plugin-layout.js';
 import { runPreflight, type PreflightInput } from './preflight.js';
-import { descriptorToSource, stageHarness, type StageItem } from './staging.js';
+import { descriptorToSource, stageHarness, type SkippedOptionalItem, type StageItem } from './staging.js';
 import {
   buildSkippedSummary,
   formatSkippedTiersSummary,
@@ -129,7 +132,7 @@ const VENDORED_SKILL_CREATOR_DIR = safePath.resolve(
 
 /**
  * Absolute path to the vendored skill-creator grader rubric each per-eval grader
- * spawn is told to judge against (issue #145). Lives inside
+ * spawn is told to judge against. Lives inside
  * {@link VENDORED_SKILL_CREATOR_DIR}, whose hash manifest is verified during
  * preflight — so the rubric the grader uses is the pinned, integrity-checked copy.
  */
@@ -296,7 +299,7 @@ export interface RunHarnessOptions {
    * Declared executables the subject skill ships (name + kind + howInvoked),
    * populated by run.ts from the resolved subject's packaging config WHEN cleanly
    * reachable (a `buildable` ref carries `packagingConfig`; a plain path source
-   * does not — issue #145 Phase T). Passed to the grader on the WITH arm ONLY as
+   * does not). Passed to the grader on the WITH arm ONLY as
    * a recognition aid alongside each eval's `toolExpectations`. Absent → the
    * grader still matches tools by the commands it sees in the transcript.
    *
@@ -310,7 +313,7 @@ export interface RunHarnessOptions {
 
   /**
    * Opt-OUT of eval gating (for interactive use). By DEFAULT (false/absent) a
-   * failing verdict returns exit EvalFailure (4) — fail-closed, so CI catches a
+   * failing verdict returns exit FINDINGS — fail-closed, so CI catches a
    * regression without an extra flag. When true, a failing verdict is downgraded
    * to Ok (0) and the pass/fail count lives only in the summary/grading.json.
    * Harness-broke codes (1/2/3) are unaffected either way.
@@ -320,7 +323,13 @@ export interface RunHarnessOptions {
 
 export interface RunHarnessResult {
   harnessPath: string;
-  exitCode: number;
+  exitCode: ExitCodeValue;
+  /**
+   * Present exactly when `exitCode` is `ERROR`: why the harness could not run.
+   * The CLI prints it as `Reason: …` on stderr. Absent on a completed run,
+   * whatever its verdict.
+   */
+  reason?: SkillTestFailureReason;
   summary: string;
   /**
    * Where the executor's per-eval working directories were materialized. Lives
@@ -376,31 +385,36 @@ export const SKILL_TEST_BUILTIN_CAPS = {
 
 /**
  * Resolve the effective PER-EVAL wall-clock timeout (ms). Each executor and
- * grader spawn is an independent, bounded-parallel unit (issue #145), so the
+ * grader spawn is an independent, bounded-parallel unit, so the
  * budget is a flat per-spawn ceiling — NOT scaled by the suite size the way the
  * old single serial run's budget was. An explicit `--timeout` (seconds)
  * wins; otherwise the flat {@link DEFAULT_TIMEOUT_MS} default applies.
  */
-export function resolveTimeoutMs(opts: RunHarnessOptions): number {
+function resolveTimeoutMs(opts: RunHarnessOptions): number {
   return opts.timeout === undefined ? DEFAULT_TIMEOUT_MS : opts.timeout * 1000;
 }
 
 /**
  * Map an eval verdict to a process exit code. Default behavior (fail-closed): a
- * failing verdict escalates to EvalFailure (4) — distinct from the harness-broke
- * codes (1/2/3) so a CI consumer can `case $? in 0);; 4) tolerate;; *) hard fail;; esac`.
+ * failing verdict is `FINDINGS` — the harness ran to completion and what it
+ * examined did not pass, exactly as `vat skills validate` reports an
+ * error-severity finding — while a harness that could not run is `ERROR`, so a
+ * CI consumer can `case $? in 0);; 1) tolerate;; *) hard fail;; esac`.
  * When `tolerateEvalFailure` is set (interactive opt-out), a failing verdict is
- * downgraded to Ok (0) and the count lives only in the summary/grading.json.
+ * downgraded to `OK` and the count lives only in the summary/grading.json.
  */
-export function verdictExitCode(allPassed: boolean, tolerateEvalFailure: boolean): SkillTestExitCodeValue {
-  return !allPassed && !tolerateEvalFailure ? SkillTestExitCode.EvalFailure : SkillTestExitCode.Ok;
+export function verdictExitCode(
+  allPassed: boolean,
+  tolerateEvalFailure: boolean,
+): typeof ExitCode.OK | typeof ExitCode.FINDINGS {
+  return !allPassed && !tolerateEvalFailure ? ExitCode.FINDINGS : ExitCode.OK;
 }
 
-export function resolveStallMs(opts: RunHarnessOptions): number | undefined {
+function resolveStallMs(opts: RunHarnessOptions): number | undefined {
   return opts.stall === undefined ? undefined : opts.stall * 1000;
 }
 
-export function resolveKnobs(opts: RunHarnessOptions): {
+function resolveKnobs(opts: RunHarnessOptions): {
   model?: string;
   maxTurns: number;
   maxBudgetUsd: number;
@@ -424,7 +438,7 @@ export function resolveKnobs(opts: RunHarnessOptions): {
  * sources (npm/url/vendored/workspace) have no local source tree to walk, so they
  * are always staged flat (returns undefined). undefined → flat staging.
  */
-export function detectItemPluginLayout(
+function detectItemPluginLayout(
   source: SkillSource,
   repoRoot: string,
 ): StageItem['pluginLayout'] | undefined {
@@ -433,7 +447,7 @@ export function detectItemPluginLayout(
   return detectPluginLayout(sourceDir, existsSync) ?? undefined;
 }
 
-export function makeStageItem(
+function makeStageItem(
   name: string,
   source: SkillSource,
   repoRoot: string,
@@ -454,14 +468,14 @@ export function makeStageItem(
  * Build the full set of items `stageHarness` will stage: the subject, every
  * REQUIRED `--with` companion, and every OPTIONAL `--with-optional` companion.
  * Both `with` and `optional` STAGE the named companion and make it invocable —
- * they differ only in required-vs-optional resolution (issue #153; a `--with`
- * name that named no positional skill used to be silently dropped, never staged,
- * no manifest trace). Fail-closed on a DUPLICATE staged name (subject / `with` /
+ * they differ only in required-vs-optional resolution (a `--with` name that
+ * names no positional skill must never be silently dropped — unstaged, with no
+ * manifest trace). Fail-closed on a DUPLICATE staged name (subject / `with` /
  * `optional` all share one namespace): the first repeat throws
  * {@link DuplicateStagedSkillError} rather than silently letting a later item
  * clobber an earlier one under the same staged slot.
  */
-export function buildStageItems(opts: RunHarnessOptions, repoRoot: string): StageItem[] {
+function buildStageItems(opts: RunHarnessOptions, repoRoot: string): StageItem[] {
   const items: StageItem[] = [];
   const seen = new Set<string>();
 
@@ -490,7 +504,7 @@ export function buildStageItems(opts: RunHarnessOptions, repoRoot: string): Stag
   return items;
 }
 
-export function buildResolveCtx(harnessRoot: string, repoRoot: string): ResolveSkillSourceContext {
+function buildResolveCtx(harnessRoot: string, repoRoot: string): ResolveSkillSourceContext {
   return {
     repoRoot,
     stagingRoot: safePath.joinUnderRoot(harnessRoot, 'staged'),
@@ -506,7 +520,7 @@ export function buildResolveCtx(harnessRoot: string, repoRoot: string): ResolveS
  * of each other (`--max-turns` / `--max-turns-per-eval` would collide). Neither
  * side of the token may be a letter or a dash.
  */
-export function helpTextDeclaresFlag(helpText: string, flag: string): boolean {
+function helpTextDeclaresFlag(helpText: string, flag: string): boolean {
   // A scan rather than a built regex: the flag is data (it comes from a list a
   // future edit will extend), and building a pattern from data is both a lint
   // error here and the kind of thing that silently changes meaning when someone
@@ -524,7 +538,7 @@ export function helpTextDeclaresFlag(helpText: string, flag: string): boolean {
  * as a NEGATIVE CONTROL: if the probe reports this as supported, the probe is
  * broken and its answer about every other flag is worthless.
  */
-export const FLAG_PROBE_SENTINEL = '--vat-probe-flag-that-cannot-exist';
+const FLAG_PROBE_SENTINEL = '--vat-probe-flag-that-cannot-exist';
 
 /**
  * Build a token-free flag-support probe from `claude --help`.
@@ -546,15 +560,26 @@ export const FLAG_PROBE_SENTINEL = '--vat-probe-flag-that-cannot-exist';
  * outright — the probe reports EVERY flag unsupported rather than every flag
  * supported. A probe that cannot tell must fail closed and be seen; the defect it
  * replaces failed open and was invisible.
+ *
+ * `--help` runs on the FIRST flag query, not when the probe is built. Building
+ * it is part of assembling preflight's input, and a preflight that never asks
+ * (a stubbed one, or one that fails an earlier check) must not have already
+ * paid for a subprocess: with the spawn at build time every harness run cost
+ * one real `claude --help` — 75 ms where the CLI is installed, an instant
+ * ENOENT where it is not — which read as a 10× platform split in a test that
+ * had injected a fake spawn and stubbed preflight precisely so no process
+ * would start.
  */
-export function buildFlagParseProbe(
+function buildFlagParseProbe(
   runHelp: () => string | null = defaultClaudeHelp,
 ): (flag: string) => boolean {
-  const helpText = runHelp();
-  // No help output, or a sentinel "match" ⇒ the probe is not trustworthy.
-  const usable = helpText !== null && !helpTextDeclaresFlag(helpText, FLAG_PROBE_SENTINEL);
-  return (flag: string): boolean =>
-    usable && helpTextDeclaresFlag(helpText ?? '', flag);
+  let helpText: string | null | undefined;
+  return (flag: string): boolean => {
+    if (helpText === undefined) helpText = runHelp();
+    // No help output, or a sentinel "match" ⇒ the probe is not trustworthy.
+    const usable = helpText !== null && !helpTextDeclaresFlag(helpText, FLAG_PROBE_SENTINEL);
+    return usable && helpTextDeclaresFlag(helpText ?? '', flag);
+  };
 }
 
 /** Run `claude --help` once, returning its combined output (null if unreachable). */
@@ -590,7 +615,7 @@ function defaultClaudeHelp(): string | null {
  * reachable: a reachable estimate that says "1 evals × 2 config" is worse than a
  * silent one, because it is quotable.
  */
-export function buildPreflightInput(
+function buildPreflightInput(
   evalsPath: string,
   pluginDirs: string[],
   opts: RunHarnessOptions,
@@ -629,7 +654,7 @@ export function buildPreflightInput(
   return preflightOpts;
 }
 
-export function renderPreflightSummary(checks: { name: string; passed: boolean; message: string }[]): string {
+function renderPreflightSummary(checks: { name: string; passed: boolean; message: string }[]): string {
   const failed = checks.filter(c => !c.passed);
   return failed.length > 0
     ? failed.map(c => `  [FAIL] ${c.name}: ${c.message}`).join('\n')
@@ -680,24 +705,35 @@ export function formatFrictionReport(items: readonly FrictionItem[]): string {
 /**
  * Read the run's friction.json (if present + valid) and echo a concise report to
  * STDERR so users don't miss packaging-fidelity friction VAT merged from the grader
- * fragments (it is otherwise only written to disk). Best-effort: a missing, unparseable, or
- * empty report emits nothing. Never touches stdout (which stays machine-readable).
- * Accepts `undefined` (a no-op) so the harness `finally` can call it unconditionally
- * even when a throw preempted assignment of the friction path.
+ * fragments (it is otherwise only written to disk). Best-effort: a missing or empty
+ * report emits nothing. A report that is there but cannot be read or does not parse
+ * emits a one-line warning instead — this runs from the harness `finally`, so it
+ * must not throw, but vat is the sole writer of friction.json and a file it wrote
+ * that it cannot read back is worth a line. Never touches stdout (which stays
+ * machine-readable). Accepts `undefined` (a no-op) so the harness `finally` can
+ * call it unconditionally even when a throw preempted assignment of the path.
  */
 function emitFrictionReport(frictionPath: string | undefined): void {
   if (frictionPath === undefined) return;
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
   if (!existsSync(frictionPath)) return;
   let raw: unknown;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
     raw = JSON.parse(readFileSync(frictionPath, 'utf-8'));
-  } catch {
+  } catch (err) {
+    process.stderr.write(
+      `warning: could not read the friction report at ${frictionPath}: ` +
+        `${err instanceof Error ? err.message : String(err)}\n`,
+    );
     return;
   }
   const parsed = FrictionReportSchema.safeParse(raw);
-  if (!parsed.success || parsed.data.items.length === 0) return;
+  if (!parsed.success) {
+    process.stderr.write(
+      `warning: the friction report at ${frictionPath} does not match its schema: ${parsed.error.message}\n`,
+    );
+    return;
+  }
+  if (parsed.data.items.length === 0) return;
   process.stderr.write(`\nPackaging friction (${parsed.data.items.length}):\n`);
   process.stderr.write(formatFrictionReport(parsed.data.items) + '\n');
 }
@@ -720,10 +756,11 @@ function emitBaselineReport(report: string | undefined): void {
  * run's staged skill set stays legible. No-op when none were skipped. (Required
  * `--with` companions instead propagate a fatal resolve error from stageHarness.)
  */
-function emitSkippedOptionalWarning(skippedOptional: string[]): void {
+function emitSkippedOptionalWarning(skippedOptional: readonly SkippedOptionalItem[]): void {
   if (skippedOptional.length === 0) return;
+  const named = skippedOptional.map((item) => `${item.name} (${item.reason})`).join(', ');
   process.stderr.write(
-    `warning: optional companion skill(s) not staged (source unresolvable): ${skippedOptional.join(', ')}\n`,
+    `warning: optional companion skill(s) not staged: ${named}\n`,
   );
 }
 
@@ -734,7 +771,7 @@ function emitSkippedOptionalWarning(skippedOptional: string[]): void {
  * that real source dir; otherwise we anchor under the repo root by skill name.
  */
 /** The subject skill's display name (trailing segment of the subject arg). */
-export function subjectSkillName(opts: RunHarnessOptions): string {
+function subjectSkillName(opts: RunHarnessOptions): string {
   return basename(toForwardSlash(opts.subject)) || opts.subject;
 }
 
@@ -760,7 +797,7 @@ export function subjectSkillName(opts: RunHarnessOptions): string {
  * into `<skillDir>/<path>`, which does not exist — so the run did not fail, it
  * bootstrapped a starter template at the bogus location and graded that.
  */
-export function resolveScaffoldEvalsPath(
+function resolveScaffoldEvalsPath(
   opts: RunHarnessOptions,
   repoRoot: string,
   evalsRef: string | undefined,
@@ -786,7 +823,7 @@ export function resolveScaffoldEvalsPath(
 }
 
 /**
- * Bootstrap (exit 3) — called when the eval suite is absent everywhere. A real run
+ * Bootstrap (exit 2, `Reason: bootstrap`) — called when the eval suite is absent everywhere. A real run
  * writes a persistent template at the source scaffold location and reports it; a dry
  * run must never touch the filesystem, so it reports where a real run *would*
  * scaffold and writes nothing. Both surface the same exit-3 BootstrapNeededError.
@@ -808,7 +845,7 @@ function bootstrapEvalSuite(opts: RunHarnessOptions, repoRoot: string, evalsRef:
  * is performing. Created 0700 and removed in the run's cleanup, exactly like
  * {@link resolveGraderOutDir}. Pure (derives a path only).
  */
-export function resolveEvalSuiteHoldDir(dirToken: string): string {
+function resolveEvalSuiteHoldDir(dirToken: string): string {
   return safePath.join(normalizedTmpdir(), `vat-skill-evals-${dirToken}`);
 }
 
@@ -822,12 +859,12 @@ export function resolveEvalSuiteHoldDir(dirToken: string): string {
  * 2. **The vat-only hold dir**, when staging harvested a suite that exists nowhere
  *    else (a fetched artifact). Its layout mirrors an authored evals dir, so
  *    `fixtures/` resolve relative to it unchanged.
- * 3. Neither → `undefined`, and the caller bootstraps a template (exit 3).
+ * 3. Neither → `undefined`, and the caller bootstraps a template (exit 2, `Reason: bootstrap`).
  *
  * Returns the suite's absolute path; its `dirname` is the base for each eval's
  * declared input `files`.
  */
-export function resolveEvalSuitePath(input: {
+function resolveEvalSuitePath(input: {
   opts: RunHarnessOptions;
   repoRoot: string;
   /** Explicit `test.evals` / `--evals` value, or `undefined` for the convention. */
@@ -838,7 +875,6 @@ export function resolveEvalSuitePath(input: {
   subjectEvalSuiteHeld: boolean;
 }): string | undefined {
   const authored = resolveScaffoldEvalsPath(input.opts, input.repoRoot, input.evalsRef);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- authored source path resolved from opts
   if (existsSync(authored)) return authored;
   if (!input.subjectEvalSuiteHeld) return undefined;
   return safePath.join(input.holdDir, basename(input.evalsSubpath));
@@ -858,7 +894,7 @@ export function resolveEvalSuitePath(input: {
  * Named by an unpredictable token, like the other vat-only dirs, and removed by
  * the same cleanup. Pure (derives a path only).
  */
-export function resolveWorkspacesRoot(dirToken: string): string {
+function resolveWorkspacesRoot(dirToken: string): string {
   return safePath.join(normalizedTmpdir(), `vat-skill-test-ws-${dirToken}`);
 }
 
@@ -879,12 +915,12 @@ export function resolveWorkspacesRoot(dirToken: string): string {
  * 8 bytes is ample for "not guessable within a run that lasts minutes"; these are
  * blinding/anti-enumeration tokens, not secrets protecting data at rest.
  */
-export function mintArmWorkspaceDirs(baseline: boolean): ArmWorkspaceDirs {
+function mintArmWorkspaceDirs(baseline: boolean): ArmWorkspaceDirs {
   const token = (): string => randomBytes(8).toString('hex');
   return baseline ? { with: token(), without: token() } : { with: token() };
 }
 
-export function stageWorkspacesForRun(
+function stageWorkspacesForRun(
   evalsPath: string,
   workspacesRoot: string,
   armDirs: ArmWorkspaceDirs,
@@ -901,7 +937,6 @@ export function stageWorkspacesForRun(
   // directory and nothing ever re-checks. Cheap: the leaf sits directly under the
   // trusted tmp boundary, so the ancestry walk degrades to one lstat + stat.
   assertSafeHarnessRoot(workspacesRoot, process.getuid?.() ?? -1);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- evalsPath is our staged-subject path
   const suite = parseEvalSuite(readFileSync(evalsPath, 'utf-8'));
   return {
     workspacesRoot: stageEvalWorkspaces({
@@ -940,7 +975,8 @@ function attemptStageWorkspaces(
     if (e instanceof EvalInputError) {
       return {
         harnessPath: harnessRoot,
-        exitCode: SkillTestExitCode.Preflight,
+        exitCode: ExitCode.ERROR,
+        reason: 'preflight',
         summary: `Eval input error:\n  ${e.message}`,
       };
     }
@@ -951,8 +987,8 @@ function attemptStageWorkspaces(
 /**
  * Advisory (never-fatal) lint pass over the parsed suite: nudges authors away
  * from presence-only expectations ("mentions/includes …") that a hallucinated
- * or wrong-for-the-right-reason answer could still satisfy (issue #145
- * follow-up). Purely additive stderr noise, emitted before any spawn — never
+ * or wrong-for-the-right-reason answer could still satisfy.
+ * Purely additive stderr noise, emitted before any spawn — never
  * affects exitCode. Extracted so the Step 5.5 call site stays a single line
  * (keeps the orchestrator's cognitive complexity budget).
  */
@@ -1239,7 +1275,7 @@ export interface CleanupHarnessOptions {
  * evict staged untrusted skill bytes and prompts from OS tmp; `results/` is the
  * opposite — it is the run's product, written solely by vat.
  */
-export const RETAINED_RESULTS_DIRNAME = 'results';
+const RETAINED_RESULTS_DIRNAME = 'results';
 
 /**
  * Remove the harness directory's staged contents after a run so untrusted skill
@@ -1268,17 +1304,17 @@ export const RETAINED_RESULTS_DIRNAME = 'results';
  * the run and cleanup is left in place rather than followed — `rmSync(recursive)`
  * could otherwise delete the symlink's target outside tmp.
  */
-export function cleanupHarness(harnessRoot: string, opts: CleanupHarnessOptions): void {
+function cleanupHarness(harnessRoot: string, opts: CleanupHarnessOptions): void {
   if (opts.keep || !opts.created) return;
   // Best-effort: cleanup runs from a `finally`, so a TOCTOU race (the dir is
   // reaped between checks) or a permission error must never throw out and mask
-  // the run's real outcome. Worst case is a leftover 0700 tmp dir, not a failure.
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
+  // the run's real outcome. Worst case is a leftover 0700 tmp dir, not a failure —
+  // but a leftover the operator was never told about is staged untrusted bytes
+  // sitting in tmp with nothing to connect them to this run, so the failure is
+  // REPORTED on stderr ({@link swallowCleanupFailure}), not swallowed silently.
+  swallowCleanupFailure(() => {
     if (!existsSync(harnessRoot)) return;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
     if (lstatSync(harnessRoot).isSymbolicLink()) return;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
     const entries = readdirSync(harnessRoot);
     // Nothing to retain — a run that ended before Step 7 (preflight refusal, lock
     // failure, a throw during staging) has no results/, so leaving an empty 0700
@@ -1291,9 +1327,7 @@ export function cleanupHarness(harnessRoot: string, opts: CleanupHarnessOptions)
       if (entry === RETAINED_RESULTS_DIRNAME) continue;
       rmSync(safePath.joinUnderRoot(harnessRoot, entry), { recursive: true, force: true });
     }
-  } catch {
-    // Swallow: a failed cleanup is not a run failure.
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1314,7 +1348,7 @@ export interface EvalWorkItem {
  * (see {@link partitionFragmentsByArm}) and never drives tier gating. Pure +
  * unit-testable.
  */
-export function buildEvalWorkItems(evals: readonly EvalEntry[], baseline: boolean): EvalWorkItem[] {
+function buildEvalWorkItems(evals: readonly EvalEntry[], baseline: boolean): EvalWorkItem[] {
   const items: EvalWorkItem[] = [];
   for (const entry of evals) {
     items.push({ entry, arm: 'with' });
@@ -1329,7 +1363,7 @@ export function buildEvalWorkItems(evals: readonly EvalEntry[], baseline: boolea
  * fragment with no `arm` (or `arm: 'with'`) is a WITH-arm fragment. Pure +
  * unit-testable.
  */
-export function partitionFragmentsByArm(fragments: EvalFragment[]): {
+function partitionFragmentsByArm(fragments: EvalFragment[]): {
   withArm: EvalFragment[];
   withoutArm: EvalFragment[];
 } {
@@ -1362,7 +1396,7 @@ export function partitionFragmentsByArm(fragments: EvalFragment[]): {
  * container; that is tracked as a follow-up (see CHANGELOG "Security" notes) and
  * is the only thing that closes the residual race outright.
  */
-export function resolveGraderOutDir(dirToken: string): string {
+function resolveGraderOutDir(dirToken: string): string {
   return safePath.join(normalizedTmpdir(), `vat-skill-grade-${dirToken}`);
 }
 
@@ -1387,7 +1421,7 @@ export function resolveGraderOutDir(dirToken: string): string {
  * told the control arm it was the control, and `../with/e1` told it where to look.
  * See {@link mintArmWorkspaceDirs}. Pure + unit-testable.
  */
-export function resolvePerEvalWorkspaceDir(
+function resolvePerEvalWorkspaceDir(
   entry: EvalEntry,
   workspacesRoot: string,
   arm: EvalArm,
@@ -1440,7 +1474,7 @@ function armWorkspaceRoot(workspacesRoot: string, armDirs: ArmWorkspaceDirs, arm
  * could not be removed will break the NEXT run with a "busy" error, and an operator
  * who saw nothing here has no way to connect the two.
  */
-export function swallowCleanupFailure(step: () => void): void {
+function swallowCleanupFailure(step: () => void): void {
   try {
     step();
   } catch (err) {
@@ -1450,17 +1484,17 @@ export function swallowCleanupFailure(step: () => void): void {
   }
 }
 
-export function removeVatOnlyDir(dir: string | undefined): void {
+/**
+ * Remove one vat-only temp dir. Same discipline as {@link cleanupHarness}: a failed
+ * removal is not a run failure, and it is reported rather than swallowed.
+ */
+function removeVatOnlyDir(dir: string | undefined): void {
   if (dir === undefined) return;
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived vat-only tmp dir
+  swallowCleanupFailure(() => {
     if (!existsSync(dir)) return;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived vat-only tmp dir
     if (lstatSync(dir).isSymbolicLink()) return;
     rmSync(dir, { recursive: true, force: true });
-  } catch {
-    // Swallow: a failed cleanup is not a run failure.
-  }
+  });
 }
 
 /** Everything one executor→grader pipeline worker needs, built once per run. */
@@ -1520,7 +1554,7 @@ interface EvalRunContext {
 
 /**
  * Run ONE work item: the blind executor spawn, then the grader spawn over its
- * captured transcript (issue #145). Returns the grader fragment tagged with the
+ * captured transcript. Returns the grader fragment tagged with the
  * item's arm. The WITHOUT arm runs the executor with `pluginDirs: []` (skill
  * absent). Grader fragments are written under a PER-ARM subdir of the vat-only
  * grader dir so a WITH and WITHOUT run of the same eval id cannot collide.
@@ -1528,7 +1562,7 @@ interface EvalRunContext {
  * Throws, and the caller ({@link runEvalWorker}) decides what a throw costs — see
  * its docblock for why that depends on the arm. An executor CLEAN failure is NOT
  * thrown on either arm: its transcript flows into the grader, whose failing
- * fragment surfaces as an eval failure (exit 4 via the verdict), never exit 1.
+ * fragment surfaces as an eval failure (exit FINDINGS via the verdict), never ERROR.
  */
 /**
  * The executor env for ONE eval.
@@ -1693,7 +1727,7 @@ async function gradeOneArm(item: EvalWorkItem, ctx: EvalRunContext): Promise<Eva
  * TREATMENT arm: rethrow. `grading.json` is the treatment arm, the verdict is
  * computed from it, and a run that cannot produce one has produced nothing — there
  * is no partial result worth writing, so the throw propagates through `runPipeline`
- * to `mapErrorToExitCode` exactly as before (exit 1).
+ * to `skillTestFailureReason` exactly as before (`ERROR`, reason `internal`).
  *
  * CONTROL arm: record and continue. Every failure mode of this arm — executor spawn
  * error, stall, wall-timeout, grader non-zero exit, grader wrote no fragment,
@@ -1744,7 +1778,7 @@ async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<E
  * Wired as the pipeline's `onRetriesExhausted`, and `--baseline` — which doubles the
  * spawn count — is the run most likely to need it.
  */
-export function rateLimitExhaustedOutcome(item: EvalWorkItem, error: RateLimitSignal): EvalWorkOutcome {
+function rateLimitExhaustedOutcome(item: EvalWorkItem, error: RateLimitSignal): EvalWorkOutcome {
   if (item.arm === 'with') throw nameTheArm(error, item.arm);
   return recordControlFailure(item, error);
 }
@@ -1794,7 +1828,7 @@ const VAT_ATTACHED_FRAGMENT_KEYS = ['contamination', 'degraded'] as const;
  * scanned properly, and an operator who learns to ignore that warning stops reading
  * the real ones.
  */
-export function withoutGraderContamination(fragment: EvalFragment): EvalFragment {
+function withoutGraderContamination(fragment: EvalFragment): EvalFragment {
   if (VAT_ATTACHED_FRAGMENT_KEYS.every((key) => fragment[key] === undefined)) return fragment;
   const copy = { ...fragment };
   for (const key of VAT_ATTACHED_FRAGMENT_KEYS) delete copy[key];
@@ -1818,8 +1852,8 @@ const ARM_LABEL: Readonly<Record<EvalArm, string>> = {
 /**
  * Prefix a worker error's message with the arm it came from, IN PLACE.
  *
- * Mutating rather than re-wrapping is deliberate. `mapErrorToExitCode` dispatches on
- * the error's CLASS, and so does the run's own regression test for a forged grader
+ * Mutating rather than re-wrapping is deliberate. `skillTestFailureReason` reads the
+ * error's own declared reason, and the run's regression test for a forged grader
  * nonce (`rejects.toThrow(GradingNonceError)`); wrapping every failure in a fresh
  * `InternalHarnessError` to get a better message would flatten
  * `EvalFragmentError`/`GradingNonceError`/`RateLimitSignal` into one class and lose
@@ -1829,8 +1863,7 @@ const ARM_LABEL: Readonly<Record<EvalArm, string>> = {
  * must not accumulate prefixes.
  */
 function nameTheArm<E>(err: E, arm: EvalArm): E {
-  const prefix = `[${ARM_LABEL[arm]}] `;
-  if (err instanceof Error && !err.message.startsWith(prefix)) err.message = `${prefix}${err.message}`;
+  prefixMessageOnce(err, `[${ARM_LABEL[arm]}] `);
   return err;
 }
 
@@ -1873,13 +1906,14 @@ type EvalWorkOutcome =
  * Fixtures are read from the STAGED workspace rather than the suite directory, for
  * the same reason the SKILL.md is: that is byte-for-byte what the arm was handed.
  *
- * Returns `[]` when the file cannot be read. A missing SKILL.md is not this
+ * Returns `[]` when there is no staged SKILL.md. A missing SKILL.md is not this
  * function's error to raise (staging has already validated the subject), and an
- * unarmed signal is reported as unarmed rather than claimed as clean. An
- * unreadable FIXTURE is skipped for the same reason, and errs the safe way: a
- * fixture we could not exclude can only make the signal noisier, never blinder.
+ * unarmed signal is reported as unarmed rather than claimed as clean. A SKILL.md
+ * that is THERE but refused is a different thing — `[]` would silently disarm the
+ * contamination signal for the whole run — so a refusal propagates. The same split
+ * applies to fixtures: see {@link collectFixtureText}.
  */
-export function resolveSkillContentNeedles(
+function resolveSkillContentNeedles(
   subjectStagedDir: string,
   evals: readonly EvalEntry[],
   /**
@@ -1897,10 +1931,10 @@ export function resolveSkillContentNeedles(
   const skillMdPath = safePath.join(subjectStagedDir, 'SKILL.md');
   let markdown: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path derived from vat's own staged dir
     markdown = readFileSync(skillMdPath, 'utf8');
-  } catch {
-    return [];
+  } catch (err) {
+    if (isPathAbsentError(err)) return [];
+    throw err;
   }
   const excluded = evals
     .flatMap((entry) => [
@@ -1914,7 +1948,8 @@ export function resolveSkillContentNeedles(
 }
 
 /**
- * The text of one eval's staged input files. Unreadable/binary fixtures are skipped.
+ * The text of one eval's staged input files. A declared fixture that was never
+ * staged is skipped; one that is there but cannot be read propagates.
  *
  * A declared `files[]` entry is legitimately a DIRECTORY — staging does `existsSync`
  * then a recursive `cpSync` — so this walks one. It used to call `readFileSync` on
@@ -1927,9 +1962,11 @@ export function resolveSkillContentNeedles(
  *
  * The `catch`'s old claim that skipping "errs the safe way: noisier, never blinder"
  * is BACKWARDS for this signal. Over-reporting is the harm here, because a false
- * `contaminated: true` is actioned by discarding a run that was fine. A fixture that
- * cannot be read is still skipped — there is nothing else to do with it — but that
- * is a cost, not a safety margin.
+ * `contaminated: true` is actioned by discarding a run that was fine. So only an
+ * ABSENT fixture is skipped (staging does `existsSync` then `cpSync`, so a declared
+ * file missing at the source is simply not in the workspace); a fixture that is
+ * there and refused throws, because an exclusion set vat could not compute is a
+ * signal vat cannot stand behind.
  */
 function readStagedFixtures(stagedWorkspaceRoot: string, entry: EvalEntry): string[] {
   const texts: string[] = [];
@@ -1943,29 +1980,37 @@ function readStagedFixtures(stagedWorkspaceRoot: string, entry: EvalEntry): stri
 /** Depth cap on the fixture walk — a symlink loop must not hang the run's setup. */
 const MAX_FIXTURE_WALK_DEPTH = 32;
 
-/** Append `path`'s text, recursing when it is a directory. Never throws. */
-function collectFixtureText(path: string, into: string[], depth = 0): void {
-  if (depth > MAX_FIXTURE_WALK_DEPTH) return;
-  let entries: Dirent[] | undefined;
+/**
+ * Append the declared fixture's text — the file's, or every file's under it when
+ * it is a directory. `lstat` first, so the ONE absence case (`ENOENT`, or `ENOTDIR`
+ * for a path routed through a file) is the only thing skipped; a symlink at the
+ * declared path is skipped too, for the same reason the walk below skips one.
+ */
+function collectFixtureText(path: string, into: string[]): void {
+  let kind: Stats;
   try {
-    // `withFileTypes` on the DIRECTORY is one syscall for the whole level, and
-    // `lstat`-shaped: a symlinked entry reports as a link rather than as whatever it
-    // points at, so the walk stays inside the bytes vat actually staged.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is contained under vat's own staged workspace
-    entries = readdirSync(path, { withFileTypes: true });
-  } catch {
-    // Not a directory (the common case: a plain file fixture), or unreadable.
-    try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is contained under vat's own staged workspace
-      into.push(readFileSync(path, 'utf8'));
-    } catch {
-      // Unreadable or binary — nothing to exclude, and not this function's error to raise.
-    }
-    return;
+    kind = lstatSync(path);
+  } catch (err) {
+    if (isPathAbsentError(err)) return;
+    throw err;
   }
-  for (const child of entries) {
-    if (!child.isFile() && !child.isDirectory()) continue;
-    collectFixtureText(safePath.joinUnderRoot(path, child.name), into, depth + 1);
+  if (kind.isFile()) into.push(readFileSync(path, 'utf8'));
+  else if (kind.isDirectory()) walkFixtureDir(path, into, 0);
+}
+
+/** Append every file's text under `dir`, recursing. Symlinked entries are skipped. */
+function walkFixtureDir(dir: string, into: string[], depth: number): void {
+  if (depth > MAX_FIXTURE_WALK_DEPTH) return;
+  // `withFileTypes` on the DIRECTORY is one syscall for the whole level, and
+  // `lstat`-shaped: a symlinked entry reports as a link rather than as whatever it
+  // points at, so the walk stays inside the bytes vat actually staged.
+  for (const child of readdirSync(dir, { withFileTypes: true })) {
+    const childPath = safePath.joinUnderRoot(dir, child.name);
+    const kind = direntKind(child);
+    // A link is skipped by design (see above): the walk reads only staged bytes.
+    if (kind === 'symlink') continue;
+    if (kind === 'file') into.push(readFileSync(childPath, 'utf8'));
+    else if (kind === 'directory') walkFixtureDir(childPath, into, depth + 1);
   }
 }
 
@@ -2024,7 +2069,7 @@ export type ContaminationCtx = Pick<
  * not to run. That is the same shape as the dropped `armCwd` that anchored the whole
  * walk one directory too high, also green.
  */
-export function buildContaminationInput(
+function buildContaminationInput(
   transcript: string,
   ctx: ContaminationCtx,
   evalId: string,
@@ -2037,7 +2082,7 @@ export function buildContaminationInput(
  * once per run with no transcript and no eval — so it can honestly supply neither,
  * and `armCwd` is correctly absent rather than accidentally dropped.
  */
-export function buildContaminationSignalsInput(ctx: ContaminationCtx): DetectBaselineContaminationInput {
+function buildContaminationSignalsInput(ctx: ContaminationCtx): DetectBaselineContaminationInput {
   return contaminationInput('', ctx, undefined);
 }
 
@@ -2157,7 +2202,7 @@ interface RunEvalsTieredInput {
 
 /**
  * Run evals TIER by TIER (ascending), bounded-parallel WITHIN each tier, with a
- * GATE between tiers (issue #145 Phase G). After a tier completes, apply the
+ * GATE between tiers. After a tier completes, apply the
  * default gate policy ({@link shouldGateAfterTier}) over that tier's WITH-arm
  * fragments: if any eval in the tier did not fully pass, do NOT launch the higher
  * (more expensive) tiers — their evals are recorded as SKIPPED (a distinct state,
@@ -2204,7 +2249,7 @@ export interface ArtifactPaths {
 /** Resolve the run's grading/friction/baseline/tool-eval artifact paths under
  *  `resultsDir`. Single source of truth for the filenames (used by the
  *  pre-pipeline stale wipe AND the post-merge writer). */
-export function resolveArtifactPaths(resultsDir: string): ArtifactPaths {
+function resolveArtifactPaths(resultsDir: string): ArtifactPaths {
   return {
     gradingOut: safePath.join(resultsDir, 'grading.json'),
     frictionOut: safePath.join(resultsDir, 'friction.json'),
@@ -2222,7 +2267,7 @@ export function resolveArtifactPaths(resultsDir: string): ArtifactPaths {
  * run's. Wiping all three up front closes that cross-run leak. Best-effort
  * (`force: true`) — a missing file is fine.
  */
-export function wipeStaleArtifacts(paths: ArtifactPaths): void {
+function wipeStaleArtifacts(paths: ArtifactPaths): void {
   for (const path of [paths.gradingOut, paths.frictionOut, paths.baselineOut, paths.toolEvalOut]) {
     rmSync(path, { force: true });
     // ...and the quarantined copy a PRIOR run's failed gate set aside. It is just as
@@ -2259,7 +2304,6 @@ function openResultsDir(input: {
   // input files ends up here as text — and unlike the workspaces, results/ SURVIVES
   // `--keep` by design.
   mkdirSyncReal(input.resultsDir, { recursive: true, mode: 0o700 });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
   writeFileSync(input.provenancePath, JSON.stringify(input.provenance, null, 2) + '\n', 'utf-8');
 }
 
@@ -2273,7 +2317,7 @@ function openResultsDir(input: {
  * a maintainer needs in order to see which refine tripped, and a name ending in
  * `.rejected` cannot be mistaken for the artifact a reader came for.
  */
-export function rejectedArtifactPath(path: string): string {
+function rejectedArtifactPath(path: string): string {
   return `${path}.rejected`;
 }
 
@@ -2304,7 +2348,7 @@ export function rejectedArtifactPath(path: string): string {
  * everything it declared, so the two fields were numerically identical in all of
  * them and the ONE thing this function exists to keep distinct was unpinned.
  */
-export function gradedCounts(fragments: EvalFragment[]): ArmEvalGrade[] {
+function gradedCounts(fragments: EvalFragment[]): ArmEvalGrade[] {
   return fragments.map((f) => ({
     evalId: f.evalId,
     passed: f.expectations.filter((e) => e.passed).length,
@@ -2394,7 +2438,7 @@ function deltaTruncationFor(skipped: SkippedEvalsSummary | undefined): DeltaTrun
  * on a run where they can be. A contaminated delta is also diagnostic in its own
  * right: it collapses toward zero, which is corroboration, not noise.
  */
-export function formatBaselineReport(delta: BaselineDelta, integrity: BaselineIntegrity): string {
+function formatBaselineReport(delta: BaselineDelta, integrity: BaselineIntegrity): string {
   const line = `\n${formatBaselineDeltaLine(delta)}\n`;
   // Any of the three makes the delta unusable-as-stated, and all three are only
   // visible on stderr — nobody opens baseline.json unprompted.
@@ -2425,17 +2469,14 @@ function writeRunArtifactsAndReconcile(
   let baselineReport: string | undefined;
 
   const grading = mergeFragmentsToGrading(withArm, runNonce, 'with');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
   writeFileSync(paths.gradingOut, JSON.stringify(grading, null, 2) + '\n', 'utf-8');
 
   const friction = mergeFragmentsToFriction(fragments);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
   writeFileSync(paths.frictionOut, JSON.stringify(friction, null, 2) + '\n', 'utf-8');
 
   // Tool verdicts come from the WITH arm ONLY — the WITHOUT/skill-absent arm never
   // carries toolExpectations, so its fragments have no `tool` body to merge.
   const toolEval = mergeFragmentsToToolEval(withArm);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
   writeFileSync(paths.toolEvalOut, JSON.stringify(toolEval, null, 2) + '\n', 'utf-8');
 
   // `controlFailures` is the second disjunct, and it is load-bearing: when EVERY
@@ -2516,7 +2557,6 @@ function writeRunArtifactsAndReconcile(
     // qualifies it would also mean a reader who wants only the lift has to
     // understand the contamination vocabulary first. (GradingReportSchema is
     // .passthrough(), so both extra keys are contract-legal — see the comment above.)
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
     writeFileSync(
       paths.baselineOut,
       JSON.stringify({ ...baseline, baselineIntegrity: integrity, baselineDelta: delta }, null, 2) + '\n',
@@ -2544,14 +2584,14 @@ function writeRunArtifactsAndReconcile(
 }
 
 /**
- * The COMPOSITE run verdict (issue #145 Phase T): the run passes only when BOTH
+ * The COMPOSITE run verdict: the run passes only when BOTH
  * the prose-expectation grading passed AND every tool-expectation verdict passed.
  * Tool verdicts live in tool-eval.json (a SEPARATE channel — C2); this combines
  * the two at the exit-code layer WITHOUT mixing the channels' data. When no eval
  * declared `toolExpectations`, `toolEval.evals` is empty and this equals
  * `outputAllPassed`. Pure + unit-testable.
  */
-export function computeCompositeVerdict(outputAllPassed: boolean, toolEval: ToolEvalReport): boolean {
+function computeCompositeVerdict(outputAllPassed: boolean, toolEval: ToolEvalReport): boolean {
   return outputAllPassed && toolEval.evals.every((v) => v.passed);
 }
 
@@ -2559,10 +2599,10 @@ export function computeCompositeVerdict(outputAllPassed: boolean, toolEval: Tool
  * The run's final pass/fail after cost-tiered fail-fast: the {@link
  * computeCompositeVerdict} of the tiers that RAN, AND no tiers were skipped. A
  * fail-fast run that gated higher tiers is NEVER a pass (skipped ≠ passed) — this
- * forces `false` so the exit code is EvalFailure (4), never downgraded to 0 by the
+ * forces `false` so the exit code is FINDINGS, never downgraded to 0 by the
  * composite path alone. Pure + unit-testable.
  */
-export function resolveCompositeAllPassed(
+function resolveCompositeAllPassed(
   outputAllPassed: boolean,
   toolEval: ToolEvalReport,
   skipped: SkippedEvalsSummary | undefined,
@@ -2583,7 +2623,7 @@ export interface RunCostSummary {
 }
 
 /** Fold one session's `total_cost_usd` into the accumulator; a non-number (mock spawn / missing result) is ignored. */
-export function recordSessionCost(acc: RunCostSummary, totalCostUsd: number | undefined): void {
+function recordSessionCost(acc: RunCostSummary, totalCostUsd: number | undefined): void {
   if (typeof totalCostUsd !== 'number' || !Number.isFinite(totalCostUsd)) return;
   acc.totalUsd += totalCostUsd;
   acc.sessions += 1;
@@ -2594,7 +2634,7 @@ export function recordSessionCost(acc: RunCostSummary, totalCostUsd: number | un
  * when no session reported a cost (e.g. every spawn was a test mock) so the suffix
  * never adds noise to a run with no cost signal. Pure + unit-testable.
  */
-export function formatRunCostSuffix(cost: RunCostSummary | undefined): string {
+function formatRunCostSuffix(cost: RunCostSummary | undefined): string {
   if (cost === undefined || cost.sessions === 0) return '';
   return ` | ≈$${cost.totalUsd.toFixed(2)} across ${cost.sessions} session${cost.sessions === 1 ? '' : 's'}`;
 }
@@ -2606,7 +2646,7 @@ export function formatRunCostSuffix(cost: RunCostSummary | undefined): string {
  * verdict failed, a `(N tool)` suffix names how many — so a composite FAIL whose
  * OUTPUT counts look all-green (e.g. `FAIL 3/3 (1 tool)`) is self-explaining. Pure.
  */
-export function buildRunSummary(
+function buildRunSummary(
   verdict: GradingVerdict,
   toolEval: ToolEvalReport,
   compositeAllPassed: boolean,
@@ -2623,7 +2663,7 @@ export function buildRunSummary(
  * tiers ALWAYS reads FAIL (skipped ≠ passed forces `compositeAllPassed` false at
  * the call site), so the base line is already FAIL when the note is present.
  */
-export function buildRunSummaryWithSkips(
+function buildRunSummaryWithSkips(
   verdict: GradingVerdict,
   toolEval: ToolEvalReport,
   compositeAllPassed: boolean,
@@ -2644,13 +2684,11 @@ export function buildRunSummaryWithSkips(
  * safe precisely because vat always writes these after the merge succeeds.
  */
 function assertVatWroteArtifact(path: string, validate: (raw: unknown) => void, label: string): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
   if (!existsSync(path)) {
     throw new InternalHarnessError(`vat did not write ${label} at ${path} after the merge — harness bug.`);
   }
   let raw: unknown;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
     raw = JSON.parse(readFileSync(path, 'utf-8'));
   } catch (err) {
     throw new InternalHarnessError(
@@ -2676,21 +2714,28 @@ function assertVatWroteArtifact(path: string, validate: (raw: unknown) => void, 
  * failing, and a cleanup that replaces the real diagnosis with a rename error would
  * be strictly worse than a file left in place. If the rename fails the file is
  * removed instead — an absent artifact reads as "vat wrote nothing", which is at
- * least not a false claim of authority.
+ * least not a false claim of authority. If THAT fails too, the file is still there
+ * under its authoritative name, and the returned clause says so with both errors:
+ * the operator is about to read a CI archive, and a bare '' told them nothing.
  */
 function quarantineArtifact(path: string): string {
   const rejected = rejectedArtifactPath(path);
+  let renameFailure: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
     renameSync(path, rejected);
     return `; moved aside to ${rejected} so it is not read as authoritative`;
-  } catch {
-    try {
-      rmSync(path, { force: true });
-      return '; removed so it is not read as authoritative';
-    } catch {
-      return '';
-    }
+  } catch (err) {
+    renameFailure = err instanceof Error ? err.message : String(err);
+  }
+  try {
+    rmSync(path, { force: true });
+    return '; removed so it is not read as authoritative';
+  } catch (err) {
+    return (
+      `; it could not be moved aside (${renameFailure}) or removed ` +
+      `(${err instanceof Error ? err.message : String(err)}), so it is STILL THERE under its ` +
+      'authoritative name — do not read it as authoritative'
+    );
   }
 }
 
@@ -2714,7 +2759,7 @@ function quarantineArtifact(path: string): string {
  * baseline and wrote nothing), which is exactly what a fail-CLOSED gate must not do.
  * A non-baseline run writes no baseline.json at all and is not asked about one.
  */
-export function assertVatWroteArtifacts(paths: ArtifactPaths, baselineRun: boolean): void {
+function assertVatWroteArtifacts(paths: ArtifactPaths, baselineRun: boolean): void {
   assertVatWroteArtifact(paths.gradingOut, (raw) => { GradingReportSchema.parse(raw); }, 'grading.json');
   assertVatWroteArtifact(paths.frictionOut, (raw) => { FrictionReportSchema.parse(raw); }, 'friction.json');
   assertVatWroteArtifact(paths.toolEvalOut, (raw) => { ToolEvalReportSchema.parse(raw); }, 'tool-eval.json');
@@ -2750,7 +2795,7 @@ export function assertVatWroteArtifacts(paths: ArtifactPaths, baselineRun: boole
  * `harnessCreated` is true only for the derived-under-OS-tmp case; an explicit
  * `--out` or `--workdir` is a location the user owns and is never auto-removed.
  */
-export function resolveHarnessLocation(
+function resolveHarnessLocation(
   opts: Pick<RunHarnessOptions, 'out' | 'workdir' | 'subject'>,
 ): { harnessRoot: string; harnessCreated: boolean } {
   if (opts.out !== undefined && opts.workdir !== undefined) {
@@ -2944,7 +2989,6 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // "can the executor reach the answer key" is not to write it there.
     // Same predicate as `resolveEvalSuitePath`'s rule 1, so the two cannot disagree
     // about which copy this run uses.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- authored source path resolved from opts
     const authoredSuiteExists = existsSync(resolveScaffoldEvalsPath(opts, repoRoot, evalsRef));
 
     const stageResult = await stageHarness({
@@ -2969,7 +3013,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // staged tree — the answer key must never be reachable by the executor — so this
     // resolves to the AUTHORED source copy, or to the vat-only hold dir when the
     // suite existed nowhere but inside a fetched artifact. Absent from both →
-    // bootstrap a template at the source scaffold and exit 3, so an authored suite
+    // bootstrap a template at the source scaffold and exit 2 with `Reason: bootstrap`, so an authored suite
     // is never overwritten.
     const evalsPath =
       resolveEvalSuitePath({
@@ -2990,7 +3034,8 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       const summary = renderPreflightSummary(preflightResult.checks);
       return {
         harnessPath: harnessRoot,
-        exitCode: SkillTestExitCode.Preflight,
+        exitCode: ExitCode.ERROR,
+        reason: 'preflight',
         summary: `Preflight failed:\n${summary}`,
       };
     }
@@ -3017,7 +3062,8 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     if (!isAcknowledged(opts)) {
       return {
         harnessPath: harnessRoot,
-        exitCode: SkillTestExitCode.Preflight,
+        exitCode: ExitCode.ERROR,
+        reason: 'preflight',
         summary:
           'Security acknowledgment required. Pass --i-understand-this-runs-skill-code to proceed.',
       };
@@ -3085,7 +3131,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     if (isDryRun) {
       return {
         harnessPath: harnessRoot,
-        exitCode: SkillTestExitCode.Ok,
+        exitCode: ExitCode.OK,
         summary: buildDryRunSummary({
           wouldBuild: opts.wouldBuild === true,
           ...(opts.dryRunStagedExistingDist === undefined
@@ -3163,7 +3209,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       ...(opts.spawn === undefined ? {} : { spawn: opts.spawn }),
     };
 
-    // Tier-ordered, cost-tiered fail-fast (issue #145 Phase G): run evals tier by
+    // Tier-ordered, cost-tiered fail-fast: run evals tier by
     // tier (ascending / cheapest first), bounded-parallel WITHIN each tier, and
     // gate BETWEEN tiers — once a cheaper tier fails a gating expectation, the
     // higher (more expensive) tiers are SKIPPED (never graded, never passed), so a
@@ -3171,8 +3217,8 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // Each tier is one runPipeline: bounded-parallel, retrying a RateLimitSignal
     // per item. An InternalHarnessError thrown by a TREATMENT-arm executor/grader
     // (timeout/stall/spawn-error, grader failure, missing fragment, nonce mismatch,
-    // declared-count mismatch) propagates OUT unhandled → mapErrorToExitCode →
-    // exit 1; a spawn or grader break is never laundered into a pass/fail verdict
+    // declared-count mismatch) propagates OUT unhandled → skillTestFailureReason →
+    // ERROR/internal; a spawn or grader break is never laundered into a pass/fail verdict
     // (R1 no-laundering). The same break on the CONTROL arm is recorded and the run
     // continues — see runEvalWorker for why the two arms are not symmetric.
     const { fragments, controlFailures, skipped } = await runEvalsTiered({
@@ -3195,7 +3241,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // tool-eval.json (and baseline.json for a baseline run), then reconciles the
     // authoritative prose-expectation verdict from the WITH-arm per-expectation
     // `passed` flags — NOT any self-reported summary. An executor CLEAN failure
-    // reaches here as a FAILing fragment → composite verdict → exit 4.
+    // reaches here as a FAILing fragment → composite verdict → exit FINDINGS.
     const { verdict, toolEval, baselineReport } = writeRunArtifactsAndReconcile({
       fragments,
       runNonce,
@@ -3227,10 +3273,10 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
 
     // Composite verdict: the run passes only when BOTH output expectations AND every
     // tool-expectation verdict passed — so an output all-pass where a `mustRun` never
-    // ran yields FAIL → exit 4. Tool verdicts stay in tool-eval.json (C2); the composite
+    // ran yields FAIL → exit FINDINGS. Tool verdicts stay in tool-eval.json (C2); the composite
     // combines the two channels only here, at the exit-code layer. A fail-fast run
     // that SKIPPED higher tiers is never a pass: skipped ≠ passed forces allPassed
-    // false → exit 4 (never downgraded to 0 by the composite path).
+    // false → exit FINDINGS (never downgraded to 0 by the composite path).
     const allPassed = resolveCompositeAllPassed(verdict.allPassed, toolEval, skipped);
     const summary = buildRunSummaryWithSkips(verdict, toolEval, allPassed, skipped, costAccumulator);
 
@@ -3260,3 +3306,62 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     cleanup();
   }
 }
+
+/**
+ * The test-facing seam — every helper the unit tests reach that is NOT part of
+ * this module's API.
+ *
+ * These used to be forty-four separate `export`s, indistinguishable at the export
+ * keyword from the seven names the skill-test barrel actually publishes, so
+ * "is this API?" was a question for a JSDoc rather than a grep. Now it is a
+ * grep: a name here is reachable by a test and by nothing else. Nothing under
+ * `src/` imports `__internal` and no barrel re-exports it — a dev-tools test
+ * holds both lines. Types stay exported on their own: an object cannot carry
+ * them, and a type is not a call site.
+ */
+export const __internal = {
+  assertVatWroteArtifacts,
+  buildContaminationInput,
+  buildContaminationSignalsInput,
+  buildEvalWorkItems,
+  buildFlagParseProbe,
+  buildPreflightInput,
+  buildResolveCtx,
+  buildRunSummary,
+  buildRunSummaryWithSkips,
+  computeCompositeVerdict,
+  detectItemPluginLayout,
+  emitFrictionReport,
+  FLAG_PROBE_SENTINEL,
+  formatBaselineReport,
+  formatRunCostSuffix,
+  gradedCounts,
+  helpTextDeclaresFlag,
+  makeStageItem,
+  mintArmWorkspaceDirs,
+  partitionFragmentsByArm,
+  recordSessionCost,
+  rejectedArtifactPath,
+  removeVatOnlyDir,
+  renderPreflightSummary,
+  resolveArtifactPaths,
+  resolveCompositeAllPassed,
+  resolveHarnessLocation,
+  resolveKnobs,
+  resolvePerEvalWorkspaceDir,
+  resolveScaffoldEvalsPath,
+  resolveSkillContentNeedles,
+  resolveStallMs,
+  resolveTimeoutMs,
+  resolveWorkspacesRoot,
+  RETAINED_RESULTS_DIRNAME,
+  stageWorkspacesForRun,
+  subjectSkillName,
+  swallowCleanupFailure,
+  wipeStaleArtifacts,
+  withoutGraderContamination,
+  cleanupHarness,
+  buildStageItems,
+  resolveGraderOutDir,
+  resolveEvalSuitePath,
+} as const;

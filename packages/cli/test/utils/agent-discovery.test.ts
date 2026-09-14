@@ -1,8 +1,7 @@
-
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code using temp directories */
 import fs from 'node:fs/promises';
 
-import { setupAsyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -11,10 +10,20 @@ import {
   resolveAgentPath,
 } from '../../src/utils/agent-discovery.js';
 
+const ORIGINAL_READDIR = fs.readdir;
+
+/** One readable agent under `agents/`, so a refusal is the only thing that changes the answer. */
+async function seedAgent(tempDir: string): Promise<void> {
+  const agentPath = safePath.join(tempDir, 'agents/test-agent');
+  await fs.mkdir(agentPath, { recursive: true });
+  await fs.writeFile(safePath.join(agentPath, 'agent.yaml'), 'metadata:\n  name: a\n  version: 1.0.0\n');
+}
+
 describe('agent-discovery', () => {
   const suite = setupAsyncTempDirSuite('agent-discovery');
   let tempDir: string;
 
+  const REFUSED = Object.assign(new Error('EACCES: refused'), { code: 'EACCES' });
   const METADATA_YAML = 'metadata:\n  name:';
   const VERSION_YAML = '\n  version:';
   const AGENT_YAML = 'agent.yaml';
@@ -216,6 +225,38 @@ describe('agent-discovery', () => {
       // Verify
       expect(agents).toHaveLength(1);
       expect(agents[0]?.name).toBe('valid');
+    });
+
+    /**
+     * The three sentinels in this module (`[]`, "continue", `null`) each stand
+     * for an ABSENCE — no such directory, no manifest here, a manifest that is
+     * not YAML. A refusal used to land in the same catch and read as the same
+     * absence, so `vat agent install x` on a tree the OS would not open answered
+     * "agent not found" rather than naming the directory it could not read.
+     */
+    it('refuses a search path the OS will not list instead of reading it as no agents', async () => {
+      await seedAgent(tempDir);
+      const refused = safePath.join(tempDir, 'agents');
+      vi.spyOn(fs, 'readdir').mockImplementation((target, ...rest) => {
+        if (safePath.resolve(String(target)) === refused) return Promise.reject(REFUSED);
+        return (ORIGINAL_READDIR as (...args: unknown[]) => Promise<never>)(target, ...rest);
+      });
+
+      await expect(discoverAgents()).rejects.toMatchObject({ code: 'EACCES' });
+    });
+
+    it('refuses a manifest the OS will not read instead of skipping the agent', async () => {
+      await seedAgent(tempDir);
+      vi.spyOn(fs, 'readFile').mockRejectedValue(REFUSED);
+
+      await expect(discoverAgents()).rejects.toMatchObject({ code: 'EACCES' });
+    });
+
+    it('refuses a candidate manifest whose probe fails for a reason other than absence', async () => {
+      await seedAgent(tempDir);
+      vi.spyOn(fs, 'access').mockRejectedValue(Object.assign(new Error('ELOOP: too many links'), { code: 'ELOOP' }));
+
+      await expect(discoverAgents()).rejects.toMatchObject({ code: 'ELOOP' });
     });
 
     it('should prefer agent.yaml over agent.yml', async () => {

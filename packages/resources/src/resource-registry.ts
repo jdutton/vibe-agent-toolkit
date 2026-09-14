@@ -24,6 +24,7 @@ import {
   safePath,
   toForwardSlash,
   toNfc,
+  VatError,
   withOuterBracket,
 } from '@vibe-agent-toolkit/utils';
 import {
@@ -179,14 +180,13 @@ type PreparedResource =
   | { outcome: 'unreadable'; filePath: string; reason: string; code?: string; error: Error }
   | { outcome: 'failed'; error: unknown };
 
-export class DuplicateResourceIdError extends Error {
+export class DuplicateResourceIdError extends VatError {
   readonly id: string;
   readonly existingPath: string;
   readonly conflictingPath: string;
 
   constructor(id: string, conflictingPath: string, existingPath: string) {
-    super(`Duplicate resource ID '${id}': '${conflictingPath}' conflicts with '${existingPath}'`);
-    this.name = 'DuplicateResourceIdError';
+    super('DUPLICATE_RESOURCE_ID', `Duplicate resource ID '${id}': '${conflictingPath}' conflicts with '${existingPath}'`);
     this.id = id;
     this.existingPath = existingPath;
     this.conflictingPath = conflictingPath;
@@ -268,7 +268,7 @@ function warnPopulationRootMismatch(boundRoot: string, offeredRoot: string): voi
  * encoded was wrong for the other verb: first "record and warn" (so the walk
  * lane exited 0 on a tree the projection lane exited 2 on), then "refuse" (so
  * `vat audit` exited 2 with zero findings over one `chmod 000` sibling —
- * issue #180's exact shape). It is the caller's knowledge, so it is the
+ * the unreadable-directory defect's exact shape). It is the caller's knowledge, so it is the
  * caller's field.
  */
 export type RegistryUnreadablePolicy = 'refuse' | Extract<UnreadablePolicy, { degrade: unknown }>;
@@ -1099,7 +1099,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // extra `stat` on a path that has already paid a whole read and a parse.
     //
     // THE stat — one call serving both `modifiedAt` and `sizeBytes`.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path, same trust level as the read above
     const stats = await fs.stat(absolutePath);
 
     // Checksum from the bytes already decoded, not a second read of the file.
@@ -2083,9 +2082,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const cacheDir = this.getCacheDirectory();
 
     // Expand any `resources.linkAuth` providers from macro refs into the engine
-    // shape (#113 §5). When the adopter has no linkAuth config, the validator
-    // skips the authenticated branch and uses the existing markdown-link-check
-    // path for every URL — identical to pre-#113 behavior.
+    // shape (linkAuth design §5). When the adopter has no linkAuth config, the
+    // validator skips the authenticated branch and uses the existing
+    // markdown-link-check path for every URL — identical to pre-linkAuth behavior.
     const adopterLinkAuth = this.config?.resources?.linkAuth;
     const linkAuthConfig = adopterLinkAuth
       ? buildLinkAuthEngineConfig(adopterLinkAuth)
@@ -2186,7 +2185,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         continue;
       }
 
-      // Prefer a code surfaced by the validator's authenticated branch (#113 §7) —
+      // Prefer a code surfaced by the validator's authenticated branch (linkAuth design §7) —
       // those LINK_AUTH_* codes encode per-provider notFoundMeaning routing that
       // statusCode alone cannot express. Fall back to the statusCode mapping for
       // the anonymous markdown-link-check path.
@@ -2259,8 +2258,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * two-registry isolation — it is one mutable object graph with two path views.
    *
    * ⚠️ **Status, which is as load-bearing as the hazard: shape confirmed,
-   * consequence NOT reproduced.** An independent fact-check (2026-08-12, against
-   * the 2026-08-06 design review) produced **zero** reproductions. The
+   * consequence NOT reproduced.** An independent fact-check of the design
+   * review that raised it produced **zero** reproductions. The
    * global-mutation shape above is verified by reading the code; the
    * order-dependent bundling consequence is *not* demonstrated by a running case
    * and must not be called a shipped bug until one exists. Both halves are
@@ -2269,7 +2268,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    *
    * One leg of the original hazard has since closed. It cited "assets bypass
    * depth limits, registry resources do not" — but `processRegistryResource`
-   * (`walk-link-graph.ts`, re-read 2026-09-05) now tests `isRoutable` BEFORE
+   * (`walk-link-graph.ts`) now tests `isRoutable` BEFORE
    * `maxDepth`, so a non-routable registry member — and a `.yaml` asset is
    * exactly that — is treated as a leaf and bypasses the depth limit just as a
    * plain asset does. The divergence in *which collection it lands in* remains.

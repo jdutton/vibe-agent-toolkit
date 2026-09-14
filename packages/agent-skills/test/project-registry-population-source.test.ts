@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is under a per-test temp directory */
 /**
  * `createProjectRegistry`'s optional `populationSource` — the packaging lanes'
  * entry onto the projection lane — and the ROOT-IDENTITY GUARD that decides

@@ -10,12 +10,15 @@
  */
 
 export {
+  PathEscapesRootError,
   safePath,
   toForwardSlash,
   toNfc,
   isAbsolutePath,
   isAbsoluteAnyPlatform,
   hasParentTraversalSegment,
+  isSingleFsSegment,
+  relativeEscapesRoot,
   toAbsolutePath,
   getRelativePath,
   issueLocation,

@@ -33,7 +33,6 @@ describe('resources validate — the refusal message reaches stderr', () => {
   beforeAll(() => {
     root = safePath.resolve(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-rv-refusal-')));
     // An include that enumerates nothing: the project has no docs/ at all.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path
     writeFileSync(
       safePath.join(root, 'vibe-agent-toolkit.config.yaml'),
       'version: 1\nresources:\n  include:\n    - "docs/**/*.md"\n',

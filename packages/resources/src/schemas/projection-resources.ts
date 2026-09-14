@@ -1,6 +1,7 @@
+import { SeveritySchema } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
-import { ContentKeySchema, JsonValueSchema, ProjectionConditionSeveritySchema } from './projection-shared.js';
+import { ContentKeySchema, JsonValueSchema } from './projection-shared.js';
 
 const EXTENT_FK_DESC = 'Foreign key to resolution_contexts.contextId, species "extent"';
 
@@ -322,7 +323,7 @@ export const RealizationConditionRowSchema = z.object({
   path: z.string().min(1)
     .describe('Path the condition is about, stated against the root. Root-relative for every condition about something the projection realizes, and "../"-prefixed for the one class that is deliberately about a path OUTSIDE the root (CLOSURE_REFERENCE_OUTSIDE_ROOT): a reference may name a real file the population was never defined over, and the row has to be able to name it. Never a bare absolute path.'),
   code: z.string().min(1).describe('An enum member, e.g. "REALIZATION_PATH_COLLISION" — open vocabulary'),
-  severity: ProjectionConditionSeveritySchema,
+  severity: SeveritySchema,
   message: z.string(),
   resourceId: z.string().min(1).nullable().describe('The identity this condition concerns, or null'),
   sourcePath: z.string().min(1).nullable()

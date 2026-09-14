@@ -33,7 +33,6 @@
  * on VAT's own repo, where the whole project is 2 distinct skill roots: 2² = 4.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import type * as NodeFs from 'node:fs';
 import * as fs from 'node:fs';
 

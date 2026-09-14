@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is a temp tree this test owns */
 /**
  * `--no-cache` / `VAT_CACHE=0` against the projection store, through the real
  * binary.

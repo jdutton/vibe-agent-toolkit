@@ -1,5 +1,6 @@
 // packages/cli/src/commands/claude/plugin/list.ts
 import { getClaudeUserPaths, listLocalPlugins } from '@vibe-agent-toolkit/claude-marketplace';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../../../utils/command-error.js';
@@ -57,7 +58,7 @@ async function pluginListCommand(options: PluginListCommandOptions): Promise<voi
       process.stdout.write(`target: ${target}\n`);
       process.stdout.write(`status: not-available\n`);
       process.stdout.write(`reason: "Only --target code is supported in this version"\n`);
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     }
 
     const paths = getClaudeUserPaths();
@@ -85,7 +86,7 @@ async function pluginListCommand(options: PluginListCommandOptions): Promise<voi
       }
     }
     process.stdout.write(`duration: ${Date.now() - startTime}ms\n`);
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'PluginList');
   }

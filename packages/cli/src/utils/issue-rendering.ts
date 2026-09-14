@@ -325,8 +325,8 @@ export function formatCollapsedFindingsHint(
  * is not: `files.dependencies` carries only what the link-graph walk discovered, so
  * every file `files:` copied in — each glob match, plus any explicit entry the walk
  * had not already bundled — is absent from the total. A bundle holding SKILL.md, one
- * linked doc and one declared artifact prints `2 files`. That undercount is issue
- * #177 and is deliberately NOT patched here; this wording is only the part that can
+ * linked doc and one declared artifact prints `2 files`. That undercount is a
+ * report-shape defect and is deliberately NOT patched here; this wording is only the part that can
  * be made true today, so nobody reads the number as an inventory of the output.
  *
  * The `+ 1` is the bundle's root `SKILL.md`, which `files.dependencies` does not

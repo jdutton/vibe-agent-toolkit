@@ -286,7 +286,6 @@ export async function mockDoctorConfig(
   const { loadConfig } = await import('../../src/utils/config-loader.js');
 
   if (opts.valid) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Mock config can be any shape
     vi.mocked(loadConfig).mockReturnValue(opts.config as any);
   } else {
     vi.mocked(loadConfig).mockImplementation(() => {

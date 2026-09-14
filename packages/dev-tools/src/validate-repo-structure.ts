@@ -24,7 +24,7 @@
  *
  * ORIGINAL RULES:
  * - No /examples directories in runtime packages
- * - No /scripts directories (except dev-tools, schema, agent-skills)
+ * - No /scripts directories (except the packages `validateScriptsLocation` names)
  * - No shell scripts (.sh, .ps1, .bat, .cmd) - use TypeScript
  * - No /staging directories in test/fixtures
  * - Test fixtures follow size guidelines (over 100KB must be compressed)
@@ -33,15 +33,15 @@
  * Use in CI to catch issues before they reach main branch
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 // This utility script needs to read dynamic file paths for validation
 
-import { existsSync } from 'node:fs';
+import { existsSync, type Dirent } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { direntKindFollowingSync, isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 
 import { isEntrypoint } from './common.js';
@@ -51,21 +51,11 @@ import {
   TOKENS_DEFAULT_FILE,
   TOKENS_ENV,
 } from './contraband-scan.js';
+import { collectDerivedArtifactFindings } from './derived-artifact-rules.js';
+import { ERROR_TYPES, type ValidationError } from './structure-finding.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const REPO_ROOT = safePath.join(__dirname, '../../..');
-
-/**
- * Validation error type constants
- */
-const ERROR_TYPES = {
-  DANGLING_CITATION: 'dangling-citation',
-  FORBIDDEN_DIRECTORY: 'forbidden-directory',
-  LARGE_FILE: 'large-file',
-  SEVERITY_COUNTS: 'severity-counts',
-  STALE_VENDOR_CLAIM: 'stale-vendor-claim',
-  STRUCTURAL_VIOLATION: 'structural-violation',
-} as const;
 
 /**
  * Common directories to skip during validation
@@ -74,19 +64,6 @@ const WORKTREES_DIR = '.worktrees';
 const PACKAGE_MANIFEST_FILENAME = 'package.json';
 const COMMON_SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.claude']);
 const SKIP_DIRS_WITH_HUSKY = new Set([...COMMON_SKIP_DIRS, '.husky', WORKTREES_DIR]);
-
-interface ValidationError {
-  type:
-    | 'dangling-citation'
-    | 'forbidden-directory'
-    | 'large-file'
-    | 'severity-counts'
-    | 'stale-vendor-claim'
-    | 'structural-violation';
-  path: string;
-  message: string;
-  severity: 'error' | 'warning';
-}
 
 const errors: ValidationError[] = [];
 
@@ -102,6 +79,46 @@ const TEXT_FILE_EXTENSIONS = new Set([
   '.cjs', '.css', '.html', '.js', '.json', '.jsx', '.md', '.mjs', '.patch',
   '.py', '.toml', '.ts', '.tsx', '.txt', '.yaml', '.yml',
 ]);
+
+/**
+ * Read the bytes of a file the population named, or `null` when it is absent
+ * from the working tree (a sparse checkout, a delete not yet committed) —
+ * there is no content to check, so nothing is recorded.
+ *
+ * A file the OS REFUSES to read is also `null`, but that is recorded through
+ * `onRefused`: every content rule over that file did not run, and a gate that
+ * said nothing would read as a clean bill of health for a file it never saw.
+ *
+ * @param fullPath - Absolute path to read
+ * @param onRefused - Receives the reason when the read failed for any reason
+ *   other than absence
+ * @returns The bytes, or `null`
+ */
+export async function readTrackedFile(
+  fullPath: string,
+  onRefused: (reason: string) => void,
+): Promise<Buffer | null> {
+  try {
+    return await readFile(fullPath);
+  } catch (error) {
+    if (isPathAbsentError(error)) return null;
+    onRefused(error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+
+/**
+ * Record a tracked file the gate could not read as a finding at `error`
+ * severity: the rules over its content did not run, so the run cannot be green.
+ */
+function recordUnreadable(relPath: string, reason: string): void {
+  errors.push({
+    type: ERROR_TYPES.STRUCTURAL_VIOLATION,
+    path: relPath,
+    message: `Could not read this file (${reason}), so no content rule ran over it. Fix the permissions or remove it from the tree; a gate that skips what it cannot read is not a gate.`,
+    severity: 'error',
+  });
+}
 
 /**
  * Helper: apply a handler to the raw bytes of every git-tracked text file.
@@ -124,13 +141,10 @@ async function forEachTrackedTextFile(
       continue;
     }
 
-    const fullPath = safePath.join(REPO_ROOT, relPath);
-    let contents: Buffer;
-    try {
-      contents = await readFile(fullPath);
-    } catch {
-      continue; // Tracked but absent from the working tree (e.g. sparse checkout)
-    }
+    const contents = await readTrackedFile(safePath.join(REPO_ROOT, relPath), (reason) => {
+      recordUnreadable(relPath, reason);
+    });
+    if (contents === null) continue;
 
     handler(relPath, contents);
   }
@@ -154,9 +168,27 @@ async function forEachTrackedTextFileLine(
 }
 
 /**
- * Helper: Walk directory tree recursively, calling handler for each entry
+ * The entries of `dir`, or none when the directory does not exist. A refusal
+ * to list propagates — see {@link walkDirectory}.
  */
-async function walkDirectory(
+async function listOrEmptyIfAbsent(dir: string): Promise<Dirent[]> {
+  try {
+    return await readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    if (isPathAbsentError(error)) return [];
+    throw error;
+  }
+}
+
+/**
+ * Helper: Walk directory tree recursively, calling handler for each entry.
+ *
+ * A directory that does not exist is walked as empty — several rules walk
+ * optional locations. A directory the OS refuses to list is NOT empty, and
+ * saying so would let every rule below report "nothing found" over a subtree
+ * it never saw; that throws, and `validate()` exits 2 naming it.
+ */
+export async function walkDirectory(
   dir: string,
   relativePath: string,
   options: {
@@ -165,14 +197,7 @@ async function walkDirectory(
     onFile?: (entry: { name: string; fullPath: string; relPath: string }) => Promise<void>;
   },
 ): Promise<void> {
-  let entries;
-  try {
-    entries = await readdir(dir, { withFileTypes: true });
-  } catch {
-    return; // Directory doesn't exist or not accessible
-  }
-
-  for (const entry of entries) {
+  for (const entry of await listOrEmptyIfAbsent(dir)) {
     const fullPath = safePath.join(dir, entry.name);
     const relPath = safePath.join(relativePath, entry.name);
 
@@ -208,7 +233,7 @@ async function forEachPackageFixturesDir(
   const entries = await readdir(packagesDir, { withFileTypes: true });
 
   for (const entry of entries) {
-    if (entry.isDirectory()) {
+    if (direntKindFollowingSync(packagesDir, entry) === 'directory') {
       const fixturesDir = safePath.join(packagesDir, entry.name, 'test', 'fixtures');
       await checkDirectory(fixturesDir, `packages/${entry.name}/test/fixtures`);
     }
@@ -224,7 +249,7 @@ async function validateNoRuntimeExamples(): Promise<void> {
   const entries = await readdir(packagesDir, { withFileTypes: true });
 
   for (const entry of entries) {
-    if (!entry.isDirectory()) {
+    if (direntKindFollowingSync(packagesDir, entry) !== 'directory') {
       continue;
     }
 
@@ -256,12 +281,13 @@ async function validateScriptsLocation(): Promise<void> {
     'dev-tools',
     'schema',
     'agent-skills',
+    'cli', // Generates the report JSON Schemas from the REPORT_SCHEMAS registry
     'vat-example-cat-agents', // Uses resource-compiler post-build script
     'vat-development-agents', // Uses resource-compiler post-build script
   ]);
 
   for (const entry of entries) {
-    if (!entry.isDirectory() || allowedScriptsPackages.has(entry.name)) {
+    if (direntKindFollowingSync(packagesDir, entry) !== 'directory' || allowedScriptsPackages.has(entry.name)) {
       continue;
     }
 
@@ -270,7 +296,7 @@ async function validateScriptsLocation(): Promise<void> {
       errors.push({
         type: ERROR_TYPES.FORBIDDEN_DIRECTORY,
         path: `packages/${entry.name}/scripts/`,
-        message: `Only dev-tools, schema, and agent-skills should have /scripts directories. Move utilities to dev-tools package.`,
+        message: `Only ${[...allowedScriptsPackages].join(', ')} may have /scripts directories. Move utilities to dev-tools package.`,
         severity: 'error',
       });
     }
@@ -397,14 +423,13 @@ async function validateNoNestedPackageJson(): Promise<void> {
 async function validateSourceFileLocations(): Promise<void> {
   const skipDirs = SKIP_DIRS_WITH_HUSKY;
 
+  // Root config files. `eslint.config.js` is JavaScript and never reaches this
+  // rule; a `.ts` root file not named here is a finding.
   const ALLOWED_ROOT_TS_FILES = new Set([
-    // Root config files
-    'eslint.config.ts',
     'vitest.config.ts',
     'vitest.integration.config.ts',
     'vitest.system.config.ts',
     'vitest.shared.ts',
-    'vitest.workspace.ts',
   ]);
 
   await walkDirectory(REPO_ROOT, '.', {
@@ -433,6 +458,11 @@ async function validateSourceFileLocations(): Promise<void> {
 
       // Allow agent-skills/scripts (build tooling for JSON Schema generation)
       if (normalizedPath.startsWith('packages/agent-skills/scripts/')) {
+        return;
+      }
+
+      // Allow cli/scripts (emits the report JSON Schemas from the REPORT_SCHEMAS registry)
+      if (normalizedPath.startsWith('packages/cli/scripts/')) {
         return;
       }
 
@@ -583,13 +613,13 @@ async function validateNoContrabandTokens(): Promise<void> {
   console.log(`   contraband scan: ${tokens.length} token(s) from ${tokensPath ?? 'an unnamed source'}`);
 
   for (const relPath of contrabandPopulation(REPO_ROOT)) {
-    let text: string;
-    try {
-      text = await readFile(safePath.join(REPO_ROOT, relPath), 'utf8');
-    } catch {
-      continue; // unreadable or deleted-but-tracked; other rules cover structure
-    }
-    for (const hit of scanTextForContraband(text, tokens)) {
+    // Deleted-but-tracked has nothing to leak; a file this gate could not
+    // read is a file it did not scan, and it says so at error severity.
+    const bytes = await readTrackedFile(safePath.join(REPO_ROOT, relPath), (reason) => {
+      recordUnreadable(relPath, reason);
+    });
+    if (bytes === null) continue;
+    for (const hit of scanTextForContraband(bytes.toString('utf8'), tokens)) {
       errors.push({
         type: ERROR_TYPES.STRUCTURAL_VIOLATION,
         path: `${relPath}:${hit.line}`,
@@ -760,7 +790,7 @@ async function validateNoCitationsToNeverCommittedDirs(): Promise<void> {
  * file force-added past `.gitignore` INTO `docs/superpowers/`, which then merges
  * to `main` and stays there.
  *
- * That is not hypothetical. Two zones specs were force-added on 2026-08-12 "for
+ * That is not hypothetical. Two zones specs were once force-added "for
  * safekeeping on a long-lived branch", each opening with its own
  * "REMOVE BEFORE PR MERGE" banner — a reminder addressed to a human, discharged
  * from memory, which survived twenty-four days and a full green CI run because
@@ -947,6 +977,26 @@ const FINDINGS_COLLECTION = /\b(?:issues|allErrors|activeErrors|activeWarnings|e
  */
 const SHARED_COLLAPSE_CALL = /\b(?:calculateValidationStatus|countBySeverity)\s*\(/;
 /**
+ * The shared report ENVELOPE: `buildReport()` from `@vibe-agent-toolkit/schema`
+ * derives `status` and `summary` (the per-severity counts) from the findings in
+ * one place, so a lane migrated onto it spells neither a status literal nor a
+ * counts property. Without this arm the migration that FIXED a lane erased it
+ * from the population — three commands read as "stale" the day they moved.
+ *
+ * Two shapes: the call (`buildReport(` or the generic `buildReport<`), or the import from the schema package
+ * (the alias is arbitrary, so the import is the structural fact when a lane
+ * renames the builder).
+ */
+const SHARED_ENVELOPE_CALL = /\bbuildReport[<(]/;
+/** Every named-import block from the schema package; the alias arm reads these. */
+const SCHEMA_NAMED_IMPORT = /import\s*\{[^}]*\}\s*from\s*'@vibe-agent-toolkit\/schema'/g;
+
+/** Whether the source calls, or imports (under any alias), the shared envelope builder. */
+function usesSharedEnvelope(source: string): boolean {
+  if (SHARED_ENVELOPE_CALL.test(source)) return true;
+  return [...source.matchAll(SCHEMA_NAMED_IMPORT)].some((m) => /\bbuildReport\b/.test(m[0]));
+}
+/**
  * A per-severity counts block, as an object property — not a local, not a comment.
  *
  * `[:,]` accepts the ES shorthand `issueCounts,` as well as `issueCounts: ...`;
@@ -1010,10 +1060,11 @@ const SHARED_COUNTS_TYPE = /\bextends\s+SeverityCounts\b|\bSeverityCounts\s*&|&\
 /** Lanes that publish a per-severity counts block beside their status. */
 const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   'packages/cli/src/commands/resources/validate.ts',
-  // Publishes `issueCounts` beside its status from the day it shipped. Its
-  // findings are the project's own `resources.checks` SQL assertions, whose
-  // severities an adopter sets per check — so the distribution is exactly what a
-  // reader cannot reconstruct from a status here.
+  // Publishes the per-severity distribution beside its status from the day it
+  // shipped (now as the shared envelope's `summary`). Its findings are the
+  // project's own `resources.checks` SQL assertions, whose severities an adopter
+  // sets per check — so the distribution is exactly what a reader cannot
+  // reconstruct from a status here.
   'packages/cli/src/commands/resources/check.ts',
   // Migrated onto the shared `calculateValidationStatus` + `countBySeverity`
   // pair, which ended five separate collapses and three different answers for
@@ -1070,24 +1121,24 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   // its own verb. It is the case this gate exists for: its one code defaults to
   // `info`, so a status alone would collapse every finding to the reassuring
   // answer and report "success" on a tree that is over budget everywhere. The
-  // distribution is the shared counter's own output (`countBySeverity`),
-  // published as `BudgetReport.issueCounts` beside the shared collapse, and the
-  // exit code is read from `issueCounts.errors` rather than from the status —
-  // so an adopter who promotes the code to `error` gates on the same number the
-  // report shows.
+  // distribution is the shared envelope's `summary` (`buildReport` derives it
+  // from the findings), and the exit code is read from `summary` rather than
+  // from the status — so an adopter who promotes the code to `error` gates on
+  // the same number the report shows.
   'packages/cli/src/commands/claude/budget.ts',
   // OKF conformance. Its severity is adopter-configurable PER BUNDLE
   // (`okf.bundles.<name>.severity`), so a project that lowers a bundle to
-  // `warning` gets `status: passed` and exit 0 over real conformance findings —
-  // correct, and unreadable from the status word alone. `issueCounts` is what
-  // separates "nothing was found" from "everything found was downgraded", and
-  // the exit code is read from `issueCounts.errors` rather than from the status
-  // so the gate and the report can never disagree. The counts are built here
-  // rather than by `countBySeverity`, whose `ValidationIssue.code` is the shared
-  // registry union whereas an OKF code comes from the specification's own
-  // vocabulary; the field keeps the shared `SeverityCounts` TYPE, so the shape
-  // stays checked against the canonical one.
+  // `warning` gets `status: findings` and exit 0 over real conformance findings —
+  // correct, and unreadable from the status word alone. The envelope's `summary`
+  // is what separates "nothing was found" from "everything found was
+  // downgraded", and the exit code is read from `summary` rather than from the
+  // status so the gate and the report can never disagree.
   'packages/cli/src/commands/okf/validate.ts',
+  // Entered the population by publishing the shared envelope: its findings are
+  // the skipped surfaces (warning) and shadowed override keys (info), so the
+  // `summary` is what separates "emitted everything" from "emitted nothing and
+  // said so"; `--strict` reads `data`, not the status word.
+  'packages/cli/src/commands/ard/emit.ts',
 ]);
 
 /**
@@ -1132,7 +1183,7 @@ export function classifySeverityCountsLane(contents: string): LaneClassification
   // findings-shaped keyword hid `audit.ts` the moment its status became
   // `calculateValidationStatus(issues)` instead of `status: 'error'` — the
   // migration that fixed the lane is what erased it from the checklist.
-  const usesSharedCollapse = SHARED_COLLAPSE_CALL.test(source);
+  const usesSharedCollapse = SHARED_COLLAPSE_CALL.test(source) || usesSharedEnvelope(source);
   return {
     isLane:
       usesSharedCollapse ||
@@ -1527,6 +1578,7 @@ export function findEngineFloorDisagreements(
 interface RawManifest {
   private?: boolean;
   engines?: { node?: string };
+  bin?: Record<string, string>;
 }
 
 /**
@@ -1618,7 +1670,7 @@ export async function collectEngineFloorFindings(
   const summaries: PackageManifestSummary[] = [];
 
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    if (direntKindFollowingSync(packagesDir, entry) !== 'directory') continue;
 
     const path = `packages/${entry.name}/${PACKAGE_MANIFEST_FILENAME}`;
     const read = await readManifest(
@@ -1646,6 +1698,63 @@ export async function collectEngineFloorFindings(
  */
 async function validateEngineFloorAgreement(): Promise<void> {
   errors.push(...(await collectEngineFloorFindings(REPO_ROOT)));
+}
+
+/**
+ * Rule 13: every `bin` target installs the last-resort exit.
+ *
+ * The exit-code contract ends every VAT process on 0/1/2, and Node's default
+ * for an uncaught throw is 1 — FINDINGS. `installLastResortExit()` from
+ * `@vibe-agent-toolkit/schema` is what turns a crash into ERROR; it was landed
+ * in `vat` alone and `vat-lab` / `vat-compile-resources` kept crashing to 1.
+ * The source behind each `bin` entry (`./dist/x.js` → `src/x.ts`; a hand-
+ * written `./bin/name` as is) must call it by name.
+ */
+const LAST_RESORT_CALL = 'installLastResortExit(';
+
+/** The source file behind a `bin` target, repo-relative: `./dist/bin/vat.js` → `src/bin/vat.ts`, anything else as written. */
+export function binSourceOf(packageDir: string, target: string): string {
+  const built = /^\.\/dist\/(.+)\.js$/.exec(target);
+  const inPackage = built?.[1] === undefined ? target.replace(/^\.\//, '') : `src/${built[1]}.ts`;
+  return `${packageDir}/${inPackage}`;
+}
+
+/** One finding per bin source that does not install the last resort, or cannot be read. */
+export function findBinsWithoutLastResort(
+  bins: readonly { readonly path: string; readonly text: string | undefined }[],
+): ValidationError[] {
+  return bins
+    .filter((bin) => !bin.text?.includes(LAST_RESORT_CALL))
+    .map((bin) => ({
+      type: ERROR_TYPES.STRUCTURAL_VIOLATION,
+      path: bin.path,
+      message:
+        bin.text === undefined
+          ? `Named by a package.json "bin" entry but could not be read, so the last-resort exit rule could not be applied to it.`
+          : `A bin that does not call installLastResortExit() from @vibe-agent-toolkit/schema — an uncaught throw then exits 1 (FINDINGS) instead of 2 (ERROR). Call it before anything else runs.`,
+      severity: 'error',
+    }));
+}
+
+async function validateBinsInstallLastResortExit(): Promise<void> {
+  const packagesDir = safePath.join(REPO_ROOT, 'packages');
+  const bins: { path: string; text: string | undefined }[] = [];
+  for (const entry of await readdir(packagesDir, { withFileTypes: true })) {
+    if (direntKindFollowingSync(packagesDir, entry) !== 'directory') continue;
+    const read = await readManifest(safePath.join(packagesDir, entry.name, PACKAGE_MANIFEST_FILENAME));
+    if (read.kind !== 'ok') continue; // absent is not a package; unreadable is the engine-floor rule's finding
+    for (const target of Object.values(read.manifest.bin ?? {})) {
+      const path = binSourceOf(`packages/${entry.name}`, target);
+      let text: string | undefined;
+      try {
+        text = await readFile(safePath.join(REPO_ROOT, path), 'utf8');
+      } catch (error) {
+        if (!isPathAbsentError(error)) throw error;
+      }
+      bins.push({ path, text });
+    }
+  }
+  errors.push(...findBinsWithoutLastResort(bins));
 }
 
 /**
@@ -1679,13 +1788,21 @@ async function validate(): Promise<void> {
   await validateVendorClaimFreshness();
   await validateSeverityCountsRatchet();
   await validateEngineFloorAgreement();
+  await validateBinsInstallLastResortExit();
+
+  // One owner per fact: every committed artifact that is DERIVED from another
+  // file (tsconfig references, CLAUDE.md lists, the CI workflow, the lockfile's
+  // workspace resolutions, package script sets, changelog fragments) is checked
+  // against its source here, so a stale copy fails the gate instead of being
+  // read as the truth.
+  errors.push(...collectDerivedArtifactFindings(REPO_ROOT));
 
   printResults();
 
   // Exit with error code if there are errors (not warnings)
   const hasErrors = errors.some((e) => e.severity === 'error');
   if (hasErrors) {
-    process.exit(1);
+    process.exit(ExitCode.FINDINGS);
   }
 }
 
@@ -1701,9 +1818,10 @@ if (isEntrypoint(import.meta.url)) {
     await validate();
   } catch (error) {
     console.error('Validation script failed:', error);
-    process.exit(2);
+    process.exit(ExitCode.ERROR);
   }
 }
 
-export { validate, type ValidationError };
+export { validate };
+export type { ValidationError } from './structure-finding.js';
  

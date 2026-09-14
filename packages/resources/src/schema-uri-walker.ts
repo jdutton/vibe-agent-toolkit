@@ -13,7 +13,7 @@
  * Does NOT handle (intentional, see spec §"Non-Goals"):
  *  - `if`/`then`/`else`, `dependentSchemas`
  *  - `patternProperties`, schema-form `additionalProperties`
- *  - `prefixItems` (JSON Schema 2020-12)
+ *  - `prefixItems` (JSON Schema draft/2020-12)
  *
  * Captures are deduplicated by `(pointer, value)` before return so that
  * multiple matching composite branches don't produce duplicate issues.
@@ -183,7 +183,7 @@ function walk(
   walkItems(data, node, root, pointerSegments, visitedRefs, captures);
 
   // Intentionally NOT handled: if/then/else, dependentSchemas, patternProperties,
-  // schema-form additionalProperties, prefixItems (2020-12). See spec §"Non-Goals".
+  // schema-form additionalProperties, prefixItems (draft/2020-12). See the module doc's "Does NOT handle".
 }
 
 /**

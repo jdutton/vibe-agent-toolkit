@@ -85,7 +85,7 @@ export const convertConversationalAssistantToTool: SingleAgentConverter = create
     return {
       ...(result as Record<string, unknown>),
       session,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the SDK result shape is widened with a session; the caller narrows
     } as any;
   },
 ) as never;
@@ -139,11 +139,11 @@ export function convertConversationalAssistantsToTools(
   configs: Record<
     string,
     {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- registry holds agents of every input/output type
       agent: Agent<any, any>;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- registry holds schemas of every input type
       inputSchema: z.ZodType<any>;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- registry holds schemas of every output type
       outputSchema: z.ZodType<any>;
     }
   >,

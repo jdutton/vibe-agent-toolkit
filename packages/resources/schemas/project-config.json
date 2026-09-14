@@ -1,0 +1,1470 @@
+{
+  "$ref": "#/definitions/project-config",
+  "definitions": {
+    "project-config": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "description": "Accepted and ignored. The npm package version is the only version VAT has; a `version:` key of any value is not read."
+        },
+        "skills": {
+          "type": "object",
+          "properties": {
+            "include": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "description": "Glob patterns to find SKILL.md files (e.g., \"skills/**/SKILL.md\")"
+            },
+            "exclude": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Glob patterns to exclude"
+            },
+            "defaults": {
+              "type": "object",
+              "properties": {
+                "publish": {
+                  "type": "boolean",
+                  "description": "Whether this skill is published for distribution (default: true). Set to false for in-development skills."
+                },
+                "linkFollowDepth": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "string",
+                      "const": "full"
+                    }
+                  ]
+                },
+                "resourceNaming": {
+                  "type": "string",
+                  "enum": [
+                    "basename",
+                    "resource-id",
+                    "preserve-path"
+                  ]
+                },
+                "stripPrefix": {
+                  "type": "string"
+                },
+                "excludeNavigationFiles": {
+                  "type": "boolean"
+                },
+                "excludeReferencesFromBundle": {
+                  "type": "object",
+                  "properties": {
+                    "rules": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "patterns": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "Glob patterns matched against path relative to project root"
+                          },
+                          "template": {
+                            "type": "string",
+                            "description": "Handlebars template for rewriting links to matched files"
+                          }
+                        },
+                        "required": [
+                          "patterns"
+                        ],
+                        "additionalProperties": false
+                      },
+                      "default": []
+                    },
+                    "defaultTemplate": {
+                      "type": "string",
+                      "description": "Handlebars template for non-bundled links that don't match any rule"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "validation": {
+                  "type": "object",
+                  "properties": {
+                    "severity": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string",
+                        "enum": [
+                          "error",
+                          "warning",
+                          "info",
+                          "ignore"
+                        ]
+                      },
+                      "propertyNames": {
+                        "pattern": "^(?:LINK_OUTSIDE_PROJECT|LINK_TARGETS_DIRECTORY|LINK_TO_UNBUNDLED_DIRECTORY|LINK_TO_NAVIGATION_FILE|LINK_TO_AGENT_INSTRUCTION_FILE|LINK_TO_GITIGNORED_FILE|LINK_MISSING_TARGET|LINK_TARGET_UNREADABLE|LINK_DEFERRED_ARTIFACT|LINK_TO_SKILL_DEFINITION|LINK_FROM_NON_ROUTABLE_FILE|LINK_DROPPED_BY_DEPTH|LINK_EXCLUDED_BY_PATTERN|PACKAGED_UNREFERENCED_FILE|PACKAGED_REFERENCED_PATH_MISSING|PACKAGED_SIZE_EXCEEDS_API_LIMIT|PACKAGED_AGENT_INSTRUCTION_FILE|TREE_PROVENANCE_INDETERMINATE|SCAN_PATH_UNREADABLE|FILES_GLOB_DROPPED_NEVER_PACKAGED|FILES_GLOB_SKIPPED_NON_REGULAR_FILE|FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED|FILES_GLOB_MATCHED_NOTHING|PACKAGED_TEST_INPUT|PACKAGED_BROKEN_LINK|FILENAME_COLLISION|PLUGIN_EXCLUDE_PATTERN_UNUSED|DUPLICATE_RESOURCE_ID|RESOURCE_UNREADABLE|COLLECTION_MIME_CONFLICT|EXTENT_DIRECTORY_UNLISTABLE|SKILL_LENGTH_EXCEEDS_RECOMMENDED|SKILL_TOTAL_SIZE_LARGE|SKILL_TOO_MANY_FILES|REFERENCE_TOO_DEEP|DESCRIPTION_TOO_VAGUE|NO_PROGRESSIVE_DISCLOSURE|SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT|SKILL_DESCRIPTION_FILLER_OPENER|SKILL_DESCRIPTION_WRONG_PERSON|SKILL_CLAUDE_PLUGIN_NAME_MISMATCH|SKILL_NAME_MISMATCHES_DIR|RESERVED_WORD_IN_NAME|SKILL_TIME_SENSITIVE_CONTENT|NON_PORTABLE_ASSET_REFERENCE|NON_PORTABLE_COMMAND|MCP_TOOL_NAME_UNQUALIFIED|SKILL_FRONTMATTER_EXTRA_FIELDS|SKILL_CROSS_SKILL_AUTH_UNDECLARED|SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE|PLUGIN_MISSING_DESCRIPTION|PLUGIN_MISSING_AUTHOR|PLUGIN_MISSING_LICENSE|PLUGIN_TOPLEVEL_BIN_DIR|PLUGIN_NAME_NOT_KEBAB_CASE|SKILL_NAME_NOT_KEBAB_CASE|SKILL_REFERENCES_BUT_NO_LINKS|SKILL_BODY_NOT_IMPERATIVE|CAPABILITY_LOCAL_SHELL|CAPABILITY_EXTERNAL_CLI|CAPABILITY_BROWSER_AUTH|COMPAT_TARGET_INCOMPATIBLE|COMPAT_TARGET_NEEDS_REVIEW|COMPAT_TARGET_UNDECLARED|ALLOW_EXPIRED|ALLOW_UNUSED|COMPONENT_DECLARED_BUT_MISSING|COMPONENT_PRESENT_BUT_UNDECLARED|REFERENCE_TARGET_MISSING|MARKETPLACE_PLUGIN_SOURCE_MISSING|REGISTRY_SHAPE_DRIFT|LINK_BROKEN_FILE|LINK_NORMALIZATION_MISMATCH|LINK_BROKEN_ANCHOR|LINK_UNKNOWN|LINK_TO_GITIGNORED|LINK_UNRESOLVED_REFERENCE|MALFORMED_HTML|FRONTMATTER_MISSING|FRONTMATTER_INVALID_YAML|FRONTMATTER_SCHEMA_ERROR|FRONTMATTER_LINK_BROKEN|FRONTMATTER_ANCHOR_MISSING|FRONTMATTER_LINK_TO_GITIGNORED|FRONTMATTER_UNKNOWN_LINK|EXTERNAL_URL_DEAD|EXTERNAL_URL_TIMEOUT|EXTERNAL_URL_ERROR|LINK_AUTH_DEAD|LINK_AUTH_DEAD_OR_UNAUTHORIZED|LINK_AUTH_FORBIDDEN|LINK_AUTH_UNAUTHORIZED|LINK_AUTH_UNVERIFIED|LINK_AUTH_PROVIDER_ERROR|ALWAYS_LOADED_CONTEXT_BUDGET|CUSTOM:[\\s\\S]+)$"
+                      }
+                    },
+                    "allow": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "paths": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "minLength": 1
+                              },
+                              "minItems": 1,
+                              "default": [
+                                "**/*"
+                              ]
+                            },
+                            "reason": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "expires": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "reason"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "propertyNames": {
+                        "enum": [
+                          "LINK_OUTSIDE_PROJECT",
+                          "LINK_TARGETS_DIRECTORY",
+                          "LINK_TO_UNBUNDLED_DIRECTORY",
+                          "LINK_TO_NAVIGATION_FILE",
+                          "LINK_TO_AGENT_INSTRUCTION_FILE",
+                          "LINK_TO_GITIGNORED_FILE",
+                          "LINK_MISSING_TARGET",
+                          "LINK_TARGET_UNREADABLE",
+                          "LINK_DEFERRED_ARTIFACT",
+                          "LINK_TO_SKILL_DEFINITION",
+                          "LINK_FROM_NON_ROUTABLE_FILE",
+                          "LINK_DROPPED_BY_DEPTH",
+                          "LINK_EXCLUDED_BY_PATTERN",
+                          "PACKAGED_UNREFERENCED_FILE",
+                          "PACKAGED_REFERENCED_PATH_MISSING",
+                          "PACKAGED_SIZE_EXCEEDS_API_LIMIT",
+                          "PACKAGED_AGENT_INSTRUCTION_FILE",
+                          "TREE_PROVENANCE_INDETERMINATE",
+                          "SCAN_PATH_UNREADABLE",
+                          "FILES_GLOB_DROPPED_NEVER_PACKAGED",
+                          "FILES_GLOB_SKIPPED_NON_REGULAR_FILE",
+                          "FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED",
+                          "FILES_GLOB_MATCHED_NOTHING",
+                          "PACKAGED_TEST_INPUT",
+                          "PACKAGED_BROKEN_LINK",
+                          "FILENAME_COLLISION",
+                          "PLUGIN_EXCLUDE_PATTERN_UNUSED",
+                          "DUPLICATE_RESOURCE_ID",
+                          "RESOURCE_UNREADABLE",
+                          "COLLECTION_MIME_CONFLICT",
+                          "EXTENT_DIRECTORY_UNLISTABLE",
+                          "SKILL_LENGTH_EXCEEDS_RECOMMENDED",
+                          "SKILL_TOTAL_SIZE_LARGE",
+                          "SKILL_TOO_MANY_FILES",
+                          "REFERENCE_TOO_DEEP",
+                          "DESCRIPTION_TOO_VAGUE",
+                          "NO_PROGRESSIVE_DISCLOSURE",
+                          "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+                          "SKILL_DESCRIPTION_FILLER_OPENER",
+                          "SKILL_DESCRIPTION_WRONG_PERSON",
+                          "SKILL_CLAUDE_PLUGIN_NAME_MISMATCH",
+                          "SKILL_NAME_MISMATCHES_DIR",
+                          "RESERVED_WORD_IN_NAME",
+                          "SKILL_TIME_SENSITIVE_CONTENT",
+                          "NON_PORTABLE_ASSET_REFERENCE",
+                          "NON_PORTABLE_COMMAND",
+                          "MCP_TOOL_NAME_UNQUALIFIED",
+                          "SKILL_FRONTMATTER_EXTRA_FIELDS",
+                          "SKILL_CROSS_SKILL_AUTH_UNDECLARED",
+                          "SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE",
+                          "PLUGIN_MISSING_DESCRIPTION",
+                          "PLUGIN_MISSING_AUTHOR",
+                          "PLUGIN_MISSING_LICENSE",
+                          "PLUGIN_TOPLEVEL_BIN_DIR",
+                          "PLUGIN_NAME_NOT_KEBAB_CASE",
+                          "SKILL_NAME_NOT_KEBAB_CASE",
+                          "SKILL_REFERENCES_BUT_NO_LINKS",
+                          "SKILL_BODY_NOT_IMPERATIVE",
+                          "CAPABILITY_LOCAL_SHELL",
+                          "CAPABILITY_EXTERNAL_CLI",
+                          "CAPABILITY_BROWSER_AUTH",
+                          "COMPAT_TARGET_INCOMPATIBLE",
+                          "COMPAT_TARGET_NEEDS_REVIEW",
+                          "COMPAT_TARGET_UNDECLARED",
+                          "ALLOW_EXPIRED",
+                          "ALLOW_UNUSED",
+                          "COMPONENT_DECLARED_BUT_MISSING",
+                          "COMPONENT_PRESENT_BUT_UNDECLARED",
+                          "REFERENCE_TARGET_MISSING",
+                          "MARKETPLACE_PLUGIN_SOURCE_MISSING",
+                          "REGISTRY_SHAPE_DRIFT",
+                          "LINK_BROKEN_FILE",
+                          "LINK_NORMALIZATION_MISMATCH",
+                          "LINK_BROKEN_ANCHOR",
+                          "LINK_UNKNOWN",
+                          "LINK_TO_GITIGNORED",
+                          "LINK_UNRESOLVED_REFERENCE",
+                          "MALFORMED_HTML",
+                          "FRONTMATTER_MISSING",
+                          "FRONTMATTER_INVALID_YAML",
+                          "FRONTMATTER_SCHEMA_ERROR",
+                          "FRONTMATTER_LINK_BROKEN",
+                          "FRONTMATTER_ANCHOR_MISSING",
+                          "FRONTMATTER_LINK_TO_GITIGNORED",
+                          "FRONTMATTER_UNKNOWN_LINK",
+                          "EXTERNAL_URL_DEAD",
+                          "EXTERNAL_URL_TIMEOUT",
+                          "EXTERNAL_URL_ERROR",
+                          "LINK_AUTH_DEAD",
+                          "LINK_AUTH_DEAD_OR_UNAUTHORIZED",
+                          "LINK_AUTH_FORBIDDEN",
+                          "LINK_AUTH_UNAUTHORIZED",
+                          "LINK_AUTH_UNVERIFIED",
+                          "LINK_AUTH_PROVIDER_ERROR",
+                          "ALWAYS_LOADED_CONTEXT_BUDGET"
+                        ]
+                      }
+                    },
+                    "thresholds": {
+                      "type": "object",
+                      "properties": {
+                        "alwaysLoadedContextTokens": {
+                          "type": "integer",
+                          "exclusiveMinimum": 0
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false,
+                  "description": "Validation framework config: severity overrides and per-path allow entries"
+                },
+                "targets": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "claude-chat",
+                      "claude-cowork",
+                      "claude-code"
+                    ]
+                  },
+                  "description": "Declared runtime targets for this skill. Suppresses non-applicable compat verdicts."
+                },
+                "files": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "source": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Source path relative to project root"
+                      },
+                      "dest": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Destination path relative to skill output directory"
+                      },
+                      "integrity": {
+                        "type": "boolean",
+                        "description": "When true, the build asserts the copied dest set exactly matches the matched source set and each file is byte-identical (a future copy-time check; late-bound)"
+                      }
+                    },
+                    "required": [
+                      "source",
+                      "dest"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "description": "Explicit source→dest file mappings for build artifacts, unlinked files, or routing overrides"
+                },
+                "test": {
+                  "type": "object",
+                  "properties": {
+                    "model": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Pinned model for reproducibility (default: a fixed model, not \"whatever the caller has\")"
+                    },
+                    "maxTurns": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "description": "Per-spawn cap on executor/grader turns"
+                    },
+                    "maxBudgetUsd": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "description": "Hard USD budget cap passed to the CLI"
+                    },
+                    "timeout": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "description": "Wall-clock timeout in seconds"
+                    },
+                    "stall": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "description": "Stall-watchdog seconds (kill on no stream output)"
+                    },
+                    "evals": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Which evals.json to grade against: a path relative to the skill source, an absolute path, or an npm bare specifier (resolved via the target package's exports map). A suite outside the skill tree is the normal case when the skill is not the one you authored. The CLI flag --evals resolves against the current directory instead."
+                    },
+                    "auth": {
+                      "type": "string",
+                      "enum": [
+                        "inherit",
+                        "subscription",
+                        "api-key",
+                        "auto"
+                      ],
+                      "description": "Auth-mechanism selection (default: inherit)"
+                    },
+                    "requireAuth": {
+                      "type": "string",
+                      "enum": [
+                        "subscription",
+                        "api-key"
+                      ],
+                      "description": "Fail-fast guard: preflight exits 2 if effective mechanism is not this"
+                    },
+                    "baseline": {
+                      "type": "boolean",
+                      "description": "Run the opt-in with/without A/B baseline (default: false)"
+                    },
+                    "skillCreator": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "workspace": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "workspace"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "npm": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "npm"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "url": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "sha256": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "url"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "path": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "required": [
+                            "path"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "vendored": {
+                              "type": "boolean",
+                              "const": true
+                            }
+                          },
+                          "required": [
+                            "vendored"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ],
+                      "description": "Source for skill-creator (default: { vendored: true })"
+                    },
+                    "with": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/project-config/properties/skills/properties/defaults/properties/test/properties/skillCreator"
+                      },
+                      "description": "Required companion skills to stage alongside the subject (invocable by it); the run fails if a source cannot be resolved."
+                    },
+                    "optional": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/project-config/properties/skills/properties/defaults/properties/test/properties/skillCreator"
+                      },
+                      "description": "Optional companion skills; staged if resolvable, skipped with a warning otherwise."
+                    },
+                    "env": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "description": "Feature B: explicit env var injections for the executor spawn. Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir} interpolation. ${fixturesDir} is PER-EVAL: it names the staged workspace for that one eval (a fixtures/ dir beneath the executor working directory), so the eval must declare input files; the other tokens are run-scoped. Protected names (PATH, auth, model, admin) cannot be overridden."
+                    },
+                    "passEnv": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "description": "Feature A: names of host env vars to forward to the executor spawn if present. Protected names are ignored with a warning."
+                    },
+                    "build": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Shell command run once, before staging, to generate build artifacts (cwd = config root)"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "description": "vat skill test configuration for this skill"
+                },
+                "executables": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Path to the executable, relative to the skill root"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "node",
+                          "python",
+                          "shell",
+                          "pwsh",
+                          "binary"
+                        ],
+                        "description": "Executable kind (informs launch-guidance linting)"
+                      },
+                      "howInvoked": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Canonical human invocation, e.g. \"uv run csvsum.py\" or \"node dist/csvsum.mjs\""
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "kind",
+                      "howInvoked"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "description": "Declared executables the skill ships — stable names for eval toolExpectations + launch-guidance linting"
+                }
+              },
+              "additionalProperties": false,
+              "description": "Default packaging config for all skills"
+            },
+            "config": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/definitions/project-config/properties/skills/properties/defaults"
+              },
+              "description": "Per-skill packaging config overrides (keyed by skill name)"
+            }
+          },
+          "required": [
+            "include"
+          ],
+          "additionalProperties": false,
+          "description": "Skills discovery and packaging configuration"
+        },
+        "resources": {
+          "type": "object",
+          "properties": {
+            "include": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Global default include patterns for the SCANNING lane — `vat resources scan` and `vat resources validate`. ⚠️ It does NOT scope the projection, so it does not scope `vat resources query` or `vat resources check`: those read the tracked tree. See `exclude` for the measurement."
+            },
+            "exclude": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Global default exclude patterns for the SCANNING lane — `vat resources scan` and `vat resources validate`. ⚠️ **It does NOT constrain the projection**, so `vat resources query` and `vat resources check` still see every path listed here. That is what a projection IS — the tree, not a view of it — and `.gitignore` IS honoured, so this is not a junk-enumeration problem. Measured on one adopter: `scan` reported 1,473 files while the same tree's projection held 11,685 members, 142 of them under a directory listed here. A check written against a path you excluded will fire on it; narrow the check's own SQL with a `WHERE path NOT LIKE …` predicate."
+            },
+            "collections": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "include": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "description": "Include patterns (paths or globs like docs/**/*.md)"
+                  },
+                  "exclude": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Exclude patterns (globs)"
+                  },
+                  "mimeType": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "MIME type every file this collection matches IS, overriding mime-type.ts's basename/extension tables — e.g. \"text/markdown\" for a corpus of prose files with an unhelpful extension. OPTIONAL, and omitting it is not the same as declaring a default: a collection that matches a file but declares nothing contributes nothing and can never conflict with another collection. Two collections that match one file and declare DIFFERENT values are a config error, reported per file and collected across the run. ⚠️ Declaring this makes the file's content key CONFIG-dependent: the parser kind is mixed into the key's digest preimage, so editing this value invalidates that file's cached parse facts automatically — which is the intended behaviour and needs no version constant."
+                  },
+                  "validation": {
+                    "type": "object",
+                    "properties": {
+                      "frontmatterSchema": {
+                        "type": "string",
+                        "description": "Path to JSON Schema file for frontmatter validation (relative to config file or package reference like @vibe-agent-toolkit/agent-skills/schemas/skill-frontmatter.json)"
+                      },
+                      "mode": {
+                        "type": "string",
+                        "enum": [
+                          "strict",
+                          "permissive"
+                        ],
+                        "description": "Validation mode (default: strict)"
+                      },
+                      "checkUrlLinks": {
+                        "type": "boolean",
+                        "description": "Whether to validate external URL links (default: false)"
+                      },
+                      "checkGitIgnored": {
+                        "type": "boolean",
+                        "description": "Whether to check if non-ignored files link to git-ignored files (default: true)"
+                      },
+                      "checkFrontmatterLinks": {
+                        "type": "boolean",
+                        "description": "Whether to validate frontmatter values at JSON Schema positions with a URI-family format (default: true). Set to false to disable for this collection."
+                      },
+                      "externalUrls": {
+                        "type": "object",
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "description": "Whether to validate external URLs (default: false)"
+                          },
+                          "timeout": {
+                            "type": "integer",
+                            "exclusiveMinimum": 0,
+                            "description": "Request timeout in milliseconds (default: 15000)"
+                          },
+                          "retryOn429": {
+                            "type": "boolean",
+                            "description": "Whether to retry on rate limit (429) (default: true)"
+                          },
+                          "ignorePatterns": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            },
+                            "description": "Regex patterns for URLs to skip validation (e.g., \"^https://localhost\")"
+                          }
+                        },
+                        "additionalProperties": false,
+                        "description": "External URL validation configuration"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "Validation configuration for this collection"
+                  }
+                },
+                "required": [
+                  "include"
+                ],
+                "additionalProperties": false,
+                "description": "Configuration for a named collection of resources"
+              },
+              "description": "Named collections of resources"
+            },
+            "validation": {
+              "$ref": "#/definitions/project-config/properties/skills/properties/defaults/properties/validation",
+              "description": "Validation framework config: severity overrides and per-code allow entries (applied inside ResourceRegistry.validate)"
+            },
+            "linkAuth": {
+              "type": "object",
+              "properties": {
+                "cache": {
+                  "type": "object",
+                  "properties": {
+                    "ttlMinutes": {
+                      "type": "integer",
+                      "exclusiveMinimum": 0,
+                      "description": "Content cache TTL in minutes (default 30 — used by slice 3 content-fetch)"
+                    }
+                  },
+                  "additionalProperties": true
+                },
+                "providers": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "use": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Macro name (e.g. \"github\", \"sharepoint\")"
+                          }
+                        },
+                        "required": [
+                          "use"
+                        ],
+                        "additionalProperties": true,
+                        "description": "Reference a shipped macro by name. Override fields (match/rewrite/auth/token/check) deep-merge on top at expansion time."
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "match": {
+                            "type": "object",
+                            "properties": {
+                              "host": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "Glob matched against URL hostname"
+                              },
+                              "excludeHost": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "description": "Globs that, if any match the hostname, exclude this provider"
+                              }
+                            },
+                            "required": [
+                              "host"
+                            ],
+                            "additionalProperties": true,
+                            "description": "Provider selection — match.host + optional excludeHost globs"
+                          },
+                          "rewrite": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "when": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "description": "Regex source (RFC-style, JavaScript-compatible) matched against the URL"
+                                },
+                                "vars": {
+                                  "type": "object",
+                                  "additionalProperties": {
+                                    "type": "string"
+                                  },
+                                  "description": "Computed variables, each a template that references captures from `when`"
+                                },
+                                "to": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "description": "URL template — interpolates ${capture} and ${var}"
+                                }
+                              },
+                              "required": [
+                                "when",
+                                "to"
+                              ],
+                              "additionalProperties": true,
+                              "description": "A single rewrite rule (one entry in a provider's ordered rewrite list)"
+                            },
+                            "minItems": 1,
+                            "description": "Ordered rewrite rules — first matching wins"
+                          },
+                          "auth": {
+                            "type": "object",
+                            "properties": {
+                              "headers": {
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": "string"
+                                },
+                                "description": "Header name → value template. Values interpolate ${token} and any capture/var."
+                              }
+                            },
+                            "required": [
+                              "headers"
+                            ],
+                            "additionalProperties": true,
+                            "description": "Auth headers attached to the authenticated fetch"
+                          },
+                          "fetch": {
+                            "type": "object",
+                            "properties": {
+                              "headers": {
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": "string"
+                                },
+                                "description": "Header name → value template, same templating as auth.headers."
+                              }
+                            },
+                            "required": [
+                              "headers"
+                            ],
+                            "additionalProperties": true,
+                            "description": "Optional fetch-mode header override (§6.2) — content retrieval, distinct from health-check"
+                          },
+                          "token": {
+                            "type": "array",
+                            "items": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "env": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    }
+                                  },
+                                  "required": [
+                                    "env"
+                                  ],
+                                  "additionalProperties": true
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "command": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1
+                                          },
+                                          "minItems": 1
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "command"
+                                  ],
+                                  "additionalProperties": true
+                                }
+                              ],
+                              "description": "A single token source — env var, or argv command (preferred), or convenience string"
+                            },
+                            "description": "Ordered token sources — first non-empty wins"
+                          },
+                          "check": {
+                            "type": "object",
+                            "properties": {
+                              "method": {
+                                "type": "string",
+                                "enum": [
+                                  "GET",
+                                  "HEAD"
+                                ]
+                              },
+                              "aliveStatus": {
+                                "type": "array",
+                                "items": {
+                                  "type": "integer",
+                                  "minimum": 100,
+                                  "maximum": 599
+                                },
+                                "minItems": 1,
+                                "description": "HTTP status codes meaning the URL is alive (per host semantics)"
+                              },
+                              "notFoundMeaning": {
+                                "type": "string",
+                                "enum": [
+                                  "ambiguous",
+                                  "dead"
+                                ],
+                                "description": "Per-host: does 404 mean \"dead\" (honest 404 host like Graph) or \"ambiguous\" (masking host like GitHub)?"
+                              }
+                            },
+                            "required": [
+                              "method",
+                              "aliveStatus",
+                              "notFoundMeaning"
+                            ],
+                            "additionalProperties": true,
+                            "description": "Status-to-outcome classifier (consumed by the resources layer, not the pure engine)"
+                          }
+                        },
+                        "required": [
+                          "match",
+                          "rewrite",
+                          "auth",
+                          "token",
+                          "check"
+                        ],
+                        "additionalProperties": true
+                      }
+                    ],
+                    "description": "A provider entry — either { use: <macro>, ...overrides } or a full inline provider"
+                  },
+                  "description": "Ordered list of providers — first claiming-by-host wins"
+                }
+              },
+              "required": [
+                "providers"
+              ],
+              "additionalProperties": true,
+              "description": "Authenticated external link resolution config (issue #113 / link-auth engine)"
+            },
+            "checks": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "What this check asserts, in the author's own words. REQUIRED: it becomes the finding's message, and a check whose intent is only inferable from its SQL is one nobody can review or act on."
+                  },
+                  "sql": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "One read-only SQL statement selecting the VIOLATING rows — zero rows is a pass. It must BEGIN with `SELECT`, `WITH` or `VALUES`; the first significant token decides, and anything else — `ATTACH`, `PRAGMA`, `EXPLAIN`, any write — is refused before it reaches SQLite, because a statement the engine accepts without producing rows cannot be told apart from a check that passed. (`EXPLAIN` is refused even though it is side-effect free: it is a PREFIX, and admitting one would mean deciding safety by looking past the first token.) Each returned row becomes one finding; a selected `path` column anchors that finding to the file. Runs against the same projection `vat resources query` reads, under PRAGMA query_only. A second statement is refused — SQLite would compile only the first and discard the rest without error — but a COMMENT after the terminating semicolon is accepted (`... ;  -- see ADR-14`), which SQL written as a YAML block scalar ends with routinely."
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "error",
+                      "warning",
+                      "info"
+                    ],
+                    "description": "How a violation is reported. Defaults to `error` — the safe direction, since a check whose author did not think about severity is still an assertion they wanted enforced. An adopter can override it per code through resources.validation.severity, including to `ignore`."
+                  }
+                },
+                "required": [
+                  "description",
+                  "sql"
+                ],
+                "additionalProperties": false,
+                "description": "A SQL assertion over the resource projection"
+              },
+              "description": "Named SQL assertions over the resource projection, run by `vat resources check`. Each key becomes a CUSTOM:<name> validation code."
+            }
+          },
+          "additionalProperties": false,
+          "description": "Resources configuration"
+        },
+        "claude": {
+          "type": "object",
+          "properties": {
+            "managedSettings": {
+              "type": "string",
+              "description": "Path to managed-settings.json for schema validation (relative to config file)"
+            },
+            "marketplaces": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "owner": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "email": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "additionalProperties": false,
+                    "description": "Marketplace owner information"
+                  },
+                  "skills": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": "*"
+                      },
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    ],
+                    "description": "Default skill filter for the marketplace — restricts which skills are available when plugins use skills: \"*\". Omit to allow all skills. This does NOT add skills directly; skills are always selected per-plugin."
+                  },
+                  "publish": {
+                    "type": "object",
+                    "properties": {
+                      "branch": {
+                        "type": "string",
+                        "description": "Target branch name (default: claude-marketplace)"
+                      },
+                      "remote": {
+                        "type": "string",
+                        "description": "Git remote name (e.g., \"origin\") or full URL (e.g., \"https://github.com/org/marketplace-repo.git\") for cross-repo publishing (default: origin)"
+                      },
+                      "changelog": {
+                        "type": "string",
+                        "description": "Path to marketplace changelog (Keep a Changelog format; used during both build and publish, overriding project root CHANGELOG.md)"
+                      },
+                      "readme": {
+                        "type": "string",
+                        "description": "Path to marketplace README (used during both build and publish, overriding project root README.md)"
+                      },
+                      "license": {
+                        "type": "string",
+                        "description": "SPDX license identifier (e.g., \"mit\") or file path (e.g., \"./LICENSE\")"
+                      },
+                      "sourceRepo": {
+                        "type": [
+                          "boolean",
+                          "string"
+                        ],
+                        "description": "Source repo URL for commit metadata (false to disable, string to override)"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "description": "Publish configuration for marketplace distribution"
+                  },
+                  "plugins": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]*$",
+                          "description": "Plugin name (lowercase alphanumeric with hyphens)"
+                        },
+                        "description": {
+                          "type": "string",
+                          "description": "Plugin description"
+                        },
+                        "skills": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "const": "*"
+                            },
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          ],
+                          "description": "Skills to include: \"*\" for all, or array of skill name selectors. Must be [] when externalSource is set"
+                        },
+                        "source": {
+                          "type": "string",
+                          "description": "Path to plugin directory (default: plugins/<name>). Incompatible with externalSource"
+                        },
+                        "files": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/definitions/project-config/properties/skills/properties/defaults/properties/files/items"
+                          },
+                          "description": "Explicit source→dest file mappings for compiled artifacts outside the plugin directory. Incompatible with externalSource"
+                        },
+                        "exclude": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Patterns (relative to the plugin source dir) to leave out of the verbatim tree-copy: a glob (\"scratch/**\"), or a directory name with or without a trailing slash (\"scratch\", \"scratch/\") which covers that directory and everything under it. Incompatible with externalSource"
+                        },
+                        "version": {
+                          "type": "string",
+                          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$",
+                          "description": "Per-plugin semver version (overrides root package.json:version for this plugin)"
+                        },
+                        "changelog": {
+                          "type": "string",
+                          "description": "Path to per-plugin CHANGELOG (relative to plugin source dir; default: <source>/CHANGELOG.md if it exists). Incompatible with externalSource"
+                        },
+                        "externalSource": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "source": {
+                                  "type": "string",
+                                  "const": "github"
+                                },
+                                "repo": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "description": "owner/repo"
+                                },
+                                "ref": {
+                                  "type": "string",
+                                  "description": "Branch or tag (default: the repo default branch)"
+                                },
+                                "sha": {
+                                  "type": "string",
+                                  "description": "Pin to an exact commit (overrides ref for reproducibility)"
+                                }
+                              },
+                              "required": [
+                                "source",
+                                "repo"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "source": {
+                                  "type": "string",
+                                  "const": "url"
+                                },
+                                "url": {
+                                  "type": "string",
+                                  "format": "uri"
+                                },
+                                "ref": {
+                                  "type": "string"
+                                },
+                                "sha": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "source",
+                                "url"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "source": {
+                                  "type": "string",
+                                  "const": "npm"
+                                },
+                                "package": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "version": {
+                                  "type": "string"
+                                },
+                                "registry": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "source",
+                                "package"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "source": {
+                                  "type": "string",
+                                  "const": "pip"
+                                },
+                                "package": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "version": {
+                                  "type": "string"
+                                },
+                                "registry": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "source",
+                                "package"
+                              ],
+                              "additionalProperties": false
+                            }
+                          ],
+                          "description": "Reference a plugin published in another marketplace/repo. VAT never builds or copies it — the source object is emitted verbatim into marketplace.json. See ExternalPluginSourceSchema"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "skills"
+                      ],
+                      "additionalProperties": false,
+                      "description": "Plugin entry within a marketplace configuration"
+                    },
+                    "minItems": 1,
+                    "description": "Plugin groupings within this marketplace"
+                  }
+                },
+                "required": [
+                  "owner",
+                  "plugins"
+                ],
+                "additionalProperties": false,
+                "description": "Configuration for a Claude plugin marketplace"
+              },
+              "description": "Named map of Claude plugin marketplaces (never singleton)"
+            }
+          },
+          "additionalProperties": false,
+          "description": "Claude-specific configuration (marketplaces, managed-settings)"
+        },
+        "extents": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "minLength": 1,
+                "description": "The resolution_contexts.kind this extent has, e.g. \"skill\". Open vocabulary; must match the kind the contributor is registered under."
+              },
+              "closureFrom": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Root-relative path of the extent root — the one member admitted unconditionally, before any traversal. A reference that resolves BACK to it is skipped in silence: the root is a member by declaration, so a self-link has nothing left to refuse and nothing for the hop budget to hold back, and a row about it would contradict the admission. That is the same verdict walk-link-graph.ts gives a link back to its own skillRootPath."
+              },
+              "follow": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "markdown-link",
+                    "markdown-link-reference",
+                    "markdown-definition",
+                    "at-prefixed",
+                    "env-anchored",
+                    "bare-token",
+                    "html-link"
+                  ],
+                  "description": "Syntactic form of a reference candidate, as a lexer sees it"
+                },
+                "default": [
+                  "markdown-link",
+                  "markdown-link-reference",
+                  "markdown-definition"
+                ],
+                "description": "Which blob_references syntactic forms the closure traverses. Defaults to the three markdown forms; an @-prefixed or bare token is ambiguous at the blob layer, so following one is an explicit choice."
+              },
+              "referenceDialect": {
+                "type": "string",
+                "enum": [
+                  "href",
+                  "claude-import"
+                ],
+                "description": "How this closure INTERPRETS the tokens it follows. Defaults to \"href\" — RFC 3986 through resolveLocalHref — so every declaration written before this field existed is unchanged. \"claude-import\" is the only correct reading of an at-prefixed token in a CLAUDE.md or .claude/rules file: a leading @ is stripped, ~/ expands to the home directory (landing OUTSIDE the corpus, which is the healthy state the vendor recommends for sharing instructions across worktrees), and a leading / is filesystem-absolute rather than root-relative. Inert data, so it rides onto zone_provenance.parameterSet verbatim and the store correctly treats two runs over one tree under different dialects as two different questions.",
+                "default": "href"
+              },
+              "maxDepth": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "string",
+                    "const": "full"
+                  }
+                ],
+                "default": "full",
+                "description": "Reference hops from the root, or \"full\" for an unbounded closure. Same union as skills packaging linkFollowDepth, so one concept has one spelling."
+              },
+              "refusals": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "OPAQUE name for this refusal, reported verbatim as the realization_conditions.code of every candidate this rule refuses. The primitive never interprets it: a caller that wants the shipped skill walker's vocabulary supplies that vocabulary here, and a caller with its own supplies its own. Required, because a refusal with no label is the payload-free verdict this rule shape exists to replace."
+                    },
+                    "patterns": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "default": [],
+                      "description": "Globs (picomatch, dot: true) matched against a candidate member's root-relative path. A refused file is neither admitted nor traversed through."
+                    },
+                    "basenames": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "default": [],
+                      "description": "Basenames matched CASE-INSENSITIVELY against a candidate member's basename, e.g. \"README.md\". Deliberately NOT a glob: patterns matches a root-relative PATH, and a brace alternation over that path cannot enumerate the spellings a case-insensitive filesystem generates freely (Readme.md, README.MD, ReadMe.md), so the glob approximation silently under-matches exactly the spellings that occur in the wild. Folding is toLowerCase(), never toLocaleLowerCase() — see basenameMatcher in agent-skills/src/validators/validation-rules.ts."
+                    },
+                    "kinds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "default": [],
+                      "description": "resources.kind values refused, e.g. \"directory\". This is the only way a declaration can refuse a DIRECTORY target: a directory's path is shaped like any other path, so no glob over the path can express the distinction — the entity kind can."
+                    },
+                    "flags": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "boolean"
+                      },
+                      "propertyNames": {
+                        "minLength": 1
+                      },
+                      "default": {},
+                      "description": "BOOLEAN COLUMNS of the candidate's resource_realizations row, as column name → the value that refuses, e.g. { \"gitignored\": true } or { \"gitignored\": true, \"exists\": true }. CONJUNCTIVE within the record — every named column must equal its declared value — which is the only way to state a guarded rule such as walk-link-graph.ts's existence-gated gitignore branch; an empty record never matches. The column name is NOT an open vocabulary the way kinds is: a realization row has a fixed shape, so a name no boolean column carries is a rule that could never fire and the closure THROWS on it rather than silently refusing nothing."
+                    },
+                    "payload": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/definitions/project-config/properties/extents/additionalProperties/properties/refusals/items/properties/payload"
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": {
+                            "$ref": "#/definitions/project-config/properties/extents/additionalProperties/properties/refusals/items/properties/payload"
+                          }
+                        }
+                      ],
+                      "description": "OPAQUE caller data about this rule, copied verbatim onto realization_conditions.matchedPayload for every candidate it refuses and NEVER interpreted by the primitive — the same contract label has, for facts that are not a name. It exists because a caller's rule carries vocabulary the primitive has no column for: the skill translation puts an excludeReferencesFromBundle rule's index and its template here, neither of which a closure could be taught without hardcoding one caller's domain. Null when the caller declares none.",
+                      "default": null
+                    }
+                  },
+                  "required": [
+                    "label"
+                  ],
+                  "additionalProperties": false,
+                  "description": "One labelled refusal rule of a closure extent's ordered cascade. The four matchers are unordered WITHIN a rule (they share the one label); ACROSS rules the array order is behaviour."
+                },
+                "default": [],
+                "description": "ORDERED refusal cascade — FIRST MATCH WINS, and the winning rule's label is what the refusal reports as its condition code. THE ORDER IS BEHAVIOUR: a candidate matching two rules is attributed to the earlier one, the same way walk-link-graph.ts's classifyExclusion attributes a directory that is also pattern-matched to \"directory-target\" rather than to \"pattern-matched\". Never rewrite this as a set or a record. A refused candidate is neither admitted nor traversed through, so the subtree reachable only through it is refused with it."
+              },
+              "admitPaths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "default": [],
+                "description": "Exact root-relative paths admitted even when a refusals rule matches them. The same rule closureFrom already gets: an explicit declaration outranks a net, because a glob never named the file it caught. Checked BEFORE the cascade, so an admitted path never reports a refusal label. Matched by exact string equality against the root-relative, forward-slashed path — never a prefix or glob test, since the explicit-vs-glob distinction is the whole point of the field."
+              }
+            },
+            "required": [
+              "kind",
+              "closureFrom"
+            ],
+            "additionalProperties": false,
+            "description": "A closure-defined extent declaration (zones.md §7.3)"
+          },
+          "propertyNames": {
+            "minLength": 1
+          },
+          "description": "Closure-defined extents (zones.md §7.3), keyed by extent name"
+        },
+        "test": {
+          "type": "object",
+          "properties": {
+            "graderModel": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Pinned grader/judge model for `vat skill test` grading (default: DEFAULT_GRADER_MODEL)"
+            },
+            "concurrency": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "description": "Bounded-parallel executor→grader pipeline width (default: DEFAULT_CONCURRENCY)"
+            }
+          },
+          "additionalProperties": false,
+          "description": "Global vat skill test configuration (graderModel, concurrency)"
+        },
+        "okf": {
+          "type": "object",
+          "properties": {
+            "bundles": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "root": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Bundle root directory, relative to the config file. Population is SPEC-DEFINED — every non-reserved .md beneath it — and is deliberately not narrowable by a glob."
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "error",
+                      "warning",
+                      "info"
+                    ],
+                    "description": "Severity for this bundle's conformance findings (default: \"error\"). VAT is producer-side, so it gates; §11's \"MUST NOT reject\" binds consumers, not publishers."
+                  }
+                },
+                "required": [
+                  "root"
+                ],
+                "additionalProperties": false,
+                "description": "One declared OKF bundle: a root directory whose population the spec defines"
+              },
+              "description": "Named map of OKF bundles (never singleton, mirroring claude.marketplaces)"
+            }
+          },
+          "required": [
+            "bundles"
+          ],
+          "additionalProperties": false,
+          "description": "Open Knowledge Format bundles this project publishes"
+        },
+        "ard": {
+          "type": "object",
+          "properties": {
+            "publisher": {
+              "type": "string",
+              "description": "Publisher domain, e.g. \"example.com\". Becomes the <publisher> segment of every entry URN and the anchor trustManifest.identity must align with."
+            },
+            "namespace": {
+              "type": "string",
+              "description": "URN namespace segment between publisher and name (default: \"skills\" for skills, \"bundles\" for OKF bundles)"
+            },
+            "baseUrl": {
+              "type": "string",
+              "description": "Base URL that entry `url` values resolve against. Required in practice: ARD demands `url` XOR `data`, and VAT has no inline artifact document to emit as `data`, so emission fails without it."
+            },
+            "trustManifest": {
+              "type": "object",
+              "properties": {
+                "identity": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Cryptographic workload identifier (SPIFFE ID, DID, or HTTPS FQDN URI). Its trust domain MUST align with the publisher segment of every entry identifier."
+                },
+                "identityType": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Hint for the identity format (e.g. \"spiffe\", \"did\", \"https\")"
+                }
+              },
+              "required": [
+                "identity"
+              ],
+              "additionalProperties": false,
+              "description": "Org-level trust identity. ARD mandates only domain binding; everything else defers to the named trust framework."
+            },
+            "entries": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "representativeQueries": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "2-5 sample natural-language queries this resource serves. AUTHORED — VAT never generates these. Omitting them emits a conformance warning, which is the honest outcome."
+                  },
+                  "capabilities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "description": "Short skill/tool tokens enabling structured filtering without fetching the artifact"
+                  },
+                  "type": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Override the media type derived from the declaring surface. Needed only for a surface VAT cannot derive a defensible type for."
+                  }
+                },
+                "additionalProperties": false,
+                "description": "Author-supplied fields for one ARD entry; everything derivable is deliberately absent"
+              },
+              "description": "Author-supplied fields, keyed by \"<kind>:<name>\" (e.g. \"skill:expenses\", \"okf-bundle:handbook\") or by a bare name when only one surface carries it. Everything derivable is derived and must not appear here."
+            }
+          },
+          "required": [
+            "publisher"
+          ],
+          "additionalProperties": false,
+          "description": "Agentic Resource Discovery emission configuration"
+        }
+      },
+      "additionalProperties": false,
+      "description": "vibe-agent-toolkit project configuration"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

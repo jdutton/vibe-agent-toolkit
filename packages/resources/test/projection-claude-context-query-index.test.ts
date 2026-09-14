@@ -396,7 +396,7 @@ describe('the per-projection context-query index', () => {
       ]);
       expect(
         answer.conditions.filter((row) => row.sourceRef === '@missing.md').map((row) => row.severity),
-      ).toEqual(['warn']);
+      ).toEqual(['warning']);
     });
   });
 });

@@ -9,7 +9,7 @@
 
 import { existsSync, lstatSync, readdirSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
@@ -83,16 +83,13 @@ function collectPlugins(paths: ClaudeUserPaths): ListedPlugin[] {
 function collectLegacySkills(paths: ClaudeUserPaths): ListedLegacySkill[] {
   const legacySkills: ListedLegacySkill[] = [];
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
   if (!existsSync(paths.skillsDir)) return legacySkills;
 
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
     const entries = readdirSync(paths.skillsDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
       const skillPath = safePath.join(paths.skillsDir, entry.name);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated path
       const stat = lstatSync(skillPath);
       legacySkills.push({
         name: entry.name,
@@ -100,10 +97,12 @@ function collectLegacySkills(paths: ClaudeUserPaths): ListedLegacySkill[] {
         type: stat.isSymbolicLink() ? 'symlink' : 'directory',
       });
     }
-  } catch {
-    // skillsDir may be unreadable (permissions, broken symlink, concurrent deletion).
-    // Legacy skill enumeration is best-effort — a failure here must not break `vat plugins list`.
-    // Return whatever entries were collected before the error.
+  } catch (error) {
+    // A skillsDir (or an entry in it) that vanished between `existsSync` and the
+    // read is the concurrent-deletion race: the entries collected so far are the
+    // answer. A listing the OS REFUSES is not — reporting it as "no legacy skills"
+    // is the quiet answer that is wrong, so the refusal reaches `vat plugins list`.
+    if (!isPathAbsentError(error)) throw error;
   }
 
   return legacySkills;

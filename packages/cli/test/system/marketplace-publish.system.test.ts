@@ -1,8 +1,8 @@
-/* eslint-disable sonarjs/no-duplicate-string, sonarjs/no-os-command-from-path */
 import { spawnSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -95,18 +95,18 @@ function createBuildOutput(tempDir: string): void {
  */
 function createBareRemote(tempDir: string): string {
   const bareDir = safePath.join(tempDir, '.bare-remote');
-  spawnSync('git', ['init', '--bare', '-b', 'main', bareDir], { encoding: 'utf-8' });
+  spawnSync(gitExecutable(), ['init', '--bare', '-b', 'main', bareDir], { encoding: 'utf-8' });
   return bareDir;
 }
 
 function initGitRepo(tempDir: string): void {
   const bareRemote = createBareRemote(tempDir);
-  spawnSync('git', ['init', '-b', 'main'], { cwd: tempDir, encoding: 'utf-8' });
-  spawnSync('git', ['config', 'user.email', 'test@test.com'], { cwd: tempDir, encoding: 'utf-8' });
-  spawnSync('git', ['config', 'user.name', 'Test'], { cwd: tempDir, encoding: 'utf-8' });
-  spawnSync('git', ['add', '.'], { cwd: tempDir, encoding: 'utf-8' });
-  spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir, encoding: 'utf-8' });
-  spawnSync('git', ['remote', 'add', 'origin', bareRemote], { cwd: tempDir, encoding: 'utf-8' });
+  spawnSync(gitExecutable(), ['init', '-b', 'main'], { cwd: tempDir, encoding: 'utf-8' });
+  spawnSync(gitExecutable(), ['config', 'user.email', 'test@test.com'], { cwd: tempDir, encoding: 'utf-8' });
+  spawnSync(gitExecutable(), ['config', 'user.name', 'Test'], { cwd: tempDir, encoding: 'utf-8' });
+  spawnSync(gitExecutable(), ['add', '.'], { cwd: tempDir, encoding: 'utf-8' });
+  spawnSync(gitExecutable(), ['commit', '-m', 'init'], { cwd: tempDir, encoding: 'utf-8' });
+  spawnSync(gitExecutable(), ['remote', 'add', 'origin', bareRemote], { cwd: tempDir, encoding: 'utf-8' });
 }
 
 /** Set up a fully configured publish project and run dry-run publish */
@@ -209,9 +209,9 @@ claude:
     expect(tmpRepoPath).not.toBe('');
 
     // Verify the .mjs script file survived the compose→cpSync pipeline
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path from CLI output
+    // A link is an entry the publish placed too; listed as one, not followed.
     const allFiles = readdirSync(tmpRepoPath, { recursive: true, withFileTypes: true })
-      .filter(entry => entry.isFile() && !entry.parentPath.includes('.git'))
+      .filter(entry => (entry.isSymbolicLink() || entry.isFile()) && !entry.parentPath.includes('.git'))
       .map(entry => safePath.relative(tmpRepoPath, safePath.join(entry.parentPath, entry.name)));
 
     const mjsFiles = allFiles.filter(f => f.endsWith('.mjs'));

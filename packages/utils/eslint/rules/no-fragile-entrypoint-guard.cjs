@@ -178,8 +178,21 @@ module.exports = {
     docs: {
       description:
         'Ban entrypoint guards that silently answer false — `import.meta.main` (undefined before Node 24.2/22.18) and any raw compare of where the module lives to `process.argv[1]`, in URL space or path space (false through any symlink). Use `isEntrypoint()`.',
-      category: 'Cross-Platform',
+      category: 'Entrypoint guards',
+      bans: '`import.meta.main`; `import.meta.url === pathToFileURL(process.argv[1]).href`; `fileURLToPath(import.meta.url) === process.argv[1]`',
+      useInstead: '`isEntrypoint(import.meta.url)`',
+      subpath: '/process',
+      // Not in `recommended`: ONE of its two halves is a claim about the CONSUMER's
+      // Node floor rather than a portable fact. `import.meta.main` shipped in Node
+      // 24.2 / 22.18; an adopter whose floor is at or above that writes it
+      // correctly and would get a finding they cannot act on. This package's own
+      // floor spans 22.13–22.17 where the property is `undefined`, so the hazard
+      // is real for some adopters and absent for others, and only they know which.
+      // The other half (`rawEntrypointCompare`) has no such dependency — a raw
+      // string compare misses a symlinked entry on every Node there has ever been
+      // — but the two share one rule id. VAT enables the whole rule explicitly.
       recommended: false,
+      recommendedSeverity: 'error',
     },
     messages: {
       importMetaMain:

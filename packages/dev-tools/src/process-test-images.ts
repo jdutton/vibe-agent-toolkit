@@ -15,13 +15,13 @@
  *   bun scripts/process-test-images.ts ~/Downloads/cat-photos test/fixtures/photos/cats
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 // This utility script needs to process user-provided image paths
 
 import { mkdir, readdir, stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { direntKindFollowingSync, safePath } from '@vibe-agent-toolkit/utils';
 import sharp from 'sharp';
 import { z } from 'zod';
 
@@ -43,7 +43,7 @@ export const TestFixtureMetadataSchema = z.object({
     .enum(['cat', 'not-cat', 'cat-like'])
     .default('cat')
     .describe('Expected classification category'),
-});
+}).strict();
 
 export type TestFixtureMetadata = z.infer<typeof TestFixtureMetadataSchema>;
 
@@ -234,7 +234,7 @@ async function processDirectory(inputDir: string, outputDir: string, config?: Pr
   let skipped = 0;
 
   for (const entry of entries) {
-    if (!entry.isFile()) {
+    if (direntKindFollowingSync(inputDir, entry) !== 'file') {
       continue;
     }
 
@@ -271,7 +271,7 @@ async function main() {
     console.error('Usage: bun scripts/process-test-images.ts <input-dir> <output-dir>');
     console.error('\nExample:');
     console.error('  bun scripts/process-test-images.ts ~/Downloads/cats test/fixtures/photos/cats');
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   }
 
   const [inputDir, outputDir] = args as [string, string];

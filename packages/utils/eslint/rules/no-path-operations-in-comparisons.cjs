@@ -25,9 +25,14 @@ module.exports = {
   meta: {
     type: 'problem',
     docs: {
-      description: 'Disallow using path operations directly in string comparisons',
-      category: 'Cross-platform compatibility',
+      description:
+        'Disallow using path operations directly in string comparisons',
+      category: 'Path handling',
+      bans: 'raw `path.*()` results in string comparisons',
+      useInstead: 'wrap in `toForwardSlash()`',
+      subpath: '/path',
       recommended: true,
+      recommendedSeverity: 'error',
     },
     messages: {
       normalizePathOperation:

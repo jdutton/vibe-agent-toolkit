@@ -1,9 +1,9 @@
 #!/usr/bin/env tsx
-/* eslint-disable security/detect-non-literal-fs-filename */
 // File paths derived from projectRoot parameter (controlled, not user input)
 
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { log } from './common.js';
@@ -20,20 +20,25 @@ function readPackageVersion(packagePath: string): PackageInfo | null {
     return null;
   }
 
+  let pkg: { name?: string; version?: string };
   try {
-    const content = readFileSync(packageJsonPath, 'utf-8');
-    const pkg = JSON.parse(content) as { name?: string; version?: string };
-    if (!pkg.name || !pkg.version) {
-      return null;
-    }
-    return {
-      name: pkg.name,
-      version: pkg.version,
-      path: packagePath,
-    };
-  } catch {
+    pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as { name?: string; version?: string };
+  } catch (cause) {
+    // A manifest that is there but unreadable or not JSON must not vanish from
+    // the population: "all N packages agree" would then be true of N-1.
+    throw new Error(
+      `Cannot read ${packageJsonPath}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause },
+    );
+  }
+  if (!pkg.name || !pkg.version) {
     return null;
   }
+  return {
+    name: pkg.name,
+    version: pkg.version,
+    path: packagePath,
+  };
 }
 
 function validateVersion(projectRoot: string): void {
@@ -41,7 +46,7 @@ function validateVersion(projectRoot: string): void {
 
   if (!existsSync(packagesDir)) {
     log('✗ No packages directory found', 'red');
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   }
 
   const packages: PackageInfo[] = [];
@@ -57,7 +62,7 @@ function validateVersion(projectRoot: string): void {
 
   if (packages.length === 0) {
     log('✗ No publishable packages found', 'red');
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   }
 
   const versions = new Set(packages.map(p => p.version));
@@ -67,14 +72,14 @@ function validateVersion(projectRoot: string): void {
     for (const pkg of packages) {
       log(`  ${pkg.name}: ${pkg.version}`, 'red');
     }
-    process.exit(1);
+    process.exit(ExitCode.FINDINGS);
   }
 
   // We know packages has at least one element due to earlier check
   const firstPackage = packages[0];
   if (!firstPackage) {
     log('✗ Unexpected error: no packages found', 'red');
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   }
 
   const version = firstPackage.version;
@@ -82,4 +87,9 @@ function validateVersion(projectRoot: string): void {
 }
 
 const projectRoot = process.argv[2] ?? process.cwd();
-validateVersion(projectRoot);
+try {
+  validateVersion(projectRoot);
+} catch (error) {
+  log(`✗ ${error instanceof Error ? error.message : String(error)}`, 'red');
+  process.exit(ExitCode.ERROR);
+}

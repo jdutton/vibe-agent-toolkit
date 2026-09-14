@@ -17,7 +17,7 @@ import {
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import { parseFileCached, type ParseResult } from '@vibe-agent-toolkit/resources';
-import type { SeverityCounts } from '@vibe-agent-toolkit/schema';
+import { ExitCode, type SeverityCounts } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
@@ -250,7 +250,6 @@ async function collectLinkedFiles(
     if (!resolvedPath.endsWith('.md')) continue;
 
     // Skip missing files
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path resolved from validated markdown links
     if (!existsSync(resolvedPath)) continue;
 
     linkedFiles.push(resolvedPath);
@@ -289,13 +288,10 @@ function extractSkillName(parseResult: ParseResult): string {
  */
 function calculateZipSize(skillPath: string, linkedFiles: string[]): number {
   let totalSize = 0;
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- User-provided path, validated
   totalSize += statSync(skillPath).size;
 
   for (const file of linkedFiles) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Collected from validated markdown links
     if (existsSync(file)) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Collected from validated markdown links
       totalSize += statSync(file).size;
     }
   }
@@ -357,7 +353,6 @@ async function performDryRun(
   const startTime = Date.now();
 
   // Validate skill path exists
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- User-provided CLI argument, validated
   if (!existsSync(skillPath)) {
     throw new Error(`SKILL.md not found: ${skillPath}`);
   }
@@ -464,7 +459,7 @@ async function packageCommand(
     // Handle dry-run mode
     if (options.dryRun) {
       await performDryRun(skillPath, options, logger);
-      process.exit(0);
+      process.exit(ExitCode.OK);
     }
 
     // VALIDATE FIRST - shift left to catch errors early
@@ -504,13 +499,13 @@ async function packageCommand(
       logger.info(`   ZIP: ${basename(result.artifacts['zip'])}`);
     }
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     if (error instanceof ZipSizeLimitError) {
       const duration = Date.now() - startTime;
       logger.error(`Package failed: ${error.message}`);
       writeYamlOutput({ status: 'error', error: error.message, duration: `${duration}ms` });
-      process.exit(1);
+      process.exit(ExitCode.FINDINGS);
     }
     handleCommandError(error, logger, startTime, 'SkillsPackage');
   }

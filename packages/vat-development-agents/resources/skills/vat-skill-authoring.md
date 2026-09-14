@@ -317,7 +317,7 @@ Common adjustments:
 
 Expired `allow` entries still apply — VAT emits `ALLOW_EXPIRED` as a reminder rather than silently re-surfacing the underlying issue (no surprise build breaks when a date passes). Unused `allow` entries surface as `ALLOW_UNUSED` (analogous to ESLint's unused-disable).
 
-`vat audit` is advisory: it applies `severity` for display grouping only, ignores `allow`, and always exits 0. Use `vat skills validate` or `vat skills build` for gated checks.
+`vat audit` applies `severity` (a code at `error` gates, `warning` does not, `ignore` hides it) and ignores `allow`; its exit code follows the report's `status`. Use `vat skills validate` or `vat skills build` for a check that honors `allow`.
 
 ## Pre-publication Check
 

@@ -10,6 +10,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
 
@@ -62,7 +63,6 @@ export function validateHelpFiles(): void {
 
   for (const filename of REQUIRED_HELP_FILES) {
     const helpPath = safePath.join(docsDir, filename);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is constructed from known safe components
     if (!existsSync(helpPath)) {
       missingFiles.push(filename);
     }
@@ -79,7 +79,6 @@ export function validateHelpFiles(): void {
 
   // Reverse direction: a doc nobody serves and nobody classified.
   const required = new Set<string>(REQUIRED_HELP_FILES);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- docsDir is derived from this module's own location
   const present = readdirSync(docsDir).filter(f => f.endsWith('.md'));
   const unclassified = present.filter(f => !required.has(f) && !PROSE_ONLY_HELP_FILES.has(f));
 
@@ -119,10 +118,10 @@ if (isEntrypoint(import.meta.url)) {
   try {
     validateHelpFiles();
     console.log('✓ All required help documentation files exist');
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     console.error('✗ Help file validation failed:');
     console.error((error as Error).message);
-    process.exit(1);
+    process.exit(ExitCode.FINDINGS);
   }
 }

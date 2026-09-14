@@ -448,11 +448,23 @@ interface CopyResourcesOptions {
 
 ### Language Service Plugin
 
-Coming soon - TypeScript language service plugin for enhanced IDE support.
+Shipped on the `@vibe-agent-toolkit/resource-compiler/language-service` subpath: a TypeScript
+language service plugin that gives markdown imports hover, completions, go-to-definition and
+diagnostics in the editor. Enable it in `tsconfig.json`:
+
+```json
+{
+  "compilerOptions": {
+    "plugins": [{ "name": "@vibe-agent-toolkit/resource-compiler/language-service" }]
+  }
+}
+```
 
 ## Development
 
-See the implementation plan for development details.
+`src/compiler/` and `src/transformer/` are the compile pass, `src/cli/` the `vat-compile-resources`
+entry point, `src/language-service/` the editor plugin; run the tests with `bun run test:unit` from
+this package directory.
 
 ## License
 

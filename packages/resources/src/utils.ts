@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import {
+  isFilesystemAccessError,
   toForwardSlash,
   normalizePath,
   safePath,
@@ -135,7 +136,9 @@ function decodeHrefSegment(segment: string): string {
   let decoded: string;
   try {
     decoded = decodeURIComponent(segment);
-  } catch {
+  } catch (error) {
+    // `URIError` is the one thing `decodeURIComponent` throws: malformed escape.
+    if (!(error instanceof URIError)) throw error;
     return segment;
   }
   // Both separators: `%5C` is a backslash in the NAME by the same rule, and a
@@ -259,8 +262,12 @@ export function resolveLocalHref(
  * containment. Two copies of the `startsWith(root + '/') || === root` pair would
  * be free to drift, and a drift here silently changes which links are reported
  * as gitignored leaks.
+ *
+ * Lexical, argument order (file, root) — deliberately NOT named like the utils
+ * sink helper `isUnderRoot(root, candidate)`, which asks the filesystem and
+ * takes its arguments the other way round; an import swap must not compile.
  */
-function isUnderRoot(normalizedFile: string, normalizedRoot: string): boolean {
+function isPathUnderRoot(normalizedFile: string, normalizedRoot: string): boolean {
   // The trailing slash prevents false positives like `/project-other` reading
   // as being inside `/project`.
   return normalizedFile.startsWith(normalizedRoot + '/') || normalizedFile === normalizedRoot;
@@ -270,7 +277,7 @@ function isUnderRoot(normalizedFile: string, normalizedRoot: string): boolean {
  * Whether two path strings name the **same directory**, as the filesystem would
  * judge it.
  *
- * The identity question, not the containment question — {@link isUnderRoot}
+ * The identity question, not the containment question — {@link isPathUnderRoot}
  * answers the latter and is deliberately a different function. This one exists
  * for {@link ResourcePopulationSource}'s root guard, where the two sides arrive
  * from different producers (one from a CLI boundary that resolved a project
@@ -406,9 +413,14 @@ export function canonicalizeSync(filePath: string): string {
 
   for (;;) {
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- candidate derives from the validated path parameter
       return safePath.join(toForwardSlash(fs.realpathSync(candidate)), ...missingRemainder);
-    } catch {
+    } catch (error) {
+      // The filesystem refused this candidate — ENOENT, and equally EACCES on
+      // an existing file or ELOOP on a symlink cycle: for all three the
+      // ancestor's namespace is a strictly better answer than the lexical one,
+      // which is the ruling `FsLookupCache.realpath` documents and this
+      // function must match. A bug is none of those and stays loud.
+      if (!isFilesystemAccessError(error)) throw error;
       const parent = toForwardSlash(path.dirname(candidate));
       // Fixpoint at a filesystem root, where `dirname` returns its own input.
       // Nothing left to walk, and nothing on the path resolved, so the lexical
@@ -439,7 +451,7 @@ export function canonicalizeSync(filePath: string): string {
  *
  * ⚠️ **It canonicalizes the run-constant project root once per call, and no
  * caller hoists it.** Measured on the crucible adopter (`vat audit .` over a
- * ~1,500-document corpus, 2026-08-09): 1,231 `realpathSync` calls on the project
+ * ~1,500-document corpus): 1,231 `realpathSync` calls on the project
  * root string, **one** distinct value, 100% of them attributed to
  * `canonicalizeSync ← isWithinProject ← resolveLocalHref` — 834 under
  * `ResourceRegistry.resolveRelativeLinkPath`, 397 under `walk-link-graph`'s
@@ -482,7 +494,7 @@ export function canonicalizeSync(filePath: string): string {
  * ```
  */
 export function isWithinProject(filePath: string, projectRoot: string): boolean {
-  return isUnderRoot(canonicalizeSync(filePath), canonicalizeSync(projectRoot));
+  return isPathUnderRoot(canonicalizeSync(filePath), canonicalizeSync(projectRoot));
 }
 
 /**
@@ -495,7 +507,7 @@ export function isWithinProject(filePath: string, projectRoot: string): boolean 
  * once per link is half the syscalls this column removes.
  *
  * Exactly equivalent to {@link isWithinProject} — same comparison
- * ({@link isUnderRoot}), same canonicalization contract (see
+ * ({@link isPathUnderRoot}), same canonicalization contract (see
  * {@link canonicalizeSync}).
  *
  * @param table - Table filled by `fillRealpaths`, covering BOTH paths
@@ -509,7 +521,7 @@ export function isWithinProjectFrom(
   filePath: string,
   projectRoot: string,
 ): boolean {
-  return isUnderRoot(realpathFrom(table, filePath), realpathFrom(table, projectRoot));
+  return isPathUnderRoot(realpathFrom(table, filePath), realpathFrom(table, projectRoot));
 }
 
 /**

@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- tempDir paths are test-generated, safe in test context */
 /**
  * Every component of a link path is judged — not just its basename.
  *
@@ -37,9 +36,9 @@ import {
   FsLookupCache,
   issueLocation,
   safePath,
-  setupAsyncTempDirSuite,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite , PERMISSIONS_ENFORCED } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { classifyLink } from '../src/link-classify.js';
@@ -96,7 +95,6 @@ async function judge(root: string, href: string, fsCache = new FsLookupCache()) 
  * happily, which would make the assertion below pass against the very bug it
  * exists to catch.
  */
-const PERMISSIONS_ENFORCED = process.platform !== 'win32' && process.getuid?.() !== 0;
 
 /**
  * Owner `--x`: traversable, so the file below still opens — and NOT listable.

@@ -5,27 +5,16 @@ paths:
   - "packages/cli/src/commands/audit-settings.ts"
 ---
 
-# `vat audit`'s scanning logic is independent of `discovery.scan()` — do not converge them
+# `vat audit` enumerates through the `crawl` lane; only its CLASSIFICATION is its own
 
-**Intentional Architectural Decision**: The `vat audit` command maintains custom scanning logic
-rather than using `discovery.scan()`.
+`vat audit` enumerates its subject tree through the `crawl` lane (`crawlDirectory`) like every
+other command — `packages/cli/src/commands/audit/scan-population.ts` is a consumer of the lane, not
+a walker.
 
-**Why**:
-- `discovery.scan()` is optimized for VAT agent resources (finds markdown files, extracts
-  frontmatter)
-- Audit needs to find multiple file types in specific directory structures (`.claude-plugin/`
-  directories, JSON manifests, TypeScript/JavaScript files)
-- Different scanning requirements = different scanning implementations
+What stays audit's own is CLASSIFICATION: which files are subjects (`SKILL.md`, the two registry
+files, a `.claude-plugin/` marker), subtree ownership between a plugin and the skills beneath it,
+and the two exclude bases.
 
-**What IS shared** — reuse these, don't reimplement:
-- ✅ Skill validation logic (uses shared `validateSkill` from agent-skills)
-- ✅ Validation result formatting (uses shared `validate` function)
-- ✅ Claude paths resolution (uses `@vibe-agent-toolkit/utils/claude-paths`)
-
-**What is NOT shared** — do not try to unify these:
-- ❌ Directory scanning (audit's requirements differ from discovery's design)
-- ❌ File type detection (audit looks for `.claude-plugin/` structure, not markdown)
-
-**This is not technical debt.** It's recognition that discovery and audit have fundamentally
-different scanning needs. Forcing them to share scanning logic would violate single
-responsibility principle and make both implementations more complex.
+Do not converge that with `discovery.scan()` (it classifies markdown/agents for a different
+question) and do not add a second walker: a new `node:fs` import in a command module is a lint
+error (`local/commands-import-boundary`).

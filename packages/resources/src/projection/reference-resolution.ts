@@ -29,7 +29,7 @@
  * resolve a reference an author wrote is the worse error.
  */
 
-import { isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { relativeEscapesRoot } from '@vibe-agent-toolkit/utils';
 
 import type { ReferenceDialect } from '../schemas/project-config.js';
 
@@ -123,35 +123,9 @@ export function resolveReferencePath(
   // is always supplied — it is listed so the exhaustiveness is visible.
   if (resolution.kind !== 'resolved') return { kind: 'unresolvable' };
   const relative = relativize(resolution.resolvedPath, root);
-  return escapesRoot(relative)
+  return relativeEscapesRoot(relative)
     ? { kind: 'outside-root', path: relative }
     : { kind: 'inside-root', path: relative };
-}
-
-/**
- * Does a path stated against the root fall OUTSIDE it?
- *
- * Two spellings, because `safePath.relative` has two ways of saying "not under
- * this root": a `..`-prefixed relative path in the ordinary case, and an
- * ABSOLUTE path when no relative route exists at all — which on Windows is what
- * a different drive letter produces. Testing only the first would silently admit
- * `D:/elsewhere/doc.md` as though it were a root-relative member, on the one
- * platform where nobody would see it fail.
- *
- * `..` alone is the root's own parent directory and is outside by the same rule;
- * it is spelled separately because it carries no trailing separator to match.
- *
- * The parameter is named `normalized…` because the name states the precondition
- * this function does not check, which is also what discharges
- * `local/no-path-startswith`.
- *
- * @param normalizedRelative - A root-relative path as `relativize` spells it
- * @returns True when the path names something the root does not contain
- */
-function escapesRoot(normalizedRelative: string): boolean {
-  return normalizedRelative === '..'
-    || normalizedRelative.startsWith('../')
-    || isAbsoluteAnyPlatform(normalizedRelative);
 }
 
 /**

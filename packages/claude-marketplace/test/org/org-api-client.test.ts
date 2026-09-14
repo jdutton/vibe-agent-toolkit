@@ -597,6 +597,32 @@ describe('interpretApiResponse', () => {
   });
 
   /**
+   * "Not JSON" is the ONE failure the two parse sites absorb into a message. A
+   * parser that throws anything else is a bug in this process, and reporting it
+   * as a malformed body from the API sends the operator to the wrong side of the
+   * wire. `JSON.parse` is the seam because it is the only thing inside either try.
+   */
+  describe('only a SyntaxError is "the body is not JSON"', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('propagates a non-syntax failure from the 2xx body parse', () => {
+      vi.spyOn(JSON, 'parse').mockImplementation(() => {
+        throw new RangeError('parser out of memory');
+      });
+      expect(() => interpretApiResponse<unknown>(200, '{"id":"x"}')).toThrow(RangeError);
+    });
+
+    it('propagates a non-syntax failure from the error-body parse', () => {
+      vi.spyOn(JSON, 'parse').mockImplementation(() => {
+        throw new RangeError('parser out of memory');
+      });
+      expect(() => interpretApiResponse<unknown>(401, '{"error":{"message":"x"}}')).toThrow(RangeError);
+    });
+  });
+
+  /**
    * Success is 2xx and ONLY 2xx. Refusing merely `>= 400` let a 1xx or 3xx through
    * as `{ ok: true, value: undefined }`, and Node's HTTP client does not follow
    * redirects, so a 3xx arrives here verbatim: a TLS-terminating proxy answering

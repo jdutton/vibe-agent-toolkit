@@ -4,7 +4,7 @@
  */
 
 import * as fs from 'node:fs';
-import { existsSync as fsExistsSync, type Dirent } from 'node:fs';
+import { existsSync as fsExistsSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
@@ -52,17 +52,20 @@ import { listingRefusalRemedy, type RegistryUnreadablePolicy } from '@vibe-agent
 import {
   calculateValidationStatus,
   countBySeverity,
+  ExitCode,
   type SeverityCounts,
   type ValidationIssue,
   type SeverityConfig,
 } from '@vibe-agent-toolkit/schema';
 import {
   findProjectRoot,
-  isAbsolutePath,
   isFilesystemAccessError,
+  isPathAbsentError,
   issueLocation,
+  relativeEscapesRoot,
   resetProjectRootCaches,
   safePath,
+  toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import {
@@ -72,7 +75,6 @@ import {
   parseGitUrl,
 } from '@vibe-agent-toolkit/utils/git';
 import { Command } from 'commander';
-import picomatch from 'picomatch';
 
 import {
   resetSkillDiscoveryCache,
@@ -80,7 +82,7 @@ import {
   resolveSkillPackagingConfig,
   stripValidationAllowForDisplay,
 } from '../skill-resolution/packaging-config.js';
-import { handleCommandError } from '../utils/command-error.js';
+import { handleCommandError, handleExpectedFailure } from '../utils/command-error.js';
 import {
   ConfigLoadError,
   loadConfig,
@@ -118,6 +120,13 @@ import {
   rewritePathsInResults,
   type Provenance,
 } from './audit/provenance.js';
+import {
+  type AuditScanSubject,
+  enumerateAuditPopulation,
+  type ExcludeMatcher,
+  resolveProjectExcludes,
+  VAT_CONFIG_FILENAME,
+} from './audit/scan-population.js';
 import { createAuditSettingsCommand } from './audit-settings.js';
 import {
   type DiscoveryUnreadablePolicy,
@@ -151,8 +160,6 @@ export interface VATProjectContext {
   skillConfigs: Map<string, SkillPackagingConfig>;
 }
 
-const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
-
 /**
  * Build config-aware context for a single VAT project at `scanRoot`.
  *
@@ -175,7 +182,6 @@ async function buildVATProjectContext(
   locationRoot: string,
 ): Promise<VATProjectContext | null> {
   const configPath = safePath.join(scanRoot, VAT_CONFIG_FILENAME);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- scanRoot is a controlled parameter
   if (!fs.existsSync(configPath)) {
     return null;
   }
@@ -523,8 +529,8 @@ function degradingDiscovery(
  * config-aware lane makes. Every other verb hands this crawl `'refuse'` (a build
  * must not ship a shorter bundle), and while the registry carried that ruling
  * INSIDE itself `vat audit` on a tree with one `chmod 000` sibling exited 2
- * with `status: error` and ZERO findings — issue #180's exact shape, from the
- * crawl the fix for #180 never looked at. Audit's contract is the opposite:
+ * with `status: error` and ZERO findings — the unreadable-directory defect's
+ * exact shape, from the crawl its first fix never looked at. Audit's contract is the opposite:
  * status describes what was found, exit describes whether the run completed.
  *
  * Recorded through the same per-directory ledger as a refused discovery, so a
@@ -744,19 +750,13 @@ function collect(value: string, previous: string[]): string[] {
  * Create audit command
  * Top-level command: vat audit [path]
  *
- * 🔑 **Two verdicts, deliberately.** The YAML `status` describes the FINDINGS;
- * the exit code describes whether the RUN completed. `status: error` beside exit
- * `0` is the correct pair for a tree with errors, and both facts are worth
- * publishing — but `status` moves with the exit code in every other command of
- * this CLI, so this one is the exception and the help text says so out loud (see
- * the `Output` and `Exit Codes` sections below, and `docs/audit.md`).
- *
- * ⚠️ Do NOT "reconcile" the two by making one follow the other. Making the exit
- * code follow `status` turns an advisory report into a gate — the thing
- * `vat validate` already is, and the thing this command's published contract
- * promises it is not. Making `status` follow the exit code deletes the only
- * machine-readable verdict a CI consumer has, and a stamped `success` over a
- * report full of errors is a stronger falsehood than the mismatch ever was.
+ * The exit code follows the document's `status`, under the one exit-code
+ * contract every verb shares: `OK` when nothing is at error severity,
+ * `FINDINGS` when something is (or the run audited zero files), `ERROR` when
+ * the audit could not run at all. This command used to be the one exception —
+ * "advisory", exit 0 over `status: error` — which a CI author reading the
+ * shared contract got wrong on exactly this verb. Warnings never move the
+ * exit code; `validation.severity` is the dial that decides what counts.
  */
 export function createAuditCommand(): Command {
   const audit = new Command('audit');
@@ -829,22 +829,16 @@ Description:
     done
   (See packages/cli/docs/audit.md for details.)
 
-Output — two verdicts, and they answer different questions:
-  The YAML 'status' describes the FINDINGS. The exit code describes whether the
-  RUN completed. On a tree with errors that is 'status: error' beside exit 0,
-  and both are correct.
-
-  Note that 'status' means something narrower here than elsewhere in this CLI,
-  where it moves with the exit code. Gate CI on the report — 'status' and
-  'issueCounts' — never on this command's exit code.
+Output:
+  The YAML 'status' describes the findings, and the exit code follows it, as
+  in every other command of this CLI.
 
   A run that audited ZERO files is refused, not passed: 'status: error' with one
   non-overridable RESOURCE_CHECK_BROKEN under a top-level 'issues:' (the claim is
-  about the run, so it is not a files[] row), still beside exit 0 — the run
-  completed; it just is not a verdict.
+  about the run, so it is not a files[] row), and exit 1.
 
 Validation Behavior:
-  Advisory only: audit surfaces all validation issues for inspection.
+  Audit surfaces all validation issues for inspection.
   Unlike 'vat skills validate', audit:
   - NEVER applies validation.allow (allowed codes are always shown)
   - Respects validation.severity: a code set to 'ignore' is hidden; warnings
@@ -868,10 +862,15 @@ Validation Checks:
 
   Warnings (should fix):
   - Skill exceeds recommended length (>5000 lines)
-  - Compat smells — requires browser auth, local shell, or external CLI
-    (COMPAT_REQUIRES_BROWSER_AUTH, COMPAT_REQUIRES_LOCAL_SHELL,
-    COMPAT_REQUIRES_EXTERNAL_CLI). See docs/validation-codes.md.
+  - With --compat: a declared target cannot or may not run the skill
+    (COMPAT_TARGET_INCOMPATIBLE, COMPAT_TARGET_NEEDS_REVIEW)
   - Unreferenced files detected (with --warn-unreferenced-files)
+
+  Info (observations):
+  - Capability observations — browser auth, local shell, or external CLI
+    (CAPABILITY_BROWSER_AUTH, CAPABILITY_LOCAL_SHELL, CAPABILITY_EXTERNAL_CLI);
+    with --compat, a skill declaring no targets (COMPAT_TARGET_UNDECLARED).
+    See docs/validation-codes.md.
 
 Gitignore-Aware Scanning:
   When scanning inside a git repository, paths matched by .gitignore are
@@ -882,8 +881,9 @@ Gitignore-Aware Scanning:
   Use --include-artifacts to scan gitignored paths (e.g., to audit a
   bundled marketplace plugin in dist/).
 
-  User-supplied --exclude patterns are always applied on top.
-  Outside a git repository, no automatic exclusions apply.
+  User-supplied --exclude patterns are always applied on top. The
+  directories no VAT crawl enters (node_modules/, .git/, coverage/,
+  .turbo/, git worktrees) stay out under every flag, in or out of git.
 
 Config-Aware Validation:
   The governing vibe-agent-toolkit.config.yaml is found by walking UP from
@@ -902,14 +902,19 @@ Config-Aware Validation:
     skills.config.<name>.validation...     that one skill
 
 Exit Codes:
-  0 - Always, when the audit completes — including when it reports
-      'status: error'. The findings are in the report; see Output above.
-      A missing or unrecognised path is UNKNOWN_FORMAT; an unreadable one,
-      or a governing config that cannot be loaded or whose skills.include
-      reaches an unreadable directory, is SCAN_PATH_UNREADABLE — readable
-      siblings are still validated, and the config's skills config-free.
-  2 - The audit could not run at all (--user with no Claude config dir,
-      a git URL that would not clone, an internal failure), so there is
+  0 - The audit completed with nothing at error severity (warnings and
+      informational findings are in the report, not the exit code).
+  1 - The audit completed and reports 'status: error': at least one
+      error-severity finding, or zero files audited. A path inside the tree
+      the scan could not read, or a governing config that cannot be loaded
+      or whose skills.include reaches an unreadable directory, is
+      SCAN_PATH_UNREADABLE (warning): the run is degraded, not failed —
+      readable siblings are still validated, the config's skills
+      config-free, and the refused path is not counted in filesScanned (so
+      a root with nothing readable is a zero-files refusal).
+  2 - The audit could not run at all: the path does not exist or is a file
+      no audit lane recognises, --user with no Claude config dir, a git URL
+      that would not clone, an unknown flag, an internal failure. There is
       no report to read.
 
 Examples:
@@ -976,11 +981,8 @@ async function auditUserDirectories(
   // config dir, so that is the run's single stated root.
   const scanRoot = safePath.resolve(claudeDir);
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
   const pluginsDirExists = fs.existsSync(pluginsDir);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
   const skillsDirExists = fs.existsSync(skillsDir);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
   const marketplacesDirExists = fs.existsSync(marketplacesDir);
 
   if (!pluginsDirExists && !skillsDirExists && !marketplacesDirExists) {
@@ -989,7 +991,7 @@ async function auditUserDirectories(
     logger.error(`  Skills: ${skillsDir}`);
     logger.error(`  Marketplaces: ${marketplacesDir}`);
     logger.error('Claude plugins/skills/marketplaces have not been installed yet.');
-    process.exit(2);
+    process.exit(ExitCode.ERROR);
   }
 
   const scanned: ValidationResult[] = [];
@@ -1050,7 +1052,6 @@ const SKILL_RESULT_TYPES: ReadonlySet<ValidationResult['type']> = new Set([RESOU
  */
 export function deriveScanRoot(targetPath: string): string {
   const resolved = safePath.resolve(targetPath);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved is the operator's own audit target
   const isDirectory = fs.existsSync(resolved) && fs.statSync(resolved).isDirectory();
   return isDirectory ? resolved : safePath.resolve(resolved, '..');
 }
@@ -1105,7 +1106,7 @@ function buildFilteredResult(
 /**
  * Apply severity resolution to validation results.
  *
- * Audit is advisory only: it applies `validation.severity` to decide what to
+ * Audit shows everything: it applies `validation.severity` to decide what to
  * show and at what severity, but deliberately ignores `validation.allow`.
  *
  * **Both directions, via the one shared resolver.** This used to compute the
@@ -1322,7 +1323,7 @@ export async function buildAuditReport(
   }
 
   // Apply severity filtering: hide codes whose effective severity is 'ignore'.
-  // Allow is deliberately NOT applied — audit is advisory only.
+  // Allow is deliberately NOT applied — audit shows every finding.
   const results = applySeverityFilter(rawResults, config);
 
   const effectiveSettings = await resolveEffectiveSettings(options, scanPath, logger);
@@ -1408,7 +1409,6 @@ export async function auditCommand(
     // cloned https://github.com/<that>.git instead, reaching out to the
     // network with a name derived from the caller's own directory layout.
     // Shorthand is a fallback for arguments that name nothing on disk.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is the user's own audit target; existence is the question being asked
     if (targetPath !== undefined && !fsExistsSync(targetPath) && isGitUrl(targetPath)) {
       await runUrlAudit(targetPath, options);
       return;
@@ -1423,6 +1423,12 @@ export async function auditCommand(
     }
 
     const scanPath = targetPath ? safePath.resolve(targetPath) : process.cwd();
+    const unusable = await unusableRootReason(scanPath);
+    if (unusable !== undefined) {
+      // `return` the call though its type is `never`: under test `process.exit`
+      // is a spy that returns, and a bare call would fall through into the scan.
+      return handleExpectedFailure(unusable, ExitCode.ERROR, startTime);
+    }
     await runAuditAtPath(scanPath, options);
   } catch (error) {
     // 'Audit', not 'AgentAudit'. The old name was copy-pasted from the agent
@@ -1430,6 +1436,38 @@ export async function auditCommand(
     // operator has to search for did not match what they typed.
     handleCommandError(error, logger, startTime, 'Audit');
   }
+}
+
+/**
+ * Why the ROOT argument cannot be audited at all, or `undefined` when the scan
+ * may start.
+ *
+ * The exit-code contract every verb shares: a path that does not exist, or a
+ * file no audit lane recognises, is the INVOCATION's mistake — `ExitCode.ERROR`
+ * (2) before any scan, the same ending `vat resources validate` and `vat skill
+ * review` give the same argument. Until this check the audit ran anyway and
+ * published `UNKNOWN_FORMAT` as a finding at exit 1 with `filesScanned: 1`: a
+ * typo in a CI step read as "the tree failed its gate", and the denominator
+ * counted a file that was never there.
+ *
+ * ONLY the root, and only these two conditions. A root the OS refuses to stat
+ * is not answered here — the scan degrades it to `SCAN_PATH_UNREADABLE`, which
+ * is not counted as a scanned file, so a tree with nothing readable ends on the
+ * zero-files refusal (exit 1) like any other tree that yielded nothing. A
+ * sub-path inside a readable tree is never the invocation's fault and stays a
+ * finding. Pinned by the `audit → error` rows of `exit-codes.system.test.ts`.
+ */
+async function unusableRootReason(scanPath: string): Promise<string | undefined> {
+  let isDirectory: boolean;
+  try {
+    isDirectory = fs.lstatSync(scanPath).isDirectory();
+  } catch (error) {
+    if (isPathAbsentError(error)) return `Path does not exist: ${scanPath}`;
+    return undefined;
+  }
+  if (isDirectory || detectFormat(scanPath) === RESOURCE_TYPE_AGENT_SKILL) return undefined;
+  if ((await detectResourceFormat(scanPath)).type !== 'unknown') return undefined;
+  return `Path is not a resource this command can audit (a SKILL.md, a plugin or marketplace directory, or a Claude registry file): ${scanPath}`;
 }
 
 /**
@@ -1583,8 +1621,11 @@ async function appendPluginInventoryToSurfaceResults(
  *   not (plugin.json) and a format it is not (JSON), at error severity beside
  *   the skill lane's warning, and carrying the build host's absolute path.
  *
- * What remains — hooks/hooks.json, .mcp.json — is appended with error
- * severity, the message spelled scan-root-relative wherever it names the file.
+ * What remains — hooks/hooks.json, .mcp.json, a directory the crawl could not
+ * list — is appended with error severity when the SUBJECT is defective, and
+ * as `SCAN_PATH_UNREADABLE` (warning) when the row is marked `unreadable`
+ * (the OS refused the path); the message is spelled scan-root-relative
+ * wherever it names the file.
  */
 function appendInventoryParseErrors(
 	result: ValidationResult,
@@ -1592,15 +1633,27 @@ function appendInventoryParseErrors(
 	locationRoot: string,
 ): void {
 	const pluginJsonSuffix = safePath.join('.claude-plugin', 'plugin.json');
+	// One refused path, one refusal: the distributed-tree detector crawls the
+	// same directories and files the ones it cannot list on this same result.
+	const refusalsFiled = new Set(
+		result.issues.filter((issue) => issue.code === 'SCAN_PATH_UNREADABLE').map((issue) => issue.location),
+	);
 	const parseIssues: ValidationIssue[] = [];
 	for (const err of inv.parseErrors) {
 		if (err.path.endsWith(pluginJsonSuffix) || basename(err.path) === 'SKILL.md') continue;
-		parseIssues.push({
-			severity: 'error',
-			code: 'PLUGIN_INVALID_JSON',
-			message: withRelativePath(err.message, err.path, locationRoot),
-			location: issueLocation(err.path, locationRoot),
-		});
+		const message = withRelativePath(err.message, err.path, locationRoot);
+		const location = issueLocation(err.path, locationRoot);
+		if (err.unreadable !== true) {
+			parseIssues.push({ severity: 'error', code: 'PLUGIN_INVALID_JSON', message, location });
+			continue;
+		}
+		// A path the OS refused was not examined; that is the run degrading, not
+		// a defect of the plugin, and it is filed at the severity every other lane
+		// gives a refusal. Under `PLUGIN_INVALID_JSON` (error) an `EACCES` on one
+		// skill directory failed the whole audit over a mode bit.
+		if (refusalsFiled.has(location)) continue;
+		refusalsFiled.add(location);
+		parseIssues.push(materializeIssue('SCAN_PATH_UNREADABLE', { location, detail: `${location}: ${message}` }));
 	}
 	// Status was hand-set to 'error' here while `issueCounts` and `summary` kept
 	// describing the pre-append list. One appender derives all three.
@@ -1625,7 +1678,8 @@ function appendInventoryParseErrors(
  * way into a validator unprotected: a `SKILL.md` named directly on the command
  * line, a plugin directory, a marketplace, each surface of a multi-surface tree.
  * All of them still ended the whole run with `status: error`, exit 2 and zero
- * findings — the exact symptom of issue #180, in the lanes nobody had checked.
+ * findings — the exact symptom of the unreadable-directory defect, in the lanes
+ * nobody had checked.
  *
  * Guarding the seven dispatch sites individually would have been the same mistake
  * a seventh time. This function is what every one of them is reached through, so
@@ -1811,32 +1865,51 @@ async function validateAuditSubject(
 	}
 
 	// If unknown format, check if it's a directory we can scan
-	const fsp = await import('node:fs/promises');
-	try {
-		const stat = await fsp.stat(scanPath);
-		if (stat.isDirectory()) {
-			logger.debug('Scanning directory for resources');
+	if (await isScannableDirectory(scanPath)) {
+		logger.debug('Scanning directory for resources');
 
-			// The project's `resources.exclude` is applied by the scan context,
-			// on the project-root basis its globs were written against — NOT
-			// merged into `options.exclude`, whose patterns are relative to the
-			// directory the operator named. See resolveProjectExcludes.
-			return scanDirectory(
-				scanPath,
-				recursive,
-				options,
-				logger,
-				await resolveScanContext(scanPath, locationRoot, logger),
-			);
-		}
-	} catch {
-		// Path doesn't exist or not accessible, let validate() handle it
+		// The project's `resources.exclude` is applied by the scan context,
+		// on the project-root basis its globs were written against — NOT
+		// merged into `options.exclude`, whose patterns are relative to the
+		// directory the operator named. See resolveProjectExcludes.
+		return scanDirectory(
+			scanPath,
+			recursive,
+			options,
+			logger,
+			await resolveScanContext(scanPath, locationRoot, logger),
+		);
 	}
 
 	// Unknown resource type - use unified validator which will return appropriate error
 	logger.debug(`Unknown resource type at: ${scanPath}`);
 	const result = await validate(scanPath, { locationRoot });
 	return [result];
+}
+
+/**
+ * Whether `scanPath` is a directory the walk can enter.
+ *
+ * `false` for a file and for NOTHING — `validate()` then names the path as
+ * unknown or absent, which is the answer the operator can act on. A refusal on
+ * the stat is neither: it propagates to `getValidationResults`, whose own catch
+ * files it as `SCAN_PATH_UNREADABLE`, so the audit still degrades (the run
+ * completes, the refusal a finding) rather than refusing the run.
+ *
+ * 🪤 The stat used to share ONE `try` with `scanDirectory` itself, and the
+ * catch was bare. Every throw from the scan — a crawl refusal, a `TypeError`
+ * two frames down — was absorbed into "let validate() handle it", and
+ * `validate()` then reported the directory as an unknown resource format. A
+ * scan that examined nothing was reported as a directory that was nothing.
+ */
+async function isScannableDirectory(scanPath: string): Promise<boolean> {
+	const fsp = await import('node:fs/promises');
+	try {
+		return (await fsp.stat(scanPath)).isDirectory();
+	} catch (error) {
+		if (isPathAbsentError(error)) return false;
+		throw error;
+	}
 }
 
 /**
@@ -1913,9 +1986,9 @@ function resolveConfigTargetsForPlugin(
 
   for (const [skillPathAbs, packagingConfig] of vatContext.skillConfigs) {
     const rel = safePath.relative(pluginDirAbs, skillPathAbs);
-    // Skill lives inside the plugin directory iff relative path does not
-    // start with '..' and is not absolute.
-    if (rel === '' || rel.startsWith('..') || isAbsolutePath(rel)) continue;
+    // Skill lives inside the plugin directory iff the relative path neither
+    // climbs out nor (on Windows, cross-drive) comes back absolute.
+    if (rel === '' || relativeEscapesRoot(rel)) continue;
 
     const skillTargets = packagingConfig.targets;
     if (skillTargets === undefined) continue;
@@ -2272,17 +2345,6 @@ function findingSubject(result: ValidationResult, root: string): string {
 }
 
 /**
- * The clause every "audit found errors" line ends with.
- *
- * One string because the two summary lanes — per-file and per-skill — both make
- * the same claim and used to word it differently, which is how one of them ended
- * up saying "Audit failed" over an exit code of 0. Naming the command that DOES
- * gate is the actionable half: an adopter reading "advisory" still has to be
- * told what to reach for instead.
- */
-const ADVISORY_EXIT_NOTE = '— advisory, exit 0; use `vat validate` to gate on this';
-
-/**
  * Render supporting evidence beneath each CAPABILITY_* issue when the
  * audit was invoked with --verbose. Evidence comes from the validation
  * result itself (per-file SKILL evidence) and from any attached
@@ -2317,8 +2379,8 @@ function renderVerboseEvidence(
  * document says. The document is derived in `buildBaseSummary`; this only
  * RENDERS it. Both stderr lanes call it first, because "Audit successful: 0
  * file(s) passed" over `status: error` is the exact disagreement the refusal
- * exists to end (invariant 6 of `run-integrity.ts`). Exit stays 0 — the run
- * completed — and the note says which command gates.
+ * exists to end (invariant 6 of `run-integrity.ts`). The run ends on
+ * `FINDINGS`, like every other `status: error` this command publishes.
  *
  * @returns Whether a refusal was rendered, so the caller skips its verdict line
  */
@@ -2327,7 +2389,7 @@ function logRunIntegrity(
   logger: ReturnType<typeof createLogger>,
 ): boolean {
   if (runIssues === undefined || runIssues.length === 0) return false;
-  logger.error(`Audit is not a verdict: it audited 0 files ${ADVISORY_EXIT_NOTE}`);
+  logger.error('Audit is not a verdict: it audited 0 files');
   for (const issue of runIssues) {
     for (const line of formatIssueLines(issue, '  ')) logger.error(line);
   }
@@ -2391,25 +2453,16 @@ function handleAuditResults(
 
   logSettingsTotals(summary.files ?? [], logger);
 
-  // 🔑 Audit is advisory only — always exit 0 for validation results, and the
-  // WORDING has to say so. This line used to read "Audit failed" on exit 0: an
-  // adopter wiring `vat audit` into CI read a failure and got a green step.
-  // "Found" is what actually happened, and the gate is `vat validate`, named
-  // here rather than implied.
-  //
-  // ⚠️ That fixed the WORDING and nothing else. The document still says
-  // `status: error` over exit 0 — measured on
-  // `packages/agent-skills/test/fixtures/skill-files` — and that is the
-  // published contract, not a leftover: `status` describes the FINDINGS, the
-  // exit code describes whether the RUN completed. An earlier version of this
-  // comment claimed all three signals had been reconciled; two of the three
-  // had, and the third is not a signal to reconcile. Where a reader is told
-  // which is which is {@link createAuditCommand}'s help — see its `Output`
-  // section, and `docs/audit.md`.
-  if (logRunIntegrity(summary.issues, logger)) {
+  // The exit code follows the document's `status`, as it does in every other
+  // command of this CLI: `status: error` — an error-severity finding, or a run
+  // that audited zero files — ends on `FINDINGS`. This used to be the one
+  // command that exited 0 over `status: error` ("advisory"), and an adopter
+  // wiring it into CI read "Audit failed" on stderr beside a green step.
+  const refused = logRunIntegrity(summary.issues, logger);
+  if (refused) {
     // Rendered above; there is no file verdict to print over zero files.
   } else if (errorCount > 0) {
-    logger.error(`Audit found ${errorCount} file(s) with errors ${ADVISORY_EXIT_NOTE}`);
+    logger.error(`Audit found ${errorCount} file(s) with errors`);
     logFindingsForStatus(results, 'error', summary.root, logger.error.bind(logger), verbose);
   } else if (warningCount > 0) {
     logger.info(`Audit passed with warnings: ${warningCount} file(s)`);
@@ -2426,7 +2479,7 @@ function handleAuditResults(
   }
 
   renderAuditFooter(results, logger);
-  process.exit(0);
+  process.exit(refused || errorCount > 0 ? ExitCode.FINDINGS : ExitCode.OK);
 }
 
 /**
@@ -2544,22 +2597,6 @@ function logFindingsForStatus(
 }
 
 /**
- * Check whether a path should be excluded during directory scanning.
- * For directories, checks both bare path and path with trailing slash
- * so patterns like "dist/**" prune the directory itself.
- */
-function isExcludedPath(
-  isMatch: ReturnType<typeof picomatch>,
-  relativePath: string,
-  isDirectory: boolean
-): boolean {
-  if (isDirectory) {
-    return isMatch(relativePath) || isMatch(relativePath + '/');
-  }
-  return isMatch(relativePath);
-}
-
-/**
  * Does the SKILL.md at `skillMdPath` own its own presence-side crawl, or has an
  * ancestor crawl already covered it?
  *
@@ -2573,40 +2610,28 @@ function ownsOwnCrawl(scanCtx: ScanContext, skillMdPath: string): boolean {
 }
 
 /**
- * Hand the descending context an owner for everything below `owner`, unless one
- * is already claimed. First owner wins, and `null` claims nothing.
+ * The directories whose presence-side crawl already owns everything beneath
+ * them — see {@link ScanContext.crawledRoot} for why there are two owner kinds
+ * and why the first owner wins.
+ *
+ * Kept as a list of roots rather than threaded down a recursion: the
+ * population arrives flat and top-down (an ancestor's subjects before a
+ * descendant's), so "who owns this path" is the first claimed root that
+ * contains it, and a claim is only ever made where no ancestor holds one.
  */
-function claimSubtree(scanCtx: ScanContext, owner: string | null): ScanContext {
-  if (owner === null || scanCtx.crawledRoot !== null) return scanCtx;
-  return { ...scanCtx, crawledRoot: safePath.resolve(owner) };
-}
+class SubtreeClaims {
+  private readonly roots: string[] = [];
 
-/**
- * The context this directory's SUBDIRECTORIES are walked with.
- *
- * A `SKILL.md` here means this directory's own crawl reaches every descendant at
- * any depth, so it — not each nested skill in turn — owns the subtree below.
- *
- * Resolved before the entry loop rather than inside it: `SKILL.md` and the
- * subdirectories it governs are siblings in one `readdir`, and their order is
- * the filesystem's to choose, so deciding this mid-loop would make the verdict
- * depend on it.
- *
- * Conditional on the crawl actually RUNNING ({@link crawlOwnsSubtree}), not on
- * the SKILL.md merely existing: a repo-source skill's crawl is skipped
- * entirely, so claiming its subtree would trade a double count for a missed
- * finding — and provenance is not monotone down a tree.
- */
-async function contextForDescendants(
-  dirPath: string,
-  entries: readonly { name: string; isFile: () => boolean }[],
-  scanCtx: ScanContext,
-): Promise<ScanContext> {
-  if (!entries.some((entry) => entry.isFile() && entry.name === 'SKILL.md')) return scanCtx;
-  const skillMd = safePath.join(dirPath, 'SKILL.md');
-  if (!ownsOwnCrawl(scanCtx, skillMd)) return scanCtx;
-  if (!await crawlOwnsSubtree(skillMd)) return scanCtx;
-  return claimSubtree(scanCtx, dirPath);
+  /** The claimed root containing `absolutePath`, or `null` while nothing does. */
+  owner(absolutePath: string): string | null {
+    const resolved = safePath.resolve(absolutePath);
+    return this.roots.find((root) => isWithin(root, resolved)) ?? null;
+  }
+
+  /** Claim everything below `dir`, unless an ancestor already did. First owner wins. */
+  claim(dir: string): void {
+    if (this.owner(dir) === null) this.roots.push(safePath.resolve(dir));
+  }
 }
 
 /**
@@ -2693,45 +2718,15 @@ async function handleFileEntry(
 }
 
 /**
- * Handle directory entry during directory scan
+ * Validate a directory the population found holding `.claude-plugin/` — a
+ * plugin or a marketplace, whichever the unified validator decides.
  */
-async function handleDirectoryEntry(
-  fullPath: string,
-  recursive: boolean,
-  options: AuditCommandOptions,
-  logger: ReturnType<typeof createLogger>,
-  baseDir: string,
-  scanCtx: ScanContext,
-  nestedConfigLog: Set<string>,
-): Promise<ValidationResult[]> {
-  const fs = await import('node:fs/promises');
-  const { locationRoot } = scanCtx;
-  const results: ValidationResult[] = [];
-
-  // Check if directory contains a plugin or marketplace
-  const claudePluginDir = safePath.join(fullPath, '.claude-plugin');
-  const hasClaudePlugin = await fs.access(claudePluginDir).then(() => true).catch(() => false);
-
-  if (hasClaudePlugin) {
-    logger.debug(`Validating resource directory: ${fullPath}`);
-    const result = await validate(fullPath, { validatePlugin, locationRoot });
-    const inv = await pluginInventoryAt(fullPath);
-    appendInventoryParseErrors(result, inv, locationRoot);
-    results.push(result);
-  }
-
-  // Recurse into subdirectories (both plugin/marketplace dirs and regular dirs).
-  // Below a plugin, `validatePlugin` has already crawled the whole subtree for
-  // agent-instruction files, so every crawl below must stand down or one file
-  // is reported twice. See {@link ScanContext.crawledRoot} — first owner wins,
-  // and it never clears on the way down.
-  const childCtx = claimSubtree(scanCtx, hasClaudePlugin ? fullPath : null);
-  if (recursive) {
-    const subResults = await scanDirectory(fullPath, recursive, options, logger, childCtx, baseDir, nestedConfigLog);
-    results.push(...subResults);
-  }
-
-  return results;
+async function validatePluginDirectory(dir: string, logger: ReturnType<typeof createLogger>, locationRoot: string): Promise<ValidationResult> {
+  logger.debug(`Validating resource directory: ${dir}`);
+  const result = await validate(dir, { validatePlugin, locationRoot });
+  const inv = await pluginInventoryAt(dir);
+  appendInventoryParseErrors(result, inv, locationRoot);
+  return result;
 }
 
 /**
@@ -2782,88 +2777,6 @@ interface ScanContext {
    * child. First owner wins: it is set once and never cleared on the way down.
    */
   crawledRoot: string | null;
-}
-
-/**
- * A compiled exclude rule plus the base its patterns are relative to.
- *
- * Audit applies two exclude sources with DIFFERENT bases, which is why the base
- * travels with the matcher instead of being assumed. `--exclude` is typed at the
- * command line about the directory the operator named, so it is relative to the
- * scan base. `resources.exclude` is written in a config file about that config's
- * own project, so it is relative to the project root — matching it against
- * scan-relative paths makes one config mean different things depending on which
- * subdirectory you happened to name.
- */
-interface ExcludeMatcher {
-  isMatch: ReturnType<typeof picomatch>;
-  base: string;
-  /** Prefix for the debug breadcrumb, so the two sources stay distinguishable. */
-  label: string;
-}
-
-/**
- * Compile the governing project's `resources.exclude` for a scan.
- *
- * The config is found by walking UP from the scan directory ({@link findProjectRoot}),
- * not by looking in it. Looking only in the scan directory is how a path argument
- * silently voided every exclude the project had declared: `vat audit
- * packages/x/resources/skills/` found no config there, so a package that excludes
- * its deliberately-broken eval fixtures had them audited as production skills the
- * moment anyone named a subdirectory. Commit 8a466b0c fixed the same defect for
- * `vat resources validate|scan` and `vat rag index`; this is the lane it missed.
- * The rule is the same one that commit established: a path argument says WHICH
- * tree to audit, and `exclude` applies either way.
- *
- * With one deliberate exception, mirroring the gitignore rule in
- * {@link resolveScanContext}: when the operator points the scan AT an excluded
- * tree, their explicit intent wins and the excludes are dropped for that run.
- * Otherwise naming an excluded directory would report `filesScanned: 0,
- * status: success` — a green run that scanned nothing.
- */
-function resolveProjectExcludes(
-  scanDir: string,
-  logger: ReturnType<typeof createLogger>,
-): ExcludeMatcher | null {
-  const projectRoot = findProjectRoot(scanDir);
-  if (projectRoot === null) return null;
-
-  let patterns: readonly string[];
-  try {
-    patterns = loadConfig(projectRoot)?.resources?.exclude ?? [];
-  } catch (err) {
-    // Audit is a bulk linter over trees it does not own; a broken governing
-    // config must not abort the scan. Say so rather than dropping it silently.
-    //
-    // 🚨 `warn`, not `debug`. This comment already said "say so" while logging at
-    // a level nobody sees without `--debug`, so what actually happened was the
-    // silent drop it forbids — and the consequence is the one this function's own
-    // docstring spells out: EVERY `resources.exclude` the project declared is
-    // void, so a package that excludes its deliberately-broken eval fixtures has
-    // them audited as production skills. That is findings APPEARING, not findings
-    // disappearing, which is exactly the direction an operator will read as VAT
-    // being wrong rather than as their config being broken.
-    logger.warn(
-      `Config at ${projectRoot} could not be read; every resources.exclude it declares is`
-      + ` dropped for this run, so excluded trees are audited as ordinary source: ${String(err)}`,
-    );
-    return null;
-  }
-  if (patterns.length === 0) return null;
-
-  // dot:true so excludes like `**/.cache/*` match through dotfile dirs;
-  // without it the exclude silently never fires.
-  const isMatch = picomatch([...patterns], { dot: true });
-  const scanRelToProject = safePath.relative(projectRoot, safePath.resolve(scanDir)).replaceAll('\\', '/');
-  if (scanRelToProject !== '' && isExcludedPath(isMatch, scanRelToProject, true)) {
-    logger.debug(
-      `Scan root ${scanRelToProject} is excluded by the config at ${projectRoot}; ` +
-        'auditing it anyway because it was named explicitly',
-    );
-    return null;
-  }
-
-  return { isMatch, base: projectRoot, label: 'excluded by config' };
 }
 
 /**
@@ -2979,57 +2892,6 @@ async function resolveScanContext(
 }
 
 /**
- * Build the gitignore exclusion map for a set of entry paths.
- * Returns null when gitignore filtering is not applicable (no git root,
- * --include-artifacts, or outside a git repo).
- */
-function buildGitIgnoreMap(
-  entryPaths: string[],
-  gitTracker: GitTracker | null,
-  includeArtifacts: boolean,
-): Map<string, boolean> | null {
-  if (gitTracker === null || includeArtifacts) {
-    return null;
-  }
-  const map = new Map<string, boolean>();
-  for (const entryPath of entryPaths) {
-    map.set(entryPath, gitTracker.isIgnoredByActiveSet(entryPath));
-  }
-  return map;
-}
-
-/**
- * Check whether a directory entry should be skipped during scanning.
- * Returns a reason string for debug logging, or null if the entry should be kept.
- */
-function getSkipReason(
-  entry: { name: string; isDirectory: () => boolean },
-  fullPath: string,
-  gitIgnoredMap: Map<string, boolean> | null,
-  excludeMatchers: readonly ExcludeMatcher[]
-): string | null {
-  // Always skip .git directory (not reported by git check-ignore)
-  if (entry.isDirectory() && entry.name === '.git') {
-    return '.git';
-  }
-
-  // Skip gitignored paths
-  if (gitIgnoredMap !== null && gitIgnoredMap.get(fullPath) === true) {
-    return `gitignored: ${entry.name}`;
-  }
-
-  // Each matcher answers against ITS OWN base — see {@link ExcludeMatcher}.
-  for (const matcher of excludeMatchers) {
-    const relativePath = safePath.relative(matcher.base, fullPath).replaceAll('\\', '/');
-    if (isExcludedPath(matcher.isMatch, relativePath, entry.isDirectory())) {
-      return `${matcher.label}: ${relativePath}`;
-    }
-  }
-
-  return null;
-}
-
-/**
  * The one finding a path the walk could not read produces — a directory it could
  * not enter, or a file it could not open.
  *
@@ -3045,14 +2907,11 @@ function getSkipReason(
  * is no longer the ONLY thing the run says — the code, the location and the fix
  * come from the registry.
  *
- * KNOWN, and deliberately not fixed here: this result counts toward
- * `summary.filesScanned`, so a path the scan could not read is counted among the
- * files it scanned. Dropping it from that denominator alone would be worse —
- * `filesWithWarnings` counts the same results, so the summary would report more
- * files with warnings than files scanned. Saying it honestly needs a field of its
- * own, which is a change to the report's shape and belongs with issue #177
- * ("report counts don't describe the artifact") rather than smuggled in here. The
- * finding itself names the path, so nothing is hidden in the meantime.
+ * This result is a `files[]` row but NOT a scanned file: `countFilesByStatus`
+ * recognises it ({@link isUnreadablePathResult}) and reports it under
+ * `summary.pathsUnreadable`, outside `filesScanned` and the status counts. A
+ * root the OS refused therefore audits zero files and ends on the zero-files
+ * refusal, instead of `filesScanned: 1` over a path nothing read.
  */
 function unreadablePathResult(
   dirPath: string,
@@ -3088,166 +2947,119 @@ function unreadablePathResult(
   };
 }
 
-/** Everything one directory entry needs, threaded through unchanged from its parent walk. */
-interface ScanEntryContext {
-  recursive: boolean;
-  options: AuditCommandOptions;
-  logger: ReturnType<typeof createLogger>;
-  scanCtx: ScanContext;
-  /** This level's own skill (if any) owns everything below — used for subdirectories. */
-  descendCtx: ScanContext;
-  baseDir: string;
-  /**
-   * Nested `vibe-agent-toolkit.config.yaml` paths already announced by the
-   * "configs do not compose" breadcrumb — its ONLY remaining purpose. It also
-   * used to carry the unloadable-config warn-once keys, and that second tenancy
-   * is what hid the defect: only the lane holding this set deduped, while
-   * `validateSingleSkill` minted a fresh one per skill. The ledger now lives at
-   * module scope; this stays a parameter because the breadcrumb is genuinely
-   * per-walk.
-   */
-  nestedConfigLog: Set<string>;
-}
-
 /**
- * Scan ONE directory entry, degrading to a finding if the filesystem refuses it.
+ * Validate ONE subject the population found, degrading to a finding if the
+ * filesystem refuses it.
  *
- * Guarded per ENTRY, not just per directory: wrapping only the parent `readdir`
- * left the other half of the same defect live — an unreadable FILE (a root-owned
- * `SKILL.md`, a quarantined bundle) threw out of `validateSkill` and still
- * aborted the whole run with `status: error` and zero findings. Under
+ * Guarded per SUBJECT, not just per listing: an unreadable FILE (a root-owned
+ * `SKILL.md`, a quarantined bundle) used to throw out of `validateSkill` and
+ * abort the whole run with `status: error` and zero findings. Under
  * `~/.claude/plugins` — the flagship `vat audit --user` target, populated by sudo
  * installs and macOS quarantine — a root-owned FILE is at least as likely as a
- * root-owned directory (issue #180).
+ * root-owned directory.
  *
- * Extracted from `scanDirectory` rather than inlined because the added branch put
- * that function over the cognitive-complexity ceiling; the walk keeps the
- * bookkeeping, this keeps the per-entry decision.
+ * Ownership is decided here and only here, in population order: a plugin
+ * directory claims its subtree unconditionally; a skill claims its own only
+ * when nothing above it already has AND its crawl actually runs
+ * ({@link crawlOwnsSubtree}) — a repo-source skill's crawl is skipped, so
+ * claiming its subtree would trade a double count for a missed finding.
  */
-async function scanEntry(
-  entry: Dirent,
-  fullPath: string,
-  ctx: ScanEntryContext,
+async function validateScanSubject(
+  subject: AuditScanSubject,
+  options: AuditCommandOptions,
+  logger: ReturnType<typeof createLogger>,
+  scanCtx: ScanContext,
+  claims: SubtreeClaims,
 ): Promise<ValidationResult[]> {
+  const { locationRoot } = scanCtx;
   try {
-    if (entry.isFile()) {
-      const result = await handleFileEntry(entry, fullPath, ctx.options, ctx.logger, ctx.scanCtx);
-      return result === null ? [] : [result];
+    if (subject.kind === 'plugin') {
+      const result = await validatePluginDirectory(subject.dir, logger, locationRoot);
+      claims.claim(subject.dir);
+      return [result];
     }
-    if (entry.isDirectory()) {
-      return await handleDirectoryEntry(
-        fullPath, ctx.recursive, ctx.options, ctx.logger, ctx.baseDir, ctx.descendCtx, ctx.nestedConfigLog,
-      );
+    const subjectCtx: ScanContext = { ...scanCtx, crawledRoot: claims.owner(subject.path) };
+    const result = await handleFileEntry({ name: basename(subject.path) }, subject.path, options, logger, subjectCtx);
+    if (subject.kind === 'skill' && ownsOwnCrawl(subjectCtx, subject.path) && await crawlOwnsSubtree(subject.path)) {
+      claims.claim(subject.dir);
     }
-    return [];
+    return result === null ? [] : [result];
   } catch (error) {
     // ONLY filesystem-access errors degrade. Anything else is rethrown, because
     // turning a genuine VAT bug into a `warning` about the file it happened on is
     // the same "detector silently disables itself" shape this guard exists to
     // prevent — it would make the tool quietest exactly when it is most wrong.
     if (!isFilesystemAccessError(error)) throw error;
-    ctx.logger.debug(`Unreadable entry: ${fullPath}`);
-    return [unreadablePathResult(fullPath, error, ctx.scanCtx.locationRoot)];
+    const path = subject.kind === 'plugin' ? subject.dir : subject.path;
+    logger.debug(`Unreadable entry: ${path}`);
+    return [unreadablePathResult(path, error, locationRoot)];
   }
 }
 
+/**
+ * The remedy a refused listing names: the operator's own knob for dropping a
+ * directory from the audit on purpose.
+ */
+function scanRefusalRemedy(): string {
+  return 'To leave it out deliberately, exclude it with --exclude <pattern>.';
+}
+
+/**
+ * Audit a directory: every plugin, skill and registry file the `crawl` lane
+ * finds beneath it, plus one finding per directory the lane could not list.
+ *
+ * The enumeration is `enumerateAuditPopulation`'s — this function owns no
+ * walk of its own. What it decides is what the audit MAKES of the population:
+ * validation per subject, subtree ownership across subjects (see
+ * {@link validateScanSubject}), the nested-config breadcrumb, and the refusal
+ * findings. A refused directory is a finding, not a thrown error: `vat audit`
+ * is a bulk linter over trees it does not own, and one root-owned directory
+ * under `~/.claude/plugins` used to abort the flagship `vat audit --user` run
+ * outright, losing every finding already collected. The scope of the loss is
+ * the subtree that refused; every readable sibling is still validated.
+ */
 async function scanDirectory(
   dirPath: string,
   recursive: boolean,
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
   scanCtx: ScanContext,
-  baseDir?: string,
-  nestedConfigLog?: Set<string>
 ): Promise<ValidationResult[]> {
-  const fs = await import('node:fs/promises');
-  const results: ValidationResult[] = [];
-  const userExcludes = options.exclude ?? [];
-  const resolvedBaseDir = baseDir ?? dirPath;
-
-  // The git context (root + tracker) and the run's anchor base are built once by
-  // the caller; every recursion reuses them unchanged.
-  const resolvedScanCtx = scanCtx;
-  const resolvedNestedLog = nestedConfigLog ?? new Set<string>();
-
-  // Top-down pre-warm of findProjectRoot's walk-up cache (spec §8). The first
-  // call here drives a single ancestor walk; every subsequent recursion is a
-  // Layer-1 hit chain. By the time we reach leaf SKILL.md files,
-  // resolveSkillPackagingConfig's per-skill walk-up is all cache hits.
+  // Warm findProjectRoot's walk-up cache from the scan root: every per-skill
+  // walk-up below lands on a cached ancestor instead of re-walking to `/`.
   findProjectRoot(dirPath);
 
-  // Emit a one-time info breadcrumb when we encounter a nested
-  // vibe-agent-toolkit.config.yaml that is NOT at the scan root. Configs do
-  // not compose across VAT projects; the message reminds operators that
-  // only per-skill packaging rules from this config still apply.
-  const nestedConfigPath = safePath.join(dirPath, VAT_CONFIG_FILENAME);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirPath is a controlled scan path
-  if (dirPath !== resolvedBaseDir && fsExistsSync(nestedConfigPath) && !resolvedNestedLog.has(nestedConfigPath)) {
-    resolvedNestedLog.add(nestedConfigPath);
-    const rel = safePath.relative(resolvedBaseDir, nestedConfigPath).replaceAll('\\', '/');
+  const population = await enumerateAuditPopulation({
+    scanDir: dirPath,
+    recursive,
+    // No tracker means no git root, or a scan root that is itself gitignored
+    // (the operator's explicit intent wins); either way ignored files are in.
+    respectGitignore: scanCtx.gitTracker !== null && !(options.includeArtifacts ?? false),
+    userExcludes: options.exclude ?? [],
+    projectExcludes: scanCtx.projectExcludes,
+  });
+
+  // A one-time breadcrumb per nested `vibe-agent-toolkit.config.yaml` that is
+  // NOT at the scan root. Configs do not compose across VAT projects; the
+  // message reminds operators that only per-skill packaging rules from this
+  // config still apply.
+  for (const nestedConfigPath of population.nestedConfigs) {
+    const rel = toForwardSlash(safePath.relative(dirPath, nestedConfigPath));
     logger.info(
-      `Nested vibe-agent-toolkit.config.yaml detected at ${rel} — configs do not compose across VAT projects. Per-skill packaging rules from this config still apply to skills declared in it.`,
+      `Nested ${VAT_CONFIG_FILENAME} detected at ${rel} — configs do not compose across VAT projects. Per-skill packaging rules from this config still apply to skills declared in it.`,
     );
   }
 
-  // Compile picomatch for user-supplied --exclude patterns.
-  // dot:true so excludes like `**/private/*` match through dotfile dirs
-  // (`.claude/.../private/x`); without it the exclude silently never fires.
-  // These are relative to the scan base; the config's excludes carry their own
-  // (project-root) base on the matcher — see {@link ExcludeMatcher}.
-  const excludeMatchers: ExcludeMatcher[] = [];
-  if (userExcludes.length > 0) {
-    excludeMatchers.push({
-      isMatch: picomatch(userExcludes, { dot: true }),
-      base: resolvedBaseDir,
-      label: 'excluded',
-    });
+  const results: ValidationResult[] = population.refusals.map((refusal) => {
+    logger.debug(`Unreadable directory: ${refusal.directory}`);
+    const err = new DirectoryListingRefusedError(refusal, { root: dirPath, remedy: scanRefusalRemedy() });
+    return unreadablePathResult(refusal.directory, err, scanCtx.locationRoot);
+  });
+
+  const claims = new SubtreeClaims();
+  for (const subject of population.subjects) {
+    results.push(...await validateScanSubject(subject, options, logger, scanCtx, claims));
   }
-  if (resolvedScanCtx.projectExcludes !== null) {
-    excludeMatchers.push(resolvedScanCtx.projectExcludes);
-  }
-
-  // Guarded because `vat audit` is a bulk linter over trees it does not own, and
-  // an unreadable entry is an ordinary condition there — one root-owned directory
-  // under `~/.claude/plugins` used to abort the flagship `vat audit --user` run
-  // outright, losing every finding already collected (issue #180). The failure is
-  // scoped to the subtree that caused it: this returns instead of throwing, so the
-  // CALLER's loop keeps its readable siblings and the walk continues.
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(dirPath, { withFileTypes: true });
-  } catch (error) {
-    // Same predicate as the per-entry guard below — see it for why a non-IO
-    // throw must not be degraded into a finding.
-    if (!isFilesystemAccessError(error)) throw error;
-    logger.debug(`Unreadable directory: ${dirPath}`);
-    return [unreadablePathResult(dirPath, error, resolvedScanCtx.locationRoot)];
-  }
-
-  const descendCtx = await contextForDescendants(dirPath, entries, resolvedScanCtx);
-
-  // Build full paths and batch-check gitignore status
-  const entryPaths = entries.map(e => safePath.join(dirPath, e.name));
-  const gitIgnoredMap = buildGitIgnoreMap(entryPaths, resolvedScanCtx.gitTracker, options.includeArtifacts ?? false);
-
-  for (const entry of entries) {
-    const fullPath = safePath.join(dirPath, entry.name);
-
-    const skipReason = getSkipReason(entry, fullPath, gitIgnoredMap, excludeMatchers);
-    if (skipReason !== null) {
-      logger.debug(`Excluding path: ${skipReason}`);
-      continue;
-    }
-
-    results.push(...await scanEntry(entry, fullPath, {
-      recursive, options, logger,
-      scanCtx: resolvedScanCtx,
-      descendCtx,
-      baseDir: resolvedBaseDir,
-      nestedConfigLog: resolvedNestedLog,
-    }));
-  }
-
   return results;
 }
 
@@ -3291,15 +3103,44 @@ interface FileStatusCounts {
   filesPassed: number;
   filesWithWarnings: number;
   filesWithErrors: number;
+  /**
+   * `files[]` rows that are a refused path, not a scanned file — a
+   * {@link unreadablePathResult}. Outside `filesScanned` and the three status
+   * counts above, so `filesScanned` is the number of files the audit READ and
+   * the identity is `files.length === filesScanned + pathsUnreadable`.
+   */
+  pathsUnreadable: number;
 }
 
-/** Count files by their own status. */
+/**
+ * Whether a `files[]` row is a refused path rather than a scanned file: the
+ * synthetic result {@link unreadablePathResult} builds, carrying nothing but
+ * `SCAN_PATH_UNREADABLE`. Keyed on the code, not on `type: 'unknown'` alone —
+ * an unrecognised file is also `unknown`, and it WAS examined.
+ */
+function isUnreadablePathResult(result: ValidationResult): boolean {
+  return result.type === 'unknown'
+    && result.issues.length > 0
+    && result.issues.every((issue) => issue.code === 'SCAN_PATH_UNREADABLE');
+}
+
+/**
+ * Count files by their own status.
+ *
+ * A refused path is NOT a scanned file. It used to be counted as one, which
+ * made the zero-files refusal unreachable for exactly the tree it exists for:
+ * `chmod 000` on the whole root gave `filesScanned: 1, filesPassed: 0`,
+ * `status: warning`, exit 0 — nothing read, gate green. Kept out of every
+ * status count too, or `filesWithWarnings` would exceed `filesScanned`.
+ */
 function countFilesByStatus(results: ValidationResult[]): FileStatusCounts {
+  const scanned = results.filter((r) => !isUnreadablePathResult(r));
   return {
-    filesScanned: results.length,
-    filesPassed: results.filter((r: ValidationResult) => r.status === 'success').length,
-    filesWithWarnings: results.filter((r: ValidationResult) => r.status === 'warning').length,
-    filesWithErrors: results.filter((r: ValidationResult) => r.status === 'error').length,
+    filesScanned: scanned.length,
+    filesPassed: scanned.filter((r: ValidationResult) => r.status === 'success').length,
+    filesWithWarnings: scanned.filter((r: ValidationResult) => r.status === 'warning').length,
+    filesWithErrors: scanned.filter((r: ValidationResult) => r.status === 'error').length,
+    pathsUnreadable: results.length - scanned.length,
   };
 }
 
@@ -3367,7 +3208,10 @@ function buildBaseSummary<T extends ValidationResult>(
     return { ...result, issueCounts: counts };
   });
 
-  const runIssues = nothingCheckedFinding(entries.length, entries.flatMap((entry) => entry.issues), () =>
+  const summary = countFilesByStatus(entries);
+  // The denominator is files READ: a tree whose every path was refused audited
+  // nothing, and says so through the same refusal as an empty tree.
+  const runIssues = nothingCheckedFinding(summary.filesScanned, entries.flatMap((entry) => entry.issues), () =>
     'The audit ran over 0 files, so this report is not a verdict: a tree with nothing'
     + ' to audit produces the same counts as a clean one. The path resolved to a tree'
     + ' holding no auditable file — usually a wrong subdirectory, plugins or skills that'
@@ -3381,7 +3225,7 @@ function buildBaseSummary<T extends ValidationResult>(
     // `run-integrity.ts`), so a non-empty refusal IS the status; otherwise the
     // files decide it, as before.
     status: runIssues.length > 0 ? 'error' : calculateOverallStatus(entries),
-    summary: countFilesByStatus(entries),
+    summary,
     issueCounts: sumSeverityCounts([issueCounts, countBySeverity(runIssues)]),
     ...(runIssues.length === 0 ? {} : { issues: [...runIssues] }),
     duration: `${Date.now() - startTime}ms`,
@@ -3429,13 +3273,13 @@ function logHierarchicalSummary(
   const skillsWithIssues = countResultsWithFindings(results);
   const totalSkills = results.length;
 
-  // Audit is advisory only — always exit 0 for validation results.
-  // Use vat skills validate for gated validation (exit 1 on errors).
-  if (logRunIntegrity(runIssues, logger)) {
+  // Same rule as the per-file lane: the exit code follows `status`.
+  const refused = logRunIntegrity(runIssues, logger);
+  if (refused) {
     // Rendered above; there is no skill verdict to print over zero skills.
   } else if (status === 'error') {
     const errorCount = results.filter((r: ValidationResult) => r.status === 'error').length;
-    logger.error(`Audit found ${errorCount} skill(s) with errors (${totalSkills} scanned, ${skillsWithIssues} with issues) ${ADVISORY_EXIT_NOTE}`);
+    logger.error(`Audit found ${errorCount} skill(s) with errors (${totalSkills} scanned, ${skillsWithIssues} with issues)`);
   } else if (status === 'warning') {
     const warningCount = results.filter((r: ValidationResult) => r.status === 'warning').length;
     logger.info(`Audit passed with warnings: ${warningCount} skill(s) (${totalSkills} scanned, ${skillsWithIssues} with issues)`);
@@ -3448,5 +3292,5 @@ function logHierarchicalSummary(
   }
 
   renderAuditFooter(results, logger);
-  process.exit(0);
+  process.exit(refused || status === 'error' ? ExitCode.FINDINGS : ExitCode.OK);
 }

@@ -2,12 +2,13 @@
  * Unit tests for copy-resources utility
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 
 
-import { mkdirSyncReal, setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, afterEach, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { copyResources, createPostBuildScript } from '../../src/utils/copy-resources.js';
@@ -211,7 +212,8 @@ describe('createPostBuildScript', () => {
         });
       }).toThrow('process.exit called');
 
-      expect(exitCode).toBe(1);
+      // The command could not do its job: ERROR, not a finding.
+      expect(exitCode).toBe(ExitCode.ERROR);
     } finally {
       process.exit = originalExit;
     }

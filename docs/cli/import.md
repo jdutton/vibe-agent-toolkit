@@ -109,7 +109,7 @@ The import command validates SKILL.md before conversion:
 - **No XML tags** - < and > not allowed in name or description
 - **No reserved words** - "anthropic" and "claude" not allowed in name
 
-See [`vat agent audit`](./audit.md) for complete validation rules.
+See [`vat audit`](../../packages/cli/docs/audit.md) for complete validation rules.
 
 ### Generated agent.yaml Structure
 
@@ -163,7 +163,7 @@ Run audit first to catch errors:
 
 ```bash
 # Audit skill first
-vat agent audit my-skill/SKILL.md
+vat audit my-skill/SKILL.md
 
 # Import if validation passes
 vat agent import my-skill/SKILL.md
@@ -227,7 +227,7 @@ Migrate a collection of skills to VAT format:
 
 ```bash
 # Audit all skills first
-vat agent audit skills/ --recursive
+vat audit skills/
 
 # Import valid skills
 for skill in skills/*/SKILL.md; do
@@ -262,7 +262,7 @@ status: error
 error: "Invalid SKILL.md frontmatter - name: String must contain at most 64 character(s)"
 ```
 
-**Fix:** See [`vat agent audit`](./audit.md) for validation rules and fixes
+**Fix:** See [`vat audit`](../../packages/cli/docs/audit.md) for validation rules and fixes
 
 ### File Already Exists
 
@@ -289,7 +289,7 @@ error: "agent.yaml already exists at /path/to/agent.yaml. Use --force to overwri
 vim my-skill/SKILL.md
 
 # Step 2: Audit
-vat agent audit my-skill/SKILL.md
+vat audit my-skill/SKILL.md
 
 # Step 3: Import
 vat agent import my-skill/SKILL.md
@@ -341,7 +341,7 @@ See [VAT Agent Specification](../architecture/README.md) for complete agent.yaml
 Always audit skills before importing to catch errors early:
 
 ```bash
-vat agent audit my-skill/SKILL.md && vat agent import my-skill/SKILL.md
+vat audit my-skill/SKILL.md && vat agent import my-skill/SKILL.md
 ```
 
 ### 2. Version Control Both Formats
@@ -395,7 +395,7 @@ demand a `projectRoot` and which do not.
 
 ## Related Commands
 
-- [`vat agent audit`](./audit.md) - Validate Agent Skills before import
+- [`vat audit`](../../packages/cli/docs/audit.md) - Validate Agent Skills before import
 
 ## Reference
 

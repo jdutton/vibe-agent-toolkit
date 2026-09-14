@@ -14,7 +14,7 @@ import {
 export const NameValidationInputSchema = z.object({
   name: z.string().describe('The proposed cat name to validate'),
   characteristics: CatCharacteristicsSchema.optional().describe('Cat characteristics for context-aware validation'),
-});
+}).strict();
 
 export type NameValidationInput = z.infer<typeof NameValidationInputSchema>;
 

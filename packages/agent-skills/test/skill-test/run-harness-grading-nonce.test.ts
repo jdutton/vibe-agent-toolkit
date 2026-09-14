@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test paths derived from our own temp harness dirs */
 /**
  * FULL-WIRING tests for `runSkillTestHarness` — the ones that must drive the real
  * orchestrator end to end because the thing under test is the WIRING, not a pure
@@ -6,7 +5,10 @@
  *
  * The executor→grader pipeline is driven with an INJECTED fake spawn (opts.spawn),
  * so no real `claude` is needed; preflight + staging are stubbed so the
- * orchestrator reaches the real pipeline/merge/verdict/artifact-write path.
+ * orchestrator reaches the real pipeline/merge/verdict/artifact-write path. No
+ * process starts: the flag probe's `claude --help` runs on preflight's first
+ * query, and a stubbed preflight never asks — when it ran at build time instead,
+ * this file cost 29 real spawns and read 10× slower wherever `claude` is installed.
  *
  * Three families live here, each because a unit test of the same behaviour would
  * have passed while the shipped run did the wrong thing:
@@ -15,7 +17,7 @@
  *    stamped into every grader prompt (in-memory only, never to disk) and every
  *    merged fragment must echo it; a wrong/absent nonce — the signature of a forged
  *    or left-behind fragment written by untrusted skill code — is a GradingNonceError
- *    (exit 1).
+ *    (ERROR, reason internal).
  * 2. A CONTROL-arm failure must not destroy the treatment run. Every unit here is
  *    fine in isolation; the defect was that the throw propagated out of `runPipeline`
  *    and `results/` ended up holding only `provenance.json`.
@@ -27,6 +29,7 @@
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -173,10 +176,10 @@ describe('runSkillTestHarness — per-eval grader integrity nonce', () => {
 describe('runSkillTestHarness — eval verdict exit code (fail-closed default)', () => {
   const { getTempDir, getAuthoredDir } = setupStubbedHarnessSubject('vat-verdict-', vi.mocked(stageHarness));
 
-  it('a completed run with a failing verdict exits EvalFailure (4) by DEFAULT', async () => {
+  it('a completed run with a failing verdict exits FINDINGS by DEFAULT', async () => {
     const result = await runHarness(getTempDir(), getAuthoredDir(), makeHarnessFakeSpawn({ graderPassed: false }).spawn);
     expect(result.summary).toBe('FAIL 0/1');
-    expect(result.exitCode).toBe(4);
+    expect(result.exitCode).toBe(ExitCode.FINDINGS);
   });
 
   it('the --allow-eval-failure opt-out downgrades a failing verdict to Ok (0)', async () => {

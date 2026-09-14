@@ -15,7 +15,7 @@ import {
   type ResourcePopulationSource,
   type ResourceRegistryOptions,
 } from '@vibe-agent-toolkit/resources';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { GitTracker, gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 
 import { loadConfig } from './config-loader.js';
@@ -132,7 +132,7 @@ function crawlOptionsForPath(
   // separator assumption in the `../` test below explicit on Windows too.
   const normalizedRelDir = toForwardSlash(safePath.relative(projectRoot, resolved));
 
-  if (normalizedRelDir === '..' || normalizedRelDir.startsWith('../')) {
+  if (relativeEscapesRoot(normalizedRelDir)) {
     // Outside the project root, so the config's root-relative globs describe a
     // different tree and genuinely cannot apply. Say so rather than dropping
     // them silently — silent dropping is the bug this function exists to fix.

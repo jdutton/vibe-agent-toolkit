@@ -4,15 +4,15 @@
  * Shared code to eliminate duplication across tool scripts.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 // File paths derived from PROJECT_ROOT constant (controlled, not user input)
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
-import { safeExecResult } from '@vibe-agent-toolkit/utils/process';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { direntKindFollowingSync, isPathAbsentError, isSingleFsSegment, safePath } from '@vibe-agent-toolkit/utils';
+import { CommandExecutionError, safeExecResult, safeExecSync } from '@vibe-agent-toolkit/utils/process';
 
 export { safeExecSync, safeExecResult } from '@vibe-agent-toolkit/utils/process';
 
@@ -54,6 +54,58 @@ export function buildJscpdArgs(outputDir?: string): string[] {
 /**
  * Get __filename equivalent in ESM
  */
+/** The parts of `jscpd-report.json` the scripts here read. */
+export interface JscpdReport<TClone = unknown> {
+  duplicates?: TClone[];
+  statistics: { total: { percentage: number; duplicatedLines: number; totalLines: number } };
+}
+
+/**
+ * Run jscpd with the shared arguments and return the JSON report it wrote.
+ *
+ * jscpd exits non-zero when it finds duplication, and that is the normal case
+ * for a tool that reads its report — so the exit code is not the verdict, the
+ * report file is. The previous report is deleted BEFORE the run: a jscpd that
+ * crashed (or was never installed) would otherwise leave last time's report in
+ * place to be read as this time's, and a baseline update over a stale report
+ * silently accepts whatever was added since.
+ *
+ * @param args - The jscpd argument list (see {@link buildJscpdArgs})
+ * @returns The parsed `jscpd-report.json`
+ * @throws {Error} when jscpd is not installed, or wrote no report
+ */
+export function runJscpd<TClone = unknown>(args: string[]): JscpdReport<TClone> {
+  const reportPath = safePath.join(JSCPD_CONFIG.OUTPUT_DIR, 'jscpd-report.json');
+  rmSync(reportPath, { force: true });
+
+  try {
+    safeExecSync('npx', ['jscpd', ...args], { encoding: 'utf-8', stdio: 'pipe' });
+  } catch (error) {
+    // Verify it's the expected failure (not a critical error like ENOENT)
+    if (isPathAbsentError(error)) {
+      throw new Error('jscpd executable not found. Install with: npm install -g jscpd', { cause: error });
+    }
+    // Otherwise continue - duplications found, but report still generated below.
+    // Surface jscpd's own stdout/stderr so a genuine crash (as opposed to the
+    // expected "duplications found" non-zero exit) is diagnosable from CI logs
+    // instead of only showing up as "report not found" further down.
+    if (error instanceof CommandExecutionError) {
+      const stdout = error.stdout.toString().trim();
+      const stderr = error.stderr.toString().trim();
+      if (stdout) console.error(`jscpd stdout:\n${stdout}`);
+      if (stderr) console.error(`jscpd stderr:\n${stderr}`);
+    } else if (error instanceof Error) {
+      console.error(`jscpd invocation error: ${error.message}`);
+    }
+  }
+
+  if (!existsSync(reportPath)) {
+    throw new Error(`jscpd report not found at ${reportPath}`);
+  }
+
+  return JSON.parse(readFileSync(reportPath, 'utf-8')) as JscpdReport<TClone>;
+}
+
 export function getFilename(importMetaUrl: string): string {
   return fileURLToPath(importMetaUrl);
 }
@@ -162,10 +214,11 @@ export function processWorkspacePackages<T extends PackageProcessResult>(
 
   try {
     const packages = readdirSync(packagesDir, { withFileTypes: true })
-      .filter(dirent => dirent.isDirectory())
+      // Followed: a workspace package reached through a link is still a package.
+      .filter(dirent => direntKindFollowingSync(packagesDir, dirent) === 'directory')
       .map(dirent => dirent.name)
-      // Security: Filter out path traversal attempts and invalid names
-      .filter(name => !name.includes('..') && !name.includes('/') && !name.includes('\\') && name.length > 0)
+      // A readdir name is one segment by construction; the guard states it.
+      .filter(name => isSingleFsSegment(name))
       .sort((a, b) => a.localeCompare(b));
 
     for (const pkg of packages) {
@@ -187,13 +240,13 @@ export function processWorkspacePackages<T extends PackageProcessResult>(
           onError(pkg, error as Error);
         } else {
           log(`  ✗ ${pkg}: ${(error as Error).message}`, 'red');
-          process.exit(1);
+          process.exit(ExitCode.ERROR);
         }
       }
     }
   } catch (error) {
     log(`✗ Failed to read packages directory: ${(error as Error).message}`, 'red');
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   }
 
   return { processed: processedCount, skipped: skippedCount };
@@ -220,7 +273,7 @@ export function findPublishablePackages(
   const entries = readdirSync(packagesDir, { withFileTypes: true });
 
   for (const entry of entries) {
-    if (!entry.isDirectory()) {
+    if (direntKindFollowingSync(packagesDir, entry) !== 'directory') {
       continue;
     }
 
@@ -231,28 +284,27 @@ export function findPublishablePackages(
       continue;
     }
 
-    try {
-      const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as Record<string, unknown>;
+    // No try here, deliberately: a `packages/*/package.json` that exists but
+    // cannot be read or is not JSON is a broken checkout, and a tool that
+    // quietly drops that package from the list would link, publish, or bump
+    // everything except the one that is wrong.
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as Record<string, unknown>;
 
-      // Skip private packages (not published to npm)
-      if (packageJson['private'] === true) {
-        continue;
-      }
-
-      // Skip umbrella package if requested (for npm link, to avoid bin conflicts)
-      if (options.skipUmbrellaPackage && packageJson['name'] === 'vibe-agent-toolkit') {
-        continue;
-      }
-
-      packages.push({
-        name: packageJson['name'] as string,
-        path: packagePath,
-        packageJson,
-      });
-    } catch {
-      // Skip packages with invalid package.json
+    // Skip private packages (not published to npm)
+    if (packageJson['private'] === true) {
       continue;
     }
+
+    // Skip umbrella package if requested (for npm link, to avoid bin conflicts)
+    if (options.skipUmbrellaPackage && packageJson['name'] === 'vibe-agent-toolkit') {
+      continue;
+    }
+
+    packages.push({
+      name: packageJson['name'] as string,
+      path: packagePath,
+      packageJson,
+    });
   }
 
   return packages;

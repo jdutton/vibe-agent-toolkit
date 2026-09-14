@@ -43,14 +43,13 @@
 import { mkdtemp } from 'node:fs/promises';
 
 import {
-  __setCrawlTimingForTest,
-  __writeCrawlTimingDumpForTest,
   CRAWL_PASS_INSIDE,
   crawlTimingStart,
   normalizedTmpdir,
   recordCrawlPass,
   safePath,
 } from '@vibe-agent-toolkit/utils';
+import { __setCrawlTimingForTest, __writeCrawlTimingDumpForTest } from '@vibe-agent-toolkit/utils/testing';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import {

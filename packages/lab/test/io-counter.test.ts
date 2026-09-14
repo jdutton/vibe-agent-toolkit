@@ -39,7 +39,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { IoDumpSchema } from '../src/facets/io/dump.js';
 
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is derived from a controlled mkdtemp scratch dir */
 
 /** One aggregated row of a dump, as the dump reader consumes it. */
 interface DumpRow {

@@ -1,3 +1,4 @@
+import { VatError } from '../errors/vat-error.js';
 import { safeExecResult } from '../safe-exec.js';
 
 import { buildForwardedEnv } from './env-scrub.js';
@@ -30,11 +31,10 @@ export interface ResolvedAuth {
 }
 
 /** A preflight auth failure — maps to exit code 2. */
-export class AuthPreflightError extends Error {
-  readonly exitCode = 2 as const;
+export class AuthPreflightError extends VatError {
+  readonly reason = 'preflight' as const;
   constructor(message: string) {
-    super(message);
-    this.name = 'AuthPreflightError';
+    super('AUTH_PREFLIGHT', message);
   }
 }
 
@@ -45,16 +45,30 @@ export class AuthPreflightError extends Error {
 export function probeAuthStatus(env: NodeJS.ProcessEnv): AuthStatusResult | null {
   const res = safeExecResult('claude', ['auth', 'status', '--json'], { env, encoding: 'utf8', stdio: 'pipe' });
   if (!res.success) return null;
+  return parseAuthStatus(res.stdout.toString());
+}
+
+/**
+ * Read what `claude auth status --json` printed. `null` means "not the JSON
+ * object the flag promises" — an older CLI answering in prose, or a bare
+ * literal — and only that: a failure inside this reader is a bug, not "not
+ * logged in", and `resolveAuth` would otherwise turn it into a preflight exit.
+ */
+export function parseAuthStatus(stdout: string): AuthStatusResult | null {
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(res.stdout.toString()) as Record<string, unknown>;
-    return {
-      loggedIn: parsed['loggedIn'] === true,
-      ...(typeof parsed['authMethod'] === 'string' ? { authMethod: parsed['authMethod'] } : {}),
-      ...(typeof parsed['apiKeySource'] === 'string' ? { apiKeySource: parsed['apiKeySource'] } : {}),
-    };
-  } catch {
+    parsed = JSON.parse(stdout);
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
     return null;
   }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const record = parsed as Record<string, unknown>;
+  return {
+    loggedIn: record['loggedIn'] === true,
+    ...(typeof record['authMethod'] === 'string' ? { authMethod: record['authMethod'] } : {}),
+    ...(typeof record['apiKeySource'] === 'string' ? { apiKeySource: record['apiKeySource'] } : {}),
+  };
 }
 
 function hasInferenceKey(env: NodeJS.ProcessEnv): boolean {

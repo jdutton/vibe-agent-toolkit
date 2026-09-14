@@ -17,7 +17,7 @@ export interface BuildGraderPromptOptions {
   /** Per-run integrity nonce the grader must copy verbatim into the fragment's `runNonce`. */
   nonce: string;
   /**
-   * The eval's declared tool expectations (issue #145 Phase T — see
+   * The eval's declared tool expectations (see
    * `eval-inputs.ts`'s `EvalEntrySchema.toolExpectations`). When present, the
    * grader is additionally instructed to judge these FROM THE TRANSCRIPT and
    * emit a `tool` object (see {@link import('./tool-eval-schema.js').ToolVerdictBody})
@@ -138,9 +138,9 @@ function buildToolChannelDataLines(
 }
 
 /**
- * Builds the tool-expectations section of the grader prompt (issue #145 Phase
- * T): declared-executable recognition hints (nonce-fenced as untrusted DATA —
- * injection fix #4), the suite's own mustRun/mustNotRun/mustSucceed/sequence
+ * Builds the tool-expectations section of the grader prompt:
+ * declared-executable recognition hints (nonce-fenced as untrusted DATA —
+ * an injection surface), the suite's own mustRun/mustNotRun/mustSucceed/sequence
  * names (nonce-fenced for the same reason — see {@link TOOL_EXPECTATIONS_FENCE}),
  * and the instruction to emit a `tool` object in the fragment. Split out of
  * {@link buildGraderPrompt} to keep that function's cognitive complexity within
@@ -221,7 +221,7 @@ function buildEvalSpecLines(expectations: string[], expectedOutput: string | und
 }
 
 /**
- * Build the prompt handed to the blind grader subagent (issue #145 — GRADER
+ * Build the prompt handed to the blind grader subagent (the GRADER
  * half of the per-eval executor/grader pipeline). The grader receives ONE
  * eval's captured transcript and expectations, and must produce ONE fragment
  * (see eval-fragment.ts) — never grade any other eval, never touch the
@@ -277,7 +277,7 @@ export function buildGraderPrompt(opts: BuildGraderPromptOptions): string {
     // Spell out the friction ITEM shape (mirrors the expectations/tool shape
     // spec above). Without it the grader emitted `friction` as bare strings,
     // which FrictionItemSchema.strict() rejects — and a malformed fragment used
-    // to abort the WHOLE run (adopter finding, PR #147). parseEvalFragment now
+    // to abort the WHOLE run (an adopter finding). parseEvalFragment now
     // also drops malformed friction leniently, but a well-shaped prompt is the
     // primary fix. The scoping sentence keeps friction to PACKAGING fidelity so
     // the grader stops restating graded expectations or auditing the harness's
@@ -319,7 +319,7 @@ const REQUIRED_PATTERNS: { test: RegExp; label: string }[] = [
   { test: /browser|viewer/i, label: 'must explicitly forbid opening a browser/viewer' },
   { test: /iterat/i, label: 'must forbid iterating on / improving the skill' },
   { test: /runNonce/i, label: 'must carry the nonce directive (runNonce)' },
-  // A grader that emits `friction` as bare strings aborted the whole run (PR #147);
+  // A grader that emits `friction` as bare strings used to abort the whole run;
   // the prompt MUST always spell out the friction object shape to prevent that.
   { test: /"friction" item MUST be a JSON object/, label: 'must spell out the friction item object shape' },
 ];

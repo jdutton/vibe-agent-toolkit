@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
 // Test file — all file operations are in temp directories; duplicated strings acceptable.
 import { existsSync, readFileSync } from 'node:fs';
 

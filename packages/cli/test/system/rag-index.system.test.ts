@@ -22,7 +22,7 @@
  * root, where `chmod 000` denies nothing.
  */
 
-import { getTestOutputDir } from '@vibe-agent-toolkit/utils';
+import { getTestOutputDir , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, it } from 'vitest';
 
 import {
@@ -39,8 +39,6 @@ import { setupRagTestProject, setupTestProject } from './test-helpers/index.js';
 const binPath = getBinPath(import.meta.url);
 
 /** `chmod 000` denies nothing to uid 0 and does not exist on Windows — see the file header. */
-const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 describe('RAG index command (system test)', () => {
   let tempDir: string;

@@ -1,5 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-
 /**
  * Integration test: the MAP of what a present-but-broken
  * `vibe-agent-toolkit.config.yaml` does to each command that meets one.
@@ -105,9 +103,10 @@ describe('broken governing config behavior (integration)', () => {
     tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-broken-cfg-'));
     initTestGitRepo(tempDir);
 
-    // package.json marker + a schema-invalid config (version must be a number).
+    // package.json marker + a schema-invalid config (a section of the wrong
+    // type; `version:` is accepted whatever its value).
     fs.writeFileSync(safePath.join(tempDir, 'package.json'), JSON.stringify({ name: 'broken-cfg-fixture' }));
-    fs.writeFileSync(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), 'version: not-a-number\n');
+    fs.writeFileSync(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), 'resources: 42\n');
 
     skillPath = safePath.join(tempDir, 'resources', 'skills', 'SKILL.md');
     fs.mkdirSync(safePath.join(tempDir, 'resources', 'skills'), { recursive: true });

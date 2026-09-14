@@ -3,6 +3,7 @@
  */
 
 import { validateAgent } from '@vibe-agent-toolkit/agent-config';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { handleCommandError } from '../../utils/command-error.js';
@@ -51,7 +52,7 @@ export async function validateCommand(
       for (const error of result.errors) {
         logger.error(`  - ${error}`);
       }
-      process.exit(1);
+      process.exit(ExitCode.FINDINGS);
     }
 
     if (result.warnings.length > 0) {
@@ -63,7 +64,7 @@ export async function validateCommand(
       logger.info('Agent validation successful');
     }
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'AgentValidate');
   }

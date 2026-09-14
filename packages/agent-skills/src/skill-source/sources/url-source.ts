@@ -110,7 +110,6 @@ async function resolveZipUrl(
 async function fetchBytes(url: string): Promise<Buffer> {
   if (url.startsWith('file://')) {
     const { fileURLToPath } = await import('node:url');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- file:// URL provided by config
     return readFileSync(fileURLToPath(url));
   }
   let res: Response;

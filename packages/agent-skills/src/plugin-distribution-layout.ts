@@ -110,7 +110,6 @@ export function listPluginSourceSkillDirs(pluginSourceDir: string): string[] {
  */
 export function listUntrackedPluginSkillDirs(pluginSourceDir: string): string[] {
   const skillsDir = safePath.join(pluginSourceDir, 'skills');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller validates pluginSourceDir
   if (!existsSync(skillsDir)) return [];
   if (gitFindRoot(safePath.resolve(skillsDir)) === null) return [];
 
@@ -128,7 +127,6 @@ export function listUntrackedPluginSkillDirs(pluginSourceDir: string): string[] 
  */
 function crawlSkillDirs(pluginSourceDir: string, respectGitignore: boolean): string[] {
   const skillsDir = safePath.join(pluginSourceDir, 'skills');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller validates pluginSourceDir
   if (!existsSync(skillsDir)) return [];
 
   // `exclude: []` (not the crawler's default) so this sees exactly what

@@ -15,7 +15,7 @@ import { extractFurColor as extractFurColorUtil } from '../utils/color-extractio
 export const PhotoAnalyzerInputSchema = z.object({
   imagePathOrBase64: z.string().describe('Path to image file or base64-encoded image'),
   mockable: z.boolean().optional().describe('Whether to use mock mode (default: true)'),
-});
+}).strict();
 
 export type PhotoAnalyzerInput = z.infer<typeof PhotoAnalyzerInputSchema>;
 

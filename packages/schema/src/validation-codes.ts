@@ -11,13 +11,21 @@
 
 import { z } from 'zod';
 
-export type IssueSeverity = 'error' | 'warning' | 'info' | 'ignore';
+import { SEVERITIES, type Severity } from './severity.js';
 
-/** Non-ignore severities actually emitted to consumers. */
-export type EmittedSeverity = Exclude<IssueSeverity, 'ignore'>;
+/**
+ * A resolved issue's severity: the published vocabulary plus `ignore`, the
+ * config-resolution state an adopter's `validation.allow` assigns. An `ignore`
+ * issue is never published — see `toFindings` in `report.ts`. Also the value
+ * space of a `validation.severity` override, which is why the config schema
+ * reads it from here.
+ */
+export const IssueSeveritySchema = z.enum([...SEVERITIES, 'ignore']);
+
+export type IssueSeverity = z.infer<typeof IssueSeveritySchema>;
 
 export interface CodeRegistryEntry {
-  defaultSeverity: EmittedSeverity;
+  defaultSeverity: Severity;
   description: string;
   fix: string;
   /** Stable anchor into docs/validation-codes.md (e.g. '#link_outside_project'). */
@@ -25,7 +33,7 @@ export interface CodeRegistryEntry {
 }
 
 const entry = (
-  defaultSeverity: EmittedSeverity,
+  defaultSeverity: Severity,
   description: string,
   fix: string,
   anchor: string,
@@ -54,8 +62,9 @@ export const CODE_REGISTRY = {
   // Reusing LINK_TARGETS_DIRECTORY was not available: its own `fix` says in as
   // many words that navigational prose links to a directory do not trigger it,
   // so emitting it here would hand a reader a finding that denies its own
-  // applicability — and its `error` default would fail exactly the builds #126
-  // (decision record D7) decided to allow.
+  // applicability — and its `error` default would fail exactly the builds the
+  // directory-link decision (a navigational directory link is a valid target)
+  // allows.
   //
   // `warning`, which is the severity this family already uses for "the target is
   // legitimate at source, but it did not travel, so the packaged link points at
@@ -279,7 +288,7 @@ export const CODE_REGISTRY = {
   // is an ordinary condition, not an exceptional one. One root-owned or
   // quarantined directory used to abort the ENTIRE run with `status: error`, exit
   // 2, and zero findings, discarding every finding already collected from readable
-  // siblings (issue #180). Degrading beats destroying: the scan continues and
+  // siblings. Degrading beats destroying: the scan continues and
   // names what it could not reach.
   //
   // Silence was the other tempting option and is not acceptable: a scan that
@@ -314,7 +323,7 @@ export const CODE_REGISTRY = {
   // FILES_GLOB_DROPPED_NEVER_PACKAGED. Louder than `info` because, unlike a
   // never-packaged drop, nothing about a glob's design makes catching a device node
   // the expected outcome. It replaces a raw `ENOTSUP` that killed the build naming
-  // neither the entry nor the path (issue #183).
+  // neither the entry nor the path.
   FILES_GLOB_SKIPPED_NON_REGULAR_FILE: entry(
     'warning',
     'A `files:` glob matched something that is not a regular file (a symlink to a directory, a dangling symlink, a FIFO, a socket or a device node); it cannot be packaged and was skipped, so it did not ship.',
@@ -533,7 +542,7 @@ export const CODE_REGISTRY = {
   // manifest and is stripped before the vocabulary is read — so a document that
   // does not drive MCP has an empty vocabulary and cannot produce a finding.
   //
-  // Re-measured 2026-09-06 with the current detector, after the hyphen,
+  // Re-measured with the current detector, after the hyphen,
   // per-match and frontmatter fixes: 883 documents over two corpora — 7 firing,
   // 11 occurrences, 0 false positives, and the authoring project fires 0. The
   // full table, the two false-vocabulary sources the population check caught,
@@ -896,11 +905,39 @@ export const IssueCodeSchema = z.enum(
   Object.keys(CODE_REGISTRY) as [IssueCode, ...IssueCode[]],
 );
 
-/** Codes outside the overridable framework — structural reports. */
+/**
+ * Codes the verify-time consistency check emits (`vat verify`, module
+ * `consistency-check.ts` in the CLI): config.yaml discovery cross-referenced
+ * against `package.json` `vat.skills` and the plugin assignments.
+ *
+ * Deliberately NOT `CODE_REGISTRY` entries. Each is emitted with a fixed
+ * severity from its one site and nothing reads a `validation.severity`
+ * override for it, so making it an `IssueCode` would let an adopter write
+ * `severity: { PUBLISHED_SKILL_NOT_IN_PLUGIN: ignore }`, watch it parse, and
+ * see no effect — the declared-but-inert shape this registry exists to prevent.
+ * They are documented beside the registry in docs/validation-codes.md under
+ * "Codes outside the overridable framework", and that doc is held to the
+ * emit sites by `test/docs/emitted-codes-documented.test.ts`.
+ */
+export const CONSISTENCY_CODES = [
+  'CONFIG_REFERENCES_UNKNOWN_SKILL',
+  'PUBLISHED_SKILL_NOT_IN_PACKAGE_JSON',
+  'PACKAGE_JSON_LISTS_UNKNOWN_SKILL',
+  'UNPUBLISHED_SKILL_IN_PACKAGE_JSON',
+  'PUBLISHED_SKILL_NOT_IN_PLUGIN',
+  'PLUGIN_REFERENCES_UNKNOWN_SKILL',
+  'SKILL_UNPUBLISHED',
+  'VENDORED_LICENSING_MISSING',
+] as const;
+
+export type ConsistencyCode = (typeof CONSISTENCY_CODES)[number];
+
+/**
+ * Codes outside the overridable framework — structural reports, always
+ * emitted at info and never blocking. Every member has an emit site; a member
+ * nothing emits is deleted, not kept "for later" (three inventory codes were).
+ */
 export type InfoCode =
-  | 'FILE_STRUCTURE_REPORT'
-  | 'RESOURCE_INVENTORY'
-  | 'METADATA_SUMMARY'
   | 'SKILL_IMPLICIT_REFERENCE'
   | 'SKILL_UNREFERENCED_FILE';
 
@@ -940,7 +977,6 @@ export type NonOverridableCode =
   // verify phase over zero built bundles. One code, because it is one claim and
   // needs one non-overridability; see `run-integrity.ts` in the CLI.
   | 'RESOURCE_CHECK_BROKEN'
-  | 'PATH_STYLE_WINDOWS'
   // FILENAME_COLLISION is NOT here: it has a CODE_REGISTRY entry and is emitted
   // through the same framework as every other packaging finding. Listing a code
   // in both places is a contradiction, not a belt-and-braces — `finalize()` finds
@@ -957,11 +993,8 @@ export type NonOverridableCode =
   | 'MARKETPLACE_MISSING_LICENSE'
   | 'MARKETPLACE_MISSING_README'
   | 'MARKETPLACE_MISSING_CHANGELOG'
-  | 'MARKETPLACE_MISSING_VERSION'
   | 'REGISTRY_MISSING_FILE'
   | 'REGISTRY_INVALID_JSON'
   | 'REGISTRY_INVALID_SCHEMA'
   | 'UNKNOWN_FORMAT'
-  | 'SKILL_TOO_LONG'
-  | 'REFERENCE_MISSING_TOC'
-  | 'DESCRIPTION_FIRST_PERSON';
+  | 'SKILL_TOO_LONG';

@@ -6,7 +6,7 @@ import type { LinkResolution } from '../walk-link-graph.js';
 import { evaluate, makeRuleContext, materializeIssue, type RuleContext } from './rule-engine/index.js';
 
 /**
- * Live-path extraction front-end (issue #129, slice 3).
+ * Live-path extraction front-end.
  *
  * Translates the link-graph walker's mechanical `excludeReason` into the
  * intent-aware {@link RuleContext} the engine reasons over. This is the ONLY

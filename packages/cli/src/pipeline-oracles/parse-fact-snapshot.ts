@@ -30,7 +30,7 @@ import type {
   ParseResult,
   ResourceLink,
 } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import type {
   ConditionFact,
@@ -55,7 +55,7 @@ import type {
  * silently — the cache corrupts it, every golden stays green, and the gate
  * reports success for the one thing it was built to catch.
  *
- * That is not hypothetical. `anchors` was uncovered until 2026-08-07, and it is
+ * That is not hypothetical. `anchors` shipped uncovered for weeks, and it is
  * the input to `ResourceRegistry.buildFragmentIndex` — i.e. to every
  * `file.md#fragment` check in VAT.
  *
@@ -113,7 +113,7 @@ export const PARSE_RESULT_FIELDS_ACCOUNTED_FOR: AssertNoUnaccountedParseResultFi
 /**
  * Capture parse facts for a set of absolute paths.
  *
- * @param absolutePaths - Paths to parse; unreadable ones are skipped, not fatal
+ * @param absolutePaths - Paths to parse; one that is no longer there is skipped, not fatal
  * @param options - Corpus root (for relativizing) and label
  * @returns The snapshot, rows ordered by content key
  * @throws {ParserUnavailableError} If a parser module cannot be loaded — a
@@ -211,7 +211,13 @@ export function diffParseFactRows(first: ParseFactRow, other: ParseFactRow): str
 }
 
 /**
- * Read+key a path, or report null when it cannot be read.
+ * Read+key a path, or report null when there is nothing at it.
+ *
+ * ONLY nothing: a path that vanished between enumeration and the read is
+ * skipped, because it is no longer in the corpus. A path the OS refuses is
+ * still in the corpus and is not in the snapshot, and a snapshot with a row
+ * quietly missing is the measurement-that-did-not-run this module's own
+ * `@throws` says must fail loudly.
  *
  * Returns the whole `KeyedContent` rather than a narrowed struct because
  * `parseOrNull` needs to NARROW it: `isParsableContent` is a type guard on the
@@ -220,8 +226,9 @@ export function diffParseFactRows(first: ParseFactRow, other: ParseFactRow): str
 async function readKeyedOrSkip(absolutePath: string): Promise<KeyedContent | null> {
   try {
     return await readContentWithKey(absolutePath, parserKindForPath(absolutePath));
-  } catch {
-    return null;
+  } catch (error) {
+    if (isPathAbsentError(error)) return null;
+    throw error;
   }
 }
 

@@ -11,20 +11,19 @@
 import { existsSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, safePath } from '@vibe-agent-toolkit/utils';
 
 export async function verifyPluginDirCaseMatch(
   projectRoot: string,
   pluginName: string,
 ): Promise<void> {
   const pluginsBase = safePath.join(projectRoot, 'plugins');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
   if (!existsSync(pluginsBase)) return;
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
   const entries = await readdir(pluginsBase, { withFileTypes: true });
+  const kinds = await Promise.all(entries.map((e) => direntKindFollowing(pluginsBase, e)));
   const matchInsensitive = entries.find(
-    (e) => e.isDirectory() && e.name.toLowerCase() === pluginName.toLowerCase(),
+    (e, i) => kinds[i] === 'directory' && e.name.toLowerCase() === pluginName.toLowerCase(),
   );
   if (matchInsensitive && matchInsensitive.name !== pluginName) {
     throw new Error(
@@ -57,10 +56,8 @@ export function verifyNoCaseCollidingPluginNames(names: readonly string[]): void
 }
 
 async function parseJsonFileIfPresent(path: string, label: string): Promise<void> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved path
   if (!existsSync(path)) return;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved path
     JSON.parse(await readFile(path, 'utf-8'));
   } catch (e) {
     throw new Error(`${label} is not valid JSON: ${(e as Error).message}`);

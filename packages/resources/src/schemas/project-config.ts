@@ -58,7 +58,7 @@ export const ExternalUrlValidationSchema = z.object({
     .describe('Whether to retry on rate limit (429) (default: true)'),
   ignorePatterns: z.array(z.string()).optional()
     .describe('Regex patterns for URLs to skip validation (e.g., "^https://localhost")'),
-}).describe('External URL validation configuration');
+}).strict().describe('External URL validation configuration');
 
 export type ExternalUrlValidation = z.infer<typeof ExternalUrlValidationSchema>;
 
@@ -78,7 +78,7 @@ export const CollectionValidationSchema = z.object({
     .describe('Whether to validate frontmatter values at JSON Schema positions with a URI-family format (default: true). Set to false to disable for this collection.'),
   externalUrls: ExternalUrlValidationSchema.optional()
     .describe('External URL validation configuration'),
-}).describe('Validation configuration for a collection');
+}).strict().describe('Validation configuration for a collection');
 
 export type CollectionValidation = z.infer<typeof CollectionValidationSchema>;
 
@@ -164,7 +164,7 @@ export const CollectionConfigSchema = z.object({
     .describe('MIME type every file this collection matches IS, overriding mime-type.ts\'s basename/extension tables — e.g. "text/markdown" for a corpus of prose files with an unhelpful extension. OPTIONAL, and omitting it is not the same as declaring a default: a collection that matches a file but declares nothing contributes nothing and can never conflict with another collection. Two collections that match one file and declare DIFFERENT values are a config error, reported per file and collected across the run. ⚠️ Declaring this makes the file\'s content key CONFIG-dependent: the parser kind is mixed into the key\'s digest preimage, so editing this value invalidates that file\'s cached parse facts automatically — which is the intended behaviour and needs no version constant.'),
   validation: CollectionValidationSchema.optional()
     .describe('Validation configuration for this collection'),
-}).describe('Configuration for a named collection of resources');
+}).strict().describe('Configuration for a named collection of resources');
 
 export type CollectionConfig = z.infer<typeof CollectionConfigSchema>;
 
@@ -249,7 +249,7 @@ export const ExcludeReferenceRuleSchema = z.object({
   // root silently matches nothing.
   patterns: z.array(z.string()).describe('Glob patterns matched against path relative to project root'),
   template: z.string().optional().describe('Handlebars template for rewriting links to matched files'),
-});
+}).strict();
 
 /**
  * Configuration for excluding references from a skill bundle.
@@ -257,7 +257,7 @@ export const ExcludeReferenceRuleSchema = z.object({
 export const ExcludeReferencesFromBundleSchema = z.object({
   rules: z.array(ExcludeReferenceRuleSchema).optional().default([]),
   defaultTemplate: z.string().optional().describe('Handlebars template for non-bundled links that don\'t match any rule'),
-});
+}).strict();
 
 /**
  * A file entry mapping a source path to a destination path in the skill output.
@@ -308,14 +308,14 @@ export const SkillFileEntrySchema = z.object({
     )
     .describe('Destination path relative to skill output directory'),
   integrity: z.boolean().optional().describe('When true, the build asserts the copied dest set exactly matches the matched source set and each file is byte-identical (a future copy-time check; late-bound)'),
-});
+}).strict();
 
 export type SkillFileEntry = z.infer<typeof SkillFileEntrySchema>;
 
 /**
  * A single declared executable a skill ships.
  *
- * Populates two downstream consumers (issue #145 Phase T/L):
+ * Populates two downstream consumers:
  * - `toolExpectations.mustRun: ["csvsum"]` (eval grading) references an executable
  *   by a stable NAME. Name resolution (defined here, implemented in a later
  *   task): the referenced name matches either (a) this entry's `path` basename
@@ -795,7 +795,7 @@ export type ClaudeConfig = z.infer<typeof ClaudeConfigSchema>;
  * is a global grader/judge selection that applies across all skills' test runs,
  * whereas `TestConfigSchema` configures the model/harness under test for a single
  * skill. Mixing the two would let a per-skill override silently change the judge,
- * undermining cross-skill eval comparability (issue #145).
+ * undermining cross-skill eval comparability.
  */
 export const SkillTestGlobalConfigSchema = z.object({
   graderModel: z.string().min(1).optional()
@@ -827,10 +827,10 @@ export type SkillTestGlobalConfig = z.infer<typeof SkillTestGlobalConfigSchema>;
  * ## What a root may point at, in practice
  *
  * A root pointed at a pre-existing docs tree is almost never conformant on day
- * one, and the number is not close. Measured on this repo's own tracked `docs/`
- * on 2026-09-06: **75 concept documents, 18 with YAML frontmatter, 0 carrying a
+ * one, and the number is not close. Measured on this repo's own tracked `docs/`:
+ * **75 concept documents, 18 with YAML frontmatter, 0 carrying a
  * `type:`, and no reserved `index.md`/`log.md` anywhere** — a bundle root there
- * is **0% conformant**. (Dated because it drifts as docs are added; re-measure
+ * is **0% conformant**. (A snapshot: it drifts as docs are added; re-measure
  * rather than trusting it.) That is not an argument against the feature;
  * it is the reason `root` names a purpose-built subtree in every case where the
  * alternative is retrofitting frontmatter onto every file in a general docs
@@ -1032,8 +1032,12 @@ export type ArdConfig = z.infer<typeof ArdConfigSchema>;
  * Complete project configuration schema.
  */
 export const ProjectConfigSchema = z.object({
-  version: z.literal(1)
-    .describe('Config file version (must be 1)'),
+  // Accepted and ignored; the npm package version is the only version this
+  // project has. The strict schema decides whether a config can be read — no
+  // integer in the file gets a vote. The key stays declared so a config still
+  // carrying the historical `version: 1` is not refused as an unknown key.
+  version: z.unknown().optional()
+    .describe('Accepted and ignored. The npm package version is the only version VAT has; a `version:` key of any value is not read.'),
   skills: SkillsConfigSchema.optional()
     .describe('Skills discovery and packaging configuration'),
   resources: ResourcesConfigSchema.optional()

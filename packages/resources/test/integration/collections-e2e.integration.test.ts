@@ -1,7 +1,8 @@
 import { promises as fs } from 'node:fs';
 
 
-import { setupAsyncTempDirSuite, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { ResourceCollection } from '../../src/resource-collection.js';
@@ -23,27 +24,18 @@ describe('Resource Collection System - End to End', () => {
     registry = new ResourceRegistry({ baseDir: tempDir });
 
     // Create test directory structure
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.mkdir(safePath.join(tempDir, 'docs/api'), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.mkdir(safePath.join(tempDir, 'docs/guides'), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.mkdir(safePath.join(tempDir, 'docs/internal'), { recursive: true });
 
     // Create test files with varied content
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(safePath.join(tempDir, 'README.md'), '# Project README\n\nWelcome to the project.', 'utf-8');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(safePath.join(tempDir, 'docs/api/reference.md'), '# API Reference\n\nAPI documentation here.', 'utf-8');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(safePath.join(tempDir, 'docs/api/guide.md'), '# API Guide\n\nGuide to using the API.', 'utf-8');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(safePath.join(tempDir, 'docs/guides/getting-started.md'), '# Getting Started\n\nStart here.', 'utf-8');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(safePath.join(tempDir, 'docs/internal/notes.md'), '# Internal Notes\n\nPrivate notes.', 'utf-8');
 
     // Create duplicate content - same as README
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(safePath.join(tempDir, 'docs/guides/README.md'), '# Project README\n\nWelcome to the project.', 'utf-8');
   });
 

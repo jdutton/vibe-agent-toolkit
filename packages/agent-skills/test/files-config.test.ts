@@ -1,8 +1,8 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test sandbox paths derived from tmp dirs */
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import type { SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -999,7 +999,7 @@ describe('applyFilesConfig', () => {
     async ({ skip }) => {
       // chmod 0o000 does not restrict access on Windows, and root bypasses
       // permission checks entirely — either makes the fixture assert nothing.
-      if (process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0)) skip();
+      if (CANNOT_DENY_READS) skip();
       const { projectRoot, skillOutputDir } = makeNonRegularSandbox(skip);
       const locked = safePath.join(projectRoot, NON_REGULAR_SRC_DIR, 'locked.mjs');
       writeFileSync(locked, 'export const secret = 2;\n');
@@ -1025,7 +1025,7 @@ describe('applyFilesConfig', () => {
   // first and this one was missed entirely — an explicit entry is the spelling
   // that unambiguously says "ship this file", so a bare errno here is if anything
   // worse: the author named the path and got back an errno that did not.
-  it.skipIf(process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0))(
+  it.skipIf(CANNOT_DENY_READS)(
     'names a NON-GLOB entry and its path when the declared file cannot be read',
     async () => {
       const { projectRoot, skillOutputDir } = makeApplySandbox();
@@ -1052,7 +1052,7 @@ describe('applyFilesConfig', () => {
   // An unwritable OUTPUT directory is the same class reached from the write side
   // rather than the read side — it fails in `mkdir`, which sat outside the guard
   // when the guard was first added.
-  it.skipIf(process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0))(
+  it.skipIf(CANNOT_DENY_READS)(
     'names the entry when the output directory cannot be written',
     async () => {
       const { projectRoot, skillOutputDir } = makeApplySandbox();

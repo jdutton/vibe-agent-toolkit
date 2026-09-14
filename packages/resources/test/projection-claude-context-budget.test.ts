@@ -143,6 +143,7 @@ function expectContributesNothing(rows: readonly AccountedRow[]): void {
 
 describe('alwaysLoadedBudget', () => {
   it('publishes 12,000 as the calibrated default, not 10,000', () => {
+    // eslint-disable-next-line local/no-registry-count-pin -- a MEASURED calibration (four corpora, see the source's module doc); the literal is the record, and a derivation would launder a re-tune past it
     expect(DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS).toBe(12_000);
   });
 

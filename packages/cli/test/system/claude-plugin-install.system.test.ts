@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test files legitimately use dynamic file paths
 
 /**
@@ -138,7 +137,8 @@ describe('claude plugin install command (system test)', () => {
       '--target', 'claude.ai',
     ], { env: fakeHomeEnv(safePath.join(tempDir, 'home')) });
 
-    expect(result.status).toBe(1);
+    // ERROR: the command cannot do what was asked; it is not a finding about a skill.
+    expect(result.status).toBe(2);
     expect(parsed.status).toBe('not-available');
     expect(parsed.requestedTarget).toBe('claude.ai');
   });

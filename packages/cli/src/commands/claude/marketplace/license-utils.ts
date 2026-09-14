@@ -147,7 +147,6 @@ export function explainUnusableLicense(value: string): string | undefined {
  */
 export function readLicenseFile(filePath: string, baseDir: string): string {
   const resolved = safePath.resolve(baseDir, filePath);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from validated config
   return readFileSync(resolved, 'utf-8');
 }
 

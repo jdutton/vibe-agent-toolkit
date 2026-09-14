@@ -21,6 +21,7 @@
  * Run: `bun run guard:audit-quality`.
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { parse } from 'yaml';
 
@@ -316,7 +317,7 @@ function main(): void {
   const ranBadly = auditRunFailure({ ...result, stdout });
   if (ranBadly !== null) {
     log(`❌ ${ranBadly}`, 'red');
-    process.exitCode = 1;
+    process.exitCode = ExitCode.ERROR;
     return;
   }
   const findings = parseAuditFindings(stdout);
@@ -324,7 +325,7 @@ function main(): void {
   reportDebt(gate);
   reportFailures(gate);
   if (gate.unexpected.length > 0 || gate.staleExemptions.length > 0) {
-    process.exitCode = 1;
+    process.exitCode = ExitCode.FINDINGS;
     return;
   }
   log(`✅ vat audit clean: ${gate.excused.length} finding(s) excused by declared reason.`, 'green');

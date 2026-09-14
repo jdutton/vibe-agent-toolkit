@@ -56,7 +56,6 @@ describe('assertSafeHarnessRoot', () => {
 
   /** Real uid of a directory, or 0 on platforms without uids (win32). */
   const dirUid = (dir: string): number => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture, controlled directory
     return statSync(dir).uid ?? 0;
   };
 
@@ -119,7 +118,6 @@ describe('assertSafeWorkdir', () => {
   });
 
   it('refuses a dir with CLAUDE.md in its ancestry (exit 2)', () => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture setup, controlled directory
     writeFileSync(safePath.join(dir, 'CLAUDE.md'), '# ambient', 'utf8');
     const child = safePath.join(dir, 'sub');
     mkdirSyncReal(child);
@@ -133,11 +131,10 @@ describe('assertSafeWorkdir', () => {
     expect(() => assertSafeWorkdir(child, tmpBoundary)).toThrow(HarnessLocationError);
   });
 
-  it('HarnessLocationError carries exitCode 2', () => {
+  it('HarnessLocationError declares the preflight reason', () => {
     expect.assertions(1);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture setup, controlled directory
     writeFileSync(safePath.join(dir, 'CLAUDE.md'), 'x', 'utf8');
-    try { assertSafeWorkdir(dir, tmpBoundary); } catch (e) { expect((e as HarnessLocationError).exitCode).toBe(2); }
+    try { assertSafeWorkdir(dir, tmpBoundary); } catch (e) { expect((e as HarnessLocationError).reason).toBe('preflight'); }
   });
 
   /**
@@ -181,7 +178,6 @@ describe('assertSafeWorkdir', () => {
       // The boundary stops AT home, exclusive — anything beneath it is still a project.
       const project = safePath.join(fakeHome, 'dev', 'proj');
       mkdirSyncReal(safePath.join(project, 'sub'), { recursive: true });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture setup, controlled directory
       writeFileSync(safePath.join(project, 'CLAUDE.md'), '# real project', 'utf8');
       expect(() => assertSafeWorkdir(safePath.join(project, 'sub'), fakeHome)).toThrow(HarnessLocationError);
     });

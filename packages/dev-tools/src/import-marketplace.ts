@@ -5,8 +5,10 @@
  * `anthropics/claude-plugins-official` and `anthropics/knowledge-work-plugins`,
  * maps each plugin to a PluginEntry, and rewrites `corpus/seed.yaml`.
  *
- * Mapping rules and design are documented in
- * `~/code/vat-issue-99-slice-1b-plan.md` (slice 1b of issue #99).
+ * Mapping rules: one PluginEntry per upstream plugin, its name prefixed per
+ * catalog to avoid collisions, its source composed by {@link composeSourceUrl}
+ * from the catalog-relative string / `git-subdir` / `url` / `github` shapes;
+ * an unknown shape is a hard failure, never a guess.
  *
  * Usage:
  *   bun run import-marketplace [--allow-shrink]
@@ -24,11 +26,11 @@
  *       without --allow-shrink)
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 // File paths derived from PROJECT_ROOT (controlled, not user input)
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { CommandExecutionError, safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import * as yaml from 'yaml';
@@ -705,6 +707,6 @@ if (isEntrypoint(import.meta.url)) {
         log(`  ${issue.path.join('.') || '(root)'}: ${issue.message}`, 'red');
       }
     }
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   }
 }

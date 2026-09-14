@@ -355,7 +355,7 @@ function buildMovement(
  * appearing or disappearing counts too — the instrument's shape moved, which the
  * reader has to know before they read any share.
  *
- * ⚠️ REVIEW FINDING 2026-08-14 — THIS VERDICT FALSE-POSITIVES AT SCALE, measured.
+ * ⚠️ REVIEW FINDING — THIS VERDICT FALSE-POSITIVES AT SCALE, measured.
  * The first real `parse ab --control` (6 pairs, cold, primary adopter, the SAME
  * binary as both arms) returned `changed` on **2 of 6 pairs**. Comparing a
  * disagreeing pair by hand shows exactly one row responsible:
@@ -379,7 +379,7 @@ function buildMovement(
  * noise; what actually bites is run-to-run variance of a small pass, which is a
  * different and much larger quantity.
  *
- * ⛔ DELIBERATELY LEFT AS IS — reviewed and decided 2026-08-14, not an oversight.
+ * ⛔ DELIBERATELY LEFT AS IS — reviewed and decided, not an oversight.
  * The failure direction is SAFE: this over-reports `changed`, which inside `ab`
  * surfaces as PAIRS DISAGREE, i.e. the tool refusing to answer. It never reports
  * `unchanged` over a real movement, and nothing currently gates on the verdict.

@@ -18,9 +18,6 @@
  * absence errnos are the negative control: a directory that VANISHED between
  * enumeration and listing is not in the population and is skipped silently.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- controlled temp fixture tree */
-import { writeFileSync } from 'node:fs';
-
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -29,24 +26,16 @@ import {
   type DirectoryRefusal,
   type UnreadablePolicy,
 } from '../src/file-crawler.js';
-import { mkdirSyncReal, safePath, toForwardSlash } from '../src/path-utils.js';
-import { setupSyncTempDirSuite, withReaddirSyncRefused } from '../src/test-helpers.js';
+import { toForwardSlash } from '../src/path-utils.js';
+import { withReaddirSyncRefused } from '../src/test-helpers.js';
+import { setupSyncTempDirSuite } from '../src/testing/temp-dir.js';
+
+import { plantOpenAndLockedTree } from './test-helpers.js';
 
 const REFUSAL_ERRNOS = ['EACCES', 'EMFILE', 'ENFILE', 'ELOOP'] as const;
 const ABSENCE_ERRNOS = ['ENOENT', 'ENOTDIR'] as const;
 const OPEN_FILE = 'docs/open/ok.md';
 const LOCKED_FILE = 'docs/locked/t.md';
-
-/** `open/ok.md` beside `locked/t.md`: the walk must still find the one it can list. */
-function plantTree(root: string): { locked: string } {
-  const open = safePath.join(root, 'docs', 'open');
-  const locked = safePath.join(root, 'docs', 'locked');
-  mkdirSyncReal(open, { recursive: true });
-  mkdirSyncReal(locked, { recursive: true });
-  writeFileSync(safePath.join(open, 'ok.md'), '# ok\n');
-  writeFileSync(safePath.join(locked, 't.md'), '# t\n');
-  return { locked };
-}
 
 const REMEDY = 'Fix the permissions on that directory, or add it to the plugin `exclude:` list.';
 
@@ -71,7 +60,7 @@ describe('crawlDirectorySync: a refused listing never becomes a shorter list', (
   beforeEach(() => {
     suite.beforeEach();
     root = suite.getTempDir();
-    ({ locked } = plantTree(root));
+    ({ locked } = plantOpenAndLockedTree(root));
   });
 
   it('enumerates both files when nothing refuses (positive control)', () => {

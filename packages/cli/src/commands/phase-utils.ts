@@ -2,7 +2,7 @@
  * Shared utilities for top-level phase orchestration commands (vat build, vat verify, vat validate).
  */
 
-import { type SeverityCounts } from '@vibe-agent-toolkit/schema';
+import { ExitCode, type ExitCodeValue, isExitCode, type SeverityCounts } from '@vibe-agent-toolkit/schema';
 import { type Command, Option } from 'commander';
 
 import { createLogger } from '../utils/logger.js';
@@ -27,7 +27,7 @@ import { writeJsonOutput, writeYamlOutput } from '../utils/output.js';
  */
 export interface PhaseOutcome {
   document: unknown;
-  exitCode: number;
+  exitCode: ExitCodeValue;
   /**
    * The phase failed UNEXPECTEDLY, so `document` is the shared error envelope
    * (`{status, error, duration}`) rather than the command's own report.
@@ -105,7 +105,7 @@ export function rejectRetiredOnly(only: string | undefined, command: string, sec
       `  Fix: drop the flag — '${command}' runs every configured surface.\n` +
       `  Still selective: 'vat build --only <phase>', where a phase is minutes, not seconds.\n`,
   );
-  process.exit(1);
+  process.exit(ExitCode.ERROR);
 }
 
 /**
@@ -134,7 +134,7 @@ export interface PhaseResult {
   name: string;
   status: PhaseStatus;
   /** The exit code the phase claimed for itself. */
-  exitCode?: number;
+  exitCode?: ExitCodeValue;
   /** Why the phase could not run at all (it threw past its own error handling). */
   error?: string;
   /**
@@ -295,7 +295,10 @@ export function applyPhaseSelection(
       error: selection.message,
       duration: `${Date.now() - startTime}ms`,
     });
-    return process.exit(1);
+    // A selection that cannot run — an unknown `--only` name, an unreadable
+    // config, nothing configured for what was asked — is the command failing
+    // to do its job, not a finding about the tree.
+    return process.exit(ExitCode.ERROR);
   }
 
   logger.warn(selection.warning);
@@ -305,7 +308,7 @@ export function applyPhaseSelection(
     note: selection.note,
     duration: `${Date.now() - startTime}ms`,
   });
-  return process.exit(0);
+  return process.exit(ExitCode.OK);
 }
 
 /** Rank used by {@link worseOf}: later wins. */
@@ -319,10 +322,21 @@ export function worseOf(a: PhaseStatus, b: PhaseStatus): PhaseStatus {
 /** Every value a phase may legitimately report as its own `status`. */
 const REPORTABLE_STATUSES = new Set<string>(PHASE_STATUS_ORDER);
 
-/** The status an exit code alone implies, before the phase's report is read. */
+/**
+ * The status an exit code alone implies, before the phase's report is read.
+ *
+ * A code outside the `ExitCode` contract is a DEFECT in the phase, not a
+ * status to round: the old table folded "anything else" into `system-error`,
+ * which let a phase ending on a code no reader could interpret pass as a
+ * merely broken environment. It throws, and {@link runPhase}'s backstop files
+ * the phase as `system-error` with the defect named.
+ */
 function statusFromExitCode(status: number): PhaseStatus {
-  if (status === 0) return 'success';
-  if (status === 1) return 'error';
+  if (!isExitCode(status)) {
+    throw new Error(`exit code ${status} is not in the ExitCode contract (0 ok, 1 findings, 2 error)`);
+  }
+  if (status === ExitCode.OK) return 'success';
+  if (status === ExitCode.FINDINGS) return 'error';
   return SYSTEM_ERROR;
 }
 
@@ -340,9 +354,10 @@ function statusFromReport(report: unknown): PhaseStatus | undefined {
  *
  * | exit code             | phase status   | why                                     |
  * |-----------------------|----------------|-----------------------------------------|
- * | 0                     | `success`      | ran, found nothing actionable           |
- * | 1                     | `error`        | ran, found validation errors            |
- * | 2 (or any other)      | `system-error` | the phase itself reported a system error |
+ * | `OK` (0)              | `success`      | ran, found nothing actionable           |
+ * | `FINDINGS` (1)        | `error`        | ran, found validation errors            |
+ * | `ERROR` (2)           | `system-error` | the phase itself reported a system error |
+ * | anything else         | throws         | a defect in the phase, filed by `runPhase` as `system-error` |
  *
  * The exit code is then reconciled with the phase's OWN reported `status`,
  * worst-wins. An exit code has three values and cannot express `warning`:
@@ -513,12 +528,12 @@ export function aggregatePhaseIssueCounts(results: readonly PhaseResult[]): Seve
 
 /**
  * The process exit code for a set of phase outcomes, per the exit-code contract
- * every orchestrator's help text documents: 0 pass, 1 validation failure,
- * 2 system error. Warnings do not fail a run — they are published in the status
- * and counts instead.
+ * every orchestrator's help text documents: `OK` pass, `FINDINGS` validation
+ * failure, `ERROR` system error. Warnings do not fail a run — they are
+ * published in the status and counts instead.
  */
-export function exitCodeForPhases(results: readonly PhaseResult[]): 0 | 1 | 2 {
+export function exitCodeForPhases(results: readonly PhaseResult[]): ExitCodeValue {
   const worst = aggregatePhaseStatus(results);
-  if (worst === SYSTEM_ERROR) return 2;
-  return worst === 'error' ? 1 : 0;
+  if (worst === SYSTEM_ERROR) return ExitCode.ERROR;
+  return worst === 'error' ? ExitCode.FINDINGS : ExitCode.OK;
 }

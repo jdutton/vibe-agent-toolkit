@@ -7,12 +7,12 @@
 
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import semver from 'semver';
 
 import { log, safeExecResult, safeExecSync } from './common.js';
-import { PUBLISHED_PACKAGES } from './package-lists.js';
-import { validatePackageList as validatePackages } from './validate-package-list.js';
+import { publishedPackagesInDependencyOrder } from './workspace-graph.js';
 
 const PROJECT_ROOT = process.cwd();
 const MANIFEST_PATH = safePath.join(PROJECT_ROOT, '.publish-manifest.json');
@@ -20,46 +20,28 @@ const VIBE_AGENT_TOOLKIT_SCOPE = '@vibe-agent-toolkit/';
 const PACKAGES_DIR = 'packages';
 const UMBRELLA_PACKAGE_NAME = 'vibe-agent-toolkit';
 
-// Use published packages list as PACKAGES for compatibility with existing code
-const PACKAGES: readonly string[] = PUBLISHED_PACKAGES;
-
 /**
- * Validate that all packages are accounted for in either PACKAGES or SKIP_PACKAGES
+ * The packages to publish, dependencies first.
+ *
+ * Derived from `package.json` — every non-private workspace package, ordered
+ * by its runtime `workspace:` edges — rather than read from a hand list. The
+ * hand list this replaced put `runtime-claude-agent-sdk` before
+ * `claude-marketplace` and `cli` before `gateway-mcp`; with every internal
+ * dependency pinned to an exact version by `resolve-workspace-deps`, each of
+ * those was uninstallable for the window between the two publishes.
+ *
+ * A manifest that cannot be read, or a dependency cycle, throws here and
+ * stops the publish before a single package has gone out.
  */
-function validatePackageList(): void {
+function resolvePublishOrder(): readonly string[] {
   try {
-    const validation = validatePackages(PROJECT_ROOT);
-    const hasErrors = validation.undeclared.length > 0 || validation.phantom.length > 0;
-
-    if (hasErrors) {
-      log('✗ Package list out of sync!', 'red');
-
-      if (validation.undeclared.length > 0) {
-        log('  The following packages exist in packages/ but are not declared:', 'red');
-        for (const pkg of validation.undeclared) {
-          log(`    - ${pkg}`, 'red');
-        }
-      }
-
-      if (validation.phantom.length > 0) {
-        log('  The following packages are declared but do not exist:', 'red');
-        for (const pkg of validation.phantom) {
-          log(`    - ${pkg}`, 'red');
-        }
-      }
-
-      log('\n  Update packages/dev-tools/src/package-lists.ts:', 'yellow');
-      log('    - Add undeclared packages to PUBLISHED_PACKAGES or SKIP_PACKAGES', 'yellow');
-      log('    - Remove phantom packages from the lists', 'yellow');
-      process.exit(1);
-    }
-
-    log('✓ All packages accounted for in publish script', 'green');
+    const order = publishedPackagesInDependencyOrder(PROJECT_ROOT);
+    log(`✓ Publish order derived from package.json (${order.length} packages)`, 'green');
+    return order;
   } catch (error) {
-    log('✗ Failed to validate package list', 'red');
-    const message = error instanceof Error ? error.message : String(error);
-    log(message, 'red');
-    process.exit(1);
+    log('✗ Could not derive the publish order from package.json', 'red');
+    log(error instanceof Error ? error.message : String(error), 'red');
+    process.exit(ExitCode.ERROR);
   }
 }
 
@@ -78,23 +60,18 @@ const manifest: Manifest = {
 };
 
 function saveManifest(): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- MANIFEST_PATH is a constant path
   writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2), 'utf8');
 }
 
 function loadManifest(): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- MANIFEST_PATH is a constant path
   if (existsSync(MANIFEST_PATH)) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- MANIFEST_PATH is a constant path
     const content = readFileSync(MANIFEST_PATH, 'utf8');
     Object.assign(manifest, JSON.parse(content));
   }
 }
 
 function cleanupManifest(): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- MANIFEST_PATH is a constant path
   if (existsSync(MANIFEST_PATH)) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- MANIFEST_PATH is a constant path
     unlinkSync(MANIFEST_PATH);
   }
 }
@@ -235,11 +212,11 @@ function rollback(dryRun: boolean): void {
 /**
  * Phase 2: Update @next tag for stable releases if needed
  */
-function updateNextTag(version: string, dryRun: boolean): void {
+function updateNextTag(packages: readonly string[], version: string, dryRun: boolean): void {
   log('\n📋 Phase 2: Updating @next tag...', 'blue');
   log('─'.repeat(60), 'blue');
 
-  for (const pkg of PACKAGES) {
+  for (const pkg of packages) {
     const result = addDistTag(pkg, version, 'next', dryRun);
 
     if (!result.success) {
@@ -247,7 +224,7 @@ function updateNextTag(version: string, dryRun: boolean): void {
       log(`   Package: ${pkg}`, 'red');
       log('   All packages published but @next tag incomplete', 'red');
       rollback(dryRun);
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     }
   }
 
@@ -269,7 +246,7 @@ Examples:
   publish-with-rollback.ts 0.1.0
   publish-with-rollback.ts 0.1.0 --dry-run
     `);
-    process.exit(args.length === 0 ? 1 : 0);
+    process.exit(args.length === 0 ? ExitCode.ERROR : ExitCode.OK);
   }
 
   const version = args[0];
@@ -277,16 +254,15 @@ Examples:
 
   if (!version) {
     log('✗ Version is required', 'red');
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   }
 
   if (!semver.valid(version)) {
     log(`✗ Invalid semver version: ${version}`, 'red');
-    process.exit(1);
+    process.exit(ExitCode.ERROR);
   }
 
-  // Validate package list is in sync
-  validatePackageList();
+  const packages = resolvePublishOrder();
 
   const isStable = semver.prerelease(version) === null;
   const primaryTag = isStable ? 'latest' : 'next';
@@ -311,7 +287,7 @@ Examples:
   log('📋 Phase 1: Publishing packages...', 'blue');
   log('─'.repeat(60), 'blue');
 
-  for (const pkg of PACKAGES) {
+  for (const pkg of packages) {
     const result = publishPackage(pkg, version, primaryTag, dryRun);
 
     if (result.success) {
@@ -320,7 +296,7 @@ Examples:
     } else {
       log('\n❌ Publish failed!', 'red');
       rollback(dryRun);
-      process.exit(1);
+      process.exit(ExitCode.ERROR);
     }
   }
 
@@ -328,7 +304,7 @@ Examples:
 
   // Phase 2: For stable versions, add @next tag if requested
   if (updateNext) {
-    updateNextTag(version, dryRun);
+    updateNextTag(packages, version, dryRun);
   }
 
   cleanupManifest();
@@ -342,7 +318,7 @@ Examples:
   }
   log('='.repeat(60), 'green');
 
-  process.exit(0);
+  process.exit(ExitCode.OK);
 }
 
 main();

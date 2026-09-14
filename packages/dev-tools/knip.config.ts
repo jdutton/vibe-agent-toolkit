@@ -1,7 +1,60 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
 import type { KnipConfig } from 'knip';
 
 /** Every package's TypeScript source lives here; several workspaces below name it. */
 const SRC_TS = 'src/**/*.ts';
+
+/**
+ * The runtime file an `exports` target names: a bare string, or the first of
+ * the `import` / `default` conditions that is one (the `types` condition is
+ * a declaration, not a module). Anything else — an object with neither, a
+ * nested condition map — is no runtime target and yields `undefined`.
+ */
+function runtimeTargetOf(target: unknown): string | undefined {
+  if (typeof target === 'string') return target;
+  if (target === null || typeof target !== 'object') return undefined;
+  const conditions = target as Record<string, unknown>;
+  for (const condition of ['import', 'default']) {
+    const value = conditions[condition];
+    if (typeof value === 'string') return value;
+  }
+  return undefined;
+}
+
+/**
+ * The source behind every `exports` target under `dist/` (`./dist/fs.js` →
+ * `src/fs.ts`; a `./dist/x/*.js` pattern → the `src/x/*.ts` glob): each is a
+ * public entry, so its exports are API surface, never "unused". A target
+ * outside `dist/` (a `./schemas/*` JSON tree, a `.cjs` shim) has no source
+ * and is skipped. Why it is derived and not listed by hand:
+ * `docs/contributing/traps.md`, "A subpath module's re-exports flap by platform".
+ */
+export function sourceEntriesOf(exports: unknown): string[] {
+  if (exports === null || typeof exports !== 'object') return [];
+  const entries: string[] = [];
+  for (const target of Object.values(exports as Record<string, unknown>)) {
+    const value = runtimeTargetOf(target);
+    if (value === undefined) continue;
+    const match = /^\.\/dist\/(.+)\.js$/.exec(value);
+    if (match?.[1] !== undefined) entries.push(`src/${match[1]}.ts`);
+  }
+  return entries;
+}
+
+function sourceEntriesFromExports(packageDir: string): string[] {
+  const manifestPath = fileURLToPath(new URL(`../${packageDir}/package.json`, import.meta.url));
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { exports?: unknown };
+  const entries = sourceEntriesOf(manifest.exports);
+  // A workspace is named here BECAUSE it publishes dist/ subpaths; an empty
+  // derivation is a condition shape this reader does not know, not a package
+  // with no API — and knip would silently judge every subpath as dead.
+  if (entries.length === 0) {
+    throw new Error(`packages/${packageDir}/package.json: no dist/ runtime target found under "exports" — extend sourceEntriesOf for its condition shape`);
+  }
+  return entries;
+}
 
 const config: KnipConfig = {
   // Only report dependency issues (not unused files/exports/types)
@@ -11,12 +64,7 @@ const config: KnipConfig = {
   ignoreDependencies: [
     // @types/* are used for TypeScript compilation, not runtime imports
     '@types/.*',
-    // tsx used for build scripts in package.json, not imported
-    'tsx',
   ],
-
-  // Vitest setup files and TS compiler plugins that knip can't resolve
-  ignoreUnresolved: ['./vitest.setup.js'],
 
   workspaces: {
     '.': {
@@ -25,9 +73,6 @@ const config: KnipConfig = {
         'jscpd',
         'secretlint',
         '@secretlint/.*',
-        // Root deps to fix transitive dependency resolution
-        '@lancedb/lancedb',
-        'apache-arrow',
         // Used by dev-tools scripts (invoked via tsx, not direct imports from root)
         'adm-zip',
         'semver',
@@ -60,8 +105,6 @@ const config: KnipConfig = {
     'packages/cli': {
       entry: ['src/bin.ts'],
       ignoreDependencies: [
-        // Installed as dep so vat-development-agents skill is available at runtime
-        '@vibe-agent-toolkit/vat-development-agents',
         // build script shells out to dev-tools/src/prepare-bin.ts via tsx (not a
         // static import) — declared so turbo's dependency graph knows cli#build
         // depends on dev-tools#build
@@ -92,9 +135,22 @@ const config: KnipConfig = {
       ignoreDependencies: ['openai'],
     },
 
-    // resource-compiler has CLI entry points beyond index.ts
+    // resource-compiler has CLI entry points beyond index.ts, plus four subpath exports.
+    // A workspace named here does not inherit the `packages/*` block above, so
+    // each restates `project` — otherwise test helpers are judged as source.
     'packages/resource-compiler': {
-      entry: ['src/cli/*.ts'],
+      entry: ['src/cli/*.ts', ...sourceEntriesFromExports('resource-compiler')],
+      project: [SRC_TS],
+    },
+
+    'packages/resources': {
+      entry: sourceEntriesFromExports('resources'),
+      project: [SRC_TS],
+    },
+
+    'packages/agent-runtime': {
+      entry: sourceEntriesFromExports('agent-runtime'),
+      project: [SRC_TS],
     },
 
     // Runtime adapters: some deps provide types or are used in tests/examples
@@ -105,16 +161,14 @@ const config: KnipConfig = {
     // utils: the `./eslint` subpath is hand-written CommonJS outside src/. Its
     // entry point and rules are `.cjs` and are only ever loaded by ESLint itself,
     // so they need naming explicitly or knip never walks them.
+    // `eslint` is an OPTIONAL peer here (for adopters of the `./eslint` subpath) and
+    // a ROOT devDependency for this repo's own rule suites — the per-package devDep
+    // was a duplicate and is gone. The hand-written `index.d.cts` types the subpath
+    // against `eslint`, so knip reads a "referenced optional peer" — intentional,
+    // the same shape blessed for `openai` in packages/rag above.
     'packages/utils': {
-      entry: ['src/index.ts', 'eslint/index.cjs', 'eslint/rules/*.cjs'],
+      entry: [...sourceEntriesFromExports('utils'), 'eslint/index.cjs', 'eslint/rules/*.cjs'],
       project: [SRC_TS, 'eslint/*.cjs', 'eslint/rules/*.cjs'],
-      // The `eslint` devDep IS used — `test/eslint/*` imports `RuleTester` and the
-      // integration test drives `ESLint` — but `project` above covers no `test/**`,
-      // so knip cannot see those imports and would report it unused. Ignored for
-      // that reason, NOT because nothing needs it: deleting the devDep breaks the
-      // rule suites, and this entry means knip will not warn you. (The rule modules
-      // themselves genuinely never require('eslint') — that is what makes the peer
-      // optional — but it is not why this line is here.)
       ignoreDependencies: ['eslint'],
     },
 
@@ -133,6 +187,8 @@ const config: KnipConfig = {
 
     // Example package: devDeps used in examples/ directory (outside knip src/ project scope)
     'packages/vat-example-cat-agents': {
+      entry: sourceEntriesFromExports('vat-example-cat-agents'),
+      project: [SRC_TS],
       ignoreDependencies: [
         '@ai-sdk/openai',
         '@anthropic-ai/sdk',
@@ -149,6 +205,8 @@ const config: KnipConfig = {
         '@vibe-agent-toolkit/cli',
         // Installed so its postinstall hook deploys the vibe-agent-toolkit skill to ~/.claude/skills/
         '@vibe-agent-toolkit/vat-development-agents',
+        // `bin/vat` (hand-written, outside src/) imports it for `installLastResortExit`.
+        '@vibe-agent-toolkit/schema',
       ],
     },
 

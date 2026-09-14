@@ -15,7 +15,7 @@ export const RAGStatsSchema = z.object({
   dbSizeBytes: z.number().describe('Database size in bytes'),
   embeddingModel: z.string().describe('Current embedding model'),
   lastIndexed: z.date().describe('When database was last indexed'),
-});
+}).strict();
 
 /**
  * RAGStats TypeScript type

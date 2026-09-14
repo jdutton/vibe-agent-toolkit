@@ -134,7 +134,7 @@ export function convertPureFunctionsToTools(
       tool(
         key, // Use the key as the tool name for clarity
         manifest.description,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK boundary: the Claude Agent SDK's Zod type differs from this repo's
         config.inputSchema as any, // Claude Agent SDK accepts Zod schemas
         createToolHandler(agent, config.inputSchema, config.outputSchema),
       ),

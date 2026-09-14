@@ -18,6 +18,9 @@
  *   in one repo, so a baked-in default is a hole in every OTHER repo. Consumers
  *   declare their own via the rule option (see `exempt-path-matcher.cjs`).
  * @param {boolean} [config.checkMemberExpression] - Check for obj.method() calls (default: false)
+ * @param {Object} config.docs - The rule's `meta.docs` manifest entry: `category`,
+ *   `bans`, `useInstead`, optional `subpath`, and `recommended` /
+ *   `recommendedSeverity` (what `index.cjs` builds `configs.recommended` from).
  * @returns {Object} ESLint rule definition
  *
  * @example
@@ -147,6 +150,7 @@ module.exports = function createNoUnsafeRule(config) {
     safeFn,
     safeModule,
     message,
+    docs,
     exemptFiles = [],
     checkMemberExpression = false,
   } = config;
@@ -166,8 +170,7 @@ module.exports = function createNoUnsafeRule(config) {
       type: 'problem',
       docs: {
         description: `Enforce use of ${safeFn}() instead of ${unsafeFn}()`,
-        category: 'Best Practices',
-        recommended: true,
+        ...docs,
       },
       fixable: 'code',
       schema: [EXEMPT_AND_SAFE_MODULE_SCHEMA],

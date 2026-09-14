@@ -462,7 +462,7 @@ export interface ParseFactSnapshot {
    * Keys whose paths did not all parse identically. **Must be empty.**
    *
    * This is the row that makes the snapshot an oracle rather than a restatement.
-   * Until 2026-08-08 the capture parsed the *first* path under each key and
+   * The capture used to parse the *first* path under each key and
    * skipped the rest, with a comment saying so outright — *"not re-parsing here
    * is the same claim, asserted."* That is the content-addressed cache's own
    * assumption, implemented inside the instrument built to verify it: with one

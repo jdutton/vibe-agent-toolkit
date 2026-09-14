@@ -177,9 +177,10 @@ function isRootAnchored(href: string): boolean {
   const [fileHref] = splitHrefAnchor(href);
   try {
     return decodeURIComponent(fileHref).startsWith('/');
-  } catch {
-    // Malformed percent-encoding. `resolveLocalHref` falls back to the raw href
-    // in the same case, so this has to as well or the two disagree.
+  } catch (error) {
+    // Malformed percent-encoding (`URIError`). `resolveLocalHref` falls back to
+    // the raw href in the same case, so this has to as well or the two disagree.
+    if (!(error instanceof URIError)) throw error;
     return fileHref.startsWith('/');
   }
 }
@@ -243,7 +244,7 @@ function missingDraft(document: string, link: ResourceLink): OkfFindingDraft {
  * show a bundle two problems where it has one. Like discovery's, it says
  * conformance was NOT ASSESSED rather than that anything is non-conformant,
  * which is what puts it out of the per-bundle severity dial's reach (see
- * `OkfSeverity`).
+ * `ValidateOkfBundleOptions.severity`).
  *
  * 🔑 **It names the directory and the errno rather than "a directory on that
  * path".** The earlier wording could not do better, because the verdict carried

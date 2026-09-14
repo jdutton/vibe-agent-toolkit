@@ -36,7 +36,6 @@
  * hoisting it has already cost this saving twice.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is a temp dir this test created and owns */
 
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
@@ -44,6 +43,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect } from 'vitest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -117,8 +117,7 @@ function loadedScripts(
   // rather than os.tmpdir() for the same reason: 8.3 short names (RUNNER~1).
   const covDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-modload-'));
   try {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- node is required for CLI integration tests
-    const result = spawnSync('node', [binPath, ...args], {
+    const result = spawnSync(NODE_EXECUTABLE, [binPath, ...args], {
       encoding: 'utf-8',
       cwd: repoRoot,
       env: { ...process.env, ...extraEnv, NODE_V8_COVERAGE: covDir },

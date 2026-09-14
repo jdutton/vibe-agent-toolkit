@@ -16,7 +16,6 @@ const STUB_ATTRIBUTION = '# Attribution\n';
 
 /** Write a vendored fixture file under the package dir. */
 function writeVendoredFile(packageDir: string, relative: string, content: string): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture setup, controlled directory
   writeFileSync(safePath.join(packageDir, relative), content, 'utf8');
 }
 

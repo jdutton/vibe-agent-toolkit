@@ -9,7 +9,7 @@
 
 import { lstatSync, realpathSync, statSync } from 'node:fs';
 
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { matchesCollection } from '../collection-matcher.js';
@@ -189,7 +189,6 @@ interface PathObservation {
  */
 function statObservation(absolutePath: string): PathObservation {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- enumerated corpus path
     const link = lstatSync(absolutePath);
     if (!link.isSymbolicLink()) {
       return {
@@ -201,7 +200,6 @@ function statObservation(absolutePath: string): PathObservation {
       };
     }
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- enumerated corpus path
       const target = statSync(absolutePath);
       return {
         exists: true,
@@ -210,7 +208,11 @@ function statObservation(absolutePath: string): PathObservation {
         symlinkResolves: true,
         mtime: link.mtime,
       };
-    } catch {
+    } catch (error) {
+      // The target is not there, or the OS will not follow the link to it
+      // (ELOOP, EACCES on the target's directory): either way this process
+      // cannot resolve it, which is what the column says.
+      if (!isFilesystemAccessError(error)) throw error;
       return {
         exists: true,
         isDirectory: false,
@@ -219,9 +221,11 @@ function statObservation(absolutePath: string): PathObservation {
         mtime: link.mtime,
       };
     }
-  } catch {
-    // Genuinely absent — `exists` is false and every other column takes its "we
-    // could not look" default rather than a guess.
+  } catch (error) {
+    // Absent, or the filesystem refused to look — `exists` is false and every
+    // other column takes its "we could not look" default rather than a guess.
+    // A bug in this function is not "could not look" and stays loud.
+    if (!isFilesystemAccessError(error)) throw error;
     return {
       exists: false,
       isDirectory: false,
@@ -380,7 +384,10 @@ export async function collectRealization(
 export function realPathOrNull(absolutePath: string): string | null {
   try {
     return toForwardSlash(realpathSync.native(absolutePath));
-  } catch {
+  } catch (error) {
+    // Absent, dangling, a cycle, or refused: the filesystem will not resolve
+    // it, which is the `null` this answers. A bug is not that.
+    if (!isFilesystemAccessError(error)) throw error;
     return null;
   }
 }
@@ -447,7 +454,10 @@ async function keyOrState(
       context.contentHint,
     );
     return { contentKey: keyed.key, contentState: 'keyed' };
-  } catch {
+  } catch (error) {
+    // `unreadable` means the filesystem refused the bytes, and that is the
+    // only thing it may mean: a bug in the keying is not a fact about the corpus.
+    if (!isFilesystemAccessError(error)) throw error;
     return { contentKey: null, contentState: 'unreadable' };
   }
 }

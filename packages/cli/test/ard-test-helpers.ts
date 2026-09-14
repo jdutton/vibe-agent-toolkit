@@ -171,7 +171,6 @@ export function projectWith(workDir: string, label: string, configYaml: string):
   const root = safePath.join(workDir, label);
   rmSync(root, { recursive: true, force: true });
   const real = mkdirSyncReal(root, { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is built from a test temp dir
   writeFileSync(safePath.join(real, CONFIG_FILENAME), configYaml, 'utf-8');
   return real;
 }
@@ -194,7 +193,6 @@ export function projectWithSkill(workDir: string, label: string, configYaml: str
   const skillDir = mkdirSyncReal(safePath.join(root, 'skills', PUBLISHED_SKILL), {
     recursive: true,
   });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is built from a test temp dir
   writeFileSync(
     safePath.join(skillDir, 'SKILL.md'),
     `---\nname: ${PUBLISHED_SKILL}\ndescription: A fixture skill\n---\n\n# ${PUBLISHED_SKILL}\n`,

@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- tmpdir paths constructed in test setup */
 import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -34,7 +33,7 @@ describe('resolveVendoredSource', () => {
   });
 
   it('throws when ctx.vendoredDir is not provided', async () => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- destructured out to build a ctx WITHOUT vendoredDir; the binding itself is the discard
     const { vendoredDir, ...rest } = ctx;
     // Create ctx without vendoredDir to test error handling
     type ContextWithoutVendored = Omit<ResolveSkillSourceContext, 'vendoredDir'>;

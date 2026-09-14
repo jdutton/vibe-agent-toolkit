@@ -19,6 +19,7 @@
  * *proposal* a human confirms is acceptable; silent generation is not.
  */
 
+import { VatError } from '@vibe-agent-toolkit/utils';
 import type { z } from 'zod';
 
 import type { ArdConfig, ArdEntryOverrides } from '../schemas/project-config.js';
@@ -62,13 +63,12 @@ export interface ArdSurface {
  * Always a hard failure, never a skip: an entry VAT half-derived would advertise
  * a resource under a value nobody chose.
  */
-export class ArdDerivationError extends Error {
+export class ArdDerivationError extends VatError {
   readonly surfaceName: string;
   readonly kind: ArdSurfaceKind;
 
   constructor(surface: Pick<ArdSurface, 'kind' | 'name'>, message: string) {
-    super(`ARD entry "${surface.name}" (${surface.kind}): ${message}`);
-    this.name = 'ArdDerivationError';
+    super('ARD_DERIVATION', `ARD entry "${surface.name}" (${surface.kind}): ${message}`);
     this.surfaceName = surface.name;
     this.kind = surface.kind;
   }

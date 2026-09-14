@@ -3,10 +3,12 @@ import * as fs from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
+
 import { gitFindRoot } from '../src/git-utils.js';
 import { loadGitignoreRules } from '../src/gitignore-checker.js';
 import { mkdirSyncReal, normalizedTmpdir } from '../src/path-utils.js';
-import { setupSyncTempDirSuite } from '../src/test-helpers.js';
+import { CANNOT_DENY_READS } from '../src/testing/platform-gates.js';
+import { setupSyncTempDirSuite } from '../src/testing/temp-dir.js';
 
 // Test constants
 const GITIGNORE_FILENAME = '.gitignore';
@@ -37,7 +39,6 @@ describe('gitignore-checker', () => {
 
     it('should find git root in parent directory', () => {
       const subDir = safePath.join(gitRoot, 'subdir');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
       fs.mkdirSync(subDir);
 
       const result = gitFindRoot(subDir);
@@ -46,7 +47,6 @@ describe('gitignore-checker', () => {
 
     it('should find git root in deeply nested directory', () => {
       const deepDir = safePath.join(gitRoot, 'a', 'b', 'c');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
       fs.mkdirSync(deepDir, { recursive: true });
 
       const result = gitFindRoot(deepDir);
@@ -74,7 +74,6 @@ describe('gitignore-checker', () => {
 
     it('should load rules from .gitignore file', () => {
       const gitignorePath = safePath.join(gitRoot, GITIGNORE_FILENAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
       fs.writeFileSync(gitignorePath, NODE_MODULES_IGNORE_CONTENT);
 
       const ig = loadGitignoreRules(gitRoot);
@@ -88,14 +87,11 @@ describe('gitignore-checker', () => {
 
     it('should load rules from nested .gitignore files', () => {
       const rootGitignore = safePath.join(gitRoot, GITIGNORE_FILENAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
       fs.writeFileSync(rootGitignore, '*.log\n');
 
       const subDir = safePath.join(gitRoot, 'subdir');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
       fs.mkdirSync(subDir);
       const subGitignore = safePath.join(subDir, GITIGNORE_FILENAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
       fs.writeFileSync(subGitignore, '*.tmp\n');
 
       const ig = loadGitignoreRules(gitRoot, subDir);
@@ -105,25 +101,30 @@ describe('gitignore-checker', () => {
       expect(ig?.ignores('subdir/file.tmp')).toBe(true); // From subdir
     });
 
-    it('should handle unreadable .gitignore files gracefully', () => {
-      const gitignorePath = safePath.join(gitRoot, GITIGNORE_FILENAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
-      fs.writeFileSync(gitignorePath, 'node_modules/\n');
-      // Make file unreadable (Unix-like systems only)
-      if (process.platform !== 'win32') {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
+    // A `.gitignore` that exists but cannot be read holds rules this checker
+    // cannot honour. It used to be skipped silently — "handled gracefully" —
+    // which meant a crawl proceeded WITHOUT the rules and enumerated the
+    // ignored tree, with nothing anywhere saying so. Only a file that vanished
+    // between `existsSync` and the read is skipped now; a refusal is loud.
+    it.skipIf(CANNOT_DENY_READS)(
+      'throws EACCES for a .gitignore the OS refuses to read, rather than crawling without its rules',
+      () => {
+        const gitignorePath = safePath.join(gitRoot, GITIGNORE_FILENAME);
+        fs.writeFileSync(gitignorePath, 'node_modules/\n');
         fs.chmodSync(gitignorePath, 0o000);
-      }
+        try {
+          expect(() => loadGitignoreRules(gitRoot)).toThrow(/EACCES/);
+        } finally {
+          fs.chmodSync(gitignorePath, 0o644);
+        }
+      },
+    );
 
-      const ig = loadGitignoreRules(gitRoot);
-      // Should still return an ignore instance (with just .git rule)
-      expect(ig).not.toBeNull();
-
-      // Restore permissions for cleanup
-      if (process.platform !== 'win32') {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename, sonarjs/file-permissions -- tempDir is from mkdtempSync, safe test file
-        fs.chmodSync(gitignorePath, 0o644);
-      }
+    it('throws EISDIR for a DIRECTORY named .gitignore, on every platform', () => {
+      // Reaches the same catch as the chmod case without needing POSIX modes or
+      // a non-root user: `existsSync` says yes, `readFileSync` refuses.
+      fs.mkdirSync(safePath.join(gitRoot, GITIGNORE_FILENAME));
+      expect(() => loadGitignoreRules(gitRoot)).toThrow(/EISDIR/);
     });
   });
 });

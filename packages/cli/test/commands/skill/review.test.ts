@@ -11,7 +11,8 @@
 
 import * as fs from 'node:fs';
 
-import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { resolveSkillPath } from '../../../src/commands/skill/review.js';
@@ -32,7 +33,6 @@ describe('resolveSkillPath', () => {
 
   it('accepts a SKILL.md file and returns its absolute path', () => {
     const skillPath = safePath.join(tempDir, 'SKILL.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(skillPath, '# skill');
 
     const result = resolveSkillPath(skillPath);
@@ -41,10 +41,8 @@ describe('resolveSkillPath', () => {
 
   it('accepts a directory containing SKILL.md and returns the SKILL.md path', () => {
     const skillDir = safePath.join(tempDir, 'my-skill');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.mkdirSync(skillDir);
     const skillMd = safePath.join(skillDir, 'SKILL.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(skillMd, '# skill');
 
     const result = resolveSkillPath(skillDir);
@@ -58,7 +56,6 @@ describe('resolveSkillPath', () => {
 
   it('throws when directory has no SKILL.md', () => {
     const emptyDir = safePath.join(tempDir, 'empty-dir');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.mkdirSync(emptyDir);
 
     expect(() => resolveSkillPath(emptyDir)).toThrow(/No SKILL.md found in directory/);
@@ -68,7 +65,6 @@ describe('resolveSkillPath', () => {
 
   it('accepts a single-file skill (.md not named SKILL.md) and returns its absolute path', () => {
     const singleFile = safePath.join(tempDir, 'vat-audit.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(singleFile, '# vat-audit skill');
 
     const result = resolveSkillPath(singleFile);
@@ -77,7 +73,6 @@ describe('resolveSkillPath', () => {
 
   it('accepts a hyphenated-name .md skill file', () => {
     const singleFile = safePath.join(tempDir, 'skill-quality-checklist.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(singleFile, '# checklist skill');
 
     const result = resolveSkillPath(singleFile);
@@ -88,7 +83,6 @@ describe('resolveSkillPath', () => {
 
   it('throws with the new error message for a .txt file', () => {
     const txtFile = safePath.join(tempDir, 'notes.txt');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(txtFile, 'not a skill');
 
     expect(() => resolveSkillPath(txtFile)).toThrow(
@@ -98,7 +92,6 @@ describe('resolveSkillPath', () => {
 
   it('throws with the new error message for a .json file', () => {
     const jsonFile = safePath.join(tempDir, 'config.json');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(jsonFile, '{}');
 
     expect(() => resolveSkillPath(jsonFile)).toThrow(
@@ -108,7 +101,6 @@ describe('resolveSkillPath', () => {
 
   it('includes the original path argument in the error for non-.md files', () => {
     const txtFile = safePath.join(tempDir, 'notes.txt');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(txtFile, 'not a skill');
 
     expect(() => resolveSkillPath(txtFile)).toThrow(txtFile);

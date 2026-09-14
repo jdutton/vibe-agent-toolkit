@@ -1,4 +1,3 @@
-/* eslint-disable sonarjs/no-duplicate-string */
 // Test file - duplicated patterns are acceptable for test clarity
 import { describe, expect, it } from 'vitest';
 

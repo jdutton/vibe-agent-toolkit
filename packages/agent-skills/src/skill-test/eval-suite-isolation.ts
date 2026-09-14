@@ -36,7 +36,7 @@
 import { cpSync, existsSync, lstatSync, rmSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { isVatError, mkdirSyncReal, PathEscapesRootError, safePath } from '@vibe-agent-toolkit/utils';
 
 /**
  * Where a skill's eval suite lives by convention. Defined here, beside the code
@@ -71,8 +71,12 @@ export function evalSuiteUnitPath(skillDir: string, evalsSubpath: string | undef
   const relative = parent === '.' || parent === '' ? evalsSubpath : parent;
   try {
     return safePath.joinUnderRoot(skillDir, relative);
-  } catch {
-    return undefined;
+  } catch (error) {
+    // Only the containment helper's OWN refusal means "outside the skill dir";
+    // anything else out of it is a bug, and `undefined` would read as
+    // "nothing to strip" — leaving the answer key in the staged copy.
+    if (isVatError(error, PathEscapesRootError.code)) return undefined;
+    throw error;
   }
 }
 
@@ -138,7 +142,6 @@ export interface IsolateEvalSuiteInput {
  */
 export function isolateEvalSuite(input: IsolateEvalSuiteInput): boolean {
   const unit = evalSuiteUnitPath(input.stagedDir, input.evalsSubpath);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- unit is proven inside our own staged dir
   if (unit === undefined || !existsSync(unit)) return false;
 
   assertInsideRoot(input.stagedDir, input.stagingRoot);
@@ -150,7 +153,6 @@ export function isolateEvalSuite(input: IsolateEvalSuiteInput): boolean {
     // lands at `<holdDir>/<basename(evalsSubpath)>` either way and `fixtures/` keep
     // their positions relative to it — exactly the shape the eval-input staging
     // expects from an authored evals dir.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- unit is proven inside our own staged dir
     const dest = lstatSync(unit).isDirectory() ? input.holdDir : safePath.join(input.holdDir, basename(unit));
     cpSync(unit, dest, { recursive: true });
     preserved = true;

@@ -21,7 +21,7 @@
  * aligned: a config that parses here must satisfy the `Provider` /
  * `LinkAuthConfig` interfaces over there.
  *
- * Per design issue #113 §4 (vocabulary) and §5 (macros), and the repo
+ * Per the linkAuth design §4 (vocabulary) and §5 (macros), and the repo
  * CLAUDE.md Postel's Law rule for adopter-facing configs.
  */
 

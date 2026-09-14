@@ -13,6 +13,31 @@
 
 import path from 'node:path';
 
+import { VatError } from './errors/vat-error.js';
+
+/**
+ * Thrown by {@link safePath.joinUnderRoot} when the joined path would land
+ * outside its root.
+ *
+ * A class with a code rather than a prefixed sentence: three packages used to
+ * recognise this refusal with `error.message.startsWith('safePath.joinUnderRoot:')`,
+ * which is a contract on prose. Dispatch with
+ * `isVatError(error, PathEscapesRootError.code)` — it survives the `src`/`dist`
+ * boundary that `instanceof` does not.
+ */
+export class PathEscapesRootError extends VatError {
+  /** The code every instance carries, for `isVatError(error, PathEscapesRootError.code)`. */
+  static readonly code = 'PATH_ESCAPES_ROOT';
+
+  /**
+   * @param root - The root the path had to stay under
+   * @param detail - Which segment, or which result, escaped it
+   */
+  constructor(root: string, detail: string) {
+    super(PathEscapesRootError.code, `safePath.joinUnderRoot: ${detail} escapes root "${root}".`);
+  }
+}
+
 /**
  * Check if a path is absolute
  *
@@ -65,7 +90,79 @@ export function isAbsoluteAnyPlatform(p: string): boolean {
  * hasParentTraversalSegment('a..b/c')      // false (".." must be a whole segment)
  */
 export function hasParentTraversalSegment(p: string): boolean {
+  // eslint-disable-next-line local/no-dotdot-containment -- this IS the one lexical `..`-segment test the rule points to; it classifies a config-supplied RELATIVE spelling before any root exists to ask the filesystem about. Sinks use isUnderRoot().
   return toForwardSlash(p).split('/').includes('..');
+}
+
+/**
+ * True when a root-relative path — as `safePath.relative(root, p)` spells it —
+ * names something the root does not contain.
+ *
+ * The three shapes `path.relative` can return for an outsider: the parent
+ * itself (`..`), a climb through it (`../x`), and, on Windows only, an
+ * absolute path (a target on another drive has no relative spelling). A name
+ * that merely BEGINS with two dots (`..notes.md`) is a member and reads as one;
+ * the bare `startsWith('..')` this replaces refused it, dropped the file from
+ * the package and unlinked the reference, at exit 0.
+ *
+ * ⚠️ **Lexical, on purpose.** This classifies a relative path that was already
+ * computed; it does not ask the filesystem, so a symlink inside the root that
+ * points outside reads as inside here. That is the right answer for the
+ * callers that own no root to ask about — a projection identity, a permission
+ * pattern, a report relativizer — and the WRONG one for a delete or copy sink,
+ * which must ask {@link isUnderRoot} from `@vibe-agent-toolkit/utils` instead.
+ * The empty relative (the root itself) is not an escape; whether equality is
+ * acceptable is the caller's question and is asked beside this one.
+ *
+ * @param normalizedRelative - A forward-slashed root-relative path
+ * @returns True when the root does not contain it
+ *
+ * @example
+ * relativeEscapesRoot(safePath.relative(root, p))   // the whole idiom
+ * relativeEscapesRoot('../x')       // true
+ * relativeEscapesRoot('..notes.md') // false — a member whose name starts with dots
+ */
+export function relativeEscapesRoot(normalizedRelative: string): boolean {
+  // eslint-disable-next-line local/no-dotdot-containment -- this IS the one lexical relative-path classifier the rule points to; every former copy of this pair now calls here. Sinks use isUnderRoot().
+  return normalizedRelative === '..' || normalizedRelative.startsWith('../') || isAbsoluteAnyPlatform(normalizedRelative);
+}
+
+/** A Windows drive-relative spelling (`C:`) — `path.resolve` sends it to that drive's cwd. */
+const DRIVE_RELATIVE = /^[A-Za-z]:/u;
+
+/**
+ * True when `name` can only ever be ONE directory entry under whatever it is
+ * joined to: non-empty, not `.` or `..`, no separator of either platform, no
+ * NUL, no drive-letter prefix.
+ *
+ * The check for a caller-controlled NAME — a skill name from a manifest, a
+ * session id, a positional the user typed — that is about to become
+ * `join(root, name)`. A name is not a path: `..cache` and `a..b` are legitimate
+ * entries, and `includes('..')` refused them while `startsWith` let `x/../..`
+ * through. The question is whether the join can land anywhere but directly
+ * under `root`, and that is answered by the segment's shape alone, with no
+ * filesystem — which is also why this belongs beside the path helpers rather
+ * than beside {@link isUnderRoot}, which is the check for a PATH.
+ *
+ * @param name - The proposed entry name
+ * @returns True when `join(root, name)` is a direct child of `root`
+ *
+ * @example
+ * isSingleFsSegment('my-skill')   // true
+ * isSingleFsSegment('..cache')    // true — dots inside a name are just dots
+ * isSingleFsSegment('../victim')  // false
+ * isSingleFsSegment('..')         // false
+ */
+export function isSingleFsSegment(name: string): boolean {
+  return (
+    name !== '' &&
+    name !== '.' &&
+    name !== '..' &&
+    !name.includes('/') &&
+    !name.includes('\\') &&
+    !name.includes('\0') &&
+    !DRIVE_RELATIVE.test(name)
+  );
 }
 
 /**
@@ -205,7 +302,8 @@ export function toNfc(value: string): string {
  * strings, or matched with glob patterns.
  *
  * **Use these instead of importing from `node:path` directly.**
- * ESLint rules enforce this — see `no-path-join`, `no-path-resolve`, `no-path-relative`.
+ * An ESLint rule enforces this — see `no-raw-node-path` (its `functions` option
+ * table maps each of `join`/`resolve`/`relative` to its `safePath.*` replacement).
  *
  * @example
  * ```typescript
@@ -216,7 +314,7 @@ export function toNfc(value: string): string {
  * safePath.resolve('/project', './docs')                   // → '/project/docs'
  * safePath.relative('/project/docs', '/project')           // → '..'
  * safePath.joinUnderRoot('/harness', 'skill-abc')          // → '/harness/skill-abc'
- * safePath.joinUnderRoot('/harness', '../escape')          // throws Error
+ * safePath.joinUnderRoot('/harness', '../escape')          // throws PathEscapesRootError
  * ```
  */
 export const safePath = {
@@ -253,7 +351,7 @@ export const safePath = {
    * skill-test staging code was vulnerable to on Windows.
    *
    * @returns Forward-slash absolute path guaranteed to be inside `root`.
-   * @throws {Error} If the resolved path would escape `root`.
+   * @throws {PathEscapesRootError} If the resolved path would escape `root`.
    *
    * @example
    * ```typescript
@@ -269,16 +367,12 @@ export const safePath = {
     // BEFORE resolving, so the error message can name the offending segment.
     for (const seg of segments) {
       if (path.isAbsolute(seg)) {
-        throw new Error(
-          `safePath.joinUnderRoot: segment "${seg}" is absolute and escapes root "${root}".`,
-        );
+        throw new PathEscapesRootError(root, `segment "${seg}" is absolute and`);
       }
       // Windows drive-letter check for POSIX hosts (path.isAbsolute won't catch
       // 'C:\...' on POSIX, but node's path.win32.isAbsolute does).
       if (path.win32.isAbsolute(seg)) {
-        throw new Error(
-          `safePath.joinUnderRoot: segment "${seg}" contains a Windows drive letter and escapes root "${root}".`,
-        );
+        throw new PathEscapesRootError(root, `segment "${seg}" contains a Windows drive letter and`);
       }
     }
 
@@ -296,9 +390,7 @@ export const safePath = {
     const rootPrefix = fwdRoot.endsWith('/') ? fwdRoot : `${fwdRoot}/`;
 
     if (fwdResult !== fwdRoot && !fwdResult.startsWith(rootPrefix)) {
-      throw new Error(
-        `safePath.joinUnderRoot: result "${fwdResult}" escapes root "${fwdRoot}".`,
-      );
+      throw new PathEscapesRootError(fwdRoot, `result "${fwdResult}"`);
     }
 
     return fwdResult;

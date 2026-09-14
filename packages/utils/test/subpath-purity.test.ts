@@ -83,11 +83,9 @@ function collectReachedModules(entryPath: string): ReachedModules {
     if (current === undefined || seen.has(current)) continue;
     seen.add(current);
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths derived from srcDir
     if (!existsSync(current)) {
       throw new Error(`subpath-purity walker could not resolve source file: ${current}`);
     }
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths derived from srcDir
     const source = stripCommentLines(readFileSync(current, 'utf8'));
 
     for (const match of source.matchAll(IMPORT_SPECIFIER)) {

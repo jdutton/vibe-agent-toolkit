@@ -17,7 +17,6 @@ import { readFileSync } from 'node:fs';
  * // '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
  */
 export function fileContentHash(path: string): string {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is caller-supplied; callers are responsible for path safety
   const bytes = readFileSync(path);
   return createHash('sha256').update(bytes).digest('hex');
 }

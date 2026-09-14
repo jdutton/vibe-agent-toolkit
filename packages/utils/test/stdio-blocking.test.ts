@@ -8,7 +8,7 @@ import { describeStdioBlocking, makeStdioBlocking } from '../src/stdio-blocking.
  * these tests.
  */
 interface StreamWithHandle {
-  _handle?: { setBlocking?: (blocking: boolean) => void } | undefined;
+  _handle?: { setBlocking?: (blocking: boolean) => unknown } | undefined;
 }
 
 /**
@@ -38,11 +38,20 @@ function withHandles<T>(
   }
 }
 
-/** A handle of the shape a POSIX pipe presents: `setBlocking` is callable. */
+/**
+ * A handle of the shape a POSIX pipe presents: `setBlocking` is callable and
+ * answers `0`, the libuv success code. (`LibuvStreamWrap::SetBlocking` returns
+ * `uv_stream_set_blocking`'s int; it does not throw.)
+ */
 function workingHandle(): { handle: unknown; calls: () => boolean[] } {
   const calls: boolean[] = [];
   return {
-    handle: { setBlocking: (blocking: boolean) => calls.push(blocking) },
+    handle: {
+      setBlocking: (blocking: boolean) => {
+        calls.push(blocking);
+        return 0;
+      },
+    },
     calls: () => calls,
   };
 }
@@ -82,19 +91,33 @@ describe('makeStdioBlocking', () => {
     expect(result).toEqual({ stdout: false, stderr: false });
   });
 
-  it('reports UNswitched rather than propagating when setBlocking throws', () => {
+  it('reports a stream UNswitched when libuv refuses the switch by RETURN VALUE', () => {
+    // This is how the refusal actually arrives: `uv_stream_set_blocking` hands
+    // back a negative errno (a Windows TTY answers UV_EINVAL) and Node returns
+    // it. The old code sat in a `try` that read a throw as the failure and the
+    // return value as nothing, so a refused switch reported `true` — and a
+    // truncation on that stream had a debug line saying it could not happen.
     const err = workingHandle();
-    const throwing = {
-      setBlocking: () => {
-        throw new Error('ENOTSUP: setBlocking is not supported on this handle');
-      },
-    };
+    const refusing = { setBlocking: () => -22 };
 
-    const result = withHandles({ stdout: throwing, stderr: err.handle }, () =>
+    const result = withHandles({ stdout: refusing, stderr: err.handle }, () =>
       makeStdioBlocking(),
     );
 
     expect(result).toEqual({ stdout: false, stderr: true });
+  });
+
+  it('lets a throw from inside the switch stay loud — that is a bug, not a refusal', () => {
+    const err = workingHandle();
+    const throwing = {
+      setBlocking: () => {
+        throw new TypeError('injected: not how libuv reports anything');
+      },
+    };
+
+    expect(() => withHandles({ stdout: throwing, stderr: err.handle }, () => makeStdioBlocking())).toThrow(
+      TypeError,
+    );
   });
 });
 

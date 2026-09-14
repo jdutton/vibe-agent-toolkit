@@ -201,7 +201,6 @@ describe('query cannot reach a database it was not opened on', () => {
 
     expect(() => store.query(`ATTACH DATABASE '${fresh}' AS smuggled`)).toThrow(/SELECT/);
     // A name this test built inside its own `mkdtempSync` directory moments ago.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- see above
     expect(existsSync(fresh), 'the attach ran and left a file behind').toBe(false);
   });
 
@@ -358,26 +357,25 @@ describe('every placeholder must be bound', () => {
     expect(store.query(sql, 'a').at(0)?.['x']).toBe('a');
   });
 
-  it("agrees with SQLite's numbering for ?NNN", () => {
-    // `?2 … ?1` declares two slots however they are ordered, and `?3` alone
-    // declares three (slots 1 and 2 exist and are simply unused — measured:
-    // binding one value fills slot 1 and `?3` reads NULL). Under-counting would
-    // refuse a statement SQLite runs; over-counting would pass one it binds NULL
-    // into. Both are what "the driver's numbering" means.
-    expect(store.query('SELECT ?2 AS x, ?1 AS y', 'a', 'b')).toEqual([{ x: 'b', y: 'a' }]);
-    expect(store.query('SELECT ?3 AS x', 'a', 'b', 'c')).toEqual([{ x: 'c' }]);
-    expect(() => store.query('SELECT ?3 AS x', 'a')).toThrow(/3 placeholders.*1 value was bound/s);
-  });
-
-  it.each(['SELECT :a AS x', 'SELECT @a AS x', 'SELECT $a AS x'])(
-    'refuses a NAMED parameter, which positional values can never reach: %s',
-    (sql) => {
-      // Measured on Node 24.13.1: `StatementSync` binds positional values only
-      // into anonymous and `?NNN` slots, so a `:a` slot with one value thrown at
-      // it fails `column index out of range` — the engine's message, about a
-      // column, for a statement with no column problem. Said plainly instead.
-      expect(() => store.query(sql, 'a')).toThrow(/named parameter/);
-      expect(() => store.query(sql)).toThrow(/named parameter/);
+  it.each([
+    ['SELECT :a AS x', ':a'],
+    ['SELECT @a AS x', '@a'],
+    ['SELECT $a AS x', '$a'],
+    ['SELECT ?2 AS x, ?1 AS y', '?2'],
+    ['SELECT ?1 AS x', '?1'],
+    ['SELECT ? AS x, ?3 AS y', '?3'],
+  ])(
+    'refuses a placeholder positional values cannot reach on every supported Node: %s',
+    (sql, form) => {
+      // `StatementSync` never binds positional values into a `:a` slot, and on
+      // the declared floor it does not bind them into `?NNN` either — measured,
+      // Node 22.13.0 and 22.14.0 throw `column index out of range` for
+      // `SELECT ?1 AS x` with one value, while 22.22.3 and 24.x bind it. The
+      // engine's message is about a column, for a statement with no column
+      // problem; a form that works on one supported runtime and fails on
+      // another is refused on all of them, by name, however many values arrive.
+      expect(() => store.query(sql, 'a', 'b', 'c')).toThrow(`numbered parameter (\`${form}\`)`);
+      expect(() => store.query(sql)).toThrow(/named or numbered parameter/);
     },
   );
 

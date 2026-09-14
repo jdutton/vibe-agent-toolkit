@@ -10,6 +10,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, parse } from 'node:path';
 
+import { isPathAbsentError } from './errors/errno.js';
 import { resetGitRootCache } from './git-root-cache.js';
 import { safePath } from './path-utils.js';
 import { readTextContentSync } from './text-file.js';
@@ -31,7 +32,6 @@ export function findConfigFile(startDir: string): string | null {
   const root = parse(current).root;
   while (true) {
     const candidate = safePath.join(current, CONFIG_FILENAME);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- walk-up is intentional
     if (existsSync(candidate)) return candidate;
     if (current === root) return null;
     const parent = dirname(current);
@@ -54,7 +54,6 @@ export function findNodeWorkspaceRoot(startDir: string): string | null {
   let current = safePath.resolve(startDir);
   while (current !== dirname(current)) {
     const pkgPath = safePath.join(current, PACKAGE_JSON_FILENAME);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- walk-up is intentional
     if (existsSync(pkgPath)) {
       try {
         // Through the decoding seam: this is the ADOPTER's manifest, not ours,
@@ -64,8 +63,13 @@ export function findNodeWorkspaceRoot(startDir: string): string | null {
         if (typeof parsed === 'object' && parsed !== null && 'workspaces' in parsed) {
           return current;
         }
-      } catch {
-        // Invalid JSON — skip and continue walking up.
+      } catch (error) {
+        // Not JSON: not a manifest this walk can read, so skip it and keep
+        // walking up. Gone between `existsSync` and the read counts the same. A
+        // manifest the OS refused (`EACCES`), or a directory named
+        // `package.json` (`EISDIR`), is neither — reading past it would make
+        // the walk settle on the WRONG root, silently.
+        if (!(error instanceof SyntaxError) && !isPathAbsentError(error)) throw error;
       }
     }
     current = dirname(current);
@@ -134,7 +138,6 @@ function configWalkPhase(
     }
     visited.push(current);
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- walk-up is intentional
     if (existsSync(safePath.join(current, CONFIG_FILENAME))) {
       const entry = { configRoot: current };
       propagateCache(visited, entry);
@@ -155,7 +158,6 @@ function configWalkPhase(
 function gitWalkPhase(startDir: string, visited: ReadonlyArray<string>): string | null {
   let current = safePath.resolve(startDir);
   while (true) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- walk-up is intentional
     if (existsSync(safePath.join(current, '.git'))) {
       const entry = { configRoot: current };
       propagateCache(visited, entry);

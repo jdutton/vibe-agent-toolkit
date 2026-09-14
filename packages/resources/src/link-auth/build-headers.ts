@@ -24,7 +24,7 @@
  * ⚠️ If a future caller does need to serialize a header MAP, reinstate a
  * structural masker — but wire it to a real call site in the same change.
  *
- * Per design issue #113 §4 (auth.headers vocabulary) and §8.
+ * Per the linkAuth design §4 (auth.headers vocabulary) and §8.
  */
 
 import { inspect } from 'node:util';
@@ -154,8 +154,10 @@ function secretForms(secret: string): string[] {
   ]);
   try {
     forms.add(encodeURIComponent(secret));
-  } catch {
-    // A lone surrogate cannot be percent-encoded; the other forms still apply.
+  } catch (error) {
+    // A lone surrogate cannot be percent-encoded (`URIError`, the one thing
+    // `encodeURIComponent` throws); the other forms still apply.
+    if (!(error instanceof URIError)) throw error;
   }
   const bytes = Buffer.from(secret, 'utf8');
   forms.add(bytes.toString('base64'));

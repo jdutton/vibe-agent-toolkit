@@ -12,7 +12,7 @@
  * the result onto the plugin-root env.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { applyDeclaredEnv, formatForwardedEnvLine } from '@vibe-agent-toolkit/utils/skill-test';
 
 import { withPluginRootEnv } from './plugin-env.js';
@@ -35,14 +35,14 @@ export interface EnvInterpolationTokens {
  * A declared `env` value referenced an unknown `${token}`. Exit 2 (preflight):
  * fail loud naming the offending token rather than forwarding a literal `${x}`.
  */
-export class UnknownEnvTokenError extends Error {
-  readonly exitCode = 2 as const;
+export class UnknownEnvTokenError extends VatError {
+  readonly reason = 'preflight' as const;
   constructor(public readonly token: string, public readonly key: string) {
     super(
+      'UNKNOWN_ENV_TOKEN',
       `Unknown interpolation token \${${token}} in env value for "${key}". ` +
         `Known tokens: fixturesDir, stagedSkillDir, harnessRoot, resultsDir.`,
     );
-    this.name = 'UnknownEnvTokenError';
   }
 }
 
@@ -56,16 +56,16 @@ export class UnknownEnvTokenError extends Error {
  * deleted directory produced a dead path the skill only discovered at runtime,
  * where it read as a skill bug rather than a harness one.
  */
-export class UnresolvableEnvTokenError extends Error {
-  readonly exitCode = 2 as const;
+export class UnresolvableEnvTokenError extends VatError {
+  readonly reason = 'preflight' as const;
   constructor(public readonly token: string, public readonly key: string) {
     super(
+      'UNRESOLVABLE_ENV_TOKEN',
       `Cannot resolve \${${token}} in env value for "${key}": this eval declares no input ` +
         `\`files\`, so it has no staged fixtures directory. Declare the fixture under the ` +
         `eval's \`files\` list (it is staged into the eval's own workspace, which is also the ` +
         `executor's working directory), or drop \${${token}} from that env value.`,
     );
-    this.name = 'UnresolvableEnvTokenError';
   }
 }
 

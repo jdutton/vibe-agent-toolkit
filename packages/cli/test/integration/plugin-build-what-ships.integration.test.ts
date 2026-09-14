@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- paths are test-owned temp dirs */
 /**
  * What a plugin build is allowed to ship — the two halves of one question, kept in
  * one file because they share a fixture shape and are read together.
@@ -27,7 +26,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
-import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { createSymlink, direntKindFollowingSync, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { runClaudePluginBuild } from '../../src/commands/claude/plugin/build.js';
@@ -144,7 +143,7 @@ function walkFiles(root: string, prefix = ''): string[] {
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     const abs = safePath.join(root, entry.name);
     const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
-    if (entry.isDirectory()) out.push(...walkFiles(abs, rel));
+    if (direntKindFollowingSync(root, entry) === 'directory') out.push(...walkFiles(abs, rel));
     else out.push(rel);
   }
   return out;

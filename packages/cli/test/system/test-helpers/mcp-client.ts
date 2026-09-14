@@ -4,6 +4,8 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
+
 // ── MCP Test Client ──────────────────────────────────────────────────
 
 /** JSON-RPC response shape */
@@ -68,18 +70,23 @@ export class MCPTestClient {
         if (!trimmed) continue;
         this.stdoutLines.push(trimmed);
 
+        let parsed: JsonRpcResponse;
         try {
-          const parsed = JSON.parse(trimmed) as JsonRpcResponse;
-          if (typeof parsed.id === 'number') {
-            const entry = this.pending.get(parsed.id);
-            if (entry) {
-              clearTimeout(entry.timer);
-              this.pending.delete(parsed.id);
-              entry.resolve(parsed);
-            }
+          parsed = JSON.parse(trimmed) as JsonRpcResponse;
+        } catch (error) {
+          // Non-JSON on stdout — tests can check stdoutLines for compliance.
+          // Only that: the resolve below sits OUTSIDE this try, so a throw
+          // from a test's own continuation is no longer read as "not JSON".
+          if (!(error instanceof SyntaxError)) throw error;
+          continue;
+        }
+        if (typeof parsed.id === 'number') {
+          const entry = this.pending.get(parsed.id);
+          if (entry) {
+            clearTimeout(entry.timer);
+            this.pending.delete(parsed.id);
+            entry.resolve(parsed);
           }
-        } catch {
-          // Non-JSON on stdout — tests can check stdoutLines for compliance
         }
       }
     });
@@ -104,8 +111,7 @@ export class MCPTestClient {
   ): Promise<MCPTestClient> {
     const readyTimeout = options?.readyTimeout ?? 10_000;
 
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Test spawns CLI process intentionally
-    const proc = spawn('node', [binPath, ...args], {
+    const proc = spawn(NODE_EXECUTABLE, [binPath, ...args], {
       env: { ...process.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

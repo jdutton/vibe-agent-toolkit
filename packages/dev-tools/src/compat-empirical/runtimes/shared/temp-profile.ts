@@ -3,7 +3,6 @@
  * never touch the user's real ~/.claude/.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- profile paths derive from mkdtemp */
 
 import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 

@@ -131,11 +131,9 @@ const suite = setupSubdirTestSuite('blob-population-');
 
 async function writeCorpus(files: readonly CorpusFile[], directories: readonly string[] = []): Promise<void> {
   for (const directory of directories) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture directory beneath a mkdtemp root
     await mkdir(safePath.join(suite.tempDir, directory), { recursive: true });
   }
   await Promise.all(files.map((file) =>
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
     writeFile(safePath.join(suite.tempDir, file.path), file.content, 'utf-8')));
 }
 
@@ -146,7 +144,6 @@ async function rewriteCorpusFile(relativePath: string, content: string | null): 
     await rm(absolute, { force: true });
     return;
   }
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
   await writeFile(absolute, content, 'utf-8');
 }
 

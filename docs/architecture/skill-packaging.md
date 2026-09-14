@@ -172,6 +172,30 @@ Either direction lets `vat skill test` honor that skill's persisted `test:` conf
 | `path:<dir>` | same as a bare `<path>` — the three `<path>` rows above apply (`buildable` at a declared skill's SOURCE dir, otherwise `source`) |
 | `vendored` | `source` |
 
+## Who owns what: SKILL.md, config.yaml, package.json
+
+Skills, config and packaging each have one role, and the boundaries are intentional:
+
+| Surface | Role | Owns |
+|---|---|---|
+| **`SKILL.md` frontmatter** | Portable skill metadata | Skill identity, description, triggers — the standard schema, never a VAT-specific field |
+| **`vibe-agent-toolkit.config.yaml`** | VAT source of truth | All VAT-specific config — discovery globs, packaging, the `publish` flag, plugin assignment |
+| **`package.json` `vat.skills`** | npm packaging hint | Which skills ship in this npm package (an array of skill names) — validated by `vat verify`, never read by `vat build` |
+
+Rules that follow from the table:
+
+- `vat verify` drives validation from config.yaml discovery and treats `package.json` as the
+  suspect: a skill listed under `vat.skills` that config does not publish, or a published skill the
+  list omits, is a consistency finding (`PACKAGE_JSON_LISTS_UNKNOWN_SKILL`,
+  `PUBLISHED_SKILL_NOT_IN_PACKAGE_JSON`, `UNPUBLISHED_SKILL_IN_PACKAGE_JSON`).
+- `publish: false` in `skills.config.<name>` opts a skill out of the **distribution-consistency**
+  checks only — the `package.json` `vat.skills` and plugin-membership cross-checks (default
+  `true`). It does **not** exempt the skill from build-time packaging validation: a `publish: false`
+  skill is still discovered, built and held to every packaging rule, and its errors still fail the
+  build. Packaging correctness is not conditional on shipping.
+- Error messages always name the config mechanism, so a developer discovers the fix from the error.
+- No VAT-specific fields in `SKILL.md` frontmatter — skills are portable artifacts.
+
 ## Decision Records
 
 ### AC-10d — Plugin-local `files:` deferred paths are out of scope for issue #127 / slice 2 of #129

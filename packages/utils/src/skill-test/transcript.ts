@@ -77,21 +77,21 @@ export interface ParsedTranscript {
   rateLimited: boolean;
 }
 
+/**
+ * Every value these two see is a fragment of a `JSON.parse` result — plain
+ * data, no cycles, no BigInt, no `toJSON` — so `JSON.stringify` cannot fail on
+ * it, and neither wraps it in a catch. The one thing it CAN answer with is
+ * `undefined`, for an absent field (a `tool_use` with no `input`); that used
+ * to trip a `.length` inside a blind catch and surface as `<unserializable>`,
+ * a parser accident reported as a property of the event.
+ */
 function summarizeValue(value: unknown): string {
-  try {
-    const json = JSON.stringify(value);
-    return json.length > 200 ? `${json.slice(0, 197)}...` : json;
-  } catch {
-    return '<unserializable>';
-  }
+  const json = stringifyValue(value);
+  return json.length > 200 ? `${json.slice(0, 197)}...` : json;
 }
 
 function stringifyValue(value: unknown): string {
-  try {
-    return JSON.stringify(value) ?? '';
-  } catch {
-    return '<unserializable>';
-  }
+  return JSON.stringify(value) ?? '';
 }
 
 /**
@@ -253,10 +253,12 @@ export function parseStreamJsonTranscript(streamText: string): ParsedTranscript 
     let parsed: MessageEvent;
     try {
       parsed = JSON.parse(trimmed) as MessageEvent;
-    } catch {
-      // Counted, not thrown on, and never pushed into `errors`: `errors` reports
-      // what the AGENT hit, this reports what the PARSER lost. Conflating them
-      // would make a harness defect look like a run failure and vice versa.
+    } catch (error) {
+      // A line that is not JSON is counted, not thrown on, and never pushed
+      // into `errors`: `errors` reports what the AGENT hit, this reports what
+      // the PARSER lost. Conflating them would make a harness defect look like
+      // a run failure and vice versa. Only a parse failure is a lost line.
+      if (!(error instanceof SyntaxError)) throw error;
       out.malformedLineCount += 1;
       continue;
     }

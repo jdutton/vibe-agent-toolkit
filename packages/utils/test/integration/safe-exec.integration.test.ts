@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, sonarjs/no-duplicate-string, security/detect-non-literal-fs-filename */
 // Test file: allows test-specific patterns (any types for error testing, duplicate strings, dynamic fs paths)
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { basename } from 'node:path';
@@ -273,11 +272,12 @@ describe('isToolAvailable', () => {
     });
   });
 
-  it.skipIf(process.platform === 'win32')('should handle multiple concurrent checks', () => {
+  it('should handle multiple concurrent checks', () => {
     // Test DRY principle - multiple tools checked efficiently
     // Use bun instead of npm - guaranteed to be available in our CI (bun monorepo)
     // npm is npm.cmd on Windows which causes which.sync() issues
-    // Skipped on Windows: bun detection needs .cmd script handling fix
+    // Runs on Windows too: `.cmd`/`.bat` tools now go through `shouldUseShell`
+    // in safe-exec.ts, which was the gap the old win32 skip named.
     const results = [
       isToolAvailable('node'),
       isToolAvailable('bun'),
@@ -321,10 +321,10 @@ describe('getToolVersion', () => {
     });
   });
 
-  it.skipIf(process.platform === 'win32')('should handle multiple version queries efficiently (DRY)', () => {
+  it('should handle multiple version queries efficiently (DRY)', () => {
     // Test that multiple version checks work correctly
     // Use bun instead of npm (npm.cmd on Windows causes which.sync issues)
-    // Skipped on Windows: bun version detection needs .cmd script execution fix
+    // Runs on Windows too — same `.cmd` handling as the concurrent-checks case above.
     const versions = [
       getToolVersion('node'),
       getToolVersion('bun'),

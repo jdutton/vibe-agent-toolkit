@@ -36,12 +36,10 @@ describe('Audit Workflows (system test)', () => {
 
   it('should handle mixed resource directory (marketplace + plugins + skills)', async () => {
     const mixedDir = safePath.join(tempDir, 'mixed');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- mixedDir is controlled in tests
     fs.mkdirSync(mixedDir, { recursive: true });
 
     // Create a marketplace structure
     const marketplaceDir = safePath.join(mixedDir, 'my-marketplace');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- marketplaceDir is controlled in tests
     fs.mkdirSync(marketplaceDir, { recursive: true });
     writeTestFile(
       safePath.join(marketplaceDir, '.claude-plugin'),
@@ -66,7 +64,6 @@ Test content.
 
     // Create a standalone plugin
     const pluginDir = safePath.join(mixedDir, 'my-plugin');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- pluginDir is controlled in tests
     fs.mkdirSync(pluginDir, { recursive: true });
     writeTestFile(
       safePath.join(pluginDir, '.claude-plugin'),
@@ -108,7 +105,7 @@ Test content.
       cwd: tempDir,
     });
 
-    // Audit is advisory only — always exits 0 (never 1 for validation results)
+    // Nothing at error severity in this tree, so the run is exit 0.
     expect(result.status).toBe(0);
 
     // Should produce output
@@ -117,13 +114,11 @@ Test content.
 
   it('should detect and report multiple validation errors', async () => {
     const errorDir = safePath.join(tempDir, 'errors');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- errorDir is controlled in tests
     fs.mkdirSync(errorDir, { recursive: true });
 
     // Create an invalid skill (invalid name format — uppercase not allowed)
     // Note: must create subdirectory since scanDirectory only finds SKILL.md in directories
     const errorDir1 = safePath.join(errorDir, 'skill1');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- errorDir1 is controlled in tests
     fs.mkdirSync(errorDir1, { recursive: true });
     writeTestFile(
       safePath.join(errorDir1, 'SKILL.md'),
@@ -140,7 +135,6 @@ Test content.
 
     // Create another invalid skill (name too long — exceeds 64 chars)
     const errorDir2 = safePath.join(errorDir, 'skill2');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- errorDir2 is controlled in tests
     fs.mkdirSync(errorDir2, { recursive: true });
     writeTestFile(
       safePath.join(errorDir2, 'SKILL.md'),
@@ -160,9 +154,8 @@ Test content.
       cwd: tempDir,
     });
 
-    // Audit is advisory only — always exits 0 even when errors are found.
-    // Use 'vat skills validate' for gated validation (exits 1 on errors).
-    expect(result.status).toBe(0);
+    // Exit 1: the exit code follows `status`, and this tree has an error-severity finding.
+    expect(result.status).toBe(1);
 
     // Should report errors in stderr
     expect(result.stderr).toBeTruthy();
@@ -173,12 +166,10 @@ Test content.
 
   it('should exit with 0 for fully valid resources', async () => {
     const validDir = safePath.join(tempDir, 'valid');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- validDir is controlled in tests
     fs.mkdirSync(validDir, { recursive: true });
 
     // Create valid skills (each in subdirectory since scanDirectory looks for SKILL.md)
     const validDir1 = safePath.join(validDir, 'skill1');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- validDir1 is controlled in tests
     fs.mkdirSync(validDir1, { recursive: true });
     writeTestFile(
       safePath.join(validDir1, 'SKILL.md'),
@@ -194,7 +185,6 @@ Test content.
     );
 
     const validDir2 = safePath.join(validDir, 'skill2');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- validDir2 is controlled in tests
     fs.mkdirSync(validDir2, { recursive: true });
     writeTestFile(
       safePath.join(validDir2, 'SKILL.md'),
@@ -230,7 +220,6 @@ Test content.
   it('should scan recursively by default without --recursive flag', async () => {
     const nestedDir = safePath.join(tempDir, 'nested-default');
     const nestedSkillDir = safePath.join(nestedDir, 'deeply', 'nested', 'skill-dir');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- nestedSkillDir is controlled in tests
     fs.mkdirSync(nestedSkillDir, { recursive: true });
 
     writeTestFile(
@@ -264,7 +253,6 @@ This skill is deeply nested to verify recursive scanning is the default.
   it('should NOT scan subdirectories with --no-recursive flag', async () => {
     const noRecurseDir = safePath.join(tempDir, 'no-recurse');
     const subDir = safePath.join(noRecurseDir, 'subdir');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- subDir is controlled in tests
     fs.mkdirSync(subDir, { recursive: true });
 
     // Create SKILL.md only in the subdirectory (not the top level)
@@ -286,8 +274,10 @@ This skill should not be found when using --no-recursive.
       cwd: tempDir,
     });
 
-    // Should exit 0 (no resources found at top level = no errors, just nothing audited)
-    expect(result.status).toBe(0);
+    // Exit 1: a run that audited ZERO files is refused, not passed — it
+    // publishes `status: error` with RESOURCE_CHECK_BROKEN, and the exit
+    // code follows `status`.
+    expect(result.status).toBe(1);
 
     // The scan ran and produced output (e.g., filesScanned count)
     expect(result.stdout).toContain('filesScanned');
@@ -300,9 +290,7 @@ This skill should not be found when using --no-recursive.
     const excludeDir = safePath.join(tempDir, 'exclude-test');
     const distDir = safePath.join(excludeDir, 'dist');
     const srcDir = safePath.join(excludeDir, 'src');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
     fs.mkdirSync(distDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
     fs.mkdirSync(srcDir, { recursive: true });
 
     // Create a skill in dist/ (should be excluded)

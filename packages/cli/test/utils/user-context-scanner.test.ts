@@ -2,7 +2,8 @@ import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 
 
 import * as claudePaths from '@vibe-agent-toolkit/claude-marketplace';
-import { normalizedTmpdir, removeScratchDir, safePath, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { removeScratchDir, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 
 import { scanUserContext } from '../../src/utils/user-context-scanner.js';
@@ -28,7 +29,6 @@ describe('scanUserContext', () => {
     // Create subdirectory for each test
     testCounter++;
     tempDir = safePath.join(suiteDir, `test-${testCounter}`);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtemp
     await mkdir(tempDir, { recursive: true });
 
     mockClaudeDir = safePath.join(tempDir, '.claude');
@@ -36,13 +36,9 @@ describe('scanUserContext', () => {
     mockSkillsDir = safePath.join(mockClaudeDir, 'skills');
     mockMarketplacesDir = safePath.join(mockClaudeDir, 'marketplaces');
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: tempDir is from mkdtemp
     await mkdir(mockClaudeDir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: path derived from mkdtemp
     await mkdir(mockPluginsDir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: path derived from mkdtemp
     await mkdir(mockSkillsDir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: path derived from mkdtemp
     await mkdir(mockMarketplacesDir);
 
     // Mock getClaudeUserPaths to return our temp directories
@@ -63,9 +59,7 @@ describe('scanUserContext', () => {
   it('should scan plugins directory for SKILL.md files', async () => {
     // Create plugin structure
     const plugin1Dir = safePath.join(mockPluginsDir, 'plugin1');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await mkdir(plugin1Dir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await writeFile(safePath.join(plugin1Dir, 'SKILL.md'), '# Skill 1');
 
     const result = await scanUserContext();
@@ -78,9 +72,7 @@ describe('scanUserContext', () => {
   it('should scan skills directory for SKILL.md files', async () => {
     // Create skill structure
     const skill1Dir = safePath.join(mockSkillsDir, 'skill1');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await mkdir(skill1Dir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await writeFile(safePath.join(skill1Dir, 'SKILL.md'), '# Skill 1');
 
     const result = await scanUserContext();
@@ -114,13 +106,9 @@ describe('scanUserContext', () => {
     // Create multiple plugins
     const plugin1Dir = safePath.join(mockPluginsDir, 'plugin1');
     const plugin2Dir = safePath.join(mockPluginsDir, 'plugin2');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await mkdir(plugin1Dir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await mkdir(plugin2Dir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await writeFile(safePath.join(plugin1Dir, 'SKILL.md'), '# Skill 1');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await writeFile(safePath.join(plugin2Dir, 'SKILL.md'), '# Skill 2');
 
     const result = await scanUserContext();
@@ -135,13 +123,9 @@ describe('scanUserContext', () => {
   it('keeps the readable plugins and reports the directory it could not list', async () => {
     const openDir = safePath.join(mockPluginsDir, 'open');
     const lockedDir = safePath.join(mockPluginsDir, 'locked');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await mkdir(openDir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await mkdir(lockedDir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await writeFile(safePath.join(openDir, 'SKILL.md'), '# Open');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await writeFile(safePath.join(lockedDir, 'SKILL.md'), '# Locked');
 
     const result = await withReaddirSyncRefused(lockedDir, 'EACCES', () => scanUserContext());
@@ -153,9 +137,7 @@ describe('scanUserContext', () => {
   it('should find skills in nested directories', async () => {
     // Create nested structure
     const nestedDir = safePath.join(mockSkillsDir, 'category', 'subcategory', 'myskill');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await mkdir(nestedDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await writeFile(safePath.join(nestedDir, 'SKILL.md'), '# Nested Skill');
 
     const result = await scanUserContext();
@@ -168,13 +150,9 @@ describe('scanUserContext', () => {
     // Create one plugin and one skill
     const pluginDir = safePath.join(mockPluginsDir, 'plugin1');
     const skillDir = safePath.join(mockSkillsDir, 'skill1');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await mkdir(pluginDir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await mkdir(skillDir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await writeFile(safePath.join(pluginDir, 'SKILL.md'), '# Plugin Skill');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await writeFile(safePath.join(skillDir, 'SKILL.md'), '# Standalone Skill');
 
     const result = await scanUserContext();
@@ -186,11 +164,8 @@ describe('scanUserContext', () => {
   it('should handle plugins with both SKILL.md and other files', async () => {
     // Create plugin with SKILL.md and other files
     const pluginDir = safePath.join(mockPluginsDir, 'myplugin');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await mkdir(pluginDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await writeFile(safePath.join(pluginDir, 'SKILL.md'), '# My Plugin');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Safe: test temp dir
     await writeFile(safePath.join(pluginDir, 'README.md'), '# Readme');
 
     const result = await scanUserContext();

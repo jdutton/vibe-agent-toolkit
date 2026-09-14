@@ -27,12 +27,15 @@
  *
  * ## Emit, never depend
  *
- * ARD is v0.91, status **Proposal** (as fetched 2026-09-06 — an external fact,
- * recorded, never a constant that decides validity). Nothing in VAT reads an
+ * ARD is v0.91, status **Proposal** (as of the fetch date recorded in
+ * `docs/external/ard/README.md` — an external fact, recorded there, never a
+ * constant that decides validity). Nothing in VAT reads an
  * ARD entry back, and no VAT behaviour is derived from one.
  */
 
 import { z } from 'zod';
+
+import { isInvalidUrlError } from '../url-errors.js';
 
 /** Charset for the `<publisher>` segment. */
 export const ARD_PUBLISHER_SEGMENT_PATTERN = /^[a-zA-Z0-9.-]+$/;
@@ -120,7 +123,10 @@ function hasDotSegment(path: string): boolean {
 function decodePathSegment(segment: string): string {
   try {
     return decodeURIComponent(segment);
-  } catch {
+  } catch (error) {
+    // `URIError` is the only thing `decodeURIComponent` throws, and it means
+    // exactly "malformed escape". Anything else is a bug and stays loud.
+    if (!(error instanceof URIError)) throw error;
     return segment;
   }
 }
@@ -247,7 +253,8 @@ export function isArdBaseUrl(value: string): boolean {
   let parsed: URL;
   try {
     parsed = new URL(value);
-  } catch {
+  } catch (error) {
+    if (!isInvalidUrlError(error)) throw error;
     return false;
   }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;

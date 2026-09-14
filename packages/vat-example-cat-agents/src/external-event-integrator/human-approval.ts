@@ -30,7 +30,7 @@ export const ApprovalRequestInputSchema = z.object({
   context: z.record(z.unknown()).optional().describe('Additional context to display'),
   autoResponse: z.union([z.literal('approve'), z.literal('reject')]).optional().describe('Auto-response for testing'),
   timeoutMs: z.number().optional().describe(TIMEOUT_MS_DESCRIPTION),
-});
+}).strict();
 
 export type ApprovalRequestInput = z.infer<typeof ApprovalRequestInputSchema>;
 
@@ -41,7 +41,7 @@ export const ApprovalResultSchema = z.object({
   approved: z.boolean().describe('Whether the request was approved'),
   reason: z.string().optional().describe('Reason for the decision'),
   timedOut: z.boolean().optional().describe('Whether the request timed out'),
-});
+}).strict();
 
 export type ApprovalResult = z.infer<typeof ApprovalResultSchema>;
 
@@ -53,7 +53,7 @@ export const ChoiceRequestInputSchema = z.object({
   options: z.array(z.string()).describe('Array of options to choose from'),
   autoResponse: z.string().optional().describe('Auto-response for testing (option value)'),
   timeoutMs: z.number().optional().describe(TIMEOUT_MS_DESCRIPTION),
-});
+}).strict();
 
 export type ChoiceRequestInput = z.infer<typeof ChoiceRequestInputSchema>;
 
@@ -64,7 +64,7 @@ export const ChoiceResultSchema = z.object({
   approved: z.boolean().describe('Whether a choice was made'),
   choice: z.string().optional().describe('The selected option'),
   reason: z.string().describe('Reason for result'),
-});
+}).strict();
 
 export type ChoiceResult = z.infer<typeof ChoiceResultSchema>;
 
@@ -75,7 +75,7 @@ export const CustomApprovalRequestInputSchema = z.object({
   prompt: z.string().describe('The question to ask'),
   autoResponse: z.string().optional().describe('Auto-response for testing'),
   timeoutMs: z.number().optional().describe(TIMEOUT_MS_DESCRIPTION),
-});
+}).strict();
 
 export type CustomApprovalRequestInput = z.infer<typeof CustomApprovalRequestInputSchema>;
 
@@ -86,7 +86,7 @@ export const CustomApprovalResultSchema = z.object({
   approved: z.boolean().describe('Whether the input was valid'),
   value: z.unknown().optional().describe('The validated value'),
   reason: z.string().describe('Reason for result'),
-});
+}).strict();
 
 export type CustomApprovalResult = z.infer<typeof CustomApprovalResultSchema>;
 

@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- fragment paths are derived from our own temp grader dirs */
 import { writeFileSync } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -9,7 +8,7 @@ import {
 } from '@vibe-agent-toolkit/utils/skill-test';
 import { expect, vi } from 'vitest';
 
-import { InternalHarnessError } from '../../src/skill-test/exit-codes.js';
+import { InternalHarnessError } from '../../src/skill-test/failure-reason.js';
 
 /** A clean, successful spawn result (status 0, no watchdog kill). */
 export const SPAWN_OK: SpawnResult = { status: 0, timedOut: false, stalled: false };

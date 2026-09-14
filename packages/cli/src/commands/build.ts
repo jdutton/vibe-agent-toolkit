@@ -13,9 +13,10 @@ import { checkBrokenPackagedLinks } from '@vibe-agent-toolkit/agent-skills';
 import {
   calculateValidationStatus,
   countBySeverity,
+  ExitCode,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
@@ -121,14 +122,16 @@ Example:
 /**
  * Check whether the current project has a claude.marketplaces config.
  * Returns false if no config file found or no claude section.
+ *
+ * A config that EXISTS and cannot be loaded throws (`ConfigLoadError`), and
+ * that is left to `buildCommand`'s own catch, which publishes it as the
+ * build's answer. It used to be absorbed here as "no marketplaces" — so an
+ * unreadable config announced a build with no claude phase, and `--only claude`
+ * on it was refused as "not configured", which was not the problem.
  */
 function hasClaudeMarketplacesConfig(cwd: string): boolean {
-  try {
-    const config = loadConfig(cwd);
-    return Boolean(config?.claude?.marketplaces && Object.keys(config.claude.marketplaces).length > 0);
-  } catch {
-    return false;
-  }
+  const config = loadConfig(cwd);
+  return Boolean(config?.claude?.marketplaces && Object.keys(config.claude.marketplaces).length > 0);
 }
 
 // Skill directories shipped inside a built plugin tree — every
@@ -137,17 +140,14 @@ function hasClaudeMarketplacesConfig(cwd: string): boolean {
 // pool import or verbatim tree-copy.
 async function collectShippedSkillDirs(marketplacesDir: string): Promise<string[]> {
   const skillDirs: string[] = [];
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- marketplacesDir is derived from cwd
   if (!existsSync(marketplacesDir)) {
     return skillDirs;
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- marketplacesDir is derived from cwd
   const marketplaceEntries = await readdir(marketplacesDir, { withFileTypes: true });
   for (const marketplaceEntry of marketplaceEntries) {
-    if (!marketplaceEntry.isDirectory()) continue;
+    if ((await direntKindFollowing(marketplacesDir, marketplaceEntry)) !== 'directory') continue;
     const pluginsDir = safePath.join(marketplacesDir, marketplaceEntry.name, 'plugins');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- pluginsDir derived from marketplacesDir listing
     if (!existsSync(pluginsDir)) continue;
     skillDirs.push(...await collectPluginSkillDirs(pluginsDir));
   }
@@ -157,12 +157,10 @@ async function collectShippedSkillDirs(marketplacesDir: string): Promise<string[
 
 async function collectPluginSkillDirs(pluginsDir: string): Promise<string[]> {
   const skillDirs: string[] = [];
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- pluginsDir derived from marketplacesDir listing
   const pluginEntries = await readdir(pluginsDir, { withFileTypes: true });
   for (const pluginEntry of pluginEntries) {
-    if (!pluginEntry.isDirectory()) continue;
+    if ((await direntKindFollowing(pluginsDir, pluginEntry)) !== 'directory') continue;
     const skillsDir = safePath.join(pluginsDir, pluginEntry.name, 'skills');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillsDir derived from pluginsDir listing
     if (!existsSync(skillsDir)) continue;
     skillDirs.push(...await collectSkillsInDir(skillsDir));
   }
@@ -172,12 +170,11 @@ async function collectPluginSkillDirs(pluginsDir: string): Promise<string[]> {
 
 async function collectSkillsInDir(skillsDir: string): Promise<string[]> {
   const skillDirs: string[] = [];
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillsDir derived from pluginsDir listing
   const skillEntries = await readdir(skillsDir, { withFileTypes: true });
   for (const skillEntry of skillEntries) {
-    if (!skillEntry.isDirectory()) continue;
+    // Followed: a symlinked skill directory (a dev install) ships like any other.
+    if ((await direntKindFollowing(skillsDir, skillEntry)) !== 'directory') continue;
     const skillDir = safePath.join(skillsDir, skillEntry.name);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillDir derived from skillsDir listing
     if (existsSync(safePath.join(skillDir, 'SKILL.md'))) {
       skillDirs.push(skillDir);
     }
@@ -263,14 +260,14 @@ async function buildTopLevelCommand(
   );
 
   const cwd = process.cwd();
-  // Spec §7: `vat build` requires a projectRoot.
-  requireProjectRoot(cwd, 'vat build');
-
   const { logger, startTime } = createPhaseContext(options.debug);
 
   try {
     // Inside the try, deliberately: this used to throw from outside it, so an
-    // unroutable `--only` produced a raw stack trace and zero bytes of stdout.
+    // unroutable `--only` produced a raw stack trace and zero bytes of stdout —
+    // and "no project here" exited 1, which the contract reads as FINDINGS.
+    // Spec §7: `vat build` requires a projectRoot.
+    requireProjectRoot(cwd, 'vat build');
     const phases = applyPhaseSelection(
       selectBuildPhases(options.only, hasClaudeMarketplacesConfig(cwd), options.verbose === true),
       logger,
@@ -335,7 +332,7 @@ async function buildTopLevelCommand(
             issues: shippedLinkIssues,
             duration: `${duration}ms`,
           });
-          process.exit(1);
+          process.exit(ExitCode.FINDINGS);
         }
       }
     }
@@ -381,7 +378,7 @@ async function buildTopLevelCommand(
       duration: `${duration}ms`,
     });
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'Build');
   }

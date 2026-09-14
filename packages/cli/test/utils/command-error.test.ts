@@ -1,16 +1,16 @@
-import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { ExitCode, reportSchema, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-
+import { z } from 'zod';
 
 import { validateCommand } from '../../src/commands/skills/validate.js';
 import {
-  errorDiagnostics,
   exitCodeForCommanderEnding,
   formatDuration,
   handleCommandError,
+  handleReportCommandError,
+  handleReportExpectedFailure,
   handleValidationGateFailure,
-  USAGE_ERROR_EXIT_CODE,
 } from '../../src/utils/command-error.js';
 import type { Logger } from '../../src/utils/logger.js';
 
@@ -92,28 +92,6 @@ describe('command-error utilities', () => {
       expect(formatDuration(60000)).toBe('1.0m');
       expect(formatDuration(90000)).toBe('1.5m');
       expect(formatDuration(150000)).toBe('2.5m');
-    });
-  });
-
-  describe('errorDiagnostics', () => {
-    it('returns the stack of an Error, not just its message', () => {
-      const diagnostics = errorDiagnostics(new Error('boom'));
-      expect(diagnostics).toContain('Error: boom');
-      expect(diagnostics.split('\n').length).toBeGreaterThan(1);
-    });
-
-    it('falls back to name and message when an Error carries no stack', () => {
-      // Cross-realm and hand-built errors reach here with `stack` undefined;
-      // `stack` is optional in the type, so the fallback is not theoretical.
-      const stackless = new RangeError('out of range');
-      stackless.stack = undefined;
-      expect(errorDiagnostics(stackless)).toBe('RangeError: out of range');
-    });
-
-    it('inspects a thrown non-Error rather than discarding it', () => {
-      expect(errorDiagnostics({ code: 'ENOENT' })).toContain("code: 'ENOENT'");
-      expect(errorDiagnostics('a bare string')).toContain('a bare string');
-      expect(errorDiagnostics(undefined)).toContain('undefined');
     });
   });
 
@@ -272,6 +250,37 @@ describe('command-error utilities', () => {
       expect(mockProcessExit).not.toHaveBeenCalledWith(2);
     });
   });
+
+  describe('the envelope endings — the failure document IS the published schema', () => {
+    // The strictest data schema an envelope command could declare: an error
+    // document must pass it anyway, because `data` is null on that branch.
+    const SCHEMA = reportSchema(z.object({ root: z.string() }).strict());
+
+    it('handleReportCommandError publishes an error envelope the schema accepts, at ERROR', () => {
+      expect(() => handleReportCommandError(new Error('Boom'), mockLogger, Date.now(), 'Envelope', 'json'))
+        .toThrow(PROCESS_EXIT_ERROR_MESSAGE);
+
+      const parsed = SCHEMA.safeParse(JSON.parse(getYamlOutput(mockStdoutWrite)));
+      expect(parsed.success ? [] : parsed.error.issues).toEqual([]);
+      if (!parsed.success) return;
+      expect(parsed.data.status).toBe('error');
+      expect(parsed.data.error).toBe('Boom');
+      expect(parsed.data.examined).toBe(0);
+      expect(parsed.data.data).toBeNull();
+      expect(mockProcessExit).toHaveBeenCalledWith(ExitCode.ERROR);
+    });
+
+    it('handleReportExpectedFailure publishes the same envelope at the code the command assigns, YAML by default', () => {
+      expect(() => handleReportExpectedFailure('no ard block', ExitCode.FINDINGS, Date.now()))
+        .toThrow(PROCESS_EXIT_ERROR_MESSAGE);
+
+      const yamlOutput = getYamlOutput(mockStdoutWrite);
+      expect(yamlOutput).toContain(STATUS_ERROR_LINE);
+      expect(yamlOutput).toContain('error: no ard block');
+      expect(yamlOutput).toContain('data: null');
+      expect(mockProcessExit).toHaveBeenCalledWith(ExitCode.FINDINGS);
+    });
+  });
 });
 
 describe('exitCodeForCommanderEnding', () => {
@@ -287,9 +296,9 @@ describe('exitCodeForCommanderEnding', () => {
   // "at least one error-severity finding". `vat resources check --json` (the
   // option is `--format json`) therefore claimed a check had been violated
   // when nothing had run.
-  it('remaps commander default 1 to the system-error code, so a usage mistake is not read as a finding', () => {
-    expect(exitCodeForCommanderEnding(1)).toBe(USAGE_ERROR_EXIT_CODE);
-    expect(exitCodeForCommanderEnding(1)).not.toBe(1);
+  it('remaps commander default 1 to ERROR, so a usage mistake is not read as a finding', () => {
+    expect(exitCodeForCommanderEnding(1)).toBe(ExitCode.ERROR);
+    expect(exitCodeForCommanderEnding(1)).not.toBe(ExitCode.FINDINGS);
   });
 
   // An unknown COMMAND arrives as code `commander.help` with a non-zero exit,
@@ -298,14 +307,7 @@ describe('exitCodeForCommanderEnding', () => {
   // why the exit code is the discriminator and the string is not.
   it('treats every non-zero commander ending as a usage mistake', () => {
     for (const code of [1, 2, 3, 64, 127]) {
-      expect(exitCodeForCommanderEnding(code)).toBe(USAGE_ERROR_EXIT_CODE);
+      expect(exitCodeForCommanderEnding(code)).toBe(ExitCode.ERROR);
     }
-  });
-
-  // Pins the contract's own number. `handleCommandError` exits 2 for an
-  // unexpected system error and `handleValidationGateFailure` exits 1 for a
-  // finding; a usage mistake belongs with the former, never the latter.
-  it('uses the same code the unexpected-failure path uses', () => {
-    expect(USAGE_ERROR_EXIT_CODE).toBe(2);
   });
 });

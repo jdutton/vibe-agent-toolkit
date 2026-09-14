@@ -329,19 +329,21 @@ const DIGIT = /\d/;
  * what a passing `resources.checks` entry looks like.
  *
  * So the count is read off the statement with the SAME scanner the separator
- * gate uses, and follows SQLite's own numbering: a bare `?` is the largest index
- * so far plus one; `?NNN` is NNN, which also declares every lower slot (`?3`
- * alone is three slots — measured, one value fills slot 1 and `?3` reads NULL).
- * A `:x`, `@x` or `$x` name is reported rather than numbered: the driver binds
- * positional values only into anonymous and `?NNN` slots, so a named slot is one
- * this surface cannot fill however many values arrive.
+ * gate uses: each bare `?` is one slot. Every other placeholder form is
+ * reported rather than counted, because positional values cannot reach it on
+ * every Node this package supports: a `:x`, `@x` or `$x` name never binds
+ * positionally, and `?NNN` does not either on the declared floor — measured,
+ * Node 22.13.0 and 22.14.0 throw `column index out of range` for
+ * `SELECT ?1 AS x` with one value, while 22.22.3 and 24.x bind it. A form that
+ * works on one supported runtime and throws an unrelated error on another is
+ * refused on all of them, with a message that names the form.
  *
  * @param sql - The statement text
- * @returns The slot count, and the first named parameter if there is one
+ * @returns The slot count, and the first unreachable placeholder if there is one
  */
-function countBoundParameters(sql: string): { readonly slots: number; readonly named: string | undefined } {
+function countBoundParameters(sql: string): { readonly slots: number; readonly unreachable: string | undefined } {
   let slots = 0;
-  let named: string | undefined;
+  let unreachable: string | undefined;
   let index = 0;
   while (index < sql.length) {
     const skipped = skipLiteralOrComment(sql, index);
@@ -354,14 +356,15 @@ function countBoundParameters(sql: string): { readonly slots: number; readonly n
       index += 1;
       continue;
     }
-    if (placeholder.name === undefined) {
-      slots = placeholder.slot === undefined ? slots + 1 : Math.max(slots, placeholder.slot);
+    const form = placeholder.name ?? (placeholder.slot === undefined ? undefined : `?${placeholder.slot}`);
+    if (form === undefined) {
+      slots += 1;
     } else {
-      named ??= placeholder.name;
+      unreachable ??= form;
     }
     index = placeholder.end;
   }
-  return { slots, named };
+  return { slots, unreachable };
 }
 
 /** What one placeholder token is: where it ends, and its `?NNN` slot or its `:name`. */
@@ -418,14 +421,14 @@ function indexPastRun(sql: string, from: number, pattern: RegExp): number {
  *
  * @param sql - The statement text
  * @param parameters - What the caller is binding, positionally
- * @throws If a placeholder is named, or the counts differ
+ * @throws If a placeholder is named or numbered, or the counts differ
  */
 function assertParametersBound(sql: string, parameters: readonly SqliteValue[]): void {
-  const { slots, named } = countBoundParameters(sql);
-  if (named !== undefined) {
+  const { slots, unreachable } = countBoundParameters(sql);
+  if (unreachable !== undefined) {
     throw new Error(
-      `This statement has a named parameter (\`${named}\`), and this surface binds values`
-      + ' positionally, so nothing can ever fill it — write `?` instead.',
+      `This statement has a named or numbered parameter (\`${unreachable}\`), and this surface binds`
+      + ' values positionally into bare `?` slots only — write `?` instead, once per value.',
     );
   }
   if (slots === parameters.length) return;

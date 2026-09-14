@@ -1,5 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-
 /**
  * Integration test: per-skill walk-up to the nearest-ancestor
  * `vibe-agent-toolkit.config.yaml`.

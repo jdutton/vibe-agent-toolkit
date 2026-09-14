@@ -1,349 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import nodeFs, { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import nodeFs, { rmSync, symlinkSync } from 'node:fs';
 import fs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 
-
-import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from './path-utils.js';
-
-/**
- * How long a scratch-dir teardown may run before it gives up and warns.
- *
- * The value only has to be comfortably *under* the hook timeout it runs in —
- * that is the whole design. Sizing a teardown budget to beat contention is
- * unprovable (see {@link removeScratchDir}); sizing it below a known constant is
- * arithmetic.
- *
- * ⚠️ **The known constant is the UNIT tier's**, which is the only tier that
- * takes vitest's 10s default (`vitest.shared.ts` declines to override it there
- * on purpose) and the tier where the flake was actually observed. The other two
- * tiers set their own, far larger: integration gets `platformTestTimeout`
- * (60s on Unix, 900s on Windows) and system gets 300s. A suite in those tiers
- * inherits this 4s default and therefore gives up 15x–225x earlier than its hook
- * would have allowed — for a heavy fixture tree that is a leaked directory and a
- * warning bought for nothing, since an abandoned removal does not stop (see
- * {@link removeScratchDir}). Such a suite should pass its own `budgetMs`, which
- * both suite helpers forward.
- */
-const SCRATCH_REMOVAL_BUDGET_MS = 4000;
-
-/** Knobs for {@link removeScratchDir}; all three exist so the behaviour is testable. */
-export interface RemoveScratchDirOptions {
-  /** Deadline before the removal is abandoned. Default {@link SCRATCH_REMOVAL_BUDGET_MS}. */
-  readonly budgetMs?: number;
-  /** Where the give-up notice goes. Default `console.warn`. */
-  readonly onWarn?: (message: string) => void;
-  /**
-   * The removal itself. Defaults to `fs.rm` with recursive/force/retries.
-   *
-   * Injectable because the *contract* — a removal that fails must warn rather
-   * than throw — cannot otherwise be tested on every platform. Driving a real
-   * `fs.rm` failure needs a path the OS refuses, and those diverge: a path
-   * whose parent component is a regular file yields `ENOTDIR` on POSIX, and
-   * resolves silently on Windows. A test written against the POSIX shape
-   * passes locally and fails in CI, which is exactly what it did once.
-   */
-  readonly remove?: (dir: string) => Promise<void>;
-}
-
-/**
- * Delete a scratch directory as *best effort* — never failing the suite that
- * created it, and never taking longer than its own budget to say so.
- *
- * ## Why this is not just `await rm(dir, { recursive: true, force: true })`
- *
- * A teardown hook that can redden a suite whose every assertion passed is a
- * defect in the harness, not a flake. `packages/lab/test/instrument.test.ts`
- * timed out here on two consecutive Windows runs with all 655 assertions
- * green — only the cleanup lost.
- *
- * The measurement is what rules out the obvious fixes: that scratch dir holds
- * 490 files / 378 KiB across 14 fixture git repos, and deletes in **59 ms**
- * idle. Against vitest's 10,000 ms unit-hook budget that is 170x of headroom,
- * and Windows blew through it anyway. No quantity of real work explains that,
- * so the cause is scheduling — contention from a fully parallel `validate`,
- * plus per-unlink antivirus on Windows — which is unbounded by nature. Hence:
- *
- * - **Raising `hookTimeout` cannot be argued.** You would be picking a number
- *   to beat an unbounded quantity, when 10s of 170x headroom already lost. It
- *   also punches a hole in the deliberate policy in `vitest.shared.ts` ("no
- *   hookTimeout override here on purpose") for every unit hook, to fix one.
- * - **`try`/`catch` around the `rm` cannot work.** A vitest hook timeout is a
- *   race decided on the *timer* side; the hook's own catch never sees it. It
- *   addresses a failure mode we did not observe and leaves the one we did.
- * - **`maxRetries` alone makes it worse.** Retries target transient
- *   `EPERM`/`EBUSY`, which fail *fast*; our failure was *slow*, and retry
- *   backoff only adds to it. Kept below as a cheap inner win, not as the fix.
- *
- * So the deadline is taken away from vitest: the removal races a timer of our
- * own, well inside the hook budget, and expiry is a warning rather than a
- * failure. The hook therefore always resolves in time, which makes it
- * *structurally* incapable of reddening a green suite on any machine at any
- * load — rather than merely unlikely to.
- *
- * The cost, stated plainly: under pathological contention the directory
- * survives in the OS temp dir, which the OS reclaims, and the warning names
- * the path. It can never surface as an unhandled rejection, because the only
- * rejection handler is installed before the race.
- *
- * ⚠️ **Abandoning the removal does not stop it, and does not free the worker.**
- * A pending libuv `fs` request is an active handle, so the `rm` runs to
- * completion regardless — measured at 2,407 ms on an 8,000-file tree after the
- * race was decided at 5 ms — and the process cannot exit until it does.
- * `timer.unref()` below unrefs the *timer*, not the removal. So what this buys
- * is bounded: the **hook** always resolves in time, which is what stops a green
- * suite going red. It does **not** shed the work, and under the contention it
- * targets the abandoned removal competes for disk with whatever runs next in
- * the same worker. That is the trade, and it is why the budget wants to be as
- * large as the tier's hook allows rather than as small as possible.
- *
- * @param dir - Directory to remove. An empty string is a no-op, so a suite
- *   whose `beforeAll` never ran can call this unconditionally.
- * @param options - Deadline and warning sink
- *
- * @example
- * ```typescript
- * afterAll(async () => {
- *   await removeScratchDir(scratch);
- * });
- * ```
- */
-export async function removeScratchDir(
-  dir: string,
-  options: RemoveScratchDirOptions = {},
-): Promise<void> {
-  if (dir === '') return;
-
-  const budgetMs = options.budgetMs ?? SCRATCH_REMOVAL_BUDGET_MS;
-  const onWarn =
-    options.onWarn ??
-    ((message: string): void => {
-      console.warn(message);
-    });
-
-  // Latches on the first outcome so a removal that finishes (or fails) after
-  // the budget expired cannot log a second time into an already-finished suite.
-  let settled = false;
-  const giveUp = (reason: string): void => {
-    if (settled) return;
-    settled = true;
-    onWarn(`scratch dir left behind at ${dir}: ${reason}`);
-  };
-
-  const remove =
-    options.remove ??
-    ((target: string): Promise<void> =>
-      fs.rm(target, { recursive: true, force: true, maxRetries: 2, retryDelay: 50 }));
-
-  const removal = remove(dir)
-    .then(() => {
-      settled = true;
-    })
-    .catch((error: unknown) => {
-      giveUp(error instanceof Error ? error.message : String(error));
-    });
-
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<void>((resolve) => {
-    timer = setTimeout(() => {
-      giveUp(`removal did not finish within ${budgetMs}ms`);
-      resolve();
-    }, budgetMs);
-    // Never hold the process open for a teardown nobody is waiting on.
-    timer.unref();
-  });
-
-  await Promise.race([removal, deadline]);
-  clearTimeout(timer);
-}
-
-/**
- * Get isolated test output directory for current test run
- *
- * Creates a unique directory under `packages/{packageName}/.test-output/{testType}/{runId}`
- * where runId is `{timestamp}-{randomId}` to ensure isolation across parallel test runs.
- *
- * @param packageName - Name of package (e.g., 'rag-lancedb')
- * @param testType - Type of test ('unit', 'integration', 'system')
- * @param subdirs - Optional subdirectories to create within the test output directory
- * @returns Absolute path to the created directory
- *
- * @example
- * ```typescript
- * // Create isolated database directory for system tests
- * const dbPath = getTestOutputDir('rag-lancedb', 'system', 'databases', 'test-db');
- * // Result: packages/rag-lancedb/.test-output/system/20260105-143022-abc123/databases/test-db
- *
- * // Create temporary file directory for integration tests
- * const tempDir = getTestOutputDir('agent-skills', 'integration', 'temp-files');
- * // Result: packages/agent-skills/.test-output/integration/20260105-143022-def456/temp-files
- * ```
- */
-export function getTestOutputDir(
-  packageName: string,
-  testType: 'unit' | 'integration' | 'system',
-  ...subdirs: string[]
-): string {
-  // Generate unique run ID: timestamp + random hex
-  const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-').slice(0, 19);
-  const randomId = randomBytes(4).toString('hex');
-  const runId = `${timestamp}-${randomId}`;
-
-  // Find project root (assuming we're always in packages/*/test/*)
-  const projectRoot = safePath.resolve(process.cwd());
-
-  // Build path: packages/{packageName}/.test-output/{testType}/{runId}/{...subdirs}
-  const testOutputDir = safePath.join(
-    projectRoot,
-    'packages',
-    packageName,
-    '.test-output',
-    testType,
-    runId,
-    ...subdirs,
-  );
-
-  // Create directory structure and return normalized path
-   
-  return mkdirSyncReal(testOutputDir, { recursive: true });
-}
-
-/**
- * Get the base test output directory for a package
- * Useful for cleanup operations that need to remove all test output
- *
- * @param packageName - Name of package (e.g., 'rag-lancedb')
- * @returns Absolute path to packages/{packageName}/.test-output
- *
- * @example
- * ```typescript
- * const baseDir = getTestOutputBase('rag-lancedb');
- * // Result: packages/rag-lancedb/.test-output
- * ```
- */
-export function getTestOutputBase(packageName: string): string {
-  const projectRoot = safePath.resolve(process.cwd());
-  return safePath.join(projectRoot, 'packages', packageName, '.test-output');
-}
-
-/**
- * Per-suite temp directory pattern (async version)
- * Creates a single temp directory for the entire test suite,
- * with subdirectories for each test. This is 3-5x faster on Windows
- * than creating a new mkdtemp for each test.
- *
- * @param prefix - Prefix for the suite temp directory name
- * @param teardown - Forwarded to {@link removeScratchDir}. Raise `budgetMs` for a
- *   suite whose fixture tree is heavy or whose tier allows a longer hook than the
- *   unit tier this default is sized against — see {@link SCRATCH_REMOVAL_BUDGET_MS}.
- * @returns Suite helper with beforeAll, afterAll, beforeEach, afterEach, and getTempDir
- *
- * @example
- * ```typescript
- * const suite = setupAsyncTempDirSuite('my-test');
- *
- * describe('my tests', () => {
- *   beforeAll(suite.beforeAll);
- *   afterAll(suite.afterAll);
- *   beforeEach(suite.beforeEach);
- *
- *   it('test 1', async () => {
- *     const tempDir = suite.getTempDir();
- *     // Use tempDir...
- *   });
- * });
- * ```
- */
-export function setupAsyncTempDirSuite(prefix: string, teardown: RemoveScratchDirOptions = {}): {
-  beforeAll: () => Promise<void>;
-  afterAll: () => Promise<void>;
-  beforeEach: () => Promise<void>;
-  afterEach: () => Promise<void>;
-  getTempDir: () => string;
-} {
-  let suiteDir = '';
-  let tempDir = '';
-  let testCounter = 0;
-
-  return {
-    beforeAll: async () => {
-      suiteDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), `${prefix}-suite-`));
-    },
-    afterAll: async () => {
-      await removeScratchDir(suiteDir, teardown);
-    },
-    beforeEach: async () => {
-      testCounter++;
-      tempDir = safePath.join(suiteDir, `test-${testCounter}`);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtemp
-      await fs.mkdir(tempDir, { recursive: true });
-    },
-    afterEach: async () => {
-      // Per-test cleanup handled by suite cleanup
-    },
-    getTempDir: () => tempDir,
-  };
-}
-
-/**
- * Per-suite temp directory pattern (sync version)
- * Creates a single temp directory for the entire test suite,
- * with subdirectories for each test. This is 3-5x faster on Windows
- * than creating a new mkdtemp for each test.
- *
- * @param prefix - Prefix for the suite temp directory name
- * @param teardown - Forwarded to {@link removeScratchDir}. Raise `budgetMs` for a
- *   suite whose fixture tree is heavy or whose tier allows a longer hook than the
- *   unit tier this default is sized against — see {@link SCRATCH_REMOVAL_BUDGET_MS}.
- * @returns Suite helper with beforeAll, afterAll, beforeEach, afterEach, and getTempDir
- *
- * @example
- * ```typescript
- * const suite = setupSyncTempDirSuite('my-test');
- *
- * describe('my tests', () => {
- *   beforeAll(suite.beforeAll);
- *   afterAll(suite.afterAll);
- *   beforeEach(suite.beforeEach);
- *
- *   it('test 1', () => {
- *     const tempDir = suite.getTempDir();
- *     // Use tempDir...
- *   });
- * });
- * ```
- */
-export function setupSyncTempDirSuite(prefix: string, teardown: RemoveScratchDirOptions = {}): {
-  beforeAll: () => void;
-  // Async despite the "sync suite" name, deliberately: only the teardown is,
-  // because bounding a removal needs a race and `rmSync` cannot be raced. The
-  // parts a sync `it()` actually calls — `beforeEach`, `getTempDir` — stay sync.
-  afterAll: () => Promise<void>;
-  beforeEach: () => void;
-  afterEach: () => void;
-  getTempDir: () => string;
-} {
-  let suiteDir = '';
-  let tempDir = '';
-  let testCounter = 0;
-
-  return {
-    beforeAll: () => {
-      suiteDir = mkdtempSync(safePath.join(normalizedTmpdir(), `${prefix}-suite-`));
-    },
-    afterAll: async () => {
-      await removeScratchDir(suiteDir, teardown);
-    },
-    beforeEach: () => {
-      testCounter++;
-      tempDir = safePath.join(suiteDir, `test-${testCounter}`);
-      mkdirSyncReal(tempDir);
-    },
-    afterEach: () => {
-      // Per-test cleanup handled by suite cleanup
-    },
-    getTempDir: () => tempDir,
-  };
-}
+import { isFilesystemAccessError } from './errors/errno.js';
+import { normalizedTmpdir, safePath, toForwardSlash } from './path-utils.js';
 
 declare const symlinkCapabilityBrand: unique symbol;
 
@@ -362,17 +23,34 @@ export type SymlinkCapability = { readonly [symlinkCapabilityBrand]: true };
 let cachedCapability: SymlinkCapability | null | undefined;
 
 /**
+ * The errnos that mean "this host cannot create symlinks": Windows without
+ * Developer Mode or `SeCreateSymbolicLinkPrivilege` (`EPERM`), and a
+ * filesystem that has no symlinks to offer (`ENOTSUP` / `EOPNOTSUPP`).
+ */
+const SYMLINK_UNSUPPORTED_ERRNOS: ReadonlySet<string> = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP']);
+
+function isSymlinkUnsupported(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && typeof error.code === 'string' && SYMLINK_UNSUPPORTED_ERRNOS.has(error.code);
+}
+
+/**
  * Whether this PROCESS can create symlinks — probed once and memoized.
  *
  * On Windows, `symlink()` needs either Developer Mode or
  * `SeCreateSymbolicLinkPrivilege`. That privilege lives on the process's
  * security token, not on any one directory: it cannot change between calls
  * within a single run, so probing it once and reusing the result is a
- * memoization, not a shortcut that risks a stale answer. (An exotic
- * filesystem that itself refuses symlinks — some network shares, some FAT
- * variants — is a real exception this does not model; every fixture in this
- * repo creates its roots under {@link normalizedTmpdir}, so it never arises
- * here.)
+ * memoization, not a shortcut that risks a stale answer. (A filesystem that
+ * itself has no symlinks — some network shares, some FAT variants — answers
+ * `ENOTSUP` and is read as the same "no"; every fixture in this repo creates
+ * its roots under {@link normalizedTmpdir}, so it never arises here.)
+ *
+ * Because the answer is memoized for the whole process, what reads as "no"
+ * matters more than usual: a `null` here silently `skip()`s every symlink test
+ * for the rest of the run. So ONLY {@link SYMLINK_UNSUPPORTED_ERRNOS} is a
+ * no. A tmpdir that is unwritable or missing, or a bug, is not an answer about
+ * symlinks at all and stays loud rather than becoming a process-wide skip for
+ * a reason nothing reported.
  *
  * Fixtures that depend on symlinks must ask rather than assume — and, having
  * asked, must SAY they skipped. A symlink case that silently no-ops reads as
@@ -386,21 +64,22 @@ export function symlinkCapability(): SymlinkCapability | null {
   if (cachedCapability === undefined) {
     const probe = safePath.join(normalizedTmpdir(), `.vat-symlink-probe-${randomBytes(4).toString('hex')}`);
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixed tmp dir plus a random basename generated here
       symlinkSync('.', probe);
       cachedCapability = {} as SymlinkCapability;
-    } catch {
+    } catch (error) {
+      if (!isSymlinkUnsupported(error)) throw error;
       cachedCapability = null;
     }
     if (cachedCapability !== null) {
       // Best-effort: the capability answer comes from creation succeeding, not
       // from cleanup — a probe left behind by a failed rmSync (e.g. a transient
       // lock on the freshly-created reparse point) must not flip a real "yes"
-      // into a memoized, process-wide "no".
+      // into a memoized, process-wide "no". Only the filesystem refusing the
+      // delete is that case; a bug is not, and stays loud.
       try {
         rmSync(probe, { force: true });
-      } catch {
-        // Leftover probe file; harmless, and not this function's concern.
+      } catch (error) {
+        if (!isFilesystemAccessError(error)) throw error;
       }
     }
   }
@@ -425,7 +104,6 @@ export function createSymlink(
   path: string,
   type?: 'dir' | 'file' | 'junction',
 ): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path; the capability parameter is what proves this call site is sanctioned
   symlinkSync(target, path, type);
 }
 
@@ -444,7 +122,6 @@ export async function createSymlinkAsync(
   path: string,
   type?: 'dir' | 'file' | 'junction',
 ): Promise<void> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied path; the capability parameter is what proves this call site is sanctioned
   await fs.symlink(target, path, type);
 }
 
@@ -527,19 +204,104 @@ export function detachGitEnv(): () => void {
   };
 }
 
+
+/**
+ * The errno-shaped error a refused `fs` call throws: a message, the `code`,
+ * and the `syscall`, exactly as Node shapes one.
+ */
+export function errnoError(code: string, syscall: string, target: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`${code}: refused, ${syscall} '${target}'`), { code, syscall });
+}
+
+/** The sync `node:fs` calls a refusal can be injected into. */
+export type RefusableSyncFsMethod =
+  | 'readdirSync'
+  | 'readFileSync'
+  | 'statSync'
+  | 'lstatSync'
+  | 'realpathSync'
+  | 'renameSync'
+  | 'rmSync'
+  | 'unlinkSync';
+
+/** The `node:fs/promises` calls a refusal can be injected into. */
+export type RefusableAsyncFsMethod = 'readdir' | 'readFile' | 'stat' | 'lstat' | 'access';
+
+/**
+ * Assign `fn` over `module[method]` and republish the builtin's ESM bindings.
+ *
+ * Assigning on the CJS object alone reaches ONLY a `import fs from 'node:fs'`
+ * caller — a named or namespace import reads the builtin's ESM bindings, which
+ * Node snapshots at import time. `syncBuiltinESMExports()` after each
+ * assignment republishes the patch (and the restore) to every import style;
+ * measured under vitest: without it, a spy on a named-import caller attached
+ * and counted zero, which reads exactly like "this function performs no I/O".
+ */
+function republish(module: object, method: string, fn: unknown): void {
+  (module as Record<string, unknown>)[method] = fn;
+  syncBuiltinESMExports();
+}
+
+/**
+ * Make `fs[method]` throw `code` for exactly `targetPath` until the returned
+ * restore is called; every other path, and every other method, stays real.
+ *
+ * A patch rather than a `chmod`: `chmod` reaches one errno (`EACCES`), only
+ * where POSIX modes bind, and not as root — and the property under test is
+ * "any refusal that is not an absence", so `EACCES`, `ELOOP`, `EMFILE` must all
+ * be reachable. What a walk under test meets is ONE refused call inside an
+ * otherwise ordinary tree; a walk that gave up entirely would pass a test where
+ * everything was refused.
+ *
+ * Lives in the shipped helpers because consumers in five packages each need to
+ * refuse a call, and the duplication gate refuses five copies.
+ */
+export function refuseSyncFs(method: RefusableSyncFsMethod, targetPath: string, code: string): () => void {
+  const original = nodeFs[method] as (...args: unknown[]) => unknown;
+  const refused = toForwardSlash(targetPath);
+  republish(nodeFs, method, (target: unknown, ...rest: unknown[]): unknown => {
+    if (toForwardSlash(String(target)) === refused) throw errnoError(code, method, String(target));
+    return original(target, ...rest);
+  });
+  return () => republish(nodeFs, method, original);
+}
+
+/**
+ * `fs/promises[method]` rejects with `code` for exactly `targetPath` until the
+ * returned restore is called; every other path, and every other method, is real.
+ */
+export function refuseAsyncFs(method: RefusableAsyncFsMethod, targetPath: string, code: string): () => void {
+  const original = (fs[method] as (...args: unknown[]) => Promise<unknown>).bind(fs);
+  const refused = toForwardSlash(targetPath);
+  republish(fs, method, async (target: unknown, ...rest: unknown[]): Promise<unknown> => {
+    if (toForwardSlash(String(target)) === refused) throw errnoError(code, method, String(target));
+    return original(target, ...rest);
+  });
+  return () => republish(fs, method, original);
+}
+
+/**
+ * Run `body` while `fs[method]` throws `code` for exactly `targetPath`; the
+ * patch is lifted however `body` exits. See {@link refuseSyncFs}.
+ */
+export async function withSyncFsRefused<T>(
+  method: RefusableSyncFsMethod,
+  targetPath: string,
+  code: string,
+  body: () => T | Promise<T>,
+): Promise<T> {
+  const restore = refuseSyncFs(method, targetPath, code);
+  try {
+    return await body();
+  } finally {
+    restore();
+  }
+}
+
 /**
  * Run `body` with `fs.readdirSync` of exactly `directory` throwing an error
- * carrying errno `code`. Every other directory lists for real, so what a walk
- * under test meets is ONE refused listing inside an otherwise ordinary tree —
- * a walk that gave up entirely would pass a test where everything was refused.
- *
- * A patch rather than a `chmod`, for the reason the promise-API twin in
- * `resources/test/helpers/refused-listing.ts` gives: `chmod` reaches one errno
- * (`EACCES`), only where POSIX modes bind, and not as root. The mapping under
- * test is "anything that is not an absence errno", and `EMFILE` / `ENFILE` /
- * `ELOOP` are just as reachable in ordinary operation. This one lives in the
- * shipped helpers because the sync crawler has consumers in three packages that
- * each need to refuse a listing, and the duplication gate refuses three copies.
+ * carrying errno `code`. The listing case of {@link withSyncFsRefused}, named
+ * because refusing a LISTING is the question the crawler's consumers ask.
  *
  * @param directory - Absolute path of the one directory to refuse
  * @param code - The errno to reject with
@@ -551,19 +313,5 @@ export async function withReaddirSyncRefused<T>(
   code: string,
   body: () => T | Promise<T>,
 ): Promise<T> {
-  const original = nodeFs.readdirSync;
-  const refused = toForwardSlash(directory);
-  const patched = ((target: nodeFs.PathLike, ...rest: unknown[]) => {
-    if (toForwardSlash(String(target)) === refused) {
-      throw Object.assign(new Error(`${code}: refused, scandir '${String(target)}'`), { code });
-    }
-    return (original as (...args: unknown[]) => unknown)(target, ...rest);
-  }) as typeof nodeFs.readdirSync;
-
-  nodeFs.readdirSync = patched;
-  try {
-    return await body();
-  } finally {
-    nodeFs.readdirSync = original;
-  }
+  return withSyncFsRefused('readdirSync', directory, code, body);
 }

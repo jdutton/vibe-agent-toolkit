@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- every path here is a temp tree the calling test owns */
 /**
  * Observing what a spawned `vat` run did with the **projection store**.
  *
@@ -35,7 +34,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, safePath } from '@vibe-agent-toolkit/utils';
 
 /**
  * Every `projection.db` under one isolated temp directory.
@@ -53,7 +52,7 @@ export function storeFilesUnder(root: string): string[] {
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const child = safePath.join(directory, entry.name);
-      if (entry.isDirectory()) visit(child);
+      if (direntKindFollowingSync(directory, entry) === 'directory') visit(child);
       else if (entry.name === 'projection.db') found.push(child);
     }
   };

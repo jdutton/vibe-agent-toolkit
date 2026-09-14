@@ -196,7 +196,6 @@ behind RFC-3986-compliant leading-`/` resolution.
 Place `vibe-agent-toolkit.config.yaml` at project root:
 
 ```yaml
-version: 1
 resources:
   include:
     - "docs/**/*.md"

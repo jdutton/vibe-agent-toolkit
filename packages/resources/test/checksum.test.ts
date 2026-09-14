@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test writes to temp dirs from computed paths */
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 

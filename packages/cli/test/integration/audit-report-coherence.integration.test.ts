@@ -27,7 +27,6 @@
  * one that cannot fail is itself a failure.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 
 import fs from 'node:fs';
 

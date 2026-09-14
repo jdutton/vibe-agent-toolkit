@@ -110,7 +110,7 @@ function instrumentTag(envelope: ReportEnvelope<unknown>): string {
  * other.
  *
  * ⚠️ **"Any axis" means any axis the coordinate models, and an instrument
- * selected by the ENVIRONMENT is not one of them.** Measured 2026-08-15: two
+ * selected by the ENVIRONMENT is not one of them.** Measured: two
  * `crawl run` invocations over one subject, differing only in
  * `VAT_INVENTORY_CRAWL` (the switch choosing the incumbent link-walk crawler or
  * the projection crawler), produced two genuinely different measurements and
@@ -176,10 +176,8 @@ export async function writeReport(
       `Refusing to write a report this build could not read back — ${readable.refusal}`,
     );
   }
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- report directory chosen by the operator running the lab
   await mkdir(directory, { recursive: true });
   const target = safePath.join(directory, reportFileName(envelope));
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- filename is composed here, not supplied
   await writeFile(target, `${JSON.stringify(envelope, null, 2)}\n`, 'utf-8');
   return target;
 }
@@ -197,7 +195,6 @@ export async function writeReport(
 export async function readReport(filePath: string): Promise<EnvelopeResult<unknown>> {
   let raw: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- report path supplied by the operator reading their own captures
     raw = await readFile(filePath, 'utf-8');
   } catch (error) {
     return {

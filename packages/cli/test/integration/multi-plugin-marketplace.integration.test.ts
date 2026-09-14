@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
 // Test file — file ops happen in temp dirs; duplicated literals (plugin/branch
 // names, paths) are expected and acceptable in fixture-driven tests.
 

@@ -1,6 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { type AddressInfo } from 'node:net';
 
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { it, beforeAll, afterAll } from 'vitest';
 
 import { describe, executeCliAndParseYaml, expect, fs, getBinPath, safePath, spawnSync } from './test-common.js';
@@ -153,7 +154,7 @@ resources:
   });
 
   it('should show version with context in dev mode', () => {
-    const result = spawnSync('node', [binPath, '--version'], {
+    const result = spawnSync(NODE_EXECUTABLE, [binPath, '--version'], {
       encoding: 'utf-8',
       env: { ...process.env, VAT_CONTEXT: 'dev', VAT_CONTEXT_PATH: '/test/path' },
     });
@@ -165,7 +166,7 @@ resources:
   });
 
   it('should show comprehensive help with --help --verbose', () => {
-    const result = spawnSync('node', [binPath, '--help', '--verbose'], {
+    const result = spawnSync(NODE_EXECUTABLE, [binPath, '--help', '--verbose'], {
       encoding: 'utf-8',
     });
 
@@ -182,7 +183,7 @@ resources:
   it('should not truncate a section verbose-help document larger than one pipe buffer', () => {
     // docs/rag.md is ~13 KB and section help goes through a DIFFERENT writer than
     // root help, so it needs its own guard against the same truncation.
-    const result = spawnSync('node', [binPath, 'rag', '--verbose'], {
+    const result = spawnSync(NODE_EXECUTABLE, [binPath, 'rag', '--verbose'], {
       encoding: 'utf-8',
     });
 
@@ -193,7 +194,7 @@ resources:
   });
 
   it('should show resources verbose help', () => {
-    const result = spawnSync('node', [binPath, 'resources', '--help', '--verbose'], {
+    const result = spawnSync(NODE_EXECUTABLE, [binPath, 'resources', '--help', '--verbose'], {
       encoding: 'utf-8',
     });
 

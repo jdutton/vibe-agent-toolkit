@@ -233,7 +233,7 @@ function reportDeadUnsafeImports(
       },
       // `fixer.remove(node)` takes the declaration and leaves its newline, so a
       // blank line remains where the import was. That is exactly what the
-      // specifier-removal leg in `path-function-rule-factory.cjs` has always
+      // specifier-removal leg in `no-raw-node-path.cjs` has always
       // done — its fixtures pin the leading `\n` — and matching it keeps one
       // behaviour rather than two. Extending the range through a trailing
       // whitespace-only remainder would tidy both, and should be done to both at

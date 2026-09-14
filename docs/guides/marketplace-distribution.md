@@ -77,17 +77,19 @@ marketplace-repo/           # or claude-marketplace branch
 
 ## Versioning Strategy
 
-**Marketplace version is the distribution version.** One version for the whole marketplace.
+Two models, and a marketplace can mix them:
 
-| Artifact | Versioned? | Required? | Source |
-|----------|-----------|-----------|--------|
-| Marketplace | Yes | Yes (error if missing) | `package.json` or config |
-| Plugin | Yes | Yes (error if missing) | Defaults to marketplace version |
-| Skill | No | N/A | Tracked by marketplace version |
+| Artifact | Versioned? | Source, in precedence order |
+|----------|-----------|-----------------------------|
+| Marketplace | Yes | root `package.json` version |
+| Plugin | Yes | the plugin entry's `version:` in config → `plugins/<name>/.claude-plugin/plugin.json` `version` → the marketplace version |
+| Skill | No | tracked by the plugin that ships it — the SKILL.md frontmatter spec has no version field |
 
-Skills are not independently versioned by VAT. The SKILL.md frontmatter spec has no version field. Skill changes are tracked at the marketplace level.
-
-Plugin version defaults to the marketplace version when not explicitly set. The top-level version defaults to `package.json` when available.
+**Single-version** (the default): declare no per-plugin version and every plugin inherits the root
+`package.json` version; the marketplace is one release artifact. **Per-plugin versioning**: declare
+`version:` on the plugin entry (or in its `plugin.json`) when plugins under one marketplace release
+on independent cadences. If both declare a version, config wins and VAT logs a reconciliation
+warning. The published `marketplace.json` carries the resolved per-plugin version either way.
 
 ## Branch Convention
 
@@ -200,8 +202,6 @@ schemas here are the authoring (write) side of a union VAT already read lenientl
 In `vibe-agent-toolkit.config.yaml`:
 
 ```yaml
-version: 1
-
 claude:
   marketplaces:
     my-marketplace:
@@ -233,10 +233,11 @@ Strings are validated against known SPDX identifiers. Paths are distinguished by
 Each marketplace maintains its own `CHANGELOG.md` following [Keep a Changelog](https://keepachangelog.com/) format. The marketplace release cadence may differ from source package releases.
 
 - Author maintains the changelog source file in the repo (path configured in YAML)
-- On publish, it's copied to `CHANGELOG.md` in the published tree
-- The `[Unreleased]` section is required for publish — the command refuses if empty
-- On publish, `[Unreleased]` is stamped with version + date
-- The changelog delta becomes the Git commit message body
+- On publish, it's copied **byte-for-byte** to `CHANGELOG.md` in the published tree — publish never
+  stamps or rewrites it; stamp `[Unreleased]` yourself (`bump-version` does this in VAT's own repo)
+- The release note for the commit body is the `## [<version>]` section matching the published
+  version when one exists and is non-empty (single-plugin marketplaces), otherwise the non-empty
+  `[Unreleased]` section; publish refuses when both are empty
 
 Categories: `Added`, `Changed`, `Removed`, `Fixed`, `Security`.
 
@@ -477,7 +478,7 @@ Everything under `plugins/<name>/` is tree-copied to `dist/.claude/plugins/marke
 
 - `.claude-plugin/` — owned by the `plugin.json` merge-write (see "plugin.json merge")
 
-Tree-copy respects `.gitignore` (safe: `node_modules/`, build detritus never ship). `plugins/<name>/skills/` is just a regular tree-copied directory — drop raw `SKILL.md` files there and they ship as-is.
+Tree-copy respects `.gitignore` (safe: `node_modules/`, build detritus never ship). `plugins/<name>/skills/` is **not** tree-copied verbatim: every `SKILL.md` found there is discovered and packaged through the same `packageSkill` path as a pool skill (links rewritten, `files:` honoured, validation applied) — see "What the verbatim tree-copy leaves behind" below: skills are packaged, never copied wholesale.
 
 ### Minimum content — empty-plugin guard
 

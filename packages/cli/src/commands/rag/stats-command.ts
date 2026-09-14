@@ -2,6 +2,8 @@
  * RAG stats command - show database statistics
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+
 import { writeYamlOutput } from '../../utils/output.js';
 
 import { executeRagOperation, formatDuration } from './command-helpers.js';
@@ -36,5 +38,5 @@ export async function statsCommand(options: StatsOptions): Promise<void> {
     duration: formatDuration(duration),
   });
 
-  process.exit(0);
+  process.exit(ExitCode.OK);
 }

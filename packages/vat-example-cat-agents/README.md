@@ -10,7 +10,7 @@ This package serves as a **reference implementation** for the Vibe Agent Toolkit
 
 ## Current Status
 
-**Implementation Progress:** 4 of 9 archetypes, 8 agents
+**Implementation Progress:** 4 of 9 archetypes; `src/index.ts` exports ten `*Agent` constants (count them there, not here)
 
 | Archetype | Status | Agents |
 |-----------|--------|--------|
@@ -50,7 +50,7 @@ vat skills install ./packages/vat-example-cat-agents
 
 **Verify installation:**
 ```bash
-vat skills list --installed
+vat skills list --user
 ```
 
 The `vat-cat-agents` skill will be installed to `~/.claude/plugins/vat-cat-agents/` and will appear in Claude Code after restarting or running `/reload-plugins`.
@@ -259,9 +259,16 @@ const characteristics = await parseDescription(text);
 Generates creative cat names based on characteristics.
 
 ```typescript
-import { generateCatName } from '@vibe-agent-toolkit/vat-example-cat-agents';
+import { nameGeneratorAgent, NameGeneratorInputSchema, NameSuggestionSchema } from '@vibe-agent-toolkit/vat-example-cat-agents';
+import { convertLLMAnalyzerToFunction } from '@vibe-agent-toolkit/runtime-vercel-ai-sdk';
+import { openai } from '@ai-sdk/openai';
 
-const name = await generateCatName(characteristics);
+// Agents are data; a runtime adapter turns one into a callable function
+const generateName = convertLLMAnalyzerToFunction(
+  nameGeneratorAgent, NameGeneratorInputSchema, NameSuggestionSchema,
+  { model: openai('gpt-4o-mini'), temperature: 0.9 },
+);
+const name = await generateName({ characteristics });
 console.log(name);
 // {
 //   name: 'Duke Marmalade III',
@@ -277,9 +284,14 @@ console.log(name);
 Creates cat-themed haikus from characteristics.
 
 ```typescript
-import { generateHaiku } from '@vibe-agent-toolkit/vat-example-cat-agents';
+import { haikuGeneratorAgent, HaikuGeneratorInputSchema, HaikuSchema } from '@vibe-agent-toolkit/vat-example-cat-agents';
 
-const haiku = await generateHaiku(characteristics);
+// Same adapter pattern as the name generator (see examples/llm-agent-demo.ts)
+const generateHaiku = convertLLMAnalyzerToFunction(
+  haikuGeneratorAgent, HaikuGeneratorInputSchema, HaikuSchema,
+  { model: openai('gpt-4o-mini') },
+);
+const haiku = await generateHaiku({ characteristics });
 console.log(haiku);
 // {
 //   line1: 'Orange fur gleaming',
@@ -450,23 +462,24 @@ Each breed profile includes: activity levels, grooming needs, apartment suitabil
 Requests human approval for decisions (mockable for testing).
 
 ```typescript
-import { requestHumanApproval } from '@vibe-agent-toolkit/vat-example-cat-agents';
+import { requestApproval } from '@vibe-agent-toolkit/vat-example-cat-agents';
 
-const decision = await requestHumanApproval({
-  title: 'Breeding Permit Review',
-  description: 'Duke Marmalade III x Lady Whiskers',
-  context: { applicationId: '12345', risk: 'low' }
-});
+// Prompts on the terminal (readline); `requestApprovalAgent` is the same behaviour as an Agent
+const decision = await requestApproval(
+  'Approve breeding permit: Duke Marmalade III x Lady Whiskers?',
+  { applicationId: '12345', risk: 'low' },
+  { timeoutMs: 60_000, onTimeout: 'reject' },
+);
 
 console.log(decision);
-// { status: 'approved', approver: 'human@example.com', timestamp: '...' }
-// OR
-// { status: 'rejected', reason: 'Genetic coefficient too high', timestamp: '...' }
+// { approved: true, reason: '...' }  or  { approved: false, reason: '...' }
 ```
 
-**Mock Mode:** Default returns instant approval. Set `mockable: false` for real HITL integration (Slack, email, etc.).
+**Auto-response for tests:** pass `{ autoResponse: 'approve' | 'reject' }` to skip the prompt.
+`requestChoice` / `requestCustomApproval` (and their `*Agent` forms) cover multiple-choice and
+typed answers.
 
-**Timeout Handling:** Configurable timeout with fallback behavior (default: 24 hours for human timescale).
+**Timeout Handling:** `timeoutMs` (default `0` = wait forever) with `onTimeout: 'reject' | 'approve'`.
 
 **Integration Agnostic:** Does not constrain HOW approval is requested (Slack, email, custom UI). Framework adapters implement integration details.
 

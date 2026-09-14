@@ -47,7 +47,8 @@
  * ## Nested schemas are NOT strict, on purpose
  *
  * `.strict()` sits on {@link ParseFactsSchema} alone. Inside an element, an
- * unknown key means a field this build no longer reads, and Zod strips it —
+ * unknown key means a field this build no longer reads, and an explicit
+ * `.strip()` drops it —
  * which is the right outcome, because a removed field's lingering presence
  * harms nothing and rejecting it would turn every entry cold for a change that
  * cannot produce a wrong answer. At the envelope, by contrast, an unknown key
@@ -80,7 +81,7 @@ export const ContentMeasuresSchema = z.object({
   wordCount: z.number().int().nonnegative().describe('Whitespace-delimited words outside code blocks. Inline code spans are NOT excluded — `measureContent` is passed only the fence ranges'),
   proseCodeUnits: z.number().int().nonnegative().describe('UTF-16 code units outside code blocks — NOT characters and NOT bytes; an astral character counts as two. Inline code spans are NOT excluded — `measureContent` is passed only the fence ranges, so a `` `token` `` counts as prose'),
   codeBlockCodeUnits: z.number().int().nonnegative().describe('UTF-16 code units inside code blocks — NOT characters and NOT bytes; an astral character counts as two. Fenced AND indented blocks, since both are one `code` AST node. Excludes inline code spans'),
-}).describe('Code-unit and word accounting for one blob, split by code context');
+}).strip().describe('Code-unit and word accounting for one blob, split by code context'); // .strip(): an ELEMENT, see "Nested schemas are NOT strict, on purpose" above
 
 export type ContentMeasures = z.infer<typeof ContentMeasuresSchema>;
 
@@ -107,7 +108,7 @@ export const LexicalReferenceSchema = z.object({
     .describe("0-based UTF-16 code-unit offset one past the token's last character"),
   syntacticForm: LexicalSyntacticFormSchema,
   ...LEXICAL_FEATURE_COLUMNS,
-}).describe('A reference candidate the markdown AST does not produce');
+}).strip().describe('A reference candidate the markdown AST does not produce'); // .strip(): an ELEMENT, see "Nested schemas are NOT strict, on purpose" above
 
 export type LexicalReference = z.infer<typeof LexicalReferenceSchema>;
 

@@ -6,6 +6,7 @@
  */
 
 
+import { ExitCode, installLastResortExit } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describeStdioBlocking, makeStdioBlocking } from '@vibe-agent-toolkit/utils/process';
 import { Command, CommanderError } from 'commander';
@@ -21,6 +22,9 @@ import { version, getVersionString, type VersionContext } from './version.js';
 // Before ANY output: a piped stdio is non-blocking, and every command here exits
 // the moment it finishes, so unflushed bytes would be discarded. See output.ts.
 const stdioBlocking = makeStdioBlocking();
+
+// A throw nothing below caught ends on ExitCode.ERROR, never Node's default 1 — see `installLastResortExit`.
+installLastResortExit();
 
 // Reported by hand rather than through the parsed `--debug` option because this
 // has to run before Commander parses anything — the same reason the verbose-help
@@ -125,7 +129,7 @@ const rootArgv = createRootArgvGrammar(program.options);
 // help page — so these four checks run before parsing.
 if (rootArgv.wantsRootVerboseHelp(argv)) {
   showVerboseHelp();
-  process.exit(0);
+  process.exit(ExitCode.OK);
 }
 
 /**
@@ -153,7 +157,7 @@ const VERBOSE_HELP_GROUPS: readonly { readonly group: string; readonly show: () 
 for (const { group, show } of VERBOSE_HELP_GROUPS) {
   if (rootArgv.wantsGroupVerboseHelp(argv, group)) {
     await show();
-    process.exit(0);
+    process.exit(ExitCode.OK);
   }
 }
 

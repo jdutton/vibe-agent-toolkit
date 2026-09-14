@@ -14,7 +14,6 @@ describe('importSkillToAgent', () => {
     const tmp = getTempDir();
     const skillPath = safePath.join(tmp, 'SKILL.md');
     // Write content with syntactically invalid YAML (unclosed bracket)
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test uses controlled temp directory
     fs.writeFileSync(skillPath, '---\nname: [invalid yaml\n---\n# Skill');
 
     const result = await importSkillToAgent({ skillPath });

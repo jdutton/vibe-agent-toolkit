@@ -68,7 +68,12 @@ export interface SessionStore<TState = unknown> {
   delete(sessionId: string): Promise<void>;
 
   /**
-   * Check if session exists
+   * Check if session exists.
+   *
+   * `false` means the store has no session under this id — the signal to
+   * start a new one. A store that cannot answer (a storage refusal, an
+   * unreachable backend) throws rather than answering `false`, so a caller
+   * never overwrites a session it was not allowed to see.
    */
   exists(sessionId: string): Promise<boolean>;
 

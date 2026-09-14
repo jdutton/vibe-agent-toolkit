@@ -121,7 +121,7 @@ describe('interpolateEnvValue', () => {
     const typed = caught as UnknownEnvTokenError;
     expect(typed.token).toBe('bogus');
     expect(typed.key).toBe('VENDOR_KEY');
-    expect(typed.exitCode).toBe(2);
+    expect(typed.reason).toBe('preflight');
   });
 });
 

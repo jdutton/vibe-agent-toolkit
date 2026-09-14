@@ -3,11 +3,12 @@
  */
 
 import type { CrawlSourceKind } from '@vibe-agent-toolkit/resources';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { createLogger } from '../../utils/logger.js';
-import { writeJsonOutput, writeYamlOutput } from '../../utils/output.js';
+import { writeStructuredOutput } from '../../utils/output.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { relativizePathEntries } from '../../utils/relativize-paths.js';
 import { loadResourcesWithConfig, type ResourceCrawlLane } from '../../utils/resource-loader.js';
@@ -164,13 +165,9 @@ export async function scanCommand(
       collections: collectionsOutput,
       verbose: options.verbose ?? false,
     });
-    if (options.format === 'json') {
-      writeJsonOutput(payload);
-    } else {
-      writeYamlOutput(payload);
-    }
+    writeStructuredOutput(payload, options.format);
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'Scan', options.format);
   }

@@ -21,7 +21,6 @@
  *   loudly rather than retrying.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- transcript path is harness-controlled */
 
 import { writeFileSync } from 'node:fs';
 

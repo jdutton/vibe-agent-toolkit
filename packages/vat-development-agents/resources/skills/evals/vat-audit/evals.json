@@ -1,6 +1,6 @@
 {
   "skill_name": "vat-audit",
-  "_category_note": "Three categories. 'catch-real-finding': given a plugin with known issues, does the agent surface the RIGHT audit findings (the compat-surface mismatch, the declared-but-missing component, the broken reference link) a baseline Claude would miss? 'no-false-positive': given a clean plugin, does it avoid inventing findings? 'guidance-correctness': when asked directly, does it explain vat audit's advisory exit-code model and the severity-vs-allow suppression rule correctly?",
+  "_category_note": "Three categories. 'catch-real-finding': given a plugin with known issues, does the agent surface the RIGHT audit findings (the compat-surface mismatch, the declared-but-missing component, the broken reference link) a baseline Claude would miss? 'no-false-positive': given a clean plugin, does it avoid inventing findings? 'guidance-correctness': when asked directly, does it explain vat audit's exit-code contract (0 / 1 findings / 2 could not run) and the severity-vs-allow suppression rule correctly?",
   "evals": [
     {
       "id": "catch-compat-surface-mismatch",
@@ -46,12 +46,12 @@
       "category": "guidance-correctness",
       "prompt": "We want our CI pipeline to fail the build when our plugins have validation errors. Can we just run `vat audit` as a CI step and rely on its exit code to block the merge?",
       "files": [],
-      "expected_output": "Explains that vat audit is advisory: it always exits 0 when it completes, regardless of how many errors or warnings it reports, so its exit code cannot gate CI on validation findings. The only non-zero exit is 2 for a system error (path not found, permission denied) — not for validation findings. Recommends `vat skills validate` (or `vat skills build`) instead for a gated check that exits 1 on validation errors and honors validation.severity / validation.allow.",
+      "expected_output": "Explains that vat audit follows the shared exit-code contract: exit 0 when nothing is at error severity, exit 1 when the audit completed and its report's status is `error` (at least one error-severity finding, or zero files audited), and exit 2 only when the command could not do its job (path not found, permission denied). Warnings alone exit 0, so a CI step on the exit code gates on ERRORS; `validation.severity` is the dial that decides which codes count as errors, and `validation.allow` suppresses a finding at a path. Notes that `vat skills validate` / `vat skills build` gate the same way for a project's own skills.",
       "expectations": [
-        "States that `vat audit` is advisory and exits 0 when the audit completes regardless of any errors or warnings it reports, so its exit code will NOT fail CI on validation findings.",
-        "Notes that the only non-zero exit code from vat audit is 2 for a system/setup error (e.g. path not found, permission denied), not for validation findings.",
-        "Recommends `vat skills validate` or `vat skills build` instead for a gated check that exits non-zero (exit 1) on validation errors.",
-        "Does NOT claim that `vat audit` returns a non-zero / exit-1 status when it finds validation errors."
+        "States that `vat audit` exits 1 when the audit completes with an error-severity finding (report status `error`), so its exit code DOES fail CI on validation errors.",
+        "States that warnings alone leave the exit code at 0, and that `validation.severity` is how a code is promoted to (or demoted from) error severity.",
+        "Notes that exit 2 means the command could not run (path not found, permission denied, usage), not a validation finding.",
+        "Does NOT claim that `vat audit` is advisory or always exits 0 regardless of findings."
       ]
     },
     {

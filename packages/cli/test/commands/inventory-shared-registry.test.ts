@@ -136,7 +136,6 @@ interface PluginInventoryShape {
 /** Write a file, creating its parent directory. */
 function writeFixtureFile(absolutePath: string, content: string): void {
   mkdirSyncReal(safePath.join(absolutePath, '..'), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture setup, temp directory
   writeFileSync(absolutePath, content, 'utf8');
 }
 

@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
 // Test file - all file operations are in temp directories, duplicated strings acceptable
 import { mkdir, writeFile } from 'node:fs/promises';
 
@@ -88,7 +87,7 @@ version: 1
     await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid YAML');
   });
 
-  it('should throw on missing version field', async () => {
+  it('accepts a config with no version field', async () => {
     const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
 resources:
@@ -97,13 +96,25 @@ resources:
 `;
     await writeFile(configPath, content);
 
-    await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid configuration in');
+    const config = await parseConfigFile(configPath);
+    expect(config.resources?.collections['test']?.include).toEqual(['docs']);
   });
 
-  it('should throw on wrong version number', async () => {
+  it('accepts and ignores any version value (the npm package version is the only version)', async () => {
     const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
 version: 2
+`;
+    await writeFile(configPath, content);
+
+    await expect(parseConfigFile(configPath)).resolves.toBeDefined();
+  });
+
+  it('should throw on a section of the wrong type', async () => {
+    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
+    const content = `
+version: 1
+resources: 42
 `;
     await writeFile(configPath, content);
 
@@ -324,6 +335,34 @@ claude:
     // notice — so naming it matters more here, not less.
     expect(warnings.join('')).toContain('unrecognized key "unknownField"');
     expect(config.claude?.marketplaces?.['acme-tools']?.plugins?.[0]?.name).toBe('acme-tools');
+  });
+
+  it('WARNS about a typo nested under a resources collection, not silently strips it', async () => {
+    // The six sub-schemas under `resources:` were `.passthrough()` on the
+    // premise that strictness would refuse an adopter's config. It would not:
+    // every loader parses through `parseConfigAllowingUnknownKeys`, which
+    // downgrades an unrecognized key at ANY depth to this warning. With
+    // passthrough the typo below was accepted in silence — `validationn:`
+    // loaded as a config with no validation section — while the same typo
+    // under `claude:` warned. Measured through the built CLI loader before and
+    // after: strict is what makes the warning fire here.
+    const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
+    const content = `
+resources:
+  collections:
+    docs:
+      include:
+        - "docs/**/*.md"
+      validationn:
+        links: true
+`;
+    await writeFile(configPath, content);
+
+    const warnings: string[] = [];
+    const config = await parseConfigFile(configPath, (m) => warnings.push(m));
+
+    expect(warnings.join('')).toContain('unrecognized key "validationn"');
+    expect(config.resources?.collections?.['docs']?.include).toEqual(['docs/**/*.md']);
   });
 
   it('still rejects a claude: section it would otherwise misread', async () => {

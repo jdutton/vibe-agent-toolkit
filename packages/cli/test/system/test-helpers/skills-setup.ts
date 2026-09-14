@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test helpers legitimately use dynamic paths
 
 /**
@@ -10,12 +9,12 @@ import * as fs from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import * as yaml from 'yaml';
 
-import { getBinPath } from '../test-common.js';
+import { getBinPath , createTestTempDir } from '../test-common.js';
 
 import type { CliResult } from './cli-runner.js';
-import { createTestTempDir } from './project-setup.js';
 
 /**
  * Set up test suite for skills install command tests
@@ -71,8 +70,7 @@ export function executeSkillsCommandAndExpectYaml(
   targetPath: string,
   extraArgs: readonly string[] = []
 ): { result: CliResult; parsed: Record<string, unknown> } {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- Test helper
-  const result = spawnSync('node', [binPath, 'skills', command, targetPath, ...extraArgs], {
+  const result = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', command, targetPath, ...extraArgs], {
     encoding: 'utf-8',
   });
 

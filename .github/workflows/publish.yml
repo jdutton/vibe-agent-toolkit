@@ -18,14 +18,45 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
+          # Determine if stable
+          if [[ "$VERSION" == *"-"* ]]; then
+            echo "is_stable=false" >> $GITHUB_OUTPUT
+          else
+            echo "is_stable=true" >> $GITHUB_OUTPUT
+          fi
+
+      # The tag is what triggered this run; the manifest is what `npm publish`
+      # reads. They are two different numbers unless something checks, and
+      # until this step nothing did: pushing `v0.2.1` on a commit whose
+      # manifests read `0.2.0-rc.7` would have published `0.2.0-rc.7@latest`,
+      # with the tag's version used only for the dist-tag and the log line.
+      # First, before any network or build time is spent, because a wrong tag
+      # is the one failure that must never reach the publish step.
+      #
+      # `pre-publish --tag` below re-asserts this alongside the release-readiness
+      # checks; this step exists so the answer arrives in seconds.
+      - name: Assert the tag names the manifest version
+        env:
+          TAG_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          MANIFEST_VERSION=$(node -p "require('./package.json').version")
+          if [ "$MANIFEST_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Tag v$TAG_VERSION does not match root package.json version $MANIFEST_VERSION. Nothing was published. Delete the tag, bump with 'bun run bump-version', and tag the commit that carries that version."
+            exit 1
+          fi
+          echo "Tag v$TAG_VERSION matches the manifest."
+
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
         with:
-          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+          build: 'false'
 
       # Fails in seconds instead of ~13 minutes. npm masks write-authorization failures on
       # `PUT` as a 404 that claims the package "is not in this registry", so a dead token
@@ -55,22 +86,6 @@ jobs:
           echo "Packages this token can reach:"
           npm access list packages 2>&1 | head -40 || true
 
-      - name: Install dependencies
-        run: bun install
-
-      - name: Extract version from tag
-        id: version
-        run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-          # Determine if stable
-          if [[ "$VERSION" == *"-"* ]]; then
-            echo "is_stable=false" >> $GITHUB_OUTPUT
-          else
-            echo "is_stable=true" >> $GITHUB_OUTPUT
-          fi
-
       - name: Build all packages
         run: bun run build
 
@@ -81,8 +96,13 @@ jobs:
         id: version_type
         run: bun run tsx packages/dev-tools/src/determine-publish-tags.ts ${{ steps.version.outputs.version }}
 
-      - name: Pre-publish checks
-        run: bun run pre-publish
+      # The release-readiness checks used to run only on the maintainer's
+      # machine (`bun run pre-release`), and CI trusted that they had. Here they
+      # run against the tag that was actually pushed: the marketplace dry-run,
+      # the CHANGELOG stamp and section content, and — with `--tag` — that the
+      # remote tag exists and names the manifest version.
+      - name: Pre-publish and release-readiness checks
+        run: bun run pre-publish -- --release-readiness --tag ${{ steps.version.outputs.version }}
 
       - name: Resolve workspace dependencies
         run: bun run resolve-workspace-deps ${{ steps.version.outputs.version }}

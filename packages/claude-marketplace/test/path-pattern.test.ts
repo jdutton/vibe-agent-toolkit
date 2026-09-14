@@ -183,15 +183,16 @@ describe('path patterns — the documented divergences from the oracle', () => {
     expect(oracle('a[!]b', 'a[!]b')).toBe(false);
   });
 
-  // ⚖️ node-ignore@6 reads `[!bc]` as the literal set `{!, b, c}`; the gitignore
-  // spec the permissions page names negates the class, and so does this. The
-  // oracle's answer is pinned alongside so the divergence is a recorded one.
-  it('negates a `[!…]` / `[^…]` class, where node-ignore does not', () => {
+  // ⚖️ A divergence that CLOSED: node-ignore@6 read `[!bc]` as the literal set
+  // `{!, b, c}`; node-ignore@7 negates the class as the gitignore spec (and this
+  // matcher) does. The oracle's answer stays pinned so a regression on either
+  // side — the oracle reverting, or this matcher drifting — is seen.
+  it('negates a `[!…]` / `[^…]` class, as node-ignore@7 now does too', () => {
     for (const pattern of ['a[!bc]d', 'a[^bc]d']) {
       expect(matches(pattern, 'acd')).toBe(false);
       expect(matches(pattern, 'aad')).toBe(true);
-      expect(oracle(pattern, 'acd')).toBe(true);
-      expect(oracle(pattern, 'aad')).toBe(false);
+      expect(oracle(pattern, 'acd')).toBe(false);
+      expect(oracle(pattern, 'aad')).toBe(true);
     }
   });
 

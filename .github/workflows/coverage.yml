@@ -17,26 +17,47 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
+      # No `node-version`, so the setup action installs the exact Node floor it
+      # derives from root package.json `engines.node`. This is the ONE job whose
+      # unit-suite VERDICT is taken on the floor (validate.yml's matrix runs Node
+      # 24; node-floor.yml only smoke-tests; test-heap-guard.yml runs two
+      # packages' integration/system tiers on the floor but reads only heap
+      # lines), so a floor-only unit red shows up here and nowhere else.
+      - name: Setup toolchain
+        uses: ./.github/actions/setup
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Build packages
-        run: bun run build
-
+      # vitest directly, not through `vibe-validate run`: the wrapper's capture
+      # dropped vitest's own summary on a long run, so a red here showed no
+      # failing file — the exit code and the reporter verdicts are the record.
+      # This job is the ONE measurement the thresholds in vitest.config.ts are
+      # seeded from: `COVERAGE_RATCHET=write` arms vitest's autoUpdate here and
+      # nowhere else, so a local run on another platform or Node never writes a
+      # number the floor cannot meet.
+      #
+      # It is also the ONE judge of the per-file duration ratchet
+      # (packages/dev-tools/src/test-tier-budget-allowlist.ts): the root configs
+      # run one file at a time, so a duration here is the file's own cost. The
+      # per-package turbo lanes in validate.yml carry no budget reporter — there
+      # a 200 ms file reads as 1–3 s depending on what else is running that
+      # second. Seed the allowlist from THIS job's log
+      # (`bun run seed:test-tier-budget <tier> <log>`), never from a local or a
+      # turbo number.
       - name: Run tests with coverage
         run: bun run test:coverage
         env:
           GH_TOKEN: ${{ github.token }}
+          COVERAGE_RATCHET: write
+
+      # The other direction of the ratchet: when this run cleared a threshold by a
+      # whole point, autoUpdate rewrote vitest.config.ts. That diff is the raise to
+      # commit — fail here and print it, so a threshold never sits a point below
+      # what the floor measures.
+      - name: Refuse a threshold the floor now clears by a whole point
+        run: |
+          if ! git diff --exit-code -- vitest.config.ts; then
+            echo "::error::coverage rose a whole point above a threshold — commit the vitest.config.ts diff above to raise the ratchet"
+            exit 1
+          fi
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
@@ -45,3 +66,20 @@ jobs:
           files: ./coverage/lcov.info
           fail_ci_if_error: true
           verbose: true
+
+      # The integration and system tiers, serially, for the duration ratchet
+      # alone (their verdicts as tests are validate.yml's, on Node 24 and on
+      # Windows). After the upload so a ratchet red never costs the coverage
+      # report. NET_AVAILABLE as in validate.yml: the network suites run here
+      # too, so their durations are measured where they are judged.
+      - name: Per-file duration ratchet — integration tier (serial, on the floor)
+        run: bun run test:integration:serial
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NET_AVAILABLE: "1"
+
+      - name: Per-file duration ratchet — system tier (serial, on the floor)
+        run: bun run test:system:serial
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NET_AVAILABLE: "1"

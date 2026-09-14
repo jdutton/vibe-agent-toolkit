@@ -291,7 +291,7 @@ function makeSchemaPermissive(schema: object): object {
  * @param obj - Schema object or nested schema fragment
  */
 function processSchemaRecursively(obj: Record<string, unknown>): void {
-  // eslint-disable-next-line sonarjs/different-types-comparison
+  // eslint-disable-next-line sonarjs/different-types-comparison -- defensive re-check of a recursive walk whose callers pass raw JSON Schema nodes
   if (typeof obj !== 'object' || obj === null) {
     return;
   }

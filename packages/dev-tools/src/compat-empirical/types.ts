@@ -62,9 +62,11 @@ export const CorpusEntrySchema = z
   .strict();
 export type CorpusEntry = z.infer<typeof CorpusEntrySchema>;
 
+// No `version` field on either file: the `.strict()` schema is what decides
+// whether a manifest can be read, and it moves with the shape for whoever
+// edits it. An integer here only refused when a human remembered to bump it.
 export const CorpusManifestSchema = z
   .object({
-    version: z.literal(1),
     entries: z.array(CorpusEntrySchema),
     repeatN: z.number().int().positive().default(1),
   })
@@ -73,7 +75,6 @@ export type CorpusManifest = z.infer<typeof CorpusManifestSchema>;
 
 export const TriggerPromptsFileSchema = z
   .object({
-    version: z.literal(1),
     prompts: z.array(TriggerPromptSchema),
   })
   .strict();

@@ -46,7 +46,7 @@ export function parseUnreleasedSection(changelog: string): string {
 }
 
 /**
- * Extract the content of a specific stamped version section (e.g. `## [1.2.0] - 2026-04-09`).
+ * Extract the content of a specific stamped version section (e.g. `## [1.2.0] - YYYY-MM-DD`).
  *
  * Supports the "pre-stamped" workflow: a repo that promotes `[Unreleased]` to `[X.Y.Z]`
  * in its release commit before tagging, leaving `[Unreleased]` empty per the Keep a
@@ -83,6 +83,5 @@ export function parseVersionSection(changelog: string, version: string): string 
  */
 export function readChangelog(filePath: string, baseDir: string): string {
   const resolved = safePath.resolve(baseDir, filePath);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from validated config
   return readFileSync(resolved, 'utf-8');
 }

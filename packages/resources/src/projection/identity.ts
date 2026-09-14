@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 /** Hex characters kept from a SHA-256 digest. 128 bits — collision-free at any corpus size. */
@@ -274,11 +274,19 @@ function realPathOrSelf(absolutePath: string): string {
   return `${realPathOrSelf(forward.slice(0, lastSlash))}/${forward.slice(lastSlash + 1)}`;
 }
 
-/** The real path, or null when it cannot be resolved. */
+/**
+ * The real path, or null when the filesystem will not resolve it.
+ *
+ * `ENOENT` is the motivating case, but `EACCES` on an existing file and
+ * `ELOOP` on a symlink cycle land here too, and for all three the ancestor's
+ * namespace is the better answer — the ruling `FsLookupCache.realpath`
+ * documents. A bug is none of those and stays loud.
+ */
 function tryRealPath(absolutePath: string): string | null {
   try {
     return toForwardSlash(realpathSync.native(absolutePath));
-  } catch {
+  } catch (error) {
+    if (!isFilesystemAccessError(error)) throw error;
     return null;
   }
 }
@@ -293,7 +301,7 @@ function tryRealPath(absolutePath: string): string | null {
  */
 function relativeTo(realRoot: string, absolutePath: string): string {
   const rel = safePath.relative(realRoot, absolutePath);
-  if (rel === '' || rel.startsWith('..')) {
+  if (rel === '' || relativeEscapesRoot(rel)) {
     return toForwardSlash(absolutePath);
   }
   return toForwardSlash(rel);

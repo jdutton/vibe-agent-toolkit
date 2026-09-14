@@ -9,7 +9,6 @@
  * Fixtures are synthetic (reuse the prior-wave `setupReferenceFixture` helper);
  * never a real adopter skill.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- tests read/write synthetic fixtures at dynamic temp paths */
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';

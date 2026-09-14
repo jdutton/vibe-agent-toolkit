@@ -33,7 +33,6 @@ const configPath = safePath.join(fixturesDir, 'vibe-agent-toolkit.config.yaml');
 
 // Helper to load config consistently
 function loadTestConfig(): ProjectConfig {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- configPath is from controlled constant
   const configContent = readFileSync(configPath, 'utf-8');
   return parseYaml(configContent) as ProjectConfig;
 }

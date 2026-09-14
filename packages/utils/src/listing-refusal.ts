@@ -18,6 +18,7 @@
  * a HIGH. A required field is what makes `tsc` enumerate the callers.
  */
 
+import { VatError } from './errors/vat-error.js';
 import { type DirectoryRefusal, transientRefusalClause } from './fs-utils.js';
 import { safePath, toForwardSlash } from './path-utils.js';
 
@@ -67,12 +68,11 @@ export type UnreadablePolicy =
  * Thrown by a listing under `{ refuse }` when a directory refused to be
  * listed. The message is the adopter's sentence — see {@link refusedListingMessage}.
  */
-export class DirectoryListingRefusedError extends Error {
+export class DirectoryListingRefusedError extends VatError {
   readonly refusal: DirectoryRefusal;
 
   constructor(refusal: DirectoryRefusal, context: RefuseListingContext) {
-    super(refusedListingMessage(refusal, context));
-    this.name = 'DirectoryListingRefusedError';
+    super('DIRECTORY_LISTING_REFUSED', refusedListingMessage(refusal, context));
     this.refusal = refusal;
   }
 }

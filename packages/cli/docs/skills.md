@@ -39,7 +39,7 @@ skills:
 - `paths` is optional on `allow` entries and defaults to `["**/*"]` (the whole skill).
 - Expired `allow` entries still apply; a separate `ALLOW_EXPIRED` warning surfaces the stale date for re-review. Opt into strict expiry with `severity.ALLOW_EXPIRED: error`.
 - Unused `allow` entries surface as `ALLOW_UNUSED` (analogous to ESLint's unused-disable).
-- `vat audit` is advisory: it applies `severity` for display grouping only, ignores `allow`, and always exits 0.
+- `vat audit` applies `severity` (a code set to `error` gates, `warning` does not, `ignore` hides it) and ignores `allow`; its exit code follows the report's `status`.
 
 See `docs/validation-codes.md` for the full code reference with per-code descriptions and defaults.
 
@@ -159,8 +159,8 @@ discovery rule that this command participates in.
 
 **Exit Codes:**
 - `0` - Build successful (or dry-run preview)
-- `1` - Invalid source or build error
-- `2` - System error (missing package.json, invalid config)
+- `1` - A skill failed its validation gate, or a shipped link check found an error
+- `2` - The build could not run (missing package.json, invalid config, an unknown flag, an internal failure)
 
 **Output Format:**
 ```yaml
@@ -242,8 +242,8 @@ for terminology.
 
 **Exit Codes:**
 - `0` - Packaging successful (or dry-run preview)
-- `1` - Invalid skill path or packaging error
-- `2` - System error
+- `1` - The skill failed its validation gate, or its ZIP exceeds the upload size limit
+- `2` - Packaging could not run (skill path not found, an unknown flag, an internal failure)
 
 **What Gets Packaged:**
 - Root SKILL.md file
@@ -364,8 +364,7 @@ any other target lands correctly but is invisible to them.
 
 **Exit Codes:**
 - `0` - Install successful (or dry-run complete)
-- `1` - Install error (validation failed, conflict without `--force`, source not found, bad target/scope)
-- `2` - System error (unexpected exception)
+- `2` - Install could not proceed: the source was not found or failed validation, the skill is already present and `--force` was not passed, a bad target/scope, an unexpected exception. None of these is a finding about a skill, so none is exit `1`; the message says which.
 
 **YAML Output Format:**
 ```yaml

@@ -77,7 +77,7 @@
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 
 import { resolveVatBinPath } from '../../utils/vat-bin-path.js';
@@ -642,15 +642,20 @@ function pollIntervalMs(budgetMs: number): number {
  * emission, so every poll before that legitimately finds nothing — and throwing
  * there would kill the supervisor instead of the runaway.
  *
+ * ONLY a missing file. The log lives in a directory this process minted, so a
+ * refusal to stat it is not a state the watchdog has a reading for — and the
+ * reading it used to take, 0 forever, is "the child has gone quiet", which
+ * kills a child that may be doing fine and reports it as a runaway.
+ *
  * @param path - The progress log
  * @returns Its size in bytes
  */
 function logSize(path: string): number {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path this process minted for this run
     return statSync(path).size;
-  } catch {
-    return 0;
+  } catch (error) {
+    if (isPathAbsentError(error)) return 0;
+    throw error;
   }
 }
 
@@ -662,10 +667,10 @@ function logSize(path: string): number {
  */
 function readLog(path: string): string {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path this process minted for this run
     return readFileSync(path, 'utf-8');
-  } catch {
-    return '';
+  } catch (error) {
+    if (isPathAbsentError(error)) return '';
+    throw error;
   }
 }
 

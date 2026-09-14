@@ -29,7 +29,6 @@ const TOKEN = 'zqwidget';
 
 /** Write a token file at an absolute path and return it. */
 function writeTokenFile(path: string, contents: string): string {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-owned temp path
   writeFileSync(path, contents, 'utf8');
   return path;
 }

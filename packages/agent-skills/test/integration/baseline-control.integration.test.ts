@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test paths are our own controlled temp dirs */
 /**
  * THE CONTROL: a `--baseline` run's skill-absent arm must not be handed the skill.
  *
@@ -33,13 +32,11 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { BaselineDeltaSchema, type BaselineDelta } from '../../src/skill-test/baseline-delta.js';
 import { runPreflight } from '../../src/skill-test/preflight.js';
-import {
-  runSkillTestHarness,
-  RETAINED_RESULTS_DIRNAME,
-  type RunHarnessOptions,
-} from '../../src/skill-test/run-harness.js';
+import { __internal, runSkillTestHarness, type RunHarnessOptions } from '../../src/skill-test/run-harness.js';
 import { makeHarnessFakeSpawn, SPAWN_TIMED_OUT, type HarnessFakeSpawnConfig } from '../skill-test/spawn-stub.js';
 import { setupTempDir } from '../test-helpers.js';
+
+const { RETAINED_RESULTS_DIRNAME } = __internal;
 
 vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('../skill-test/preflight-stub.js')).passingPreflight(io));
 

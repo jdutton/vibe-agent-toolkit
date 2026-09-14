@@ -99,9 +99,9 @@ describe('vat inventory (system test)', () => {
 				parsed = JSON.parse(result.stdout) as Record<string, unknown>;
 			}).not.toThrow();
 
-			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- parsed is asserted non-null by the not.toThrow() above
 			expect(parsed!['kind']).toBe('plugin');
-			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+			// eslint-disable-next-line @typescript-eslint/no-non-null-assertion -- same: parse succeeded two lines up
 			expect('schema' in parsed!).toBe(false);
 			expect(result.stdout).not.toContain('"schema"');
 		});
@@ -114,9 +114,7 @@ describe('vat inventory (system test)', () => {
 			// Create a minimal plugin dir with invalid JSON in plugin.json
 			brokenPluginDir = safePath.join(tempDir, 'broken-plugin');
 			const pluginJsonDir = safePath.join(brokenPluginDir, '.claude-plugin');
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled path
 			fs.mkdirSync(pluginJsonDir, { recursive: true });
-			// eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled path
 			fs.writeFileSync(safePath.join(pluginJsonDir, 'plugin.json'), '{ invalid json !!!', 'utf-8');
 		});
 

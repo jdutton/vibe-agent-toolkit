@@ -1,3 +1,4 @@
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { it, beforeAll, afterAll } from 'vitest';
 
 import {
@@ -43,7 +44,7 @@ describe('Context detection (system test)', () => {
 
   it('should detect dev context via VAT_ROOT_DIR', () => {
     const repoRoot = safePath.resolve(__dirname, '../../../..');
-    const result = spawnSync('node', [wrapperPath, '--version'], {
+    const result = spawnSync(NODE_EXECUTABLE, [wrapperPath, '--version'], {
       encoding: 'utf-8',
       env: { ...process.env, VAT_ROOT_DIR: repoRoot },
     });
@@ -64,7 +65,7 @@ describe('Context detection (system test)', () => {
       return;
     }
 
-    const result = spawnSync('node', [wrapperPath, '--version'], {
+    const result = spawnSync(NODE_EXECUTABLE, [wrapperPath, '--version'], {
       encoding: 'utf-8',
       cwd: repoRoot,
     });
@@ -78,7 +79,7 @@ describe('Context detection (system test)', () => {
     // In real usage, npm/bun install would set up the full package structure
     // For testing, we just verify the wrapper handles missing local gracefully
 
-    const result = spawnSync('node', [wrapperPath, '--version'], {
+    const result = spawnSync(NODE_EXECUTABLE, [wrapperPath, '--version'], {
       encoding: 'utf-8',
       cwd: projectDir,
     });
@@ -89,7 +90,7 @@ describe('Context detection (system test)', () => {
   });
 
   it('should fall back to global context', () => {
-    const result = spawnSync('node', [wrapperPath, '--version'], {
+    const result = spawnSync(NODE_EXECUTABLE, [wrapperPath, '--version'], {
       encoding: 'utf-8',
       cwd: tempDir, // No project markers
       env: { ...process.env, VAT_ROOT_DIR: undefined },
@@ -104,7 +105,7 @@ describe('Context detection (system test)', () => {
   });
 
   it('should pass arguments through wrapper correctly', () => {
-    const result = spawnSync('node', [wrapperPath, '--help'], {
+    const result = spawnSync(NODE_EXECUTABLE, [wrapperPath, '--help'], {
       encoding: 'utf-8',
     });
 
@@ -114,7 +115,7 @@ describe('Context detection (system test)', () => {
   });
 
   it('should handle unknown commands through wrapper', () => {
-    const result = spawnSync('node', [wrapperPath, 'unknown-command'], {
+    const result = spawnSync(NODE_EXECUTABLE, [wrapperPath, 'unknown-command'], {
       encoding: 'utf-8',
     });
 

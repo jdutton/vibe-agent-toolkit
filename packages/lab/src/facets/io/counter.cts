@@ -431,7 +431,10 @@ function fileUrlToPath(url: string): string {
   }
   try {
     return decodeURIComponent(decoded);
-  } catch {
+  } catch (error) {
+    // A malformed percent-escape is the one thing decodeURIComponent throws
+    // for, and the raw spelling is still a usable site key for that frame.
+    if (!(error instanceof URIError)) throw error;
     return decoded;
   }
 }

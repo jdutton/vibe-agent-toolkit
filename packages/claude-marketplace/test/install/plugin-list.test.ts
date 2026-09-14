@@ -1,12 +1,12 @@
 // packages/claude-marketplace/test/install/plugin-list.test.ts
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test helper — file paths are controlled by test code, not user input
 
 import { writeFileSync } from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { refuseSyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { listLocalPlugins } from '../../src/install/plugin-list.js';
@@ -94,6 +94,18 @@ describe('listLocalPlugins', () => {
     const result = listLocalPlugins(paths);
     expect(result.legacySkillsDir).toBe(0);
     expect(result.legacySkills).toHaveLength(0);
+  });
+
+  it('propagates a skillsDir the OS refuses to list instead of reporting no legacy skills', () => {
+    const paths = getPaths();
+    mkdirSyncReal(safePath.join(paths.skillsDir, 'present-skill'));
+
+    const restore = refuseSyncFs('readdirSync', paths.skillsDir, 'EACCES');
+    try {
+      expect(() => listLocalPlugins(paths)).toThrow(/EACCES/);
+    } finally {
+      restore();
+    }
   });
 
   it('returns empty when installed_plugins.json missing', () => {

@@ -1,9 +1,8 @@
-
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with safe temp directories */
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { validateAgent } from '../../src/validator/agent-validator.js';
 import {
@@ -18,6 +17,7 @@ describe('agent-validator', () => {
   const DOCUMENTATION = 'documentation';
   const DOCS_GUIDE_MD = './docs/guide.md';
   const INFO_AGENT = 'info-agent';
+  const SYSTEM_PROMPT_MD = './prompts/system.md';
 
   beforeAll(() => {
     tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-validator-test-'));
@@ -75,7 +75,7 @@ describe('agent-validator', () => {
         name: 'resource-agent',
         version: '0.1.0',
         description: 'Agent with resources',
-        prompts: { system: './prompts/system.md' },
+        prompts: { system: SYSTEM_PROMPT_MD },
         resources: { docs: { path: DOCS_GUIDE_MD, type: DOCUMENTATION } },
       });
 
@@ -91,7 +91,7 @@ describe('agent-validator', () => {
           name: 'resource-agent',
           version: '0.1.0',
           description: 'Agent with resources',
-          prompts: { system: './prompts/system.md' },
+          prompts: { system: SYSTEM_PROMPT_MD },
           resources: { docs: { path: DOCS_GUIDE_MD, type: DOCUMENTATION } },
         },
         {
@@ -230,6 +230,40 @@ describe('agent-validator', () => {
 
       const result = await validateAgent(agentDir);
       assertValidationFailedWithUnknownManifest(result, { checkVersion: false });
+    });
+
+    describe('a file the OS refuses is reported as refused, not as missing', () => {
+      afterEach(() => {
+        vi.restoreAllMocks();
+      });
+
+      it('names the refusal for a resource that is there but unreadable', async () => {
+        const agentDir = createTestAgent(
+          tempDir,
+          'refused-resource-agent',
+          {
+            name: 'refused-agent',
+            version: '0.1.0',
+            prompts: { system: SYSTEM_PROMPT_MD },
+            resources: { docs: { path: DOCS_GUIDE_MD, type: DOCUMENTATION } },
+          },
+          { 'prompts/system.md': '# System', 'docs/guide.md': '# Guide' }
+        );
+        const refused = safePath.join(agentDir, 'docs', 'guide.md');
+        const original = fsp.access.bind(fsp);
+        vi.spyOn(fsp, 'access').mockImplementation(async (target, mode) => {
+          if (String(target) === refused) {
+            throw Object.assign(new Error(`EACCES: permission denied, access '${refused}'`), { code: 'EACCES' });
+          }
+          return original(target, mode);
+        });
+
+        const result = await validateAgent(agentDir);
+        expect(result.valid).toBe(false);
+        expect(result.errors).toHaveLength(1);
+        expect(result.errors[0]).toMatch(/Resource 'docs' could not be checked: .*guide\.md.*EACCES/);
+        expect(result.errors[0]).not.toContain('not found');
+      });
     });
   });
 });

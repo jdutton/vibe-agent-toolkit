@@ -55,46 +55,68 @@
  * - If 2-3 packages persistently fail, that's expected npm workspace behavior
  */
 
+import { CommandExecutionError } from '@vibe-agent-toolkit/utils/process';
+
 import { processPackages, safeExecSync } from './common.js';
+
+/**
+ * The global npm tree as `npm list -g --json` prints it.
+ *
+ * `npm list` exits 1 when the global tree has problems (an extraneous or
+ * invalid package) and still prints the full listing, so a non-zero exit whose
+ * stdout is the JSON document is a listing, not a failure.
+ */
+function readGlobalListing(): string {
+  try {
+    return safeExecSync('npm', ['list', '-g', '--depth=0', '--json'], {
+      stdio: 'pipe',
+      encoding: 'utf8',
+    }) as string;
+  } catch (error) {
+    if (error instanceof CommandExecutionError && String(error.stdout).trimStart().startsWith('{')) {
+      return String(error.stdout);
+    }
+    throw error;
+  }
+}
 
 /**
  * Check for globally installed VAT packages that might interfere with npm link
  * Returns list of packages that should be uninstalled
  */
 function checkForGlobalInstallations(): string[] {
+  let globalPackages: { dependencies?: Record<string, { version: string; resolved?: string }> };
   try {
-    const result = safeExecSync('npm', ['list', '-g', '--depth=0', '--json'], {
-      stdio: 'pipe',
-      encoding: 'utf8',
-    });
-
-    const globalPackages = JSON.parse(result as string) as {
-      dependencies?: Record<string, { version: string; resolved?: string }>;
-    };
-
-    const problematicPackages: string[] = [];
-
-    if (globalPackages.dependencies) {
-      // Check for umbrella package
-      if ('vibe-agent-toolkit' in globalPackages.dependencies) {
-        problematicPackages.push('vibe-agent-toolkit');
-      }
-
-      // Check for CLI package (provides vat command)
-      if ('@vibe-agent-toolkit/cli' in globalPackages.dependencies) {
-        // Only flag if it's a real install (not a symlink from previous npm link)
-        const pkg = globalPackages.dependencies['@vibe-agent-toolkit/cli'];
-        if (pkg.resolved && !pkg.resolved.includes('file:')) {
-          problematicPackages.push('@vibe-agent-toolkit/cli');
-        }
-      }
-    }
-
-    return problematicPackages;
-  } catch {
-    // If we can't check, proceed anyway
+    globalPackages = JSON.parse(readGlobalListing()) as typeof globalPackages;
+  } catch (error) {
+    // Advisory only — linking proceeds either way — but a check that could
+    // not run must say so rather than reporting "no global installs found".
+    console.warn(
+      `⚠️  Could not check for global VAT installations (${error instanceof Error ? error.message : String(error)}); ` +
+        'proceeding without that check.',
+    );
     return [];
   }
+
+  const problematicPackages: string[] = [];
+
+  if (globalPackages.dependencies) {
+    // Check for umbrella package
+    if ('vibe-agent-toolkit' in globalPackages.dependencies) {
+      problematicPackages.push('vibe-agent-toolkit');
+    }
+
+    // Check for CLI package (provides vat command)
+    if ('@vibe-agent-toolkit/cli' in globalPackages.dependencies) {
+      // Only flag if it's a real install (not a symlink from previous npm link)
+      const pkg = globalPackages.dependencies['@vibe-agent-toolkit/cli'];
+      if (pkg.resolved && !pkg.resolved.includes('file:')) {
+        problematicPackages.push('@vibe-agent-toolkit/cli');
+      }
+    }
+  }
+
+  return problematicPackages;
 }
 
 /**

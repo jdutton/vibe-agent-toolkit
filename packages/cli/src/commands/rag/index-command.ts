@@ -5,6 +5,7 @@
 import type { IndexResult } from '@vibe-agent-toolkit/rag';
 import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
 import type { UnreadableResource } from '@vibe-agent-toolkit/resources';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { createLogger } from '../../utils/logger.js';
@@ -61,7 +62,9 @@ export interface IndexOutcome {
 export function indexOutcome(indexResult: Pick<IndexResult, 'errors'>): IndexOutcome {
   const failed = indexResult.errors?.length ?? 0;
 
-  return failed > 0 ? { status: 'partial', exitCode: 1 } : { status: 'success', exitCode: 0 };
+  return failed > 0
+    ? { status: 'partial', exitCode: ExitCode.FINDINGS }
+    : { status: 'success', exitCode: ExitCode.OK };
 }
 
 /** One entry of `IndexResult['errors']`. */

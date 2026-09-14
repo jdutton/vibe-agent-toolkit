@@ -11,7 +11,6 @@
  * function, here.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- every path derives from a mkdtemp root created here. */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 

@@ -1,41 +1,41 @@
 #!/usr/bin/env tsx
 /**
- * Generate JSON Schema files from resources' projection Zod schemas.
+ * Generate JSON Schema files from resources' Zod schemas.
  *
  * Lives in dev-tools rather than packages/resources/scripts/ because this
- * repo's structure validation restricts /scripts directories to dev-tools,
- * schema, and agent-skills (see validate-repo-structure.ts) — every
- * other package's generation utilities live here instead. Invoked by
- * resources' own `generate:schemas` script via a relative tsx path, the same
- * pattern resources already uses for `build` (tsx ../dev-tools/src/tsc-clean-build.ts).
+ * repo's structure validation restricts /scripts directories to a short list
+ * (see validate-repo-structure.ts) — every other package's generation
+ * utilities live here instead. Invoked by resources' own `generate:schemas`
+ * script via a relative tsx path, the same pattern resources already uses for
+ * `build` (tsx ../dev-tools/src/tsc-clean-build.ts).
  *
- * The **twelve table** schemas are not listed here: they come from
+ * The target list is exported: `test/emitted-schemas-drift.test.ts` reads the
+ * committed `packages/resources/schemas/*.json` back and compares each to a
+ * fresh render of the same list, so a Zod edit that forgets `git add` — or a
+ * target added here and never generated — fails a unit test rather than
+ * shipping a stale artifact. See `pin-emitted-schemas.ts`.
+ *
+ * The **twelve table** schemas are not listed by hand: they come from
  * `PROJECTION_TABLES`, the single registry that also supplies `exportProjection`
  * its primary keys. This file used to enumerate fifteen schemas in one
  * undifferentiated list, which is how three non-tables came to sit
  * indistinguishably among twelve tables — see below.
  */
 
-import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-import { safePath } from '@vibe-agent-toolkit/utils';
-
 import { PROJECTION_TABLES } from '../../resources/src/projection/table-registry.js';
 import { OkfConceptFrontmatterSchema } from '../../resources/src/schemas/okf-concept.js';
+import { ProjectConfigSchema } from '../../resources/src/schemas/project-config.js';
 import {
   EdgeResolutionRowSchema,
   EdgeRowSchema,
 } from '../../resources/src/schemas/projection-edges.js';
 import { LensEntryPointRowSchema } from '../../resources/src/schemas/projection-zones.js';
 
-import { createJsonSchemaWriter } from './json-schema-writer.js';
+import { isEntrypoint, PROJECT_ROOT } from './common.js';
+import { writeEmittedSchemas, type EmittedSchemaTarget } from './pin-emitted-schemas.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const SCHEMAS_DIR = safePath.join(__dirname, '..', '..', 'resources', 'schemas');
-
-const writeJsonSchema = createJsonSchemaWriter(SCHEMAS_DIR);
+/** Where resources commits its artifacts, relative to the repo root. */
+export const RESOURCES_SCHEMAS_DIR = `${PROJECT_ROOT}/packages/resources/schemas`;
 
 /**
  * Row schemas that are **not** projection tables, and their schema filenames.
@@ -55,21 +55,11 @@ const writeJsonSchema = createJsonSchemaWriter(SCHEMAS_DIR);
  * no projection table holds it.* Anything that IS a table belongs in the
  * registry, where the compiler checks it against `Projection`.
  */
-const NON_TABLE_ROW_SCHEMAS = [
-  ['projection-edges', EdgeRowSchema],
-  ['projection-edge-resolutions', EdgeResolutionRowSchema],
-  ['projection-lens-entry-points', LensEntryPointRowSchema],
-] as const;
-
-console.log('🔨 Generating projection JSON Schemas from Zod...\n');
-
-for (const spec of Object.values(PROJECTION_TABLES)) {
-  writeJsonSchema(`projection-${spec.name.replaceAll('_', '-')}`, spec.schema);
-}
-
-for (const [name, schema] of NON_TABLE_ROW_SCHEMAS) {
-  writeJsonSchema(name, schema);
-}
+const NON_TABLE_ROW_SCHEMAS: readonly EmittedSchemaTarget[] = [
+  { name: 'projection-edges', schema: EdgeRowSchema },
+  { name: 'projection-edge-resolutions', schema: EdgeResolutionRowSchema },
+  { name: 'projection-lens-entry-points', schema: LensEntryPointRowSchema },
+];
 
 /**
  * Schemas that describe an EXTERNAL format rather than one of VAT's own rows.
@@ -87,12 +77,36 @@ for (const [name, schema] of NON_TABLE_ROW_SCHEMAS) {
  * `frontmatterSchema` at it through `resolveAssetReference` — which is also why
  * tracking a future OKF revision is a file swap rather than a code change.
  */
-const EXTERNAL_FORMAT_SCHEMAS = [
-  ['okf-concept-frontmatter', OkfConceptFrontmatterSchema],
-] as const;
+const EXTERNAL_FORMAT_SCHEMAS: readonly EmittedSchemaTarget[] = [
+  { name: 'okf-concept-frontmatter', schema: OkfConceptFrontmatterSchema },
+];
 
-for (const [name, schema] of EXTERNAL_FORMAT_SCHEMAS) {
-  writeJsonSchema(name, schema);
+/**
+ * The adopter-facing config file, `vibe-agent-toolkit.config.yaml`.
+ *
+ * Emitted so an editor or a CI step can validate an adopter's config against
+ * the same Zod that `loadConfig` runs — and so a key the runtime accepts can
+ * never be one the published schema refuses, or the reverse.
+ */
+const CONFIG_SCHEMAS: readonly EmittedSchemaTarget[] = [
+  { name: 'project-config', schema: ProjectConfigSchema },
+];
+
+/** Every JSON Schema `packages/resources` ships under `schemas/`. */
+export const RESOURCES_SCHEMA_TARGETS: readonly EmittedSchemaTarget[] = [
+  ...Object.values(PROJECTION_TABLES).map((spec) => ({
+    name: `projection-${spec.name.replaceAll('_', '-')}`,
+    schema: spec.schema,
+  })),
+  ...NON_TABLE_ROW_SCHEMAS,
+  ...EXTERNAL_FORMAT_SCHEMAS,
+  ...CONFIG_SCHEMAS,
+];
+
+if (isEntrypoint(import.meta.url)) {
+  console.log('🔨 Generating resources JSON Schemas from Zod...\n');
+  for (const path of writeEmittedSchemas(RESOURCES_SCHEMAS_DIR, RESOURCES_SCHEMA_TARGETS)) {
+    console.log(`✅ Generated: ${path}`);
+  }
+  console.log('\n✨ Resources JSON Schema generation complete!');
 }
-
-console.log('\n✨ Projection JSON Schema generation complete!');

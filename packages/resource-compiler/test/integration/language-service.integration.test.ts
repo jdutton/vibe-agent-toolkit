@@ -3,12 +3,12 @@
  * Tests the plugin with real TypeScript Language Service
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string -- Test file with controlled inputs */
 
 import { writeFileSync } from 'node:fs';
 
 
-import { mkdirSyncReal, setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import ts from 'typescript/lib/tsserverlibrary';
 import { describe, it, expect, beforeEach, afterEach, beforeAll } from 'vitest';
 

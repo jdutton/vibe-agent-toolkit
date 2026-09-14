@@ -196,6 +196,8 @@ Either indicates project root.
 
 ```typescript
 // commands/mycommand.ts
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+
 export interface MyCommandOptions {
   debug?: boolean;
   // ... other options
@@ -212,9 +214,10 @@ export async function myCommand(
     // 1. Validate inputs
     // 2. Process
     // 3. Output results (YAML to stdout)
-    // 4. Exit with appropriate code
+    // 4. Exit with appropriate code — a member of `ExitCode`, never a literal
+    //    (`local/no-literal-process-exit`)
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'MyCommand');
   }
@@ -233,7 +236,6 @@ export async function myCommand(
 
 **Example:**
 ```yaml
-version: 1
 resources:
   include:
     - "docs/**/*.md"
@@ -370,7 +372,7 @@ vat resources --help --verbose    # Resources commands only
 - Command purpose and description
 - What it does (step-by-step)
 - Options and flags
-- Exit codes (0 = success, 1 = validation errors, 2 = system errors)
+- Exit codes (`ExitCode`: 0 = nothing at error severity, 1 = findings, 2 = the command could not do its job)
 - Files created/modified
 - Examples with bash code blocks
 - Error guidance
@@ -545,16 +547,17 @@ issues:
 
 ## Cross-Platform Requirements
 
-- Use `path.join()` and `path.resolve()` for all paths
+- Use `safePath.join()` / `safePath.resolve()` from `@vibe-agent-toolkit/utils` for all paths (raw `node:path` is a lint error, `local/no-raw-node-path`)
 - Use Node.js APIs (fs, child_process) instead of shell commands
 - Test on Windows, macOS, Linux in CI
 - Handle line endings properly (CRLF vs LF)
 
 ## Error Handling
 
-- Exit code 0: Success
-- Exit code 1: Validation errors (expected failures)
-- Exit code 2: System errors (unexpected failures)
+- Exit codes are `ExitCode` from `@vibe-agent-toolkit/schema` — `OK` (0) nothing at error
+  severity; `FINDINGS` (1) the run completed and what it examined failed its gate; `ERROR` (2) the
+  command could not do its job (usage, environment, internal). A literal `process.exit(n)` is a
+  lint error (`local/no-literal-process-exit`).
 - Always flush stdout before writing to stderr
 - Test format errors must include file:line:column
 
@@ -569,8 +572,8 @@ try {
 }
 ```
 
-This ensures a consistent error format, duration logging, and the exit codes above (1 for
-expected errors, 2 for unexpected).
+This ensures a consistent error format, duration logging, and the exit codes above (`FINDINGS`
+for a gate the tree failed, `ERROR` for a command that could not do its job).
 
 ## Testing Patterns
 

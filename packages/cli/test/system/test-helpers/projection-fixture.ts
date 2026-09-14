@@ -18,8 +18,9 @@ import { spawnSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 
-import { createTestTempDir } from './project-setup.js';
+import { createTestTempDir } from '../test-common.js';
 
 /**
  * Create a temp git repository holding two markdown documents.
@@ -35,11 +36,8 @@ import { createTestTempDir } from './project-setup.js';
 export function createMarkdownGitFixture(prefix: string): string {
   const dir = createTestTempDir(prefix);
   mkdirSyncReal(safePath.join(dir, 'docs'), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
   writeFileSync(safePath.join(dir, 'docs/a.md'), '# Alpha\n', 'utf-8');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir
   writeFileSync(safePath.join(dir, 'docs/b.md'), '# Bravo\n', 'utf-8');
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- fixture setup
-  spawnSync('git', ['init', '--quiet'], { cwd: dir });
+  spawnSync(gitExecutable(), ['init', '--quiet'], { cwd: dir });
   return dir;
 }

@@ -556,7 +556,6 @@ export async function parseHtml(filePath: string): Promise<ParseResult> {
   // document, whose encoding VAT does not choose. See text-content.ts.
   const [decoded, stats] = await Promise.all([
     readTextContent(filePath),
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is a user-provided path parameter
     stat(filePath),
   ]);
 

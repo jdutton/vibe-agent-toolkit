@@ -307,7 +307,6 @@ let dir = '';
 /** Write `bytes` to a fresh file under {@link dir} and hand back its path. */
 function plant(name: string, bytes: Buffer): string {
   const file = safePath.join(dir, name);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- temp fixture this test created
   writeFileSync(file, bytes);
   return file;
 }

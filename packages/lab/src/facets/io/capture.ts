@@ -134,7 +134,6 @@ function resolveCounterPath(override: string | undefined): string {
   const counter = safePath.resolve(
     override ?? resolveFromImportMeta(import.meta.url, COUNTER_FILE),
   );
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- the module's own sibling, or a caller-supplied path
   if (existsSync(counter)) return counter;
 
   throw new Error(

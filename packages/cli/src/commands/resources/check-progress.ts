@@ -179,7 +179,10 @@ function readLine(line: string): ProgressEntry | undefined {
   let value: unknown;
   try {
     value = JSON.parse(line);
-  } catch {
+  } catch (error) {
+    // `JSON.parse` throws exactly one thing for damage, and that is the thing
+    // this `undefined` stands for.
+    if (!(error instanceof SyntaxError)) throw error;
     return undefined;
   }
   const parsed = ProgressEntrySchema.safeParse(value);
@@ -235,7 +238,6 @@ export function unitInFlight(entries: readonly ProgressEntry[]): UnitInFlight {
  */
 export function createProgressWriter(path: string): (entry: ProgressEntry) => void {
   return (entry) => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- a path this process minted for this run
     appendFileSync(path, `${JSON.stringify(entry)}\n`, 'utf-8');
   };
 }

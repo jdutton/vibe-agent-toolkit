@@ -14,6 +14,7 @@
  * a test can state directly, with no process, no serialization and no stub.
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it, vi } from 'vitest';
 import * as YAML from 'yaml';
 
@@ -67,10 +68,15 @@ describe('phaseResultFromOutcome', () => {
     expect(result.error).toContain('system-error code 2');
   });
 
-  it('maps any other non-zero exit code to system-error', () => {
-    expect(
-      phaseResultFromOutcome('skills', { document: undefined, exitCode: 7 }).status,
-    ).toBe(SYSTEM_ERROR);
+  // A code outside the ExitCode contract is a defect in the phase, not a
+  // status to round: the old table folded it into `system-error` silently.
+  it('refuses a code outside the contract, and runPhase files that as a system-error naming the defect', async () => {
+    expect(() =>
+      phaseResultFromOutcome('skills', { document: undefined, exitCode: 7 as never }),
+    ).toThrow(/exit code 7 is not in the ExitCode contract/);
+    const result = await runPhase(phaseReturning('skills', { document: undefined, exitCode: 7 as never }));
+    expect(result.status).toBe(SYSTEM_ERROR);
+    expect(result.error).toContain('exit code 7 is not in the ExitCode contract');
   });
 });
 
@@ -362,10 +368,13 @@ function captureSelectionOutput(selection: Parameters<typeof applyPhaseSelection
 }
 
 describe('applyPhaseSelection', () => {
+  // ERROR, not FINDINGS: a selection that cannot run is the command failing to
+  // do its job, not a finding about the tree. This used to exit 1 while the
+  // contract every `--help` prints reserves 1 for validation findings.
   it('writes the normal structured document — not a stack trace — for an unroutable --only', () => {
     const { stdout, exitCode } = captureSelectionOutput({ kind: 'fail', message: "Phase 'claude' is not configured" });
 
-    expect(exitCode).toBe(1);
+    expect(exitCode).toBe(ExitCode.ERROR);
     expect(YAML.parse(stdout)).toMatchObject({
       status: 'error',
       phases: [],

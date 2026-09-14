@@ -81,7 +81,8 @@ export interface SpawnResult {
  * orphaned MCP subprocesses that a direct `child.kill()` would leave running.
  *
  * - Guards an undefined pid (child never spawned — nothing to kill).
- * - Swallows the throw (ESRCH) when the group is already gone.
+ * - Absorbs the throw that means the group is already gone (see
+ *   {@link isProcessGroupGone}); anything else stays loud.
  * - Windows has no POSIX process groups: fall back to `taskkill /T /F`, which
  *   terminates the whole process tree.
  */
@@ -96,9 +97,25 @@ export function killProcessTree(child: { pid?: number | undefined }): void {
       // Negated pid → deliver the signal to the whole process group.
       process.kill(-pid, 'SIGKILL');
     }
-  } catch {
-    // ESRCH (no such process/group): the child and its group are already dead.
+  } catch (error) {
+    // A reaper that says nothing about a tree it did not reap is the
+    // orphan-billing defect the registry exists to prevent, so only "already
+    // gone" is absorbed. A bug here — the one other thing `process.kill` on our
+    // own child's group can throw — stays loud.
+    if (!isProcessGroupGone(error)) throw error;
   }
+}
+
+/**
+ * Whether `process.kill(-pid)` failed because the group is already gone.
+ *
+ * `ESRCH`: no such process group. `EPERM`: the group id has been recycled to a
+ * process this uid may not signal — which, for a group WE created and would
+ * have permission over, also means every process of ours in it has exited.
+ * Both are the outcome the kill was after.
+ */
+function isProcessGroupGone(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && (error.code === 'ESRCH' || error.code === 'EPERM');
 }
 
 /**

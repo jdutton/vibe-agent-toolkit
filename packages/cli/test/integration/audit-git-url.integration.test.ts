@@ -1,5 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-
 /**
  * Integration test: `vat audit <git-url>` end-to-end against a local
  * bare git repo. Avoids network entirely — bare repo created in
@@ -11,6 +9,7 @@ import fs, { mkdtempSync, readdirSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { runAuditCli } from '../test-helpers.js';
@@ -26,8 +25,7 @@ let workTree: string;
 const OFFLINE_REMOTE_PREFIX = 'vat-offline-no-such-remote';
 
 function git(args: string[], cwd: string): void {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is a standard system command
-  const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+  const result = spawnSync(gitExecutable(), args, { cwd, encoding: 'utf-8' });
   if (result.status !== 0) {
     throw new Error(`git ${args.join(' ')} failed: ${result.stderr ?? ''}`);
   }

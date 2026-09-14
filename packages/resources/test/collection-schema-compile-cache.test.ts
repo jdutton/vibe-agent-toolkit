@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test file operations are confined to temp directories */
 /**
  * Collection frontmatter schemas are read, parsed and Ajv-compiled ONCE per
  * (resolved schema file, mode) per registry — never once per resource.

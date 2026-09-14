@@ -36,7 +36,6 @@ describe('inventory pipeline parity', () => {
 		const corpus = await getTestFixturesPath();
 		const snapshotPath = safePath.join(__dirname, '../fixtures/legacy-audit-snapshot.json');
 
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path is constructed internally
 		const legacy = JSON.parse(readFileSync(snapshotPath, 'utf-8')) as FindingTuple[];
 
 		const newFindings = await collectFindings(corpus);

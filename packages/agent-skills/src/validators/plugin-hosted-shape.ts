@@ -38,18 +38,15 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 /** How many bin/ entries to name in the message before eliding. */
 const SAMPLE_LIMIT = 3;
 
 function listBinEntries(pluginPath: string): string[] {
   const binDir = safePath.join(pluginPath, 'bin');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved under the caller-supplied plugin dir
   if (!existsSync(binDir)) return [];
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved under the caller-supplied plugin dir
   if (!statSync(binDir).isDirectory()) return [];
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved under the caller-supplied plugin dir
   return readdirSync(binDir);
 }
 
@@ -59,8 +56,10 @@ function listBinEntries(pluginPath: string): string[] {
  *
  * @param pluginPath - Absolute path to the plugin directory (the one holding
  *   `.claude-plugin/`).
+ * @param locationRoot - Anchor base every emitted `location` is relative to
+ *   (the anchor contract in `validation-issue.ts`).
  */
-export function detectHostedIncompatibleShape(pluginPath: string): ValidationIssue[] {
+export function detectHostedIncompatibleShape(pluginPath: string, locationRoot: string): ValidationIssue[] {
   const entries = listBinEntries(pluginPath);
   if (entries.length === 0) return [];
 
@@ -80,7 +79,7 @@ export function detectHostedIncompatibleShape(pluginPath: string): ValidationIss
         'tool PATH as bare commands; if they are only ever invoked by path, scripts/ is the ' +
         'documented home. A claude.ai-hosted marketplace sync has been observed to skip ' +
         'plugins containing bin/.',
-      location: safePath.join(pluginPath, 'bin'),
+      location: issueLocation(safePath.join(pluginPath, 'bin'), locationRoot),
       fix: entry.fix,
       reference: entry.reference,
     },

@@ -48,7 +48,6 @@ export async function importSkillToAgent(options: ImportOptions): Promise<Import
   const { skillPath, outputPath, force = false } = options;
 
   // Check if SKILL.md exists
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath is user input but validated
   if (!fs.existsSync(skillPath)) {
     return {
       success: false,
@@ -57,7 +56,6 @@ export async function importSkillToAgent(options: ImportOptions): Promise<Import
   }
 
   // Read SKILL.md content
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- validated above
   const content = fs.readFileSync(skillPath, 'utf-8');
 
   // Parse frontmatter
@@ -93,7 +91,6 @@ export async function importSkillToAgent(options: ImportOptions): Promise<Import
   const agentPath = outputPath ?? safePath.join(path.dirname(skillPath), 'agent.yaml');
 
   // Check if output already exists
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from validated skillPath
   if (fs.existsSync(agentPath) && !force) {
     return {
       success: false,
@@ -111,7 +108,6 @@ export async function importSkillToAgent(options: ImportOptions): Promise<Import
       lineWidth: 100,
     });
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from validated skillPath
     fs.writeFileSync(agentPath, yamlContent, 'utf-8');
 
     return {

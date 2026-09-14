@@ -1,5 +1,35 @@
 # vibe-validate configuration
 # Documentation: https://github.com/jdutton/vibe-validate
+#
+# ── Two tiers, one step list ──────────────────────────────────────────────────
+#
+# Every step below belongs to one of two tiers:
+#
+#   pre-commit  build · typecheck · lint · duplication · unit tests
+#               What `.husky/pre-commit` (`vibe-validate pre-commit`) runs on
+#               every commit. ~66 s warm on macOS; keeps the cheap 89 % of the
+#               signal at the desk.
+#
+#   full        everything, including the steps marked `runScope: ci`.
+#               What CI runs (`validate.yml`, generated from this file) and what
+#               `bun run validate` runs locally — that script sets `CI=1`, which
+#               is the only switch vibe-validate exposes for `runScope`.
+#
+# `runScope: ci` is vibe-validate's supported per-step gate (`ValidationStepSchema`
+# in @vibe-validate/config): a step so marked is skipped whenever `process.env.CI`
+# is unset. There is no `--phase`, no second config file, and no per-hook step
+# list in vibe-validate 0.20 — this is the mechanism.
+#
+# ⚠️ The vibe-validate cache is keyed on the git TREE HASH alone, and a step
+# skipped by runScope is recorded as passed (0 s). A pre-commit-tier pass on a
+# tree therefore reads as a cached pass for the full tier on that same tree.
+# That is why `bun run validate` carries `--force`: the full command never
+# replays a verdict that may have been the half-gate's. The pre-commit hook
+# keeps the cache (a full pass is a superset of what it needs).
+#
+# Integration and system tests run in the full tier only: together they were
+# 232 s of a 321 s warm gate (72 %), serialised, and growing linearly with file
+# count — the two slow tiers are what PR CI is for.
 
 # CI matrix configuration
 ci:
@@ -31,42 +61,56 @@ validation:
 
         - name: 'Dependency check'
           command: 'bun run dependency-check'
-          description: 'Validates dependencies are correctly declared (unused, missing, misplaced)'
+          description: 'Validates dependencies are correctly declared (unused, missing, misplaced). Full tier only.'
+          runScope: ci
+
+        - name: 'Unused exports'
+          command: 'bun run unused-exports'
+          description: 'knip unused-export ratchet: a new unused export or a stale allowlist entry fails. Full tier only.'
+          runScope: ci
 
         - name: 'Repository structure validation'
           command: 'bun run validate-structure'
-          description: 'Validates repo structure conventions (no runtime /examples, no /staging, etc.)'
+          description: 'Validates repo structure conventions (no runtime /examples, no /staging, etc.). Full tier only.'
+          runScope: ci
 
         - name: 'Package publish readiness'
           command: 'bun run pre-publish -- --skip-git-checks'
-          description: 'Validates packages are ready for publishing (metadata, files, workspace deps, etc.)'
+          description: 'Validates packages are ready for publishing (metadata, files, workspace deps, etc.). Full tier only.'
+          runScope: ci
 
         - name: 'Documentation validation'
           command: 'bun run vat resources validate'
-          description: 'Validates markdown link integrity across entire project'
+          description: 'Validates markdown link integrity across entire project. Full tier only.'
+          runScope: ci
 
         - name: 'VAT dogfood: resource projection checks'
           command: 'bun run vat resources check'
-          description: 'Runs the SQL assertions under resources.checks (dogfoods vat resources check)'
+          description: 'Runs the SQL assertions under resources.checks (dogfoods vat resources check). Full tier only.'
+          runScope: ci
 
         - name: 'VAT dogfood: audit quality gate'
           command: 'bun run guard:audit-quality'
-          description: 'Turns advisory `vat audit` into a hard gate over this repo (see audit-quality-gate.ts)'
+          description: 'Turns advisory `vat audit` into a hard gate over this repo (see audit-quality-gate.ts). Full tier only.'
+          runScope: ci
 
         - name: 'Code duplication check'
           command: 'bun run duplication-check'
 
         - name: 'Skills validation'
           command: 'bun run vat skills validate'
-          description: 'Validates all SKILL.md files (unified: resources + skill-specific rules)'
+          description: 'Validates all SKILL.md files (unified: resources + skill-specific rules). Full tier only.'
+          runScope: ci
 
         - name: 'VAT dogfood: build skills and claude artifacts'
           command: 'bun run vat build --cwd packages/vat-development-agents'
-          description: 'Builds vat-development-agents skills and claude plugin artifacts (dogfoods vat build)'
+          description: 'Builds vat-development-agents skills and claude plugin artifacts (dogfoods vat build). Full tier only.'
+          runScope: ci
 
         - name: 'VAT dogfood: verify all artifacts'
           command: 'bun run vat verify --cwd packages/vat-development-agents'
-          description: 'Verifies vat-development-agents resources, skills, and claude artifacts (dogfoods vat verify)'
+          description: 'Verifies vat-development-agents resources, skills, and claude artifacts (dogfoods vat verify). Full tier only.'
+          runScope: ci
 
         - name: 'Unit tests'
           command: 'bun run test:unit'
@@ -77,10 +121,13 @@ validation:
       steps:
         - name: 'Integration tests'
           command: 'bun run test:integration'
+          description: 'Full tier only — see the header.'
+          runScope: ci
 
     - name: 'System Tests'
       parallel: false
       steps:
         - name: 'End-to-end system tests'
           command: 'bun run test:system'
-          description: 'Runs complete end-to-end workflows testing the entire system'
+          description: 'Runs complete end-to-end workflows testing the entire system. Full tier only — see the header.'
+          runScope: ci

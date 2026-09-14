@@ -1,4 +1,3 @@
-version: 1
 entries:
   - id: BadId-WithCapitals
     bucket: invalid-bucket

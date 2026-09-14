@@ -7,10 +7,10 @@
  * `LINK_BROKEN_FILE`) — same mechanism as the gitTracker/checkHtmlAnchors
  * options already threaded through `validateAllLinks`.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- tempDir paths are test-generated, safe in test context */
 import { promises as fs } from 'node:fs';
 
-import { safePath, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { DeferredArtifacts } from '../src/deferred-artifacts.js';

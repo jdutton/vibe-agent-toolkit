@@ -26,6 +26,8 @@
 // of the rag lane's shared helpers live: that module statically imports
 // `@vibe-agent-toolkit/rag-lancedb`, so reaching for its `handleCommandError`
 // here would load the very backend this file exists to defer.
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+
 import { writeYamlOutput } from './output.js';
 
 /**
@@ -86,7 +88,7 @@ export function reportMissingBackend(backend: OptionalBackend): never {
     error: `${backend.feature} backend not installed: ${backend.packageName}`,
     fix: install,
   });
-  process.exit(2);
+  process.exit(ExitCode.ERROR);
 }
 
 /** One optional backend, as a user is told to install it. */

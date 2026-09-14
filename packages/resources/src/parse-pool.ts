@@ -469,7 +469,6 @@ function resolveWorkerEntry(): string {
   const candidates = ['./parse-worker.js', '../dist/parse-worker.js'].map((specifier) =>
     fileURLToPath(new URL(specifier, import.meta.url)),
   );
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- both candidates are derived from import.meta.url; no caller input reaches this
   const found = candidates.find((candidate) => existsSync(candidate));
   if (found === undefined) {
     throw new Error(

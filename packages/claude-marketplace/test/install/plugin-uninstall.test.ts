@@ -1,6 +1,5 @@
 // packages/claude-marketplace/test/install/plugin-uninstall.test.ts
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 // Test helper — file paths are controlled by test code, not user input
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';

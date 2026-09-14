@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Paths are user-provided CLI arguments */
 /**
  * `vat claude marketplace validate [path]` — strict marketplace validation.
  *
@@ -21,15 +20,15 @@ import { validatePlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import {
   calculateValidationStatus,
   countBySeverity,
+  type Severity,
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, issueLocation, normalizePath, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, findProjectRoot, isPathAbsentError, issueLocation, isVatError, normalizePath, PathEscapesRootError, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { formatDuration, reportCommandError } from '../../../utils/command-error.js';
 import { loadConfig } from '../../../utils/config-loader.js';
-import { escapesCorpusRoot } from '../../../utils/corpus-target.js';
 import { summarizeFindings, type FindingCountSummary } from '../../../utils/issue-rendering.js';
 import { resolveIssueSeverity } from '../../../utils/issue-severity.js';
 import { createLogger } from '../../../utils/logger.js';
@@ -50,7 +49,7 @@ interface MarketplaceValidateOptions {
 function checkMarketplaceFiles(marketplacePath: string): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
-  const fileChecks: Array<{ file: string; code: string; severity: 'error' | 'warning'; verb: string }> = [
+  const fileChecks: Array<{ file: string; code: string; severity: Severity; verb: string }> = [
     { file: 'LICENSE', code: 'MARKETPLACE_MISSING_LICENSE', severity: 'error', verb: 'required for distribution' },
     { file: 'README.md', code: 'MARKETPLACE_MISSING_README', severity: 'warning', verb: 'recommended for documentation' },
     { file: 'CHANGELOG.md', code: 'MARKETPLACE_MISSING_CHANGELOG', severity: 'warning', verb: 'recommended for tracking changes' },
@@ -107,7 +106,7 @@ class WalkBoundary {
    */
   contains(abs: string): boolean {
     const real = toForwardSlash(normalizePath(abs));
-    if (!escapesCorpusRoot(safePath.relative(this.realRoot, real))) return true;
+    if (!relativeEscapesRoot(safePath.relative(this.realRoot, real))) return true;
     this.refused.push(issueLocation(abs, this.marketplacePath));
     return false;
   }
@@ -160,14 +159,18 @@ export interface LocalPluginResult extends LocalPluginSource {
 }
 
 /**
- * Whether `dir` is a directory. `false` for a file, for nothing, and for a path
- * the process cannot stat — all three are "no plugin directory here".
+ * Whether `dir` is a directory. `false` for a file and for nothing — both are
+ * "no plugin directory here". A path the process cannot stat is NOT: a
+ * declared source the OS refuses used to be reported as one that does not
+ * resolve, sending the reader to create a directory that is there. The refusal
+ * propagates and the command refuses the run by errno, like every other verb.
  */
 function isDirectory(dir: string): boolean {
   try {
     return statSync(dir).isDirectory();
-  } catch {
-    return false;
+  } catch (error) {
+    if (isPathAbsentError(error)) return false;
+    throw error;
   }
 }
 
@@ -213,12 +216,15 @@ function containedPluginDir(
   let lexical: string;
   try {
     lexical = safePath.joinUnderRoot(marketplacePath, toForwardSlash(source));
-  } catch {
+  } catch (error) {
+    // `joinUnderRoot` refuses an escape by design. Anything else (a
+    // `TypeError` from a bad argument) is a bug.
+    if (!isVatError(error, PathEscapesRootError.code)) throw error;
     return undefined;
   }
   if (!isDirectory(lexical)) return undefined;
   const real = toForwardSlash(normalizePath(lexical));
-  return escapesCorpusRoot(safePath.relative(realRoot, real)) ? undefined : { lexical, real };
+  return relativeEscapesRoot(safePath.relative(realRoot, real)) ? undefined : { lexical, real };
 }
 
 /**
@@ -358,7 +364,9 @@ function undeclaredPluginDirs(marketplacePath: string, validatedDirs: ReadonlySe
   const pluginsDir = safePath.join(marketplacePath, 'plugins');
   if (!existsSync(pluginsDir)) return [];
   return readdirSync(pluginsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
+    // Followed: a plugin directory that is a link is a plugin the marketplace
+    // ships, and `validatedDirs` is real paths for exactly that reason.
+    .filter((entry) => direntKindFollowingSync(pluginsDir, entry) === 'directory')
     .map((entry) => safePath.join(pluginsDir, entry.name))
     .filter((dir) => !validatedDirs.has(toForwardSlash(normalizePath(dir))))
     .map((dir) => issueLocation(dir, marketplacePath));

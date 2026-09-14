@@ -8,7 +8,6 @@ import { CODE_REGISTRY } from '../../src/validation-codes.js';
 const docsPath = fileURLToPath(new URL('../../../../docs/validation-codes.md', import.meta.url));
 // Path is derived from `import.meta.url`, not user input — points at the
 // repo's docs/validation-codes.md, the source of truth for code reference anchors.
-// eslint-disable-next-line security/detect-non-literal-fs-filename
 const docs = readFileSync(docsPath, 'utf8');
 
 const CODES = Object.keys(CODE_REGISTRY) as (keyof typeof CODE_REGISTRY)[];

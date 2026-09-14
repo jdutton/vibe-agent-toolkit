@@ -1,4 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 /**
  * Unit tests for the settings auditor's answer shapes.
  *
@@ -8,7 +7,8 @@
 
 import * as fs from 'node:fs/promises';
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { removeScratchDir , refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -18,6 +18,7 @@ import {
   resolveSettingsPaths,
   validateSettingsFile,
 } from '../src/settings/settings-auditor.js';
+
 
 const NUL = String.fromCodePoint(0);
 const A_MODEL = 'claude-sonnet-4-5';
@@ -29,6 +30,7 @@ describe('settings auditor answer shapes', () => {
   let invalidFile: string;
   let emptyObjectFile: string;
   let missingFile: string;
+  let notJsonFile: string;
 
   beforeAll(async () => {
     dir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'vat-settings-auditor-'));
@@ -37,6 +39,7 @@ describe('settings auditor answer shapes', () => {
     invalidFile = safePath.join(dir, 'invalid.json');
     emptyObjectFile = safePath.join(dir, 'empty.json');
     missingFile = safePath.join(dir, 'nope.json');
+    notJsonFile = safePath.join(dir, 'not-json.json');
 
     await fs.writeFile(
       validUserFile,
@@ -48,6 +51,7 @@ describe('settings auditor answer shapes', () => {
     );
     await fs.writeFile(invalidFile, JSON.stringify({ model: 42 }));
     await fs.writeFile(emptyObjectFile, JSON.stringify({}));
+    await fs.writeFile(notJsonFile, '{ "model": ');
   });
 
   afterAll(async () => {
@@ -117,8 +121,26 @@ describe('settings auditor answer shapes', () => {
   });
 
   describe('getSettingsFileFields', () => {
-    it('returns null when the file cannot be read — NOT an empty field list', async () => {
+    it('returns null when the file is not there — NOT an empty field list', async () => {
       await expect(getSettingsFileFields(missingFile)).resolves.toBeNull();
+    });
+
+    it('returns null when the file is not JSON', async () => {
+      await expect(getSettingsFileFields(notJsonFile)).resolves.toBeNull();
+    });
+
+    /**
+     * `null` stands for "there is nothing here to list" — absent, or not JSON.
+     * A file that IS there and the OS refuses is neither, and reading it as
+     * `null` reports a permission bit as an empty settings file.
+     */
+    it('propagates a file the OS refuses to read rather than reporting it as null', async () => {
+      const restore = refuseAsyncFs('readFile', validUserFile, 'EACCES');
+      try {
+        await expect(getSettingsFileFields(validUserFile)).rejects.toThrow(/EACCES/);
+      } finally {
+        restore();
+      }
     });
 
     /**

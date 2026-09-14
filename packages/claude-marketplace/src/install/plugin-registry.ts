@@ -11,7 +11,7 @@
 import { cpSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
@@ -57,17 +57,37 @@ export interface InstallPluginOptions {
 }
 
 /**
+ * Parse a registry file that Claude Code owns, or `undefined` when it is not there.
+ *
+ * ⚠️ ONLY an absent file is "empty". Every reader here is followed by a WRITE of
+ * the same file, so a file that is present but cannot be read — refused by the
+ * OS, or not JSON after a half-written save — must not read as empty: the next
+ * write would then replace the user's registry (or their whole `settings.json`)
+ * with a document holding nothing but the plugin being installed. That refusal
+ * is translated so the message names the file, and `installPlugin`'s own catch
+ * turns it into the warning the operator sees.
+ */
+function readRegistryFile(filePath: string): unknown {
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, 'utf-8');
+  } catch (error) {
+    if (isPathAbsentError(error)) return undefined;
+    throw new Error(`Could not read ${filePath}: ${String(error)}`, { cause: error });
+  }
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch (error) {
+    throw new Error(`${filePath} is not valid JSON: ${String(error)}`, { cause: error });
+  }
+}
+
+/**
  * Read known_marketplaces.json from the Claude plugins directory.
- * Returns an empty object if the file does not exist.
+ * Returns an empty object if the file does not exist; throws if it is there but unreadable.
  */
 export function readKnownMarketplaces(paths: ClaudeUserPaths): KnownMarketplaces {
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
-    const raw = readFileSync(paths.knownMarketplacesPath, 'utf-8');
-    return JSON.parse(raw) as KnownMarketplaces;
-  } catch {
-    return {};
-  }
+  return (readRegistryFile(paths.knownMarketplacesPath) as KnownMarketplaces | undefined) ?? {};
 }
 
 /**
@@ -76,22 +96,16 @@ export function readKnownMarketplaces(paths: ClaudeUserPaths): KnownMarketplaces
  */
 export function writeKnownMarketplaces(paths: ClaudeUserPaths, data: KnownMarketplaces): void {
   mkdirSyncReal(dirname(paths.knownMarketplacesPath), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
   writeFileSync(paths.knownMarketplacesPath, JSON.stringify(data, null, 2));
 }
 
 /**
  * Read installed_plugins.json from the Claude plugins directory.
- * Returns empty registry if the file does not exist.
+ * Returns empty registry if the file does not exist; throws if it is there but unreadable.
  */
 export function readInstalledPlugins(paths: ClaudeUserPaths): InstalledPlugins {
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
-    const raw = readFileSync(paths.installedPluginsPath, 'utf-8');
-    return JSON.parse(raw) as InstalledPlugins;
-  } catch {
-    return { version: 2, plugins: {} };
-  }
+  return (readRegistryFile(paths.installedPluginsPath) as InstalledPlugins | undefined)
+    ?? { version: 2, plugins: {} };
 }
 
 /**
@@ -100,7 +114,6 @@ export function readInstalledPlugins(paths: ClaudeUserPaths): InstalledPlugins {
  */
 export function writeInstalledPlugins(paths: ClaudeUserPaths, data: InstalledPlugins): void {
   mkdirSyncReal(dirname(paths.installedPluginsPath), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
   writeFileSync(paths.installedPluginsPath, JSON.stringify(data, null, 2));
 }
 
@@ -168,18 +181,13 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<void> {
 
 /**
  * Read user settings.json as a plain object.
- * Returns an empty object if the file does not exist or is invalid.
+ * Returns an empty object if the file does not exist or holds JSON that is not an
+ * object; throws if it is there but cannot be read or parsed (see `readRegistryFile`).
  */
 export function readUserSettings(paths: ClaudeUserPaths): Record<string, unknown> {
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
-    const raw = readFileSync(paths.userSettingsPath, 'utf-8');
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {
-    // File does not exist or is invalid — start from empty
+  const parsed = readRegistryFile(paths.userSettingsPath);
+  if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return parsed as Record<string, unknown>;
   }
   return {};
 }
@@ -197,6 +205,5 @@ function updateUserSettings(paths: ClaudeUserPaths, pluginKey: string): void {
   settingsData['enabledPlugins'] = { ...existingEnabled, [pluginKey]: true };
 
   mkdirSyncReal(dirname(paths.userSettingsPath), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
   writeFileSync(paths.userSettingsPath, JSON.stringify(settingsData, null, 2));
 }

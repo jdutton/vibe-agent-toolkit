@@ -248,7 +248,6 @@ export async function bundledPathCandidates(filePath: string): Promise<string[]>
  * argument rather than needing its own.
  */
 function bundleHas(skillDir: string, rel: string): boolean {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- see above
   return existsSync(safePath.join(skillDir, rel));
 }
 

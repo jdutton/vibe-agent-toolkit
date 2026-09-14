@@ -12,7 +12,6 @@
  * flags, and which is a genuine maintenance cost besides: the harness options
  * shape has changed several times, and every copy has to change with it.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- callers pass their own temp dirs */
 import { writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';

@@ -33,14 +33,12 @@ export async function withCachedFetch(args: CachedFetchArgs): Promise<string> {
   ensureOwned0700(args.cacheDir, currentUid);
 
   const entry = safePath.join(args.cacheDir, `${args.key}-${args.digest}`);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- entry under our 0700 cache root
   const hit = existsSync(entry);
 
   if (hit && args.refresh === true) {
     await rm(entry, { recursive: true, force: true });
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- entry under our 0700 cache root
   const entryExists = existsSync(entry);
   if (entryExists) {
     assertOwned(entry, currentUid);
@@ -50,7 +48,6 @@ export async function withCachedFetch(args: CachedFetchArgs): Promise<string> {
     const tmp = mkdtempSync(safePath.join(args.cacheDir, '.tmp-'));
     try {
       await args.fetchInto(tmp);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- entry and tmp under our 0700 cache root
       renameSync(tmp, entry);
     } catch (err) {
       await rm(tmp, { recursive: true, force: true });
@@ -68,12 +65,10 @@ function ensureOwned0700(dir: string, currentUid: number): void {
   assertOwned(dir, currentUid);
   // Re-enforce 0700 in case the dir already existed with looser permissions.
   // assertOwned above confirms we own it, so chmod is safe.
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own cache root confirmed owned above
   chmodSync(dir, 0o700);
 }
 
 function assertOwned(dir: string, currentUid: number): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- ownership probe on our own cache path
   const st = statSync(dir);
   if (currentUid >= 0 && st.uid !== currentUid) {
     throw new Error(

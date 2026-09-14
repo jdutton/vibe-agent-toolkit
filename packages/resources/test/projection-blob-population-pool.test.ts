@@ -116,16 +116,13 @@ const suite = setupSubdirTestSuite('blob-population-pool-');
 async function writeLoopCorpus(): Promise<void> {
   await Promise.all(
     LOOP_CORPUS.map(async (file) =>
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
       writeFile(safePath.join(suite.tempDir, file.path), file.content, 'utf-8'),
     ),
   );
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
   await writeFile(
     safePath.join(suite.tempDir, BINARY_FIXTURE),
     Uint8Array.from([0x89, 0x50, 0x00, 0x4e, 0x47]),
   );
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture directory beneath a mkdtemp root
   await mkdir(safePath.join(suite.tempDir, 'empty-dir'), { recursive: true });
 }
 
@@ -143,14 +140,12 @@ async function writeLoopCorpus(): Promise<void> {
  */
 async function writeTail(count: number, byteLength: number): Promise<string> {
   const tailDir = safePath.join(suite.tempDir, TAIL_DIR);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture directory beneath a mkdtemp root
   await mkdir(tailDir, { recursive: true });
   await Promise.all(
     Array.from({ length: count }, async (_unused, index) => {
       const filler = 'lorem ipsum dolor sit amet\n';
       const heading = `# Tail ${String(index)}\n\n`;
       const body = filler.repeat(Math.ceil(byteLength / filler.length));
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path beneath a mkdtemp root
       return writeFile(
         safePath.join(tailDir, `tail-${String(index)}.md`),
         (heading + body).slice(0, byteLength),

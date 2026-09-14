@@ -3,7 +3,7 @@ import { basename, dirname } from 'node:path';
 
 import { isLocalFileLink, isParserUnavailable, parseFileCached, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
 import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, isPathAbsentError, issueLocation, relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
 
 
 import type { EvidenceRecord } from '../evidence/index.js';
@@ -44,7 +44,6 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   const allEvidence: EvidenceRecord[] = [];
 
   // Validate file exists
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath is user-provided but validated
   if (!fs.existsSync(skillPath)) {
     const missingFileIssues: ValidationIssue[] = [{
       severity: 'error',
@@ -63,7 +62,6 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   }
 
   // Read file
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath validated above
   const content = fs.readFileSync(skillPath, 'utf-8');
   const lineCount = content.split('\n').length;
 
@@ -142,7 +140,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   // Bundled-resource link detection — fires after link traversal so the
   // linkedFiles set reflects everything reachable from SKILL.md.
   const bundledResourceIssues = detectBundledResourceWithoutLinks(
-    skillPath,
+    content,
     skillDir,
     linkedFiles.map((lf) => lf.path),
     locationRoot,
@@ -213,14 +211,13 @@ function validateLocalLink(
 
   const resolvedPath = resolved.resolvedPath;
   const relativeToBoundary = safePath.relative(skillDir, resolvedPath);
-  const escapesBoundary = relativeToBoundary.startsWith('..');
+  const escapesBoundary = relativeEscapesRoot(relativeToBoundary);
 
   // Check existence BEFORE boundary classification — a link that both
   // escapes the skill directory boundary and is missing must surface as a
   // broken link (error), not be silently swallowed as a boundary warning.
   // LINK_OUTSIDE_PROJECT (below) only applies when the target actually
   // exists outside the boundary.
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolvedPath from parsed markdown
   if (!fs.existsSync(resolvedPath)) {
     const issue: ValidationIssue = {
       severity: 'error',
@@ -302,7 +299,7 @@ function processFileLinks(
  * Traverse links from SKILL.md using BFS, validating each link target.
  *
  * - Missing file -> LINK_INTEGRITY_BROKEN error
- * - Outside skill directory -> OUTSIDE_PROJECT_BOUNDARY warning
+ * - Outside skill directory -> LINK_OUTSIDE_PROJECT warning
  * - Existing .md file -> recurse (add to BFS queue)
  * - Non-markdown asset -> existence check only
  *
@@ -362,7 +359,6 @@ async function traverseLinks(
     // the top-level invocation). Re-read raw file content so fenced code
     // blocks remain intact for detectors.
     if (currentPath !== resolvedSkillPath) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- currentPath verified existent by BFS predecessor
       const linkedContent = fs.readFileSync(currentPath, 'utf-8');
       const { evidence: linkedEvidence, observations: linkedObservations } =
         runCompatDetectors(linkedContent, currentPath, locationRoot);
@@ -588,10 +584,14 @@ function scanFileForReferences(
 ): void {
   let content: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- visitedPath from BFS traversal
     content = fs.readFileSync(visitedPath, 'utf-8');
-  } catch {
-    return; // File unreadable, skip
+  } catch (error) {
+    // The BFS already read this file, so "not there now" is a race with nothing
+    // left to scan. A refusal is not that: skipping it silently dropped every
+    // implicit reference the file carried, and the unreferenced-file finding
+    // it would have cleared fired instead.
+    if (isPathAbsentError(error)) return;
+    throw error;
   }
 
   const lines = content.split('\n');

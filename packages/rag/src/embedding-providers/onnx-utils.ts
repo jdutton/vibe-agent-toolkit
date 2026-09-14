@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import { stat, mkdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 
 // ---------------------------------------------------------------------------
@@ -129,7 +129,7 @@ function buildIncompatibleVocabMessage(details: {
  * the index would silently degrade with no way for a user to notice. There is
  * no bypass flag by design.
  */
-export class IncompatibleVocabError extends Error {
+export class IncompatibleVocabError extends VatError {
   readonly vocabPath: string;
   readonly missingTokens: readonly string[];
   readonly modelId: string | undefined;
@@ -140,8 +140,7 @@ export class IncompatibleVocabError extends Error {
     foundInstead: readonly string[];
     modelId: string | undefined;
   }) {
-    super(buildIncompatibleVocabMessage(details));
-    this.name = 'IncompatibleVocabError';
+    super('INCOMPATIBLE_VOCAB', buildIncompatibleVocabMessage(details));
     this.vocabPath = details.vocabPath;
     this.missingTokens = details.missingTokens;
     this.modelId = details.modelId;
@@ -160,7 +159,7 @@ export class IncompatibleVocabError extends Error {
  * structurally valid — right shape, right norm — so nothing downstream can tell,
  * and the index quietly gets worse. There is no bypass flag by design.
  */
-export class CasedVocabError extends Error {
+export class CasedVocabError extends VatError {
   readonly vocabPath: string;
   readonly casedSamples: readonly string[];
   readonly modelId: string | undefined;
@@ -175,6 +174,7 @@ export class CasedVocabError extends Error {
         ? 'The configured ONNX embedding model'
         : `ONNX embedding model '${details.modelId}'`;
     super(
+      'CASED_VOCAB',
       [
         `${subject} ships a CASED WordPiece vocabulary, which this tokenizer cannot use.`,
         `Vocab file: ${details.vocabPath}`,
@@ -185,7 +185,6 @@ export class CasedVocabError extends Error {
         "Use an uncased BERT-family model (the default 'Xenova/all-MiniLM-L6-v2' is one).",
       ].join('\n'),
     );
-    this.name = 'CasedVocabError';
     this.vocabPath = details.vocabPath;
     this.casedSamples = details.casedSamples;
     this.modelId = details.modelId;
@@ -630,14 +629,19 @@ export function l2Normalize(vector: number[]): number[] {
 
 /**
  * Check whether a file exists at the given path.
+ *
+ * Only a path that is not there is `false`. The cache is guarded by existence
+ * alone, so a `stat` the OS refuses must not read as "absent": that would
+ * start a download onto a path that cannot even be read, and surface the
+ * refusal as a write failure at the wrong step.
  */
 async function fileExists(filePath: string): Promise<boolean> {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is constructed from known cache directory
     await stat(filePath);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    if (isPathAbsentError(error)) return false;
+    throw error;
   }
 }
 
@@ -685,7 +689,6 @@ function assertCompleteBody(url: string, received: number, declared: string | nu
  */
 async function downloadFile(url: string, destination: string): Promise<void> {
   const directory = dirname(destination);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- destination is constructed from known cache directory
   await mkdir(directory, { recursive: true });
 
   const response = await fetch(url);
@@ -701,17 +704,14 @@ async function downloadFile(url: string, destination: string): Promise<void> {
 
   // Sibling temp, so the rename never crosses a filesystem boundary (EXDEV).
   const temporary = `${destination}.${process.pid.toString()}.${randomUUID()}.part`;
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- destination is constructed from known cache directory
   await writeFile(temporary, Buffer.from(arrayBuffer));
 
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- destination is constructed from known cache directory
     await rename(temporary, destination);
   } catch (cause) {
     // A concurrent downloader may already hold the destination open, which on
     // Windows makes the replace fail. Its copy is just as complete as ours, so
     // losing the race is success, not an error.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- destination is constructed from known cache directory
     await unlink(temporary).catch(() => undefined);
     if (!(await fileExists(destination))) throw cause;
   }

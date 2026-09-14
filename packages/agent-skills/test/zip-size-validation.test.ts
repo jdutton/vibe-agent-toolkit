@@ -16,7 +16,6 @@
  * module level in ESM — mixing with real-fs tests would break both.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with controlled temp dirs */
 import * as nodeFs from 'node:fs';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 

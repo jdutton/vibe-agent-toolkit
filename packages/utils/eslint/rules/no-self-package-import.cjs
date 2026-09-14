@@ -94,7 +94,18 @@ module.exports = {
       description:
         "Disallow importing the enclosing package by its own name; use a relative path so the import does not depend on the package's built `dist/`.",
       category: 'Build correctness',
-      recommended: true,
+      bans: 'importing the enclosing package by its own name',
+      useInstead: 'a relative path to the defining module',
+      // Not in `recommended`, for two reasons either of which would be enough. It
+      // REQUIRES a `packageName` option — it will not read a `package.json` to find
+      // out, because a rule module must require nothing (see `index.cjs`) — and a
+      // rule with a required option cannot ride in a config that supplies none.
+      // And the directories it must not fire in are a property of the adopter's
+      // `tsconfig`: a self-import only breaks the build in files the package
+      // COMPILES, while test and example trees import their own package by name on
+      // purpose. The consuming config knows both; see the README.
+      recommended: false,
+      recommendedSeverity: 'error',
     },
     messages: {
       useRelativeImport:
@@ -143,7 +154,7 @@ module.exports = {
       // The specifier hangs off `source`; typescript-eslint has called this
       // property `parameter` and `argument` in earlier majors, and reading the
       // wrong one costs nothing at lint time — the visitor simply never fires.
-      // The `import() in TYPE position` case in `rules.test.ts` is what turns
+      // The `import() in TYPE position` case in `test/eslint/rules/no-self-package-import.test.ts` is what turns
       // that silence into a red test if a future parser renames it again.
       TSImportType: (node) => check(node.source),
       // `require('x')` in the `.cts`/`.cjs` files this pack also lints.

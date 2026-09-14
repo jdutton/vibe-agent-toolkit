@@ -74,7 +74,6 @@ export function isPathLike(command: string): boolean {
  *
  * - Node.js deprecation: https://nodejs.org/api/deprecations.html#DEP0190
  * - Security tests: `packages/utils/test/safe-exec.test.ts`
- * - Windows fix: PR #94 (fix/windows-shell-independence-v2)
  *
  * @param commandPath - Resolved absolute path to command
  * @returns true if shell should be used, false otherwise

@@ -62,7 +62,7 @@
  * authoring project, which is precisely the population check
  * `docs/validation-rule-design.md` requires and the reason it requires it.
  *
- * ## Measured fire rate, re-measured 2026-09-07
+ * ## Measured fire rate (re-measured after the camelCase fix below)
  *
  * Population = documents that spell at least one MCP tool fully-qualified.
  *

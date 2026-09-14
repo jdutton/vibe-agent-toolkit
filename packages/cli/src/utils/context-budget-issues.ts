@@ -11,7 +11,7 @@
  *
  * A sweep reports every working location, and locations sharing an instruction
  * chain share one budget — that is the whole point of the collapse. Re-measured
- * on VAT's own tree 2026-08-23, after the context population began declining the
+ * on VAT's own tree, after the context population began declining the
  * gitignored half: **366 of 589 directories** pay the single chain
  * `['CLAUDE.md']`, so emitting per location would print 366 byte-identical
  * findings, all blaming one file, the moment the root `CLAUDE.md` crossed the

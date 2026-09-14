@@ -10,8 +10,10 @@ import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import {
+  ARD_EMIT_REPORT_SCHEMA,
   ArdConfigMissingError,
   ardEmitCommand,
+  buildArdEmitReport,
   runArdEmit,
   type ArdEmitOptions,
 } from '../src/commands/ard/emit.js';
@@ -158,7 +160,6 @@ async function emitAndRead(root: string): Promise<{
 }> {
   const outputPath = safePath.join(root, 'out', 'ard.json');
   const result = await runArdEmit({ projectRoot: root, output: outputPath });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is built from a test temp dir
   const manifest = JSON.parse(readFileSync(outputPath, 'utf-8')) as {
     '@context'?: string;
     entries: Array<Record<string, unknown>>;
@@ -177,6 +178,15 @@ describe('runArdEmit', () => {
     expect(manifest.entries[0]?.identifier).toBe(`urn:air:example.com:skills:${PUBLISHED_SKILL}`);
     expect(manifest.entries[0]?.type).toBe('application/ai-skill+md');
     expect(manifest.entries[0]?.url).toBe(`https://example.com/catalog/skills/${PUBLISHED_SKILL}`);
+  });
+
+  it('builds a document its own published schema accepts', async () => {
+    // The Zod object matches what the command WRITES — the drift test only
+    // proves the JSON file matches the Zod object.
+    const root = projectWithSkill(workDir, 'schema-accepts', CONFIG_YAML_WITH_ARD);
+    const { result } = await emitAndRead(root);
+
+    expect(ARD_EMIT_REPORT_SCHEMA.safeParse(buildArdEmitReport(result)).success).toBe(true);
   });
 
   it('refuses when the project declares no `ard` block at all', async () => {
@@ -208,7 +218,6 @@ describe('runArdEmit — a config key VAT removed does not take the command down
     const { stderr, exitCalls } = await captureEmit(root);
 
     expect(exitCalls).toEqual([]);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is built from a test temp dir
     expect(existsSync(safePath.join(root, 'out', 'ard.json'))).toBe(true);
     expect(stderr).toContain(`unrecognized key "${REMOVED_RESOURCES_KEY}"`);
     expect(stderr).toContain('Ignoring the unknown key(s) and continuing');
@@ -288,13 +297,22 @@ describe('runArdEmit — a manifest never advertises a skill that is not there',
     // 🚨 `"version": ""` reached the entry and emitted `"version": ""` at exit
     // 0 — a field asserting a version that is not one.
     const root = projectWithSkill(workDir, 'blank-version', CONFIG_YAML_WITH_ARD);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is built from a test temp dir
     writeFileSync(safePath.join(root, 'package.json'), '{"name":"x","version":""}\n', 'utf-8');
 
     const { result, manifest } = await emitAndRead(root);
 
     expect(result.entryCount).toBe(1);
     expect(manifest.entries[0]).not.toHaveProperty('version');
+  });
+
+  it('refuses a package.json that is not JSON rather than emitting an unversioned manifest', async () => {
+    // "Absent" is the only shape that omits the version. A manifest that is
+    // there and broken used to be read the same way — an entry with no
+    // `version`, exit 0, from a tree npm itself cannot load.
+    const root = projectWithSkill(workDir, 'broken-manifest', CONFIG_YAML_WITH_ARD);
+    writeFileSync(safePath.join(root, 'package.json'), '{"name":"x",', 'utf-8');
+
+    await expect(emitAndRead(root)).rejects.toThrow(/package\.json is not valid JSON/);
   });
 });
 
@@ -474,7 +492,6 @@ describe('runArdEmit — a dot segment never reaches a published address', () =>
     await expect(runArdEmit({ projectRoot: root, output: outputPath })).rejects.toThrow(
       /namespace/i
     );
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is built from a test temp dir
     expect(existsSync(outputPath)).toBe(false);
   });
 });
@@ -536,17 +553,25 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
 
   const reportFrom = (stdout: string): Record<string, unknown> =>
     JSON.parse(stdout) as Record<string, unknown>;
+  const dataOf = (report: Record<string, unknown>): Record<string, unknown> =>
+    report['data'] as Record<string, unknown>;
 
-  it('publishes the skip count and the skipped surfaces as JSON', async () => {
+  it('publishes the skip count beside a finding per skipped surface as JSON', async () => {
     const root = projectWith(workDir, 'json-empty', CONFIG_YAML_WITH_ARD);
 
     const { stdout } = await captureEmit(root, { format: 'json' });
 
     const report = reportFrom(stdout);
-    expect(report.entryCount).toBe(0);
-    expect(report.skippedCount).toBe(1);
-    expect(report.skipped).toEqual([
-      expect.objectContaining({ name: PUBLISHED_SKILL, kind: 'skill' }),
+    expect(dataOf(report)['entryCount']).toBe(0);
+    expect(dataOf(report)['skippedCount']).toBe(1);
+    expect(report['examined']).toBe(1);
+    expect(report['status']).toBe('findings');
+    expect(report['findings']).toEqual([
+      expect.objectContaining({
+        code: 'ARD_SURFACE_SKIPPED',
+        severity: 'warning',
+        message: expect.stringContaining(`skipped skill "${PUBLISHED_SKILL}"`),
+      }),
     ]);
   });
 
@@ -559,10 +584,10 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
     const emptyReport = reportFrom((await captureEmit(empty, { format: 'json' })).stdout);
     const fullReport = reportFrom((await captureEmit(full, { format: 'json' })).stdout);
 
-    expect(emptyReport.status).toBe('empty');
-    expect(fullReport.status).toBe('written');
-    expect(fullReport.entryCount).toBe(1);
-    expect(fullReport.skippedCount).toBe(0);
+    expect(dataOf(emptyReport)['entryCount']).toBe(0);
+    expect(dataOf(fullReport)['entryCount']).toBe(1);
+    expect(dataOf(fullReport)['skippedCount']).toBe(0);
+    expect(fullReport['status']).toBe('ok');
   });
 
   it('keeps the default exit code at 0 over an empty manifest', async () => {
@@ -570,7 +595,8 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
 
     const { exitCalls, stdout } = await captureEmit(root, { format: 'json' });
 
-    expect(reportFrom(stdout)).toMatchObject({ status: 'empty', skippedCount: 0 });
+    // Nothing declared, nothing skipped: the denominator is what says so.
+    expect(reportFrom(stdout)).toMatchObject({ status: 'ok', examined: 0, data: { entryCount: 0, skippedCount: 0 } });
     expect(exitCalls).toEqual([]);
   });
 
@@ -592,8 +618,8 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
     const { exitCalls, stdout } = await captureEmit(root, { strict: true, format: 'json' });
 
     const report = reportFrom(stdout);
-    expect(report.entryCount).toBe(1);
-    expect(report.skippedCount).toBe(1);
+    expect(dataOf(report)['entryCount']).toBe(1);
+    expect(dataOf(report)['skippedCount']).toBe(1);
     expect(exitCalls).toEqual([[1]]);
   });
 
@@ -630,7 +656,7 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
       errSpy.mockRestore();
       outSpy.mockRestore();
     }
-    expect(reportFrom(stdout).status).toBe('empty');
+    expect(dataOf(reportFrom(stdout))['entryCount']).toBe(0);
     // 🪤 The exit code ALONE cannot see this: `process.exit` is mocked, so
     // Commander's own "unknown option" path exits 1 too — renaming the option
     // in the parser left this case green until it asserted on the message only

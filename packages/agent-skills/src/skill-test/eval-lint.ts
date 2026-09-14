@@ -1,6 +1,6 @@
 /**
- * Advisory (never-fatal) lint over an eval suite's `expectations` prose (issue #145
- * follow-up). An adopter reported that WEAK expectations — pure "mentions X" /
+ * Advisory (never-fatal) lint over an eval suite's `expectations` prose.
+ * An adopter reported that WEAK expectations — pure "mentions X" /
  * "includes Y" presence checks with no discriminating or negative counterpart —
  * pass even for a hallucinated or right-for-the-wrong-reason answer, giving false
  * confidence in a green run. This module flags that pattern so authors can
@@ -73,7 +73,7 @@ export function lintEvalExpectations(evals: EvalEntry[]): EvalLintWarning[] {
 }
 
 // ---------------------------------------------------------------------------
-// Undeclared-executable lint (issue #145 adopter follow-up)
+// Undeclared-executable lint
 // ---------------------------------------------------------------------------
 
 // A trailing script/binary extension we strip before comparing an executable
@@ -130,8 +130,8 @@ function probableDeclaredTypoTarget(
 
 /**
  * Advisory (never-fatal) lint: flag a `toolExpectations` entry that names an
- * executable which looks like a TYPO of one of the skill's `declaredExecutables`
- * (issue #145 adopter follow-up). A name that never matches a real tool is a quiet
+ * executable which looks like a TYPO of one of the skill's `declaredExecutables`.
+ * A name that never matches a real tool is a quiet
  * footgun — `mustRun`/`mustSucceed`/`sequence` then fail for the wrong reason, and
  * `mustNotRun` passes vacuously (the tool "never ran" only because the name is
  * wrong). This is zero-token static plumbing, run before any spend.

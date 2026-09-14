@@ -3,6 +3,7 @@
  */
 import type { OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
 import { createOrgApiClientFromEnv } from '@vibe-agent-toolkit/claude-marketplace';
+import { ExitCode, type ExitCodeValue } from '@vibe-agent-toolkit/schema';
 import type { Command } from 'commander';
 
 import { handleCommandError } from '../../../utils/command-error.js';
@@ -167,13 +168,18 @@ export function addPaginationOptions(cmd: Command): Command {
 }
 
 /**
- * The exit code for a run that COMPLETED and reported failures.
+ * An org command's document, tagged as one that must NOT end in a success exit.
  *
- * Read against the contract every command's `--help` publishes — `0` no
- * error-severity findings, `1` at least one, `2` a system error — this is `1`:
- * the command ran, produced its document, and that document reports something
- * that went wrong. `2` stays for the run that could not happen at all (no
- * credential, no such source), which is what {@link handleCommandError} ends on.
+ * A batch command's failures are part of its REPORT, not an exception: the
+ * document has to be published (which skills landed, which did not, and why),
+ * and the run still has to end non-zero — on `FINDINGS`: the command ran,
+ * produced its document, and that document reports something that went wrong.
+ * `ERROR` stays for the run that could not happen at all (no credential, no
+ * such source), which is what {@link handleCommandError} ends on. Throwing
+ * would end non-zero but discard the report; returning plainly publishes the
+ * report but claims success. This wrapper is the third option, and it keeps
+ * the "did this fail?" decision in one place instead of letting each command
+ * invent a status field.
  *
  * 🔑 It exists because a batch command has an ending the old code could not
  * express. `skills install --from-npm` catches each per-skill upload failure and
@@ -181,18 +187,6 @@ export function addPaginationOptions(cmd: Command): Command {
  * `status: success` beside `skillsFailed: 3` and exited 0 — and a CI wrapper
  * spelled `vat claude org skills install --from-npm … || fail` published nothing
  * and reported green.
- */
-export const ORG_RUN_FAILED_EXIT_CODE = 1;
-
-/**
- * An org command's document, tagged as one that must NOT end in a success exit.
- *
- * A batch command's failures are part of its REPORT, not an exception: the
- * document has to be published (which skills landed, which did not, and why),
- * and the run still has to end non-zero. Throwing would end non-zero but discard
- * the report; returning plainly publishes the report but claims success. This
- * wrapper is the third option, and it keeps the "did this fail?" decision in one
- * place instead of letting each command invent a status field.
  */
 export interface OrgCommandFailure {
   readonly orgCommandFailed: true;
@@ -211,7 +205,7 @@ function isOrgCommandFailure(result: object): result is OrgCommandFailure {
 /** What an org command writes to stdout, and the code it ends on. */
 export interface OrgCommandEnding {
   readonly document: Record<string, unknown>;
-  readonly exitCode: number;
+  readonly exitCode: ExitCodeValue;
 }
 
 /**
@@ -230,7 +224,7 @@ export function buildOrgCommandEnding(result: object, durationMs: number): OrgCo
       ...payload,
       duration: `${String(durationMs)}ms`,
     },
-    exitCode: failed ? ORG_RUN_FAILED_EXIT_CODE : 0,
+    exitCode: failed ? ExitCode.FINDINGS : ExitCode.OK,
   };
 }
 
@@ -238,10 +232,10 @@ export function buildOrgCommandEnding(result: object, durationMs: number): OrgCo
  * Execute an org command with standard error handling.
  * Sets up client, logger, timer, and catches errors uniformly.
  *
- * An action may return its document plainly (success, exit 0) or wrapped in
- * {@link orgCommandFailure} (the document is still published, the run exits
- * {@link ORG_RUN_FAILED_EXIT_CODE}). Anything thrown is the system error and
- * ends on {@link handleCommandError}'s exit 2.
+ * An action may return its document plainly (success, `OK`) or wrapped in
+ * {@link orgCommandFailure} (the document is still published, the run ends on
+ * `FINDINGS`). Anything thrown is the system error and ends on
+ * {@link handleCommandError}'s `ERROR`.
  *
  * 🔑 Usage guards belong INSIDE the action, not in the Commander action that
  * calls this. `bin.ts` runs the synchronous `program.parse()`, so a throw from

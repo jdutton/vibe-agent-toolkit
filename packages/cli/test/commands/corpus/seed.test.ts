@@ -8,7 +8,6 @@ import { loadSeedFile } from '../../../src/commands/corpus/seed.js';
 function writeSeed(content: string): string {
   const dir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-corpus-seed-'));
   const file = safePath.join(dir, 'seed.yaml');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only path under tmpdir
   writeFileSync(file, content, 'utf-8');
   return file;
 }

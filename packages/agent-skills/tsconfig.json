@@ -7,8 +7,9 @@
   },
   "include": ["src/**/*"],
   "references": [
-    { "path": "../utils" },
+    { "path": "../agent-config" },
     { "path": "../resources" },
-    { "path": "../agent-config" }
+    { "path": "../schema" },
+    { "path": "../utils" }
   ]
 }

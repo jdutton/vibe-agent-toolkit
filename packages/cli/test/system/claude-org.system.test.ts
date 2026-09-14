@@ -52,10 +52,13 @@ async function expectSkillsKeyError(args: string[]): Promise<void> {
   expect(result.stderr).not.toContain('ANTHROPIC_ADMIN_API_KEY');
 }
 
-/** Expect exit 1 with not-yet-implemented stub for the given command name. */
+/**
+ * Expect the not-yet-implemented stub for the given command name, ending on
+ * ERROR: a verb that cannot do its job is not a finding about the org.
+ */
 async function expectStub(args: string[], commandName: string): Promise<void> {
   const { result, parsed } = await runStubCommand(args);
-  expect(result.status).toBe(1);
+  expect(result.status).toBe(2);
   expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
   expect(parsed.command).toBe(commandName);
 }
@@ -91,7 +94,7 @@ describe('vat claude org', () => {
       { cmd: 'org workspaces create', args: ['workspaces', 'create', '--name', 'test'] },
       { cmd: 'org workspaces archive', args: ['workspaces', 'archive', 'ws_123'] },
       { cmd: 'org api-keys update', args: ['api-keys', 'update', 'key_123', '--name', 'new-name'] },
-    ])('$cmd outputs not-yet-implemented and exits 1', async ({ cmd, args }) => {
+    ])('$cmd outputs not-yet-implemented and exits 2', async ({ cmd, args }) => {
       await expectStub(args, cmd);
     });
 
@@ -100,9 +103,9 @@ describe('vat claude org', () => {
       { cmd: 'workspaces members add', args: ['workspaces', 'members', 'add', 'ws_123', '--user-id', 'u1', '--role', 'admin'] },
       { cmd: 'workspaces members update', args: ['workspaces', 'members', 'update', 'ws_123', '--user-id', 'u1', '--role', 'developer'] },
       { cmd: 'workspaces members remove', args: ['workspaces', 'members', 'remove', 'ws_123', '--user-id', 'u1'] },
-    ])('org $cmd outputs not-yet-implemented and exits 1', async ({ args }) => {
+    ])('org $cmd outputs not-yet-implemented and exits 2', async ({ args }) => {
       const { result, parsed } = await runStubCommand(args);
-      expect(result.status).toBe(1);
+      expect(result.status).toBe(2);
       expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
     });
   });
@@ -129,7 +132,7 @@ describe('vat claude org', () => {
     //
     // The exact code, not `not.toBe(0)`: that assertion is satisfied by exit 1,
     // which every command's --help publishes as "at least one error-severity
-    // finding" — a claim about a run that never started. USAGE_ERROR_EXIT_CODE is 2
+    // finding" — a claim about a run that never started. `ExitCode.ERROR` is 2
     // precisely so a wrapper can tell the two apart, and an assertion that accepts
     // either cannot see the difference it exists to protect.
     it('org skills versions add requires a skill id', async () => {

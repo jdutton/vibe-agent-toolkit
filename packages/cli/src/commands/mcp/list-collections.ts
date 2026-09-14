@@ -2,6 +2,8 @@
  * MCP list-collections command - lists available agent collections
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
@@ -50,7 +52,7 @@ export async function listCollectionsCommand(
     logger.info(`  vat mcp serve @vibe-agent-toolkit/vat-example-cat-agents`);
     logger.info(`  vat mcp serve ./packages/vat-example-cat-agents  # Local development\n`);
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'MCPListCollections');
   }

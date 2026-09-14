@@ -57,7 +57,7 @@ const AGENTS_SKILLS_PATH = '.agents/skills';
  *
  * @vendor-claim reviewed=2026-07-30 verify=Each of the seven platforms' own published docs for where it reads skills from (claude, codex, copilot, gemini, cursor, windsurf, agents)
  *
- * Last reviewed against vendor documentation 2026-07-30: all fourteen paths
+ * At the last review (the `reviewed=` date above): all fourteen paths
  * re-read from the first-party sources listed below, all fourteen unchanged.
  * Update this table when platforms change theirs — and re-read those sources when
  * you do, because nothing here is verified at build or test time. A stale entry
@@ -76,7 +76,7 @@ const AGENTS_SKILLS_PATH = '.agents/skills';
  * a change-detector masquerading as verification, and friction against exactly the
  * correction the clock above exists to produce.)
  *
- * Sources, one per target, re-read 2026-07-30:
+ * Sources, one per target, re-read at that review:
  * - claude   https://code.claude.com/docs/en/skills
  *            (docs.claude.com/en/docs/claude-code/skills now 301s here)
  * - codex    https://developers.openai.com/codex/skills/

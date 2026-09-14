@@ -6,12 +6,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { loadAgentManifest } from '@vibe-agent-toolkit/agent-config';
-import { copyDirectory, safePath } from '@vibe-agent-toolkit/utils';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { copyDirectory, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
 import { validateAndGetScopeLocation } from '../../utils/scope-locations.js';
+
+import { agentInstallPath } from './install-path.js';
 
 export interface InstallOptions {
   scope?: 'user' | 'project';
@@ -45,12 +48,15 @@ export async function installAgent(
     // Validate scope and get target location
     const targetLocation = validateAndGetScopeLocation(runtime, scope);
 
+    // Refused by name before anything is examined — before the agent is even
+    // looked up: with `--force` this path is `rm -rf`'d, and the positional is
+    // the one thing on it the user typed.
+    const installPath = agentInstallPath(targetLocation, agentName);
+
     // Find built skill
     const builtSkillPath = await findBuiltSkill(agentName, runtime, logger);
-    const installPath = safePath.join(targetLocation, agentName);
 
     // Ensure target directory exists
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from validated scope location
     await fs.mkdir(targetLocation, { recursive: true });
 
     // Check if already installed.
@@ -63,19 +69,22 @@ export async function installAgent(
     // against the one state it most needed to clear. `lstat` stats the link
     // itself, so the entry is seen whether or not its target still exists.
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- installPath is built from a validated scope location
       await fs.lstat(installPath);
       if (!force) {
         logger.error(
           `\n${agentName} already installed at ${installPath}\n` +
             `Use --force to overwrite\n`
         );
-        process.exit(1);
+        process.exit(ExitCode.ERROR);
       }
       // Remove existing if force flag is set
       await fs.rm(installPath, { recursive: true, force: true });
-    } catch {
-      // Not installed, continue
+    } catch (error) {
+      // Not installed: continue. Only an ABSENCE means that — a refused `lstat`
+      // (the scope dir the OS will not let us into) or a failed `rm` used to
+      // land here too, read as "not installed", and the install then tripped
+      // over whatever was actually there.
+      if (!isPathAbsentError(error)) throw error;
     }
 
     if (dev) {
@@ -91,7 +100,7 @@ export async function installAgent(
     const duration = Date.now() - startTime;
     logger.debug(`Install completed in ${duration}ms`);
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'Install');
   }
@@ -121,7 +130,7 @@ export async function installAgent(
  */
 async function linkForDevelopment(builtSkillPath: string, installPath: string): Promise<void> {
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename, local/no-bare-symlink-in-tests -- eyes open: win32 is refused by the guard in `installAgent` before this runs, so the Windows privilege hazard the rule names cannot be reached here.
+    // eslint-disable-next-line local/no-bare-symlink-in-tests -- eyes open: win32 is refused by the guard in `installAgent` before this runs, so the Windows privilege hazard the rule names cannot be reached here.
     await fs.symlink(builtSkillPath, installPath, 'dir');
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
@@ -181,7 +190,10 @@ async function findAgentPackageRoot(manifestPath: string): Promise<string> {
     try {
       await fs.access(packageJsonPath);
       return currentDir;
-    } catch {
+    } catch (error) {
+      // No manifest at this level: climb. A refused ancestor is not "no
+      // manifest" and stays loud.
+      if (!isPathAbsentError(error)) throw error;
       currentDir = path.dirname(currentDir);
     }
   }

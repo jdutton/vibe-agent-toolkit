@@ -21,11 +21,12 @@ import {
   type SummarizeBaselineIntegrityInput,
 } from '../../src/skill-test/baseline-integrity.js';
 import { resolveHarnessRoot } from '../../src/skill-test/harness-location.js';
-import { resolveHarnessLocation } from '../../src/skill-test/run-harness.js';
+import { __internal } from '../../src/skill-test/run-harness.js';
+
+const { resolveHarnessLocation } = __internal;
 
 // Synthetic paths used only as string needles for the detector — nothing is read
 // or written here, so the publicly-writable-directory concern does not apply.
-/* eslint-disable sonarjs/publicly-writable-directories -- inert test literals; the detector never touches the filesystem */
 const TMP_DIR = '/tmp';
 const HARNESS_DIR = '/tmp/vat-skill-test';
 const HARNESS_ROOT = '/tmp/vat-skill-test/my-skill-abc12345';
@@ -33,7 +34,7 @@ const WS_ROOT = '/tmp/vat-skill-test-ws-abc';
 /** vat's private tmp dirs: the held answer key, and the grader's nonce dir. */
 const HOLD_DIR = '/tmp/vat-skill-evals-1111aaaa2222bbbb';
 const GRADER_DIR = '/tmp/vat-skill-grade-3333cccc4444dddd';
-/* eslint-enable sonarjs/publicly-writable-directories */
+ 
 /** The treatment arm's live working directory, one `ls ..` from the control's. */
 const SIBLING_ARM = `${WS_ROOT}/1111aaaa2222bbbb`;
 /**
@@ -299,7 +300,7 @@ describe('detectBaselineContamination', () => {
  * none of the 99 tests.
  */
 describe('detectBaselineContamination — the cwd is carried across calls', () => {
-  const HARNESS = '/tmp/vat-skill-test/my-skill-1a2b3c4d'; // eslint-disable-line sonarjs/publicly-writable-directories -- inert literal
+  const HARNESS = '/tmp/vat-skill-test/my-skill-1a2b3c4d';  
 
   it('follows a multi-call cd chain into the harness and flags the reach', () => {
     const transcript = bashSession(
@@ -660,11 +661,10 @@ describe('detectBaselineContamination — real path forms', () => {
   // the boundary check replaced by a bare `indexOf`. Two reviewers found that
   // independently, which is why the assertion below pins the needles first.
   it.each([
-    /* eslint-disable sonarjs/publicly-writable-directories -- inert test literals; the detector is a pure string scan */
     ['/tmp/out', 'wc -l /tmp/output.csv'],
     ['/tmp/hold', 'head -5 /tmp/holdings.csv'],
     ['/tmp/vat-run', 'ls /tmp/vat-runner-cache'],
-    /* eslint-enable sonarjs/publicly-writable-directories */
+     
   ])('does not fire mid-segment for --out %s', (out, command) => {
     expect(harnessNeedles(out).length, 'row is vacuous: no needle to match').toBeGreaterThan(0);
     expect(scanHits({ transcript: transcriptWith(command), harnessRoot: out })).toEqual([]);
@@ -674,7 +674,6 @@ describe('detectBaselineContamination — real path forms', () => {
   // for a short root, disabling the harness-path check while the verdict still read
   // "checked and clean". An absolute reach into the staged tree must still fire.
   it('still detects an absolute reach under a very short --out', () => {
-    // eslint-disable-next-line sonarjs/publicly-writable-directories -- inert test literal
     const harnessRoot = '/tmp/x';
     const hits = scanHits({
       transcript: transcriptWith(`cat ${harnessRoot}/staged/my-skill/SKILL.md`),
@@ -1104,7 +1103,7 @@ describe('detectBaselineContamination — what `match` is allowed to carry', () 
   // `vat-skill-evals-` and a short `--out` have no prefix to drop, and an `…/` on
   // them would advertise a truncation that never happened.
   it('leaves a needle of two segments or fewer exactly as it matched', () => {
-    const short = '/tmp/h'; // eslint-disable-line sonarjs/publicly-writable-directories -- inert literal
+    const short = '/tmp/h';  
     const hits = scanHits({
       transcript: transcriptWith(`cat ${short}/staged/s/SKILL.md`),
       harnessRoot: short,
@@ -1342,10 +1341,9 @@ describe('scrubControlArmEnv', () => {
   // own declared input files while the treatment kept them. Same fake-lift
   // direction as the PATH case above.
   it('does not strip a value that merely shares a path PREFIX with the harness root', () => {
-    /* eslint-disable sonarjs/publicly-writable-directories -- inert test literals; scrubControlArmEnv is a pure string scan */
     const harnessRoot = '/tmp/vat-skill-test';
     const fixtures = '/tmp/vat-skill-test-ws-9f3c/lookup-1/fixtures';
-    /* eslint-enable sonarjs/publicly-writable-directories */
+     
     const { env, droppedNamingRoot } = scrubControlArmEnv({ FIXTURES: fixtures }, harnessRoot, []);
 
     expect(droppedNamingRoot, 'a prefix collision stripped the control arm fixtures').toEqual([]);

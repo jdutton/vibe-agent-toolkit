@@ -5,7 +5,6 @@
  * checkUnreferencedFiles hard-filtered to .md, causing broken links
  * INSIDE bundled HTML to ship with a green build.
  */
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';

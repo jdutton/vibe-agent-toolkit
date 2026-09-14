@@ -79,11 +79,9 @@ export function projectRootOrNull(startDir: string): string | null {
  */
 export function assertDirectoryArgument(pathArg: string): string {
   const resolved = safePath.resolve(pathArg);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- CLI path argument, resolved above
   if (!existsSync(resolved)) {
     throw new Error(`Path does not exist: ${resolved}`);
   }
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- CLI path argument, existence checked above
   if (!statSync(resolved).isDirectory()) {
     throw new Error(`Path is not a directory: ${resolved}`);
   }

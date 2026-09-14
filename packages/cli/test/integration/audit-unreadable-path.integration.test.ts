@@ -1,10 +1,3 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-/* eslint-disable sonarjs/file-permissions -- `chmod 000` on a throwaway temp directory IS the
-   fixture: this suite exists to prove the audit degrades on an unreadable path, and there is no way
-   to produce one without setting the mode. The directory is created by `mkdtemp` under the system
-   temp dir, is restored to 0755 in `afterAll` (rm -rf cannot clear a 000 directory otherwise), and
-   never holds anything but the three files written here. */
-
 /**
  * Regression, issue #180: one unreadable subdirectory used to abort the WHOLE
  * `vat audit` run — `status: error`, exit 2, and zero findings, discarding every
@@ -27,6 +20,7 @@ import fs from 'node:fs';
 import { dirname } from 'node:path';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 
@@ -45,13 +39,21 @@ const silentLogger = {
 
 const UNREADABLE = 0o000;
 const READABLE = 0o755;
+
+/** Write `rel` under `root`, creating parents, and return its absolute path. */
+function writerUnder(root: string): (rel: string, body: string) => string {
+  return (rel, body) => {
+    const abs = safePath.join(root, rel);
+    fs.mkdirSync(dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, body);
+    return abs;
+  };
+}
 const SKILL_DIR = 'demo';
 const UNREADABLE_SUBDIR = 'sub';
 const AGENT_INSTRUCTION_FILE = 'CLAUDE.md';
 
 /** `chmod 000` denies nothing to uid 0 — see the file header. */
-const CANNOT_DENY_READS =
-  process.platform === 'win32' || (typeof process.getuid === 'function' && process.getuid() === 0);
 
 let tempDir: string;
 let skillDir: string;
@@ -449,12 +451,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit of a plugin with a SKILL.md it can
   beforeAll(() => {
     pluginTempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-plugin-unreadable-skill-'));
     pluginDir = safePath.join(pluginTempDir, 'plug');
-    const write = (rel: string, body: string): string => {
-      const abs = safePath.join(pluginDir, rel);
-      fs.mkdirSync(dirname(abs), { recursive: true });
-      fs.writeFileSync(abs, body);
-      return abs;
-    };
+    const write = writerUnder(pluginDir);
     write('.claude-plugin/plugin.json', '{"name":"plug","version":"1.0.0","description":"A plugin with one skill the scan cannot open."}\n');
     write('skills/good/SKILL.md', '---\nname: good\ndescription: A readable skill that must survive its siblings.\n---\n\n# Good\n');
     write('skills/badfm/SKILL.md', '---\n- just\n- a list\n---\n\n# Bad\n');
@@ -506,5 +503,67 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit of a plugin with a SKILL.md it can
     const unreadable = results.flatMap((r) => r.issues).find((i) => i.code === 'SCAN_PATH_UNREADABLE');
     expect(unreadable?.message).toMatch(/EACCES|permission denied/i);
     expect(unreadable?.message).toContain(`${prefix}skills/lockedfile/SKILL.md`);
+  });
+});
+
+/**
+ * A skill DIRECTORY the OS refuses, inside a plugin. The plugin inventory's
+ * whole-tree crawl records the refusal on `parseErrors[]`, and every
+ * `parseErrors[]` row used to reach the report as `PLUGIN_INVALID_JSON` at
+ * error severity: an `EACCES` on `skills/<name>` read as a broken manifest, and
+ * the audit exited 1 over a mode bit. A refused path is the RUN degrading —
+ * `SCAN_PATH_UNREADABLE`, warning, exit 0 — and it is filed once even though
+ * the distributed-tree detector meets the same directory.
+ *
+ * And the other half of the same contract, driven through the CLI: a root with
+ * NOTHING readable audited zero files. The refusal row is not a scanned file,
+ * so `filesScanned` is 0 and the run ends on the zero-files refusal (exit 1)
+ * instead of `filesScanned: 1, filesPassed: 0`, `status: warning`, exit 0.
+ */
+describe.skipIf(CANNOT_DENY_READS)('vat audit of a plugin with a skill directory it cannot list', () => {
+  let pluginTempDir: string;
+  let pluginDir: string;
+  let lockedSkillDir: string;
+
+  beforeAll(() => {
+    pluginTempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-plugin-unreadable-dir-'));
+    pluginDir = safePath.join(pluginTempDir, 'plug');
+    const write = writerUnder(pluginDir);
+    write('.claude-plugin/plugin.json', '{"name":"plug","version":"1.0.0","description":"A plugin with one skill directory the scan cannot list."}\n');
+    write('skills/good/SKILL.md', '---\nname: good\ndescription: A readable skill that must survive its siblings.\n---\n\n# Good\n');
+    write('skills/lockeddir/SKILL.md', '---\nname: lockeddir\ndescription: A skill whose directory cannot be listed.\n---\n\n# Locked\n');
+    lockedSkillDir = safePath.join(pluginDir, 'skills', 'lockeddir');
+    fs.chmodSync(lockedSkillDir, UNREADABLE);
+  });
+
+  afterAll(() => {
+    if (fs.existsSync(lockedSkillDir)) fs.chmodSync(lockedSkillDir, READABLE);
+    fs.rmSync(pluginTempDir, { recursive: true, force: true });
+  });
+
+  it('files the refusal once as SCAN_PATH_UNREADABLE on the plugin — never as PLUGIN_INVALID_JSON — and exits 0', () => {
+    const result = runAuditCli(pluginDir);
+    const report = parseYaml(result.stdout) as { status: string; summary: Record<string, number>; files: Array<{ path: string; issues: Array<{ code: string; location?: string }> }> };
+    const issues = report.files.flatMap((f) => f.issues);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(report.status).toBe('warning');
+    expect(issues.map((i) => i.code)).not.toContain('PLUGIN_INVALID_JSON');
+    expect(issues.filter((i) => i.code === 'SCAN_PATH_UNREADABLE').map((i) => i.location)).toEqual(['skills/lockeddir']);
+    // The readable sibling still scanned, and the refusal is not a scanned file.
+    expect(report.files.some((f) => f.path.endsWith('skills/good/SKILL.md'))).toBe(true);
+    expect(report.summary['pathsUnreadable']).toBe(0);
+  });
+
+  it('a root with nothing readable audits zero files: the refusal is not counted, so the run is refused at exit 1', () => {
+    const result = runAuditCli(lockedSkillDir);
+    const report = parseYaml(result.stdout) as { status: string; summary: Record<string, number>; issues?: Array<{ code: string }>; files: Array<{ issues: Array<{ code: string }> }> };
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(report.status).toBe('error');
+    expect(report.summary['filesScanned']).toBe(0);
+    expect(report.summary['pathsUnreadable']).toBe(1);
+    expect(report.files.flatMap((f) => f.issues).map((i) => i.code)).toEqual(['SCAN_PATH_UNREADABLE']);
+    expect(report.issues?.map((i) => i.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
   });
 });

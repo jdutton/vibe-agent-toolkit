@@ -44,7 +44,6 @@ interface FileCounts {
  */
 async function readPluginManifest(pluginDir: string): Promise<PluginManifest> {
   const manifestPath = safePath.join(pluginDir, '.claude-plugin', 'plugin.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from join(pluginDir, ...)
   const raw = await readFile(manifestPath, 'utf8');
   const parsed = JSON.parse(raw) as Record<string, unknown>;
 
@@ -133,7 +132,6 @@ async function scanMarkdownFile(
   fullPath: string,
   locationRoot: string,
 ): Promise<EvidenceRecord[]> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from collectFiles walk
   const content = await readFile(fullPath, 'utf8');
   return [
     ...scanCodeBlocks(content, fullPath, locationRoot),
@@ -157,7 +155,6 @@ async function scanScriptFile(
   }
 
   if (extname(fullPath).toLowerCase() === '.py') {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from collectFiles walk
     const content = await readFile(fullPath, 'utf8');
     evidence.push(...scanPythonImports(content, fullPath, locationRoot));
   }
@@ -172,7 +169,6 @@ async function scanHooksFile(
   fullPath: string,
   locationRoot: string,
 ): Promise<EvidenceRecord[]> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from collectFiles walk
   const raw = await readFile(fullPath, 'utf8');
   const config = JSON.parse(raw) as Record<string, unknown>;
   return scanHooksConfig(config, fullPath, locationRoot);
@@ -185,7 +181,6 @@ async function scanMcpFile(
   fullPath: string,
   locationRoot: string,
 ): Promise<EvidenceRecord[]> {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from collectFiles walk
   const raw = await readFile(fullPath, 'utf8');
   const config = JSON.parse(raw) as Record<string, unknown>;
   return scanMcpConfig(config, fullPath, locationRoot);

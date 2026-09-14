@@ -135,7 +135,9 @@ console.log(turn2.recommendations); // Breed recommendations based on profile
 
 ```typescript
 import { convertConversationalAssistantsToFunctions } from '@vibe-agent-toolkit/runtime-vercel-ai-sdk';
-import { breedAdvisorAgent, petCareAdvisorAgent } from '@vibe-agent-toolkit/vat-example-cat-agents';
+import { breedAdvisorAgent, BreedAdvisorInputSchema, BreedAdvisorOutputSchema } from '@vibe-agent-toolkit/vat-example-cat-agents';
+// A second conversational agent of your own — the cat-agents package ships only one
+import { petCareAdvisorAgent, PetCareInputSchema, PetCareOutputSchema } from './pet-care-advisor.js';
 
 const assistants = convertConversationalAssistantsToFunctions(
   {

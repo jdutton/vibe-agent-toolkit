@@ -14,6 +14,14 @@ export type ParseError = {
 	path: string;
 	message: string;
 	line?: number;
+	/**
+	 * Set when the OS refused to read or list `path` (`EACCES`, `EPERM`, a
+	 * vanished mount). The row is then a statement about the RUN — this path
+	 * was not examined — not a defect in the subject, and a consumer must not
+	 * file it at the severity it gives malformed content. Absent for a parse
+	 * failure, a missing manifest, or any other defect the subject owns.
+	 */
+	unreadable?: true;
 };
 
 export type ComponentRef = {

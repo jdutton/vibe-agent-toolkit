@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 /**
- * vat-owned tool-expectation channel (issue #145 Phase T, C2). This is
+ * vat-owned tool-expectation channel (C2). This is
  * DELIBERATELY separate from `grading.json`'s `expectations[]` and from
  * friction's closed category enum (friction-schema.ts): tool verdicts judge
  * declared `toolExpectations` (mustRun/mustNotRun/sequence) against the
@@ -24,7 +24,7 @@ const ToolSequenceCheckSchema = z.object({
 }).strict();
 
 /**
- * A single `mustSucceed` check (feature #148): the named executable must have
+ * A single `mustSucceed` check: the named executable must have
  * RUN and its invoking tool_result must NOT be an error. `succeeded` is judged
  * FROM THE TRANSCRIPT (preferring the tool_result `is_error` flag), so a skill
  * that swallows a non-zero exit (e.g. `cmd || true`) can legitimately read as

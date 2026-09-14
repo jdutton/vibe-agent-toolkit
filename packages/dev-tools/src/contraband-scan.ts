@@ -161,7 +161,6 @@ export function loadTokens(repoRoot: string, env: NodeJS.ProcessEnv = process.en
   for (const path of candidates) {
     let contents: string;
     try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- operator-supplied path, by design
       contents = readFileSync(path, 'utf8');
     } catch (cause) {
       // An explicitly configured path that cannot be read is an error, not a fallback.

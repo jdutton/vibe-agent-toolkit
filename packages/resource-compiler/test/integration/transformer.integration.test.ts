@@ -3,12 +3,12 @@
  * Tests the transformer with real TypeScript compilation
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 
-import { mkdirSyncReal, setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import ts from 'typescript';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 

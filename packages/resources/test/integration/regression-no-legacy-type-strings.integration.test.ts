@@ -64,7 +64,6 @@ const FRONTMATTER_SCHEMA = {
  */
 async function writeFixtureProject(tempDir: string): Promise<ProjectConfig> {
   const schemaPath = safePath.join(tempDir, 'schema.json');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is test-controlled
   await fs.writeFile(schemaPath, JSON.stringify(FRONTMATTER_SCHEMA, null, 2), 'utf-8');
 
   const docPath = safePath.join(tempDir, 'doc.md');
@@ -77,7 +76,6 @@ description: A document that violates the schema and contains a broken link
 
 See [the missing target](./does-not-exist.md) for more.
 `;
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is test-controlled
   await fs.writeFile(docPath, docContent, 'utf-8');
 
   return {

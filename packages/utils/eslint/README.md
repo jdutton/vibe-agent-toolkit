@@ -2,7 +2,7 @@
 
 ESLint rules that enforce the cross-platform and agentic-code safety helpers in the rest of [`@vibe-agent-toolkit/utils`](https://www.npmjs.com/package/@vibe-agent-toolkit/utils).
 
-Twenty-six rules, all of them derived from a bug that actually shipped: `os.tmpdir()` returning an 8.3 short path on a Windows CI runner, `path.join()` producing backslashes that then failed a string comparison, `await import(absolutePath)` throwing on Windows without a `file://` URL, `execSync()` interpolating a caller-controlled string into a shell. Most auto-fix.
+Every rule here is derived from a bug that actually shipped: `os.tmpdir()` returning an 8.3 short path on a Windows CI runner, `path.join()` producing backslashes that then failed a string comparison, `await import(absolutePath)` throwing on Windows without a `file://` URL, `execSync()` interpolating a caller-controlled string into a shell. The [rule table](#rules) is generated from the rules' own metadata and carries the counts.
 
 ## Installation
 
@@ -25,7 +25,7 @@ export default [
 ];
 ```
 
-`configs.recommended` registers the plugin under the `@vibe-agent-toolkit` namespace and enables the **cross-platform safety core** — 18 of the 26 rules, most at `error` and three at `warn` (see [Severities](#severities)). The other eight are opt-in; the [rule tables](#rules) mark each rule's `recommended` severity, and `—` means not in `recommended`.
+`configs.recommended` registers the plugin under the `@vibe-agent-toolkit` namespace and enables the **cross-platform safety core**: every rule whose `meta.docs.recommended` is true, at the severity it declares (see [Severities](#severities)). The rest are opt-in; the [rule table](#rules) marks each rule's `recommended` severity, and `—` means not in `recommended`.
 
 To pick rules yourself, register the plugin and name them:
 
@@ -37,7 +37,7 @@ export default [
     files: ['**/*.{ts,tsx,js,cjs,mjs}'],
     plugins: { '@vibe-agent-toolkit': vat },
     rules: {
-      '@vibe-agent-toolkit/no-path-join': 'error',
+      '@vibe-agent-toolkit/no-raw-node-path': 'error',
       '@vibe-agent-toolkit/no-os-tmpdir': 'error',
     },
   },
@@ -50,7 +50,7 @@ A rule that bans `os.tmpdir()` has to let *something* call it — the file that 
 
 ```js
 '@vibe-agent-toolkit/no-os-tmpdir': ['error', { exemptFiles: ['src/paths.ts'] }],
-'@vibe-agent-toolkit/no-path-join': ['error', { exemptFiles: [
+'@vibe-agent-toolkit/no-raw-node-path': ['error', { exemptFiles: [
   'src/paths.ts',
   'test/paths.test.ts',   // asserts the platform-native behavior the wrapper hides
 ] }],
@@ -64,54 +64,125 @@ Taken to its limit, a **bare filename with no `/` exempts that filename everywhe
 
 The option **replaces** any default rather than merging with it, and unknown option keys are a config error — a typo'd `exemptFile` must fail loudly rather than quietly exempt nothing.
 
-The rules taking `exemptFiles` are `no-path-join`, `no-path-resolve`, `no-path-relative`, `no-os-tmpdir`, `no-fs-mkdirSync`, `no-fs-realpathSync`, `no-child-process-execSync`, and `no-fs-promises-cp`.
+The rules taking `exemptFiles` are `no-raw-node-path`, `no-os-tmpdir`, `no-fs-mkdirSync`, `no-fs-realpathSync`, `no-child-process-execSync`, `no-fs-promises-cp`, `no-raw-text-decode` and `no-bare-symlink-in-tests`.
 
 ## Rules
 
-The "use instead" column names the `@vibe-agent-toolkit/utils` subpath the replacement lives on; ✓ marks an auto-fix. The **`recommended`** column is the severity `configs.recommended` assigns — `—` means the rule is **not** in `recommended` and must be enabled explicitly.
+The table is **generated** from each rule's `meta.docs` by `bun run generate:claude-md` (repo root; the `eslint-rules` block), and `validate-structure` fails when the committed copy drifts from the rules — so edit the rule, never the table. The "Subpath" column names the `@vibe-agent-toolkit/utils` subpath the replacement lives on; ✓ marks an auto-fix. The **`recommended`** column is the severity `configs.recommended` assigns — `—` means the rule is **not** in `recommended` and must be enabled explicitly.
 
 **The auto-fix writes the import to the subpath in that column**, not to the barrel — `--fix` on a raw `path.join()` inserts `import { safePath } from '@vibe-agent-toolkit/utils/path'`. A file that already reaches the helper through the barrel keeps its existing import and only has the call rewritten: adding a second binding of the same name is a `SyntaxError`, not a redundant import.
+
+<!-- gen:eslint-rules -->
+35 rules; 7 auto-fix. `configs.recommended` enables 18 of them (16 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
+
+#### Path handling
+
+| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
+|---|---|---|---|---|---|
+| `no-hardcoded-path-split` | `split('/')` / `split('\\')` on a path | `path.basename()`, or `toForwardSlash()` first | `/path` |  | `error` |
+| `no-manual-path-normalize` | hand-rolled `.replace(/\\/g, '/')` | `toForwardSlash()` | `/path` | ✓ | `error` |
+| `no-path-operations-in-comparisons` | raw `path.*()` results in string comparisons | wrap in `toForwardSlash()` | `/path` |  | `error` |
+| `no-path-sep-in-strings` | `path.sep` embedded in a string literal | `toForwardSlash()` | `/path` |  | `error` |
+| `no-path-startswith` | `path.startsWith()` on a raw path | `toForwardSlash()` first | `/path` |  | `error` |
+| `no-raw-node-path` | `path.join()`, `path.resolve()`, `path.relative()` | `safePath.join()` / `.resolve()` / `.relative()` | `/path` | ✓ | `warn` |
+| `no-unsafe-root-join` | `safePath.join(someRoot, x)` where `x` can escape | `safePath.joinUnderRoot()` | `/path` |  | — |
+
+#### Filesystem and process
+
+| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
+|---|---|---|---|---|---|
+| `no-bare-executable-spawn` | Disallow spawning 'git' or 'node' by bare name — resolve the executable once (process.execPath; NODE_EXECUTABLE / gitExecutable() in tests) and spawn the absolute path | — | — |  | `error` |
+| `no-bare-symlink-in-tests` | unguarded `fs.symlinkSync()` / `fs.promises.symlink()` | in tests: `createSymlink(cap, …)` / `createSymlinkAsync(cap, …)`; in shipped code: a win32 junction, or a `catch` naming the privilege | `/testing` |  | — |
+| `no-child-process-execSync` | `child_process.execSync()` | `safeExecSync()` | `/process` | ✓ | `error` |
+| `no-fs-mkdirSync` | `fs.mkdirSync()` | `mkdirSyncReal()` | `/fs` | ✓ | `error` |
+| `no-fs-promises-cp` | `cp()` from `node:fs/promises` (drops nested files on Node 22) | `cpSync()` from `node:fs` | — | ✓ | `error` |
+| `no-fs-realpathSync` | `fs.realpathSync()` | `normalizePath()` | `/fs` | ✓ | `error` |
+| `no-os-tmpdir` | `os.tmpdir()` (8.3 short names on Windows) | `normalizedTmpdir()` | `/fs` | ✓ | `error` |
+| `no-unix-shell-commands` | `tar`, `grep`, `rm`, `echo`, … spawned directly | Node APIs, or a portable script fixture | — |  | `error` |
+
+#### URLs and dynamic imports
+
+| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
+|---|---|---|---|---|---|
+| `no-bare-dynamic-import-path` | `await import(absolutePath)` | `dynamicImportPath()` / `pathToFileURL(p).href` | `/fs` |  | `error` |
+| `no-file-url-string-concat` | `` `file://${p}` `` | `pathToFileURL(p).href` | — |  | `error` |
+| `no-url-pathname-for-fs` | `new URL(x, import.meta.url).pathname` as a filesystem path | `resolveFromImportMeta()` / `fileURLToPath()` | `/fs` |  | `error` |
+
+#### Entrypoint guards
+
+| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
+|---|---|---|---|---|---|
+| `no-fragile-entrypoint-guard` | `import.meta.main`; `import.meta.url === pathToFileURL(process.argv[1]).href`; `fileURLToPath(import.meta.url) === process.argv[1]` | `isEntrypoint(import.meta.url)` | `/process` |  | — |
+
+#### Process control
+
+| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
+|---|---|---|---|---|---|
+| `no-process-exit-in-phase` | `process.exit()` inside a function named `…Phase` | return the exit code from the phase; only the command wrapper exits | — |  | — |
+
+#### Error handling
+
+| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
+|---|---|---|---|---|---|
+| `no-blind-catch` | a `catch` that neither reads its error nor throws | narrow on the error and rethrow the rest, or carry it into the result | — |  | `warn` |
+
+#### Content decoding
+
+| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
+|---|---|---|---|---|---|
+| `no-raw-text-decode` | `buf.toString('utf-8')`, `new TextDecoder(…)`, `readFile(p, 'utf-8')` | one project-owned decoding seam | — |  | — |
+
+#### Build correctness
+
+| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
+|---|---|---|---|---|---|
+| `no-self-package-import` | importing the enclosing package by its own name | a relative path to the defining module | — |  | — |
+
+#### Code and test hygiene
+
+| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
+|---|---|---|---|---|---|
+| `no-test-scoped-functions` | helper functions declared inside `describe`/`it` | module scope | — |  | — |
+| `prefer-startswith-over-regex` | `/^foo/.test(s)`, `` /^\*glob/.test(s) ``, `const RE = /^foo/; RE.test(s)` | `s.startsWith('foo')` | — |  | `error` |
+| `require-justified-skip` | unannotated `it.skip`/`it.todo`, tautological assertions, empty test bodies | a `SKIP(#123): reason` annotation, or a real assertion | — |  | — |
+
+#### Other
+
+| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
+|---|---|---|---|---|---|
+| `commands-import-boundary` | Disallow filesystem and internal-module imports in command modules — a command calls a declared enumeration lane, it does not become one | — | — |  | — |
+| `dirent-type-needs-symlink-check` | Require an isSymbolicLink() check on a Dirent before isFile()/isDirectory() — both are false for a symlink, so an unchecked walk drops links silently | — | — |  | — |
+| `explicit-zod-strictness` | Require every z.object({...}) to declare its unknown-key policy in the same chain — .strict(), .passthrough(), .loose() or an explicit .strip() — because the default silently strips keys | — | — |  | — |
+| `no-decaying-referent` | Disallow issue/PR numbers, ISO dates and named people in src comments — they decay in place; the rule belongs in the comment and the history in the commit, CHANGELOG or docs | — | — |  | — |
+| `no-dotdot-containment` | Disallow startsWith('..') / includes('..') / split-and-hunt as a path containment check — use the realpath-based isUnderRoot() helper | — | — |  | — |
+| `no-io-in-unit-tier` | Disallow child_process imports and mkdtemp/spawn/exec calls in unit-tier test files — a test that spawns or writes to disk belongs in the integration or system tier | — | — |  | — |
+| `no-literal-process-exit` | Disallow process.exit(<number>) and process.exitCode = <number> — name the meaning with the ExitCode enum so every command shares one exit contract | — | — |  | — |
+| `no-registry-count-pin` | Disallow pinning the size of an imported registry with a literal in tests — toHaveLength(27) on something pulled from src is a change detector fixed by retyping | — | — |  | — |
+| `no-version-literal` | Disallow z.literal(<number>) on a version-named field and <X>_VERSION = <number> constants — a hand-bumped integer deciding data validity is the shape CLAUDE.md bans | — | — |  | — |
+<!-- /gen:eslint-rules -->
 
 ### Pointing the fix at your own re-export seam — `safeModule`
 
 If your repo re-exports these helpers through its own module, the defaults above are wrong for you, and not merely stylistically: in a workspace with isolated `node_modules` (pnpm, Yarn PnP), an import of a package the receiving package does not declare **fails to resolve**. One adopter measured 620 files across 52 such packages. Point the rule at the module that resolves where the fix lands:
 
 ```js
-'@vibe-agent-toolkit/no-path-join':  ['warn',  { safeModule: '@acme/dev-tools/paths' }],
+'@vibe-agent-toolkit/no-raw-node-path': ['warn',  { safeModule: '@acme/dev-tools/paths' }],
 '@vibe-agent-toolkit/no-os-tmpdir':  ['error', { safeModule: '@acme/dev-tools/fs' }],
 ```
 
 It is **per-rule**, not one shared `settings` key, because a seam need not split its symbols the way this package does — an adopter whose narrow entry carried `normalizedTmpdir()` but not `safePath` needed the two rules pointed at different modules, which a single key cannot express. Note the two lines above therefore name *different* modules. It composes with `exemptFiles`, and it changes the error message as well as the fix, so the advice never names a module you don't use. Every rule that names a module accepts it, including the ones that only advise and never fix.
 
-> **Point each rule at a module that exports the symbol *that rule writes*, not merely one that resolves.** This is the failure mode worth spending a minute on, because it is the quiet one. A `safeModule` that doesn't resolve fails loudly and immediately. A `safeModule` that resolves but lacks the symbol passes every resolution check — including an explicit `import()` probe — and then throws `Cannot read properties of undefined` at each call site, once per fixed file. Aim `no-path-join` at an entry without `safePath` and you get a green `--fix`, a green install, and thousands of latent `TypeError`s. The rules cannot check this for you: verifying it would mean resolving and importing your module from inside the linter, which is neither its job nor reliable from wherever ESLint happens to be running.
+> **Point each rule at a module that exports the symbol *that rule writes*, not merely one that resolves.** This is the failure mode worth spending a minute on, because it is the quiet one. A `safeModule` that doesn't resolve fails loudly and immediately. A `safeModule` that resolves but lacks the symbol passes every resolution check — including an explicit `import()` probe — and then throws `Cannot read properties of undefined` at each call site, once per fixed file. Aim `no-raw-node-path` at an entry without `safePath` and you get a green `--fix`, a green install, and thousands of latent `TypeError`s. The rules cannot check this for you: verifying it would mean resolving and importing your module from inside the linter, which is neither its job nor reliable from wherever ESLint happens to be running.
 
 Two ways your target can be wrong, which surface differently: `ERR_MODULE_NOT_FOUND` means the receiving package doesn't declare it at all, while `ERR_PACKAGE_PATH_NOT_EXPORTED` means it does — but the version resolved *at that location* doesn't export the subpath. In a monorepo mid-upgrade those differ, so the question is never "does the package declare it" but "does the resolved version there export it."
 
-### Path handling
+### Notes on individual rules
 
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `no-path-join` | `path.join()` | `safePath.join()` | `/path` | ✓ | `warn` |
-| `no-path-resolve` | `path.resolve()` | `safePath.resolve()` | `/path` | ✓ | `warn` |
-| `no-path-relative` | `path.relative()` | `safePath.relative()` | `/path` | ✓ | `warn` |
-| `no-path-startswith` | `path.startsWith()` on a raw path | `toForwardSlash()` first | `/path` | | `error` |
-| `no-hardcoded-path-split` | `split('/')` / `split('\\')` on a path | `path.basename()`, or `toForwardSlash()` first | `/path` | | `error` |
-| `no-path-sep-in-strings` | `path.sep` embedded in a string literal | `toForwardSlash()` | `/path` | | `error` |
-| `no-manual-path-normalize` | hand-rolled `.replace(/\\/g, '/')` | `toForwardSlash()` | `/path` | ✓ | `error` |
-| `no-path-operations-in-comparisons` | raw `path.*()` results in string comparisons | wrap in `toForwardSlash()` | `/path` | | `error` |
-| `no-unsafe-root-join` | `safePath.join(someRoot, x)` where `x` can escape | `safePath.joinUnderRoot()` | `/path` | | — |
+#### `no-raw-node-path`
 
-### Filesystem and process
+One rule over the three `node:path` functions `safePath` wraps. Its `functions` option is the table (default `['join', 'resolve', 'relative']`; each maps to `safePath.<fn>()`), so one `--fix` pass carries every wrapped call in a file to the same inserted import. Narrow it to migrate one function at a time: `['warn', { functions: ['join'] }]`.
 
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `no-os-tmpdir` | `os.tmpdir()` (8.3 short names on Windows) | `normalizedTmpdir()` | `/fs` | ✓ | `error` |
-| `no-fs-realpathSync` | `fs.realpathSync()` | `normalizePath()` | `/fs` | ✓ | `error` |
-| `no-fs-mkdirSync` | `fs.mkdirSync()` | `mkdirSyncReal()` | `/fs` | ✓ | `error` |
-| `no-fs-promises-cp` | `cp()` from `node:fs/promises` (drops nested files on Node 22) | `cpSync()` from `node:fs` | — | ✓ | `error` |
-| `no-child-process-execSync` | `child_process.execSync()` | `safeExecSync()` | `/process` | ✓ | `error` |
-| `no-unix-shell-commands` | `tar`, `grep`, `rm`, `echo`, … spawned directly | Node APIs, or a portable script fixture | — | | `error` |
-| `no-bare-symlink-in-tests` | unguarded `fs.symlinkSync()` / `fs.promises.symlink()` | in tests: `createSymlink(cap, …)` / `createSymlinkAsync(cap, …)`; in shipped code: a win32 junction, or a `catch` naming the privilege | `/testing` | | — |
+#### `no-bare-symlink-in-tests`
 
 **`no-bare-symlink-in-tests` reports two different remedies, and the name is narrower than the rule.**
 Creating a symlink on Windows requires `SeCreateSymbolicLinkPrivilege` — Developer Mode or an
@@ -127,21 +198,11 @@ say so in an `eslint-disable` justification, which is what `vat agent install --
 `exemptFiles` matters here: the implementation file holding the sanctioned `symlinkSync` is not a
 test file, so it needs an explicit exemption once the rule covers shipped code.
 
+#### Member-call rules and the receiver
+
 The member-call rules here check the **receiver**, not just the method name, so `env.tmpdir()` on some unrelated object is not a finding — and the namespace they check for can be bound by a static `import * as os`, by `const os = require('node:os')`, or by `const os = await import('node:os')`. The fix replaces the whole callee (`os.tmpdir()` → `normalizedTmpdir()`), which is correct however the binding was made. Matching the method name alone was the earlier behaviour and it produced `os.normalizedTmpdir()` — a method that does not exist, compiles, and throws.
 
-### URLs and dynamic imports
-
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `no-url-pathname-for-fs` | `new URL(x, import.meta.url).pathname` as a filesystem path | `resolveFromImportMeta()` / `fileURLToPath()` | `/fs` | | `error` |
-| `no-bare-dynamic-import-path` | `await import(absolutePath)` | `dynamicImportPath()` / `pathToFileURL(p).href` | `/fs` | | `error` |
-| `no-file-url-string-concat` | `` `file://${p}` `` | `pathToFileURL(p).href` | — | | `error` |
-
-### Entrypoint guards
-
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `no-fragile-entrypoint-guard` | `import.meta.main`; `import.meta.url === pathToFileURL(process.argv[1]).href`; `fileURLToPath(import.meta.url) === process.argv[1]` | `isEntrypoint(import.meta.url)` | `/process` | | — |
+#### `no-fragile-entrypoint-guard`
 
 All three banned spellings fail the same way: the guard answers **false for the script it is guarding**, so the process exits 0 having run nothing — the quietest failure a CLI has.
 
@@ -151,11 +212,17 @@ The other two are one defect wearing two spellings: a raw string comparison of w
 
 Not in `recommended` because the first half depends on **your** Node floor — at or above 24.2 / 22.18, `import.meta.main` is correct. The argv compares depend on nothing and are a defect everywhere; the two share a rule id, so enable it explicitly if your floor is below 24.2 / 22.18 or you ship a `bin`.
 
-### Content decoding
+#### `no-blind-catch`
 
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `no-raw-text-decode` | `buf.toString('utf-8')`, `new TextDecoder(…)`, `readFile(p, 'utf-8')` | one project-owned decoding seam | — | | — |
+`try { return statSync(p); } catch { return null; }` answers three different questions with one word. *Not there* is what the author meant. *Refused* — `EACCES`, `EPERM`, `ELOOP` — is a file that exists and could not be read, now reported as absent. *Bug* — a `TypeError` two frames down — is a defect, now reported as a file that is not there. All three exit 0, and the tool is quietest exactly where it is most wrong.
+
+The rule is a floor, deliberately syntactic: a catch is fine if it **references its error binding anywhere** in the body (`isFilesystemAccessError(e)`, `e instanceof X`, `e.code === 'ENOENT'`, `errors.push(String(e))`, `log.warn(e)`) or **throws at its own level** (a rethrow, or a translation into a louder error; a `throw` inside a nested function is a promise to fail later, not a rethrow). It cannot tell `narrow(e)` from `log(e)` and does not try. What it guarantees is the weaker, enforceable property — *the error was looked at before it was discarded* — which every one of the shipped defects lacked.
+
+This is the one seam `tsc` cannot see. When a callee learns to throw where it used to return — a crawler that starts refusing an unreadable directory instead of skipping it — every caller whose contract changed by TYPE fails to compile and gets fixed; the caller with a blind `catch` compiles unchanged and absorbs the new refusal. That is how a refuse-by-default crawler shipped under a `catch { return null }` that turned `vat audit` into a scan of nothing.
+
+There is no annotation escape hatch. Every flagged site has a legitimate rewrite, and an `eslint-disable-next-line` with a reason is the escape hatch ESLint already provides — visible in the diff, and countable with `rg 'eslint-disable.*no-blind-catch'`. `warn` in `recommended` because there is no autofix and an existing tree has many (this repo measured 202 across ~200k lines); the hazard is real at each one.
+
+#### `no-raw-text-decode`
 
 `buf.toString('utf-8')` ignores every byte-order mark and cannot express UTF-16BE at all — Node's `Buffer` has no such encoding. A UTF-16 document therefore decodes to NUL-interleaved mojibake, and whatever sniffs for binary content downstream believes it. PowerShell 5.1's `Out-File` and `>` write UTF-16LE by default, so this is a Windows-authored file, not an exotic one.
 
@@ -190,11 +257,7 @@ That gives a reviewer a falsifiable test: a justification that cannot name who w
 
 Only a string **literal** encoding triggers it. `buf.toString(enc)` is deliberately not reported: without type information it is indistinguishable from `n.toString(radix)`, and `readFile(p, cb)` from `readFile(p, encoding)`.
 
-### Build correctness
-
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `no-self-package-import` | importing the enclosing package by its own name | a relative path to the defining module | — | | — (needs `packageName`) |
+#### `no-self-package-import`
 
 A file inside `packages/foo` that writes `import … from '@scope/foo'` resolves out through `node_modules` to its own `package.json`, whose `types` point at `./dist/index.d.ts` — a file the compiler is in the middle of producing. It works only by a TypeScript courtesy: while `dist` **is** the running project's output path, that declaration is recognised as the project's own output and the import is redirected back to `src`, so it resolves with no `dist/` on disk.
 
@@ -208,17 +271,9 @@ The knock-on `TS2339`s land wherever a local type extended one of the now-unreso
 
 It is latent by construction, and worse, **it is invisible to any tree that has built before**: a stale `dist/` satisfies the literal lookup, so the build passes by typechecking against the *previous* build's declarations. In a monorepo whose worktrees live inside the main checkout, resolution walks up past the worktree and satisfies it from the *parent checkout's* `dist/`. Both are green locally and red in CI, which is the only genuinely pristine tree. Lint is the only stage that sees it on the author's machine.
 
-### Code and test hygiene
-
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `prefer-startswith-over-regex` | `/^foo/.test(s)`, `` /^\*glob/.test(s) ``, `const RE = /^foo/; RE.test(s)` | `s.startsWith('foo')` | — | | `error` |
-| `no-test-scoped-functions` | helper functions declared inside `describe`/`it` | module scope | — | | — |
-| `require-justified-skip` | unannotated `it.skip`/`it.todo`, tautological assertions, empty test bodies | a `SKIP(#123): reason` annotation, or a real assertion | — | | — |
-
 ### What `recommended` deliberately leaves out
 
-Six rules ship without riding in `recommended`, for five different reasons.
+Every rule marked `—` in the table ships without riding in `recommended`, and each states its reason beside its own `recommended: false` in `eslint/rules/<rule>.cjs`. The reasons fall into a few families:
 
 **Test-style opinions** — `no-test-scoped-functions` (where a helper may be declared) and `require-justified-skip` (the annotation grammar for a disabled test). Neither is a portability or correctness fact, and installing this package for `safePath.join()` should not also import someone else's test conventions. Both are worth turning on deliberately.
 
@@ -251,9 +306,11 @@ export default readdirSync('packages').flatMap((dir) => {
 
 Scope it to the sources you **compile**. Test and example trees — normally excluded from the build — import their own package by name **on purpose**, to exercise the public entry point exactly as a consumer does. This repo has ~10 such imports, every one of them correct.
 
+**A convention of one repository, not a portable fact** — `no-process-exit-in-phase` keys on a `…Phase` function-name suffix, and `no-fragile-entrypoint-guard`'s `import.meta.main` half is only wrong below a Node floor that is yours to know. Both ship and are enabled here by name.
+
 **Half its advice is unreachable without a helper you may not have** — `no-bare-symlink-in-tests`. In a test file it points at `createSymlink()` / `createSymlinkAsync()`, which live on *this* package's `./testing` subpath and route through a probed capability token; an adopter on a different test runner, or with no symlink-heavy tests, should not silently inherit that opinion — nor the vitest-specific `skip()` idiom the message names. Its **shipped-code** half (`unguardedSymlink`) carries neither dependency and is portable advice on its own, so this is the one exclusion that is half arbitrary; it stays out because the two halves cannot be enabled separately. This repo turns it on explicitly, scoped to its own test-file convention.
 
-Enable any of the six by naming it:
+Enable any of them by naming it:
 
 ```js
 import vat from '@vibe-agent-toolkit/utils/eslint';
@@ -286,17 +343,18 @@ export default [
 
 ### Severities
 
-Within `recommended`, `error` is the default; three rules are `warn`:
+Within `recommended`, `error` is the default; two rules are `warn`:
 
-- **`no-path-join`, `no-path-resolve`, `no-path-relative`** — by far the highest-churn rules; they fire on every raw `node:path` call in an existing codebase. Measured on a 4,670-file adopter tree: 3,963 + 372 + 1 findings, **every one of them autofixable**. `warn` lets a project run `--fix` and burn the list down incrementally instead of blocking CI on day one.
+- **`no-raw-node-path`** — by far the highest-churn rule; it fires on every raw `node:path` call in an existing codebase. Measured on a 4,670-file adopter tree: 3,963 + 372 + 1 findings across its three functions, **every one of them autofixable**. `warn` lets a project run `--fix` and burn the list down incrementally instead of blocking CI on day one.
+- **`no-blind-catch`** — the same criterion without the autofix: each site is a decision about which failure its sentinel stands for, and an existing tree has many of them (202 in this repo's own ~200k lines when the rule landed).
 
-Raise all three to `error` once the backlog is clear. That is what this repo does.
+Raise both to `error` once the backlog is clear. That is what this repo does.
 
 The criterion for `warn` is **migration volume**, not how real the finding is — a rule whose findings we doubted would be out of `recommended` entirely, not demoted. Everything at `error` either prevents a bug or moves a static-analysis finding left of a merge.
 
 ### Running `--fix` over a large backlog
 
-Every rule that rewrites a call *and* edits imports fixes **all** of a file's call sites in a single pass, and `packages/utils/test/eslint/rules.test.ts` holds each of them to that: it runs `--fix` to its fixpoint and then asks `no-undef` whether the result still binds every identifier.
+Every rule that rewrites a call *and* edits imports fixes **all** of a file's call sites in a single pass, and `packages/utils/test/eslint/autofix-fixpoint.test.ts` holds each of them to that: it runs `--fix` to its fixpoint and then asks `no-undef` whether the result still binds every identifier.
 
 That test exists because the answer used to be no. ESLint merges the fixes one `fix()` yields into a **single range spanning `min..max`**, and applies only non-overlapping ranges per pass — so a fix touching both the import and its own call site spanned everything in between, N call sites produced N nested ranges, and ESLint kept one. The rule then went quiet, because the import specifier its detection keyed on was what had just been removed. `--fix` reached a stable fixpoint over source that no longer compiles and exited clean; you found out at `tsc`. An adopter measured **146 files left with a dangling reference** across one ~4,900-site sweep, worst single file 75 unrewritten calls.
 
@@ -326,7 +384,7 @@ What these rules buy is *when* you find out. Without them, a raw `os.tmpdir()` i
 
 The second reason is agentic. When most code in a repo is written by an LLM, a convention that lives only in a style guide or a CLAUDE.md gets re-violated constantly — the model is confident, `path.join` is what it saw a million times in training, and the guidance was three thousand tokens back. A lint rule is feedback the model receives at the moment it is wrong, which is the only moment it can act on. Treat rules as the durable form of any convention you'd otherwise repeat in a prompt.
 
-Most projects will want rules the ones here don't cover, for invariants only that project has: a deprecated internal API, a logging call that must carry a request ID, a module boundary nothing may import across. These rules are readable, small, and built on two shared factories plus a segment-anchored path matcher — copy the shape. `eslint-rule-factory.cjs` handles "ban function X from module Y, suggest Z, fix the import"; `exempt-path-matcher.cjs` handles the exemption question every such rule eventually asks, and is worth reading before you write `filename.includes(...)`.
+Most projects will want rules the ones here don't cover, for invariants only that project has: a deprecated internal API, a logging call that must carry a request ID, a module boundary nothing may import across. These rules are readable, small, and built on one shared factory plus a segment-anchored path matcher — copy the shape. `eslint-rule-factory.cjs` handles "ban function X from module Y, suggest Z, fix the import"; `no-raw-node-path.cjs` is the worked example of a rule driven by an option table; `exempt-path-matcher.cjs` handles the exemption question every such rule eventually asks, and is worth reading before you write `filename.includes(...)`.
 
 ## License
 

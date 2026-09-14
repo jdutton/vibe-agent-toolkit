@@ -8,7 +8,6 @@
  * internally and not from user input.
  */
 
-/* eslint-disable security/detect-non-literal-fs-filename */
 
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';

@@ -58,6 +58,8 @@
  * — {@link SourceSpan.label} on a definition — rather than a dialect rule.
  */
 
+import { VatError } from '@vibe-agent-toolkit/utils';
+
 import type { ResourceLink } from './schemas/resource-metadata.js';
 
 /**
@@ -261,12 +263,11 @@ export interface MarkdownParser {
  * a fidelity finding, and matching on a message string to separate them is how
  * that distinction gets lost.
  */
-export class MissingCapabilityError extends Error {
+export class MissingCapabilityError extends VatError {
   constructor(
     readonly parserName: string,
     readonly capability: ParseCapability,
   ) {
-    super(`Parser "${parserName}" does not serve the ${capability} capability`);
-    this.name = 'MissingCapabilityError';
+    super('MISSING_CAPABILITY', `Parser "${parserName}" does not serve the ${capability} capability`);
   }
 }

@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp } from 'node:fs/promises';
 
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { removeScratchDir , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
 // Everything under test comes from `src`, never from this package's own name.
@@ -22,6 +23,8 @@ import {
   type SessionStoreTestSuite,
 } from '../../src/session/test-helpers/index.js';
 
+/** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
+
 describe('FileSessionStore', () => {
   let suiteDir: string;
   let tempDir: string;
@@ -32,7 +35,6 @@ describe('FileSessionStore', () => {
     setup: async () => {
       testCounter++;
       tempDir = safePath.join(suiteDir, `test-${testCounter}`);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtemp
       await mkdir(tempDir, { recursive: true });
       suite.store = new FileSessionStore<{ count: number }>({
         baseDir: tempDir,
@@ -138,6 +140,23 @@ describe('FileSessionStore', () => {
     it('should return false for non-existent sessions', async () => {
       expect(await suite.store.exists('non-existent')).toBe(false);
     });
+
+    it.skipIf(CANNOT_DENY_READS)(
+      'throws rather than answering false when the OS refuses to look at the session',
+      async () => {
+        // `false` from exists() means "start a new session", so a refusal read as
+        // absence would have the caller overwrite a session it was not allowed
+        // to see. Only a path that is not there is absent.
+        const sessionId = await suite.store.create();
+        const sessionDir = safePath.join(tempDir, sessionId);
+        await chmod(sessionDir, 0o000);
+        try {
+          await expect(suite.store.exists(sessionId)).rejects.toMatchObject({ code: 'EACCES' });
+        } finally {
+          await chmod(sessionDir, 0o700);
+        }
+      },
+    );
   });
 
   describe('list', () => {

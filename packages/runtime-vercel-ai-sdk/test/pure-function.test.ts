@@ -19,7 +19,6 @@ createPureFunctionTestSuite({
   getToolFromResult: (result) => result.tool,
   executeFunction: async (result, input) => {
     const execute = result.tool.execute;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return await execute(input, {} as any);
   },
   parseOutput: parseUnwrappedOutput,

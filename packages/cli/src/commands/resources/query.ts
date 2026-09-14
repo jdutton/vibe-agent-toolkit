@@ -45,10 +45,12 @@
  * authority on why.
  */
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+
 import { handleCommandError } from '../../utils/command-error.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { writeJsonOutput, writeYamlOutput } from '../../utils/output.js';
+import { writeStructuredOutput } from '../../utils/output.js';
 import { assertDirectoryArgument, projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import {
   withQueriedProjection,
@@ -193,13 +195,9 @@ export async function queryCommand(
       root: projectRoot,
       durationMs: Date.now() - startTime,
     });
-    if (options.format === 'json') {
-      writeJsonOutput(payload);
-    } else {
-      writeYamlOutput(payload);
-    }
+    writeStructuredOutput(payload, options.format);
 
-    process.exit(0);
+    process.exit(ExitCode.OK);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'Query', options.format);
   }

@@ -12,7 +12,7 @@
  * it re-executes vitest directly rather than through turbo, so it can't
  * cache-hit even when the target packages are unchanged, and paying that
  * cost on every local commit was a bigger tax than the local-feedback value
- * (see PR #144 discussion). CI-only is an acceptable delay for this check:
+ * worth. CI-only is an acceptable delay for this check:
  * it fails the PR, not silently ships.
  *
  * Scoped deliberately: rag-lancedb's real memory risk (LanceDB's Arrow
@@ -27,6 +27,7 @@
  * target list entirely — pass one --cwd/--suite pair per target).
  * Exit 0 = clean, 1 = over budget or a measurement failure.
  */
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { PROJECT_ROOT, isEntrypoint, log, safeExecResult } from './common.js';
@@ -363,7 +364,7 @@ function main(): void {
       const incomplete = findIncompleteMeasurement(output, parsed.length, status);
       if (incomplete) {
         log(`check-test-heap-budget: ${target.dir} (${suite}): ${incomplete} Failing closed.`, 'red');
-        process.exitCode = 1;
+        process.exitCode = ExitCode.ERROR;
         return;
       }
       const entries = parsed.map((e) => ({ ...e, file: `${target.dir}/${e.file}` }));
@@ -384,7 +385,7 @@ function main(): void {
         'otherwise OOM / time out the CI fork.\n',
       'red',
     );
-    process.exitCode = 1;
+    process.exitCode = ExitCode.FINDINGS;
     return;
   }
 

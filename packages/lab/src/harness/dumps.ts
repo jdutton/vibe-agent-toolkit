@@ -157,7 +157,6 @@ async function readOneDump<TDump>(
 ): Promise<{ readonly ok: true; readonly dump: TDump } | DumpsRefusal> {
   let raw: string;
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dump directory chosen by the capture that wrote it
     raw = await readFile(filePath, 'utf-8');
   } catch (error) {
     return refuseDumps(`could not read ${kind.noun} '${filePath}': ${messageOf(error)}`);
@@ -202,7 +201,6 @@ export async function readDumpFiles<TDump>(
 ): Promise<DumpFilesResult<TDump>> {
   let entries: string[];
   try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dump directory chosen by the capture that wrote it
     entries = await readdir(directory);
   } catch (error) {
     return refuseDumps(

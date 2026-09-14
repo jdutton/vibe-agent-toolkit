@@ -1,4 +1,3 @@
-
 /**
  * Tests for agent-runner utility
  *
@@ -12,7 +11,8 @@
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 
 
-import { normalizedTmpdir, removeScratchDir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as agentRunner from '../../src/utils/agent-runner.js';
@@ -76,11 +76,8 @@ describe('agent-runner', () => {
 
     // Create prompts directory and files
     const promptsDir = safePath.join(tempDir, 'prompts');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtemp (safe)
     await mkdir(promptsDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- promptsDir is from mkdtemp (safe)
     await writeFile(safePath.join(promptsDir, 'system.md'), SYSTEM_PROMPT_CONTENT);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- promptsDir is from mkdtemp (safe)
     await writeFile(safePath.join(promptsDir, 'user.md'), USER_PROMPT_CONTENT);
 
     // Setup default mock for loadAgentManifest

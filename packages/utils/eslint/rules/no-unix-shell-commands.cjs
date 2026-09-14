@@ -85,9 +85,13 @@ module.exports = {
   meta: {
     type: 'problem',
     docs: {
-      description: 'Prevent Unix-specific commands that break Windows compatibility',
-      category: 'Cross-Platform',
+      description:
+        'Prevent Unix-specific commands that break Windows compatibility',
+      category: 'Filesystem and process',
+      bans: '`tar`, `grep`, `rm`, `echo`, … spawned directly',
+      useInstead: 'Node APIs, or a portable script fixture',
       recommended: true,
+      recommendedSeverity: 'error',
     },
     fixable: null, // No auto-fix - requires manual refactoring
     schema: [],

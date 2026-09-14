@@ -7,9 +7,12 @@
   },
   "references": [
     { "path": "../agent-runtime" },
+    { "path": "../resource-compiler" },
+    { "path": "../runtime-claude-agent-sdk" },
+    { "path": "../runtime-langchain" },
+    { "path": "../runtime-openai" },
     { "path": "../schema" },
-    { "path": "../utils" },
-    { "path": "../resource-compiler" }
+    { "path": "../transports" }
   ],
   "include": ["src/**/*", "resources/**/*.md"],
   "exclude": ["node_modules", "dist", "test", "examples"]

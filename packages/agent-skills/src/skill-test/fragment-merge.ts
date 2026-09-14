@@ -7,8 +7,8 @@ import { ToolEvalReportSchema, type ToolEvalReport } from './tool-eval-schema.js
 
 /**
  * Assemble the run's aggregate grading result (skill-creator's flat
- * `grading.json` shape) from every eval's per-eval grader fragment (issue #145
- * Task 4/5). vat is the SOLE writer of the aggregate; this is that assembly
+ * `grading.json` shape) from every eval's per-eval grader fragment.
+ * vat is the SOLE writer of the aggregate; this is that assembly
  * step — the result feeds {@link import('./grading-adapter.js').reconcileGrading}
  * unchanged.
  *
@@ -133,8 +133,8 @@ export function mergeFragmentsToFriction(fragments: EvalFragment[]): FrictionRep
 }
 
 /**
- * Assemble vat's `tool-eval.json` from every eval's fragment (issue #145
- * Phase T; see tool-eval-schema.ts). A SEPARATE channel from `grading.json`
+ * Assemble vat's `tool-eval.json` from every eval's fragment (see
+ * tool-eval-schema.ts). A SEPARATE channel from `grading.json`
  * and from friction (C2) — tool verdicts judge declared `toolExpectations`
  * against the transcript, not prose expectations or packaging friction.
  *
