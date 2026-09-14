@@ -377,9 +377,13 @@ with a regression test.
 
 - **(contributor gates)** A table-driven system test for the exit-code contract; a per-rule
   `eslint-disable` count ratchet plus mandatory `-- reason` on every directive; a per-tier, per-file
-  test duration budget (a listed file is held to 8× what it measured; the stale side is judged only
-  under the turbo runs it was seeded from); `no-io-in-unit-tier` and `no-registry-count-pin` on
-  the test tier.
+  test duration budget (a listed file is held to 8× what it measured and is stale under a tenth
+  of it), judged only by the three serial root configs — in CI, the coverage job, which now also
+  runs the integration and system tiers serially on the floor — and never in a per-package turbo
+  lane, where a 200 ms file read as 1–3 s and six CI runs each crossed a different handful of
+  files; the allowlist is re-seeded from the serial runs (112 → 28 entries) and
+  `bun run seed:test-tier-budget <tier> <log>` reads that run's saved output instead of turbo
+  logs; `no-io-in-unit-tier` and `no-registry-count-pin` on the test tier.
 
 - **(contributor gates)** `local/commands-import-boundary` (a new `node:fs` import in a CLI command
   module is a lint error; 45 files ratcheted with reasons); `bun run unused-exports` (a knip ratchet:

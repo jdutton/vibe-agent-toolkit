@@ -1,7 +1,8 @@
 /**
  * FULL-WIRING tests for `runSkillTestHarness` — the ones that must drive the real
  * orchestrator end to end because the thing under test is the WIRING, not a pure
- * function anyone can call directly.
+ * function anyone can call directly. Integration tier: end to end through real
+ * artifact writes is integration-shaped work (~2 s serially on macOS).
  *
  * The executor→grader pipeline is driven with an INJECTED fake spawn (opts.spawn),
  * so no real `claude` is needed; preflight + staging are stubbed so the
@@ -35,11 +36,11 @@ import type { BaselineIntegrity } from '../../src/skill-test/baseline-integrity.
 import { GradingNonceError } from '../../src/skill-test/grading-adapter.js';
 import { runSkillTestHarness } from '../../src/skill-test/run-harness.js';
 import { stageHarness } from '../../src/skill-test/staging.js';
+import { makeHarnessFakeSpawn, SPAWN_TIMED_OUT } from '../skill-test/spawn-stub.js';
 import { setupStubbedHarnessSubject } from '../test-helpers.js';
 
-import { makeHarnessFakeSpawn, SPAWN_TIMED_OUT } from './spawn-stub.js';
 
-vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('./preflight-stub.js')).passingPreflight(io));
+vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('../skill-test/preflight-stub.js')).passingPreflight(io));
 
 vi.mock('../../src/skill-test/staging.js', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();

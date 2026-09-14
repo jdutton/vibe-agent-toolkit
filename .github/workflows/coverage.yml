@@ -33,6 +33,15 @@ jobs:
       # seeded from: `COVERAGE_RATCHET=write` arms vitest's autoUpdate here and
       # nowhere else, so a local run on another platform or Node never writes a
       # number the floor cannot meet.
+      #
+      # It is also the ONE judge of the per-file duration ratchet
+      # (packages/dev-tools/src/test-tier-budget-allowlist.ts): the root configs
+      # run one file at a time, so a duration here is the file's own cost. The
+      # per-package turbo lanes in validate.yml carry no budget reporter — there
+      # a 200 ms file reads as 1–3 s depending on what else is running that
+      # second. Seed the allowlist from THIS job's log
+      # (`bun run seed:test-tier-budget <tier> <log>`), never from a local or a
+      # turbo number.
       - name: Run tests with coverage
         run: bun run test:coverage
         env:
@@ -57,3 +66,20 @@ jobs:
           files: ./coverage/lcov.info
           fail_ci_if_error: true
           verbose: true
+
+      # The integration and system tiers, serially, for the duration ratchet
+      # alone (their verdicts as tests are validate.yml's, on Node 24 and on
+      # Windows). After the upload so a ratchet red never costs the coverage
+      # report. NET_AVAILABLE as in validate.yml: the network suites run here
+      # too, so their durations are measured where they are judged.
+      - name: Per-file duration ratchet — integration tier (serial, on the floor)
+        run: bunx vitest run --config vitest.integration.config.ts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NET_AVAILABLE: "1"
+
+      - name: Per-file duration ratchet — system tier (serial, on the floor)
+        run: bunx vitest run --config vitest.system.config.ts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NET_AVAILABLE: "1"

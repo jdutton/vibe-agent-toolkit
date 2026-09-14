@@ -62,7 +62,7 @@
     "test:unit": "turbo run test:unit",
     "test:cli": "bun --filter @vibe-agent-toolkit/cli run test:unit",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage --no-file-parallelism",
+    "test:coverage": "vitest run --coverage",
     "test:integration": "vibe-validate run \"turbo run test:integration --concurrency=4 --continue\"",
     "test:system": "vibe-validate run \"turbo run test:system --concurrency=4 --continue\"",
     "validate-links": "vibe-validate run \"vitest run --config vitest.system.config.ts\"",

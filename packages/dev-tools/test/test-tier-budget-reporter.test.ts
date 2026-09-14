@@ -34,7 +34,7 @@ function sample(file: string, durationMs: number, state: DurationSample['state']
 }
 
 function judge(samples: DurationSample[], allowlist: TestTierBudgetEntry[] = []): BudgetVerdict[] {
-  return judgeSamples(samples, allowlist, TIER_BUDGET_MS, { judgeStale: true });
+  return judgeSamples(samples, allowlist, TIER_BUDGET_MS);
 }
 
 describe('repoRelative', () => {
@@ -116,16 +116,15 @@ describe('judgeSamples', () => {
     expect(judge([sample(file, 11)], [entry(file, 124)])).toHaveLength(1);
   });
 
-  it('judges only the ceilings when stale judgement is off — a serial run cannot measure staleness against a turbo seed', () => {
+  it('judges both sides in one pass — a stale entry and a headroom breach in the same run are both verdicts', () => {
     const fast = 'packages/x/test/fast.test.ts';
     const slow = 'packages/x/test/slow.test.ts';
     const verdicts = judgeSamples(
       [sample(fast, 550), sample(slow, 70_000)],
       [entry(fast, 7_600), entry(slow, 7_600)],
       TIER_BUDGET_MS,
-      { judgeStale: false },
     );
-    expect(verdicts.map((v) => [v.kind, v.file])).toEqual([['listed-over-headroom', slow]]);
+    expect(verdicts.map((v) => [v.kind, v.file])).toEqual([['stale-entry', fast], ['listed-over-headroom', slow]]);
   });
 
   it('never calls a FAILED module stale — its duration is partial', () => {
@@ -188,7 +187,7 @@ function fakeModule(moduleId: string, durationMs: number, state: ModuleState = '
 
 /** Feed one module through a fresh reporter and finish the run. */
 async function runReporter(
-  options: { repoRoot: string; allowlist: TestTierBudgetEntry[]; judgeStale: boolean },
+  options: { repoRoot: string; allowlist: TestTierBudgetEntry[] },
   moduleId: string,
   durationMs: number,
 ): Promise<{ reporter: TestTierBudgetReporter; write: ReturnType<typeof vi.fn> }> {
@@ -210,13 +209,13 @@ describe('TestTierBudgetReporter', () => {
   });
 
   it('leaves the exit code alone and prints nothing when every file is within budget', async () => {
-    const { write } = await runReporter({ repoRoot: REPO_ROOT, allowlist: [], judgeStale: true }, `${REPO_ROOT}/${A_FILE}`, 10);
+    const { write } = await runReporter({ repoRoot: REPO_ROOT, allowlist: [] }, `${REPO_ROOT}/${A_FILE}`, 10);
     expect(write).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(originalExitCode);
   });
 
   it('sets a non-zero exit code and prints the verdict when a file is over budget', async () => {
-    const { write } = await runReporter({ repoRoot: REPO_ROOT, allowlist: [], judgeStale: true }, `${REPO_ROOT}/${A_FILE}`, 1_500);
+    const { write } = await runReporter({ repoRoot: REPO_ROOT, allowlist: [] }, `${REPO_ROOT}/${A_FILE}`, 1_500);
     expect(process.exitCode).toBe(1);
     expect(write).toHaveBeenCalledTimes(1);
     expect(String(write.mock.calls[0]?.[0])).toContain(A_FILE);
@@ -225,23 +224,24 @@ describe('TestTierBudgetReporter', () => {
   it('resolves module ids against the repo root so allowlist entries match', async () => {
     // 5 000 ms: over the unit budget (so an unmatched id would red) and under
     // the entry's 6 000 ms headroom ceiling (so a matched one passes).
-    const { write } = await runReporter({ repoRoot: `${REPO_ROOT}/`, allowlist: [entry(A_FILE)], judgeStale: true }, `${REPO_ROOT}/${A_FILE}`, 5_000);
+    const { write } = await runReporter({ repoRoot: `${REPO_ROOT}/`, allowlist: [entry(A_FILE)] }, `${REPO_ROOT}/${A_FILE}`, 5_000);
     expect(write).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(originalExitCode);
   });
 
-  it('skips the stale side when constructed with judgeStale: false, and still fails the headroom side', async () => {
+  it('fails a listed file on the stale side as well as the headroom side — the reporter has no half-judging mode', async () => {
     const listed = [entry(A_FILE, 7_600)];
-    const stale = await runReporter({ repoRoot: REPO_ROOT, allowlist: listed, judgeStale: false }, `${REPO_ROOT}/${A_FILE}`, 550);
-    expect(stale.write).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(originalExitCode);
-    const over = await runReporter({ repoRoot: REPO_ROOT, allowlist: listed, judgeStale: false }, `${REPO_ROOT}/${A_FILE}`, 70_000);
+    const stale = await runReporter({ repoRoot: REPO_ROOT, allowlist: listed }, `${REPO_ROOT}/${A_FILE}`, 550);
+    expect(process.exitCode).toBe(1);
+    expect(String(stale.write.mock.calls[0]?.[0])).toContain('STALE ENTRY');
+    process.exitCode = originalExitCode;
+    const over = await runReporter({ repoRoot: REPO_ROOT, allowlist: listed }, `${REPO_ROOT}/${A_FILE}`, 70_000);
     expect(process.exitCode).toBe(1);
     expect(String(over.write.mock.calls[0]?.[0])).toContain('OVER HEADROOM');
   });
 
   it('forgets the previous run between runs, so watch mode judges each run on its own', async () => {
-    const { reporter, write } = await runReporter({ repoRoot: REPO_ROOT, allowlist: [], judgeStale: true }, `${REPO_ROOT}/${A_FILE}`, 1_500);
+    const { reporter, write } = await runReporter({ repoRoot: REPO_ROOT, allowlist: [] }, `${REPO_ROOT}/${A_FILE}`, 1_500);
     process.exitCode = originalExitCode;
     write.mockClear();
     await reporter.onTestRunEnd();

@@ -1,6 +1,6 @@
 /**
  * Unit tests for the allowlist seed: parsing vitest's per-file summary lines
- * out of a turbo log, and classifying why a spec file is slow.
+ * out of a serial root-run log, and classifying why a spec file is slow.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -9,27 +9,32 @@ import {
   classifyMechanisms,
   findDelistCandidates,
   mechanismsOf,
-  parseTurboVitestLog,
+  parseVitestLog,
   renderEntries,
   selectSeedCandidates,
 } from '../src/test-tier-budget-seed.js';
 
 const ESC = String.fromCodePoint(0x1b);
 
-/** A slice of a real `turbo-test$colon$unit.log`, with ANSI colour and per-test lines interleaved. */
+/**
+ * A slice of a real serial root-run log — repo-relative paths, ANSI colour,
+ * per-test lines interleaved, and one line carrying the timestamp GitHub
+ * Actions prefixes to a job log.
+ */
 const LOG = [
-  `${ESC}[32m ✓ ${ESC}[0mtest/subject.test.ts ${ESC}[2m(24 tests)${ESC}[0m ${ESC}[33m28847ms${ESC}[0m`,
+  `${ESC}[32m ✓ ${ESC}[0mpackages/lab/test/subject.test.ts ${ESC}[2m(24 tests)${ESC}[0m ${ESC}[33m28847ms${ESC}[0m`,
   '     ✓ resolves this checkout to its built bin  1040ms',
-  ' ✓ test/fast.test.ts (3 tests) 12ms',
-  ' ❯ test/flaky.test.ts (2 tests | 1 failed) 2s',
-  ' ↓ test/gated.test.ts (5 tests | 5 skipped)',
-  ' ✓ test/subject.test.ts (24 tests) 28000ms',
-  ' ✓ test/integration/io.integration.test.ts (7 tests) 3340ms',
+  '2026-09-14T01:12:18.8634032Z  ✓ packages/lab/test/fast.test.ts (3 tests) 12ms',
+  ' ❯ packages/lab/test/flaky.test.ts (2 tests | 1 failed) 2s',
+  ' ↓ packages/lab/test/gated.test.ts (5 tests | 5 skipped)',
+  ' ✓ packages/lab/test/subject.test.ts (24 tests) 28000ms',
+  ' ✓ packages/lab/test/integration/io.integration.test.ts (7 tests) 3340ms',
+  '@vibe-agent-toolkit/lab:test:unit:  ✓ test/turbo-lane.test.ts (1 test) 900ms',
 ].join('\n');
 
-describe('parseTurboVitestLog', () => {
+describe('parseVitestLog', () => {
   it('reads one duration per spec file, keeping the FIRST line for a file that prints twice', () => {
-    const rows = parseTurboVitestLog(LOG, 'lab');
+    const rows = parseVitestLog(LOG);
     expect(rows).toEqual([
       { file: 'packages/lab/test/subject.test.ts', durationMs: 28_847 },
       { file: 'packages/lab/test/fast.test.ts', durationMs: 12 },
@@ -38,14 +43,15 @@ describe('parseTurboVitestLog', () => {
     ]);
   });
 
-  it('ignores per-test lines and files that printed no duration', () => {
-    const files = parseTurboVitestLog(LOG, 'lab').map((r) => r.file);
+  it('ignores per-test lines, files that printed no duration, and a turbo lane\'s package-relative line', () => {
+    const files = parseVitestLog(LOG).map((r) => r.file);
     expect(files).not.toContain('packages/lab/test/gated.test.ts');
-    expect(files.every((f) => f.endsWith('.test.ts'))).toBe(true);
+    expect(files.some((f) => f.includes('turbo-lane'))).toBe(false);
+    expect(files.every((f) => f.startsWith('packages/') && f.endsWith('.test.ts'))).toBe(true);
   });
 
   it('returns nothing for an empty log', () => {
-    expect(parseTurboVitestLog('', 'lab')).toEqual([]);
+    expect(parseVitestLog('')).toEqual([]);
   });
 });
 

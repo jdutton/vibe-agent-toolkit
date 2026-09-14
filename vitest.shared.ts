@@ -33,36 +33,28 @@ import { TestTierBudgetReporter } from './packages/dev-tools/src/test-tier-budge
 const setupFilePath = fileURLToPath(new URL('./vitest.setup.js', import.meta.url));
 const repoRoot = fileURLToPath(new URL('./', import.meta.url));
 
-/**
- * Per-tier, per-FILE duration budgets, enforced by a reporter in every tier —
- * `packages/dev-tools/src/test-tier-budget-allowlist.ts` holds the budgets,
- * the ratchet allowlist and the rationale.
- *
- * ⚠️ NOT wired on win32. The allowlist was seeded from macOS durations, and
- * this repo's own gate measurements put Windows CI at 6–9× slower (CLAUDE.md:
- * 4,750 s against 528–771 s), which is past the ~10× headroom an unlisted file
- * has. A budget that has never been measured on a platform is not a ratchet
- * there, it is a coin flip — so the reporter stays out until a Windows seed
- * exists. To add one: run each tier uncached on the Windows box, then
- * `bun run seed:test-tier-budget <tier>`.
- */
 type ReporterEntry = string | readonly [string, Record<string, unknown>] | TestTierBudgetReporter;
-function tierBudgetReporters(base: readonly ReporterEntry[], options: { judgeStale: boolean }): ReporterEntry[] {
-  return process.platform === 'win32' ? [...base] : [...base, new TestTierBudgetReporter({ repoRoot, ...options })];
-}
 
 /**
  * The reporters of a ROOT config — `vitest.config.ts`, `vitest.integration.config.ts`,
- * `vitest.system.config.ts`. Those run the whole repo SERIALLY in one vitest
- * process (`test:coverage`, `validate-links`, a bare `bunx vitest run --config …`
- * from the root), where a heavy file reads up to 13× faster than under the
- * per-package turbo runs the allowlist was seeded from. The stale side of the
- * ratchet is judged only under turbo; here only the ceilings apply — see
- * `JudgeOptions.judgeStale`. Every root config passes its base list through
- * this, never through the per-package factories' reporters.
+ * `vitest.system.config.ts` — and the ONLY place the per-file duration ratchet
+ * is judged. Those configs run the whole repo in one vitest process with
+ * `fileParallelism: false`, so a file's duration is its own cost and not the
+ * contention of every other package's workers; the allowlist
+ * (`packages/dev-tools/src/test-tier-budget-allowlist.ts`) is seeded from that
+ * same run on the CI floor and judged there (`coverage.yml`). The per-package
+ * factories below attach no budget reporter: under turbo a 200 ms file reads as
+ * 1–3 s depending on what else is running that second, and six CI runs each
+ * crossed a different handful of files — a turbo-lane duration is load, not a
+ * measurement.
+ *
+ * ⚠️ NOT wired on win32. The allowlist is measured on Linux (and on macOS
+ * locally), and this repo's own gate measurements put Windows CI at 6–9×
+ * slower, past the 8× headroom a listed file has. A budget never measured on a
+ * platform is a coin flip there, not a ratchet.
  */
 export function rootSerialReporters(base: readonly ReporterEntry[]): ReporterEntry[] {
-  return tierBudgetReporters(base, { judgeStale: false });
+  return process.platform === 'win32' ? [...base] : [...base, new TestTierBudgetReporter({ repoRoot })];
 }
 
 /**
@@ -217,7 +209,7 @@ export function createUnitTestConfig(overrides: UnitTestConfigOverrides = {}) {
     pool: unitPool,
     maxWorkers: maxTestWorkers,
     execArgv: unitExecArgv,
-    reporters: tierBudgetReporters(['default'], { judgeStale: true }),
+    reporters: ['default'],
     coverage: {
       provider: 'v8' as const,
       reporter: ['text', 'json', 'html'] as const,
@@ -262,7 +254,7 @@ export function createIntegrationTestConfig(overrides: IntegrationTestConfigOver
     pool: integrationPool,
     maxWorkers: maxTestWorkers,
     execArgv: integrationExecArgv,
-    reporters: tierBudgetReporters(['default'], { judgeStale: true }),
+    reporters: ['default'],
   };
 }
 
@@ -315,7 +307,7 @@ export function createSystemTestConfig(overrides: SystemTestConfigOverrides = {}
     // ['default', { summary: false }] is the vitest v3 replacement for the
     // deprecated 'basic' reporter. Skipping the per-test streaming summary
     // reduces main<->worker RPC pressure.
-    reporters: tierBudgetReporters([['default', { summary: false }]], { judgeStale: true }),
+    reporters: [['default', { summary: false }]],
     // Tests emitting verbose console output pile RPC pressure onto the same
     // channel the onTaskUpdate heartbeat uses; write worker stdout directly instead.
     disableConsoleIntercept: true,

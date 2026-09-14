@@ -14,7 +14,10 @@ export default defineConfig({
       'packages/*/test/**/*.system.test.ts',
       'packages/*/src/**/*.system.test.ts',
     ],
-    // One serial process: ceilings only — see `rootSerialReporters`.
+    // One file at a time, by construction: this config is the per-file duration
+    // ratchet's judge, and a duration is only a measurement when nothing else is
+    // running — see `rootSerialReporters` in vitest.shared.ts.
+    fileParallelism: false,
     reporters: rootSerialReporters([['default', { summary: false }]]),
   },
 });

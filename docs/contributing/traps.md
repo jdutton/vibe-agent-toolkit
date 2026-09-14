@@ -116,19 +116,20 @@ only, green locally.
 **Remedy:** the job is the only writer (`COVERAGE_RATCHET=write`) and fails on its own diff when a
 threshold can rise — seed from its "All files" row, never from a local number.
 
-### The duration ratchet reports one package per CI run
+### A turbo-lane duration is load, not a measurement
 
-Turbo runs every package's unit tier in parallel and kills the rest (`exited with code 130`) the
-moment one package's budget reporter fails, so a run that carries six files over budget reports
-one. Seed it, push, and the next run reports the next — one CI round per file. The parallel
-runner also measures a hover file at 3–9× its serial time, so the red names a file that does no
-more work than before.
-**Tell:** `OVER BUDGET` for exactly one file while the printed capture shows other packages'
-`✓ … NNNNms` lines above the budget; `exited with code 130` for the packages that never reported.
-**Remedy:** read every `✓ … NNNNms` line in the printed unit capture and list every unlisted file
-over the budget in one change. Seed each at `max(alone, turbo / 4)` with both readings in the
-`note` — an entry seeded from the turbo number alone trips the stale line (a tenth of it) on the
-next fast local run, which is the mirror failure. Do not seed from one round's single verdict.
+The per-file duration ratchet was once judged inside the per-package turbo lanes. On the 4-core
+ubuntu runner a 120–540 ms file read as 1 000–3 055 ms there — 3–9× — and six consecutive CI
+runs each crossed a different handful of unlisted files (22 distinct, none twice), while turbo's
+kill-on-first-failure showed exactly one per run. Seeding from the turbo number then tripped the
+stale line (a tenth of it) on the next quiet local run: no single `measuredMs` satisfied both
+environments once the multiplier passed 10×.
+**Tell:** `OVER BUDGET` naming a different file each run, at a duration several times what the file
+takes alone; `exited with code 130` for the packages that never reported.
+**Remedy:** the ratchet is judged only by the three serial root configs (`fileParallelism: false`)
+— in CI, the coverage job — and seeded from that job's log with
+`bun run seed:test-tier-budget <tier> <log>`. Do not re-attach the reporter to a per-package
+config, and do not seed from a turbo log or a `bun run test:<tier>` capture.
 
 ### A hook timeout is decided on the timer side
 

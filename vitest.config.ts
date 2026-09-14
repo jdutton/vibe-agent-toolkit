@@ -27,8 +27,10 @@ export default defineConfig({
     pool: unitPool,
     maxWorkers: maxTestWorkers,
     execArgv: unitExecArgv,
-    // The per-file duration ratchet, ceilings only: this config runs serially —
-    // see `rootSerialReporters` in vitest.shared.ts.
+    // One file at a time, by construction: this config is the per-file duration
+    // ratchet's judge, and a duration is only a measurement when nothing else is
+    // running — see `rootSerialReporters` in vitest.shared.ts.
+    fileParallelism: false,
     reporters: rootSerialReporters(['default']),
     coverage: {
       provider: 'v8',

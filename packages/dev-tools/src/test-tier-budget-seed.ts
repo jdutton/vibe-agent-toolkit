@@ -1,12 +1,17 @@
 #!/usr/bin/env tsx
 /**
  * test-tier-budget-seed — prints allowlist entries for
- * `test-tier-budget-allowlist.ts` from the per-package turbo logs of the last
- * UNCACHED run of a tier.
+ * `test-tier-budget-allowlist.ts` from the saved output of one SERIAL root-config
+ * run of a tier — the run that judges the ratchet, so the seed and the judge
+ * read the same instrument.
  *
- * Run: `bun run seed:test-tier-budget <unit|integration|system>`
- * after `bun run test:<tier>` has actually executed (a turbo cache hit replays
- * the old log, which is the old measurement — check the `Duration` stamp).
+ * Run: `bun run seed:test-tier-budget <unit|integration|system> <log>`
+ * where `<log>` is the captured stdout of `bunx vitest run --config
+ * vitest[.<tier>].config.ts` (locally) or the CI coverage job's log for the
+ * same command (`gh api repos/<owner>/<repo>/actions/jobs/<id>/logs`) — the
+ * floor's numbers are the ones the ratchet is judged against, so prefer them.
+ * A per-package turbo log is NOT a source: under turbo a file's duration is
+ * the contention of every other package's workers, not its cost.
  *
  * What it prints, exactly: an entry for every file that measured OVER its
  * tier budget, and a refreshed entry for every file ALREADY listed (so a
@@ -24,7 +29,7 @@
  * the entry has to.
  */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -57,27 +62,28 @@ function stripAnsi(line: string): string {
 }
 
 /**
- * Vitest's per-FILE summary line: ` ✓ test/x.test.ts (24 tests) 28847ms`.
- * The `(N tests …)` group is what separates it from the per-test lines the
- * verbose reporter prints underneath, which carry a name and no group.
+ * Vitest's per-FILE summary line as a ROOT run prints it, repo-relative:
+ * ` ✓ packages/lab/test/x.test.ts (24 tests) 28847ms`. The `(N tests …)` group
+ * is what separates it from the per-test lines the verbose reporter prints
+ * underneath, which carry a name and no group. Not anchored at the line start:
+ * a GitHub Actions log carries a timestamp before the marker.
  */
-const FILE_LINE_RE = /^\s*[✓×❯↓]\s+(\S+\.test\.ts)\s+\(\d+ tests?[^)]*\)\s+(\d+)(ms|s)\b/;
+const FILE_LINE_RE = /(?:^|\s)[✓×❯↓]\s+(packages\/\S+\.test\.ts)\s+\(\d+ tests?[^)]*\)\s+(\d+)(ms|s)\b/;
 
 /**
- * Parse one package's turbo log into per-file durations.
+ * Parse a serial root-run log into per-file durations.
  *
  * The first line for a file wins: vitest reprints a file's summary in its
  * end-of-run failure recap, and the recap carries the same number.
  */
-export function parseTurboVitestLog(logText: string, pkg: string): DurationRow[] {
+export function parseVitestLog(logText: string): DurationRow[] {
   const seen = new Set<string>();
   const rows: DurationRow[] = [];
   for (const rawLine of logText.split('\n')) {
     const match = FILE_LINE_RE.exec(stripAnsi(rawLine));
     if (!match) continue;
-    const [, relative, amount, unit] = match;
-    if (!relative || !amount) continue;
-    const file = `packages/${pkg}/${relative}`;
+    const [, file, amount, unit] = match;
+    if (!file || !amount) continue;
     if (seen.has(file)) continue;
     seen.add(file);
     rows.push({ file, durationMs: Number(amount) * (unit === 's' ? 1000 : 1) });
@@ -171,25 +177,24 @@ export function renderEntries(entries: readonly TestTierBudgetEntry[]): string {
     .join('');
 }
 
-function readTurboLogs(tier: TestTier): DurationRow[] {
-  const packagesDir = safePath.join(PROJECT_ROOT, 'packages');
-  const rows: DurationRow[] = [];
-  for (const pkg of readdirSync(packagesDir)) {
-    const logPath = safePath.join(packagesDir, pkg, '.turbo', `turbo-test$colon$${tier}.log`);
-    if (!existsSync(logPath)) continue;
-    rows.push(...parseTurboVitestLog(readFileSync(logPath, 'utf8'), pkg));
-  }
-  return rows;
-}
-
 function main(): void {
   const tier = process.argv[2];
-  if (tier !== 'unit' && tier !== 'integration' && tier !== 'system') {
-    log('usage: test-tier-budget-seed <unit|integration|system>', 'red');
+  const logArg = process.argv[3];
+  if ((tier !== 'unit' && tier !== 'integration' && tier !== 'system') || logArg === undefined) {
+    log('usage: test-tier-budget-seed <unit|integration|system> <serial-root-run.log>', 'red');
     process.exitCode = ExitCode.ERROR;
     return;
   }
-  const rows = readTurboLogs(tier);
+  const logPath = safePath.resolve(process.cwd(), logArg);
+  if (!existsSync(logPath)) {
+    log(`no such log: ${logPath}`, 'red');
+    process.exitCode = ExitCode.ERROR;
+    return;
+  }
+  // Only this tier's files: a root log names every spec it ran, and `tierOf`
+  // keys the budget off the filename, so a unit log fed as `integration` would
+  // otherwise seed unit files against the integration budget.
+  const rows = parseVitestLog(readFileSync(logPath, 'utf8')).filter((row) => tierOf(row.file) === tier);
   const candidates = selectSeedCandidates(rows, TIER_BUDGET_MS, TEST_TIER_BUDGET_ALLOWLIST);
   const entries: TestTierBudgetEntry[] = [];
   for (const row of candidates) {

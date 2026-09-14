@@ -4,11 +4,13 @@
  * ratchet allowlist; and fails it the other way when a listed file has become
  * fast enough that its entry is stale.
  *
- * Wired into every tier through `vitest.shared.ts` (so all package configs and
- * the root configs carry it), NOT enabled on win32 — see the comment at the
- * wiring site. The budgets, the allowlist and the two fractions that make the
- * check tolerate load noise live in `test-tier-budget-allowlist.ts`; this file
- * only measures and judges.
+ * Wired ONLY into the three root configs through `rootSerialReporters` in
+ * `vitest.shared.ts` — one vitest process, one file at a time — and NOT on
+ * win32; see the comment at the wiring site for both. The per-package turbo
+ * lanes carry no reporter: a duration measured beside every other package's
+ * workers is contention, not the file's cost. The budgets, the allowlist and
+ * the two fractions that make the check tolerate noise live in
+ * `test-tier-budget-allowlist.ts`; this file only measures and judges.
  *
  * ⚠️ A reporter cannot mark a test failed after the fact. It fails the run by
  * setting `process.exitCode`, which vitest never resets to 0 — it only ever
@@ -93,7 +95,6 @@ function judgeOne(
   sample: DurationSample,
   listed: ReadonlyMap<string, TestTierBudgetEntry>,
   budgets: Readonly<Record<TestTier, number>>,
-  judgeStale: boolean,
 ): BudgetVerdict | undefined {
   const tier = tierOf(sample.file);
   if (tier === undefined || sample.state === 'skipped' || sample.state === 'pending' || sample.state === 'queued') {
@@ -106,7 +107,7 @@ function judgeOne(
     // header for the measured noise that rules out a budget-relative line. A
     // failed module's duration is partial: it says nothing about staleness.
     const staleBelowMs = entry.measuredMs * STALE_FRACTION;
-    if (judgeStale && sample.state === 'passed' && sample.durationMs < staleBelowMs) {
+    if (sample.state === 'passed' && sample.durationMs < staleBelowMs) {
       return { kind: 'stale-entry', file: sample.file, tier, durationMs: sample.durationMs, budgetMs, staleBelowMs };
     }
     // An entry buys headroom over its own measurement, never exemption: a
@@ -123,20 +124,6 @@ function judgeOne(
   return undefined;
 }
 
-export interface JudgeOptions {
-  /**
-   * Judge the STALE side (a listed file under `STALE_FRACTION` of its own
-   * `measuredMs`). Required — no default, because the run that omits it is
-   * exactly the serial run that must not judge it. The seeds are taken from the per-package turbo
-   * runs, where a heavy file reads up to 13× slower than in one serial vitest
-   * process (measured: 7 647 ms under turbo, 558 ms serially), so a serial run
-   * — the root config's coverage run, or a bare `bunx vitest run` from the
-   * root — cannot tell a stale entry from a quiet host and judges only the
-   * ceilings.
-   */
-  readonly judgeStale: boolean;
-}
-
 /**
  * Judge every measured file against its tier budget and the allowlist.
  *
@@ -147,13 +134,11 @@ export function judgeSamples(
   samples: readonly DurationSample[],
   allowlist: readonly TestTierBudgetEntry[],
   budgets: Readonly<Record<TestTier, number>>,
-  options: JudgeOptions,
 ): BudgetVerdict[] {
-  const { judgeStale } = options;
   const listed = new Map(allowlist.map((e) => [e.file, e]));
   const verdicts: BudgetVerdict[] = [];
   for (const sample of samples) {
-    const verdict = judgeOne(sample, listed, budgets, judgeStale);
+    const verdict = judgeOne(sample, listed, budgets);
     if (verdict) verdicts.push(verdict);
   }
   return verdicts;
@@ -192,22 +177,18 @@ export interface TestTierBudgetReporterOptions {
   readonly allowlist?: readonly TestTierBudgetEntry[];
   /** Defaults to stderr; injectable for tests. */
   readonly write?: (text: string) => void;
-  /** See `JudgeOptions.judgeStale` — required: turbo lane `true`, serial root run `false`. */
-  readonly judgeStale: boolean;
 }
 
 export class TestTierBudgetReporter implements Reporter {
   private readonly repoRoot: string;
   private readonly allowlist: readonly TestTierBudgetEntry[];
   private readonly write: (text: string) => void;
-  private readonly judgeStale: boolean;
   private samples: DurationSample[] = [];
 
   constructor(options: TestTierBudgetReporterOptions) {
     this.repoRoot = options.repoRoot;
     this.allowlist = options.allowlist ?? TEST_TIER_BUDGET_ALLOWLIST;
     this.write = options.write ?? ((text) => process.stderr.write(text));
-    this.judgeStale = options.judgeStale;
   }
 
   onTestModuleEnd(testModule: ModuleLike | TestModule): void {
@@ -219,7 +200,7 @@ export class TestTierBudgetReporter implements Reporter {
   }
 
   onTestRunEnd(): Promise<void> {
-    const verdicts = judgeSamples(this.samples, this.allowlist, TIER_BUDGET_MS, { judgeStale: this.judgeStale });
+    const verdicts = judgeSamples(this.samples, this.allowlist, TIER_BUDGET_MS);
     // Each run is judged on its own: watch mode calls this once per re-run.
     this.samples = [];
     if (verdicts.length > 0) {

@@ -124,7 +124,8 @@ nothing to register; `tsconfig.json` `references` are generated, never hand-edit
 
 Read [`docs/writing-tests.md`](docs/writing-tests.md) before writing any test — it owns the test
 pyramid, the helper-extraction rule, fixture storage, and the per-FILE duration budget
-(`test-tier-budget-reporter`, shrink-only allowlist; not on Windows).
+(`test-tier-budget-reporter`, shrink-only allowlist; judged only by the serial root configs —
+the coverage job in CI — never in a turbo lane; not on Windows).
 
 - **Never `bun test`** — it ignores `vitest.config.ts` and runs every tier in one process. Use
   `bun run validate` or `bun run test:<tier>`. Only unit tests are coverage-instrumented.

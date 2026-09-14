@@ -16,9 +16,10 @@ cd packages/<pkg> && bunx vitest run --config vitest.integration.config.ts test/
 
 The default root config (`vitest.config.ts`) is the UNIT config: it excludes
 `*.integration.test.ts` and `*.system.test.ts`, so `bunx vitest run <file>` from the repo root
-prints "No test files found" and exits 1 having run nothing. The seeds in the duration allowlist
-were measured under the per-package turbo runs, so a file's budget verdict is only comparable when
-run the same way ([`docs/writing-tests.md`](../../docs/writing-tests.md#the-per-file-duration-budget)).
+prints "No test files found" and exits 1 having run nothing. The per-file duration ratchet is
+judged only by the three root configs, which run one file at a time; a per-package run carries no
+budget reporter, so it cannot tell you whether a file is over budget — for that, run the root
+config ([`docs/writing-tests.md`](../../docs/writing-tests.md#the-per-file-duration-budget)).
 (not enforced)
 
 - Whole tiers: `bun run test:integration` / `bun run test:system` — never `bun test`, which
