@@ -847,6 +847,23 @@ with a regression test.
   switch (Windows TTY) — the libuv return value was ignored. A CLI transport whose session file is
   corrupt now warns before starting a fresh session in its place. The ONNX provider's `dispose()`
   no longer swallows a failed `session.release()`.
+- **`vat skill test` no longer fails the whole suite as harness-broke when a grader echoes an integer
+  eval id as a number.** `evals.json` documents `id: 1` as a first-class form, but the grader prompt
+  rendered it unquoted (`MUST be exactly: 3`), so the grader wrote `"evalId": 3` and the fail-closed
+  fragment schema refused it (`Expected string, received number`) — exit 1 for every eval in the run.
+  The prompt now renders the id as a JSON string literal in both places (a prompt invariant enforces
+  it), and the fragment schema accepts the integer form and normalises it to the string every other
+  layer already carries. `runNonce`, `expectations` and `tool` stay exactly as strict as before.
+- **`vat skill test`: one grader fragment that is not valid JSON no longer takes the whole suite
+  down as harness-broke (exit 1 on rc.7; `2` under this release's contract).** A bad escape the
+  grader model emitted in a free-text `evidence` was indistinguishable from a broken harness. The
+  eval is now re-graded once — same transcript, a fresh integrity nonce the stale file cannot
+  satisfy, the bad file consumed first, and the prompt told what went wrong. Only a second
+  unparseable fragment surfaces, and then as that eval's own `fail` with reason
+  `grader-fragment-unparseable` in every `evidence`; the other evals' verdicts are reported and the
+  exit code follows the verdict (1, or 0 under `--allow-eval-failure`). On a `--baseline` control
+  arm it is recorded as a control-arm failure with the delta withheld, like every other control-arm
+  grader failure. Schema refusals and nonce mismatches stay fail-closed with no retry.
 - **`resources.linkAuth` now applies whenever it is declared — it was silently inert unless
   `resources.collections` was also declared, so every link on a claimed host was checked anonymously.**
   Adopters with `linkAuth` and no `collections`: expect new `LINK_AUTH_*` findings in CI output.

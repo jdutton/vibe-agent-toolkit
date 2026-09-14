@@ -142,6 +142,24 @@ function readResult(tempDir: string, name: string): unknown {
 const readBaseline = (tempDir: string): BaselineArtifact => readResult(tempDir, BASELINE_JSON) as BaselineArtifact;
 
 /**
+ * The control-arm contract every recorded failure must satisfy: the run lives
+ * (exit 0), the treatment verdict is untouched (1/1), the delta is withheld, and
+ * `controlArmFailures[0].detail` names the failure. `detailFragment` is the one
+ * thing that differs between the failure classes pinned below.
+ */
+function expectRecordedControlFailure(
+  tempDir: string,
+  result: Awaited<ReturnType<typeof runHarness>>,
+  detailFragment: string,
+): void {
+  expect(result.exitCode).toBe(0);
+  expect(readResult(tempDir, GRADING_JSON)).toMatchObject({ summary: { passed: 1, total: 1 } });
+  const { baselineIntegrity, baselineDelta } = readBaseline(tempDir);
+  expect(baselineDelta.delta).toBeNull();
+  expect(baselineIntegrity.controlArmFailures[0]?.detail).toContain(detailFragment);
+}
+
+/**
  * A control arm (`pluginDirs: []`) whose executor is killed by the wall-clock
  * watchdog — an `InternalHarnessError` thrown from inside the pipeline worker,
  * which is the exact shape that used to take the whole run down.
@@ -273,11 +291,7 @@ describe('runSkillTestHarness — a CONTROL-arm failure must not destroy the run
     });
     const result = await runHarness(tempDir, getAuthoredDir(), miscounting.spawn, { baseline: true });
 
-    expect(result.exitCode).toBe(0);
-    expect(readResult(tempDir, GRADING_JSON)).toMatchObject({ summary: { passed: 1, total: 1 } });
-    const { baselineIntegrity, baselineDelta } = readBaseline(tempDir);
-    expect(baselineDelta.delta).toBeNull();
-    expect(baselineIntegrity.controlArmFailures[0]?.detail).toContain('expectation entr');
+    expectRecordedControlFailure(tempDir, result, 'expectation entr');
   });
 
   /**
@@ -340,6 +354,101 @@ describe('runSkillTestHarness — a CONTROL-arm failure must not destroy the run
     await expect(
       runHarness(getTempDir(), getAuthoredDir(), treatmentDies.spawn, { baseline: true }),
     ).rejects.toThrow(/treatment arm \(skill available\)/);
+  });
+});
+
+/**
+ * ONE MALFORMED GRADER FRAGMENT TOOK A SIX-EVAL SUITE DOWN AS HARNESS-BROKE.
+ *
+ * The grader MODEL emitted a bad JSON escape inside a free-text `evidence`; the
+ * other five evals had graded fine; the run exited 1 with `EvalFragmentError`. A
+ * flaky token is not a broken harness. The grader is re-run once for that eval,
+ * and only a SECOND unparseable fragment surfaces — as that eval's own `fail`,
+ * with the other evals' verdicts reported and the exit code following the verdict
+ * (FINDINGS, never ERROR with `Reason: internal`).
+ *
+ * Wiring, not unit: `runGraderForEval` throws a distinct class and it is
+ * `runEvalWorker` that decides what the class costs — per arm, like every other
+ * grader failure — and nothing but a full run can see that decision.
+ */
+/**
+ * A grader whose fragment for every path `isTarget` accepts is garbage on its first
+ * `garbageAttempts` spawns, plus how many times each such path was spawned — the
+ * count is what distinguishes "re-graded once" from "gave up on the first".
+ */
+function graderWritingGarbage(
+  isTarget: (fragmentPath: string) => boolean,
+  garbageAttempts: number,
+): { stub: ReturnType<typeof makeHarnessFakeSpawn>; attempts: Map<string, number> } {
+  const attempts = new Map<string, number>();
+  const stub = makeHarnessFakeSpawn({
+    graderRawFragment: (fragmentPath) => {
+      if (!isTarget(fragmentPath)) return undefined;
+      const n = (attempts.get(fragmentPath) ?? 0) + 1;
+      attempts.set(fragmentPath, n);
+      return n <= garbageAttempts ? '{not valid json' : undefined;
+    },
+  });
+  return { stub, attempts };
+}
+
+const graderWritingGarbageFor = (evalId: string, garbageAttempts: number) =>
+  graderWritingGarbage((p) => p.endsWith(`/${evalId}.json`), garbageAttempts).stub;
+
+describe('runSkillTestHarness — an unparseable grader fragment', () => {
+  const { getTempDir, getAuthoredDir } = setupStubbedHarnessSubject('vat-unparseable-', vi.mocked(stageHarness));
+
+  it('re-grades once: garbage then strict JSON is a PASS, from exactly one extra grader spawn', async () => {
+    writeEvalSuite(getAuthoredDir(), [{ id: 'e1' }, { id: 'e2' }]);
+    const stub = graderWritingGarbageFor('e2', 1);
+
+    const result = await runHarness(getTempDir(), getAuthoredDir(), stub.spawn);
+
+    expect(result.summary).toBe('PASS 2/2');
+    expect(result.exitCode).toBe(0);
+    // Two evals, one re-grade: three grader spawns, and the third is the retry.
+    expect(stub.graderNonces).toHaveLength(3);
+  });
+
+  it('garbage twice is THAT eval\'s fail with the reason named, and the other eval\'s verdict is reported', async () => {
+    const tempDir = getTempDir();
+    writeEvalSuite(getAuthoredDir(), [{ id: 'e1' }, { id: 'e2' }]);
+
+    const result = await runHarness(tempDir, getAuthoredDir(), graderWritingGarbageFor('e2', 2).spawn);
+
+    expect(result.summary).toBe('FAIL 1/2');
+    expect(result.exitCode).toBe(ExitCode.FINDINGS);
+    const grading = readResult(tempDir, GRADING_JSON) as { expectations: Array<{ evalId: string; passed: boolean; evidence?: string }> };
+    expect(grading.expectations).toEqual([
+      expect.objectContaining({ evalId: 'e1', passed: true }),
+      expect.objectContaining({ evalId: 'e2', passed: false, evidence: expect.stringContaining('grader-fragment-unparseable') }),
+    ]);
+  });
+
+  // The verdict path, not a harness exit: the interactive opt-out still applies.
+  it('the --allow-eval-failure opt-out downgrades it to Ok like any other failing verdict', async () => {
+    const result = await runHarness(getTempDir(), getAuthoredDir(), graderWritingGarbageFor('1', 2).spawn, {
+      tolerateEvalFailure: true,
+    });
+
+    expect(result.summary).toBe('FAIL 0/1');
+    expect(result.exitCode).toBe(0);
+  });
+
+  /**
+   * On the CONTROL arm a fabricated `fail` would read as skill lift — the grader
+   * broke, the skill did nothing — so it takes the path every other control-arm
+   * grader failure takes: recorded, delta withheld, treatment untouched.
+   */
+  it('on the control arm it is a recorded control failure, never a manufactured delta', async () => {
+    const tempDir = getTempDir();
+    const { stub, attempts } = graderWritingGarbage((p) => p.includes('/without/'), 2);
+
+    const result = await runHarness(tempDir, getAuthoredDir(), stub.spawn, { baseline: true });
+
+    expectRecordedControlFailure(tempDir, result, 'grader-fragment-unparseable');
+    // The re-grade fired on this arm too — bounded at one.
+    expect([...attempts.values()]).toEqual([2]);
   });
 });
 

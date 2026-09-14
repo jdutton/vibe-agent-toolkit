@@ -39,7 +39,10 @@ export type EvalFragmentExpectation = z.infer<typeof EvalFragmentExpectationSche
  */
 export const EvalFragmentSchema = z.object({
   runNonce: z.string().min(1),
-  evalId: z.string().min(1),
+  // evals.json allows an integer id and every other layer carries it as a
+  // string; a grader that echoes the number names the same eval, so it is
+  // normalised here rather than refused as a forged fragment.
+  evalId: z.union([z.string().min(1), z.number().int()]).transform(String),
   arm: z.enum(['with', 'without']).optional(),
   expectations: z.array(EvalFragmentExpectationSchema).min(1),
   friction: z.array(FrictionItemSchema).optional(),
@@ -98,6 +101,7 @@ export class EvalFragmentError extends VatError {
 function extractRawEvalId(raw: unknown): string {
   if (typeof raw === 'object' && raw !== null && 'evalId' in raw) {
     const value = (raw as Record<string, unknown>)['evalId'];
+    if (typeof value === 'number') return `"${String(value)}"`;
     if (typeof value === 'string' && value.length > 0) return `"${sanitizeGraderText(value)}"`;
   }
   return '(unknown)';

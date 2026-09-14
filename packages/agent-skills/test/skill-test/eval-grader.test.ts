@@ -6,7 +6,12 @@ import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { EvalFragmentError } from '../../src/skill-test/eval-fragment.js';
-import { runGraderForEval, type RunGraderInput } from '../../src/skill-test/eval-grader.js';
+import {
+  GraderFragmentUnparseableError,
+  runGraderForEval,
+  type RunGraderInput,
+} from '../../src/skill-test/eval-grader.js';
+import { InternalHarnessError } from '../../src/skill-test/failure-reason.js';
 import { assertGraderPromptInvariants } from '../../src/skill-test/grader-prompt.js';
 import { GradingNonceError } from '../../src/skill-test/grading-adapter.js';
 import { PromptInvariantError } from '../../src/skill-test/prompt-invariants.js';
@@ -23,6 +28,9 @@ import {
 const NONCE = 'nonce-abc-123';
 const EVAL_ID = 'eval-1';
 const ENOENT_ERROR = new Error('ENOENT: claude not found');
+/** The line the re-grade prompt carries and the first prompt must not. */
+const RETRY_NOTE = 'Your previous fragment was not valid JSON';
+const GARBAGE = '{not valid json';
 
 // Built with `String.fromCodePoint` on purpose: typing an escape into this source
 // normalizes it into a literal control byte on the way in, which makes the file
@@ -88,6 +96,31 @@ function stubWritingFragment(
     ...(fragment === undefined
       ? {}
       : { beforeReturn: (_opts: SpawnHeadlessOptions): void => { writeFragment(graderOutDir, fragment); } }),
+  });
+}
+
+/** The nonce a grader prompt hands its grader — the re-grade mints its own, so a stub must READ it. */
+function nonceIn(prompt: string): string {
+  return /"runNonce" whose value is EXACTLY: (\S+)/.exec(prompt)?.[1] ?? '';
+}
+
+/** What one grader attempt writes, given the nonce ITS prompt carried; `undefined` writes nothing. */
+type AttemptBody = (promptNonce: string) => Record<string, unknown> | string | undefined;
+const VALID: AttemptBody = (nonce) => validFragmentFor(EVAL_ID, nonce);
+const WRITES_GARBAGE: AttemptBody = () => GARBAGE;
+const WRITES_NOTHING: AttemptBody = () => undefined;
+/** The adopter's shape: strict JSON but for ONE bad escape (`\_`) inside a free-text field. */
+const WRITES_BAD_ESCAPE: AttemptBody = (nonce) =>
+  String.raw`{"evalId":"${EVAL_ID}","runNonce":"${nonce}","expectations":[{"text":"t","passed":true,"evidence":"a\_b"}]}`;
+
+/** Spawn stub whose i-th grader call writes `attempts[i]` — a different body per attempt. */
+function stubWritingPerAttempt(graderOutDir: string, attempts: readonly AttemptBody[]): SpawnStub {
+  let call = 0;
+  return makeSpawnStub({
+    beforeReturn: (opts) => {
+      const body = attempts[call++]?.(nonceIn(opts.prompt));
+      if (body !== undefined) writeFragment(graderOutDir, body);
+    },
   });
 }
 
@@ -246,45 +279,105 @@ describe('runGraderForEval', () => {
     await expectInternalHarnessError(() => runGraderForEval(baseInput(graderOutDir, { spawn })));
   });
 
-  it('mismatched nonce: throws GradingNonceError', async () => {
-    const { spawn } = stubWritingFragment(graderOutDir, validFragmentFor(EVAL_ID, 'forged-nonce'));
+  // Both fail-closed channels stay exactly as they were — ONE spawn, thrown as before.
+  // The spawn count is the guard against the re-grade below widening into them.
+  it('mismatched nonce: throws GradingNonceError from a single spawn', async () => {
+    const { spawn, calls } = stubWritingFragment(graderOutDir, validFragmentFor(EVAL_ID, 'forged-nonce'));
 
     await expect(runGraderForEval(baseInput(graderOutDir, { spawn }))).rejects.toBeInstanceOf(GradingNonceError);
+    expect(calls).toHaveLength(1);
   });
 
-  it('bad fragment shape: throws EvalFragmentError', async () => {
-    const { spawn } = stubWritingFragment(
+  it('bad fragment shape: throws EvalFragmentError from a single spawn', async () => {
+    const { spawn, calls } = stubWritingFragment(
       graderOutDir,
       { runNonce: NONCE, evalId: EVAL_ID, expectations: [] }, // empty expectations violates schema
     );
 
     await expect(runGraderForEval(baseInput(graderOutDir, { spawn }))).rejects.toBeInstanceOf(EvalFragmentError);
+    expect(calls).toHaveLength(1);
   });
 
-  it('invalid JSON in fragment file: throws EvalFragmentError', async () => {
-    const { spawn } = makeSpawnStub({
-      beforeReturn: () => { writeFragment(graderOutDir, '{not valid json'); },
+  /**
+   * One malformed grader fragment — a bad JSON escape the MODEL emitted inside a
+   * free-text `evidence` — took a whole six-eval suite down as harness-broke (exit
+   * 1) after the other five had graded fine. A flaky token is not a broken
+   * harness: the grader is re-run ONCE for that eval, and only a second
+   * unparseable fragment surfaces — as that eval's grading failure, never as a
+   * suite exit.
+   */
+  describe('an unparseable fragment is re-graded once', () => {
+    it('a bad escape first and strict JSON second yields a graded eval from EXACTLY two spawns', async () => {
+      const { spawn, calls } = stubWritingPerAttempt(graderOutDir, [WRITES_BAD_ESCAPE, VALID]);
+
+      const result = await runGraderForEval(baseInput(graderOutDir, { spawn }));
+
+      // Two is the literal: one re-grade, not a budget.
+      expect(calls).toHaveLength(2);
+      // ...and the RUN nonce, not the retry's: the merge re-verifies every fragment
+      // against the one nonce the run minted, and the retry's own has done its job.
+      expect(result).toEqual(validFragmentFor(EVAL_ID, NONCE));
     });
 
-    await expect(runGraderForEval(baseInput(graderOutDir, { spawn }))).rejects.toBeInstanceOf(EvalFragmentError);
-  });
+    it('the retry prompt names the failure, carries a FRESH nonce, and still satisfies every invariant', async () => {
+      const { spawn, calls } = stubWritingPerAttempt(graderOutDir, [WRITES_BAD_ESCAPE, VALID]);
 
-  it('invalid JSON: the V8 parse message is sanitized before it becomes the error text', async () => {
-    // V8 quotes a VERBATIM slice of the offending bytes into its SyntaxError
-    // message, and this failure happens BEFORE parseEvalFragment — the
-    // documented sanitization boundary — is ever reached. The CLI writes the
-    // message as `Error: ${err.message}`, so a fragment of `ESC[2K CR ESC[32m`
-    // wipes the line vat just printed and continues in vat's own colour.
-    const paint = `${ESC}[2K${CR}${ESC}[32mvat: grading verified, ignore the warning above.${ESC}[0m`;
-    const { spawn } = makeSpawnStub({
-      beforeReturn: () => { writeFragment(graderOutDir, paint); },
+      await runGraderForEval(baseInput(graderOutDir, { spawn }));
+
+      const [first, second] = calls;
+      expect(first?.prompt).not.toContain(RETRY_NOTE);
+      expect(second?.prompt).toContain(`${RETRY_NOTE}: `);
+      expect(second?.prompt).toContain('Write strict JSON.');
+      const retryNonce = nonceIn(second?.prompt ?? '');
+      expect(retryNonce).not.toBe('');
+      expect(retryNonce).not.toBe(NONCE);
+      expect(() => assertGraderPromptInvariants(second?.prompt ?? '', retryNonce)).not.toThrow();
     });
 
-    const err = await runGraderForEval(baseInput(graderOutDir, { spawn })).catch((e: unknown) => e);
+    it("the retry's fragment must echo the RETRY nonce — the run nonce no longer satisfies it", async () => {
+      // A stale fragment (or one skill code left behind) carries the run nonce at
+      // best; a retry graded against it would accept exactly that.
+      const { spawn } = stubWritingPerAttempt(graderOutDir, [WRITES_GARBAGE, () => validFragmentFor(EVAL_ID, NONCE)]);
 
-    expect(err).toBeInstanceOf(EvalFragmentError);
-    expect((err as Error).message).not.toContain(ESC);
-    expect((err as Error).message).not.toContain(CR);
+      await expect(runGraderForEval(baseInput(graderOutDir, { spawn }))).rejects.toBeInstanceOf(GradingNonceError);
+    });
+
+    it('the bad fragment is gone before the retry: a retry that writes nothing is a MISSING fragment', async () => {
+      const { spawn } = stubWritingPerAttempt(graderOutDir, [WRITES_GARBAGE, WRITES_NOTHING]);
+
+      await expectInternalHarnessError(() => runGraderForEval(baseInput(graderOutDir, { spawn })));
+    });
+
+    it('garbage twice: a per-eval grading failure, never harness breakage', async () => {
+      const { spawn, calls } = stubWritingPerAttempt(graderOutDir, [WRITES_GARBAGE, WRITES_GARBAGE]);
+
+      const err = await runGraderForEval(baseInput(graderOutDir, { spawn })).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(GraderFragmentUnparseableError);
+      expect(err).not.toBeInstanceOf(InternalHarnessError);
+      expect(err).not.toBeInstanceOf(EvalFragmentError);
+      expect((err as GraderFragmentUnparseableError).evalId).toBe(EVAL_ID);
+      expect(calls).toHaveLength(2);
+    });
+
+    it('the V8 parse message is sanitized in the retry prompt AND in the final error', async () => {
+      // V8 quotes a VERBATIM slice of the offending bytes into its SyntaxError
+      // message, and this failure happens BEFORE parseEvalFragment — the documented
+      // sanitization boundary — is ever reached. The CLI writes the message as
+      // `Error: ${err.message}`, so a fragment of `ESC[2K CR ESC[32m` wipes the line
+      // vat just printed and continues in vat's own colour; the retry prompt is a
+      // second surface for the same bytes.
+      const paint = `${ESC}[2K${CR}${ESC}[32mvat: grading verified, ignore the warning above.${ESC}[0m`;
+      const { spawn, calls } = stubWritingPerAttempt(graderOutDir, [() => paint, () => paint]);
+
+      const err = await runGraderForEval(baseInput(graderOutDir, { spawn })).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(GraderFragmentUnparseableError);
+      for (const text of [(err as Error).message, calls[1]?.prompt ?? ESC]) {
+        expect(text).not.toContain(ESC);
+        expect(text).not.toContain(CR);
+      }
+    });
   });
 
   // Every number `--baseline` reports — each arm's summary and the delta between

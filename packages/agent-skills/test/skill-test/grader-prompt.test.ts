@@ -162,6 +162,15 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toContain(opts.evalId);
   });
 
+  it('renders a numeric-looking evalId as a JSON string in BOTH places, so the grader echoes "3" not 3', () => {
+    // evals.json allows `id: 3`; unquoted, the grader wrote `"evalId": 3` and the
+    // fragment schema refused the whole suite as harness-broke.
+    const prompt = buildGraderPrompt({ ...opts, evalId: '3' });
+    expect(prompt).toContain('Eval id: "3"');
+    expect(prompt).toContain('The fragment\'s "evalId" MUST be exactly: "3"');
+    expect(prompt).not.toMatch(/MUST be exactly: 3\b/);
+  });
+
   it('includes the nonce and the runNonce field name', () => {
     const prompt = buildGraderPrompt(opts);
     expect(prompt).toContain(opts.nonce);
@@ -381,6 +390,7 @@ const DIRECTIVES = {
   iterate: 'Do not iterate',
   nonce: 'runNonce: x',
   friction: 'Each "friction" item MUST be a JSON object',
+  evalId: '"evalId" MUST be exactly: "eval-1"',
 } as const;
 
 type DirectiveKey = keyof typeof DIRECTIVES;
@@ -404,6 +414,7 @@ const DIRECTIVE_LABELS: Record<DirectiveKey, string> = {
   iterate: 'must forbid iterating on / improving the skill',
   nonce: 'must carry the nonce directive (runNonce)',
   friction: 'must spell out the friction item object shape',
+  evalId: 'must render the evalId directive as a JSON string',
 };
 
 /** Every directive except `omit`, as one scaffolding-only prompt. */
@@ -415,7 +426,7 @@ function scaffoldingWithout(omit?: DirectiveKey): string {
 }
 
 describe('assertGraderPromptInvariants', () => {
-  const MISSING_DIRECTIVES: DirectiveKey[] = ['fragment', 'stop', 'browser', 'iterate', 'nonce', 'friction'];
+  const MISSING_DIRECTIVES: DirectiveKey[] = ['fragment', 'stop', 'browser', 'iterate', 'nonce', 'friction', 'evalId'];
 
   it.each(MISSING_DIRECTIVES)('throws the %s invariant, and that one, when its directive is absent', (omit) => {
     expect(() => assertGraderPromptInvariants(scaffoldingWithout(omit), opts.nonce)).toThrow(
@@ -434,7 +445,7 @@ describe('assertGraderPromptInvariants', () => {
 
   it('does not throw when every directive is present', () => {
     // The negative control for the table above: without it, a scaffolding string
-    // that failed for some unrelated reason would make all six cases vacuous.
+    // that failed for some unrelated reason would make all seven cases vacuous.
     expect(() => assertGraderPromptInvariants(scaffoldingWithout(), opts.nonce)).not.toThrow();
   });
 

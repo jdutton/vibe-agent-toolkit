@@ -1558,7 +1558,7 @@ Exit Codes:
   0 - Harness ran to completion and every eval passed (or --allow-eval-failure suppressed a failing verdict)
   1 - An eval FAILED (the harness completed and produced a valid grading.json; expectations did not all pass). This is the fail-closed DEFAULT -- suppress with --allow-eval-failure.
   2 - The harness could not run. A 'Reason: <reason>' line on stderr says why:
-        internal  - the harness broke (grader fragment absent/invalid, summary/expectations skew, executor/grader crash, stall/timeout)
+        internal  - the harness broke (grader fragment absent or off-schema, summary/expectations skew, executor/grader crash, stall/timeout)
         preflight - the environment or inputs need fixing (missing binary, auth error, eval inputs absent, unsafe workdir, ack missing, broken project config, a required skill -- subject or --with companion -- failed to build, --no-build with no existing dist for one of them, or an OPTIONAL --with-optional companion hitting a non-survivable failure: a destructive plugin-local build failure, missing security ack, or broken config)
         bootstrap - evals.json was absent, so VAT wrote a starter template next to the skill source. Fill it in and re-run.
 

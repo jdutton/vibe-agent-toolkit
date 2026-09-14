@@ -68,7 +68,7 @@ import {
 import { assembleChildEnv, assertKnownEnvTokens, computeEnvTokens, resolveInjectEnv } from './declared-env.js';
 import { runExecutorForEval } from './eval-executor.js';
 import type { EvalFragment } from './eval-fragment.js';
-import { runGraderForEval } from './eval-grader.js';
+import { GRADER_FRAGMENT_UNPARSEABLE, GraderFragmentUnparseableError, runGraderForEval } from './eval-grader.js';
 import {
   armDirSegment,
   EvalInputError,
@@ -1731,7 +1731,7 @@ async function gradeOneArm(item: EvalWorkItem, ctx: EvalRunContext): Promise<Eva
  *
  * CONTROL arm: record and continue. Every failure mode of this arm — executor spawn
  * error, stall, wall-timeout, grader non-zero exit, grader wrote no fragment,
- * fragment is not valid JSON, nonce mismatch, and (newest) a grader that returned a
+ * fragment unparseable twice, nonce mismatch, and a grader that returned a
  * different number of expectations than the eval declares — used to propagate out of
  * `runPipeline` and annihilate the treatment work already completed and billed. A
  * two-eval probe was measured doing precisely that: both treatment executors ran,
@@ -1756,9 +1756,50 @@ async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<E
   try {
     return { fragment: await gradeOneArm(item, ctx) };
   } catch (err) {
-    if (err instanceof RateLimitSignal || item.arm === 'with') throw nameTheArm(err, item.arm);
+    if (err instanceof RateLimitSignal) throw nameTheArm(err, item.arm);
+    if (item.arm === 'with') {
+      if (err instanceof GraderFragmentUnparseableError) return { fragment: unparseableGradingFragment(item, ctx, err) };
+      throw nameTheArm(err, item.arm);
+    }
     return recordControlFailure(item, err);
   }
+}
+
+/**
+ * The TREATMENT arm's outcome for a grader that could not write valid JSON twice
+ * ({@link GraderFragmentUnparseableError}): this eval FAILS, in the same fragment
+ * shape a grader's own failing verdict takes, so it merges, counts and gates
+ * exactly like one — `FAIL n/m`, `FINDINGS` unless `--allow-eval-failure`, the other
+ * evals reported. Every declared expectation is marked failed with the reason as
+ * its `evidence`; a `tool` verdict is NOT invented, because none was produced —
+ * the eval already fails on the output channel, and `tool-eval.json` omitting it
+ * is the truth. Not `InternalHarnessError`: the harness ran the grader twice and
+ * it was the model that could not produce strict JSON.
+ *
+ * Treatment only. On the control arm the same error is recorded as a control
+ * failure (delta withheld) — a synthesized control `fail` would read as lift.
+ */
+function unparseableGradingFragment(
+  item: EvalWorkItem,
+  ctx: EvalRunContext,
+  err: GraderFragmentUnparseableError,
+): EvalFragment {
+  process.stderr.write(
+    `\n⚠️  [${ARM_LABEL[item.arm]}] ${err.message}\n` +
+      `   Eval "${err.evalId}" is reported as FAILED (${GRADER_FRAGMENT_UNPARSEABLE}); the run continues.\n`,
+  );
+  return {
+    runNonce: ctx.runNonce,
+    evalId: err.evalId,
+    arm: item.arm,
+    expectations: item.entry.expectations.map((text) => ({
+      // Suite text enters an artifact here without a grader's echo in between, so
+      // it takes the same sanitizer a grader's echo would have.
+      text: sanitizeGraderText(text),
+      passed: false,
+      evidence: `${GRADER_FRAGMENT_UNPARSEABLE}: ${err.detail}`,
+    })),
+  };
 }
 
 /**
@@ -3219,8 +3260,11 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // (timeout/stall/spawn-error, grader failure, missing fragment, nonce mismatch,
     // declared-count mismatch) propagates OUT unhandled → skillTestFailureReason →
     // ERROR/internal; a spawn or grader break is never laundered into a pass/fail verdict
-    // (R1 no-laundering). The same break on the CONTROL arm is recorded and the run
-    // continues — see runEvalWorker for why the two arms are not symmetric.
+    // (R1 no-laundering). The one grader outcome that IS a verdict — a fragment the
+    // model could not write as valid JSON even after one re-grade — fails that eval
+    // (see unparseableGradingFragment). The same break on the CONTROL arm is
+    // recorded and the run continues — see runEvalWorker for why the two arms are
+    // not symmetric.
     const { fragments, controlFailures, skipped } = await runEvalsTiered({
       evals: suite.evals,
       baseline: opts.baseline === true,
