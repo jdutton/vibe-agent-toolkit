@@ -1,12 +1,14 @@
 /**
  * FULL-WIRING tests for `runSkillTestHarness` — the ones that must drive the real
  * orchestrator end to end because the thing under test is the WIRING, not a pure
- * function anyone can call directly. Integration tier: end to end through real
- * artifact writes is integration-shaped work (~2 s serially on macOS).
+ * function anyone can call directly.
  *
  * The executor→grader pipeline is driven with an INJECTED fake spawn (opts.spawn),
  * so no real `claude` is needed; preflight + staging are stubbed so the
- * orchestrator reaches the real pipeline/merge/verdict/artifact-write path.
+ * orchestrator reaches the real pipeline/merge/verdict/artifact-write path. No
+ * process starts: the flag probe's `claude --help` runs on preflight's first
+ * query, and a stubbed preflight never asks — when it ran at build time instead,
+ * this file cost 29 real spawns and read 10× slower wherever `claude` is installed.
  *
  * Three families live here, each because a unit test of the same behaviour would
  * have passed while the shipped run did the wrong thing:
@@ -36,11 +38,11 @@ import type { BaselineIntegrity } from '../../src/skill-test/baseline-integrity.
 import { GradingNonceError } from '../../src/skill-test/grading-adapter.js';
 import { runSkillTestHarness } from '../../src/skill-test/run-harness.js';
 import { stageHarness } from '../../src/skill-test/staging.js';
-import { makeHarnessFakeSpawn, SPAWN_TIMED_OUT } from '../skill-test/spawn-stub.js';
 import { setupStubbedHarnessSubject } from '../test-helpers.js';
 
+import { makeHarnessFakeSpawn, SPAWN_TIMED_OUT } from './spawn-stub.js';
 
-vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('../skill-test/preflight-stub.js')).passingPreflight(io));
+vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('./preflight-stub.js')).passingPreflight(io));
 
 vi.mock('../../src/skill-test/staging.js', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();

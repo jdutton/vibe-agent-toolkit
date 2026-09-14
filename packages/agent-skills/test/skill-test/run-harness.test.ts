@@ -234,6 +234,26 @@ describe('buildFlagParseProbe', () => {
     const probe = buildFlagParseProbe(() => null);
     expect(probe(PLUGIN_DIR_FLAG)).toBe(false);
   });
+
+  // The spawn is the probe's whole cost. Built eagerly it ran once per harness
+  // run whether or not preflight ever asked — a stubbed preflight still paid for
+  // a real `claude --help` — so it runs on the first query, and once.
+  it('runs --help on the first query, not when built, and only once', () => {
+    const runHelp = vi.fn(() => HELP_FIXTURE);
+    const probe = buildFlagParseProbe(runHelp);
+    expect(runHelp).not.toHaveBeenCalled();
+    expect(probe(PLUGIN_DIR_FLAG)).toBe(true);
+    expect(probe('--max-turns')).toBe(false);
+    expect(runHelp).toHaveBeenCalledTimes(1);
+  });
+
+  it('remembers an unreachable --help rather than retrying it per flag', () => {
+    const runHelp = vi.fn(() => null);
+    const probe = buildFlagParseProbe(runHelp);
+    expect(probe(PLUGIN_DIR_FLAG)).toBe(false);
+    expect(probe('--max-turns')).toBe(false);
+    expect(runHelp).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

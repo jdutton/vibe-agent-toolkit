@@ -771,6 +771,10 @@ with a regression test.
 - **`vat validate`'s orchestrator refuses a phase that ends on a code outside the contract**
   instead of rounding it to `system-error`.
 
+- **`vat skill test run` spawns `claude --help` for the flag-support probe only when preflight
+  first asks**, not while its input is assembled — a run that fails an earlier preflight check no
+  longer pays for a subprocess whose answer it never reads.
+
 - **`claude plugin install --dev` no longer recognises its own "already installed" refusal by the
   words in the message**, and no longer reads a permission refusal on the destination as "not installed".
 

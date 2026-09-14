@@ -560,15 +560,26 @@ const FLAG_PROBE_SENTINEL = '--vat-probe-flag-that-cannot-exist';
  * outright — the probe reports EVERY flag unsupported rather than every flag
  * supported. A probe that cannot tell must fail closed and be seen; the defect it
  * replaces failed open and was invisible.
+ *
+ * `--help` runs on the FIRST flag query, not when the probe is built. Building
+ * it is part of assembling preflight's input, and a preflight that never asks
+ * (a stubbed one, or one that fails an earlier check) must not have already
+ * paid for a subprocess: with the spawn at build time every harness run cost
+ * one real `claude --help` — 75 ms where the CLI is installed, an instant
+ * ENOENT where it is not — which read as a 10× platform split in a test that
+ * had injected a fake spawn and stubbed preflight precisely so no process
+ * would start.
  */
 function buildFlagParseProbe(
   runHelp: () => string | null = defaultClaudeHelp,
 ): (flag: string) => boolean {
-  const helpText = runHelp();
-  // No help output, or a sentinel "match" ⇒ the probe is not trustworthy.
-  const usable = helpText !== null && !helpTextDeclaresFlag(helpText, FLAG_PROBE_SENTINEL);
-  return (flag: string): boolean =>
-    usable && helpTextDeclaresFlag(helpText ?? '', flag);
+  let helpText: string | null | undefined;
+  return (flag: string): boolean => {
+    if (helpText === undefined) helpText = runHelp();
+    // No help output, or a sentinel "match" ⇒ the probe is not trustworthy.
+    const usable = helpText !== null && !helpTextDeclaresFlag(helpText, FLAG_PROBE_SENTINEL);
+    return usable && helpTextDeclaresFlag(helpText ?? '', flag);
+  };
 }
 
 /** Run `claude --help` once, returning its combined output (null if unreachable). */
