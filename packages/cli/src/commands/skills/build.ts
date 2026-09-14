@@ -14,6 +14,7 @@ import {
   conventionalSuiteProbe,
   packageSkills,
   packagingConfigToPackageOptions,
+  pluginLocalSkillNames,
   skillNameToFsPath,
   validateSkillForPackaging,
   type ConventionalSuiteProbe,
@@ -54,7 +55,7 @@ import {
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { withResourcePopulationSource } from '../../utils/resource-loader.js';
-import { collectDeclaredEvalSuites, isSkillPublished, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
+import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, publishScope } from '../../utils/skill-packaging-config.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 import { finishCommand, type PhaseOutcome } from '../phase-utils.js';
 
@@ -117,7 +118,10 @@ Description:
   bundled here, never expected by 'vat verify'. Such skills are set aside
   with one info line and counted as skillsInPlace; --skill naming one is
   an error (exit 1). A plugin-local skill (under a plugin's skills/ dir)
-  ships with its plugin regardless of publish.
+  ships with its plugin regardless of publish, so it is never in place:
+  under publish: false it is set aside on its own info line, not counted
+  in skillsInPlace, and --skill naming it exits 1 pointing at the claude
+  phase that packages it.
 
 Config Structure (vibe-agent-toolkit.config.yaml):
   version: 1
@@ -188,7 +192,8 @@ Output:
   skillsInPlace / skillsInPlaceNames:
                   NOT a failure — skills whose merged config says publish: false,
                   so this run set them aside unbuilt. Published so a build that
-                  bundles fewer skills than it discovered says so by count.
+                  bundles fewer skills than it discovered says so by count. A
+                  plugin-local skill is never counted: it ships with its plugin.
   runIssueCounts: findings that belong to the run rather than to any one
                   skill (ALLOW_UNUSED)
   issueCounts:    the run total, which reconciles against the rows above:
@@ -1271,46 +1276,64 @@ export interface BuildSkillSpec {
 }
 
 /**
- * Merge every skill's config and split the pool skills from the IN-PLACE ones.
+ * Merge every skill's config and split the pool skills from the ones this run sets aside.
  *
- * `buildSpecs` is what this run bundles; `inPlace` is every skill whose merged
- * config says `publish: false` — validated at source by `vat validate`, never
- * bundled here, never expected by `vat verify` (see `isSkillPublished`). Both
- * halves keep discovery order, so the human and machine reports list them as
- * the globs found them.
+ * `buildSpecs` is what this run bundles. Of the `publish: false` skills (see
+ * `publishScope`), `inPlace` is every one used from the repo — validated at
+ * source by `vat validate`, never bundled, never expected by `vat verify` — and
+ * `pluginOnly` every PLUGIN-LOCAL one (`pluginLocalNames`, from
+ * `pluginLocalSkillNames`): not bundled here either, but shipped with its plugin,
+ * so reporting it as in-place would be false. Every list keeps discovery order,
+ * so the human and machine reports list them as the globs found them.
  */
 export function partitionInPlaceSkills(
   skills: readonly DiscoveredSkill[],
   skillsConfig: SkillsConfig,
-): { buildSpecs: BuildSkillSpec[]; inPlace: BuildSkillSpec[] } {
-  const buildSpecs: BuildSkillSpec[] = [];
-  const inPlace: BuildSkillSpec[] = [];
+  pluginLocalNames: ReadonlySet<string>,
+): { buildSpecs: BuildSkillSpec[]; inPlace: BuildSkillSpec[]; pluginOnly: BuildSkillSpec[] } {
+  const lists = { pool: [] as BuildSkillSpec[], 'in-place': [] as BuildSkillSpec[], 'plugin-only': [] as BuildSkillSpec[] };
   for (const skill of skills) {
-    const spec: BuildSkillSpec = {
-      skill,
-      packagingConfig: mergeSkillPackagingConfig(skillsConfig.defaults, skillsConfig.config?.[skill.name]),
-    };
-    (isSkillPublished(spec.packagingConfig) ? buildSpecs : inPlace).push(spec);
+    const packagingConfig = mergeSkillPackagingConfig(skillsConfig.defaults, skillsConfig.config?.[skill.name]);
+    lists[publishScope(skill.name, packagingConfig, pluginLocalNames)].push({ skill, packagingConfig });
   }
-  return { buildSpecs, inPlace };
+  return { buildSpecs: lists.pool, inPlace: lists['in-place'], pluginOnly: lists['plugin-only'] };
 }
 
-/** How many in-place names the one info line spells out before "… and N more". */
-const IN_PLACE_NAMES_SHOWN = 10;
+/** How many set-aside names one info line spells out before "… and N more". */
+const SET_ASIDE_NAMES_SHOWN = 10;
 
 /**
- * ONE info line for the skills this run set aside, naming the count and (up to
- * {@link IN_PLACE_NAMES_SHOWN} of) the names. Nothing when there are none: a
+ * ONE info line for one population this run set aside, naming the count and (up
+ * to {@link SET_ASIDE_NAMES_SHOWN} of) the names. Nothing when there are none: a
  * "0 in-place" line on every build is noise that trains readers to skip the line
  * that matters.
  */
+function logSetAsideSkills(
+  setAside: readonly BuildSkillSpec[],
+  label: string,
+  logger: ReturnType<typeof createLogger>,
+): void {
+  if (setAside.length === 0) return;
+  const names = setAside.map((spec) => spec.skill.name);
+  const shown = names.slice(0, SET_ASIDE_NAMES_SHOWN).join(', ');
+  const more = names.length > SET_ASIDE_NAMES_SHOWN ? ` … and ${names.length - SET_ASIDE_NAMES_SHOWN} more` : '';
+  logger.info(`Skipping ${setAside.length} ${label}: ${shown}${more}`);
+}
+
+/** The info line for the in-place skills — see {@link logSetAsideSkills}. */
 export function logInPlaceSkills(inPlace: readonly BuildSkillSpec[], logger: ReturnType<typeof createLogger>): void {
-  if (inPlace.length === 0) return;
-  const names = inPlace.map((spec) => spec.skill.name);
-  const shown = names.slice(0, IN_PLACE_NAMES_SHOWN).join(', ');
-  const more = names.length > IN_PLACE_NAMES_SHOWN ? ` … and ${names.length - IN_PLACE_NAMES_SHOWN} more` : '';
-  logger.info(
-    `Skipping ${inPlace.length} in-place skill(s) (publish: false — validated at source, never bundled): ${shown}${more}`,
+  logSetAsideSkills(inPlace, 'in-place skill(s) (publish: false — validated at source, never bundled)', logger);
+}
+
+/**
+ * The info line for the plugin-local `publish: false` skills — deliberately NOT the
+ * in-place line: they are left out of `dist/skills` but ship with their plugin.
+ */
+function logPluginOnlySkills(pluginOnly: readonly BuildSkillSpec[], logger: ReturnType<typeof createLogger>): void {
+  logSetAsideSkills(
+    pluginOnly,
+    'plugin-local skill(s) from dist/skills (publish: false — each ships with its plugin via the claude phase)',
+    logger,
   );
 }
 
@@ -1324,6 +1347,22 @@ export function inPlaceSkillRefusal(skill: string | undefined, inPlace: readonly
     `Skill "${skill}" is an in-place skill (skills.config.${skill}.publish is false, `
       + 'directly or via skills.defaults.publish): vat build never bundles it, so there is no bundle to build. '
       + 'Set publish: true to distribute it through dist/skills, or drop --skill.',
+  );
+}
+
+/**
+ * `--skill x` on a plugin-local `publish: false` skill: exit 1 like the in-place
+ * refusal, but saying what is true of it — it is not a pool skill, and it ships
+ * with its plugin, packaged by the claude phase.
+ */
+function pluginOnlySkillRefusal(skill: string | undefined, pluginOnly: readonly BuildSkillSpec[]): Error | undefined {
+  if (skill === undefined || pluginOnly.length === 0) return undefined;
+  return new Error(
+    `Skill "${skill}" is a plugin-local skill (under a plugin's skills/ directory) with publish: false `
+      + `(skills.config.${skill}.publish, directly or via skills.defaults.publish): it ships with its plugin, `
+      + 'packaged by the claude phase, and is never bundled into dist/skills, so this command has nothing to build for it. '
+      + "Run 'vat build --only claude' to package its plugin, set publish: true to also distribute it through dist/skills, "
+      + 'or drop --skill.',
   );
 }
 
@@ -1685,17 +1724,21 @@ export async function runSkillsBuildPhase(
     // `publish: false` names a skill the pool never carries (see
     // `isSkillPublished`), so the partition happens BEFORE the count is announced:
     // "Found N skill(s) to build" must be the number this run will bundle.
-    const { buildSpecs, inPlace } = partitionInPlaceSkills(
+    // Plugin-local by LOCATION, from the UNFILTERED discovery (the same predicate
+    // the consistency check and `vat verify` ask): such a skill is never in place.
+    const { buildSpecs, inPlace, pluginOnly } = partitionInPlaceSkills(
       filterSkillsByName(discoveredSkills, options.skill),
       skillsConfig,
+      pluginLocalSkillNames(config, discoveredSkills, cwd),
     );
 
-    const refusal = inPlaceSkillRefusal(options.skill, inPlace);
+    const refusal = inPlaceSkillRefusal(options.skill, inPlace) ?? pluginOnlySkillRefusal(options.skill, pluginOnly);
     if (refusal !== undefined) {
       return { document: reportCommandError(refusal, logger, startTime, 'SkillsBuild'), exitCode: 1, failed: true };
     }
 
     logInPlaceSkills(inPlace, logger);
+    logPluginOnlySkills(pluginOnly, logger);
     logger.info(`Found ${buildSpecs.length} skill(s) to build`);
 
     // Handle dry-run mode. Nothing has touched `dist/` at this point — the

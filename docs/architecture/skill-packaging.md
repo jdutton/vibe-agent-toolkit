@@ -201,10 +201,12 @@ Rules that follow from the table:
   `friction.json`.
 - `publish` scopes the **pool** (`dist/skills/`) only. A plugin-local skill (under a plugin's
   `skills/` directory) ships with its plugin by location whatever `publish` says: the claude phase
-  packages it and `vat verify` expects it. A skill both discovered by `skills.include` and
-  plugin-local skips the pool under `publish: false` and still ships in its plugin — so a project
-  that builds with `vat build --only claude` and uses its other skills in place declares
-  `skills.defaults.publish: false` once.
+  packages it and `vat verify` expects it. A plugin-local skill is therefore never **in place**:
+  it is never counted in `skillsInPlace` or `bundlesInPlace`, and `vat skills build` names it on its
+  own info line (and `--skill <name>` on one exits 1 pointing at the claude phase). A skill both
+  discovered by `skills.include` and plugin-local skips the pool under `publish: false` and still
+  ships in its plugin — so a project that builds with `vat build --only claude` and uses its other
+  skills in place declares `skills.defaults.publish: false` once.
 - Error messages always name the config mechanism, so a developer discovers the fix from the error.
 - No VAT-specific fields in `SKILL.md` frontmatter — skills are portable artifacts.
 

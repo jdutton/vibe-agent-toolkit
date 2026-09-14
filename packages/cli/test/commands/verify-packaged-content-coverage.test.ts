@@ -19,13 +19,56 @@
  * the missing bundles.
  */
 
-import { describe, expect, it } from 'vitest';
+import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
+import { describe, expect, it, vi } from 'vitest';
 
 import { exitCodeForPhases } from '../../src/commands/phase-utils.js';
-import { buildPackagedContentPhase, type PackagedContentCrawl } from '../../src/commands/verify.js';
+import {
+  buildPackagedContentPhase,
+  checkPackagedAgentInstructionFiles,
+  type PackagedContentCrawl,
+} from '../../src/commands/verify.js';
+
+const harness = vi.hoisted(() => ({ config: undefined as ProjectConfig | undefined }));
+
+vi.mock('../../src/utils/config-loader.js', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  loadConfig: () => harness.config,
+}));
 
 const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
 const BETA_BUNDLE = 'dist/skills/beta';
+
+/** A root with nothing on disk: every bundle reads as absent, so only the in-place count is under test. */
+const NO_SUCH_ROOT = safePath.join(normalizedTmpdir(), 'no-such-project-pc-in-place');
+
+/**
+ * `skills.defaults.publish: false`, one plugin `p`, and two discovered skills: `repo-only`
+ * outside any plugin and `local` under `plugins/p/skills/` (plugin-local by LOCATION).
+ */
+function crawlPluginLocalBesideRepoOnly(defaultPublish: boolean): PackagedContentCrawl {
+  harness.config = {
+    version: 1,
+    skills: { include: ['**/SKILL.md'], defaults: { publish: defaultPublish } },
+    claude: { marketplaces: { m: { owner: { name: 'Owner' }, plugins: [{ name: 'p', skills: [] }] } } },
+  } as ProjectConfig;
+  return checkPackagedAgentInstructionFiles(NO_SUCH_ROOT, [
+    { name: 'repo-only', sourcePath: safePath.join(NO_SUCH_ROOT, 'skills', 'repo-only', 'SKILL.md') },
+    { name: 'local', sourcePath: safePath.join(NO_SUCH_ROOT, 'plugins', 'p', 'skills', 'local', 'SKILL.md') },
+  ]);
+}
+
+describe('checkPackagedAgentInstructionFiles — a plugin-local skill is never in place', () => {
+  it('counts only the repo-only publish:false skill in bundlesInPlace', () => {
+    expect(crawlPluginLocalBesideRepoOnly(false).bundlesInPlace).toBe(1);
+  });
+
+  it('control: with publish unset nothing is in place, and both pool bundles are expected', () => {
+    expect(crawlPluginLocalBesideRepoOnly(true)).toMatchObject({ bundlesInPlace: 0, bundlesExpected: 2 });
+  });
+});
 
 function crawlOf(overrides: Partial<PackagedContentCrawl>): PackagedContentCrawl {
   return { bundlesInspected: 0, bundlesExpected: 0, bundlesInPlace: 0, bundlesMissing: [], issues: [], ...overrides };

@@ -60,6 +60,39 @@ export function getPluginSourceDir(
 }
 
 /**
+ * The names of every discovered skill that is PLUGIN-LOCAL: its `sourcePath`
+ * sits under some plugin's `<getPluginSourceDir(configDir, plugin)>/skills/`.
+ *
+ * Matched by physical location, never by `publish`: a plugin-local skill ships
+ * with its plugin whatever the flag says, so it is never "in place". The ONE
+ * answer `vat build`, `vat verify` and the consistency check all ask — consistency
+ * for plugin assignment and `SKILL_UNPUBLISHED`, build and verify for what they
+ * report as in-place.
+ *
+ * A trailing slash on the prefix enforces a path-separator boundary, so a
+ * sibling directory with a common prefix (`/skills` vs `/skills-extra`) is not
+ * a false match.
+ */
+export function pluginLocalSkillNames(
+  config: ProjectConfig,
+  discoveredSkills: ReadonlyArray<{ name: string; sourcePath: string }>,
+  configDir: string,
+): Set<string> {
+  const names = new Set<string>();
+  const marketplaces = config.claude?.marketplaces;
+  if (!marketplaces) return names;
+  for (const marketplace of Object.values(marketplaces)) {
+    for (const plugin of marketplace.plugins) {
+      const srcSkillsPrefix = `${safePath.join(getPluginSourceDir(configDir, plugin), 'skills')}/`;
+      for (const skill of discoveredSkills) {
+        if (toForwardSlash(skill.sourcePath).startsWith(srcSkillsPrefix)) names.add(skill.name);
+      }
+    }
+  }
+  return names;
+}
+
+/**
  * Every plugin-local SKILL DIRECTORY under `<pluginSourceDir>/skills/`, as a
  * forward-slash path relative to that `skills/` dir (`my-skill`,
  * `group/nested-skill`).

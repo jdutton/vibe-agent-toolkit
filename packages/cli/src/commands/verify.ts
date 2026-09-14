@@ -22,6 +22,7 @@ import {
   computeTreeCopiedSkillLocations,
   detectPackagedAgentInstructionFiles,
   explicitFilesConfigDests,
+  pluginLocalSkillNames,
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
@@ -42,7 +43,7 @@ import type { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 import { nothingCheckedFinding, runIntegrityFinding } from '../utils/run-integrity.js';
-import { isSkillPublished, mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
+import { isSkillPublished, mergeSkillPackagingConfig, publishScope } from '../utils/skill-packaging-config.js';
 
 import { runMarketplaceValidatePhase } from './claude/marketplace/validate.js';
 import {
@@ -152,8 +153,10 @@ Output:
     bundled by 'vat build', so no pool bundle is expected for it (a stale one
     in dist/skills is still inspected); bundlesInPlace counts them, and a run
     whose every discovered skill is in place passes with nothing to inspect. A
-    plugin-local skill is expected in its plugin tree regardless. Declare skills.defaults.publish: false for a project
-    that builds with --only claude and uses its other skills from the repo.
+    plugin-local skill is never in place: it is expected in its plugin tree
+    whatever publish says, and never counted in bundlesInPlace. Declare
+    skills.defaults.publish: false for a project that builds with --only claude
+    and uses its other skills from the repo.
   Progress and validation errors → stderr (streamed live)
 
   By default each delegated phase reports a per-asset summary plus the assets
@@ -238,7 +241,7 @@ interface BuiltSkillOutputs {
    * non-overridable error a second time.
    */
   expected: number;
-  /** Discovered pool skills left out of `expected` because they are in-place. */
+  /** Discovered skills left out of `expected` because they are in-place — never a plugin-local one, which ships with its plugin. */
   inPlace: number;
   /** Expected candidates whose output dir is absent — `cwd`-relative, so a reader can open where it should be. */
   missing: string[];
@@ -356,6 +359,9 @@ function collectBuiltSkillOutputs(
 
   // Dedup guard: key = `skillName\0outputDir`
   const seen = new Set<string>();
+  // A plugin-local skill is never in place, whatever `publish` says: its tree copy
+  // is expected below. The same location predicate `vat build` and consistency ask.
+  const pluginLocalNames = pluginLocalSkillNames(config, discovered, cwd);
 
   // --- Pool skills: candidate dir is dist/skills/<fsName> ---
   // Expected only when discovered AND published (see BuiltSkillOutputs.expected).
@@ -368,7 +374,7 @@ function collectBuiltSkillOutputs(
     const packaging = mergeSkillPackagingConfig(defaults, perSkill);
     const discoveredSkill = discoveredNames.has(skillName);
     const published = isSkillPublished(packaging);
-    if (discoveredSkill && !published) outputs.inPlace += 1;
+    if (discoveredSkill && publishScope(skillName, packaging, pluginLocalNames) === 'in-place') outputs.inPlace += 1;
     addCheckCandidate(outputs, seen, cwd, { skillName, outputDir, packaging }, discoveredSkill && published);
   }
 
@@ -513,7 +519,7 @@ export interface PackagedContentCrawl {
   bundlesInspected: number;
   /** Bundles `vat build` produces for this run's discovered skills — what the denominator should be. */
   bundlesExpected: number;
-  /** Discovered skills declared `publish: false` — used in place, so no bundle is expected for them. */
+  /** Discovered skills declared `publish: false` and not plugin-local — used in place, so no bundle is expected for them. */
   bundlesInPlace: number;
   /** Expected bundles absent from disk, as `cwd`-relative paths. Non-empty means the phase is not a verdict. */
   bundlesMissing: string[];

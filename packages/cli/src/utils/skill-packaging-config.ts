@@ -84,6 +84,29 @@ export function isSkillPublished(packaging: SkillPackagingConfig): boolean {
 }
 
 /**
+ * Where `publish` sends a discovered skill:
+ *   - `pool` — published: bundled into `dist/skills/<name>` (a plugin-local one ALSO ships in its plugin);
+ *   - `plugin-only` — `publish: false` but plugin-local: out of the pool, still shipped by its plugin;
+ *   - `in-place` — `publish: false` and not plugin-local: used from the repo, distributed nowhere.
+ */
+type PublishScope = 'pool' | 'plugin-only' | 'in-place';
+
+/**
+ * Classify one discovered skill — {@link isSkillPublished} over its merged config,
+ * then plugin-local by LOCATION (`pluginLocalNames`, from `pluginLocalSkillNames`).
+ * A plugin-local skill is never `in-place`: it ships with its plugin, so every lane
+ * that reports in-place skills (`vat build`, `vat verify`) asks this, not the flag alone.
+ */
+export function publishScope(
+  skillName: string,
+  packaging: SkillPackagingConfig,
+  pluginLocalNames: ReadonlySet<string>,
+): PublishScope {
+  if (isSkillPublished(packaging)) return 'pool';
+  return pluginLocalNames.has(skillName) ? 'plugin-only' : 'in-place';
+}
+
+/**
  * The PROJECT's declared eval suites: one {@link DeclaredEvalSuite} per discovered
  * skill, from the same discovery + merge every lane already runs.
  *

@@ -167,6 +167,7 @@ const BARREL_EXPORTS = [
   'parseEvalSuite',
   'parseFrontmatter',
   'parseGradingJson',
+  'pluginLocalSkillNames',
   'preBuildGlobFindingsToIssues',
   'readDeclaredSkillName',
   'reconcileGrading',

@@ -193,8 +193,9 @@ with a regression test.
 - **`publish: false` now means an in-place skill: `vat build` / `vat skills build` skip it and
   `vat verify` no longer expects its `dist/skills/<name>` bundle** (it reports them as `bundlesInPlace`)
   — it is still validated at source.
-  `skills.defaults.publish: false` declares a whole tree in-place (plugin-local skills still ship
-  with their plugin); `--skill <name>` on an in-place skill now exits `1`.
+  `skills.defaults.publish: false` declares a whole tree in-place; `--skill <name>` on an in-place skill
+  now exits `1`. Plugin-local skills still ship with their plugin and are never counted or named as
+  in-place (`bundlesInPlace`, `skillsInPlace`).
 - **`skills.defaults.publish` is now honoured by the consistency check**, so a project-wide
   `publish: false` yields `SKILL_UNPUBLISHED` (info) instead of `PUBLISHED_SKILL_NOT_IN_*` errors. A
   plugin `skills:` selector matching only in-place skills is now `PLUGIN_REFERENCES_UNKNOWN_SKILL`.

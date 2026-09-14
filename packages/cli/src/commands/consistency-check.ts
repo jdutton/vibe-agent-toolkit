@@ -8,10 +8,10 @@
 
 import { existsSync } from 'node:fs';
 
-import { getPluginSourceDir } from '@vibe-agent-toolkit/agent-skills';
+import { pluginLocalSkillNames } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import type { Severity } from '@vibe-agent-toolkit/schema';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import { readPackageJsonOrAbsent } from '../utils/package-json.js';
@@ -58,37 +58,6 @@ function publishedByConfig(skillName: string, config: ProjectConfig): boolean {
     config.skills?.defaults as Record<string, unknown> | undefined,
     config.skills?.config?.[skillName] as Record<string, unknown> | undefined,
   ));
-}
-
-/**
- * The names of every discovered skill that is PLUGIN-LOCAL: its `sourcePath`
- * sits under some plugin's `<getPluginSourceDir(projectRoot, plugin)>/skills/`.
- *
- * Matched by physical location, never by `publish`: a plugin-local skill ships
- * with its plugin whatever the flag says (see `isSkillPublished`), so both the
- * assignment and the unpublished-info lane ask this set, not the flag.
- *
- * A trailing slash on the prefix enforces a path-separator boundary, so a
- * sibling directory with a common prefix (`/skills` vs `/skills-extra`) is not
- * a false match.
- */
-function pluginLocalSkillNames(
-  config: ProjectConfig,
-  discoveredSkills: DiscoveredSkill[],
-  projectRoot: string,
-): Set<string> {
-  const names = new Set<string>();
-  const marketplaces = config.claude?.marketplaces;
-  if (!marketplaces) return names;
-  for (const marketplace of Object.values(marketplaces)) {
-    for (const plugin of marketplace.plugins) {
-      const srcSkillsPrefix = `${safePath.join(getPluginSourceDir(projectRoot, plugin), 'skills')}/`;
-      for (const skill of discoveredSkills) {
-        if (toForwardSlash(skill.sourcePath).startsWith(srcSkillsPrefix)) names.add(skill.name);
-      }
-    }
-  }
-  return names;
 }
 
 /**

@@ -265,7 +265,8 @@ describe('packaged-content with in-place (publish: false) skills', () => {
     const root = setupProject({ publish: 'defaults-false', poolBundles: [] });
 
     const crawl = await inPlaceCrawlIn(root);
-    expect(crawl).toEqual({ bundlesInspected: 1, bundlesExpected: 1, bundlesInPlace: 2, bundlesMissing: [], issues: [] });
+    // The plugin-local skill ships in its plugin tree, so only the pool-only skill is in place.
+    expect(crawl).toEqual({ bundlesInspected: 1, bundlesExpected: 1, bundlesInPlace: 1, bundlesMissing: [], issues: [] });
 
     const { phase } = await phaseIn(root);
     expect(phase.status).toBe('success');
@@ -305,7 +306,7 @@ describe('packaged-content with in-place (publish: false) skills', () => {
 
     const crawl = await inPlaceCrawlIn(root);
     // Distributed output is looked at (it is in dist/); nothing in this run builds it.
-    expect(crawl).toEqual({ bundlesInspected: 2, bundlesExpected: 1, bundlesInPlace: 2, bundlesMissing: [], issues: [] });
+    expect(crawl).toEqual({ bundlesInspected: 2, bundlesExpected: 1, bundlesInPlace: 1, bundlesMissing: [], issues: [] });
     expect(exitCodeForPhases([(await phaseIn(root)).phase])).toBe(0);
   });
 

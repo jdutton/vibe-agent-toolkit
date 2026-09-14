@@ -7,7 +7,7 @@
  * are stubbed so the dry-run and refusal wiring is exercised in-process.
  */
 
-import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
+import type { ProjectConfig, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as yaml from 'yaml';
@@ -26,7 +26,7 @@ import type { DiscoveredSkill } from '../../../src/commands/skills/command-helpe
 import { recordingLogger } from '../../test-doubles.js';
 
 const harness = vi.hoisted(() => ({
-  config: undefined as { skills: SkillsConfig } | undefined,
+  config: undefined as Pick<ProjectConfig, 'claude'> & { skills: SkillsConfig } | undefined,
   discovered: [] as DiscoveredSkill[],
   lines: [] as string[],
 }));
@@ -56,6 +56,10 @@ vi.mock('../../../src/commands/skills/command-helpers.js', async (importOriginal
 });
 
 const IN_PLACE_KEY = 'publish: false';
+const IN_PLACE = 'in-place';
+/** A skill under plugin `p`'s `skills/` dir — plugin-local by LOCATION. */
+const PLUGIN_LOCAL = 'shipped';
+const NO_PLUGIN_LOCAL: ReadonlySet<string> = new Set();
 
 function skill(name: string): DiscoveredSkill {
   return { name, sourcePath: safePath.resolve(`/project/skills/${name}/SKILL.md`) };
@@ -67,6 +71,22 @@ function specs(names: readonly string[]): BuildSkillSpec[] {
 
 function namesOf(list: readonly BuildSkillSpec[]): string[] {
   return list.map((spec) => spec.skill.name);
+}
+
+function pluginLocalSkill(name: string): DiscoveredSkill {
+  return { name, sourcePath: safePath.join('/project', 'plugins', 'p', 'skills', name, 'SKILL.md') };
+}
+
+/**
+ * Stub a `skills.defaults.publish: false` project with one repo-only skill (`kept`)
+ * and one skill under plugin `p`'s `skills/` dir ({@link PLUGIN_LOCAL}).
+ */
+function givenPluginProject(): void {
+  harness.config = {
+    skills: { include: ['**/SKILL.md'], defaults: { publish: false } },
+    claude: { marketplaces: { m: { owner: { name: 'Owner' }, plugins: [{ name: 'p', skills: [] }] } } },
+  } as typeof harness.config;
+  harness.discovered = [skill('kept'), pluginLocalSkill(PLUGIN_LOCAL)];
 }
 
 /** Stub a project with one published skill (`built`) and one in-place skill (`kept`). */
@@ -103,6 +123,7 @@ describe('partitionInPlaceSkills', () => {
     const { buildSpecs, inPlace } = partitionInPlaceSkills(
       [skill('a'), skill('b'), skill('c')],
       { include: ['skills/**'], defaults: { publish: false }, config: { b: { publish: true, linkFollowDepth: 1 } } },
+      NO_PLUGIN_LOCAL,
     );
 
     expect(namesOf(buildSpecs)).toEqual(['b']);
@@ -111,10 +132,30 @@ describe('partitionInPlaceSkills', () => {
   });
 
   it('bundles every skill when nothing says publish:false', () => {
-    const { buildSpecs, inPlace } = partitionInPlaceSkills([skill('a'), skill('b')], { include: ['skills/**'] });
+    const { buildSpecs, inPlace } = partitionInPlaceSkills([skill('a'), skill('b')], { include: ['skills/**'] }, NO_PLUGIN_LOCAL);
 
     expect(namesOf(buildSpecs)).toEqual(['a', 'b']);
     expect(inPlace).toEqual([]);
+  });
+
+  it('never counts a plugin-local publish:false skill as in place: it is set aside as plugin-only', () => {
+    const { buildSpecs, inPlace, pluginOnly } = partitionInPlaceSkills(
+      [skill('kept'), pluginLocalSkill(PLUGIN_LOCAL)],
+      { include: ['**/SKILL.md'], defaults: { publish: false } },
+      new Set([PLUGIN_LOCAL]),
+    );
+
+    expect([namesOf(buildSpecs), namesOf(inPlace), namesOf(pluginOnly)]).toEqual([[], ['kept'], [PLUGIN_LOCAL]]);
+  });
+
+  it('still bundles a plugin-local skill into the pool when it is published', () => {
+    const { buildSpecs, inPlace, pluginOnly } = partitionInPlaceSkills(
+      [pluginLocalSkill(PLUGIN_LOCAL)],
+      { include: ['**/SKILL.md'] },
+      new Set([PLUGIN_LOCAL]),
+    );
+
+    expect([namesOf(buildSpecs), inPlace, pluginOnly]).toEqual([[PLUGIN_LOCAL], [], []]);
   });
 });
 
@@ -181,6 +222,15 @@ describe('the published build report carries the in-place count', () => {
   });
 });
 
+/** Dry-run the stubbed project; return the exit code and the parsed stdout header (above `skills:`). */
+async function dryRunHeader(): Promise<{ exitCode: number | undefined; header: unknown }> {
+  let outcome: Awaited<ReturnType<typeof runSkillsBuildPhase>> | undefined;
+  const stdout = await captureStdout(async () => {
+    outcome = await runSkillsBuildPhase(undefined, { dryRun: true });
+  });
+  return { exitCode: outcome?.exitCode, header: yaml.parse(stdout.slice(0, stdout.indexOf('skills:'))) };
+}
+
 describe('runSkillsBuildPhase — in-place wiring', () => {
   afterEach(() => {
     harness.config = undefined;
@@ -190,13 +240,10 @@ describe('runSkillsBuildPhase — in-place wiring', () => {
   it('a dry run previews the partition on both streams', async () => {
     givenProject();
 
-    let outcome: Awaited<ReturnType<typeof runSkillsBuildPhase>> | undefined;
-    const stdout = await captureStdout(async () => {
-      outcome = await runSkillsBuildPhase(undefined, { dryRun: true });
-    });
+    const { exitCode, header } = await dryRunHeader();
 
-    expect(outcome?.exitCode).toBe(0);
-    expect(yaml.parse(stdout.slice(0, stdout.indexOf('skills:')))).toMatchObject({ skillsFound: 1, skillsInPlace: 1 });
+    expect(exitCode).toBe(0);
+    expect(header).toMatchObject({ skillsFound: 1, skillsInPlace: 1 });
     expect(harness.lines).toContain('Found 1 skill(s) to build');
     expect(harness.lines.some((line) => line.startsWith('Skipping 1 in-place skill(s)') && line.endsWith(': kept'))).toBe(true);
   });
@@ -210,5 +257,38 @@ describe('runSkillsBuildPhase — in-place wiring', () => {
     expect(outcome.failed).toBe(true);
     expect(outcome.document).toMatchObject({ status: 'error' });
     expect(String((outcome.document as { error: string }).error)).toContain('skills.config.kept.publish is false');
+  });
+
+  it('a dry run counts only the repo-only skill in place and never names the plugin-local one as in-place', async () => {
+    givenPluginProject();
+
+    const { exitCode, header } = await dryRunHeader();
+
+    expect(exitCode).toBe(0);
+    expect(header).toMatchObject({ skillsFound: 0, skillsInPlace: 1 });
+    expect(harness.lines.some((line) => line.startsWith('Skipping 1 in-place skill(s)') && line.endsWith(': kept'))).toBe(true);
+    expect(harness.lines.filter((line) => line.includes(IN_PLACE) && line.includes(PLUGIN_LOCAL))).toEqual([]);
+    expect(harness.lines.some((line) => line.startsWith('Skipping 1 plugin-local skill(s)') && line.endsWith(`: ${PLUGIN_LOCAL}`))).toBe(true);
+  });
+
+  it('--skill naming a plugin-local publish:false skill exits 1 without calling it in-place', async () => {
+    givenPluginProject();
+
+    const outcome = await runSkillsBuildPhase(undefined, { skill: PLUGIN_LOCAL });
+
+    expect([outcome.exitCode, outcome.failed]).toEqual([1, true]);
+    const error = String((outcome.document as { error: string }).error);
+    expect(error).not.toContain(IN_PLACE);
+    expect(error).toContain('plugin-local');
+    expect(error).toContain('claude');
+  });
+
+  it('control: in the same project --skill on the repo-only skill is still the in-place refusal', async () => {
+    givenPluginProject();
+
+    const outcome = await runSkillsBuildPhase(undefined, { skill: 'kept' });
+
+    expect(outcome.exitCode).toBe(1);
+    expect(String((outcome.document as { error: string }).error)).toContain('Skill "kept" is an in-place skill');
   });
 });
