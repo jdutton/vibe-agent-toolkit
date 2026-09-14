@@ -36,7 +36,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@lancedb/lancedb": "^0.23.0",
+    "@lancedb/lancedb": "^0.38.0",
     "@vibe-agent-toolkit/rag": "workspace:*",
     "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
