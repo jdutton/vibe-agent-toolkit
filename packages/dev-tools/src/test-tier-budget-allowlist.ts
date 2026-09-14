@@ -172,8 +172,13 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/claude-marketplace/test/integration/inventory-extent-corpus.integration.test.ts', measuredMs: 6584, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.projection] },
   { file: 'packages/cli/test/integration/module-load-budget.integration.test.ts', measuredMs: 6102, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
   { file: 'packages/cli/test/integration/claude-budget.integration.test.ts', measuredMs: 5810, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
+  { file: 'packages/cli/test/integration/audit-unreadable-path.integration.test.ts', measuredMs: 5651, mechanisms: [MECHANISM.tempTree, MECHANISM.refusal], note: '4810 ms on the floor run before' },
   { file: 'packages/rag-lancedb/test/integration/indexing.integration.test.ts', measuredMs: 5483, mechanisms: [MECHANISM.tempTree, MECHANISM.nativeModel] },
-  { file: 'packages/cli/test/integration/multi-plugin-marketplace.integration.test.ts', measuredMs: 5312, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn], note: 'local serial run; 4671 ms on the floor' },
+  { file: 'packages/cli/test/integration/multi-plugin-marketplace.integration.test.ts', measuredMs: 5312, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn], note: 'local serial run; 4671 and 4942 ms on the floor' },
+  // Two hover entries, listed by hand, not by the seed tool: within 2 % of the budget on a
+  // floor run that read 15–20 % slower than the one before it, so the next such run crosses.
+  { file: 'packages/resource-compiler/test/integration/transformer.integration.test.ts', measuredMs: 4953, mechanisms: [MECHANISM.tempTree], note: 'a real TypeScript program per case; 4008 and 4953 ms on the floor' },
+  { file: 'packages/cli/test/integration/audit-git-url.integration.test.ts', measuredMs: 4906, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn], note: 'a real bare repo cloned by the audit pipeline; 4226 and 4906 ms on the floor' },
   // System: bootstrapped from a local serial run; the coverage job's system step (after the
   // integration step first passes) is the measurement to re-seed from.
   { file: 'packages/rag-lancedb/test/system/large-scale-filtering.system.test.ts', measuredMs: 43119, mechanisms: [MECHANISM.nativeModel] },

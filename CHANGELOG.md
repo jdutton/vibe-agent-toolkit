@@ -381,7 +381,7 @@ with a regression test.
   of it), judged only by the three serial root configs — in CI, the coverage job, which now also
   runs the integration and system tiers serially on the floor — and never in a per-package turbo
   lane, where a 200 ms file read as 1–3 s and six CI runs each crossed a different handful of
-  files; the allowlist is re-seeded from the serial runs (112 → 33 entries) and
+  files; the allowlist is re-seeded from the serial runs (112 → 36 entries) and
   `bun run seed:test-tier-budget <tier> <log>` reads that run's saved output instead of turbo
   logs; `no-io-in-unit-tier` and `no-registry-count-pin` on the test tier.
 
@@ -660,7 +660,9 @@ with a regression test.
   `No issues found` with two filtered — the register: `adm-zip` GHSA-vwc7-r8mq-g2x9
   (CVE-2026-76845, CVSS 6.8; no fixed version exists, and none of VAT's three extraction sites can
   present the pre-existing symlink the exploit needs) and `esbuild` GHSA-g7r4-m6w7-qqqr (CVSS 2.5;
-  the `esbuild serve` dev server, which VAT never runs and does not ship).
+  the `esbuild serve` dev server, which VAT never runs and does not ship). The CI job installs
+  `osv-scanner` as the pinned, checksum-verified release binary instead of `go install`ing it — the
+  Go module proxy failed mid-stream on a transitive module twice in one day and the scan never ran.
 
 - **The settings checker reported an unparseable Bash command as permitted** — `Bash(echo *)`
   approved `echo hi # don't` + newline + `rm -rf /`. **Re-run any saved permission report.**
