@@ -189,6 +189,18 @@ with a regression test.
   stays `LINK_BROKEN_FILE` (error); a normalization-only difference is the new
   `LINK_NORMALIZATION_MISMATCH` (warning). Fix the links it names; the suggestion spells the whole path.
 
+- **`publish: false` now means an in-place skill: `vat build` / `vat skills build` skip it and
+  `vat verify` no longer expects its `dist/skills/<name>` bundle** (it reports them as `bundlesInPlace`)
+  — it is still validated at source.
+  `skills.defaults.publish: false` declares a whole tree in-place (plugin-local skills still ship
+  with their plugin); `--skill <name>` on an in-place skill now exits `1`.
+- **`skills.defaults.publish` is now honoured by the consistency check**, so a project-wide
+  `publish: false` yields `SKILL_UNPUBLISHED` (info) instead of `PUBLISHED_SKILL_NOT_IN_*` errors. A
+  plugin `skills:` selector matching only in-place skills is now `PLUGIN_REFERENCES_UNKNOWN_SKILL`.
+- **The "link points outside the skill directory" warning is now `LINK_OUTSIDE_SKILL_DIR`**;
+  `LINK_OUTSIDE_PROJECT` now means only a link escaping the project root. Re-key any
+  `validation.severity` / `validation.allow` entry that targeted the skill-directory warning.
+
 #### RAG (library)
 
 - **A RAG filter no provider implements now throws instead of being silently ignored** — which
@@ -210,6 +222,9 @@ with a regression test.
   negative counters are rejected); the hand-written interface is gone.
 
 #### Library
+
+- **`validateSkill()` now requires `validation: ValidationConfig`** (`{}` when no config applies)
+  and applies its `severity` and `allow` to every issue it emits.
 
 - **`copyDirectory` refuses a symlink whose target is outside the source tree
   (`CopyLinkEscapesSourceError`) and a link that leads back into it (`DirectoryWalkRevisitedError`)**;

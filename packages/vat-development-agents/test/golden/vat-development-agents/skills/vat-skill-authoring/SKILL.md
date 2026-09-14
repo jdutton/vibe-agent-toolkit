@@ -80,6 +80,8 @@ A short `## References` section at the bottom is the canonical place to list lin
 
 Avoid linking to navigation files (`README.md`, `index.md`) — they're excluded from the bundle and the link resolves to nothing (`LINK_TO_NAVIGATION_FILE`).
 
+A link out of the skill directory to a file still inside the project fires `LINK_OUTSIDE_SKILL_DIR` (warning) from the config-free skill validator (`vat audit` on an undeclared skill, `vat claude marketplace validate`, `vat skills package`, `vat skills install`); the packaging lane (`vat skills validate`, `vat build`) bundles such a file instead. Where a config applies (`vat audit`, marketplace validate), set its `validation.severity` to `error` to require self-contained skills, or `ignore` to allow cross-links. A link out of the project root is `LINK_OUTSIDE_PROJECT` (error), a separate code.
+
 ## Referencing bundled scripts and assets (portability)
 
 When the body tells the agent to run a bundled script or read a bundled asset, **reference it by a relative path rooted at the skill directory** — `scripts/run.mjs`, `assets/template.xlsx` — and nothing else. This is the only form that is portable across the surfaces a skill can run on (Claude Code plugins, claude.ai uploads, the API container, and others).

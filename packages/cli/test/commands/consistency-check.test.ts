@@ -36,14 +36,16 @@ const LOOK_ALIKE = 'look-alike';
 /** Build a minimal ProjectConfig with one marketplace and a given plugin list. */
 function buildConfig(
   plugins: Array<{ name: string; source?: string; skills: '*' | string[] }>,
-  skillPublishOverrides?: Record<string, boolean>
+  skillPublishOverrides?: Record<string, boolean>,
+  defaultPublish?: boolean,
 ): ProjectConfig {
-  const skillsSection = skillPublishOverrides
+  const skillsSection = skillPublishOverrides || defaultPublish !== undefined
     ? {
         skills: {
           include: ['skills/**/SKILL.md'],
+          ...(defaultPublish === undefined ? {} : { defaults: { publish: defaultPublish } }),
           config: Object.fromEntries(
-            Object.entries(skillPublishOverrides).map(([k, v]) => [k, { publish: v }])
+            Object.entries(skillPublishOverrides ?? {}).map(([k, v]) => [k, { publish: v }])
           ),
         },
       }
@@ -162,7 +164,11 @@ describe('resolveAssignedSkills', () => {
     expect(result.has(LOOK_ALIKE)).toBe(false);
   });
 
-  it('does NOT assign an unpublished skill even when its sourcePath is under the plugin source dir', () => {
+  it('assigns a publish: false skill under the plugin source dir — plugin-local assignment is by LOCATION, outside publish\'s scope', () => {
+    // `publish` scopes the pool only. A plugin-local skill ships with its plugin
+    // whatever the flag says (the claude phase packages it, verify expects it), so
+    // it is assigned by where it sits — not left unassigned by a flag about a
+    // bundle it never had.
     const config = buildConfig(
       [{ name: TREE_PLUGIN, skills: [] }],
       { 'private-skill': false },
@@ -171,7 +177,14 @@ describe('resolveAssignedSkills', () => {
 
     const result = resolveAssignedSkills(config, [skill], PROJECT_ROOT);
 
-    expect(result.has('private-skill')).toBe(false);
+    expect(result.has('private-skill')).toBe(true);
+  });
+
+  it('does NOT let a pool selector pick up a publish: false skill — it is not in the pool', () => {
+    const config = buildConfig([{ name: 'pool-plugin', skills: '*' }], { 'in-place': false });
+    const result = resolveAssignedSkills(config, [makeExternalSkill('in-place'), makeExternalSkill('pooled')], PROJECT_ROOT);
+    expect(result.has('in-place')).toBe(false);
+    expect(result.has('pooled')).toBe(true);
   });
 
   it('is additive: pool selector and source tree-copy both contribute to the assigned set', () => {
@@ -211,6 +224,82 @@ describe('PUBLISHED_SKILL_NOT_IN_PLUGIN check', () => {
     const flagged = issues.filter((i) => i.code === 'PUBLISHED_SKILL_NOT_IN_PLUGIN');
     expect(flagged).toHaveLength(1);
     expect(flagged[0]?.message).toContain('orphan-skill');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// publish is read off the MERGED config: skills.defaults.publish counts
+// ---------------------------------------------------------------------------
+
+describe('publish is read through the merged packaging config', () => {
+  const codesFor = (issues: Array<{ code: string }>, code: string): number =>
+    issues.filter((i) => i.code === code).length;
+
+  it('positive control: with no publish anywhere, an unassigned pool skill is PUBLISHED_SKILL_NOT_IN_PLUGIN', () => {
+    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }]);
+    const { issues, summary } = runConsistencyChecks([makeExternalSkill('orphan-skill')], config, PROJECT_ROOT);
+    expect(codesFor(issues, 'PUBLISHED_SKILL_NOT_IN_PLUGIN')).toBe(1);
+    expect(codesFor(issues, 'SKILL_UNPUBLISHED')).toBe(0);
+    expect(summary).toMatchObject({ publishedSkills: 1, unpublishedSkills: 0 });
+  });
+
+  it('honours skills.defaults.publish: false — the same skill is in-place, not an unassigned published one', () => {
+    // This was red: the check read `skills.config.<name>.publish` alone, so a
+    // project-wide default parsed, validated and changed nothing.
+    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }], undefined, false);
+    const { issues, summary } = runConsistencyChecks([makeExternalSkill('orphan-skill')], config, PROJECT_ROOT);
+    expect(codesFor(issues, 'PUBLISHED_SKILL_NOT_IN_PLUGIN')).toBe(0);
+    expect(codesFor(issues, 'SKILL_UNPUBLISHED')).toBe(1);
+    expect(summary).toMatchObject({ publishedSkills: 0, unpublishedSkills: 1 });
+  });
+
+  it('lets skills.config.<name>.publish: true opt one skill back in over a false default', () => {
+    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }], { 'orphan-skill': true }, false);
+    const { issues } = runConsistencyChecks(
+      [makeExternalSkill('orphan-skill'), makeExternalSkill('stays-in-place')],
+      config,
+      PROJECT_ROOT,
+    );
+    expect(issues.filter((i) => i.code === 'PUBLISHED_SKILL_NOT_IN_PLUGIN').map((i) => i.message)).toEqual([
+      expect.stringContaining('orphan-skill'),
+    ]);
+    expect(issues.filter((i) => i.code === 'SKILL_UNPUBLISHED').map((i) => i.message)).toEqual([
+      expect.stringContaining('stays-in-place'),
+    ]);
+  });
+
+  it('a plugin-local skill under a false default is neither unassigned nor SKILL_UNPUBLISHED — it ships with its plugin', () => {
+    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }], undefined, false);
+    const { issues } = runConsistencyChecks([makeSourceSkill(BUNDLED_SKILL, TREE_PLUGIN)], config, PROJECT_ROOT);
+    expect(codesFor(issues, 'PUBLISHED_SKILL_NOT_IN_PLUGIN')).toBe(0);
+    expect(codesFor(issues, 'SKILL_UNPUBLISHED')).toBe(0);
+  });
+
+  it('a plugin selector that matches ONLY in-place skills selects nothing from the pool — PLUGIN_REFERENCES_UNKNOWN_SKILL naming publish', () => {
+    // An in-place skill is never built, so the claude phase (which selects from
+    // dist/skills) would silently ship the plugin without it.
+    const config = buildConfig([{ name: 'pool-plugin', skills: ['in-place', 'pooled'] }], { 'in-place': false });
+    const { issues } = runConsistencyChecks([makeExternalSkill('in-place'), makeExternalSkill('pooled')], config, PROJECT_ROOT);
+    const refs = issues.filter((i) => i.code === 'PLUGIN_REFERENCES_UNKNOWN_SKILL');
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.message).toContain('"in-place"');
+    expect(refs[0]?.message).toContain('publish: false');
+    expect(refs[0]?.fix).toContain('skills.config.<name>.publish');
+  });
+
+  it('a selector naming a plugin-local skill under publish: false is not flagged — it ships by location', () => {
+    const config = buildConfig([{ name: TREE_PLUGIN, skills: [BUNDLED_SKILL] }], undefined, false);
+    const { issues } = runConsistencyChecks([makeSourceSkill(BUNDLED_SKILL, TREE_PLUGIN)], config, PROJECT_ROOT);
+    expect(codesFor(issues, 'PLUGIN_REFERENCES_UNKNOWN_SKILL')).toBe(0);
+  });
+
+  it('SKILL_UNPUBLISHED names the in-place meaning, not "not distributed"', () => {
+    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }], { 'in-place': false });
+    const { issues } = runConsistencyChecks([makeExternalSkill('in-place')], config, PROJECT_ROOT);
+    const info = issues.find((i) => i.code === 'SKILL_UNPUBLISHED');
+    expect(info?.severity).toBe('info');
+    expect(info?.message).toContain('in-place');
+    expect(info?.message).toContain('dist/skills');
   });
 });
 

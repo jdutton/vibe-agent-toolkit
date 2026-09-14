@@ -63,6 +63,7 @@ function runHarness(
     env?: Record<string, string>;
     /** Collapse the pipeline's rate-limit backoff so the retry budget is spent instantly. */
     fastRateLimitRetries?: boolean;
+    subjectInPlace?: boolean;
   },
 ): ReturnType<typeof runSkillTestHarness> {
   return runSkillTestHarness({
@@ -71,6 +72,7 @@ function runHarness(
     out: safePath.join(tempDir, 'harness'),
     subjectSource: { path: authoredDir },
     subjectScaffoldDir: authoredDir,
+    subjectInPlace: extra?.subjectInPlace === true,
     acknowledgedRunsSkillCode: true,
     spawn,
     ...(extra?.tolerateEvalFailure === undefined ? {} : { tolerateEvalFailure: extra.tolerateEvalFailure }),
@@ -761,5 +763,33 @@ describe('runSkillTestHarness — the run nonce reaches no artifact', () => {
       expect(body, `${name} carries the run's integrity nonce`).not.toContain(nonce);
       expect(body, `${name} carries a runNonce field`).not.toContain('runNonce');
     }
+  });
+});
+
+/**
+ * An IN-PLACE subject (`publish: false`) is staged from its authored directory — no
+ * bundle exists for it — so vat itself contributes ONE friction item saying what the
+ * harness cannot see. Wiring, not a pure function: the item must reach friction.json
+ * beside whatever the graders emitted, through the same merge vat is the sole writer of.
+ */
+describe('runSkillTestHarness — an in-place subject carries one harness-origin friction item', () => {
+  const { getTempDir, getAuthoredDir } = setupStubbedHarnessSubject('vat-in-place-', vi.mocked(stageHarness));
+
+  const frictionItems = (tempDir: string): Array<Record<string, unknown>> =>
+    (readResult(tempDir, 'friction.json') as { items: Array<Record<string, unknown>> }).items;
+
+  it('subjectInPlace: true → friction.json carries exactly one in-place item', async () => {
+    const result = await runHarness(getTempDir(), getAuthoredDir(), makeHarnessFakeSpawn().spawn, { subjectInPlace: true });
+    expect(result.exitCode).toBe(0);
+    const items = frictionItems(getTempDir());
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ severity: 'low', category: 'path-assumption' });
+    expect(String(items[0]?.['message'])).toContain('publish: false');
+    expect(String(items[0]?.['message'])).toContain('links that leave the skill directory');
+  });
+
+  it('positive control: subjectInPlace: false → no harness-origin item', async () => {
+    await runHarness(getTempDir(), getAuthoredDir(), makeHarnessFakeSpawn().spawn);
+    expect(frictionItems(getTempDir())).toEqual([]);
   });
 });

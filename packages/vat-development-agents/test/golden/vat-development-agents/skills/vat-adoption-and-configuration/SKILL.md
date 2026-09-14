@@ -66,6 +66,8 @@ skills:
   config:
     my-skill:
       linkFollowDepth: 1
+    used-in-place:
+      publish: false    # in-place: validated at source, never built or expected in dist/
 
 resources:
   collections:

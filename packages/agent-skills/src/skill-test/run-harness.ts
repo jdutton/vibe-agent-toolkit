@@ -270,6 +270,12 @@ export interface RunHarnessOptions {
   subjectScaffoldDir?: string;
 
   /**
+   * True when the subject is an IN-PLACE skill (`publish: false`): no bundle exists,
+   * so it is staged from source and the run's friction report says so.
+   */
+  subjectInPlace: boolean;
+
+  /**
    * True when run.ts actually rebuilt the subject (declared skill, no
    * --no-build/--dry-run). Recorded in provenance. Absent/false → staged as-is.
    */
@@ -2500,7 +2506,16 @@ interface WriteRunArtifactsInput {
   controlFailures: readonly BaselineControlArmFailure[];
   /** What the fail-fast gate cut off, or `undefined` when the whole suite ran. */
   skipped: SkippedEvalsSummary | undefined;
+  subjectInPlace: boolean;
 }
+
+const IN_PLACE_SUBJECT_FRICTION: FrictionItem = {
+  severity: 'low',
+  category: 'path-assumption',
+  message:
+    'In-place skill (publish: false) — staged from source; links that leave the skill directory are not ' +
+    'present in the harness, so an eval that depends on them tests the skill without them.',
+};
 
 function writeRunArtifactsAndReconcile(
   input: WriteRunArtifactsInput,
@@ -2512,7 +2527,8 @@ function writeRunArtifactsAndReconcile(
   const grading = mergeFragmentsToGrading(withArm, runNonce, 'with');
   writeFileSync(paths.gradingOut, JSON.stringify(grading, null, 2) + '\n', 'utf-8');
 
-  const friction = mergeFragmentsToFriction(fragments);
+  const merged = mergeFragmentsToFriction(fragments);
+  const friction = input.subjectInPlace ? { items: [IN_PLACE_SUBJECT_FRICTION, ...merged.items] } : merged;
   writeFileSync(paths.frictionOut, JSON.stringify(friction, null, 2) + '\n', 'utf-8');
 
   // Tool verdicts come from the WITH arm ONLY — the WITHOUT/skill-absent arm never
@@ -3295,6 +3311,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       // `skipped` was in scope here and simply not passed, which is how the delta
       // block and its printed line came to describe a truncated run as a complete one.
       skipped,
+      subjectInPlace: opts.subjectInPlace,
     });
 
     // D2 fail-closed gate: vat is the SOLE writer of results/, so a missing/unparseable/

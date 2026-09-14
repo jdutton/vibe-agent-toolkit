@@ -29,20 +29,20 @@ describe('plugin-dev cross-walk rules (integration)', () => {
 	});
 
 	it('skill validator fires SKILL_REFERENCES_BUT_NO_LINKS for the unreferenced scripts/ dir', async () => {
-		const result = await validateSkill({ skillPath: safePath.join(FIXTURE, 'SKILL.md') });
+		const result = await validateSkill({ skillPath: safePath.join(FIXTURE, 'SKILL.md'), validation: {} });
 		const codes = result.issues.map(i => i.code);
 		expect(codes).toContain('SKILL_REFERENCES_BUT_NO_LINKS');
 	});
 
 	it('skill validator fires SKILL_BODY_NOT_IMPERATIVE for "You should…"', async () => {
-		const result = await validateSkill({ skillPath: safePath.join(FIXTURE, 'SKILL.md') });
+		const result = await validateSkill({ skillPath: safePath.join(FIXTURE, 'SKILL.md'), validation: {} });
 		const codes = result.issues.map(i => i.code);
 		expect(codes).toContain('SKILL_BODY_NOT_IMPERATIVE');
 	});
 
 	it('all new codes ship at info severity by default', async () => {
 		const pluginResult = await validatePlugin(FIXTURE);
-		const skillResult = await validateSkill({ skillPath: safePath.join(FIXTURE, 'SKILL.md') });
+		const skillResult = await validateSkill({ skillPath: safePath.join(FIXTURE, 'SKILL.md'), validation: {} });
 		const newCodes = new Set([
 			'PLUGIN_MISSING_DESCRIPTION',
 			'PLUGIN_MISSING_AUTHOR',

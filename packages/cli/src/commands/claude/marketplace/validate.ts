@@ -140,7 +140,8 @@ async function validatePluginSkills(
     const skillMdPath = safePath.join(skillDir, 'SKILL.md');
     if (!existsSync(skillMdPath) || !boundary.contains(skillMdPath)) continue;
 
-    const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir, locationRoot: marketplacePath });
+    // `{}`: the caller resolves severity, as for every other marketplace finding.
+    const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir, locationRoot: marketplacePath, validation: {} });
     issues.push(...skillResult.issues);
   }
 

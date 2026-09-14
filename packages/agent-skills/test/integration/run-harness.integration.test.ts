@@ -59,6 +59,7 @@ function harnessOpts(skillDir: string, spawn: RunHarnessOptions['spawn']): RunHa
     out: safePath.join(tempDir, 'harness'),
     subjectSource: { path: skillDir },
     subjectScaffoldDir: skillDir,
+    subjectInPlace: false,
     acknowledgedRunsSkillCode: true,
     allowUnverifiedSkillSource: true,
     ...(spawn === undefined ? {} : { spawn }),

@@ -28,7 +28,7 @@ const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
 const BETA_BUNDLE = 'dist/skills/beta';
 
 function crawlOf(overrides: Partial<PackagedContentCrawl>): PackagedContentCrawl {
-  return { bundlesInspected: 0, bundlesExpected: 0, bundlesMissing: [], issues: [], ...overrides };
+  return { bundlesInspected: 0, bundlesExpected: 0, bundlesInPlace: 0, bundlesMissing: [], issues: [], ...overrides };
 }
 
 describe('buildPackagedContentPhase — a phase over PART of the build is not a verdict', () => {
@@ -102,5 +102,17 @@ describe('buildPackagedContentPhase — a phase over PART of the build is not a 
     expect(phase.status).toBe('error');
     expect(phase.issues.map((i) => i.code)).toEqual([RUN_INTEGRITY_CODE]);
     expect(phase.issues[0]?.message).toContain('inspected 0 built skill bundles');
+  });
+
+  it('passes a run whose every discovered skill is in place: nothing expected, nothing inspected, the count published', () => {
+    const phase = buildPackagedContentPhase(crawlOf({ bundlesInPlace: 2 }));
+
+    expect([phase.status, phase.bundlesInPlace, phase.issues, exitCodeForPhases([phase])]).toEqual(['success', 2, [], 0]);
+  });
+
+  it('still refuses zero inspected when a published bundle was expected beside in-place skills', () => {
+    const phase = buildPackagedContentPhase(crawlOf({ bundlesExpected: 1, bundlesInPlace: 2, bundlesMissing: [BETA_BUNDLE] }));
+
+    expect([phase.status, ...phase.issues.map((i) => i.code)]).toEqual(['error', RUN_INTEGRITY_CODE]);
   });
 });

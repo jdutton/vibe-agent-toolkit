@@ -9,7 +9,7 @@
  *   - exit 1  when an internal/parse-failure error is thrown (InternalHarnessError)
  */
 
-import { chmodSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import * as harness from '@vibe-agent-toolkit/agent-skills';
@@ -920,6 +920,79 @@ describe('resolveSubjectForTest (run.ts subject resolution)', () => {
     expect(toForwardSlash(String(out.subjectSource && 'path' in out.subjectSource ? out.subjectSource.path : ''))).toBe(
       toForwardSlash(fx.poolDistDir(DECLARED_POOL)),
     );
+  });
+});
+
+/** The staged `{ path }` of a resolved subject, forward-slashed (empty when not a path source). */
+function stagedPath(subject: { subjectSource: unknown }): string {
+  const source = subject.subjectSource as { path?: string };
+  return toForwardSlash(source.path ?? '');
+}
+
+// `publish: false` names an IN-PLACE skill: `vat build` never bundles it, so a test
+// must not invent the bundle. It stages the authored directory — what is actually used
+// in place — and the harness reports the fidelity gap as friction.
+describe('resolveSubjectForTest (an in-place subject — publish: false — is staged from source, never bundled)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const IN_PLACE = { skillsDefaults: { publish: false } };
+
+  it('positive control: a published pool subject is built, and is not in-place', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+    const pkg = spyPackageSkillCreatingDist();
+    const out = await resolveSubjectForTest(DECLARED_POOL, fx.root, ACKED_BUILD_FLAGS, newBuildMemo(), undefined);
+    expect(pkg).toHaveBeenCalledTimes(1);
+    expect(out).toMatchObject({ inPlace: false, wouldBuild: true, rebuilt: true });
+  });
+
+  it('skills.defaults.publish: false → stages the authored dir: no packageSkill, no dist, inPlace', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL], ...IN_PLACE });
+    resetSkillDiscoveryCache();
+    const pkg = spyPackageSkillCreatingDist();
+    const out = await resolveSubjectForTest(DECLARED_POOL, fx.root, ACKED_BUILD_FLAGS, newBuildMemo(), undefined);
+    expect(pkg).not.toHaveBeenCalled();
+    expect(out).toMatchObject({ inPlace: true, wouldBuild: false, rebuilt: false, linkedToDeclaredSkill: true });
+    expect(stagedPath(out)).toBe(toForwardSlash(dirname(fx.poolSkillMd(DECLARED_POOL))));
+    expect(toForwardSlash(String(out.subjectScaffoldDir))).toBe(toForwardSlash(dirname(fx.poolSkillMd(DECLARED_POOL))));
+    expect(existsSync(fx.poolDistDir(DECLARED_POOL))).toBe(false);
+  });
+
+  it('--no-build on an in-place subject stages source instead of demanding a dist that never exists', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL], ...IN_PLACE });
+    resetSkillDiscoveryCache();
+    const out = await resolveSubjectForTest(
+      DECLARED_POOL, fx.root, { ...ACKED_BUILD_FLAGS, noBuild: true }, newBuildMemo(), undefined,
+    );
+    expect(out.inPlace).toBe(true);
+    expect(stagedPath(out)).toBe(toForwardSlash(dirname(fx.poolSkillMd(DECLARED_POOL))));
+  });
+
+  it('a publish: false PLUGIN-LOCAL subject is not in-place — it ships with its plugin and still builds there', async () => {
+    const fx = setupReferenceFixture({ pluginLocal: [PLUGIN_LOCAL_SKILL], ...IN_PLACE });
+    resetSkillDiscoveryCache();
+    const build = spyPluginBuildCreatingDists([fx.pluginDistDir(PLUGIN_LOCAL_SKILL)]);
+    const out = await resolveSubjectForTest(PLUGIN_LOCAL_SKILL, fx.root, ACKED_BUILD_FLAGS, newBuildMemo(), undefined);
+    expect(build).toHaveBeenCalledTimes(1);
+    expect(out).toMatchObject({ inPlace: false, wouldBuild: true });
+  });
+
+  it('an in-place COMPANION is staged from source too — never bundled for a test', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL], ...IN_PLACE });
+    resetSkillDiscoveryCache();
+    const pkg = spyPackageSkillCreatingDist();
+    const sourceDir = dirname(fx.poolSkillMd(DECLARED_POOL));
+    const spec = await resolveCompanionSpec(COMPANION_ALIAS, { path: sourceDir }, fx.root, ACKED_BUILD_FLAGS, false, newBuildMemo());
+    expect(pkg).not.toHaveBeenCalled();
+    expect(toForwardSlash((spec as { path: string }).path)).toBe(toForwardSlash(sourceDir));
+  });
+
+  it('runSkillTestRun hands the harness subjectInPlace from the resolved subject', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL], ...IN_PLACE });
+    resetSkillDiscoveryCache();
+    vi.spyOn(process, 'cwd').mockReturnValue(fx.root);
+    const opts = await runAndCaptureOpts(DECLARED_POOL, { iUnderstandThisRunsSkillCode: true });
+    expect(opts['subjectInPlace']).toBe(true);
   });
 });
 

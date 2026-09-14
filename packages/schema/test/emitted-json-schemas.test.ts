@@ -39,6 +39,7 @@ const SCHEMAS_DIR = safePath.join(dirname(fileURLToPath(import.meta.url)), '..',
 /** A probe key, exercised against both contracts. */
 const PROBE_KEYS = [
   'LINK_OUTSIDE_PROJECT',
+  'LINK_OUTSIDE_SKILL_DIR',
   'ALWAYS_LOADED_CONTEXT_BUDGET',
   customCheckCode('my-check'),
   customCheckCode('a check with spaces'),

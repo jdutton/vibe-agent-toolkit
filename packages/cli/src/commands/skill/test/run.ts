@@ -43,6 +43,7 @@ import {
 } from '../../../skill-resolution/index.js';
 import { ConfigLoadError, loadConfig, loadConfigCached } from '../../../utils/config-loader.js';
 import { collectRepeated } from '../../../utils/repeatable-option.js';
+import { isSkillPublished } from '../../../utils/skill-packaging-config.js';
 import { runClaudePluginBuild } from '../../claude/plugin/build.js';
 
 import { assertValidAuth, assertValidRequireAuth } from './auth-flags.js';
@@ -587,15 +588,17 @@ function buildHarnessOpts(
   knobs: ReturnType<typeof coerceKnobs>,
   config: TestConfig | undefined,
   globalTest: SkillTestGlobalConfig,
+  resolvedSubject: ResolvedSubject,
 ): HarnessOpts {
   const repoRoot = resolveRepoRoot();
-  const opts: HarnessOpts = { subject, repoRoot };
+  const opts: HarnessOpts = { subject, repoRoot, subjectInPlace: resolvedSubject.inPlace };
   applyFlagOnlyOptions(opts, options);
   applyScalarMerges(opts, options, config);
   applyKnobMerges(opts, knobs, config);
   applyDepMerges(opts, options, config);
   applyEnvMerges(opts, options, config);
   applyGraderMerges(opts, options, knobs, globalTest);
+  applyResolvedSubject(opts, resolvedSubject);
   return opts;
 }
 
@@ -610,6 +613,12 @@ export interface ResolvedSubject {
   subjectScaffoldDir?: string;
   /** True only when this resolution actually built the subject (declared skill, no --no-build/--dry-run). */
   rebuilt: boolean;
+  /**
+   * True when the subject is an IN-PLACE declared skill (`publish: false`, see
+   * {@link isInPlaceSkill}): staged from its authored directory, never bundled.
+   * Forwarded to the harness, which reports the fidelity gap as friction.
+   */
+  inPlace: boolean;
   /**
    * True when the resolved reference is `buildable` — a real run would build + stage
    * it before spawning. False for plain `source` subjects (path/npm/url/vendored).
@@ -719,6 +728,7 @@ export async function resolveSubjectForTest(
       return {
         subjectSource: resolved.source,
         rebuilt: false,
+        inPlace: false,
         wouldBuild: false,
         ...sourceScaffoldFields(resolved.source, resolved.declaredSkill, cwd),
       };
@@ -739,6 +749,17 @@ export async function resolveSubjectForTest(
       return declaredExecutables === undefined ? subject : { ...subject, declaredExecutables };
     }
   }
+}
+
+/**
+ * An IN-PLACE declared skill: a POOL skill whose merged config says `publish: false`.
+ * `vat build` never bundles it (see `isSkillPublished`), so a test must not invent the
+ * bundle either — it stages the authored directory, which is what is used in place. A
+ * plugin-local skill is never in-place: `publish` scopes the pool only, and it ships
+ * with its plugin whatever the flag says.
+ */
+function isInPlaceSkill(ref: BuildableReference): boolean {
+  return ref.distribution.kind === 'pool' && !isSkillPublished(ref.packagingConfig);
 }
 
 /** Result of {@link buildDeclaredSkill}: where the built (or reused) dist landed. */
@@ -963,8 +984,11 @@ async function buildDeclaredSkill(
   // dry run stays the one mode that is safe to point at an untrusted clone. That
   // preview falls back to an existing dist and says so (stale warning) — the honest
   // trade, since accuracy requires consent to execute the repo's own build.
+  // An in-place skill has no dist to reuse or build: its authored directory IS what
+  // ships (in place), under every flag combination.
+  const inPlaceResult: BuildDeclaredSkillResult = { distDir: dirname(ref.sourcePath), rebuilt: false };
   if (flags.noBuild || (flags.dryRun && !flags.explicitAck)) {
-    return resolveExistingDistOrThrow(ref, flags);
+    return isInPlaceSkill(ref) ? inPlaceResult : resolveExistingDistOrThrow(ref, flags);
   }
 
   // SECURITY (§12): reaching here means a real build WOULD run — runPreStageBuild
@@ -974,6 +998,13 @@ async function buildDeclaredSkill(
   // explicit acknowledgment. (Defense-in-depth: the harness Step-6 check remains.)
   if (!flags.acknowledged) {
     throw new SecurityAckError();
+  }
+
+  // The `test.build` hook still runs for an in-place skill — it prepares what the
+  // test needs (the declared contract: once, before staging) — but nothing is bundled.
+  if (isInPlaceSkill(ref)) {
+    runPreStageBuildOnce(buildCommand, ref.configRoot, memo);
+    return inPlaceResult;
   }
 
   const key = buildMemoKey(ref);
@@ -1014,10 +1045,22 @@ async function resolveBuildableSubject(
 ): Promise<ResolvedSubject> {
   const scaffoldDir = dirname(ref.sourcePath);
   const build = await buildDeclaredSkill(ref, flags, memo, buildCommand);
+  if (isInPlaceSkill(ref)) {
+    // Staged as-is from source, but still the declared skill: its `test:` config applies.
+    return {
+      subjectSource: { path: build.distDir },
+      subjectScaffoldDir: scaffoldDir,
+      rebuilt: false,
+      inPlace: true,
+      wouldBuild: false,
+      linkedToDeclaredSkill: true,
+    };
+  }
   return {
     subjectSource: { path: build.distDir },
     subjectScaffoldDir: scaffoldDir,
     rebuilt: build.rebuilt,
+    inPlace: false,
     wouldBuild: true,
     ...(build.dryRunStagedExistingDist === undefined
       ? {}
@@ -1352,8 +1395,7 @@ export async function runSkillTestRun(
     // buildHarnessOpts assembles the companion records (--with/--with-optional and
     // config with:/optional:) and can throw DuplicateStagedSkillError on a repeated
     // name — inside the try so it reads as preflight like every other preflight error.
-    const harnessOpts = buildHarnessOpts(subject, options, knobs, config, globalTest);
-    applyResolvedSubject(harnessOpts, resolvedSubject);
+    const harnessOpts = buildHarnessOpts(subject, options, knobs, config, globalTest, resolvedSubject);
     // Companion build resolution: a --with/--with-optional companion
     // whose source is a path into a declared skill gets built (its `files:`
     // injection runs) exactly like the subject, instead of a raw source-tree copy.
@@ -1506,6 +1548,10 @@ Description:
   Claude session performs the task and a separate grader session judges its
   transcript against the skill's expectations. VAT merges the grader results and
   writes grading.json.
+
+  A declared skill is built before staging -- except an IN-PLACE one (merged
+  config publish: false), which 'vat build' never bundles: it is staged from its
+  source directory, and friction.json says links leaving that directory are absent.
 
   IMPORTANT: This command EXECUTES the skill's code with your user account's
   full privileges (filesystem, network, shell) and a reachable auth credential.

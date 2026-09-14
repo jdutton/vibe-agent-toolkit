@@ -150,9 +150,11 @@ async function validateSkillOrExit(
   logger: ReturnType<typeof createLogger>
 ): Promise<ValidationResult> {
   logger.info(`\n🔍 Validating skill...`);
+  // `{}`: this verb reads no project config (nor does `packageSkill` below).
   const validationResult = await validateSkill({
     skillPath,
     rootDir: basePath,
+    validation: {},
   });
 
   for (const line of formatSkillValidationLines(validationResult)) {

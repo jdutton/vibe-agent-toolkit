@@ -57,6 +57,7 @@ describe('runSkillTestHarness — security ack gate', () => {
       repoRoot: tempDir,
       workdir: tempDir,
       subjectSource: { path: getAuthoredDir() },
+      subjectInPlace: false,
       subjectScaffoldDir: getAuthoredDir(),
       // acknowledgedRunsSkillCode intentionally absent; dryRun absent.
     });

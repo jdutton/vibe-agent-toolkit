@@ -83,7 +83,7 @@ Globs written against a link's resolved *target* are depth-fragile — picomatch
 | `vat skills build` | ✓ | ✓ | Yes (exit 1) |
 | `vat skills validate` | ✓ | ✓ | Yes (exit 1) |
 | `vat resources validate` | ✓ | ✓ | Yes (exit 1) |
-| `vat audit` | Display grouping only | ✗ | No (always exit 0) |
+| `vat audit` | ✓ (from the skill's governing config) | ✗ | Yes (exit 1) |
 
 ## Skill-resource rule catalog (single source of truth)
 
@@ -101,6 +101,7 @@ once in each code's section below (linked from the `Code` cell).
 | Code | Severity | Description | Fix headline |
 |---|---|---|---|
 | [`LINK_OUTSIDE_PROJECT`](#link_outside_project) | error | Markdown link points to a file outside the project root. | Move the target inside the project or remove the link. Use validation.allow if the reference is intentional and cross-project. |
+| [`LINK_OUTSIDE_SKILL_DIR`](#link_outside_skill_dir) | warning | Markdown link resolves to a file outside the skill's directory (inside the project). | Move the target into the skill directory to keep the skill self-contained. Set validation.severity.LINK_OUTSIDE_SKILL_DIR to error to require self-contained skills, or to ignore to allow cross-links. |
 | [`LINK_TARGETS_DIRECTORY`](#link_targets_directory) | error | A typed single-file reference (e.g. a packaging `files:` source entry) resolves to a directory instead of a file. | Point the `files:` source (or other single-file reference) at a specific file, not a directory. Navigational prose links to a directory are valid and do not trigger this code. |
 | [`LINK_TO_UNBUNDLED_DIRECTORY`](#link_to_unbundled_directory) | warning | Markdown link targets a directory; directories are never bundled, so the target did not ship and the packaged link points at nothing. | Link the specific file inside the directory that the prose means — a directory cannot be packaged, and VAT does not resolve one to an index file. Set severity.LINK_TO_UNBUNDLED_DIRECTORY to ignore if the link is meant for a reader browsing the repository rather than for the packaged bundle. |
 | [`LINK_TO_NAVIGATION_FILE`](#link_to_navigation_file) | warning | Markdown link targets a navigation file (README.md, index.md, etc.) which was excluded from the bundle. | Link to the specific content instead of the navigation file, or set severity.LINK_TO_NAVIGATION_FILE to ignore if this is intentional. |
@@ -147,6 +148,7 @@ and shows the `files:` edge as the resolving state once `DeferredArtifacts` is w
 | Leaves the bundle | Links a gitignored file | `LINK_TO_GITIGNORED_FILE` |
 | Leaves the bundle | Links a gitignored file that IS a materialized `files:` build artifact | `LINK_DEFERRED_ARTIFACT` (info — expected post-build state, not a leak) |
 | Leaves the bundle | Target outside the project root | `LINK_OUTSIDE_PROJECT` |
+| Leaves the skill directory | Target inside the project but outside the skill's own directory (source-level `validateSkill` lane only; the packaging walker bundles it) | `LINK_OUTSIDE_SKILL_DIR` (warning — `error` to require self-contained skills, `ignore` to allow cross-links) |
 | Directory target | Navigational prose link | *valid at source — no code. The packaged output strips it to plain text: bundled resources are flattened into `resources/`, so no authored directory survives to point at.* |
 | Directory target | Typed single-file slot (`files:` source) | `LINK_TARGETS_DIRECTORY` |
 
@@ -167,6 +169,15 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 - **What:** Markdown link points to a file outside the project root.
 - **Why it matters:** Skills and resource bundles are self-contained artifacts. A link that escapes the project root cannot be resolved by the agent at runtime and signals a structural problem in how the content is organized.
 - **Fix:** Move the target inside the project or remove the link. Use `validation.allow` if the reference is intentional and cross-project.
+- **Not the skill-directory boundary:** a link that stays inside the project but leaves the skill's own directory is [`LINK_OUTSIDE_SKILL_DIR`](#link_outside_skill_dir).
+
+### `LINK_OUTSIDE_SKILL_DIR`
+
+- **Default:** `warning`
+- **What:** Markdown link resolves to a file outside the skill's directory (inside the project). Emitted by the source-level skill validator (`vat skills package`, `vat skills install`, `vat claude marketplace validate`, and `vat audit` for a skill no `vibe-agent-toolkit.config.yaml` governs) when an existing link target lies outside the directory that holds `SKILL.md`. A missing target is `LINK_INTEGRITY_BROKEN` instead, whether or not it also leaves the directory. `vat audit` and `vat claude marketplace validate` resolve its severity against the project config; `vat skills package` and `vat skills install` read no config and report it at the default. None of these lanes applies `validation.allow`, so the knob is the severity. The packaging lane (`vat skills validate`, `vat skills build`) has no skill-directory boundary: it bundles the target.
+- **Why it matters:** VAT's stance is that a skill should be self-contained — everything it links to travels with it. A link into a sibling directory couples the skill silently to the project's layout, and when the skill is packaged it drags that file into the bundle. That stance is VAT's, not the Agent Skills spec's, and a link inside the project resolves perfectly well at source, which is why the default is `warning` and not `error`.
+- **Not [`LINK_OUTSIDE_PROJECT`](#link_outside_project):** that code is the packaging walker's, fires for a target outside the **project root**, and is an `error` because such a link cannot be right. This one is about the skill's own directory. Two boundaries, two codes, so an adopter can set one without moving the other.
+- **Fix:** Move the target into the skill directory to keep the skill self-contained. Set `validation.severity.LINK_OUTSIDE_SKILL_DIR` to `error` to require self-contained skills, or to `ignore` to allow cross-links.
 
 ### `LINK_TARGETS_DIRECTORY`
 
@@ -1157,8 +1168,11 @@ Declared as `InfoCode` beside the list above. Display-only inventory rows; never
 Emitted by `vat verify`'s consistency check (`packages/cli/src/commands/consistency-check.ts`),
 which treats config.yaml discovery as the source of truth and `package.json` as the suspect.
 Declared as `ConsistencyCode` in `packages/schema/src/validation-codes.ts`. Severity is fixed per
-code; `publish: false` on a skill opts it out of the distribution-consistency rows (the first six),
-never out of packaging validation.
+code. `publish` is read off the merged config (`skills.defaults.publish`, overridden by
+`skills.config.<name>.publish`; default `true`). `publish: false` names an in-place skill: validated
+at source, never built into `dist/skills/`, never expected by `vat verify`, and out of the pool-side
+rows (the first six). A plugin-local skill is assigned to its plugin by location whatever `publish`
+says, and never gets `SKILL_UNPUBLISHED`.
 
 | Code | Severity | What | Fix |
 |---|---|---|---|
@@ -1167,8 +1181,8 @@ never out of packaging validation.
 | `PACKAGE_JSON_LISTS_UNKNOWN_SKILL` | error | `vat.skills` names a skill the config globs did not discover | Remove it from `vat.skills`, or make `skills.include` match its SKILL.md |
 | `UNPUBLISHED_SKILL_IN_PACKAGE_JSON` | warning | A `publish: false` skill is still listed in `vat.skills` — contradictory | Remove it from `vat.skills`, or drop the `publish: false` |
 | `PUBLISHED_SKILL_NOT_IN_PLUGIN` | error | A published skill is assigned to no plugin under `claude.marketplaces` | Add it to a plugin's `skills:` selector, or set `publish: false` |
-| `PLUGIN_REFERENCES_UNKNOWN_SKILL` | error | A plugin's `skills:` selector matches no discovered skill | Fix the selector in `claude.marketplaces.<mp>.plugins` |
-| `SKILL_UNPUBLISHED` | info | A skill is `publish: false` and so is not distributed | To publish it, remove the `publish: false` setting |
+| `PLUGIN_REFERENCES_UNKNOWN_SKILL` | error | A plugin's `skills:` selector matches no discovered skill — or matches only in-place (`publish: false`) skills, which `dist/skills/` never carries | Fix the selector in `claude.marketplaces.<mp>.plugins`, or set `skills.config.<name>.publish: true` for a skill the plugin ships |
+| `SKILL_UNPUBLISHED` | info | A pool skill is `publish: false` — in-place: validated at source, never bundled into `dist/skills/`, never expected by `vat verify` | To distribute it through the pool, set `publish: true` (or drop the `false` under `skills.defaults`) |
 | `VENDORED_LICENSING_MISSING` | error | The vendored `skill-creator` tree in `agent-skills` lacks its `LICENSE.txt` / `ATTRIBUTION.md`, or `vendor/` is not in the package's `files` (VAT's own repository only) | Restore the licensing files and the `files` entry |
 
 ### OKF conformance codes

@@ -6,6 +6,7 @@ describe('CODE_REGISTRY', () => {
   it('contains every overridable code with a default severity', () => {
     const expected: IssueCode[] = [
       'LINK_OUTSIDE_PROJECT',
+      'LINK_OUTSIDE_SKILL_DIR',
       'LINK_TARGETS_DIRECTORY',
       'LINK_TO_NAVIGATION_FILE',
       'LINK_TO_AGENT_INSTRUCTION_FILE',
@@ -35,6 +36,10 @@ describe('CODE_REGISTRY', () => {
 
   it('enforces expected defaults for link codes', () => {
     expect(CODE_REGISTRY.LINK_OUTSIDE_PROJECT.defaultSeverity).toBe('error');
+    // Two boundaries, two codes: the project-root escape cannot be right
+    // (error); leaving the skill directory is VAT's self-containment stance,
+    // which an adopter may raise or drop (warning).
+    expect(CODE_REGISTRY.LINK_OUTSIDE_SKILL_DIR.defaultSeverity).toBe('warning');
     expect(CODE_REGISTRY.LINK_TARGETS_DIRECTORY.defaultSeverity).toBe('error');
     expect(CODE_REGISTRY.LINK_TO_NAVIGATION_FILE.defaultSeverity).toBe('warning');
     // A README is content at the wrong granularity (warning); a CLAUDE.md is

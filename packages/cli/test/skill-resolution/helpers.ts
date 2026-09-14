@@ -69,6 +69,8 @@ export interface ReferenceFixtureSpec {
    * `files:` `source` genuinely resolves.
    */
   sourceFiles?: Record<string, string>;
+  /** Optional `skills.defaults` block (e.g. `{ publish: false }` for an in-place project). */
+  skillsDefaults?: Record<string, unknown>;
   /** Optional second config root nested inside this one. */
   nested?: NestedProjectSpec;
 }
@@ -143,6 +145,7 @@ function buildConfigYaml(spec: ReferenceFixtureSpec): string {
   const config: Record<string, unknown> = { version: 1 };
   if (include.length > 0) {
     const skills: Record<string, unknown> = { include };
+    if (spec.skillsDefaults !== undefined) skills.defaults = spec.skillsDefaults;
     const skillsConfig = buildSkillsConfig(spec.poolTest, spec.skillFiles);
     if (skillsConfig !== undefined) skills.config = skillsConfig;
     config.skills = skills;

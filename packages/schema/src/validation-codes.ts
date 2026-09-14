@@ -46,6 +46,16 @@ export const CODE_REGISTRY = {
     'Move the target inside the project or remove the link. Use validation.allow if the reference is intentional and cross-project.',
     'link_outside_project',
   ),
+  // The SKILL-DIRECTORY boundary (source-level `validateSkill`), deliberately a
+  // separate key from the PROJECT-ROOT escape above (the packaging walker), so
+  // an adopter can raise or drop one without moving the other. `warning`:
+  // self-containment is VAT's stance, not a defect — the link resolves fine.
+  LINK_OUTSIDE_SKILL_DIR: entry(
+    'warning',
+    "Markdown link resolves to a file outside the skill's directory (inside the project).",
+    'Move the target into the skill directory to keep the skill self-contained. Set validation.severity.LINK_OUTSIDE_SKILL_DIR to error to require self-contained skills, or to ignore to allow cross-links.',
+    'link_outside_skill_dir',
+  ),
   LINK_TARGETS_DIRECTORY: entry(
     'error',
     'A typed single-file reference (e.g. a packaging `files:` source entry) resolves to a directory instead of a file.',

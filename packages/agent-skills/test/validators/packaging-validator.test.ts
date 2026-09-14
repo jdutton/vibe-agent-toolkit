@@ -985,7 +985,12 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		expect(activeWarningsOf(result).find(e => e.code === 'ALLOW_EXPIRED')).toBeUndefined();
 	});
 
-	it('emits LINK_OUTSIDE_PROJECT through the framework instead of OUTSIDE_PROJECT_BOUNDARY', async () => {
+	// The second row: the skill-directory key is a different boundary, so
+	// ignoring it must leave the project-root escape an error.
+	it.each([
+		['an explicit LINK_OUTSIDE_PROJECT: error', { LINK_OUTSIDE_PROJECT: 'error' }],
+		['LINK_OUTSIDE_SKILL_DIR: ignore (the other boundary)', { LINK_OUTSIDE_SKILL_DIR: 'ignore' }],
+	] as const)('emits LINK_OUTSIDE_PROJECT through the framework instead of OUTSIDE_PROJECT_BOUNDARY under %s', async (_label, severity) => {
 		// Create a skill that links outside the project boundary
 		// We use a path that goes above the temp dir (which is the project root here)
 		const tempDir = getTempDir();
@@ -996,7 +1001,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
 
 		const result = await validateSkillForPackaging(skillPath, {
-			validation: { severity: { LINK_OUTSIDE_PROJECT: 'error' } },
+			validation: { severity },
 		});
 
 		expect(activeErrorsOf(result).map(e => e.code)).toContain('LINK_OUTSIDE_PROJECT');

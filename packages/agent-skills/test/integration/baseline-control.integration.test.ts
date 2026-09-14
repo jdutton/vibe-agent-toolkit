@@ -156,6 +156,7 @@ function baselineOpts(
     out: safePath.join(getTempDir(), 'harness'),
     subjectSource: { path: subjectDir },
     subjectScaffoldDir: subjectDir,
+    subjectInPlace: false,
     acknowledgedRunsSkillCode: true,
     allowUnverifiedSkillSource: true,
     baseline: true,

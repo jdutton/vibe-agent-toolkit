@@ -183,7 +183,7 @@ claude:
           skills: "*"                 # REQUIRED: "*" (every built skill) or a list of skill names
 ```
 
-The top-level `skills:` section drives standalone skill builds (output: `dist/skills/`). The `claude:` section defines plugins. Every plugin entry must carry a `skills:` selector — `"*"` for all skills the `skills:` section built, or an explicit list of names — and may also have its own `plugins/<name>/` directory (plugin-local skills under `plugins/<name>/skills/**/SKILL.md`, packaged automatically). Each marketplace has `owner` and `plugins` fields (strict schema — no extra fields).
+The top-level `skills:` section drives standalone skill builds (output: `dist/skills/`). A skill whose merged config says `publish: false` (`skills.defaults.publish` or `skills.config.<name>.publish`) is **in-place**: validated at source, never built into `dist/skills/`, never expected by `vat verify` — use it for skills in `skills.include` only to be validated. Plugin-local skills ship with their plugin whatever `publish` says. The `claude:` section defines plugins. Every plugin entry must carry a `skills:` selector — `"*"` for all skills the `skills:` section built, or an explicit list of names — and may also have its own `plugins/<name>/` directory (plugin-local skills under `plugins/<name>/skills/**/SKILL.md`, packaged automatically). Each marketplace has `owner` and `plugins` fields (strict schema — no extra fields).
 
 **Naming convention:** marketplace = org identity (e.g. `acme`), plugin = this package
 (e.g. `acme-tools`). Registers as `my-plugin@my-marketplace` in Claude's plugin registry.

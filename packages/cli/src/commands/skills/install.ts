@@ -126,8 +126,10 @@ function assertInstallableName(name: string, origin: string): void {
  */
 async function preVerifySkill(skillDir: string): Promise<string> {
   const skillMdPath = safePath.join(skillDir, 'SKILL.md');
+  // An install source (npm, ZIP, directory) carries no config that governs it.
   const result = await validateSkill({
     skillPath: skillMdPath,
+    validation: {},
   });
   if (result.status === 'error') {
     const issueSummary = (result.issues ?? [])

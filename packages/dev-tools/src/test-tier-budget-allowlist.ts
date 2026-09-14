@@ -159,6 +159,8 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/lab/test/perf-capture.test.ts', measuredMs: 1316, mechanisms: [MECHANISM.unclassified], note: 'repeats real child-process runs to build the statistic under test' },
   { file: 'packages/lab/test/instrument.test.ts', measuredMs: 1310, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn], note: 'local serial run; 762 ms on the floor' },
   { file: 'packages/cli/test/commands/audit/distributed-tree.test.ts', measuredMs: 1220, mechanisms: [MECHANISM.tempTree, MECHANISM.git], note: 'local serial run; 885 ms on the floor' },
+  { file: 'packages/utils/test/git-tracker-unlistable.test.ts', measuredMs: 1233, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal], note: 'real repos with unlistable dirs; 161–358 ms across seven prior floor runs, 1233 on the eighth' },
+  { file: 'packages/cli/test/commands/claude/plugin/tree-copy.test.ts', measuredMs: 1205, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal], note: '42 tree-copy fixtures; 325–598 ms across seven prior floor runs, 1205 on the eighth' },
   { file: 'packages/agent-skills/test/skill-source/url-source.test.ts', measuredMs: 1162, mechanisms: [MECHANISM.tempTree, MECHANISM.git], note: 'a real bare repo and a clone per resolve; 362–1162 ms across four floor runs' },
   { file: 'packages/agent-skills/test/skill-packager.test.ts', measuredMs: 1136, mechanisms: [MECHANISM.tempTree, MECHANISM.refusal] },
   { file: 'packages/resources/test/projection-filesystem-extent.test.ts', measuredMs: 1120, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal] },

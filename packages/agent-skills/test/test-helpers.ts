@@ -117,7 +117,7 @@ export async function createSkillAndValidate(
 ): Promise<ValidationResult> {
   const skillPath = safePath.join(tempDir, 'SKILL.md');
   fs.writeFileSync(skillPath, content);
-  return validateSkill({ skillPath });
+  return validateSkill({ skillPath, validation: {} });
 }
 
 /**
@@ -169,6 +169,7 @@ export async function validateSkillWithTransitiveChecking(
   return validateSkill({
     skillPath,
     rootDir: rootDir ?? path.dirname(skillPath),
+    validation: {},
   });
 }
 
@@ -187,6 +188,7 @@ export async function validateSkillWithUnreferencedFileCheck(
     skillPath,
     rootDir,
     checkUnreferencedFiles: true,
+    validation: {},
   });
 }
 

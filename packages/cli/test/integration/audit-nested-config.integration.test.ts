@@ -29,8 +29,11 @@ import { gitAddAll, initTestGitRepo, runAudit } from '../test-helpers.js';
 
 /**
  * Write a SKILL.md that references an external doc via a relative path that
- * escapes the skill's bundle root. Without a suppressing rule this fires
- * LINK_OUTSIDE_PROJECT under packaging validation.
+ * escapes the skill's bundle root. Which boundary code fires depends on the
+ * LANE the skill is validated in: under a governing config (pkg-a) the
+ * packaging walker reports the PROJECT-ROOT escape, `LINK_OUTSIDE_PROJECT`;
+ * with no governing config (pkg-b) the config-free `validateSkill` lane knows
+ * only the SKILL-DIRECTORY boundary and reports `LINK_OUTSIDE_SKILL_DIR`.
  */
 function writeSkillWithExternalLink(skillPath: string, skillName: string): void {
   fs.mkdirSync(path.dirname(skillPath), { recursive: true });
@@ -71,15 +74,23 @@ function writeRootConfig(rootDir: string): void {
   );
 }
 
+/** The two boundary codes — one per lane; see {@link writeSkillWithExternalLink}. */
+const BOUNDARY_CODES = new Set(['LINK_OUTSIDE_PROJECT', 'LINK_OUTSIDE_SKILL_DIR']);
+
 /**
  * pkg-a's config declares pkg-a-skill explicitly in `skills.config` with a
- * `validation.severity` override that demotes LINK_OUTSIDE_PROJECT to
- * `ignore` for that skill. Updated for canonical projectRoot semantics —
- * see plan 2026-05-17. Under the new model, pkg-a is the nearest-ancestor
- * config so external-docs is genuinely outside its project root. Audit
- * deliberately ignores `validation.allow` (it shows every potential issue)
- * but DOES honor `validation.severity` (which is exactly the per-skill
- * walk-up signal this test exists to verify).
+ * `validation.severity` override that demotes BOTH boundary codes to `ignore`
+ * for that skill. Updated for canonical projectRoot semantics — see plan
+ * 2026-05-17. Under the new model, pkg-a is the nearest-ancestor config so
+ * external-docs is genuinely outside its project root. Audit deliberately
+ * ignores `validation.allow` (it shows every potential issue) but DOES honor
+ * `validation.severity` (which is exactly the per-skill walk-up signal this
+ * test exists to verify).
+ *
+ * Both codes, not just the one pkg-a's lane emits: the non-composition claim
+ * below is "nothing in this config reaches pkg-b", and pkg-b's lane emits the
+ * OTHER code. Ignoring only `LINK_OUTSIDE_PROJECT` here would let pkg-b's
+ * finding survive for a reason that has nothing to do with composition.
  */
 function writePkgAConfig(pkgDir: string): void {
   fs.writeFileSync(
@@ -94,13 +105,14 @@ skills:
       validation:
         severity:
           LINK_OUTSIDE_PROJECT: ignore
+          LINK_OUTSIDE_SKILL_DIR: ignore
 `,
   );
 }
 
 /**
- * Run audit and collect LINK_OUTSIDE_PROJECT issues for the skill whose
- * path contains `pkgMarker`. Returns `{ result, linkOutsideIssues }` so
+ * Run audit and collect the boundary-code issues (either lane's) for the skill
+ * whose path contains `pkgMarker`. Returns `{ result, linkOutsideIssues }` so
  * each test can assert on whatever shape it needs.
  */
 async function auditAndCollectLinkOutside(
@@ -113,7 +125,7 @@ async function auditAndCollectLinkOutside(
   const results = await runAudit(scanDir, { recursive: true });
   const result = results.find(r => r.path.includes(pkgMarker));
   const linkOutsideIssues = (result?.issues ?? []).filter(
-    i => i.code === 'LINK_OUTSIDE_PROJECT',
+    i => BOUNDARY_CODES.has(i.code),
   );
   return { result, linkOutsideIssues };
 }
@@ -136,7 +148,7 @@ describe('audit per-skill walk-up to nearest-ancestor config (integration)', () 
     // External doc the SKILL.md files link to (lives at repo root)
     writeExternalDoc(safePath.join(tempDir, 'external-docs', 'guide.md'));
 
-    // pkg-a: governing config suppresses LINK_OUTSIDE_PROJECT for pkg-a-skill.
+    // pkg-a: governing config suppresses both boundary codes for pkg-a-skill.
     pkgADir = safePath.join(tempDir, 'pkg-a');
     writeSkillWithExternalLink(
       safePath.join(pkgADir, 'resources', 'skills', 'SKILL.md'),
@@ -146,7 +158,8 @@ describe('audit per-skill walk-up to nearest-ancestor config (integration)', () 
 
     // pkg-b: NO governing config — walk-up finds the root config which has
     // no skills section, so wild mode / default rules apply. The skill's
-    // external link should still fire LINK_OUTSIDE_PROJECT.
+    // external link should still fire the wild lane's boundary code,
+    // LINK_OUTSIDE_SKILL_DIR.
     pkgBDir = safePath.join(tempDir, 'pkg-b');
     writeSkillWithExternalLink(
       safePath.join(pkgBDir, 'resources', 'skills', 'SKILL.md'),
@@ -161,16 +174,18 @@ describe('audit per-skill walk-up to nearest-ancestor config (integration)', () 
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('pkg-a: LINK_OUTSIDE_PROJECT suppressed via validation.severity in pkg-a config', async () => {
+  it('pkg-a: boundary codes suppressed via validation.severity in pkg-a config', async () => {
     const { result, linkOutsideIssues } = await auditAndCollectLinkOutside(tempDir, 'pkg-a');
     expect(result).toBeDefined();
     expect(linkOutsideIssues).toHaveLength(0);
   });
 
-  it('pkg-b: LINK_OUTSIDE_PROJECT still fires — pkg-a rule does NOT compose into pkg-b', async () => {
+  it('pkg-b: LINK_OUTSIDE_SKILL_DIR still fires — pkg-a rule does NOT compose into pkg-b', async () => {
     const { result, linkOutsideIssues } = await auditAndCollectLinkOutside(tempDir, 'pkg-b');
     expect(result).toBeDefined();
-    expect(linkOutsideIssues.length).toBeGreaterThan(0);
+    // The wild lane's code, and only that one: `validateSkill` knows the
+    // skill-directory boundary and never the project root.
+    expect(linkOutsideIssues.map(i => i.code)).toEqual(['LINK_OUTSIDE_SKILL_DIR']);
     // Sanity: the firing link targets the external doc, proving the rule
     // from pkg-a did not bleed across sibling configs.
     expect(linkOutsideIssues[0]?.message ?? '').toContain('external-docs');

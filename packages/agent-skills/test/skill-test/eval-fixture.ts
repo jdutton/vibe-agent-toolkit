@@ -74,6 +74,7 @@ export function harnessOptsFor(input: HarnessFixtureOptions): RunHarnessOptions 
     out: safePath.join(input.tempDir, 'harness'),
     subjectSource: { path: input.subjectDir },
     subjectScaffoldDir: input.scaffoldDir ?? input.subjectDir,
+    subjectInPlace: false,
     acknowledgedRunsSkillCode: true,
     allowUnverifiedSkillSource: true,
     ...(input.spawn === undefined ? {} : { spawn: input.spawn }),

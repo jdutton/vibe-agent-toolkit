@@ -5,7 +5,7 @@
  * globs to discover SKILL.md files, instead of reading package.json vat.skills objects.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
@@ -221,6 +221,91 @@ describe('skills build command (system test)', () => {
     const { result } = await suite.runBuildCommand(tempDir, ['--skill', 'nonexistent']);
 
     expect(result.status).not.toBe(0);
+  });
+
+  describe('publish: false = an in-place skill: validated at source, never bundled', () => {
+    /** skill-a pooled, skill-b in-place (`skills.config.skill-b.publish: false`). */
+    const setupOnePooledOneInPlace = (tempDir: string): void => {
+      suite.createSkillSource(tempDir, 'resources/skills/skill-a.md', SKILL_A_NAME);
+      suite.createSkillSource(tempDir, 'resources/skills/skill-b.md', SKILL_B_NAME);
+      writeTestFile(
+        safePath.join(tempDir, VAT_CONFIG_FILENAME),
+        [CONFIG_VERSION_LINE, 'skills:', '  include:', '    - "resources/skills/*.md"', '  config:', `    ${SKILL_B_NAME}:`, '      publish: false', ''].join('\n'),
+      );
+    };
+
+    it('skips the in-place skill with ONE info line, builds the rest, and counts the skip in the document', async () => {
+      const tempDir = suite.createTempDir();
+      setupOnePooledOneInPlace(tempDir);
+
+      const { result, parsed } = await suite.runBuildCommand(tempDir);
+
+      expect(result.status).toBe(0);
+      expect(parsed).toHaveProperty('skillsBuilt', 1);
+      // The drop is VISIBLE in the machine output: a build that ships fewer
+      // skills than it discovered says so by count, not by omission.
+      expect(parsed).toHaveProperty('skillsInPlace', 1);
+      expect(parsed['skillsInPlaceNames']).toEqual([SKILL_B_NAME]);
+      expect((parsed['skills'] as Array<Record<string, unknown>>).map((s) => s['name'])).toEqual([SKILL_A_NAME]);
+      expect(existsSync(safePath.join(tempDir, 'dist', 'skills', SKILL_A_NAME, 'SKILL.md'))).toBe(true);
+      expect(existsSync(safePath.join(tempDir, 'dist', 'skills', SKILL_B_NAME))).toBe(false);
+
+      // ONE line names the skipped skills (count + names); the closing tally may
+      // repeat the count but never the names.
+      const infoLines = result.stderr.split('\n').filter((line) => line.includes(SKILL_B_NAME));
+      expect(infoLines).toHaveLength(1);
+      expect(infoLines[0]).toContain('1 in-place skill(s)');
+      expect(result.stderr).toContain('Found 1 skill(s) to build');
+      expect(result.stderr).toContain('Built 1 skill(s) successfully (1 in-place skill(s) not bundled)');
+    });
+
+    it('shows the same partition in --dry-run', async () => {
+      const tempDir = suite.createTempDir();
+      setupOnePooledOneInPlace(tempDir);
+
+      const { result, parsed } = await suite.runBuildCommand(tempDir, ['--dry-run']);
+
+      expect(result.status).toBe(0);
+      expect(parsed).toHaveProperty('skillsFound', 1);
+      expect(parsed).toHaveProperty('skillsInPlace', 1);
+      expect((parsed['skills'] as Array<Record<string, unknown>>).map((s) => s['name'])).toEqual([SKILL_A_NAME]);
+      expect(result.stderr).toContain(SKILL_B_NAME);
+      expect(existsSync(safePath.join(tempDir, 'dist'))).toBe(false);
+    });
+
+    it('--skill naming an in-place skill is a contradiction: exit 1, naming the config key', async () => {
+      const tempDir = suite.createTempDir();
+      setupOnePooledOneInPlace(tempDir);
+
+      const { result, parsed } = await suite.runBuildCommand(tempDir, ['--skill', SKILL_B_NAME]);
+
+      expect(result.status).toBe(1);
+      expect(parsed).toHaveProperty('status', 'error');
+      expect(String(parsed['error'])).toContain(`skills.config.${SKILL_B_NAME}.publish`);
+      expect(result.stderr).toContain(`skills.config.${SKILL_B_NAME}.publish`);
+      expect(existsSync(safePath.join(tempDir, 'dist', 'skills'))).toBe(false);
+    });
+
+    it('a project whose every skill is in-place (skills.defaults.publish: false) builds nothing and exits 0', async () => {
+      const tempDir = suite.createTempDir();
+      suite.createSkillSource(tempDir, 'resources/skills/skill-a.md', SKILL_A_NAME);
+      suite.createSkillSource(tempDir, 'resources/skills/skill-b.md', SKILL_B_NAME);
+      writeTestFile(
+        safePath.join(tempDir, VAT_CONFIG_FILENAME),
+        [CONFIG_VERSION_LINE, 'skills:', '  include:', '    - "resources/skills/*.md"', '  defaults:', '    publish: false', ''].join('\n'),
+      );
+
+      const { result, parsed } = await suite.runBuildCommand(tempDir);
+
+      expect(result.status).toBe(0);
+      expect(parsed).toHaveProperty('skillsBuilt', 0);
+      expect(parsed).toHaveProperty('skillsInPlace', 2);
+      expect(parsed['skills']).toEqual([]);
+      // Pinned: `runSkillBuild` over zero specs promotes an EMPTY staging tree, so
+      // dist/skills is absent or empty — never a stale bundle from an earlier run.
+      const distSkills = safePath.join(tempDir, 'dist', 'skills');
+      expect(existsSync(distSkills) ? readdirSync(distSkills) : []).toEqual([]);
+    });
   });
 
   it('should copy files declared in skills.config.<name>.files to the skill output', async () => {
