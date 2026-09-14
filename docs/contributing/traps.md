@@ -116,6 +116,20 @@ only, green locally.
 **Remedy:** the job is the only writer (`COVERAGE_RATCHET=write`) and fails on its own diff when a
 threshold can rise — seed from its "All files" row, never from a local number.
 
+### The duration ratchet reports one package per CI run
+
+Turbo runs every package's unit tier in parallel and kills the rest (`exited with code 130`) the
+moment one package's budget reporter fails, so a run that carries six files over budget reports
+one. Seed it, push, and the next run reports the next — one CI round per file. The parallel
+runner also measures a hover file at 3–9× its serial time, so the red names a file that does no
+more work than before.
+**Tell:** `OVER BUDGET` for exactly one file while the printed capture shows other packages'
+`✓ … NNNNms` lines above the budget; `exited with code 130` for the packages that never reported.
+**Remedy:** read every `✓ … NNNNms` line in the printed unit capture and list every unlisted file
+over the budget in one change. Seed each at `max(alone, turbo / 4)` with both readings in the
+`note` — an entry seeded from the turbo number alone trips the stale line (a tenth of it) on the
+next fast local run, which is the mirror failure. Do not seed from one round's single verdict.
+
 ### A hook timeout is decided on the timer side
 
 vitest decides a `beforeAll`/`afterAll` timeout on its own timer; the hook's `try/catch` never sees

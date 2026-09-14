@@ -73,13 +73,17 @@ export const TIER_BUDGET_MS: Readonly<Record<TestTier, number>> = {
  * less than its tier budget) before the reporter fails the run. See the header
  * for the measured noise this covers.
  *
- * ⚠️ Known gap: a spawn-heavy file (git, child processes) can swing 20× between
- * a serial run and a loaded turbo tier, so its entry must be seeded from the
- * turbo number, and even 8× is a margin over LOAD, not a statement about the
- * file. A per-mechanism factor or a CPU-time measurement would be the honest
- * instrument; until then, an `OVER HEADROOM` on a `spawn`/`git` entry with a
- * much smaller serial reading is contention, and the remedy is to re-seed
- * from the turbo number.
+ * ⚠️ Known gap: a file can swing 3–20× between a run alone and a loaded turbo
+ * tier (spawn-heavy files worst), so 8× is a margin over LOAD, not a statement
+ * about the file. An entry seeded from the turbo number then trips the stale
+ * line (a tenth of it) wherever the file runs fast, and one seeded from the
+ * run-alone number has no ceiling left for contention. The entries marked
+ * `contention seed` are listed at `max(alone, turbo / 4)`: the ceiling clears
+ * the turbo reading with half the headroom kept for run-to-run variance, and
+ * the stale line stays under the fastest run seen. A per-mechanism factor or a
+ * CPU-time measurement would be the honest instrument; until then an
+ * `OVER HEADROOM` or `STALE ENTRY` on such an entry is contention, and the
+ * remedy is to re-seed from both readings by the same rule.
  */
 export const LISTED_HEADROOM_FACTOR = 8;
 
@@ -152,11 +156,21 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/agent-skills/test/skill-source/url-source.test.ts', measuredMs: 11311, mechanisms: [MECHANISM.tempTree, MECHANISM.git] },
   { file: 'packages/lab/test/parse-capture.test.ts', measuredMs: 10677, mechanisms: [MECHANISM.tempTree, MECHANISM.workerPool] },
   { file: 'packages/cli/test/utils/projection-store.test.ts', measuredMs: 10225, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal, MECHANISM.projection] },
+  // Re-seeded from two consecutive full turbo unit tiers (8 789 / 10 031 ms);
+  // 416 ms serially — a 21× contention swing on a git-spawning file, well past
+  // the 2–4× the header describes for small files. Wall-clock under turbo is a
+  // poor instrument for spawn-heavy files; see the `LISTED_HEADROOM_FACTOR` note.
+  { file: 'packages/utils/test/git-tracker-snapshot-priming.test.ts', measuredMs: 8789, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn] },
   { file: 'packages/dev-tools/test/validate-repo-structure.test.ts', measuredMs: 7647, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal] },
   { file: 'packages/agent-skills/test/skill-test/run-harness-grading-nonce.test.ts', measuredMs: 6732, mechanisms: [MECHANISM.unclassified], note: 'runs the skill-test harness end to end against a fixture harness dir (real files, forged-grading cases)' },
   { file: 'packages/lab/test/io-capture.test.ts', measuredMs: 5699, mechanisms: [MECHANISM.tempTree, MECHANISM.git] },
   { file: 'packages/resources/test/parse-pool.test.ts', measuredMs: 5480, mechanisms: [MECHANISM.tempTree, MECHANISM.workerPool] },
   { file: 'packages/claude-marketplace/test/permission-matcher.test.ts', measuredMs: 5430, mechanisms: [MECHANISM.tempTree, MECHANISM.git] },
+  // Generalised from the commands-import-boundary ratchet test to a table over
+  // three allowlists (~170 files linted with a bare parser). Seeded from the
+  // full turbo unit tier (4 663 ms); it reads 1 227 ms serially — the 3.8×
+  // swing the header describes.
+  { file: 'packages/dev-tools/test/eslint-allowlist-ratchets.test.ts', measuredMs: 4663, mechanisms: [MECHANISM.eslint] },
   { file: 'packages/cli/test/commands/corpus/runner.test.ts', measuredMs: 3709, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal, MECHANISM.spawn] },
   { file: 'packages/resources/test/projection-resource-population.test.ts', measuredMs: 3488, mechanisms: [MECHANISM.git, MECHANISM.projection] },
   { file: 'packages/lab/test/perf-capture.test.ts', measuredMs: 3472, mechanisms: [MECHANISM.unclassified], note: 'repeats real child-process runs to build the statistic under test' },
@@ -166,11 +180,6 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/resources/test/projection-store-unlistable-freshness.test.ts', measuredMs: 2729, mechanisms: [MECHANISM.git, MECHANISM.refusal, MECHANISM.projection] },
   { file: 'packages/dev-tools/test/local-eslint-rule-enablement.test.ts', measuredMs: 2516, mechanisms: [MECHANISM.eslint] },
   { file: 'packages/cli/test/commands/inventory-shared-registry.test.ts', measuredMs: 2173, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal] },
-  // Re-seeded from two consecutive full turbo unit tiers (8 789 / 10 031 ms);
-  // 416 ms serially — a 21× contention swing on a git-spawning file, well past
-  // the 2–4× the header describes for small files. Wall-clock under turbo is a
-  // poor instrument for spawn-heavy files; see the `LISTED_HEADROOM_FACTOR` note.
-  { file: 'packages/utils/test/git-tracker-snapshot-priming.test.ts', measuredMs: 8789, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn] },
   { file: 'packages/claude-marketplace/test/inventory/extract-skill.test.ts', measuredMs: 1999, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal] },
   { file: 'packages/resources/test/projection-blob-population-pool.test.ts', measuredMs: 1991, mechanisms: [MECHANISM.workerPool, MECHANISM.projection] },
   { file: 'packages/claude-marketplace/test/projection-plugin-extent.test.ts', measuredMs: 1985, mechanisms: [MECHANISM.projection] },
@@ -181,12 +190,9 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/utils/test/git-run.test.ts', measuredMs: 1686, mechanisms: [MECHANISM.git, MECHANISM.spawn] },
   { file: 'packages/discovery/test/local-scanner.test.ts', measuredMs: 1591, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal, MECHANISM.spawn] },
   { file: 'packages/rag-lancedb/test/barrel-exports.test.ts', measuredMs: 1432, mechanisms: [MECHANISM.nativeModel], note: 'importing the barrel loads the native lancedb runtime' },
-  // Seeded from the parallel CI validate run: 234 ms serial (coverage job), 5.6× under turbo contention.
-  { file: 'packages/projection-sqlite/test/query.test.ts', measuredMs: 1312, mechanisms: [MECHANISM.unclassified], note: 'opens an ephemeral node:sqlite store and writes two blobs per test, 67 tests' },
-  // Seeded from the serial, coverage-instrumented CI run (`test:coverage`).
   { file: 'packages/cli/test/org-skills-adopter-findings.test.ts', measuredMs: 1242, mechanisms: [MECHANISM.tempTree], note: 'hover entry: import of the org/skills command module dominates' },
-  { file: 'packages/projection-sqlite/test/barrel-exports.test.ts', measuredMs: 1160, mechanisms: [MECHANISM.unclassified], note: 'importing the barrel opens node:sqlite' },
   { file: 'packages/lab/test/repeat.test.ts', measuredMs: 1166, mechanisms: [MECHANISM.unclassified], note: 'spawns a probe child process per repeat to record clear/run ordering' },
+  { file: 'packages/projection-sqlite/test/barrel-exports.test.ts', measuredMs: 1160, mechanisms: [MECHANISM.unclassified], note: 'importing the barrel opens node:sqlite' },
   { file: 'packages/projection-sqlite/test/store.test.ts', measuredMs: 1126, mechanisms: [MECHANISM.tempTree, MECHANISM.git] },
   { file: 'packages/cli/test/commands/skills/build-run-ledger.test.ts', measuredMs: 1090, mechanisms: [MECHANISM.tempTree] },
   { file: 'packages/agent-skills/test/skill-packager.test.ts', measuredMs: 1005, mechanisms: [MECHANISM.tempTree, MECHANISM.refusal] },
@@ -194,18 +200,17 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/lab/test/git-state.test.ts', measuredMs: 896, mechanisms: [MECHANISM.tempTree, MECHANISM.git] },
   { file: 'packages/resources/test/resource-registry-pool.test.ts', measuredMs: 890, mechanisms: [MECHANISM.workerPool] },
   { file: 'packages/resource-compiler/test/cli/stdio-blocking.test.ts', measuredMs: 870, mechanisms: [MECHANISM.spawn] },
-  // Generalised from the commands-import-boundary ratchet test to a table over
-  // three allowlists (~170 files linted with a bare parser). Seeded from the
-  // full turbo unit tier (4 663 ms); it reads 1 227 ms serially — the 3.8×
-  // swing the header describes.
-  { file: 'packages/dev-tools/test/eslint-allowlist-ratchets.test.ts', measuredMs: 4663, mechanisms: [MECHANISM.eslint] },
+  { file: 'packages/utils/test/eslint/rules/no-raw-node-path.test.ts', measuredMs: 764, mechanisms: [MECHANISM.eslint], note: 'RuleTester over every safePath spelling; contention seed: 3055 ms in the parallel enforcer, 536 ms alone; listed at max(alone, parallel/4)' },
   { file: 'packages/resources/test/projection-content-promotion-guard.test.ts', measuredMs: 701, mechanisms: [MECHANISM.git, MECHANISM.projection] },
+  { file: 'packages/resources/test/link-parser.test.ts', measuredMs: 623, mechanisms: [MECHANISM.tempTree], note: '101 parser cases; contention seed: 2491 ms in the parallel enforcer, 288 ms alone; listed at max(alone, parallel/4)' },
   { file: 'packages/resources/test/projection-git-extent-symlink.test.ts', measuredMs: 585, mechanisms: [MECHANISM.git, MECHANISM.symlinks] },
   { file: 'packages/resources/test/parser-unavailable-error.test.ts', measuredMs: 569, mechanisms: [MECHANISM.refusal] },
   { file: 'packages/cli/test/commands/audit/nested-skill-crawl.test.ts', measuredMs: 556, mechanisms: [MECHANISM.tempTree] },
   { file: 'packages/resources/test/projection-filesystem-extent-symlink.test.ts', measuredMs: 552, mechanisms: [MECHANISM.symlinks] },
+  { file: 'packages/utils/test/eslint/autofix-fixpoint.test.ts', measuredMs: 545, mechanisms: [MECHANISM.tempTree, MECHANISM.eslint], note: 'runs the linter to a fixpoint per case; contention seed: 2177 ms in the parallel enforcer, 385 ms alone; listed at max(alone, parallel/4)' },
   { file: 'packages/resources/test/projection-untracked-symlink-extent.test.ts', measuredMs: 539, mechanisms: [MECHANISM.symlinks] },
   { file: 'packages/utils/test/timing-dump.test.ts', measuredMs: 524, mechanisms: [MECHANISM.tempTree, MECHANISM.workerPool] },
+  { file: 'packages/resources/test/parse-cache.test.ts', measuredMs: 509, mechanisms: [MECHANISM.tempTree, MECHANISM.projection], note: 'contention seed: 2033 ms in the parallel enforcer, 284 ms alone; listed at max(alone, parallel/4)' },
   { file: 'packages/utils/test/unreadable-policy-required.test.ts', measuredMs: 509, mechanisms: [MECHANISM.tempTree] },
   { file: 'packages/cli/test/commands/resources-check-payload.test.ts', measuredMs: 497, mechanisms: [MECHANISM.unclassified] },
   { file: 'packages/agent-skills/test/validators/packaging-validator.test.ts', measuredMs: 489, mechanisms: [MECHANISM.tempTree] },
@@ -213,16 +218,22 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/lab/test/run.test.ts', measuredMs: 454, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
   { file: 'packages/agent-skills/test/files-config.test.ts', measuredMs: 435, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal] },
   { file: 'packages/resources/test/okf/validate.test.ts', measuredMs: 425, mechanisms: [MECHANISM.refusal] },
+  { file: 'packages/rag-lancedb/test/index-resources-interrupted.test.ts', measuredMs: 420, mechanisms: [MECHANISM.nativeModel], note: 'contention seed: 1677 ms in the parallel enforcer, 197 ms alone; listed at max(alone, parallel/4)' },
   { file: 'packages/cli/test/commands/skills/validate-non-skill-discovered.test.ts', measuredMs: 415, mechanisms: [MECHANISM.tempTree] },
   { file: 'packages/vat-example-cat-agents/test/conversational-demo.test.ts', measuredMs: 395, mechanisms: [MECHANISM.unclassified] },
   { file: 'packages/agent-skills/test/projection-skill-extent.test.ts', measuredMs: 392, mechanisms: [MECHANISM.tempTree, MECHANISM.projection] },
   { file: 'packages/agent-skills/test/builder.test.ts', measuredMs: 391, mechanisms: [MECHANISM.tempTree] },
   { file: 'packages/agent-skills/test/validators/referenced-path-missing.test.ts', measuredMs: 372, mechanisms: [MECHANISM.tempTree] },
   { file: 'packages/cli/test/org-skill-upload-payload.test.ts', measuredMs: 367, mechanisms: [MECHANISM.tempTree] },
+  { file: 'packages/projection-sqlite/test/query.test.ts', measuredMs: 328, mechanisms: [MECHANISM.unclassified], note: 'opens an ephemeral node:sqlite store and writes two blobs per test, 67 tests; contention seed: 1312 ms in the parallel enforcer, 234 ms alone; listed at max(alone, parallel/4)' },
+  // Seeded from the serial, coverage-instrumented CI run (`test:coverage`).
+  { file: 'packages/agent-skills/test/skill-test/baseline-integrity.test.ts', measuredMs: 311, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn], note: '358 cases; contention seed: 1243 ms in the parallel enforcer, 267 ms alone; listed at max(alone, parallel/4)' },
+  { file: 'packages/utils/test/fs-utils.test.ts', measuredMs: 276, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn], note: 'contention seed: 1102 ms in the parallel enforcer, 121 ms alone; listed at max(alone, parallel/4)' },
+  { file: 'packages/rag/test/chunking/chunk-by-tokens.test.ts', measuredMs: 260, mechanisms: [MECHANISM.unclassified], note: 'pure chunker over a fake token counter; contention seed: 1037 ms in the parallel enforcer, 183 ms alone; listed at max(alone, parallel/4)' },
   { file: 'packages/cli/test/integration/cli-basics.integration.test.ts', measuredMs: 8109, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
+  // A typed program over the 23 `NO_UNSAFE_BACKLOG` files; measured serially.
+  { file: 'packages/dev-tools/test/integration/no-unsafe-backlog-ratchet.integration.test.ts', measuredMs: 7020, mechanisms: [MECHANISM.eslint] },
   { file: 'packages/cli/test/integration/multi-plugin-marketplace.integration.test.ts', measuredMs: 6135, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn] },
-  // Seeded from a local full gate at load 7: 800 ms alone, 7× under the parallel integration run.
-  { file: 'packages/resources/test/integration/crawl-source-parity.integration.test.ts', measuredMs: 5601, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.projection], note: 'populates a projection over a real temp tree through both crawl sources, 31 cases' },
   { file: 'packages/cli/test/integration/module-load-budget.integration.test.ts', measuredMs: 5489, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
   { file: 'packages/claude-marketplace/test/integration/inventory-extent-corpus.integration.test.ts', measuredMs: 5019, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.projection] },
   { file: 'packages/cli/test/integration/audit-git-url.integration.test.ts', measuredMs: 3833, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn] },
@@ -242,10 +253,11 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/resource-compiler/test/integration/transformer.integration.test.ts', measuredMs: 2091, mechanisms: [MECHANISM.tempTree] },
   { file: 'packages/projection-sqlite/test/integration/store-sharing.integration.test.ts', measuredMs: 2068, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn, MECHANISM.projection] },
   { file: 'packages/dev-tools/test/integration/dist-visibility.integration.test.ts', measuredMs: 2067, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
-  // A typed program over the 23 `NO_UNSAFE_BACKLOG` files; measured serially.
-  { file: 'packages/dev-tools/test/integration/no-unsafe-backlog-ratchet.integration.test.ts', measuredMs: 7020, mechanisms: [MECHANISM.eslint] },
   { file: 'packages/cli/test/integration/audit-unloadable-config.integration.test.ts', measuredMs: 2066, mechanisms: [MECHANISM.tempTree, MECHANISM.refusal] },
   { file: 'packages/utils/test/integration/safe-exec.integration.test.ts', measuredMs: 2044, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal, MECHANISM.spawn] },
+  { file: 'packages/utils/test/integration/git-ignore-oracle-parity.integration.test.ts', measuredMs: 1787, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn], note: 'git check-ignore oracle over 12 planted trees; contention seed: 7148 ms in the parallel enforcer, 1173 ms alone; listed at max(alone, parallel/4)' },
+  { file: 'packages/resources/test/integration/crawl-source-parity.integration.test.ts', measuredMs: 1401, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.projection], note: 'populates a projection over a real temp tree through both crawl sources, 31 cases; contention seed: 5601 ms in the parallel enforcer, 800 ms alone; listed at max(alone, parallel/4)' },
+  { file: 'packages/utils/test/integration/git-utils.integration.test.ts', measuredMs: 1390, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn], note: 'contention seed: 5557 ms in the parallel enforcer, 769 ms alone; listed at max(alone, parallel/4)' },
   { file: 'packages/rag-lancedb/test/system/large-scale-filtering.system.test.ts', measuredMs: 45287, mechanisms: [MECHANISM.nativeModel] },
   { file: 'packages/cli/test/system/claude-context.system.test.ts', measuredMs: 16926, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
 ];
