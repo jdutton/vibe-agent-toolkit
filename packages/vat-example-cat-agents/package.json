@@ -40,7 +40,7 @@
   },
   "devDependencies": {
     "@ai-sdk/openai": "^3.0.18",
-    "@anthropic-ai/sdk": "^0.36.0",
+    "@anthropic-ai/sdk": "^0.125.0",
     "@langchain/openai": "^1.5.11",
     "@vibe-agent-toolkit/resource-compiler": "workspace:*",
     "@vibe-agent-toolkit/runtime-claude-agent-sdk": "workspace:*",
