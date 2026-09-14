@@ -99,9 +99,9 @@ export default defineConfig({
       // regression to fix, or an exclusion to justify in place.
       thresholds: {
         statements: 82,
-        branches: 76,
+        branches: 77,
         functions: 86,
-        lines: 82,
+        lines: 83,
         autoUpdate: process.env['COVERAGE_RATCHET'] === 'write' ? (measured: number) => Math.floor(measured) : false,
       },
     },
