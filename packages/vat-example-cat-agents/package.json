@@ -47,7 +47,7 @@
     "@vibe-agent-toolkit/runtime-langchain": "workspace:*",
     "@vibe-agent-toolkit/runtime-openai": "workspace:*",
     "ai": "^6.0.48",
-    "openai": "^4.77.3"
+    "openai": "^6.49.0"
   },
   "vat": {
     "version": "1.0",
