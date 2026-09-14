@@ -179,7 +179,7 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   // floor run that read 15–20 % slower than the one before it, so the next such run crosses.
   { file: 'packages/resource-compiler/test/integration/transformer.integration.test.ts', measuredMs: 4953, mechanisms: [MECHANISM.tempTree], note: 'a real TypeScript program per case; 4008 and 4953 ms on the floor' },
   { file: 'packages/cli/test/integration/audit-git-url.integration.test.ts', measuredMs: 4906, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn], note: 'a real bare repo cloned by the audit pipeline; 4226 and 4906 ms on the floor' },
-  // System: bootstrapped from a local serial run; the coverage job's system step (after the
-  // integration step first passes) is the measurement to re-seed from.
-  { file: 'packages/rag-lancedb/test/system/large-scale-filtering.system.test.ts', measuredMs: 43119, mechanisms: [MECHANISM.nativeModel] },
+  // System: seeded from the coverage job's first serial run on the floor.
+  { file: 'packages/rag-lancedb/test/system/large-scale-filtering.system.test.ts', measuredMs: 60112, mechanisms: [MECHANISM.nativeModel], note: '43119 ms local serial' },
+  { file: 'packages/cli/test/system/claude-context.system.test.ts', measuredMs: 36487, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn], note: '26 spawned `vat claude context` runs; 15188 ms local serial' },
 ];
