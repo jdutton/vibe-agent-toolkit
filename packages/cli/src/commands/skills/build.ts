@@ -774,7 +774,7 @@ export function buildYamlSummary(
  * drop this command exists to prevent, so the number a `publish: false` removed
  * from `skillsBuilt` must be visible where a consumer reads the count.
  */
-function buildBuildDocument(
+export function buildBuildDocument(
   run: SkillBuildRun,
   skillsInPlaceNames: readonly string[],
   duration: number,
@@ -825,7 +825,7 @@ function buildBuildDocument(
  * megabytes on a large project. The key ORDER here is the document's order; the
  * split is presentation only and adds nothing the document does not carry.
  */
-function outputBuildYaml(document: Record<string, unknown>): void {
+export function outputBuildYaml(document: Record<string, unknown>): void {
   const {
     status, skillsBuilt, skillsInPlace, skillsFailed, skillsFailedValidation, skillsWithErrors, outputCommitted,
     duration: durationText, ...body
@@ -1279,7 +1279,7 @@ export interface BuildSkillSpec {
  * halves keep discovery order, so the human and machine reports list them as
  * the globs found them.
  */
-function partitionInPlaceSkills(
+export function partitionInPlaceSkills(
   skills: readonly DiscoveredSkill[],
   skillsConfig: SkillsConfig,
 ): { buildSpecs: BuildSkillSpec[]; inPlace: BuildSkillSpec[] } {
@@ -1304,7 +1304,7 @@ const IN_PLACE_NAMES_SHOWN = 10;
  * "0 in-place" line on every build is noise that trains readers to skip the line
  * that matters.
  */
-function logInPlaceSkills(inPlace: readonly BuildSkillSpec[], logger: ReturnType<typeof createLogger>): void {
+export function logInPlaceSkills(inPlace: readonly BuildSkillSpec[], logger: ReturnType<typeof createLogger>): void {
   if (inPlace.length === 0) return;
   const names = inPlace.map((spec) => spec.skill.name);
   const shown = names.slice(0, IN_PLACE_NAMES_SHOWN).join(', ');
@@ -1312,6 +1312,24 @@ function logInPlaceSkills(inPlace: readonly BuildSkillSpec[], logger: ReturnType
   logger.info(
     `Skipping ${inPlace.length} in-place skill(s) (publish: false — validated at source, never bundled): ${shown}${more}`,
   );
+}
+
+/**
+ * `--skill x` on an in-place skill is a contradiction, not a silent skip: exit 1
+ * naming the key that makes it one. (The one-skill filter leaves only that skill.)
+ */
+export function inPlaceSkillRefusal(skill: string | undefined, inPlace: readonly BuildSkillSpec[]): Error | undefined {
+  if (skill === undefined || inPlace.length === 0) return undefined;
+  return new Error(
+    `Skill "${skill}" is an in-place skill (skills.config.${skill}.publish is false, `
+      + 'directly or via skills.defaults.publish): vat build never bundles it, so there is no bundle to build. '
+      + 'Set publish: true to distribute it through dist/skills, or drop --skill.',
+  );
+}
+
+export function formatBuiltSuccessLine(built: number, inPlace: number): string {
+  return `\nBuilt ${built} skill(s) successfully`
+    + (inPlace === 0 ? '' : ` (${inPlace} in-place skill(s) not bundled)`);
 }
 
 /**
@@ -1672,15 +1690,9 @@ export async function runSkillsBuildPhase(
       skillsConfig,
     );
 
-    // An explicit request for a bundle the config says does not exist is a
-    // contradiction, not a silent skip: `--skill x` on an in-place skill exits 1
-    // naming the key that makes it one. (The one-skill filter above guarantees
-    // that if `--skill` was given, everything left is that skill.)
-    if (options.skill !== undefined && inPlace.length > 0) {
-      const message = `Skill "${options.skill}" is an in-place skill (skills.config.${options.skill}.publish is false, `
-        + 'directly or via skills.defaults.publish): vat build never bundles it, so there is no bundle to build. '
-        + 'Set publish: true to distribute it through dist/skills, or drop --skill.';
-      return { document: reportCommandError(new Error(message), logger, startTime, 'SkillsBuild'), exitCode: 1, failed: true };
+    const refusal = inPlaceSkillRefusal(options.skill, inPlace);
+    if (refusal !== undefined) {
+      return { document: reportCommandError(refusal, logger, startTime, 'SkillsBuild'), exitCode: 1, failed: true };
     }
 
     logInPlaceSkills(inPlace, logger);
@@ -1736,10 +1748,7 @@ export async function runSkillsBuildPhase(
       return { document, exitCode: 1 };
     }
 
-    logger.info(
-      `\nBuilt ${run.results.length} skill(s) successfully`
-      + (inPlace.length === 0 ? '' : ` (${inPlace.length} in-place skill(s) not bundled)`),
-    );
+    logger.info(formatBuiltSuccessLine(run.results.length, inPlace.length));
 
     return { document, exitCode: 0 };
   } catch (error) {

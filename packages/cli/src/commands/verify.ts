@@ -926,14 +926,20 @@ export function runPackagedContentPhase(
   discoveredSkills: readonly DiscoveredSkill[],
   logger: ReturnType<typeof createLogger>,
 ): PackagedContentPhaseResult {
-  const crawl = checkPackagedAgentInstructionFiles(projectRoot, discoveredSkills);
-  const phase = buildPackagedContentPhase(crawl);
+  const phase = buildPackagedContentPhase(checkPackagedAgentInstructionFiles(projectRoot, discoveredSkills));
+  reportPackagedContentPhase(phase, logger);
+  return phase;
+}
+
+export function reportPackagedContentPhase(
+  phase: PackagedContentPhaseResult,
+  logger: ReturnType<typeof createLogger>,
+): void {
   if (phase.issues.length > 0) {
     reportPackagedContentIssues(asValidationIssues(phase.issues), logger);
   } else if (phase.bundlesExpected === 0 && phase.bundlesInspected === 0) {
     logger.info(`\n▶ Phase: ${PACKAGED_CONTENT} — nothing to inspect: all ${phase.bundlesInPlace} discovered skill(s) are in place (publish: false)`);
   }
-  return phase;
 }
 
 /**
