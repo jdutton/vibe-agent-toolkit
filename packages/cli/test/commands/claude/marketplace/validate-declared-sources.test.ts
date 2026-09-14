@@ -331,6 +331,47 @@ async function expectRefusedWithoutLeaving(root: string, source: string): Promis
   }
 }
 
+/** Marketplace under `tmp/name` whose plugin `a` has `skills/s/SKILL.md` linking `../shared.md`, with a config at its root. */
+async function boundaryFindings(tmp: string, name: string, severityYaml: string): Promise<{ exitCode: number; found: VerboseIssue[] }> {
+  const root = safePath.join(tmp, name);
+  writeMarketplace(root, [DECLARED_A]);
+  writePlugin(safePath.join(root, PLUGIN_A), 'a');
+  const skillsDir = safePath.join(root, PLUGIN_A, 'skills');
+  mkdirSyncReal(safePath.join(skillsDir, 's'), { recursive: true });
+  writeFileSync(safePath.join(skillsDir, 'shared.md'), '# Shared\n');
+  writeFileSync(
+    safePath.join(skillsDir, 's', 'SKILL.md'),
+    '---\nname: s\ndescription: A skill whose one link leaves its own directory for a shared doc.\n---\n\n# S\n\nSee [shared](../shared.md).\n',
+  );
+  writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), `skills:\n  include: ['none/SKILL.md']\n  defaults:\n    validation:\n${severityYaml}`);
+
+  const { exitCode, doc } = await validate(root, true);
+  return { exitCode, found: (doc['issues'] as VerboseIssue[]).filter((i) => i.code === 'LINK_OUTSIDE_SKILL_DIR') };
+}
+
+describe('marketplace validate — a plugin skill\'s severity is resolved where the skill is validated', () => {
+  let tmp: string;
+
+  beforeAll(() => {
+    tmp = safePath.resolve(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-mp-skill-severity-')));
+  });
+
+  afterAll(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('is silent on a link out of the skill directory by default', async () => {
+    const { found } = await boundaryFindings(tmp, 'default', '      severity:\n        LINK_OUTSIDE_PROJECT: error\n');
+    expect(found).toEqual([]);
+  });
+
+  it('raises a default-ignore code to error from skills.defaults.validation.severity', async () => {
+    const { exitCode, found } = await boundaryFindings(tmp, 'strict', '      severity:\n        LINK_OUTSIDE_SKILL_DIR: error\n');
+    expect(found.map((i) => i.severity)).toEqual(['error']);
+    expect(exitCode).toBe(1);
+  });
+});
+
 describe('marketplace validate — a declared source never leaves the marketplace root', () => {
   let tmp: string;
   /** A real plugin OUTSIDE every marketplace root below — the thing a leak reaches. */

@@ -296,7 +296,7 @@ type LinkedFileWalkRecord = Omit<LinkedFileValidationResult, 'issues'>;
  * Traverse links from SKILL.md using BFS, validating each link target.
  *
  * - Missing file -> LINK_INTEGRITY_BROKEN error
- * - Outside skill directory -> LINK_OUTSIDE_SKILL_DIR warning (default; the
+ * - Outside skill directory -> LINK_OUTSIDE_SKILL_DIR (default `ignore`; the
  *   adopter's `validation.severity` decides)
  * - Existing .md file -> recurse (add to BFS queue)
  * - Non-markdown asset -> existence check only

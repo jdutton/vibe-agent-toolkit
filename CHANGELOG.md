@@ -36,7 +36,8 @@ with a regression test.
 
 - **`vat skill test run` folds its five exit codes into the shared three**: a failed eval is `1`
   (was `4`); every way the harness could not run is `2` (was `1`/`2`/`3`) with a `Reason: internal |
-  preflight | bootstrap` line on stderr. `SkillTestExitCode` and `mapErrorToExitCode` are gone.
+  preflight | bootstrap` line on stderr. A CI step that tolerates `4` as "evals failed" must now match
+  `1`. `SkillTestExitCode` and `mapErrorToExitCode` are gone.
 
 - **`vat skill review` exits `0` on warnings alone** (was `1`); the new `--strict` promotes them to `1`.
 
@@ -197,9 +198,11 @@ with a regression test.
 - **`skills.defaults.publish` is now honoured by the consistency check**, so a project-wide
   `publish: false` yields `SKILL_UNPUBLISHED` (info) instead of `PUBLISHED_SKILL_NOT_IN_*` errors. A
   plugin `skills:` selector matching only in-place skills is now `PLUGIN_REFERENCES_UNKNOWN_SKILL`.
-- **The "link points outside the skill directory" warning is now `LINK_OUTSIDE_SKILL_DIR`**;
-  `LINK_OUTSIDE_PROJECT` now means only a link escaping the project root. Re-key any
-  `validation.severity` / `validation.allow` entry that targeted the skill-directory warning.
+- **The "link points outside the skill directory" warning is now `LINK_OUTSIDE_SKILL_DIR`, default
+  `ignore`** (bundled, link rewritten). For a self-contained skill set it to `error` in
+  `validation.severity` under `skills.config.<name>` or `skills.defaults`: validate and build fail,
+  plugin-local skills included. `LINK_OUTSIDE_PROJECT` now means only a project-root escape — re-key
+  an override on it that was meant for the skill-directory warning.
 
 #### RAG (library)
 

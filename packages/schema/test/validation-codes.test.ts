@@ -27,7 +27,7 @@ describe('CODE_REGISTRY', () => {
     ];
     for (const code of expected) {
       expect(CODE_REGISTRY[code], `registry missing ${code}`).toBeDefined();
-      expect(CODE_REGISTRY[code].defaultSeverity).toMatch(/^(error|warning|info)$/);
+      expect(CODE_REGISTRY[code].defaultSeverity).toMatch(/^(error|warning|info|ignore)$/);
       expect(CODE_REGISTRY[code].description.length).toBeGreaterThan(10);
       expect(CODE_REGISTRY[code].fix.length).toBeGreaterThan(10);
       expect(CODE_REGISTRY[code].reference).toMatch(/^#/);
@@ -37,9 +37,9 @@ describe('CODE_REGISTRY', () => {
   it('enforces expected defaults for link codes', () => {
     expect(CODE_REGISTRY.LINK_OUTSIDE_PROJECT.defaultSeverity).toBe('error');
     // Two boundaries, two codes: the project-root escape cannot be right
-    // (error); leaving the skill directory is VAT's self-containment stance,
-    // which an adopter may raise or drop (warning).
-    expect(CODE_REGISTRY.LINK_OUTSIDE_SKILL_DIR.defaultSeverity).toBe('warning');
+    // (error); leaving the skill directory is bundled and rewritten unless an
+    // adopter raises it to demand a self-contained skill (ignore).
+    expect(CODE_REGISTRY.LINK_OUTSIDE_SKILL_DIR.defaultSeverity).toBe('ignore');
     expect(CODE_REGISTRY.LINK_TARGETS_DIRECTORY.defaultSeverity).toBe('error');
     expect(CODE_REGISTRY.LINK_TO_NAVIGATION_FILE.defaultSeverity).toBe('warning');
     // A README is content at the wrong granularity (warning); a CLAUDE.md is

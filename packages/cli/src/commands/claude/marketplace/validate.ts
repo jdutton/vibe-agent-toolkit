@@ -126,6 +126,7 @@ async function validatePluginSkills(
   pluginDir: string,
   marketplacePath: string,
   boundary: WalkBoundary,
+  validation: ValidationConfig | undefined,
 ): Promise<ValidationIssue[]> {
   const skillsDir = safePath.join(pluginDir, 'skills');
   if (!existsSync(skillsDir) || !boundary.contains(skillsDir)) return [];
@@ -140,8 +141,9 @@ async function validatePluginSkills(
     const skillMdPath = safePath.join(skillDir, 'SKILL.md');
     if (!existsSync(skillMdPath) || !boundary.contains(skillMdPath)) continue;
 
-    // `{}`: the caller resolves severity, as for every other marketplace finding.
-    const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir, locationRoot: marketplacePath, validation: {} });
+    // Severity only (no `allow`), resolved here so a default-`ignore` code can still be raised.
+    const severity = validation?.severity === undefined ? {} : { severity: validation.severity };
+    const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir, locationRoot: marketplacePath, validation: severity });
     issues.push(...skillResult.issues);
   }
 
@@ -298,8 +300,7 @@ async function validateDeclaredPlugins(
     pluginResults.push({ ...entry, result });
     issues.push(...result.issues);
 
-    const skillIssues = await validatePluginSkills(dir.lexical, marketplacePath, boundary);
-    issues.push(...resolveIssueSeverity(skillIssues, validation));
+    issues.push(...await validatePluginSkills(dir.lexical, marketplacePath, boundary, validation));
   }
 
   return {

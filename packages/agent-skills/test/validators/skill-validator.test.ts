@@ -132,8 +132,16 @@ async function validateSkillLinkingOutsideItsDir(tempDir: string, validation: Va
 describe('transitive link traversal — boundary escape', () => {
   const { getTempDir } = setupTempDir('skill-boundary-');
 
-  it('reports LINK_OUTSIDE_SKILL_DIR (warning by default) for a link leaving the skill directory to an EXISTING target', async () => {
+  it('is silent by default for a link leaving the skill directory to an EXISTING target', async () => {
     const result = await validateSkillLinkingOutsideItsDir(getTempDir(), {});
+
+    expect(findIssues(result, 'LINK_OUTSIDE_SKILL_DIR')).toHaveLength(0);
+    expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
+    expect(result.status).toBe('success');
+  });
+
+  it('validation.severity.LINK_OUTSIDE_SKILL_DIR: warning reports the boundary escape', async () => {
+    const result = await validateSkillLinkingOutsideItsDir(getTempDir(), { severity: { LINK_OUTSIDE_SKILL_DIR: 'warning' } });
 
     const issues = findIssues(result, 'LINK_OUTSIDE_SKILL_DIR');
     expect(issues).toHaveLength(1);
@@ -142,11 +150,8 @@ describe('transitive link traversal — boundary escape', () => {
     expect(issues[0]?.link).toBe('../sibling.md');
     expect(issues[0]?.reference).toBe('#link_outside_skill_dir');
     expect(result.status).toBe('warning');
-    // The skill-directory boundary is THIS lane's; the project-root escape
-    // (`LINK_OUTSIDE_PROJECT`) belongs to the packaging walker and never fires
-    // here — one code per boundary.
+    // One code per boundary: the project-root escape never fires for a target inside the project.
     expect(findIssues(result, 'LINK_OUTSIDE_PROJECT')).toHaveLength(0);
-    expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
   });
 
   it('validation.severity.LINK_OUTSIDE_SKILL_DIR: error makes the boundary escape fail the validation', async () => {
@@ -159,21 +164,16 @@ describe('transitive link traversal — boundary escape', () => {
     expect(result.issueCounts.errors).toBe(1);
   });
 
-  it('validation.severity.LINK_OUTSIDE_SKILL_DIR: ignore silences the boundary escape', async () => {
-    const result = await validateSkillLinkingOutsideItsDir(getTempDir(), { severity: { LINK_OUTSIDE_SKILL_DIR: 'ignore' } });
+  it('validation.severity.LINK_OUTSIDE_PROJECT does not reach the skill-directory boundary', async () => {
+    const result = await validateSkillLinkingOutsideItsDir(getTempDir(), { severity: { LINK_OUTSIDE_PROJECT: 'error' } });
 
     expect(findIssues(result, 'LINK_OUTSIDE_SKILL_DIR')).toHaveLength(0);
     expect(result.status).toBe('success');
   });
 
-  it('validation.severity.LINK_OUTSIDE_PROJECT does not reach the skill-directory boundary', async () => {
-    const result = await validateSkillLinkingOutsideItsDir(getTempDir(), { severity: { LINK_OUTSIDE_PROJECT: 'ignore' } });
-
-    expect(findIssues(result, 'LINK_OUTSIDE_SKILL_DIR').map(i => i.severity)).toEqual(['warning']);
-  });
-
-  it('validation.allow suppresses the boundary escape for a matching path and records nothing unused', async () => {
+  it('validation.allow suppresses a raised boundary escape for a matching path and records nothing unused', async () => {
     const result = await validateSkillLinkingOutsideItsDir(getTempDir(), {
+      severity: { LINK_OUTSIDE_SKILL_DIR: 'error' },
       allow: { LINK_OUTSIDE_SKILL_DIR: [{ paths: ['**/*'], reason: 'cross-links are intentional in this skill' }] },
     });
 

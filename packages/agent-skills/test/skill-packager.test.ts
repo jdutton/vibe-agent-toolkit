@@ -1557,3 +1557,45 @@ describe('synthesizeAssetId', () => {
     expect(id).toBe(`asset::${toForwardSlash(safePath.resolve('/a/b/c.yaml'))}`);
   });
 });
+
+// ============================================================================
+// LINK_OUTSIDE_SKILL_DIR — the packager's own link receipt, so a lane with no
+// pre-build source pass (a plugin-local skill) still honours a raised severity
+// ============================================================================
+
+const OUTSIDE_CODE = 'LINK_OUTSIDE_SKILL_DIR';
+
+/** A skill in `<tmp>/skill/` linking `../shared.md`, packaged at `severity` (undefined = registry default). */
+async function packOutsideLink(severity: 'error' | 'warning' | undefined) {
+  const tmp = getTempDir();
+  // The project root the packager bounds `LINK_OUTSIDE_PROJECT` by — without it the skill dir is the root.
+  await writeFile(safePath.join(tmp, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+  await writeFile(safePath.join(tmp, 'shared.md'), '# Shared');
+  const skillDir = safePath.join(tmp, 'skill');
+  await mkdir(skillDir, { recursive: true });
+  const sp = await writeSkillMd(skillDir, UNIT_SKILL_NAME, 'See [shared](../shared.md).');
+  const result = await packWithOutput(sp, severity === undefined ? {} : { validation: { severity: { [OUTSIDE_CODE]: severity } } });
+  return { result, issues: (result.postBuildIssues ?? []).filter(i => i.code === OUTSIDE_CODE) };
+}
+
+describe('packageSkill - LINK_OUTSIDE_SKILL_DIR receipt', () => {
+
+  it.each([
+    ['error', true],
+    ['warning', false],
+  ] as const)('emits it at %s (hasErrors %s) and still bundles the target', async (severity, hasErrors) => {
+    const { result, issues } = await packOutsideLink(severity);
+
+    expect(issues.map(i => i.severity)).toEqual([severity]);
+    expect(toForwardSlash(issues[0]?.location ?? '')).toBe('skill/SKILL.md');
+    expect(result.hasErrors).toBe(hasErrors);
+    expect(result.files.dependencies.some(d => d.endsWith('shared.md'))).toBe(true);
+  });
+
+  it('emits nothing at the registry default', async () => {
+    const { result, issues } = await packOutsideLink(undefined);
+
+    expect(issues).toEqual([]);
+    expect(result.hasErrors).toBe(false);
+  });
+});

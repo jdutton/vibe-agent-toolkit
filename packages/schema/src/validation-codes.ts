@@ -11,7 +11,7 @@
 
 import { z } from 'zod';
 
-import { SEVERITIES, type Severity } from './severity.js';
+import { SEVERITIES } from './severity.js';
 
 /**
  * A resolved issue's severity: the published vocabulary plus `ignore`, the
@@ -25,7 +25,7 @@ export const IssueSeveritySchema = z.enum([...SEVERITIES, 'ignore']);
 export type IssueSeverity = z.infer<typeof IssueSeveritySchema>;
 
 export interface CodeRegistryEntry {
-  defaultSeverity: Severity;
+  defaultSeverity: IssueSeverity;
   description: string;
   fix: string;
   /** Stable anchor into docs/validation-codes.md (e.g. '#link_outside_project'). */
@@ -33,7 +33,7 @@ export interface CodeRegistryEntry {
 }
 
 const entry = (
-  defaultSeverity: Severity,
+  defaultSeverity: IssueSeverity,
   description: string,
   fix: string,
   anchor: string,
@@ -46,14 +46,14 @@ export const CODE_REGISTRY = {
     'Move the target inside the project or remove the link. Use validation.allow if the reference is intentional and cross-project.',
     'link_outside_project',
   ),
-  // The SKILL-DIRECTORY boundary (source-level `validateSkill`), deliberately a
-  // separate key from the PROJECT-ROOT escape above (the packaging walker), so
-  // an adopter can raise or drop one without moving the other. `warning`:
-  // self-containment is VAT's stance, not a defect — the link resolves fine.
+  // The SKILL-DIRECTORY boundary, deliberately a separate key from the
+  // PROJECT-ROOT escape above, so an adopter can raise one without moving the
+  // other. `ignore`: the packager bundles the target and rewrites the link, so
+  // only a skill that must be self-contained raises it.
   LINK_OUTSIDE_SKILL_DIR: entry(
-    'warning',
+    'ignore',
     "Markdown link resolves to a file outside the skill's directory (inside the project).",
-    'Move the target into the skill directory to keep the skill self-contained. Set validation.severity.LINK_OUTSIDE_SKILL_DIR to error to require self-contained skills, or to ignore to allow cross-links.',
+    'Move the target into the skill directory to keep the skill self-contained. By default the target is bundled and the link rewritten silently; set validation.severity.LINK_OUTSIDE_SKILL_DIR to error (per skill under skills.config.<name>.validation, or tree-wide under skills.defaults.validation) to make validate and build fail instead of bundling, or to warning to bundle and report.',
     'link_outside_skill_dir',
   ),
   LINK_TARGETS_DIRECTORY: entry(

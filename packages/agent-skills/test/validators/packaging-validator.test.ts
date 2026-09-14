@@ -990,6 +990,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 	it.each([
 		['an explicit LINK_OUTSIDE_PROJECT: error', { LINK_OUTSIDE_PROJECT: 'error' }],
 		['LINK_OUTSIDE_SKILL_DIR: ignore (the other boundary)', { LINK_OUTSIDE_SKILL_DIR: 'ignore' }],
+		['LINK_OUTSIDE_SKILL_DIR: error (a strict skill still reports one code per link)', { LINK_OUTSIDE_SKILL_DIR: 'error' }],
 	] as const)('emits LINK_OUTSIDE_PROJECT through the framework instead of OUTSIDE_PROJECT_BOUNDARY under %s', async (_label, severity) => {
 		// Create a skill that links outside the project boundary
 		// We use a path that goes above the temp dir (which is the project root here)
@@ -1006,6 +1007,36 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 
 		expect(activeErrorsOf(result).map(e => e.code)).toContain('LINK_OUTSIDE_PROJECT');
 		expect(activeErrorsOf(result).map(e => e.code)).not.toContain('OUTSIDE_PROJECT_BOUNDARY');
+		expect(result.allErrors.map(e => e.code)).not.toContain('LINK_OUTSIDE_SKILL_DIR');
+	});
+
+	// The skill-directory boundary on the PACKAGING lane: `skill/SKILL.md` links
+	// `../shared.md`, inside the project (the config marks its root). Default
+	// bundles it silently; a strict skill raises the severity.
+	it.each([
+		['the default (ignore): bundled, no finding', {}, [], 'success'],
+		['warning: bundled and reported', { LINK_OUTSIDE_SKILL_DIR: 'warning' }, ['warning'], 'success'],
+		['error: the skill must be self-contained', { LINK_OUTSIDE_SKILL_DIR: 'error' }, ['error'], 'error'],
+	] as const)('LINK_OUTSIDE_SKILL_DIR under %s', async (_label, severity, expectedSeverities, expectedStatus) => {
+		const tempDir = getTempDir();
+		const skillDir = safePath.join(tempDir, 'skill');
+		fs.mkdirSync(skillDir, { recursive: true });
+		fs.writeFileSync(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+		fs.writeFileSync(safePath.join(tempDir, 'shared.md'), '# Shared\n');
+		const { skillPath } = createTransitiveSkillStructure(skillDir, {}, createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			'\n# Test Skill\n\nSee [shared](../shared.md).',
+		));
+
+		const result = await validateSkillForPackaging(skillPath, { validation: { severity } });
+
+		const boundary = result.allErrors.filter(e => e.code === 'LINK_OUTSIDE_SKILL_DIR');
+		expect(boundary.map(e => e.severity)).toEqual(expectedSeverities);
+		expect(boundary.map(e => [e.location, e.link])).toEqual(expectedSeverities.map(() => ['skill/SKILL.md', '../shared.md']));
+		expect(result.status).toBe(expectedStatus);
+		expect(result.allErrors.map(e => e.code)).not.toContain('LINK_OUTSIDE_PROJECT');
+		// Bundled whatever the severity: the verdict gates the build, not the walk.
+		expect(result.metadata.fileCount).toBe(2);
 	});
 
 	it('navigational directory link produces no error and needs no allow entry', async () => {

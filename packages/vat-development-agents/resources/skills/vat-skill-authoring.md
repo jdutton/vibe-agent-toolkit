@@ -78,7 +78,9 @@ A short `## References` section at the bottom is the canonical place to list lin
 
 Avoid linking to navigation files (`README.md`, `index.md`) — they're excluded from the bundle and the link resolves to nothing (`LINK_TO_NAVIGATION_FILE`).
 
-A link out of the skill directory to a file still inside the project fires `LINK_OUTSIDE_SKILL_DIR` (warning) from the config-free skill validator (`vat audit` on an undeclared skill, `vat claude marketplace validate`, `vat skills package`, `vat skills install`); the packaging lane (`vat skills validate`, `vat build`) bundles such a file instead. Where a config applies (`vat audit`, marketplace validate), set its `validation.severity` to `error` to require self-contained skills, or `ignore` to allow cross-links. A link out of the project root is `LINK_OUTSIDE_PROJECT` (error), a separate code.
+A link out of the skill directory to a file still inside the project is bundled and rewritten silently by default (`LINK_OUTSIDE_SKILL_DIR`, `ignore`).
+For a self-contained skill, set `skills.config.<name>.validation.severity.LINK_OUTSIDE_SKILL_DIR: error` — `vat skills validate` and `vat build` then fail instead of bundling.
+A link out of the project root is `LINK_OUTSIDE_PROJECT` (error), a separate code.
 
 ## Referencing bundled scripts and assets (portability)
 

@@ -509,6 +509,26 @@ function setupProjectWithDepthDropAndAllow(
   return projectDir;
 }
 
+/**
+ * Helper: `skills/<name>/SKILL.md` links `../shared.md` — outside the skill
+ * directory, inside the project — with the given extra lines under
+ * `skills.config.<name>` (e.g. a `validation.severity` block).
+ */
+function setupProjectLinkingSharedDoc(tempDir: string, skillName: string, skillConfigLines: string[]): string {
+  const projectDir = safePath.join(tempDir, 'shared-doc');
+  mkdirSyncReal(safePath.join(projectDir, 'skills', skillName), { recursive: true });
+  writeTestFile(
+    safePath.join(projectDir, 'skills', skillName, 'SKILL.md'),
+    `${SKILL_FRONTMATTER_TEMPLATE(skillName)}\nSee [shared](../shared.md).\n`,
+  );
+  writeTestFile(safePath.join(projectDir, 'skills', 'shared.md'), '# Shared\n\nShared guidance.\n');
+  writeTestFile(
+    safePath.join(projectDir, VAT_CONFIG_FILENAME),
+    [CONFIG_VERSION_LINE, 'skills:', '  include:', `    - "skills/${skillName}/SKILL.md"`, '  config:', `    ${skillName}:`, ...skillConfigLines, ''].join('\n'),
+  );
+  return projectDir;
+}
+
 describe('skills build — framework exit codes (system test)', () => {
   const DEPTH_DROP_SKILL = 'depth-drop-skill';
   const MISSING_TARGET_SKILL = 'missing-target-skill';
@@ -553,6 +573,36 @@ describe('skills build — framework exit codes (system test)', () => {
     // The severity is rendered as itself, so a reader can tell WHICH finding
     // failed the build rather than inferring it from the exit code.
     expect(cmdResult.stderr + cmdResult.stdout).toContain('[ERROR] [LINK_MISSING_TARGET]');
+  });
+
+  describe('LINK_OUTSIDE_SKILL_DIR — a link out of the skill directory', () => {
+    const SHARED_DOC_SKILL = 'shared-doc-skill';
+
+    it('by default bundles the target, rewrites the link, and reports nothing', async () => {
+      const projectDir = setupProjectLinkingSharedDoc(suite.createTempDir(), SHARED_DOC_SKILL, ['      linkFollowDepth: 1']);
+
+      const { result: cmdResult } = await suite.runBuildCommand(projectDir);
+
+      expect(cmdResult.status).toBe(0);
+      expect(cmdResult.stderr + cmdResult.stdout).not.toContain('LINK_OUTSIDE_SKILL_DIR');
+      const outputDir = safePath.join(projectDir, 'dist', 'skills', SHARED_DOC_SKILL);
+      expect(readdirSync(outputDir, { recursive: true }).map(String).filter((entry) => entry.endsWith('shared.md'))).toHaveLength(1);
+      expect(readFileSync(safePath.join(outputDir, 'SKILL.md'), 'utf-8')).not.toContain('../shared.md');
+    });
+
+    it('at severity error fails the build naming the code, instead of bundling and rewriting', async () => {
+      const projectDir = setupProjectLinkingSharedDoc(suite.createTempDir(), SHARED_DOC_SKILL, [
+        CONFIG_VALIDATION_INDENT,
+        '        severity:',
+        '          LINK_OUTSIDE_SKILL_DIR: error',
+      ]);
+
+      const { result: cmdResult } = await suite.runBuildCommand(projectDir);
+
+      expect(cmdResult.status).toBe(1);
+      expect(cmdResult.stderr + cmdResult.stdout).toContain('[ERROR] [LINK_OUTSIDE_SKILL_DIR]');
+      expect(existsSync(safePath.join(projectDir, 'dist', 'skills', SHARED_DOC_SKILL, 'SKILL.md'))).toBe(false);
+    });
   });
 });
 

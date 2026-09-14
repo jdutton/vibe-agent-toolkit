@@ -115,8 +115,8 @@ function evaluateWalkDecision(ctx: RuleContext): IssueCode | null {
   // the author to fix VAT's traversal policy over their own typo.
   if (ctx.nonRoutableSource) return 'LINK_FROM_NON_ROUTABLE_FILE';
 
-  // Resolves to an existing in-bundle file — fine.
-  return null;
+  // An existing in-bundle file — fine, unless bundled (and rewritten) from outside the skill directory.
+  return ctx.insideSkillDir ? null : 'LINK_OUTSIDE_SKILL_DIR';
 }
 
 /**
