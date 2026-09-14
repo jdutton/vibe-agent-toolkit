@@ -43,10 +43,22 @@ jobs:
           fi
         env:
           CONTRABAND_TOKENS: ${{ secrets.CONTRABAND_TOKENS }}
+      # NET_AVAILABLE: the four network suites (external-link-validator,
+      # external-url-validation, audit-git-url, corpus-scan) skip unless it is
+      # set; a hosted runner has the network, so this is the tier that runs them.
+      # Locally they stay opt-in (`NET_AVAILABLE=1 bun run validate`).
       - name: Run validation
         run: bun run validate
         env:
           GH_TOKEN: ${{ github.token }}
+          NET_AVAILABLE: "1"
+      # vibe-validate captures a failed step's stdout and stderr to files and summarises
+      # them through an extractor that keeps only lines carrying an error keyword, so a
+      # verdict without one (`NEW unused export: …`) never reaches this log. Print the
+      # captures verbatim: the step's own words are the record, not the summary.
+      - name: Print failed step output
+        if: failure()
+        run: bun run print-failed-step-output
     strategy:
       fail-fast: false
       matrix:

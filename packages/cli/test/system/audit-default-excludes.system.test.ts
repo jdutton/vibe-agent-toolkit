@@ -14,6 +14,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -33,7 +34,7 @@ function buildProject(parentDir: string, rootName: string): string {
   fs.mkdirSync(rootDir, { recursive: true });
 
   // Initialize a git repo so gitignore-aware scanning works
-  spawnSync('git', ['init'], { cwd: rootDir, stdio: 'pipe' });
+  spawnSync(gitExecutable(), ['init'], { cwd: rootDir, stdio: 'pipe' });
 
   // Create .gitignore to mark artifact directories
   writeTestFile(

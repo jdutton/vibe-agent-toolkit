@@ -13,6 +13,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { getBinPath } from './test-common.js';
@@ -20,7 +21,7 @@ import { getBinPath } from './test-common.js';
 const binPath = getBinPath(import.meta.url);
 
 function runAuditHelp(): string {
-  const result = spawnSync('node', [binPath, 'audit', '--help'], { encoding: 'utf-8' });
+  const result = spawnSync(NODE_EXECUTABLE, [binPath, 'audit', '--help'], { encoding: 'utf-8' });
   expect(result.status).toBe(0);
   return result.stdout;
 }

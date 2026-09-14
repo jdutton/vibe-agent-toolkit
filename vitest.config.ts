@@ -29,7 +29,7 @@ export default defineConfig({
     execArgv: unitExecArgv,
     // The per-file duration ratchet, ceilings only: this config runs serially —
     // see `rootSerialReporters` in vitest.shared.ts.
-    reporters: rootSerialReporters,
+    reporters: rootSerialReporters(['default']),
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'lcov'],
@@ -81,26 +81,26 @@ export default defineConfig({
         'packages/vat-development-agents/src/**', // Agent packages (integration test only)
         'packages/vat-example-cat-agents/src/**', // Agent packages (integration test only)
       ],
-      // ⛔ A RATCHET: these only go up. They are the measured values of one
-      // serial `vitest run --coverage` over the whole unit tier, rounded DOWN
-      // to the integer, taken the day the three stale exclusions above were
-      // deleted. The previous 70 % was computed over 65 % of src — with
-      // `commands/**` (18 % of src, well unit-tested) simply not counted — so
-      // the number went UP, not down, when the metric became honest.
+      // ⛔ A RATCHET: these only go up, and ONE measurement seeds them — the
+      // coverage job in `coverage.yml` (Linux, the exact Node floor). A run on
+      // another platform or Node counts different branches: the 77 % a macOS
+      // run once wrote for branches was 76.99 % on the floor, and CI could not
+      // meet it. So `autoUpdate` — which rewrites these four numbers in THIS
+      // file, in WHOLE points, whenever the run measures higher — is armed only
+      // where `COVERAGE_RATCHET=write`, which is that job and nothing else; the
+      // job then fails on the diff it produced, printing the numbers to commit.
+      // A local run never writes here. (A bare `autoUpdate: true` would write
+      // the exact `pct`, e.g. 82.17, and leave zero headroom.)
       //
-      // `autoUpdate` rewrites these four numbers in THIS file whenever a run
-      // measures higher, so the ratchet raises itself; commit the rewrite. The
-      // ratchet moves in WHOLE points: a bare `true` writes the exact measured
-      // `pct` (e.g. 82.17), and the first such rewrite leaves zero headroom —
-      // deleting one covered line reds `coverage.yml` with no legal move left.
-      // Never lower one by hand: a drop is a coverage regression to fix, or an
-      // exclusion to justify file by file above.
+      // They are measured over the whole unit tier with the exclusions above
+      // justified file by file. Never lower one by hand: a drop is a coverage
+      // regression to fix, or an exclusion to justify in place.
       thresholds: {
         statements: 82,
-        branches: 77,
+        branches: 76,
         functions: 86,
         lines: 82,
-        autoUpdate: (measured: number) => Math.floor(measured),
+        autoUpdate: process.env['COVERAGE_RATCHET'] === 'write' ? (measured: number) => Math.floor(measured) : false,
       },
     },
   },

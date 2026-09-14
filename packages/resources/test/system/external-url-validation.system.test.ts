@@ -15,13 +15,14 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
  * Helper to run vat validation command.
  */
 function runValidate(binPathValue: string, cwd: string, args: string[]) {
-  return spawnSync('node', [binPathValue, ...args], {
+  return spawnSync(NODE_EXECUTABLE, [binPathValue, ...args], {
     cwd,
     encoding: 'utf-8',
     timeout: 10000,
@@ -99,7 +100,7 @@ resources:
 
   it('should show help text mentioning external URL validation', () => {
     // Check help text
-    const result = spawnSync('node', [binPath, 'resources', 'validate', '--help'], {
+    const result = spawnSync(NODE_EXECUTABLE, [binPath, 'resources', 'validate', '--help'], {
       encoding: 'utf-8',
       timeout: 5000,
     });

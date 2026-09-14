@@ -4,12 +4,12 @@
  *
  * ⚠️ This module imports NOTHING. It is the leaf that `fs-utils.ts`,
  * `path-utils.ts`, `dirent-kind.ts`, `path-containment.ts` and the rest of the
- * package share, and it lived in `fs-utils.ts` until that put three of them in
- * an import cycle (`fs-utils → path-utils → fs-utils` and two more). Inside a
- * cycle a module-graph walker's answer depends on which file it visits first,
- * and visit order is glob order — so knip's unused-export report disagreed
- * between macOS and both CI platforms on exactly the two names whose only path
- * ran through the cycle. A leaf has one visit order everywhere.
+ * package share; it lived in `fs-utils.ts` until that put three of them in an
+ * import cycle (`fs-utils → path-utils → fs-utils` and two more), and a leaf
+ * is the one place a shared predicate cannot re-open one. (The cycle was once
+ * blamed for a platform-dependent knip verdict on these two names; breaking it
+ * changed nothing there — the cause was a missing knip entry, see
+ * `docs/contributing/traps.md`, "A subpath module's re-exports flap by platform".)
  */
 
 /**

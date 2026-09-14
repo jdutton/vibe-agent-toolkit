@@ -435,6 +435,7 @@
       },
       "dependencies": {
         "@vibe-agent-toolkit/cli": "workspace:*",
+        "@vibe-agent-toolkit/schema": "workspace:*",
         "@vibe-agent-toolkit/vat-development-agents": "workspace:*",
       },
     },

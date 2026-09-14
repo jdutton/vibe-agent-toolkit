@@ -20,6 +20,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -44,7 +45,7 @@ beforeEach(() => {
   writeFileSync(`${plainDirectory}/readme.md`, '# plain\n');
 
   repository = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-extent-repo-'));
-  spawnSync('git', ['init', '-q'], { cwd: repository });
+  spawnSync(gitExecutable(), ['init', '-q'], { cwd: repository });
   writeFileSync(`${repository}/readme.md`, '# repo\n');
 
   // A `.git` that EXISTS and is not a repository. This is what an aborted clone

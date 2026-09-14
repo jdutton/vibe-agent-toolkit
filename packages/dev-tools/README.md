@@ -14,15 +14,15 @@ Every top-level script under `src/`, by basename (generated from the directory; 
 `audit-quality-gate`, `bump-version`, `changelog-fragments`, `check-test-heap-budget`,
 `clean-build`, `comment-density-ceilings`, `comment-density`, `common`, `contraband-scan`,
 `copy-yaml-assets`, `derived-artifact-rules`, `determine-publish-tags`, `duplication-check`,
-`extract-changelog`, `fix-workspace-deps`, `generate-claude-md`, `generate-python-stdlib`,
-`generate-resources-json-schemas`, `generate-tsconfig-refs`, `generate-workflow`,
-`import-marketplace`, `index`, `jscpd-check-new`, `jscpd-update-baseline`, `link-all`,
-`link-workspace-packages`, `markdown-it-parser`, `parser-bakeoff`, `pin-barrel-exports`,
-`pin-emitted-schemas`, `pre-publish-check`, `prepare-bin`, `process-test-images`,
-`publish-with-rollback`, `resolve-workspace-deps`, `runtime-test-helpers`, `structure-finding`,
-`test-tier-budget-allowlist`, `test-tier-budget-reporter`, `test-tier-budget-seed`,
-`tsc-clean-build`, `unlink-all`, `unused-exports-allowlist`, `unused-exports`,
-`validate-repo-structure`, `validate-version`, `workspace-graph`
+`eslint-rules-table`, `extract-changelog`, `fix-workspace-deps`, `generate-claude-md`,
+`generate-python-stdlib`, `generate-resources-json-schemas`, `generate-tsconfig-refs`,
+`generate-workflow`, `import-marketplace`, `index`, `jscpd-check-new`, `jscpd-update-baseline`,
+`link-all`, `link-workspace-packages`, `markdown-it-parser`, `parser-bakeoff`, `pin-barrel-exports`,
+`pin-emitted-schemas`, `pre-publish-check`, `prepare-bin`, `print-failed-step-output`,
+`process-test-images`, `publish-with-rollback`, `resolve-workspace-deps`, `runtime-test-helpers`,
+`structure-finding`, `test-tier-budget-allowlist`, `test-tier-budget-reporter`,
+`test-tier-budget-seed`, `tsc-clean-build`, `unlink-all`, `unused-exports-allowlist`,
+`unused-exports`, `validate-repo-structure`, `validate-version`, `workspace-graph`
 <!-- /gen:dev-tools-scripts -->
 
 ## Where the rules they enforce are stated

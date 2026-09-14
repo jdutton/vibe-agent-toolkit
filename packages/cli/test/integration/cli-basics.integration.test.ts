@@ -3,13 +3,14 @@ import {  dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect } from 'vitest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const binPath = safePath.resolve(__dirname, '../../dist/bin.js');
 
 function runVat(...args: string[]): SpawnSyncReturns<string> {
-  return spawnSync('node', [binPath, ...args], { encoding: 'utf-8' });
+  return spawnSync(NODE_EXECUTABLE, [binPath, ...args], { encoding: 'utf-8' });
 }
 
 describe('CLI basics (integration)', () => {

@@ -93,6 +93,29 @@ same commit.
 **Remedy:** `gh run rerun <run-id> --job <job-id>` before reading a line of code; only a reproduced
 failure is a defect.
 
+### A gate step's verdict can vanish from the CI log
+
+vibe-validate captures a failed step's output to files and summarises it through an extractor that
+keeps only lines carrying an error keyword (`error`, `failed`, `at `, a `file.ts:12` reference). A
+verdict without one — `NEW unused export: …`, `STALE allowlist entry: …` — is dropped, and the log
+ends at `script "unused-exports" exited with code 1`. Three STALE entries once surfaced only because
+the export NAMES contained `Error`; the next round's did not, and the same job reported nothing.
+**Tell:** `errorSummary` in the YAML state is bun's one "exited with code" line, with `durationSecs`
+showing the step ran.
+**Remedy:** the validate workflow's `Print failed step output` step (`bun run
+print-failed-step-output`) prints every capture verbatim after a failure; read that block, never the
+summary.
+
+### The coverage thresholds were seeded on the wrong platform
+
+`vitest.config.ts` thresholds were written by `autoUpdate` from a local macOS/Node 24 run, and the
+`coverage.yml` job that enforces them runs Linux on the Node floor, which counts different branches:
+77 % locally was 76.99 % there, and no local run could reproduce the red.
+**Tell:** `Coverage for branches (76.99%) does not meet global threshold (77%)` in the coverage job
+only, green locally.
+**Remedy:** the job is the only writer (`COVERAGE_RATCHET=write`) and fails on its own diff when a
+threshold can rise — seed from its "All files" row, never from a local number.
+
 ### A hook timeout is decided on the timer side
 
 vitest decides a `beforeAll`/`afterAll` timeout on its own timer; the hook's `try/catch` never sees
@@ -679,6 +702,8 @@ allowlist made the disagreement a red on whichever side did not seed the entry. 
 cycle in the package did not change the answer.
 **Tell:** an unused-exports STALE/NEW pair on CI only, naming a re-export in a file that is a
 `package.json` `exports` target.
-**Remedy:** derive the workspace's knip `entry` from `exports` (`sourceEntriesFromExports` in
-`packages/dev-tools/knip.config.ts`) — a public entry's exports are API surface and are never
-reported — then `bun run unused-exports --prune`.
+**Remedy:** derive the workspace's knip `entry` from `exports` (`sourceEntriesOf` in
+`packages/dev-tools/knip.config.ts`, which reads a bare string, the `import` condition and the
+`default` condition — the first cut read only `import`, so the three `{default, types}` packages
+got no entries and the flap stayed open there) — a public entry's exports are API surface and are
+never reported — then `bun run unused-exports --prune`.

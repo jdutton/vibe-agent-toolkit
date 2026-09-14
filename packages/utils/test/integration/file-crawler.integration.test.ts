@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { crawlDirectory, crawlDirectorySync } from '../../src/file-crawler.js';
 import { mkdirSyncReal, toForwardSlash } from '../../src/path-utils.js';
 import { createSymlink, symlinkCapability } from '../../src/test-helpers.js';
+import { gitExecutable } from '../../src/testing/executables.js';
 import { setupSyncTempDirSuite } from '../../src/testing/temp-dir.js';
 import { refuseUnreadableFixture } from '../../src/testing.js';
 import { createGitRepo } from '../test-helpers.js';
@@ -418,7 +419,7 @@ describe('file-crawler', () => {
       writeFileSync(gitignorePath, 'docs/\n*.log\n');
 
       // Track only non-ignored files (git ls-files returns tracked files)
-      spawnSync('git', ['add', 'src/', 'README.md'], { cwd: testDir, stdio: 'pipe' });
+      spawnSync(gitExecutable(), ['add', 'src/', 'README.md'], { cwd: testDir, stdio: 'pipe' });
 
       const files = crawlDirectorySync({
         baseDir: testDir,
@@ -468,7 +469,7 @@ describe('file-crawler', () => {
       writeFileSync(safePath.join(testDir, GITIGNORE), 'docs/\n');
       // Only src/ is committed: README.md and package.json stay untracked,
       // docs/ is ignored outright.
-      spawnSync('git', ['add', 'src/'], { cwd: testDir, stdio: 'pipe' });
+      spawnSync(gitExecutable(), ['add', 'src/'], { cwd: testDir, stdio: 'pipe' });
 
       const files = crawlDirectorySync({
         baseDir: testDir,
@@ -516,7 +517,7 @@ describe('file-crawler', () => {
 
       // Same tree, now tracked — `git ls-files` answers instead.
       createGitRepo(testDir);
-      spawnSync('git', ['add', '-A'], { cwd: testDir, stdio: 'pipe' });
+      spawnSync(gitExecutable(), ['add', '-A'], { cwd: testDir, stdio: 'pipe' });
 
       const tracked = crawl();
       expect(tracked.some((f) => f.endsWith(CLAUDE_RULE))).toBe(true);

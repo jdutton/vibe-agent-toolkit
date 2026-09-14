@@ -7,20 +7,51 @@ import type { KnipConfig } from 'knip';
 const SRC_TS = 'src/**/*.ts';
 
 /**
- * The source behind every `package.json` `exports` target under `dist/`
- * (`./dist/fs.js` → `src/fs.ts`): each is a public entry, so its exports are
- * API surface, never "unused". Why it is derived and not listed by hand:
+ * The runtime file an `exports` target names: a bare string, or the first of
+ * the `import` / `default` conditions that is one (the `types` condition is
+ * a declaration, not a module). Anything else — an object with neither, a
+ * nested condition map — is no runtime target and yields `undefined`.
+ */
+function runtimeTargetOf(target: unknown): string | undefined {
+  if (typeof target === 'string') return target;
+  if (target === null || typeof target !== 'object') return undefined;
+  const conditions = target as Record<string, unknown>;
+  for (const condition of ['import', 'default']) {
+    const value = conditions[condition];
+    if (typeof value === 'string') return value;
+  }
+  return undefined;
+}
+
+/**
+ * The source behind every `exports` target under `dist/` (`./dist/fs.js` →
+ * `src/fs.ts`; a `./dist/x/*.js` pattern → the `src/x/*.ts` glob): each is a
+ * public entry, so its exports are API surface, never "unused". A target
+ * outside `dist/` (a `./schemas/*` JSON tree, a `.cjs` shim) has no source
+ * and is skipped. Why it is derived and not listed by hand:
  * `docs/contributing/traps.md`, "A subpath module's re-exports flap by platform".
  */
-function sourceEntriesFromExports(packageDir: string): string[] {
-  const manifestPath = fileURLToPath(new URL(`../${packageDir}/package.json`, import.meta.url));
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { exports?: Record<string, unknown> };
+export function sourceEntriesOf(exports: unknown): string[] {
+  if (exports === null || typeof exports !== 'object') return [];
   const entries: string[] = [];
-  for (const target of Object.values(manifest.exports ?? {})) {
-    const value = typeof target === 'string' ? target : (target as Record<string, unknown>)['import'];
-    if (typeof value !== 'string') continue;
+  for (const target of Object.values(exports as Record<string, unknown>)) {
+    const value = runtimeTargetOf(target);
+    if (value === undefined) continue;
     const match = /^\.\/dist\/(.+)\.js$/.exec(value);
     if (match?.[1] !== undefined) entries.push(`src/${match[1]}.ts`);
+  }
+  return entries;
+}
+
+function sourceEntriesFromExports(packageDir: string): string[] {
+  const manifestPath = fileURLToPath(new URL(`../${packageDir}/package.json`, import.meta.url));
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { exports?: unknown };
+  const entries = sourceEntriesOf(manifest.exports);
+  // A workspace is named here BECAUSE it publishes dist/ subpaths; an empty
+  // derivation is a condition shape this reader does not know, not a package
+  // with no API — and knip would silently judge every subpath as dead.
+  if (entries.length === 0) {
+    throw new Error(`packages/${packageDir}/package.json: no dist/ runtime target found under "exports" — extend sourceEntriesOf for its condition shape`);
   }
   return entries;
 }
@@ -174,6 +205,8 @@ const config: KnipConfig = {
         '@vibe-agent-toolkit/cli',
         // Installed so its postinstall hook deploys the vibe-agent-toolkit skill to ~/.claude/skills/
         '@vibe-agent-toolkit/vat-development-agents',
+        // `bin/vat` (hand-written, outside src/) imports it for `installLastResortExit`.
+        '@vibe-agent-toolkit/schema',
       ],
     },
 

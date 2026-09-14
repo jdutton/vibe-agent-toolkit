@@ -70,98 +70,12 @@ summarises it.
 
 ## Current Rules
 
-Generated from `meta.docs` by `bun run generate:eslint-rules-doc` (in `packages/utils`);
-`test/eslint/rule-manifest.test.ts` fails when this block drifts from the rules. Edit the rule,
-then regenerate — never the table.
+Generated from `meta.docs` by `bun run generate:claude-md` (the `eslint-rules` block);
+`validate-structure` fails when the committed table drifts from the rules. Edit the rule, then
+regenerate — never the table.
 
-<!-- gen:eslint-rules -->
-34 rules; 7 auto-fix. `configs.recommended` enables 17 of them (15 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
-
-#### Path handling
-
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `no-hardcoded-path-split` | `split('/')` / `split('\\')` on a path | `path.basename()`, or `toForwardSlash()` first | `/path` |  | `error` |
-| `no-manual-path-normalize` | hand-rolled `.replace(/\\/g, '/')` | `toForwardSlash()` | `/path` | ✓ | `error` |
-| `no-path-operations-in-comparisons` | raw `path.*()` results in string comparisons | wrap in `toForwardSlash()` | `/path` |  | `error` |
-| `no-path-sep-in-strings` | `path.sep` embedded in a string literal | `toForwardSlash()` | `/path` |  | `error` |
-| `no-path-startswith` | `path.startsWith()` on a raw path | `toForwardSlash()` first | `/path` |  | `error` |
-| `no-raw-node-path` | `path.join()`, `path.resolve()`, `path.relative()` | `safePath.join()` / `.resolve()` / `.relative()` | `/path` | ✓ | `warn` |
-| `no-unsafe-root-join` | `safePath.join(someRoot, x)` where `x` can escape | `safePath.joinUnderRoot()` | `/path` |  | — |
-
-#### Filesystem and process
-
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `no-bare-symlink-in-tests` | unguarded `fs.symlinkSync()` / `fs.promises.symlink()` | in tests: `createSymlink(cap, …)` / `createSymlinkAsync(cap, …)`; in shipped code: a win32 junction, or a `catch` naming the privilege | `/testing` |  | — |
-| `no-child-process-execSync` | `child_process.execSync()` | `safeExecSync()` | `/process` | ✓ | `error` |
-| `no-fs-mkdirSync` | `fs.mkdirSync()` | `mkdirSyncReal()` | `/fs` | ✓ | `error` |
-| `no-fs-promises-cp` | `cp()` from `node:fs/promises` (drops nested files on Node 22) | `cpSync()` from `node:fs` | — | ✓ | `error` |
-| `no-fs-realpathSync` | `fs.realpathSync()` | `normalizePath()` | `/fs` | ✓ | `error` |
-| `no-os-tmpdir` | `os.tmpdir()` (8.3 short names on Windows) | `normalizedTmpdir()` | `/fs` | ✓ | `error` |
-| `no-unix-shell-commands` | `tar`, `grep`, `rm`, `echo`, … spawned directly | Node APIs, or a portable script fixture | — |  | `error` |
-
-#### URLs and dynamic imports
-
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `no-bare-dynamic-import-path` | `await import(absolutePath)` | `dynamicImportPath()` / `pathToFileURL(p).href` | `/fs` |  | `error` |
-| `no-file-url-string-concat` | `` `file://${p}` `` | `pathToFileURL(p).href` | — |  | `error` |
-| `no-url-pathname-for-fs` | `new URL(x, import.meta.url).pathname` as a filesystem path | `resolveFromImportMeta()` / `fileURLToPath()` | `/fs` |  | `error` |
-
-#### Entrypoint guards
-
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `no-fragile-entrypoint-guard` | `import.meta.main`; `import.meta.url === pathToFileURL(process.argv[1]).href`; `fileURLToPath(import.meta.url) === process.argv[1]` | `isEntrypoint(import.meta.url)` | `/process` |  | — |
-
-#### Process control
-
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `no-process-exit-in-phase` | `process.exit()` inside a function named `…Phase` | return the exit code from the phase; only the command wrapper exits | — |  | — |
-
-#### Error handling
-
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `no-blind-catch` | a `catch` that neither reads its error nor throws | narrow on the error and rethrow the rest, or carry it into the result | — |  | `warn` |
-
-#### Content decoding
-
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `no-raw-text-decode` | `buf.toString('utf-8')`, `new TextDecoder(…)`, `readFile(p, 'utf-8')` | one project-owned decoding seam | — |  | — |
-
-#### Build correctness
-
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `no-self-package-import` | importing the enclosing package by its own name | a relative path to the defining module | — |  | — |
-
-#### Code and test hygiene
-
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `no-test-scoped-functions` | helper functions declared inside `describe`/`it` | module scope | — |  | — |
-| `prefer-startswith-over-regex` | `/^foo/.test(s)`, `` /^\*glob/.test(s) ``, `const RE = /^foo/; RE.test(s)` | `s.startsWith('foo')` | — |  | `error` |
-| `require-justified-skip` | unannotated `it.skip`/`it.todo`, tautological assertions, empty test bodies | a `SKIP(#123): reason` annotation, or a real assertion | — |  | — |
-
-#### Other
-
-| Rule | Bans | Use instead | Subpath | Fix | `recommended` |
-|---|---|---|---|---|---|
-| `commands-import-boundary` | Disallow filesystem and internal-module imports in command modules — a command calls a declared enumeration lane, it does not become one | — | — |  | — |
-| `dirent-type-needs-symlink-check` | Require an isSymbolicLink() check on a Dirent before isFile()/isDirectory() — both are false for a symlink, so an unchecked walk drops links silently | — | — |  | — |
-| `explicit-zod-strictness` | Require every z.object({...}) to declare its unknown-key policy in the same chain — .strict(), .passthrough(), .loose() or an explicit .strip() — because the default silently strips keys | — | — |  | — |
-| `no-decaying-referent` | Disallow issue/PR numbers, ISO dates and named people in src comments — they decay in place; the rule belongs in the comment and the history in the commit, CHANGELOG or docs | — | — |  | — |
-| `no-dotdot-containment` | Disallow startsWith('..') / includes('..') / split-and-hunt as a path containment check — use the realpath-based isUnderRoot() helper | — | — |  | — |
-| `no-io-in-unit-tier` | Disallow child_process imports and mkdtemp/spawn/exec calls in unit-tier test files — a test that spawns or writes to disk belongs in the integration or system tier | — | — |  | — |
-| `no-literal-process-exit` | Disallow process.exit(<number>) and process.exitCode = <number> — name the meaning with the ExitCode enum so every command shares one exit contract | — | — |  | — |
-| `no-registry-count-pin` | Disallow pinning the size of an imported registry with a literal in tests — toHaveLength(27) on something pulled from src is a change detector fixed by retyping | — | — |  | — |
-| `no-version-literal` | Disallow z.literal(<number>) on a version-named field and <X>_VERSION = <number> constants — a hand-bumped integer deciding data validity is the shape CLAUDE.md bans | — | — |  | — |
-
-<!-- /gen:eslint-rules -->
+The table lives in one place — [`packages/utils/eslint/README.md`](../packages/utils/eslint/README.md#rules),
+the file that ships with the pack.
 
 ## Creating New Rules
 
@@ -248,10 +162,10 @@ All three normalize to forward slashes first, so they behave identically on Wind
 ### 3. Regenerate the docs table
 
 ```bash
-cd packages/utils && bun run generate:eslint-rules-doc
+bun run generate:claude-md
 ```
 
-That rewrites the block above and the one in `packages/utils/eslint/README.md`. Nothing to
+That rewrites the `eslint-rules` block in `packages/utils/eslint/README.md`. Nothing to
 register: `index.cjs` found the file the moment it existed, and `configs.recommended` read its
 `meta.docs`. If the rule is not recommended, say why in a comment beside `recommended: false`.
 

@@ -6,10 +6,12 @@ sequence that surrounds it.
 
 ## Before opening or updating a pull request
 
-1. **Changelog.** Write a `.changes/<topic>.md` fragment
-   ([`.changes/README.md`](../../.changes/README.md)) rather than editing `CHANGELOG.md`
-   `[Unreleased]` directly — fragments never conflict between branches, and `bump-version` folds
-   them. Wording is an adopter contract: what the reader must DO, three lines at most, per
+1. **Changelog.** Either a `.changes/<topic>.md` fragment
+   ([`.changes/README.md`](../../.changes/README.md)) or a direct edit under `CHANGELOG.md`
+   `[Unreleased]`; prefer the fragment when other branches are in flight — fragments never
+   conflict, and `bump-version` folds them. Nothing enforces the choice; `pre-release` enforces
+   that a stable version leaves `[Unreleased]` empty. Wording is an adopter contract: what the
+   reader must DO, three lines at most, per
    [`.claude/rules/changelog-adopter-visible.md`](../../.claude/rules/changelog-adopter-visible.md).
    A contributor-only change (docs under `docs/contributing/`, a `.claude/rules/` file, dev
    tooling) gets no entry.

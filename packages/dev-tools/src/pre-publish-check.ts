@@ -23,7 +23,7 @@
  * 15. CHANGELOG section non-empty (stable versions only)
  *
  * Usage:
- *   tsx tools/pre-publish-check.ts [--allow-branch BRANCH] [--skip-git-checks] [--release-readiness] [--tag VERSION]
+ *   tsx packages/dev-tools/src/pre-publish-check.ts [--allow-branch BRANCH] [--skip-git-checks] [--release-readiness] [--tag VERSION]
  *   bun run pre-publish [--allow-branch BRANCH] [--skip-git-checks] [--release-readiness] [--tag VERSION]
  *
  * Exit codes:
@@ -116,7 +116,7 @@ while (i < args.length) {
 Pre-Publish Validation Check
 
 Usage:
-  tsx tools/pre-publish-check.ts [OPTIONS]
+  tsx packages/dev-tools/src/pre-publish-check.ts [OPTIONS]
   bun run pre-publish [OPTIONS]
 
 Options:
@@ -141,7 +141,7 @@ Exit codes:
     process.exit(ExitCode.OK);
   } else {
     console.error(`Unknown option: ${String(args[i] ?? 'unknown')}`);
-    console.error('Usage: tsx tools/pre-publish-check.ts [OPTIONS]');
+    console.error('Usage: tsx packages/dev-tools/src/pre-publish-check.ts [OPTIONS]');
     process.exit(ExitCode.ERROR);
   }
   i++;
@@ -670,7 +670,9 @@ if (releaseReadiness) {
 
     // Check 14: No stale unreleased content
     // If the version IS stamped (has ## [version] heading) but no tag exists on remote,
-    // and [Unreleased] has content, warn.
+    // and [Unreleased] has content, FAIL — a stable release must carry everything
+    // above it; docs/contributing/pull-request-checklist.md names this check as
+    // the enforcer, so it enforces.
     console.log('');
     console.log('Checking for stale unreleased content...');
 
@@ -685,7 +687,8 @@ if (releaseReadiness) {
         const unreleasedMatch = /^## \[Unreleased\]([\s\S]*?)(?=^## \[|$)/m.exec(changelogContent);
         const unreleasedContent = unreleasedMatch?.[1]?.trim() ?? '';
         if (unreleasedContent.length > 0) {
-          log(`⚠ v${currentVersion} is stamped but not yet released. New changes should go under [${currentVersion}], not [Unreleased].`, 'yellow');
+          log(`✗ v${currentVersion} is stamped but [Unreleased] still has content. Move it under [${currentVersion}] (or a later section) before releasing.`, 'red');
+          process.exit(ExitCode.FINDINGS);
         } else {
           log('✓ No stale unreleased content', 'green');
         }

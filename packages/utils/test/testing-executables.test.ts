@@ -3,7 +3,7 @@ import { accessSync, constants } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { isAbsolutePath } from '../src/path-core.js';
-import { NODE_EXECUTABLE, gitExecutable, resolveExecutable } from '../src/testing/executables.js';
+import { NODE_EXECUTABLE, executableCandidates, gitExecutable, resolveExecutable } from '../src/testing/executables.js';
 
 describe('resolveExecutable', () => {
   it('returns an absolute, executable path for a binary on PATH', () => {
@@ -24,5 +24,20 @@ describe('resolveExecutable', () => {
   it('NODE_EXECUTABLE is the running node, absolute', () => {
     expect(NODE_EXECUTABLE).toBe(process.execPath);
     expect(isAbsolutePath(NODE_EXECUTABLE)).toBe(true);
+  });
+});
+
+describe('executableCandidates', () => {
+  it('tries only the bare name off Windows', () => {
+    expect(executableCandidates('git', 'linux', '.EXE;.CMD')).toEqual(['git']);
+    expect(executableCandidates('git', 'darwin', undefined)).toEqual(['git']);
+  });
+
+  it('tries every PATHEXT extension first on Windows, then the bare name', () => {
+    expect(executableCandidates('git', 'win32', '.COM;.EXE;.BAT;.CMD')).toEqual(['git.COM', 'git.EXE', 'git.BAT', 'git.CMD', 'git']);
+  });
+
+  it('falls back to the conventional PATHEXT when the variable is unset', () => {
+    expect(executableCandidates('git', 'win32', undefined)).toEqual(['git.EXE', 'git.CMD', 'git.BAT', 'git.COM', 'git']);
   });
 });

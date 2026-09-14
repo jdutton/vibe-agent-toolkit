@@ -1,3 +1,5 @@
+import { inspect } from 'node:util';
+
 import type { SeverityCounts } from './validation-issue.js';
 
 /**
@@ -71,4 +73,38 @@ export function exitCodeForSeverityCounts(
   if (counts.errors > 0) return ExitCode.FINDINGS;
   if (options.strict === true && counts.warnings > 0) return ExitCode.FINDINGS;
   return ExitCode.OK;
+}
+
+/**
+ * Everything about a thrown value that `error.message` alone discards: the
+ * stack of an `Error` (the frame that threw is the one thing a reader of an
+ * ERROR needs), or an inspection of a non-`Error` value, which the envelope
+ * would otherwise flatten to the literal `Unknown error`.
+ */
+export function errorDiagnostics(error: unknown): string {
+  if (error instanceof Error) {
+    // `stack` is optional in the type and absent on some cross-realm errors.
+    return error.stack ?? `${error.name}: ${error.message}`;
+  }
+  return `Non-Error value thrown: ${inspect(error, { depth: 3 })}`;
+}
+
+let lastResortInstalled = false;
+
+/**
+ * The last resort every VAT `bin` installs first (`validate-structure` Rule 13
+ * checks that it does): a throw nothing below caught ends on
+ * {@link ExitCode.ERROR}. Node's default for an unhandled rejection is exit 1
+ * — FINDINGS — so without this a crash reads as "the tree failed its gate".
+ * The frames still go to `write` (stderr by default). Installed once per process.
+ */
+export function installLastResortExit(write: (text: string) => void = (text) => process.stderr.write(text)): void {
+  if (lastResortInstalled) return;
+  lastResortInstalled = true;
+  const onUncaught = (error: unknown): void => {
+    write(`${errorDiagnostics(error)}\n`);
+    process.exit(ExitCode.ERROR);
+  };
+  process.on('unhandledRejection', onUncaught);
+  process.on('uncaughtException', onUncaught);
 }

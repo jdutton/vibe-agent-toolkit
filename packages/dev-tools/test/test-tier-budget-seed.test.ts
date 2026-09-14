@@ -75,18 +75,19 @@ describe('classifyMechanisms', () => {
 });
 
 describe('selectSeedCandidates', () => {
-  it('keeps files whose headroom would exceed their tier budget — an entry below that bounds nothing — and re-lists every file already listed', () => {
-    // Boundaries are budget / LISTED_HEADROOM_FACTOR (8): 125 / 625 / 3 750 ms.
-    // The old floor (10 % of budget) seeded "hover" entries that were under
-    // budget when listed and, under the reporter's rule, bought nothing.
+  it('keeps only files OVER their tier budget — an entry for a file under budget can only widen its ceiling — and re-lists every file already listed', () => {
+    // Boundaries are the tier budgets themselves: 1 000 / 5 000 / 30 000 ms.
+    // Two earlier floors (10 % of budget, then budget / 8) seeded "hover"
+    // entries that were under budget when listed and bought nothing.
     const rows = [
-      { file: 'packages/a/test/slow.test.ts', durationMs: 126 },
-      { file: 'packages/a/test/fast.test.ts', durationMs: 125 },
+      { file: 'packages/a/test/slow.test.ts', durationMs: 1_001 },
+      { file: 'packages/a/test/fast.test.ts', durationMs: 1_000 },
+      { file: 'packages/a/test/hover.test.ts', durationMs: 126 },
       { file: 'packages/a/test/listed.test.ts', durationMs: 50 },
-      { file: 'packages/a/test/integration/slow.integration.test.ts', durationMs: 626 },
-      { file: 'packages/a/test/integration/fast.integration.test.ts', durationMs: 625 },
-      { file: 'packages/a/test/system/slow.system.test.ts', durationMs: 3_751 },
-      { file: 'packages/a/test/system/fast.system.test.ts', durationMs: 3_750 },
+      { file: 'packages/a/test/integration/slow.integration.test.ts', durationMs: 5_001 },
+      { file: 'packages/a/test/integration/fast.integration.test.ts', durationMs: 5_000 },
+      { file: 'packages/a/test/system/slow.system.test.ts', durationMs: 30_001 },
+      { file: 'packages/a/test/system/fast.system.test.ts', durationMs: 30_000 },
     ];
     const allowlist = [{ file: 'packages/a/test/listed.test.ts', measuredMs: 900, mechanisms: [MECHANISM.tempTree] }];
     const files = selectSeedCandidates(rows, TIER_BUDGET_MS, allowlist).map((r) => r.file);
@@ -100,10 +101,10 @@ describe('selectSeedCandidates', () => {
 
   it('sorts candidates slowest first', () => {
     const rows = [
-      { file: 'packages/a/test/b.test.ts', durationMs: 400 },
-      { file: 'packages/a/test/a.test.ts', durationMs: 900 },
+      { file: 'packages/a/test/b.test.ts', durationMs: 1_400 },
+      { file: 'packages/a/test/a.test.ts', durationMs: 1_900 },
     ];
-    expect(selectSeedCandidates(rows, TIER_BUDGET_MS, []).map((r) => r.durationMs)).toEqual([900, 400]);
+    expect(selectSeedCandidates(rows, TIER_BUDGET_MS, []).map((r) => r.durationMs)).toEqual([1_900, 1_400]);
   });
 });
 

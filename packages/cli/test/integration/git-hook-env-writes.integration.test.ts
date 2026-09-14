@@ -21,6 +21,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { detachGitEnv, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { publishToGitBranch } from '../../src/commands/claude/marketplace/git-publish.js';
@@ -47,7 +48,7 @@ const GIT_CONFIG = [
  * @returns Trimmed stdout
  */
 function fixtureGit(cwd: string, args: string[]): string {
-  const result = spawnSync('git', [...GIT_CONFIG, ...args], { cwd, encoding: 'utf-8' });
+  const result = spawnSync(gitExecutable(), [...GIT_CONFIG, ...args], { cwd, encoding: 'utf-8' });
   if (result.status !== 0) {
     throw new Error(`fixture git ${args.join(' ')} failed: ${result.stderr ?? ''}`);
   }

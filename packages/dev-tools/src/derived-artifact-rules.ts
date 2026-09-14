@@ -91,7 +91,38 @@ export function checkGeneratedBlocks(repoRoot: string): ValidationError[] {
       findings.push(stale(document.path, `No \`<!-- gen:${name} -->\` block: the "${name}" list has nowhere to be regenerated into.`));
     }
   }
+  findings.push(...checkNoStrayGeneratedMarkers(repoRoot));
   return findings;
+}
+
+const GEN_MARKER = /<!-- \/?gen:[\w-]+ -->/u;
+
+/**
+ * Rule: a `<!-- gen:… -->` marker appears only in a registered document.
+ * A block pasted into any other tracked Markdown file is never regenerated
+ * and never checked — the second copy the registry exists to end.
+ */
+export function checkNoStrayGeneratedMarkers(
+  repoRoot: string,
+  trackedMarkdown: readonly string[] = trackedMarkdownFiles(repoRoot),
+  readText: (relPath: string) => string = (relPath) => readFileSync(safePath.join(repoRoot, relPath), 'utf8'),
+): ValidationError[] {
+  const registered = new Set(GENERATED_DOCUMENTS.map((document) => document.path));
+  return trackedMarkdown
+    .filter((relPath) => !registered.has(relPath) && GEN_MARKER.test(readText(relPath)))
+    .map((relPath) =>
+      stale(
+        relPath,
+        'Carries a `<!-- gen:… -->` marker but is not in GENERATED_DOCUMENTS (packages/dev-tools/src/generate-claude-md.ts), ' +
+          'so the block is never regenerated or checked. Register the document, or link to the one that owns the list.',
+      ),
+    );
+}
+
+/** Every tracked `.md` file, repo-relative with forward slashes. */
+function trackedMarkdownFiles(repoRoot: string): string[] {
+  const listing = String(runGitOrThrow(['ls-files', '-z', '--', '*.md', '**/*.md'], { cwd: repoRoot, trim: false }));
+  return listing.split('\0').filter((rel) => rel.length > 0);
 }
 
 /** Rule: the root `CLAUDE.md` stays under its byte budget. */

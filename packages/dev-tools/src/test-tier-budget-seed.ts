@@ -13,8 +13,9 @@
  * re-seed replaces moved measurements); then a `DELIST` line for every listed
  * file whose fresh measurement × `LISTED_HEADROOM_FACTOR` no longer exceeds
  * the budget — its entry now bounds nothing. It never proposes an entry for a
- * file under budget: under the reporter's rule such an entry is inert, and a
- * seed that listed them grew the allowlist on every run.
+ * file under budget: a listed file's ceiling is `max(budget, 8 × measuredMs)`,
+ * so listing a file that is under budget can only WIDEN its ceiling, and a
+ * seed that listed such "hover" files grew the allowlist on every run.
  *
  * The output is a REVIEW aid, not something to paste blind: an entry's reason
  * is derived from what the spec file's source does (real temp trees, git,
@@ -127,7 +128,7 @@ export function selectSeedCandidates(
     .filter((row) => {
       const tier = tierOf(row.file);
       if (tier === undefined) return false;
-      return listed.has(row.file) || row.durationMs * LISTED_HEADROOM_FACTOR > budgets[tier];
+      return listed.has(row.file) || row.durationMs > budgets[tier];
     })
     .toSorted((a, b) => b.durationMs - a.durationMs);
 }

@@ -36,7 +36,7 @@
  *     17–48 ms serially. Even the entry-relative line is crossed by a SERIAL
  *     run of the heaviest files (measured: 7 647 ms under turbo, 558 ms
  *     serially — 13×), so the stale side is judged only where the seeds come
- *     from, the per-package turbo runs; the root config's serial run judges
+ *     from, the per-package turbo runs; the three root configs' serial runs judge
  *     the ceilings only (`judgeStale: false`).
  *
  * `measuredMs` is therefore a live input on both sides; `mechanisms` names the

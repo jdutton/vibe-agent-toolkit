@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
@@ -93,7 +94,7 @@ describe('auditOnePlugin — local source', () => {
 });
 
 function git(args: string[], cwd: string): void {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+  const r = spawnSync(gitExecutable(), args, { cwd, encoding: 'utf-8' });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
 }
 

@@ -7,7 +7,7 @@
  * vat config at all.
  */
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { ExitCode, installLastResortExit } from '@vibe-agent-toolkit/schema';
 import { parseWholeNumberAtLeast, safePath } from '@vibe-agent-toolkit/utils';
 import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
 import { Command, InvalidArgumentError } from 'commander';
@@ -861,5 +861,6 @@ export function createProgram(): Command {
 // and the guard is false: `vat-lab` prints nothing and exits 0. Measured on Node
 // 22.14.0 and 24.13.1 alike.
 if (isEntrypoint(import.meta.url)) {
+  installLastResortExit();
   await createProgram().parseAsync(process.argv);
 }

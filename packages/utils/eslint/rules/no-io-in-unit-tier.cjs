@@ -37,6 +37,7 @@
 
 'use strict';
 
+const { calleeName } = require('./callee-name.cjs');
 const { createExemptPathMatcher, isTestFile } = require('./exempt-path-matcher.cjs');
 
 const CHILD_PROCESS_MODULES = new Set(['node:child_process', 'child_process']);
@@ -59,13 +60,7 @@ function isUnitTierFile(filename) {
 
 /** The banned callee name of a call, bare (`spawn(…)`) or namespaced (`cp.spawn(…)`), or null. */
 function bannedCallName(call) {
-  const { callee } = call;
-  let name = null;
-  if (callee.type === 'Identifier') {
-    name = callee.name;
-  } else if (callee.type === 'MemberExpression' && !callee.computed && callee.property.type === 'Identifier') {
-    name = callee.property.name;
-  }
+  const name = calleeName(call);
   return name !== null && IO_CALLS.has(name) ? name : null;
 }
 

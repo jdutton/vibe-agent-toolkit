@@ -86,12 +86,11 @@ export * from './asset-reference.js';
 // symptom is a type that cannot be imported, which surfaces the first time
 // someone tries — not a silent break in existing code.
 // The lookups themselves, plus the memo every fill shares.
+export { isFilesystemAccessError, isPathAbsentError } from './errors/errno.js';
 export {
   copyDirectory,
   CopyLinkEscapesSourceError,
   FsLookupCache,
-  isFilesystemAccessError,
-  isPathAbsentError,
   transientRefusalClause,
 } from './fs-utils.js';
 // The two fill+judge pairs, in the order the note above lists them, plus the

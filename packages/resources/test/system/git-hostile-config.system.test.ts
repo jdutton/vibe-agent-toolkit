@@ -91,6 +91,7 @@ import {
 import {
   GitTracker,
 } from '@vibe-agent-toolkit/utils/git';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { computeContentKey, readContentWithKey } from '../../src/content-key.js';
@@ -147,7 +148,7 @@ function sedAvailable(): boolean {
  * @returns True when the `lfs` subcommand exists
  */
 function lfsAvailable(): boolean {
-  return spawnSync('git', ['lfs', 'version'], { encoding: 'utf-8' }).status === 0;
+  return spawnSync(gitExecutable(), ['lfs', 'version'], { encoding: 'utf-8' }).status === 0;
 }
 
 /** One host capability a section needs, and what the suite loses without it. */
@@ -271,7 +272,7 @@ function newRepo(prefix: string): Fixture {
   };
 
   const git = (...args: readonly string[]): string => {
-    const result = spawnSync('git', [...args], { cwd: repo, env, encoding: 'utf-8' });
+    const result = spawnSync(gitExecutable(), [...args], { cwd: repo, env, encoding: 'utf-8' });
     if (result.status !== 0) {
       throw new Error(`git ${args.join(' ')} exited ${String(result.status)}\n${result.stderr}`);
     }
@@ -354,7 +355,7 @@ function stagedIndex(fixture: Fixture): Map<string, { mode: string; oid: string 
  * @returns The blob's raw bytes
  */
 function blobBytes(fixture: Fixture, oid: string): Buffer {
-  const result = spawnSync('git', ['cat-file', 'blob', oid], { cwd: fixture.repo });
+  const result = spawnSync(gitExecutable(), ['cat-file', 'blob', oid], { cwd: fixture.repo });
   if (result.status !== 0) throw new Error(`git cat-file blob ${oid} failed`);
   return result.stdout;
 }

@@ -1,7 +1,7 @@
 /**
  * The unused-export ratchet's allowlist: its shape, its parser, and where the
  * data lives. The entries themselves are in `unused-exports-allowlist.txt`
- * beside this module — one `<file> <name> <reason>` per line — because 565
+ * beside this module — one `<file> <name> <reason>` per line — because hundreds of
  * rows of one shape are data, and a code analyser that normalises literals
  * reads them as 998 duplicated lines. Read and written by
  * `packages/dev-tools/src/unused-exports.ts` (`bun run unused-exports`).

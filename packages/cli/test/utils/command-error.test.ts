@@ -5,7 +5,6 @@ import { z } from 'zod';
 
 import { validateCommand } from '../../src/commands/skills/validate.js';
 import {
-  errorDiagnostics,
   exitCodeForCommanderEnding,
   formatDuration,
   handleCommandError,
@@ -93,28 +92,6 @@ describe('command-error utilities', () => {
       expect(formatDuration(60000)).toBe('1.0m');
       expect(formatDuration(90000)).toBe('1.5m');
       expect(formatDuration(150000)).toBe('2.5m');
-    });
-  });
-
-  describe('errorDiagnostics', () => {
-    it('returns the stack of an Error, not just its message', () => {
-      const diagnostics = errorDiagnostics(new Error('boom'));
-      expect(diagnostics).toContain('Error: boom');
-      expect(diagnostics.split('\n').length).toBeGreaterThan(1);
-    });
-
-    it('falls back to name and message when an Error carries no stack', () => {
-      // Cross-realm and hand-built errors reach here with `stack` undefined;
-      // `stack` is optional in the type, so the fallback is not theoretical.
-      const stackless = new RangeError('out of range');
-      stackless.stack = undefined;
-      expect(errorDiagnostics(stackless)).toBe('RangeError: out of range');
-    });
-
-    it('inspects a thrown non-Error rather than discarding it', () => {
-      expect(errorDiagnostics({ code: 'ENOENT' })).toContain("code: 'ENOENT'");
-      expect(errorDiagnostics('a bare string')).toContain('a bare string');
-      expect(errorDiagnostics(undefined)).toContain('undefined');
     });
   });
 

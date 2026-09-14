@@ -28,6 +28,7 @@ import { ExitCode, type ExitCodeValue } from '@vibe-agent-toolkit/schema';
 import { direntKindFollowingSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { isEntrypoint, log, PROJECT_ROOT } from './common.js';
+import { eslintRulesTable } from './eslint-rules-table.js';
 import { readWorkspaceGraph } from './workspace-graph.js';
 
 const CLAUDE_MD = 'CLAUDE.md';
@@ -206,6 +207,7 @@ export const CLAUDE_MD_GENERATORS: Readonly<Record<string, BlockGenerator>> = {
   'skills-table': skillsTable,
   'contributing-docs': (repoRoot) => wrapBacktickedList(contributingDocs(repoRoot), 2),
   'asset-reference-sites': assetReferenceSites,
+  'eslint-rules': eslintRulesTable,
 };
 
 /** A document that carries generated blocks, and the blocks it must carry. */
@@ -225,6 +227,8 @@ export const GENERATED_DOCUMENTS: readonly GeneratedDocument[] = [
   { path: CLAUDE_MD, blocks: ['packages-tree', 'skills-table', 'contributing-docs'] },
   { path: '.claude/rules/asset-references.md', blocks: ['asset-reference-sites'] },
   { path: 'packages/dev-tools/README.md', blocks: ['dev-tools-scripts'] },
+  // The rule pack's own README ships with it; docs/custom-eslint-rules.md links here.
+  { path: 'packages/utils/eslint/README.md', blocks: ['eslint-rules'] },
 ];
 
 const OPEN_MARKER = /^([ \t]*)<!-- gen:([\w-]+) -->[ \t]*$/;

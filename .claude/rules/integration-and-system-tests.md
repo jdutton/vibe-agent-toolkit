@@ -30,3 +30,4 @@ run the same way ([`docs/writing-tests.md`](../../docs/writing-tests.md#the-per-
   diff — it must be exactly your edit.
 - A test under this rule runs real processes: use `NODE_EXECUTABLE` / `gitExecutable()` from
   `@vibe-agent-toolkit/utils/testing` rather than spawning `node` or `git` by name.
+  (enforced by: `local/no-bare-executable-spawn`, repo-wide, no allowlist)

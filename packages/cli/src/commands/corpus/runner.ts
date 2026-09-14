@@ -199,8 +199,8 @@ export interface SkillReviewSection {
  * error section rather than thrown — one bad skill must not abort siblings.
  */
 function reviewOneSkill(bin: string, skillDir: string, relativePath: string): SkillReviewSection {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- node is required for invoking vat
-  const result = spawnSync('node', [bin, 'skill', 'review', skillDir], {
+  // The node running this process, never a PATH lookup.
+  const result = spawnSync(process.execPath, [bin, 'skill', 'review', skillDir], {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });

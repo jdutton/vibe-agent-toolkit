@@ -95,7 +95,6 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "generate:eslint-rules-doc": "tsx scripts/eslint-rules-doc.ts",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },
   "dependencies": {

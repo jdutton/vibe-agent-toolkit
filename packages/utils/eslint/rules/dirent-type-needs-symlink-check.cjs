@@ -52,6 +52,8 @@
 
 'use strict';
 
+const { calleeName } = require('./callee-name.cjs');
+
 const READDIR_FUNCTIONS = new Set(['readdir', 'readdirSync']);
 const OPENDIR_FUNCTIONS = new Set(['opendir', 'opendirSync']);
 const ELEMENT_CALLBACK_METHODS = new Set([
@@ -61,18 +63,6 @@ const ELEMENT_CALLBACK_METHODS = new Set([
 const COLLECTION_PRESERVING_METHODS = new Set(['filter', 'toSorted', 'toReversed', 'slice', 'reverse', 'sort']);
 const TYPE_TESTS = new Set(['isFile', 'isDirectory']);
 const FUNCTION_TYPES = ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'];
-
-/** The callee's bare name: `readdirSync` for both `readdirSync(…)` and `fs.readdirSync(…)`. */
-function calleeName(call) {
-  const { callee } = call;
-  if (callee.type === 'Identifier') {
-    return callee.name;
-  }
-  if (callee.type === 'MemberExpression' && !callee.computed && callee.property.type === 'Identifier') {
-    return callee.property.name;
-  }
-  return null;
-}
 
 /** Whether some argument is an object literal carrying `withFileTypes: true`. */
 function hasWithFileTypes(call) {

@@ -19,7 +19,7 @@ import { rm } from 'node:fs/promises';
 
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { getTestOutputDir } from '@vibe-agent-toolkit/utils/testing';
+import { getTestOutputDir, NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
@@ -61,7 +61,7 @@ function executeCliCommand(
   timeout?: number
 ): unknown {
   // Use 'node' from PATH - safe in test context where PATH is controlled by test environment
-  const result = spawnSync('node', [binPath, ...args], {
+  const result = spawnSync(NODE_EXECUTABLE, [binPath, ...args], {
     encoding: 'utf-8',
     cwd: projectRoot,
     timeout,

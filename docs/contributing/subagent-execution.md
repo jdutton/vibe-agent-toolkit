@@ -24,7 +24,7 @@ Paste it verbatim into the brief; a subagent that is not told this will run the 
 commit, because both look like diligence:
 
 > Verify with the fast isolated signal only: `bunx eslint <changed files> --max-warnings=0` and
-> `bunx vitest run <path/to/file.test.ts>` (or `bun run test:unit -- <substring>`). Do NOT run
+> `bunx vitest run <path/to/file.test.ts>` from that package's directory. Do NOT run
 > `bun run validate`, `test:system`, `test:integration` or `bun test`. Do NOT commit.
 
 For a file under `test/integration/` or `test/system/`, the single-file run must be made from the

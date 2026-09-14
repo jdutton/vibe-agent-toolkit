@@ -116,8 +116,9 @@ nothing to register; `tsconfig.json` `references` are generated, never hand-edit
   argue one away. In its PR comment, New, Accepted and Security Hotspots must all be zero — "Quality
   Gate passed" is not zero. Codecov is the coverage authority
   ([why](docs/contributing/traps.md#sonarcloud-coverage-on-new-code-is-always-zero)). (not enforced)
-- Coverage thresholds are a self-raising ratchet over ALL of `src`; never lower one by hand.
-  (enforced by: `coverage.yml`; the "never lower" half is not)
+- Coverage thresholds ratchet from the CI coverage job's numbers only — a local run never writes
+  them; never lower one by hand. (enforced by: `coverage.yml`, both directions; the "never lower"
+  half is not)
 
 ## Testing
 

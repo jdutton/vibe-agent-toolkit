@@ -22,7 +22,7 @@ import { createRequire } from 'node:module';
 import {  dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { ExitCode, installLastResortExit } from '@vibe-agent-toolkit/schema';
 import {
   findNodeWorkspaceRoot,
   isPathAbsentError,
@@ -55,6 +55,9 @@ function reportStdioBlocking(debug: boolean): void {
   }
 }
 
+// A throw nothing below caught ends on ExitCode.ERROR, never Node's default 1.
+installLastResortExit();
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 type Context = 'dev' | 'local' | 'global';
@@ -66,8 +69,9 @@ function spawnCli(binPath: string, context: Context, contextPath?: string): neve
     VAT_CONTEXT_PATH: contextPath,
   };
 
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- node is always in PATH for CLI usage
-  const result = spawnSync('node', [binPath, ...process.argv.slice(2)], {
+  // The node running this wrapper, never a PATH lookup: the child must be the
+  // same binary, and `node` by name is whatever PATH says first.
+  const result = spawnSync(process.execPath, [binPath, ...process.argv.slice(2)], {
     stdio: 'inherit',
     env,
   });

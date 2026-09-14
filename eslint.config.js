@@ -337,6 +337,11 @@ function selfImportConfigs() {
 // Local rules — agentic code safety. Apply to both TS and JS source.
 const localRulesConfig = {
   'local/no-child-process-execSync': ['error', SAFE_EXEC_EXEMPT],
+  // Repo-wide, tests included, no allowlist: 84 sites spawned 'git' or 'node' by
+  // bare name (PATH searched at spawn time — SonarCloud S4036 named 13 of them,
+  // new code only); all were migrated to process.execPath / NODE_EXECUTABLE /
+  // gitExecutable() in one pass, so the next one is an error at the desk.
+  'local/no-bare-executable-spawn': 'error',
   'local/no-hardcoded-path-split': 'error',
   'local/no-path-startswith': 'error',
   'local/no-unix-shell-commands': 'error',

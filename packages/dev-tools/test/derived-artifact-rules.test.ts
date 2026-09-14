@@ -16,6 +16,7 @@ import {
   checkChangelogFragments,
   checkClaudeMdByteBudget,
   checkLockfileWorkspaceResolutions,
+  checkNoStrayGeneratedMarkers,
   checkPackageScripts,
   checkTurboAdopterEdges,
   checkValidateWorkflowGenerated,
@@ -182,5 +183,29 @@ describe('derived-artifact rules on the real tree', () => {
     ['changelog fragments', checkChangelogFragments],
   ])('%s: no findings', (_label, rule) => {
     expect(rule(PROJECT_ROOT)).toEqual([]);
+  });
+});
+
+describe('checkNoStrayGeneratedMarkers', () => {
+  const texts: Record<string, string> = {
+    'CLAUDE.md': '<!-- gen:packages-tree -->\n<!-- /gen:packages-tree -->',
+    'docs/plain.md': '# nothing generated here',
+    'docs/pasted.md': 'a copy\n<!-- gen:packages-tree -->\nstale\n<!-- /gen:packages-tree -->',
+    'docs/closer-only.md': '<!-- /gen:skills-table -->',
+  };
+  const read = (rel: string): string => texts[rel] ?? '';
+
+  it('passes a registered document and a plain one', () => {
+    expect(checkNoStrayGeneratedMarkers(PROJECT_ROOT, ['CLAUDE.md', 'docs/plain.md'], read)).toEqual([]);
+  });
+
+  it('fails an unregistered document carrying a marker — an opener or a lone closer', () => {
+    const findings = checkNoStrayGeneratedMarkers(PROJECT_ROOT, Object.keys(texts), read);
+    expect(findings.map((f) => f.path).sort((a, b) => a.localeCompare(b))).toEqual(['docs/closer-only.md', 'docs/pasted.md']);
+    expect(findings[0]?.message).toContain('GENERATED_DOCUMENTS');
+  });
+
+  it('finds no stray marker in the real tree', () => {
+    expect(checkNoStrayGeneratedMarkers(PROJECT_ROOT)).toEqual([]);
   });
 });

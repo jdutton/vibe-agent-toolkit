@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -94,18 +95,18 @@ function createBuildOutput(tempDir: string): void {
  */
 function createBareRemote(tempDir: string): string {
   const bareDir = safePath.join(tempDir, '.bare-remote');
-  spawnSync('git', ['init', '--bare', '-b', 'main', bareDir], { encoding: 'utf-8' });
+  spawnSync(gitExecutable(), ['init', '--bare', '-b', 'main', bareDir], { encoding: 'utf-8' });
   return bareDir;
 }
 
 function initGitRepo(tempDir: string): void {
   const bareRemote = createBareRemote(tempDir);
-  spawnSync('git', ['init', '-b', 'main'], { cwd: tempDir, encoding: 'utf-8' });
-  spawnSync('git', ['config', 'user.email', 'test@test.com'], { cwd: tempDir, encoding: 'utf-8' });
-  spawnSync('git', ['config', 'user.name', 'Test'], { cwd: tempDir, encoding: 'utf-8' });
-  spawnSync('git', ['add', '.'], { cwd: tempDir, encoding: 'utf-8' });
-  spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir, encoding: 'utf-8' });
-  spawnSync('git', ['remote', 'add', 'origin', bareRemote], { cwd: tempDir, encoding: 'utf-8' });
+  spawnSync(gitExecutable(), ['init', '-b', 'main'], { cwd: tempDir, encoding: 'utf-8' });
+  spawnSync(gitExecutable(), ['config', 'user.email', 'test@test.com'], { cwd: tempDir, encoding: 'utf-8' });
+  spawnSync(gitExecutable(), ['config', 'user.name', 'Test'], { cwd: tempDir, encoding: 'utf-8' });
+  spawnSync(gitExecutable(), ['add', '.'], { cwd: tempDir, encoding: 'utf-8' });
+  spawnSync(gitExecutable(), ['commit', '-m', 'init'], { cwd: tempDir, encoding: 'utf-8' });
+  spawnSync(gitExecutable(), ['remote', 'add', 'origin', bareRemote], { cwd: tempDir, encoding: 'utf-8' });
 }
 
 /** Set up a fully configured publish project and run dry-run publish */

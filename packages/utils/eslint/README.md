@@ -68,12 +68,12 @@ The rules taking `exemptFiles` are `no-raw-node-path`, `no-os-tmpdir`, `no-fs-mk
 
 ## Rules
 
-The table is **generated** from each rule's `meta.docs` by `bun run generate:eslint-rules-doc` (run from `packages/utils`), and `test/eslint/rule-manifest.test.ts` fails when the committed copy drifts from the rules — so edit the rule, never the table. The "Subpath" column names the `@vibe-agent-toolkit/utils` subpath the replacement lives on; ✓ marks an auto-fix. The **`recommended`** column is the severity `configs.recommended` assigns — `—` means the rule is **not** in `recommended` and must be enabled explicitly.
+The table is **generated** from each rule's `meta.docs` by `bun run generate:claude-md` (repo root; the `eslint-rules` block), and `validate-structure` fails when the committed copy drifts from the rules — so edit the rule, never the table. The "Subpath" column names the `@vibe-agent-toolkit/utils` subpath the replacement lives on; ✓ marks an auto-fix. The **`recommended`** column is the severity `configs.recommended` assigns — `—` means the rule is **not** in `recommended` and must be enabled explicitly.
 
 **The auto-fix writes the import to the subpath in that column**, not to the barrel — `--fix` on a raw `path.join()` inserts `import { safePath } from '@vibe-agent-toolkit/utils/path'`. A file that already reaches the helper through the barrel keeps its existing import and only has the call rewritten: adding a second binding of the same name is a `SyntaxError`, not a redundant import.
 
 <!-- gen:eslint-rules -->
-34 rules; 7 auto-fix. `configs.recommended` enables 17 of them (15 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
+35 rules; 7 auto-fix. `configs.recommended` enables 18 of them (16 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
 
 #### Path handling
 
@@ -91,6 +91,7 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:esl
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
 |---|---|---|---|---|---|
+| `no-bare-executable-spawn` | Disallow spawning 'git' or 'node' by bare name — resolve the executable once (process.execPath; NODE_EXECUTABLE / gitExecutable() in tests) and spawn the absolute path | — | — |  | `error` |
 | `no-bare-symlink-in-tests` | unguarded `fs.symlinkSync()` / `fs.promises.symlink()` | in tests: `createSymlink(cap, …)` / `createSymlinkAsync(cap, …)`; in shipped code: a win32 junction, or a `catch` naming the privilege | `/testing` |  | — |
 | `no-child-process-execSync` | `child_process.execSync()` | `safeExecSync()` | `/process` | ✓ | `error` |
 | `no-fs-mkdirSync` | `fs.mkdirSync()` | `mkdirSyncReal()` | `/fs` | ✓ | `error` |
@@ -158,7 +159,6 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:esl
 | `no-literal-process-exit` | Disallow process.exit(<number>) and process.exitCode = <number> — name the meaning with the ExitCode enum so every command shares one exit contract | — | — |  | — |
 | `no-registry-count-pin` | Disallow pinning the size of an imported registry with a literal in tests — toHaveLength(27) on something pulled from src is a change detector fixed by retyping | — | — |  | — |
 | `no-version-literal` | Disallow z.literal(<number>) on a version-named field and <X>_VERSION = <number> constants — a hand-bumped integer deciding data validity is the shape CLAUDE.md bans | — | — |  | — |
-
 <!-- /gen:eslint-rules -->
 
 ### Pointing the fix at your own re-export seam — `safeModule`

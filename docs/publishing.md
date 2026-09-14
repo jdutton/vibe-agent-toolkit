@@ -139,7 +139,7 @@ bun run bump-version <version>
 bun run build
 
 # Run pre-publish checks
-bun run pre-publish-check
+bun run pre-publish
 
 # Publish with rollback safety
 bun run publish-with-rollback <version>

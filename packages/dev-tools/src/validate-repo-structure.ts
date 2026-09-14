@@ -282,7 +282,6 @@ async function validateScriptsLocation(): Promise<void> {
     'schema',
     'agent-skills',
     'cli', // Generates the report JSON Schemas from the REPORT_SCHEMAS registry
-    'utils', // Generates the ESLint rule table beside the rules it documents
     'vat-example-cat-agents', // Uses resource-compiler post-build script
     'vat-development-agents', // Uses resource-compiler post-build script
   ]);
@@ -1579,6 +1578,7 @@ export function findEngineFloorDisagreements(
 interface RawManifest {
   private?: boolean;
   engines?: { node?: string };
+  bin?: Record<string, string>;
 }
 
 /**
@@ -1701,6 +1701,63 @@ async function validateEngineFloorAgreement(): Promise<void> {
 }
 
 /**
+ * Rule 13: every `bin` target installs the last-resort exit.
+ *
+ * The exit-code contract ends every VAT process on 0/1/2, and Node's default
+ * for an uncaught throw is 1 — FINDINGS. `installLastResortExit()` from
+ * `@vibe-agent-toolkit/schema` is what turns a crash into ERROR; it was landed
+ * in `vat` alone and `vat-lab` / `vat-compile-resources` kept crashing to 1.
+ * The source behind each `bin` entry (`./dist/x.js` → `src/x.ts`; a hand-
+ * written `./bin/name` as is) must call it by name.
+ */
+const LAST_RESORT_CALL = 'installLastResortExit(';
+
+/** The source file behind a `bin` target, repo-relative: `./dist/bin/vat.js` → `src/bin/vat.ts`, anything else as written. */
+export function binSourceOf(packageDir: string, target: string): string {
+  const built = /^\.\/dist\/(.+)\.js$/.exec(target);
+  const inPackage = built?.[1] === undefined ? target.replace(/^\.\//, '') : `src/${built[1]}.ts`;
+  return `${packageDir}/${inPackage}`;
+}
+
+/** One finding per bin source that does not install the last resort, or cannot be read. */
+export function findBinsWithoutLastResort(
+  bins: readonly { readonly path: string; readonly text: string | undefined }[],
+): ValidationError[] {
+  return bins
+    .filter((bin) => !bin.text?.includes(LAST_RESORT_CALL))
+    .map((bin) => ({
+      type: ERROR_TYPES.STRUCTURAL_VIOLATION,
+      path: bin.path,
+      message:
+        bin.text === undefined
+          ? `Named by a package.json "bin" entry but could not be read, so the last-resort exit rule could not be applied to it.`
+          : `A bin that does not call installLastResortExit() from @vibe-agent-toolkit/schema — an uncaught throw then exits 1 (FINDINGS) instead of 2 (ERROR). Call it before anything else runs.`,
+      severity: 'error',
+    }));
+}
+
+async function validateBinsInstallLastResortExit(): Promise<void> {
+  const packagesDir = safePath.join(REPO_ROOT, 'packages');
+  const bins: { path: string; text: string | undefined }[] = [];
+  for (const entry of await readdir(packagesDir, { withFileTypes: true })) {
+    if (direntKindFollowingSync(packagesDir, entry) !== 'directory') continue;
+    const read = await readManifest(safePath.join(packagesDir, entry.name, PACKAGE_MANIFEST_FILENAME));
+    if (read.kind !== 'ok') continue; // absent is not a package; unreadable is the engine-floor rule's finding
+    for (const target of Object.values(read.manifest.bin ?? {})) {
+      const path = binSourceOf(`packages/${entry.name}`, target);
+      let text: string | undefined;
+      try {
+        text = await readFile(safePath.join(REPO_ROOT, path), 'utf8');
+      } catch (error) {
+        if (!isPathAbsentError(error)) throw error;
+      }
+      bins.push({ path, text });
+    }
+  }
+  errors.push(...findBinsWithoutLastResort(bins));
+}
+
+/**
  * Main validation function
  */
 async function validate(): Promise<void> {
@@ -1731,6 +1788,7 @@ async function validate(): Promise<void> {
   await validateVendorClaimFreshness();
   await validateSeverityCountsRatchet();
   await validateEngineFloorAgreement();
+  await validateBinsInstallLastResortExit();
 
   // One owner per fact: every committed artifact that is DERIVED from another
   // file (tsconfig references, CLAUDE.md lists, the CI workflow, the lockfile's

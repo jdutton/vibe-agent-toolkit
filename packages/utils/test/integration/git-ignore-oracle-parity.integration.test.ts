@@ -79,6 +79,7 @@ import { GitTracker } from '../../src/git-tracker.js';
 import { isGitIgnored } from '../../src/git-utils.js';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '../../src/path-utils.js';
 import { createSymlink, symlinkCapability } from '../../src/test-helpers.js';
+import { gitExecutable } from '../../src/testing/executables.js';
 import { createGitRepo } from '../test-helpers.js';
 
 /** The answer each oracle gives for one path class. */
@@ -242,7 +243,7 @@ let tracker: GitTracker;
  * into a comparison of two "not ignored" answers. Fail loudly instead.
  */
 function runGit(cwd: string, args: readonly string[]): void {
-  const result = spawnSync('git', [...args], { cwd, stdio: 'pipe', encoding: 'utf-8' });
+  const result = spawnSync(gitExecutable(), [...args], { cwd, stdio: 'pipe', encoding: 'utf-8' });
   if (result.status !== 0) {
     throw new Error(
       `git ${args.join(' ')} failed (status ${String(result.status)}): ${result.stderr ?? ''}`

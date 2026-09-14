@@ -9,6 +9,7 @@ import fs, { mkdtempSync, readdirSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { runAuditCli } from '../test-helpers.js';
@@ -24,7 +25,7 @@ let workTree: string;
 const OFFLINE_REMOTE_PREFIX = 'vat-offline-no-such-remote';
 
 function git(args: string[], cwd: string): void {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+  const result = spawnSync(gitExecutable(), args, { cwd, encoding: 'utf-8' });
   if (result.status !== 0) {
     throw new Error(`git ${args.join(' ')} failed: ${result.stderr ?? ''}`);
   }

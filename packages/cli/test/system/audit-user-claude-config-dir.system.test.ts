@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { getBinPath } from './test-common.js';
@@ -42,7 +43,7 @@ describe('vat audit --user honors CLAUDE_CONFIG_DIR', () => {
   });
 
   it('scans the override directory and finds the marker skill', () => {
-    const result = spawnSync('node', [binPath, 'audit', '--user', '--verbose'], {
+    const result = spawnSync(NODE_EXECUTABLE, [binPath, 'audit', '--user', '--verbose'], {
       encoding: 'utf-8',
       env: { ...process.env, CLAUDE_CONFIG_DIR: overrideDir },
     });

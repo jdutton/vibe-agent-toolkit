@@ -24,6 +24,7 @@
  */
 
 import { createSymlink, type SymlinkCapability, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, it } from 'vitest';
 
 import {
@@ -146,7 +147,7 @@ describe.skipIf(!symlinkCap)('vat wrapper local-install resolution under pnpm', 
   });
 
   it('runs the CLI the lockfile pinned instead of falling through to the global install', () => {
-    const result = spawnSync('node', [wrapperPath, '--version'], {
+    const result = spawnSync(NODE_EXECUTABLE, [wrapperPath, '--version'], {
       encoding: 'utf-8',
       cwd: adopterDir,
       env: { ...process.env, VAT_ROOT_DIR: undefined },
@@ -159,7 +160,7 @@ describe.skipIf(!symlinkCap)('vat wrapper local-install resolution under pnpm', 
   });
 
   it('reports the local context, not the global fallback', () => {
-    const result = spawnSync('node', [wrapperPath, '--version'], {
+    const result = spawnSync(NODE_EXECUTABLE, [wrapperPath, '--version'], {
       encoding: 'utf-8',
       cwd: adopterDir,
       env: { ...process.env, VAT_ROOT_DIR: undefined, VAT_DEBUG: '1' },

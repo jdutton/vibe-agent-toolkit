@@ -47,18 +47,23 @@ const repoRoot = fileURLToPath(new URL('./', import.meta.url));
  * `bun run seed:test-tier-budget <tier>`.
  */
 type ReporterEntry = string | readonly [string, Record<string, unknown>] | TestTierBudgetReporter;
-function tierBudgetReporters(base: readonly ReporterEntry[], options: { judgeStale?: boolean } = {}): ReporterEntry[] {
+function tierBudgetReporters(base: readonly ReporterEntry[], options: { judgeStale: boolean }): ReporterEntry[] {
   return process.platform === 'win32' ? [...base] : [...base, new TestTierBudgetReporter({ repoRoot, ...options })];
 }
 
 /**
- * The root config's reporters — it inlines its own `test` block and runs
- * SERIALLY (`test:coverage`, or a bare `bunx vitest run` from the root), where
- * a heavy file reads up to 13× faster than under the per-package turbo runs the
- * allowlist was seeded from. The stale side of the ratchet is judged only under
- * turbo; here only the ceilings apply — see `JudgeOptions.judgeStale`.
+ * The reporters of a ROOT config — `vitest.config.ts`, `vitest.integration.config.ts`,
+ * `vitest.system.config.ts`. Those run the whole repo SERIALLY in one vitest
+ * process (`test:coverage`, `validate-links`, a bare `bunx vitest run --config …`
+ * from the root), where a heavy file reads up to 13× faster than under the
+ * per-package turbo runs the allowlist was seeded from. The stale side of the
+ * ratchet is judged only under turbo; here only the ceilings apply — see
+ * `JudgeOptions.judgeStale`. Every root config passes its base list through
+ * this, never through the per-package factories' reporters.
  */
-export const rootSerialReporters = tierBudgetReporters(['default'], { judgeStale: false });
+export function rootSerialReporters(base: readonly ReporterEntry[]): ReporterEntry[] {
+  return tierBudgetReporters(base, { judgeStale: false });
+}
 
 /**
  * Clear every mock's CALL HISTORY before each test, in all three tiers.
@@ -212,7 +217,7 @@ export function createUnitTestConfig(overrides: UnitTestConfigOverrides = {}) {
     pool: unitPool,
     maxWorkers: maxTestWorkers,
     execArgv: unitExecArgv,
-    reporters: tierBudgetReporters(['default']),
+    reporters: tierBudgetReporters(['default'], { judgeStale: true }),
     coverage: {
       provider: 'v8' as const,
       reporter: ['text', 'json', 'html'] as const,
@@ -257,7 +262,7 @@ export function createIntegrationTestConfig(overrides: IntegrationTestConfigOver
     pool: integrationPool,
     maxWorkers: maxTestWorkers,
     execArgv: integrationExecArgv,
-    reporters: tierBudgetReporters(['default']),
+    reporters: tierBudgetReporters(['default'], { judgeStale: true }),
   };
 }
 
@@ -310,7 +315,7 @@ export function createSystemTestConfig(overrides: SystemTestConfigOverrides = {}
     // ['default', { summary: false }] is the vitest v3 replacement for the
     // deprecated 'basic' reporter. Skipping the per-test streaming summary
     // reduces main<->worker RPC pressure.
-    reporters: tierBudgetReporters([['default', { summary: false }]]),
+    reporters: tierBudgetReporters([['default', { summary: false }]], { judgeStale: true }),
     // Tests emitting verbose console output pile RPC pressure onto the same
     // channel the onTaskUpdate heartbeat uses; write worker stdout directly instead.
     disableConsoleIntercept: true,

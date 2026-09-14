@@ -72,6 +72,7 @@
     "dependency-check": "bunx knip --config packages/dev-tools/knip.config.ts",
     "unused-exports": "tsx packages/dev-tools/src/unused-exports.ts",
     "comment-density": "tsx packages/dev-tools/src/comment-density.ts",
+    "print-failed-step-output": "tsx packages/dev-tools/src/print-failed-step-output.ts",
     "duplication-check": "tsx packages/dev-tools/src/duplication-check.ts",
     "duplication-update-baseline": "tsx packages/dev-tools/src/jscpd-update-baseline.ts",
     "generate:claude-md": "bun run --cwd packages/dev-tools generate:claude-md",

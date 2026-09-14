@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { isFilesystemAccessError, isPathAbsentError } from '../src/fs-utils.js';
+import { isFilesystemAccessError, isPathAbsentError } from '../src/errors/errno.js';
 
 /** Shape of a real `node:fs` rejection: an Error carrying an errno `code`. */
 function errno(code: string): Error & { code: string } {

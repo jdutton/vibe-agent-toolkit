@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-import { createSystemTestConfig, windowsExcludedCliSystemTests } from './vitest.shared.js';
+import { createSystemTestConfig, rootSerialReporters, windowsExcludedCliSystemTests } from './vitest.shared.js';
 
 export default defineConfig({
   test: {
@@ -14,5 +14,7 @@ export default defineConfig({
       'packages/*/test/**/*.system.test.ts',
       'packages/*/src/**/*.system.test.ts',
     ],
+    // One serial process: ceilings only — see `rootSerialReporters`.
+    reporters: rootSerialReporters([['default', { summary: false }]]),
   },
 });

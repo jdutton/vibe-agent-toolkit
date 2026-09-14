@@ -34,7 +34,7 @@ function sample(file: string, durationMs: number, state: DurationSample['state']
 }
 
 function judge(samples: DurationSample[], allowlist: TestTierBudgetEntry[] = []): BudgetVerdict[] {
-  return judgeSamples(samples, allowlist, TIER_BUDGET_MS);
+  return judgeSamples(samples, allowlist, TIER_BUDGET_MS, { judgeStale: true });
 }
 
 describe('repoRelative', () => {
@@ -188,7 +188,7 @@ function fakeModule(moduleId: string, durationMs: number, state: ModuleState = '
 
 /** Feed one module through a fresh reporter and finish the run. */
 async function runReporter(
-  options: { repoRoot: string; allowlist: TestTierBudgetEntry[]; judgeStale?: boolean },
+  options: { repoRoot: string; allowlist: TestTierBudgetEntry[]; judgeStale: boolean },
   moduleId: string,
   durationMs: number,
 ): Promise<{ reporter: TestTierBudgetReporter; write: ReturnType<typeof vi.fn> }> {
@@ -210,13 +210,13 @@ describe('TestTierBudgetReporter', () => {
   });
 
   it('leaves the exit code alone and prints nothing when every file is within budget', async () => {
-    const { write } = await runReporter({ repoRoot: REPO_ROOT, allowlist: [] }, `${REPO_ROOT}/${A_FILE}`, 10);
+    const { write } = await runReporter({ repoRoot: REPO_ROOT, allowlist: [], judgeStale: true }, `${REPO_ROOT}/${A_FILE}`, 10);
     expect(write).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(originalExitCode);
   });
 
   it('sets a non-zero exit code and prints the verdict when a file is over budget', async () => {
-    const { write } = await runReporter({ repoRoot: REPO_ROOT, allowlist: [] }, `${REPO_ROOT}/${A_FILE}`, 1_500);
+    const { write } = await runReporter({ repoRoot: REPO_ROOT, allowlist: [], judgeStale: true }, `${REPO_ROOT}/${A_FILE}`, 1_500);
     expect(process.exitCode).toBe(1);
     expect(write).toHaveBeenCalledTimes(1);
     expect(String(write.mock.calls[0]?.[0])).toContain(A_FILE);
@@ -225,7 +225,7 @@ describe('TestTierBudgetReporter', () => {
   it('resolves module ids against the repo root so allowlist entries match', async () => {
     // 5 000 ms: over the unit budget (so an unmatched id would red) and under
     // the entry's 6 000 ms headroom ceiling (so a matched one passes).
-    const { write } = await runReporter({ repoRoot: `${REPO_ROOT}/`, allowlist: [entry(A_FILE)] }, `${REPO_ROOT}/${A_FILE}`, 5_000);
+    const { write } = await runReporter({ repoRoot: `${REPO_ROOT}/`, allowlist: [entry(A_FILE)], judgeStale: true }, `${REPO_ROOT}/${A_FILE}`, 5_000);
     expect(write).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(originalExitCode);
   });
@@ -241,7 +241,7 @@ describe('TestTierBudgetReporter', () => {
   });
 
   it('forgets the previous run between runs, so watch mode judges each run on its own', async () => {
-    const { reporter, write } = await runReporter({ repoRoot: REPO_ROOT, allowlist: [] }, `${REPO_ROOT}/${A_FILE}`, 1_500);
+    const { reporter, write } = await runReporter({ repoRoot: REPO_ROOT, allowlist: [], judgeStale: true }, `${REPO_ROOT}/${A_FILE}`, 1_500);
     process.exitCode = originalExitCode;
     write.mockClear();
     await reporter.onTestRunEnd();

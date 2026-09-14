@@ -50,8 +50,8 @@ names the integration-shaped work each listed file does and what it measured whe
   (`OVER HEADROOM`) — fix the regression, or re-measure and update `measuredMs` with the reason;
 - a file **listed** that runs under 10 % of its own `measuredMs` fails the run (`STALE ENTRY`)
   until its entry is deleted — judged only under the per-package turbo runs the allowlist was
-  seeded from (`bun run test:<tier>`); the root config's serial run (`test:coverage`, a bare
-  `bunx vitest run` from the root) judges the two ceilings only.
+  seeded from (`bun run test:<tier>`); the three root configs' serial runs (`test:coverage`,
+  `validate-links`, a bare `bunx vitest run --config <root config>`) judge the two ceilings only.
 
 Durations are noisy (2–4× between one serial vitest process and turbo's parallel workers for a
 small file, up to 13× for the heaviest, and 3–7× between a quiet turbo seed and a turbo run on
@@ -70,7 +70,7 @@ list should be checked against the other. If the work is legitimate for its tier
 reason. To re-seed a tier after an uncached run: `bun run seed:test-tier-budget <tier>`
 prints an entry for every file over its budget and a refreshed one for every file already listed,
 from the turbo logs, with reasons classified from each file's source — never an entry for a file
-under budget. Review before pasting.
+under budget (listing one can only widen its ceiling). Review before pasting.
 
 The reporter is **not wired on Windows**: the allowlist was measured on macOS, and this repo's own
 Windows CI runs 6–9× slower, past the headroom. A Windows seed would enable it there.

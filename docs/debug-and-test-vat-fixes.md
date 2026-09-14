@@ -107,11 +107,13 @@ Reproduce the bug as a test before touching source code:
 
 See [docs/writing-tests.md](./writing-tests.md) for patterns and classification guide.
 
-Run just the test you added:
+Run just the test you added, from its package directory (`bun run test:<tier> -- <pattern>` does
+not work: bun strips the `--` and turbo reads the pattern as a task name):
 ```bash
-bun run test:unit -- <pattern>          # unit
-bun run test:integration -- <pattern>  # integration
-bun run test:system -- <pattern>       # system
+cd packages/<pkg>
+bunx vitest run test/<file>.test.ts                                        # unit
+bunx vitest run --config vitest.integration.config.ts test/integration/<file>.integration.test.ts
+bunx vitest run --config vitest.system.config.ts test/system/<file>.system.test.ts
 ```
 
 ## Validate Before Committing

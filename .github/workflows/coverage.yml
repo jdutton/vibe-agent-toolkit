@@ -18,20 +18,37 @@ jobs:
           fetch-depth: 0
 
       # No `node-version`, so the setup action installs the exact Node floor it
-      # derives from root package.json `engines.node`. This is the ONE tier that
-      # runs the unit suite on the floor (validate.yml's matrix runs Node 24;
-      # node-floor.yml only smoke-tests), so a floor-only red shows up here and
-      # nowhere else.
+      # derives from root package.json `engines.node`. This is the ONE job whose
+      # unit-suite VERDICT is taken on the floor (validate.yml's matrix runs Node
+      # 24; node-floor.yml only smoke-tests; test-heap-guard.yml runs two
+      # packages' integration/system tiers on the floor but reads only heap
+      # lines), so a floor-only unit red shows up here and nowhere else.
       - name: Setup toolchain
         uses: ./.github/actions/setup
 
       # vitest directly, not through `vibe-validate run`: the wrapper's capture
       # dropped vitest's own summary on a long run, so a red here showed no
       # failing file — the exit code and the reporter verdicts are the record.
+      # This job is the ONE measurement the thresholds in vitest.config.ts are
+      # seeded from: `COVERAGE_RATCHET=write` arms vitest's autoUpdate here and
+      # nowhere else, so a local run on another platform or Node never writes a
+      # number the floor cannot meet.
       - name: Run tests with coverage
         run: bun run test:coverage
         env:
           GH_TOKEN: ${{ github.token }}
+          COVERAGE_RATCHET: write
+
+      # The other direction of the ratchet: when this run cleared a threshold by a
+      # whole point, autoUpdate rewrote vitest.config.ts. That diff is the raise to
+      # commit — fail here and print it, so a threshold never sits a point below
+      # what the floor measures.
+      - name: Refuse a threshold the floor now clears by a whole point
+        run: |
+          if ! git diff --exit-code -- vitest.config.ts; then
+            echo "::error::coverage rose a whole point above a threshold — commit the vitest.config.ts diff above to raise the ratchet"
+            exit 1
+          fi
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7

@@ -1,6 +1,6 @@
 /**
  * The rule manifest IS the `eslint/rules/` directory, and everything derived
- * from it — `rules`, `configs.recommended`, the two docs tables — is asserted
+ * from it — `rules`, `configs.recommended` — is asserted
  * against the directory rather than against a number.
  *
  * The old form pinned `toHaveLength(27)`, `19`, `15`, `4` beside a prose comment
@@ -10,19 +10,12 @@
  * cannot check; a set derived from the manifest is the manifest.
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 
 import type { Rule } from 'eslint';
 import { describe, expect, it } from 'vitest';
 
-import {
-  committedRulesDocBlock,
-  renderRulesDocBlock,
-  RULES_DOC_FILES,
-  type RuleLike,
-} from '../../scripts/eslint-rules-doc.js';
 import { resolveFromImportMeta } from '../../src/fs.js';
-import { safePath } from '../../src/path.js';
 
 import { loadEslintModule, loadLocalRuleModule } from './rule-tester.js';
 
@@ -30,7 +23,7 @@ const RULES_DIR = resolveFromImportMeta(import.meta.url, '..', '..', 'eslint', '
 const NAMESPACE = '@vibe-agent-toolkit/';
 
 interface Plugin {
-  rules: Record<string, Rule.RuleModule & RuleLike>;
+  rules: Record<string, Rule.RuleModule & { meta: { docs: { recommended: boolean; recommendedSeverity?: 'error' | 'warn' } } }>;
   configs: { recommended: { rules: Record<string, 'error' | 'warn'> } };
 }
 
@@ -106,24 +99,3 @@ describe('configs.recommended is derived from meta.docs', () => {
   });
 });
 
-/**
- * The docs tables are GENERATED, and the committed copy must equal what the
- * generator produces now. `bun run generate:eslint-rules-doc` (in
- * `packages/utils`) is the fix for a red here — never a hand edit to the table.
- */
-describe('the committed rule tables equal the generated block', () => {
-  const generated = renderRulesDocBlock(plugin);
-
-  it.each(RULES_DOC_FILES.map((file) => [safePath.relative(process.cwd(), file), file]))('%s', (_label, file) => {
-    // A doc this repo wrote, read back as it was written.
-    const committed = committedRulesDocBlock(readFileSync(file, 'utf8'));
-    expect(committed, `${file} carries no gen:eslint-rules block`).toBeDefined();
-    expect(committed).toBe(generated);
-  });
-
-  it('lists every rule exactly once', () => {
-    for (const name of Object.keys(plugin.rules)) {
-      expect(generated.split(`| \`${name}\` |`)).toHaveLength(2);
-    }
-  });
-});

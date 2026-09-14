@@ -1264,8 +1264,3 @@ export function realpathFrom(table: RealpathTable, filePath: string): string {
 
   return realPath;
 }
-
-// The errno predicates live in `./errors/errno.ts` (a leaf — see its header for
-// the import cycle they used to close); re-exported here because this module
-// is where every caller found them and `@vibe-agent-toolkit/utils/fs` names it.
-export { isFilesystemAccessError, isPathAbsentError } from './errors/errno.js';

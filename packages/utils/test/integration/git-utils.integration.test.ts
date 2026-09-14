@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 import { gitFindRoot, gitLsFiles, isGitIgnored } from '../../src/git-utils.js';
 import { normalizedTmpdir } from '../../src/path-utils.js';
 import { createSymlink, symlinkCapability } from '../../src/test-helpers.js';
+import { gitExecutable } from '../../src/testing/executables.js';
 import { setupSyncTempDirSuite } from '../../src/testing/temp-dir.js';
 import { refuseUnreadableFixture } from '../../src/testing.js';
 import { createGitRepo } from '../test-helpers.js';
@@ -115,7 +116,7 @@ describe('gitLsFiles', () => {
     fs.writeFileSync(file2, 'export {}');
 
     // Add files to git
-    spawnSync('git', ['add', '.'], { cwd: tempDir, stdio: 'pipe' });
+    spawnSync(gitExecutable(), ['add', '.'], { cwd: tempDir, stdio: 'pipe' });
 
     const result = listFixture();
 
@@ -130,7 +131,7 @@ describe('gitLsFiles', () => {
     fs.writeFileSync(safePath.join(tempDir, 'test.txt'), 'test');
 
     // Add files to git
-    spawnSync('git', ['add', '.'], { cwd: tempDir, stdio: 'pipe' });
+    spawnSync(gitExecutable(), ['add', '.'], { cwd: tempDir, stdio: 'pipe' });
 
     const result = listFixture({ patterns: ['*.md'] });
 
@@ -142,7 +143,7 @@ describe('gitLsFiles', () => {
   it('should include untracked files when requested', () => {
     // Create tracked file
     fs.writeFileSync(safePath.join(tempDir, TRACKED_FILE), '# Tracked');
-    spawnSync('git', ['add', TRACKED_FILE], { cwd: tempDir, stdio: 'pipe' });
+    spawnSync(gitExecutable(), ['add', TRACKED_FILE], { cwd: tempDir, stdio: 'pipe' });
 
     // Create untracked file
     fs.writeFileSync(safePath.join(tempDir, 'untracked.md'), '# Untracked');
@@ -180,7 +181,7 @@ describe('gitLsFiles', () => {
     // this filename is unusable to any exact-string lookup against it.
     const nonAsciiFile = 'café.md';
     fs.writeFileSync(safePath.join(tempDir, nonAsciiFile), '# Café\n');
-    spawnSync('git', ['add', nonAsciiFile], { cwd: tempDir, stdio: 'pipe' });
+    spawnSync(gitExecutable(), ['add', nonAsciiFile], { cwd: tempDir, stdio: 'pipe' });
 
     const result = listFixture();
 

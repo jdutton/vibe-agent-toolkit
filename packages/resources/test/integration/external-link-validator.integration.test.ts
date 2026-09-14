@@ -15,8 +15,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ExternalLinkValidator } from '../../src/external-link-validator.js';
 import { setupExternalLinkValidatorSuite } from '../test-helpers.js';
 
-// Use httpbin.org — designed for automated HTTP testing, no bot detection
-const WORKING_URL = 'https://httpbin.org/status/200';
+// GitHub's canonical demo repo — the same host the corpus-scan system test clones
+const WORKING_URL = 'https://github.com/octocat/Hello-World';
 const BROKEN_URL = 'https://this-domain-definitely-does-not-exist-12345.com';
 
 const NET_AVAILABLE = process.env['NET_AVAILABLE'] === '1';

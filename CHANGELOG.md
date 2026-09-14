@@ -248,6 +248,16 @@ with a regression test.
   are replaced by ONE rule, `no-raw-node-path`**, with a `functions` option table; messages, autofix
   and options are unchanged. Rename the three ids in configs and `eslint-disable` comments.
 
+- **`@vibe-agent-toolkit/utils/eslint`: `no-bare-executable-spawn` joins `configs.recommended` at
+  `error`** — `spawn`/`spawnSync`/`execFile`/`execFileSync`/`execSync` with the literal `'git'` or
+  `'node'` as the command is refused (PATH is searched at spawn time). Spawn `process.execPath`, or
+  `NODE_EXECUTABLE` / `gitExecutable()` from `@vibe-agent-toolkit/utils/testing`, or disable the
+  rule by name.
+
+- **`vat-lab` and `vat-compile-resources` exit `2` on an uncaught throw**, as `vat` already did;
+  Node's default `1` read as "findings". `installLastResortExit()` and `errorDiagnostics()` ship in
+  `@vibe-agent-toolkit/schema` for any bin that wants the same ending.
+
 - **Five `VALIDATION_RULES` rows that nothing ever emitted are gone** (`BROKEN_INTERNAL_LINK`,
   `CIRCULAR_REFERENCE`, `OUTSIDE_PROJECT_BOUNDARY`, `WINDOWS_BACKSLASH_IN_PATH`, `LINKS_TO_NAVIGATION_FILES`);
   the link-integrity checks emit `LINK_INTEGRITY_BROKEN` / `LINK_OUTSIDE_PROJECT` through `CODE_REGISTRY`.
@@ -374,7 +384,10 @@ with a regression test.
 - **(contributor gates)** `local/commands-import-boundary` (a new `node:fs` import in a CLI command
   module is a lint error; 45 files ratcheted with reasons); `bun run unused-exports` (a knip ratchet:
   a new unused export or a stale allowlist entry fails; the allowlist is a `<file> <name> <reason>`
-  data file, not a module); a comment-density ratchet per package.
+  data file, not a module); a comment-density ratchet per package. When a gate step fails in CI,
+  `bun run print-failed-step-output` prints its captured stdout and stderr verbatim — the
+  vibe-validate summary keeps only lines carrying an error keyword, so a verdict without one
+  used to vanish from the log.
 
 - **(contributor convention) `__internal`** — a module exports one `__internal` object for its
   test-facing helpers instead of one `export` per helper; a test holds that no barrel re-exports it
@@ -565,7 +578,9 @@ with a regression test.
   the root `package.json`, so a root script edit no longer cold-starts every cache.
 
 - **(contributor workflow)** Coverage counts the CLI commands, every `schemas/` directory and every
-  `index.ts`; the thresholds are the measured 82/77/86/82 %, a self-raising ratchet. The unit-tier
+  `index.ts`; the thresholds are 82/76/86/82 %, measured by the CI coverage job (Linux, the Node
+  floor) — the one run that may raise them (`COVERAGE_RATCHET=write`), and it fails on the diff
+  when it does, so the ratchet is asserted both ways; a local run never writes them. The unit-tier
   per-test timeout is 15 s (150 s on Windows), down from 60 s.
 
 - **(dev-tools)** The compat-empirical corpus manifest and trigger-prompts file no longer carry a

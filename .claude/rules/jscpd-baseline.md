@@ -12,7 +12,8 @@ When `bun run duplication-check` fails, refactor: extract the clone into a share
 permission — the baseline is the set of clones still to be removed, and an entry added to make a
 red go green is a one-way ratchet that hides the clone forever
 ([drift class 4](../../docs/contributing/drift-classes.md#4-a-one-way-ratchet)).
-(enforced by: `bun run duplication-check`)
+(enforced by: `bun run duplication-check` for "new duplication fails"; "never edit the baseline
+without permission" is not)
 
 Duplication is judged by the gate (both tiers), never by the per-file signal an implementer runs,
 so a "move/rename" task must delete the original in the same task — a copy left behind for a later

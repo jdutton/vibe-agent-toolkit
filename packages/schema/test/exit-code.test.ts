@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ExitCode,
+  errorDiagnostics,
   exitCodeForSeverityCounts,
   isExitCode,
   type SeverityCounts,
@@ -60,5 +61,27 @@ describe('exitCodeForSeverityCounts', () => {
     for (const c of [counts(0, 0), counts(9, 9, 9), counts(0, 9)]) {
       expect(exitCodeForSeverityCounts(c, { strict: true })).not.toBe(ExitCode.ERROR);
     }
+  });
+});
+
+describe('errorDiagnostics', () => {
+  it('returns the stack of an Error, not just its message', () => {
+    const diagnostics = errorDiagnostics(new Error('boom'));
+    expect(diagnostics).toContain('Error: boom');
+    expect(diagnostics.split('\n').length).toBeGreaterThan(1);
+  });
+
+  it('falls back to name and message when an Error carries no stack', () => {
+    // Cross-realm and hand-built errors reach here with `stack` undefined;
+    // `stack` is optional in the type, so the fallback is not theoretical.
+    const stackless = new RangeError('out of range');
+    stackless.stack = undefined;
+    expect(errorDiagnostics(stackless)).toBe('RangeError: out of range');
+  });
+
+  it('inspects a thrown non-Error rather than discarding it', () => {
+    expect(errorDiagnostics({ code: 'ENOENT' })).toContain("code: 'ENOENT'");
+    expect(errorDiagnostics('a bare string')).toContain('a bare string');
+    expect(errorDiagnostics(undefined)).toContain('undefined');
   });
 });

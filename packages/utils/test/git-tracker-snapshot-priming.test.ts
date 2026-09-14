@@ -31,6 +31,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { gitTreeSnapshot, withGitSnapshotCache } from '../src/git-snapshot.js';
 import { GitTracker } from '../src/git-tracker.js';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '../src/path-utils.js';
+import { gitExecutable } from '../src/testing/executables.js';
 
 /** A path that exists on disk but was created AFTER the snapshot was taken. */
 const APPEARED_AFTER = 'appeared-after.md';
@@ -41,7 +42,7 @@ const COMMITTED = 'committed.md';
 const created: string[] = [];
 
 function git(cwd: string, ...args: string[]): void {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  const result = spawnSync(gitExecutable(), args, { cwd, encoding: 'utf8' });
   if (result.status !== 0) {
     throw new Error(`git ${args.join(' ')} failed: ${result.stderr ?? result.error?.message}`);
   }
