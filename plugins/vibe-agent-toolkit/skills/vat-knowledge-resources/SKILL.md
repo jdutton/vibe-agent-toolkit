@@ -18,8 +18,6 @@ directories to have different required frontmatter — without writing a single 
 ## Config Format
 
 ```yaml
-version: 1
-
 resources:
   collections:
     # Name your collection to match the doc type
@@ -74,7 +72,7 @@ and why — `vat resources query` runs ONE read-only SQL statement against the s
 ```bash
 vat resources query 'SELECT path FROM resource_realizations WHERE ext = ".md" LIMIT 5'
 vat resources query 'SELECT * FROM blob_conditions'        # what was refused, and why
-vat resources query 'SELECT target FROM blob_references WHERE kind = ?' --param markdown-link
+vat resources query 'SELECT rawRef FROM blob_references WHERE syntacticForm = ?' --param markdown-link
 ```
 
 A statement naming a table or column that does not exist gets the real columns of the tables it
@@ -108,8 +106,9 @@ SELECT path FROM resource_realizations
 the rows were built by this run or read from the projection store — and it is reported rather than
 inferred, because a correct store hit and a correct re-derivation produce identical rows.
 `populationMs` sits beside it and says what that origin was WORTH, so the tell is not a bare label
-you have to take on faith. Measured on this repo: **1.06 s `derived` against 0.19 s `store`**, same
-answer; on a ~11,700-member adopter tree, **16.5 s cold against 1.3 s from the store**.
+you have to take on faith. `vat resources check --help` carries the current reference timings
+(VAT's own repo and a ~10k-file adopter tree, warm and cold) — read them there rather than from a
+number pasted here.
 
 ⛔ There is **no `engine` field**. An earlier RC published one (`sqlite | ephemeral`) to say which
 database answered the SQL; it is gone, because the answer is now always the same. The statement
@@ -135,10 +134,13 @@ resources:
     orphan-skills:
       description: Every SKILL.md must be referenced by a plugin
       sql: |
-        SELECT path FROM resource_realizations
-         WHERE path LIKE '%/SKILL.md'
-           AND path NOT IN (SELECT target FROM blob_references WHERE kind = 'plugin-skill')
-      severity: error        # optional; error is the default
+        SELECT rr.path AS path
+        FROM resource_realizations rr
+        WHERE rr.path LIKE '%/SKILL.md'
+          AND rr.resourceId NOT IN (
+            SELECT r.dstResource FROM edge_resolutions r WHERE r.dstKind = 'resource'
+          )
+      severity: error        # optional; error | warning | info (error is the default)
 ```
 
 ```bash
@@ -151,9 +153,10 @@ vat resources check --format json      # honoured on the error path too
 usual "assert true" reflex and it is the single most common authoring mistake — write the query
 that finds what is wrong, not the one that confirms what is right.
 
-`severity` accepts the same values as `resources.validation`, but `RESOURCE_CHECK_BROKEN` is
-**not overridable**: a run that did not complete cannot be downgraded to a warning, because the
-green would mean nothing.
+`severity` on a check is `error` | `warning` | `info` — there is no `ignore` here; to silence a
+check an adopter overrides its `CUSTOM:<name>` code through `resources.validation.severity`
+(which does accept `ignore`). `RESOURCE_CHECK_BROKEN` is **not overridable** at all: a run that did
+not complete cannot be downgraded to a warning, because the green would mean nothing.
 
 ### The `--budget` bound, and why it exists
 
@@ -170,8 +173,8 @@ vat resources check --budget 0     # remove the bound; CAN then hang forever
 **Default 300 s, and it is time WITHOUT PROGRESS, not total runtime.** ⚠️ In practice those are
 nearly the same thing today: the population is a single un-instrumented unit, so for a cold run the
 budget IS effectively a total-runtime bound. Size it against your population, not against your SQL —
-on an ~11,700-member adopter tree the population is **>99.9%** of a check run (16.5 s cold, ~1.3 s
-from the store) while the SQL itself is 0.0008–0.004 s.
+on a large adopter tree the population is essentially the whole check run while the SQL itself is
+milliseconds; `vat resources check --help` states the reference timings.
 
 A killed or crashed run is still evidence: checks that completed keep their per-rule row counts, and
 the report names the rule that was in flight. It **never exits 0** — not on a watchdog kill, not on
@@ -203,7 +206,7 @@ frontmatterSchema: "@vibe-agent-toolkit/agent-skills/..."  # npm package export
 
 ## Recommend `format: "uri-reference"` for path-shaped frontmatter fields
 
-When designing a schema for a knowledge-base collection that references other files (e.g., `parent_prd`, `supersedes`, `adr_citations[*].adr`, `artifacts`), declare `format: "uri-reference"` on the field. VAT will then validate those values against the file system using the same engine as markdown link checking — broken paths, missing anchors, gitignore violations, and unknown URI schemes all produce errors.
+When designing a schema for a knowledge-base collection that references other files (e.g., `parent_prd`, `supersedes`, `adr_citations[*].adr`, `artifacts`), declare `format: "uri-reference"` on the field. VAT will then validate those values against the file system using the same engine as markdown link checking — broken paths, missing anchors and gitignore violations produce errors (`FRONTMATTER_LINK_BROKEN`, `FRONTMATTER_ANCHOR_MISSING`, `FRONTMATTER_LINK_TO_GITIGNORED`); an unknown URI scheme produces a warning (`FRONTMATTER_UNKNOWN_LINK`).
 
 To require local committed files (no absolute URLs), add a `pattern` excluding scheme prefixes. Standard JSON Schema; stays portable.
 
@@ -296,6 +299,9 @@ For tools that **modify** frontmatter (not just validate it), see
 ```yaml
 status: success
 filesScanned: 47
+linksChecked: 212
+durationSecs: 0.23
+validationMode: strict
 collections:
   systems:
     resourceCount: 7
@@ -305,7 +311,10 @@ collections:
     resourceCount: 12
     hasSchema: true
     validationMode: permissive
-duration: 234ms
 ```
+
+On issues the shape changes: `status` becomes the worst actionable severity (`warning` | `error`),
+with `errorsFound`, `filesWithErrors` and `issueCounts: {errors, warnings, info}` — the field
+list is in `vat resources validate --help`.
 
 Errors appear in stderr with `file:line: message` format for editor navigation.
