@@ -63,7 +63,7 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
   // Only the rows something EMITS live here. FILENAME_COLLISION, the broken /
   // circular / outside-project link codes and the Windows-backslash code used
   // to sit in this table too; none was emitted through it (the link checks go
-  // through CODE_REGISTRY as LINK_INTEGRITY_BROKEN / LINK_OUTSIDE_PROJECT, the
+  // through CODE_REGISTRY as LINK_INTEGRITY_BROKEN / LINK_OUTSIDE_SKILL_DIR, the
   // collision through `filenameCollisionIssue` in skill-packager.ts), and a
   // second, stale definition of one code is worse than none.
   LINK_TARGETS_DIRECTORY: {

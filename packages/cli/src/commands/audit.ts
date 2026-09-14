@@ -694,8 +694,8 @@ async function validateSingleSkill(
     return configAware;
   }
 
-  // Fallback: basic validation
-  const validateOptions: ValidateOptions = { skillPath, locationRoot };
+  // Fallback: basic validation. Severity is applied by `applySeverityFilter`.
+  const validateOptions: ValidateOptions = { skillPath, locationRoot, validation: {} };
   if (options.warnUnreferencedFiles) {
     validateOptions.checkUnreferencedFiles = true;
   }
@@ -2701,8 +2701,8 @@ async function handleFileEntry(
       return configAware;
     }
 
-    // Wild mode: basic validation
-    const validateOptions: ValidateOptions = { skillPath: fullPath, locationRoot };
+    // Wild mode: basic validation. Severity is applied by `applySeverityFilter`.
+    const validateOptions: ValidateOptions = { skillPath: fullPath, locationRoot, validation: {} };
     if (options.warnUnreferencedFiles) {
       validateOptions.checkUnreferencedFiles = true;
     }

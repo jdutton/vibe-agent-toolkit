@@ -1,4 +1,4 @@
-import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation } from '@vibe-agent-toolkit/utils';
 
 import type { LinkResolution } from '../walk-link-graph.js';
@@ -115,19 +115,29 @@ export function walkerExclusionsToIssues(
     if (!r.excludeReason) continue;
     const code = evaluate(exclusionToContext(r.excludeReason, r.targetExists));
     if (code === null) continue;
-    // Anchor to the file CONTAINING the link, not the target. For a
-    // `missing-target` exclusion the target does not exist, so a location
-    // naming it points at nothing the author can open. The target is a link,
-    // and links have their own field.
-    const target = issueLocation(r.path, locationRoot);
-    issues.push(materializeIssue(code, {
-      location: issueLocation(r.sourcePath, locationRoot),
-      ...(r.sourceLine !== undefined && { line: r.sourceLine }),
-      link: r.linkHref ?? target,
-      detail: exclusionDetail(r, target),
-    }));
+    issues.push(edgeIssue(code, r, locationRoot));
   }
   return issues;
+}
+
+/** Followed links that left the skill directory, as issues at the registry default severity. */
+export function outsideSkillDirLinksToIssues(
+  links: readonly LinkResolution[],
+  locationRoot: string,
+): ValidationIssue[] {
+  const code = evaluate(makeRuleContext({ subject: 'edge', insideSkillDir: false }));
+  return code === null ? [] : links.map(r => edgeIssue(code, r, locationRoot));
+}
+
+/** One edge's issue, anchored to the file CONTAINING the link: a missing target names nothing to open. */
+function edgeIssue(code: IssueCode, r: LinkResolution, locationRoot: string): ValidationIssue {
+  const target = issueLocation(r.path, locationRoot);
+  return materializeIssue(code, {
+    location: issueLocation(r.sourcePath, locationRoot),
+    ...(r.sourceLine !== undefined && { line: r.sourceLine }),
+    link: r.linkHref ?? target,
+    detail: exclusionDetail(r, target),
+  });
 }
 
 /**

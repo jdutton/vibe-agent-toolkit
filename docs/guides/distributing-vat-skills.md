@@ -90,7 +90,10 @@ skill bundles:
   depth-exceeded links (default `{{link.text}}`). Template context: `link.text`, `link.href`,
   `link.fragment`, `link.type`, `link.resource.id|fileName|relativePath`, `skill.name`.
 - `files`: explicit source→dest entries for build artifacts and unlinked files.
-- `publish: false`, `resourceNaming`, `validation` (severity overrides / allow entries), `targets`.
+- `publish: false` (per skill, or once under `skills.defaults`): an in-place skill — validated at
+  source, never built into `dist/skills/`, never expected by `vat verify`. Plugin-local skills ship
+  with their plugin regardless.
+- `resourceNaming`, `validation` (severity overrides / allow entries), `targets`.
 
 The full key reference is in the `vat-skill-authoring` skill; every finding a build can raise is in
 [`validation-codes.md`](../validation-codes.md).

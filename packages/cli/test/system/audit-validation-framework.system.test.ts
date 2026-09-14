@@ -48,7 +48,7 @@ const makeSkillMd = (name: string, body = 'This is a test skill.') =>
  *     outside.md                       (lives ABOVE the project root)
  *     outside-link/                    ← projectDir (config root)
  *       skills/
- *         SKILL.md  → links to ../../outside.md (LINK_OUTSIDE_PROJECT, severity=warning)
+ *         SKILL.md  → links to ../../outside.md (LINK_OUTSIDE_PROJECT, severity=error)
  *       vibe-agent-toolkit.config.yaml (no validation overrides — config anchors projectRoot here)
  *
  * The packaging walker emits LINK_OUTSIDE_PROJECT when a link target falls
@@ -56,8 +56,8 @@ const makeSkillMd = (name: string, body = 'This is a test skill.') =>
  * (config → git → null), the config at `outside-link/` anchors the project
  * root there, so `../../outside.md` does escape it.
  *
- * This fixture verifies: audit exits 0 even when LINK_OUTSIDE_PROJECT
- * (severity=warning) fires.
+ * This fixture verifies: audit exits 1 when LINK_OUTSIDE_PROJECT
+ * (severity=error, the packaging walker's project-root escape) fires.
  */
 function setupProjectWithOutsideLink(tempDir: string): string {
   const projectDir = safePath.join(tempDir, 'outside-link');
@@ -85,7 +85,7 @@ function setupProjectWithOutsideLink(tempDir: string): string {
  * Create a project whose SKILL.md has a broken link (LINK_MISSING_TARGET,
  * severity=error).  No validation.allow in the config.
  *
- * Used to assert that audit exits 0 even when severity=error issues fire.
+ * Used to assert that audit exits 1 when severity=error issues fire.
  */
 function setupProjectWithBrokenLink(tempDir: string): string {
   const projectDir = safePath.join(tempDir, 'broken-link');
@@ -142,9 +142,10 @@ function setupProjectWithBrokenLinkAllowed(tempDir: string): string {
 }
 
 /**
- * Create a project that emits LINK_OUTSIDE_PROJECT (emitted at severity=warning
- * by validateSkill), and the config sets severity.LINK_OUTSIDE_PROJECT to
- * 'ignore'. Audit must hide this code from its output.
+ * Create a project that emits LINK_OUTSIDE_PROJECT (the packaging walker's
+ * project-root escape, error by default — the config-free `validateSkill` lane
+ * never runs here because the config governs the skill), and the config sets
+ * severity.LINK_OUTSIDE_PROJECT to 'ignore'. Audit must hide this code from its output.
  *
  * Note: audit reads the VATConfig and applies severity to decide what to show,
  * but it does NOT apply allow. Only vat skills validate uses allow.

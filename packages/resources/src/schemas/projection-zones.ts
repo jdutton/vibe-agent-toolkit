@@ -143,9 +143,8 @@ export type LensEntryPointRow = z.infer<typeof LensEntryPointRowSchema>;
  * Recording *which contributors ran* detects only total absence. Population
  * divergence is a difference in **extent**, and on-demand materialisation
  * makes partial divergence the common case. Concretely: a skill configured
- * `publish: false` is **inside** the extent `vat validate` asks for
- * (packaging correctness is not conditional on shipping) and **outside** the
- * distribution-consistency extent `vat verify` asks for. Both record an
+ * `publish: false` is **inside** the extent `vat validate` asks for and
+ * **outside** the distribution-consistency extent `vat verify` asks for. Both record an
  * identical contributor set. Both report complete. A gate counting broken
  * bundled references returns 12 and 11.
  *

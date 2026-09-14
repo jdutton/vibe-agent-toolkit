@@ -125,6 +125,13 @@ const SCENARIOS: Scenario[] = [
     ctx: { subject: 'edge', fileKind: 'doc', existsAtSource: true, reachableFromSkillMd: true, referencedHow: 'link' },
     expect: null,
   },
+  {
+    // Followed and bundled, so the link resolves — but from outside the skill's
+    // own directory, which the packager rewrites. A strict skill raises it.
+    intent: 'followed link to an existing file outside the skill directory, inside the project',
+    ctx: { subject: 'edge', insideSkillDir: false },
+    expect: 'LINK_OUTSIDE_SKILL_DIR',
+  },
   // --- files: orphan candidates --------------------------------------------
   {
     intent: 'unreferenced file in the built output',
@@ -219,6 +226,18 @@ const ORDERING_SCENARIOS: Scenario[] = [
     ctx: { subject: 'edge', existsAtSource: false, nonRoutableSource: true },
     expect: 'LINK_MISSING_TARGET',
   },
+  {
+    // One boundary per link: a target above the project root is necessarily
+    // outside the skill directory too, and must report only the project escape.
+    intent: 'ordering: target outside the project ALSO outside the skill directory → outside-project wins',
+    ctx: { subject: 'edge', outsideProject: true, insideSkillDir: false },
+    expect: 'LINK_OUTSIDE_PROJECT',
+  },
+  {
+    intent: 'ordering: missing target ALSO outside the skill directory → missing-target wins',
+    ctx: { subject: 'edge', existsAtSource: false, insideSkillDir: false },
+    expect: 'LINK_MISSING_TARGET',
+  },
 ];
 
 /** Both tables drive the same assertions; the split is documentary. */
@@ -295,6 +314,7 @@ describe('rule-engine: anti-workaround invariant', () => {
   // Codes whose detection now flows through the engine / shared materializer.
   const ENGINE_CODES: IssueCode[] = [
     'LINK_OUTSIDE_PROJECT',
+    'LINK_OUTSIDE_SKILL_DIR',
     'LINK_TARGETS_DIRECTORY',
     'LINK_TO_UNBUNDLED_DIRECTORY',
     'LINK_EXCLUDED_BY_PATTERN',

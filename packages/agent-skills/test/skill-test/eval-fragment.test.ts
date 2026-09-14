@@ -129,6 +129,14 @@ describe('EvalFragmentSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('rejects an empty evalId', () => {
+    expect(EvalFragmentSchema.safeParse({ ...validFragment, evalId: '' }).success).toBe(false);
+  });
+
+  it('rejects a non-integer numeric evalId (a float is not an eval id)', () => {
+    expect(EvalFragmentSchema.safeParse({ ...validFragment, evalId: 3.5 }).success).toBe(false);
+  });
+
   it('rejects an invalid arm value', () => {
     const result = EvalFragmentSchema.safeParse({ ...validFragment, arm: 'sideways' });
     expect(result.success).toBe(false);
@@ -170,6 +178,36 @@ describe('parseEvalFragment', () => {
   it('falls back to "(unknown)" in the message when evalId itself is missing', () => {
     const withoutEvalId = { runNonce: validFragment.runNonce, expectations: validFragment.expectations };
     expect(() => parseEvalFragment(withoutEvalId, warnUnwatched)).toThrow(/grader fragment for eval \(unknown\) has an invalid shape/);
+  });
+});
+
+describe('parseEvalFragment — integer eval ids (adopter report)', () => {
+  // evals.json documents `id: 1` as a first-class form (evals-template.ts) and
+  // every other layer stringifies it; the grader prompt used to render it
+  // unquoted, so a grader echoing `"evalId": 3` failed the WHOLE suite as
+  // harness-broke on a fail-closed `z.string()`.
+  it('accepts a numeric evalId and normalises it to the string form', () => {
+    const fragment = parseEvalFragment(fragmentWith({ evalId: 3 }), warnUnwatched);
+    expect(fragment.evalId).toBe('3');
+    expect(typeof fragment.evalId).toBe('string');
+  });
+
+  it('normalises a numeric id to ITS OWN string — 4 does not become the eval under grading', () => {
+    // The request-side id is '3'; a grader that wrote 4 must still read as '4'
+    // after normalisation so nothing downstream can mistake it for eval 3.
+    const fragment = parseEvalFragment(fragmentWith({ evalId: 4 }), warnUnwatched);
+    expect(fragment.evalId).toBe('4');
+    expect(fragment.evalId).not.toBe('3');
+  });
+
+  it('still refuses a numeric runNonce — only evalId is normalised', () => {
+    expect(() => parseEvalFragment(fragmentWith({ runNonce: 12345 }), warnUnwatched)).toThrow(EvalFragmentError);
+  });
+
+  it('names a numeric evalId in the error message when the rest of the fragment is invalid', () => {
+    expect(() => parseEvalFragment(fragmentWith({ evalId: 3, expectations: [] }), warnUnwatched)).toThrow(
+      /grader fragment for eval "3" has an invalid shape/,
+    );
   });
 });
 

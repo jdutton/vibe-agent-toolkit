@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { deferredAssetsToIssues, walkerExclusionsToIssues } from '../../src/validators/walker-to-issues.js';
+import { deferredAssetsToIssues, outsideSkillDirLinksToIssues, walkerExclusionsToIssues } from '../../src/validators/walker-to-issues.js';
 import type { ExcludeRule, LinkResolution } from '../../src/walk-link-graph.js';
 
 const SOURCE = '/root/skills/demo/SKILL.md';
@@ -170,6 +170,30 @@ describe('walkerExclusionsToIssues: the two previously-silent reasons', () => {
     expect(issues[0]?.message).toBe(
       'A reference was excluded from the bundle by an excludeReferencesFromBundle rule this project declared; the target did not ship. (link: /root/docs/internal.md; matched excludeReferencesFromBundle pattern(s): docs/**, internal/**)',
     );
+  });
+});
+
+describe('outsideSkillDirLinksToIssues', () => {
+  const followed: LinkResolution = {
+    path: '/root/docs/shared.md',
+    sourcePath: SOURCE,
+    sourceLine: 3,
+    targetExists: true,
+    bundled: true,
+    linkHref: '../../docs/shared.md',
+  };
+
+  it('reports each followed out-of-directory link as LINK_OUTSIDE_SKILL_DIR, anchored at the linking file', () => {
+    const issues = outsideSkillDirLinksToIssues([followed], '/root');
+    expect(issues.map(i => [i.code, i.location, i.line, i.link])).toEqual([
+      ['LINK_OUTSIDE_SKILL_DIR', 'skills/demo/SKILL.md', 3, '../../docs/shared.md'],
+    ]);
+    // Raw registry default; the framework resolves it against the skill's config.
+    expect(issues[0]?.severity).toBe('ignore');
+  });
+
+  it('returns nothing for no followed out-of-directory links', () => {
+    expect(outsideSkillDirLinksToIssues([], '/root')).toEqual([]);
   });
 });
 

@@ -127,6 +127,8 @@ export interface LinkGraphResult {
   bundledAssets: string[];
   /** References detected but NOT bundled (depth, exclude, etc.) */
   excludedReferences: LinkResolution[];
+  /** Followed links whose shipped target lies outside the skill's directory (inside the project) */
+  outsideSkillDirLinks: LinkResolution[];
   /** Actual max depth of the bundled portion */
   maxBundledDepth: number;
   /** Asset paths that are deferred (declared in files config, may not exist yet) */
@@ -261,6 +263,18 @@ function isOutsideProject(targetPath: string, projectRoot: string): boolean {
 // used directly at the call sites below. On APFS/NTFS a `Claude.md` is loaded as
 // instructions exactly as a `CLAUDE.md` is, so the walker must refuse both spellings.
 
+function makeFollowedLink(targetPath: string, sourcePath: string, targetExists: boolean, link: ResourceLink): LinkResolution {
+  return {
+    path: targetPath,
+    sourcePath,
+    ...(link.line !== undefined && { sourceLine: link.line }),
+    targetExists,
+    bundled: true,
+    linkText: link.text,
+    linkHref: link.href,
+  };
+}
+
 /** Create an exclusion record */
 function makeExclusion(
   targetPath: string,
@@ -271,15 +285,10 @@ function makeExclusion(
   matchedRule?: ExcludeRule,
 ): LinkResolution {
   return {
-    path: targetPath,
-    sourcePath,
-    ...(link.line !== undefined && { sourceLine: link.line }),
-    targetExists,
+    ...makeFollowedLink(targetPath, sourcePath, targetExists, link),
     bundled: false,
     excludeReason: reason,
     ...(matchedRule ? { matchedRule } : {}),
-    linkText: link.text,
-    linkHref: link.href,
   };
 }
 
@@ -306,6 +315,8 @@ interface WalkState {
    * survive into {@link WalkState.excludedReferences}.
    */
   unfollowedFromNonRoutable: LinkResolution[];
+  /** Followed links leaving the skill directory, filtered to shipped targets when the walk ends. */
+  followedOutsideSkillDir: LinkResolution[];
   /**
    * Pass 1′ — the attribute oracle for the paths this walk asks about.
    *
@@ -842,6 +853,11 @@ function processLink(
     // File doesn't exist and not in registry, and not deferred (handled above).
     // Record as missing-target so downstream emits LINK_MISSING_TARGET.
     state.excludedReferences.push(makeExclusion(targetPath, currentResource.filePath, false, 'missing-target', link));
+    return;
+  }
+
+  if (relativeEscapesRoot(safePath.relative(dirname(options.skillRootPath), targetPath))) {
+    state.followedOutsideSkillDir.push(makeFollowedLink(targetPath, currentResource.filePath, true, link));
   }
 }
 
@@ -996,7 +1012,7 @@ function walkLinkGraphBody(
 ): LinkGraphResult {
   const skillResource = registry.getResourceById(skillResourceId);
   if (!skillResource) {
-    return { bundledResources: [], bundledAssets: [], excludedReferences: [], maxBundledDepth: 0, deferredAssets: [] };
+    return { bundledResources: [], bundledAssets: [], excludedReferences: [], outsideSkillDirLinks: [], maxBundledDepth: 0, deferredAssets: [] };
   }
 
   // Compile exclude patterns once
@@ -1019,6 +1035,7 @@ function walkLinkGraphBody(
     maxBundledDepth: 0,
     queue: [[skillResource, 0]],
     unfollowedFromNonRoutable: [],
+    followedOutsideSkillDir: [],
     pathProbe: options.pathProbe ?? new FsLookupCache(),
     gitignoreFacts: new Map<string, boolean>(),
   };
@@ -1078,6 +1095,7 @@ function walkLinkGraphBody(
     bundledResources: [...state.bundledResourceMap.values()],
     bundledAssets: [...state.bundledAssetSet],
     excludedReferences,
+    outsideSkillDirLinks: state.followedOutsideSkillDir.filter(targetShipped),
     maxBundledDepth: state.maxBundledDepth,
     deferredAssets: [...state.deferredAssetSet],
   };

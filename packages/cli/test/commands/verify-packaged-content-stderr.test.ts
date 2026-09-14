@@ -19,7 +19,11 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { runPackagedContentPhase } from '../../src/commands/verify.js';
+import {
+  buildPackagedContentPhase,
+  reportPackagedContentPhase,
+  runPackagedContentPhase,
+} from '../../src/commands/verify.js';
 import { recordingLogger } from '../test-doubles.js';
 
 describe('verify packaged-content — the refusal reaches stderr', () => {
@@ -37,5 +41,21 @@ describe('verify packaged-content — the refusal reaches stderr', () => {
     expect(stderr).toContain('RESOURCE_CHECK_BROKEN');
     expect(stderr).toContain('inspected 0 built skill bundles');
     expect(stderr).toContain('vat build');
+  });
+
+  it('says why a run whose every discovered skill is in place inspected nothing', () => {
+    const { logger, lines } = recordingLogger();
+    const crawl = { bundlesInspected: 0, bundlesExpected: 0, bundlesMissing: [], issues: [] };
+
+    const phase = buildPackagedContentPhase({ ...crawl, bundlesInPlace: 2 });
+    reportPackagedContentPhase(phase, logger);
+
+    expect(phase.status).toBe('success');
+    expect(lines.join('\n')).toContain('nothing to inspect: all 2 discovered skill(s) are in place');
+
+    // Control: a stale in-place bundle that WAS inspected cleanly logs no such line.
+    const inspected = recordingLogger();
+    reportPackagedContentPhase(buildPackagedContentPhase({ ...crawl, bundlesInspected: 1, bundlesInPlace: 2 }), inspected.logger);
+    expect(inspected.lines).toEqual([]);
   });
 });

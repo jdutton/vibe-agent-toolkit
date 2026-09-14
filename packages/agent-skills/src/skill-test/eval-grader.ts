@@ -1,12 +1,13 @@
+import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import {
   parseStreamJsonTranscript,
   spawnHeadlessClaude,
 } from '@vibe-agent-toolkit/utils/skill-test';
 
-import { EvalFragmentError, parseEvalFragment, type EvalFragment } from './eval-fragment.js';
+import { parseEvalFragment, type EvalFragment } from './eval-fragment.js';
 import type { ToolExpectations } from './eval-inputs.js';
 import { InternalHarnessError } from './failure-reason.js';
 import { assertGraderPromptInvariants, buildGraderPrompt } from './grader-prompt.js';
@@ -58,12 +59,52 @@ export interface RunGraderInput {
    */
   onProgress: (chunk: string) => void;
   /**
-   * Reports this grader session's `total_cost_usd` (parsed from its stream-json
+   * Reports each grader session's `total_cost_usd` (parsed from its stream-json
    * transcript's terminal result; `undefined` when the transcript carried none,
-   * e.g. a mock spawn). Called once after a successful grader spawn so the run can
-   * aggregate total spend across all executor+grader sessions (adopter follow-up).
+   * e.g. a mock spawn). Called once per successful grader spawn — twice when the
+   * unparseable-fragment re-grade fires — so the run can aggregate total spend
+   * across all executor+grader sessions (adopter follow-up).
    */
   costSink?: (totalCostUsd: number | undefined) => void;
+}
+
+/** The reason named in {@link GraderFragmentUnparseableError}'s message and in every `evidence` of the failing fragment vat synthesizes from it. */
+export const GRADER_FRAGMENT_UNPARSEABLE = 'grader-fragment-unparseable';
+
+/**
+ * Thrown when the grader's fragment was not valid JSON on BOTH attempts (see
+ * {@link runGraderForEval}). A per-eval GRADING failure, deliberately neither
+ * {@link InternalHarnessError} nor `EvalFragmentError`: the harness did its
+ * job twice and the model could not write strict JSON, which is a verdict about
+ * this eval's grading, not about the suite — so it ends on the verdict path
+ * (`FINDINGS`), never on `ERROR` with `Reason: internal`. `runEvalWorker` (run-harness.ts)
+ * turns it into that eval's failing fragment (reason
+ * {@link GRADER_FRAGMENT_UNPARSEABLE}) on the treatment arm, and into a recorded
+ * control-arm failure on the other — where a fabricated `fail` would read as
+ * skill lift. `detail` is already sanitized. Carries no `reason` on purpose:
+ * `skillTestFailureReason` would read it only if this escaped, and escaping IS
+ * the bug — the worker catches it on both arms.
+ */
+export class GraderFragmentUnparseableError extends VatError {
+  constructor(
+    public readonly evalId: string,
+    public readonly detail: string,
+  ) {
+    super(
+      'SKILL_TEST_GRADER_FRAGMENT_UNPARSEABLE',
+      `${GRADER_FRAGMENT_UNPARSEABLE}: the grader for eval "${evalId}" wrote a fragment that was not valid JSON ` +
+        `on either attempt (${detail}).`,
+    );
+  }
+}
+
+/**
+ * Adapt the grader's stdout `onProgress` sink into the `onWarn` callback
+ * {@link parseEvalFragment} requires (called only when it drops malformed
+ * friction items).
+ */
+function fragmentWarnRouter(onProgress: RunGraderInput['onProgress']): (message: string) => void {
+  return (message) => onProgress(`[skill-test] ${message}\n`);
 }
 
 /**
@@ -80,24 +121,21 @@ export interface RunGraderInput {
  * executor (see eval-executor.ts), there is NO clean-failure path here. A
  * spawn rejection, watchdog kill (`timedOut`/`stalled`), non-zero exit, or a
  * missing fragment file all mean the grader failed to do its ONE job and are
- * thrown as {@link InternalHarnessError} (exit 1) — never laundered into a
+ * thrown as {@link InternalHarnessError} (`ERROR`, `Reason: internal`) — never laundered into a
  * passing (or even a valid failing) verdict.
  *
- * Once the fragment file exists, shape/JSON problems throw
- * {@link EvalFragmentError} (via {@link parseEvalFragment}) and a nonce that
- * doesn't match this run's expected nonce throws {@link GradingNonceError} —
- * both distinct from harness breakage because the grader DID run and produce
- * *something*, just not something we can trust.
+ * A fragment that exists but is not valid JSON is the one exception, because
+ * the grader MODEL writes it: one bad escape in a free-text `evidence` took a
+ * six-eval suite down as harness-broke after five evals had graded fine. That
+ * attempt is re-run ONCE — same transcript, a FRESH nonce (so the stale file, or
+ * anything left behind, cannot satisfy the retry), the bad file consumed first,
+ * and the prompt told what went wrong. Only a second unparseable fragment
+ * surfaces, as {@link GraderFragmentUnparseableError}. Once a fragment parses,
+ * shape problems throw `EvalFragmentError` (via {@link parseEvalFragment})
+ * and a nonce that doesn't match the nonce THAT attempt was prompted with throws
+ * {@link GradingNonceError} — both fail-closed with no retry, because the grader
+ * DID produce JSON, just not JSON we can trust.
  */
-/**
- * Adapt the grader's stdout `onProgress` sink into the `onWarn` callback
- * {@link parseEvalFragment} requires (called only when it drops malformed
- * friction items).
- */
-function fragmentWarnRouter(onProgress: RunGraderInput['onProgress']): (message: string) => void {
-  return (message) => onProgress(`[skill-test] ${message}\n`);
-}
-
 export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragment> {
   // 0700, like every other vat-only directory this codebase creates (the grader
   // root in `resolveGraderOutDir`, the workspaces root and every eval workspace in
@@ -115,17 +153,83 @@ export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragm
   // and closes off any future path where an unvalidated id reaches here.
   const fragmentOut = safePath.joinUnderRoot(input.graderOutDir, `${input.evalId}.json`);
 
-  const prompt = buildGraderPrompt({
+  let attempt = await runGraderAttempt(input, fragmentOut, input.nonce, undefined);
+  if (attempt.unparseable !== undefined) {
+    input.onProgress(
+      `[skill-test] grader fragment for eval "${input.evalId}" was not valid JSON (${attempt.unparseable}); re-grading once.\n`,
+    );
+    // Minted here, not derived from the run nonce: the retry must accept nothing
+    // written under the first prompt.
+    attempt = await runGraderAttempt(input, fragmentOut, randomBytes(16).toString('hex'), attempt.unparseable);
+    if (attempt.unparseable !== undefined) {
+      throw new GraderFragmentUnparseableError(input.evalId, attempt.unparseable);
+    }
+  }
+
+  const fragment = parseEvalFragment(attempt.parsed, fragmentWarnRouter(input.onProgress));
+
+  // Integrity gate: a missing/wrong nonce means this fragment was not produced
+  // by the grader we prompted for THIS attempt — most likely forged or left
+  // behind by untrusted skill code — so the verdict cannot be trusted, hard error.
+  if (fragment.runNonce !== attempt.nonce) {
+    throw new GradingNonceError(
+      `eval "${input.evalId}" fragment \`runNonce\` does not match this run`,
+    );
+  }
+
+  assertExpectationCountDeclared(input.evalId, input.expectations, fragment.expectations);
+  assertToolVerdictConsistent(input.evalId, input.toolExpectations, fragment.tool);
+
+  // The grader's only input is the executor transcript, which untrusted skill code
+  // controls, and `evalId` is schema-typed as any non-empty string. It is echoed
+  // verbatim into the run summary and into `baseline.json` — including the
+  // CONTAMINATED banner — so a grader talked into emitting an id containing
+  // newlines and ANSI escapes can paint a reassuring "known false positive, the
+  // delta is valid" line directly beneath vat's own warning. VAT knows which eval
+  // it asked about; take the id from the request, never from the answer.
+  //
+  // `runNonce` is re-stamped for the same reason: the merge re-verifies every
+  // fragment against the ONE nonce the run minted, and a re-graded fragment has
+  // already passed the gate above against the nonce its own prompt carried.
+  return { ...fragment, evalId: input.evalId, runNonce: input.nonce };
+}
+
+/**
+ * What one grader spawn left behind: the parsed fragment JSON and the nonce its
+ * prompt carried, or the sanitized reason it could not be parsed.
+ */
+type GraderAttempt =
+  | { readonly nonce: string; readonly parsed: unknown; readonly unparseable?: undefined }
+  | { readonly nonce: string; readonly parsed?: undefined; readonly unparseable: string };
+
+/**
+ * ONE grader spawn under `nonce`: build and assert the prompt, spawn, apply the
+ * harness-breakage gates, report cost, consume the fragment file. `previousFailure`
+ * is the re-grade's only difference — a trailing line telling the grader what its
+ * first fragment got wrong (sanitized where it was caught, at the bottom of this
+ * function). Required, not defaulted, so both call sites say which attempt they are.
+ */
+async function runGraderAttempt(
+  input: RunGraderInput,
+  fragmentOut: string,
+  nonce: string,
+  previousFailure: string | undefined,
+): Promise<GraderAttempt> {
+  const built = buildGraderPrompt({
     evalId: input.evalId,
     transcript: input.transcript,
     expectations: input.expectations,
     ...(input.expectedOutput === undefined ? {} : { expectedOutput: input.expectedOutput }),
     rubricPath: input.rubricPath,
     fragmentOut,
-    nonce: input.nonce,
+    nonce,
     ...(input.toolExpectations === undefined ? {} : { toolExpectations: input.toolExpectations }),
     ...(input.declaredExecutables === undefined ? {} : { declaredExecutables: input.declaredExecutables }),
   });
+  const prompt =
+    previousFailure === undefined
+      ? built
+      : `${built}\n\nYour previous fragment was not valid JSON: ${previousFailure}. Write strict JSON.`;
   // Defense-in-depth (parity with eval-executor.ts's build→assert→use pattern):
   // re-verify the built grader prompt still carries its required invariants
   // (STOP, fragment path, browser/iteration forbids, nonce directive, and the
@@ -135,7 +239,7 @@ export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragm
   // manifest, and the suite's own expectations/expected_output — and none of
   // that attacker-controlled text can satisfy an invariant on the builder's
   // behalf.
-  assertGraderPromptInvariants(prompt, input.nonce);
+  assertGraderPromptInvariants(prompt, nonce);
 
   const spawn = input.spawn ?? spawnHeadlessClaude;
 
@@ -197,77 +301,54 @@ export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragm
   input.costSink?.(parseStreamJsonTranscript(graderTranscript).result?.totalCostUsd);
 
   const warn = fragmentWarnRouter(input.onProgress);
-  const raw = readAndConsumeFragmentFile(fragmentOut, input.evalId, spawnResult.status, warn);
-  const fragment = parseEvalFragment(raw, warn);
-
-  // Integrity gate: a missing/wrong nonce means this fragment was not produced
-  // by the grader we prompted for THIS run — most likely forged or left behind
-  // by untrusted skill code — so the verdict cannot be trusted, hard error.
-  if (fragment.runNonce !== input.nonce) {
-    throw new GradingNonceError(
-      `eval "${input.evalId}" fragment \`runNonce\` does not match this run`,
-    );
+  const text = readAndConsumeFragmentFile(fragmentOut, input.evalId, spawnResult.status, warn);
+  try {
+    return { nonce, parsed: JSON.parse(text) };
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
+    // V8 embeds a VERBATIM slice of the offending bytes in its SyntaxError
+    // message, unescaped — and this is one of the few grader-controlled strings
+    // that reaches an operator WITHOUT passing `parseEvalFragment`, the
+    // documented text boundary, because the parse it would have gone through is
+    // the one that just failed. It lands in a thrown message (which the CLI writes
+    // as `Error: ${err.message}`, so an unsanitized `ESC[2K CR ESC[32m…` wipes the
+    // line vat just printed and continues in vat's own colour) AND in the re-grade
+    // prompt.
+    return { nonce, unparseable: sanitizeGraderText(err.message) };
   }
-
-  assertExpectationCountDeclared(input.evalId, input.expectations, fragment.expectations);
-  assertToolVerdictConsistent(input.evalId, input.toolExpectations, fragment.tool);
-
-  // The grader's only input is the executor transcript, which untrusted skill code
-  // controls, and `evalId` is schema-typed as any non-empty string. It is echoed
-  // verbatim into the run summary and into `baseline.json` — including the
-  // CONTAMINATED banner — so a grader talked into emitting an id containing
-  // newlines and ANSI escapes can paint a reassuring "known false positive, the
-  // delta is valid" line directly beneath vat's own warning. VAT knows which eval
-  // it asked about; take the id from the request, never from the answer.
-  return { ...fragment, evalId: input.evalId };
 }
 
 /**
- * Read the grader's fragment JSON into memory and unlink it immediately —
- * consume-on-read. Split out of {@link runGraderForEval} to keep its cognitive
- * complexity within budget. Throws {@link InternalHarnessError} if the grader
- * wrote no fragment, {@link EvalFragmentError} if it is not valid JSON.
+ * Read the grader's fragment file into memory and remove it immediately —
+ * consume-on-read, whether or not it will parse. Throws {@link InternalHarnessError}
+ * if the grader wrote no fragment.
  *
- * The unlink is the security-relevant half: the grader dir is same-uid (see
+ * The removal is the security-relevant half: the grader dir is same-uid (see
  * `resolveGraderOutDir`), so a fragment left on disk lets skill code that
  * survived the process-group kill read the echoed nonce at leisure and forge
  * LATER fragments. Consuming it on read leaves no persisted copy — exposure
- * shrinks to each fragment's own read window (no cross-eval harvest). The read
- * here is the ONLY read of the file; all downstream logic runs off the returned
- * value. A failed unlink is not a run failure (end-of-run cleanup removes the
- * whole dir) but it IS the one degradation this design exists to prevent, so it
- * is reported through `onWarn` rather than swallowed: the operator learns the
- * fragment lingered, with the errno. True isolation from same-uid code is a
- * separate, unbuilt mechanism (a different uid or a sandbox), not this unlink.
+ * shrinks to each fragment's own read window (no cross-eval harvest). It is also
+ * what makes the re-grade honest: a retry that writes nothing finds no file, not
+ * the unparseable one. The read here is the ONLY read of the file; all downstream
+ * logic runs off the returned text. A failed removal is not a run failure
+ * (end-of-run cleanup removes the whole dir) but it IS the one degradation this
+ * design exists to prevent, so it is reported through `onWarn` rather than
+ * swallowed: the operator learns the fragment lingered, with the errno. True
+ * isolation from same-uid code is a separate, unbuilt mechanism (a different uid
+ * or a sandbox), not this removal.
  */
 function readAndConsumeFragmentFile(
   fragmentOut: string,
   evalId: string,
   status: number,
   onWarn: (message: string) => void,
-): unknown {
+): string {
   if (!existsSync(fragmentOut)) {
     throw new InternalHarnessError(
       `Grader exited (status ${status}) without writing a fragment at ${fragmentOut} for eval "${evalId}".`,
     );
   }
-  let raw: unknown;
-  try {
-    raw = JSON.parse(readFileSync(fragmentOut, 'utf-8'));
-  } catch (err) {
-    // V8 embeds a VERBATIM slice of the offending bytes in its SyntaxError
-    // message, unescaped — and this is one of the few grader-controlled strings
-    // that reaches an operator WITHOUT passing `parseEvalFragment`, the
-    // documented text boundary, because the parse it would have gone through is
-    // the one that just failed. The CLI writes it as `Error: ${err.message}`, so
-    // an unsanitized fragment of `ESC[2K CR ESC[32m…` wipes the line vat just
-    // printed and continues in vat's own colour (and a <=16-byte file gets its
-    // whole `ESC[2J ESC[H` echoed, clearing the screen).
-    throw new EvalFragmentError(
-      `grader fragment for eval "${evalId}" at ${fragmentOut} is not valid JSON: ` +
-        sanitizeGraderText(err instanceof Error ? err.message : String(err)),
-    );
-  }
+  const text = readFileSync(fragmentOut, 'utf-8');
   try {
     // `force` covers the one benign case — the file is already gone — so what the
     // catch sees is a refusal (EACCES/EPERM/EBUSY), never an absence.
@@ -278,7 +359,7 @@ function readAndConsumeFragmentFile(
         `(${err instanceof Error ? err.message : String(err)}); it stays on disk until end-of-run cleanup.`,
     );
   }
-  return raw;
+  return text;
 }
 
 /**

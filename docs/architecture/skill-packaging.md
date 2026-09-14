@@ -188,11 +188,23 @@ Rules that follow from the table:
   suspect: a skill listed under `vat.skills` that config does not publish, or a published skill the
   list omits, is a consistency finding (`PACKAGE_JSON_LISTS_UNKNOWN_SKILL`,
   `PUBLISHED_SKILL_NOT_IN_PACKAGE_JSON`, `UNPUBLISHED_SKILL_IN_PACKAGE_JSON`).
-- `publish: false` in `skills.config.<name>` opts a skill out of the **distribution-consistency**
-  checks only — the `package.json` `vat.skills` and plugin-membership cross-checks (default
-  `true`). It does **not** exempt the skill from build-time packaging validation: a `publish: false`
-  skill is still discovered, built and held to every packaging rule, and its errors still fail the
-  build. Packaging correctness is not conditional on shipping.
+- `publish: false` names an **in-place** skill — one used from the repo where it sits, never
+  distributed. The effective value is the merged config (`skills.defaults.publish`, overridden by
+  `skills.config.<name>.publish`; default `true`), read through the one `isSkillPublished`
+  predicate by every lane. An in-place skill is discovered and validated at source (`vat validate`,
+  `vat skills validate`), **never bundled** by `vat build` / `vat skills build` (the build reports it
+  under `skillsInPlace`; `--skill <name>` on one exits 1), **never expected** by `vat verify` (a stale
+  bundle left in `dist/skills/` is still inspected), and outside the pool-side consistency checks
+  (`SKILL_UNPUBLISHED` at info instead). Its packaging rules do not apply because no package exists:
+  a link into `docs/` that is correct in the repo is not a broken link in a bundle nobody ships.
+  `vat skill test` stages an in-place subject from its source directory and says so in
+  `friction.json`.
+- `publish` scopes the **pool** (`dist/skills/`) only. A plugin-local skill (under a plugin's
+  `skills/` directory) ships with its plugin by location whatever `publish` says: the claude phase
+  packages it and `vat verify` expects it. A skill both discovered by `skills.include` and
+  plugin-local skips the pool under `publish: false` and still ships in its plugin — so a project
+  that builds with `vat build --only claude` and uses its other skills in place declares
+  `skills.defaults.publish: false` once.
 - Error messages always name the config mechanism, so a developer discovers the fix from the error.
 - No VAT-specific fields in `SKILL.md` frontmatter — skills are portable artifacts.
 

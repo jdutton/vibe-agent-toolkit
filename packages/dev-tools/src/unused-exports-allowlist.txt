@@ -177,7 +177,6 @@ packages/cli/src/commands/claude/plugin/plugin-json-merge.ts VatGeneratedFields 
 packages/cli/src/commands/claude/plugin/tree-copy.ts RefusedSymlink dead
 packages/cli/src/commands/claude/plugin/tree-copy.ts SymlinkRefusalReason dead
 packages/cli/src/commands/consistency-check.ts ConsistencyCheckResult dead
-packages/cli/src/commands/consistency-check.ts isSkillPublished dead
 packages/cli/src/commands/consistency-check.ts matchesSimpleGlob dead
 packages/cli/src/commands/corpus/report.ts computeTotals dead
 packages/cli/src/commands/corpus/report.ts runDirectoryName dead

@@ -89,7 +89,7 @@ import { detectPackagedAgentInstructionFiles } from './validators/agent-instruct
 import { checkPackagedSizeLimit } from './validators/packaged-size-limit.js';
 import { validateSkillForPackaging, type PackagingValidationResult, type SkillPackagingConfig } from './validators/packaging-validator.js';
 import { materializeIssue } from './validators/rule-engine/index.js';
-import { deferredAssetsToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
+import { deferredAssetsToIssues, outsideSkillDirLinksToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
 const PACKAGE_JSON_FILENAME = 'package.json';
@@ -653,7 +653,7 @@ export async function packageSkill(
   if (options.gitTracker !== undefined) {
     packagerWalkOptions.gitTracker = options.gitTracker;
   }
-  const { bundledResources, bundledAssets, excludedReferences, deferredAssets } = walkLinkGraph(
+  const { bundledResources, bundledAssets, excludedReferences, outsideSkillDirLinks, deferredAssets } = walkLinkGraph(
     skillResourceId,
     registry as WalkableRegistry,
     packagerWalkOptions,
@@ -907,6 +907,7 @@ export async function packageSkill(
     // (a pattern match is author-declared intent; this exclusion is VAT's).
     ...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot),
     ...deferredAssetsToIssues(deferredAssets, projectRoot),
+    ...outsideSkillDirLinksToIssues(outsideSkillDirLinks, projectRoot),
   ];
 
   // ONE ledger for BOTH lanes below. `options.validation.allow` governs the

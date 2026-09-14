@@ -42,7 +42,7 @@ import type { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 import { nothingCheckedFinding, runIntegrityFinding } from '../utils/run-integrity.js';
-import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
+import { isSkillPublished, mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 
 import { runMarketplaceValidatePhase } from './claude/marketplace/validate.js';
 import {
@@ -148,6 +148,12 @@ Output:
     a pass: a run that found none of the build (dist/ not built, or a
     skills.include glob that matched nothing) or only part of it (a bundle
     deleted, a skill added since the last build) is not a verdict on what ships.
+    A skill whose merged config says publish: false is IN-PLACE — never
+    bundled by 'vat build', so no pool bundle is expected for it (a stale one
+    in dist/skills is still inspected); bundlesInPlace counts them, and a run
+    whose every discovered skill is in place passes with nothing to inspect. A
+    plugin-local skill is expected in its plugin tree regardless. Declare skills.defaults.publish: false for a project
+    that builds with --only claude and uses its other skills from the repo.
   Progress and validation errors → stderr (streamed live)
 
   By default each delegated phase reports a per-asset summary plus the assets
@@ -223,13 +229,17 @@ interface BuiltSkillOutputs {
   built: CheckEntry[];
   /**
    * Candidates `vat build` produces for THIS run's inputs: one pool bundle per
-   * discovered skill, one plugin-tree bundle per plugin-local skill. A
-   * `skills.config` key discovery does not reach is NOT counted — nothing builds
-   * it, and the consistency phase already reports the stale key — so demanding
-   * its bundle here would turn a typo'd config line into a non-overridable
-   * error a second time.
+   * discovered PUBLISHED skill, one plugin-tree bundle per plugin-local skill.
+   * A `publish: false` skill is in-place (see `isSkillPublished`): never built,
+   * so demanding its pool bundle would fail every `vat build --only claude`
+   * project. A `skills.config` key discovery does not reach is NOT counted
+   * either — nothing builds it, and the consistency phase already reports the
+   * stale key — so demanding its bundle would make a typo'd config line a
+   * non-overridable error a second time.
    */
   expected: number;
+  /** Discovered pool skills left out of `expected` because they are in-place. */
+  inPlace: number;
   /** Expected candidates whose output dir is absent — `cwd`-relative, so a reader can open where it should be. */
   missing: string[];
 }
@@ -331,7 +341,7 @@ function collectBuiltSkillOutputs(
   cwd: string,
   discovered: readonly DiscoveredSkill[],
 ): BuiltSkillOutputs {
-  const outputs: BuiltSkillOutputs = { built: [], expected: 0, missing: [] };
+  const outputs: BuiltSkillOutputs = { built: [], expected: 0, inPlace: 0, missing: [] };
   // No `try`, deliberately. The config was already loaded by the command (see
   // `loadConfigTolerant`) and the in-process phases run only when it loaded, so
   // `loadConfig` here answers from cache. The `catch { return outputs }` that
@@ -348,25 +358,24 @@ function collectBuiltSkillOutputs(
   const seen = new Set<string>();
 
   // --- Pool skills: candidate dir is dist/skills/<fsName> ---
-  // Expected only when discovered: `vat skills build` builds every discovered
-  // skill and nothing else (see BuiltSkillOutputs.expected).
+  // Expected only when discovered AND published (see BuiltSkillOutputs.expected).
+  // An in-place skill's stale bundle in dist/ is still inspected, just not demanded.
   const discoveredNames = new Set(discovered.map((skill) => skill.name));
   const poolNames = new Set<string>([...discoveredNames, ...Object.keys(skillsConfig?.config ?? {})]);
   for (const skillName of poolNames) {
     const perSkill = skillsConfig?.config?.[skillName] as Record<string, unknown> | undefined;
     const outputDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
-    addCheckCandidate(
-      outputs,
-      seen,
-      cwd,
-      { skillName, outputDir, packaging: mergeSkillPackagingConfig(defaults, perSkill) },
-      discoveredNames.has(skillName),
-    );
+    const packaging = mergeSkillPackagingConfig(defaults, perSkill);
+    const discoveredSkill = discoveredNames.has(skillName);
+    const published = isSkillPublished(packaging);
+    if (discoveredSkill && !published) outputs.inPlace += 1;
+    addCheckCandidate(outputs, seen, cwd, { skillName, outputDir, packaging }, discoveredSkill && published);
   }
 
   // --- Tree-copy skills: candidate dirs are plugin output skill dirs ---
-  // Always expected: every location here is a plugin-local skill the claude
-  // build phase packages into the plugin tree.
+  // Always expected, whatever `publish` says: every location here is a
+  // plugin-local skill the claude build phase packages into the plugin tree —
+  // `publish` scopes the pool only (see `isSkillPublished`).
   for (const loc of computeTreeCopiedSkillLocations(config, cwd)) {
     // Per-skill config is keyed by the skill's declared NAME. `skillDirPath` is a
     // path (`group/nested-skill` for a nested skill), so try its trailing segment
@@ -484,6 +493,7 @@ export function checkPackagedAgentInstructionFiles(
   return {
     bundlesInspected: outputs.built.length,
     bundlesExpected: outputs.expected,
+    bundlesInPlace: outputs.inPlace,
     bundlesMissing: outputs.missing,
     issues,
   };
@@ -503,6 +513,8 @@ export interface PackagedContentCrawl {
   bundlesInspected: number;
   /** Bundles `vat build` produces for this run's discovered skills — what the denominator should be. */
   bundlesExpected: number;
+  /** Discovered skills declared `publish: false` — used in place, so no bundle is expected for them. */
+  bundlesInPlace: number;
   /** Expected bundles absent from disk, as `cwd`-relative paths. Non-empty means the phase is not a verdict. */
   bundlesMissing: string[];
   issues: ValidationIssue[];
@@ -787,6 +799,7 @@ interface FindingsPhaseResult extends PhaseResult {
 export interface PackagedContentPhaseResult extends FindingsPhaseResult {
   bundlesInspected: number;
   bundlesExpected: number;
+  bundlesInPlace: number;
   bundlesMissing: string[];
 }
 
@@ -829,6 +842,9 @@ function missingBundlesFinding(crawl: PackagedContentCrawl): readonly Validation
  * `success` beside `bundlesInspected: 1`. The crawl now also carries what it
  * should have found, and the document publishes both counts.
  *
+ * One zero IS a verdict: nothing expected because every discovered skill is in
+ * place (`bundlesInPlace > 0`). Zero discovered skills stays refused.
+ *
  * Derived here, in the one function that produces this phase's document, and
  * not in the command body, so no path through the orchestrator can publish
  * `status: success` beside `bundlesInspected: 0` or beside a non-empty
@@ -842,11 +858,12 @@ function missingBundlesFinding(crawl: PackagedContentCrawl): readonly Validation
  * Pure, and exported so the refusal is pinned without a project on disk.
  */
 export function buildPackagedContentPhase(crawl: PackagedContentCrawl): PackagedContentPhaseResult {
-  const { bundlesInspected, bundlesExpected, bundlesMissing, issues: found } = crawl;
+  const { bundlesInspected, bundlesExpected, bundlesInPlace, bundlesMissing, issues: found } = crawl;
   const missing = missingBundlesFinding(crawl);
+  const accountedFor = bundlesExpected === 0 ? bundlesInspected + bundlesInPlace : bundlesInspected;
   const issues = [
     ...missing,
-    ...nothingCheckedFinding(bundlesInspected, [...missing, ...found], () =>
+    ...nothingCheckedFinding(accountedFor, [...missing, ...found], () =>
       'The packaged-content phase inspected 0 built skill bundles, so this phase is not a'
       + ' verdict: nothing was crawled for files that must not ship, and the document reads'
       + ' the same as a run over clean bundles. Either `vat build` has not run (or wrote'
@@ -861,6 +878,7 @@ export function buildPackagedContentPhase(crawl: PackagedContentCrawl): Packaged
     // The denominator, beside the counts it qualifies — and what it should have been.
     bundlesInspected,
     bundlesExpected,
+    bundlesInPlace,
     bundlesMissing,
     issueCounts: countBySeverity(issues),
     issues: issues.map(toPublishedIssue),
@@ -908,12 +926,20 @@ export function runPackagedContentPhase(
   discoveredSkills: readonly DiscoveredSkill[],
   logger: ReturnType<typeof createLogger>,
 ): PackagedContentPhaseResult {
-  const crawl = checkPackagedAgentInstructionFiles(projectRoot, discoveredSkills);
-  const phase = buildPackagedContentPhase(crawl);
+  const phase = buildPackagedContentPhase(checkPackagedAgentInstructionFiles(projectRoot, discoveredSkills));
+  reportPackagedContentPhase(phase, logger);
+  return phase;
+}
+
+export function reportPackagedContentPhase(
+  phase: PackagedContentPhaseResult,
+  logger: ReturnType<typeof createLogger>,
+): void {
   if (phase.issues.length > 0) {
     reportPackagedContentIssues(asValidationIssues(phase.issues), logger);
+  } else if (phase.bundlesExpected === 0 && phase.bundlesInspected === 0) {
+    logger.info(`\n▶ Phase: ${PACKAGED_CONTENT} — nothing to inspect: all ${phase.bundlesInPlace} discovered skill(s) are in place (publish: false)`);
   }
-  return phase;
 }
 
 /**

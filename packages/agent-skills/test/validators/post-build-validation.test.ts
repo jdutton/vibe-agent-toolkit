@@ -7,8 +7,8 @@ describe('SOURCE_ONLY_CODES', () => {
     expect(SOURCE_ONLY_CODES.has('LINK_OUTSIDE_PROJECT')).toBe(true);
   });
 
-  it('contains LINK_BOUNDARY_VIOLATION', () => {
-    expect(SOURCE_ONLY_CODES.has('LINK_BOUNDARY_VIOLATION')).toBe(true);
+  it('contains LINK_OUTSIDE_SKILL_DIR', () => {
+    expect(SOURCE_ONLY_CODES.has('LINK_OUTSIDE_SKILL_DIR')).toBe(true);
   });
 
   it('contains LINK_TO_AGENT_INSTRUCTION_FILE', () => {

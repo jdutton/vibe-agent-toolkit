@@ -443,6 +443,7 @@ skills:
     await expect(packagedCrawlIn(tempDir)).resolves.toEqual({
       bundlesInspected: 0,
       bundlesExpected: 0,
+      bundlesInPlace: 0,
       bundlesMissing: [],
       issues: [],
     });

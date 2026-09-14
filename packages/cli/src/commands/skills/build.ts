@@ -24,7 +24,7 @@ import {
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
-import type { ResourcePopulationSource } from '@vibe-agent-toolkit/resources';
+import type { ResourcePopulationSource, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import {
   allowUnusedIssues,
   calculateValidationStatus,
@@ -54,7 +54,7 @@ import {
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { withResourcePopulationSource } from '../../utils/resource-loader.js';
-import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
+import { collectDeclaredEvalSuites, isSkillPublished, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 import { finishCommand, type PhaseOutcome } from '../phase-utils.js';
 
@@ -112,6 +112,13 @@ Description:
   (schema defaults -> config yaml defaults -> per-skill overrides),
   validates, and packages into dist/skills/<name>/.
 
+  publish: false (merged from skills.defaults and skills.config.<name>)
+  marks an IN-PLACE skill: validated at source by 'vat validate', never
+  bundled here, never expected by 'vat verify'. Such skills are set aside
+  with one info line and counted as skillsInPlace; --skill naming one is
+  an error (exit 1). A plugin-local skill (under a plugin's skills/ dir)
+  ships with its plugin regardless of publish.
+
 Config Structure (vibe-agent-toolkit.config.yaml):
   version: 1
   skills:
@@ -130,6 +137,8 @@ Config Structure (vibe-agent-toolkit.config.yaml):
             LINK_DROPPED_BY_DEPTH:
               - paths: ["docs/**"]
                 reason: depth drop is intentional for large reference docs
+      used-in-place:
+        publish: false
 
 Validation:
   Both pre-build and post-build checks use the unified validation framework.
@@ -176,6 +185,10 @@ Output:
                   emitted post-build validation errors. They are counted in
                   skillsBuilt, not skillsFailed, so read ALL of these before
                   concluding a run was clean: the exit code follows this one too.
+  skillsInPlace / skillsInPlaceNames:
+                  NOT a failure — skills whose merged config says publish: false,
+                  so this run set them aside unbuilt. Published so a build that
+                  bundles fewer skills than it discovered says so by count.
   runIssueCounts: findings that belong to the run rather than to any one
                   skill (ALLOW_UNUSED)
   issueCounts:    the run total, which reconciles against the rows above:
@@ -468,6 +481,7 @@ async function validateSkillBeforeBuild(
  */
 function outputDryRunYaml(
   skills: DiscoveredSkill[],
+  skillsInPlace: number,
   duration: number
 ): void {
   writeYamlHeader({
@@ -479,6 +493,9 @@ function outputDryRunYaml(
     // misreading. This field makes the absence explicit instead.
     validated: false,
     skillsFound: skills.length,
+    // The same partition the real build publishes: what a preview would NOT
+    // bundle is as much a part of the preview as what it would.
+    skillsInPlace,
   });
   process.stdout.write(`skills:\n`);
   for (const skill of skills) {
@@ -494,11 +511,13 @@ function outputDryRunYaml(
  */
 function performDryRun(
   skillsToBuild: DiscoveredSkill[],
+  skillsInPlace: number,
   duration: number,
   logger: ReturnType<typeof createLogger>
 ): void {
   logger.info(`Dry-run: Analyzing skill build...`);
   logger.info(`   Skills to build: ${skillsToBuild.length}`);
+  logger.info(`   In-place skills (publish: false, not bundled): ${skillsInPlace}`);
 
   logger.info(`\nSkills:`);
   for (const skill of skillsToBuild) {
@@ -507,7 +526,7 @@ function performDryRun(
     logger.info(`      Output: dist/skills/${skillNameToFsPath(skill.name)}`);
   }
 
-  outputDryRunYaml(skillsToBuild, duration);
+  outputDryRunYaml(skillsToBuild, skillsInPlace, duration);
 
   logger.info(`\nDry-run complete (no files created)`);
   logger.info(`   Run without --dry-run to build the skills`);
@@ -749,8 +768,17 @@ export function buildYamlSummary(
  * true when phases stopped being child processes. Returning the summary instead
  * would have flipped `skillsWithErrors` from a number to an array in `vat
  * build`'s output, silently and with nothing to typecheck it against.
+ *
+ * `skillsInPlace` rides in the header beside `skillsBuilt`, with the names under
+ * `skillsInPlaceNames`: a build that ships fewer skills than it discovered is the
+ * drop this command exists to prevent, so the number a `publish: false` removed
+ * from `skillsBuilt` must be visible where a consumer reads the count.
  */
-function buildBuildDocument(run: SkillBuildRun, duration: number): Record<string, unknown> {
+export function buildBuildDocument(
+  run: SkillBuildRun,
+  skillsInPlaceNames: readonly string[],
+  duration: number,
+): Record<string, unknown> {
   const summary = buildYamlSummary(run, duration);
   const {
     status, skillsBuilt, skillsFailed, skillsFailedValidation, issueCounts, runIssueCounts,
@@ -761,6 +789,7 @@ function buildBuildDocument(run: SkillBuildRun, duration: number): Record<string
   return {
     status,
     skillsBuilt,
+    skillsInPlace: skillsInPlaceNames.length,
     skillsFailed,
     skillsFailedValidation,
     skillsWithErrors: summary.skillsWithErrors.length,
@@ -782,6 +811,7 @@ function buildBuildDocument(run: SkillBuildRun, duration: number): Record<string
     failedSkills,
     validationFailedSkills,
     skillsWithErrorNames: summary.skillsWithErrors,
+    skillsInPlaceNames: [...skillsInPlaceNames],
     runIssues: summary.runIssues,
     duration: durationText,
   };
@@ -795,9 +825,9 @@ function buildBuildDocument(run: SkillBuildRun, duration: number): Record<string
  * megabytes on a large project. The key ORDER here is the document's order; the
  * split is presentation only and adds nothing the document does not carry.
  */
-function outputBuildYaml(document: Record<string, unknown>): void {
+export function outputBuildYaml(document: Record<string, unknown>): void {
   const {
-    status, skillsBuilt, skillsFailed, skillsFailedValidation, skillsWithErrors, outputCommitted,
+    status, skillsBuilt, skillsInPlace, skillsFailed, skillsFailedValidation, skillsWithErrors, outputCommitted,
     duration: durationText, ...body
   } = document;
   // In the header, beside the other counts: these are the numbers the exit code
@@ -807,6 +837,7 @@ function outputBuildYaml(document: Record<string, unknown>): void {
   writeYamlHeader({
     status: status as string,
     skillsBuilt: skillsBuilt as number,
+    skillsInPlace: skillsInPlace as number,
     skillsFailed: skillsFailed as number,
     skillsFailedValidation: skillsFailedValidation as number,
     skillsWithErrors: skillsWithErrors as number,
@@ -1240,6 +1271,68 @@ export interface BuildSkillSpec {
 }
 
 /**
+ * Merge every skill's config and split the pool skills from the IN-PLACE ones.
+ *
+ * `buildSpecs` is what this run bundles; `inPlace` is every skill whose merged
+ * config says `publish: false` — validated at source by `vat validate`, never
+ * bundled here, never expected by `vat verify` (see `isSkillPublished`). Both
+ * halves keep discovery order, so the human and machine reports list them as
+ * the globs found them.
+ */
+export function partitionInPlaceSkills(
+  skills: readonly DiscoveredSkill[],
+  skillsConfig: SkillsConfig,
+): { buildSpecs: BuildSkillSpec[]; inPlace: BuildSkillSpec[] } {
+  const buildSpecs: BuildSkillSpec[] = [];
+  const inPlace: BuildSkillSpec[] = [];
+  for (const skill of skills) {
+    const spec: BuildSkillSpec = {
+      skill,
+      packagingConfig: mergeSkillPackagingConfig(skillsConfig.defaults, skillsConfig.config?.[skill.name]),
+    };
+    (isSkillPublished(spec.packagingConfig) ? buildSpecs : inPlace).push(spec);
+  }
+  return { buildSpecs, inPlace };
+}
+
+/** How many in-place names the one info line spells out before "… and N more". */
+const IN_PLACE_NAMES_SHOWN = 10;
+
+/**
+ * ONE info line for the skills this run set aside, naming the count and (up to
+ * {@link IN_PLACE_NAMES_SHOWN} of) the names. Nothing when there are none: a
+ * "0 in-place" line on every build is noise that trains readers to skip the line
+ * that matters.
+ */
+export function logInPlaceSkills(inPlace: readonly BuildSkillSpec[], logger: ReturnType<typeof createLogger>): void {
+  if (inPlace.length === 0) return;
+  const names = inPlace.map((spec) => spec.skill.name);
+  const shown = names.slice(0, IN_PLACE_NAMES_SHOWN).join(', ');
+  const more = names.length > IN_PLACE_NAMES_SHOWN ? ` … and ${names.length - IN_PLACE_NAMES_SHOWN} more` : '';
+  logger.info(
+    `Skipping ${inPlace.length} in-place skill(s) (publish: false — validated at source, never bundled): ${shown}${more}`,
+  );
+}
+
+/**
+ * `--skill x` on an in-place skill is a contradiction, not a silent skip: exit 1
+ * naming the key that makes it one. (The one-skill filter leaves only that skill.)
+ */
+export function inPlaceSkillRefusal(skill: string | undefined, inPlace: readonly BuildSkillSpec[]): Error | undefined {
+  if (skill === undefined || inPlace.length === 0) return undefined;
+  return new Error(
+    `Skill "${skill}" is an in-place skill (skills.config.${skill}.publish is false, `
+      + 'directly or via skills.defaults.publish): vat build never bundles it, so there is no bundle to build. '
+      + 'Set publish: true to distribute it through dist/skills, or drop --skill.',
+  );
+}
+
+export function formatBuiltSuccessLine(built: number, inPlace: number): string {
+  return `\nBuilt ${built} skill(s) successfully`
+    + (inPlace === 0 ? '' : ` (${inPlace} in-place skill(s) not bundled)`);
+}
+
+/**
  * A skill whose packaging THREW — it produced no artifact at all.
  *
  * Deliberately distinct from `skillsWithErrors`, which names skills that built
@@ -1588,10 +1681,22 @@ export async function runSkillsBuildPhase(
       );
     }
 
-    // Filter by skill name if specified
-    const skillsToBuild = filterSkillsByName(discoveredSkills, options.skill);
+    // Filter by skill name if specified, then set the in-place skills aside.
+    // `publish: false` names a skill the pool never carries (see
+    // `isSkillPublished`), so the partition happens BEFORE the count is announced:
+    // "Found N skill(s) to build" must be the number this run will bundle.
+    const { buildSpecs, inPlace } = partitionInPlaceSkills(
+      filterSkillsByName(discoveredSkills, options.skill),
+      skillsConfig,
+    );
 
-    logger.info(`Found ${skillsToBuild.length} skill(s) to build`);
+    const refusal = inPlaceSkillRefusal(options.skill, inPlace);
+    if (refusal !== undefined) {
+      return { document: reportCommandError(refusal, logger, startTime, 'SkillsBuild'), exitCode: 1, failed: true };
+    }
+
+    logInPlaceSkills(inPlace, logger);
+    logger.info(`Found ${buildSpecs.length} skill(s) to build`);
 
     // Handle dry-run mode. Nothing has touched `dist/` at this point — the
     // staging directory and the swap both live inside `runSkillBuild`, which a
@@ -1601,17 +1706,9 @@ export async function runSkillsBuildPhase(
     // guard three lines up to stay honest.)
     if (options.dryRun) {
       const duration = Date.now() - startTime;
-      performDryRun(skillsToBuild, duration, logger);
+      performDryRun(buildSpecs.map((spec) => spec.skill), inPlace.length, duration, logger);
       return { document: undefined, exitCode: 0 };
     }
-
-    const buildSpecs: BuildSkillSpec[] = skillsToBuild.map((skill) => ({
-      skill,
-      packagingConfig: mergeSkillPackagingConfig(
-        skillsConfig.defaults,
-        skillsConfig.config?.[skill.name],
-      ),
-    }));
 
     // Assembled ONCE, from the UNFILTERED discovery: `--skill x` narrows the build,
     // not the set of files that count as some skill's declared test input.
@@ -1627,7 +1724,7 @@ export async function runSkillsBuildPhase(
     });
     const duration = Date.now() - startTime;
 
-    const document = buildBuildDocument(run, duration);
+    const document = buildBuildDocument(run, inPlace.map((spec) => spec.skill.name), duration);
     for (const line of formatRunIssueLines(run.runIssues)) {
       logger.info(line);
     }
@@ -1651,7 +1748,7 @@ export async function runSkillsBuildPhase(
       return { document, exitCode: 1 };
     }
 
-    logger.info(`\nBuilt ${run.results.length} skill(s) successfully`);
+    logger.info(formatBuiltSuccessLine(run.results.length, inPlace.length));
 
     return { document, exitCode: 0 };
   } catch (error) {

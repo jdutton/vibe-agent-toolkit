@@ -143,6 +143,7 @@ function canaryOpts(
     out: safePath.join(tempDir, 'harness'),
     subjectSource: { path: layout.subjectDir },
     subjectScaffoldDir: layout.scaffoldDir,
+    subjectInPlace: false,
     acknowledgedRunsSkillCode: true,
     allowUnverifiedSkillSource: true,
     ...(spawn === undefined ? {} : { spawn }),

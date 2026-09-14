@@ -181,6 +181,14 @@ export interface HarnessFakeSpawnConfig {
    * the stub's own fragment unchanged.
    */
   graderFragmentOverrides?: (fragmentPath: string) => Record<string, unknown> | undefined;
+  /**
+   * Raw bytes written AS the fragment, instead of the stub's JSON — the knob for
+   * a grader whose output `JSON.parse` rejects, which no override of a parsed
+   * object can express. Called once per grader spawn, so a counter in the closure
+   * can answer differently attempt by attempt (the re-grade is a second spawn for
+   * the same fragment path). `undefined` writes the stub's own fragment.
+   */
+  graderRawFragment?: (fragmentPath: string) => string | undefined;
 }
 
 export interface HarnessFakeSpawn {
@@ -214,7 +222,8 @@ export function makeHarnessFakeSpawn(cfg: HarnessFakeSpawnConfig = {}): HarnessF
     if (isGrader) {
       graderSandboxDirs.push(opts.sandboxDir);
       const fragmentPath = /fragment path (.+?),/.exec(opts.prompt)?.[1];
-      const evalId = /Eval id: (\S+)/.exec(opts.prompt)?.[1] ?? 'unknown';
+      // The prompt renders the id as a JSON string literal (`Eval id: "3"`).
+      const evalId = /Eval id: "([^"]+)"/.exec(opts.prompt)?.[1] ?? 'unknown';
       const nonce = /EXACTLY: ([a-f0-9]+)/.exec(opts.prompt)?.[1] ?? '';
       graderNonces.push(nonce);
       // The grader prompt only carries this directive when the eval declared
@@ -227,6 +236,11 @@ export function makeHarnessFakeSpawn(cfg: HarnessFakeSpawnConfig = {}): HarnessF
       // let a "missing fragment" assertion pass against a file that exists.
       if (forced !== undefined) return forced;
       if (fragmentPath !== undefined) {
+        const raw = cfg.graderRawFragment?.(fragmentPath);
+        if (raw !== undefined) {
+          writeFileSync(fragmentPath, raw, 'utf8');
+          return SPAWN_OK;
+        }
         // Resolved INSIDE the guard so `graderPassedFor` always receives a real
         // path rather than an empty-string stand-in — an arm predicate handed
         // `''` would silently take its fallback branch for every spawn.

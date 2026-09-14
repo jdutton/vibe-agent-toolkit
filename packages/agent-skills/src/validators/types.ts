@@ -1,4 +1,4 @@
-import type { SeverityCounts, ValidationIssue } from '@vibe-agent-toolkit/schema';
+import type { SeverityCounts, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { EvidenceRecord } from '../evidence/index.js';
 
@@ -91,6 +91,13 @@ export interface ValidateOptions {
 
   /** Check for files in skill directory that aren't referenced in markdown content */
   checkUnreferencedFiles?: boolean;
+
+  /**
+   * `severity` / `allow` applied to every registry-coded issue this lane emits.
+   * REQUIRED so a caller holding a config cannot silently omit it; `{}` when
+   * no config governs the skill or the caller resolves severity itself.
+   */
+  validation: ValidationConfig;
 }
 
 /**

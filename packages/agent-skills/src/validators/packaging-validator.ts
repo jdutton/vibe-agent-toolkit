@@ -70,7 +70,7 @@ import {
   VALIDATION_RULES,
   VALIDATION_THRESHOLDS,
 } from './validation-rules.js';
-import { deferredAssetsToIssues, walkerExclusionsToIssues } from './walker-to-issues.js';
+import { deferredAssetsToIssues, outsideSkillDirLinksToIssues, walkerExclusionsToIssues } from './walker-to-issues.js';
 
 /** Exclude reason constants to avoid duplicate string literals */
 const EXCLUDE_REASON_DIRECTORY = 'directory-target' as const;
@@ -927,7 +927,7 @@ export async function validateSkillForPackaging(
   if (shared?.gitTracker !== undefined) {
     walkOptions.gitTracker = shared.gitTracker;
   }
-  const { bundledResources, bundledAssets, excludedReferences, maxBundledDepth, deferredAssets } = walkLinkGraph(
+  const { bundledResources, bundledAssets, excludedReferences, outsideSkillDirLinks, maxBundledDepth, deferredAssets } = walkLinkGraph(
     skillResource?.id ?? '',
     registry as WalkableRegistry,
     walkOptions,
@@ -939,17 +939,18 @@ export async function validateSkillForPackaging(
   const bundledFileSet = new Set(bundledFiles);
   const directFileCount = directLinks.filter(p => bundledFileSet.has(p)).length;
 
-  // Three producers, one append, order significant. Each is a receipt for a link
-  // the walker dropped or deferred, and all three anchor on `locationRoot`:
+  // Four producers, one append, order significant, all anchored on `locationRoot`:
   //  1. walker exclusions (LINK_OUTSIDE_PROJECT, LINK_TARGETS_DIRECTORY, etc.)
   //  2. links dropped for pointing into declared test input — the same issue, at
   //     the same location, the packager emits for it. `projectRoot` scopes WHICH
   //     dirs count as declared test input; `locationRoot` only anchors.
   //  3. one info issue per deferred asset declared in files: config
+  //  4. followed links bundled from outside the skill directory (LINK_OUTSIDE_SKILL_DIR)
   rawIssues.push(
     ...walkerExclusionsToIssues(excludedReferences, locationRoot),
     ...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot, locationRoot),
     ...deferredAssetsToIssues(deferredAssets, locationRoot),
+    ...outsideSkillDirLinksToIssues(outsideSkillDirLinks, locationRoot),
   );
 
   const fileCount = bundledFiles.length + 1; // +1 for SKILL.md itself

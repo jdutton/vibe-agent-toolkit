@@ -36,7 +36,8 @@ with a regression test.
 
 - **`vat skill test run` folds its five exit codes into the shared three**: a failed eval is `1`
   (was `4`); every way the harness could not run is `2` (was `1`/`2`/`3`) with a `Reason: internal |
-  preflight | bootstrap` line on stderr. `SkillTestExitCode` and `mapErrorToExitCode` are gone.
+  preflight | bootstrap` line on stderr. A CI step that tolerates `4` as "evals failed" must now match
+  `1`. `SkillTestExitCode` and `mapErrorToExitCode` are gone.
 
 - **`vat skill review` exits `0` on warnings alone** (was `1`); the new `--strict` promotes them to `1`.
 
@@ -189,6 +190,20 @@ with a regression test.
   stays `LINK_BROKEN_FILE` (error); a normalization-only difference is the new
   `LINK_NORMALIZATION_MISMATCH` (warning). Fix the links it names; the suggestion spells the whole path.
 
+- **`publish: false` now means an in-place skill: `vat build` / `vat skills build` skip it and
+  `vat verify` no longer expects its `dist/skills/<name>` bundle** (it reports them as `bundlesInPlace`)
+  — it is still validated at source.
+  `skills.defaults.publish: false` declares a whole tree in-place (plugin-local skills still ship
+  with their plugin); `--skill <name>` on an in-place skill now exits `1`.
+- **`skills.defaults.publish` is now honoured by the consistency check**, so a project-wide
+  `publish: false` yields `SKILL_UNPUBLISHED` (info) instead of `PUBLISHED_SKILL_NOT_IN_*` errors. A
+  plugin `skills:` selector matching only in-place skills is now `PLUGIN_REFERENCES_UNKNOWN_SKILL`.
+- **The "link points outside the skill directory" warning is now `LINK_OUTSIDE_SKILL_DIR`, default
+  `ignore`** (bundled, link rewritten). For a self-contained skill set it to `error` in
+  `validation.severity` under `skills.config.<name>` or `skills.defaults`: validate and build fail,
+  plugin-local skills included. `LINK_OUTSIDE_PROJECT` now means only a project-root escape — re-key
+  an override on it that was meant for the skill-directory warning.
+
 #### RAG (library)
 
 - **A RAG filter no provider implements now throws instead of being silently ignored** — which
@@ -210,6 +225,9 @@ with a regression test.
   negative counters are rejected); the hand-written interface is gone.
 
 #### Library
+
+- **`validateSkill()` now requires `validation: ValidationConfig`** (`{}` when no config applies)
+  and applies its `severity` and `allow` to every issue it emits.
 
 - **`copyDirectory` refuses a symlink whose target is outside the source tree
   (`CopyLinkEscapesSourceError`) and a link that leads back into it (`DirectoryWalkRevisitedError`)**;
@@ -847,6 +865,23 @@ with a regression test.
   switch (Windows TTY) — the libuv return value was ignored. A CLI transport whose session file is
   corrupt now warns before starting a fresh session in its place. The ONNX provider's `dispose()`
   no longer swallows a failed `session.release()`.
+- **`vat skill test` no longer fails the whole suite as harness-broke when a grader echoes an integer
+  eval id as a number.** `evals.json` documents `id: 1` as a first-class form, but the grader prompt
+  rendered it unquoted (`MUST be exactly: 3`), so the grader wrote `"evalId": 3` and the fail-closed
+  fragment schema refused it (`Expected string, received number`) — exit 1 for every eval in the run.
+  The prompt now renders the id as a JSON string literal in both places (a prompt invariant enforces
+  it), and the fragment schema accepts the integer form and normalises it to the string every other
+  layer already carries. `runNonce`, `expectations` and `tool` stay exactly as strict as before.
+- **`vat skill test`: one grader fragment that is not valid JSON no longer takes the whole suite
+  down as harness-broke (exit 1 on rc.7; `2` under this release's contract).** A bad escape the
+  grader model emitted in a free-text `evidence` was indistinguishable from a broken harness. The
+  eval is now re-graded once — same transcript, a fresh integrity nonce the stale file cannot
+  satisfy, the bad file consumed first, and the prompt told what went wrong. Only a second
+  unparseable fragment surfaces, and then as that eval's own `fail` with reason
+  `grader-fragment-unparseable` in every `evidence`; the other evals' verdicts are reported and the
+  exit code follows the verdict (1, or 0 under `--allow-eval-failure`). On a `--baseline` control
+  arm it is recorded as a control-arm failure with the delta withheld, like every other control-arm
+  grader failure. Schema refusals and nonce mismatches stay fail-closed with no retry.
 - **`resources.linkAuth` now applies whenever it is declared — it was silently inert unless
   `resources.collections` was also declared, so every link on a claimed host was checked anonymously.**
   Adopters with `linkAuth` and no `collections`: expect new `LINK_AUTH_*` findings in CI output.

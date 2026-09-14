@@ -7,6 +7,7 @@
 
 import { writeFileSync } from 'node:fs';
 
+import type { ValidationConfig } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -20,9 +21,7 @@ import {
   validateSkillWithUnreferencedFileCheck,
 } from '../test-helpers.js';
 
-// ---------------------------------------------------------------------------
 // Constants & Helpers
-// ---------------------------------------------------------------------------
 
 const TEST_SKILL_NAME = 'test-skill';
 const TEST_SKILL_DESC = 'A test skill for link traversal';
@@ -72,9 +71,7 @@ async function checkUnreferencedIssues(
   return findIssues(result, 'SKILL_UNREFERENCED_FILE');
 }
 
-// ---------------------------------------------------------------------------
 // 1. Valid local links
-// ---------------------------------------------------------------------------
 
 describe('transitive link traversal — valid links', () => {
   const { getTempDir } = setupTempDir('skill-valid-links-');
@@ -97,9 +94,7 @@ describe('transitive link traversal — valid links', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // 2. Broken links
-// ---------------------------------------------------------------------------
 
 describe('transitive link traversal — broken links', () => {
   const { getTempDir } = setupTempDir('skill-broken-links-');
@@ -117,28 +112,74 @@ describe('transitive link traversal — broken links', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // 3. Link escaping directory
-// ---------------------------------------------------------------------------
+
+/**
+ * A skill whose SKILL.md links to an EXISTING sibling file one level above the
+ * skill directory — inside the project, outside the skill. Returns the result
+ * of validating it under `validation`, so every boundary case runs against the
+ * same fixture and each silent case has its positive control right beside it.
+ */
+async function validateSkillLinkingOutsideItsDir(tempDir: string, validation: ValidationConfig): Promise<ValidationResult> {
+  const skillDir = safePath.join(tempDir, 'skill');
+  mkdirSyncReal(skillDir, { recursive: true });
+  writeFileSync(safePath.join(tempDir, 'sibling.md'), '# Sibling\n');
+  const skillPath = safePath.join(skillDir, 'SKILL.md');
+  writeFileSync(skillPath, skillWithLink('../sibling.md', 'sibling'));
+  return validateSkill({ skillPath, rootDir: skillDir, validation });
+}
 
 describe('transitive link traversal — boundary escape', () => {
   const { getTempDir } = setupTempDir('skill-boundary-');
 
-  it('should report LINK_OUTSIDE_PROJECT (warning only) for a link escaping the skill directory to an EXISTING target', async () => {
-    const tempDir = getTempDir();
-    const skillDir = safePath.join(tempDir, 'skill');
-    mkdirSyncReal(skillDir, { recursive: true });
-    writeFileSync(safePath.join(tempDir, 'sibling.md'), '# Sibling\n');
-    const skillPath = safePath.join(skillDir, 'SKILL.md');
-    writeFileSync(skillPath, skillWithLink('../sibling.md', 'sibling'));
+  it('is silent by default for a link leaving the skill directory to an EXISTING target', async () => {
+    const result = await validateSkillLinkingOutsideItsDir(getTempDir(), {});
 
-    const result = await validateSkill({ skillPath, rootDir: skillDir });
+    expect(findIssues(result, 'LINK_OUTSIDE_SKILL_DIR')).toHaveLength(0);
+    expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
+    expect(result.status).toBe('success');
+  });
 
-    const issues = findIssues(result, 'LINK_OUTSIDE_PROJECT');
+  it('validation.severity.LINK_OUTSIDE_SKILL_DIR: warning reports the boundary escape', async () => {
+    const result = await validateSkillLinkingOutsideItsDir(getTempDir(), { severity: { LINK_OUTSIDE_SKILL_DIR: 'warning' } });
+
+    const issues = findIssues(result, 'LINK_OUTSIDE_SKILL_DIR');
     expect(issues).toHaveLength(1);
     expect(issues[0]?.severity).toBe('warning');
     expect(issues[0]?.message).toContain('../sibling.md');
-    expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
+    expect(issues[0]?.link).toBe('../sibling.md');
+    expect(issues[0]?.reference).toBe('#link_outside_skill_dir');
+    expect(result.status).toBe('warning');
+    // One code per boundary: the project-root escape never fires for a target inside the project.
+    expect(findIssues(result, 'LINK_OUTSIDE_PROJECT')).toHaveLength(0);
+  });
+
+  it('validation.severity.LINK_OUTSIDE_SKILL_DIR: error makes the boundary escape fail the validation', async () => {
+    const result = await validateSkillLinkingOutsideItsDir(getTempDir(), { severity: { LINK_OUTSIDE_SKILL_DIR: 'error' } });
+
+    const issues = findIssues(result, 'LINK_OUTSIDE_SKILL_DIR');
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.severity).toBe('error');
+    expect(result.status).toBe('error');
+    expect(result.issueCounts.errors).toBe(1);
+  });
+
+  it('validation.severity.LINK_OUTSIDE_PROJECT does not reach the skill-directory boundary', async () => {
+    const result = await validateSkillLinkingOutsideItsDir(getTempDir(), { severity: { LINK_OUTSIDE_PROJECT: 'error' } });
+
+    expect(findIssues(result, 'LINK_OUTSIDE_SKILL_DIR')).toHaveLength(0);
+    expect(result.status).toBe('success');
+  });
+
+  it('validation.allow suppresses a raised boundary escape for a matching path and records nothing unused', async () => {
+    const result = await validateSkillLinkingOutsideItsDir(getTempDir(), {
+      severity: { LINK_OUTSIDE_SKILL_DIR: 'error' },
+      allow: { LINK_OUTSIDE_SKILL_DIR: [{ paths: ['**/*'], reason: 'cross-links are intentional in this skill' }] },
+    });
+
+    expect(findIssues(result, 'LINK_OUTSIDE_SKILL_DIR')).toHaveLength(0);
+    expect(findIssues(result, 'ALLOW_UNUSED')).toHaveLength(0);
+    expect(result.status).toBe('success');
   });
 
   it('should report LINK_INTEGRITY_BROKEN (error), not a silent boundary warning, when a link escapes the skill directory AND its target does not exist', async () => {
@@ -146,7 +187,7 @@ describe('transitive link traversal — boundary escape', () => {
       getTempDir(), {}, skillWithLink('../missing-outside.md', 'missing'),
     );
 
-    expect(findIssues(result, 'LINK_OUTSIDE_PROJECT')).toHaveLength(0);
+    expect(findIssues(result, 'LINK_OUTSIDE_SKILL_DIR')).toHaveLength(0);
     const issues = findIssues(result, 'LINK_INTEGRITY_BROKEN');
     expect(issues).toHaveLength(1);
     expect(issues[0]?.severity).toBe('error');
@@ -155,9 +196,7 @@ describe('transitive link traversal — boundary escape', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // 4. Unreferenced files — checkUnreferencedFiles=true
-// ---------------------------------------------------------------------------
 
 describe('transitive link traversal — unreferenced files', () => {
   const { getTempDir } = setupTempDir('skill-unreferenced-');
@@ -175,9 +214,7 @@ describe('transitive link traversal — unreferenced files', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // 4b. Unreferenced files — implicit references
-// ---------------------------------------------------------------------------
 
 describe('transitive link traversal — implicit references', () => {
   const { getTempDir } = setupTempDir('skill-implicit-refs-');
@@ -223,9 +260,7 @@ describe('transitive link traversal — implicit references', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // 5. Unreferenced files — checkUnreferencedFiles=false
-// ---------------------------------------------------------------------------
 
 describe('transitive link traversal — unreferenced files disabled', () => {
   const { getTempDir } = setupTempDir('skill-no-unreferenced-');
@@ -241,9 +276,7 @@ describe('transitive link traversal — unreferenced files disabled', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // 6. Circular links
-// ---------------------------------------------------------------------------
 
 describe('transitive link traversal — circular links', () => {
   const { getTempDir } = setupTempDir('skill-circular-');
@@ -259,9 +292,7 @@ describe('transitive link traversal — circular links', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // 7. Transitive links (SKILL->A->B)
-// ---------------------------------------------------------------------------
 
 describe('transitive link traversal — transitive links', () => {
   const { getTempDir } = setupTempDir('skill-transitive-');
@@ -276,9 +307,7 @@ describe('transitive link traversal — transitive links', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // 8. CLAUDE.md and README.md never flagged as unreferenced
-// ---------------------------------------------------------------------------
 
 describe('transitive link traversal — excluded from unreferenced', () => {
   const { getTempDir } = setupTempDir('skill-excluded-');
@@ -302,9 +331,7 @@ describe('transitive link traversal — excluded from unreferenced', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // 9. Non-markdown asset linked — existence check, no traversal
-// ---------------------------------------------------------------------------
 
 describe('transitive link traversal — non-markdown assets', () => {
   const { getTempDir } = setupTempDir('skill-assets-');
@@ -329,9 +356,7 @@ describe('transitive link traversal — non-markdown assets', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // 10. External URLs and anchor-only links — skipped
-// ---------------------------------------------------------------------------
 
 describe('transitive link traversal — skipped link types', () => {
   const { getTempDir } = setupTempDir('skill-skipped-');
@@ -348,13 +373,11 @@ describe('transitive link traversal — skipped link types', () => {
     );
 
     expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
-    expect(findIssues(result, 'LINK_OUTSIDE_PROJECT')).toHaveLength(0);
+    expect(findIssues(result, 'LINK_OUTSIDE_SKILL_DIR')).toHaveLength(0);
   });
 });
 
-// ---------------------------------------------------------------------------
 // Edge: links with anchors to existing files
-// ---------------------------------------------------------------------------
 
 describe('transitive link traversal — links with anchors', () => {
   const { getTempDir } = setupTempDir('skill-anchors-');
@@ -371,9 +394,7 @@ describe('transitive link traversal — links with anchors', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // Edge: URL-encoded paths (%20, %26, etc.)
-// ---------------------------------------------------------------------------
 
 describe('transitive link traversal — URL-encoded paths', () => {
   const { getTempDir } = setupTempDir('skill-url-encoded-');
@@ -409,9 +430,7 @@ describe('transitive link traversal — URL-encoded paths', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // Edge: no rootDir provided — defaults to dirname(skillPath)
-// ---------------------------------------------------------------------------
 
 describe('transitive link traversal — rootDir default', () => {
   const { getTempDir } = setupTempDir('skill-rootdir-default-');
@@ -421,16 +440,14 @@ describe('transitive link traversal — rootDir default', () => {
       getTempDir(), { 'doc.md': '# Doc\n\nContent.' }, skillWithLink('./doc.md', 'doc'),
     );
 
-    const result = await validateSkill({ skillPath });
+    const result = await validateSkill({ skillPath, validation: {} });
 
     expect(result.linkedFiles).toHaveLength(1);
     expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
   });
 });
 
-// ---------------------------------------------------------------------------
 // I1 fix (#126): directory links in the config-less audit path
-// ---------------------------------------------------------------------------
 
 describe('transitive link traversal — directory links', () => {
   const { getTempDir } = setupTempDir('skill-directory-links-');
@@ -456,14 +473,12 @@ describe('transitive link traversal — directory links', () => {
     // does not try to write a file into it
     mkdirSyncReal(safePath.join(tempDir, 'existing-dir'), { recursive: true });
 
-    const result = await validateSkill({ skillPath });
+    const result = await validateSkill({ skillPath, validation: {} });
     expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
   });
 });
 
-// ---------------------------------------------------------------------------
 // Kebab-case detection — skill
-// ---------------------------------------------------------------------------
 
 describe('kebab-case detection — skill', () => {
   const { getTempDir } = setupTempDir('skill-kebab-');
@@ -483,7 +498,7 @@ describe('kebab-case detection — skill', () => {
         'Body.',
       ].join('\n'),
     );
-    const result = await validateSkill({ skillPath });
+    const result = await validateSkill({ skillPath, validation: {} });
     const codes = result.issues.map((i) => i.code);
     expect(codes).toContain('SKILL_NAME_NOT_KEBAB_CASE');
     const kebabIssue = result.issues.find((i) => i.code === 'SKILL_NAME_NOT_KEBAB_CASE');

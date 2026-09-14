@@ -103,7 +103,7 @@ const STAGED_FILE = 'staged.txt';
 
 /** Build a minimal RunHarnessOptions with the given subject and overrides. */
 function makeOpts(overrides: Partial<RunHarnessOptions> = {}): RunHarnessOptions {
-  return { subject: 'my-skill', ...overrides };
+  return { subject: 'my-skill', subjectInPlace: false, ...overrides };
 }
 
 /** Build a preflight check entry. */

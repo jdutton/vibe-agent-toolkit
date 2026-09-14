@@ -597,6 +597,52 @@ afterEach(() => {
   vi.mocked(isGitIgnored).mockReturnValue(false);
 });
 
+/** A skill one directory level below `docs/`, so `../../docs/guide.md` leaves the skill dir. */
+const NESTED_SKILL_PATH = safePath.resolve('/project/skills/demo/SKILL.md');
+const NESTED_GUIDE_HREF = '../../docs/guide.md';
+const LOCAL_ID = 'local-md';
+
+/**
+ * Walk `skills/demo/SKILL.md → [./local.md, ../../docs/guide.md, ../../../outside.md]`,
+ * with `local.md` optionally linking on to the out-of-directory guide.
+ */
+function walkNestedSkill(opts: { localLinksGuide: boolean; maxDepth: number }): ReturnType<typeof walkLinkGraph> {
+  const skillLinks = [
+    createLocalLink('local', './local.md', LOCAL_ID),
+    createLocalLink('escape', '../../../outside.md'),
+  ];
+  if (!opts.localLinksGuide) skillLinks.push(createLocalLink('guide', NESTED_GUIDE_HREF, GUIDE_ID));
+  const skill = createMockResource(SKILL_ID, NESTED_SKILL_PATH, skillLinks);
+  const local = createMockResource(LOCAL_ID, safePath.resolve('/project/skills/demo/local.md'),
+    opts.localLinksGuide ? [createLocalLink('guide', NESTED_GUIDE_HREF, GUIDE_ID)] : []);
+  const registry = createMockRegistry([skill, local, createMockResource(GUIDE_ID, GUIDE_PATH)]);
+  return walkLinkGraph(SKILL_ID, registry, defaultOptions({ skillRootPath: NESTED_SKILL_PATH, maxDepth: opts.maxDepth }));
+}
+
+describe('walkLinkGraph: followed links leaving the skill directory', () => {
+  it('records a followed link whose target ships from outside the skill directory, and only that one', () => {
+    const result = walkNestedSkill({ localLinksGuide: false, maxDepth: 5 });
+
+    expectBundledIds(result, [LOCAL_ID, GUIDE_ID]);
+    expect(result.outsideSkillDirLinks.map(r => [r.path, r.sourcePath, r.linkHref])).toEqual([
+      [GUIDE_PATH, NESTED_SKILL_PATH, NESTED_GUIDE_HREF],
+    ]);
+    // The project-root escape stays an exclusion and is NOT also a skill-dir record.
+    expect(result.excludedReferences.map(r => r.excludeReason)).toEqual([REASON_OUTSIDE_PROJECT]);
+  });
+
+  it('does not record an out-of-directory edge whose target did not ship', () => {
+    const result = walkNestedSkill({ localLinksGuide: true, maxDepth: 1 });
+
+    expectBundledIds(result, [LOCAL_ID]);
+    expect(result.outsideSkillDirLinks).toEqual([]);
+  });
+
+  it('records nothing for a skill whose links all stay inside its directory', () => {
+    expect(walkLinkGraph(SKILL_ID, createSkillGuideRegistry(), defaultOptions()).outsideSkillDirLinks).toEqual([]);
+  });
+});
+
 describe('walkLinkGraph', () => {
   describe('skill resource not found', () => {
     it('should return empty result when skill resource ID is not in registry', () => {

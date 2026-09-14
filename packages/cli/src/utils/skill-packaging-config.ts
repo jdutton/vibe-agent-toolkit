@@ -53,6 +53,37 @@ export function mergeSkillPackagingConfig(
 }
 
 /**
+ * Is this skill distributed through the POOL (`dist/skills/<name>`)?
+ *
+ * THE predicate for `publish`, read off the MERGED config so that
+ * `skills.defaults.publish` counts; every lane that decides whether a pool bundle
+ * is built, expected or assigned asks this and nothing else. The consistency
+ * check used to read `skills.config.<name>.publish` alone, so a project-wide
+ * `skills.defaults.publish: false` parsed and changed nothing — and `vat build`
+ * and `vat verify` never read the flag at all: two contracts for one key.
+ *
+ * `publish: false` names an IN-PLACE skill: validated at source by `vat validate`
+ * / `vat skills validate`, never bundled by `vat build`, never expected by
+ * `vat verify`. Default `true`.
+ *
+ * `publish` scopes the POOL only. A plugin-local skill (one under a plugin's
+ * `skills/` directory — see `computeTreeCopiedSkillLocations`) ships with its
+ * plugin by LOCATION: the claude phase packages it and verify expects it whatever
+ * this returns. A skill that is both discovered by `skills.include` and
+ * plugin-local therefore skips the pool with `publish: false` and still ships in
+ * its plugin.
+ *
+ * `publish` is a distribution flag, not a packaging knob — the packaging
+ * validator never reads it — so it is declared on the project-config schema and
+ * carried through the merge generically like every other key; it is read here
+ * off the merged record rather than off a typed field of the validator's config.
+ */
+export function isSkillPublished(packaging: SkillPackagingConfig): boolean {
+  const { publish } = packaging as { publish?: boolean };
+  return publish ?? true;
+}
+
+/**
  * The PROJECT's declared eval suites: one {@link DeclaredEvalSuite} per discovered
  * skill, from the same discovery + merge every lane already runs.
  *

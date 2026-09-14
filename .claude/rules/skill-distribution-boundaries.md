@@ -15,8 +15,11 @@ paths:
   `vibe-agent-toolkit.config.yaml`. (not enforced)
 - `package.json` `vat.skills` is a packaging hint that `vat verify` checks and `vat build` never
   reads. (enforced by: `vat verify` consistency-check)
-- `publish: false` opts a skill out of the distribution-consistency checks only; it is still
-  discovered, built and held to every packaging rule. (enforced by: `vat build`)
+- `publish: false` (merged from `skills.defaults` and `skills.config.<name>`, read through the one
+  `isSkillPublished` predicate) names an IN-PLACE skill: still discovered and validated at source
+  by `vat validate`, never bundled by `vat build`, never expected by `vat verify`. It scopes the
+  pool (`dist/skills`) only — a plugin-local skill ships with its plugin by location regardless.
+  (enforced by: `vat build`, `vat verify`)
 - Error messages name the config mechanism that fixes them. (not enforced)
 
 Roles table: [`docs/architecture/skill-packaging.md`](../../docs/architecture/skill-packaging.md#who-owns-what-skillmd-configyaml-packagejson).
