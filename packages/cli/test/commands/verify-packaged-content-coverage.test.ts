@@ -20,21 +20,18 @@
  */
 
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
+import { describe, expect, it, vi } from 'vitest';
 
 import { exitCodeForPhases } from '../../src/commands/phase-utils.js';
+import type { DiscoveredSkill } from '../../src/commands/skills/command-helpers.js';
 import {
   buildPackagedContentPhase,
   checkPackagedAgentInstructionFiles,
   type PackagedContentCrawl,
 } from '../../src/commands/verify.js';
-import {
-  pluginProjectConfig,
-  pluginSkillDir,
-  writeSkillProject,
-  type FixtureSkill,
-} from '../helpers/plugin-local-fixture.js';
-import { createTempDirTracker } from '../system/test-common.js';
+import { fakePluginLocalIndex, pluginProjectConfig } from '../helpers/plugin-local-fixture.js';
 
 const harness = vi.hoisted(() => ({ config: undefined as ProjectConfig | undefined }));
 
@@ -46,26 +43,21 @@ vi.mock('../../src/utils/config-loader.js', async (importOriginal) => ({
 const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
 const BETA_BUNDLE = 'dist/skills/beta';
 
-/** Each directory differs from its skill's declared name, so a name-keyed predicate cannot pass. */
-const REPO_ONLY: FixtureSkill = { dir: 'skills/repo-only-dir', name: 'repo-only' };
-const PLUGIN_LOCAL: FixtureSkill = { dir: pluginSkillDir('local-dir'), name: 'local' };
+/** A project root nothing was ever built under, so every bundle reads as absent. */
+const ROOT = safePath.join(normalizedTmpdir(), 'no-such-project-pc');
 
-const tempDirs = createTempDirTracker('vat-verify-plugin-local-');
+/** A discovered skill at `<ROOT>/<dir>/SKILL.md`; every directory differs from its declared name. */
+const skillAt = (name: string, dir: string): DiscoveredSkill => ({ name, sourcePath: safePath.join(ROOT, dir, 'SKILL.md') });
+const REPO_ONLY = skillAt('repo-only', 'skills/repo-only-dir');
+const PLUGIN_LOCAL = skillAt('local', 'plugins/p/skills/local-dir');
 
-/** Crawl a fresh project — nothing built, so every bundle reads as absent — under `skills.defaults.publish`. */
-function crawl(
-  defaultPublish: boolean,
-  skills: readonly FixtureSkill[],
-  git: Parameters<typeof writeSkillProject>[2] = 'none',
-): PackagedContentCrawl {
-  const root = tempDirs.createTempDir();
+/** Crawl `discovered` under `skills.defaults.publish`, with only `pluginLocal` plugin-local. */
+function crawl(defaultPublish: boolean, discovered: DiscoveredSkill[], pluginLocal: DiscoveredSkill[] = [PLUGIN_LOCAL]): PackagedContentCrawl {
   harness.config = pluginProjectConfig(defaultPublish);
-  return checkPackagedAgentInstructionFiles(root, writeSkillProject(root, skills, git));
+  return checkPackagedAgentInstructionFiles(ROOT, discovered, fakePluginLocalIndex(pluginLocal));
 }
 
 describe('checkPackagedAgentInstructionFiles — a plugin-local skill is never in place', () => {
-  afterEach(() => tempDirs.cleanupTempDirs());
-
   it('counts only the repo-only publish:false skill in bundlesInPlace', () => {
     expect(crawl(false, [REPO_ONLY, PLUGIN_LOCAL]).bundlesInPlace).toBe(1);
   });
@@ -74,17 +66,15 @@ describe('checkPackagedAgentInstructionFiles — a plugin-local skill is never i
     expect(crawl(true, [REPO_ONLY, PLUGIN_LOCAL])).toMatchObject({ bundlesInPlace: 0, bundlesExpected: 3 });
   });
 
-  it('an UNTRACKED skill under a plugin skills/ dir does not ship, so under publish:false it is in place — not an empty verdict', () => {
-    const found = crawl(false, [PLUGIN_LOCAL], { untracked: [PLUGIN_LOCAL.dir] });
+  it('a skill under a plugin skills/ dir that the index does not hold ships nowhere, so under publish:false it is in place — not an empty verdict', () => {
+    const found = crawl(false, [PLUGIN_LOCAL], []);
 
     expect(found).toMatchObject({ bundlesInspected: 0, bundlesExpected: 0, bundlesInPlace: 1 });
     expect(exitCodeForPhases([buildPackagedContentPhase(found)])).toBe(0);
   });
 
   it('a repo-only skill sharing its declared name with a plugin-local one is still in place', () => {
-    const twin: FixtureSkill = { dir: 'skills/twin-dir', name: PLUGIN_LOCAL.name };
-
-    expect(crawl(false, [twin, PLUGIN_LOCAL]).bundlesInPlace).toBe(1);
+    expect(crawl(false, [skillAt(PLUGIN_LOCAL.name, 'skills/twin-dir'), PLUGIN_LOCAL]).bundlesInPlace).toBe(1);
   });
 });
 

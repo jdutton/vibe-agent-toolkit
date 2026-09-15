@@ -199,9 +199,11 @@ with a regression test.
   `--skill` on one exits `1` pointing at `vat build --only claude`.
 - **`skills.defaults.publish` is now honoured by the consistency check**, so a project-wide
   `publish: false` yields `SKILL_UNPUBLISHED` (info) instead of `PUBLISHED_SKILL_NOT_IN_*` errors. A
-  plugin `skills:` selector matching only in-place skills is now `PLUGIN_REFERENCES_UNKNOWN_SKILL`.
-  A skill under a plugin's `skills/` that git does not track no longer counts as assigned to that
-  plugin (the plugin build never shipped it): `git add` it, or expect `PUBLISHED_SKILL_NOT_IN_PLUGIN`.
+  plugin `skills:` selector matching only in-place skills — or only `publish: false` skills local to
+  a *different* plugin — is now `PLUGIN_REFERENCES_UNKNOWN_SKILL`.
+  A skill under a plugin's `skills/` that git does not track, or that is nested inside another
+  plugin-local skill's directory, no longer counts as assigned to that plugin (the plugin build never
+  shipped it): `git add` it or move it to its own directory, or expect `PUBLISHED_SKILL_NOT_IN_PLUGIN`.
 - **The "link points outside the skill directory" warning is now `LINK_OUTSIDE_SKILL_DIR`, default
   `ignore`** (bundled, link rewritten). For a self-contained skill set it to `error` in
   `validation.severity` under `skills.config.<name>` or `skills.defaults`: validate and build fail,
@@ -773,6 +775,9 @@ with a regression test.
 
 ### Fixed
 
+- **`vat verify` now reads a plugin-local skill's `skills.config.<name>` by its declared name** when
+  checking its plugin-tree copy; a skill whose directory is not named after it had its `files:` dests
+  and severity overrides ignored there. Fixed; a newly reported missing dest is a real one.
 - **`vat claude plugin install`, `list` and `uninstall` now see a plugin or marketplace installed as a
   symlink** (a `--dev` install); the listing skipped links, so a dev install was invisible to the
   commands that manage it. A skill directory that is itself a link is linked like any other.

@@ -91,8 +91,9 @@ skill bundles:
   `link.fragment`, `link.type`, `link.resource.id|fileName|relativePath`, `skill.name`.
 - `files`: explicit source→dest entries for build artifacts and unlinked files.
 - `publish: false` (per skill, or once under `skills.defaults`): an in-place skill — validated at
-  source, never built into `dist/skills/`, never expected by `vat verify`. Plugin-local skills ship
-  with their plugin regardless.
+  source, never built into `dist/skills/`, never expected by `vat verify`. Plugin-local skills — the
+  outermost skill directories under a plugin's `skills/` that git tracks — ship with their plugin
+  regardless; one not yet `git add`ed, or nested inside another skill's directory, does not.
 - `resourceNaming`, `validation` (severity overrides / allow entries), `targets`.
 
 The full key reference is in the `vat-skill-authoring` skill; every finding a build can raise is in

@@ -14,6 +14,7 @@
 
 import { writeFileSync } from 'node:fs';
 
+import { indexPluginLocalSkills } from '@vibe-agent-toolkit/agent-skills';
 import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -40,11 +41,15 @@ async function discoveredIn(cwd: string): Promise<Awaited<ReturnType<typeof disc
   return config?.skills ? discoverSkillsFromConfig(config.skills, cwd, 'refuse') : [];
 }
 
+/** The plugin-local index `vat verify` builds for `cwd`. */
+const pluginLocalIn = (cwd: string): ReturnType<typeof indexPluginLocalSkills> =>
+  indexPluginLocalSkills(loadConfig(cwd) ?? { version: 1 }, cwd);
+
 const filesDestsIn = async (cwd: string): Promise<FilesDestCheckResult[]> =>
-  checkFilesConfigDests(cwd, await discoveredIn(cwd));
+  checkFilesConfigDests(cwd, await discoveredIn(cwd), pluginLocalIn(cwd));
 
 const packagedCrawlIn = async (cwd: string): Promise<ReturnType<typeof checkPackagedAgentInstructionFiles>> =>
-  checkPackagedAgentInstructionFiles(cwd, await discoveredIn(cwd));
+  checkPackagedAgentInstructionFiles(cwd, await discoveredIn(cwd), pluginLocalIn(cwd));
 
 /** The crawl's findings alone; the bundle count beside them is pinned where it matters. */
 const packagedContentIn = async (cwd: string): Promise<ValidationIssue[]> =>
@@ -243,6 +248,44 @@ describe('checkFilesConfigDests (tree-copy distribution awareness)', () => {
 
       expect(results).toHaveLength(0);
     });
+  });
+
+  it('reads a plugin-tree copy\'s files: from skills.config.<declared name>, not from its directory name', async () => {
+    // The skill's directory (`shipped-dir`) is not named after it (`shipped`), so a
+    // directory-keyed lookup finds no `files:` and reports nothing missing.
+    const tempDir = createTempDir();
+    writeFileSync(
+      safePath.join(tempDir, CONFIG_FILE),
+      `version: 1
+skills:
+  include: ["plugins/*/skills/**/SKILL.md"]
+  config:
+    shipped:
+      files:
+        - source: src/${DEST_FILE}
+          dest: ${DEST_FILE}
+claude:
+  marketplaces:
+    ${MARKETPLACE_NAME}:
+      owner:
+        name: Test Org
+      plugins:
+        - name: ${PLUGIN_NAME}
+          skills: []
+`,
+      'utf-8',
+    );
+    const sourceDir = safePath.join(tempDir, 'plugins', PLUGIN_NAME, 'skills', 'shipped-dir');
+    mkdirSyncReal(sourceDir, { recursive: true });
+    writeFileSync(safePath.join(sourceDir, 'SKILL.md'), '---\nname: shipped\ndescription: skill whose dir is not its name\n---\n', 'utf-8');
+    const outputDir = safePath.join(
+      tempDir, 'dist', '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME, 'plugins', PLUGIN_NAME, 'skills', 'shipped-dir',
+    );
+    mkdirSyncReal(outputDir, { recursive: true });
+
+    const results = await filesDestsIn(tempDir);
+
+    expect(results.map((r) => [r.outputDir, r.missing])).toEqual([[outputDir, [DEST_FILE]]]);
   });
 
   // -------------------------------------------------------------------------

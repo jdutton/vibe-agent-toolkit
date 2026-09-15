@@ -22,6 +22,8 @@ import {
   detectPackagedAgentInstructionFiles,
   explicitFilesConfigDests,
   indexPluginLocalSkills,
+  type DistributedSkillLocation,
+  type PluginLocalSkillIndex,
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
@@ -333,6 +335,8 @@ function addCheckCandidate(
  * crawls the whole project, `vat verify` already needs the same list for its
  * consistency phase, and an optional parameter here would let a call site quietly
  * re-crawl (or, worse, skip discovery and reinstate the blindness above).
+ * `pluginLocal` is required for the same reason: listing plugin-local skills crawls
+ * every plugin, and `vat verify` builds that index ONCE for all three in-process phases.
  *
  * The merge goes through {@link mergeSkillPackagingConfig} — the ONE helper every
  * lane uses — so `vat verify` and `vat build` cannot disagree about a skill's
@@ -343,6 +347,7 @@ function addCheckCandidate(
 function collectBuiltSkillOutputs(
   cwd: string,
   discovered: readonly DiscoveredSkill[],
+  pluginLocal: PluginLocalSkillIndex,
 ): BuiltSkillOutputs {
   const outputs: BuiltSkillOutputs = { built: [], expected: 0, inPlace: 0, missing: [] };
   // No `try`, deliberately. The config was already loaded by the command (see
@@ -359,8 +364,6 @@ function collectBuiltSkillOutputs(
 
   // Dedup guard: key = `skillName\0outputDir`
   const seen = new Set<string>();
-  // What the plugin build packages — the same index `vat build` and consistency ask.
-  const pluginLocal = indexPluginLocalSkills(config, cwd);
   const packagingOf = (skillName: string): SkillPackagingConfig =>
     mergeSkillPackagingConfig(defaults, skillsConfig?.config?.[skillName] as Record<string, unknown> | undefined);
 
@@ -386,13 +389,13 @@ function collectBuiltSkillOutputs(
   // Always expected, whatever `publish` says: every location here is a
   // plugin-local skill the claude build phase packages into the plugin tree —
   // `publish` scopes the pool only (see `isSkillPublished`).
+  // Per-skill config is keyed by the skill's declared NAME: each location takes the name
+  // of the discovered skill whose SKILL.md directory it is (through the index).
+  const declaredNameAt = new Map<DistributedSkillLocation, string>();
+  for (const skill of discovered) {
+    for (const loc of pluginLocal.locationsOf(skill.sourcePath)) declaredNameAt.set(loc, skill.name);
+  }
   for (const loc of pluginLocal.locations) {
-    // Per-skill config is keyed by the skill's declared NAME. `skillDirPath` is a
-    // path (`group/nested-skill` for a nested skill), so try its trailing segment
-    // too — the spelling that matches for every skill whose dir is named after it.
-    const dirLeaf = basename(loc.skillDirPath);
-    const perSkill = (skillsConfig?.config?.[loc.skillDirPath] ?? skillsConfig?.config?.[dirLeaf]) as
-      Record<string, unknown> | undefined;
     addCheckCandidate(
       outputs,
       seen,
@@ -400,13 +403,23 @@ function collectBuiltSkillOutputs(
       {
         skillName: loc.skillDirPath,
         outputDir: loc.skillOutputDir,
-        packaging: mergeSkillPackagingConfig(defaults, perSkill),
+        packaging: packagingOf(declaredNameAt.get(loc) ?? undiscoveredLocationConfigKey(loc, skillsConfig?.config)),
       },
       true,
     );
   }
 
   return outputs;
+}
+
+/**
+ * The `skills.config` key for a plugin-local location NO discovered skill lives at (one
+ * `skills.include` does not reach), which has no declared name to go by: its directory
+ * path (`group/nested-skill`) if that is a key, else its trailing segment — the spelling
+ * that matches every skill whose directory is named after it.
+ */
+function undiscoveredLocationConfigKey(loc: DistributedSkillLocation, config: Record<string, unknown> | undefined): string {
+  return config?.[loc.skillDirPath] === undefined ? basename(loc.skillDirPath) : loc.skillDirPath;
 }
 
 /**
@@ -417,14 +430,16 @@ function collectBuiltSkillOutputs(
  *
  * @param discovered - The skills this run discovered from `skills.include`. See
  *   {@link collectBuiltSkillOutputs} for why it is required rather than optional.
+ * @param pluginLocal - The run's plugin-local index — required for the same reason.
  * @returns One result per (skill, outputDir) pair where dests are absent.
  */
 export function checkFilesConfigDests(
   cwd: string,
   discovered: readonly DiscoveredSkill[],
+  pluginLocal: PluginLocalSkillIndex,
 ): FilesDestCheckResult[] {
   const results: FilesDestCheckResult[] = [];
-  for (const check of collectBuiltSkillOutputs(cwd, discovered).built) {
+  for (const check of collectBuiltSkillOutputs(cwd, discovered, pluginLocal).built) {
     const { skillName, outputDir } = check;
     const mergedFiles = filesOf(check);
     if (mergedFiles.length === 0) continue;
@@ -485,13 +500,15 @@ export function checkFilesConfigDests(
  *
  * @param discovered - The skills this run discovered from `skills.include`. See
  *   {@link collectBuiltSkillOutputs} for why it is required rather than optional.
+ * @param pluginLocal - The run's plugin-local index — required for the same reason.
  */
 export function checkPackagedAgentInstructionFiles(
   cwd: string,
   discovered: readonly DiscoveredSkill[],
+  pluginLocal: PluginLocalSkillIndex,
 ): PackagedContentCrawl {
   const issues: ValidationIssue[] = [];
-  const outputs = collectBuiltSkillOutputs(cwd, discovered);
+  const outputs = collectBuiltSkillOutputs(cwd, discovered, pluginLocal);
   for (const check of outputs.built) {
     const raw = detectPackagedAgentInstructionFiles(
       check.outputDir,
@@ -934,9 +951,10 @@ function asValidationIssues(issues: readonly PublishedIssue[]): ValidationIssue[
 export function runPackagedContentPhase(
   projectRoot: string,
   discoveredSkills: readonly DiscoveredSkill[],
+  pluginLocal: PluginLocalSkillIndex,
   logger: ReturnType<typeof createLogger>,
 ): PackagedContentPhaseResult {
-  const phase = buildPackagedContentPhase(checkPackagedAgentInstructionFiles(projectRoot, discoveredSkills));
+  const phase = buildPackagedContentPhase(checkPackagedAgentInstructionFiles(projectRoot, discoveredSkills, pluginLocal));
   reportPackagedContentPhase(phase, logger);
   return phase;
 }
@@ -970,6 +988,7 @@ function runConsistencyPhase(
   config: ProjectConfig | undefined,
   projectRoot: string,
   discoveredSkills: readonly DiscoveredSkill[],
+  pluginLocal: PluginLocalSkillIndex,
 ): void {
   if (!config?.skills) {
     // Nothing to cross-reference, so nothing to report: a run without a
@@ -985,7 +1004,7 @@ function runConsistencyPhase(
     return;
   }
 
-  const consistencyResult = runConsistencyChecks([...discoveredSkills], config, projectRoot);
+  const consistencyResult = runConsistencyChecks([...discoveredSkills], config, projectRoot, pluginLocal);
   const issues = consistencyResult.issues;
 
   if (issues.length > 0) {
@@ -1000,6 +1019,63 @@ function runConsistencyPhase(
     issues: asValidation.map(toPublishedIssue),
   };
   phaseResults.push(result);
+}
+
+/**
+ * The in-process half of `vat verify`: `files-config-dests`, `packaged-content` and
+ * `consistency`, each where `inProcess` names it.
+ */
+async function runInProcessPhases(run: {
+  inProcess: readonly InProcessPhaseName[];
+  config: ProjectConfig;
+  skills: NonNullable<ProjectConfig['skills']>;
+  projectRoot: string;
+  logger: ReturnType<typeof createLogger>;
+  phaseResults: PhaseResult[];
+}): Promise<void> {
+  const { inProcess, config, projectRoot, logger, phaseResults } = run;
+  // ONE discovery for the whole in-process half of the run. Every phase below
+  // asks the same question — "which skills does this project have" — and each
+  // answer used to be a different one: `consistency` crawled, while
+  // `files-config-dests` and `packaged-content` read `skills.config` keys and
+  // were therefore blind to every skill discovered by a glob.
+  // `'refuse'`: a verify over a population it could not see is the
+  // green-without-checking shape this command exists to refuse. The throw
+  // lands in the command's catch → `handleCommandError`, exit 2, with the
+  // crawl's own root-relative sentence.
+  const discoveredSkills = await discoverSkillsFromConfig(run.skills, projectRoot, 'refuse');
+  // ONE plugin-local index likewise: listing it crawls every plugin, and every phase
+  // below asks it (in-place vs plugin-only, plugin-tree bundles, plugin assignment).
+  const pluginLocal = indexPluginLocalSkills(config, projectRoot);
+
+  // Post-build files config check: verify all dest paths exist in built output
+  if (inProcess.includes(FILES_CONFIG_DESTS)) {
+    const filesDestResults = checkFilesConfigDests(projectRoot, discoveredSkills, pluginLocal);
+    if (filesDestResults.length > 0) {
+      reportFilesDestErrors(filesDestResults, logger);
+      phaseResults.push({
+        name: FILES_CONFIG_DESTS,
+        status: 'error',
+        issueCounts: { errors: filesDestResults.length, warnings: 0, info: 0 },
+      });
+    }
+  }
+
+  // Packaged-content check: crawl each built skill bundle for repo-internal
+  // agent-instruction files. Publishes its findings INTO the document rather
+  // than only logging them — a file that must not ship has to be visible in
+  // `issueCounts`, or a CI consumer reads a clean report for a bundle carrying
+  // one. Warnings do not fail the run; the exit code still comes from errors.
+  // The zero-bundle refusal is derived inside the builder and logged from the
+  // built phase, so stderr, the document and the exit code carry one list.
+  if (inProcess.includes(PACKAGED_CONTENT)) {
+    phaseResults.push(runPackagedContentPhase(projectRoot, discoveredSkills, pluginLocal, logger));
+  }
+
+  // Consistency check: cross-reference discovered skills vs package.json and plugin assignments
+  if (inProcess.includes('consistency')) {
+    runConsistencyPhase(logger, phaseResults, config, projectRoot, discoveredSkills, pluginLocal);
+  }
 }
 
 async function verifyTopLevelCommand(
@@ -1051,46 +1127,8 @@ async function verifyTopLevelCommand(
       phaseResults.push(await runPhase(phase));
     }
 
-    // ONE discovery for the whole in-process half of the run. Every phase below
-    // asks the same question — "which skills does this project have" — and each
-    // answer used to be a different one: `consistency` crawled, while
-    // `files-config-dests` and `packaged-content` read `skills.config` keys and
-    // were therefore blind to every skill discovered by a glob.
-    // `'refuse'`: a verify over a population it could not see is the
-    // green-without-checking shape this command exists to refuse. The throw
-    // lands in the command's catch → `handleCommandError`, exit 2, with the
-    // crawl's own root-relative sentence.
-    const discoveredSkills = inProcess.length > 0 && config?.skills
-      ? await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse')
-      : [];
-
-    // Post-build files config check: verify all dest paths exist in built output
-    if (inProcess.includes(FILES_CONFIG_DESTS)) {
-      const filesDestResults = checkFilesConfigDests(projectRoot, discoveredSkills);
-      if (filesDestResults.length > 0) {
-        reportFilesDestErrors(filesDestResults, logger);
-        phaseResults.push({
-          name: FILES_CONFIG_DESTS,
-          status: 'error',
-          issueCounts: { errors: filesDestResults.length, warnings: 0, info: 0 },
-        });
-      }
-    }
-
-    // Packaged-content check: crawl each built skill bundle for repo-internal
-    // agent-instruction files. Publishes its findings INTO the document rather
-    // than only logging them — a file that must not ship has to be visible in
-    // `issueCounts`, or a CI consumer reads a clean report for a bundle carrying
-    // one. Warnings do not fail the run; the exit code still comes from errors.
-    // The zero-bundle refusal is derived inside the builder and logged from the
-    // built phase, so stderr, the document and the exit code carry one list.
-    if (inProcess.includes(PACKAGED_CONTENT)) {
-      phaseResults.push(runPackagedContentPhase(projectRoot, discoveredSkills, logger));
-    }
-
-    // Consistency check: cross-reference discovered skills vs package.json and plugin assignments
-    if (inProcess.includes('consistency')) {
-      runConsistencyPhase(logger, phaseResults, config, projectRoot, discoveredSkills);
+    if (inProcess.length > 0 && config?.skills) {
+      await runInProcessPhases({ inProcess, config, skills: config.skills, projectRoot, logger, phaseResults });
     }
 
     const duration = Date.now() - startTime;

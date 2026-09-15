@@ -1390,9 +1390,13 @@ function pluginOnlySkillRefusal(skill: string | undefined, pluginOnly: readonly 
   );
 }
 
-export function formatBuiltSuccessLine(built: number, inPlace: number): string {
-  return `\nBuilt ${built} skill(s) successfully`
-    + (inPlace === 0 ? '' : ` (${inPlace} in-place skill(s) not bundled)`);
+/** The human success line, naming each set-aside population only when it is non-empty. */
+export function formatBuiltSuccessLine(built: number, setAside: { inPlace: number; pluginOnly: number }): string {
+  const tails = [
+    ...(setAside.inPlace === 0 ? [] : [`${setAside.inPlace} in-place skill(s) not bundled`]),
+    ...(setAside.pluginOnly === 0 ? [] : [`${setAside.pluginOnly} plugin-only skill(s) shipped with their plugin`]),
+  ];
+  return `\nBuilt ${built} skill(s) successfully` + (tails.length === 0 ? '' : ` (${tails.join(', ')})`);
 }
 
 /**
@@ -1819,7 +1823,7 @@ export async function runSkillsBuildPhase(
       return { document, exitCode: 1 };
     }
 
-    logger.info(formatBuiltSuccessLine(run.results.length, inPlace.length));
+    logger.info(formatBuiltSuccessLine(run.results.length, { inPlace: inPlace.length, pluginOnly: pluginOnly.length }));
 
     return { document, exitCode: 0 };
   } catch (error) {

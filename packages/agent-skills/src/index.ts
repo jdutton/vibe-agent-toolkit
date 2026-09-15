@@ -254,4 +254,5 @@ export {
   skillNameToFsPath,
   type DistributedSkillLocation,
   type PluginLocalSkillIndex,
+  type PluginSkillExclusion,
 } from './plugin-distribution-layout.js';

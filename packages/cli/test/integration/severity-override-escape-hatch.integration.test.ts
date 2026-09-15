@@ -24,6 +24,7 @@
 
 import { writeFileSync } from 'node:fs';
 
+import { indexPluginLocalSkills } from '@vibe-agent-toolkit/agent-skills';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -235,7 +236,8 @@ async function marketplaceOutcome(
 async function verifyFindings(root: string): Promise<string[]> {
   const config = loadConfig(root);
   const discovered = config?.skills ? await discoverSkillsFromConfig(config.skills, root, 'refuse') : [];
-  return checkPackagedAgentInstructionFiles(root, discovered).issues.map((i) => String(i.location));
+  const pluginLocal = indexPluginLocalSkills(config ?? { version: 1 }, root);
+  return checkPackagedAgentInstructionFiles(root, discovered, pluginLocal).issues.map((i) => String(i.location));
 }
 
 /** Every agent-instruction issue `vat audit <target>` publishes, AFTER severity resolution. */
