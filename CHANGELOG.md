@@ -194,11 +194,14 @@ with a regression test.
   `vat verify` no longer expects its `dist/skills/<name>` bundle** (it reports them as `bundlesInPlace`)
   — it is still validated at source.
   `skills.defaults.publish: false` declares a whole tree in-place; `--skill <name>` on an in-place skill
-  now exits `1`. Plugin-local skills still ship with their plugin and are never counted or named as
-  in-place (`bundlesInPlace`, `skillsInPlace`).
+  now exits `1`. Plugin-local skills (git-tracked, under a plugin's `skills/`) still ship with their
+  plugin: they are counted as `skillsPluginOnly` / `skillsPluginOnlyNames`, never as in-place, and
+  `--skill` on one exits `1` pointing at `vat build --only claude`.
 - **`skills.defaults.publish` is now honoured by the consistency check**, so a project-wide
   `publish: false` yields `SKILL_UNPUBLISHED` (info) instead of `PUBLISHED_SKILL_NOT_IN_*` errors. A
   plugin `skills:` selector matching only in-place skills is now `PLUGIN_REFERENCES_UNKNOWN_SKILL`.
+  A skill under a plugin's `skills/` that git does not track no longer counts as assigned to that
+  plugin (the plugin build never shipped it): `git add` it, or expect `PUBLISHED_SKILL_NOT_IN_PLUGIN`.
 - **The "link points outside the skill directory" warning is now `LINK_OUTSIDE_SKILL_DIR`, default
   `ignore`** (bundled, link rewritten). For a self-contained skill set it to `error` in
   `validation.severity` under `skills.config.<name>` or `skills.defaults`: validate and build fail,

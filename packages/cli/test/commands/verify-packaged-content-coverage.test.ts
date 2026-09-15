@@ -20,9 +20,7 @@
  */
 
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { exitCodeForPhases } from '../../src/commands/phase-utils.js';
 import {
@@ -30,6 +28,13 @@ import {
   checkPackagedAgentInstructionFiles,
   type PackagedContentCrawl,
 } from '../../src/commands/verify.js';
+import {
+  pluginProjectConfig,
+  pluginSkillDir,
+  writeSkillProject,
+  type FixtureSkill,
+} from '../helpers/plugin-local-fixture.js';
+import { createTempDirTracker } from '../system/test-common.js';
 
 const harness = vi.hoisted(() => ({ config: undefined as ProjectConfig | undefined }));
 
@@ -41,32 +46,45 @@ vi.mock('../../src/utils/config-loader.js', async (importOriginal) => ({
 const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
 const BETA_BUNDLE = 'dist/skills/beta';
 
-/** A root with nothing on disk: every bundle reads as absent, so only the in-place count is under test. */
-const NO_SUCH_ROOT = safePath.join(normalizedTmpdir(), 'no-such-project-pc-in-place');
+/** Each directory differs from its skill's declared name, so a name-keyed predicate cannot pass. */
+const REPO_ONLY: FixtureSkill = { dir: 'skills/repo-only-dir', name: 'repo-only' };
+const PLUGIN_LOCAL: FixtureSkill = { dir: pluginSkillDir('local-dir'), name: 'local' };
 
-/**
- * `skills.defaults.publish: false`, one plugin `p`, and two discovered skills: `repo-only`
- * outside any plugin and `local` under `plugins/p/skills/` (plugin-local by LOCATION).
- */
-function crawlPluginLocalBesideRepoOnly(defaultPublish: boolean): PackagedContentCrawl {
-  harness.config = {
-    version: 1,
-    skills: { include: ['**/SKILL.md'], defaults: { publish: defaultPublish } },
-    claude: { marketplaces: { m: { owner: { name: 'Owner' }, plugins: [{ name: 'p', skills: [] }] } } },
-  } as ProjectConfig;
-  return checkPackagedAgentInstructionFiles(NO_SUCH_ROOT, [
-    { name: 'repo-only', sourcePath: safePath.join(NO_SUCH_ROOT, 'skills', 'repo-only', 'SKILL.md') },
-    { name: 'local', sourcePath: safePath.join(NO_SUCH_ROOT, 'plugins', 'p', 'skills', 'local', 'SKILL.md') },
-  ]);
+const tempDirs = createTempDirTracker('vat-verify-plugin-local-');
+
+/** Crawl a fresh project — nothing built, so every bundle reads as absent — under `skills.defaults.publish`. */
+function crawl(
+  defaultPublish: boolean,
+  skills: readonly FixtureSkill[],
+  git: Parameters<typeof writeSkillProject>[2] = 'none',
+): PackagedContentCrawl {
+  const root = tempDirs.createTempDir();
+  harness.config = pluginProjectConfig(defaultPublish);
+  return checkPackagedAgentInstructionFiles(root, writeSkillProject(root, skills, git));
 }
 
 describe('checkPackagedAgentInstructionFiles — a plugin-local skill is never in place', () => {
+  afterEach(() => tempDirs.cleanupTempDirs());
+
   it('counts only the repo-only publish:false skill in bundlesInPlace', () => {
-    expect(crawlPluginLocalBesideRepoOnly(false).bundlesInPlace).toBe(1);
+    expect(crawl(false, [REPO_ONLY, PLUGIN_LOCAL]).bundlesInPlace).toBe(1);
   });
 
-  it('control: with publish unset nothing is in place, and both pool bundles are expected', () => {
-    expect(crawlPluginLocalBesideRepoOnly(true)).toMatchObject({ bundlesInPlace: 0, bundlesExpected: 2 });
+  it('control: with publish unset nothing is in place — two pool bundles plus the plugin tree copy are expected', () => {
+    expect(crawl(true, [REPO_ONLY, PLUGIN_LOCAL])).toMatchObject({ bundlesInPlace: 0, bundlesExpected: 3 });
+  });
+
+  it('an UNTRACKED skill under a plugin skills/ dir does not ship, so under publish:false it is in place — not an empty verdict', () => {
+    const found = crawl(false, [PLUGIN_LOCAL], { untracked: [PLUGIN_LOCAL.dir] });
+
+    expect(found).toMatchObject({ bundlesInspected: 0, bundlesExpected: 0, bundlesInPlace: 1 });
+    expect(exitCodeForPhases([buildPackagedContentPhase(found)])).toBe(0);
+  });
+
+  it('a repo-only skill sharing its declared name with a plugin-local one is still in place', () => {
+    const twin: FixtureSkill = { dir: 'skills/twin-dir', name: PLUGIN_LOCAL.name };
+
+    expect(crawl(false, [twin, PLUGIN_LOCAL]).bundlesInPlace).toBe(1);
   });
 });
 

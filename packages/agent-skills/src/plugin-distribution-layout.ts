@@ -4,8 +4,8 @@
  * Shared primitives for locating where `vat build --only claude` places
  * tree-copied plugin skills in the output tree, and where it reads them from.
  *
- * Consumed by `vat build`, `vat verify`, and consistency-check so the path
- * conventions can never drift between those commands.
+ * Consumed by `vat build`, `vat verify`, consistency-check and skill-reference
+ * resolution so the path conventions can never drift between those commands.
  */
 
 import { existsSync } from 'node:fs';
@@ -57,39 +57,6 @@ export function getPluginSourceDir(
     configDir,
     plugin.source ?? safePath.join('plugins', plugin.name),
   );
-}
-
-/**
- * The names of every discovered skill that is PLUGIN-LOCAL: its `sourcePath`
- * sits under some plugin's `<getPluginSourceDir(configDir, plugin)>/skills/`.
- *
- * Matched by physical location, never by `publish`: a plugin-local skill ships
- * with its plugin whatever the flag says, so it is never "in place". The ONE
- * answer `vat build`, `vat verify` and the consistency check all ask — consistency
- * for plugin assignment and `SKILL_UNPUBLISHED`, build and verify for what they
- * report as in-place.
- *
- * A trailing slash on the prefix enforces a path-separator boundary, so a
- * sibling directory with a common prefix (`/skills` vs `/skills-extra`) is not
- * a false match.
- */
-export function pluginLocalSkillNames(
-  config: ProjectConfig,
-  discoveredSkills: ReadonlyArray<{ name: string; sourcePath: string }>,
-  configDir: string,
-): Set<string> {
-  const names = new Set<string>();
-  const marketplaces = config.claude?.marketplaces;
-  if (!marketplaces) return names;
-  for (const marketplace of Object.values(marketplaces)) {
-    for (const plugin of marketplace.plugins) {
-      const srcSkillsPrefix = `${safePath.join(getPluginSourceDir(configDir, plugin), 'skills')}/`;
-      for (const skill of discoveredSkills) {
-        if (toForwardSlash(skill.sourcePath).startsWith(srcSkillsPrefix)) names.add(skill.name);
-      }
-    }
-  }
-  return names;
 }
 
 /**
@@ -272,18 +239,41 @@ export function skillNameToFsPath(name: string): string {
   return name.replaceAll(':', '__');
 }
 
+/** The plugin-local skills a project ships — see {@link indexPluginLocalSkills}. */
+export interface PluginLocalSkillIndex {
+  /** Every plugin-local skill location, as {@link computeTreeCopiedSkillLocations} lists them. */
+  readonly locations: readonly DistributedSkillLocation[];
+  /**
+   * The location of the skill whose `SKILL.md` is at `skillMdPath` — matched by the
+   * directory holding that file — or `undefined` when the skill is not plugin-local.
+   */
+  locationOf(skillMdPath: string): DistributedSkillLocation | undefined;
+}
+
 /**
- * Find the tree-copied location whose SOURCE skill dir equals `skillSourceDir`
- * (compared via resolved absolute paths). Returns `undefined` for pool skills
- * or skills not declared in any plugin's `skills/` source dir.
+ * THE answer to "is this skill plugin-local — does it ship with its plugin?", for every
+ * lane that asks: `vat build` / `vat skills build` and `vat verify` (what they report as
+ * in-place), the consistency check (plugin assignment, `SKILL_UNPUBLISHED`), and
+ * skill-reference resolution (where a skill builds to).
+ *
+ * Derived from what the claude phase actually PACKAGES — {@link computeTreeCopiedSkillLocations},
+ * i.e. git-visible, outermost skill directories under a plugin's `skills/` — never from a
+ * path prefix. A prefix also claimed a skill the plugin build does not ship: one not yet
+ * `git add`ed (reported as shipping while the build warned it was not packaged), or one
+ * nested inside another skill's directory.
+ *
+ * Keyed by the skill's SOURCE DIRECTORY, never its declared name: a name is not unique
+ * across a project (a repo-only skill may share one with a plugin-local skill) and is
+ * unrelated to the directory the build lists. Exact directories also make the
+ * `skills/` vs `skills-extra/` boundary structural.
+ *
+ * Build ONCE per invocation: listing the locations runs the crawl for every plugin.
  */
-export function findDistributedSkillLocationBySource(
-  config: ProjectConfig,
-  configDir: string,
-  skillSourceDir: string,
-): DistributedSkillLocation | undefined {
-  const target = safePath.resolve(skillSourceDir);
-  return computeTreeCopiedSkillLocations(config, configDir).find(
-    loc => safePath.resolve(loc.skillSourceDir) === target,
-  );
+export function indexPluginLocalSkills(config: ProjectConfig, configDir: string): PluginLocalSkillIndex {
+  const locations = computeTreeCopiedSkillLocations(config, configDir);
+  const bySourceDir = new Map(locations.map((loc) => [safePath.resolve(loc.skillSourceDir), loc]));
+  return {
+    locations,
+    locationOf: (skillMdPath) => bySourceDir.get(safePath.resolve(dirname(safePath.resolve(skillMdPath)))),
+  };
 }

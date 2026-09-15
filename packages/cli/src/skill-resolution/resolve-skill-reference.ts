@@ -37,7 +37,7 @@ import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
-  findDistributedSkillLocationBySource,
+  indexPluginLocalSkills,
   skillNameToFsPath,
 } from '@vibe-agent-toolkit/agent-skills';
 import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
@@ -64,8 +64,7 @@ function computeSkillDistribution(
   configRoot: string,
   config: NonNullable<ReturnType<typeof loadConfigCached>>,
 ): { distribution: SkillDistribution; expectedDistDir: string } {
-  const skillDir = safePath.resolve(safePath.join(safePath.resolve(sourcePath), '..'));
-  const location = findDistributedSkillLocationBySource(config, configRoot, skillDir);
+  const location = indexPluginLocalSkills(config, configRoot).locationOf(sourcePath);
   if (location === undefined) {
     return {
       distribution: { kind: 'pool' },

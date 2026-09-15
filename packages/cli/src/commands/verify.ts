@@ -19,10 +19,9 @@ import { existsSync, statSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
-  computeTreeCopiedSkillLocations,
   detectPackagedAgentInstructionFiles,
   explicitFilesConfigDests,
-  pluginLocalSkillNames,
+  indexPluginLocalSkills,
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
@@ -153,8 +152,9 @@ Output:
     bundled by 'vat build', so no pool bundle is expected for it (a stale one
     in dist/skills is still inspected); bundlesInPlace counts them, and a run
     whose every discovered skill is in place passes with nothing to inspect. A
-    plugin-local skill is never in place: it is expected in its plugin tree
-    whatever publish says, and never counted in bundlesInPlace. Declare
+    plugin-local skill (a git-tracked skill dir under a plugin's skills/) is
+    never in place: it is expected in its plugin tree whatever publish says,
+    and never counted in bundlesInPlace. Declare
     skills.defaults.publish: false for a project that builds with --only claude
     and uses its other skills from the repo.
   Progress and validation errors → stderr (streamed live)
@@ -359,9 +359,17 @@ function collectBuiltSkillOutputs(
 
   // Dedup guard: key = `skillName\0outputDir`
   const seen = new Set<string>();
-  // A plugin-local skill is never in place, whatever `publish` says: its tree copy
-  // is expected below. The same location predicate `vat build` and consistency ask.
-  const pluginLocalNames = pluginLocalSkillNames(config, discovered, cwd);
+  // What the plugin build packages — the same index `vat build` and consistency ask.
+  const pluginLocal = indexPluginLocalSkills(config, cwd);
+  const packagingOf = (skillName: string): SkillPackagingConfig =>
+    mergeSkillPackagingConfig(defaults, skillsConfig?.config?.[skillName] as Record<string, unknown> | undefined);
+
+  // A plugin-local skill is never in place, whatever `publish` says: its plugin copy
+  // is expected below. Counted per discovered SKILL, not per name — a repo-only skill
+  // may share its declared name with a plugin-local one.
+  outputs.inPlace = discovered.filter(
+    (skill) => publishScope(skill, packagingOf(skill.name), pluginLocal) === 'in-place',
+  ).length;
 
   // --- Pool skills: candidate dir is dist/skills/<fsName> ---
   // Expected only when discovered AND published (see BuiltSkillOutputs.expected).
@@ -369,20 +377,16 @@ function collectBuiltSkillOutputs(
   const discoveredNames = new Set(discovered.map((skill) => skill.name));
   const poolNames = new Set<string>([...discoveredNames, ...Object.keys(skillsConfig?.config ?? {})]);
   for (const skillName of poolNames) {
-    const perSkill = skillsConfig?.config?.[skillName] as Record<string, unknown> | undefined;
     const outputDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
-    const packaging = mergeSkillPackagingConfig(defaults, perSkill);
-    const discoveredSkill = discoveredNames.has(skillName);
-    const published = isSkillPublished(packaging);
-    if (discoveredSkill && publishScope(skillName, packaging, pluginLocalNames) === 'in-place') outputs.inPlace += 1;
-    addCheckCandidate(outputs, seen, cwd, { skillName, outputDir, packaging }, discoveredSkill && published);
+    const packaging = packagingOf(skillName);
+    addCheckCandidate(outputs, seen, cwd, { skillName, outputDir, packaging }, discoveredNames.has(skillName) && isSkillPublished(packaging));
   }
 
   // --- Tree-copy skills: candidate dirs are plugin output skill dirs ---
   // Always expected, whatever `publish` says: every location here is a
   // plugin-local skill the claude build phase packages into the plugin tree —
   // `publish` scopes the pool only (see `isSkillPublished`).
-  for (const loc of computeTreeCopiedSkillLocations(config, cwd)) {
+  for (const loc of pluginLocal.locations) {
     // Per-skill config is keyed by the skill's declared NAME. `skillDirPath` is a
     // path (`group/nested-skill` for a nested skill), so try its trailing segment
     // too — the spelling that matches for every skill whose dir is named after it.
