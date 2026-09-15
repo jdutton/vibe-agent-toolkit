@@ -16,13 +16,11 @@
  */
 
 import { existsSync, statSync } from 'node:fs';
-import { basename } from 'node:path';
 
 import {
   detectPackagedAgentInstructionFiles,
   explicitFilesConfigDests,
   indexPluginLocalSkills,
-  type DistributedSkillLocation,
   type PluginLocalSkillIndex,
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
@@ -44,7 +42,7 @@ import type { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 import { nothingCheckedFinding, runIntegrityFinding } from '../utils/run-integrity.js';
-import { isSkillPublished, mergeSkillPackagingConfig, publishScope } from '../utils/skill-packaging-config.js';
+import { isSkillPublished, mergeSkillPackagingConfig, pluginLocalSkillConfigEntry, publishScope } from '../utils/skill-packaging-config.js';
 
 import { runMarketplaceValidatePhase } from './claude/marketplace/validate.js';
 import {
@@ -68,7 +66,7 @@ import {
 import { rejectPositionalArguments } from './positional-args.js';
 import { runResourcesValidatePhase } from './resources/validate.js';
 import type { DiscoveredSkill } from './skills/command-helpers.js';
-import { discoverSkillsFromConfig } from './skills/skill-discovery.js';
+import { discoverSkillsFromConfig, readPluginLocalSkillNames, type PluginLocalSkillNames } from './skills/skill-discovery.js';
 import { runSkillsValidatePhase } from './skills/validate.js';
 
 export interface VerifyCommandOptions {
@@ -337,6 +335,9 @@ function addCheckCandidate(
  * re-crawl (or, worse, skip discovery and reinstate the blindness above).
  * `pluginLocal` is required for the same reason: listing plugin-local skills crawls
  * every plugin, and `vat verify` builds that index ONCE for all three in-process phases.
+ * `pluginLocalNames` — every location's declared name, read once per run by
+ * `readPluginLocalSkillNames` — is required too: without it a plugin-local skill's config
+ * would be looked up by something other than the name the plugin build packaged it under.
  *
  * The merge goes through {@link mergeSkillPackagingConfig} — the ONE helper every
  * lane uses — so `vat verify` and `vat build` cannot disagree about a skill's
@@ -348,6 +349,7 @@ function collectBuiltSkillOutputs(
   cwd: string,
   discovered: readonly DiscoveredSkill[],
   pluginLocal: PluginLocalSkillIndex,
+  pluginLocalNames: PluginLocalSkillNames,
 ): BuiltSkillOutputs {
   const outputs: BuiltSkillOutputs = { built: [], expected: 0, inPlace: 0, missing: [] };
   // No `try`, deliberately. The config was already loaded by the command (see
@@ -389,13 +391,14 @@ function collectBuiltSkillOutputs(
   // Always expected, whatever `publish` says: every location here is a
   // plugin-local skill the claude build phase packages into the plugin tree —
   // `publish` scopes the pool only (see `isSkillPublished`).
-  // Per-skill config is keyed by the skill's declared NAME: each location takes the name
-  // of the discovered skill whose SKILL.md directory it is (through the index).
-  const declaredNameAt = new Map<DistributedSkillLocation, string>();
-  for (const skill of discovered) {
-    for (const loc of pluginLocal.locationsOf(skill.sourcePath)) declaredNameAt.set(loc, skill.name);
-  }
+  // Per-skill config goes through `pluginLocalSkillConfigEntry` — the plugin build's own
+  // lookup — under the declared name the build reads (`pluginLocalNames`).
   for (const loc of pluginLocal.locations) {
+    const declaredName = pluginLocalNames.get(safePath.resolve(loc.skillSourceDir));
+    if (declaredName === undefined) {
+      throw new Error(`vat verify defect: no declared name was read for the plugin-local skill at ${loc.skillSourceDir}`);
+    }
+    const perSkill = pluginLocalSkillConfigEntry(skillsConfig?.config, { skillName: declaredName, skillDirPath: loc.skillDirPath });
     addCheckCandidate(
       outputs,
       seen,
@@ -403,23 +406,13 @@ function collectBuiltSkillOutputs(
       {
         skillName: loc.skillDirPath,
         outputDir: loc.skillOutputDir,
-        packaging: packagingOf(declaredNameAt.get(loc) ?? undiscoveredLocationConfigKey(loc, skillsConfig?.config)),
+        packaging: mergeSkillPackagingConfig(defaults, perSkill as Record<string, unknown> | undefined),
       },
       true,
     );
   }
 
   return outputs;
-}
-
-/**
- * The `skills.config` key for a plugin-local location NO discovered skill lives at (one
- * `skills.include` does not reach), which has no declared name to go by: its directory
- * path (`group/nested-skill`) if that is a key, else its trailing segment — the spelling
- * that matches every skill whose directory is named after it.
- */
-function undiscoveredLocationConfigKey(loc: DistributedSkillLocation, config: Record<string, unknown> | undefined): string {
-  return config?.[loc.skillDirPath] === undefined ? basename(loc.skillDirPath) : loc.skillDirPath;
 }
 
 /**
@@ -431,15 +424,17 @@ function undiscoveredLocationConfigKey(loc: DistributedSkillLocation, config: Re
  * @param discovered - The skills this run discovered from `skills.include`. See
  *   {@link collectBuiltSkillOutputs} for why it is required rather than optional.
  * @param pluginLocal - The run's plugin-local index — required for the same reason.
+ * @param pluginLocalNames - The declared name of every location in `pluginLocal` — required for the same reason.
  * @returns One result per (skill, outputDir) pair where dests are absent.
  */
 export function checkFilesConfigDests(
   cwd: string,
   discovered: readonly DiscoveredSkill[],
   pluginLocal: PluginLocalSkillIndex,
+  pluginLocalNames: PluginLocalSkillNames,
 ): FilesDestCheckResult[] {
   const results: FilesDestCheckResult[] = [];
-  for (const check of collectBuiltSkillOutputs(cwd, discovered, pluginLocal).built) {
+  for (const check of collectBuiltSkillOutputs(cwd, discovered, pluginLocal, pluginLocalNames).built) {
     const { skillName, outputDir } = check;
     const mergedFiles = filesOf(check);
     if (mergedFiles.length === 0) continue;
@@ -501,14 +496,16 @@ export function checkFilesConfigDests(
  * @param discovered - The skills this run discovered from `skills.include`. See
  *   {@link collectBuiltSkillOutputs} for why it is required rather than optional.
  * @param pluginLocal - The run's plugin-local index — required for the same reason.
+ * @param pluginLocalNames - The declared name of every location in `pluginLocal` — required for the same reason.
  */
 export function checkPackagedAgentInstructionFiles(
   cwd: string,
   discovered: readonly DiscoveredSkill[],
   pluginLocal: PluginLocalSkillIndex,
+  pluginLocalNames: PluginLocalSkillNames,
 ): PackagedContentCrawl {
   const issues: ValidationIssue[] = [];
-  const outputs = collectBuiltSkillOutputs(cwd, discovered, pluginLocal);
+  const outputs = collectBuiltSkillOutputs(cwd, discovered, pluginLocal, pluginLocalNames);
   for (const check of outputs.built) {
     const raw = detectPackagedAgentInstructionFiles(
       check.outputDir,
@@ -952,9 +949,10 @@ export function runPackagedContentPhase(
   projectRoot: string,
   discoveredSkills: readonly DiscoveredSkill[],
   pluginLocal: PluginLocalSkillIndex,
+  pluginLocalNames: PluginLocalSkillNames,
   logger: ReturnType<typeof createLogger>,
 ): PackagedContentPhaseResult {
-  const phase = buildPackagedContentPhase(checkPackagedAgentInstructionFiles(projectRoot, discoveredSkills, pluginLocal));
+  const phase = buildPackagedContentPhase(checkPackagedAgentInstructionFiles(projectRoot, discoveredSkills, pluginLocal, pluginLocalNames));
   reportPackagedContentPhase(phase, logger);
   return phase;
 }
@@ -1047,10 +1045,13 @@ async function runInProcessPhases(run: {
   // ONE plugin-local index likewise: listing it crawls every plugin, and every phase
   // below asks it (in-place vs plugin-only, plugin-tree bundles, plugin assignment).
   const pluginLocal = indexPluginLocalSkills(config, projectRoot);
+  // …and the declared name of each plugin-local skill, which keys its config exactly as
+  // the plugin build keyed it.
+  const pluginLocalNames = await readPluginLocalSkillNames(pluginLocal);
 
   // Post-build files config check: verify all dest paths exist in built output
   if (inProcess.includes(FILES_CONFIG_DESTS)) {
-    const filesDestResults = checkFilesConfigDests(projectRoot, discoveredSkills, pluginLocal);
+    const filesDestResults = checkFilesConfigDests(projectRoot, discoveredSkills, pluginLocal, pluginLocalNames);
     if (filesDestResults.length > 0) {
       reportFilesDestErrors(filesDestResults, logger);
       phaseResults.push({
@@ -1069,7 +1070,7 @@ async function runInProcessPhases(run: {
   // The zero-bundle refusal is derived inside the builder and logged from the
   // built phase, so stderr, the document and the exit code carry one list.
   if (inProcess.includes(PACKAGED_CONTENT)) {
-    phaseResults.push(runPackagedContentPhase(projectRoot, discoveredSkills, pluginLocal, logger));
+    phaseResults.push(runPackagedContentPhase(projectRoot, discoveredSkills, pluginLocal, pluginLocalNames, logger));
   }
 
   // Consistency check: cross-reference discovered skills vs package.json and plugin assignments

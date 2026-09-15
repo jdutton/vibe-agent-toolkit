@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { isSkillPublished, mergeSkillPackagingConfig } from '../../src/utils/skill-packaging-config.js';
+import { isSkillPublished, mergeSkillPackagingConfig, pluginLocalSkillConfigEntry } from '../../src/utils/skill-packaging-config.js';
 
 describe('isSkillPublished', () => {
   it('defaults to true when neither defaults nor the per-skill block say', () => {
@@ -26,5 +26,17 @@ describe('isSkillPublished', () => {
     expect(isSkillPublished(mergeSkillPackagingConfig({ publish: false }, { publish: true }))).toBe(true);
     expect(isSkillPublished(mergeSkillPackagingConfig({ publish: true }, { publish: false }))).toBe(false);
     expect(isSkillPublished(mergeSkillPackagingConfig(undefined, { publish: false }))).toBe(false);
+  });
+});
+
+describe('pluginLocalSkillConfigEntry', () => {
+  const skill = { skillName: 'named', skillDirPath: 'group/leaf' };
+
+  it('prefers the declared name, then the directory path, then its trailing segment', () => {
+    expect(pluginLocalSkillConfigEntry({ named: 1, 'group/leaf': 2, leaf: 3 }, skill)).toBe(1);
+    expect(pluginLocalSkillConfigEntry({ 'group/leaf': 2, leaf: 3 }, skill)).toBe(2);
+    expect(pluginLocalSkillConfigEntry({ leaf: 3 }, skill)).toBe(3);
+    expect(pluginLocalSkillConfigEntry({ other: 4 }, skill)).toBeUndefined();
+    expect(pluginLocalSkillConfigEntry(undefined, skill)).toBeUndefined();
   });
 });

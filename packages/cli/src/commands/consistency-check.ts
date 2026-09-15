@@ -7,6 +7,7 @@
  */
 
 import { existsSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
 
 import type { PluginLocalSkillIndex, PluginSkillExclusion, SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
@@ -310,8 +311,8 @@ function notInPluginFix(
   if (exclusion?.kind === 'nested') {
     const { outer } = exclusion;
     const outerName = context.discovered.find(
-      (candidate) => context.pluginLocal.locationOf(candidate.sourcePath)?.skillSourceDir === outer.skillSourceDir,
-    )?.name ?? outer.skillDirPath;
+      (candidate) => safePath.resolve(dirname(candidate.sourcePath)) === safePath.resolve(outer.skillSourceDir),
+    )?.name ?? basename(outer.skillSourceDir);
     return `"${name}" is nested inside skill "${outerName}" (${rel(outer.skillSourceDir)}) under plugin "${outer.pluginName}"'s skills/ directory, and the plugin build ships only the outermost skill directory, so "${name}" is never packaged as a skill of its own. Move it to its own directory under skills/, or ${configRemedies}.`;
   }
   return `Either ${configRemedies}`;

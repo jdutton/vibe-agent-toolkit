@@ -14,12 +14,16 @@
 
 import { writeFileSync } from 'node:fs';
 
-import { indexPluginLocalSkills } from '@vibe-agent-toolkit/agent-skills';
+import { indexPluginLocalSkills, type PluginLocalSkillIndex } from '@vibe-agent-toolkit/agent-skills';
 import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { discoverSkillsFromConfig } from '../../src/commands/skills/skill-discovery.js';
+import {
+  discoverSkillsFromConfig,
+  readPluginLocalSkillNames,
+  type PluginLocalSkillNames,
+} from '../../src/commands/skills/skill-discovery.js';
 import {
   checkFilesConfigDests,
   checkPackagedAgentInstructionFiles,
@@ -41,15 +45,17 @@ async function discoveredIn(cwd: string): Promise<Awaited<ReturnType<typeof disc
   return config?.skills ? discoverSkillsFromConfig(config.skills, cwd, 'refuse') : [];
 }
 
-/** The plugin-local index `vat verify` builds for `cwd`. */
-const pluginLocalIn = (cwd: string): ReturnType<typeof indexPluginLocalSkills> =>
-  indexPluginLocalSkills(loadConfig(cwd) ?? { version: 1 }, cwd);
+/** The plugin-local index `vat verify` builds for `cwd`, and the declared names it reads for it. */
+async function pluginLocalIn(cwd: string): Promise<[PluginLocalSkillIndex, PluginLocalSkillNames]> {
+  const index = indexPluginLocalSkills(loadConfig(cwd) ?? { version: 1 }, cwd);
+  return [index, await readPluginLocalSkillNames(index)];
+}
 
 const filesDestsIn = async (cwd: string): Promise<FilesDestCheckResult[]> =>
-  checkFilesConfigDests(cwd, await discoveredIn(cwd), pluginLocalIn(cwd));
+  checkFilesConfigDests(cwd, await discoveredIn(cwd), ...(await pluginLocalIn(cwd)));
 
 const packagedCrawlIn = async (cwd: string): Promise<ReturnType<typeof checkPackagedAgentInstructionFiles>> =>
-  checkPackagedAgentInstructionFiles(cwd, await discoveredIn(cwd), pluginLocalIn(cwd));
+  checkPackagedAgentInstructionFiles(cwd, await discoveredIn(cwd), ...(await pluginLocalIn(cwd)));
 
 /** The crawl's findings alone; the bundle count beside them is pinned where it matters. */
 const packagedContentIn = async (cwd: string): Promise<ValidationIssue[]> =>
@@ -106,6 +112,44 @@ interface FixtureResult {
 }
 
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-verify-files-dests-');
+
+/**
+ * A project whose plugin-local skill `name` lives in `skills/<dir>`, discovered by
+ * `include`, with `files:` declared under `skills.config.<configKey>`. Returns the
+ * plugin-tree output dir, created empty.
+ */
+function planted(opts: { name: string; dir: string; include: string; configKey: string }): { tempDir: string; outputDir: string } {
+  const tempDir = createTempDir();
+  writeFileSync(
+    safePath.join(tempDir, CONFIG_FILE),
+    `version: 1
+skills:
+  include: ["${opts.include}"]
+  config:
+    ${opts.configKey}:
+      files:
+        - source: src/${DEST_FILE}
+          dest: ${DEST_FILE}
+claude:
+  marketplaces:
+    ${MARKETPLACE_NAME}:
+      owner:
+        name: Test Org
+      plugins:
+        - name: ${PLUGIN_NAME}
+          skills: []
+`,
+    'utf-8',
+  );
+  const sourceDir = safePath.join(tempDir, 'plugins', PLUGIN_NAME, 'skills', opts.dir);
+  mkdirSyncReal(sourceDir, { recursive: true });
+  writeFileSync(safePath.join(sourceDir, 'SKILL.md'), `---\nname: ${opts.name}\ndescription: fixture\n---\n`, 'utf-8');
+  const outputDir = safePath.join(
+    tempDir, 'dist', '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME, 'plugins', PLUGIN_NAME, 'skills', opts.dir,
+  );
+  mkdirSyncReal(outputDir, { recursive: true });
+  return { tempDir, outputDir };
+}
 
 /**
  * Create a temp dir with a synthetic tree-copy fixture for files-dests tests.
@@ -286,6 +330,20 @@ claude:
     const results = await filesDestsIn(tempDir);
 
     expect(results.map((r) => [r.outputDir, r.missing])).toEqual([[outputDir, [DEST_FILE]]]);
+  });
+
+  describe('a plugin-tree copy\'s config is looked up exactly as the plugin build looks it up', () => {
+    it('by declared name even when no include glob reaches the skill — the build still names it', async () => {
+      const { tempDir, outputDir } = planted({ name: 'shipped', dir: 'shipped-dir', include: 'elsewhere/**/SKILL.md', configKey: 'shipped' });
+
+      expect((await filesDestsIn(tempDir)).map((r) => [r.outputDir, r.missing])).toEqual([[outputDir, [DEST_FILE]]]);
+    });
+
+    it('by directory when no key carries its declared name — the build applies that entry, so verify checks it', async () => {
+      const { tempDir, outputDir } = planted({ name: 'foo', dir: 'bar', include: 'plugins/*/skills/**/SKILL.md', configKey: 'bar' });
+
+      expect((await filesDestsIn(tempDir)).map((r) => [r.outputDir, r.missing])).toEqual([[outputDir, [DEST_FILE]]]);
+    });
   });
 
   // -------------------------------------------------------------------------

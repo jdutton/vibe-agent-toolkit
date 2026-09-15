@@ -64,7 +64,7 @@ function computeSkillDistribution(
   sourcePath: string,
   scope: DeclaredSkillScope,
 ): { distribution: SkillDistribution; expectedDistDir: string } {
-  const location = scope.pluginLocal.locationOf(sourcePath);
+  const location = scope.pluginLocal().locationOf(sourcePath);
   if (location === undefined) {
     return {
       distribution: { kind: 'pool' },
@@ -84,13 +84,15 @@ function computeSkillDistribution(
 
 /**
  * The governing project a reference resolves against: its root, its declared skills
- * (`SKILL.md` path → name), and its plugin-local index — built ONCE per resolution
- * call, never per declared skill (listing plugin-local skills crawls every plugin).
+ * (`SKILL.md` path → name), and its plugin-local index — built at most ONCE per
+ * resolution call, never per declared skill (listing plugin-local skills crawls every
+ * plugin), and only when a path first needs it: a resolution that never asks where a
+ * declared skill builds to (a name miss, a plain source dir) lists no plugin.
  */
 interface DeclaredSkillScope {
   configRoot: string;
   byPath: ReadonlyMap<string, string>;
-  pluginLocal: PluginLocalSkillIndex;
+  pluginLocal: () => PluginLocalSkillIndex;
 }
 
 /**
@@ -107,7 +109,8 @@ async function loadDeclaredSkillScope(absPath: string): Promise<DeclaredSkillSco
   // on `not-found` for a skill that exists. The throw propagates to the
   // command (`vat skill test` wraps it as `SkillBuildError`, named).
   const byPath = await getDiscoveredSkillsByPath(config.skills, configRoot, 'refuse');
-  return { configRoot, byPath, pluginLocal: indexPluginLocalSkills(config, configRoot) };
+  let pluginLocal: PluginLocalSkillIndex | undefined;
+  return { configRoot, byPath, pluginLocal: () => (pluginLocal ??= indexPluginLocalSkills(config, configRoot)) };
 }
 
 /** {@link findDeclaredSkillForPath} within an already-loaded scope. */

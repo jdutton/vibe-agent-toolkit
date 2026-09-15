@@ -17,12 +17,16 @@
 
 import { rmSync, writeFileSync } from 'node:fs';
 
-import { indexPluginLocalSkills } from '@vibe-agent-toolkit/agent-skills';
+import { indexPluginLocalSkills, type PluginLocalSkillIndex } from '@vibe-agent-toolkit/agent-skills';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { exitCodeForPhases } from '../../src/commands/phase-utils.js';
-import { discoverSkillsFromConfig } from '../../src/commands/skills/skill-discovery.js';
+import {
+  discoverSkillsFromConfig,
+  readPluginLocalSkillNames,
+  type PluginLocalSkillNames,
+} from '../../src/commands/skills/skill-discovery.js';
 import {
   buildPackagedContentPhase,
   checkPackagedAgentInstructionFiles,
@@ -74,18 +78,19 @@ async function discoveredIn(root: string): Promise<Awaited<ReturnType<typeof dis
   return config?.skills ? discoverSkillsFromConfig(config.skills, root, 'refuse') : [];
 }
 
-/** The plugin-local index `vat verify` builds for `root`. */
-function pluginLocalIn(root: string): ReturnType<typeof indexPluginLocalSkills> {
-  return indexPluginLocalSkills(loadConfig(root) ?? { version: 1 }, root);
+/** The plugin-local index `vat verify` builds for `root`, and the declared names it reads for it. */
+async function pluginLocalIn(root: string): Promise<[PluginLocalSkillIndex, PluginLocalSkillNames]> {
+  const index = indexPluginLocalSkills(loadConfig(root) ?? { version: 1 }, root);
+  return [index, await readPluginLocalSkillNames(index)];
 }
 
 async function crawlIn(root: string): Promise<PackagedContentCrawl> {
-  return checkPackagedAgentInstructionFiles(root, await discoveredIn(root), pluginLocalIn(root));
+  return checkPackagedAgentInstructionFiles(root, await discoveredIn(root), ...(await pluginLocalIn(root)));
 }
 
 async function phaseIn(root: string): Promise<{ phase: PackagedContentPhaseResult; stderr: string }> {
   const { logger, lines } = recordingLogger();
-  const phase = runPackagedContentPhase(root, await discoveredIn(root), pluginLocalIn(root), logger);
+  const phase = runPackagedContentPhase(root, await discoveredIn(root), ...(await pluginLocalIn(root)), logger);
   return { phase, stderr: lines.join('\n') };
 }
 
@@ -248,7 +253,7 @@ async function inPlaceCrawlIn(root: string): Promise<PackagedContentCrawl> {
   const discovered = await discoveredIn(root);
   // Both skills are discovered either way — `publish` narrows what is EXPECTED, never what exists.
   expect(discovered.map((s) => s.name).sort((a, b) => a.localeCompare(b))).toEqual([PLUGIN_LOCAL, POOL]);
-  const crawl = checkPackagedAgentInstructionFiles(root, discovered, pluginLocalIn(root));
+  const crawl = checkPackagedAgentInstructionFiles(root, discovered, ...(await pluginLocalIn(root)));
   return { ...crawl, bundlesMissing: [...crawl.bundlesMissing].sort((a, b) => a.localeCompare(b)) };
 }
 

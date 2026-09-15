@@ -25,6 +25,7 @@ import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import * as yaml from 'yaml';
 
 import type { DiscoveredSkill } from '../../src/commands/skills/command-helpers.js';
+import type { PluginLocalSkillNames } from '../../src/commands/skills/skill-discovery.js';
 
 /** The one plugin every fixture declares: `claude.marketplaces.m.plugins[p]`, source `plugins/p`. */
 const FIXTURE_PLUGIN = 'p';
@@ -135,4 +136,9 @@ export function fakePluginLocalIndex(
     locationOf: (skillMdPath) => locationsOf(skillMdPath)[0],
     exclusionOf: (skillMdPath) => exclusions[skillMdPath],
   };
+}
+
+/** The declared names `vat verify` would read for {@link fakePluginLocalIndex}`(pluginLocal)` — each skill's `name`. */
+export function fakePluginLocalNames(pluginLocal: readonly DiscoveredSkill[]): PluginLocalSkillNames {
+  return new Map(pluginLocal.map((skill) => [safePath.resolve(dirname(skill.sourcePath)), skill.name]));
 }

@@ -31,7 +31,7 @@ import {
   checkPackagedAgentInstructionFiles,
   type PackagedContentCrawl,
 } from '../../src/commands/verify.js';
-import { fakePluginLocalIndex, pluginProjectConfig } from '../helpers/plugin-local-fixture.js';
+import { fakePluginLocalIndex, fakePluginLocalNames, pluginProjectConfig } from '../helpers/plugin-local-fixture.js';
 
 const harness = vi.hoisted(() => ({ config: undefined as ProjectConfig | undefined }));
 
@@ -54,7 +54,7 @@ const PLUGIN_LOCAL = skillAt('local', 'plugins/p/skills/local-dir');
 /** Crawl `discovered` under `skills.defaults.publish`, with only `pluginLocal` plugin-local. */
 function crawl(defaultPublish: boolean, discovered: DiscoveredSkill[], pluginLocal: DiscoveredSkill[] = [PLUGIN_LOCAL]): PackagedContentCrawl {
   harness.config = pluginProjectConfig(defaultPublish);
-  return checkPackagedAgentInstructionFiles(ROOT, discovered, fakePluginLocalIndex(pluginLocal));
+  return checkPackagedAgentInstructionFiles(ROOT, discovered, fakePluginLocalIndex(pluginLocal), fakePluginLocalNames(pluginLocal));
 }
 
 describe('checkPackagedAgentInstructionFiles — a plugin-local skill is never in place', () => {

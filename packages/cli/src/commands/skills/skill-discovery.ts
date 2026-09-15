@@ -8,6 +8,7 @@
 import { existsSync } from 'node:fs';
 import { basename } from 'node:path';
 
+import type { PluginLocalSkillIndex } from '@vibe-agent-toolkit/agent-skills';
 import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -53,9 +54,10 @@ const DISCOVERY_EXCLUDE = [
 
 /**
  * Read a skill's name from SKILL.md frontmatter, falling back to its H1 title and
- * then its filename. Exported so the Claude plugin build resolves a plugin-local
- * skill's name through the SAME definition `vat skills build` uses — per-skill
- * config is keyed by name, so two answers would mean two effective configs.
+ * then its filename. The Claude plugin build and `vat verify` reach it through
+ * {@link readPluginLocalSkillName}, so a plugin-local skill is named by the SAME
+ * definition `vat skills build` uses — per-skill config is keyed by name, so two
+ * answers would mean two effective configs.
  *
  * The fallback is a KEY, not a verdict. A name is optional on the agentskills.io
  * schema, so a nameless frontmatter block is a legal skill and needs a key; a
@@ -65,7 +67,7 @@ const DISCOVERY_EXCLUDE = [
  * file's path. Excluding it here instead would shrink the denominator silently,
  * which is the exact tell-less drop `includeUntracked` below exists to prevent.
  */
-export async function readSkillName(skillPath: string): Promise<string | undefined> {
+async function readSkillName(skillPath: string): Promise<string | undefined> {
   const parsed = await parseFileCached(skillPath, 'markdown');
   // The H1 fallback below reads the SAME bytes the parse already decoded, so it
   // uses `parsed.content` rather than a second read of the same path.
@@ -83,6 +85,34 @@ export async function readSkillName(skillPath: string): Promise<string | undefin
     return h1Match[1].trim();
   }
   return basename(skillPath, '.md');
+}
+
+/**
+ * The declared name of each plugin-local skill, keyed by its resolved source directory
+ * — the key per-skill config goes by (see `pluginLocalSkillConfigEntry`). `vat verify`
+ * reads it ONCE per run, for every location in the index, including a location no
+ * `skills.include` glob reaches: that skill still has a declared name, and the plugin
+ * build packages it under that name's config.
+ */
+export type PluginLocalSkillNames = ReadonlyMap<string, string>;
+
+/**
+ * The declared name of the plugin-local skill in `skillSourceDir` ({@link readSkillName}),
+ * else `skillDirPath`'s trailing segment. The plugin build and `vat verify` both name a
+ * plugin-local skill through THIS, so they look up the same config.
+ */
+export async function readPluginLocalSkillName(skillSourceDir: string, skillDirPath: string): Promise<string> {
+  return (await readSkillName(safePath.join(skillSourceDir, 'SKILL.md'))) ?? basename(skillDirPath);
+}
+
+/** {@link PluginLocalSkillNames} for every location in `pluginLocal`. */
+export async function readPluginLocalSkillNames(pluginLocal: PluginLocalSkillIndex): Promise<PluginLocalSkillNames> {
+  const names = new Map<string, string>();
+  for (const loc of pluginLocal.locations) {
+    const key = safePath.resolve(loc.skillSourceDir);
+    if (!names.has(key)) names.set(key, await readPluginLocalSkillName(loc.skillSourceDir, loc.skillDirPath));
+  }
+  return names;
 }
 
 /**

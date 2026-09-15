@@ -33,7 +33,7 @@ describe('verify packaged-content — the refusal reaches stderr', () => {
     // not exist is fine: nothing is read when there is nothing to crawl.
     const { logger, lines } = recordingLogger();
 
-    const phase = runPackagedContentPhase('/no-such-project-pc', [], fakePluginLocalIndex([]), logger);
+    const phase = runPackagedContentPhase('/no-such-project-pc', [], fakePluginLocalIndex([]), new Map(), logger);
     const stderr = lines.join('\n');
 
     expect(phase.status).toBe('error');

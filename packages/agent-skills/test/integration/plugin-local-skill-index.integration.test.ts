@@ -48,7 +48,10 @@ describe('indexPluginLocalSkills in a git repository', () => {
       pluginName: PLUGIN,
       skillSourceDir: safePath.join(skillsDir, FRESH),
     });
-    expect(index.exclusionOf(mdOf(`${TRACKED}/nested`))).toMatchObject({ kind: 'nested', outer: { skillDirPath: TRACKED } });
+    expect(index.exclusionOf(mdOf(`${TRACKED}/nested`))).toEqual({
+      kind: 'nested',
+      outer: { pluginName: PLUGIN, skillSourceDir: safePath.join(skillsDir, TRACKED) },
+    });
     expect(index.exclusionOf(mdOf(IGNORED))).toBeUndefined();
   });
 });

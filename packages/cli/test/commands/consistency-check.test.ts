@@ -162,7 +162,7 @@ describe('PUBLISHED_SKILL_NOT_IN_PLUGIN check', () => {
     const outerLocation = outerIndex.locations[0];
     if (outerLocation === undefined) throw new Error('fake index lost the outer skill');
     const inner: DiscoveredSkill = { name: 'inner', sourcePath: safePath.join(outerLocation.skillSourceDir, 'inner-dir', 'SKILL.md') };
-    const index = indexOf([outer], { [inner.sourcePath]: { kind: 'nested', outer: outerLocation } });
+    const index = indexOf([outer], { [inner.sourcePath]: { kind: 'nested', outer: { pluginName: outerLocation.pluginName, skillSourceDir: outerLocation.skillSourceDir } } });
 
     const flagged = withCode(check([outer, inner], config, index).issues, NOT_IN_PLUGIN);
 

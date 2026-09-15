@@ -10,6 +10,8 @@
  * outright. `files:` is the exception — see below.
  */
 
+import { basename } from 'node:path';
+
 import {
   mergeFilesConfig,
   type DeclaredEvalSuite,
@@ -55,6 +57,21 @@ export function mergeSkillPackagingConfig(
   }
 
   return packagingConfig;
+}
+
+/**
+ * THE `skills.config` entry a plugin-local skill packages under, for both lanes that
+ * ask: the Claude plugin build that packages it and `vat verify` that checks what it
+ * packaged. Keyed by the skill's declared name; its directory path under the plugin's
+ * `skills/` (`group/nested`) and that path's trailing segment are fallbacks for a
+ * config keyed by directory. Two lookups were two effective configs for one skill —
+ * verify checked `files:` dests and severity overrides the build never applied.
+ */
+export function pluginLocalSkillConfigEntry<T>(
+  config: Readonly<Record<string, T>> | undefined,
+  skill: { readonly skillName: string; readonly skillDirPath: string },
+): T | undefined {
+  return config?.[skill.skillName] ?? config?.[skill.skillDirPath] ?? config?.[basename(skill.skillDirPath)];
 }
 
 /**

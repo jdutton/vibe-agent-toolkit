@@ -68,6 +68,17 @@ function issuesOf(config: ProjectConfig, discovered: DiscoveredSkill[], root: st
 const withCode = (issues: Array<{ code: string }>, code: string): number => issues.filter((i) => i.code === code).length;
 
 /**
+ * The `PUBLISHED_SKILL_NOT_IN_PLUGIN` findings for skill `inner` nested in skill `outer`'s
+ * directory under {@link TREE_PLUGIN} (selected by nothing) — both git-tracked, or both not.
+ */
+function nestedSkillFindings(untracked: boolean): ReturnType<typeof issuesOf> {
+  const outer = pluginSkill('outer');
+  const inner: FixtureSkill = { dir: `${outer.dir}/inner-dir`, name: 'inner' };
+  const { root, discovered } = project([outer, inner], untracked ? [outer.dir, inner.dir] : []);
+  return issuesOf(buildConfig([{ name: TREE_PLUGIN, skills: [] }]), discovered, root).filter((i) => i.code === NOT_IN_PLUGIN);
+}
+
+/**
  * The consistency issues for ONE plugin-local skill ({@link BUNDLED_SKILL} in {@link TREE_PLUGIN}),
  * selected by `selector` (none by default), optionally left untracked by git.
  */
@@ -136,17 +147,21 @@ describe('PUBLISHED_SKILL_NOT_IN_PLUGIN — the fix says what is true of the ski
   });
 
   it('a TRACKED skill nested inside another plugin-local skill: the fix names the outer skill, never git add', () => {
-    const outer = pluginSkill('outer');
-    const inner: FixtureSkill = { dir: `${outer.dir}/inner-dir`, name: 'inner' };
-    const { root, discovered } = project([outer, inner], []);
-
-    const flagged = issuesOf(buildConfig([{ name: TREE_PLUGIN, skills: [] }]), discovered, root)
-      .filter((i) => i.code === NOT_IN_PLUGIN);
+    const flagged = nestedSkillFindings(false);
 
     expect(flagged.map((i) => i.message)).toEqual([expect.stringContaining('"inner"')]);
     expect(flagged[0]?.fix).toContain('nested inside skill "outer"');
     expect(flagged[0]?.fix).toContain('outermost');
     expect(flagged[0]?.fix).not.toContain('git add');
+  });
+
+  it('a skill inside an UNTRACKED outer skill: nested, never git add — adding the outer dir would not ship it', () => {
+    const flagged = nestedSkillFindings(true);
+
+    expect(flagged.map((i) => i.message)).toEqual([expect.stringContaining('"outer"'), expect.stringContaining('"inner"')]);
+    expect(flagged[0]?.fix).toContain('git add');
+    expect(flagged[1]?.fix).toContain('nested inside skill "outer"');
+    expect(flagged[1]?.fix).not.toContain('git add');
   });
 });
 

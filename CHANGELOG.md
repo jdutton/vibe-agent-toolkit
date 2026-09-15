@@ -775,9 +775,11 @@ with a regression test.
 
 ### Fixed
 
-- **`vat verify` now reads a plugin-local skill's `skills.config.<name>` by its declared name** when
-  checking its plugin-tree copy; a skill whose directory is not named after it had its `files:` dests
-  and severity overrides ignored there. Fixed; a newly reported missing dest is a real one.
+- **`vat verify` now reads a plugin-local skill's `skills.config` entry exactly as the plugin build
+  does** (declared name, then directory path, then its last segment) when checking its plugin-tree
+  copy — including a skill no `skills.include` glob reaches. A skill whose directory is not named
+  after it had its `files:` dests and severity overrides ignored there. Fixed; a newly reported
+  missing dest is a real one.
 - **`vat claude plugin install`, `list` and `uninstall` now see a plugin or marketplace installed as a
   symlink** (a `--dev` install); the listing skipped links, so a dev install was invisible to the
   commands that manage it. A skill directory that is itself a link is linked like any other.

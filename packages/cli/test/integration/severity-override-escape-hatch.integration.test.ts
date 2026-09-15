@@ -33,7 +33,7 @@ import {
   buildMarketplaceValidateReport,
   collectMarketplaceFindings,
 } from '../../src/commands/claude/marketplace/validate.js';
-import { discoverSkillsFromConfig } from '../../src/commands/skills/skill-discovery.js';
+import { discoverSkillsFromConfig, readPluginLocalSkillNames } from '../../src/commands/skills/skill-discovery.js';
 import { checkPackagedAgentInstructionFiles } from '../../src/commands/verify.js';
 import { loadConfig } from '../../src/utils/config-loader.js';
 import { createTempDirTracker } from '../system/test-common.js';
@@ -237,7 +237,7 @@ async function verifyFindings(root: string): Promise<string[]> {
   const config = loadConfig(root);
   const discovered = config?.skills ? await discoverSkillsFromConfig(config.skills, root, 'refuse') : [];
   const pluginLocal = indexPluginLocalSkills(config ?? { version: 1 }, root);
-  return checkPackagedAgentInstructionFiles(root, discovered, pluginLocal).issues.map((i) => String(i.location));
+  return checkPackagedAgentInstructionFiles(root, discovered, pluginLocal, await readPluginLocalSkillNames(pluginLocal)).issues.map((i) => String(i.location));
 }
 
 /** Every agent-instruction issue `vat audit <target>` publishes, AFTER severity resolution. */

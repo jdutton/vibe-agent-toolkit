@@ -242,15 +242,16 @@ export function skillNameToFsPath(name: string): string {
 /**
  * Why a skill sitting under a plugin's `skills/` directory is NOT plugin-local — the
  * plugin build does not ship it:
- *   - `untracked` — its directory is, or is inside, `skillSourceDir`: a skill directory
- *     under plugin `pluginName`'s `skills/` that git does not track
- *     ({@link listUntrackedPluginSkillDirs}); `git add` makes it ship.
- *   - `nested` — its directory is inside `outer`, a plugin-local skill's directory, and
- *     the plugin build packages only the outermost skill directory.
+ *   - `untracked` — its directory IS `skillSourceDir`: a skill directory under plugin
+ *     `pluginName`'s `skills/` that git does not track ({@link listUntrackedPluginSkillDirs});
+ *     `git add` makes it ship.
+ *   - `nested` — its directory is inside `outer`, another skill's directory under plugin
+ *     `outer.pluginName`'s `skills/` (tracked or not), and the plugin build packages only
+ *     the outermost skill directory — so `git add` changes nothing for it.
  */
 export type PluginSkillExclusion =
   | ({ readonly kind: 'untracked' } & UntrackedPluginSkillDir)
-  | { readonly kind: 'nested'; readonly outer: DistributedSkillLocation };
+  | { readonly kind: 'nested'; readonly outer: UntrackedPluginSkillDir };
 
 /** The plugin-local skills a project ships — see {@link indexPluginLocalSkills}. */
 export interface PluginLocalSkillIndex {
@@ -345,12 +346,14 @@ export function indexSkillLocations(
       if (locationsOf(skillMdPath).length > 0) return undefined;
       const skillDir = skillDirOf(skillMdPath);
       const outer = locations.find((loc) => isUnder(skillDir, loc.skillSourceDir));
-      if (outer !== undefined) return { kind: 'nested', outer };
+      if (outer !== undefined) return { kind: 'nested', outer: { pluginName: outer.pluginName, skillSourceDir: outer.skillSourceDir } };
       untracked ??= listUntracked();
-      const enclosing = untracked.find(
-        (dir) => safePath.resolve(dir.skillSourceDir) === skillDir || isUnder(skillDir, dir.skillSourceDir),
-      );
-      return enclosing === undefined ? undefined : { kind: 'untracked', ...enclosing };
+      // Inside an UNTRACKED outer skill is still nested: `git add` on the outer dir ships
+      // the outer skill and leaves this one nested inside it.
+      const untrackedOuter = untracked.find((dir) => isUnder(skillDir, dir.skillSourceDir));
+      if (untrackedOuter !== undefined) return { kind: 'nested', outer: untrackedOuter };
+      const own = untracked.find((dir) => safePath.resolve(dir.skillSourceDir) === skillDir);
+      return own === undefined ? undefined : { kind: 'untracked', ...own };
     },
   };
 }

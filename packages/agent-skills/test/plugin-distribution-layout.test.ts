@@ -505,18 +505,27 @@ describe('indexSkillLocations', () => {
     const outer = locationFor('outer');
     const { index, listings } = indexed([outer]);
 
-    expect(index.exclusionOf(mdOf('outer/inner'))).toEqual({ kind: 'nested', outer });
+    expect(index.exclusionOf(mdOf('outer/inner'))).toEqual({
+      kind: 'nested',
+      outer: { pluginName: TREE_PLUGIN, skillSourceDir: outer.skillSourceDir },
+    });
     expect(listings()).toBe(0);
     expect(index.exclusionOf(mdOf('outer-sibling'))).toBeUndefined();
   });
 
-  it('names the plugin for an untracked skill dir, or a skill inside one — listing the disk once', () => {
+  it('names the plugin for an untracked skill dir — listing the disk once', () => {
     const untracked: UntrackedPluginSkillDir = { pluginName: TREE_PLUGIN, skillSourceDir: safePath.join(skillsDir, 'fresh') };
     const { index, listings } = indexed([], [untracked]);
 
     expect(index.exclusionOf(mdOf('fresh'))).toEqual({ kind: 'untracked', ...untracked });
-    expect(index.exclusionOf(mdOf('fresh/inner'))).toEqual({ kind: 'untracked', ...untracked });
     expect(index.exclusionOf(mdOf('fresh-look-alike'))).toBeUndefined();
     expect(listings()).toBe(1);
+  });
+
+  it('a skill inside an UNTRACKED outer skill is nested, not untracked: git add on the outer dir would not ship it', () => {
+    const untracked: UntrackedPluginSkillDir = { pluginName: TREE_PLUGIN, skillSourceDir: safePath.join(skillsDir, 'fresh') };
+    const { index } = indexed([], [untracked]);
+
+    expect(index.exclusionOf(mdOf('fresh/inner'))).toEqual({ kind: 'nested', outer: untracked });
   });
 });

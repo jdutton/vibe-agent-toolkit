@@ -315,7 +315,7 @@ describe('checkFilesConfigDests', () => {
 
       // `[]` is what the command itself passes here: with no `skills:` block
       // there is nothing to discover, so this is the real input, not a stub.
-      expect(checkFilesConfigDests(dir, [], fakePluginLocalIndex([]))).toEqual([]);
+      expect(checkFilesConfigDests(dir, [], fakePluginLocalIndex([]), new Map())).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
