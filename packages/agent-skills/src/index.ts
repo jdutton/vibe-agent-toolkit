@@ -246,11 +246,13 @@ export {
 
 export {
   computeTreeCopiedSkillLocations,
-  findDistributedSkillLocationBySource,
   getPluginOutputDir,
   getPluginSourceDir,
+  indexPluginLocalSkills,
   listPluginSourceSkillDirs,
   listUntrackedPluginSkillDirs,
   skillNameToFsPath,
   type DistributedSkillLocation,
+  type PluginLocalSkillIndex,
+  type PluginSkillExclusion,
 } from './plugin-distribution-layout.js';

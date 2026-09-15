@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { checkPackagedAgentInstructionFiles } from '../../src/commands/verify.js';
 import { resetLoadedConfigCache } from '../../src/utils/config-loader.js';
+import { fakePluginLocalIndex } from '../helpers/plugin-local-fixture.js';
 import { errno, realBehind, refusingOnly } from '../helpers/refusal-doubles.js';
 import { createTempDirTracker } from '../system/test-common.js';
 
@@ -47,7 +48,7 @@ describe('a built-output directory the run cannot stat', () => {
   it('counts an absent bundle as inspected-nothing — the case "no bundle here" is for', () => {
     const root = projectWithOneCandidate();
 
-    const crawl = checkPackagedAgentInstructionFiles(root, []);
+    const crawl = checkPackagedAgentInstructionFiles(root, [], fakePluginLocalIndex([]), new Map());
 
     expect(crawl.bundlesInspected).toBe(0);
   });
@@ -56,7 +57,7 @@ describe('a built-output directory the run cannot stat', () => {
     const root = projectWithOneCandidate();
     mkdirSyncReal(safePath.join(root, 'dist', 'skills', SKILL), { recursive: true });
 
-    const crawl = checkPackagedAgentInstructionFiles(root, []);
+    const crawl = checkPackagedAgentInstructionFiles(root, [], fakePluginLocalIndex([]), new Map());
 
     expect(crawl.bundlesInspected).toBe(1);
   });
@@ -67,6 +68,6 @@ describe('a built-output directory the run cannot stat', () => {
     mkdirSyncReal(bundle, { recursive: true });
     vi.mocked(statSync).mockImplementation(refusingOnly(bundle, errno('EACCES'), realBehind(statSync)));
 
-    expect(() => checkPackagedAgentInstructionFiles(root, [])).toThrow(expect.objectContaining({ code: 'EACCES' }));
+    expect(() => checkPackagedAgentInstructionFiles(root, [], fakePluginLocalIndex([]), new Map())).toThrow(expect.objectContaining({ code: 'EACCES' }));
   });
 });

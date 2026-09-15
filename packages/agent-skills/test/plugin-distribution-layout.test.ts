@@ -8,12 +8,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   computeTreeCopiedSkillLocations,
-  findDistributedSkillLocationBySource,
   getPluginOutputDir,
   getPluginSourceDir,
+  indexPluginLocalSkills,
+  indexSkillLocations,
   listPluginSourceSkillDirs,
   skillNameToFsPath,
   type DistributedSkillLocation,
+  type UntrackedPluginSkillDir,
 } from '../src/plugin-distribution-layout.js';
 
 import { setupTempDir } from './test-helpers.js';
@@ -371,49 +373,159 @@ describe('skillNameToFsPath', () => {
 });
 
 // ---------------------------------------------------------------------------
-// findDistributedSkillLocationBySource
+// indexPluginLocalSkills
 // ---------------------------------------------------------------------------
 
-describe('findDistributedSkillLocationBySource', () => {
-  const { getTempDir } = setupTempDir('vat-plugin-layout-by-source-');
+describe('indexPluginLocalSkills', () => {
+  const { getTempDir } = setupTempDir('vat-plugin-layout-index-');
 
-  it('returns the matching location for a known source skill dir', () => {
+  /** The `SKILL.md` path of a skill dir under the tree plugin's source `skills/`. */
+  const skillMd = (tempDir: string, dirPath: string, skillsDir = 'skills'): string =>
+    safePath.join(tempDir, TREE_SOURCE, skillsDir, dirPath, 'SKILL.md');
+
+  it('locates a skill by the directory holding its SKILL.md', () => {
     const { tempDir, config } = setupTreeFixture(getTempDir, [SKILL_ONE, SKILL_TWO]);
 
-    const skillSourceDir = safePath.join(tempDir, TREE_SOURCE, 'skills', SKILL_ONE);
-    const match = findDistributedSkillLocationBySource(config, tempDir, skillSourceDir);
+    const match = indexPluginLocalSkills(config, tempDir).locationOf(skillMd(tempDir, SKILL_ONE));
 
-    expect(match).toBeDefined();
     expect(match?.skillDirPath).toBe(SKILL_ONE);
     expect(match?.pluginName).toBe(TREE_PLUGIN);
-    expect(toForwardSlash(match?.skillSourceDir ?? '')).toBe(
-      toForwardSlash(skillSourceDir),
-    );
+    expect(toForwardSlash(match?.skillSourceDir ?? '')).toBe(toForwardSlash(safePath.join(tempDir, TREE_SOURCE, 'skills', SKILL_ONE)));
+  });
+
+  it('carries exactly the locations the plugin build packages', () => {
+    const { tempDir, config } = setupTreeFixture(getTempDir, [SKILL_ONE, SKILL_TWO]);
+
+    expect(indexPluginLocalSkills(config, tempDir).locations).toEqual(computeTreeCopiedSkillLocations(config, tempDir));
   });
 
   it('matches across path forms (resolves before comparing)', () => {
     const { tempDir, config } = setupTreeFixture(getTempDir);
 
-    const unnormalized = safePath.join(tempDir, TREE_SOURCE, 'skills', '.', SKILL_ONE);
-    const match = findDistributedSkillLocationBySource(config, tempDir, unnormalized);
+    const unnormalized = safePath.join(tempDir, TREE_SOURCE, 'skills', '.', SKILL_ONE, 'SKILL.md');
 
-    expect(match?.skillDirPath).toBe(SKILL_ONE);
+    expect(indexPluginLocalSkills(config, tempDir).locationOf(unnormalized)?.skillDirPath).toBe(SKILL_ONE);
   });
 
-  it('returns undefined for a source dir not declared in any plugin', () => {
+  it('does not locate a SKILL.md in a directory that is not a plugin skill dir', () => {
     const { tempDir, config } = setupTreeFixture(getTempDir);
 
-    const unknown = safePath.join(tempDir, TREE_SOURCE, 'skills', 'not-a-skill');
-    expect(findDistributedSkillLocationBySource(config, tempDir, unknown)).toBeUndefined();
+    expect(indexPluginLocalSkills(config, tempDir).locationOf(skillMd(tempDir, 'not-a-skill'))).toBeUndefined();
   });
 
-  it('returns undefined when no tree-copied locations exist (pool-only)', () => {
+  it('does not locate a skill under a look-alike `skills-extra/` sibling', () => {
+    const { tempDir, config } = setupTreeFixture(getTempDir);
+    writeSkillDir(safePath.join(tempDir, TREE_SOURCE, 'skills-extra'), SKILL_ONE);
+
+    expect(indexPluginLocalSkills(config, tempDir).locationOf(skillMd(tempDir, SKILL_ONE, 'skills-extra'))).toBeUndefined();
+  });
+
+  it('locates only the OUTERMOST of a skill nested inside another skill dir', () => {
+    const { tempDir, config } = setupTreeFixture(getTempDir, ['outer', 'outer/inner']);
+    const index = indexPluginLocalSkills(config, tempDir);
+
+    expect(index.locationOf(skillMd(tempDir, 'outer'))?.skillDirPath).toBe('outer');
+    expect(index.locationOf(skillMd(tempDir, 'outer/inner'))).toBeUndefined();
+  });
+
+  it('locates the FIRST-declared location when one plugin is listed in two marketplaces', () => {
+    const { tempDir, config } = setupTreeFixture(getTempDir);
+    const first = config.claude?.marketplaces?.[MARKET];
+    if (first === undefined) throw new Error('fixture config has no marketplace');
+    const withSecond: ProjectConfig = {
+      ...config,
+      claude: { marketplaces: { [MARKET]: first, second: { ...first, plugins: first.plugins } } },
+    };
+
+    const index = indexPluginLocalSkills(withSecond, tempDir);
+
+    expect(index.locations.map((loc) => loc.marketplaceName)).toEqual([MARKET, 'second']);
+    expect(index.locationOf(skillMd(tempDir, SKILL_ONE))?.marketplaceName).toBe(MARKET);
+  });
+
+  it('locates nothing when no plugin has a skills/ dir (pool-only)', () => {
     const tempDir = getTempDir();
     const config = makeTwoPluginConfig();
-
     mkdirSyncReal(safePath.join(tempDir, 'plugins', POOL_PLUGIN), { recursive: true });
 
-    const anyPath = safePath.join(tempDir, 'plugins', POOL_PLUGIN, 'skills', 'x');
-    expect(findDistributedSkillLocationBySource(config, tempDir, anyPath)).toBeUndefined();
+    const index = indexPluginLocalSkills(config, tempDir);
+
+    expect(index.locations).toEqual([]);
+    expect(index.locationOf(safePath.join(tempDir, 'plugins', POOL_PLUGIN, 'skills', 'x', 'SKILL.md'))).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// indexSkillLocations — the pure half, over in-memory locations
+// ---------------------------------------------------------------------------
+
+/** Index `locations`, counting how often the untracked listing is taken. */
+function indexed(
+  locations: readonly DistributedSkillLocation[],
+  untracked: readonly UntrackedPluginSkillDir[] = [],
+): { index: ReturnType<typeof indexSkillLocations>; listings: () => number } {
+  let listings = 0;
+  const index = indexSkillLocations(locations, () => {
+    listings += 1;
+    return untracked;
+  });
+  return { index, listings: () => listings };
+}
+
+describe('indexSkillLocations', () => {
+  const root = safePath.resolve('/project');
+  const skillsDir = safePath.join(root, 'plugins', TREE_PLUGIN, 'skills');
+
+  /** A location for `skillDirPath` under {@link TREE_PLUGIN}, listed through `marketplaceName`. */
+  const locationFor = (skillDirPath: string, marketplaceName = MARKET): DistributedSkillLocation => ({
+    marketplaceName,
+    pluginName: TREE_PLUGIN,
+    skillDirPath,
+    skillSourceDir: safePath.join(skillsDir, skillDirPath),
+    skillOutputDir: safePath.join(getPluginOutputDir(root, marketplaceName, TREE_PLUGIN), 'skills', skillDirPath),
+  });
+  const mdOf = (dirPath: string): string => safePath.join(skillsDir, dirPath, 'SKILL.md');
+
+  it('keeps the FIRST listing of one skill dir for locationOf, and every listing for locationsOf', () => {
+    const { index } = indexed([locationFor(SKILL_ONE), locationFor(SKILL_ONE, 'second')]);
+
+    expect(index.locationOf(mdOf(SKILL_ONE))?.marketplaceName).toBe(MARKET);
+    expect(index.locationsOf(mdOf(SKILL_ONE)).map((loc) => loc.marketplaceName)).toEqual([MARKET, 'second']);
+    expect(index.locationsOf(mdOf(SKILL_TWO))).toEqual([]);
+  });
+
+  it('has no exclusion for a plugin-local skill, and never lists the disk to say so', () => {
+    const { index, listings } = indexed([locationFor(SKILL_ONE)]);
+
+    expect(index.exclusionOf(mdOf(SKILL_ONE))).toBeUndefined();
+    expect(listings()).toBe(0);
+  });
+
+  it('names the outer skill for a skill nested inside a plugin-local one, before listing the disk', () => {
+    const outer = locationFor('outer');
+    const { index, listings } = indexed([outer]);
+
+    expect(index.exclusionOf(mdOf('outer/inner'))).toEqual({
+      kind: 'nested',
+      outer: { pluginName: TREE_PLUGIN, skillSourceDir: outer.skillSourceDir },
+    });
+    expect(listings()).toBe(0);
+    expect(index.exclusionOf(mdOf('outer-sibling'))).toBeUndefined();
+  });
+
+  it('names the plugin for an untracked skill dir — listing the disk once', () => {
+    const untracked: UntrackedPluginSkillDir = { pluginName: TREE_PLUGIN, skillSourceDir: safePath.join(skillsDir, 'fresh') };
+    const { index, listings } = indexed([], [untracked]);
+
+    expect(index.exclusionOf(mdOf('fresh'))).toEqual({ kind: 'untracked', ...untracked });
+    expect(index.exclusionOf(mdOf('fresh-look-alike'))).toBeUndefined();
+    expect(listings()).toBe(1);
+  });
+
+  it('a skill inside an UNTRACKED outer skill is nested, not untracked: git add on the outer dir would not ship it', () => {
+    const untracked: UntrackedPluginSkillDir = { pluginName: TREE_PLUGIN, skillSourceDir: safePath.join(skillsDir, 'fresh') };
+    const { index } = indexed([], [untracked]);
+
+    expect(index.exclusionOf(mdOf('fresh/inner'))).toEqual({ kind: 'nested', outer: untracked });
   });
 });

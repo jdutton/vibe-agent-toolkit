@@ -17,18 +17,31 @@
 
 import { rmSync, writeFileSync } from 'node:fs';
 
+import { indexPluginLocalSkills, type PluginLocalSkillIndex } from '@vibe-agent-toolkit/agent-skills';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { exitCodeForPhases } from '../../src/commands/phase-utils.js';
-import { discoverSkillsFromConfig } from '../../src/commands/skills/skill-discovery.js';
 import {
+  discoverSkillsFromConfig,
+  readPluginLocalSkillNames,
+  type PluginLocalSkillNames,
+} from '../../src/commands/skills/skill-discovery.js';
+import {
+  buildPackagedContentPhase,
   checkPackagedAgentInstructionFiles,
   runPackagedContentPhase,
   type PackagedContentCrawl,
   type PackagedContentPhaseResult,
 } from '../../src/commands/verify.js';
 import { loadConfig } from '../../src/utils/config-loader.js';
+import {
+  pluginProjectConfig,
+  pluginSkillDir,
+  writeProjectConfig,
+  writeSkillProject,
+  type FixtureSkill,
+} from '../helpers/plugin-local-fixture.js';
 import { createTempDirTracker } from '../system/test-common.js';
 import { recordingLogger } from '../test-doubles.js';
 
@@ -65,13 +78,19 @@ async function discoveredIn(root: string): Promise<Awaited<ReturnType<typeof dis
   return config?.skills ? discoverSkillsFromConfig(config.skills, root, 'refuse') : [];
 }
 
+/** The plugin-local index `vat verify` builds for `root`, and the declared names it reads for it. */
+async function pluginLocalIn(root: string): Promise<[PluginLocalSkillIndex, PluginLocalSkillNames]> {
+  const index = indexPluginLocalSkills(loadConfig(root) ?? { version: 1 }, root);
+  return [index, await readPluginLocalSkillNames(index)];
+}
+
 async function crawlIn(root: string): Promise<PackagedContentCrawl> {
-  return checkPackagedAgentInstructionFiles(root, await discoveredIn(root));
+  return checkPackagedAgentInstructionFiles(root, await discoveredIn(root), ...(await pluginLocalIn(root)));
 }
 
 async function phaseIn(root: string): Promise<{ phase: PackagedContentPhaseResult; stderr: string }> {
   const { logger, lines } = recordingLogger();
-  const phase = runPackagedContentPhase(root, await discoveredIn(root), logger);
+  const phase = runPackagedContentPhase(root, await discoveredIn(root), ...(await pluginLocalIn(root)), logger);
   return { phase, stderr: lines.join('\n') };
 }
 
@@ -234,7 +253,7 @@ async function inPlaceCrawlIn(root: string): Promise<PackagedContentCrawl> {
   const discovered = await discoveredIn(root);
   // Both skills are discovered either way — `publish` narrows what is EXPECTED, never what exists.
   expect(discovered.map((s) => s.name).sort((a, b) => a.localeCompare(b))).toEqual([PLUGIN_LOCAL, POOL]);
-  const crawl = checkPackagedAgentInstructionFiles(root, discovered);
+  const crawl = checkPackagedAgentInstructionFiles(root, discovered, ...(await pluginLocalIn(root)));
   return { ...crawl, bundlesMissing: [...crawl.bundlesMissing].sort((a, b) => a.localeCompare(b)) };
 }
 
@@ -265,7 +284,8 @@ describe('packaged-content with in-place (publish: false) skills', () => {
     const root = setupProject({ publish: 'defaults-false', poolBundles: [] });
 
     const crawl = await inPlaceCrawlIn(root);
-    expect(crawl).toEqual({ bundlesInspected: 1, bundlesExpected: 1, bundlesInPlace: 2, bundlesMissing: [], issues: [] });
+    // The plugin-local skill ships in its plugin tree, so only the pool-only skill is in place.
+    expect(crawl).toEqual({ bundlesInspected: 1, bundlesExpected: 1, bundlesInPlace: 1, bundlesMissing: [], issues: [] });
 
     const { phase } = await phaseIn(root);
     expect(phase.status).toBe('success');
@@ -305,7 +325,7 @@ describe('packaged-content with in-place (publish: false) skills', () => {
 
     const crawl = await inPlaceCrawlIn(root);
     // Distributed output is looked at (it is in dist/); nothing in this run builds it.
-    expect(crawl).toEqual({ bundlesInspected: 2, bundlesExpected: 1, bundlesInPlace: 2, bundlesMissing: [], issues: [] });
+    expect(crawl).toEqual({ bundlesInspected: 2, bundlesExpected: 1, bundlesInPlace: 1, bundlesMissing: [], issues: [] });
     expect(exitCodeForPhases([(await phaseIn(root)).phase])).toBe(0);
   });
 
@@ -338,3 +358,32 @@ function poolOnlyProject(includeGlob: string): string {
   );
   return root;
 }
+
+/** A `skills.defaults.publish: false` project, nothing built, whose directories differ from their skills' names. */
+async function crawlPluginProject(skills: readonly FixtureSkill[], git: Parameters<typeof writeSkillProject>[2]): Promise<PackagedContentCrawl> {
+  const root = createTempDir();
+  writeProjectConfig(root, pluginProjectConfig(false));
+  writeSkillProject(root, skills, git);
+  return crawlIn(root);
+}
+
+describe('packaged-content — what the plugin build ships decides in-place, not the directory a skill sits in', () => {
+  afterEach(() => {
+    cleanupTempDirs();
+  });
+
+  const shipped: FixtureSkill = { dir: pluginSkillDir('local-dir'), name: 'local' };
+
+  it('an UNTRACKED skill under a plugin skills/ dir does not ship, so it is in place — not an empty verdict', async () => {
+    const crawl = await crawlPluginProject([shipped], { untracked: [shipped.dir] });
+
+    expect(crawl).toMatchObject({ bundlesInspected: 0, bundlesExpected: 0, bundlesInPlace: 1 });
+    expect(exitCodeForPhases([buildPackagedContentPhase(crawl)])).toBe(0);
+  });
+
+  it('a repo-only skill sharing its declared name with a tracked plugin-local one is still in place', async () => {
+    const twin: FixtureSkill = { dir: 'skills/twin-dir', name: shipped.name };
+
+    expect(await crawlPluginProject([twin, shipped], { untracked: [] })).toMatchObject({ bundlesInPlace: 1, bundlesExpected: 1 });
+  });
+});

@@ -77,7 +77,7 @@ Applicable validation: marketplace-level codes.
 
 `vat claude plugin build` (`packages/cli/src/commands/claude/plugin/build.ts`) assembles a Claude-plugin's non-skill content and its skills through two different mechanisms — but only ONE of them ever produces a skill:
 
-- **Packaging** (`packagePluginLocalSkills` in `build.ts`) runs every plugin-local skill (a skill under the plugin's own `skills/` source tree) through `packageSkill` — the identical packager pool skills (`vat skills build`) use. Each skill gets its own effective packaging config (`skills.config.<name>` merged over `skills.defaults`, keyed by the skill's declared name or its directory path), so link-following, reference-rewriting, `files:` injection, and declared-test-input exclusion all apply exactly as they do for a pool skill. A skill whose packaged output fails post-build validation now **fails the plugin build**, holding plugin-local skills to the same bar `vat skills build` already holds pool skills to.
+- **Packaging** (`packagePluginLocalSkills` in `build.ts`) runs every plugin-local skill (a skill under the plugin's own `skills/` source tree) through `packageSkill` — the identical packager pool skills (`vat skills build`) use. Each skill gets its own effective packaging config (`skills.config.<name>` merged over `skills.defaults`, keyed by the skill's declared name, then its directory path, then that path's last segment — `pluginLocalSkillConfigEntry`, the same lookup `vat verify` checks the plugin-tree copy with), so link-following, reference-rewriting, `files:` injection, and declared-test-input exclusion all apply exactly as they do for a pool skill. A skill whose packaged output fails post-build validation now **fails the plugin build**, holding plugin-local skills to the same bar `vat skills build` already holds pool skills to.
 - **Tree-copy** (`packages/cli/src/commands/claude/plugin/tree-copy.ts`, `treeCopyPlugin`) copies everything else under the plugin's source directory verbatim, except `.claude-plugin/` (owned by the `plugin.json` merge-write) and every directory the packager just produced (`excludeSkillDirs`). What's left — `commands/`, `hooks/`, `agents/`, `.mcp.json`, root files, and any **non-skill** directory under `skills/` — has no packaging semantics of its own, so a byte-for-byte copy is correct for it.
 
 A skill is therefore never tree-copied — `applyTreeCopiedSkillFiles` (the old function that re-applied `files:` semantics on top of a verbatim copy) no longer exists. Before this, a plugin-local skill's whole source directory shipped byte-for-byte: eval suites (answer keys included), scratch files, and un-rewritten links all shipped, `files:` had to be re-implemented on the tree-copy side to compensate, and no post-build validation ever ran against the result. "What ships in a skill" now has exactly one answer, regardless of whether the skill came from the shared pool or a plugin's own `skills/` tree.
@@ -86,7 +86,7 @@ A skill is therefore never tree-copied — `applyTreeCopiedSkillFiles` (the old 
 
 The packager runs **first**, and the tree-copy's exclusion list is derived from what it produced — never from a second listing of `skills/`. Two independent filters over the same directory would let a directory be excluded by one and skipped by the other, and it would then ship NOWHERE with no diagnostic. Both halves of the exclusion list (packaged skills, plus pool-sourced collisions) come from a single Phase 1.4 discovery, partitioned.
 
-That discovery — `listPluginSourceSkillDirs` in `packages/agent-skills/src/plugin-distribution-layout.ts` — defines what a plugin-local skill *is*, for the build, for `vat verify`, and for skill-reference resolution alike:
+That discovery — `listPluginSourceSkillDirs` in `packages/agent-skills/src/plugin-distribution-layout.ts` — defines what a plugin-local skill *is*, for the build, for `vat verify`, for the consistency check, and for skill-reference resolution alike. Every lane that asks whether a *discovered* skill is plugin-local asks `indexPluginLocalSkills` over it, matching the directory holding the skill's `SKILL.md` — never its name, never a path prefix. A plugin listed in several marketplaces yields one location per listing, and the first in config order is the skill's location. Why a skill under a plugin's `skills/` is *not* plugin-local — untracked, or nested inside another skill's directory — is answered by the same index (`exclusionOf`), which is what `PUBLISHED_SKILL_NOT_IN_PLUGIN`'s fix text reports:
 
 - **A skill is a directory holding a `SKILL.md`.** A `shared/` helper dir, a `_templates/` dir, or the bare parent segment of a nested skill is not a skill; it has no packager, so the tree-copy is its only route into the bundle and it must not appear in the exclusion list.
 - **Discovery is recursive, and yields PATHS.** Claude Code loads `skills/<group>/<skill>/SKILL.md`, so VAT packages it, at the same depth it was authored. A skill nested inside another skill yields only the outermost — the inner directory is part of the outer skill's own tree.
@@ -190,8 +190,8 @@ Rules that follow from the table:
   `PUBLISHED_SKILL_NOT_IN_PACKAGE_JSON`, `UNPUBLISHED_SKILL_IN_PACKAGE_JSON`).
 - `publish: false` names an **in-place** skill — one used from the repo where it sits, never
   distributed. The effective value is the merged config (`skills.defaults.publish`, overridden by
-  `skills.config.<name>.publish`; default `true`), read through the one `isSkillPublished`
-  predicate by every lane. An in-place skill is discovered and validated at source (`vat validate`,
+  `skills.config.<name>.publish`; default `true`), read through `publishScope` (`pool` /
+  `plugin-only` / `in-place`, over `isSkillPublished`) by every lane. An in-place skill is discovered and validated at source (`vat validate`,
   `vat skills validate`), **never bundled** by `vat build` / `vat skills build` (the build reports it
   under `skillsInPlace`; `--skill <name>` on one exits 1), **never expected** by `vat verify` (a stale
   bundle left in `dist/skills/` is still inspected), and outside the pool-side consistency checks
@@ -199,12 +199,18 @@ Rules that follow from the table:
   a link into `docs/` that is correct in the repo is not a broken link in a bundle nobody ships.
   `vat skill test` stages an in-place subject from its source directory and says so in
   `friction.json`.
-- `publish` scopes the **pool** (`dist/skills/`) only. A plugin-local skill (under a plugin's
-  `skills/` directory) ships with its plugin by location whatever `publish` says: the claude phase
-  packages it and `vat verify` expects it. A skill both discovered by `skills.include` and
-  plugin-local skips the pool under `publish: false` and still ships in its plugin — so a project
-  that builds with `vat build --only claude` and uses its other skills in place declares
-  `skills.defaults.publish: false` once.
+- `publish` scopes the **pool** (`dist/skills/`) only. A plugin-local skill — a **git-tracked** skill
+  directory under a plugin's `skills/` (what the claude phase packages; see
+  [One listing, one answer](#one-listing-one-answer)) — ships with its plugin whatever `publish` says:
+  the claude phase packages it and `vat verify` expects it. A plugin-local `publish: false` skill is
+  therefore **plugin-only**, never **in place**: never counted in `skillsInPlace` or
+  `bundlesInPlace`, counted in `skillsPluginOnly` instead, named on its own info line by
+  `vat skills build` (and `--skill <name>` on one exits 1 pointing at the claude phase). A skill
+  sitting under a plugin's `skills/` that git does not track ships nowhere, so under
+  `publish: false` it is in place like any repo-only skill. A skill both
+  discovered by `skills.include` and plugin-local skips the pool under `publish: false` and still
+  ships in its plugin — so a project that builds with `vat build --only claude` and uses its other
+  skills in place declares `skills.defaults.publish: false` once.
 - Error messages always name the config mechanism, so a developer discovers the fix from the error.
 - No VAT-specific fields in `SKILL.md` frontmatter — skills are portable artifacts.
 

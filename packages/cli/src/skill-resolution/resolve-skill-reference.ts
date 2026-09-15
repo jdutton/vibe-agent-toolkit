@@ -37,8 +37,9 @@ import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
-  findDistributedSkillLocationBySource,
+  indexPluginLocalSkills,
   skillNameToFsPath,
+  type PluginLocalSkillIndex,
 } from '@vibe-agent-toolkit/agent-skills';
 import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -61,15 +62,13 @@ function existingDir(p: string): boolean {
 function computeSkillDistribution(
   name: string,
   sourcePath: string,
-  configRoot: string,
-  config: NonNullable<ReturnType<typeof loadConfigCached>>,
+  scope: DeclaredSkillScope,
 ): { distribution: SkillDistribution; expectedDistDir: string } {
-  const skillDir = safePath.resolve(safePath.join(safePath.resolve(sourcePath), '..'));
-  const location = findDistributedSkillLocationBySource(config, configRoot, skillDir);
+  const location = scope.pluginLocal().locationOf(sourcePath);
   if (location === undefined) {
     return {
       distribution: { kind: 'pool' },
-      expectedDistDir: safePath.join(configRoot, 'dist', 'skills', skillNameToFsPath(name)),
+      expectedDistDir: safePath.join(scope.configRoot, 'dist', 'skills', skillNameToFsPath(name)),
     };
   }
   return {
@@ -84,30 +83,24 @@ function computeSkillDistribution(
 }
 
 /**
- * Shared config+discovery lookup for both the reverse (dist-path) and forward
- * (source-path) declared-skill matchers below: walk up from `absPath` (config-first,
- * so a monorepo package config beats the repo `.git`) to the governing config, then
- * return its declared-skills-by-path map. Undefined when there's no governing
- * config, or no `skills` section declared.
+ * The governing project a reference resolves against: its root, its declared skills
+ * (`SKILL.md` path → name), and its plugin-local index — built at most ONCE per
+ * resolution call, never per declared skill (listing plugin-local skills crawls every
+ * plugin), and only when a path first needs it: a resolution that never asks where a
+ * declared skill builds to (a name miss, a plain source dir) lists no plugin.
  */
+interface DeclaredSkillScope {
+  configRoot: string;
+  byPath: ReadonlyMap<string, string>;
+  pluginLocal: () => PluginLocalSkillIndex;
+}
+
 /**
- * Shared engine for both the reverse (dist-path) and forward (source-path)
- * declared-skill matchers below: walk up from `absPath` (config-first, so a
- * monorepo package config beats the repo `.git`) to the governing config, then
- * scan its declared skills for the first one `matches` accepts. `matches` returns
- * the caller's result shape (or undefined to keep scanning) — the two matchers
- * differ only in WHICH path each declared skill is compared against and WHAT they
- * build from a hit, not in the walk-up/scan itself.
+ * Walk up from `absPath` (config-first, so a monorepo package config beats the repo
+ * `.git`) to the governing config and load its {@link DeclaredSkillScope}. Undefined
+ * when there's no governing config, or no `skills` section declared.
  */
-async function findFirstDeclaredSkillEntry<T>(
-  absPath: string,
-  matches: (
-    sourcePath: string,
-    name: string,
-    configRoot: string,
-    config: NonNullable<ReturnType<typeof loadConfigCached>>,
-  ) => T | undefined | Promise<T | undefined>,
-): Promise<T | undefined> {
+async function loadDeclaredSkillScope(absPath: string): Promise<DeclaredSkillScope | undefined> {
   const configRoot = findProjectRoot(absPath);
   if (configRoot === null) return undefined;
   const config = loadConfigCached(configRoot);
@@ -116,9 +109,25 @@ async function findFirstDeclaredSkillEntry<T>(
   // on `not-found` for a skill that exists. The throw propagates to the
   // command (`vat skill test` wraps it as `SkillBuildError`, named).
   const byPath = await getDiscoveredSkillsByPath(config.skills, configRoot, 'refuse');
-  for (const [sourcePath, name] of byPath.entries()) {
-    const result = await matches(sourcePath, name, configRoot, config);
-    if (result !== undefined) return result;
+  let pluginLocal: PluginLocalSkillIndex | undefined;
+  return { configRoot, byPath, pluginLocal: () => (pluginLocal ??= indexPluginLocalSkills(config, configRoot)) };
+}
+
+/** {@link findDeclaredSkillForPath} within an already-loaded scope. */
+function matchDeclaredDist(scope: DeclaredSkillScope, absPath: string): DeclaredSkillLink | undefined {
+  for (const [sourcePath, name] of scope.byPath) {
+    const { expectedDistDir } = computeSkillDistribution(name, sourcePath, scope);
+    if (safePath.resolve(expectedDistDir) === absPath) {
+      return { name, configRoot: scope.configRoot, sourcePath, expectedDistDir };
+    }
+  }
+  return undefined;
+}
+
+/** {@link findDeclaredSkillForSourceDir} within an already-loaded scope. */
+async function matchDeclaredSource(scope: DeclaredSkillScope, absPath: string): Promise<BuildableReference | undefined> {
+  for (const [sourcePath, name] of scope.byPath) {
+    if (safePath.resolve(dirname(sourcePath)) === absPath) return buildBuildable(name, sourcePath, scope);
   }
   return undefined;
 }
@@ -134,12 +143,8 @@ export async function findDeclaredSkillForPath(
   cwd: string,
 ): Promise<DeclaredSkillLink | undefined> {
   const absPath = safePath.resolve(cwd, pathRef);
-  return findFirstDeclaredSkillEntry(absPath, (sourcePath, name, configRoot, config) => {
-    const { expectedDistDir } = computeSkillDistribution(name, sourcePath, configRoot, config);
-    return safePath.resolve(expectedDistDir) === absPath
-      ? { name, configRoot, sourcePath, expectedDistDir }
-      : undefined;
-  });
+  const scope = await loadDeclaredSkillScope(absPath);
+  return scope === undefined ? undefined : matchDeclaredDist(scope, absPath);
 }
 
 /**
@@ -161,9 +166,8 @@ export async function findDeclaredSkillForSourceDir(
   cwd: string,
 ): Promise<BuildableReference | undefined> {
   const absPath = safePath.resolve(cwd, pathRef);
-  return findFirstDeclaredSkillEntry(absPath, (sourcePath, name, configRoot, config) =>
-    safePath.resolve(dirname(sourcePath)) === absPath ? buildBuildable(name, sourcePath, configRoot, config) : undefined,
-  );
+  const scope = await loadDeclaredSkillScope(absPath);
+  return scope === undefined ? undefined : matchDeclaredSource(scope, absPath);
 }
 
 /**
@@ -179,10 +183,14 @@ export async function findDeclaredSkillForSourceDir(
  * cognitive complexity within budget.
  */
 async function resolveDefinitePath(ref: string, cwd: string): Promise<SkillReference> {
-  const declaredSource = await findDeclaredSkillForSourceDir(ref, cwd);
+  const absPath = safePath.resolve(cwd, ref);
+  const scope = await loadDeclaredSkillScope(absPath);
+  if (scope === undefined) return { kind: 'source', source: { path: ref } };
+
+  const declaredSource = await matchDeclaredSource(scope, absPath);
   if (declaredSource !== undefined) return declaredSource;
 
-  const declaredSkill = await findDeclaredSkillForPath(ref, cwd);
+  const declaredSkill = matchDeclaredDist(scope, absPath);
   return { kind: 'source', source: { path: ref }, ...(declaredSkill ? { declaredSkill } : {}) };
 }
 
@@ -192,29 +200,20 @@ async function resolveDefinitePath(ref: string, cwd: string): Promise<SkillRefer
  * {@link resolveSkillReference} to keep its cognitive complexity within budget.
  */
 async function resolveBareName(ref: string, cwd: string): Promise<SkillReference> {
-  const configRoot = findProjectRoot(cwd);
   const dirCandidate = safePath.resolve(cwd, ref);
-
-  if (configRoot === null) {
-    return existingDir(dirCandidate)
-      ? { kind: 'source', source: { path: ref } }
-      : { kind: 'not-found', ref };
-  }
-
-  const config = loadConfigCached(configRoot);
-  if (config?.skills === undefined) {
-    // findProjectRoot can anchor on a bare `.git` dir with no governing VAT config
-    // (or a config that declares no skills). That is the spec's "wild" rung — there
-    // is nothing to name-resolve against, so it is an existing dir or `not-found`,
-    // never a name-miss.
+  // No governing project root — or one anchored on a bare `.git` dir with no VAT
+  // config (or a config that declares no skills). That is the spec's "wild" rung:
+  // there is nothing to name-resolve against, so it is an existing dir or
+  // `not-found`, never a name-miss.
+  const scope = await loadDeclaredSkillScope(cwd);
+  if (scope === undefined) {
     return existingDir(dirCandidate)
       ? { kind: 'source', source: { path: ref } }
       : { kind: 'not-found', ref };
   }
 
   const byName = new Map<string, string>(); // name → abs SKILL.md path
-  const byPath = await getDiscoveredSkillsByPath(config.skills, configRoot, 'refuse');
-  for (const [skillMdPath, name] of byPath.entries()) byName.set(name, skillMdPath);
+  for (const [skillMdPath, name] of scope.byPath) byName.set(name, skillMdPath);
 
   const sourcePath = byName.get(ref);
   if (sourcePath !== undefined) {
@@ -223,14 +222,14 @@ async function resolveBareName(ref: string, cwd: string): Promise<SkillReference
         `note: '${ref}' matched a declared skill; testing its built dist. Use './${ref}' to test the local directory as-is.\n`,
       );
     }
-    return buildBuildable(ref, sourcePath, configRoot, config);
+    return buildBuildable(ref, sourcePath, scope);
   }
 
   if (existingDir(dirCandidate)) return { kind: 'source', source: { path: ref } };
   return {
     kind: 'name-miss',
     name: ref,
-    configRoot,
+    configRoot: scope.configRoot,
     knownSkills: [...byName.keys()].sort((a, b) => a.localeCompare(b)),
   };
 }
@@ -252,13 +251,8 @@ export async function resolveSkillReference(ref: string, cwd: string): Promise<S
   return resolveBareName(ref, cwd);
 }
 
-async function buildBuildable(
-  name: string,
-  sourcePath: string,
-  configRoot: string,
-  config: NonNullable<ReturnType<typeof loadConfigCached>>,
-): Promise<BuildableReference> {
+async function buildBuildable(name: string, sourcePath: string, scope: DeclaredSkillScope): Promise<BuildableReference> {
   const packagingConfig = (await resolveSkillPackagingConfig(sourcePath, 'refuse')) ?? {};
-  const { distribution, expectedDistDir } = computeSkillDistribution(name, sourcePath, configRoot, config);
-  return { kind: 'buildable', name, sourcePath, configRoot, packagingConfig, distribution, expectedDistDir };
+  const { distribution, expectedDistDir } = computeSkillDistribution(name, sourcePath, scope);
+  return { kind: 'buildable', name, sourcePath, configRoot: scope.configRoot, packagingConfig, distribution, expectedDistDir };
 }

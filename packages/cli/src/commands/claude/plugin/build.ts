@@ -9,7 +9,6 @@
 
 import { cpSync, existsSync, readFileSync } from 'node:fs';
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
-import { basename } from 'node:path';
 
 import { conventionalSuiteProbe, createProjectRegistry, getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
@@ -17,7 +16,7 @@ import { countBySeverity, type SeverityCounts, type ValidationIssue } from '@vib
 import { direntKindFollowing, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
-import { readSkillName } from '../../../commands/skills/skill-discovery.js';
+import { readPluginLocalSkillName } from '../../../commands/skills/skill-discovery.js';
 import { reportCommandError } from '../../../utils/command-error.js';
 import { loadConfig } from '../../../utils/config-loader.js';
 import {
@@ -32,7 +31,7 @@ import { createLogger } from '../../../utils/logger.js';
 import { writeYamlOutput } from '../../../utils/output.js';
 import { readPackageJsonOrAbsent } from '../../../utils/package-json.js';
 import { withResourcePopulationSource } from '../../../utils/resource-loader.js';
-import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../../utils/skill-packaging-config.js';
+import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, pluginLocalSkillConfigEntry } from '../../../utils/skill-packaging-config.js';
 import { finishCommand, type PhaseOutcome } from '../../phase-utils.js';
 import { discoverSkillsFromConfig } from '../../skills/skill-discovery.js';
 import { loadClaudeProjectConfig } from '../claude-config.js';
@@ -809,18 +808,13 @@ async function discoverPluginLocalSkills(
   }
   const skills: PluginLocalSkill[] = [];
   for (const skillDirPath of listPluginSourceSkillDirs(pluginSourceDir)) {
-    const skillPath = safePath.join(pluginSourceDir, 'skills', skillDirPath, 'SKILL.md');
-    // Resolved through the SAME reader `vat skills build` uses — per-skill config is
-    // keyed by name, so two answers would mean two effective configs.
-    const skillName = await readSkillName(skillPath) ?? lastPathSegment(skillDirPath);
-    skills.push({ skillDirPath, skillPath, skillName });
+    const skillSourceDir = safePath.join(pluginSourceDir, 'skills', skillDirPath);
+    // Resolved through the SAME reader `vat skills build` and `vat verify` use — per-skill
+    // config is keyed by name, so two answers would mean two effective configs.
+    const skillName = await readPluginLocalSkillName(skillSourceDir, skillDirPath);
+    skills.push({ skillDirPath, skillPath: safePath.join(skillSourceDir, 'SKILL.md'), skillName });
   }
   return skills;
-}
-
-/** Trailing segment of a skill dir path (`group/nested` → `nested`). */
-function lastPathSegment(dirPath: string): string {
-  return basename(dirPath);
 }
 
 /**
@@ -906,17 +900,12 @@ export async function packagePluginLocalSkills(input: {
   // are an absent or unreadable `files:` source; do not use a collision as the fixture
   // when adding that guard, or the test will pass without the guard existing.
   for (const { skillDirPath, skillPath, skillName } of input.skills) {
-    // Per-skill config is keyed by the skill's declared NAME; the directory path and
-    // its trailing segment are fallbacks for the common cases where they coincide.
-    // The fallback LIST must stay a superset of `vat verify`'s (checkFilesConfigDests
-    // cannot read declared names, so it tries path-then-leaf): if verify resolved a
-    // key the build did not, verify would check `files:` dests for a skill the build
-    // was never told to copy them into, and fail a build that had in fact succeeded.
+    // Per-skill config goes through `pluginLocalSkillConfigEntry` — the one lookup
+    // `vat verify` also uses to check what this packaged — so verify never checks
+    // `files:` dests or severity overrides this build did not apply.
     const packagingConfig = mergeSkillPackagingConfig(
       input.skillsConfig?.defaults,
-      input.skillsConfig?.config?.[skillName] ??
-        input.skillsConfig?.config?.[skillDirPath] ??
-        input.skillsConfig?.config?.[lastPathSegment(skillDirPath)],
+      pluginLocalSkillConfigEntry(input.skillsConfig?.config, { skillName, skillDirPath }),
     );
 
     const skillOutputDir = safePath.join(input.pluginDir, 'skills', skillDirPath);

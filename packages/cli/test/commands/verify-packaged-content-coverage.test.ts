@@ -19,13 +19,64 @@
  * the missing bundles.
  */
 
-import { describe, expect, it } from 'vitest';
+import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
+import { describe, expect, it, vi } from 'vitest';
 
 import { exitCodeForPhases } from '../../src/commands/phase-utils.js';
-import { buildPackagedContentPhase, type PackagedContentCrawl } from '../../src/commands/verify.js';
+import type { DiscoveredSkill } from '../../src/commands/skills/command-helpers.js';
+import {
+  buildPackagedContentPhase,
+  checkPackagedAgentInstructionFiles,
+  type PackagedContentCrawl,
+} from '../../src/commands/verify.js';
+import { fakePluginLocalIndex, fakePluginLocalNames, pluginProjectConfig } from '../helpers/plugin-local-fixture.js';
+
+const harness = vi.hoisted(() => ({ config: undefined as ProjectConfig | undefined }));
+
+vi.mock('../../src/utils/config-loader.js', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  loadConfig: () => harness.config,
+}));
 
 const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
 const BETA_BUNDLE = 'dist/skills/beta';
+
+/** A project root nothing was ever built under, so every bundle reads as absent. */
+const ROOT = safePath.join(normalizedTmpdir(), 'no-such-project-pc');
+
+/** A discovered skill at `<ROOT>/<dir>/SKILL.md`; every directory differs from its declared name. */
+const skillAt = (name: string, dir: string): DiscoveredSkill => ({ name, sourcePath: safePath.join(ROOT, dir, 'SKILL.md') });
+const REPO_ONLY = skillAt('repo-only', 'skills/repo-only-dir');
+const PLUGIN_LOCAL = skillAt('local', 'plugins/p/skills/local-dir');
+
+/** Crawl `discovered` under `skills.defaults.publish`, with only `pluginLocal` plugin-local. */
+function crawl(defaultPublish: boolean, discovered: DiscoveredSkill[], pluginLocal: DiscoveredSkill[] = [PLUGIN_LOCAL]): PackagedContentCrawl {
+  harness.config = pluginProjectConfig(defaultPublish);
+  return checkPackagedAgentInstructionFiles(ROOT, discovered, fakePluginLocalIndex(pluginLocal), fakePluginLocalNames(pluginLocal));
+}
+
+describe('checkPackagedAgentInstructionFiles — a plugin-local skill is never in place', () => {
+  it('counts only the repo-only publish:false skill in bundlesInPlace', () => {
+    expect(crawl(false, [REPO_ONLY, PLUGIN_LOCAL]).bundlesInPlace).toBe(1);
+  });
+
+  it('control: with publish unset nothing is in place — two pool bundles plus the plugin tree copy are expected', () => {
+    expect(crawl(true, [REPO_ONLY, PLUGIN_LOCAL])).toMatchObject({ bundlesInPlace: 0, bundlesExpected: 3 });
+  });
+
+  it('a skill under a plugin skills/ dir that the index does not hold ships nowhere, so under publish:false it is in place — not an empty verdict', () => {
+    const found = crawl(false, [PLUGIN_LOCAL], []);
+
+    expect(found).toMatchObject({ bundlesInspected: 0, bundlesExpected: 0, bundlesInPlace: 1 });
+    expect(exitCodeForPhases([buildPackagedContentPhase(found)])).toBe(0);
+  });
+
+  it('a repo-only skill sharing its declared name with a plugin-local one is still in place', () => {
+    expect(crawl(false, [skillAt(PLUGIN_LOCAL.name, 'skills/twin-dir'), PLUGIN_LOCAL]).bundlesInPlace).toBe(1);
+  });
+});
 
 function crawlOf(overrides: Partial<PackagedContentCrawl>): PackagedContentCrawl {
   return { bundlesInspected: 0, bundlesExpected: 0, bundlesInPlace: 0, bundlesMissing: [], issues: [], ...overrides };

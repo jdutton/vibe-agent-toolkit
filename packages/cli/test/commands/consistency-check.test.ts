@@ -1,14 +1,15 @@
 /**
- * Unit tests for resolveAssignedSkills and the PUBLISHED_SKILL_NOT_IN_PLUGIN
- * check in consistency-check.ts.
+ * Unit tests for resolveAssignedSkills and runConsistencyChecks in consistency-check.ts.
  *
- * All tests are in-memory — no file system access required because
- * resolveAssignedSkills performs only path-string comparisons against
- * the pre-computed DiscoveredSkill.sourcePath values.
+ * Every case is in memory: which skills are plugin-local (and why the others under a
+ * plugin's `skills/` are not) is handed in as a fake index, so these pin what the
+ * check does with that answer. The index against a real project and git repository is
+ * `test/integration/consistency-check-plugin-local.integration.test.ts`.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
+import type { PluginLocalSkillIndex, PluginSkillExclusion } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
@@ -20,80 +21,66 @@ import {
   runConsistencyChecks,
 } from '../../src/commands/consistency-check.js';
 import type { DiscoveredSkill } from '../../src/commands/skills/command-helpers.js';
+import { fakePluginLocalIndex, marketplaceConfig } from '../helpers/plugin-local-fixture.js';
 
 // ---------------------------------------------------------------------------
 // Shared test infrastructure
 // ---------------------------------------------------------------------------
 
-/** Fake project root — a plausible absolute path with no real files. */
-const PROJECT_ROOT = '/testroot-cc';
+/** Fake project root — nothing is ever read under it. */
+const PROJECT_ROOT = safePath.join(normalizedTmpdir(), 'no-such-project-cc');
 
 // Reusable string constants to satisfy sonarjs/no-duplicate-string (3+ occurrences trigger it).
 const TREE_PLUGIN = 'tree-plugin';
 const BUNDLED_SKILL = 'bundled-skill';
-const LOOK_ALIKE = 'look-alike';
+const UNPUBLISHED = 'SKILL_UNPUBLISHED';
+const NOT_IN_PLUGIN = 'PUBLISHED_SKILL_NOT_IN_PLUGIN';
+const UNKNOWN_SKILL = 'PLUGIN_REFERENCES_UNKNOWN_SKILL';
+const ORPHAN = 'orphan-skill';
+const IN_PLACE = 'in-place';
+
+/** The original remedy text, for a skill nowhere near a plugin. */
+const CONFIG_ONLY_FIX = `Either add "${ORPHAN}" to a plugin's skills array in vibe-agent-toolkit.config.yaml: claude.marketplaces.<marketplace>.plugins[].skills, or opt out of publishing by setting publish: false in vibe-agent-toolkit.config.yaml: skills.config.${ORPHAN}.publish: false`;
 
 /** Build a minimal ProjectConfig with one marketplace and a given plugin list. */
 function buildConfig(
-  plugins: Array<{ name: string; source?: string; skills: '*' | string[] }>,
+  plugins: Array<{ name: string; skills: '*' | string[] }>,
   skillPublishOverrides?: Record<string, boolean>,
   defaultPublish?: boolean,
 ): ProjectConfig {
-  const skillsSection = skillPublishOverrides || defaultPublish !== undefined
-    ? {
-        skills: {
-          include: ['skills/**/SKILL.md'],
-          ...(defaultPublish === undefined ? {} : { defaults: { publish: defaultPublish } }),
-          config: Object.fromEntries(
-            Object.entries(skillPublishOverrides ?? {}).map(([k, v]) => [k, { publish: v }])
-          ),
-        },
-      }
-    : {};
-
-  return {
-    version: 1,
-    ...skillsSection,
-    claude: {
-      marketplaces: {
-        test: {
-          owner: { name: 'Test Owner' },
-          plugins,
-        },
-      },
-    },
-  };
+  return marketplaceConfig(plugins, { include: 'skills/**/SKILL.md', defaultPublish, publish: skillPublishOverrides });
 }
 
-/**
- * Build a DiscoveredSkill whose sourcePath sits inside a plugin's source skills dir.
- *
- * Convention: skills are at `<PROJECT_ROOT>/plugins/<pluginName>/skills/<skillName>/SKILL.md`
- * (using the default source path convention, i.e. no explicit `source` override).
- */
-function makeSourceSkill(skillName: string, pluginName: string): DiscoveredSkill {
-  return {
-    name: skillName,
-    sourcePath: safePath.join(
-      PROJECT_ROOT,
-      'plugins',
-      pluginName,
-      'skills',
-      skillName,
-      'SKILL.md',
-    ),
-  };
+/** A discovered skill in its own directory `<group>/<name>-dir/` under the fake root. */
+function skillAt(name: string, group = 'standalone-skills'): DiscoveredSkill {
+  return { name, sourcePath: safePath.join(PROJECT_ROOT, group, `${name}-dir`, 'SKILL.md') };
 }
 
-/**
- * Build a DiscoveredSkill that lives completely outside any plugin source tree.
- */
-function makeExternalSkill(skillName: string): DiscoveredSkill {
-  return {
-    name: skillName,
-    sourcePath: safePath.join(PROJECT_ROOT, 'standalone-skills', skillName, 'SKILL.md'),
-  };
+/** The same skill, under `plugin`'s `skills/` dir. */
+function pluginSkill(name: string, plugin = TREE_PLUGIN): DiscoveredSkill {
+  return skillAt(name, `plugins/${plugin}/skills`);
 }
+
+/** Every listed skill is plugin-local to {@link TREE_PLUGIN}, listed through marketplace `test`. */
+function indexOf(pluginLocal: readonly DiscoveredSkill[], exclusions: Record<string, PluginSkillExclusion> = {}): PluginLocalSkillIndex {
+  return fakePluginLocalIndex(
+    pluginLocal.map((s) => ({ sourcePath: s.sourcePath, pluginName: TREE_PLUGIN, marketplaceName: 'test' })),
+    exclusions,
+  );
+}
+
+function check(
+  discovered: DiscoveredSkill[],
+  config: ProjectConfig,
+  pluginLocal: PluginLocalSkillIndex = indexOf([]),
+): ReturnType<typeof runConsistencyChecks> {
+  return runConsistencyChecks(discovered, config, PROJECT_ROOT, pluginLocal);
+}
+
+const codesFor = (issues: Array<{ code: string }>, code: string): number =>
+  issues.filter((i) => i.code === code).length;
+
+const withCode = <T extends { code: string }>(issues: T[], code: string): T[] => issues.filter((i) => i.code === code);
 
 // ---------------------------------------------------------------------------
 // resolveAssignedSkills
@@ -101,102 +88,41 @@ function makeExternalSkill(skillName: string): DiscoveredSkill {
 
 describe('resolveAssignedSkills', () => {
   it('returns an empty set when no marketplaces are configured', () => {
-    const config: ProjectConfig = { version: 1 };
-    const result = resolveAssignedSkills(config, [makeExternalSkill('foo')], PROJECT_ROOT);
-    expect(result.size).toBe(0);
+    expect(resolveAssignedSkills({ version: 1 }, [skillAt('foo')], indexOf([])).size).toBe(0);
   });
 
   it('assigns a skill matched by a pool name selector', () => {
     const config = buildConfig([{ name: 'pool-plugin', skills: ['my-skill'] }]);
-    const skill = makeExternalSkill('my-skill');
 
-    const result = resolveAssignedSkills(config, [skill], PROJECT_ROOT);
-
-    expect(result.has('my-skill')).toBe(true);
+    expect(resolveAssignedSkills(config, [skillAt('my-skill')], indexOf([])).has('my-skill')).toBe(true);
   });
 
   it('assigns all published skills when pool selector is "*"', () => {
-    const config = buildConfig([{ name: 'pool-plugin', skills: '*' }]);
-    const skills = [makeExternalSkill('skill-a'), makeExternalSkill('skill-b')];
+    const result = resolveAssignedSkills(buildConfig([{ name: 'pool-plugin', skills: '*' }]), [skillAt('skill-a'), skillAt('skill-b')], indexOf([]));
 
-    const result = resolveAssignedSkills(config, skills, PROJECT_ROOT);
-
-    expect(result.has('skill-a')).toBe(true);
-    expect(result.has('skill-b')).toBe(true);
+    expect([result.has('skill-a'), result.has('skill-b')]).toEqual([true, true]);
   });
 
-  it('assigns a published skill whose sourcePath is under the plugin source skills dir', () => {
-    // Tree-copy plugin: source declared, skills: [] (no pool selectors)
-    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }]);
-    const skill = makeSourceSkill(BUNDLED_SKILL, TREE_PLUGIN);
+  it('assigns a skill the index says is plugin-local, whatever publish says, and nothing it does not', () => {
+    const local = pluginSkill('private-skill');
+    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }], { 'private-skill': false });
 
-    const result = resolveAssignedSkills(config, [skill], PROJECT_ROOT);
+    const result = resolveAssignedSkills(config, [local, pluginSkill('untracked-skill'), skillAt('unassigned')], indexOf([local]));
 
-    expect(result.has(BUNDLED_SKILL)).toBe(true);
-  });
-
-  it('does NOT assign a skill whose sourcePath is outside every plugin source skills dir', () => {
-    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }]);
-    const skill = makeExternalSkill('unassigned-skill');
-
-    const result = resolveAssignedSkills(config, [skill], PROJECT_ROOT);
-
-    expect(result.has('unassigned-skill')).toBe(false);
-  });
-
-  it('enforces path-separator boundary: skill under skills-extra/ is not matched', () => {
-    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }]);
-    // sourcePath is under /skills-extra/ (common prefix with /skills/ but different directory)
-    const skill: DiscoveredSkill = {
-      name: LOOK_ALIKE,
-      sourcePath: safePath.join(
-        PROJECT_ROOT,
-        'plugins',
-        TREE_PLUGIN,
-        'skills-extra',
-        LOOK_ALIKE,
-        'SKILL.md',
-      ),
-    };
-
-    const result = resolveAssignedSkills(config, [skill], PROJECT_ROOT);
-
-    expect(result.has(LOOK_ALIKE)).toBe(false);
-  });
-
-  it('assigns a publish: false skill under the plugin source dir — plugin-local assignment is by LOCATION, outside publish\'s scope', () => {
-    // `publish` scopes the pool only. A plugin-local skill ships with its plugin
-    // whatever the flag says (the claude phase packages it, verify expects it), so
-    // it is assigned by where it sits — not left unassigned by a flag about a
-    // bundle it never had.
-    const config = buildConfig(
-      [{ name: TREE_PLUGIN, skills: [] }],
-      { 'private-skill': false },
-    );
-    const skill = makeSourceSkill('private-skill', TREE_PLUGIN);
-
-    const result = resolveAssignedSkills(config, [skill], PROJECT_ROOT);
-
-    expect(result.has('private-skill')).toBe(true);
+    expect([...result]).toEqual(['private-skill']);
   });
 
   it('does NOT let a pool selector pick up a publish: false skill — it is not in the pool', () => {
-    const config = buildConfig([{ name: 'pool-plugin', skills: '*' }], { 'in-place': false });
-    const result = resolveAssignedSkills(config, [makeExternalSkill('in-place'), makeExternalSkill('pooled')], PROJECT_ROOT);
-    expect(result.has('in-place')).toBe(false);
-    expect(result.has('pooled')).toBe(true);
+    const config = buildConfig([{ name: 'pool-plugin', skills: '*' }], { [IN_PLACE]: false });
+    const result = resolveAssignedSkills(config, [skillAt(IN_PLACE), skillAt('pooled')], indexOf([]));
+    expect([result.has(IN_PLACE), result.has('pooled')]).toEqual([false, true]);
   });
 
-  it('is additive: pool selector and source tree-copy both contribute to the assigned set', () => {
-    // Plugin uses pool selector for skill-a and has tree-copy skill-b in its source dir
-    const config = buildConfig([{ name: 'hybrid-plugin', skills: ['skill-a'] }]);
-    const poolSkill = makeExternalSkill('skill-a');
-    const treeSkill = makeSourceSkill('skill-b', 'hybrid-plugin');
+  it('is additive: pool selector and a plugin-local skill both contribute to the assigned set', () => {
+    const local = pluginSkill('skill-b', 'hybrid-plugin');
+    const result = resolveAssignedSkills(buildConfig([{ name: 'hybrid-plugin', skills: ['skill-a'] }]), [skillAt('skill-a'), local], indexOf([local]));
 
-    const result = resolveAssignedSkills(config, [poolSkill, treeSkill], PROJECT_ROOT);
-
-    expect(result.has('skill-a')).toBe(true);
-    expect(result.has('skill-b')).toBe(true);
+    expect([result.has('skill-a'), result.has('skill-b')]).toEqual([true, true]);
   });
 });
 
@@ -205,25 +131,45 @@ describe('resolveAssignedSkills', () => {
 // ---------------------------------------------------------------------------
 
 describe('PUBLISHED_SKILL_NOT_IN_PLUGIN check', () => {
-  it('does NOT flag a published skill that resides in the plugin source skills dir', () => {
-    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }]);
-    const skill = makeSourceSkill(BUNDLED_SKILL, TREE_PLUGIN);
+  const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }]);
 
-    const { issues } = runConsistencyChecks([skill], config, PROJECT_ROOT);
+  it('does NOT flag a published plugin-local skill', () => {
+    const local = pluginSkill(BUNDLED_SKILL);
 
-    const flagged = issues.filter((i) => i.code === 'PUBLISHED_SKILL_NOT_IN_PLUGIN');
-    expect(flagged).toHaveLength(0);
+    expect(codesFor(check([local], config, indexOf([local])).issues, NOT_IN_PLUGIN)).toBe(0);
   });
 
-  it('STILL flags a published skill that is not assigned to any plugin', () => {
-    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }]);
-    const skill = makeExternalSkill('orphan-skill');
+  it('a skill nowhere near a plugin gets the config remedies alone — no git add hint', () => {
+    const flagged = withCode(check([skillAt(ORPHAN)], config).issues, NOT_IN_PLUGIN);
 
-    const { issues } = runConsistencyChecks([skill], config, PROJECT_ROOT);
+    expect(flagged.map((i) => [i.message, i.fix])).toEqual([[expect.stringContaining(ORPHAN), CONFIG_ONLY_FIX]]);
+  });
 
-    const flagged = issues.filter((i) => i.code === 'PUBLISHED_SKILL_NOT_IN_PLUGIN');
-    expect(flagged).toHaveLength(1);
-    expect(flagged[0]?.message).toContain('orphan-skill');
+  it('an untracked skill under a plugin skills/ dir: the fix names the plugin and the directory to git add', () => {
+    const skill = pluginSkill(ORPHAN);
+    const skillSourceDir = safePath.join(PROJECT_ROOT, 'plugins', TREE_PLUGIN, 'skills', `${ORPHAN}-dir`);
+    const exclusion: PluginSkillExclusion = { kind: 'untracked', pluginName: TREE_PLUGIN, skillSourceDir };
+
+    const [issue] = withCode(check([skill], config, indexOf([], { [skill.sourcePath]: exclusion })).issues, NOT_IN_PLUGIN);
+
+    expect(issue?.fix).toContain(`plugin "${TREE_PLUGIN}"'s skills/ directory, but git does not track it`);
+    expect(issue?.fix).toContain(`git add plugins/${TREE_PLUGIN}/skills/${ORPHAN}-dir.`);
+  });
+
+  it('a skill nested inside a plugin-local skill: the fix names the outer skill by its declared name, never git add', () => {
+    const outer = pluginSkill('outer');
+    const outerIndex = indexOf([outer]);
+    const outerLocation = outerIndex.locations[0];
+    if (outerLocation === undefined) throw new Error('fake index lost the outer skill');
+    const inner: DiscoveredSkill = { name: 'inner', sourcePath: safePath.join(outerLocation.skillSourceDir, 'inner-dir', 'SKILL.md') };
+    const index = indexOf([outer], { [inner.sourcePath]: { kind: 'nested', outer: { pluginName: outerLocation.pluginName, skillSourceDir: outerLocation.skillSourceDir } } });
+
+    const flagged = withCode(check([outer, inner], config, index).issues, NOT_IN_PLUGIN);
+
+    expect(flagged.map((i) => i.message)).toEqual([expect.stringContaining('"inner"')]);
+    expect(flagged[0]?.fix).toContain('nested inside skill "outer"');
+    expect(flagged[0]?.fix).toContain('ships only the outermost skill directory');
+    expect(flagged[0]?.fix).not.toContain('git add');
   });
 });
 
@@ -232,74 +178,85 @@ describe('PUBLISHED_SKILL_NOT_IN_PLUGIN check', () => {
 // ---------------------------------------------------------------------------
 
 describe('publish is read through the merged packaging config', () => {
-  const codesFor = (issues: Array<{ code: string }>, code: string): number =>
-    issues.filter((i) => i.code === code).length;
-
   it('positive control: with no publish anywhere, an unassigned pool skill is PUBLISHED_SKILL_NOT_IN_PLUGIN', () => {
-    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }]);
-    const { issues, summary } = runConsistencyChecks([makeExternalSkill('orphan-skill')], config, PROJECT_ROOT);
-    expect(codesFor(issues, 'PUBLISHED_SKILL_NOT_IN_PLUGIN')).toBe(1);
-    expect(codesFor(issues, 'SKILL_UNPUBLISHED')).toBe(0);
+    const { issues, summary } = check([skillAt(ORPHAN)], buildConfig([{ name: TREE_PLUGIN, skills: [] }]));
+    expect([codesFor(issues, NOT_IN_PLUGIN), codesFor(issues, UNPUBLISHED)]).toEqual([1, 0]);
     expect(summary).toMatchObject({ publishedSkills: 1, unpublishedSkills: 0 });
   });
 
   it('honours skills.defaults.publish: false — the same skill is in-place, not an unassigned published one', () => {
     // This was red: the check read `skills.config.<name>.publish` alone, so a
     // project-wide default parsed, validated and changed nothing.
-    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }], undefined, false);
-    const { issues, summary } = runConsistencyChecks([makeExternalSkill('orphan-skill')], config, PROJECT_ROOT);
-    expect(codesFor(issues, 'PUBLISHED_SKILL_NOT_IN_PLUGIN')).toBe(0);
-    expect(codesFor(issues, 'SKILL_UNPUBLISHED')).toBe(1);
+    const { issues, summary } = check([skillAt(ORPHAN)], buildConfig([{ name: TREE_PLUGIN, skills: [] }], undefined, false));
+    expect([codesFor(issues, NOT_IN_PLUGIN), codesFor(issues, UNPUBLISHED)]).toEqual([0, 1]);
     expect(summary).toMatchObject({ publishedSkills: 0, unpublishedSkills: 1 });
   });
 
   it('lets skills.config.<name>.publish: true opt one skill back in over a false default', () => {
-    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }], { 'orphan-skill': true }, false);
-    const { issues } = runConsistencyChecks(
-      [makeExternalSkill('orphan-skill'), makeExternalSkill('stays-in-place')],
-      config,
-      PROJECT_ROOT,
-    );
-    expect(issues.filter((i) => i.code === 'PUBLISHED_SKILL_NOT_IN_PLUGIN').map((i) => i.message)).toEqual([
-      expect.stringContaining('orphan-skill'),
-    ]);
-    expect(issues.filter((i) => i.code === 'SKILL_UNPUBLISHED').map((i) => i.message)).toEqual([
-      expect.stringContaining('stays-in-place'),
-    ]);
+    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }], { [ORPHAN]: true }, false);
+    const { issues } = check([skillAt(ORPHAN), skillAt('stays-in-place')], config);
+    expect(withCode(issues, NOT_IN_PLUGIN).map((i) => i.message)).toEqual([expect.stringContaining(ORPHAN)]);
+    expect(withCode(issues, UNPUBLISHED).map((i) => i.message)).toEqual([expect.stringContaining('stays-in-place')]);
   });
 
-  it('a plugin-local skill under a false default is neither unassigned nor SKILL_UNPUBLISHED — it ships with its plugin', () => {
+  it('a plugin-local skill under a false default is neither unassigned nor SKILL_UNPUBLISHED; a same-named repo-only one is in place', () => {
+    const local = pluginSkill(BUNDLED_SKILL);
     const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }], undefined, false);
-    const { issues } = runConsistencyChecks([makeSourceSkill(BUNDLED_SKILL, TREE_PLUGIN)], config, PROJECT_ROOT);
-    expect(codesFor(issues, 'PUBLISHED_SKILL_NOT_IN_PLUGIN')).toBe(0);
-    expect(codesFor(issues, 'SKILL_UNPUBLISHED')).toBe(0);
-  });
 
-  it('a plugin selector that matches ONLY in-place skills selects nothing from the pool — PLUGIN_REFERENCES_UNKNOWN_SKILL naming publish', () => {
-    // An in-place skill is never built, so the claude phase (which selects from
-    // dist/skills) would silently ship the plugin without it.
-    const config = buildConfig([{ name: 'pool-plugin', skills: ['in-place', 'pooled'] }], { 'in-place': false });
-    const { issues } = runConsistencyChecks([makeExternalSkill('in-place'), makeExternalSkill('pooled')], config, PROJECT_ROOT);
-    const refs = issues.filter((i) => i.code === 'PLUGIN_REFERENCES_UNKNOWN_SKILL');
-    expect(refs).toHaveLength(1);
-    expect(refs[0]?.message).toContain('"in-place"');
-    expect(refs[0]?.message).toContain('publish: false');
-    expect(refs[0]?.fix).toContain('skills.config.<name>.publish');
-  });
+    const { issues, summary } = check([skillAt(BUNDLED_SKILL), local], config, indexOf([local]));
 
-  it('a selector naming a plugin-local skill under publish: false is not flagged — it ships by location', () => {
-    const config = buildConfig([{ name: TREE_PLUGIN, skills: [BUNDLED_SKILL] }], undefined, false);
-    const { issues } = runConsistencyChecks([makeSourceSkill(BUNDLED_SKILL, TREE_PLUGIN)], config, PROJECT_ROOT);
-    expect(codesFor(issues, 'PLUGIN_REFERENCES_UNKNOWN_SKILL')).toBe(0);
+    expect([codesFor(issues, NOT_IN_PLUGIN), codesFor(issues, UNPUBLISHED)]).toEqual([0, 1]);
+    expect(summary).toMatchObject({ publishedSkills: 0, unpublishedSkills: 2 });
   });
 
   it('SKILL_UNPUBLISHED names the in-place meaning, not "not distributed"', () => {
-    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }], { 'in-place': false });
-    const { issues } = runConsistencyChecks([makeExternalSkill('in-place')], config, PROJECT_ROOT);
-    const info = issues.find((i) => i.code === 'SKILL_UNPUBLISHED');
+    const { issues } = check([skillAt(IN_PLACE)], buildConfig([{ name: TREE_PLUGIN, skills: [] }], { [IN_PLACE]: false }));
+    const info = issues.find((i) => i.code === UNPUBLISHED);
     expect(info?.severity).toBe('info');
-    expect(info?.message).toContain('in-place');
+    expect(info?.message).toContain(IN_PLACE);
     expect(info?.message).toContain('dist/skills');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PLUGIN_REFERENCES_UNKNOWN_SKILL — what a selector can actually select
+// ---------------------------------------------------------------------------
+
+describe('plugin selectors and publish: false skills', () => {
+  it('a selector that matches ONLY in-place skills selects nothing from the pool — naming publish', () => {
+    // An in-place skill is never built, so the claude phase (which selects from
+    // dist/skills) would silently ship the plugin without it.
+    const config = buildConfig([{ name: 'pool-plugin', skills: [IN_PLACE, 'pooled'] }], { [IN_PLACE]: false });
+    const refs = withCode(check([skillAt(IN_PLACE), skillAt('pooled')], config).issues, UNKNOWN_SKILL);
+    expect(refs).toHaveLength(1);
+    expect(refs[0]?.message).toContain(`"${IN_PLACE}"`);
+    expect(refs[0]?.message).toContain('matches only in-place skills (publish: false)');
+    expect(refs[0]?.fix).toContain('skills.config.<name>.publish');
+  });
+
+  it('control: a selector naming a publish: false skill plugin-local to ITS OWN plugin is not flagged', () => {
+    const local = pluginSkill(BUNDLED_SKILL);
+    const config = buildConfig([{ name: TREE_PLUGIN, skills: [BUNDLED_SKILL] }], undefined, false);
+
+    expect(codesFor(check([local], config, indexOf([local])).issues, UNKNOWN_SKILL)).toBe(0);
+  });
+
+  it('a selector in ANOTHER plugin naming a publish: false plugin-local skill is flagged, naming the plugin that ships it', () => {
+    const local = pluginSkill(BUNDLED_SKILL);
+    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }, { name: 'other-plugin', skills: [BUNDLED_SKILL] }], undefined, false);
+
+    const refs = withCode(check([local], config, indexOf([local])).issues, UNKNOWN_SKILL);
+
+    expect(refs.map((i) => i.message)).toEqual([
+      expect.stringContaining(`Plugin "other-plugin" in marketplace "test" references skill selector "${BUNDLED_SKILL}", which matches only publish: false skills plugin-local to "${TREE_PLUGIN}"`),
+    ]);
+  });
+
+  it('a PUBLISHED plugin-local skill is selectable by any plugin — it is in dist/skills', () => {
+    const local = pluginSkill(BUNDLED_SKILL);
+    const config = buildConfig([{ name: TREE_PLUGIN, skills: [] }, { name: 'other-plugin', skills: [BUNDLED_SKILL] }]);
+
+    expect(codesFor(check([local], config, indexOf([local])).issues, UNKNOWN_SKILL)).toBe(0);
   });
 });
 

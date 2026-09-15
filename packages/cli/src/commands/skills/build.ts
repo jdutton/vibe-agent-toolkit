@@ -12,6 +12,7 @@ import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 
 import {
   conventionalSuiteProbe,
+  indexPluginLocalSkills,
   packageSkills,
   packagingConfigToPackageOptions,
   skillNameToFsPath,
@@ -20,6 +21,7 @@ import {
   type DeclaredEvalSuite,
   type PackageSkillResult,
   type PackagingValidationResult,
+  type PluginLocalSkillIndex,
   type SkillBuildSpec,
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
@@ -54,7 +56,7 @@ import {
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { withResourcePopulationSource } from '../../utils/resource-loader.js';
-import { collectDeclaredEvalSuites, isSkillPublished, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
+import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, publishScope } from '../../utils/skill-packaging-config.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 import { finishCommand, type PhaseOutcome } from '../phase-utils.js';
 
@@ -116,8 +118,11 @@ Description:
   marks an IN-PLACE skill: validated at source by 'vat validate', never
   bundled here, never expected by 'vat verify'. Such skills are set aside
   with one info line and counted as skillsInPlace; --skill naming one is
-  an error (exit 1). A plugin-local skill (under a plugin's skills/ dir)
-  ships with its plugin regardless of publish.
+  an error (exit 1). A plugin-local skill (a git-tracked skill dir under a
+  plugin's skills/) ships with its plugin regardless of publish, so it is
+  never in place: under publish: false it is set aside on its own info line,
+  counted as skillsPluginOnly, and --skill naming it exits 1 pointing at the
+  claude phase that packages it.
 
 Config Structure (vibe-agent-toolkit.config.yaml):
   version: 1
@@ -189,6 +194,10 @@ Output:
                   NOT a failure — skills whose merged config says publish: false,
                   so this run set them aside unbuilt. Published so a build that
                   bundles fewer skills than it discovered says so by count.
+  skillsPluginOnly / skillsPluginOnlyNames:
+                  NOT a failure — plugin-local publish: false skills, set aside
+                  here too but shipped with their plugin by the claude phase, so
+                  never counted in skillsInPlace. Both pairs are also in --dry-run.
   runIssueCounts: findings that belong to the run rather than to any one
                   skill (ALLOW_UNUSED)
   issueCounts:    the run total, which reconciles against the rows above:
@@ -477,11 +486,20 @@ async function validateSkillBeforeBuild(
 }
 
 /**
+ * The skills a run sets aside unbuilt, by name — the `inPlace` and `pluginOnly`
+ * halves of {@link partitionInPlaceSkills}.
+ */
+interface SetAsideSkillNames {
+  inPlace: readonly string[];
+  pluginOnly: readonly string[];
+}
+
+/**
  * Output dry-run results
  */
 function outputDryRunYaml(
   skills: DiscoveredSkill[],
-  skillsInPlace: number,
+  setAside: SetAsideSkillNames,
   duration: number
 ): void {
   writeYamlHeader({
@@ -495,7 +513,8 @@ function outputDryRunYaml(
     skillsFound: skills.length,
     // The same partition the real build publishes: what a preview would NOT
     // bundle is as much a part of the preview as what it would.
-    skillsInPlace,
+    skillsInPlace: setAside.inPlace.length,
+    skillsPluginOnly: setAside.pluginOnly.length,
   });
   process.stdout.write(`skills:\n`);
   for (const skill of skills) {
@@ -503,6 +522,10 @@ function outputDryRunYaml(
     process.stdout.write(`    source: ${skill.sourcePath}\n`);
     process.stdout.write(`    output: dist/skills/${skillNameToFsPath(skill.name)}\n`);
   }
+  process.stdout.write(yaml.stringify(
+    { skillsInPlaceNames: [...setAside.inPlace], skillsPluginOnlyNames: [...setAside.pluginOnly] },
+    { indent: 2, lineWidth: 0 },
+  ));
   process.stdout.write(`duration: ${duration}ms\n`);
 }
 
@@ -511,13 +534,14 @@ function outputDryRunYaml(
  */
 function performDryRun(
   skillsToBuild: DiscoveredSkill[],
-  skillsInPlace: number,
+  setAside: SetAsideSkillNames,
   duration: number,
   logger: ReturnType<typeof createLogger>
 ): void {
   logger.info(`Dry-run: Analyzing skill build...`);
   logger.info(`   Skills to build: ${skillsToBuild.length}`);
-  logger.info(`   In-place skills (publish: false, not bundled): ${skillsInPlace}`);
+  logger.info(`   In-place skills (publish: false, not bundled): ${setAside.inPlace.length}`);
+  logger.info(`   Plugin-only skills (publish: false, ship with their plugin): ${setAside.pluginOnly.length}`);
 
   logger.info(`\nSkills:`);
   for (const skill of skillsToBuild) {
@@ -526,7 +550,7 @@ function performDryRun(
     logger.info(`      Output: dist/skills/${skillNameToFsPath(skill.name)}`);
   }
 
-  outputDryRunYaml(skillsToBuild, skillsInPlace, duration);
+  outputDryRunYaml(skillsToBuild, setAside, duration);
 
   logger.info(`\nDry-run complete (no files created)`);
   logger.info(`   Run without --dry-run to build the skills`);
@@ -769,14 +793,16 @@ export function buildYamlSummary(
  * would have flipped `skillsWithErrors` from a number to an array in `vat
  * build`'s output, silently and with nothing to typecheck it against.
  *
- * `skillsInPlace` rides in the header beside `skillsBuilt`, with the names under
- * `skillsInPlaceNames`: a build that ships fewer skills than it discovered is the
- * drop this command exists to prevent, so the number a `publish: false` removed
- * from `skillsBuilt` must be visible where a consumer reads the count.
+ * `skillsInPlace` and `skillsPluginOnly` ride in the header beside `skillsBuilt`,
+ * with the names under `skillsInPlaceNames` / `skillsPluginOnlyNames`: a build that
+ * ships fewer skills than it discovered is the drop this command exists to prevent,
+ * so every skill a `publish: false` removed from `skillsBuilt` must be visible where
+ * a consumer reads the count — including a plugin-local one, which is not in place
+ * (it ships with its plugin) but is still not bundled here.
  */
 export function buildBuildDocument(
   run: SkillBuildRun,
-  skillsInPlaceNames: readonly string[],
+  setAside: SetAsideSkillNames,
   duration: number,
 ): Record<string, unknown> {
   const summary = buildYamlSummary(run, duration);
@@ -789,7 +815,8 @@ export function buildBuildDocument(
   return {
     status,
     skillsBuilt,
-    skillsInPlace: skillsInPlaceNames.length,
+    skillsInPlace: setAside.inPlace.length,
+    skillsPluginOnly: setAside.pluginOnly.length,
     skillsFailed,
     skillsFailedValidation,
     skillsWithErrors: summary.skillsWithErrors.length,
@@ -811,7 +838,8 @@ export function buildBuildDocument(
     failedSkills,
     validationFailedSkills,
     skillsWithErrorNames: summary.skillsWithErrors,
-    skillsInPlaceNames: [...skillsInPlaceNames],
+    skillsInPlaceNames: [...setAside.inPlace],
+    skillsPluginOnlyNames: [...setAside.pluginOnly],
     runIssues: summary.runIssues,
     duration: durationText,
   };
@@ -827,8 +855,8 @@ export function buildBuildDocument(
  */
 export function outputBuildYaml(document: Record<string, unknown>): void {
   const {
-    status, skillsBuilt, skillsInPlace, skillsFailed, skillsFailedValidation, skillsWithErrors, outputCommitted,
-    duration: durationText, ...body
+    status, skillsBuilt, skillsInPlace, skillsPluginOnly, skillsFailed, skillsFailedValidation, skillsWithErrors,
+    outputCommitted, duration: durationText, ...body
   } = document;
   // In the header, beside the other counts: these are the numbers the exit code
   // actually follows, so a reader who stops at the header is not misled by it.
@@ -838,6 +866,7 @@ export function outputBuildYaml(document: Record<string, unknown>): void {
     status: status as string,
     skillsBuilt: skillsBuilt as number,
     skillsInPlace: skillsInPlace as number,
+    skillsPluginOnly: skillsPluginOnly as number,
     skillsFailed: skillsFailed as number,
     skillsFailedValidation: skillsFailedValidation as number,
     skillsWithErrors: skillsWithErrors as number,
@@ -1271,46 +1300,64 @@ export interface BuildSkillSpec {
 }
 
 /**
- * Merge every skill's config and split the pool skills from the IN-PLACE ones.
+ * Merge every skill's config and split the pool skills from the ones this run sets aside.
  *
- * `buildSpecs` is what this run bundles; `inPlace` is every skill whose merged
- * config says `publish: false` — validated at source by `vat validate`, never
- * bundled here, never expected by `vat verify` (see `isSkillPublished`). Both
- * halves keep discovery order, so the human and machine reports list them as
- * the globs found them.
+ * `buildSpecs` is what this run bundles. Of the `publish: false` skills (see
+ * `publishScope`), `inPlace` is every one used from the repo — validated at
+ * source by `vat validate`, never bundled, never expected by `vat verify` — and
+ * `pluginOnly` every PLUGIN-LOCAL one (its source dir is a location in `pluginLocal`,
+ * from `indexPluginLocalSkills`): not bundled here either, but shipped with its
+ * plugin, so reporting it as in-place would be false. Every list keeps discovery
+ * order, so the human and machine reports list them as the globs found them.
  */
 export function partitionInPlaceSkills(
   skills: readonly DiscoveredSkill[],
   skillsConfig: SkillsConfig,
-): { buildSpecs: BuildSkillSpec[]; inPlace: BuildSkillSpec[] } {
-  const buildSpecs: BuildSkillSpec[] = [];
-  const inPlace: BuildSkillSpec[] = [];
+  pluginLocal: PluginLocalSkillIndex,
+): { buildSpecs: BuildSkillSpec[]; inPlace: BuildSkillSpec[]; pluginOnly: BuildSkillSpec[] } {
+  const lists = { pool: [] as BuildSkillSpec[], 'in-place': [] as BuildSkillSpec[], 'plugin-only': [] as BuildSkillSpec[] };
   for (const skill of skills) {
-    const spec: BuildSkillSpec = {
-      skill,
-      packagingConfig: mergeSkillPackagingConfig(skillsConfig.defaults, skillsConfig.config?.[skill.name]),
-    };
-    (isSkillPublished(spec.packagingConfig) ? buildSpecs : inPlace).push(spec);
+    const packagingConfig = mergeSkillPackagingConfig(skillsConfig.defaults, skillsConfig.config?.[skill.name]);
+    lists[publishScope(skill, packagingConfig, pluginLocal)].push({ skill, packagingConfig });
   }
-  return { buildSpecs, inPlace };
+  return { buildSpecs: lists.pool, inPlace: lists['in-place'], pluginOnly: lists['plugin-only'] };
 }
 
-/** How many in-place names the one info line spells out before "… and N more". */
-const IN_PLACE_NAMES_SHOWN = 10;
+/** How many set-aside names one info line spells out before "… and N more". */
+const SET_ASIDE_NAMES_SHOWN = 10;
 
 /**
- * ONE info line for the skills this run set aside, naming the count and (up to
- * {@link IN_PLACE_NAMES_SHOWN} of) the names. Nothing when there are none: a
+ * ONE info line for one population this run set aside, naming the count and (up
+ * to {@link SET_ASIDE_NAMES_SHOWN} of) the names. Nothing when there are none: a
  * "0 in-place" line on every build is noise that trains readers to skip the line
  * that matters.
  */
+function logSetAsideSkills(
+  setAside: readonly BuildSkillSpec[],
+  label: string,
+  logger: ReturnType<typeof createLogger>,
+): void {
+  if (setAside.length === 0) return;
+  const names = setAside.map((spec) => spec.skill.name);
+  const shown = names.slice(0, SET_ASIDE_NAMES_SHOWN).join(', ');
+  const more = names.length > SET_ASIDE_NAMES_SHOWN ? ` … and ${names.length - SET_ASIDE_NAMES_SHOWN} more` : '';
+  logger.info(`Skipping ${setAside.length} ${label}: ${shown}${more}`);
+}
+
+/** The info line for the in-place skills — see {@link logSetAsideSkills}. */
 export function logInPlaceSkills(inPlace: readonly BuildSkillSpec[], logger: ReturnType<typeof createLogger>): void {
-  if (inPlace.length === 0) return;
-  const names = inPlace.map((spec) => spec.skill.name);
-  const shown = names.slice(0, IN_PLACE_NAMES_SHOWN).join(', ');
-  const more = names.length > IN_PLACE_NAMES_SHOWN ? ` … and ${names.length - IN_PLACE_NAMES_SHOWN} more` : '';
-  logger.info(
-    `Skipping ${inPlace.length} in-place skill(s) (publish: false — validated at source, never bundled): ${shown}${more}`,
+  logSetAsideSkills(inPlace, 'in-place skill(s) (publish: false — validated at source, never bundled)', logger);
+}
+
+/**
+ * The info line for the plugin-local `publish: false` skills — deliberately NOT the
+ * in-place line: they are left out of `dist/skills` but ship with their plugin.
+ */
+function logPluginOnlySkills(pluginOnly: readonly BuildSkillSpec[], logger: ReturnType<typeof createLogger>): void {
+  logSetAsideSkills(
+    pluginOnly,
+    'plugin-local skill(s) from dist/skills (publish: false — each ships with its plugin via the claude phase)',
+    logger,
   );
 }
 
@@ -1327,9 +1374,29 @@ export function inPlaceSkillRefusal(skill: string | undefined, inPlace: readonly
   );
 }
 
-export function formatBuiltSuccessLine(built: number, inPlace: number): string {
-  return `\nBuilt ${built} skill(s) successfully`
-    + (inPlace === 0 ? '' : ` (${inPlace} in-place skill(s) not bundled)`);
+/**
+ * `--skill x` on a plugin-local `publish: false` skill: exit 1 like the in-place
+ * refusal, but saying what is true of it — it is not a pool skill, and it ships
+ * with its plugin, packaged by the claude phase.
+ */
+function pluginOnlySkillRefusal(skill: string | undefined, pluginOnly: readonly BuildSkillSpec[]): Error | undefined {
+  if (skill === undefined || pluginOnly.length === 0) return undefined;
+  return new Error(
+    `Skill "${skill}" is a plugin-local skill (under a plugin's skills/ directory) with publish: false `
+      + `(skills.config.${skill}.publish, directly or via skills.defaults.publish): it ships with its plugin, `
+      + 'packaged by the claude phase, and is never bundled into dist/skills, so this command has nothing to build for it. '
+      + "Run 'vat build --only claude' to package its plugin, set publish: true to also distribute it through dist/skills, "
+      + 'or drop --skill.',
+  );
+}
+
+/** The human success line, naming each set-aside population only when it is non-empty. */
+export function formatBuiltSuccessLine(built: number, setAside: { inPlace: number; pluginOnly: number }): string {
+  const tails = [
+    ...(setAside.inPlace === 0 ? [] : [`${setAside.inPlace} in-place skill(s) not bundled`]),
+    ...(setAside.pluginOnly === 0 ? [] : [`${setAside.pluginOnly} plugin-only skill(s) shipped with their plugin`]),
+  ];
+  return `\nBuilt ${built} skill(s) successfully` + (tails.length === 0 ? '' : ` (${tails.join(', ')})`);
 }
 
 /**
@@ -1685,18 +1752,26 @@ export async function runSkillsBuildPhase(
     // `publish: false` names a skill the pool never carries (see
     // `isSkillPublished`), so the partition happens BEFORE the count is announced:
     // "Found N skill(s) to build" must be the number this run will bundle.
-    const { buildSpecs, inPlace } = partitionInPlaceSkills(
+    // Plugin-local = a skill dir the plugin build packages (the same index the
+    // consistency check and `vat verify` ask): such a skill is never in place.
+    const { buildSpecs, inPlace, pluginOnly } = partitionInPlaceSkills(
       filterSkillsByName(discoveredSkills, options.skill),
       skillsConfig,
+      indexPluginLocalSkills(config, cwd),
     );
 
-    const refusal = inPlaceSkillRefusal(options.skill, inPlace);
+    const refusal = inPlaceSkillRefusal(options.skill, inPlace) ?? pluginOnlySkillRefusal(options.skill, pluginOnly);
     if (refusal !== undefined) {
       return { document: reportCommandError(refusal, logger, startTime, 'SkillsBuild'), exitCode: 1, failed: true };
     }
 
     logInPlaceSkills(inPlace, logger);
+    logPluginOnlySkills(pluginOnly, logger);
     logger.info(`Found ${buildSpecs.length} skill(s) to build`);
+    const setAside: SetAsideSkillNames = {
+      inPlace: inPlace.map((spec) => spec.skill.name),
+      pluginOnly: pluginOnly.map((spec) => spec.skill.name),
+    };
 
     // Handle dry-run mode. Nothing has touched `dist/` at this point — the
     // staging directory and the swap both live inside `runSkillBuild`, which a
@@ -1706,7 +1781,7 @@ export async function runSkillsBuildPhase(
     // guard three lines up to stay honest.)
     if (options.dryRun) {
       const duration = Date.now() - startTime;
-      performDryRun(buildSpecs.map((spec) => spec.skill), inPlace.length, duration, logger);
+      performDryRun(buildSpecs.map((spec) => spec.skill), setAside, duration, logger);
       return { document: undefined, exitCode: 0 };
     }
 
@@ -1724,7 +1799,7 @@ export async function runSkillsBuildPhase(
     });
     const duration = Date.now() - startTime;
 
-    const document = buildBuildDocument(run, inPlace.map((spec) => spec.skill.name), duration);
+    const document = buildBuildDocument(run, setAside, duration);
     for (const line of formatRunIssueLines(run.runIssues)) {
       logger.info(line);
     }
@@ -1748,7 +1823,7 @@ export async function runSkillsBuildPhase(
       return { document, exitCode: 1 };
     }
 
-    logger.info(formatBuiltSuccessLine(run.results.length, inPlace.length));
+    logger.info(formatBuiltSuccessLine(run.results.length, { inPlace: inPlace.length, pluginOnly: pluginOnly.length }));
 
     return { document, exitCode: 0 };
   } catch (error) {

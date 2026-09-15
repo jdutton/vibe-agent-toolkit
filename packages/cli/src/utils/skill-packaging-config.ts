@@ -10,7 +10,14 @@
  * outright. `files:` is the exception — see below.
  */
 
-import { mergeFilesConfig, type DeclaredEvalSuite, type SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
+import { basename } from 'node:path';
+
+import {
+  mergeFilesConfig,
+  type DeclaredEvalSuite,
+  type PluginLocalSkillIndex,
+  type SkillPackagingConfig,
+} from '@vibe-agent-toolkit/agent-skills';
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -53,6 +60,21 @@ export function mergeSkillPackagingConfig(
 }
 
 /**
+ * THE `skills.config` entry a plugin-local skill packages under, for both lanes that
+ * ask: the Claude plugin build that packages it and `vat verify` that checks what it
+ * packaged. Keyed by the skill's declared name; its directory path under the plugin's
+ * `skills/` (`group/nested`) and that path's trailing segment are fallbacks for a
+ * config keyed by directory. Two lookups were two effective configs for one skill —
+ * verify checked `files:` dests and severity overrides the build never applied.
+ */
+export function pluginLocalSkillConfigEntry<T>(
+  config: Readonly<Record<string, T>> | undefined,
+  skill: { readonly skillName: string; readonly skillDirPath: string },
+): T | undefined {
+  return config?.[skill.skillName] ?? config?.[skill.skillDirPath] ?? config?.[basename(skill.skillDirPath)];
+}
+
+/**
  * Is this skill distributed through the POOL (`dist/skills/<name>`)?
  *
  * THE predicate for `publish`, read off the MERGED config so that
@@ -66,8 +88,8 @@ export function mergeSkillPackagingConfig(
  * / `vat skills validate`, never bundled by `vat build`, never expected by
  * `vat verify`. Default `true`.
  *
- * `publish` scopes the POOL only. A plugin-local skill (one under a plugin's
- * `skills/` directory — see `computeTreeCopiedSkillLocations`) ships with its
+ * `publish` scopes the POOL only. A plugin-local skill (a git-tracked skill directory
+ * under a plugin's `skills/` — see `indexPluginLocalSkills`) ships with its
  * plugin by LOCATION: the claude phase packages it and verify expects it whatever
  * this returns. A skill that is both discovered by `skills.include` and
  * plugin-local therefore skips the pool with `publish: false` and still ships in
@@ -81,6 +103,35 @@ export function mergeSkillPackagingConfig(
 export function isSkillPublished(packaging: SkillPackagingConfig): boolean {
   const { publish } = packaging as { publish?: boolean };
   return publish ?? true;
+}
+
+/**
+ * Where `publish` sends a discovered skill:
+ *   - `pool` — published: bundled into `dist/skills/<name>` (a plugin-local one ALSO ships in its plugin);
+ *   - `plugin-only` — `publish: false` but plugin-local: out of the pool, still shipped by its plugin;
+ *   - `in-place` — `publish: false` and not plugin-local: used from the repo, distributed nowhere.
+ *
+ * `plugin-only` is deliberately not `SkillDistribution`'s `plugin-local`: that names WHERE a
+ * skill's plugin build output lands whatever `publish` says; this names a skill that ships
+ * ONLY there, which a published plugin-local skill does not.
+ */
+type PublishScope = 'pool' | 'plugin-only' | 'in-place';
+
+/**
+ * Classify one discovered skill — {@link isSkillPublished} over its merged config, then
+ * plugin-local by the directory holding its `SKILL.md` (`pluginLocal`, from
+ * `indexPluginLocalSkills`: the skill dirs the plugin build actually packages). A
+ * plugin-local skill is never `in-place`: it ships with its plugin, so every lane that
+ * reports in-place skills (`vat build`, `vat verify`, the consistency check) asks this,
+ * not the flag alone.
+ */
+export function publishScope(
+  skill: { sourcePath: string },
+  packaging: SkillPackagingConfig,
+  pluginLocal: PluginLocalSkillIndex,
+): PublishScope {
+  if (isSkillPublished(packaging)) return 'pool';
+  return pluginLocal.locationOf(skill.sourcePath) === undefined ? 'in-place' : 'plugin-only';
 }
 
 /**

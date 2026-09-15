@@ -79,7 +79,8 @@ Description:
 
   publish: false (skills.defaults or skills.config.<name>) marks an IN-PLACE
   skill: validated at source, never bundled into dist/skills/, never expected
-  by 'vat verify'. Plugin-local skills ship with their plugin regardless.
+  by 'vat verify'. Plugin-local skills (git-tracked, outermost skill dirs
+  under a plugin's skills/) ship with their plugin regardless.
 
   A phase that ERRORS stops the run: later phases do not execute. So a skills
   phase that exits 1 (e.g. on FILENAME_COLLISION) leaves dist/skills/ written

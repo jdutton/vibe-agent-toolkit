@@ -24,6 +24,7 @@ import {
   reportPackagedContentPhase,
   runPackagedContentPhase,
 } from '../../src/commands/verify.js';
+import { fakePluginLocalIndex } from '../helpers/plugin-local-fixture.js';
 import { recordingLogger } from '../test-doubles.js';
 
 describe('verify packaged-content — the refusal reaches stderr', () => {
@@ -32,7 +33,7 @@ describe('verify packaged-content — the refusal reaches stderr', () => {
     // not exist is fine: nothing is read when there is nothing to crawl.
     const { logger, lines } = recordingLogger();
 
-    const phase = runPackagedContentPhase('/no-such-project-pc', [], logger);
+    const phase = runPackagedContentPhase('/no-such-project-pc', [], fakePluginLocalIndex([]), new Map(), logger);
     const stderr = lines.join('\n');
 
     expect(phase.status).toBe('error');

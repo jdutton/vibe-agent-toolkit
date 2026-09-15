@@ -7,15 +7,16 @@
  */
 
 import { existsSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
 
-import { getPluginSourceDir } from '@vibe-agent-toolkit/agent-skills';
+import type { PluginLocalSkillIndex, PluginSkillExclusion, SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import type { Severity } from '@vibe-agent-toolkit/schema';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import { readPackageJsonOrAbsent } from '../utils/package-json.js';
-import { isSkillPublished, mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
+import { isSkillPublished, mergeSkillPackagingConfig, publishScope } from '../utils/skill-packaging-config.js';
 
 import type { DiscoveredSkill } from './skills/command-helpers.js';
 
@@ -47,48 +48,15 @@ export interface ConsistencyCheckResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Whether a discovered skill is a POOL skill (distributed through `dist/skills`),
- * through the ONE predicate every lane uses — `isSkillPublished` over the MERGED
- * config — so `skills.defaults.publish` counts here exactly as it does in
- * `vat build` and `vat verify`. The per-name reader this replaces looked at
- * `skills.config.<name>` alone.
+ * A skill's MERGED packaging config — `skills.defaults` under `skills.config.<name>` —
+ * so `skills.defaults.publish` counts here exactly as it does in `vat build` and
+ * `vat verify`. The per-name reader this replaces looked at `skills.config.<name>` alone.
  */
-function publishedByConfig(skillName: string, config: ProjectConfig): boolean {
-  return isSkillPublished(mergeSkillPackagingConfig(
+function packagingOf(skillName: string, config: ProjectConfig): SkillPackagingConfig {
+  return mergeSkillPackagingConfig(
     config.skills?.defaults as Record<string, unknown> | undefined,
     config.skills?.config?.[skillName] as Record<string, unknown> | undefined,
-  ));
-}
-
-/**
- * The names of every discovered skill that is PLUGIN-LOCAL: its `sourcePath`
- * sits under some plugin's `<getPluginSourceDir(projectRoot, plugin)>/skills/`.
- *
- * Matched by physical location, never by `publish`: a plugin-local skill ships
- * with its plugin whatever the flag says (see `isSkillPublished`), so both the
- * assignment and the unpublished-info lane ask this set, not the flag.
- *
- * A trailing slash on the prefix enforces a path-separator boundary, so a
- * sibling directory with a common prefix (`/skills` vs `/skills-extra`) is not
- * a false match.
- */
-function pluginLocalSkillNames(
-  config: ProjectConfig,
-  discoveredSkills: DiscoveredSkill[],
-  projectRoot: string,
-): Set<string> {
-  const names = new Set<string>();
-  const marketplaces = config.claude?.marketplaces;
-  if (!marketplaces) return names;
-  for (const marketplace of Object.values(marketplaces)) {
-    for (const plugin of marketplace.plugins) {
-      const srcSkillsPrefix = `${safePath.join(getPluginSourceDir(projectRoot, plugin), 'skills')}/`;
-      for (const skill of discoveredSkills) {
-        if (toForwardSlash(skill.sourcePath).startsWith(srcSkillsPrefix)) names.add(skill.name);
-      }
-    }
-  }
-  return names;
+  );
 }
 
 /**
@@ -182,18 +150,22 @@ function addMatchingSkills(
  * Assignment is additive per plugin:
  * - **Pool path**: `plugin.skills` glob selectors matched against PUBLISHED skill
  *   names — a `publish: false` skill is not in the pool, so no selector reaches it.
- * - **Plugin-local path**: any discovered skill whose `sourcePath` lives under
- *   `<getPluginSourceDir(projectRoot, plugin)>/skills/` is assigned by physical
- *   location, INDEPENDENT of `publish` — it ships with its plugin either way.
+ * - **Plugin-local path**: any discovered skill the plugin build packages — its
+ *   `SKILL.md` directory is a location in `pluginLocal` (`indexPluginLocalSkills`:
+ *   git-tracked skill dirs under a plugin's `skills/`) — is assigned by location,
+ *   INDEPENDENT of `publish`: it ships with its plugin either way. A skill merely
+ *   sitting there untracked is not: the plugin build does not ship it.
  *
  * Returns the set of skill names assigned to at least one plugin.
  */
 export function resolveAssignedSkills(
   config: ProjectConfig,
   discoveredSkills: DiscoveredSkill[],
-  projectRoot: string
+  pluginLocal: PluginLocalSkillIndex,
 ): Set<string> {
-  const assigned = pluginLocalSkillNames(config, discoveredSkills, projectRoot);
+  const assigned = new Set(
+    discoveredSkills.filter((s) => pluginLocal.locationOf(s.sourcePath) !== undefined).map((s) => s.name),
+  );
   const marketplaces = config.claude?.marketplaces;
 
   if (!marketplaces) {
@@ -202,7 +174,7 @@ export function resolveAssignedSkills(
 
   // Compute published names once for pool-selector matching
   const publishedNames = discoveredSkills
-    .filter((s) => publishedByConfig(s.name, config))
+    .filter((s) => isSkillPublished(packagingOf(s.name, config)))
     .map((s) => s.name);
 
   for (const marketplace of Object.values(marketplaces)) {
@@ -318,62 +290,121 @@ function checkUnpublishedSkillInPackageJson(
   return issues;
 }
 
+/**
+ * The fix for a published skill no plugin ships — saying what is TRUE of this skill.
+ * A skill under a plugin's `skills/` that the plugin build does not package gets the
+ * reason ({@link PluginSkillExclusion}): untracked (`git add` it) or nested inside
+ * another skill's directory (where `git add` changes nothing). Any other skill gets the
+ * two config remedies alone — a "git add" hint on a skill nowhere near a plugin is noise.
+ */
+function notInPluginFix(
+  skill: DiscoveredSkill,
+  exclusion: PluginSkillExclusion | undefined,
+  context: { projectRoot: string; discovered: readonly DiscoveredSkill[]; pluginLocal: PluginLocalSkillIndex },
+): string {
+  const { name } = skill;
+  const configRemedies = `add "${name}" to a plugin's skills array in vibe-agent-toolkit.config.yaml: claude.marketplaces.<marketplace>.plugins[].skills, or opt out of publishing by setting publish: false in vibe-agent-toolkit.config.yaml: skills.config.${name}.publish: false`;
+  const rel = (dir: string): string => safePath.relative(context.projectRoot, dir);
+  if (exclusion?.kind === 'untracked') {
+    return `"${name}" sits under plugin "${exclusion.pluginName}"'s skills/ directory, but git does not track it, so that plugin's build does not ship it: git add ${rel(exclusion.skillSourceDir)}. Otherwise, ${configRemedies}.`;
+  }
+  if (exclusion?.kind === 'nested') {
+    const { outer } = exclusion;
+    const outerName = context.discovered.find(
+      (candidate) => safePath.resolve(dirname(candidate.sourcePath)) === safePath.resolve(outer.skillSourceDir),
+    )?.name ?? basename(outer.skillSourceDir);
+    return `"${name}" is nested inside skill "${outerName}" (${rel(outer.skillSourceDir)}) under plugin "${outer.pluginName}"'s skills/ directory, and the plugin build ships only the outermost skill directory, so "${name}" is never packaged as a skill of its own. Move it to its own directory under skills/, or ${configRemedies}.`;
+  }
+  return `Either ${configRemedies}`;
+}
+
 function checkPublishedSkillNotInPlugin(
-  publishedNames: string[],
+  publishedSkills: readonly DiscoveredSkill[],
   config: ProjectConfig,
-  assignedSkills: Set<string>
+  assignedSkills: Set<string>,
+  context: Parameters<typeof notInPluginFix>[2],
 ): ConsistencyIssue[] {
   if (!config.claude?.marketplaces) {
     return [];
   }
 
-  const issues: ConsistencyIssue[] = [];
-
-  for (const name of publishedNames) {
-    if (!assignedSkills.has(name)) {
-      issues.push({
-        severity: 'error',
-        code: 'PUBLISHED_SKILL_NOT_IN_PLUGIN',
-        message: `Skill "${name}" is published but not assigned to any plugin in claude.marketplaces.`,
-        fix: `Either add "${name}" to a plugin's skills array in vibe-agent-toolkit.config.yaml: claude.marketplaces.<marketplace>.plugins[].skills, or opt out of publishing by setting publish: false in vibe-agent-toolkit.config.yaml: skills.config.${name}.publish: false`,
-      });
-    }
-  }
-
-  return issues;
+  return publishedSkills.filter((skill) => !assignedSkills.has(skill.name)).map((skill) => ({
+    severity: 'error' as const,
+    code: 'PUBLISHED_SKILL_NOT_IN_PLUGIN',
+    message: `Skill "${skill.name}" is published but not assigned to any plugin in claude.marketplaces.`,
+    fix: notInPluginFix(skill, context.pluginLocal.exclusionOf(skill.sourcePath), context),
+  }));
 }
 
 /**
- * Check a single plugin's skill selectors against discovered skill names.
+ * What a plugin's `skills:` selectors are checked against: every discovered name, the
+ * PUBLISHED ones (in `dist/skills`, selectable by any plugin), and the plugin-local names
+ * of each plugin by {@link pluginKey} — a `publish: false` plugin-local skill ships with
+ * ITS plugin only, so it counts as shipping for a selector in that plugin and no other.
  */
+interface SelectorNames {
+  discovered: Set<string>;
+  published: Set<string>;
+  pluginLocalByPlugin: ReadonlyMap<string, ReadonlySet<string>>;
+}
+
+/** The key of a plugin as listed in one marketplace. */
+function pluginKey(marketplaceName: string, pluginName: string): string {
+  return `${marketplaceName}\0${pluginName}`;
+}
+
+/** Every discovered skill's name, under each plugin (per marketplace listing) whose build ships it. */
+function pluginLocalNamesByPlugin(
+  discoveredSkills: readonly DiscoveredSkill[],
+  pluginLocal: PluginLocalSkillIndex,
+): Map<string, Set<string>> {
+  const byPlugin = new Map<string, Set<string>>();
+  for (const skill of discoveredSkills) {
+    for (const loc of pluginLocal.locationsOf(skill.sourcePath)) {
+      const key = pluginKey(loc.marketplaceName, loc.pluginName);
+      byPlugin.set(key, (byPlugin.get(key) ?? new Set()).add(skill.name));
+    }
+  }
+  return byPlugin;
+}
+
 /**
- * A selector matching only IN-PLACE skills selects nothing: the claude phase picks
- * from `dist/skills`, which never carries them, so the plugin would silently ship
- * without them. `shipping` is every skill that ships — published, or plugin-local.
+ * A selector matching no skill that ships FOR THIS PLUGIN selects nothing: the claude
+ * phase picks from `dist/skills`, which carries only published skills, so the plugin
+ * would silently ship without them. Such a match is either in-place (used from the repo)
+ * or `publish: false` and plugin-local to ANOTHER plugin — which ships it, and only it.
  */
 function checkPluginSelectors(
   pluginSkills: string[],
   pluginName: string,
   marketplaceName: string,
-  names: { discovered: Set<string>; shipping: Set<string> },
+  names: SelectorNames,
 ): ConsistencyIssue[] {
   const issues: ConsistencyIssue[] = [];
   const where = `vibe-agent-toolkit.config.yaml: claude.marketplaces.${marketplaceName}.plugins (plugin "${pluginName}")`;
+  const localHere = names.pluginLocalByPlugin.get(pluginKey(marketplaceName, pluginName)) ?? new Set<string>();
+  const code = 'PLUGIN_REFERENCES_UNKNOWN_SKILL';
+  const subject = (selector: string): string =>
+    `Plugin "${pluginName}" in marketplace "${marketplaceName}" references skill selector "${selector}"`;
 
   for (const selector of pluginSkills) {
     const matching = [...names.discovered].filter((name) => matchesSimpleGlob(name, selector));
     if (matching.length === 0) {
       issues.push({
         severity: 'error',
-        code: 'PLUGIN_REFERENCES_UNKNOWN_SKILL',
-        message: `Plugin "${pluginName}" in marketplace "${marketplaceName}" references skill selector "${selector}" which matches no discovered skill.`,
+        code,
+        message: `${subject(selector)} which matches no discovered skill.`,
         fix: `Check for typos in ${where}. The selector must match at least one discovered SKILL.md name.`,
       });
-    } else if (!matching.some((name) => names.shipping.has(name))) {
+    } else if (!matching.some((name) => names.published.has(name) || localHere.has(name))) {
+      const owners = otherOwners(matching, names.pluginLocalByPlugin).map((owner) => JSON.stringify(owner)).join(', ');
+      const matches = owners === ''
+        ? 'which matches only in-place skills (publish: false) — never built into dist/skills'
+        : `which matches only publish: false skills plugin-local to ${owners} — shipped by that plugin alone, never built into dist/skills`;
       issues.push({
         severity: 'error',
-        code: 'PLUGIN_REFERENCES_UNKNOWN_SKILL',
-        message: `Plugin "${pluginName}" in marketplace "${marketplaceName}" references skill selector "${selector}", which matches only in-place skills (publish: false) — never built into dist/skills, so the plugin would ship without them.`,
+        code,
+        message: `${subject(selector)}, ${matches}, so the plugin would ship without them.`,
         fix: `Set skills.config.<name>.publish: true for the skill(s) this plugin ships, or remove the selector from ${where}.`,
       });
     }
@@ -382,8 +413,17 @@ function checkPluginSelectors(
   return issues;
 }
 
+/** The plugins (by name, sorted, unique) whose build ships any of `names`. */
+function otherOwners(names: readonly string[], pluginLocalByPlugin: SelectorNames['pluginLocalByPlugin']): string[] {
+  const owners = new Set<string>();
+  for (const [key, local] of pluginLocalByPlugin) {
+    if (names.some((name) => local.has(name))) owners.add(key.slice(key.indexOf('\0') + 1));
+  }
+  return [...owners].sort((a, b) => a.localeCompare(b));
+}
+
 function checkPluginReferencesUnknownSkill(
-  names: { discovered: Set<string>; shipping: Set<string> },
+  names: SelectorNames,
   config: ProjectConfig
 ): ConsistencyIssue[] {
   const marketplaces = config.claude?.marketplaces;
@@ -407,14 +447,12 @@ function checkPluginReferencesUnknownSkill(
 }
 
 /**
- * One info per IN-PLACE pool skill. A plugin-local skill is excluded: it still
- * ships with its plugin, so "in-place" would be a false statement about it.
+ * One info per IN-PLACE skill (`publishScope` says `in-place`). A plugin-only skill is
+ * not passed here: it still ships with its plugin, so "in-place" would be a false
+ * statement about it.
  */
-function checkSkillUnpublished(
-  unpublishedNames: string[],
-  pluginLocalNames: Set<string>,
-): ConsistencyIssue[] {
-  return unpublishedNames.filter((name) => !pluginLocalNames.has(name)).map((name) => ({
+function checkSkillUnpublished(inPlaceNames: string[]): ConsistencyIssue[] {
+  return inPlaceNames.map((name) => ({
     severity: 'info' as const,
     code: 'SKILL_UNPUBLISHED',
     message: `Skill "${name}" is publish: false — an in-place skill: validated at source, never bundled into dist/skills, never expected by vat verify.`,
@@ -537,24 +575,40 @@ export function assertVendoredLicensingShipped(
  * @param discoveredSkills - Skills found via config.yaml glob discovery (source of truth)
  * @param config - Parsed project configuration
  * @param projectRoot - Project root directory (for reading package.json)
+ * @param pluginLocal - The run's plugin-local index (`indexPluginLocalSkills(config, projectRoot)`).
+ *   Required, so the one index `vat verify` builds per run serves every phase: an optional
+ *   parameter would let a call site quietly crawl every plugin again.
  * @returns Consistency check result with issues and summary
  */
 export function runConsistencyChecks(
   discoveredSkills: DiscoveredSkill[],
   config: ProjectConfig,
-  projectRoot: string
+  projectRoot: string,
+  pluginLocal: PluginLocalSkillIndex,
 ): ConsistencyCheckResult {
   const discoveredNames = new Set(discoveredSkills.map((s) => s.name));
 
-  const publishedNames: string[] = [];
+  // Classified per discovered SKILL (by its source directory), not per name: a
+  // repo-only skill may share its declared name with a plugin-local one.
+  const publishedSkills: DiscoveredSkill[] = [];
   const unpublishedNames: string[] = [];
+  const inPlaceNames: string[] = [];
   for (const s of discoveredSkills) {
-    (publishedByConfig(s.name, config) ? publishedNames : unpublishedNames).push(s.name);
+    const scope = publishScope(s, packagingOf(s.name, config), pluginLocal);
+    if (scope === 'pool') publishedSkills.push(s);
+    else unpublishedNames.push(s.name);
+    if (scope === 'in-place') inPlaceNames.push(s.name);
   }
+  const publishedNames = publishedSkills.map((s) => s.name);
 
   const vatSkills = readVatSkillsFromPackageJson(projectRoot);
-  const assignedSkills = resolveAssignedSkills(config, discoveredSkills, projectRoot);
-  const pluginLocalNames = pluginLocalSkillNames(config, discoveredSkills, projectRoot);
+  const assignedSkills = resolveAssignedSkills(config, discoveredSkills, pluginLocal);
+  const selectorNames: SelectorNames = {
+    discovered: discoveredNames,
+    published: new Set(publishedNames),
+    pluginLocalByPlugin: pluginLocalNamesByPlugin(discoveredSkills, pluginLocal),
+  };
+  const fixContext = { projectRoot, discovered: discoveredSkills, pluginLocal };
 
   // Run checks in specified order
   const issues: ConsistencyIssue[] = [
@@ -562,12 +616,9 @@ export function runConsistencyChecks(
     ...checkPublishedSkillNotInPackageJson(publishedNames, vatSkills),
     ...checkPackageJsonListsUnknownSkill(discoveredNames, vatSkills),
     ...checkUnpublishedSkillInPackageJson(unpublishedNames, vatSkills),
-    ...checkPublishedSkillNotInPlugin(publishedNames, config, assignedSkills),
-    ...checkPluginReferencesUnknownSkill(
-      { discovered: discoveredNames, shipping: new Set([...publishedNames, ...pluginLocalNames]) },
-      config,
-    ),
-    ...checkSkillUnpublished(unpublishedNames, pluginLocalNames),
+    ...checkPublishedSkillNotInPlugin(publishedSkills, config, assignedSkills, fixContext),
+    ...checkPluginReferencesUnknownSkill(selectorNames, config),
+    ...checkSkillUnpublished(inPlaceNames),
     ...checkVendoredLicensing(projectRoot),
   ];
 

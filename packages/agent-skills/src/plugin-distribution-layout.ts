@@ -4,8 +4,8 @@
  * Shared primitives for locating where `vat build --only claude` places
  * tree-copied plugin skills in the output tree, and where it reads them from.
  *
- * Consumed by `vat build`, `vat verify`, and consistency-check so the path
- * conventions can never drift between those commands.
+ * Consumed by `vat build`, `vat verify`, consistency-check and skill-reference
+ * resolution so the path conventions can never drift between those commands.
  */
 
 import { existsSync } from 'node:fs';
@@ -240,17 +240,120 @@ export function skillNameToFsPath(name: string): string {
 }
 
 /**
- * Find the tree-copied location whose SOURCE skill dir equals `skillSourceDir`
- * (compared via resolved absolute paths). Returns `undefined` for pool skills
- * or skills not declared in any plugin's `skills/` source dir.
+ * Why a skill sitting under a plugin's `skills/` directory is NOT plugin-local — the
+ * plugin build does not ship it:
+ *   - `untracked` — its directory IS `skillSourceDir`: a skill directory under plugin
+ *     `pluginName`'s `skills/` that git does not track ({@link listUntrackedPluginSkillDirs});
+ *     `git add` makes it ship.
+ *   - `nested` — its directory is inside `outer`, another skill's directory under plugin
+ *     `outer.pluginName`'s `skills/` (tracked or not), and the plugin build packages only
+ *     the outermost skill directory — so `git add` changes nothing for it.
  */
-export function findDistributedSkillLocationBySource(
-  config: ProjectConfig,
-  configDir: string,
-  skillSourceDir: string,
-): DistributedSkillLocation | undefined {
-  const target = safePath.resolve(skillSourceDir);
-  return computeTreeCopiedSkillLocations(config, configDir).find(
-    loc => safePath.resolve(loc.skillSourceDir) === target,
+export type PluginSkillExclusion =
+  | ({ readonly kind: 'untracked' } & UntrackedPluginSkillDir)
+  | { readonly kind: 'nested'; readonly outer: UntrackedPluginSkillDir };
+
+/** The plugin-local skills a project ships — see {@link indexPluginLocalSkills}. */
+export interface PluginLocalSkillIndex {
+  /** Every plugin-local skill location, as {@link computeTreeCopiedSkillLocations} lists them. */
+  readonly locations: readonly DistributedSkillLocation[];
+  /**
+   * The location of the skill whose `SKILL.md` is at `skillMdPath` — matched by the
+   * directory holding that file — or `undefined` when the skill is not plugin-local.
+   * One plugin listed in several marketplaces yields one location per listing; this is
+   * the FIRST, in config order (see {@link locationsOf} for all of them).
+   */
+  locationOf(skillMdPath: string): DistributedSkillLocation | undefined;
+  /** Every location of the skill whose `SKILL.md` is at `skillMdPath`, in config order; `[]` when not plugin-local. */
+  locationsOf(skillMdPath: string): readonly DistributedSkillLocation[];
+  /**
+   * Why the skill whose `SKILL.md` is at `skillMdPath` is NOT plugin-local although it sits
+   * under a plugin's `skills/` dir — or `undefined` when it IS plugin-local, or is under no
+   * plugin's `skills/` dir at all (or is gitignored there: ignoring it is the instruction).
+   * Diagnostic: the untracked half lists the disk, so it runs only when first asked.
+   */
+  exclusionOf(skillMdPath: string): PluginSkillExclusion | undefined;
+}
+
+/**
+ * THE answer to "is this skill plugin-local — does it ship with its plugin?", for every
+ * lane that asks: `vat build` / `vat skills build` and `vat verify` (what they report as
+ * in-place), the consistency check (plugin assignment, `SKILL_UNPUBLISHED`), and
+ * skill-reference resolution (where a skill builds to).
+ *
+ * Derived from what the claude phase actually PACKAGES — {@link computeTreeCopiedSkillLocations},
+ * i.e. git-visible, outermost skill directories under a plugin's `skills/` — never from a
+ * path prefix. A prefix also claimed a skill the plugin build does not ship: one not yet
+ * `git add`ed (reported as shipping while the build warned it was not packaged), or one
+ * nested inside another skill's directory.
+ *
+ * Keyed by the skill's SOURCE DIRECTORY, never its declared name: a name is not unique
+ * across a project (a repo-only skill may share one with a plugin-local skill) and is
+ * unrelated to the directory the build lists. Exact directories also make the
+ * `skills/` vs `skills-extra/` boundary structural.
+ *
+ * Build ONCE per invocation: listing the locations runs the crawl for every plugin.
+ */
+export function indexPluginLocalSkills(config: ProjectConfig, configDir: string): PluginLocalSkillIndex {
+  // First plugin per source dir: two listings of one source dir list the same disk.
+  const pluginBySourceDir = new Map<string, string>();
+  for (const marketplace of Object.values(config.claude?.marketplaces ?? {})) {
+    for (const plugin of marketplace.plugins) {
+      const sourceDir = getPluginSourceDir(configDir, plugin);
+      if (!pluginBySourceDir.has(sourceDir)) pluginBySourceDir.set(sourceDir, plugin.name);
+    }
+  }
+  return indexSkillLocations(computeTreeCopiedSkillLocations(config, configDir), () =>
+    [...pluginBySourceDir].flatMap(([sourceDir, pluginName]) =>
+      listUntrackedPluginSkillDirs(sourceDir).map((dir) => ({ pluginName, skillSourceDir: safePath.join(sourceDir, 'skills', dir) })),
+    ),
   );
+}
+
+/** An untracked skill directory under a plugin's `skills/` — see {@link listUntrackedPluginSkillDirs}. */
+export interface UntrackedPluginSkillDir {
+  readonly pluginName: string;
+  /** Absolute source directory. */
+  readonly skillSourceDir: string;
+}
+
+/**
+ * The pure half of {@link indexPluginLocalSkills}: index `locations` (config order) by
+ * source directory, the first listing winning `locationOf`. `listUntracked` — every
+ * untracked skill directory under a plugin's `skills/` — is called at most once, and
+ * only when {@link PluginLocalSkillIndex.exclusionOf} first gets past the nested check.
+ */
+export function indexSkillLocations(
+  locations: readonly DistributedSkillLocation[],
+  listUntracked: () => readonly UntrackedPluginSkillDir[],
+): PluginLocalSkillIndex {
+  const bySourceDir = new Map<string, DistributedSkillLocation[]>();
+  for (const loc of locations) {
+    const key = safePath.resolve(loc.skillSourceDir);
+    bySourceDir.set(key, [...(bySourceDir.get(key) ?? []), loc]);
+  }
+  const skillDirOf = (skillMdPath: string): string => safePath.resolve(dirname(safePath.resolve(skillMdPath)));
+  const locationsOf = (skillMdPath: string): readonly DistributedSkillLocation[] => bySourceDir.get(skillDirOf(skillMdPath)) ?? [];
+  const isUnder = (dir: string, ancestor: string): boolean =>
+    toForwardSlash(dir).startsWith(`${toForwardSlash(safePath.resolve(ancestor))}/`);
+  let untracked: readonly UntrackedPluginSkillDir[] | undefined;
+
+  return {
+    locations,
+    locationsOf,
+    locationOf: (skillMdPath) => locationsOf(skillMdPath)[0],
+    exclusionOf: (skillMdPath) => {
+      if (locationsOf(skillMdPath).length > 0) return undefined;
+      const skillDir = skillDirOf(skillMdPath);
+      const outer = locations.find((loc) => isUnder(skillDir, loc.skillSourceDir));
+      if (outer !== undefined) return { kind: 'nested', outer: { pluginName: outer.pluginName, skillSourceDir: outer.skillSourceDir } };
+      untracked ??= listUntracked();
+      // Inside an UNTRACKED outer skill is still nested: `git add` on the outer dir ships
+      // the outer skill and leaves this one nested inside it.
+      const untrackedOuter = untracked.find((dir) => isUnder(skillDir, dir.skillSourceDir));
+      if (untrackedOuter !== undefined) return { kind: 'nested', outer: untrackedOuter };
+      const own = untracked.find((dir) => safePath.resolve(dir.skillSourceDir) === skillDir);
+      return own === undefined ? undefined : { kind: 'untracked', ...own };
+    },
+  };
 }

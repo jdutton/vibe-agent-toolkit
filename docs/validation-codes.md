@@ -1172,8 +1172,9 @@ Declared as `ConsistencyCode` in `packages/schema/src/validation-codes.ts`. Seve
 code. `publish` is read off the merged config (`skills.defaults.publish`, overridden by
 `skills.config.<name>.publish`; default `true`). `publish: false` names an in-place skill: validated
 at source, never built into `dist/skills/`, never expected by `vat verify`, and out of the pool-side
-rows (the first six). A plugin-local skill is assigned to its plugin by location whatever `publish`
-says, and never gets `SKILL_UNPUBLISHED`.
+rows (the first six). A plugin-local skill — a git-tracked skill directory under a plugin's
+`skills/` — is assigned to its plugin by location whatever `publish` says, and never gets
+`SKILL_UNPUBLISHED`; one git does not track ships nowhere and is treated like any other skill.
 
 | Code | Severity | What | Fix |
 |---|---|---|---|
@@ -1181,8 +1182,8 @@ says, and never gets `SKILL_UNPUBLISHED`.
 | `PUBLISHED_SKILL_NOT_IN_PACKAGE_JSON` | error | A published skill (`publish` defaults to `true`) is absent from `package.json` `vat.skills` | Add the name to `vat.skills`, or set `skills.config.<name>.publish: false` |
 | `PACKAGE_JSON_LISTS_UNKNOWN_SKILL` | error | `vat.skills` names a skill the config globs did not discover | Remove it from `vat.skills`, or make `skills.include` match its SKILL.md |
 | `UNPUBLISHED_SKILL_IN_PACKAGE_JSON` | warning | A `publish: false` skill is still listed in `vat.skills` — contradictory | Remove it from `vat.skills`, or drop the `publish: false` |
-| `PUBLISHED_SKILL_NOT_IN_PLUGIN` | error | A published skill is assigned to no plugin under `claude.marketplaces` | Add it to a plugin's `skills:` selector, or set `publish: false` |
-| `PLUGIN_REFERENCES_UNKNOWN_SKILL` | error | A plugin's `skills:` selector matches no discovered skill — or matches only in-place (`publish: false`) skills, which `dist/skills/` never carries | Fix the selector in `claude.marketplaces.<mp>.plugins`, or set `skills.config.<name>.publish: true` for a skill the plugin ships |
+| `PUBLISHED_SKILL_NOT_IN_PLUGIN` | error | A published skill is assigned to no plugin under `claude.marketplaces` | Add it to a plugin's `skills:` selector, `git add` it if it sits under a plugin's `skills/` untracked, move it to its own directory if it is nested inside another skill's, or set `publish: false` |
+| `PLUGIN_REFERENCES_UNKNOWN_SKILL` | error | A plugin's `skills:` selector matches no discovered skill — or matches only `publish: false` skills this plugin does not ship itself (in-place ones, or ones plugin-local to another plugin), which `dist/skills/` never carries | Fix the selector in `claude.marketplaces.<mp>.plugins`, or set `skills.config.<name>.publish: true` for a skill the plugin ships |
 | `SKILL_UNPUBLISHED` | info | A pool skill is `publish: false` — in-place: validated at source, never bundled into `dist/skills/`, never expected by `vat verify` | To distribute it through the pool, set `publish: true` (or drop the `false` under `skills.defaults`) |
 | `VENDORED_LICENSING_MISSING` | error | The vendored `skill-creator` tree in `agent-skills` lacks its `LICENSE.txt` / `ATTRIBUTION.md`, or `vendor/` is not in the package's `files` (VAT's own repository only) | Restore the licensing files and the `files` entry |
 
