@@ -115,11 +115,88 @@ a script that branches on `engine`, it predates this and is wrong.
 ⚠️ Values come back exactly as SQLite holds them — a boolean as `0`/`1`, a date and a JSON column
 as text. They are **not** decoded, because decoding needs a table spec and arbitrary SQL has none.
 
+**The projection store is ON by default.** VAT writes a SQLite cache of each scanned tree under
+`<tmpdir>/.vat-cache/` — roughly 71 MB for a 12,600-file repository, bounded at three trees per
+repository and 50,000 content keys, and `vat cache clear` reclaims it. `VAT_PROJECTION_STORE=off`
+opts out of the store alone; `VAT_CACHE=0` vetoes every VAT cache. The store makes the POPULATION
+cheap and is never itself queried.
+
+### `claude_rule_patterns` — what each `.claude/rules` glob scopes
+
+One row per `paths:` glob of one rules file: `pattern`, `literalPrefix` (its glob-free leading
+segments, so "does this rule cover everything under `docs/`?" is a prefix comparison needing no
+glob engine), `witnessPath` (the first file it matched, or null) and `status`.
+
+⚠️ **Three statuses, and the third is a trap.** `matched` and `inert` are the evaluated cases;
+`unevaluated` means VAT never ran the matcher, because the rule's whole `paths:` list blew Claude
+Code's shared 1,000-pattern / 4 MiB expansion budget. **Filter `status = 'inert'`, never
+`status != 'matched'`** — the latter reports VAT's own declined work as the author's dead glob, and
+no edit to the rules file would fix it.
+
+🪤 **"Which rule FILES fire on nothing?" is not an anti-join.** The intuitive query — rules files
+with no row in `claude_context_loads` — is `status != 'matched'` wearing a `LEFT JOIN`: that table
+holds one row per glob that CAN fire, so a rule refused by the expansion budget has no row there
+either and reads as dead while firing perfectly well. Ask the three-state table, and take the size
+from `blobs` — `resource_realizations` carries no size column, and `claude_context_loads` carries
+`bytes` but cannot see the file you are looking for:
+
+```sql
+SELECT r.path, b.bytes, COUNT(*) AS globs
+  FROM claude_rule_patterns p
+  JOIN resource_realizations r ON r.resourceId = p.resourceId
+  JOIN blobs b ON b.contentKey = r.contentKey
+ GROUP BY r.path, b.bytes
+HAVING SUM(p.status = 'matched') = 0 AND SUM(p.status = 'unevaluated') = 0
+```
+
+One statement answers both halves of a rules-hygiene gate — which rule files are dead, and how big
+each rule file is — and it names no lens relation, so it costs nothing beyond the population.
+
+### Relations that are COMPUTED, not stored — and are skipped unless you name them
+
+Beside the materialised tables, `query` and `check` expose relations a lens computes for the run:
+`lens_contexts`, `edges` and `edge_resolutions` (the resolved link graph), and
+`claude_context_chains` / `claude_context_loads` (what loads into an agent's context at each working
+location, each load carrying a `budgetDisposition` — the rows `vat claude budget` reports over).
+
+**A lens runs only when a statement you declared names one of its relations**, so a statement naming
+none pays nothing for them. A statement reaching for a relation nothing evaluated is **refused**,
+never answered from the empty table — an empty table and a healthy tree are the same answer.
+
+🪤 `claude_context_chains` holds ONE ROW PER WORKING LOCATION, so the obvious
+`JOIN claude_context_chains ON chainId` multiplies every load row by the locations sharing that
+chain. Select from `claude_context_loads` alone and reach the chain relation by correlated subquery.
+
 ## Standing Assertions That Gate CI (`vat resources check`)
 
 A query answers a question once. `vat resources check` runs the questions a project decided were
 worth asking **every time**, against the same projection, and fails the run when any error-severity
 check is violated.
+
+### VAT's built-in checks run first, with or without a config file
+
+A project that declares nothing still gets the **default set** — today one check,
+`claude-rule-glob-inert`, emitting [`CLAUDE_RULE_GLOB_INERT`](../../../../docs/validation-codes.md#claude_rule_glob_inert)
+at `info` for every `paths:` glob under `.claude/rules/` that matches no file in the tree. Config
+only **adds** to that set or moves a severity in it; a directory with no
+`vibe-agent-toolkit.config.yaml` runs exactly the same built-ins, which is what makes "default-on"
+mean anything.
+
+⛔ **A built-in is never SQL.** It is a TypeScript predicate over the projection's rows
+(`BUILTIN_CHECKS` in `@vibe-agent-toolkit/resources`), so a default-on rule never makes a query
+engine part of somebody's gate. Its SQL twin ships as documentation in `--help` and in the code's
+entry in `validation-codes.md`, for you to copy into your own `resources.checks` and narrow.
+
+Three consequences worth knowing:
+
+- Severity moves through the **code**, not through `CUSTOM:<name>`:
+  `resources.validation.severity.CLAUDE_RULE_GLOB_INERT: ignore` (or `warning` / `error`).
+- `--check <name>` takes a built-in name exactly as it takes a config key.
+- `data.checksRun` counts built-ins too, and each built-in's entry in `data.checks` carries
+  `builtin: true`. A run that declares no checks of its own is **not** a refusal any more — you get
+  a stderr warning, and `checksRun: 0` now means not even a built-in ran.
+
+### Your own checks
 
 Declare them under `resources.checks` in `vibe-agent-toolkit.config.yaml` — each is a description
 plus one SQL statement selecting the rows that **VIOLATE** it:
@@ -140,8 +217,9 @@ resources:
 ```
 
 ```bash
-vat resources check                    # every declared check
-vat resources check --check orphan-skills   # just one, by its config key
+vat resources check                    # the built-ins plus every declared check
+vat resources check --check orphan-skills        # just one, by its config key
+vat resources check --check claude-rule-glob-inert   # just one, by its built-in name
 vat resources check --format json      # honoured on the error path too
 ```
 

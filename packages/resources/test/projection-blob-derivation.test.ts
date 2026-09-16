@@ -71,6 +71,7 @@ function baseBlobReader(): ExtentContributor {
       memberships: [],
       tags: [],
       conditions: [],
+      claudeRulePatterns: [],
     }),
   };
 }

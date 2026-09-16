@@ -441,11 +441,24 @@ describe('the stated limits', () => {
     // rule could go missing; now a rule whose patterns match nothing in the tree
     // today is absent and fires the day a matching file appears. Filed
     // `under-report` rather than `scope`: it makes the number too SMALL, which is
-    // a direction a reader can hedge against.
+    // a direction a reader can hedge against — and the sign did not move when the
+    // rule became nameable, because naming it elsewhere changes nothing about
+    // THIS answer's size.
     const limit = CLAUDE_CONTEXT_LIMITS.find((entry) => entry.id === 'existential-needs-a-file');
 
     expect(limit?.direction).toBe(UNDER_REPORT);
     expect(limit?.statement).toContain('∀ half is immune');
+    // ⛔ The half that DID move, pinned so it cannot quietly revert to "absent,
+    // full stop". `claude_rule_patterns` makes an inert glob nameable, so a
+    // statement that still said only "invisible here" would send a reader
+    // looking for nothing when a row and a default-on code exist...
+    expect(limit?.statement).toContain('claude_rule_patterns');
+    expect(limit?.statement).toContain('CLAUDE_RULE_GLOB_INERT');
+    // ...and the third status is the trap that comes with the fix: a null
+    // witness means "never evaluated" as well as "matched nothing", so a limit
+    // naming only `inert` would licence `!= 'matched'` and report VAT's own
+    // declined work as the adopter's dead glob.
+    expect(limit?.statement).toContain('unevaluated');
   });
 
   it('signs the gitignored half this lane stopped realizing as an under-report', () => {

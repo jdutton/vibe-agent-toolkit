@@ -1,8 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { LOADING_TAG } from '../../src/projection/agentic-tags.js';
+import { LOADING_TAG, RULE_SCOPE_TAG } from '../../src/projection/agentic-tags.js';
 import { CLAUDE_IMPORT_KIND } from '../../src/projection/contributors/claude-import-extent.js';
-import { RULE_SCOPE_TAG } from '../../src/projection/contributors/claude-rules-scope.js';
 import type { Projection } from '../../src/projection/projection.js';
 
 import { buildClaudeContextTree, byCodePoint, removeClaudeContextTree } from './claude-context-tree.js';

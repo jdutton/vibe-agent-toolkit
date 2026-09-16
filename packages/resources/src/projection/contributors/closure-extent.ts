@@ -110,6 +110,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
+import { parserKindForPath } from '../../content-key.js';
 import {
   ExtentDeclarationSchema,
   type ExtentDeclaration,
@@ -187,8 +188,17 @@ export const CLOSURE_ROOT_ABSENT = 'CLOSURE_ROOT_ABSENT';
  */
 export const CLOSURE_DEPTH_EXCEEDED = 'CLOSURE_DEPTH_EXCEEDED';
 
-/** Where the walk currently is: a root-relative path and its hop count from the root. */
-type Hop = readonly [path: string, depth: number];
+/**
+ * Where the walk currently is: a root-relative path, its hop count from the
+ * root, and whether the walk goes THROUGH it.
+ *
+ * A non-traversable hop is a LEAF — admitted as a member, never enqueued. The
+ * flag rides on the hop rather than being recomputed at the queue because the
+ * one place that can answer it is {@link hopFor}, which already holds the
+ * target row; re-deriving it from a path at the loop would be a second reading
+ * of the same question.
+ */
+type Hop = readonly [path: string, depth: number, traversable: boolean];
 
 /** Everything one traversal needs, gathered once from the base. */
 interface WalkContext {
@@ -386,7 +396,7 @@ function traverseClosure(
 
   const admitted: AdmittedHop[] = [{ path: rootPath, depth: 0, viaPath: null }];
   const visited = new Set<string>([rootPath]);
-  const queue: Hop[] = [[rootPath, 0]];
+  const queue: Hop[] = [[rootPath, 0, true]];
 
   while (queue.length > 0) {
     const hop = queue.shift();
@@ -406,7 +416,13 @@ function traverseClosure(
       if (visited.has(next[0])) continue;
       visited.add(next[0]);
       admitted.push({ path: next[0], depth: next[1], viaPath: path });
-      queue.push(next);
+      // ⚠️ MEMBERSHIP and TRAVERSAL part company here, and only here. A leaf is
+      // admitted on the line above like any other member; it is simply not a
+      // door, so nothing behind it is this extent's. Enqueuing one anyway would
+      // follow whatever `blob_references` happens to hold for a `.ts` or a
+      // `.png` — the walker parses neither — and the extent would grow through a
+      // file the packager treats as cargo.
+      if (next[2]) queue.push(next);
     }
   }
 
@@ -445,7 +461,9 @@ function walkClosure(walk: WalkContext): Omit<ExtentContribution, 'contexts'> {
     memberships.push({ resourceId: first.resourceId, extentId: walk.extentId });
   }
 
-  return { resources, realizations, memberships, tags: [], conditions };
+  // A closure declares MEMBERSHIP; it classifies nothing, so both classification
+  // tables are empty here.
+  return { resources, realizations, memberships, tags: [], conditions, claudeRulePatterns: [] };
 }
 
 /**
@@ -726,6 +744,16 @@ function hopFor(
     conditions.push(refusedCondition(walk.extentId, target, refusal, path, reference));
     return undefined;
   }
+  // A LEAF is admitted before the budget is consulted, and the order is the
+  // behaviour: `walk-link-graph.ts` tests `isRoutable` BEFORE its depth check in
+  // `processRegistryResource`, and reaches its plain-asset branch without a
+  // depth test at all. Both say the same thing — "bundling this enqueues
+  // nothing, so there is no hop for a limit to bound" — and charging it anyway
+  // is what made a bounded closure disagree with the packager about the image
+  // hanging off a document at the frontier. Declared, never assumed: a
+  // declaration that names no `traverseParserKinds` charges every target, which
+  // is what every declaration written before this field did.
+  if (!isTraversable(target, walk.declaration)) return [target.path, depth + 1, false];
   // The depth bound is checked LAST, and after the refusal — the order is
   // `classifyExclusion`-before-`processRegistryResource`, which is the order
   // `walk-link-graph.ts` checks them in. It matters because both can apply to
@@ -736,7 +764,24 @@ function hopFor(
     conditions.push(depthExceededCondition(walk.extentId, target, path, reference));
     return undefined;
   }
-  return [target.path, depth + 1];
+  return [target.path, depth + 1, true];
+}
+
+/**
+ * Does this closure walk THROUGH this target, or is it cargo?
+ *
+ * Keyed on {@link parserKindForPath} rather than on an extension list of its
+ * own, so VAT keeps ONE parser discriminator — the same reason
+ * `walk-link-graph.ts`'s `isRoutable` is keyed on it. A format that gains a
+ * parser gains a traversability answer in the same edit.
+ *
+ * @param target - The resolved target's realization row
+ * @param declaration - The extent declaration
+ * @returns True when the walk may follow references out of the target
+ */
+function isTraversable(target: ResourceRealizationRow, declaration: ExtentDeclaration): boolean {
+  const kinds = declaration.traverseParserKinds;
+  return kinds === null || kinds.includes(parserKindForPath(target.path));
 }
 
 /**

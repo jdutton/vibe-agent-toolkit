@@ -53,6 +53,10 @@
  * shipped, published schema a declared one would be, so the two cannot drift.
  */
 
+import {
+  ClaudeContextChainRowSchema,
+  ClaudeContextLoadRowSchema,
+} from '../schemas/projection-claude-context.js';
 import { EdgeResolutionRowSchema, EdgeRowSchema } from '../schemas/projection-edges.js';
 import { ResolutionContextRowSchema } from '../schemas/projection-zones.js';
 
@@ -74,13 +78,26 @@ export interface DerivedTableSpec extends ProjectionColumnTypeSource {
 }
 
 /**
- * The relations `resolveEdges` produces, plus the lens rows that explain them.
+ * The relations `resolveEdges` produces, plus the lens rows that explain them —
+ * and the always-loaded context chain, which is derived the same way for the
+ * same reason.
  *
  * 🪤 `edges.refOrdinal` is nullable AND part of the key. SQLite permits NULL in
  * a `PRIMARY KEY` column of an ordinary rowid table and treats two NULLs as
  * distinct, so the key is declared for the index it builds and the contract it
  * documents, not for a uniqueness it cannot fully enforce — exactly as
  * `schema-sql.ts` already records for three materialised tables.
+ *
+ * ## Why the two `claude_context_*` relations are HERE and not tables
+ *
+ * They are the output of `whatLoadsAt` — a fixpoint over admissions, run per
+ * instruction chain — which is a question asked of a projection rather than a
+ * fact any contributor emits. `claude-context-query.ts` says so at length and
+ * declines to materialise the same traversal's provenance; putting these in
+ * `PROJECTION_TABLES` would be materialising it after all, and would file rows
+ * that are a function of a LENS into scope-partitioned bundles a shared on-disk
+ * store persists. They have no scope, and {@link DerivedTableSpec} has no field
+ * for one. That is the whole statement.
  */
 export const DERIVED_TABLES = {
   lensContexts: derived('lensContexts', 'lens_contexts', ResolutionContextRowSchema, ['contextId']),
@@ -91,6 +108,18 @@ export const DERIVED_TABLES = {
     'contextId',
     'candidateOrdinal',
   ]),
+  claudeContextChains: derived(
+    'claudeContextChains',
+    'claude_context_chains',
+    ClaudeContextChainRowSchema,
+    ['chainId', 'directory'],
+  ),
+  claudeContextLoads: derived(
+    'claudeContextLoads',
+    'claude_context_loads',
+    ClaudeContextLoadRowSchema,
+    ['chainId', 'resourceId'],
+  ),
 } as const satisfies Readonly<Record<string, DerivedTableSpec>>;
 
 /** The name a derived relation is carried under. */

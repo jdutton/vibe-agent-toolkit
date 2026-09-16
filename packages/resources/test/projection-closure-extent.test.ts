@@ -52,6 +52,12 @@ const DOC_HUB = 'skills/foo/Readme.md';
 /** Reachable ONLY through {@link DOC_HUB} — the subtree a refusal must prune. */
 const DOC_BEHIND = 'skills/foo/behind.md';
 
+/** A LEAF target: nothing routes a PNG to a parser, so no walk goes through one. */
+const ASSET_PNG = 'skills/foo/diagram.png';
+
+/** Reachable only from {@link ASSET_PNG} — the subtree a leaf must NOT open. */
+const DOC_PAST_ASSET = 'skills/foo/past-asset.md';
+
 /** A DIRECTORY entity, whose path is shaped exactly like a file's. */
 const DOC_DIR = 'skills/foo/nested';
 
@@ -125,6 +131,24 @@ const CHAIN: readonly FixtureFile[] = [
  * `DOC_B` is the control: it must survive every refusal below, or "the matcher
  * refused something" would also be satisfied by a walk that refused everything.
  */
+/**
+ * `SKILL.md → b.md → {c.md, diagram.png}`, and the PNG links onward.
+ *
+ * The two depth-2 targets are the whole point: one routes to a parser and one
+ * does not, so a single `maxDepth: 1` walk answers both halves of the leaf rule
+ * at once — `c.md` is held back by the budget, `diagram.png` is not subject to
+ * it. `DOC_PAST_ASSET` sits behind the PNG on a markdown-form reference, which
+ * is what makes "admitted but never traversed" falsifiable: a primitive that
+ * enqueued the leaf would admit it and the fixture would say so.
+ */
+const CHAIN_WITH_ASSET: readonly FixtureFile[] = [
+  { path: ROOT_DOC, refs: [{ rawRef: 'b.md' }] },
+  { path: DOC_B, refs: [{ rawRef: 'c.md' }, { rawRef: 'diagram.png' }] },
+  { path: DOC_C, refs: [] },
+  { path: ASSET_PNG, refs: [{ rawRef: 'past-asset.md' }] },
+  { path: DOC_PAST_ASSET, refs: [] },
+];
+
 const HUB_CHAIN: readonly FixtureFile[] = [
   { path: ROOT_DOC, refs: [{ rawRef: README_REF }, { rawRef: 'b.md' }] },
   { path: DOC_HUB, refs: [{ rawRef: 'behind.md' }] },
@@ -363,6 +387,58 @@ describe('ClosureExtentContributor', () => {
   it('admits only the root at maxDepth 0', async () => {
     const contribution = await contributeOver(CHAIN, declarationOf({ maxDepth: 0 }));
     expect(memberPaths(contribution)).toEqual([ROOT_DOC]);
+  });
+
+  it('does not charge a LEAF against maxDepth, and does not walk through it', async () => {
+    // `walk-link-graph.ts` tests `isRoutable` BEFORE its depth check and reaches
+    // its plain-asset branch without a depth test at all: "bundling it enqueues
+    // nothing, so there is no hop for a limit to bound". Charging it anyway is
+    // what made a bounded closure under-report against the packager — measured
+    // on the real corpus, where a skill at `linkFollowDepth: 2` bundled two
+    // files the closure called `depth-exceeded`.
+    const contribution = await contributeOver(
+      CHAIN_WITH_ASSET,
+      declarationOf({ maxDepth: 1, traverseParserKinds: ['markdown'] }),
+    );
+
+    // `DOC_C` and `ASSET_PNG` are both two hops out of the root, and only one of
+    // them is a door. A fixture carrying just one of the pair could be satisfied
+    // by a primitive that had simply stopped bounding anything.
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B, ASSET_PNG]);
+    expect(conditionCodeFor(contribution, DOC_C)).toBe(CLOSURE_DEPTH_EXCEEDED);
+
+    // Admitted is not traversed: the PNG's own markdown-form reference is not
+    // this extent's edge, so nothing behind it arrives and nothing is REPORTED
+    // about it either — the walker never parses an asset, so it has no verdict
+    // to mirror.
+    expect(memberPaths(contribution)).not.toContain(DOC_PAST_ASSET);
+    expect(conditionCodeFor(contribution, DOC_PAST_ASSET)).toBeUndefined();
+    expectContributionRowsValid(contribution);
+  });
+
+  it('charges every target when the declaration names no traverseParserKinds', async () => {
+    // The default is null, and null means "every target is a door" — the
+    // behaviour of every declaration written before the field existed. Without
+    // this case the field would be an optional seam whose omission is the
+    // failure: the leaf test above would pass for a primitive that had made the
+    // exemption unconditional, and every caller that never declares it would
+    // silently get the new behaviour.
+    const contribution = await contributeOver(CHAIN_WITH_ASSET, declarationOf({ maxDepth: 1 }));
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
+    expect(conditionCodeFor(contribution, ASSET_PNG)).toBe(CLOSURE_DEPTH_EXCEEDED);
+  });
+
+  it('leaves a leaf subject to the refusal cascade, which outranks the exemption', async () => {
+    // Order is the behaviour on both arms: the walker's `checkExclusions` runs
+    // before it ever asks whether the target is routable, so "assets bypass the
+    // depth limit" has never meant "assets bypass an exclude rule".
+    const contribution = await contributeOver(CHAIN_WITH_ASSET, declarationOf({
+      maxDepth: 1,
+      traverseParserKinds: ['markdown'],
+      refusals: [refusalRule(LABEL_GLOB, { patterns: ['**/*.png'] })],
+    }));
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
+    expect(conditionCodeFor(contribution, ASSET_PNG)).toBe(LABEL_GLOB);
   });
 
   it('REPORTS what the hop budget held back, instead of falling silent at the boundary', async () => {

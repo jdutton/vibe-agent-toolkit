@@ -451,6 +451,11 @@ describe('skillExtentDeclaration', () => {
       kind: SKILL_EXTENT_KIND,
       closureFrom: SKILL_REL,
       maxDepth: DEFAULT_DEPTH,
+      // `walkLinkGraph`'s `isRoutable`, in the declaration's vocabulary — both
+      // read `parserKindForPath`. Not derived from config: the packager applies
+      // it to every skill regardless of what the skill declares, so a config-less
+      // skill gets it exactly as a configured one does.
+      traverseParserKinds: ['markdown'],
       follow: ['markdown-link', 'markdown-link-reference', 'markdown-definition'],
       // The schema default, materialized by `parse`. A skill bundle's links are
       // markdown hrefs and are read under RFC 3986; Claude Code's `@`-import
@@ -684,21 +689,33 @@ describe('membership against walkLinkGraph', () => {
     expect(closure).toEqual(await walkerBundle(root, config));
   });
 
-  it('DIVERGES at linkFollowDepth 0: an asset bypasses the walker\'s depth cap', async () => {
+  it('AGREES at linkFollowDepth 0, where an asset bypasses the depth cap on BOTH arms', async () => {
     const root = fixtureCorpus('depth-zero');
     const config: SkillPackagingConfig = { linkFollowDepth: 0 };
 
     const closure = await closureMembers(root, config);
     const walker = await walkerBundle(root, config);
 
-    // The walker's depth check lives in `processRegistryResource`, so it is
-    // reached only for a REGISTRY member. A non-markdown target never gets
-    // there: `processLink` adds it to `bundledAssetSet` unconditionally. The
-    // primitive has one depth for every followed reference, so the asset is a
-    // depth-1 hop and is refused. Same corpus, same config, different answer —
-    // which is the standing proof that the fixture CAN distinguish.
-    expect(difference(walker, closure)).toEqual([HELPER_REL]);
+    // ✅ THIS TEST USED TO PIN A DIVERGENCE, AND THE PIN IS THE POINT. The
+    // walker's depth check lives in `processRegistryResource`, so it is reached
+    // only for a REGISTRY member; `processLink` adds a non-markdown target to
+    // `bundledAssetSet` without ever consulting depth. The primitive charged one
+    // depth for every followed reference, so the asset was a depth-1 hop and was
+    // refused — recorded here as expected, and separately in zones.md as
+    // "observed in shipped code, not yet filed".
+    //
+    // It is closed by `traverseParserKinds: ['markdown']`, the declaration's
+    // spelling of `isRoutable`: a leaf is admitted without being charged,
+    // because bundling it enqueues nothing and there is no hop for a budget to
+    // bound. The walker won because it is the packager.
+    expect(difference(walker, closure)).toEqual([]);
     expect(difference(closure, walker)).toEqual([]);
+
+    // Stated, not just compared: an equality two empty sets satisfy would be the
+    // vacuous pass this file exists to avoid, and `HELPER_REL` is the very file
+    // the old divergence named.
+    expect(closure).toContain(HELPER_REL);
+    expect(closure).toEqual(walker);
   });
 
   it('AGREES on the three cascade discriminators, and now names each one', async () => {
@@ -767,7 +784,7 @@ describe('membership against walkLinkGraph', () => {
     expect(kindOf(GUIDE_REL)).toBe('file');
   });
 
-  it('AGREES on skill-definition now, and DIVERGES only where the asset path skips depth', async () => {
+  it('AGREES on skill-definition AND on the asset the depth cap used to split', async () => {
     const root = cascadeCorpus();
     const closure = await closureMembers(root, DEFAULT_CONFIG);
     const walker = await walkerBundle(root, DEFAULT_CONFIG);
@@ -798,23 +815,23 @@ describe('membership against walkLinkGraph', () => {
     expect(closure).not.toContain(SIBLING_SKILL_REL);
     expect(walker).not.toContain(SIBLING_SKILL_REL);
 
-    // Bundled by the walker, refused by the closure: `templates/config.json` is
-    // an asset linked from a depth-2 document, so it is a depth-3 hop the
-    // declaration's `maxDepth: 2` refuses while the walker's asset path never
-    // consults depth at all. Same feature as the depth-0 case above, reached
-    // through a chain rather than through the root. ⚠️ This one is a genuine
-    // remaining difference, NOT a vocabulary gap — see the `unreadable-target`
-    // and routability rows in `skill-extent.ts`'s table for the two that are.
-    expect(difference(walker, closure)).toEqual([CONFIG_ASSET_REL]);
+    // ✅ `templates/config.json` used to sit on this side alone: an asset linked
+    // from a depth-2 document is a depth-3 hop that `maxDepth: 2` refused, while
+    // the walker's asset path never consults depth. Same feature as the depth-0
+    // case above, reached through a chain rather than through the root, and
+    // closed by the same declaration — which is why BOTH had to be rewritten in
+    // one edit. The routability row in `skill-extent.ts`'s table moved from "not
+    // expressible" to "expressible" with it.
+    expect(difference(walker, closure)).toEqual([]);
 
-    // Both sides in full, so the difference above cannot be read as a diff
-    // between sets nobody stated — and so the markdown chain both sides DO
-    // agree on (`docs/guide.md` → `docs/chain.md`, depth 2) is visible as the
-    // common ground it is. The closure's set is now a strict SUBSET of the
-    // walker's, which it was not before: the only remaining gap is one the
-    // walker over-bundles, never one the closure over-admits.
-    expect(walker).toEqual(sortedPaths([SKILL_REL, GUIDE_REL, CHAIN_REL, HELPER_REL, CONFIG_ASSET_REL]));
-    expect(closure).toEqual(sortedPaths([SKILL_REL, GUIDE_REL, CHAIN_REL, HELPER_REL]));
+    // Both sides in full, so the equality above cannot be read as a diff between
+    // sets nobody stated, and so the markdown chain (`docs/guide.md` →
+    // `docs/chain.md`, depth 2) is visible as the common ground it is. The two
+    // sets are now IDENTICAL on this corpus, where the closure used to be a
+    // strict subset.
+    const both = sortedPaths([SKILL_REL, GUIDE_REL, CHAIN_REL, HELPER_REL, CONFIG_ASSET_REL]);
+    expect(walker).toEqual(both);
+    expect(closure).toEqual(both);
   });
 
   it('admits a files:-declared CLAUDE.md the same walk otherwise refuses', async () => {

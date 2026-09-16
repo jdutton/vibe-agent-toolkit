@@ -194,6 +194,32 @@ describe('CODE_REGISTRY — installed-plugins registry drift', () => {
   });
 });
 
+describe('CODE_REGISTRY — inert Claude rule globs', () => {
+  // `info`, and the severity is the whole decision: the detector's arithmetic
+  // ("no realized path matches this pattern") is not in doubt, but the corpus
+  // that would justify blocking does not exist — the one adopter measured so far
+  // (245 rules, 673 globs) has zero inert globs, so there is no observed
+  // population to calibrate a louder default against. docs/validation-rule-design.md
+  // forbids shipping `error` without that evidence, and a rule that nobody has
+  // ever seen fire is the last one entitled to fail a build.
+  it('registers CLAUDE_RULE_GLOB_INERT as an info-severity overridable code', () => {
+    expect(CODE_REGISTRY.CLAUDE_RULE_GLOB_INERT).toBeDefined();
+    expect(CODE_REGISTRY.CLAUDE_RULE_GLOB_INERT.defaultSeverity).toBe('info');
+    expect(CODE_REGISTRY.CLAUDE_RULE_GLOB_INERT.description.length).toBeGreaterThan(10);
+    expect(CODE_REGISTRY.CLAUDE_RULE_GLOB_INERT.reference).toBe('#claude_rule_glob_inert');
+  });
+
+  it('offers both real remedies and promises no auto-fix', () => {
+    // The two things an author can actually do are delete the dead glob or
+    // correct it. A remedy that only says "fix the glob" leaves the reader to
+    // guess whether VAT will do it for them, and VAT will not.
+    const { fix } = CODE_REGISTRY.CLAUDE_RULE_GLOB_INERT;
+    expect(fix).toMatch(/delete/i);
+    expect(fix).toMatch(/correct/i);
+    expect(fix).not.toMatch(/--fix|automatically|auto-fix/i);
+  });
+});
+
 describe('IssueCodeSchema', () => {
   it('IssueCodeSchema enumerates exactly the registry keys', () => {
     expect(new Set(IssueCodeSchema.options)).toEqual(new Set(Object.keys(CODE_REGISTRY)));

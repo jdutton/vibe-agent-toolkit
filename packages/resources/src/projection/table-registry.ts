@@ -20,11 +20,11 @@
  *   holds its shape as the object literal it was declared with, so `.shape`'s
  *   key order *is* the declaration order — which is the order the row schemas
  *   already document and the order the generated JSON Schemas already carry.
- *   Two of the twelve row schemas are wrapped in `.superRefine()`, so the shape
+ *   Two of the thirteen row schemas are wrapped in `.superRefine()`, so the shape
  *   lives one `ZodEffects` deep; `projectionRowShape` unwraps rather than each
  *   caller knowing that.
  * - **The SQL name is derived from the field name.** `resourceRealizations` →
- *   `resource_realizations` holds for all twelve, and the JSON Schema filenames
+ *   `resource_realizations` holds for all thirteen, and the JSON Schema filenames
  *   (`projection-resource-realizations`) are that name with dashes. A hand-kept
  *   spelling here would be the same class of drift one table lower.
  *
@@ -49,6 +49,7 @@ import {
   BlobRowSchema,
   BlobSectionRowSchema,
 } from '../schemas/projection-blobs.js';
+import { ClaudeRulePatternRowSchema } from '../schemas/projection-claude-rules.js';
 import {
   RealizationConditionRowSchema,
   ResourceExtentRowSchema,
@@ -137,12 +138,12 @@ export interface ProjectionTableSpec<
    * With it, a write replaces only the contexts it produced, and a read takes
    * only the contexts it asked for.
    *
-   * Three tables legitimately have none — `roots`, `resources` and
-   * `resource_tags` are facts about the *tree* or about an *identity*, not about
-   * one extent's view of it, and two contributors that both realize a file
-   * contribute the same identity row. Those are merged by primary key rather
-   * than partitioned, and a reader reconstructs the subset it is owed by
-   * following the references its own contexts' rows carry.
+   * Four tables legitimately have none — `roots`, `resources`, `resource_tags`
+   * and `claude_rule_patterns` are facts about the *tree* or about an
+   * *identity*, not about one extent's view of it, and two contributors that
+   * both realize a file contribute the same identity row. Those are merged by
+   * primary key rather than partitioned, and a reader reconstructs the subset it
+   * is owed by following the references its own contexts' rows carry.
    *
    * Not derivable: `extentId` and `contextId` are two spellings of the same
    * relation (an extent *is* a resolution context), and nothing in a Zod object
@@ -152,7 +153,7 @@ export interface ProjectionTableSpec<
 }
 
 /**
- * The twelve tables of the resource projection.
+ * The thirteen tables of the resource projection.
  *
  * Declaration order is {@link Projection}'s own field order, which is also the
  * key order `exportProjection` emits — a document whose table order moved would
@@ -170,6 +171,11 @@ export const PROJECTION_TABLES = {
     'code',
     'resourceId',
   ], 'extentId'),
+  // No context column, for the same reason `resources` and `resource_tags` have
+  // none: a `paths:` glob is a fact about the rules file's IDENTITY, not about
+  // one extent's view of it, and a rules file is re-realized under every import
+  // closure that reaches it. Merged by primary key, never partitioned.
+  claudeRulePatterns: table('claudeRulePatterns', 'extent', ClaudeRulePatternRowSchema, ['resourceId', 'ordinal']),
   resolutionContexts: table('resolutionContexts', 'extent', ResolutionContextRowSchema, ['contextId'], 'contextId'),
   zoneProvenance: table('zoneProvenance', 'extent', ZoneProvenanceRowSchema, ['contextId', 'contributorId'], 'contextId'),
   blobs: table('blobs', 'blob', BlobRowSchema, ['contentKey']),
@@ -185,7 +191,7 @@ export const PROJECTION_TABLES = {
  * survives as a literal into {@link PROJECTION_TABLES}. That is what lets a
  * consumer split the table names by scope *in the type system* — a store's
  * blob-scoped and extent-scoped row bundles are derived from these literals,
- * so a thirteenth table joins the right bundle by declaring its scope here and
+ * so a fourteenth table joins the right bundle by declaring its scope here and
  * nowhere else.
  *
  * @param key - The {@link Projection} field these rows are carried under
@@ -193,7 +199,7 @@ export const PROJECTION_TABLES = {
  * @param schema - The row schema, which supplies the column order
  * @param primaryKey - The columns that identify a row, in comparison order
  * @param contextColumn - The column naming the row's resolution context, for a
- *   table whose rows belong to one; omitted for the three that describe the tree
+ *   table whose rows belong to one; omitted for the four that describe the tree
  *   or an identity rather than one extent's view of it
  * @returns The table's specification
  */

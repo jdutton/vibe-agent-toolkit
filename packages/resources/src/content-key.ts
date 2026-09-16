@@ -157,7 +157,7 @@ export const NO_PARSER_KIND = 'none';
  * The values are bare identifier words, which is why they can be spliced into a
  * regex below without escaping. Keep them that way.
  */
-const PARSER_KINDS = ['markdown', 'html', NO_PARSER_KIND] as const;
+export const PARSER_KINDS = ['markdown', 'html', NO_PARSER_KIND] as const;
 
 /**
  * Which parser a document is routed to. This is part of a document's identity,
@@ -196,7 +196,7 @@ const KEY_DOMAIN = 'vat-content-key';
  * can drift" the first time a kind is added.
  */
 export const CONTENT_KEY_PATTERN =
-  // eslint-disable-next-line security/detect-non-literal-regexp -- built from PARSER_KINDS, a module-private `as const` array of bare identifier words; no input reaches it
+  // eslint-disable-next-line security/detect-non-literal-regexp -- built from PARSER_KINDS, this module's own `as const` array of bare identifier words; no input reaches it
   new RegExp(String.raw`^(?:${PARSER_KINDS.join('|')})\.[0-9a-f]{64}$`);
 
 /**

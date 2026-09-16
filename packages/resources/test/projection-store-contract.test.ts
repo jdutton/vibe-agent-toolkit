@@ -3,7 +3,7 @@
  * shape digest, and identifier quoting.
  *
  * No backend is involved. What is being pinned here is that the *interface*
- * derives everything from the registry — so a thirteenth table joins the right
+ * derives everything from the registry — so a fourteenth table joins the right
  * bundle, and a schema edit moves the digest, without anyone editing a second
  * list.
  */
@@ -35,7 +35,7 @@ const EXPECTED_CONTEXT_COLUMNS: Partial<Record<ProjectionTableName, string>> = {
   zoneProvenance: 'contextId',
 };
 
-/** An empty projection — twelve tables, no rows. */
+/** An empty projection — thirteen tables, no rows. */
 function emptyProjection(): Projection {
   const tables: Record<string, readonly unknown[]> = {};
   for (const spec of Object.values(PROJECTION_TABLES)) {
@@ -102,7 +102,7 @@ async function digestUnderRegistry(tables: Record<string, unknown>): Promise<str
 }
 
 describe('table scopes', () => {
-  it('declares a scope for all twelve tables', () => {
+  it('declares a scope for all thirteen tables', () => {
     for (const spec of Object.values(PROJECTION_TABLES)) {
       expect(['blob', 'extent'], spec.name).toContain(spec.scope);
     }
@@ -121,7 +121,8 @@ describe('table scopes', () => {
       .map((spec) => spec.key);
     expect(extentScoped).toEqual([
       'roots', 'resources', 'resourceRealizations', 'resourceExtents',
-      'resourceTags', 'realizationConditions', 'resolutionContexts', 'zoneProvenance',
+      'resourceTags', 'realizationConditions', 'claudeRulePatterns', 'resolutionContexts',
+      'zoneProvenance',
     ]);
   });
 });
@@ -141,16 +142,16 @@ describe('context columns', () => {
     expect(declared).toEqual(EXPECTED_CONTEXT_COLUMNS);
   });
 
-  it('leaves exactly roots, resources and resourceTags without one', () => {
-    // These three are facts about the tree or about an identity, not about one
+  it('leaves exactly roots, resources, resourceTags and claudeRulePatterns without one', () => {
+    // These four are facts about the tree or about an identity, not about one
     // extent's view of it, so they are merged by primary key and reconstructed
-    // by reachability on read (see `store-hydration.ts`). A fourth name
+    // by reachability on read (see `store-hydration.ts`). A fifth name
     // appearing here means some table lost the partitioning a write depends on.
     const contextLess = Object.values(PROJECTION_TABLES)
       .filter((spec) => spec.scope === 'extent' && spec.contextColumn === undefined)
       .map((spec) => spec.key);
 
-    expect(contextLess).toEqual(['roots', 'resources', 'resourceTags']);
+    expect(contextLess).toEqual(['roots', 'resources', 'resourceTags', 'claudeRulePatterns']);
   });
 });
 

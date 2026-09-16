@@ -178,6 +178,7 @@ const {
   openPopulationCache,
   PROJECTION_STORE_DIR_ENV,
   PROJECTION_STORE_ENV,
+  PROJECTION_STORE_OFF,
   PROJECTION_STORE_SQLITE,
   projectionStoreSelected,
   withPopulationCache,
@@ -223,6 +224,7 @@ const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-projection-
 const FIXTURE_DOC = '# a document\n';
 
 let repoRoot: string;
+let secondRepoRoot: string;
 let outsideAnyRepo: string;
 
 beforeAll(() => {
@@ -233,6 +235,17 @@ beforeAll(() => {
   writeFileSync(safePath.join(repoRoot, 'doc.md'), FIXTURE_DOC, 'utf-8');
   initTestGitRepo(repoRoot);
   gitAddAll(repoRoot);
+
+  // A SECOND repository, a sibling of the first so git cannot resolve one from
+  // the other, holding DIFFERENT content so its tree hash genuinely differs.
+  // Identical content would produce the identical hash — `git write-tree` is a
+  // function of contents alone — and the nesting test would then pass for a
+  // build that reused the outer store blindly.
+  secondRepoRoot = safePath.join(scratch, 'other-repo');
+  mkdirSyncReal(secondRepoRoot, { recursive: true });
+  writeFileSync(safePath.join(secondRepoRoot, 'doc.md'), '# a different document\n', 'utf-8');
+  initTestGitRepo(secondRepoRoot);
+  gitAddAll(secondRepoRoot);
 
   // A plain directory with no repository above it. It is a SIBLING of the
   // fixture repo, never a child: git resolves upward, so a nested directory
@@ -287,30 +300,49 @@ afterEach(() => {
 });
 
 describe('projectionStoreSelected', () => {
-  it('is false when the selector is not set at all', () => {
-    // The default, and the one that matters most: a cache changes no answer, so
-    // it stays off until someone measured the win and asked for it.
+  it('is true when the selector is not set at all', () => {
+    // The default, and the one that matters most — and it MOVED. It used to be
+    // false, on the rule that a cache's win is a claim about cost and a default
+    // flipped before the cost is measured is a claim nobody checked. The
+    // measurement is in the function's own docstring: 3.5× warm on a
+    // 12,602-file adopter tree, 2.4× on VAT itself, with the cold arm never
+    // slower than the uncached one.
     expect(process.env[PROJECTION_STORE_ENV]).toBeUndefined();
-    expect(projectionStoreSelected()).toBe(false);
+    expect(projectionStoreSelected()).toBe(true);
   });
 
-  it('is true for the exact value that names the SQLite backend', () => {
-    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+  it.each([
+    ['the backend by name, as every pre-flip script spells it', PROJECTION_STORE_SQLITE],
+    ['a case variant of it', 'SQLite'],
+    ['the right word with stray whitespace', ' sqlite '],
+    ['a truthy-looking value', '1'],
+    ['a backend that does not exist', 'duckdb'],
+  ])('stays selected for %s', (_description, value) => {
+    // ⚠️ `duckdb` is in this list deliberately, and it is the uncomfortable one:
+    // an unrecognised backend name leaves the SQLite store selected rather than
+    // refusing. There is exactly one backend, so a refusal would have no
+    // alternative to offer; the day a second exists this becomes a real
+    // enumeration and that is the day to add the refusal.
+    process.env[PROJECTION_STORE_ENV] = value;
 
     expect(projectionStoreSelected()).toBe(true);
   });
 
   it.each([
-    ['an empty value', ''],
-    ['a backend that does not exist', 'duckdb'],
-    ['a case variant', 'SQLite'],
-    ['the right word with stray whitespace', ' sqlite'],
-    ['a truthy-looking value', '1'],
+    ['the documented escape hatch', PROJECTION_STORE_OFF],
+    ['an operator shouting it', 'OFF'],
+    ['an operator clearing the variable', ''],
+    ['a value that arrived through a YAML block as whitespace', '  '],
+    ['the numeric off spelling', '0'],
+    ['an operator spelling it out', 'false'],
+    ['an operator saying no', 'no'],
   ])('is false for %s', (_description, value) => {
-    // Exact-match, not truthiness. `VAT_PROJECTION_STORE=1` reads like an
-    // enable flag and is not one — an operator who wrote it would otherwise get
-    // a store nobody named, and the day a second backend exists the value is
-    // the only thing distinguishing them.
+    // The opt-out an adopter needs, read through the same `parseEnvBoolean`
+    // every other VAT switch is read through — so there is one off-vocabulary
+    // in the toolkit rather than a private one here. The empty string is the
+    // one addition: an operator who cleared the variable said something, and
+    // unlike VAT_PROJECTION_STORE_DIR there is no default value for an empty
+    // selector to fall back to.
     process.env[PROJECTION_STORE_ENV] = value;
 
     expect(projectionStoreSelected()).toBe(false);
@@ -354,27 +386,33 @@ describe('projectionStoreSelected', () => {
   it('reads the environment on every call rather than memoizing it at module load', () => {
     // 🪤 THE load-bearing test in this file. `vitest.setup.js` deletes every
     // `VAT_*` variable before any test module is loaded, so a module-level
-    // binding would be captured as `false` and could never be turned on again.
-    // Every other test here that sets the selector would then pass while
-    // silently exercising the UNCACHED path, and the whole suite would be a
-    // clean result over a subject that does nothing. Watching the answer move
-    // under a live process is the only way to see that; a single call, however
-    // it is arranged, cannot.
+    // binding would be captured once and could never move again. Every other
+    // test here that sets the selector would then pass while silently
+    // exercising the wrong path, and the whole suite would be a clean result
+    // over a subject that does nothing. Watching the answer move under a live
+    // process is the only way to see that; a single call, however it is
+    // arranged, cannot.
+    expect(projectionStoreSelected()).toBe(true);
+
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_OFF;
     expect(projectionStoreSelected()).toBe(false);
 
     process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
     expect(projectionStoreSelected()).toBe(true);
 
-    process.env[PROJECTION_STORE_ENV] = 'something-else';
+    process.env[PROJECTION_STORE_ENV] = '';
     expect(projectionStoreSelected()).toBe(false);
-
-    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
-    expect(projectionStoreSelected()).toBe(true);
   });
 });
 
 describe('openPopulationCache', () => {
-  it('returns undefined without keying the tree or opening a backend when no store is selected', async () => {
+  it('returns undefined without keying the tree or opening a backend when the store is turned off', async () => {
+    // Explicitly off, because the default is now ON: a version of this test that
+    // relied on the unset default would have started asserting the opposite of
+    // what it claims the moment the flip landed, and would still have gone green
+    // — the store opens, the snapshot is taken, and `opened` is defined.
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_OFF;
+
     const opened = await openPopulationCache({ root: repoRoot });
 
     expect(opened).toBeUndefined();
@@ -570,7 +608,8 @@ describe('nodeSqliteFloorFailure', () => {
 });
 
 describe('withPopulationCache', () => {
-  it('runs the work with no cache, and returns its value, when no store is selected', async () => {
+  it('runs the work with no cache, and returns its value, when the store is turned off', async () => {
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_OFF;
     const seen: (PopulationCache | undefined)[] = [];
 
     const result = await withPopulationCache({ root: repoRoot }, async (cache) => {
@@ -675,6 +714,82 @@ describe('withPopulationCache', () => {
     });
 
     expect(lastStore().isOpen()).toBe(false);
+  });
+
+  it('is reentrant: a nested scope over the same repository reuses the open store', async () => {
+    // 🔑 The property that lets `vat validate` hoist ONE bracket over every
+    // phase without rewriting the lanes underneath. Each lane still opens its
+    // own scope — `resource-loader`'s two, `inventory`, `claude/context`,
+    // `claude/budget` — and each one now finds the orchestrator's scope already
+    // open and joins it instead of opening a second database and taking a
+    // second `git write-tree`.
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+
+    const inner = await withPopulationCache({ root: repoRoot }, async (outerCache) => {
+      expect(outerCache).toBeDefined();
+      return withPopulationCache({ root: repoRoot }, async (innerCache) => {
+        // The SAME cache, by identity. An inner scope that opened a second
+        // store over the same file would also "work" — and would pay a second
+        // open, a second snapshot, and hold two connections to one WAL
+        // database.
+        expect(innerCache).toBe(outerCache);
+        // Still open INSIDE the inner scope, which is the half that catches the
+        // obvious wrong implementation: an inner scope that closed what it
+        // reused.
+        expect(lastStore().isOpen()).toBe(true);
+        return innerCache;
+      });
+    });
+
+    expect(inner).toBeDefined();
+    expect(backend.openCalls.count).toBe(1);
+    // Closed exactly once, by the scope that opened it. Twice would mean the
+    // inner scope closed a store it did not own; zero would be a leak.
+    expect(lastStore().isOpen()).toBe(false);
+    expect(lastStore().closeCount()).toBe(1);
+  });
+
+  it('opens its own store for a nested scope rooted in a DIFFERENT repository', async () => {
+    // The positive control on the reuse above, and the whole reason reuse is
+    // gated on the TREE HASH rather than on "a scope is open". A stored extent
+    // is filed under `(rootId, treeHash)`; handing a lane in another repository
+    // this repository's hash would file its extent under a key that does not
+    // describe it — the same silent mis-keying the git-snapshot bracket exists
+    // to prevent, arriving through the hoist instead.
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+
+    const hashes = await withPopulationCache({ root: repoRoot }, async (outerCache) =>
+      withPopulationCache({ root: secondRepoRoot }, async (innerCache) => ({
+        outer: outerCache?.treeHash,
+        inner: innerCache?.treeHash,
+      })),
+    );
+
+    expect(backend.openCalls.count).toBe(2);
+    expect(hashes.outer).toMatch(/^[0-9a-f]{40}$/);
+    expect(hashes.inner).toMatch(/^[0-9a-f]{40}$/);
+    expect(hashes.inner).not.toBe(hashes.outer);
+    // Both closed: the inner scope owns the store it opened.
+    expect(backend.stores.every((record) => record.closeCount === 1)).toBe(true);
+  });
+
+  it('gives a nested scope no cache when the store is turned off, without reopening the question', async () => {
+    // The uncached path has to nest too, and has to stay cheap while it does:
+    // the inner scope must not spawn its own `git write-tree` to discover there
+    // is nothing to reuse.
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_OFF;
+    const seen: (PopulationCache | undefined)[] = [];
+
+    await withPopulationCache({ root: repoRoot }, async (outerCache) => {
+      seen.push(outerCache);
+      return withPopulationCache({ root: secondRepoRoot }, async (innerCache) => {
+        seen.push(innerCache);
+      });
+    });
+
+    expect(seen).toEqual([undefined, undefined]);
+    expect(backend.openCalls.count).toBe(0);
+    expect(git.calls.count).toBe(0);
   });
 
   it('is the git-snapshot bracket, so a mid-scope edit cannot split the key from the extent', async () => {

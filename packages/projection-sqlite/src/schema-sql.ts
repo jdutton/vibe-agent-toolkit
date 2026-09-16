@@ -123,11 +123,55 @@ export const CREATE_EXTENTS_TABLE_SQL
     + `PRIMARY KEY (${quoteIdentifier('storeRootId')}, ${quoteIdentifier('storeTreeHash')}))`;
 
 /**
+ * The table recording when each content key's blob facts were last derived.
+ *
+ * What {@link EXTENTS_TABLE} is for the extent tier: the record of what may be
+ * reclaimed and in what order. Blob rows carry no tree and no root, so an extent
+ * eviction has no key to attribute them by; one row per content key gives them
+ * one. `store.ts` keeps the newest `retainedBlobKeys`, ordered by this column
+ * then `rowid` — same ordering and same tie-break reason as the extent manifest.
+ *
+ * ⚠️ WRITE recency, not use recency: a key served from the store every run is
+ * never rewritten, so it ages as if idle. The cheap side of the trade — evicting
+ * a key still in use costs one cold re-derivation — against a write on every
+ * read path.
+ */
+export const BLOB_KEYS_TABLE = 'blob_keys';
+
+/** Column of {@link BLOB_KEYS_TABLE} holding the content key itself. */
+export const BLOB_KEY_COLUMN = 'contentKey';
+
+/** DDL for the blob-key manifest. See {@link BLOB_KEYS_TABLE}. */
+export const CREATE_BLOB_KEYS_TABLE_SQL
+  = `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(BLOB_KEYS_TABLE)} (`
+    + `${quoteIdentifier(BLOB_KEY_COLUMN)} TEXT NOT NULL PRIMARY KEY, `
+    + `${quoteIdentifier(WRITTEN_AT_COLUMN)} TEXT NOT NULL)`;
+
+/**
+ * The statement that adopts blob rows a pre-manifest store already holds.
+ *
+ * 🪤 Without it the bound holds only for brand-new stores: a store an earlier
+ * build of the same cache namespace wrote carries blob rows no manifest row
+ * names, invisible to an eviction that walks the manifest. Adoption files them
+ * at the empty string, which sorts before every ISO-8601 timestamp, so rows of
+ * unknown age go first — the safe direction, costing one cold re-derivation.
+ *
+ * @param spec - A blob-scoped table's registry entry
+ * @returns An `INSERT OR IGNORE … SELECT DISTINCT` over that table's key column
+ */
+export function adoptBlobKeysSql(spec: StoredTableSpec): string {
+  return `INSERT OR IGNORE INTO ${quoteIdentifier(BLOB_KEYS_TABLE)}`
+    + ` (${quoteIdentifier(BLOB_KEY_COLUMN)}, ${quoteIdentifier(WRITTEN_AT_COLUMN)})`
+    + ` SELECT DISTINCT ${quoteIdentifier(blobKeyColumn(spec))}, ''`
+    + ` FROM ${quoteIdentifier(spec.name)}`;
+}
+
+/**
  * A projection table, as this module needs to see it.
  *
  * Structural and row-type-free: every entry of `PROJECTION_TABLES` satisfies
- * it, and erasing `Row` is what lets one function serve all twelve without the
- * caller reconciling twelve different row types into a union.
+ * it, and erasing `Row` is what lets one function serve all thirteen without the
+ * caller reconciling thirteen different row types into a union.
  */
 export interface StoredTableSpec extends ProjectionColumnTypeSource {
   /**
@@ -442,7 +486,7 @@ export function blobKeyColumn(spec: StoredTableSpec): string {
  * SQLite would reject the `CREATE TABLE` with `duplicate column name`, which
  * names the column but not the reason — and the reason matters, because the
  * repair is never "drop one of them": the two are different facts (see
- * {@link EXTENT_KEY_COLUMNS}). A thirteenth table taking one of these names
+ * {@link EXTENT_KEY_COLUMNS}). A fourteenth table taking one of these names
  * should fail here, saying so.
  *
  * @param spec - An extent-scoped table's registry entry

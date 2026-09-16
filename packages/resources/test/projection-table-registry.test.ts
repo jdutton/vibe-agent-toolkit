@@ -8,7 +8,7 @@ import { PROJECTION_TABLES, type ProjectionTableName } from '../src/projection/t
 const ROOT = safePath.join(normalizedTmpdir(), 'vat-table-registry');
 
 /**
- * The twelve tables, in {@link Projection}'s declaration order.
+ * The thirteen tables, in {@link Projection}'s declaration order.
  *
  * `satisfies readonly (keyof Projection)[]` makes a renamed table a compile
  * error here; the runtime assertions below make an *added* or *removed* one a
@@ -22,6 +22,7 @@ const EXPECTED_TABLES = [
   'resourceExtents',
   'resourceTags',
   'realizationConditions',
+  'claudeRulePatterns',
   'resolutionContexts',
   'zoneProvenance',
   'blobs',
@@ -46,6 +47,7 @@ const EXPECTED_PRIMARY_KEYS: Record<ProjectionTableName, readonly string[]> = {
   resourceExtents: ['resourceId', 'extentId'],
   resourceTags: ['resourceId', 'tag', 'value', 'source'],
   realizationConditions: ['extentId', 'path', 'code', 'resourceId'],
+  claudeRulePatterns: ['resourceId', 'ordinal'],
   resolutionContexts: ['contextId'],
   zoneProvenance: ['contextId', 'contributorId'],
   blobs: ['contentKey'],
@@ -67,6 +69,7 @@ const EXPECTED_SQL_NAMES: Record<ProjectionTableName, string> = {
   resourceExtents: 'resource_extents',
   resourceTags: 'resource_tags',
   realizationConditions: 'realization_conditions',
+  claudeRulePatterns: 'claude_rule_patterns',
   resolutionContexts: 'resolution_contexts',
   zoneProvenance: 'zone_provenance',
   blobs: 'blobs',
@@ -79,7 +82,7 @@ const EXPECTED_SQL_NAMES: Record<ProjectionTableName, string> = {
  * Full column lists for three tables, in the order their Zod schemas declare
  * them — the order a storage backend's `INSERT (<columns>)` will use.
  *
- * Three rather than twelve, chosen for what each one can break:
+ * Three rather than thirteen, chosen for what each one can break:
  * `resourceRealizations` and `resolutionContexts` are the two row schemas
  * wrapped in `.superRefine()`, so their shape sits one `ZodEffects` deep and a
  * registry that only looked for `.shape` would report nothing for them.
@@ -156,7 +159,7 @@ function declaredColumns(schema: any): readonly string[] {
 }
 
 describe('PROJECTION_TABLES', () => {
-  it('covers exactly the twelve tables of Projection, in declaration order', () => {
+  it('covers exactly the thirteen tables of Projection, in declaration order', () => {
     expect(Object.keys(PROJECTION_TABLES)).toStrictEqual([...EXPECTED_TABLES]);
   });
 

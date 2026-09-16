@@ -427,9 +427,13 @@ with a regression test.
 
 - **The resource projection** — a queryable model of the tree's documents, blobs, links and
   membership, which the resource commands now run on; `vat resources scan` gains `--format json`
-  plus `lane` and `extentSource`. Optional SQLite persistence: install
-  `@vibe-agent-toolkit/projection-sqlite`, set `VAT_PROJECTION_STORE=sqlite`, and set
-  `VAT_PROJECTION_STORE_DIR` per CI job or concurrent jobs write into one file.
+  plus `lane` and `extentSource`.
+
+- **VAT now caches that projection to disk, without being asked.** A SQLite file per scanned tree
+  under `<tmpdir>/.vat-cache/<version>/projection-<shape>/projection.db` — expect ~71 MB for a
+  12,600-file repository, bounded at 3 trees per repository and 50,000 content keys (~265 MB), and
+  reclaimed by `vat cache clear`. Turn it off with `VAT_PROJECTION_STORE=off`, or `VAT_CACHE=0` for
+  every VAT cache. Set `VAT_PROJECTION_STORE_DIR` per CI job, or concurrent jobs write into one file.
 
 - **`vat resources query <sql> [path]`** — runs one read-only SQL statement (`SELECT`, `WITH` or
   `VALUES`; writes and multi-statement text are refused, exit 2) against the tree's projection.
@@ -438,16 +442,20 @@ with a regression test.
   reach those on every Node this package supports (Node 22.13–22.14 refuse `?NNN` outright).
   `[path]` locates the project and never narrows the corpus — a `WHERE` clause is the only scope.
 
-- **`vat resources check [path]`** — runs the SQL assertions declared under `resources.checks`
-  (each a `description` plus one `sql` selecting the rows that VIOLATE it) and exits 1 when any
-  returns rows; findings carry `CUSTOM:<name>`, which `resources.validation.severity` can
-  downgrade. A check that could not run, or a run with no `checks:` block, is
+- **`vat resources check [path]`** — runs VAT's built-in checks plus the SQL assertions declared
+  under `resources.checks` (each a `description` plus one `sql` selecting the rows that VIOLATE it)
+  and exits 1 when any returns rows; declared findings carry `CUSTOM:<name>`, which
+  `resources.validation.severity` can downgrade. A check that could not run is
   `RESOURCE_CHECK_BROKEN`, which nothing can silence. ⚠️ **Checks run over the TRACKED TREE, not
   your configured resource set** — `resources.include`/`exclude` do not scope the projection;
   narrow with the check's own `WHERE`.
 
 - **The link graph is queryable** — `lens_contexts`, `edges` and `edge_resolutions` join
-  `vat resources query` and `check`; each resolution is classed by `dstKind` (`resource` |
+  `vat resources query` and `check`, alongside `claude_context_chains` and `claude_context_loads`
+  (what loads into an agent's context at each working location, with a `budgetDisposition`).
+  A relation is computed only when your statement names it, and a statement naming a relation
+  nothing computed is refused rather than answered from an empty table.
+  Each resolution is classed by `dstKind` (`resource` |
   `external` | `out-of-corpus`) and keyed by `dstKey`. ⚠️ **Group by the `(dstKind, dstKey)` pair,
   never `dstKey` alone**, and split on `dstKind` before counting dangling links — `dstResource IS
   NULL` folds external URLs and out-of-corpus targets together, and `out-of-corpus` is a class,

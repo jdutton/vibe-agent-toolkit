@@ -495,6 +495,188 @@ issues:
 ---
 ```
 
+### `vat resources check [path]`
+
+**Purpose:** Run the project's own assertions over its resource projection, as a gate.
+
+A query answers a question once. A question worth asking twice is a rule, and a rule that lives in
+someone's shell history is not enforced — it decays into a comment. This verb runs the statements a
+project wrote into `resources.checks` plus VAT's own built-in set, turns each violating row into an
+ordinary validation finding, and exits non-zero when any of them is an error. That is the whole
+difference between `vat resources query` and this, and it is the difference between a tool and a gate.
+
+The invariants below are load-bearing; `packages/cli/src/commands/resources/check.ts` implements
+them and points here.
+
+#### 🔑 Four ways to check nothing, all of them refusals
+
+VAT ships no schema version, so a renamed column simply breaks a check's SQL. The tempting handling
+— log it and carry on — is the one thing this must never do: a check that stopped running looks
+exactly like a check that passed, and the project keeps reporting green over an assertion nobody is
+making any more. Four situations collapse to that same shape, and all four are reported at **error**
+severity under one non-overridable code, `RESOURCE_CHECK_BROKEN`:
+
+| Situation | Mechanism |
+|---|---|
+| A statement will not run | reported with the columns the projection actually has, from the `catch` in `runUnits` |
+| The corpus enumerated empty | `checksRun` counts RULES, so nothing counted the ROWS; `membersEnumerated` is published and a run over zero members refuses (`emptyCorpusFinding`) |
+| `--check <name>` matched nothing | `requireKnownCheck` refuses before the crawl, naming the declared set |
+| Not one check executed at all | `noCheckRanFinding`, derived in `buildCheckOutputData` |
+
+The empty-corpus case is the one that shipped: a broad `.gitignore`, a shallow or sparse CI
+checkout, or a root that resolved somewhere else ran every declared check over nothing and reported
+`status: success` on exit 0 with empty stderr. Population declines ignored members rather than
+flagging them, so the tables held no trace of it either.
+
+The fourth case changed meaning once a DEFAULT SET existed. `checksRun` counts the built-in set plus
+whatever the project declared, so an absent `checks:` block no longer produces a zero — and it must
+not, because a project with no config has to run the defaults and be able to pass. The refusal now
+means what it always literally said: **not one check executed, the defaults included**, which is a
+defect in VAT or an emptied default list rather than anything an adopter wrote. Deriving it in
+`buildCheckOutputData` is what stops a future edit that empties `BUILTIN_CHECKS` from publishing a
+clean document.
+
+⚠️ **What is NOT claimed:** that the step can now always fail. The only built-in ships at `info`, so
+a project declaring no checks of its own has a `vat resources check` step that exits 0 whatever it
+finds. That is a property of the code's SEVERITY — movable with `resources.validation.severity` —
+and not of the denominator, and inventing a second refusal for it would refuse the no-config run the
+default set exists to serve. The stderr warning says which situation the operator is in; the
+document names every rule that ran in `checks[]`, with `builtin: true` on the ones VAT supplied, so
+a deleted `checks:` block is visible in the machine channel rather than only in a warning nothing
+parses.
+
+#### 🔑 No built-in check may be SQL
+
+Every SQL statement this verb runs is adopter-declared: `checkCommand` reads
+`config?.resources?.checks` and nothing else for statements. The one way to end that quietly is to
+author a built-in as SQL — a default-on rule written as a statement makes the engine, the projection
+and the population mandatory for everyone who inherits it, without anybody deciding that. So
+**built-ins are TypeScript predicates over the projection's row model.** SQL stays the two places a
+user asked for it: this verb's declared checks, and `vat resources query`.
+
+✅ The first built-in is `claude-rule-glob-inert`, in `@vibe-agent-toolkit/resources`'
+`builtin-checks.ts`: a for-loop over `claudeRulePatterns`, which the population already holds in
+memory. It ships its SQL twin as `sqlTwin` — DOCUMENTATION an adopter copies into their own
+`resources.checks` to narrow or re-severity, printed by `--help`, never executed. That is the point
+of materialising these facts as tables: the built-in is the default REPORT, and the same question
+stays askable by anyone who wants a different answer.
+
+**A built-in's findings carry an ORDINARY registry code.** A built-in is not a custom check: its
+findings carry a `CODE_REGISTRY` code with the registry's own default severity, so
+`resources.validation.severity.<CODE>` moves it exactly like every other code VAT emits, through the
+identical `resolveIssueSeverity` call. The `CUSTOM:<name>` space that `sql-checks.ts` mints is for
+ADOPTER-declared statements, whose severity is declared beside them because the registry holds no
+entry for a name a user invented; reusing it for a built-in would put a shipped rule in a key space
+the schema validates by shape instead of by identity, and a misspelled override would silently reach
+nothing.
+
+⚠️ The engine today is `node:sqlite`, built into Node, so what is at stake is not an install — it is
+the POPULATION. On an ~11,700-member adopter tree, building the projection is **>99.9%** of a check
+run (16.5 s cold, ~1.3 s from the store) against **0.0008–0.004 s** for the statements themselves.
+That is exactly the cost "What this does not do" below refuses to put on every adopter's pre-commit
+path, and a default-on SQL check would put it there without the decision. The INSTALL cost is
+deferred rather than gone: the open question about a columnar engine is a 108 MB platform binding on
+a published toolkit, and this invariant is what keeps that question answerable either way.
+
+#### 🔑 The default check set belongs to the pipeline, not to the config file
+
+A directory with no `vibe-agent-toolkit.config.yaml` must run exactly the same default-on checks as
+one with a config; config only ADDS to that set or OVERRIDES a severity in it. *"'Default-on error'
+is meaningless as a category if being default-on requires a config file to say so."*
+
+That is a constraint on WHERE the defaults live in code, not only on what they are. They cannot be
+defaulted into the parsed config object, because an absent config is `undefined` and every default
+would vanish with it — for the project that never wrote one, which is the population the category
+exists for. The rest of VAT already behaves this way: `vat audit` completes its entire scan first
+and reads config only to apply severity overrides, warning and CONTINUING when the file cannot be
+read; `loadResourcesWithConfig` hands `vat resources validate` a registry whose built-in validators
+run whether `loadConfig` returned a config or nothing.
+
+✅ **Honoured by construction.** `BUILTIN_CHECKS` is a module constant in
+`@vibe-agent-toolkit/resources`; `runOutcome` binds it to the projection and hands it to
+`runProjectChecks` as `builtins`, a REQUIRED argument beside `checks` rather than a default folded
+into either. Nothing on that path reads `config`.
+
+#### Keeping a TypeScript check and its SQL twin: two good reasons, one trap
+
+The proposal was "write the predicate twice, in TypeScript and in SQL, and run whichever is faster".
+Two thirds of it are worth having.
+
+✅ **As documentation.** An SQL twin is executable documentation of the row model, and strictly
+better than prose about it: prose can describe a column that no longer exists and never say so,
+while a statement stops compiling — which this verb reports as `RESOURCE_CHECK_BROKEN` rather than
+as a skip.
+
+✅ **As a differential oracle.** Run both over the frozen corpus and assert IDENTICAL findings. That
+is the only thing which makes a dual implementation better than a single one rather than worse: two
+implementations with no mandatory differential test are simply two places for one rule to be wrong.
+Apply it selectively, to genuinely relational checks — done by default, every new rule costs three
+artifacts instead of one.
+
+⛔ **As a runtime optimizer — rejected, on two INDEPENDENT grounds.** It would essentially never
+choose SQL: `buildResourceProjection` hands the rows back in memory before the ephemeral database
+exists at all, so the TypeScript arm is a for-loop over data already in hand, and the SQL arm's whole
+measured share of a run is the 0.0008–0.004 s above. A scheduler would be choosing between two arms
+of the 0.1%. And it reintroduces the dependency through the back door: an optimizer that MAY choose
+SQL means SQL MAY be needed at check time, which for anyone shipping the thing is the same as
+needed. **Optionality is not a property you can keep while also letting a scheduler reach for the
+optional thing.**
+
+#### 🔑 Adopter SQL runs unsandboxed on purpose — and contributed SQL is not adopter SQL
+
+What a statement may BE is gated hard, and documented where it is enforced: `assertIsQuery` and
+`detachForeignSchemas` in `packages/projection-sqlite/src/store.ts` refuse `ATTACH` and `PRAGMA`,
+with the measured cross-repository leak that motivated both, and `CHANGELOG.md`'s `--budget` entry
+carries why nothing inside this process can interrupt a runaway statement.
+
+Everything PAST those gates is unsandboxed deliberately. A `.sql` file the adopter points their own
+config at is adopter code, at the same trust boundary as their eslint config: they wrote it or they
+chose to inherit it, and VAT is not the thing standing between a project and its own repository.
+
+🚨 That reasoning covers exactly ONE trust domain, and the rule scoping it is the other half:
+**contributed SQL is a reviewed EXAMPLE, never an auto-executed check.** A contribution channel is
+third-party text, and a statement arriving through one has none of the "they chose it" the paragraph
+above rests on. Ship it as documentation an adopter copies into their own `resources.checks`
+deliberately. One paragraph must not be stretched to cover both domains.
+
+#### 🚨 The population is charged to NOBODY, and the clock proves it
+
+A check's published `durationSecs` is the STATEMENT alone. The git tracker, the projection build and
+the load into the ephemeral database happen ONCE and serve every check in the run, so folding that
+shared setup into each rule would make N cheap rules look expensive and make the per-rule numbers sum
+to N times a cost paid once. It is published separately instead — `populationSecs` beside
+`population` — so a reader reconciles the parts against `durationSecs` rather than inferring the
+remainder and attributing it to whichever rule they happen to be reading.
+
+🪤 This repo has already shipped the opposite mistake once, in another instrument: `parse ab`
+reported a pooled arm BACKWARDS because its estimate was thread-summed, and the report surfaced no
+caveat that would have told the reader. A shared cost silently attributed to one participant is the
+same defect wearing different clothes. If you ever want the population inside these numbers, divide
+it out explicitly and say so in the field name.
+
+The span is enforced structurally: it is the thunk handed to `timed`, which exists for that reason.
+⚠️ `performance.now()`, never `Date.now()` — a rule over a small projection is routinely
+sub-millisecond, and a millisecond-granularity clock reports every one as `0`, which reads as "not
+measured". 🪤 Exactly one cost record per executed check, on both paths, because `checksRun` is that
+list's length; the record is filed before the rows become findings, so nothing between the two can
+leave a check unpriced.
+
+#### 🚨 Why the loop announces a check before it can be stopped
+
+The progress sink is told a check is about to run, and told again when it is priced. That ordering is
+not decoration: this verb runs adopter-authored SQL unattended, an accidental cross join or an
+unterminated `WITH RECURSIVE` runs forever, and NOTHING in-process can interrupt it — the query is
+synchronous, it holds the event loop, and `node:sqlite` exposes no interrupt. The supervisor's only
+lever is an external `SIGKILL`, which publishes nothing of the killed process's memory. So the name
+of the rule that hangs has to be on disk BEFORE it is entered, or it is not recoverable at all.
+
+#### What this does not do
+
+It does not fold into `vat resources validate`. That command is on every adopter's pre-commit path,
+and adding a store-backed population to it is a cost and a risk that deserves its own decision with
+its own evidence. Wiring this into CI is one line in a workflow; making it unavoidable is not this
+change's call to make.
+
 ## Build Process
 
 ### CLI Package Build

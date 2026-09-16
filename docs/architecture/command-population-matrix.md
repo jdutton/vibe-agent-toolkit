@@ -184,19 +184,23 @@ and nothing declares which route a new command should reach for.
 
 **The win is once-per-lifecycle-phase, not incrementality, and the doubled `populate()` in the two
 `vat claude` rows above is bounded by that rather than excused by it.** A projection built once and
-read many times beats a walk per check, and that is the whole of the claim. Of the twelve tables only
+read many times beats a walk per check, and that is the whole of the claim. Of the thirteen tables only
 the four blob-scoped ones (`blobs`, `blob_references`, `blob_sections`, `blob_conditions`) are keyed
 on content and so survive an edit elsewhere in the tree — and content-keyed reuse of parse work is
 not new work: the cross-process parse cache has shipped it since stage 2 (2026-08-10, `c2a05547`),
 measuring 45× warm over cold on VAT's own 265 tracked markdown files, and
-`packages/resources/src/parse-cache.ts` is the authority on that number. The other eight are keyed on
+`packages/resources/src/parse-cache.ts` is the authority on that number. The other nine are keyed on
 `(rootId, treeHash)` (`packages/resources/src/projection/store.ts › ExtentKey`), where `treeHash`
 names the whole tree, dirty working copy included: one edited byte anywhere re-derives every
-path-dependent table, all or nothing. On a default run they are re-derived whatever the tree, because
-the store is opt-in behind `VAT_PROJECTION_STORE=sqlite`
-(`packages/cli/src/utils/projection-store.ts › projectionStoreSelected()`) and nothing crosses a run
-without it. And a phase is not a command: `vat build` populates twice in one invocation — once under
-`vat skills build`'s population bracket, again under `vat claude plugin build`'s.
+path-dependent table, all or nothing. On a default run they now **do** cross invocations: the store
+is on by default (`packages/cli/src/utils/projection-store.ts › projectionStoreSelected()`, which
+carries the measurement the flip was made on), and `VAT_PROJECTION_STORE=off` — or `VAT_CACHE=0` for
+every cache at once — is the way back to re-deriving each run. And a phase is not a command:
+`vat build` populates twice in one invocation — once under `vat skills build`'s population bracket,
+again under `vat claude plugin build`'s. `vat validate` no longer does: its orchestrator holds one
+population scope around every surface, and a nested scope over the same repository joins it rather
+than opening a second store (`packages/cli/src/commands/validate.ts ›
+runPhasesUnderOnePopulation()`).
 
 ## 4. What each command sees
 
@@ -262,8 +266,18 @@ no blob stage — it reads and parses each admitted resource directly, charged a
 | lane | `contentDemand` at enumeration | resulting `contentState` | blob stage (`contentParsing`) |
 |---|---|---|---|
 | resources projection (`vat resources scan/validate`, `vat rag index`, and the packaging registries — the default lane, per [§2](#2-the-three-selectors-and-the-opt-outs-they-answer-to)) | `deferred` — enumerate every path, read none of them ([the filesystem extent keys lazily](#the-filesystem-extent-keys-lazily)) | `deferred` for every file row, `none` for a directory. `contentKey` is always null | **`CONTENT_PARSING_SKIP`** — the stage is ~90% of this lane's cold cost and not one blob row is read ([the blob stage default and its refusal](#the-blob-stage-default-and-its-refusal)) |
-| resources query (`vat resources query`) | `deferGitignored` — the default, stated at the call. Same registry as the row above; the two differ **only** here and in the blob stage | `keyed`, or `deferred` for an ignored row, or `none`/`unreadable` | **`CONTENT_PARSING_DERIVE`** (the default). Not optional in spirit: the verb exists to answer questions about blob-keyed tables, and a skipped stage would return zero rows and report success |
+| resources query (`vat resources query`, `vat resources check`) | `deferGitignored` — the default, stated at the call. Same registry as the row above; the two differ **only** here, in the blob stage, and in `classifyClaudeRules` | `keyed`, or `deferred` for an ignored row, or `none`/`unreadable` | **`CONTENT_PARSING_DERIVE`** (the default). Not optional in spirit: the verb exists to answer questions about blob-keyed tables, and a skipped stage would return zero rows and report success |
 | inventory projection (`vat inventory`, plugin dir) | `deferGitignored`, from the same contributor — key eagerly, except where the row's own `gitignored` column is true | `keyed`, or `deferred` for an ignored row, or `none`/`unreadable` | **`CONTENT_PARSING_DERIVE`** (the default). Mandatory here, not a choice: the closure contributor reads the blob-keyed tables, and `populate()` **throws** rather than silently reducing every extent to its own root |
+
+**One table is reachable from the query lane ONLY, and that is forced rather than chosen.**
+`claude_rule_patterns` is produced by `ClaudeRulesScopeContributor`, which declares `readsBlobs:
+true` because a rule's `paths:` list lives in frontmatter — and `populate()` throws when a run
+asking for `CONTENT_PARSING_SKIP` has a blob reader registered. So `resourceContributors()` takes
+`classifyClaudeRules` as a parameter: registering it unconditionally would not degrade the
+`scan`/`validate` lane, it would take that lane out entirely. The derived relations are lane-bound
+the same way and for a different reason — `edges`, `edge_resolutions`, `lens_contexts`,
+`claude_context_chains` and `claude_context_loads` are evaluated per lens by `query`/`check`, and
+only when a declared statement names one of them.
 
 **Zero file-content reads on this lane, and a gate holds it there.** The demand is the caller's
 decision rather than a property of the contributor, so `vat inventory` keeps `deferGitignored` while

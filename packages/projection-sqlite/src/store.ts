@@ -30,7 +30,7 @@
  * `writeBlobFacts` deletes the four tables' rows for the content keys it is
  * about to write and inserts those. Replace rather than insert-if-absent for a
  * specific reason — see `schema-sql.ts` on SQLite's treatment of NULL in a
- * primary key, which makes a conflict clause unable to dedup three of the twelve
+ * primary key, which makes a conflict clause unable to dedup three of the thirteen
  * tables. 🪤 The keys it clears are the union of what **all four** tables name,
  * never `blobs` alone: a declined blob is a `blob_conditions` row with no
  * `blobs` row, which is what every binary file in a corpus produces — see
@@ -83,17 +83,21 @@
  * namespace, and an age ordering across the whole manifest would let a busy
  * repository evict a quiet one's only extent.
  *
- * ## What eviction deliberately does NOT reclaim
+ * ## The blob tier is evicted too — by its own manifest, not by the extent's
  *
- * **Blob-scoped rows.** They are a pure function of bytes, shared by every tree
- * and every root that contains those bytes, so they cannot be attributed to the
- * extent being evicted without scanning every surviving extent's realizations —
- * and a scan that ran between another process's `writeBlobFacts` and its
- * `writeExtent` would collect rows that are about to be referenced. They also do
- * not exhibit the defect being fixed: an edit changes one file's content key, so
- * the blob tier grows by one file's rows where the extent tier grows by a whole
- * corpus. That tier is still bounded only by the namespace rotation, which is
- * stated here rather than left for someone to discover.
+ * A blob fact belongs to bytes, not to a tree, so extent eviction can attribute
+ * none of it, and its only bound used to be the release namespace rotating.
+ * That is not a bound, and the tier is 153,245 of a 12,602-file adopter store's
+ * 193,605 rows. So {@link BLOB_KEYS_TABLE} records each key's last derivation
+ * and {@link SqliteProjectionStore.writeBlobFacts} keeps the
+ * {@link SqliteStoreOptions.retainedBlobKeys} newest, on exactly `writeExtent`'s
+ * terms: amortized into the write that grew it, unable to select the keys that
+ * write just recorded, inside the same transaction.
+ *
+ * 🔑 Evicting a key a surviving extent still references is SAFE — that is what
+ * makes a global window admissible here and not for extents. `blobFactsCover`
+ * turns a missing key into a MISS, so the cost is one cold re-derivation rather
+ * than a partial projection.
  */
 
 import { DatabaseSync, type StatementSync } from 'node:sqlite';
@@ -116,10 +120,14 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 
 import {
+  BLOB_KEYS_TABLE,
+  BLOB_KEY_COLUMN,
+  CREATE_BLOB_KEYS_TABLE_SQL,
   CREATE_EXTENTS_TABLE_SQL,
   EXTENTS_TABLE,
   WRITTEN_AT_COLUMN,
   type StoredTableSpec,
+  adoptBlobKeysSql,
   allSpecs,
   blobKeyColumn,
   createDerivedTableSql,
@@ -483,6 +491,24 @@ const DATABASE_FILENAME = 'projection.db';
  */
 const DEFAULT_RETAINED_EXTENTS_PER_ROOT = 3;
 
+/**
+ * How many content keys' blob facts survive a write, when the caller does not
+ * say.
+ *
+ * Arithmetic, not a round number: the blob tier costs **~5.3 KB per content
+ * key** on two corpora with nothing in common but the tool — a 12,602-file
+ * adopter monorepo (10,398 keys, 153,245 rows, ~55 MB) and VAT itself (2,604
+ * keys, 42,948 rows, ~14 MB) — so 50,000 is a ~265 MB ceiling an operator can
+ * check with `du`.
+ *
+ * The window is GLOBAL, since a blob fact has no root, so every repository on
+ * the machine shares it: below one corpus every run would evict the keys it is
+ * about to need. 50,000 holds about five adopter-sized trees. Too low costs
+ * cold runs, too high costs disk `vat cache clear` reclaims — both cheap, which
+ * is why this is a constant and not a knob every command plumbs.
+ */
+const DEFAULT_RETAINED_BLOB_KEYS = 50_000;
+
 /** Retries for the WAL switch, which the busy handler does not cover — see {@link enableWal}. */
 const WAL_SWITCH_ATTEMPTS = 50;
 
@@ -513,6 +539,19 @@ export interface SqliteStoreOptions {
    * that holds nothing.
    */
   readonly retainedExtentsPerRoot?: number;
+  /**
+   * How many content keys' blob facts survive a write.
+   *
+   * Defaults to {@link DEFAULT_RETAINED_BLOB_KEYS}. Clamped to at least one for
+   * the same reason as {@link SqliteStoreOptions.retainedExtentsPerRoot}, and
+   * exposed for the same narrow reason: a test has to be able to cross the
+   * window without writing 50,000 keys to do it.
+   *
+   * ⚠️ Global, not per root — a blob fact belongs to bytes, so there is no root
+   * to scope it to. See {@link DEFAULT_RETAINED_BLOB_KEYS} on what that means
+   * for a machine holding several corpora.
+   */
+  readonly retainedBlobKeys?: number;
 }
 
 /**
@@ -625,10 +664,35 @@ export function openSqliteProjectionStore(options: SqliteStoreOptions = {}): Sql
   const database = new DatabaseSync(safePath.join(directory, DATABASE_FILENAME));
   configure(database, options.busyTimeoutMs ?? BUSY_TIMEOUT_MS);
   createSchema(database);
+  // File-backed only, and only here: it is the only store that can have been
+  // written by an earlier build. See {@link adoptLegacyBlobKeys}.
+  adoptLegacyBlobKeys(database);
   return new SqliteProjectionStore(
     database,
     Math.max(1, Math.trunc(options.retainedExtentsPerRoot ?? DEFAULT_RETAINED_EXTENTS_PER_ROOT)),
+    { retainedBlobKeys: Math.max(1, Math.trunc(options.retainedBlobKeys ?? DEFAULT_RETAINED_BLOB_KEYS)) },
   );
+}
+
+/**
+ * File every content key a pre-manifest store already holds, as the oldest
+ * there is.
+ *
+ * 🪤 What keeps the blob bound from being true only of fresh stores — see
+ * {@link adoptBlobKeysSql}. Gated on the manifest being empty, so it costs one
+ * indexed `LIMIT 1` per open after the first write; on a genuinely empty store
+ * the four statements scan four empty tables.
+ *
+ * @param database - An open connection whose schema exists
+ */
+function adoptLegacyBlobKeys(database: DatabaseSync): void {
+  const alreadyTracked = database
+    .prepare(`SELECT 1 FROM ${quoteIdentifier(BLOB_KEYS_TABLE)} LIMIT 1`)
+    .get();
+  if (alreadyTracked !== undefined) return;
+  for (const spec of allSpecs()) {
+    if (spec.scope === 'blob') database.exec(adoptBlobKeysSql(spec));
+  }
 }
 
 /**
@@ -811,7 +875,7 @@ export function openEphemeralProjectionStore(): SqlQueryableStore {
   }
   // The `true` and the loop above are ONE decision: this is the only store that
   // has the relations, so it is the only one permitted to write them.
-  return new SqliteProjectionStore(database, DEFAULT_RETAINED_EXTENTS_PER_ROOT, true);
+  return new SqliteProjectionStore(database, DEFAULT_RETAINED_EXTENTS_PER_ROOT, { hasDerivedTables: true });
 }
 
 /**
@@ -1016,6 +1080,7 @@ function sleepBriefly(milliseconds: number): void {
  */
 function createSchema(database: DatabaseSync): void {
   database.exec(CREATE_EXTENTS_TABLE_SQL);
+  database.exec(CREATE_BLOB_KEYS_TABLE_SQL);
   for (const spec of allSpecs()) {
     database.exec(createTableSql(spec));
   }
@@ -1031,6 +1096,11 @@ class SqliteProjectionStore implements SqlQueryableStore {
   readonly #extentsPastRetention: StatementSync;
   readonly #forgetExtent: StatementSync;
   readonly #retainedExtentsPerRoot: number;
+  /** The blob tier's three eviction statements — see {@link BLOB_KEYS_TABLE}. */
+  readonly #recordBlobKey: StatementSync;
+  readonly #blobKeysPastRetention: StatementSync;
+  readonly #forgetBlobKey: StatementSync;
+  readonly #retainedBlobKeys: number;
   /** Blob-fact statements memoized by table and placeholder count — see {@link TablePlan}. */
   readonly #blobStatements = new Map<string, StatementSync>();
   /** Derived-relation statements, prepared on first use — see {@link SqliteProjectionStore.writeDerived}. */
@@ -1055,15 +1125,22 @@ class SqliteProjectionStore implements SqlQueryableStore {
    * @param database - An open, configured connection whose schema exists
    * @param retainedExtentsPerRoot - How many of a root's newest trees survive a
    *   write. Already clamped to at least one by {@link openSqliteProjectionStore}
-   * @param hasDerivedTables - Whether this connection's schema carries the
-   *   derived relations, which is the ONLY thing permitting `writeDerived`.
-   *   Defaults to false so a new factory has to opt in deliberately; pass true
-   *   only where the derived DDL was actually issued
+   * @param tiers - The other two dials, grouped so a caller cannot transpose
+   *   two positional numbers. `retainedBlobKeys` is already clamped to at least
+   *   one by {@link openSqliteProjectionStore}; `hasDerivedTables` says whether
+   *   this connection's schema carries the derived relations, which is the ONLY
+   *   thing permitting `writeDerived`, and defaults to false so a new factory
+   *   has to opt in deliberately
    */
-  constructor(database: DatabaseSync, retainedExtentsPerRoot: number, hasDerivedTables = false) {
+  constructor(
+    database: DatabaseSync,
+    retainedExtentsPerRoot: number,
+    tiers: { retainedBlobKeys?: number; hasDerivedTables?: boolean } = {},
+  ) {
     this.#database = database;
     this.#retainedExtentsPerRoot = retainedExtentsPerRoot;
-    this.#hasDerivedTables = hasDerivedTables;
+    this.#retainedBlobKeys = tiers.retainedBlobKeys ?? DEFAULT_RETAINED_BLOB_KEYS;
+    this.#hasDerivedTables = tiers.hasDerivedTables ?? false;
     this.#plans = allSpecs().map((spec) => ({
       spec,
       columns: projectionColumnTypes(spec),
@@ -1100,6 +1177,21 @@ class SqliteProjectionStore implements SqlQueryableStore {
     this.#forgetExtent = database.prepare(
       `DELETE FROM "${EXTENTS_TABLE}" WHERE "storeRootId" = ? AND "storeTreeHash" = ?`,
     );
+    // The blob tier's three, mirroring the extent tier's above statement for
+    // statement — including the `rowid` tie-break, which is what makes the keys
+    // a write just recorded unselectable: `INSERT OR REPLACE` re-inserts, so a
+    // refreshed key carries the newest rowid as well as the newest timestamp.
+    this.#recordBlobKey = database.prepare(
+      `INSERT OR REPLACE INTO ${quoteIdentifier(BLOB_KEYS_TABLE)}`
+      + ` (${quoteIdentifier(BLOB_KEY_COLUMN)}, ${quoteIdentifier(WRITTEN_AT_COLUMN)}) VALUES (?, ?)`,
+    );
+    this.#blobKeysPastRetention = database.prepare(
+      `SELECT ${quoteIdentifier(BLOB_KEY_COLUMN)} FROM ${quoteIdentifier(BLOB_KEYS_TABLE)}`
+      + ` ORDER BY ${quoteIdentifier(WRITTEN_AT_COLUMN)} DESC, "rowid" DESC LIMIT -1 OFFSET ?`,
+    );
+    this.#forgetBlobKey = database.prepare(
+      `DELETE FROM ${quoteIdentifier(BLOB_KEYS_TABLE)} WHERE ${quoteIdentifier(BLOB_KEY_COLUMN)} = ?`,
+    );
   }
 
   /**
@@ -1115,14 +1207,60 @@ class SqliteProjectionStore implements SqlQueryableStore {
     const contentKeys = uniqueContentKeys(bundle);
     if (contentKeys.length === 0) return;
 
+    let evicted = 0;
     this.#transaction(() => {
-      for (const batch of batched(contentKeys)) {
-        for (const { spec } of this.#plansOfScope('blob')) {
-          this.#blobStatement('delete', spec, batch.length).run(...batch);
-        }
-      }
+      this.#forgetBlobKeys(contentKeys);
       this.#insertBundle(bundle, 'blob', []);
+      // AFTER the rows, and BEFORE the eviction, for the reason `writeExtent`
+      // records its manifest row before evicting: a key not yet in the ordering
+      // is a key the window cannot see, so a small retention would drop the very
+      // keys this write just inserted.
+      const writtenAt = new Date().toISOString();
+      for (const key of contentKeys) this.#recordBlobKey.run(key, writtenAt);
+      evicted = this.#evictBlobKeysPastRetention();
     });
+    // Outside the transaction, because SQLite refuses `incremental_vacuum`
+    // inside one — the same arrangement, and the same reason, as `writeExtent`.
+    if (evicted > 0) this.#database.exec('PRAGMA incremental_vacuum');
+  }
+
+  /**
+   * Delete every blob-scoped row for a set of content keys, in all four tables.
+   *
+   * The range a write clears before filling it, and the range an eviction
+   * reclaims: they are the same operation over different keys, which is why
+   * there is one of it. 🪤 The keys are the union all four tables name, never
+   * `blobs` alone — see {@link uniqueContentKeys}.
+   *
+   * @param contentKeys - The keys to clear
+   */
+  #forgetBlobKeys(contentKeys: readonly string[]): void {
+    for (const batch of batched(contentKeys)) {
+      for (const { spec } of this.#plansOfScope('blob')) {
+        this.#blobStatement('delete', spec, batch.length).run(...batch);
+      }
+    }
+  }
+
+  /**
+   * Drop every content key past the blob window, rows and manifest alike.
+   *
+   * Called from inside {@link SqliteProjectionStore.writeBlobFacts}'s
+   * transaction, so a key's rows and its manifest row can never be observed
+   * apart — a manifest row with no rows would make the window count a key the
+   * store no longer holds, and rows with no manifest row would be unevictable
+   * for good.
+   *
+   * @returns How many keys were evicted
+   */
+  #evictBlobKeysPastRetention(): number {
+    const victims = (this.#blobKeysPastRetention.all(this.#retainedBlobKeys) as {
+      contentKey: string;
+    }[]).map((row) => row.contentKey);
+    if (victims.length === 0) return 0;
+    this.#forgetBlobKeys(victims);
+    for (const key of victims) this.#forgetBlobKey.run(key);
+    return victims.length;
   }
 
   /** @inheritdoc */

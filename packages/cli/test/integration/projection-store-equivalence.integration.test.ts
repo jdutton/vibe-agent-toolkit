@@ -1,11 +1,19 @@
 /**
  * The projection store changes COST, never the ANSWER.
  *
- * `VAT_PROJECTION_STORE=sqlite` is opt-in today and is about to become the
- * default. The moment it does, every command's answer is served from a cache on
- * the second run — so the property that has to be true BEFORE the flip is that
- * nothing depends on the store being there, and nothing depends on it being
- * absent. This suite pins that, per command, against one fixture tree.
+ * The projection store is **the default now**, and this suite is what the flip
+ * was allowed to happen on top of. Every command's answer is served from a cache
+ * on the second run, so the property that had to be true before the flip — and
+ * has to stay true after it — is that nothing depends on the store being there
+ * and nothing depends on it being absent. This suite pins that, per command,
+ * against one fixture tree.
+ *
+ * ⚠️ Arm A therefore turns the store OFF **explicitly**, with
+ * {@link PROJECTION_STORE_OFF}. It used to get the uncached path by saying
+ * nothing, which stopped being true the day the default moved — and would have
+ * stopped silently: arm A would have run WITH a store, its "no store file"
+ * assertions would have failed against its own isolated directory, and the
+ * reference answer every other arm is compared to would have been a cached one.
  *
  * ## Three arms, because "cache off" and "cache warm" are different questions
  *
@@ -69,7 +77,12 @@
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { PROJECTION_STORE_DIR_ENV } from '../../src/utils/projection-store.js';
+import {
+  PROJECTION_STORE_DIR_ENV,
+  PROJECTION_STORE_ENV,
+  PROJECTION_STORE_OFF,
+  PROJECTION_STORE_SQLITE,
+} from '../../src/utils/projection-store.js';
 import {
   contributorsCharged,
   rowsStoredUnder,
@@ -166,7 +179,10 @@ async function runArm(options: {
     env: {
       VAT_RESOURCES_CRAWL: PROJECTION_LANE,
       VAT_CRAWL_TIMING: timing,
-      ...(options.store ? { VAT_PROJECTION_STORE: 'sqlite' } : {}),
+      // Both arms state their position, and neither relies on the default. The
+      // "off" half is the one that matters: it is the reference answer, and a
+      // silent default would have turned it into a cached one.
+      [PROJECTION_STORE_ENV]: options.store ? PROJECTION_STORE_SQLITE : PROJECTION_STORE_OFF,
       // 🪤 Imported from the module under test, never spelled as a literal: a
       // rename would otherwise leave every arm writing the shared default, where
       // arm A's "no store file" assertions would still pass — vacuously, against

@@ -4,8 +4,8 @@
  * ## Why a query verb at all, when `scan` already reports counts
  *
  * `vat resources scan` answers the questions its payload was written for, and
- * nothing else. The projection holds twelve tables — realizations, references,
- * sections, conditions, provenance — and every question about them that nobody
+ * nothing else. The projection holds thirteen tables — realizations, references,
+ * sections, conditions, provenance, rule patterns — and every question nobody
  * anticipated currently has no answer short of writing a new command. This verb
  * is the general case: one statement, the rows it selects, no new field.
  *
@@ -102,11 +102,15 @@ export function buildProjectionQueryOutputData(input: ProjectionQueryPayloadInpu
     // or derived, and what that was worth. Separated they read as two unrelated
     // numbers in a list.
     populationSecs: formatDurationSecs(input.populationMs),
-    // Beside the population it is NOT part of. The lens is evaluated on every
-    // run whether or not the statement mentions `edges`, and a store hit does
-    // not make it cheaper, so folding it into `populationSecs` would read as
-    // the store having got worse. See `ProjectionProvenance.lensMs`.
+    // Beside the population it is NOT part of. A store hit does not make a lens
+    // evaluation cheaper, so folding it into `populationSecs` would read as the
+    // store having got worse. See `ProjectionProvenance.lensMs`.
     lensSecs: formatDurationSecs(input.lensMs),
+    // 🔑 What that number covers. A lens is evaluated only when THIS statement
+    // names one of its relations, so an empty list beside `lensSecs: 0` is the
+    // statement saying it asked for none — not a lens that silently stopped
+    // running. See `ProjectionProvenance.lensesEvaluated`.
+    lensesEvaluated: input.lensesEvaluated,
     rowCount: input.rows.length,
     durationSecs: formatDurationSecs(input.durationMs),
     rows: input.rows,
@@ -139,10 +143,14 @@ async function runProjectionQuery(options: {
   // The statement is compiled against the empty schema first, so a typo'd
   // column — or a `?` with no `--param` behind it — costs milliseconds instead
   // of a full population.
-  return withQueriedProjection({ root, logger, preflight: [{ sql, parameters }] }, (ask, provenance) => ({
-    rows: ask(sql, ...parameters),
-    ...provenance,
-  }));
+  return withQueriedProjection(
+    // `statements` as well as `preflight`, and the two are not redundant: the
+    // preflight COMPILES this statement early, while `statements` decides which
+    // derived relations get evaluated at all. One statement, two questions asked
+    // of it.
+    { root, logger, preflight: [{ sql, parameters }], statements: [sql] },
+    (ask, provenance) => ({ rows: ask(sql, ...parameters), ...provenance }),
+  );
 }
 
 /**

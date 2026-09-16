@@ -255,6 +255,9 @@ function contributeEachManifest(base: ProjectionBase, spec: ManifestExtentSpec):
   const byPath = indexFirstRealizationByPath(base);
   const out: ExtentContribution = {
     contexts: [], resources: [], realizations: [], memberships: [], tags: [], conditions: [],
+    // A `.claude/rules` file's `paths:` list is not a plugin fact; the one
+    // producer of this table is `ClaudeRulesScopeContributor`.
+    claudeRulePatterns: [],
   };
 
   for (const manifestPath of discoverManifests(byPath, spec.suffix)) {

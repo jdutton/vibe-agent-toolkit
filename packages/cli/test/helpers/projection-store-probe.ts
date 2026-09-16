@@ -90,10 +90,43 @@ export function rowsStoredUnder(root: string): number {
  * @returns Every charged contributor id, with repeats — one per recorded pass
  */
 export function contributorsCharged(timingDir: string): string[] {
-  return readdirSync(timingDir).flatMap((file) => {
-    const dump = JSON.parse(readFileSync(safePath.join(timingDir, file), 'utf-8')) as {
-      entries: { contributorId: string }[];
-    };
-    return dump.entries.map((entry) => entry.contributorId);
-  });
+  return timingDumps(timingDir).flatMap((dump) => dump.entries.map((entry) => entry.contributorId));
+}
+
+/**
+ * How many TIMES a run invoked each contributor, summed across its processes.
+ *
+ * 🪤 **Not what {@link contributorsCharged} answers, and the difference is the
+ * whole question when counting populations.** A dump holds one ROW per
+ * `(stratum, pass, contributorId)`, with a `calls` counter inside it — so a
+ * contributor invoked once and a contributor invoked five times produce the
+ * same single entry, and a list of ids can never say how many populations a run
+ * performed. Only `calls` can.
+ *
+ * Summed across dump files because a `vat` invocation is not always one process
+ * — the shipped `bin/vat` wrapper re-dispatches, and each process files its own
+ * dump. A count that read one file would be a count of whichever file
+ * `readdir` returned first.
+ *
+ * @param timingDir - The directory one run's `VAT_CRAWL_TIMING` pointed at
+ * @returns Contributor id to invocation count; absent means never invoked
+ */
+export function chargedCalls(timingDir: string): Record<string, number> {
+  const totals: Record<string, number> = {};
+  for (const dump of timingDumps(timingDir)) {
+    for (const entry of dump.entries) {
+      totals[entry.contributorId] = (totals[entry.contributorId] ?? 0) + entry.calls;
+    }
+  }
+  return totals;
+}
+
+/** Every crawl-timing dump one run left behind, parsed. */
+function timingDumps(timingDir: string): { entries: { contributorId: string; calls: number }[] }[] {
+  return readdirSync(timingDir).map(
+    (file) =>
+      JSON.parse(readFileSync(safePath.join(timingDir, file), 'utf-8')) as {
+        entries: { contributorId: string; calls: number }[];
+      },
+  );
 }

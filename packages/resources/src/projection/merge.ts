@@ -1226,4 +1226,7 @@ function mergeContribution(builder: ProjectionBuilder, contribution: ExtentContr
   for (const row of contribution.conditions) {
     builder.addCondition(row);
   }
+  for (const row of contribution.claudeRulePatterns) {
+    builder.addClaudeRulePattern(row);
+  }
 }

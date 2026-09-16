@@ -61,6 +61,10 @@ const PopulationEntrySchema = z.object({
   // to invent or omit. Omitting it would make an interrupted run's report claim
   // the lens was free.
   lensMs: z.number(),
+  // What that cost COVERS: `lensMs: 0` is ambiguous on its own — nothing asked,
+  // or a lens that stopped running. Carried rather than recomputed because an
+  // interrupted run's document is rebuilt from these lines alone.
+  lensesEvaluated: z.array(z.string()),
   membersEnumerated: z.number(),
 }).strict();
 
@@ -93,6 +97,10 @@ const CheckEntrySchema = z.object({
   durationMs: z.number(),
   rows: z.number().optional(),
   broken: z.literal(true).optional(),
+  // Which SET the name came from. Carried, not recomputed: a parent that looked
+  // the name up in `BUILTIN_CHECK_NAMES` would be a second authority that
+  // disagrees the day a project declares a check of the same name.
+  builtin: z.literal(true).optional(),
 }).strict();
 
 /**
@@ -109,11 +117,11 @@ const CheckEntrySchema = z.object({
  * window. It carries no fields: the fact that it was written is the whole
  * message.
  *
- * 🪤 **Emitted by `runDeclaredChecks`, before it resolves severities.** It first
+ * 🪤 **Emitted by `runProjectChecks`, before it resolves severities.** It first
  * shipped a level up, from `runOutcome` after that function had already
  * returned, which left `resolveIssueSeverity` charged to the last check's window
  * while this comment claimed otherwise. What it still does NOT cover is the last
- * check's row-to-issue conversion — `runChecks` files that check's cost before
+ * check's row-to-issue conversion — `runUnits` files that check's cost before
  * converting its rows — which is why the report's `idle` sentence hedges.
  */
 const ChecksCompleteEntrySchema = z.object({

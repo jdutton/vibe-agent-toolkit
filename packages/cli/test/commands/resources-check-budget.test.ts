@@ -58,6 +58,11 @@ const POPULATION: ProgressEntry = {
   kind: 'population',
   population: 'store',
   populationMs: 1180,
+  lensMs: 0,
+  // Empty, and the zero above goes with it: this run's checks named no derived
+  // relation, so no lens was evaluated. An interrupted run's document has to be
+  // able to say that rather than leave the reader guessing.
+  lensesEvaluated: [],
   membersEnumerated: 8123,
 };
 const FIRST_COST: ProgressEntry = { kind: 'check', name: 'no-markdown', durationMs: 4.25, rows: 3 };

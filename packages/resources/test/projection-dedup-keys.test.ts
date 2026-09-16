@@ -2,7 +2,7 @@
  * The builder's de-duplication keys are the registry's primary keys.
  *
  * `PROJECTION_TABLES` declares each table's primary key as data;
- * `ProjectionBuilder` states the same twelve keys again as `ProjectionTable`
+ * `ProjectionBuilder` states the same thirteen keys again as `ProjectionTable`
  * closures, and nothing in the production code makes the two agree. A
  * divergence there is not an ordering wobble — it changes which rows are
  * **de-duplicated**, so the projection would carry a different row set.
@@ -28,7 +28,7 @@
  * from each of the twelve closures in turn reddens that table and only that
  * table (12/12), and widening each key with one non-key column reddens its table
  * too (10/10; `resource_extents` and `resource_tags` have no non-key column to
- * add).
+ * add). `claude_rule_patterns` arrived after that sweep and was not part of it.
  *
  * ## Order is deliberately not pinned here, because it is not observable here
  *
@@ -89,7 +89,7 @@ interface TableFixture {
  * Read a row as an untyped record.
  *
  * The one cast in this file, and it widens rather than narrows: the assertions
- * below are generic over twelve unrelated row types and address columns by name.
+ * below are generic over thirteen unrelated row types and address columns by name.
  *
  * @param row - Any projection row
  * @returns The same object, typed column-wise
@@ -127,7 +127,7 @@ function fixture<Name extends ProjectionTableName>(
 }
 
 /**
- * The twelve fixtures, in the registry's own declaration order.
+ * The thirteen fixtures, in the registry's own declaration order.
  *
  * Every `alt` differs from its `base` in **every** column — asserted below
  * rather than assumed, because a fixture whose columns move together is exactly
@@ -236,6 +236,29 @@ const FIXTURES: readonly TableFixture[] = [
       targetExists: null,
       matchedPattern: null,
       matchedPayload: { rule: 1 },
+    },
+  ),
+  fixture(
+    'claudeRulePatterns',
+    (builder, row) => builder.addClaudeRulePattern(row),
+    {
+      resourceId: 'res-base',
+      ordinal: 0,
+      pattern: 'lib/**/*.md',
+      literalPrefix: 'lib',
+      witnessPath: PATH_BASE,
+      status: 'matched',
+    },
+    {
+      resourceId: 'res-alt',
+      ordinal: 3,
+      pattern: 'src/**/*.txt',
+      literalPrefix: 'src',
+      // `witnessPath`/`status` move together: a null witness under `matched`
+      // would be a row no producer can emit, and the fixture-power guard above
+      // needs both columns to vary anyway.
+      witnessPath: null,
+      status: 'unevaluated',
     },
   ),
   fixture(
@@ -387,7 +410,7 @@ function altValues(entry: TableFixture, columns: readonly string[]): RowRecord {
 
 describe('ProjectionBuilder de-duplication keys', () => {
   it('are exercised for every table the registry declares', () => {
-    // A thirteenth table would otherwise be silently unguarded: it would compile,
+    // A fourteenth table would otherwise be silently unguarded: it would compile,
     // and no assertion below would ever mention it.
     expect(FIXTURES.map((entry) => entry.name)).toStrictEqual(Object.keys(PROJECTION_TABLES));
   });

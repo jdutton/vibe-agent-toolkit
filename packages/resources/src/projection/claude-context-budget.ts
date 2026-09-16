@@ -130,6 +130,34 @@ export const DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS = 12_000;
  */
 const MAX_QUALIFYING_IMPORT_DEPTH = 1;
 
+/**
+ * How one accounted row reaches — or fails to reach — the always-loaded total.
+ *
+ * A closed union HERE, where the decision is made, and an open string in
+ * `ClaudeContextBudgetDispositionSchema`, where the decision is STORED. That
+ * asymmetry is the same one `ZoneKindSchema` carries and is deliberate: adding a
+ * member must be a compile error at every site that folds one (there is exactly
+ * one, {@link admit}), and must NOT be a schema migration for a stored row.
+ */
+export type BudgetDisposition =
+  | 'charged'
+  | 'unknown-size'
+  | 'oversize'
+  | 'excluded-rule'
+  | 'excluded-deep-import'
+  | 'excluded-unattributed-import'
+  | 'not-always';
+
+/**
+ * The disposition of a qualifying row whose size nothing measured.
+ *
+ * Named because both {@link budgetDisposition} and {@link countDisposition} use
+ * it — and ⚠️ because it is spelled the same as a `ChargeState` it is NOT:
+ * `charge: 'unknown-size'` is the accounting layer's verdict on a row with no
+ * blob, this is the budget's. They coincide today and are free to stop.
+ */
+const UNKNOWN_SIZE: BudgetDisposition = 'unknown-size';
+
 /** One charged file's contribution to the always-loaded total. */
 export interface BudgetContributor {
   readonly path: string;
@@ -193,6 +221,53 @@ export function alwaysLoadedBudget(
   rows: readonly AccountedRow[],
   threshold: number,
 ): AlwaysLoadedBudget {
+  return budgetFromDispositions(
+    directory,
+    rows.map((row) => ({
+      path: row.path,
+      tokens: row.tokens,
+      budgetDisposition: budgetDisposition(row),
+    })),
+    threshold,
+  );
+}
+
+/**
+ * The three facts the budget fold reads, and nothing else.
+ *
+ * 🔑 The seam that makes `claude_context_loads` the budget's SOURCE rather than
+ * a parallel description of it: an {@link AccountedRow} satisfies it once
+ * {@link budgetDisposition} has run, and a `ClaudeContextLoadRow` satisfies it as
+ * it stands, so the verb's verdict and an adopter's `SUM(tokens) … WHERE
+ * budgetDisposition = 'charged'` are folds of the same rows.
+ *
+ * ⚠️ `budgetDisposition` is a plain `string` here, matching the stored column's
+ * OPEN vocabulary rather than {@link BudgetDisposition}'s closed union — a value
+ * this fold has not been taught adds nothing and counts nothing, exactly as
+ * `not-always` does.
+ */
+export interface BudgetChargeRow {
+  readonly path: string;
+  /** ⚠️ `null` is UNKNOWN, never zero. */
+  readonly tokens: number | null;
+  readonly budgetDisposition: string;
+}
+
+/**
+ * Fold already-dispositioned rows into one directory's budget.
+ *
+ * @param directory - Root-relative directory the rows were queried for. Echoed
+ *   into the answer, never interpreted
+ * @param rows - The rows, each carrying its disposition
+ * @param threshold - The always-loaded token budget, in tokens
+ * @returns The total, the contributors behind it, and every exclusion counted
+ * @throws {TypeError} When `threshold` is not a positive integer
+ */
+export function budgetFromDispositions(
+  directory: string,
+  rows: readonly BudgetChargeRow[],
+  threshold: number,
+): AlwaysLoadedBudget {
   assertPositiveIntegerThreshold(threshold);
 
   const accumulator: BudgetAccumulator = {
@@ -222,15 +297,68 @@ export function alwaysLoadedBudget(
 }
 
 /**
- * Route one row into the sum, into an exclusion counter, or into nothing.
+ * How one accounted row reaches — or fails to reach — the always-loaded total.
+ *
+ * 🔑 **Exported because it is the column `claude_context_loads` stores.** The
+ * decision cannot be made in SQL — it reads the admission LIST and the 4 MiB
+ * cliff's verdict, neither of which survives into a flat relation — so it is made
+ * here once and materialised, which is what lets an adopter's `SUM(tokens) …
+ * WHERE budgetDisposition = 'charged'` be the SAME arithmetic
+ * {@link alwaysLoadedBudget} does. `claudeContextRelations` is the producer.
+ *
+ * ⛔ The order of the tests is the same PRIORITY {@link countExclusion} and
+ * {@link chargeInto} carried when this logic was spelled inside them, and it is
+ * not cosmetic: the cliff outranks an unknown size (a file the harness skipped
+ * is knowledge, not ignorance), and an unattributable import outranks a merely
+ * deep one.
  *
  * @param row - One accounted row
+ * @returns Its disposition — see `ClaudeContextBudgetDispositionSchema` for what
+ *   each value means to a reader of the relation
+ */
+export function budgetDisposition(row: AccountedRow): BudgetDisposition {
+  // `on-demand` rows are outside this budget SILENTLY. Their absence is not an
+  // exclusion anybody should count, and the relation says so with a value of its
+  // own rather than by omitting the row — a row missing from the relation and a
+  // row that costs nothing are different facts.
+  if (row.loadClass !== 'always') return 'not-always';
+  if (!qualifies(row.admissions)) return exclusionOf(row.admissions);
+  // Adds nothing AND counts nothing: the 4 MiB cliff is a vendor fact honoured
+  // upstream, and a file the harness skipped genuinely is not loaded.
+  if (row.charge === 'oversize-skipped' || row.charge === 'pruned-by-oversize') return 'oversize';
+  if (row.charge === 'unknown-size' || row.tokens === null) return UNKNOWN_SIZE;
+  return 'charged';
+}
+
+/**
+ * Route one row into the sum or into exactly one counter, by its disposition.
+ *
+ * @param row - One row carrying its disposition
  * @param accumulator - The running sums, mutated in place
  */
-function admit(row: AccountedRow, accumulator: BudgetAccumulator): void {
-  if (row.loadClass !== 'always') return;
-  if (qualifies(row.admissions)) chargeInto(row, accumulator);
-  else countExclusion(row.admissions, accumulator);
+function admit(row: BudgetChargeRow, accumulator: BudgetAccumulator): void {
+  if (row.budgetDisposition === 'charged') {
+    chargeInto(row, accumulator);
+    return;
+  }
+  countDisposition(row.budgetDisposition, accumulator);
+}
+
+/**
+ * Increment the one counter a non-charged disposition belongs to.
+ *
+ * `not-always` and `oversize` increment nothing, which is the whole of their
+ * meaning: the first is outside this budget and the second is a cost the harness
+ * demonstrably did not pay.
+ *
+ * @param disposition - Anything but `charged`
+ * @param accumulator - The running sums, mutated in place
+ */
+function countDisposition(disposition: string, accumulator: BudgetAccumulator): void {
+  if (disposition === UNKNOWN_SIZE) accumulator.unknownTokenRows += 1;
+  else if (disposition === 'excluded-rule') accumulator.excludedRuleRows += 1;
+  else if (disposition === 'excluded-deep-import') accumulator.excludedDeepImportRows += 1;
+  else if (disposition === 'excluded-unattributed-import') accumulator.unattributedImportRows += 1;
 }
 
 /**
@@ -263,44 +391,53 @@ function admit(row: AccountedRow, accumulator: BudgetAccumulator): void {
  * @returns True when at least one admission qualifies
  */
 function qualifies(admissions: readonly Admission[]): boolean {
-  return admissions.some(
-    (admission) =>
-      admission.kind === 'ancestry'
-      || admission.kind === 'root-rule'
-      || (admission.kind === 'import'
-        && admission.depth !== null
-        && admission.depth <= MAX_QUALIFYING_IMPORT_DEPTH),
+  return admissions.some(admissionQualifiesForBudget);
+}
+
+/**
+ * Does THIS one admission put a row inside the calibrated budget?
+ *
+ * Split out of {@link qualifies} and exported so `claude-context-relations.ts`
+ * can name the DECIDING admission — the one whose kind and pattern
+ * `claude_context_loads` stores — without a second copy of the predicate. A
+ * second copy is how the stored `admissionKind` would come to disagree with the
+ * stored `budgetDisposition` beside it, which is the one inconsistency a reader
+ * of that relation could not detect.
+ *
+ * @param admission - One admission
+ * @returns True when it alone is enough to charge the row
+ */
+export function admissionQualifiesForBudget(admission: Admission): boolean {
+  return (
+    admission.kind === 'ancestry'
+    || admission.kind === 'root-rule'
+    || (admission.kind === 'import'
+      && admission.depth !== null
+      && admission.depth <= MAX_QUALIFYING_IMPORT_DEPTH)
   );
 }
 
 /**
- * Add a qualifying row's tokens, or count why they could not be added.
+ * Add a charged row's tokens to the running total.
  *
- * ⚠️ `row.tokens !== null` rather than `row.tokens ?? 0`. A charged row's tokens
- * are non-null by construction (`chargeOf` returns `unknown-size` first), so this
- * branch is unreachable through `account` — but a coalesced zero would assert a
- * free file, and this counts an unmeasured one instead. Never coalesce a null
- * size to zero in this lane.
+ * ⚠️ The `?? 0` is a COMPILER obligation, not a guard — the same one
+ * `claude-context-accounting.ts`'s `totalsOf` documents. {@link
+ * budgetDisposition} returns `unknown-size` for every null-token row before this
+ * function is reachable, so no input can exercise the zero; the field is
+ * `number | null`, so it cannot be deleted, and it cannot be tested. Never read
+ * it as "an unmeasured file is free".
  *
- * The two oversize states add nothing AND count nothing: the 4 MiB cliff is a
- * vendor fact already honoured upstream, and a file the harness skipped genuinely
- * is not loaded. That is knowledge, not ignorance, so it is not a lower bound.
- *
- * @param row - A qualifying always-class row
+ * @param row - A row whose disposition is `charged`
  * @param accumulator - The running sums, mutated in place
  */
-function chargeInto(row: AccountedRow, accumulator: BudgetAccumulator): void {
-  if (row.charge === 'oversize-skipped' || row.charge === 'pruned-by-oversize') return;
-  if (row.charge === 'unknown-size' || row.tokens === null) {
-    accumulator.unknownTokenRows += 1;
-    return;
-  }
-  accumulator.tokens += row.tokens;
-  accumulator.contributors.push({ path: row.path, tokens: row.tokens });
+function chargeInto(row: BudgetChargeRow, accumulator: BudgetAccumulator): void {
+  const tokens = row.tokens ?? 0;
+  accumulator.tokens += tokens;
+  accumulator.contributors.push({ path: row.path, tokens });
 }
 
 /**
- * File a non-qualifying always-class row under exactly one exclusion counter.
+ * Which exclusion a non-qualifying always-class row belongs to.
  *
  * The order is a PRIORITY, not a coincidence: a row carrying both an
  * unattributable import and a deep one is reported as unattributed, because
@@ -308,31 +445,28 @@ function chargeInto(row: AccountedRow, accumulator: BudgetAccumulator): void {
  * to know than "it came from four hops away".
  *
  * @param admissions - Every admission the row carries
- * @param accumulator - The running sums, mutated in place
+ * @returns The disposition naming why this row is not in the total
  */
-function countExclusion(
-  admissions: readonly Admission[],
-  accumulator: BudgetAccumulator,
-): void {
+function exclusionOf(admissions: readonly Admission[]): BudgetDisposition {
   const imports = admissions.filter(
     (admission): admission is ImportAdmission => admission.kind === 'import',
   );
   if (imports.some((admission) => admission.depth === null)) {
-    accumulator.unattributedImportRows += 1;
-  } else if (
+    return 'excluded-unattributed-import';
+  }
+  if (
     imports.some(
       (admission) => admission.depth !== null && admission.depth > MAX_QUALIFYING_IMPORT_DEPTH,
     )
   ) {
-    accumulator.excludedDeepImportRows += 1;
-  } else {
-    // On-demand rules only — every rule kind but `root-rule`, which
-    // {@link qualifies} admits — and also the admission-less row, which the
-    // query emits when nothing reached a member. Neither is ignorance about a
-    // cost: a path-scoped or nested rule is excluded by design because it does
-    // not load at launch, and the admission-less row has no route at all.
-    accumulator.excludedRuleRows += 1;
+    return 'excluded-deep-import';
   }
+  // On-demand rules only — every rule kind but `root-rule`, which
+  // {@link qualifies} admits — and also the admission-less row, which the
+  // query emits when nothing reached a member. Neither is ignorance about a
+  // cost: a path-scoped or nested rule is excluded by design because it does
+  // not load at launch, and the admission-less row has no route at all.
+  return 'excluded-rule';
 }
 
 /**

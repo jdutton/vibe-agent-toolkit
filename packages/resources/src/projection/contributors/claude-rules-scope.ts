@@ -56,15 +56,39 @@
  * `closure`. That is legal — `ExtentContribution` carries `tags`, and
  * `walkClosure` already returns `tags: []` — but it must be stated, because a
  * reader who assumes tags come from one place will not find this one.
+ *
+ * ## It also produces `claude_rule_patterns`, and that half is per-GLOB
+ *
+ * The `rule-scope` tag says a rule is path-scoped; it does not say *which* of
+ * its globs reach anything, which is the question an adopter has. So each
+ * declared glob also gets one row through {@link evaluateRulePatterns}.
+ *
+ * ⚠️ **Tree-wide, and evaluated ONCE per sweep** — the corpus file list is built
+ * lazily and shared across every rule in the contribution
+ * ({@link lazyCorpusFiles}). `selectRules`' per-query short-circuit is a
+ * different question and is deliberately untouched by this.
+ *
+ * ⛔ Emitted under the same identity dedup as the tag, and for a stronger
+ * reason: `claude_rule_patterns` is keyed `(resourceId, ordinal)`, so a
+ * re-realized rules file's second and third emission would be silently
+ * collapsed by the builder while still costing a full glob sweep apiece.
  */
 
+import type { ClaudeRulePatternRow } from '../../schemas/projection-claude-rules.js';
 import type {
   ResourceExtentRow,
   ResourceTagRow,
 } from '../../schemas/projection-resources.js';
 import type { JsonValue } from '../../schemas/projection-shared.js';
 import type { ResolutionContextRow } from '../../schemas/projection-zones.js';
-import { RULES_FILE_TAG, classifyPath, pluginRootsFrom } from '../agentic-tags.js';
+import {
+  RULES_FILE_TAG,
+  RULE_SCOPE_TAG,
+  type RuleScope,
+  classifyPath,
+  pluginRootsFrom,
+} from '../agentic-tags.js';
+import { corpusFiles, declaredPatterns, evaluateRulePatterns } from '../claude-context-rules.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../contributor.js';
 import type { ProjectionBase } from '../projection.js';
 
@@ -72,24 +96,6 @@ import { extentContextId } from './context-id.js';
 
 /** This contributor's `resolution_contexts.kind`, and its id. */
 export const CLAUDE_RULES_SCOPE_KIND = 'claude-rules-scope';
-
-/** The tag whose value carries a rules file's {@link RuleScope}. */
-export const RULE_SCOPE_TAG = 'rule-scope';
-
-/**
- * How broadly a `.claude/rules` file applies.
- *
- * - `root` — no `paths:`, and under the PROJECT-ROOT `.claude/rules/`. Loads at
- *   launch with the same priority as `.claude/CLAUDE.md`.
- * - `nested` — no `paths:`, but under a `.claude/rules/` somewhere below the
- *   project root. The vendor puts these in the on-demand class.
- * - `path-scoped` — carries `paths:`. Its predicate needs a path, and this
- *   classifier has none, so the class is the same wherever the file lives.
- *
- * Deliberately NOT a `loading` class — see the module header for why a second
- * `loading` producer would end an invariant `strongestLoading` exists to hold.
- */
-export type RuleScope = 'root' | 'nested' | 'path-scoped';
 
 /** The frontmatter key whose presence makes a rule path-scoped. */
 const PATHS_KEY = 'paths';
@@ -126,7 +132,28 @@ export function ruleScopeFor(
 }
 
 /**
- * Tags every `.claude/rules` file with the scope its frontmatter implies.
+ * The tree's file list, built at most ONCE per contribution and only when a
+ * path-scoped rule actually asks for it.
+ *
+ * `corpusFiles` walks and sorts every realization and {@link evaluateRulePatterns}
+ * binary-searches the result, so it must be SHARED across a sweep (per-rule
+ * construction is 245 walks of one realization table on the adopter this lane was
+ * measured against) and LAZY, so a tree with no path-scoped rule never pays.
+ *
+ * @param base - The projection so far
+ * @returns A memoized accessor for the sorted, deduplicated corpus file list
+ */
+function lazyCorpusFiles(base: ProjectionBase): () => readonly string[] {
+  let files: readonly string[] | undefined;
+  return () => {
+    files ??= corpusFiles(base.resourceRealizations);
+    return files;
+  };
+}
+
+/**
+ * Tags every `.claude/rules` file with the scope its frontmatter implies, and
+ * records what each of its declared `paths:` globs reaches in this tree.
  *
  * `closure` stratum and `readsBlobs: true` — see the header for both, and for
  * what `readsBlobs` does and does not buy.
@@ -142,13 +169,14 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
   readonly readsBlobs = true;
 
   /**
-   * Classify every realized rules file.
+   * Classify every realized rules file, and evaluate every glob it declares.
    *
    * @param base - Read-only projection view; `resourceRealizations` and `blobs`
    *   are the inputs
    * @param _parameters - Unused. A tree's rules are the same question however
    *   the caller narrowed the crawl
-   * @returns One extent, its members, and their `rule-scope` tags
+   * @returns One extent, its members, their `rule-scope` tags, and one
+   *   `claude_rule_patterns` row per declared `paths:` glob
    */
   contribute(base: ProjectionBase, _parameters: JsonValue): Promise<ExtentContribution> {
     const { rootId } = base.identities;
@@ -172,6 +200,8 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
 
     const tags: ResourceTagRow[] = [];
     const memberships: ResourceExtentRow[] = [];
+    const claudeRulePatterns: ClaudeRulePatternRow[] = [];
+    const filesOf = lazyCorpusFiles(base);
     const seen = new Set<string>();
 
     for (const row of base.resourceRealizations) {
@@ -210,6 +240,14 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
         value: ruleScopeFor(row.path, frontmatter),
         source: this.id,
       });
+      // Under the SAME identity dedup as the tag above, and for a stronger
+      // reason: `claude_rule_patterns` is keyed `(resourceId, ordinal)`, so the
+      // builder would silently collapse the second and third emission of an
+      // identity realized under three extents — the duplicate work would stay,
+      // invisible, at one tree-wide glob sweep per extra realization per pass.
+      for (const evaluation of this.#patternsOf(frontmatter, filesOf)) {
+        claudeRulePatterns.push({ resourceId: row.resourceId, ...evaluation });
+      }
     }
 
     return Promise.resolve({
@@ -222,6 +260,34 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
       memberships,
       tags,
       conditions: [],
+      claudeRulePatterns,
     });
+  }
+
+  /**
+   * What each glob one rules file declares reaches in this tree.
+   *
+   * Private and tiny, and it exists to keep the corpus file list from being
+   * built for a tree that has no path-scoped rule in it: a rule declaring
+   * nothing returns before `filesOf()` is ever called.
+   *
+   * ⛔ The pattern lane is TREE-WIDE, not query-scoped, which is the whole
+   * difference between "this glob matches nothing" and "this glob matches
+   * nothing HERE". That is why it is evaluated during POPULATION rather than
+   * inside `selectRules`, whose short-circuit answers a different question and
+   * is deliberately left untouched.
+   *
+   * @param frontmatter - The rules file's parsed frontmatter, or null when its
+   *   blob was never keyed
+   * @param filesOf - The sweep's shared, lazily-built corpus file list
+   * @returns One evaluation per declared glob, in declaration order
+   */
+  #patternsOf(
+    frontmatter: Readonly<Record<string, JsonValue>> | null,
+    filesOf: () => readonly string[],
+  ): readonly Omit<ClaudeRulePatternRow, 'resourceId'>[] {
+    const patterns = declaredPatterns(frontmatter);
+    if (patterns.length === 0) return [];
+    return evaluateRulePatterns({ patterns, files: filesOf() });
   }
 }

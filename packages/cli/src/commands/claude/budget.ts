@@ -53,6 +53,8 @@
 
 import {
   ALWAYS_LOADED_BUDGET_LIMITS,
+  ALWAYS_LOADED_BUDGET_SQL_TWIN,
+  ALWAYS_LOADED_CONTRIBUTORS_SQL_TWIN,
   buildClaudeContextPopulation,
   CLAUDE_CONTEXT_BOUNDS_STATEMENT,
   DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS,
@@ -93,6 +95,20 @@ const WRAP_COLUMNS = 96;
 
 /** How the corpus root itself is named to a reader — it has no path of its own. */
 const CORPUS_ROOT_LABEL = '<corpus root>';
+
+/**
+ * Indent a multi-line statement for the help text.
+ *
+ * The statements are IMPORTED, never restated here: a second copy in help text
+ * would go stale the first time a column is renamed — silently, and in the one
+ * place an adopter is told to trust.
+ *
+ * @param sql - The statement
+ * @returns Its lines, each indented four spaces
+ */
+function indented(sql: string): string {
+  return sql.split('\n').map((line) => `    ${line}`).join('\n');
+}
 
 /** How the report is rendered. `text` is for a person; the other two are for a program. */
 export type BudgetOutputFormat = 'text' | 'yaml' | 'json';
@@ -198,6 +214,25 @@ Description:
 
   This is the CHECK. 'vat claude context' is the QUERY — same lane, no
   threshold and no verdict.
+
+The same question in SQL:
+  This verb is a default REPORT over rows you can select yourself. The
+  relations are claude_context_chains(chainId, directory, representative) and
+  claude_context_loads(chainId, resourceId, path, loadClass, admissionKind,
+  pattern, depth, admissionCount, charge, budgetDisposition, tokens, bytes),
+  reachable from 'vat resources query' and declarable as a check under
+  resources.checks. This statement reproduces the verdict above:
+
+${indented(ALWAYS_LOADED_BUDGET_SQL_TWIN)}
+
+  And this one says which files put a chain over it — pass the chainId with
+  --param:
+
+${indented(ALWAYS_LOADED_CONTRIBUTORS_SQL_TWIN)}
+
+  WARNING: claude_context_chains holds one row per working LOCATION, so a
+  plain JOIN onto it multiplies every load row by the number of directories
+  paying that chain. Aggregate the loads first, as above.
 
 Configuration (vibe-agent-toolkit.config.yaml):
   resources.validation.thresholds.alwaysLoadedContextTokens moves the budget

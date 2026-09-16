@@ -105,8 +105,9 @@ import type {
   ResourceRealizationRow,
   ResourceTagRow,
 } from '../schemas/projection-resources.js';
+import type { JsonValue } from '../schemas/projection-shared.js';
 
-import { RULE_SCOPE_TAG, type RuleScope } from './contributors/claude-rules-scope.js';
+import { RULE_SCOPE_TAG, type RuleScope } from './agentic-tags.js';
 
 /**
  * The vendor's shared expansion budget for one rule's whole `paths` list.
@@ -186,6 +187,40 @@ export interface SelectedRule {
 export interface RuleSelectionResult {
   readonly rules: readonly SelectedRule[];
   readonly overBudget: readonly string[];
+}
+
+/**
+ * What happened when one declared pattern was tested against the whole tree.
+ *
+ * ⛔ THREE states, and the third is the point: a pattern the vendor's budget
+ * REFUSED has a null witness while meaning the opposite of inertness, so
+ * collapsing the two reports a refusal as a defect. See
+ * `docs/architecture/zones.md` §4.
+ *
+ * - `matched` — some realized file matches; `witnessPath` names it.
+ * - `inert` — evaluated against every candidate and matched none. The defect
+ *   signal: a glob naming a moved, renamed or never-created path.
+ * - `unevaluated` — the rule's `paths:` list blew the shared expansion or byte
+ *   budget, so no matcher ran. One over-budget entry refuses the whole list.
+ */
+type RulePatternStatus = 'matched' | 'inert' | 'unevaluated';
+
+/** One declared `paths:` entry, and what the tree-wide walk found for it. */
+interface RulePatternEvaluation {
+  /** Zero-based index in the rule's declared `paths:` list. */
+  readonly ordinal: number;
+  /** The pattern exactly as declared — never normalised. */
+  readonly pattern: string;
+  /**
+   * The longest path every match must live at or below.
+   *
+   * ⛔ A wholly-literal pattern yields ITSELF, a FILE rather than a directory —
+   * see {@link literalPrefix}. Read it as "at or below", inclusively.
+   */
+  readonly literalPrefix: string;
+  /** The file that proves the pattern live, or null for the other two states. */
+  readonly witnessPath: string | null;
+  readonly status: RulePatternStatus;
 }
 
 /**
@@ -270,6 +305,75 @@ export function selectRules(input: {
     }
   }
   return { rules, overBudget };
+}
+
+/**
+ * Every realized file in the corpus, deduplicated and path-sorted.
+ *
+ * The input {@link evaluateRulePatterns} needs, hoisted to its own export so a
+ * caller evaluating many rules builds it ONCE. Rebuilding it per rule is the
+ * shape of cost this module already refuses inside {@link selectRules}: on the
+ * adopter that motivated the per-pattern lane it would be 246 walks of the same
+ * realization table.
+ *
+ * @param realizations - Every realization the projection holds
+ * @returns The sorted, deduplicated file list for the whole tree
+ */
+export function corpusFiles(
+  realizations: readonly ResourceRealizationRow[],
+): readonly string[] {
+  return filesUnder(realizations, '');
+}
+
+/**
+ * Every declared pattern of one rule, and whether the tree realizes it.
+ *
+ * **Not what {@link selectRules} answers.** {@link directoryAdmission} returns on
+ * the FIRST pattern that produces a witness — correct for *is this rule in the
+ * answer, and why*, and deliberately cheap — so the rule's other patterns are
+ * never tested and are absent from its result. This walks all of them, and that
+ * short-circuit is untouched.
+ *
+ * ⛔ The witness is TREE-WIDE, not query-scoped: that is the difference between
+ * "matches nothing" and "matches nothing HERE", and a rule scoped to another
+ * package is correctly absent from a `packages/cli/src` query without its
+ * patterns being dead. {@link isAtOrBelow} makes the empty `under` the corpus
+ * root, so passing `''` disables the disjoint-subtree prune and keeps the
+ * sorted-range one — exactly the tree-wide walk.
+ *
+ * ⛔ **The vendor's 1,000-pattern / 4 MiB budget is spent by the whole `paths:`
+ * list at once**, so one oversized entry makes EVERY pattern in the list
+ * `unevaluated`. Reporting those as `inert` would name a defect the rule does
+ * not have and hide the one it does.
+ *
+ * @param input - The rule's declared patterns and the tree's files
+ * @param input.patterns - The rule's `paths:` entries, in declaration order
+ * @param input.files - {@link corpusFiles}' output; the order is load-bearing,
+ *   because {@link candidateRange} binary-searches it
+ * @returns One evaluation per declared pattern, in declaration order
+ */
+export function evaluateRulePatterns(input: {
+  readonly patterns: readonly string[];
+  readonly files: readonly string[];
+}): readonly RulePatternEvaluation[] {
+  const refused = isOverBudget(input.patterns);
+  return input.patterns.map((pattern, ordinal) => {
+    const prefix = literalPrefix(pattern);
+    // ⚠️ No matcher is compiled and no file is read on this branch. That is the
+    // claim `unevaluated` makes, and a `firstMatchUnder` call here would quietly
+    // turn it into a lie the reader cannot see.
+    if (refused) {
+      return { ordinal, pattern, literalPrefix: prefix, witnessPath: null, status: 'unevaluated' };
+    }
+    const witness = firstMatchUnder(pattern, '', input.files);
+    return {
+      ordinal,
+      pattern,
+      literalPrefix: prefix,
+      witnessPath: witness ?? null,
+      status: witness === undefined ? 'inert' : 'matched',
+    };
+  });
 }
 
 /**
@@ -550,11 +654,38 @@ function filesUnder(
 }
 
 /**
- * A rule's `paths:` list, or empty when it has none or it is not a string array.
+ * The `paths:` globs one rules file declares, read off its parsed frontmatter.
  *
  * A `paths:` that is not an array of strings is not a narrower predicate — it is
  * an unreadable one, and treating it as "matches everything" would charge a rule
- * the harness cannot run.
+ * the harness cannot run. Non-string entries are dropped for the same reason,
+ * one entry at a time.
+ *
+ * ⛔ Exported so the PRODUCER of `claude_rule_patterns`
+ * (`ClaudeRulesScopeContributor`) and this module's query lane read one
+ * declaration through one function. A second reader would be free to disagree
+ * about what `paths:` means, and the disagreement would surface as a stored row
+ * describing a predicate the query never applies.
+ *
+ * ⚠️ NOT the same question as {@link ruleScopeFor}'s, which asks only whether a
+ * `paths:` key holds a non-empty array. A rule declaring `paths: [42]` is
+ * therefore `path-scoped` with zero patterns: classified as on-demand, and with
+ * nothing to evaluate. Deliberate — the scope is the load class, and refusing to
+ * read a malformed entry must not promote a rule to always-loaded.
+ *
+ * @param frontmatter - The rules file's parsed frontmatter, or null
+ * @returns The declared patterns in declaration order, or an empty list
+ */
+export function declaredPatterns(
+  frontmatter: Readonly<Record<string, JsonValue>> | null | undefined,
+): string[] {
+  const value = frontmatter?.['paths'];
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string');
+}
+
+/**
+ * A rule's `paths:` list, or empty when it has none or it is not a string array.
  *
  * @param row - The rule's realization
  * @param blobByKey - `contentKey` → blob
@@ -565,9 +696,7 @@ function pathsFrontmatterOf(
   blobByKey: ReadonlyMap<string, BlobRow>,
 ): string[] {
   if (row.contentKey === null) return [];
-  const value = blobByKey.get(row.contentKey)?.frontmatter?.['paths'];
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === 'string');
+  return declaredPatterns(blobByKey.get(row.contentKey)?.frontmatter);
 }
 
 /**

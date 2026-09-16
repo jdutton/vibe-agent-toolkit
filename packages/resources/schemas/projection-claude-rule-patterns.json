@@ -1,0 +1,57 @@
+{
+  "$ref": "#/definitions/projection-claude-rule-patterns",
+  "definitions": {
+    "projection-claude-rule-patterns": {
+      "type": "object",
+      "properties": {
+        "resourceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foreign key to resources.resourceId — the `.claude/rules` file that declares this pattern"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Index of this glob in the rule file's own `paths:` list, from 0"
+        },
+        "pattern": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The `paths:` glob verbatim, exactly as the rule file declares it"
+        },
+        "literalPrefix": {
+          "type": "string",
+          "description": "The glob-free leading segments of `pattern`; may be empty. The longest path every match lives at or below."
+        },
+        "witnessPath": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "First tree path this pattern matches, or null when it matched nothing or was never evaluated"
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Pattern status — open vocabulary: \"matched\", \"inert\" or \"unevaluated\""
+        }
+      },
+      "required": [
+        "resourceId",
+        "ordinal",
+        "pattern",
+        "literalPrefix",
+        "witnessPath",
+        "status"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the path-dependent `claude_rule_patterns` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

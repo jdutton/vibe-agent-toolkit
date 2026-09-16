@@ -93,6 +93,8 @@ import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { ResourceCheck } from '../schemas/project-config.js';
 
+import { findingLocation } from './finding-location.js';
+
 /**
  * Turn one check's selected rows into findings.
  *
@@ -137,36 +139,17 @@ export function issuesFromCheckRows(
  * finding to the config file instead would put the reader where the check is
  * WRITTEN, which is never where the problem is.
  *
- * 🪤 Absolute and backslashed values are declined rather than passed through,
- * and **this function is the only thing enforcing that** on this path. Nothing
- * between here and the output formats parses a check's findings through
- * `ValidationIssueSchema`: the CLI's `resources check` hands these issues
- * straight to the severity counts, so there is no validating boundary
- * downstream to fall back on. Deleting a guard would emit an issue that violates
- * `ValidationIssueSchema`'s refined `location` (relative, POSIX) with no gate
- * catching it, and `validation.allow` globs are matched against `location`, so
- * such a value would also silently match no allow entry an adopter wrote. Every
- * projection table stores root-relative POSIX paths, so this only fires on a
- * statement that built one itself.
- *
- * 📌 A path naming a **DIRECTORY** keeps its anchor. Decided rather than
- * overlooked: this module holds no SQL and never opens a database, so it cannot
- * tell `docs` (a directory row) from `docs` (an extension-less file), and
- * refusing every extension-less path would unanchor legitimate file rows —
- * `LICENSE`, `Makefile` — to catch a rarer one. The consequence an adopter has
- * to know is that `validation.allow` globs match against `location`, and
- * `docs/**` does not match the bare directory `docs`; allow the directory itself
- * when a check selects directory rows.
+ * 🪤 What makes a value USABLE as a location — relative, POSIX, non-empty — is
+ * {@link findingLocation}, shared with the built-in check set for the reason its
+ * module header gives: two lanes materialise findings from projection rows, and
+ * nothing downstream re-validates either lane's `location`, so a second copy of
+ * the guard is one of them silently losing a clause.
  *
  * @param row - One selected row
  * @returns The location, or undefined when the row names no usable one
  */
 function locationOf(row: Record<string, unknown>): string | undefined {
-  const value = row['path'];
-  if (typeof value !== 'string' || value.length === 0) return undefined;
-  if (value.includes('\\')) return undefined;
-  if (value.startsWith('/') || /^[A-Za-z]:/.test(value)) return undefined;
-  return value;
+  return findingLocation(row['path']);
 }
 
 /**

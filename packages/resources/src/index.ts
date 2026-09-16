@@ -140,6 +140,25 @@ export {
 } from './schemas/projection-blobs.js';
 
 export {
+  ClaudeRulePatternRowSchema,
+  ClaudeRulePatternStatusSchema,
+  type ClaudeRulePatternRow,
+} from './schemas/projection-claude-rules.js';
+
+// The two DERIVED relations that put the always-loaded chain in SQL's reach.
+// Exported as row shapes for the same reason the edge row schemas are: a caller
+// evaluating the lens hands `writeDerived` rows a backend validates against
+// these, so the shapes are part of the published surface even though nothing
+// materialises them.
+export {
+  ClaudeContextBudgetDispositionSchema,
+  ClaudeContextChainRowSchema,
+  ClaudeContextLoadRowSchema,
+  type ClaudeContextChainRow,
+  type ClaudeContextLoadRow,
+} from './schemas/projection-claude-context.js';
+
+export {
   LensEntryPointRowSchema,
   ResolutionContextRowSchema,
   TreeRoleSchema,
@@ -253,7 +272,7 @@ export {
 // parse-fact oracle — exported so exactly one walk defines document order.
 export { blobSectionsFor, flattenHeadings } from './projection/blob-sections.js';
 
-// The projection container: twelve row tables, the builder that accumulates
+// The projection container: thirteen row tables, the builder that accumulates
 // them, and the read-only base view a contributor is handed. The builder's
 // `ensureContentKey` is the demand half of demand-driven keying — the only way
 // a `deferred` realization's null `contentKey` ever becomes a real one.
@@ -684,10 +703,11 @@ export {
   classifyPath,
   LOADING_TAG,
   pluginRootsFrom,
+  RULE_SCOPE_TAG,
   RULES_FILE_TAG,
   strongestLoading,
 } from './projection/agentic-tags.js';
-export type { AgenticTag, PluginRoots, TagLoading } from './projection/agentic-tags.js';
+export type { AgenticTag, PluginRoots, RuleScope, TagLoading } from './projection/agentic-tags.js';
 
 // The Claude `@`-import closure: one extent per `CLAUDE.md` / `.claude/rules`
 // root, the roots discovered through `classifyPath` rather than a second glob.
@@ -705,10 +725,8 @@ export {
 export {
   CLAUDE_RULES_SCOPE_KIND,
   ClaudeRulesScopeContributor,
-  RULE_SCOPE_TAG,
   ruleScopeFor,
 } from './projection/contributors/claude-rules-scope.js';
-export type { RuleScope } from './projection/contributors/claude-rules-scope.js';
 
 // The lane that assembles the three above. Its own lane, not a flag on the fast
 // repo-wide one: that one declares CONTENT_PARSING_SKIP and both classifiers
@@ -750,10 +768,30 @@ export {
 // re-spelled would be a second copy of a measured quantity.
 export {
   DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS,
+  admissionQualifiesForBudget,
   alwaysLoadedBudget,
+  budgetDisposition,
+  budgetFromDispositions,
   type AlwaysLoadedBudget,
+  type BudgetChargeRow,
   type BudgetContributor,
+  type BudgetDisposition,
 } from './projection/claude-context-budget.js';
+
+// The chain as RELATIONS — the same rows the sweep folds, flattened for SQL. A
+// lens evaluator (`packages/cli/src/utils/claude-context-lens.ts`) is the only
+// caller of `claudeContextRelations`; `contextChains` additionally feeds
+// `sweepAlwaysLoadedBudgets`, which is what makes the verb a report OVER these
+// rows rather than a second computation beside them.
+export {
+  ALWAYS_LOADED_BUDGET_SQL_TWIN,
+  ALWAYS_LOADED_CONTRIBUTORS_SQL_TWIN,
+  claudeContextRelations,
+  contextChainId,
+  contextChains,
+  type ClaudeContextRelations,
+  type ContextChain,
+} from './projection/claude-context-relations.js';
 
 // That budget over the WHOLE tree, from one query per distinct instruction chain
 // rather than one per directory — 9 queries instead of 589 on VAT's own corpus.
@@ -853,6 +891,20 @@ export {
 // The statement itself is the CLI's business — only it knows a storage backend
 // exists — so the rule engine here never opens a database.
 export { issuesFromCheckRows } from './projection/sql-checks.js';
+
+// VAT's OWN default assertions over the same projection — TypeScript predicates,
+// never SQL, because a default-on rule written as a statement would make the
+// engine mandatory for everyone who inherits it. The CLI binds them to the
+// projection it just built and runs them beside the project's declared checks.
+export {
+  bindBuiltinChecks,
+  BUILTIN_CHECK_NAMES,
+  BUILTIN_CHECKS,
+  CLAUDE_RULE_GLOB_INERT_CHECK,
+  type BoundBuiltinCheck,
+  type BuiltinCheck,
+  type BuiltinCheckInput,
+} from './projection/builtin-checks.js';
 
 export {
   buildResourcePopulation,

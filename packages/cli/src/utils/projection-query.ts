@@ -53,13 +53,19 @@ import {
   buildResourceProjection,
   PROJECTION_TABLES,
   splitProjectionByScope,
+  type Projection,
 } from '@vibe-agent-toolkit/resources';
 
 import { gitTrackerForProjectRoot } from '../commands/audit/distributed-tree.js';
 
-import { evaluateAuthoredLenses } from './edge-lens-evaluation.js';
 import type { Logger } from './logger.js';
 import { populationWiring } from './population-wiring.js';
+import {
+  evaluateLens,
+  lensesNamedBy,
+  unevaluatedRelationsNamed,
+  type ProjectionLens,
+} from './projection-lenses.js';
 import { openEphemeralQueryStore, withPopulationCache } from './projection-store.js';
 
 /**
@@ -161,15 +167,33 @@ export interface ProjectionProvenance {
   readonly populationMs: number;
 
   /**
-   * What EVALUATING THE LENS cost, separately from populating the tree.
+   * The lenses this run evaluated, by name, in evaluation order.
+   *
+   * 🔑 **Published because "which lenses ran" became a DECISION, and an
+   * unpublished decision is one nobody can check.** Without it an empty derived
+   * relation is ambiguous — no rows, or no evaluation? This is the tell, in the
+   * same family as {@link population}, and what makes a `lensSecs` of `0`
+   * legible rather than alarming.
+   *
+   * ⚠️ Not the only guard: a statement naming a relation no evaluated lens
+   * produced is REFUSED (see {@link withQueriedProjection}), so this field
+   * explains a cheap run rather than excusing a blind one.
+   */
+  readonly lensesEvaluated: readonly string[];
+
+  /**
+   * What EVALUATING THE LENSES cost, separately from populating the tree.
    *
    * Separate because the two answer different questions and a reader must be
    * able to tell them apart. Population is work every verb pays and the store
-   * can make cheap; this is work the *edge relations* cost, it is paid on every
-   * run whether or not the caller's statement mentions them, and a store hit
-   * does NOT make it cheaper — the lens is evaluated over the served rows just
-   * as over derived ones. Folded into `populationMs` it would look like the
-   * store getting worse.
+   * can make cheap; this is work the *derived relations* cost, and a store hit
+   * does NOT make an authored-link evaluation cheaper — it is a pass over the
+   * served rows just as over derived ones. Folded into `populationMs` it would
+   * look like the store getting worse.
+   *
+   * ⚠️ **Not an unconditional cost.** A run whose statements name no derived
+   * relation evaluates nothing and reports `0`; {@link lensesEvaluated} says
+   * which lenses the number covers.
    *
    * ⚠️ **DISJOINT from `populationMs`, and that is enforced by where the
    * population clock stops, not by convention.** It shipped overlapping: the
@@ -179,9 +203,9 @@ export interface ProjectionProvenance {
    * a reader comparing a served run against a derived one is the whole reason
    * they are two fields.
    *
-   * ⚠️ Published rather than merely measured, because an unconditional cost
-   * that is invisible is the one nobody can argue with. If this ever grows
-   * large enough to be worth a flag, this field is the evidence that says so.
+   * ⚠️ Published rather than merely measured, because a cost that is invisible
+   * is the one nobody can argue with. It is the evidence the selection above
+   * rests on, and the evidence any future flag would rest on.
    */
   readonly lensMs: number;
 }
@@ -216,7 +240,7 @@ export interface PopulationExtent {
    *
    * 🪤 Realizations rather than any other count, because every alternative
    * fails to reach zero on the case that matters: `roots` always holds exactly
-   * one row (the invariant thrown for below), so a total over all twelve tables
+   * one row (the invariant thrown for below), so a total over all thirteen tables
    * is never 0; `blobs` is content-keyed and deduped, so it counts parse REACH
    * and already has its own guard in `onBlobPopulation`; and `resources` counts
    * identities, which a corpus can legitimately have none of while enumerating
@@ -309,17 +333,34 @@ export async function assertQueriesCompile(statements: readonly PreflightStateme
  * @param options.preflight - Every statement this run intends to ask, compiled
  *   against the empty schema BEFORE the population starts. See
  *   {@link assertQueriesCompile}
- * @param work - Given the asker, where its rows came from, and how much of the
- *   tree they cover. The store is open for exactly this call and closed however
- *   it ends
+ * @param options.statements - Every statement this run may ask, for LENS
+ *   SELECTION only — never compiled, never bound, and deliberately separate from
+ *   `preflight`. ⛔ Omitting it evaluates EVERY lens, which is the correct answer
+ *   and the expensive one
+ * @param work - Given the asker, where its rows came from, how much of the tree
+ *   they cover, and the ROWS THEMSELVES. The store is open for exactly this call
+ *   and closed however it ends
  * @returns Whatever `work` returned
  */
 export async function withQueriedProjection<T>(
-  options: { root: string; logger: Logger; preflight?: readonly PreflightStatement[] },
+  options: {
+    root: string;
+    logger: Logger;
+    preflight?: readonly PreflightStatement[];
+    statements?: readonly string[];
+  },
   work: (
     ask: AskProjection,
     provenance: ProjectionProvenance,
     extent: PopulationExtent,
+    // 🔑 The in-memory rows, beside `ask` rather than instead of it: a built-in
+    // check is a TypeScript predicate over the row model (no built-in may be
+    // SQL) and needs the rows, not a database. Free to hand over — the
+    // ephemeral database was loaded FROM them.
+    //
+    // ⚠️ Not a second way to ask the same question. Nothing here re-derives,
+    // re-filters or re-scopes; a caller wanting a relational answer uses `ask`.
+    projection: Projection,
   ) => Promise<T> | T,
 ): Promise<T> {
   const { root, logger } = options;
@@ -395,19 +436,28 @@ export async function withQueriedProjection<T>(
       // over-count wall time for anyone who added them.
       const populationMs = performance.now() - populationStart;
 
-      // The lens's output, alongside the tree's facts. Unconditional rather
-      // than behind a flag: the relations are the answer to questions the
-      // projection was built to support, and a surface that exists only when
-      // someone remembered a flag is one nobody writes a check against. What it
-      // costs is published as `lensSecs` rather than folded into the population
-      // — a caller who finds it too expensive can see the number they are
-      // paying, which a hidden cost never permits.
+      // 🔑 The lenses this run's statements NAME, and no others — zones.md §2
+      // carries why. The relations are still not behind a flag: a surface that
+      // exists only when somebody remembered a flag is one nobody writes a check
+      // against. What decides is the statement, which cannot be forgotten.
+      //
+      // ⛔ The narrowing is safe ONLY because `ask` below refuses a statement
+      // naming a relation nothing filled. Delete that refusal and this becomes a
+      // silent wrong answer: an unevaluated relation exists in the schema and
+      // selects zero rows.
+      const lenses = lensesNamedBy(options.statements);
       const lensStart = performance.now();
-      await store.writeDerived(evaluateAuthoredLenses(projection));
+      for (const lens of lenses) {
+        // Sequential, not `Promise.all`: a lens may populate, and two
+        // populations racing for one projection store is the concurrency this
+        // lane has no reason to invite.
+        await store.writeDerived(await evaluateLens(lens, { projection, root, logger, cache }));
+      }
       const lensMs = performance.now() - lensStart;
       // The shared setup is done. Everything after this line is the caller's.
 
       const ask: AskProjection = (sql, ...parameters) => {
+        assertRelationsEvaluated(sql, lenses);
         try {
           return store.query(sql, ...parameters);
         } catch (error) {
@@ -419,12 +469,18 @@ export async function withQueriedProjection<T>(
 
       return await work(
         ask,
-        { population: contributorRecords === 0 ? 'store' : 'derived', populationMs, lensMs },
+        {
+          population: contributorRecords === 0 ? 'store' : 'derived',
+          populationMs,
+          lensMs,
+          lensesEvaluated: lenses.map((lens) => lens.name),
+        },
         // Read off the PROJECTION rather than counted back out of the store with
         // a `SELECT COUNT(*)`: a count that travelled through the same `ask` the
         // caller's statements do would be broken by the very schema drift it
         // exists to survive, and it is the population's size either way.
         { membersEnumerated: projection.resourceRealizations.length },
+        projection,
       );
     } finally {
       // Closed however the work ends. An in-memory database is reclaimed with the
@@ -433,6 +489,39 @@ export async function withQueriedProjection<T>(
       await store.close();
     }
   });
+}
+
+/**
+ * Refuse a statement reaching for a relation this run did not evaluate.
+ *
+ * 🚨 **The refusal is what makes lazy lens evaluation an optimisation.** A
+ * derived relation always EXISTS in the ephemeral schema — the DDL is issued for
+ * every registry entry — so an unevaluated one is an empty table, and
+ * `SELECT COUNT(*) FROM edges` over it answers `0` at exit 0: indistinguishable
+ * from a tree with no links, and for `vat resources check` a rule that can no
+ * longer fail. So the caller gets a legible error naming the relation instead of
+ * a confident zero; for `check` that surfaces as a `RESOURCE_CHECK_BROKEN`
+ * finding naming the rule.
+ *
+ * ⚠️ It cannot fire for a caller that passed no `statements` at all: that
+ * selects every lens, so nothing is unevaluated. The guard exists for the caller
+ * that declared SOME statements and then ran a different one.
+ *
+ * @param sql - The statement about to run
+ * @param evaluated - The lenses this run evaluated
+ * @throws When the statement names a relation none of them produced
+ */
+function assertRelationsEvaluated(sql: string, evaluated: readonly ProjectionLens[]): void {
+  const missing = unevaluatedRelationsNamed(sql, evaluated);
+  if (missing.length === 0) return;
+  throw new Error(
+    `This statement reads ${missing.join(', ')}, but no lens producing`
+    + ` ${missing.length === 1 ? 'that relation' : 'those relations'} was evaluated for this run,`
+    + ' so the table is empty and any answer from it would be false.'
+    + ' A derived relation is evaluated only when one of the statements the run DECLARED names it'
+    + ' — declare this statement (`vat resources query` passes the one it was given; `vat resources'
+    + ' check` passes every statement in `resources.checks`) rather than reading the empty table.',
+  );
 }
 
 /**

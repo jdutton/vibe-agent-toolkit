@@ -107,10 +107,9 @@
  * both callers.
  */
 
-import { account } from './claude-context-accounting.js';
-import { alwaysLoadedBudget, type AlwaysLoadedBudget } from './claude-context-budget.js';
-import { whatLoadsAt } from './claude-context-query.js';
-import { claudeMdIdentities, comparePaths, contextRegions } from './claude-context-regions.js';
+import { budgetFromDispositions, type AlwaysLoadedBudget } from './claude-context-budget.js';
+import { comparePaths } from './claude-context-regions.js';
+import { contextChains } from './claude-context-relations.js';
 import type { Projection } from './projection.js';
 
 /** One working location's budget, and the query that produced it. */
@@ -160,99 +159,65 @@ export interface BudgetSweep {
  * Every working location's always-loaded budget, from one query per distinct
  * instruction chain.
  *
+ * ## 🔑 It folds the SAME rows `claude_context_loads` publishes
+ *
+ * The chains, the queries and each row's budget disposition all come from
+ * {@link contextChains}, which is also what `claudeContextRelations` flattens
+ * into the derived relation an adopter selects from. So this verdict and an
+ * adopter's `SUM(tokens) … WHERE budgetDisposition = 'charged' GROUP BY chainId`
+ * are two folds of ONE row set rather than two models of one question. This
+ * function used to issue its own `whatLoadsAt` calls and run its own `account`,
+ * which is precisely what made `vat claude budget` the only way to ask.
+ *
+ * ⚠️ The per-representative MEMO went with that, and nothing regressed:
+ * `contextRegions` returns one entry per DISTINCT representative, so the memo
+ * never had a second caller to serve. {@link BudgetSweep.queriedDirectories} is
+ * the chain count now, which is the number it always reported.
+ *
  * @param projection - A populated projection from `buildClaudeContextPopulation`
  * @param threshold - The always-loaded token budget, in tokens. Passed straight
- *   through to `alwaysLoadedBudget`, which refuses a non-positive-integer loudly
+ *   through to `budgetFromDispositions`, which refuses a non-positive integer
+ *   loudly
  * @returns Every location's budget, and the two counters that show the collapse
  * @throws {TypeError} When `threshold` is not a positive integer — raised by
- *   `alwaysLoadedBudget` on the first representative, deliberately not
- *   pre-validated here: one owner for that rule, not two
+ *   `budgetFromDispositions` on the first chain, deliberately not pre-validated
+ *   here: one owner for that rule, not two
  */
 export function sweepAlwaysLoadedBudgets(
   projection: Projection,
   threshold: number,
 ): BudgetSweep {
-  const claudeMdIds = claudeMdIdentities(projection);
-  const regions = contextRegions(projection);
-
-  const state: SweepState = { projection, threshold, claudeMdIds, answers: new Map(), queries: 0 };
+  const chains = contextChains(projection);
   const results: LocationBudget[] = [];
   let evaluated = 0;
   let skipped = 0;
 
-  // Region-major, then sorted back to directory order below. Iterating the
+  // Chain-major, then sorted back to directory order below. Iterating the
   // collapse directly is what makes "one query per distinct chain" structural
   // rather than a property of a memo: there is no longer a per-directory call
   // site for a future edit to reintroduce.
-  for (const region of regions) {
-    evaluated += region.locations.length;
-    const budget = budgetOnce(state, region.representative);
-    if (budget === null) {
-      skipped += region.locations.length;
+  for (const chain of chains) {
+    evaluated += chain.locations.length;
+    // ⛔ `null` is "the representative is a path this projection never realized",
+    // which is not an empty budget. Counted, never reported as zero.
+    if (chain.loads === null) {
+      skipped += chain.locations.length;
       continue;
     }
-    for (const directory of region.locations) {
-      results.push({ directory, representative: region.representative, budget });
+    const budget = budgetFromDispositions(chain.representative, chain.loads, threshold);
+    for (const directory of chain.locations) {
+      results.push({ directory, representative: chain.representative, budget });
     }
   }
 
   return {
     // ⛔ Sorted HERE rather than inherited from the iteration order. The field is
-    // documented as directory-ordered and consumers diff it across runs; region
+    // documented as directory-ordered and consumers diff it across runs; chain
     // order is representative-major, which interleaves directories from
-    // different regions and would report churn nobody caused.
+    // different chains and would report churn nobody caused.
     locations: results.toSorted((left, right) => comparePaths(left.directory, right.directory)),
-    queriedDirectories: state.queries,
+    queriedDirectories: chains.length,
     evaluatedDirectories: evaluated,
     skippedUnknownLocations: skipped,
   };
-}
-
-/**
- * The invariants of one sweep, plus the two things that change as it runs.
- *
- * Bundled rather than threaded as five parameters, which is what
- * {@link budgetOnce} needed and what the lint gate's parameter ceiling refuses.
- */
-interface SweepState {
-  readonly projection: Projection;
-  readonly threshold: number;
-  readonly claudeMdIds: ReadonlySet<string>;
-  /**
-   * Representative → its budget.
-   *
-   * `null` is a REMEMBERED refusal, not an absent entry: an `unknown`
-   * representative shared by fifty locations must still be queried exactly once.
-   */
-  readonly answers: Map<string, AlwaysLoadedBudget | null>;
-  /** `whatLoadsAt` calls issued so far — see {@link BudgetSweep.queriedDirectories}. */
-  queries: number;
-}
-
-/**
- * One representative's budget, querying at most once per representative.
- *
- * ⚠️ The memo is consulted with `has` and not with a truthiness test on `get`:
- * a remembered `null` is an answer, and re-deriving it would re-issue the query
- * this whole module exists to issue once.
- *
- * @param state - The sweep's state, mutated in place
- * @param representative - The directory to query
- * @returns The budget, or null when the query answered `unknown`
- */
-function budgetOnce(state: SweepState, representative: string): AlwaysLoadedBudget | null {
-  if (state.answers.has(representative)) return state.answers.get(representative) ?? null;
-
-  state.queries += 1;
-  const answer = whatLoadsAt(state.projection, representative);
-  const budget =
-    answer.kind === 'unknown'
-      ? null
-      : alwaysLoadedBudget(
-          representative,
-          account(answer, state.claudeMdIds).rows,
-          state.threshold,
-        );
-  state.answers.set(representative, budget);
-  return budget;
 }

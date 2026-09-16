@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { expandedPatternCount, selectRules } from '../src/projection/claude-context-rules.js';
-import { RULE_SCOPE_TAG } from '../src/projection/contributors/claude-rules-scope.js';
+import { RULE_SCOPE_TAG } from '../src/projection/agentic-tags.js';
+import {
+  corpusFiles,
+  evaluateRulePatterns,
+  expandedPatternCount,
+  selectRules,
+} from '../src/projection/claude-context-rules.js';
 import type { BlobRow } from '../src/schemas/projection-blobs.js';
 import type {
   ResourceRealizationRow,
@@ -383,6 +388,169 @@ describe('selectRules', () => {
     });
 
     expect(result.rules[0]?.admission).toEqual({ kind: 'glob-rule', pattern: 'src/**/*.ts' });
+  });
+});
+
+/** A `.ts` file in a package the `packages/cli` fixtures never reach. */
+const OTHER_PKG_TS = 'packages/other-pkg/src/thing1.ts';
+
+/** The glob that names {@link OTHER_PKG_TS} and nothing under `packages/cli`. */
+const OTHER_PKG_GLOB = 'packages/other-pkg/src/thing*.ts';
+
+/** A markdown glob under the shared package — live against {@link SUBJECT_MD}. */
+const CLI_MD_GLOB = `${PACKAGES_CLI}/**/*.md`;
+
+/** The tree-wide file list, built the way a caller builds it once per query. */
+function corpusOf(...paths: readonly string[]): readonly string[] {
+  return corpusFiles(paths.map((path) => queryRealization(path)));
+}
+
+/**
+ * The statuses of one evaluation, in declaration order.
+ *
+ * Returned rather than asserted, so the call site owns the positive control —
+ * an absence assertion in here would be invisible to its reader.
+ *
+ * @param patterns - The rule's `paths:` entries
+ * @param files - The tree-wide, path-sorted realized file list
+ * @returns One status per declared pattern
+ */
+function statusesOf(
+  patterns: readonly string[],
+  files: readonly string[],
+): readonly string[] {
+  return evaluateRulePatterns({ patterns, files }).map((entry) => entry.status);
+}
+
+describe('evaluateRulePatterns', () => {
+  it('reports one result per declared pattern, in declaration order, naming the dead one', () => {
+    // ⛔ The reason this function exists. `directoryAdmission` returns on the
+    // FIRST pattern that matches, so on a real adopter 246 rule rows produced
+    // exactly 246 admissions and one pattern each — "which of this rule's globs
+    // matches nothing" was not a question the answer could be asked.
+    const patterns = [TS_GLOB, CLI_MD_GLOB, OTHER_PKG_GLOB];
+    const result = evaluateRulePatterns({
+      patterns, files: corpusOf(SUBJECT_TS, SUBJECT_MD),
+    });
+
+    expect(result.map((entry) => entry.pattern)).toEqual(patterns);
+    expect(result.map((entry) => entry.ordinal)).toEqual([0, 1, 2]);
+    expect(result.map((entry) => entry.status)).toEqual(['matched', 'matched', 'inert']);
+    expect(result[2]).toEqual({
+      ordinal: 2, pattern: OTHER_PKG_GLOB, literalPrefix: 'packages/other-pkg/src',
+      witnessPath: null, status: 'inert',
+    });
+    expect(result[0]?.witnessPath).toBe(SUBJECT_TS);
+  });
+
+  it('reports a wholly-literal pattern naming a file that does not exist as inert', () => {
+    // 🪤 `literalPrefix` returns the WHOLE pattern here — `.` is not a glob
+    // metacharacter — so the prefix is a FILE. Pinned, because it is also the
+    // string bound `candidateRange` searches on, and the last time that was
+    // misread every wholly-literal entry silently vanished from the answer.
+    const pattern = 'packages/cli/src/missing.ts';
+    const result = evaluateRulePatterns({ patterns: [pattern], files: corpusOf(SUBJECT_TS) });
+
+    expect(result).toEqual([{
+      ordinal: 0, pattern, literalPrefix: pattern, witnessPath: null, status: 'inert',
+    }]);
+  });
+
+  it('names a wholly-literal pattern ITSELF as the witness when that file exists', () => {
+    const result = evaluateRulePatterns({
+      patterns: [SUBJECT_TS], files: corpusOf(SUBJECT_TS),
+    });
+
+    expect(result).toEqual([{
+      ordinal: 0, pattern: SUBJECT_TS, literalPrefix: SUBJECT_TS,
+      witnessPath: SUBJECT_TS, status: 'matched',
+    }]);
+  });
+
+  it('finds a witness ANYWHERE in the tree, not only under one query directory', () => {
+    // The tree-wide half: `selectRules` drops this rule from a `packages/cli/src`
+    // query because it provably cannot fire there, and that absence is correct.
+    // A per-pattern report that inherited the query directory would then call the
+    // pattern inert — it matches a file, just not one here.
+    const rule = '.claude/rules/elsewhere.md';
+    const scoped = selectRules({
+      realizations: [queryRealization(rule), queryRealization(OTHER_PKG_TS)],
+      tags: [scopeTag(rule, PATH_SCOPED)], blobs: [blob(rule, [OTHER_PKG_GLOB])],
+      queryDir: PACKAGES_CLI_SRC, queryFile: null,
+    });
+
+    expect(scoped.rules).toEqual([]);
+    expect(evaluateRulePatterns({
+      patterns: [OTHER_PKG_GLOB], files: corpusOf(SUBJECT_TS, OTHER_PKG_TS),
+    })).toEqual([{
+      ordinal: 0, pattern: OTHER_PKG_GLOB, literalPrefix: 'packages/other-pkg/src',
+      witnessPath: OTHER_PKG_TS, status: 'matched',
+    }]);
+  });
+
+  it('classifies a BUDGET-REFUSED pattern as unevaluated, never as inert', () => {
+    // ⛔ The three-state requirement. A two-state result reports a REFUSAL as a
+    // defect: the harness never expanded this list, so no pattern in it was ever
+    // matched, and a null witness here says nothing about the pattern's reach.
+    // The budget is shared across the whole `paths:` list, so the live sibling is
+    // refused with it.
+    const statuses = statusesOf([OVER_BUDGET_PATTERN, TS_GLOB], corpusOf(SUBJECT_TS));
+
+    expect(statuses).toEqual(['unevaluated', 'unevaluated']);
+    expect(statuses).not.toContain('inert');
+  });
+
+  it('classifies a pattern INSIDE the budget that matches nothing as inert', () => {
+    // The positive control for the test above: the same brace shape, small enough
+    // for the harness to expand, matching no file. Without this pair, a function
+    // that answered `unevaluated` for everything would pass.
+    const inBudget = 'src/{a,b}/x.ts';
+    const result = evaluateRulePatterns({
+      patterns: [inBudget, TS_GLOB], files: corpusOf(SUBJECT_TS),
+    });
+
+    expect(result.map((entry) => entry.status)).toEqual(['inert', 'matched']);
+    // The fixture is in budget because it expands to two patterns, not because
+    // it looks smaller than its sibling.
+    expect(expandedPatternCount([inBudget])).toBe(2);
+  });
+
+  it('leaves directoryAdmission answering with ONE first-match admission', () => {
+    // The mutation check on the hot path. Per-pattern evaluation is a SECOND
+    // walk, not a replacement: a directory query still short-circuits on the
+    // first pattern that produces a witness, and still names only that one.
+    const rule = TS_RULE;
+    const patterns = [TS_GLOB, CLI_MD_GLOB, OTHER_PKG_GLOB];
+    const scoped = selectRules({
+      realizations: [queryRealization(rule), queryRealization(SUBJECT_TS), queryRealization(SUBJECT_MD)],
+      tags: [scopeTag(rule, PATH_SCOPED)], blobs: [blob(rule, patterns)],
+      queryDir: PACKAGES_CLI_SRC, queryFile: null,
+    });
+
+    expect(scoped.rules).toEqual([{
+      resourceId: `id:${rule}`, path: rule,
+      admission: { kind: MAY_FIRE, pattern: TS_GLOB, examplePath: SUBJECT_TS },
+    }]);
+    expect(evaluateRulePatterns({ patterns, files: corpusOf(SUBJECT_TS, SUBJECT_MD) }))
+      .toHaveLength(patterns.length);
+  });
+
+  it('returns nothing for an empty paths list', () => {
+    expect(evaluateRulePatterns({ patterns: [], files: corpusOf(SUBJECT_TS) })).toEqual([]);
+  });
+});
+
+describe('corpusFiles', () => {
+  it('deduplicates across extents, drops directories, and sorts by code point', () => {
+    const directoryRow = { ...queryRealization(PACKAGES_CLI_SRC), isDirectory: true };
+    const files = corpusFiles([
+      ...realizedInThreeExtents(SUBJECT_TS), directoryRow, queryRealization(SUBJECT_CONFIG),
+      queryRealization(SUBJECT_MD),
+    ]);
+
+    // Spelled out rather than re-sorted here: an expectation that reran the
+    // production comparator would agree with any comparator at all.
+    expect(files).toEqual([SUBJECT_TS, SUBJECT_MD, SUBJECT_CONFIG]);
   });
 });
 

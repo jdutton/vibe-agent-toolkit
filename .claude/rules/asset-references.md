@@ -2,7 +2,6 @@
 paths:
   - "packages/utils/src/asset-reference.ts"
   - "packages/*/src/**/*config*.ts"
-  - "packages/*/src/**/config/**"
   - "packages/cli/src/commands/**"
   - "packages/resources/src/okf/**"
   - "packages/agent-skills/src/skill-source/**"

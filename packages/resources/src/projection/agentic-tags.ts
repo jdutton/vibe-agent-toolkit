@@ -107,6 +107,30 @@ export const CLAUDE_MD_TAG = 'claude-md';
 /** The tag a markdown file under a `.claude/rules/` directory carries — see {@link CLAUDE_MD_TAG}. */
 export const RULES_FILE_TAG = 'rules-file';
 
+/** The tag whose value carries a rules file's {@link RuleScope}. */
+export const RULE_SCOPE_TAG = 'rule-scope';
+
+/**
+ * How broadly a `.claude/rules` file applies.
+ *
+ * - `root` — no `paths:`, and under the PROJECT-ROOT `.claude/rules/`. Loads at
+ *   launch with the same priority as `.claude/CLAUDE.md`.
+ * - `nested` — no `paths:`, but under a `.claude/rules/` somewhere below the
+ *   project root. The vendor puts these in the on-demand class.
+ * - `path-scoped` — carries `paths:`. Its predicate needs a path, and the
+ *   classifier that assigns this has none, so the class is the same wherever the
+ *   file lives.
+ *
+ * Deliberately NOT a `loading` class — `contributors/claude-rules-scope.ts`'s
+ * module header has the argument for why a second `loading` producer would end
+ * an invariant {@link strongestLoading} exists to hold.
+ *
+ * ⛔ It lives HERE, beside the other tag names, rather than with the classifier
+ * that writes it: the layering with no cycle in it is vocabulary → engine →
+ * producer, and this is the vocabulary.
+ */
+export type RuleScope = 'root' | 'nested' | 'path-scoped';
+
 /**
  * Directory a plugin's auto-discovered components live in, relative to its root.
  *

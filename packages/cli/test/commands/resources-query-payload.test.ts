@@ -198,7 +198,7 @@ describe('the failure message', () => {
     expect(message).toContain('no such column: contentHash');
     expect(message).toContain(PROJECTION_TABLES.blobs.name);
     expect(message).toContain('contentKey');
-    // Only the table that was named — a listing of all twelve would bury it.
+    // Only the table that was named — a listing of all thirteen would bury it.
     expect(message).not.toContain(PROJECTION_TABLES.blobSections.name);
   });
 

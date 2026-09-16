@@ -1,170 +1,43 @@
 /**
- * `vat resources check` — run the project's own SQL assertions over its
- * resource projection.
+ * `vat resources check` — run the project's own assertions over its resource
+ * projection, as a gate.
  *
- * ## Why this verb exists when `vat resources query` already runs SQL
+ * The invariants this file implements are written down once, in
+ * `docs/architecture/cli.md` under "`vat resources check [path]`". Read that
+ * before changing anything here; the headlines, so a reader knows when to:
  *
- * A query answers a question once. A question worth asking twice is a rule, and
- * a rule that lives in someone's shell history is not enforced — it decays into
- * a comment. This verb runs the statements a project wrote into
- * `resources.checks`, turns each violating row into an ordinary validation
- * finding, and exits non-zero when any of them is an error. That is the whole
- * difference, and it is the difference between a tool and a gate.
- *
- * ## 🔑 A broken check is an ERROR, never a skip
- *
- * VAT ships no schema version, so a renamed column simply breaks a check's SQL.
- * The tempting handling — log it and carry on — is the one thing this must never
- * do: a check that stopped running looks exactly like a check that passed, and
- * the project keeps reporting green over an assertion nobody is making any more.
- * So a statement that will not run is reported as a finding at **error**
- * severity, with the columns the projection actually has, and it fails the run.
- *
- * That report carries its OWN code (`RESOURCE_CHECK_BROKEN`), which no
- * `validation.severity` entry can reach. A check's severity override is about how
- * bad a VIOLATION is; while the two shared the code `CUSTOM:<name>`, the
- * documented way to stand down an inherited check also silenced the news that it
- * had stopped checking. See the `catch` in `runChecks`.
- *
- * ## 🔑 An empty CORPUS is a refusal too, not a pass
- *
- * The same class one level further out, and the one that shipped. `checksRun` is
- * the denominator of RULES; nothing counted the ROWS, so a repository whose
- * enumeration came back empty — a broad `.gitignore`, a shallow or sparse CI
- * checkout, a root that resolved somewhere else — ran every declared check over
- * nothing and reported `status: success` on exit 0 with empty stderr. Population
- * declines ignored members rather than flagging them, so the tables held no
- * trace of it either.
- *
- * So the population's size is published (`membersEnumerated`), and a run whose
- * checks executed over zero members is an ERROR under the same non-overridable
- * code as a broken statement — see {@link emptyCorpusFinding}. A gate that
- * asserts nothing over nothing has not passed.
- *
- * ## 🔑 An unknown `--check` name is a refusal, not an empty pass
- *
- * The same failure class one flag over: a filter that matched nothing ran nothing
- * and exited 0. `requireDeclaredCheck` refuses it before the crawl, naming the
- * declared set. A gate that cannot fail is worse than no gate.
- *
- * ## 🔑 NO checks at all is the same refusal, and the one that shipped longest
- *
- * A project with a valid config and no `checks:` block reported `status:
- * success`, `checksRun: 0`, exit 0 — so DELETING the `checks:` block silently
- * deleted the gate and nothing anywhere said so. A gate that checked nothing is
- * indistinguishable from a gate that was removed, and the entire argument for
- * having these gates is that you never let those two look alike. It is now a
- * `RESOURCE_CHECK_BROKEN` error like the other three — see
- * {@link noCheckRanFinding}, and `RUN_INTEGRITY_CODE` for why one code
- * covers all four. Declaring no checks is a legitimate CHOICE; running a gate
- * that can only pass is not, so the remedy is to take the command out of the
- * pipeline.
- *
- * ## 🔑 SQL is the surface a user OPTED IN to, so no BUILT-IN check may be SQL
- *
- * Every check this verb runs is adopter-declared: {@link checkCommand} reads
- * `config?.resources?.checks` and nothing else, and warns loudly when a project
- * declares none. There are no built-ins, and the one way to end that quietly is
- * to author the first one as SQL. A default-on rule written as a statement makes
- * the engine, the projection and the population mandatory for everyone who
- * inherits it, without anybody deciding that. So: **built-ins are TypeScript
- * predicates over the projection's row model.** SQL stays the two places a user
- * asked for it — this verb's declared checks, and `vat resources query`.
- *
- * ⚠️ The engine today is `node:sqlite`, built into Node, so the thing at stake is
- * not an install — it is the POPULATION. On an ~11,700-member adopter tree
- * building the projection is **>99.9%** of a check run (16.5 s cold, ~1.3 s from
- * the store) against **0.0008–0.004 s** for the statements themselves; see
- * `vat-knowledge-resources.md`, which carries that measurement. That is exactly
- * the cost "What this does NOT do" below refuses to put on every adopter's
- * pre-commit path, and a default-on SQL check would put it there without the
- * decision. The INSTALL cost is deferred rather than gone: the open question
- * about a columnar engine is a 108 MB platform binding on a published toolkit,
- * and this invariant is what keeps that question still answerable either way.
- *
- * ## 🔑 The DEFAULT check set belongs to the pipeline, not to the config file
- *
- * A directory with no `vibe-agent-toolkit.config.yaml` must run exactly the same
- * default-on checks as one with a config; config only ADDS to that set or
- * OVERRIDES a severity in it. This is load-bearing rather than a convenience:
- * *"'default-on error' is meaningless as a category if being default-on requires
- * a config file to say so."*
- *
- * It is therefore a constraint on WHERE the defaults live in code, not only on
- * what they are. They cannot be defaulted into the parsed config object, because
- * an absent config is `undefined` and every default would vanish with it — for
- * the project that never wrote one, which is the population the category exists
- * for. The rest of VAT already behaves this way and is the shape to match:
- * `vat audit` completes its entire scan first and reads config only to apply
- * severity overrides, warning and CONTINUING when the file cannot be read; and
- * `loadResourcesWithConfig` hands `vat resources validate` a registry whose
- * built-in validators run whether `loadConfig` returned a config or nothing.
- * This verb has no defaults yet, so the invariant is a rule for the first one —
- * and the day it is written is the easiest day to break it.
- *
- * ## Keeping a TypeScript check and its SQL twin: two good reasons, one trap
- *
- * The proposal was "write the predicate twice, in TypeScript and in SQL, and run
- * whichever is faster". Two thirds of it are worth having.
- *
- * ✅ **As documentation.** An SQL twin is executable documentation of the row
- * model, and strictly better than prose about it: prose can describe a column
- * that no longer exists and never say so, while a statement stops compiling —
- * which this verb reports as `RESOURCE_CHECK_BROKEN` rather than as a skip.
- *
- * ✅ **As a differential oracle.** Run both over the frozen corpus and assert
- * IDENTICAL findings. That is the only thing which makes a dual implementation
- * better than a single one rather than worse: two implementations with no
- * mandatory differential test are simply two places for one rule to be wrong.
- * Apply it selectively, to genuinely relational checks — done by default, every
- * new rule costs three artifacts instead of one.
- *
- * ⛔ **As a runtime optimizer — rejected, on two INDEPENDENT grounds.** It would
- * essentially never choose SQL: `buildResourceProjection` hands the rows back in
- * memory before the ephemeral database exists at all, so the TypeScript arm is a
- * for-loop over data already in hand, and the SQL arm's whole measured share of a
- * run is the 0.0008–0.004 s above. A scheduler would be choosing between two
- * arms of the 0.1%. And it reintroduces the dependency through the back door: an
- * optimizer that MAY choose SQL means SQL MAY be needed at check time, which for
- * anyone shipping the thing is the same as needed. **Optionality is not a
- * property you can keep while also letting a scheduler reach for the optional
- * thing.**
- *
- * ## 🔑 Adopter SQL runs UNSANDBOXED on purpose — and contributed SQL is not adopter SQL
- *
- * What a statement may BE is gated hard, and documented where it is enforced:
- * `assertIsQuery` and `detachForeignSchemas` in
- * `packages/projection-sqlite/src/store.ts` refuse `ATTACH` and `PRAGMA`, with
- * the measured cross-repository leak that motivated both, and CHANGELOG.md's
- * `--budget` entry carries why nothing inside this process can interrupt a
- * runaway statement. Read those; do not restate them here.
- *
- * What is written down nowhere else is that everything PAST those gates is
- * unsandboxed deliberately. A `.sql` file the adopter points their own config at
- * is adopter code, at the same trust boundary as their eslint config: they wrote
- * it or they chose to inherit it, and VAT is not the thing standing between a
- * project and its own repository.
- *
- * 🚨 That reasoning covers exactly ONE trust domain, and the rule scoping it is
- * the other half: **contributed SQL is a reviewed EXAMPLE, never an
- * auto-executed check.** A contribution channel is third-party text, and a
- * statement arriving through one has none of the "they chose it" the paragraph
- * above rests on. Ship it as documentation an adopter copies into their own
- * `resources.checks` deliberately. One paragraph must not be stretched to cover
- * both domains.
- *
- * ## What this does NOT do
- *
- * It does not fold into `vat resources validate`. That command is on every
- * adopter's pre-commit path, and adding a store-backed population to it is a
- * cost and a risk that deserves its own decision with its own evidence. Wiring
- * this into CI is one line in a workflow; making it unavoidable is not this
- * change's call to make.
+ * - 🔑 **Four ways to check nothing are all refusals**, at error severity under
+ *   the non-overridable `RESOURCE_CHECK_BROKEN`: a statement that will not run
+ *   (the `catch` in `runUnits`), a corpus that enumerated empty
+ *   ({@link emptyCorpusFinding}), a `--check` name nothing declares
+ *   (`requireKnownCheck`), and not one check executed at all
+ *   ({@link noCheckRanFinding}, derived in {@link buildCheckOutputData} so an
+ *   emptied `BUILTIN_CHECKS` cannot publish a clean document).
+ * - ⚠️ That last one does NOT make the step always able to fail: the only
+ *   built-in ships at `info`. Do not invent a second refusal for it — that
+ *   would refuse the no-config run the default set exists to serve.
+ * - 🔑 **No built-in check may be SQL.** {@link checkCommand} reads
+ *   `config?.resources?.checks` and nothing else for statements; built-ins are
+ *   TypeScript predicates over the row model, and a built-in's `sqlTwin` is
+ *   documentation an adopter copies, never executed here.
+ * - 🔑 **The default set belongs to the pipeline, not the config file.**
+ *   `BUILTIN_CHECKS` reaches {@link runProjectChecks} as a REQUIRED `builtins`
+ *   argument via {@link runOutcome}; nothing on that path reads `config`.
+ * - 🚨 **Adopter SQL runs unsandboxed on purpose, and contributed SQL is not
+ *   adopter SQL** — a contributed statement ships as a reviewed example.
+ * - ⛔ A TypeScript/SQL twin is documentation and a differential oracle, never
+ *   a runtime optimizer to schedule between.
  */
 
 import { performance } from 'node:perf_hooks';
 
-import { issuesFromCheckRows, type ResourceCheck } from '@vibe-agent-toolkit/resources';
+import {
+  bindBuiltinChecks,
+  BUILTIN_CHECK_NAMES,
+  issuesFromCheckRows,
+  type BoundBuiltinCheck,
+  type ResourceCheck,
+} from '@vibe-agent-toolkit/resources';
 import {
   buildReport,
   CUSTOM_CHECK_CODE_PREFIX,
@@ -241,33 +114,27 @@ interface CheckOptions {
 /**
  * What one declared check cost, and what it found.
  *
- * ## 🚨 The population is charged to NOBODY, and that is deliberate
- *
- * {@link durationMs} is the STATEMENT alone. The git tracker, the projection
- * build and the load into the ephemeral database happen ONCE and serve every
- * check in the run, so folding that shared setup into each rule would make N
- * cheap rules look expensive and make the per-rule numbers sum to N times a cost
- * paid once. It is published separately instead — `populationSecs` beside
- * `population` in the document — so a reader can reconcile the parts against
- * `durationSecs` rather than inferring the remainder and attributing it to
- * whichever rule they happen to be reading.
- *
- * 🪤 This repo has already shipped the opposite mistake once, in another
- * instrument: `parse ab` reported a pooled arm BACKWARDS because its estimate
- * was thread-summed, and the report surfaced no caveat that would have told the
- * reader. A shared cost silently attributed to one participant is the same
- * defect wearing different clothes. If you ever want the population inside these
- * numbers, divide it out explicitly and say so in the field name.
+ * 🚨 **The population is charged to NOBODY, and that is deliberate.**
+ * {@link durationMs} is the STATEMENT alone; the shared setup is published as
+ * `populationSecs`. Why, and the pooled-arm defect this avoids:
+ * `docs/architecture/cli.md`, "The population is charged to NOBODY".
  */
 export interface CheckCost {
-  /** The check's key in `resources.checks`. */
+  /** The check's key in `resources.checks`, or a built-in's name. */
   readonly name: string;
-  /** Wall time of this check's statement, and of nothing it shares with others. */
+  /** Wall time of this check's selection, and of nothing it shares with others. */
   readonly durationMs: number;
-  /** Rows the statement returned — the violations it selected. Absent when the statement did not run. */
+  /** Rows the selection returned — the violations it found. Absent when it did not run. */
   readonly rows?: number;
-  /** Set when the statement threw. A statement that did not complete has no row count. */
+  /** Set when the check threw. One that did not complete has no row count. */
   readonly broken?: true;
+  /**
+   * Set when VAT supplied this check rather than the project. 🔑 Without it a
+   * reader whose config declares nothing finds a rule they never wrote in
+   * `checks[]` with no way to tell a default from a stale declaration — or, when
+   * a project declares a check of the same name, to tell the two entries apart.
+   */
+  readonly builtin?: true;
 }
 
 /** What one run of the checks produced. */
@@ -299,6 +166,8 @@ const PublishedCheckCostSchema = z.object({
   /** Rows the statement returned. ABSENT, never 0, when the statement did not complete. */
   rows: z.number().int().nonnegative().optional(),
   broken: z.literal(true).optional(),
+  /** Present and `true` only for a rule VAT supplied — see {@link CheckCost.builtin}. */
+  builtin: z.literal(true).optional(),
 }).strict();
 
 /**
@@ -315,8 +184,16 @@ export const CheckDataSchema = z.object({
   population: z.enum(['derived', 'store']),
   /** What the population cost — charged to no check, see `CheckCost`. */
   populationSecs: z.number().nonnegative(),
-  /** What evaluating the lens cost, paid before the first statement ran. */
+  /** What evaluating the lenses cost, paid before the first statement ran. */
   lensSecs: z.number().nonnegative(),
+  /**
+   * Which lenses that covers — the derived relations this run's checks could
+   * actually read. 🔑 An empty list says "no check asked for a derived relation"
+   * rather than "a lens stopped running"; without it `lensSecs: 0` is the same
+   * document either way, and a gate whose rules silently read empty relations is
+   * a gate that cannot fail.
+   */
+  lensesEvaluated: z.array(z.string()),
   /** The number of rules that EXECUTED. Derived from `checks`, never carried beside it. */
   checksRun: z.number().int().nonnegative(),
   /** What each rule cost, directly under the denominator it is the breakdown of. */
@@ -363,8 +240,14 @@ export type CheckReport = Report<CheckData>;
  * stand-down matters here for an interrupted run, which recovers zero costs when
  * the kill landed before the first statement finished and already carries
  * {@link interruptedRunFinding}, the more specific of the two claims. A `--check`
- * filter that matched nothing is refused earlier by {@link requireDeclaredCheck},
+ * filter that matched nothing is refused earlier by {@link requireKnownCheck},
  * and must stay refused even if that guard is ever widened.
+ *
+ * 🔑 **An absent `checks:` block does not empty the denominator** — the built-in
+ * set is in the pipeline, so reaching zero here means not even a default ran and
+ * the remedy is not "declare some checks". The guard stays because it is the
+ * mechanism-level guarantee that `checksRun: 0` can never be published clean,
+ * whatever empties it.
  *
  * @param costs - One record per check that EXECUTED; its length is `checksRun`
  * @param issues - What the run already found, so an existing run-integrity
@@ -376,13 +259,13 @@ function noCheckRanFinding(
   issues: readonly ValidationIssue[],
 ): readonly ValidationIssue[] {
   return nothingCheckedFinding(costs.length, issues, () =>
-    'No check ran, so this document is not a verdict: a gate that checked nothing'
+    'No check ran at all, so this document is not a verdict: a gate that checked nothing'
     + ' produces the same report as a gate that was removed, and this run cannot tell'
     + ' you which happened.'
-    + ' Declare checks under `resources.checks` in vibe-agent-toolkit.config.yaml —'
-    + ' each is a description plus one SQL statement selecting the rows that VIOLATE it —'
-    + ' and if this project deliberately has none, take `vat resources check` out of the'
-    + ' pipeline rather than leaving a step that can only pass.');
+    + ' This is not an absent `resources.checks` block — VAT\'s own built-in checks run'
+    + ' whether or not a project declares any, so reaching zero means not even those'
+    + ' executed. Re-run with --debug and report it; if the run was filtered, check that'
+    + ' --check named a rule this build still ships.');
 }
 
 /**
@@ -443,6 +326,10 @@ export function buildCheckOutputData(input: CheckPayloadInput): CheckReport {
       // lens's cost to whichever rule the reader happened to be looking at, which
       // is the same defect `populationSecs` exists to prevent.
       lensSecs: formatDurationSecs(input.lensMs),
+      // What that number covers — see `CheckDataSchema.lensesEvaluated`. Copied
+      // into a plain array so the published document owns no reference into the
+      // run's own state.
+      lensesEvaluated: [...input.lensesEvaluated],
       // The denominator of rules. Derived from `checks`, never carried beside it.
       checksRun: input.costs.length,
       // What each rule cost, directly under the denominator it is a breakdown
@@ -462,6 +349,9 @@ export function buildCheckOutputData(input: CheckPayloadInput): CheckReport {
         durationSecs: formatDurationSecs(cost.durationMs),
         ...(cost.rows === undefined ? {} : { rows: cost.rows }),
         ...(cost.broken === undefined ? {} : { broken: cost.broken }),
+        // Absent, never `false`, on a declared rule — so the key's presence is
+        // the whole claim and a reader never has to tell `false` from unset.
+        ...(cost.builtin === undefined ? {} : { builtin: cost.builtin }),
       })),
     },
   });
@@ -536,7 +426,7 @@ function timed<T>(now: () => number, run: () => T): Timed<T> {
  *
  * 🪤 Only `ask` reaches this. Turning the selected rows INTO findings is not a
  * statement failure, and reporting it as one told the operator a working rule
- * was broken — see the append in {@link runChecks}.
+ * was broken — see the append in {@link runUnits}.
  *
  * @param name - The check's key in `resources.checks`
  * @param error - Whatever the statement threw
@@ -550,51 +440,125 @@ function brokenCheckFinding(name: string, error: unknown): ValidationIssue {
 }
 
 /**
- * Run every declared check, collect its findings, and price it.
+ * What one check's selection produced: how many violations, and how to report
+ * them.
  *
- * ## What the clock measures, and what it must not
+ * 🔑 **Two members because only the first half is TIMED.** A SQL check's cost is
+ * `ask(sql)`, not the row-to-finding conversion that follows it — the conversion
+ * is unbounded in the issue count, so charging it to the statement would make a
+ * cheap rule that selected a lot of rows look slow.
+ */
+interface CheckSelection {
+  /** How many violating rows the check selected. */
+  readonly rows: number;
+  /** Turn them into findings. Deliberately OUTSIDE the timed span. */
+  readonly report: () => readonly ValidationIssue[];
+}
+
+/**
+ * One runnable check — a name and the selection that IS its cost.
  *
- * The span is `ask(check.sql)` and nothing else — structurally, because it is
- * the thunk handed to {@link timed}, which exists for that reason and documents
- * the mutation that proved an inline stopwatch unguardable. Everything before
- * the loop — the git tracker, `buildResourceProjection`, loading the ephemeral
- * database — is paid ONCE for all of them and reaches the document as
- * `populationSecs`; see {@link CheckCost} for why charging it here would be a
- * lie in N places.
+ * 🔑 **The seam that lets a built-in and a declared statement share one loop**,
+ * so a built-in cannot quietly miss the `--check` filter, the progress log, the
+ * cost list or the broken-check refusal. Only the selection differs.
+ */
+interface CheckUnit {
+  readonly name: string;
+  /** Set for a rule VAT supplied — carried onto the cost record. */
+  readonly builtin?: true;
+  /** Select the violations. The ONLY thing {@link timed} measures. */
+  readonly select: () => CheckSelection;
+}
+
+/**
+ * One declared statement, as a unit.
  *
- * ⚠️ `performance.now()`, never `Date.now()`. A rule over a small projection is
- * routinely sub-millisecond, and a millisecond-granularity clock reports every
- * one of them as `0` — which reads as "not measured" and makes the whole
- * attribution worthless exactly where it is cheapest to get right.
- *
- * 🪤 Exactly one cost record per executed check, on both paths, because
- * `checksRun` is this list's length. The record is filed before the rows become
- * findings, so nothing between the two can leave a check unpriced.
- *
- * ## 🚨 Why the loop announces itself before it can be stopped
- *
- * {@link ProgressSink} is told a check is about to run, and told again when it
- * is priced. That ordering is not decoration: this verb runs adopter-authored
- * SQL unattended, an accidental cross join or an unterminated `WITH RECURSIVE`
- * runs forever, and NOTHING in-process can interrupt it — the query is
- * synchronous, it holds the event loop, and `node:sqlite` exposes no interrupt.
- * The supervisor's only lever is an external `SIGKILL`, which publishes nothing
- * of the killed process's memory. So the name of the rule that hangs has to be
- * on disk BEFORE it is entered, or it is not recoverable at all.
- *
- * @param checks - The project's `resources.checks`
- * @param only - A single check key to run, or undefined for all of them
+ * @param name - The check's key in `resources.checks`
+ * @param check - Its declaration
  * @param ask - Runs one statement against the populated projection
+ * @returns The runnable unit
+ */
+function sqlCheckUnit(name: string, check: ResourceCheck, ask: AskProjection): CheckUnit {
+  return {
+    name,
+    select: () => {
+      const rows = ask(check.sql);
+      return { rows: rows.length, report: () => issuesFromCheckRows(name, check, rows) };
+    },
+  };
+}
+
+/**
+ * One built-in predicate, as a unit.
+ *
+ * 🪤 Its `rows` is the finding count, and that is the same quantity a statement
+ * reports: one finding per violating row. There is no conversion step to leave
+ * outside the clock, so the whole predicate is timed.
+ *
+ * @param builtin - The built-in, already bound to this run's projection
+ * @returns The runnable unit
+ */
+function builtinCheckUnit(builtin: BoundBuiltinCheck): CheckUnit {
+  return {
+    name: builtin.name,
+    builtin: true,
+    select: () => {
+      const issues = builtin.run();
+      return { rows: issues.length, report: () => issues };
+    },
+  };
+}
+
+/**
+ * Every check this run will attempt, in the order it will attempt them.
+ *
+ * 🔑 **Built-ins FIRST, and never interleaved with the declared ones**, so the
+ * document's `checks[]` opens with the same rules in the same order for every
+ * project and a reader comparing two runs compares like with like.
+ *
+ * 🪤 A project MAY declare a check whose key equals a built-in's name. Both run,
+ * both are priced, `builtin` on the cost record tells them apart, and
+ * `--check <name>` selects both. Not refused: a new config error is a breaking
+ * change and nothing about the collision is unsafe.
+ *
+ * @param builtins - The default set, bound to this run's projection
+ * @param checks - The project's `resources.checks`
+ * @param ask - Runs one statement against the populated projection
+ * @returns The units, built-ins first
+ */
+function checkUnits(
+  builtins: readonly BoundBuiltinCheck[],
+  checks: Readonly<Record<string, ResourceCheck>>,
+  ask: AskProjection,
+): CheckUnit[] {
+  return [
+    ...builtins.map((builtin) => builtinCheckUnit(builtin)),
+    ...Object.entries(checks).map(([name, check]) => sqlCheckUnit(name, check, ask)),
+  ];
+}
+
+/**
+ * Run every unit, collect its findings, and price it.
+ *
+ * 🚨 **The timed span is `unit.select()` and nothing else** — structurally,
+ * because it is the thunk handed to {@link timed}. 🚨 **And the loop announces a
+ * check BEFORE it can be stopped**, because a runaway statement can only be
+ * ended by an external `SIGKILL` that publishes nothing of the killed process's
+ * memory. Both, with the clock-granularity and one-record-per-check rules they
+ * rest on: `docs/architecture/cli.md`, "The population is charged to NOBODY" and
+ * "Why the loop announces a check before it can be stopped".
+ *
+ * @param units - Every check this run will attempt, built-ins first
+ * @param only - A single check name to run, or undefined for all of them
  * @param now - The clock, in milliseconds; injected so a test can assert an
  *   exact duration rather than a range that passes on a timer that never started
  * @param onProgress - Told what is about to run and what it cost, or undefined
  *   when nothing is watching (the in-process lane, and `--budget 0`)
  * @returns The findings, and one cost record per check that ran
  */
-function runChecks(
-  checks: Readonly<Record<string, ResourceCheck>>,
+function runUnits(
+  units: readonly CheckUnit[],
   only: string | undefined,
-  ask: AskProjection,
   now: () => number,
   onProgress: ProgressSink | undefined,
 ): { issues: ValidationIssue[]; costs: CheckCost[] } {
@@ -606,24 +570,29 @@ function runChecks(
     onProgress?.({ kind: 'check', ...cost });
   };
 
-  for (const [name, check] of Object.entries(checks)) {
+  for (const unit of units) {
+    const { name } = unit;
     if (only !== undefined && name !== only) continue;
+    // Spread onto every cost record this unit files, so the two arms below
+    // cannot disagree about which set the rule came from.
+    const origin = unit.builtin === undefined ? {} : { builtin: unit.builtin };
     // 🪤 BEFORE `timed`, and not one line later. `ask` is where a runaway
     // statement never returns from, so an announcement below it is filed by
     // every check except the one whose name the operator needs.
     onProgress?.({ kind: 'start', name });
-    const outcome = timed(now, () => ask(check.sql));
+    const outcome = timed(now, unit.select);
 
     if (!outcome.ok) {
-      // Priced up to the throw, and with NO row count: a statement that did not
+      // Priced up to the throw, and with NO row count: a check that did not
       // complete selected nothing, and `rows: 0` would say it selected nothing
-      // and passed.
-      price({ name, durationMs: outcome.durationMs, broken: true });
+      // and passed. A built-in reaches this arm too — a defect in VAT's own
+      // predicate must fail the gate rather than vanish.
+      price({ name, durationMs: outcome.durationMs, broken: true, ...origin });
       issues.push(brokenCheckFinding(name, outcome.error));
       continue;
     }
 
-    price({ name, durationMs: outcome.durationMs, rows: outcome.value.length });
+    price({ name, durationMs: outcome.durationMs, rows: outcome.value.rows, ...origin });
     // 🪤 Appended one at a time, NEVER `issues.push(...findings)`. A spread
     // becomes an ARGUMENT LIST, which throws `RangeError: Maximum call stack
     // size exceeded` past roughly 125,000 elements on the main thread — and a
@@ -633,49 +602,55 @@ function runChecks(
     // the throw landed in the arm above: a rule that ran perfectly was reported
     // as one that "could not run, so it is asserting nothing". A loop does not
     // put the argument limit in play at all.
-    for (const issue of issuesFromCheckRows(name, check, outcome.value)) issues.push(issue);
+    for (const issue of outcome.value.report()) issues.push(issue);
   }
 
   return { issues, costs };
 }
 
 /**
- * Refuse a `--check` name the project does not declare.
+ * Refuse a `--check` name that names neither a built-in nor a declared check.
  *
- * 🔑 **An unknown name used to be a silent green.** The filter was a bare
- * `if (only !== undefined && name !== only) continue;` and nothing compared the
- * flag against the declared keys, so `--check nope` filtered every check away,
- * ran none, and exited 0 with `checksRun: 0` and `issues: []` on empty stderr.
- * The loud "no checks are declared" warning never fired, because it asks whether
- * the `checks` MAP is empty, never whether the FILTER matched anything.
- *
- * That is not a hypothetical typo: `vat resources check --check orphan-skills`
- * is the example in this command's own help text. Rename or delete that check
- * and the CI step keeps passing forever while asserting nothing.
+ * 🔑 **An unknown name is otherwise a silent green.** With nothing comparing the
+ * flag against the known names, `--check nope` filters every check away, runs
+ * none, and exits 0 with `checksRun: 0` and `issues: []` on empty stderr — and
+ * the "no checks are declared" warning does not fire, because it asks whether
+ * the `checks` MAP is empty, never whether the FILTER matched anything. Not a
+ * hypothetical typo: rename or delete a check and the CI step keeps passing
+ * forever while asserting nothing.
  *
  * Thrown rather than reported as a finding, because it is an OPERATOR error and
  * not a content violation — the two have different exit codes in this command's
  * contract (2 versus 1) and different audiences. Thrown before the projection is
  * populated, so a mistyped flag costs no crawl.
  *
+ * 🔑 **A built-in is nameable here exactly like a declared one.** A guard that
+ * only knew the config would refuse the very rules that run when there is no
+ * config at all. The refusal names both sets.
+ *
+ * @param builtinNames - The default set's names — {@link BUILTIN_CHECK_NAMES} in
+ *   production, and passed in rather than imported here so a test can prove the
+ *   guard rather than restate the constant
  * @param checks - The project's `resources.checks`
  * @param only - The `--check` value, or undefined
- * @throws When `only` names no declared check
+ * @throws When `only` names no check this run would attempt
  */
-export function requireDeclaredCheck(
+export function requireKnownCheck(
+  builtinNames: readonly string[],
   checks: Readonly<Record<string, ResourceCheck>>,
   only: string | undefined,
 ): void {
   // 🪤 `Object.hasOwn`, not `only in checks`. `in` walks the prototype chain, so
   // `--check toString` would have looked declared, matched nothing, and restored
   // the exact silent green this guard closes.
-  if (only === undefined || Object.hasOwn(checks, only)) return;
+  if (only === undefined || builtinNames.includes(only) || Object.hasOwn(checks, only)) return;
 
   const declared = Object.keys(checks);
   throw new Error(
-    `No check named "${only}" is declared. `
+    `No check named "${only}" exists. `
+    + `Built in: ${builtinNames.join(', ')}. `
     + (declared.length === 0
-      ? 'This project declares none — add them under `resources.checks` in'
+      ? 'This project declares none of its own — add them under `resources.checks` in'
         + ' vibe-agent-toolkit.config.yaml.'
       : `Declared under \`resources.checks\`: ${declared.join(', ')}.`),
   );
@@ -685,7 +660,7 @@ export function requireDeclaredCheck(
  * Name every `CUSTOM:` severity override that overrides nothing.
  *
  * 🔑 **The same silent-green shape as an unknown `--check` name, one surface
- * over.** {@link requireDeclaredCheck} refuses `--check nope` because a filter
+ * over.** {@link requireKnownCheck} refuses `--check nope` because a filter
  * that matched nothing ran nothing and exited 0. A `validation.severity` entry
  * keyed `CUSTOM:<name>` for a check that is not declared is the mirror image: it
  * parses (the schema validates the KEY's shape and cannot see
@@ -722,7 +697,7 @@ export function warnUndeclaredOverrides(
 ): void {
   const stale = Object.keys(validation?.severity ?? {})
     .filter((code) => isCustomCheckCode(code))
-    // 🪤 `Object.hasOwn`, not `in` — same reason {@link requireDeclaredCheck}
+    // 🪤 `Object.hasOwn`, not `in` — same reason {@link requireKnownCheck}
     // uses it: `in` walks the prototype chain, so an override keyed
     // `CUSTOM:toString` would look declared and stay silent.
     .filter((code) => !Object.hasOwn(checks, code.slice(CUSTOM_CHECK_CODE_PREFIX.length)));
@@ -1203,6 +1178,7 @@ export function buildInterruptedCheckInput(options: {
     population: population.population,
     populationMs: population.populationMs,
     lensMs: population.lensMs,
+    lensesEvaluated: population.lensesEvaluated,
     membersEnumerated: population.membersEnumerated,
     issues: [interruptedRunFinding(unitInFlight(entries), ending)],
     // 🪤 Rebuilt field by field rather than passed through. The log's check
@@ -1215,13 +1191,20 @@ export function buildInterruptedCheckInput(options: {
       durationMs: entry.durationMs,
       ...(entry.rows === undefined ? {} : { rows: entry.rows }),
       ...(entry.broken === undefined ? {} : { broken: entry.broken }),
+      ...(entry.builtin === undefined ? {} : { builtin: entry.builtin }),
     })),
   };
 }
 
 /**
- * Run the declared checks and resolve their severities — the whole of this
- * verb's logic, with the database taken out.
+ * Run this project's checks — VAT's default set plus whatever the project
+ * declared — and resolve their severities: the whole of this verb's logic, with
+ * the database taken out.
+ *
+ * 🔑 **`builtins` is a required argument beside `checks`, never a default inside
+ * this function.** That is what makes "the default set belongs to the pipeline,
+ * not to the config file" a property of the signature — nobody can get the
+ * defaults by omitting an argument or lose them by supplying no config.
  *
  * Exported and pure so the loop is provable without a spawn. It was not: every
  * spawned case declared ONE check (the `--check` case declares two and filters
@@ -1234,8 +1217,11 @@ export function buildInterruptedCheckInput(options: {
  * trust.
  *
  * @param options - The run
+ * @param options.builtins - The default set, already bound to this run's
+ *   projection. Required, and `[]` is a deliberate statement rather than an
+ *   omission
  * @param options.checks - The declared checks
- * @param options.only - A single check key, or undefined for all
+ * @param options.only - A single check name, or undefined for all
  * @param options.ask - Runs one statement against the populated projection
  * @param options.validation - The project's severity overrides, or undefined
  * @param options.membersEnumerated - How many members the population enumerated.
@@ -1250,7 +1236,8 @@ export function buildInterruptedCheckInput(options: {
  *   unit case run with nobody watching
  * @returns The resolved findings, and one cost record per check that ran
  */
-export function runDeclaredChecks(options: {
+export function runProjectChecks(options: {
+  builtins: readonly BoundBuiltinCheck[];
   checks: Readonly<Record<string, ResourceCheck>>;
   only: string | undefined;
   ask: AskProjection;
@@ -1266,8 +1253,11 @@ export function runDeclaredChecks(options: {
   onProgress?: ProgressSink | undefined;
 }): { issues: ValidationIssue[]; costs: CheckCost[] } {
   const now = options.now ?? (() => performance.now());
-  const { issues, costs } = runChecks(
-    options.checks, options.only, options.ask, now, options.onProgress,
+  const { issues, costs } = runUnits(
+    checkUnits(options.builtins, options.checks, options.ask),
+    options.only,
+    now,
+    options.onProgress,
   );
   // 🚨 HERE, and this line moved to get here. `checks-complete` buys the phase
   // after the last statement a fresh watchdog window, and three places
@@ -1279,7 +1269,7 @@ export function runDeclaredChecks(options: {
   // which is the useful direction: the alternative was to weaken three docs.
   //
   // ⚠️ It does NOT cover the last check's row-to-issue conversion, which
-  // `runChecks` does after filing that check's cost — see {@link inFlightPhrase}
+  // `runUnits` does after filing that check's cost — see {@link inFlightPhrase}
   // for why the `idle` sentence still has to hedge for that window.
   options.onProgress?.({ kind: 'checks-complete' });
   // The run-integrity report leads. An aggregate check selects a row whatever
@@ -1296,6 +1286,12 @@ export function runDeclaredChecks(options: {
     // It reaches a check's VIOLATIONS only. `RESOURCE_CHECK_BROKEN` is not an
     // overridable code, so the news that a check stopped checking survives every
     // override an adopter can write about the check itself.
+    //
+    // 🔑 A BUILT-IN's findings pass through the identical call, under their
+    // ordinary registry code: `severity: { CLAUDE_RULE_GLOB_INERT: ignore }`
+    // silences the default exactly as it silences any other code VAT emits, with
+    // no `CUSTOM:` spelling and no second override surface. That the two lanes
+    // share this one line is the reason there is nothing to keep in step.
     issues: resolveIssueSeverity(reported, options.validation),
     costs,
   };
@@ -1488,21 +1484,23 @@ export async function checkCommand(
     const checks = config?.resources?.checks;
 
     if (checks === undefined || Object.keys(checks).length === 0) {
-      // 🪤 Stderr only, and it decides NOTHING. The refusal lives in
-      // {@link noCheckRanFinding}, on the document, because the document is
-      // what the exit code is computed from and what CI parses; this warning is
-      // the same statement addressed to the human, and the two are one statement
-      // per audience. It used to be the ONLY channel, and the document said the
-      // opposite — `status: success`, exit 0 — which is the half that matters.
+      // 🪤 Stderr only, and it decides NOTHING — the document is what the exit
+      // code is computed from and what CI parses. ⚠️ It does not stand beside a
+      // refusal: the built-in set runs here, so this run DID assert something.
+      // What the operator needs to know is that the project is relying entirely
+      // on VAT's defaults, which is what a deleted `checks:` block looks like.
       logger.warn(
-        'No checks are declared. Add them under `resources.checks` in'
-        + ' vibe-agent-toolkit.config.yaml; each is a description plus one SQL'
-        + ' statement selecting the rows that VIOLATE it.',
+        `No checks of this project's own are declared, so this run asserted only VAT's`
+        + ` built-in set (${BUILTIN_CHECK_NAMES.join(', ')}).`
+        + ' Add your own under `resources.checks` in vibe-agent-toolkit.config.yaml;'
+        + ' each is a description plus one SQL statement selecting the rows that VIOLATE it.'
+        + ' `vat resources check --help` prints the SQL each built-in is equivalent to,'
+        + ' as a starting point.',
       );
     }
 
     // Before the crawl: a mistyped flag is an operator error and pays nothing.
-    requireDeclaredCheck(checks ?? {}, options.check);
+    requireKnownCheck(BUILTIN_CHECK_NAMES, checks ?? {}, options.check);
     // Also before the crawl, and for the same reason: an override that overrides
     // nothing is knowable from the config alone, and the operator should read it
     // beside the other config news rather than after a full population.
@@ -1563,7 +1561,13 @@ async function runOutcome(options: {
   // bare throw, and the finding exists precisely so a renamed column cannot end a
   // gate quietly. The population is the price of an honest report, and it is
   // charged once for every check rather than per broken one.
-  return withQueriedProjection({ root, logger }, (ask, provenance, extent) => {
+  // 🔑 `statements` IS passed, and it is a different question from `preflight`:
+  // it only decides which derived relations are evaluated. Every declared
+  // statement goes in, including one `--check` narrows away — the lens is per
+  // RUN, and narrowing it would make `--check foo` and a full run disagree about
+  // which relations exist.
+  const statements = Object.values(checks).map((check) => check.sql);
+  return withQueriedProjection({ root, logger, statements }, (ask, provenance, extent, projection) => {
     // 🔑 Emitted HERE, inside the callback, because this is the one place where
     // the provenance and the extent are both exactly in hand — and emitted the
     // INSTANT population completes, because its arrival is what tells a
@@ -1575,14 +1579,27 @@ async function runOutcome(options: {
       population: provenance.population,
       populationMs: provenance.populationMs,
       lensMs: provenance.lensMs,
+      lensesEvaluated: [...provenance.lensesEvaluated],
       membersEnumerated: extent.membersEnumerated,
     });
     // 🪤 `checks-complete` is NOT emitted here. It used to be, and that put
-    // `resolveIssueSeverity` — which runs inside `runDeclaredChecks` — on the
+    // `resolveIssueSeverity` — which runs inside `runProjectChecks` — on the
     // wrong side of the line, still charged to the last check's budget window
     // while three separate docs said otherwise. It is emitted by
-    // `runDeclaredChecks` itself now, the instant the last statement is done.
-    const ran = runDeclaredChecks({ checks, only, ask, validation, ...extent, onProgress });
+    // `runProjectChecks` itself now, the instant the last statement is done.
+    //
+    // 🔑 The DEFAULT SET enters HERE, from a module constant bound to the
+    // projection — never from `config`, which this line does not read. That is
+    // the placement the "defaults belong to the pipeline" invariant is about.
+    const ran = runProjectChecks({
+      builtins: bindBuiltinChecks(projection),
+      checks,
+      only,
+      ask,
+      validation,
+      ...extent,
+      onProgress,
+    });
     return { ...ran, ...provenance, ...extent };
   });
 }

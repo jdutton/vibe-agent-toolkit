@@ -6,9 +6,23 @@
  * described in prose. This is that path, named once.
  *
  * Scope is the WHOLE `<tmpdir>/.vat-cache/` tree, not just the parse tenant.
- * That directory is shared — `external-links.json`, `auth-<user>/` and `parse/`
- * all live under it — and "clear the cache" cannot honestly mean "clear one of
- * the three". All of them are disposable by construction.
+ * That directory is shared — `external-links.json`, `auth-<user>/`, `parse/` and
+ * `<namespace>/projection-<shapeDigest>/projection.db` all live under it — and
+ * "clear the cache" cannot honestly mean "clear one of the four". All of them
+ * are disposable by construction.
+ *
+ * 🔑 **The projection store is the one that makes this command matter, and it is
+ * covered by SCOPE rather than by a clause about it.** `defaultStoreDirectory()`
+ * resolves through `vatCacheNamespaceRoot()`, so it is already inside the tree
+ * this removes; the tenant list above is the only thing that has to keep up. It
+ * is also by far the largest tenant (71 MB for one 12,602-file tree) and is on
+ * by DEFAULT, which is why reclaiming it had to be invocable before the flip.
+ *
+ * ⚠️ A store relocated with `VAT_PROJECTION_STORE_DIR` is outside this tree and
+ * is NOT removed — the variable names a directory this command was never told
+ * about, and a clear that hunted for stores by shape would delete directories
+ * the operator chose. Stated so nobody reads a clean `bytesRemoved` as "every
+ * store is gone".
  */
 
 import { type Dirent, promises as fs } from 'node:fs';

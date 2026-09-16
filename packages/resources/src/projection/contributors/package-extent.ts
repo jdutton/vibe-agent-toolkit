@@ -138,6 +138,7 @@ export class PackageExtentContributor implements ExtentContributor {
     const params = PackageExtentParametersSchema.parse(parameters ?? {});
     const contribution: ExtentContribution = {
       contexts: [], resources: [], realizations: [], memberships: [], tags: [], conditions: [],
+      claudeRulePatterns: [],
     };
 
     for (const spec of collectPackageSpecs(base.root, params)) {

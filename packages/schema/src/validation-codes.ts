@@ -907,6 +907,17 @@ export const CODE_REGISTRY = {
     'Raise or lower resources.validation.thresholds.alwaysLoadedContextTokens in vibe-agent-toolkit.config.yaml to move the budget, or set resources.validation.severity.ALWAYS_LOADED_CONTEXT_BUDGET to ignore to stop reporting it. Neither is usually the real fix: open the largest contributors the finding names, in the order it names them, and trim there. The win is usually in an ancestor file — a root CLAUDE.md or a root .claude/rules/ file is paid in full by every directory beneath it, so trimming one is the single edit that lowers every reported directory at once — but the finding, not the file type, says which one.',
     'always_loaded_context_budget',
   ),
+
+  // Projection path — a path-scoped Claude rule nothing can trigger.
+  // `info` because the observed population of inert globs is still empty, and
+  // because an inert glob can be deliberate: docs/validation-rule-design.md,
+  // "Worked case: CLAUDE_RULE_GLOB_INERT ships at info".
+  CLAUDE_RULE_GLOB_INERT: entry(
+    'info',
+    'A path-scoped rules file under .claude/rules/ declares a paths: glob that matches no file in the tree, so nothing an agent touches can load that rule. Reported per inert pattern, not per rule: a rule whose other patterns still match is reported only for the dead one.',
+    'Delete the dead glob, or correct it to the path it meant — VAT reports the pattern and never rewrites it. The usual causes are a directory renamed or moved out from under the pattern, a missing ** between segments, and a pattern written against the repo root when rules match repository-relative paths. If the glob is deliberately ahead of its files, set resources.validation.severity.CLAUDE_RULE_GLOB_INERT to ignore.',
+    'claude_rule_glob_inert',
+  ),
 } as const satisfies Record<string, CodeRegistryEntry>;
 
 export type IssueCode = keyof typeof CODE_REGISTRY;

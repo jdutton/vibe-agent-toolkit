@@ -10,7 +10,10 @@ const CTX_ONE = 'ctx-1';
 const GIT_TRACKED = 'git-tracked';
 
 function emptyContribution(): ExtentContribution {
-  return { contexts: [], resources: [], realizations: [], memberships: [], tags: [], conditions: [] };
+  return {
+    contexts: [], resources: [], realizations: [], memberships: [], tags: [], conditions: [],
+    claudeRulePatterns: [],
+  };
 }
 
 function stubContributor(id: string, kind: string): ExtentContributor {
@@ -31,6 +34,7 @@ const NON_EMPTY_TABLES: ReadonlyArray<readonly [string, Partial<ExtentContributi
   ['memberships', { memberships: [{ resourceId: RES_A, extentId: CTX_ONE }] }],
   ['tags', { tags: [{ resourceId: RES_A, tag: 'skill', value: null, source: 'config' }] }],
   ['conditions', { conditions: [{ extentId: CTX_ONE, path: 'a.md', code: 'X', severity: 'info', message: '', resourceId: null }] }],
+  ['claudeRulePatterns', { claudeRulePatterns: [{ resourceId: RES_A, ordinal: 0, pattern: 'docs/**', literalPrefix: 'docs', witnessPath: null, status: 'inert' }] }],
 ];
 
 describe('extentDigest', () => {

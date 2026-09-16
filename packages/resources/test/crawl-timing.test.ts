@@ -217,7 +217,10 @@ class RegistryBuildingContributor implements ExtentContributor {
   async contribute(): Promise<ExtentContribution> {
     const registry = await ResourceRegistry.fromCrawl({ unreadable: 'refuse', baseDir: suite.tempDir });
     registry.resolveLinks();
-    return { contexts: [], resources: [], realizations: [], memberships: [], tags: [], conditions: [] };
+    return {
+      contexts: [], resources: [], realizations: [], memberships: [], tags: [], conditions: [],
+      claudeRulePatterns: [],
+    };
   }
 }
 

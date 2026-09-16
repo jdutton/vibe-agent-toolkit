@@ -30,6 +30,7 @@
  * | Walk option | Declaration |
  * |---|---|
  * | `maxDepth: Infinity` | {@link INVENTORY_MAX_DEPTH} — `'full'`, the declaration's spelling of the same union |
+ * | `isRoutable` (not an option — the walker's own rule) | `traverseParserKinds: ['markdown']`, the same predicate (`parserKindForPath(p) === 'markdown'`). It reads as inert at `'full'`, where the depth half of the leaf rule can never fire, and it is not: the TRAVERSAL half still bites. `walkLinkGraph` bundles an HTML page and records `non-routable-source` for every link out of it; a closure that left this null would walk THROUGH that page and admit a subtree the walker never opened |
  * | `excludeRules: []` | no `patterns` rule at all; there is nothing to flatten |
  * | `excludeNavigationFiles: true` | {@link INVENTORY_REFUSED_NAVIGATION_FILE}, unconditionally, because the option is a literal |
  * | *(no `deferredArtifacts`)* | no `admitPaths`. With `deferredArtifacts` absent, `refusesAgentInstructionFile` short-circuits on `declaredSources === undefined` and refuses EVERY agent-instruction file, so there is no escape hatch to model |
@@ -232,6 +233,7 @@ export function inventoryExtentDeclaration(
     kind: INVENTORY_EXTENT_KIND,
     closureFrom: skillPath,
     maxDepth: INVENTORY_MAX_DEPTH,
+    traverseParserKinds: ['markdown'],
     refusals: inventoryRefusals(hasGitTracker),
     admitPaths: [],
   });

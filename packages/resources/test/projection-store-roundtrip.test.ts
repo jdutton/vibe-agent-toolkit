@@ -11,7 +11,7 @@
  * varies, so a hydrated projection and a freshly populated one are either the
  * same document or they are not. Every hit assertion below is therefore
  * `serializeProjection(hydrated) === serializeProjection(populated)` — one
- * comparison over twelve tables, which no per-table deep-equal could match for
+ * comparison over thirteen tables, which no per-table deep-equal could match for
  * either coverage or honesty. A bespoke comparison would have to *choose* which
  * columns to compare, and the columns a hydration bug drops are exactly the ones
  * nobody thinks to list.

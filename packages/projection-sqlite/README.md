@@ -10,9 +10,11 @@ npm install @vibe-agent-toolkit/projection-sqlite
 ```
 
 Separate from `@vibe-agent-toolkit/resources` because a storage backend is a
-choice, not a default. Choosing this one costs almost nothing: `node:sqlite`
-ships with Node, so there is no binary, no WASM module, no extension to seed and
-nothing to download.
+choice the consumer makes, not something the projection layer assumes. Choosing
+this one costs almost nothing: `node:sqlite` ships with Node, so there is no
+binary, no WASM module, no extension to seed and nothing to download — which is
+why the VAT CLI now selects it **by default**, with `VAT_PROJECTION_STORE=off`
+(or `VAT_CACHE=0` for every VAT cache) as the way back to re-deriving each run.
 
 **Requires Node >= 22.13.0** — `node:sqlite` was added in 22.5.0 behind
 `--experimental-sqlite`, and 22.13.0 is the first 22.x where it loads without that
@@ -55,13 +57,13 @@ await store.close();
 
 ## What it stores, and where
 
-The twelve projection tables split in two, by the `scope` each declares in
+The thirteen projection tables split in two, by the `scope` each declares in
 `PROJECTION_TABLES`:
 
 | scope | tables | keyed by | lifetime |
 |---|---|---|---|
-| `blob` | `blobs`, `blob_references`, `blob_sections`, `blob_conditions` | content key | forever — a pure function of the bytes, shared by every tree containing them |
-| `extent` | the other eight | `(storeRootId, storeTreeHash)` | forever *for that tree* — the extent of a tree is a pure function of that tree |
+| `blob` | `blobs`, `blob_references`, `blob_sections`, `blob_conditions` | content key | bounded by the `blob_keys` manifest — a pure function of the bytes, shared by every tree containing them, and retained until it falls out of the newest `DEFAULT_RETAINED_BLOB_KEYS` keys |
+| `extent` | the other nine, `claude_rule_patterns` among them | `(storeRootId, storeTreeHash)` | forever *for that tree* — the extent of a tree is a pure function of that tree |
 
 Extent-scoped tables carry two extra leading columns holding that key, and their
 primary key is prefixed with it, so reading one tree is a key-range scan and no
@@ -105,12 +107,16 @@ shrinks rather than merely stopping its growth. A store created before that
 pragma shipped keeps `auto_vacuum = NONE` — its freed pages go to the freelist
 and are reused, so it stops growing but never shrinks.
 
-**Blob-scoped rows are not evicted.** They are a pure function of bytes and are
-shared by every tree and root containing those bytes, so they cannot be
-attributed to one extent without a scan that could race another process between
-its `writeBlobFacts` and its `writeExtent`. They also grow by one file's rows per
-edit where the extent tier grew by a whole corpus. That tier remains bounded only
-by the namespace rotation.
+**Blob-scoped rows are evicted on their own clock, never with an extent.** They
+are a pure function of bytes and are shared by every tree and root containing
+those bytes, so they cannot be attributed to one extent without a scan that could
+race another process between its `writeBlobFacts` and its `writeExtent`. Instead
+a `blob_keys` manifest records when each content key was last written, and a
+write keeps the newest `retainedBlobKeys` — default
+`DEFAULT_RETAINED_BLOB_KEYS = 50_000`, a ~265 MB ceiling an operator can check
+with `du`. The window is **global**, because a blob fact has no root: every
+repository on the machine shares it, and 50,000 holds roughly five
+adopter-sized trees.
 
 ## Traps this package exists to have already solved
 
