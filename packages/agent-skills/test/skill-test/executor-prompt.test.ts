@@ -42,14 +42,14 @@ describe('buildExecutorPrompt', () => {
 
     expect(prompt).toBe(baseOpts.task);
     expect(prompt).not.toContain(SUBJECT_PATH);
-    expect(prompt).not.toMatch(/relevant files/i);
+    expect(prompt).not.toMatch(/installed at/i);
   });
 
   it('still states the working directory when subjectPath is absent', () => {
     const prompt = buildExecutorPrompt({ task: baseOpts.task, workspaceDir: '/w/eval-1' });
 
     expect(prompt).toContain('/w/eval-1');
-    expect(prompt).not.toMatch(/relevant files/i);
+    expect(prompt).not.toMatch(/installed at/i);
     expect(() => assertExecutorPromptInvariants(prompt, baseOpts.task)).not.toThrow();
   });
 
