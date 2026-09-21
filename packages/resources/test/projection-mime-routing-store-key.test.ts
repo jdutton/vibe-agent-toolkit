@@ -143,7 +143,7 @@ async function storeKeyFor(
     registry,
     contentParsing: CONTENT_PARSING_SKIP,
     onBlobPopulation: DISCARD_BLOB_POPULATION,
-    cache: { store, treeHash: FIXTURE_TREE_HASH },
+    cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
     ...(collections !== undefined && { collections }),
   });
 
@@ -252,7 +252,7 @@ async function ambientKeysAcrossBothPasses(
 
   await buildClaudeContextPopulation({
     root: twoPass.root(),
-    cache: { store, treeHash: FIXTURE_TREE_HASH },
+    cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
     onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(collections !== undefined && { collections }),
   });

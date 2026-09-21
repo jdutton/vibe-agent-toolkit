@@ -215,7 +215,7 @@ describe.skipIf(process.platform === 'win32')('vat claude context', () => {
   // ⛔ "Never renders an unknown size as zero" is NOT asserted here, and that is
   // deliberate. Every file in this repository has a measured blob, so no row on
   // this tree has `tokens: null` — a loop pairing `row.tokens === null` with
-  // `row.charge === 'unknown-size'` compares `false === false` on every row and
+  // `row.sizeCliff === 'unmeasured'` compares `false === false` on every row and
   // passes vacuously, and it would keep passing if the renderer were changed to
   // `${row.tokens ?? 0} tokens`. It also asserts a property of `account()`
   // rather than of the CLI, and `account()` pins it directly. The renderer's

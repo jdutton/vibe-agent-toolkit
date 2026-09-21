@@ -115,7 +115,7 @@ function projectionSource(
         offeredRoots.push(root);
         const population = await buildResourcePopulation({
           root,
-          cache: { store, treeHash: 'test-tree-hash' },
+          cache: { store, treeUnchanged: () => true, treeHash: 'test-tree-hash' },
         });
         return { paths: population.paths, conditions: population.conditions };
       },

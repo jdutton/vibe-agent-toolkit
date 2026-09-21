@@ -417,6 +417,10 @@ function applyContribution(builder: ProjectionBuilder, contribution: ExtentContr
   for (const row of contribution.memberships) builder.addExtentMembership(row);
   for (const row of contribution.tags) builder.addTag(row);
   for (const row of contribution.conditions) builder.addCondition(row);
+  // Kept in step with `mergeContribution` in `merge.ts`: this fixture bypasses
+  // the driver, so a table it forgets is a table the fixture's projection is
+  // silently missing while the real lane carries it.
+  for (const row of contribution.claudeRulePatterns) builder.addClaudeRulePattern(row);
 }
 
 /** A corpus root that is never touched on disk — see the module docstring. */

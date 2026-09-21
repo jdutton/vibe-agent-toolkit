@@ -396,7 +396,7 @@ async function validateNoNestedPackageJson(): Promise<void> {
     onFile: async ({ name, relPath }) => {
       if (name === PACKAGE_MANIFEST_FILENAME) {
         // Normalize path separators
-        const normalizedPath = relPath.replaceAll('\\', '/');
+        const normalizedPath = toForwardSlash(relPath);
 
         // Check if it's in a valid location
         const isRootPackageJson = normalizedPath === PACKAGE_MANIFEST_FILENAME;
@@ -439,7 +439,7 @@ async function validateSourceFileLocations(): Promise<void> {
         return;
       }
 
-      const normalizedPath = relPath.replaceAll('\\', '/');
+      const normalizedPath = toForwardSlash(relPath);
 
       // Allow root config files
       if (ALLOWED_ROOT_TS_FILES.has(normalizedPath)) {
@@ -504,7 +504,7 @@ async function validateTestFileNaming(): Promise<void> {
   await walkDirectory(REPO_ROOT, '.', {
     skipDirs: COMMON_SKIP_DIRS,
     onFile: async ({ name, relPath }) => {
-      const normalizedPath = relPath.replaceAll('\\', '/');
+      const normalizedPath = toForwardSlash(relPath);
 
       // Check for .spec.ts files (we use .test.ts)
       if (name.endsWith('.spec.ts')) {
@@ -1125,7 +1125,6 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   // from the findings), and the exit code is read from `summary` rather than
   // from the status — so an adopter who promotes the code to `error` gates on
   // the same number the report shows.
-  'packages/cli/src/commands/claude/budget.ts',
   // OKF conformance. Its severity is adopter-configurable PER BUNDLE
   // (`okf.bundles.<name>.severity`), so a project that lowers a bundle to
   // `warning` gets `status: findings` and exit 0 over real conformance findings —

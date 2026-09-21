@@ -103,6 +103,7 @@ function isSourceFile(filename) {
   if (!filename) {
     return false;
   }
+  // eslint-disable-next-line local/no-manual-path-normalize -- the rule pack is standalone CommonJS and cannot import the ESM helper; config paths and linted filenames are matched separator-agnostically on purpose.
   const normalized = String(filename).replaceAll('\\', '/');
   return normalized.includes('/src/') && !isTestFile(normalized);
 }

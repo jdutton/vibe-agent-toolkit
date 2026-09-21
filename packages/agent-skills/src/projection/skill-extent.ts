@@ -38,7 +38,7 @@
  * | `skill-definition` | **expressible**, as two halves that were always two verdicts under one `if`. The cross-skill half is an ordinary `basenames: ['SKILL.md']` rule, sitting between the agent-instruction rule and the globs exactly where `classifyExclusion` puts it. The self-link half is the walker's `{ kind: 'skipped' }`, and it is not a rule: the PRIMITIVE now skips a reference resolving to `closureFrom`, because the root is a member by declaration in any closure — see `closure-extent.ts`'s `hopFor`. ⚠️ The walker compares the basename with `===`; `basenames` folds case, so `Skill.md` diverges — see {@link SKILL_DEFINITION_BASENAME} |
  * | `outside-project` | **expressible as a REASON, not as a full row** — and it never needed an oracle: `relativize` states every path against the root, and one the root does not contain comes back `..`-prefixed. It was a LABELLING gap, not a knowledge gap; the closure knew, and reported `CLOSURE_REFERENCE_UNRESOLVED`, which is true and useless. It is now `CLOSURE_REFERENCE_OUTSIDE_ROOT`, naming the same target the walker's row names. ⚠️ `targetExists` stays null: the walker `stat`s the escaping path, a projection populated from one root observes nothing outside it |
  * | `missing-target` | **not expressible** — and NOT for the reason the column suggests. `exists` is a real column and `flags` reads it, but no rule can ever fire on it here: a path that is not on disk is never ENUMERATED, so it has no realization for a candidate to be, and the reference resolves to nothing long before the cascade runs. The producer is structurally blind, so the matcher is dead. The fact is still reported — as `CLOSURE_REFERENCE_UNRESOLVED` — but that code conflates "absent" with "present and not enumerated by any contributor", and only a filesystem probe separates them |
- * | routable vs non-routable | **not expressible** (reasoned, not measured — the corpus has no HTML), and the earlier reason given here was wrong. The declaration is not short of a COLUMN: `resource_realizations.ext` carries the extension and `blobs.contentKey` is literally `<parserKind>.<sha256>`. What it is short of is a VERDICT: `isRoutable` makes an HTML page a member that is not traversed THROUGH, and the primitive has no admit-but-do-not-traverse outcome — a refusal would drop a file the walker bundles. Expressing it means a new verdict in the primitive, not a new matcher |
+ * | routable vs non-routable | **expressible**, and it closed the way the earlier note said it would have to — by adding the VERDICT, not a matcher. `traverseGlobs: LINK_GRAPH_MEMBER_GLOBS` is the walker's door rule itself — it traverses registry members, and the registry is that glob (NOT `parserKindForPath`, which also calls `.txt` and `README` markdown) — and the primitive admits a non-matching target as a LEAF: a member, not charged against `maxDepth`, never traversed through. The gap was not academic. It was measured on the repo-root corpus the moment a skill first linked a document that links assets: at `linkFollowDepth: 2` the packager bundled two files the closure refused as `depth-exceeded`, because a leaf is free on one arm and costs a hop on the other |
  * | `unreadable-target` | **not expressible** — the one genuine oracle left. It is `existsSync` true AND `statSync` throwing anyway, a read outcome no column records: `contentState: 'unreadable'` is a *different* fact (a BYTE read that threw) and is demand-driven besides, so a path nobody asked to hash reads `deferred` whether or not it is stattable |
  * | a refusal's PROVENANCE (`sourcePath`, `sourceLine`, `linkHref`, `targetExists`, `matchedRule`) | **expressible** — `realization_conditions` gained the six columns (projection schema v4), the closure fills them at the refusal site, and every one of the five is compared field by field against the walker's own row by the corpus shadow's provenance bucket |
  *
@@ -121,6 +121,7 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import { isGlob, safePath } from '@vibe-agent-toolkit/utils';
 
+import { LINK_GRAPH_MEMBER_GLOBS } from '../link-graph-members.js';
 import {
   AGENT_INSTRUCTION_FILE_PATTERNS,
   NAVIGATION_FILE_PATTERNS,
@@ -548,6 +549,7 @@ export function skillExtentDeclaration(
     kind: SKILL_EXTENT_KIND,
     closureFrom: skillPath,
     maxDepth: config.linkFollowDepth ?? DEFAULT_LINK_FOLLOW_DEPTH,
+    traverseGlobs: [...LINK_GRAPH_MEMBER_GLOBS],
     refusals: skillRefusals(config, hasGitTracker),
     admitPaths: declaredAgentInstructionSources(config),
   });

@@ -1,11 +1,10 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { LOADING_TAG } from '../src/projection/agentic-tags.js';
+import { LOADING_TAG, RULE_SCOPE_TAG } from '../src/projection/agentic-tags.js';
 import {
   CLAUDE_RULES_SCOPE_KIND,
   ClaudeRulesScopeContributor,
-  RULE_SCOPE_TAG,
   ruleScopeFor,
 } from '../src/projection/contributors/claude-rules-scope.js';
 import { ProjectionBuilder, type ProjectionBase } from '../src/projection/projection.js';
@@ -96,8 +95,21 @@ interface FixtureFile {
   deferred?: boolean;
 }
 
-/** A base projection holding these files, their blobs, and their identities. */
-function buildBase(files: readonly FixtureFile[]): {
+/**
+ * A base projection holding these files, their blobs, and their identities.
+ *
+ * `extraExtents` re-realizes every file under further extent ids — the ORDINARY
+ * production state, not a corner case: `resource_realizations` is keyed
+ * `(extentId, path)` and a rules file is itself an `@`-import root, so it is
+ * re-realized under its own closure and under every closure that reaches it.
+ * Both of this contributor's outputs are per-IDENTITY, so a fixture that could
+ * only realize a path once could not tell a correct dedup from an absent one.
+ *
+ * @param files - The fixture files
+ * @param extraExtents - Extent ids to re-realize every file under
+ * @returns The live base and a path → identity lookup
+ */
+function buildBase(files: readonly FixtureFile[], extraExtents: readonly string[] = []): {
   base: ProjectionBase;
   idOf: (path: string) => string;
 } {
@@ -110,6 +122,10 @@ function buildBase(files: readonly FixtureFile[]): {
       { path: file.path, refs: [], markdown: file.markdown, deferred: file.deferred ?? false },
       ROOT,
     );
+  }
+  const planted = [...builder.base().resourceRealizations];
+  for (const extentId of extraExtents) {
+    for (const row of planted) builder.addRealization({ ...row, extentId });
   }
   return {
     base: builder.base(),
@@ -224,6 +240,155 @@ describe('ClaudeRulesScopeContributor', () => {
     expect(contribution.tags).toEqual([
       { resourceId: idOf(ROOT_RULE), tag: RULE_SCOPE_TAG, value: 'root', source: CLAUDE_RULES_SCOPE_KIND },
     ]);
+  });
+});
+
+/** The rule whose `paths:` list the pattern-row cases below are about. */
+const PATTERN_RULE = '.claude/rules/scoped.md';
+
+/**
+ * Two globs the fixture tree realizes and one it does not — the whole point.
+ *
+ * The dead entry is LAST so a producer that stopped at the first miss would
+ * still emit two rows and fail on the count rather than on the status.
+ */
+const PATTERN_FRONTMATTER = [
+  '---',
+  'paths:',
+  '  - "docs/**/*.md"',
+  '  - "packages/cli/src/**/*.ts"',
+  '  - "gone/**/*.md"',
+  '---',
+  '',
+  '# Scoped\n',
+].join('\n');
+
+/**
+ * A `paths:` list the vendor's shared expansion budget refuses.
+ *
+ * Four brace groups of six alternatives expand to 1,296 patterns against a
+ * 1,000-pattern budget. The FIRST entry is an obviously-live glob: the budget is
+ * shared across the whole list, so it has to come back `unevaluated` too.
+ */
+const OVER_BUDGET_FRONTMATTER = [
+  '---',
+  'paths:',
+  '  - "docs/**/*.md"',
+  '  - "src/{a,b,c,d,e,f}/{a,b,c,d,e,f}/{a,b,c,d,e,f}/{a,b,c,d,e,f}/*.ts"',
+  '---',
+  '',
+  '# Over budget\n',
+].join('\n');
+
+/** The tree the pattern cases run over: one live markdown file, one live TS file. */
+const PATTERN_FIXTURE: readonly FixtureFile[] = [
+  { path: PATTERN_RULE, markdown: PATTERN_FRONTMATTER },
+  { path: 'docs/guide.md', markdown: '# Guide\n' },
+  { path: 'packages/cli/src/index.ts', markdown: '# Not really markdown\n' },
+  { path: 'CLAUDE.md', markdown: '# Project\n' },
+];
+
+describe('ClaudeRulesScopeContributor — claude_rule_patterns rows', () => {
+  it('emits one row per declared glob, in declaration order, with its witness', async () => {
+    const { base, idOf } = buildBase(PATTERN_FIXTURE);
+
+    const contribution = await new ClaudeRulesScopeContributor().contribute(base, null);
+
+    expect(contribution.claudeRulePatterns).toEqual([
+      {
+        resourceId: idOf(PATTERN_RULE),
+        ordinal: 0,
+        pattern: 'docs/**/*.md',
+        literalPrefix: 'docs',
+        witnessPath: 'docs/guide.md',
+        status: 'matched',
+      },
+      {
+        resourceId: idOf(PATTERN_RULE),
+        ordinal: 1,
+        pattern: 'packages/cli/src/**/*.ts',
+        literalPrefix: 'packages/cli/src',
+        witnessPath: 'packages/cli/src/index.ts',
+        status: 'matched',
+      },
+      {
+        // The defect the table exists to make queryable: a glob naming a path
+        // no file in this tree occupies, carried in a `paths:` list where it can
+        // never fire. `inert` rather than `unevaluated` — a matcher DID run.
+        resourceId: idOf(PATTERN_RULE),
+        ordinal: 2,
+        pattern: 'gone/**/*.md',
+        literalPrefix: 'gone',
+        witnessPath: null,
+        status: 'inert',
+      },
+    ]);
+  });
+
+  it('emits NO pattern rows for a rule that declares no paths:', async () => {
+    // The control for the count above. `root` and `nested` rules have no
+    // predicate to evaluate, so a producer that emitted a row per RULE rather
+    // than per declared glob would fail here rather than over-produce silently.
+    const { base } = buildBase(RULES_FIXTURE.filter((file) => file.path !== SCOPED_RULE));
+
+    const contribution = await new ClaudeRulesScopeContributor().contribute(base, null);
+
+    expect(contribution.tags).not.toEqual([]);
+    expect(contribution.claudeRulePatterns).toEqual([]);
+  });
+
+  it('emits each pattern ONCE though the rule is realized under three extents', async () => {
+    // `claude_rule_patterns` is keyed `(resourceId, ordinal)`, so the builder
+    // would collapse the duplicates — which is exactly why the CONTRIBUTION is
+    // asserted rather than a built projection: triple emission is invisible
+    // downstream and is still three evaluations of every glob against the whole
+    // tree, per pass, per run.
+    const { base, idOf } = buildBase(PATTERN_FIXTURE, ['ctx-import-closure', 'ctx-git']);
+
+    const contribution = await new ClaudeRulesScopeContributor().contribute(base, null);
+
+    expect(contribution.claudeRulePatterns.map((row) => row.ordinal)).toEqual([0, 1, 2]);
+    expect(new Set(contribution.claudeRulePatterns.map((row) => row.resourceId)))
+      .toEqual(new Set([idOf(PATTERN_RULE)]));
+  });
+
+  it('does not let a second extent widen the corpus a witness is drawn from', async () => {
+    // The dead glob stays dead. `corpusFiles` deduplicates by path, so three
+    // realizations of `docs/guide.md` are one candidate — and a producer that
+    // rebuilt the file list per realization would report the same witness with
+    // three times the work.
+    const { base } = buildBase(PATTERN_FIXTURE, ['ctx-import-closure']);
+
+    const contribution = await new ClaudeRulesScopeContributor().contribute(base, null);
+
+    expect(contribution.claudeRulePatterns.at(-1)?.status).toBe('inert');
+  });
+
+  it('reports every glob of an over-budget rule as unevaluated, live ones included', async () => {
+    // The vendor spends the 1,000-pattern budget across a rule's whole `paths:`
+    // list at once, so one oversized entry means NONE of them are expanded.
+    // Reporting `docs/**/*.md` as `inert` here would name a defect the rule does
+    // not have and hide the one it does.
+    const { base } = buildBase([
+      { path: PATTERN_RULE, markdown: OVER_BUDGET_FRONTMATTER },
+      { path: 'docs/guide.md', markdown: '# Guide\n' },
+    ]);
+
+    const contribution = await new ClaudeRulesScopeContributor().contribute(base, null);
+
+    expect(contribution.claudeRulePatterns.map((row) => row.status))
+      .toEqual(['unevaluated', 'unevaluated']);
+    expect(contribution.claudeRulePatterns.map((row) => row.witnessPath)).toEqual([null, null]);
+  });
+
+  it('still tags the over-budget rule path-scoped — the refusal is about evaluation', async () => {
+    // The positive control on the case above: `unevaluated` rows are what the
+    // budget refused, not a rule that failed to classify.
+    const { base } = buildBase([{ path: PATTERN_RULE, markdown: OVER_BUDGET_FRONTMATTER }]);
+
+    const contribution = await new ClaudeRulesScopeContributor().contribute(base, null);
+
+    expect(contribution.tags.map((row) => row.value)).toEqual([PATH_SCOPED]);
   });
 });
 

@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { CODE_REGISTRY } from '../src/validation-codes.js';
@@ -13,12 +15,21 @@ describe('ValidationIssueSchema location contract', () => {
     ['POSIX absolute', '/Users/dev/skills/foo/SKILL.md'],
     ['Windows drive absolute', 'C:/Users/dev/skills/foo/SKILL.md'],
     ['Windows backslash absolute', String.raw`C:\Users\dev\SKILL.md`],
-    ['relative with backslashes', String.raw`skills\foo\SKILL.md`],
   ])('rejects a %s location', (_label, location) => {
     // `location` was a bare `z.string()`, which is how 235 absolute paths
     // shipped unnoticed. A Windows-absolute path must be rejected on POSIX CI
     // too, hence the host-independent check.
     expect(ValidationIssueSchema.safeParse(issueWith({ location })).success).toBe(false);
+  });
+
+  // Gated: a backslash is a separator only on win32; on POSIX `skills\foo\SKILL.md` is one legal filename.
+  it.skipIf(path.sep !== '\\')('rejects a backslashed relative location on win32', () => {
+    expect(ValidationIssueSchema.safeParse(issueWith({ location: String.raw`skills\foo\SKILL.md` })).success).toBe(false);
+  });
+
+  // Gated: on win32 the backslash is a separator, and the case above is the contract there.
+  it.skipIf(path.sep === '\\')('accepts a POSIX filename that contains a backslash', () => {
+    expect(ValidationIssueSchema.safeParse(issueWith({ location: String.raw`.claude/rules/a\b.md` })).success).toBe(true);
   });
 
   it('accepts a project-relative POSIX location alongside line and field', () => {

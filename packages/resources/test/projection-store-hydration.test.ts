@@ -292,6 +292,7 @@ function storedExtent(): ExtentScopedRows {
         ...CONDITION_WITHOUT_REFERENCE,
       },
     ],
+    claudeRulePatterns: [],
     resolutionContexts: [
       extentContext(CTX_FILESYSTEM, 'filesystem', ROOT_ID),
       extentContext(CTX_ALPHA, SKILL_KIND, ROOT_ID),
@@ -392,7 +393,7 @@ function blobFacts(rows: { blobs?: readonly BlobRow[]; blobConditions?: readonly
  * {@link keyedContentKeys} reads.
  *
  * @param rows - The realizations
- * @returns The eight tables, seven of them empty
+ * @returns The nine tables, eight of them empty
  */
 function extentWithRealizations(rows: readonly ResourceRealizationRow[]): ExtentScopedRows {
   return {
@@ -402,6 +403,7 @@ function extentWithRealizations(rows: readonly ResourceRealizationRow[]): Extent
     resourceExtents: [],
     resourceTags: [],
     realizationConditions: [],
+    claudeRulePatterns: [],
     resolutionContexts: [],
     zoneProvenance: [],
   };
@@ -560,7 +562,7 @@ describe('selectRequestedRows', () => {
   });
 
   it('narrows to exactly the eight extent-scoped tables the registry declares', () => {
-    // Derived from the registry rather than listed, so a thirteenth
+    // Derived from the registry rather than listed, so a fourteenth
     // extent-scoped table makes this red instead of arriving silently unhydrated.
     const selected = selectRequestedRows(storedExtent(), { contexts: [CTX_FILESYSTEM], rootId: ROOT_ID });
 
@@ -644,7 +646,7 @@ describe('assembleProjection', () => {
     expect(Object.isFrozen(projection)).toBe(true);
   });
 
-  it('holds all twelve tables, with neither scope losing one on the way through', () => {
+  it('holds all thirteen tables, with neither scope losing one on the way through', () => {
     const projection = assembleProjection(storedExtent(), emptyBlobRows());
 
     expect(sortedKeys(Object.keys(projection))).toEqual(sortedKeys(Object.keys(PROJECTION_TABLES)));
@@ -664,7 +666,7 @@ describe('assembleProjection', () => {
 describe('emptyBlobRows', () => {
   it('has exactly the blob-scoped tables the registry declares, never a hardcoded four', () => {
     // Asserted against `PROJECTION_TABLES` rather than a literal list, because a
-    // thirteenth blob-scoped table is exactly the change that must not leave a
+    // fourteenth blob-scoped table is exactly the change that must not leave a
     // blob-skipping hydration handing back eleven tables and one absent key.
     expect(sortedKeys(Object.keys(emptyBlobRows()))).toEqual(sortedKeys(tableKeysOfScope('blob')));
   });

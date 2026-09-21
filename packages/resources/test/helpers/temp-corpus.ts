@@ -19,6 +19,9 @@
  * first. Give every fixture a distinguishing marker line.
  */
 
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { replantableCorpus } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach } from 'vitest';
 
@@ -44,4 +47,47 @@ export function setupTempCorpus(
   afterEach(planted.clear);
 
   return { root: planted.root };
+}
+
+/**
+ * Write a `{root-relative path: content}` map into a fresh temp tree, creating
+ * every parent directory.
+ *
+ * The sibling of {@link setupTempCorpus} for suites that plant ONCE per file
+ * rather than per test, and for paths with directories in them —
+ * `replantableCorpus` writes names verbatim and cannot create a parent, so a
+ * `.claude/rules/x.md` fixture needs this one.
+ *
+ * `normalizedTmpdir`, not `os.tmpdir()`: on Windows the raw value can be an 8.3
+ * short name (`RUNNER~1`), which does not compare equal to the long path every
+ * realization row is stated against.
+ *
+ * @param prefix - `mkdtemp` prefix, so a leaked directory names its own suite
+ * @param files - Root-relative, forward-slashed paths to file contents
+ * @returns The absolute root the tree was written into
+ */
+export async function plantTree(
+  prefix: string,
+  files: Readonly<Record<string, string>>,
+): Promise<string> {
+  const dir = await mkdtemp(safePath.join(normalizedTmpdir(), prefix));
+  for (const [relativePath, content] of Object.entries(files)) {
+    const absolute = safePath.join(dir, relativePath);
+    await mkdir(safePath.resolve(absolute, '..'), { recursive: true });
+    await writeFile(absolute, content);
+  }
+  return dir;
+}
+
+/**
+ * Remove a tree {@link plantTree} created.
+ *
+ * Takes `undefined` so a `beforeAll` that threw before minting a root still has
+ * a teardown that runs rather than one that throws over the real failure.
+ *
+ * @param dir - The temp directory, or undefined when it was never created
+ */
+export async function razeTree(dir: string | undefined): Promise<void> {
+  if (dir === undefined) return;
+  await rm(dir, { recursive: true, force: true });
 }

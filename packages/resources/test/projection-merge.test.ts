@@ -31,6 +31,7 @@ function contribution(memberIds: readonly string[]): ExtentContribution {
     realizations: [],
     tags: [],
     conditions: [],
+    claudeRulePatterns: [],
     memberships: memberIds.map((resourceId) => ({ resourceId, extentId: CTX })),
   };
 }

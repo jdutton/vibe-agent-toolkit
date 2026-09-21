@@ -1,7 +1,7 @@
 /**
  * The `Projection` container and the mutable builder that populates it.
  *
- * A projection is nothing but rows: twelve tables, each a flat array, produced
+ * A projection is nothing but rows: thirteen tables, each a flat array, produced
  * by contributors that never interpret one another's output. This module owns
  * two things and deliberately nothing else — the shape of that row set, and the
  * single **population** invariant no individual row can observe.
@@ -40,6 +40,7 @@ import type {
   BlobRow,
   BlobSectionRow,
 } from '../schemas/projection-blobs.js';
+import type { ClaudeRulePatternRow } from '../schemas/projection-claude-rules.js';
 import { CONDITION_WITHOUT_REFERENCE } from '../schemas/projection-resources.js';
 import type {
   ContentState,
@@ -95,7 +96,7 @@ const NO_PARSER_KIND: ParserKind = 'none';
 const KEY_SEPARATOR = '\u0000';
 
 /**
- * The twelve materialised tables of the resource projection.
+ * The thirteen materialised tables of the resource projection.
  *
  * `edges`, `edge_resolutions` and `lens_entry_points` are absent on purpose:
  * zones.md §2 places them in the derived-per-lens column, so they are the
@@ -115,6 +116,20 @@ export interface Projection {
   readonly resourceTags: readonly ResourceTagRow[];
   /** Population-time conditions, chiefly path collisions. */
   readonly realizationConditions: readonly RealizationConditionRow[];
+  /**
+   * One row per `paths:` glob of one `.claude/rules` file, and what it scopes.
+   *
+   * Produced by `ClaudeRulesScopeContributor`, which is the ONE producer — the
+   * table is merged by primary key rather than partitioned per context, so a
+   * second producer covering an identity this one already covered would win or
+   * lose by ordering.
+   *
+   * ⚠️ Empty in a projection whose lane did not register that contributor. It
+   * reads blobs, so a lane running under `CONTENT_PARSING_SKIP` cannot have it —
+   * `buildResourcePopulation` is exactly that lane, and `buildResourceProjection`
+   * beside it is not.
+   */
+  readonly claudeRulePatterns: readonly ClaudeRulePatternRow[];
   /** Zone entities — extents and lenses. */
   readonly resolutionContexts: readonly ResolutionContextRow[];
   /** Which contributor produced which extent, and the digest that makes runs comparable. */
@@ -140,7 +155,7 @@ export interface Projection {
  *
  * The arrays are **live**, not snapshots: the merge driver hands the same base
  * to successive strata, and a closure contributor must see what the base
- * stratum contributed. Copying twelve tables per contributor per fixpoint
+ * stratum contributed. Copying thirteen tables per contributor per fixpoint
  * iteration would be the alternative, and it buys nothing the `readonly` types
  * do not already state.
  */
@@ -199,7 +214,7 @@ type RowKey<T> = (row: T) => string;
 /**
  * One table: insertion-ordered rows plus a key index.
  *
- * Twelve near-identical `add` implementations would be twelve places for the
+ * Thirteen near-identical `add` implementations would be thirteen places for the
  * de-duplication rule to drift, so there is one, parameterised by the key.
  */
 class ProjectionTable<T> {
@@ -329,6 +344,13 @@ export class ProjectionBuilder {
   );
   readonly #realizationConditions = new ProjectionTable<RealizationConditionRow>(
     (row) => compositeKey(row.extentId, row.path, row.code, row.resourceId),
+  );
+  // Keyed on the IDENTITY and the glob's slot in its own `paths:` list, never on
+  // an extent: a rules file is re-realized under every import closure that
+  // reaches it, and its `paths:` list is a property of the file rather than of
+  // any one extent's view of it.
+  readonly #claudeRulePatterns = new ProjectionTable<ClaudeRulePatternRow>(
+    (row) => compositeKey(row.resourceId, row.ordinal),
   );
   readonly #contexts = new ProjectionTable<ResolutionContextRow>((row) => row.contextId);
   // Replaces rather than keeps: a closure contributor re-runs to a fixpoint, and
@@ -647,6 +669,20 @@ export class ProjectionBuilder {
   }
 
   /**
+   * Record one `paths:` glob of one `.claude/rules` file.
+   *
+   * Reached from `mergeContribution` for every row a contributor declares in
+   * `ExtentContribution.claudeRulePatterns` — see {@link Projection.claudeRulePatterns}
+   * for the single-producer rule.
+   *
+   * @param row - The pattern row
+   * @returns True when recorded, false when this `(resourceId, ordinal)` was already present
+   */
+  addClaudeRulePattern(row: ClaudeRulePatternRow): boolean {
+    return this.#claudeRulePatterns.add(row) === undefined;
+  }
+
+  /**
    * Record a zone entity.
    *
    * @param row - The resolution-context row
@@ -753,6 +789,7 @@ export class ProjectionBuilder {
       resourceExtents: this.#extents.rows,
       resourceTags: this.#tags.rows,
       realizationConditions: this.#realizationConditions.rows,
+      claudeRulePatterns: this.#claudeRulePatterns.rows,
       resolutionContexts: this.#contexts.rows,
       zoneProvenance: this.#provenance.rows,
       blobs: this.#blobs.rows,
@@ -779,6 +816,7 @@ export class ProjectionBuilder {
       resourceExtents: this.#extents.snapshot(),
       resourceTags: this.#tags.snapshot(),
       realizationConditions: this.#realizationConditions.snapshot(),
+      claudeRulePatterns: this.#claudeRulePatterns.snapshot(),
       resolutionContexts: this.#contexts.snapshot(),
       zoneProvenance: this.#provenance.snapshot(),
       blobs: this.#blobs.snapshot(),

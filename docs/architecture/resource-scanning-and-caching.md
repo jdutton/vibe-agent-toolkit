@@ -607,6 +607,69 @@ never a committed document, so **this section is where the class lives**; the ta
 not a pointer to follow. (Unrelated: `docs/validation-codes.md` has its own *decision record* D7,
 about directory-index resolution. Different sequence, different subject.)
 
+### 3.7 ✅ The projection STORE is on by default — the measurement that paid for the flip
+
+`VAT_PROJECTION_STORE` used to select the store and default to off, on the rule that a cache's win
+is a claim about cost and a default flipped before the cost is measured is a claim nobody checked.
+The evidence arrived, so the default moved and the variable became an escape hatch rather than a
+selector (`packages/cli/src/utils/projection-store.ts`, `projectionStoreSelected`).
+
+`vat resources query "SELECT count(*) FROM resources"`, three runs per arm, store directory outside
+the corpus:
+
+| Corpus | Files | Store OFF | ON, cold | ON, warm | Warm | Store |
+|---|---|---|---|---|---|---|
+| An adopter monorepo | 12,602 | 5,787 / 4,341 / 4,309 ms | 4,895 ms | 1,273 / 1,244 ms | **3.5×** | 71.2 MB |
+| VAT itself | 3,257 | 1,638 / 1,412 / 1,386 ms | 1,597 ms | 600 / 573 ms | **2.4×** | 18.2 MB |
+
+**The cold arm is never slower than the OFF arm, which is the half a flip can get wrong.**
+`vat resources validate` — a narrower question over the same trees — moves less (adopter
+1,949 → 1,447 ms, VAT 733 → 518 ms).
+
+⚠️ Flipping this makes the store every adopter's problem, so the bound came first: `projection-sqlite`
+bounds the blob tier as well as the extent tier — see `DEFAULT_RETAINED_BLOB_KEYS` there.
+
+**One scope for a whole multi-surface run.** Every lane opens its own
+`withPopulationCache` bracket, because each has to be correct when its command runs alone — so a
+multi-lane run opened a database and took a `git write-tree` per lane. `vat validate` therefore
+holds one bracket over all its surfaces (`runPhasesUnderOnePopulation`), and a nested scope over the
+same repository joins the open one. Interleaved A/B on the 12,602-file adopter tree, four runs per
+arm: cold 6,140 / 4,961 ms → 5,228 / 4,281 ms, warm 3,509–3,812 ms → 3,354–3,496 ms, with
+`git-tracker:initialize` falling from 132–159 ms to 57–64 ms as the second surface reads the first's
+snapshot instead of taking its own.
+
+⚠️ **That hoist is admissible for `vat validate` specifically, and is not a free refactor**: one
+scope is one git snapshot for the whole run. `vat validate` never writes, so no phase can miss
+another's output. A verb whose phases produce files for the next to read (`vat build`) must not be
+hoisted this way, and is not.
+
+**Where the store is shared, within and across invocations.** The selector is read from the
+environment, and every phase now runs in the process that read it — phases used to be child processes
+inheriting it across a `spawnSync`, which reached the same place by a longer route, so `vat
+validate`'s phases can no longer fail to see the selection their orchestrator did.
+
+That sharing has a within-verb instance. `vat build`'s two phases — `skills build` and
+`claude plugin build` — both reach the lane through `withResourcePopulationSource`
+(`resource-loader.ts`), rooted at the same directory, so phase 2 reads the extent phase 1 wrote.
+Measured on `packages/vat-development-agents` with `VAT_CRAWL_TIMING`: with a cold store, phase 1
+files `builtin:filesystem` 39.2 ms and `projection-store:write` 10.1 ms; phase 2 files neither, and
+its `resource-registry:enumerate` reads 3.6 ms against phase 1's 66.6 ms. It did NOT need the closure
+to emit reasons, which an earlier reading expected: the packaging lanes consume
+`resource_realizations` and let `walkLinkGraph` keep running on top of the registry, so the base
+extent alone answers them. The cross-INVOCATION win is unchanged and independent: `vat validate` and
+`vat verify` spawn a byte-identical `resources validate` child, so the second hits the store.
+
+⚠️ One packaging enumeration is still on the walk: `vat claude plugin build`'s per-skill post-build
+validation, which reaches `crawlAndResolveRegistry` in `packaging-validator.ts` without a source —
+its `withResourcePopulationSource` bracket closes around `createProjectRegistry` and does not span
+the marketplace loop. `vat skills build` no longer does: it holds one bracket over the whole run, and
+the registry memo is keyed on the population source.
+
+⚠️ `VAT_PROJECTION_STORE=sqlite` is redundant with the default now, and is kept because every
+measurement arm, CI job and adopter script written while the store was opt-in spells it. It is not a
+shim for a renamed thing — it is the one backend's own name. An unrecognised value (`duckdb`, say)
+leaves the store selected rather than refusing: there is one backend, so a refusal has no
+alternative to offer. The day a second exists is the day that variable becomes an enumeration.
 
 ## 4. Symlinks
 

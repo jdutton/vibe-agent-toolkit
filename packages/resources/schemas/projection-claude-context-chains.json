@@ -1,0 +1,31 @@
+{
+  "$ref": "#/definitions/projection-claude-context-chains",
+  "definitions": {
+    "projection-claude-context-chains": {
+      "type": "object",
+      "properties": {
+        "chainId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The instruction chain's id, derived from its representative so it is stable and predictable"
+        },
+        "directory": {
+          "type": "string",
+          "description": "A working location that loads this chain at launch. `` is the corpus root"
+        },
+        "representative": {
+          "type": "string",
+          "description": "The instructed directory whose chain this is — itself one of the directories. `` is the corpus root"
+        }
+      },
+      "required": [
+        "chainId",
+        "directory",
+        "representative"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `claude_context_chains` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

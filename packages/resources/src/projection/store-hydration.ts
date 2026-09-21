@@ -39,7 +39,7 @@
  * same files.
  *
  * So {@link selectRequestedContexts} keeps only rows belonging to the contexts
- * the run's own contributors declared. The three tables with no
+ * the run's own contributors declared. The tables with no
  * {@link ProjectionTableSpec.contextColumn} cannot be partitioned that way and
  * are not stored per-context either, so they are recovered by **reachability**:
  *
@@ -48,6 +48,11 @@
  * | `roots` | it is this run's root, or a kept context names it |
  * | `resources` | a kept realization or membership names the identity |
  * | `resourceTags` | a kept realization or membership names the identity |
+ * | `claudeRulePatterns` | a kept realization or membership names the identity |
+ *
+ * The identity rows are reached through the registry rather than named here —
+ * see {@link identityTableKeys} — so a later context-less identity table is
+ * recovered rather than silently absent from every hydrated projection.
  *
  * That reconstruction is a claim, and the claim is falsifiable rather than
  * argued: `exportProjection` emits a byte-identical document from a projection,
@@ -95,6 +100,9 @@ export interface RequestedContributor {
 
 /** A table bundle seen structurally, which is how every table is walked here. */
 type RowBundle = Record<string, readonly Record<string, unknown>[]>;
+
+/** The column an identity-keyed table names its identity in. */
+const IDENTITY_COLUMN = 'resourceId';
 
 /**
  * The contexts a stored extent already holds for this exact request, or
@@ -161,10 +169,15 @@ export function selectRequestedRows(
     kept[spec.key] = (source[spec.key] ?? []).filter((row) => contexts.has(String(row[column])));
   }
 
-  // The three context-less tables, by reachability from what was kept above.
+  // The context-less IDENTITY tables, by reachability from what was kept above.
+  // Read off the registry rather than named one by one: a context-less table
+  // that nobody remembered to list here would hydrate as `undefined` — not as an
+  // empty table, which is a cache miss a reader can diagnose, but as a missing
+  // field that is a TypeError at whichever consumer touches it first.
   const identities = referencedIdentities(kept);
-  kept[PROJECTION_TABLES.resources.key] = rowsNaming(source, PROJECTION_TABLES.resources.key, 'resourceId', identities);
-  kept[PROJECTION_TABLES.resourceTags.key] = rowsNaming(source, PROJECTION_TABLES.resourceTags.key, 'resourceId', identities);
+  for (const key of identityTableKeys()) {
+    kept[key] = rowsNaming(source, key, IDENTITY_COLUMN, identities);
+  }
 
   const roots = new Set<string>([options.rootId]);
   for (const row of kept[PROJECTION_TABLES.resolutionContexts.key] ?? []) {
@@ -216,11 +229,11 @@ export function keyedContentKeys(extent: ExtentScopedRows): readonly string[] {
 }
 
 /**
- * Assemble the twelve tables into a projection.
+ * Assemble the thirteen tables into a projection.
  *
  * The two halves are disjoint and exhaustive over {@link Projection} by
  * construction — that is what {@link ProjectionTableScope} partitions — so this
- * is a spread rather than a merge, and a thirteenth table joins whichever half
+ * is a spread rather than a merge, and a fourteenth table joins whichever half
  * its scope declares without touching this line.
  *
  * Frozen for the same reason {@link ProjectionBuilder.build} freezes: a
@@ -241,7 +254,7 @@ export function assembleProjection(extent: ExtentScopedRows, blobs: BlobScopedRo
  * derive blobs hydrates with.
  *
  * Built from the registry rather than written out, so it cannot fall behind a
- * thirteenth blob-scoped table.
+ * fourteenth blob-scoped table.
  *
  * @returns Four empty tables
  */
@@ -262,6 +275,26 @@ export function emptyBlobRows(): BlobScopedRows {
  */
 function questionKey(contributorId: string, parameterSet: unknown): string {
   return `${canonicalJson(contributorId)}\0${canonicalJson(parameterSet)}`;
+}
+
+/**
+ * Every extent-scoped table that is keyed on an identity rather than partitioned
+ * by context — `resources`, `resource_tags` and `claude_rule_patterns` today.
+ *
+ * Derived, not listed: a context-less table is recovered by reachability, and
+ * the only thing that decides whether this reconstruction can reach it is
+ * whether it names an identity at all. `roots` is the one context-less table
+ * this does not cover, because it is keyed on a ROOT rather than an identity and
+ * is reconstructed from the run's own root plus the kept contexts.
+ *
+ * @returns The registry keys of the identity-keyed context-less tables
+ */
+function identityTableKeys(): readonly string[] {
+  return Object.values(PROJECTION_TABLES)
+    .filter((spec) => spec.scope === 'extent'
+      && spec.contextColumn === undefined
+      && (spec.columns as readonly string[]).includes(IDENTITY_COLUMN))
+    .map((spec) => spec.key);
 }
 
 /**

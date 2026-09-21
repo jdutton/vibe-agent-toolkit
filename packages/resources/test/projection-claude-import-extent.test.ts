@@ -163,6 +163,14 @@ describe('claudeImportExtentDeclaration', () => {
       follow: ['at-prefixed'],
       referenceDialect: 'claude-import',
       maxDepth: 4,
+      // NULL here, and the two packaging lanes declare `['markdown']` — the
+      // difference is the vendor, not an oversight. `isRoutable` is
+      // `walk-link-graph.ts`'s rule about what a SKILL BUNDLE walks through;
+      // Claude Code's `@`-import resolver is not that walker and VAT has no
+      // vendor statement that it stops at a non-markdown import. Declaring a
+      // narrowing nothing measured would be a claim, so the default stands
+      // until an import lane is measured against the real harness.
+      traverseGlobs: null,
       refusals: [],
       admitPaths: [],
     });

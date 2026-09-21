@@ -1,6 +1,6 @@
 {
   "name": "vibe-agent-toolkit",
-  "version": "0.2.0-rc.8",
+  "version": "0.2.0-rc.9",
   "type": "module",
   "private": true,
   "description": "Toolkit for testing and packaging portable AI agents across various LLMs, frameworks, and deployment targets",
@@ -122,7 +122,7 @@
     "@vibe-agent-toolkit/utils": "workspace:*",
     "@vibe-validate/cli": "0.20.1",
     "@vitest/coverage-v8": "^4.1.11",
-    "adm-zip": "^0.6.0",
+    "adm-zip": "^0.6.1",
     "eslint": "^9.39.5",
     "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-n": "^17.24.0",

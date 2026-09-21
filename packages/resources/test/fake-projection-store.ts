@@ -41,7 +41,7 @@ const BLOB_COLUMN = 'blob';
 
 /**
  * The blob-scoped tables, read off the registry rather than written out, so a
- * thirteenth one is stored rather than silently dropped on the floor.
+ * fourteenth one is stored rather than silently dropped on the floor.
  */
 const BLOB_TABLES: readonly string[] = Object.values(PROJECTION_TABLES)
   .filter((spec) => spec.scope === BLOB_SCOPE)
@@ -58,7 +58,7 @@ const BLOB_KEY_COLUMNS: Readonly<Record<string, string>> = {
 /**
  * The key column of one blob-scoped table.
  *
- * Throws rather than defaulting: a thirteenth blob table whose rows this double
+ * Throws rather than defaulting: a fourteenth blob table whose rows this double
  * filed under `undefined` would make every coverage check pass by accident,
  * which is the shape of bug this whole file is written to catch.
  *

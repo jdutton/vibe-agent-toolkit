@@ -137,7 +137,9 @@ try {
       contributorRuns.push(`${timing.contributorId}@${timing.pass}`);
     },
     onBlobPopulation: DISCARD_BLOB_POPULATION,
-    cache: { store, treeHash },
+    // The corpus is a fixture nobody edits mid-run, and `treeHash` is the
+    // test's own label rather than a git tree, so the tree never moves.
+    cache: { store, treeHash, treeUnchanged: () => true },
   });
 
   // `serializeProjection` sorts every table by its primary key, emits every

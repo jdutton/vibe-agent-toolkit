@@ -24,6 +24,7 @@ import {
   safePath,
   staticGlobBase,
   toForwardSlash,
+  toForwardSlashAnyPlatform,
 } from '@vibe-agent-toolkit/utils';
 import { glob } from 'glob';
 import picomatch from 'picomatch';
@@ -348,7 +349,7 @@ function anchoredPath(absolute: string, root: string): string {
 const BUILD_SEGMENTS = new Set(['dist', 'build', 'out']);
 
 export function buildArtifactHint(source: string): string {
-  const normalized = toForwardSlash(source);
+  const normalized = toForwardSlashAnyPlatform(source);
   const segments = normalized.split('/');
   const hasArtifactSegment = segments.some((seg) => BUILD_SEGMENTS.has(seg));
   const hasArtifactExtension =
@@ -371,7 +372,7 @@ export function buildArtifactHint(source: string): string {
  * `files:` config" about a copy VAT performed itself.
  */
 export function normalizeRelPath(p: string): string {
-  let normalized = toForwardSlash(p);
+  let normalized = toForwardSlashAnyPlatform(p);
   if (normalized.startsWith('./')) {
     normalized = normalized.slice(2);
   }

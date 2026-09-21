@@ -130,7 +130,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 
 import which from 'which';
 
@@ -159,13 +159,15 @@ const RENAME_RETRY_BACKOFF_MS = [1, 2, 5, 10, 25, 50] as const;
 const RENAME_RETRY_CODES = new Set(['EPERM', 'EBUSY', 'EACCES']);
 
 /**
- * Forward-slash form of a path. The `safePath.*` wrappers this script cannot
- * import (see the header) are `node:path` plus exactly this normalisation; the
+ * Forward-slash form of a NATIVE path. The `safePath.*` wrappers this script
+ * cannot import (see the header) are `node:path` plus exactly this
+ * normalisation — `toForwardSlash`'s: convert only where the host's separator
+ * is a backslash, because on POSIX a backslash is a filename character. The
  * ordering logic below counts `/` and reads basenames, so every path it
  * compares goes through here first.
  */
 function fwd(path: string): string {
-  return path.replaceAll('\\', '/');
+  return sep === '/' ? path : path.replaceAll(sep, '/');
 }
 
 /** The filesystem saying "nothing here", as opposed to "I could not". */

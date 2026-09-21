@@ -71,7 +71,7 @@ function rowOf(overrides: Partial<AccountedRow> = {}): AccountedRow {
     bytes: 4800,
     loadClass: 'always',
     admissions: [{ kind: 'ancestry', dir: '' }],
-    charge: 'charged',
+    sizeCliff: 'loaded',
     ...overrides,
   };
 }
@@ -219,7 +219,7 @@ describe('vat claude context --all — the text cost map', () => {
     const text = renderCostMapText(mapOf({
       regions: [regionOf({
         unknownTokenRows: 1,
-        alwaysRows: [rowOf({ tokens: null, bytes: null, charge: 'unknown-size' })],
+        alwaysRows: [rowOf({ tokens: null, bytes: null, sizeCliff: 'unmeasured' })],
       })],
     }));
 

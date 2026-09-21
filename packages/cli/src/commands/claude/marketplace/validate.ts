@@ -24,7 +24,7 @@ import {
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, findProjectRoot, isPathAbsentError, issueLocation, isVatError, normalizePath, PathEscapesRootError, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, findProjectRoot, isPathAbsentError, issueLocation, isVatError, normalizePath, PathEscapesRootError, relativeEscapesRoot, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { formatDuration, reportCommandError } from '../../../utils/command-error.js';
@@ -218,7 +218,7 @@ function containedPluginDir(
 ): { lexical: string; real: string } | undefined {
   let lexical: string;
   try {
-    lexical = safePath.joinUnderRoot(marketplacePath, toForwardSlash(source));
+    lexical = safePath.joinUnderRoot(marketplacePath, toForwardSlashAnyPlatform(source));
   } catch (error) {
     // `joinUnderRoot` refuses an escape by design. Anything else (a
     // `TypeError` from a bad argument) is a bug.

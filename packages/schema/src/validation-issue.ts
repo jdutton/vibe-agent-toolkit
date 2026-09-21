@@ -155,7 +155,9 @@ export const ValidationIssueSchema = z.object({
     .refine((v) => !isAbsoluteAnyPlatform(v), {
       message: 'location must be a project-relative POSIX path, not an absolute path',
     })
-    .refine((v) => !v.includes('\\'), {
+    // Win32 only: there a backslash is a separator a producer forgot to convert;
+    // on POSIX it is a legal filename character (`docs/x\y.md` is one file).
+    .refine((v) => path.sep !== '\\' || !v.includes('\\'), {
       message: 'location must use forward slashes, not backslashes',
     })
     .optional(),

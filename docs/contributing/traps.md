@@ -264,10 +264,11 @@ never `process.env`; confirm a control's positive twin is non-zero before trusti
 
 ### The projection store needs two switches, and file size is not a tell
 
-`VAT_PROJECTION_STORE=sqlite` turns the store on; `VAT_RESOURCES_CRAWL=projection` selects the lane
-that produces a projection. One without the other brackets a crawl with nothing to store: zero
-rows, exit 0, a schema-only `projection.db` that looks like a working cache, and pure overhead. The
-store lives at `<normalizedTmpdir()>/.vat-cache/<namespace>/`, not under the project.
+Both the store and the projection lane are defaults now, so this trap has become its own mirror
+image: `VAT_PROJECTION_STORE=off` turns the store off and `VAT_RESOURCES_CRAWL=walk` leaves the lane,
+and turning off ONE of them brackets a crawl with nothing to store — zero rows, exit 0, a
+schema-only `projection.db` that looks like a working cache, and pure overhead. The store lives at
+`<normalizedTmpdir()>/.vat-cache/<namespace>/`, not under the project.
 **Tell:** a `.db` file of exactly schema size; a "cache" that never changes a timing.
 **Remedy:** before believing a null result from a feature, enumerate every input the feature is
 AND-ed behind; proving one switch took effect proves nothing about the ones you did not set.
@@ -276,12 +277,24 @@ AND-ed behind; proving one switch took effect proves nothing about the ones you 
 
 `VAT_CACHE=0` / `--no-cache` once bypassed the parse cache and still wrote the projection store; and
 the store, keyed on the whole-repository tree hash, grew by a full extent per edit with nothing
-reclaiming it. `projectionStoreSelected()` now vetoes on `VAT_CACHE === '0'` (compared exactly, never
-truthily), and `writeExtent` prunes to the three most recent trees per root inside its own
-transaction — a TTL would have reclaimed nothing, since every extent is minutes old.
-**Tell:** a cache directory growing on every edit; a `.db` written under `--no-cache`.
-**Remedy:** a new cache joins the existing veto and the existing eviction; `auto_vacuum` is set
-before the schema is created or it never applies.
+reclaiming it. `projectionStoreSelected()` now vetoes on any off spelling of `VAT_CACHE`
+(`parseEnvBoolean`, never a truthiness test or a literal `'0'`), and `writeExtent` prunes to the
+three most recent trees per root inside its own transaction — a TTL would have reclaimed nothing,
+since every extent is minutes old.
+
+The blob tier took the same lesson a release later, and the tell was subtler: it is **79% of the
+store's rows** (153,245 of 193,605 on a 12,602-file adopter tree) and extent eviction could not
+attribute a single one of them, because a blob fact belongs to bytes rather than to a tree. Its
+"bound" was the release namespace rotating, which is not a bound — and the day the store became the
+default was the day that stopped being survivable. `writeBlobFacts` now keeps the 50,000 most
+recently written content keys, sized from a measured ~5.3 KB per key on two corpora, with a manifest
+table of its own and a one-time adoption pass for the rows a pre-manifest store already holds.
+**Tell:** a cache directory growing on every edit; a `.db` written under `--no-cache`; a tier whose
+eviction policy is a sentence about something else rotating.
+**Remedy:** a new cache joins the existing veto and the existing eviction; a tier that cannot be
+attributed to the existing key gets its own manifest rather than an exemption; `auto_vacuum` is set
+before the schema is created or it never applies; and a bound that would hold only for artifacts
+created after it shipped adopts the existing ones instead of claiming a ceiling it does not have.
 
 ## Tests that prove nothing
 

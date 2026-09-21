@@ -39,6 +39,7 @@ const POPULATION: ProgressEntry = {
   population: 'derived',
   populationMs: 1234.5,
   lensMs: 12.5,
+  lensesEvaluated: ['authored-link'],
   membersEnumerated: 12,
 };
 

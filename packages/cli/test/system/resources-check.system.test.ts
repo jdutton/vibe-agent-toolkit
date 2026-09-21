@@ -19,6 +19,7 @@
 
 import { spawnSync } from 'node:child_process';
 
+import { BUILTIN_CHECK_NAMES } from '@vibe-agent-toolkit/resources';
 import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
@@ -47,6 +48,17 @@ const BROKEN_DESC = 'This names a column that does not exist';
 /** The config file every fixture writes, and the key the markdown check uses. */
 const CONFIG_FILE = 'vibe-agent-toolkit.config.yaml';
 const NO_MD_KEY = 'no-markdown';
+
+/**
+ * How many rules VAT itself contributes to every run.
+ *
+ * 🔑 Read off `BUILTIN_CHECK_NAMES` rather than written as a literal. Every
+ * `checksRun` below is `<declared> + BUILTIN_COUNT`, and a literal here would
+ * have to be edited in six places the day a second built-in ships — which is
+ * how a suite ends up asserting the old denominator with a comment that says
+ * otherwise.
+ */
+const BUILTIN_COUNT = BUILTIN_CHECK_NAMES.length;
 
 /**
  * One `resources.checks` entry, indented for the `checks:` map.
@@ -116,6 +128,15 @@ function check(...args: string[]): CheckRun {
   return checkIn(projectDir, ...args);
 }
 
+/** One entry of the document's `checks` cost list, as a reader sees it. */
+interface PublishedCost {
+  name: string;
+  durationSecs: number;
+  rows?: number;
+  broken?: true;
+  builtin?: true;
+}
+
 /** One finding, as these cases read it back off the document. */
 interface CheckFinding {
   code: string;
@@ -162,7 +183,9 @@ describe('vat resources check', () => {
 
     expect(status).toBe(0);
     expect(doc['status']).toBe('ok');
-    expect(data(doc)['checksRun']).toBe(1);
+    // 🔑 The declared rule PLUS the built-in set: `checksRun` is every rule that
+    // executed, and the defaults execute whether or not a project declares any.
+    expect(data(doc)['checksRun']).toBe(1 + BUILTIN_COUNT);
     expect(doc['findings']).toStrictEqual([]);
     // 🔑 The other denominator, and the half a pure test cannot reach: that the
     // number published came off a REAL population rather than a plausible
@@ -225,6 +248,8 @@ describe('vat resources check', () => {
 
     const { doc } = check('--check', 'second');
 
+    // A filter narrows to the named rule — the built-ins included, which is why
+    // this is 1 and not 1 + BUILTIN_COUNT.
     expect(data(doc)['checksRun']).toBe(1);
     expect(doc['findings']).toStrictEqual([]);
   });
@@ -242,7 +267,7 @@ describe('vat resources check', () => {
     const { status, doc } = check();
 
     expect(status).toBe(1);
-    expect(data(doc)['checksRun']).toBe(2);
+    expect(data(doc)['checksRun']).toBe(2 + BUILTIN_COUNT);
     const codes = new Set((doc['findings'] as { code: string }[]).map((i) => i.code));
     expect([...codes].sort((a, b) => a.localeCompare(b)))
       .toStrictEqual(['CUSTOM:no-headings', 'CUSTOM:no-markdown']);
@@ -259,10 +284,14 @@ describe('vat resources check', () => {
     // exactly what `formatDurationSecs`' three SIGNIFICANT figures exist to
     // preserve. No upper bound per rule and no ordering between the two: both
     // are process noise at this size.
-    const costs = data(doc)['checks'] as { name: string; durationSecs: number; rows: number }[];
-    expect(costs.map((c) => c.name).sort((a, b) => a.localeCompare(b)))
+    const costs = data(doc)['checks'] as PublishedCost[];
+    expect(costs.filter((c) => c.builtin !== true).map((c) => c.name).sort((a, b) => a.localeCompare(b)))
       .toStrictEqual(['no-headings', NO_MD_KEY]);
-    for (const cost of costs) {
+    // 🔑 The defaults are in the same list, marked — so a reader can tell a rule
+    // VAT supplied from one this project wrote without consulting the config.
+    expect(costs.filter((c) => c.builtin === true).map((c) => c.name))
+      .toStrictEqual([...BUILTIN_CHECK_NAMES]);
+    for (const cost of costs.filter((c) => c.builtin !== true)) {
       expect(cost.durationSecs).toBeGreaterThan(0);
       // Both statements select the same markdown rows, so each rule genuinely
       // returned something — a `rows: 0` here would mean the cost list was
@@ -298,7 +327,7 @@ describe('vat resources check', () => {
     expect(status).toBe(0);
     // Ignored means EXECUTED and then dropped, never "not run": `checksRun` is
     // what makes those two distinguishable.
-    expect(data(doc)['checksRun']).toBe(1);
+    expect(data(doc)['checksRun']).toBe(1 + BUILTIN_COUNT);
     expect(doc['findings']).toStrictEqual([]);
   });
 
@@ -318,7 +347,8 @@ describe('vat resources check', () => {
   });
 
   it('refuses an unknown --check name instead of reporting a silent green', () => {
-    // 🔑 `--check orphan-skills` is the example in this command's own help text.
+    // 🔑 `--check orphan-skills` WAS the example in this command's own help text,
+    // naming a check no shipped project declares.
     // Nothing compared the flag against the declared keys, so an unknown name
     // filtered every check away and exited 0 with `checksRun: 0`, `issues: []`
     // and empty stderr — a CI step that passes forever while asserting nothing.
@@ -365,13 +395,20 @@ describe('vat resources check', () => {
     expect(issue.message).toContain('1 placeholder and 0 values were bound');
   });
 
-  it('FAILS when the project declares no checks at all', () => {
-    // 🚨 This exited 0 with `checksRun: 0` and a stderr warning, which means
-    // deleting the `checks:` block silently deleted the gate: a gate that checked
-    // nothing produces the same document as a gate that was removed, and only
-    // the document decides the exit code. The warning stays — it is the same
-    // statement addressed to the human — but it no longer carries the verdict
-    // on its own.
+  it('runs the BUILT-IN set when the project declares no checks at all', () => {
+    // 🔑 **The default-set invariant, end to end, and the one place it can be
+    // proved.** *"A directory with no `vibe-agent-toolkit.config.yaml` must run
+    // exactly the same default-on checks as one with a config."* This config has
+    // no `checks:` block at all, so `config?.resources?.checks` is `undefined` —
+    // the exact value every default folded into the parsed config object would
+    // vanish with. The run must still assert something, and `checks[]` must name
+    // what.
+    //
+    // ⚠️ This case previously asserted exit 1 and `checksRun: 0`. That refusal
+    // was correct while there were no built-ins; it is wrong now, because the
+    // run is no longer a gate that can only pass by checking nothing. The
+    // refusal itself is unchanged and still derived from the denominator — see
+    // `noCheckRanFinding` — and the unit suite drives it at `costs: []`.
     fs.writeFileSync(
       safePath.join(projectDir, CONFIG_FILE),
       'version: 1\nresources:\n  include:\n    - "**/*.md"\n',
@@ -380,13 +417,47 @@ describe('vat resources check', () => {
 
     const { status, doc, stderr } = check();
 
-    expect(status).toBe(1);
-    expect(doc['status']).toBe('findings');
-    expect(data(doc)['checksRun']).toBe(0);
-    const [issue] = doc['findings'] as CheckFinding[];
-    expect(issue?.code).toBe('RESOURCE_CHECK_BROKEN');
-    expect(issue?.severity).toBe('error');
-    expect(stderr).toContain('No checks are declared');
+    expect(status).toBe(0);
+    expect(data(doc)['checksRun']).toBe(BUILTIN_COUNT);
+    expect((data(doc)['checks'] as PublishedCost[]).map((c) => [c.name, c.builtin]))
+      .toStrictEqual(BUILTIN_CHECK_NAMES.map((name) => [name, true]));
+    // No RULES of its own — and the document says so in the machine channel
+    // rather than only in the warning, which is what the old refusal was for.
+    expect((doc['findings'] as CheckFinding[]).map((f) => f.code))
+      .not.toContain('RESOURCE_CHECK_BROKEN');
+    // The human channel still says the project is relying entirely on VAT's
+    // defaults, which is what a DELETED `checks:` block looks like.
+    expect(stderr).toContain('No checks of this project\'s own are declared');
+    expect(stderr).toContain(BUILTIN_CHECK_NAMES[0] ?? '');
+  });
+
+  it('selects a BUILT-IN by name under --check, with no config declaring it', () => {
+    // 🔑 `--check` takes a RULE, not a config key. A guard that consulted only
+    // `resources.checks` would exit 2 here — refusing the very rules that run
+    // when a project declares none.
+    fs.writeFileSync(
+      safePath.join(projectDir, CONFIG_FILE),
+      'version: 1\nresources:\n  include:\n    - "**/*.md"\n',
+      'utf-8',
+    );
+
+    const { status, doc } = check('--check', BUILTIN_CHECK_NAMES[0] ?? '');
+
+    expect(status).toBe(0);
+    expect(data(doc)['checksRun']).toBe(1);
+    expect((data(doc)['checks'] as PublishedCost[])[0]?.name).toBe(BUILTIN_CHECK_NAMES[0]);
+  });
+
+  it('names the BUILT-IN set when it refuses an unknown --check', () => {
+    // The refusal has to name both sets, or an operator who mistyped a default
+    // goes looking for a declaration that was never going to be there.
+    writeChecks(checkBlock('declared-one', NO_TXT, TXT_ROWS));
+
+    const { status, doc } = check('--check', 'claude-rule-glob-inertt');
+
+    expect(status).toBe(2);
+    expect(doc['error']).toContain('declared-one');
+    expect(doc['error']).toContain(BUILTIN_CHECK_NAMES[0] ?? '');
   });
 });
 
@@ -435,7 +506,7 @@ describe('vat resources check over an emptied corpus', () => {
     const { status, doc } = checkIn(emptyDir);
 
     expect(doc['examined']).toBe(0);
-    expect(data(doc)['checksRun']).toBe(2);
+    expect(data(doc)['checksRun']).toBe(2 + BUILTIN_COUNT);
     expect(doc['status']).not.toBe('ok');
     expect(status).not.toBe(0);
   });

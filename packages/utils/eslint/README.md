@@ -79,8 +79,8 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
 |---|---|---|---|---|---|
-| `no-hardcoded-path-split` | `split('/')` / `split('\\')` on a path | `path.basename()`, or `toForwardSlash()` first | `/path` |  | `error` |
-| `no-manual-path-normalize` | hand-rolled `.replace(/\\/g, '/')` | `toForwardSlash()` | `/path` | ✓ | `error` |
+| `no-hardcoded-path-split` | `split('/')` / `split('\\')` on a path | `path.basename()`, or `toForwardSlash()` / `toForwardSlashAnyPlatform()` first | `/path` |  | `error` |
+| `no-manual-path-normalize` | hand-rolled `.replace(/\\/g, '/')` / `split(path.sep).join('/')` | `toForwardSlash()` (native paths) / `toForwardSlashAnyPlatform()` (authored text) | `/path` | ✓ | `error` |
 | `no-path-operations-in-comparisons` | raw `path.*()` results in string comparisons | wrap in `toForwardSlash()` | `/path` |  | `error` |
 | `no-path-sep-in-strings` | `path.sep` embedded in a string literal | `toForwardSlash()` | `/path` |  | `error` |
 | `no-path-startswith` | `path.startsWith()` on a raw path | `toForwardSlash()` first | `/path` |  | `error` |

@@ -148,6 +148,18 @@ function storeSelectedEnv(): NodeJS.ProcessEnv {
   return { ...process.env, VAT_PROJECTION_STORE: 'sqlite' };
 }
 
+/**
+ * No store at all, said out loud.
+ *
+ * The store is ON by default, so an arm that wants the uncached path has to ask
+ * for it. Silence used to mean "no store" and now means "the shared default
+ * database", which is a different corpus, a different warmth, and not something
+ * an assertion should depend on.
+ */
+function storeOffEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, VAT_PROJECTION_STORE: 'off' };
+}
+
 /** The shared store this suite writes, kept beneath the fixture so cleanup takes it. */
 function storeEnv(): NodeJS.ProcessEnv {
   return {
@@ -490,7 +502,12 @@ describe('vat resources query', () => {
     const withStore = query(COUNT_BLOBS, {
       env: { ...storeEnv(), VAT_PROJECTION_STORE_DIR: coldDir },
     });
-    const withoutStore = query(COUNT_BLOBS);
+    // 🪤 Turned off EXPLICITLY. The store is the default now, so an arm that got
+    // the no-store path by saying nothing would quietly have become a second
+    // store arm — pointed at the developer's own default database, where the
+    // `derived` assertion below would go red or green depending on whether
+    // something else had already warmed it.
+    const withoutStore = query(COUNT_BLOBS, { env: storeOffEnv() });
 
     expect(withStore.status, withStore.stderr).toBe(0);
     expect(withoutStore.status, withoutStore.stderr).toBe(0);

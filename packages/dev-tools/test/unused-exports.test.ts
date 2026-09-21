@@ -5,6 +5,8 @@
  * (`bun run unused-exports`) is the integration.
  */
 
+import { sep } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { loadUnusedExportsAllowlist, parseAllowlist, type UnusedExportFile } from '../src/unused-exports-allowlist.js';
@@ -22,7 +24,8 @@ const ALLOWLIST: readonly UnusedExportFile[] = [
 ];
 
 describe('reportedExportsOf', () => {
-  it('flattens every export kind knip reports, forward-slashed', () => {
+  // Gated: the input is a NATIVE path, and a backslash is a separator only on win32 (a filename character on POSIX).
+  it.skipIf(sep !== '\\')('flattens every export kind knip reports, forward-slashed', () => {
     const reported = reportedExportsOf({
       issues: [
         { file: String.raw`packages\a\src\x.ts`, exports: [{ name: 'alpha' }], types: [{ name: 'Alpha' }] },

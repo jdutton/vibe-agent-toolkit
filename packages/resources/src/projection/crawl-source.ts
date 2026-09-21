@@ -377,10 +377,10 @@ export class FilesystemCrawlSource implements CrawlSource {
  * 🪤 Two copies of one rule is how this diverged the first time: the
  * mode-`120000` drop lived in the snapshot half alone, so a committed symlink
  * was excluded and an UNTRACKED one walked in through the prune list — under
- * four docstrings and one published `vat claude budget` limit all saying that no
+ * four docstrings and one published `vat claude context` limit all saying that no
  * lane emits a symlink's own path. The link and its target then realized the
- * same `contentKey` under two identities, which is a budget charging one set of
- * bytes twice.
+ * same `contentKey` under two identities, which is a launch total charging one set
+ * of bytes twice.
  */
 interface CrawlCandidate {
   /** Absolute, forward-slashed. */

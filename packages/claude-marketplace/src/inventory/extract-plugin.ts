@@ -328,8 +328,9 @@ async function discoverSkills(
 	// was an opt-in second implementation of a question the walk already answers,
 	// so its failure was "a missing measurement, not a defect in the subject".
 	// That premise expired twice over: the projection is now this command's
-	// DEFAULT membership answer, and the source behind it writes an
-	// EXPLICITLY OPTED-IN cache (`VAT_PROJECTION_STORE`). Silence turned a hard
+	// DEFAULT membership answer, and the source behind it writes a cache that is
+	// now DEFAULT-ON too (`VAT_PROJECTION_STORE`, off only when asked). Silence
+	// turned a hard
 	// store failure into a run that exited 0, cached nothing, and paid the
 	// projection AND the walk — on every root shipping a binary file, for as long
 	// as the store rejected a declined blob. Measured on a real adopter plugin:

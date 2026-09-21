@@ -4,7 +4,7 @@
  *
  * ## Why this is a primitive rather than a private helper
  *
- * `claude-context-budget-sweep.ts` needs it to answer "what does every directory
+ * `claude-context-relations.ts` needs it to answer "what does every directory
  * load at launch" from a handful of queries, and `claude-context-cost-map.ts`
  * needs it to report the always-loaded half ONCE per chain rather than once per
  * directory. Two private copies of one collapse are two models that can drift,
@@ -15,15 +15,15 @@
  * ## The collapse, and why it is sound
  *
  * A directory's always-loaded set is every `claude-md`-tagged file in its
- * ancestors (inclusive) plus those files' one-hop `@` imports. So **a directory
+ * ancestors (inclusive), any unscoped root rule, and their `@` import closures. So **a directory
  * containing no `claude-md` file of its own pays exactly what its nearest
  * instructed ancestor pays**, falling back to the corpus root. Measured on VAT's
  * own tree: 589 working locations, **9** distinct chains.
  *
  * The three things that look like they should break it — an unscoped root rule,
  * the root's second `.claude/CLAUDE.md` project location, and a gitignored
- * `CLAUDE.md` — are argued at length in `claude-context-budget-sweep.ts`'s module
- * docstring and not restated here. The short form: the first two are CONSTANTS
+ * `CLAUDE.md` — are argued in `projection-claude-context-chains-oracle.test.ts`,
+ * whose differential oracle holds them. The short form: the first two are CONSTANTS
  * across every query directory, and a constant cannot separate two groups; the
  * third can no longer arrive, because `buildClaudeContextPopulation` declines the
  * ignored half outright.

@@ -6,7 +6,7 @@
 import { existsSync } from 'node:fs';
 import { dirname,   isAbsolute } from 'node:path';
 
-import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { toForwardSlashAnyPlatform, safePath } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript';
 
 /**
@@ -34,7 +34,7 @@ export function resolveMarkdownPath(
   compilerOptions: ts.CompilerOptions,
 ): string | null {
   // Handle relative paths (normalize to forward slashes for cross-platform)
-  const normalizedPath = toForwardSlash(modulePath);
+  const normalizedPath = toForwardSlashAnyPlatform(modulePath);
   // eslint-disable-next-line local/no-dotdot-containment -- this classifies an import SPECIFIER as relative (module-resolution grammar: `./` and `../` are the relative forms), not a path as contained; nothing here is a sink.
   if (normalizedPath.startsWith('./') || normalizedPath.startsWith('../')) {
     return resolveRelativePath(modulePath, containingFile);

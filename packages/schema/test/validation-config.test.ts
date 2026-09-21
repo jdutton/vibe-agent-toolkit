@@ -52,61 +52,46 @@ describe('ValidationConfigSchema', () => {
   });
 });
 
-describe('ValidationConfigSchema — thresholds', () => {
-  it('parses a thresholds block with alwaysLoadedContextTokens', () => {
+describe('ValidationConfigSchema — no thresholds surface', () => {
+  // VAT ships no numeric knob any more: the always-loaded context BUDGET was the
+  // only one, and it is gone with the verdict it moved. The outer object is
+  // `.strict()`, so a config still carrying the retired key is a loud error
+  // rather than a value that silently does nothing — which is what an adopter
+  // needs to be told when the surface it configured no longer exists.
+  it('rejects a thresholds block, so a retired knob cannot look like it still applies', () => {
     const result = ValidationConfigSchema.safeParse({
       thresholds: { alwaysLoadedContextTokens: 12_000 },
     });
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects even an empty thresholds block', () => {
+    expect(ValidationConfigSchema.safeParse({ thresholds: {} }).success).toBe(false);
   });
 
   it('parses a config with no thresholds key at all', () => {
     const result = ValidationConfigSchema.safeParse({ severity: {} });
     expect(result.success).toBe(true);
   });
-
-  it('parses an empty thresholds block', () => {
-    const result = ValidationConfigSchema.safeParse({ thresholds: {} });
-    expect(result.success).toBe(true);
-  });
-
-  it.each([
-    ['a non-integer', 12_000.5],
-    ['zero', 0],
-    ['a negative number', -1],
-    ['a string', '12000'],
-  ])('rejects %s alwaysLoadedContextTokens', (_label, value) => {
-    const result = ValidationConfigSchema.safeParse({
-      thresholds: { alwaysLoadedContextTokens: value },
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it('is strict inside thresholds — rejects an unknown threshold key', () => {
-    const result = ValidationConfigSchema.safeParse({
-      thresholds: { alwaysLoadedContextTokens: 12_000, alwaysLoadedContextTokenz: 9 },
-    });
-    expect(result.success).toBe(false);
-  });
 });
 
 // Proves the new code actually reached IssueCodeSchema: `severity` and `allow`
 // are keyed by the registry enum, so a config naming a code the registry does not
-// hold is rejected. If ALWAYS_LOADED_CONTEXT_BUDGET were missing from
+// hold is rejected. If CLAUDE_RULE_GLOB_INERT were missing from
 // CODE_REGISTRY these two would fail exactly like the LNIK_ typo test above.
-describe('ValidationConfigSchema — ALWAYS_LOADED_CONTEXT_BUDGET is an overridable code', () => {
-  it('accepts a severity override for ALWAYS_LOADED_CONTEXT_BUDGET', () => {
+describe('ValidationConfigSchema — CLAUDE_RULE_GLOB_INERT is an overridable code', () => {
+  it('accepts a severity override for CLAUDE_RULE_GLOB_INERT', () => {
     const result = ValidationConfigSchema.safeParse({
-      severity: { ALWAYS_LOADED_CONTEXT_BUDGET: 'ignore' },
+      severity: { CLAUDE_RULE_GLOB_INERT: 'ignore' },
     });
     expect(result.success).toBe(true);
   });
 
-  it('accepts an allow entry keyed by ALWAYS_LOADED_CONTEXT_BUDGET', () => {
+  it('accepts an allow entry keyed by CLAUDE_RULE_GLOB_INERT', () => {
     const result = ValidationConfigSchema.safeParse({
       allow: {
-        ALWAYS_LOADED_CONTEXT_BUDGET: [
-          { paths: ['docs/**'], reason: 'docs tree is read by humans, not loaded as context' },
+        CLAUDE_RULE_GLOB_INERT: [
+          { paths: ['docs/**'], reason: 'the generated tree is scoped by a glob written ahead of it' },
         ],
       },
     });

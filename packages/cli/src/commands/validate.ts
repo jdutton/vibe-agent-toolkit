@@ -31,6 +31,7 @@ import { loadConfig } from '../utils/config-loader.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
+import { withPopulationCache } from '../utils/projection-store.js';
 
 import {
   addRetiredOnlyOption,
@@ -193,6 +194,40 @@ export function selectValidateSurfaces(
   return decidePhaseSelection(undefined, phases, VALIDATE_VOCABULARY);
 }
 
+/**
+ * Run every surface inside ONE projection-store scope, so the lanes share one
+ * database and one `git write-tree` instead of taking one each. The measurement,
+ * and why the hoist is admissible here and nowhere else, are in
+ * `docs/architecture/resource-scanning-and-caching.md` §3.7.
+ *
+ * ⚠️ One scope is one git snapshot for the whole run. `vat validate` never
+ * writes — source-level and build-free by the decision at the top of this file —
+ * so no phase can miss another's output. A verb whose phases produce files for
+ * the next to read (`vat build`) must not be hoisted this way, and is not.
+ *
+ * @param projectRoot - The resolved project root, which every surface roots at
+ * @param phases - The surfaces to run, in order
+ * @param logger - Where the per-surface banner goes
+ * @returns One result per phase, in the same order
+ */
+async function runPhasesUnderOnePopulation(
+  projectRoot: string,
+  phases: readonly Phase[],
+  logger: ReturnType<typeof createLogger>,
+): Promise<PhaseResult[]> {
+  return withPopulationCache({ root: projectRoot }, async () => {
+    const phaseResults: PhaseResult[] = [];
+    for (const phase of phases) {
+      logger.info(`\n▶ Surface: ${phase.name}`);
+      // Awaited in the loop, deliberately: surfaces are announced in a fixed
+      // order and their stderr streams live, so overlapping them would
+      // interleave two running reports into one unreadable channel.
+      phaseResults.push(await runPhase(phase));
+    }
+    return phaseResults;
+  });
+}
+
 async function validateTopLevelCommand(
   options: ValidateCommandOptions,
   command: Command,
@@ -229,14 +264,7 @@ async function validateTopLevelCommand(
 
     logger.info(`✅ vat validate (surfaces: ${phases.map((p) => p.name).join(' → ')})`);
 
-    const phaseResults: PhaseResult[] = [];
-    for (const phase of phases) {
-      logger.info(`\n▶ Surface: ${phase.name}`);
-      // Awaited in the loop, deliberately: surfaces are announced in a fixed
-      // order and their stderr streams live, so overlapping them would
-      // interleave two running reports into one unreadable channel.
-      phaseResults.push(await runPhase(phase));
-    }
+    const phaseResults = await runPhasesUnderOnePopulation(projectRoot, phases, logger);
 
     // A surface whose validator could not RUN (exit 2, or a self-reported
     // system error) is not one that failed validation: it exits 2, so a CI gate can

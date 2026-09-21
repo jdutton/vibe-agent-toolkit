@@ -27,6 +27,7 @@ const BARREL_EXPORTS = [
   'encodeValue',
   'insertSql',
   'openEphemeralProjectionStore',
+  'openProjectionCompileProbe',
   'openSqliteProjectionStore',
   'selectBlobFactsSql',
   'selectExtentSql',

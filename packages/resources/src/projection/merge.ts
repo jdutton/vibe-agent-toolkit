@@ -76,7 +76,7 @@ import type { CollectionConfig } from '../schemas/project-config.js';
 import type { RealizationConditionRow, ResourceRealizationRow } from '../schemas/projection-resources.js';
 import type { JsonValue } from '../schemas/projection-shared.js';
 
-import { populateBlobs, type BlobPopulationResult } from './blob-population.js';
+import { populateBlobs, storableBlobFacts, type BlobPopulationResult } from './blob-population.js';
 import { RunContentCache } from './content-cache.js';
 import type { ContributorRegistry, ExtentContribution, ExtentContributor } from './contributor.js';
 import {
@@ -433,6 +433,19 @@ export interface PopulationCache {
    * `vibe-validate` makes on every commit.
    */
   readonly treeHash: string;
+  /**
+   * Does {@link treeHash} still describe the tree, asked NOW?
+   *
+   * ⛔ Required, and asked before an extent is filed. The hash is taken when the
+   * run starts and the rows are what it reads afterwards; an edit landing in
+   * between filed the edited rows under the unedited key, and once the edit was
+   * reverted every later run was served them. A run whose tree moved files
+   * nothing, so the next run derives instead of hitting.
+   *
+   * ⚠️ An edit made AND reverted entirely inside one run is not seen — both
+   * snapshots agree. The window is the run itself rather than every run after it.
+   */
+  treeUnchanged(): boolean;
 }
 
 /** What one contributor invocation cost. */
@@ -946,8 +959,12 @@ async function writeCachedProjection(
 
   const startedAt = crawlTimingStart();
   const { blobs, extent } = splitProjectionByScope(projection);
-  if (parseContent) await cache.store.writeBlobFacts(blobs);
-  await cache.store.writeExtent(storeKeyFor(options, rootId, cache, routing), extent);
+  // Blob facts are keyed by the bytes actually read, so they are true whatever
+  // the tree did meanwhile. The extent is keyed by the tree, so it is not.
+  if (parseContent) await cache.store.writeBlobFacts(storableBlobFacts(blobs));
+  if (cache.treeUnchanged()) {
+    await cache.store.writeExtent(storeKeyFor(options, rootId, cache, routing), extent);
+  }
   recordCrawlPass(CRAWL_STORE_WRITE_ID, 'base', BASE_STRATUM_PASS, startedAt);
 }
 
@@ -1225,5 +1242,8 @@ function mergeContribution(builder: ProjectionBuilder, contribution: ExtentContr
   }
   for (const row of contribution.conditions) {
     builder.addCondition(row);
+  }
+  for (const row of contribution.claudeRulePatterns) {
+    builder.addClaudeRulePattern(row);
   }
 }

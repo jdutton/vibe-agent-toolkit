@@ -16,6 +16,8 @@
  * selecting nothing is exactly what success looks like, deliberately.
  */
 
+import { sep } from 'node:path';
+
 import { customCheckCode } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
@@ -114,13 +116,19 @@ describe('issuesFromCheckRows', () => {
   const locationFor = (path: unknown): string | undefined =>
     issuesFromCheckRows(NAME, CHECK, [{ path }])[0]?.location;
 
-  it('declines a backslashed path rather than emitting an invalid location', () => {
+  // Gated: a backslash is a separator only on win32; on POSIX it is a filename character (next case).
+  it.skipIf(sep !== '\\')('declines a backslashed path rather than emitting an invalid location', () => {
     // 🪤 NOTHING on this path parses the findings through ValidationIssueSchema,
     // so this guard is the ONLY enforcement of its `location` contract. A
     // backslashed value emitted here would be a schema-violating issue that no
     // gate catches — `validation.allow` globs are matched against `location`, so
     // it would also silently fail to match any allow entry an adopter wrote.
     expect(locationFor(String.raw`docs\guide.md`)).toBeUndefined();
+  });
+
+  // Gated: on win32 the backslash is a separator, and the case above is the contract there.
+  it.skipIf(sep === '\\')('keeps a POSIX filename that contains a backslash as the location', () => {
+    expect(locationFor(String.raw`.claude/rules/a\b.md`)).toBe(String.raw`.claude/rules/a\b.md`);
   });
 
   it('declines a POSIX-absolute path', () => {

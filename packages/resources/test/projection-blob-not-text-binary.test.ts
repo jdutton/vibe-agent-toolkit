@@ -167,7 +167,11 @@ describe('looksBinary, against real binary shapes (not synthesized NUL strings)'
     expect(report.blobsNotText).toBe(1);
     expect(report.blobsDerived).toBe(0);
     expect(notTextConditions).toHaveLength(1);
-    expect(notTextConditions[0]?.message).toContain(fileName);
+    // ⛔ NOT the file name. The row is filed in the content-addressed tier every
+    // repository holding these bytes is served, so a path in it is another
+    // repository's path the moment a second one derives the same key.
+    expect(notTextConditions[0]?.message).toContain('NUL');
+    expect(notTextConditions[0]?.message).not.toContain(fileName);
   });
 
   it('accepts a UTF-16LE document whose RAW bytes are saturated with NULs', async () => {

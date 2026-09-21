@@ -173,7 +173,6 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/cli/test/integration/projection-skill-extent-corpus.integration.test.ts', measuredMs: 7876, mechanisms: [MECHANISM.git, MECHANISM.projection] },
   { file: 'packages/claude-marketplace/test/integration/inventory-extent-corpus.integration.test.ts', measuredMs: 6584, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.projection] },
   { file: 'packages/cli/test/integration/module-load-budget.integration.test.ts', measuredMs: 6102, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
-  { file: 'packages/cli/test/integration/claude-budget.integration.test.ts', measuredMs: 5810, mechanisms: [MECHANISM.tempTree, MECHANISM.spawn] },
   { file: 'packages/cli/test/integration/audit-unreadable-path.integration.test.ts', measuredMs: 5651, mechanisms: [MECHANISM.tempTree, MECHANISM.refusal], note: '4810 ms on the floor run before' },
   { file: 'packages/rag-lancedb/test/integration/indexing.integration.test.ts', measuredMs: 5483, mechanisms: [MECHANISM.tempTree, MECHANISM.nativeModel] },
   { file: 'packages/cli/test/integration/multi-plugin-marketplace.integration.test.ts', measuredMs: 5312, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn], note: 'local serial run; 4671 and 4942 ms on the floor' },

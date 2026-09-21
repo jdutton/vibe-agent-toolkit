@@ -22,14 +22,12 @@
  * membership/provenance disagreement that only a real enumeration can produce.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll } from 'vitest';
 
 import { buildClaudeContextPopulation } from '../../src/projection/claude-context-population.js';
 import type { Projection } from '../../src/projection/projection.js';
+import { plantTree, razeTree } from '../helpers/temp-corpus.js';
 
 /** A populated tree, and the temp directory it lives in. */
 export interface ClaudeContextTree {
@@ -57,16 +55,7 @@ export async function buildClaudeContextTree(
   files: Readonly<Record<string, string>>,
   options: { git?: boolean } = {},
 ): Promise<ClaudeContextTree> {
-  // `normalizedTmpdir`, not `os.tmpdir()`: on Windows the raw value can be an
-  // 8.3 short name (`RUNNER~1`), which does not compare equal to the long path
-  // every realization row is stated against.
-  const dir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-claude-context-'));
-
-  for (const [relativePath, content] of Object.entries(files)) {
-    const absolute = safePath.join(dir, relativePath);
-    await mkdir(safePath.resolve(absolute, '..'), { recursive: true });
-    await writeFile(absolute, content);
-  }
+  const dir = await plantTree('vat-claude-context-', files);
 
   let gitTracker: GitTracker | undefined;
   if (options.git === true) {
@@ -94,8 +83,7 @@ export async function buildClaudeContextTree(
  * @param dir - The temp directory, or undefined when `beforeAll` never got that far
  */
 export async function removeClaudeContextTree(dir: string | undefined): Promise<void> {
-  if (dir === undefined) return;
-  await rm(dir, { recursive: true, force: true });
+  await razeTree(dir);
 }
 
 /** A live handle to the tree a {@link setupClaudeContextTree} suite is running against. */

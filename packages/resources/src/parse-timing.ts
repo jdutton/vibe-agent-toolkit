@@ -203,8 +203,8 @@ export type ParsePassSlot = (typeof ParsePass)[keyof typeof ParsePass];
  * - `projection/blob-population.ts`'s `unparsedFacts` runs **three real passes
  *   over the full content** — `findLexicalReferences`, `measureContent` and
  *   `estimateTokens` — on every non-prose file. ❌ That work is real, it is
- *   unattributed, and it is the lane `claude context`, `claude budget` and cold
- *   population all use.
+ *   unattributed, and it is the lane `claude context`, the claude-context SQL
+ *   relations and cold population all use.
  *
  * The gap is **bounded, not zero**: the same three passes measured 605 ms +
  * 469 ms + 0.585 ms over 8,713 documents / 108.9 MB, so on an adopter tree whose

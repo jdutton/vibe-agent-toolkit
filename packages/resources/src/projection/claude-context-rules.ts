@@ -101,12 +101,14 @@
 import picomatch from 'picomatch';
 
 import type { BlobRow } from '../schemas/projection-blobs.js';
+import type { ClaudeRulePatternStatus } from '../schemas/projection-claude-rules.js';
 import type {
   ResourceRealizationRow,
   ResourceTagRow,
 } from '../schemas/projection-resources.js';
+import type { JsonValue } from '../schemas/projection-shared.js';
 
-import { RULE_SCOPE_TAG, type RuleScope } from './contributors/claude-rules-scope.js';
+import { RULE_SCOPE_TAG, type RuleScope } from './agentic-tags.js';
 
 /**
  * The vendor's shared expansion budget for one rule's whole `paths` list.
@@ -189,6 +191,46 @@ export interface RuleSelectionResult {
 }
 
 /**
+ * What happened when one declared pattern was tested against the whole tree.
+ *
+ * ⛔ FOUR states, and the last two are the point: a pattern the vendor's budget
+ * REFUSED, and a pattern whose territory git ignores, both have a null witness
+ * while meaning something other than inertness, so folding either into `inert`
+ * reports a blind spot as a defect. See `docs/architecture/zones.md` §4.
+ *
+ * - `matched` — some realized file matches; `witnessPath` names it.
+ * - `inert` — evaluated against every candidate and matched none. The defect
+ *   signal: a glob naming a moved, renamed or never-created path.
+ * - `unevaluated` — the rule's `paths:` list blew the shared expansion or byte
+ *   budget, so no matcher ran. One over-budget entry refuses the whole list.
+ * - `gitignored` — evaluated and matched nothing VAT can see, and its
+ *   territory is gitignored ({@link territoryIgnored}). VAT never realizes an
+ *   ignored file while the harness reads the filesystem, so the glob may well
+ *   fire and VAT declines to judge it.
+ *
+ * The schema's type, not a second spelling of the vocabulary.
+ */
+type RulePatternStatus = ClaudeRulePatternStatus;
+
+/** One declared `paths:` entry, and what the tree-wide walk found for it. */
+interface RulePatternEvaluation {
+  /** Zero-based index in the rule's declared `paths:` list. */
+  readonly ordinal: number;
+  /** The pattern exactly as declared — never normalised. */
+  readonly pattern: string;
+  /**
+   * The longest path every match must live at or below.
+   *
+   * ⛔ A wholly-literal pattern yields ITSELF, a FILE rather than a directory —
+   * see {@link literalPrefix}. Read it as "at or below", inclusively.
+   */
+  readonly literalPrefix: string;
+  /** The file that proves the pattern live, or null for every other state. */
+  readonly witnessPath: string | null;
+  readonly status: RulePatternStatus;
+}
+
+/**
  * How many patterns the harness would expand this `paths` list to.
  *
  * Brace groups multiply, so the count is the product of each pattern's group
@@ -200,16 +242,104 @@ export interface RuleSelectionResult {
  * @returns The expanded pattern count the shared budget is measured against
  */
 export function expandedPatternCount(patterns: readonly string[]): number {
-  let total = 0;
-  for (const pattern of patterns) {
-    let product = 1;
-    for (const group of pattern.matchAll(/\{([^{}]*)\}/g)) {
-      product *= (group[1] ?? '').split(',').length;
-    }
-    total += product;
-  }
-  return total;
+  return patterns.reduce((total, pattern) => total + expansionsOf(pattern), 0);
 }
+
+/**
+ * How many strings one pattern's braces expand to.
+ *
+ * ⛔ A real grammar, not a comma count, and both halves of that were live
+ * under-counts: a RANGE (`{1..5000}`) has no comma and scored 1, and an
+ * innermost-group scan scored `{x,y}{a,{b,c}}` as 4 when it expands to 6. An
+ * under-count is the dangerous direction — the list reads as inside the budget,
+ * the matcher runs, and a row the harness would never have evaluated is reported
+ * `matched` or `inert` instead of `unevaluated`.
+ *
+ * The first top-level group is split on its top-level commas; each alternative is
+ * counted recursively and the sum multiplies the count of everything after the
+ * group. A group with no top-level comma is a range when it parses as one, and
+ * otherwise literal text.
+ *
+ * @param pattern - One `paths:` entry
+ * @returns Its expansion count, never less than 1
+ */
+function expansionsOf(pattern: string): number {
+  const open = pattern.indexOf('{');
+  if (open === -1) return 1;
+  const close = matchingBrace(pattern, open);
+  if (close === -1) return 1;
+  const rest = expansionsOf(pattern.slice(close + 1));
+  const alternatives = topLevelAlternatives(pattern.slice(open + 1, close));
+  if (alternatives.length === 1) return rangeSize(alternatives[0] ?? '') * rest;
+  return alternatives.reduce((sum, alternative) => sum + expansionsOf(alternative), 0) * rest;
+}
+
+/**
+ * The index of the `}` closing the `{` at `open`, or -1 when it is unclosed.
+ *
+ * @param text - The pattern
+ * @param open - Index of a `{`
+ * @returns The matching close index, or -1
+ */
+function matchingBrace(text: string, open: number): number {
+  let depth = 0;
+  for (let index = open; index < text.length; index += 1) {
+    if (text[index] === '{') depth += 1;
+    else if (text[index] === '}') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
+/**
+ * A group body split on the commas that are not inside a nested group.
+ *
+ * @param body - The text between a group's braces
+ * @returns Its alternatives, in order
+ */
+function topLevelAlternatives(body: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < body.length; index += 1) {
+    const char = body[index];
+    if (char === '{') depth += 1;
+    else if (char === '}') depth -= 1;
+    else if (char === ',' && depth === 0) {
+      parts.push(body.slice(start, index));
+      start = index + 1;
+    }
+  }
+  parts.push(body.slice(start));
+  return parts;
+}
+
+/**
+ * The size of a comma-free group: a numeric or single-character range, or 1.
+ *
+ * @param body - The group body
+ * @returns How many strings the group expands to
+ */
+function rangeSize(body: string): number {
+  // `from..to` or `from..to..step`, where the ends are integers or one
+  // character. Split rather than matched whole: the one-pattern form backtracks.
+  const [from = '', to = '', step, ...rest] = body.split('..');
+  const isEnd = (end: string): boolean => NUMBER.test(end) || (end.length === 1 && !NOT_A_CHAR_END.test(end));
+  if (rest.length > 0 || !isEnd(from) || !isEnd(to) || (step !== undefined && !NUMBER.test(step))) return 1;
+  const numeric = NUMBER.test(from) && NUMBER.test(to);
+  const first = numeric ? Number(from) : from.codePointAt(0) ?? 0;
+  const last = numeric ? Number(to) : to.codePointAt(0) ?? 0;
+  const stride = Math.abs(Number(step ?? 1)) || 1;
+  return Math.floor(Math.abs(last - first) / stride) + 1;
+}
+
+/** An optionally signed integer. */
+const NUMBER = /^-?\d+$/;
+
+/** A single character that cannot be a character-range end: a digit or a dot. */
+const NOT_A_CHAR_END = /[\d.]/;
 
 /**
  * The rules a query at `queryDir` (optionally at `queryFile`) loads.
@@ -273,6 +403,135 @@ export function selectRules(input: {
 }
 
 /**
+ * Every realized file in the corpus, deduplicated and path-sorted.
+ *
+ * The input {@link evaluateRulePatterns} needs, hoisted to its own export so a
+ * caller evaluating many rules builds it ONCE. Rebuilding it per rule is the
+ * shape of cost this module already refuses inside {@link selectRules}: on the
+ * adopter that motivated the per-pattern lane it would be 246 walks of the same
+ * realization table.
+ *
+ * @param realizations - Every realization the projection holds
+ * @returns The sorted, deduplicated file list for the whole tree
+ */
+export function corpusFiles(
+  realizations: readonly ResourceRealizationRow[],
+): readonly string[] {
+  return filesUnder(realizations, '');
+}
+
+/**
+ * Every declared pattern of one rule, and whether the tree realizes it.
+ *
+ * **Not what {@link selectRules} answers.** {@link directoryAdmission} returns on
+ * the FIRST pattern that produces a witness — correct for *is this rule in the
+ * answer, and why*, and deliberately cheap — so the rule's other patterns are
+ * never tested and are absent from its result. This walks all of them, and that
+ * short-circuit is untouched.
+ *
+ * ⛔ The witness is TREE-WIDE, not query-scoped: that is the difference between
+ * "matches nothing" and "matches nothing HERE", and a rule scoped to another
+ * package is correctly absent from a `packages/cli/src` query without its
+ * patterns being dead. {@link isAtOrBelow} makes the empty `under` the corpus
+ * root, so passing `''` disables the disjoint-subtree prune and keeps the
+ * sorted-range one — exactly the tree-wide walk.
+ *
+ * ⛔ **The vendor's 1,000-pattern / 4 MiB budget is spent by the whole `paths:`
+ * list at once**, so one oversized entry makes EVERY pattern in the list
+ * `unevaluated`. Reporting those as `inert` would name a defect the rule does
+ * not have and hide the one it does.
+ *
+ * ⛔ **`files` holds no gitignored path, and the harness reads the filesystem**,
+ * so a glob scoped to build output (`dist/**`) matches nothing here and may
+ * fire there. A would-be `inert` pattern whose territory `isIgnored` says is
+ * ignored is `gitignored` instead — {@link territoryIgnored} says which path is
+ * asked. Only would-be `inert` patterns ask, so a healthy tree pays nothing.
+ *
+ * @param input - The rule's declared patterns, the tree's files, and the tree's
+ *   ignore oracle
+ * @param input.patterns - The rule's `paths:` entries, in declaration order
+ * @param input.files - {@link corpusFiles}' output; the order is load-bearing,
+ *   because {@link candidateRange} binary-searches it
+ * @param input.isIgnored - Would git ignore a file at this root-relative,
+ *   forward-slashed path? Required, not defaulted: a caller outside a
+ *   repository passes `() => false` and says so, because an omitted oracle is
+ *   exactly the false `inert` this state exists to prevent
+ * @returns One evaluation per declared pattern, in declaration order
+ */
+export function evaluateRulePatterns(input: {
+  /** The rules file's root-relative path — decides whether a second base applies. */
+  readonly rulePath: string;
+  readonly patterns: readonly DeclaredPattern[];
+  readonly files: readonly string[];
+  readonly isIgnored: (path: string) => boolean;
+}): readonly RulePatternEvaluation[] {
+  const refused = isOverBudget(input.patterns.map((entry) => entry.pattern));
+  return input.patterns.map(({ ordinal, pattern }) => {
+    const prefix = literalPrefix(pattern);
+    // ⚠️ No matcher is compiled and no file is read on this branch. That is the
+    // claim `unevaluated` makes, and a `firstMatchUnder` call here would quietly
+    // turn it into a lie the reader cannot see.
+    if (refused) {
+      return { ordinal, pattern, literalPrefix: prefix, witnessPath: null, status: 'unevaluated' };
+    }
+    const forms = matchingForms(input.rulePath, pattern);
+    const witness = forms
+      .map((form) => firstMatchUnder(form, '', input.files))
+      .find((match) => match !== undefined);
+    if (witness !== undefined) {
+      return { ordinal, pattern, literalPrefix: prefix, witnessPath: witness, status: 'matched' };
+    }
+    const ignored = forms.some((form) => territoryIgnored(form, input.isIgnored));
+    return {
+      ordinal,
+      pattern,
+      literalPrefix: prefix,
+      witnessPath: null,
+      status: ignored ? 'gitignored' : 'inert',
+    };
+  });
+}
+
+/**
+ * A stand-in file name beneath a glob's literal prefix — see {@link territoryIgnored}.
+ *
+ * Extension-less on purpose: an ignore line that names only some files
+ * (`*.map`) does not make the territory ignored, and must not match the probe.
+ */
+const TERRITORY_PROBE = 'vat-territory-probe';
+
+/**
+ * Is the territory one matching form can reach gitignored?
+ *
+ * The question asked is about a path, and WHICH path is the whole decision:
+ *
+ * - **A wholly-literal form** names one file, so that file is asked about.
+ * - **Otherwise every match lives strictly BELOW the literal prefix**, so a
+ *   stand-in file beneath it is asked about — never the bare prefix. ⛔ The
+ *   bare prefix is the wrong question: `.gitignore`'s `dist/` matches only a
+ *   DIRECTORY, and a `dist` that has not been built is not known to be one, so
+ *   git answers "not ignored" for `dist` while answering "ignored" for
+ *   anything beneath it. The same holds for `gen/**`, which ignores `gen`'s
+ *   contents but not `gen`.
+ * - **An empty prefix** (`**\/*.gen.ts`) reaches the whole tree, and "is the
+ *   root ignored" is not a question worth asking — never judged, so such a
+ *   glob stays `inert` (a documented blind spot).
+ *
+ * A prefix that climbs out of the tree is passed through as spelled; the
+ * oracle owns the root, so it is the one that answers "outside" (not ignored).
+ *
+ * @param form - One matching form of a `paths:` entry
+ * @param isIgnored - The tree's ignore oracle
+ * @returns True when a file the form could match would be gitignored
+ */
+function territoryIgnored(form: string, isIgnored: (path: string) => boolean): boolean {
+  const prefix = literalPrefix(form);
+  if (prefix === '') return false;
+  const wholeForm = withoutLeadingDotSegments(form);
+  return isIgnored(prefix === wholeForm ? prefix : `${prefix}/${TERRITORY_PROBE}`);
+}
+
+/**
  * The admission one rule earns, or undefined when this query does not load it.
  *
  * Split from {@link selectRules} to stay under the cognitive-complexity ceiling:
@@ -328,9 +587,10 @@ function admissionFor(
     return undefined;
   }
 
-  if (input.queryFile === null) return directoryAdmission(patterns, input.queryDir, input.dirFiles);
+  const forms = patterns.flatMap((pattern) => matchingForms(row.path, pattern));
+  if (input.queryFile === null) return directoryAdmission(forms, input.queryDir, input.dirFiles);
 
-  const matched = patterns.find((pattern) => picomatch.isMatch(input.queryFile ?? '', pattern, { dot: true }));
+  const matched = forms.find((pattern) => picomatch.isMatch(input.queryFile ?? '', pattern, { dot: true }));
   return matched === undefined ? undefined : { kind: 'glob-rule', pattern: matched };
 }
 
@@ -387,7 +647,8 @@ function directoryAdmission(
  * @param queryDir - Root-relative directory of the query
  * @returns True when every path under `queryDir` matches
  */
-function coversDirectory(pattern: string, queryDir: string): boolean {
+function coversDirectory(declared: string, queryDir: string): boolean {
+  const pattern = withoutLeadingDotSegments(declared);
   if (UNIVERSAL_PATTERNS.has(pattern)) return true;
   const tail = UNIVERSAL_TAILS.find((candidate) => pattern.endsWith(candidate));
   if (tail === undefined) return false;
@@ -453,13 +714,33 @@ function firstMatchUnder(
  */
 function literalPrefix(pattern: string): string {
   // eslint-disable-next-line local/no-hardcoded-path-split -- `paths:` globs are forward-slashed by the vendor's own dialect, never platform-separated
-  const segments = pattern.split('/');
+  const segments = withoutLeadingDotSegments(pattern).split('/');
   const literal: string[] = [];
   for (const segment of segments) {
     if (GLOB_META.test(segment)) break;
     literal.push(segment);
   }
   return literal.join('/');
+}
+
+/**
+ * A pattern with its leading `./` segments removed.
+ *
+ * ⛔ Only for the PRUNE. The compiled matcher accepts `./docs/**` against
+ * `docs/guide.md`, but `.` is not a glob metacharacter, so the literal prefix
+ * came back as `./docs` — a string no root-relative path starts with. The
+ * candidate range was then empty on every tree, and a live glob was reported
+ * `inert` by the default-on check while the file query for the same path
+ * admitted the rule. Stripped here and nowhere else: the reported `pattern`
+ * stays the author's spelling.
+ *
+ * @param pattern - One `paths:` entry
+ * @returns The same pattern without leading `./`
+ */
+function withoutLeadingDotSegments(pattern: string): string {
+  let stripped = pattern;
+  while (stripped.startsWith('./')) stripped = stripped.slice(2);
+  return stripped;
 }
 
 /**
@@ -543,18 +824,63 @@ function filesUnder(
 ): string[] {
   const paths = new Set<string>();
   for (const row of realizations) {
-    if (row.isDirectory || !isAtOrBelow(row.dir, queryDir)) continue;
+    // A realization that does not exist is a dangling link target, and as a
+    // witness it would call a dead glob matched on a file nobody can open.
+    if (row.isDirectory || !row.exists || !isAtOrBelow(row.dir, queryDir)) continue;
     paths.add(row.path);
   }
   return [...paths].sort((left, right) => (left < right ? -1 : Number(left > right)));
 }
 
 /**
- * A rule's `paths:` list, or empty when it has none or it is not a string array.
+ * The `paths:` globs one rules file declares, read off its parsed frontmatter.
  *
  * A `paths:` that is not an array of strings is not a narrower predicate — it is
  * an unreadable one, and treating it as "matches everything" would charge a rule
- * the harness cannot run.
+ * the harness cannot run. Non-string entries are dropped for the same reason,
+ * one entry at a time.
+ *
+ * ⛔ Exported so the PRODUCER of `claude_rule_patterns`
+ * (`ClaudeRulesScopeContributor`) and this module's query lane read one
+ * declaration through one function. A second reader would be free to disagree
+ * about what `paths:` means, and the disagreement would surface as a stored row
+ * describing a predicate the query never applies.
+ *
+ * ⚠️ NOT the same question as {@link ruleScopeFor}'s, which asks only whether a
+ * `paths:` key holds a non-empty array. A rule declaring `paths: [42]` is
+ * therefore `path-scoped` with zero patterns: classified as on-demand, and with
+ * nothing to evaluate. Deliberate — the scope is the load class, and refusing to
+ * read a malformed entry must not promote a rule to always-loaded.
+ *
+ * @param frontmatter - The rules file's parsed frontmatter, or null
+ * @returns The declared patterns in declaration order, or an empty list
+ */
+export function declaredPatterns(
+  frontmatter: Readonly<Record<string, JsonValue>> | null | undefined,
+): DeclaredPattern[] {
+  const value = frontmatter?.['paths'];
+  if (!Array.isArray(value)) return [];
+  const declared: DeclaredPattern[] = [];
+  for (const [ordinal, pattern] of value.entries()) {
+    if (typeof pattern === 'string') declared.push({ ordinal, pattern });
+  }
+  return declared;
+}
+
+/**
+ * One readable `paths:` entry and its index in the AUTHOR'S list.
+ *
+ * ⛔ The index is taken before anything is dropped. Numbered afterwards, a blank
+ * YAML item ahead of a dead glob shifted every later ordinal, and the finding's
+ * `paths[N]` named the healthy glob beside the one to delete.
+ */
+export interface DeclaredPattern {
+  readonly ordinal: number;
+  readonly pattern: string;
+}
+
+/**
+ * A rule's `paths:` list, or empty when it has none or it is not a string array.
  *
  * @param row - The rule's realization
  * @param blobByKey - `contentKey` → blob
@@ -565,9 +891,31 @@ function pathsFrontmatterOf(
   blobByKey: ReadonlyMap<string, BlobRow>,
 ): string[] {
   if (row.contentKey === null) return [];
-  const value = blobByKey.get(row.contentKey)?.frontmatter?.['paths'];
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === 'string');
+  return declaredPatterns(blobByKey.get(row.contentKey)?.frontmatter).map((entry) => entry.pattern);
+}
+
+/**
+ * Every root-relative form a rule's `paths:` glob may take.
+ *
+ * ⛔ The vendor does not say which base a NESTED rules file's globs resolve
+ * against — the repository root the session runs in, or the project directory
+ * the second `.claude/` belongs to. Swept only against the root, a fixture
+ * project's `src/**` was called dead beside its own `src/index.ts`: a false
+ * CLAUDE_RULE_GLOB_INERT whose remedy deletes a working glob. So a nested rule's
+ * glob is tried under BOTH bases, and "dead" means dead under both. A rule in the
+ * project's own rules directory has one base and is never re-based. Recorded as
+ * the `nested-rule-glob-base` assumption.
+ *
+ * Both lanes call this — the per-pattern sweep and the query — so the check can
+ * never call a glob live while `claude context` leaves its rule out.
+ *
+ * @param rulePath - Root-relative path of the rules file
+ * @param pattern - One declared `paths:` entry
+ * @returns The root-relative form, then the re-based one when the rule is nested
+ */
+function matchingForms(rulePath: string, pattern: string): string[] {
+  const base = nestedRuleParent(rulePath);
+  return base === null ? [pattern] : [pattern, `${base}/${withoutLeadingDotSegments(pattern)}`];
 }
 
 /**

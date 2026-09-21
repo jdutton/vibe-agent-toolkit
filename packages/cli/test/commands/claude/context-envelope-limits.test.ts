@@ -41,7 +41,7 @@ import {
 const RUN_SCOPED_FIELDS = ['limits', 'modelledBehaviours', 'boundsStatement'] as const;
 
 /**
- * An empty projection — twelve empty tables.
+ * An empty projection — thirteen empty tables.
  *
  * The document's SHAPE is what is under test, and shape does not depend on the
  * rows: `account()` over no rows still produces totals, and its correctness is

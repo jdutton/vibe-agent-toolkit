@@ -42,6 +42,7 @@ const BARREL_EXPORTS = [
   'HarnessLocationError',
   'HarnessLockBusyError',
   'InternalHarnessError',
+  'LINK_GRAPH_MEMBER_GLOBS',
   'MarketplaceManifestJsonSchema',
   'MarketplaceManifestSchema',
   'NAVIGATION_FILE_PATTERNS',

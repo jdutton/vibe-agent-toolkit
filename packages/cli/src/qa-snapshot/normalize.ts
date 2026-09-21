@@ -34,7 +34,7 @@
  * silence it.
  */
 
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 /** The roots a captured stream may name absolutely. */
 export interface NormalizeContext {
@@ -142,8 +142,8 @@ function withoutTrailingSeparators(root: string): string {
  * @returns `true` when equal or nested.
  */
 function isWithin(candidate: string, container: string): boolean {
-  const normalizedCandidate = toForwardSlash(candidate);
-  const normalizedContainer = toForwardSlash(container);
+  const normalizedCandidate = toForwardSlashAnyPlatform(candidate);
+  const normalizedContainer = toForwardSlashAnyPlatform(container);
   if (normalizedCandidate === normalizedContainer) {
     return true;
   }
@@ -155,7 +155,7 @@ function isWithin(candidate: string, container: string): boolean {
  *
  * Windows output mixes separators within a single run — a path built by
  * `path.join` arrives backslashed while one that passed through
- * `toForwardSlash` does not — so both spellings are substituted regardless of
+ * `toForwardSlashAnyPlatform` does not — so both spellings are substituted regardless of
  * which platform is doing the normalizing.
  *
  * @param root - Absolute path of the root, as given.
@@ -167,7 +167,7 @@ function spellingsOf(root: string, placeholder: string): PathSubstitution[] {
   if (trimmed.length === 0) {
     return [];
   }
-  const forward = toForwardSlash(trimmed);
+  const forward = toForwardSlashAnyPlatform(trimmed);
   const backward = forward.replaceAll('/', '\\');
   const spellings = new Set([trimmed, forward, backward]);
   return [...spellings].map((from) => ({ from, to: placeholder }));

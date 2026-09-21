@@ -45,6 +45,13 @@ const IGNORED_DOC = `${IGNORED_DIR}/generated.md`;
 /** Any stable string: {@link CapturingStore} never reads, so it names nothing. */
 const FIXTURE_TREE_HASH = 'fixture-tree';
 
+/**
+ * A `.claude/rules` file whose second glob names a subtree this tree does not
+ * have — one live pattern and one dead one, which is the whole question
+ * `claude_rule_patterns` exists to answer.
+ */
+const RULE_WITH_ONE_DEAD_GLOB = '---\npaths: ["docs/**/*.md", "gone/**/*.md"]\n---\n\nScoped.\n';
+
 const suite = setupSubdirTestSuite('resource-population-');
 
 /** Write one fixture file, creating its parent directory. */
@@ -96,7 +103,7 @@ async function populateCapturing(tracker: GitTracker): Promise<CapturingStore> {
   await buildResourcePopulation({
     root: suite.tempDir,
     gitTracker: tracker,
-    cache: { store, treeHash: FIXTURE_TREE_HASH },
+    cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
   });
   return store;
 }
@@ -134,6 +141,19 @@ describe('buildResourcePopulation', () => {
     // lens keys on a directory — so this asserts the CONSUMER declines it, not
     // that the extent failed to produce it.
     expect(await populationOf()).toEqual([DOC_A, 'docs/b.md']);
+  });
+
+  it('still enumerates a rules file WITHOUT registering a blob reader', async () => {
+    // ⛔ The guard on the lane decision next door. This lane runs under
+    // `contentParsing: CONTENT_PARSING_SKIP`, and `populate()` THROWS when a
+    // registered contributor declares `readsBlobs` — so registering the rules
+    // classifier in `resourceContributors` rather than in the projection lane
+    // alone would take `vat resources validate` out with it. A file list is
+    // still a file list here.
+    await write('.claude/rules/scoped.md', RULE_WITH_ONE_DEAD_GLOB);
+    await write(DOC_A, '# A\n');
+
+    expect(await populationOf()).toEqual(['.claude/rules/scoped.md', DOC_A]);
   });
 
   it('admits a file no glob would reach, leaving include/exclude to the caller', async () => {
@@ -359,6 +379,27 @@ describe('buildResourceProjection', () => {
     // The discriminator: an extent that realized nothing would pass without it.
     expect(realized).toContain(COMMITTED);
     expect(realized).toContain(UNCOMMITTED);
+  });
+
+  it('answers a rule-pattern question the population lane cannot ask at all', async () => {
+    // The lane decision. `ClaudeRulesScopeContributor` was registered only in
+    // the claude-context lane, so `vat resources query` and `vat resources
+    // check` — which populate through THIS function — saw an empty
+    // `claude_rule_patterns` table and reported it as a corpus with no dead
+    // globs. An empty table and a clean corpus are the same SQL answer.
+    await write('.claude/rules/scoped.md', RULE_WITH_ONE_DEAD_GLOB);
+    await write('docs/guide.md', '# Guide\n');
+
+    const projection = await buildResourceProjection({
+      root: suite.tempDir,
+      onBlobPopulation: DISCARD_BLOB_POPULATION,
+    });
+
+    expect(projection.claudeRulePatterns.map((row) => [row.pattern, row.status])).toEqual([
+      ['docs/**/*.md', 'matched'],
+      ['gone/**/*.md', 'inert'],
+    ]);
+    expect(projection.claudeRulePatterns[0]?.witnessPath).toBe('docs/guide.md');
   });
 
   it('files a contributor record when it derived, which is the cache tell', async () => {

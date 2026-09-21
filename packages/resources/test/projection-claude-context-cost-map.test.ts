@@ -23,8 +23,8 @@
  *
  * ## ⚠️ `queriedDirectories` is NOT smaller than `evaluatedDirectories`, and must not be
  *
- * `sweepAlwaysLoadedBudgets` saves queries because it needs the always half
- * ONLY. This module needs an on-demand number per directory, so it issues one
+ * `claudeContextRelations` saves queries because it collapses per chain and
+ * keys its on-demand rows to the representative. This module needs an on-demand number per directory, so it issues one
  * query per working location whatever the regions do — and the region collapse
  * buys OUTPUT size (one always-row list per chain instead of per directory),
  * not call count. So the honest counter assertion is EQUALITY: it fails high if
@@ -326,7 +326,7 @@ describe('buildContextCostMap', () => {
     });
 
     it('skips a location whose OWN path is unrealized, keeping its region intact', async () => {
-      // The case the budget sweep never had to face: it queried representatives
+      // The case the per-chain relations never face: they query representatives
       // only, so a location that is a `dir` without a realization of its own was
       // never asked anything. This module asks every location.
       const projection = withoutRealization(await claudeContextFixture(COST_TREE), COLD);

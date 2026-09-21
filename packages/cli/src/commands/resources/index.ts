@@ -2,6 +2,7 @@
  * Resources command group
  */
 
+import { BUILTIN_CHECKS } from '@vibe-agent-toolkit/resources';
 import { Command, Option } from 'commander';
 
 import { collectRepeated } from '../../utils/repeatable-option.js';
@@ -13,6 +14,56 @@ import { validateCommand } from './validate.js';
 
 /** What every subcommand's `--debug` flag says it does. */
 const DEBUG_HELP = 'Enable debug logging';
+
+/**
+ * Every built-in's SQL twin, as a `resources.checks` block a reader can paste.
+ *
+ * 🔑 RENDERED from `BUILTIN_CHECKS`, never transcribed. A hand-copied statement
+ * here backs a claim `check.ts` makes to the operator, and would go silently
+ * false the moment a second built-in ships or a column is renamed.
+ *
+ * @returns The YAML block, indented for the help text
+ */
+function builtinSqlTwins(): string {
+  return BUILTIN_CHECKS.map((check) => [
+    '    resources:',
+    '      checks:',
+    `        my-${check.name}:`,
+    `          description: ${check.description}`,
+    '          sql: |',
+    ...check.sqlTwin.split('\n').map((line) => `            ${line}`),
+  ].join('\n')).join('\n\n');
+}
+
+/**
+ * The derived relations and the one filter that makes a budget sum correct.
+ *
+ * Shared by `query` and `check` because a declared check is where the wrong
+ * sum does its damage: it gates silently on a number four times too large.
+ */
+const DERIVED_RELATIONS_HELP = `Derived relations (evaluated only when a statement names one):
+  edges, edge_resolutions, lens_contexts -- the resolved link graph.
+  claude_context_chains, claude_context_loads -- what Claude Code loads at
+  each working location, the rows behind vat claude context.
+
+  VAT ships no context budget: what a launch chain may cost is your call,
+  written as your own check over these rows. A launch sum MUST count only
+  launchCharge = 'charged':
+
+    SELECT l.chainId,
+           SUM(CASE WHEN l.launchCharge = 'charged' THEN l.bytes END) AS bytes,
+           SUM(l.launchCharge = 'unknown-size') AS unsized
+      FROM claude_context_loads l
+     GROUP BY l.chainId
+
+  claude_context_loads also carries every path-scoped rule and every file
+  that is not paid at launch; unfiltered, the same sum on one adopter was
+  wrong by 725,714 bytes. sizeCliff is NOT the filter -- it is the 4 MiB
+  CLAUDE.md cliff's verdict, and 'loaded' holds rows no launch charges.
+
+  An 'unknown-size' row has no bytes and SUM() skips NULL, so the unsized
+  count is what stops a chain whose largest file could not be sized from
+  passing. (A WHERE on 'charged' would also filter those rows away.)`;
 
 /** The two serializations `scan` and `query` offer of one document. */
 const OUTPUT_YAML = 'yaml';
@@ -165,9 +216,17 @@ Output Fields:
   populationSecs:
               What that population cost. The store's whole job is to make it
               cheap, so this is the number that says whether it did
+  lensSecs:   What evaluating the derived relations cost. Not part of
+              populationSecs: a store hit does not make a lens cheaper
+  lensesEvaluated:
+              Which lenses that covers -- only those whose relations the
+              statement names. An empty list is a statement that asked for
+              none, not a lens that stopped running
   rows:       The selected rows, exactly as SQLite holds them -- a boolean as
               0/1, a date and a JSON column as text. Values are NOT decoded,
               because decoding needs a table spec and arbitrary SQL has none
+
+${DERIVED_RELATIONS_HELP}
 
 Path Argument:
   [path] says where to LOOK FOR the project -- root discovery walks up from
@@ -191,15 +250,16 @@ Examples:
   $ vat resources query 'SELECT path FROM resource_realizations LIMIT 5'
   $ vat resources query 'SELECT COUNT(*) AS n FROM blobs'
   $ vat resources query 'SELECT * FROM blob_conditions'      # what was refused
-  $ vat resources query 'SELECT target FROM blob_references WHERE kind = ?' --param markdown-link
+  $ vat resources query 'SELECT rawRef FROM blob_references WHERE syntacticForm = ?' --param markdown-link
+  $ vat resources query "SELECT pattern FROM claude_rule_patterns WHERE status = 'inert'"
 `
     );
 
   resources
     .command('check [path]')
-    .description('Run the project\'s declared SQL assertions over its resource projection')
+    .description('Run VAT\'s built-in checks and the project\'s declared SQL assertions over its resource projection')
     .option('--debug', DEBUG_HELP)
-    .option('--check <name>', 'Run only this check, by its key in resources.checks')
+    .option('--check <name>', 'Run only this check, by its built-in name or its key in resources.checks')
     .option(
       '--budget <seconds>',
       'Kill the run if it goes this long without completing a unit of work'
@@ -219,12 +279,62 @@ Examples:
       'after',
       `
 Description:
-  Runs every assertion declared under \`resources.checks\` in
-  vibe-agent-toolkit.config.yaml against the same projection \`vat resources
-  query\` reads, and fails the run when any error-severity check is violated.
+  Runs VAT's built-in checks, plus every assertion declared under
+  \`resources.checks\` in vibe-agent-toolkit.config.yaml, against the same
+  projection \`vat resources query\` reads -- and fails the run when any
+  error-severity check is violated.
 
   A query answers a question once. This runs the questions a project decided
   were worth asking every time.
+
+Built-in checks (run with or without a config file):
+  claude-rule-glob-inert   Every paths: glob in .claude/rules/ matches at
+                           least one file in the tree. Emits
+                           CLAUDE_RULE_GLOB_INERT (default: info) per dead
+                           glob, naming the rules file and quoting the glob.
+
+  They are TypeScript predicates over the projection's rows, never SQL, so
+  adding one never makes a query engine part of anybody's gate. Config only
+  ADDS to this set or moves a severity in it -- a directory with no
+  vibe-agent-toolkit.config.yaml runs exactly the same built-ins.
+
+  Severity moves through the CODE, like any other code vat emits:
+
+    resources:
+      validation:
+        severity:
+          CLAUDE_RULE_GLOB_INERT: ignore   # or warning / error
+
+  Not CUSTOM:<name> -- that space is for checks YOU declare, below.
+
+  --check <name> takes a built-in name exactly as it takes a declared key.
+  In data.checks each built-in entry carries \`builtin: true\`, so a rule vat
+  supplied is distinguishable from one this project wrote.
+
+Asking a built-in's question yourself:
+  The facts are ordinary projection rows, so the built-in is the default
+  REPORT and not the only way to ask. Copy one of these into resources.checks
+  and narrow it -- a WHERE clause, a different severity, your own message:
+
+${builtinSqlTwins()}
+
+  Note \`status = 'inert'\` and not \`status != 'matched'\`: 'unevaluated'
+  means vat never ran the matcher (the rule's paths: list blew the expansion
+  budget), and 'gitignored' means the glob covers ignored files vat never
+  reads but Claude Code does. Neither status means the glob is dead.
+
+${DERIVED_RELATIONS_HELP}
+
+  A ratchet -- no file may grow past its recorded size -- needs no new
+  mechanism. Carry the baseline inline and select what grew:
+
+    sql: |
+      WITH baseline(path, ceiling) AS (VALUES ('CLAUDE.md', 6200))
+      SELECT r.path, b.bytes, baseline.ceiling
+        FROM baseline
+        JOIN resource_realizations r ON r.path = baseline.path
+        JOIN blobs b ON b.contentKey = r.contentKey
+       WHERE b.bytes > baseline.ceiling
 
 Declaring a check:
   resources:
@@ -287,11 +397,14 @@ A check with NOTHING TO RUN OVER fails the same way:
   sparse CI checkout, or a root that resolved somewhere other than intended.
 
 A run with NO CHECKS AT ALL fails too:
-  Declaring none is reported the same way and for a stronger reason: a gate
-  that checked nothing produces the same document as a gate that was deleted,
-  so \`data.checksRun: 0\` is RESOURCE_CHECK_BROKEN at error and exit 1. If this
-  project deliberately has no checks, take the command out of the pipeline
-  rather than leaving a step that can only pass.
+  \`data.checksRun: 0\` is RESOURCE_CHECK_BROKEN at error and exit 1, for the
+  same reason: a gate that checked nothing produces the same document as a
+  gate that was deleted.
+
+  Declaring none of your own no longer reaches that state -- the built-ins
+  above run regardless, so checksRun is never 0 for that reason. You get a
+  stderr warning instead, and data.checks names exactly what did run. Reaching
+  0 now means not even a built-in executed, which is a bug in vat.
 
 A run that HANGS is killed and reported, not waited on:
   A check's SQL is adopter-authored and unbounded -- an accidental cross join
@@ -318,14 +431,14 @@ A run that HANGS is killed and reported, not waited on:
   An interrupted run NEVER exits 0 and never looks like a pass. There are two
   ways to be interrupted and they are reported differently:
 
-    Killed by the budget -- exit 1, status: error, and a RESOURCE_CHECK_BROKEN
-    finding naming the check that was in flight and the bound that was blown.
+    Killed by the budget -- exit 1, status: findings, and a
+    RESOURCE_CHECK_BROKEN finding naming the check that was in flight and the bound that was blown.
 
     Died -- the child ran out of memory materialising a result set (Node aborts
     with SIGABRT), or something outside killed it (a runner's OOM killer sends
     SIGKILL, a step timeout or a cancelled job sends SIGTERM), or it crashed in
     native code (SIGSEGV), or it could not be started at all. Also exit 1,
-    status: error, RESOURCE_CHECK_BROKEN -- naming what ended it, with the
+    status: findings, RESOURCE_CHECK_BROKEN -- naming what ended it, with the
     remedy that ending actually earns, and saying plainly that raising --budget
     is not it.
 
@@ -350,7 +463,9 @@ A run that HANGS is killed and reported, not waited on:
   SIGINT once a handler exists.
 
 Output Fields (the shared report envelope; schema: packages/cli/schemas/resources-check.json):
-  status:    ok | findings | error -- a literal statement about \`findings\`
+  status:    ok | findings | error -- a literal statement about \`findings\`.
+             An interrupted run is \`findings\` (its RESOURCE_CHECK_BROKEN is
+             one); \`error\` is a run that produced no document -- exit 2
   examined:  How many members the projection enumerated -- the corpus the
              checks ran AGAINST, where data.checksRun is how many rules ran.
              Four checks over 8,000 files and four over 0 are otherwise the
@@ -365,16 +480,20 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
              findings from NO checks are otherwise the same document
   data.checks:
              What each check COST -- {name, durationSecs, rows} per check, or
-             {name, durationSecs, broken} for one whose statement threw. rows
-             is what the statement SELECTED, and it is a memory signal: rows
-             are fully materialised. It is not a finding count -- a severity
-             override of 'ignore' drops findings the statement still selected,
-             so sum(rows) and summary legitimately disagree
+             {name, durationSecs, broken} for one whose statement threw, plus
+             \`builtin: true\` on the ones vat supplied (absent, never false, on
+             a rule you declared). rows is what the check SELECTED, and it is
+             a memory signal: rows are fully materialised. It is not a finding
+             count -- a severity override of 'ignore' drops findings the check
+             still selected, so sum(rows) and summary legitimately disagree
   data.populationSecs, data.lensSecs, data.population, data.root:
              What the shared population cost, and where it came from. NOT
              charged to any check: every check's durationSecs is its own
-             statement and nothing else, so populationSecs is the term that
-             reconciles them against durationMs
+             statement and nothing else, so populationSecs + lensSecs are the
+             terms that reconcile them against durationMs
+  data.lensesEvaluated:
+             Which lenses lensSecs covers -- those whose relations some check
+             names. Empty means no check read a derived relation
 
 Exit Codes:
   0 - No error-severity findings
@@ -388,7 +507,7 @@ Exit Codes:
 
 Examples:
   $ vat resources check
-  $ vat resources check --check orphan-skills
+  $ vat resources check --check claude-rule-glob-inert   # one built-in
   $ vat resources check --budget 60
 `
     );

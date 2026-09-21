@@ -20,7 +20,7 @@
  *    statement. It says so in its own output rather than looking complete.
  */
 
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import type {
   ArtifactDelta,
@@ -443,7 +443,7 @@ function presenceConstraints(deltas: readonly ArtifactDelta[]): string[] {
  * @returns The final segment, or the original value when there is none
  */
 function lastPathSegment(value: string): string {
-  const segments = toForwardSlash(value)
+  const segments = toForwardSlashAnyPlatform(value)
     .split('/')
     .filter((segment) => segment !== '');
   return segments.at(-1) ?? value;

@@ -461,11 +461,11 @@ function gitProvenance(corpusRoot: string): {
   corpusGitHead: string | null;
   corpusGitDirty: boolean | null;
 } {
-  const head = gitOutput(corpusRoot, ['rev-parse', 'HEAD']);
+  const head = gitOutput(corpusRoot, ['rev-parse', 'HEAD'], true);
   if (head === null) {
     return { corpusGitHead: null, corpusGitDirty: null };
   }
-  const status = gitOutput(corpusRoot, ['status', '--porcelain']);
+  const status = gitOutput(corpusRoot, ['status', '--porcelain'], true);
   return { corpusGitHead: head, corpusGitDirty: status === null ? null : status.length > 0 };
 }
 
@@ -496,11 +496,17 @@ function gitProvenance(corpusRoot: string): {
  * @returns Zero or one warning line
  */
 function untrackedFileWarnings(corpusRoot: string): string[] {
-  const untracked = gitOutput(corpusRoot, ['ls-files', '--others', '--exclude-standard']);
-  if (untracked === null || untracked.length === 0) {
+  // `-z`: without it git QUOTES any name holding a backslash, a quote or a
+  // non-ASCII byte (`"caf\303\251.md"`), so the warning named files that do
+  // not exist. Untrimmed, because a leading space is a filename character.
+  const untracked = gitOutput(corpusRoot, ['ls-files', '-z', '--others', '--exclude-standard'], false);
+  if (untracked === null) {
     return [];
   }
-  const paths = untracked.split('\n').filter((line) => line.length > 0);
+  const paths = untracked.split('\0').filter((entry) => entry.length > 0);
+  if (paths.length === 0) {
+    return [];
+  }
   const shown = paths.slice(0, UNTRACKED_SAMPLE_SIZE).join(', ');
   const more = paths.length > UNTRACKED_SAMPLE_SIZE ? `, +${String(paths.length - UNTRACKED_SAMPLE_SIZE)} more` : '';
   return [
@@ -524,10 +530,12 @@ const UNTRACKED_SAMPLE_SIZE = 5;
  *
  * @param cwd - Directory to run in
  * @param args - Arguments after `git`
- * @returns Trimmed stdout, or null when the command did not succeed
+ * @param trim - Trim stdout. False for a NUL-delimited listing, where a leading
+ *   space is part of the first filename
+ * @returns Stdout, or null when the command did not succeed
  */
-function gitOutput(cwd: string, args: string[]): string | null {
-  const result = runGit(args, { cwd, timeout: GIT_TIMEOUT_MS });
+function gitOutput(cwd: string, args: string[], trim: boolean): string | null {
+  const result = runGit(args, { cwd, timeout: GIT_TIMEOUT_MS, trim });
   return result.ok ? result.stdout : null;
 }
 

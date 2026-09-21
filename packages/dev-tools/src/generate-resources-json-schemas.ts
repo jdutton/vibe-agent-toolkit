@@ -15,16 +15,20 @@
  * target added here and never generated — fails a unit test rather than
  * shipping a stale artifact. See `pin-emitted-schemas.ts`.
  *
- * The **twelve table** schemas are not listed by hand: they come from
+ * The **thirteen table** schemas are not listed by hand: they come from
  * `PROJECTION_TABLES`, the single registry that also supplies `exportProjection`
  * its primary keys. This file used to enumerate fifteen schemas in one
  * undifferentiated list, which is how three non-tables came to sit
- * indistinguishably among twelve tables — see below.
+ * indistinguishably among thirteen tables — see below.
  */
 
 import { PROJECTION_TABLES } from '../../resources/src/projection/table-registry.js';
 import { OkfConceptFrontmatterSchema } from '../../resources/src/schemas/okf-concept.js';
 import { ProjectConfigSchema } from '../../resources/src/schemas/project-config.js';
+import {
+  ClaudeContextChainRowSchema,
+  ClaudeContextLoadRowSchema,
+} from '../../resources/src/schemas/projection-claude-context.js';
 import {
   EdgeResolutionRowSchema,
   EdgeRowSchema,
@@ -49,7 +53,7 @@ export const RESOURCES_SCHEMAS_DIR = `${PROJECT_ROOT}/packages/resources/schemas
  * used to say nothing did.
  * They still have committed JSON Schemas, so they are still generated; the list
  * is separate so that "generated but not a table" is a visible, deliberate
- * category rather than three entries indistinguishable from the twelve.
+ * category rather than three entries indistinguishable from the thirteen.
  *
  * Adding a schema here is therefore a claim: *this row shape is published but
  * no projection table holds it.* Anything that IS a table belongs in the
@@ -59,6 +63,8 @@ const NON_TABLE_ROW_SCHEMAS: readonly EmittedSchemaTarget[] = [
   { name: 'projection-edges', schema: EdgeRowSchema },
   { name: 'projection-edge-resolutions', schema: EdgeResolutionRowSchema },
   { name: 'projection-lens-entry-points', schema: LensEntryPointRowSchema },
+  { name: 'projection-claude-context-chains', schema: ClaudeContextChainRowSchema },
+  { name: 'projection-claude-context-loads', schema: ClaudeContextLoadRowSchema },
 ];
 
 /**

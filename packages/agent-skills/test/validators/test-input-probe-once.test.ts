@@ -36,7 +36,7 @@
 import type * as NodeFs from 'node:fs';
 import * as fs from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_EVALS_SUBPATH } from '../../src/skill-test/eval-suite-isolation.js';
@@ -50,7 +50,7 @@ vi.mock('node:fs', async (importOriginal) => {
   const real = await importOriginal<typeof NodeFs>();
   const collect = (target: Parameters<NodeFs['existsSync']>[0]): boolean => {
     const probed = String(target);
-    if (probed.replaceAll('\\', '/').endsWith(DEFAULT_EVALS_SUBPATH)) suiteProbes.push(probed);
+    if (toForwardSlash(probed).endsWith(DEFAULT_EVALS_SUBPATH)) suiteProbes.push(probed);
     return real.existsSync(target);
   };
   return { ...real, default: real, existsSync: collect };

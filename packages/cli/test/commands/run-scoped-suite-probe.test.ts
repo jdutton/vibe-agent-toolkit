@@ -37,7 +37,7 @@
 import type * as NodeFs from 'node:fs';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /** Forward-slash suite path → how many times the run asked the filesystem about it. */
@@ -56,7 +56,7 @@ vi.mock('node:fs', async (importOriginal) => {
     ...real,
     default: real,
     existsSync(target: Parameters<NodeFs['existsSync']>[0]): boolean {
-      const probed = String(target).replaceAll('\\', '/');
+      const probed = toForwardSlash(String(target));
       if (probed.endsWith(EVALS_SUBPATH)) probeCounts.set(probed, (probeCounts.get(probed) ?? 0) + 1);
       return real.existsSync(target);
     },
@@ -116,7 +116,7 @@ function writeSkillProject(): string {
  */
 function oneProbePerSkillRoot(root: string): Map<string, number> {
   return new Map(
-    SKILL_NAMES.map((name) => [safePath.resolve(root, 'skills', name, EVALS_SUBPATH).replaceAll('\\', '/'), 1]),
+    SKILL_NAMES.map((name) => [safePath.resolve(root, 'skills', name, EVALS_SUBPATH), 1]),
   );
 }
 

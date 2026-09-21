@@ -32,7 +32,7 @@
  * Each child emits `serializeProjection`'s bytes: every table sorted by its
  * primary key, every row's keys in the registry's column order, and
  * `roots.path` — the one column that legitimately differs between runs —
- * redacted. So "B hydrated what A derived" is one string comparison over twelve
+ * redacted. So "B hydrated what A derived" is one string comparison over thirteen
  * tables. A bespoke per-table deep-equal would have to *choose* which columns to
  * compare, and the columns a hydration bug drops are exactly the ones nobody
  * thinks to list.
@@ -141,7 +141,7 @@ interface Population {
    */
   readonly contributorRuns: readonly string[];
   /**
-   * `serializeProjection`'s bytes: twelve primary-key-sorted, path-redacted
+   * `serializeProjection`'s bytes: thirteen primary-key-sorted, path-redacted
    * tables whose rows carry their keys in the registry's column order.
    *
    * The string and not the parsed tables, so the comparison below is over the

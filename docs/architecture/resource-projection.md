@@ -50,7 +50,7 @@ generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` a
 `PROJECTION_SCHEMA_VERSION` is removed, and a *stored* projection would take a derived digest of the
 row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the pattern).
 
-**Population is ✅ real for the twelve shipped tables.** `populate()` derives rows from `ParseFacts`
+**Population is ✅ real for the thirteen shipped tables.** `populate()` derives rows from `ParseFacts`
 and `ResourceRegistry` at runtime, and `vat resources query` writes them into a per-run in-memory
 store. What remains 🔷 proposed is the REMAINDER described below: columns the parser does not yet
 carry, and the zone modeling several tables depend on.
@@ -58,8 +58,10 @@ carry, and the zone modeling several tables depend on.
 ⚠️ `edges` was listed among the tables with a partial source and does **not** belong: it has **zero
 producers as a MATERIALISED TABLE**, and `edge_resolutions` alongside it. ⚠️ **They are not
 unimplemented.** `resolveEdges()` COMPUTES both per lens, and `vat resources query` /
-`vat resources check` expose them as derived relations beside `lens_contexts` — nothing *stores*
-them, something *evaluates* them (see [zones.md §5](zones.md#5-references-and-edges)
+`vat resources check` expose them as derived relations beside `lens_contexts`,
+`claude_context_chains` and `claude_context_loads` — nothing *stores*
+them, something *evaluates* them, and a lens is evaluated only when a declared statement names one
+of its relations (see [zones.md §5](zones.md#5-references-and-edges)
 and §9 item 3). Several columns (e.g. `wordCount`, `proseCodeUnits`, `codeBlockCodeUnits`, `sectionCount`,
 `slugOccurrence`, `column`, `inCodeSpan`, `inFence`) require new parser output that `ParseFacts`
 does not yet carry; `resource_realizations`, `resource_zones` beyond a single default "tree" zone, and
@@ -96,7 +98,7 @@ fields on the shipped cache entry rather than as a separate row shape.
 
 ### Why not a columnar engine — and why the published half of that spike is the wrong build
 
-The projection ships on SQLite (`packages/projection-sqlite`, opt-in). DuckDB was spiked in 2026-08
+The projection ships on SQLite (`packages/projection-sqlite`, on by default). DuckDB was spiked in 2026-08
 and not adopted. The spike is recorded here for one reason: it ran against `@duckdb/duckdb-wasm`
 v1.5.4, and a **2026-08-17 correction established that wasm was the wrong build to spike**. Without
 both halves written down, the next person to revisit a columnar engine re-runs a spike whose answer
@@ -128,10 +130,11 @@ by default rather than skipped, so the gate does not hold and the bytes reach ad
 ## 3. Path-dependent tables (🔷 proposed) — rebuilt by joining, cheap, disposable
 
 Most of the tables in this section are 🔷 proposed, continuing the schema from §2 — with two
-exceptions, because saying "none" here contradicts §2. `roots`, `resources`, `resource_realizations`
-and `resource_tags` ship as real `PROJECTION_TABLES` entries and are populated at runtime; `edges`
-and `edge_resolutions` exist as **derived relations** (`DERIVED_TABLES`), computed per lens by
-`resolveEdges()` and never materialised. They
+exceptions, because saying "none" here contradicts §2. `roots`, `resources`, `resource_realizations`,
+`resource_tags` and `claude_rule_patterns` ship as real `PROJECTION_TABLES` entries and are populated
+at runtime; `edges` and `edge_resolutions` exist as **derived relations** (`DERIVED_TABLES`),
+computed per lens by `resolveEdges()` and never materialised, as do `claude_context_chains` and
+`claude_context_loads`, computed by the claude-context lens. They
 carry everything that depends on *where* content lives, not what it is, and are designed to be cheap
 to rebuild by joining against the blob-keyed tables above, so they'd carry no durability promise of
 their own.
@@ -143,6 +146,7 @@ their own.
 | `resource_realizations` | `(resource_id, zone_id, path)` — one resource id can have many paths (e.g. a source registry and a build-output registry sharing node identity) |
 | `resource_zones` | `(resource_id, zone_kind, zone_id, role)`; `zone_kind ∈ {skill, plugin, marketplace, collection, package, tree}`; tree `role ∈ {source, dist, vendored}` |
 | `resource_tags` | `(resource_id, tag, value, source)`; `source ∈ {filename, config, frontmatter, zone, harness-convention}` |
+| `claude_rule_patterns` (✅ shipped) | `(resource_id, ordinal)` — one row per `paths:` glob of one `.claude/rules` file, with `pattern`, `literal_prefix`, `witness_path` and `status ∈ {matched, inert, unevaluated, gitignored}`. Keyed on the rules file's IDENTITY, not on an extent, and carrying no context column, for the reason [zones.md §4](zones.md#the-claude_rule_patterns-table--four-statuses-one-witness) gives |
 | `edges` + `edge_resolutions` | ⚠️ **This row previously described `edges` as carrying `dst_resource` / `dst_anchor` directly. That shape is wrong and the shipped schema rejects it** — a scalar destination cannot hold a many-candidate resolution, and choosing one winner *is* the last-write-wins defect per-lens resolution exists to remove. The destination lives on a separate `edge_resolutions` table, one row per candidate. See [zones.md §5](zones.md#5-references-and-edges), which is authoritative for this model; `packages/resources/src/schemas/projection-edges.ts` is the shipped shape. Resolution is per **resolution context**, not per zone id. |
 
 **`roots` is a table, so `path` alone is never an identifier.** Any SQL check's column contract must
@@ -196,10 +200,11 @@ than against taste** (`packages/resources/src/projection/agentic-tags.ts` carrie
   measurement that motivated `selected` is a **base rate, not a rule**, so the tag ships with no
   `loading` value at all until something reads frontmatter.
 
-  ⚠️ **Two consequences, and the second is a correction the budget check now implements.** First,
-  VAT's own `claude-rules` collection *requires* `paths:` — deliberately stricter than the vendor,
-  because an unscoped rule is charged to every session whether or not the work touches what it
-  guards, and that cost is precisely what this check exists to surface. Second, the design's
+  ⚠️ **Two consequences, and the second is a correction the launch-charge accounting now
+  implements.** First, VAT's own `claude-rules` collection *requires* `paths:` — deliberately
+  stricter than the vendor, because an unscoped rule is charged to every session whether or not the
+  work touches what it guards, and that cost is precisely what `launchCharge` exists to surface.
+  Second, the design's
   instruction to **exclude rules files from the always-loaded chain sum is right only for rules
   that carry `paths:`**. A rule that omits it *is* always-loaded, and excluding it under-reports
   exactly the file whose cost is worst — the same direction of error the `loading` rank rule exists
@@ -216,13 +221,14 @@ than against taste** (`packages/resources/src/projection/agentic-tags.ts` carrie
   tell whether this correction was cosmetic or dominant, and a future edit that flattens it back to
   "rules files are `always`" has nothing to argue against.
 
-  ⭐ **This passage shipped BEFORE the code obeyed it, and that gap was a real defect.**
-  `alwaysLoadedBudget`'s `qualifies()` excluded every rule admission, so `vat claude budget` and
-  `vat claude context` disagreed about the same directory — the query lane classed an unscoped root
-  rule `always`, the check dropped it, and a repo whose root rules omit `paths:` was told *"Every
+  ⭐ **This passage shipped BEFORE the code obeyed it, and that gap was a real defect.** The
+  launch-charge predicate (then `alwaysLoadedBudget`'s `qualifies()`, now `admissionLoadsAtLaunch` in
+  `claude-context-launch-charge.ts`) excluded every rule admission, so the two readings of the same
+  directory disagreed — the query lane classed an unscoped root rule `always`, the now-removed
+  `vat claude budget` check dropped it, and a repo whose root rules omit `paths:` was told *"Every
   instruction chain checked is within budget."* Unreachable from VAT's own tree, where all rules
-  carry `paths:`, which is why nothing went red for it. `qualifies()` now admits `root-rule` and
-  only `root-rule`; the path-scoped kinds stay excluded, for the reason above.
+  carry `paths:`, which is why nothing went red for it. `admissionLoadsAtLaunch` now admits
+  `root-rule` and only `root-rule`; the path-scoped kinds stay excluded, for the reason above.
 - **`AGENTS.md` is not `always`.** Claude Code reads `CLAUDE.md`, not `AGENTS.md`; the latter is
   charged only where a `CLAUDE.md` imports it. Its class is a property of the import graph, so it
   too ships with no `loading` value.
@@ -474,8 +480,10 @@ which a bare commit key cannot express.
 
 - ✅ **Shipped** (stages 1b/2): the pipeline restructure and the object-level, content-addressed parse
   cache described in §5.
-- ✅ **Shipped** (stage 3, schema only): the ten projection table shapes as Zod schemas with
-  generated JSON Schema, carrying no contract-version constant. Includes the `blob_links` →
+- ✅ **Shipped** (stage 3, schema only): the projection table shapes as Zod schemas with
+  generated JSON Schema, carrying no contract-version constant. `PROJECTION_TABLES`
+  (`packages/resources/src/projection/table-registry.ts`) is the enumeration — read the count there
+  rather than from prose here, which is how "ten" survived three tables past its truth. Includes the `blob_links` →
   `blob_references` rename — the old name was a claim the data cannot make (a markdown link is
   certainly a link, an `@`-prefixed token is not), so the table now records syntactic shape and
   lexical features rather than classified link types. Classification needs the corpus, and the
@@ -503,15 +511,33 @@ which a bare commit key cannot express.
     vocabulary the earlier draft listed: the first belongs to the npm Changesets release tool that
     no agent harness reads, and the other three are the skill packager's and a lens's outputs
     rather than functions of a path.
-- ✅ **Consumed as of 2026-08-23.** `resource_tags` has its first reader: the always-loaded
-  context-budget check reads the `claude-md` tag to decide which realizations set an instruction
-  chain (`packages/resources/src/projection/claude-context-budget-sweep.ts › claudeMdIdentities()`,
-  and the same lookup in `claude-context-accounting.ts`'s caller). It ships as `vat claude budget`,
-  a command of its own rather than a check folded into `vat resources validate` — a validation run
-  must not emit findings nobody asked for. `lens_entry_points` remains unbuilt, and the check does
-  not join against it. A populated table is still not evidence of a *useful* one any more than a
-  typed one was evidence of a populated one; what changed is that this one now has a consumer that
-  would break if it went empty.
+- ✅ **Consumed as of 2026-08-23.** `resource_tags` has its first reader: the claude-context lens
+  reads the `claude-md` tag to decide which realizations set an instruction chain
+  (`packages/resources/src/projection/claude-context-regions.ts › claudeMdIdentities()`, consumed by
+  both `claude-context-relations.ts` and `claude-context-cost-map.ts`). It surfaces as published rows
+  — `claude_context_chains` / `claude_context_loads` via `vat resources query` / `vat resources
+  check`, and a whole-tree cost map via `vat claude context` — never as a check folded into
+  `vat resources validate`; a validation run must not emit findings nobody asked for.
+  `lens_entry_points` remains unbuilt, and neither reader joins against it. A populated table is
+  still not evidence of a *useful* one any more than a typed one was evidence of a populated one;
+  what changed is that this one now has a consumer that would break if it went empty.
+- ✅ **Shipped: `claude_rule_patterns`, the thirteenth materialised table.**
+  `ClaudeRulesScopeContributor` emits one row per `paths:` glob of one `.claude/rules` file — see
+  §3's row and [zones.md §4](zones.md#the-claude_rule_patterns-table--four-statuses-one-witness)
+  for the key, the four statuses and why a witness rather than a match count. It is reachable from
+  `vat resources query` and `vat resources check` only: the `scan`/`validate` lane populates under
+  `CONTENT_PARSING_SKIP`, where registering a blob reader throws.
+- ✅ **Shipped: the first consumer that is a RULE.** `CLAUDE_RULE_GLOB_INERT` ships as the built-in
+  check `claude-rule-glob-inert` — a TypeScript predicate over `claude_rule_patterns` carrying a
+  documented `sqlTwin`, run whether or not a project declares any `resources.checks`. The invariant
+  that keeps a default-on rule from making the query engine mandatory is
+  [cli.md](./cli.md#-no-built-in-check-may-be-sql); the code's entry is in
+  [validation-codes.md](../validation-codes.md#claude_rule_glob_inert).
+- ✅ **Shipped: the store is on by default.** The extent- and blob-scoped tables now cross
+  invocations without an opt-in (`VAT_PROJECTION_STORE=off`, or `VAT_CACHE=0` for every cache, is
+  the way back), and the blob tier is bounded by a `blob_keys` manifest rather than growing without
+  limit. [`packages/projection-sqlite/README.md`](../../packages/projection-sqlite/README.md) owns
+  the layout, the retention and the measurements.
 
 > ✅ **The Zones revisions below have LANDED** — this note is kept as the record of what changed and
 > why, not as a warning about pending work. Zone modelling was originally deferred past population

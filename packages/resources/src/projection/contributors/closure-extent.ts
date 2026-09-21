@@ -187,8 +187,17 @@ export const CLOSURE_ROOT_ABSENT = 'CLOSURE_ROOT_ABSENT';
  */
 export const CLOSURE_DEPTH_EXCEEDED = 'CLOSURE_DEPTH_EXCEEDED';
 
-/** Where the walk currently is: a root-relative path and its hop count from the root. */
-type Hop = readonly [path: string, depth: number];
+/**
+ * Where the walk currently is: a root-relative path, its hop count from the
+ * root, and whether the walk goes THROUGH it.
+ *
+ * A non-traversable hop is a LEAF — admitted as a member, never enqueued. The
+ * flag rides on the hop rather than being recomputed at the queue because the
+ * one place that can answer it is {@link hopFor}, which already holds the
+ * target row; re-deriving it from a path at the loop would be a second reading
+ * of the same question.
+ */
+type Hop = readonly [path: string, depth: number, traversable: boolean];
 
 /** Everything one traversal needs, gathered once from the base. */
 interface WalkContext {
@@ -225,6 +234,11 @@ interface WalkContext {
    * in this module's docstring true.
    */
   readonly refusalOf: (candidate: ResourceRealizationRow) => ExtentRefusalRule | undefined;
+  /**
+   * Does the walk go THROUGH this target? Compiled once from `traverseGlobs`;
+   * always true when the declaration names none.
+   */
+  readonly isDoor: (path: string) => boolean;
 }
 
 /**
@@ -331,6 +345,7 @@ export class ClosureExtentContributor implements ExtentContributor {
       byPath: realizationsByPathFor(base),
       byBlob: referencesByBlobFor(base),
       refusalOf: refusalMatcher(declaration, base),
+      isDoor: doorMatcher(declaration.traverseGlobs),
     });
 
     return { contexts: [context], ...walk };
@@ -386,7 +401,7 @@ function traverseClosure(
 
   const admitted: AdmittedHop[] = [{ path: rootPath, depth: 0, viaPath: null }];
   const visited = new Set<string>([rootPath]);
-  const queue: Hop[] = [[rootPath, 0]];
+  const queue: Hop[] = [[rootPath, 0, true]];
 
   while (queue.length > 0) {
     const hop = queue.shift();
@@ -406,7 +421,13 @@ function traverseClosure(
       if (visited.has(next[0])) continue;
       visited.add(next[0]);
       admitted.push({ path: next[0], depth: next[1], viaPath: path });
-      queue.push(next);
+      // ⚠️ MEMBERSHIP and TRAVERSAL part company here, and only here. A leaf is
+      // admitted on the line above like any other member; it is simply not a
+      // door, so nothing behind it is this extent's. Enqueuing one anyway would
+      // follow whatever `blob_references` happens to hold for a `.ts` or a
+      // `.png` — the walker parses neither — and the extent would grow through a
+      // file the packager treats as cargo.
+      if (next[2]) queue.push(next);
     }
   }
 
@@ -445,7 +466,9 @@ function walkClosure(walk: WalkContext): Omit<ExtentContribution, 'contexts'> {
     memberships.push({ resourceId: first.resourceId, extentId: walk.extentId });
   }
 
-  return { resources, realizations, memberships, tags: [], conditions };
+  // A closure declares MEMBERSHIP; it classifies nothing, so both classification
+  // tables are empty here.
+  return { resources, realizations, memberships, tags: [], conditions, claudeRulePatterns: [] };
 }
 
 /**
@@ -597,6 +620,7 @@ export function closureProvenance(
     byBlob: referencesByBlobFor(partialBase),
     // Sound only under the guard above.
     refusalOf: () => undefined,
+    isDoor: doorMatcher(input.declaration.traverseGlobs),
   };
 
   const provenance = new Map<string, ImportProvenance>();
@@ -726,6 +750,15 @@ function hopFor(
     conditions.push(refusedCondition(walk.extentId, target, refusal, path, reference));
     return undefined;
   }
+  // A LEAF is admitted before the budget is consulted, and the order is the
+  // behaviour: `walk-link-graph.ts` tests `isRoutable` BEFORE its depth check in
+  // `processRegistryResource`, and reaches its plain-asset branch without a
+  // depth test at all. Both say the same thing — "bundling this enqueues
+  // nothing, so there is no hop for a limit to bound" — and charging it anyway
+  // is what made a bounded closure disagree with the packager about the image
+  // hanging off a document at the frontier. Declared, never assumed: a
+  // declaration that names no `traverseGlobs` charges every target.
+  if (!walk.isDoor(target.path)) return [target.path, depth + 1, false];
   // The depth bound is checked LAST, and after the refusal — the order is
   // `classifyExclusion`-before-`processRegistryResource`, which is the order
   // `walk-link-graph.ts` checks them in. It matters because both can apply to
@@ -736,7 +769,24 @@ function hopFor(
     conditions.push(depthExceededCondition(walk.extentId, target, path, reference));
     return undefined;
   }
-  return [target.path, depth + 1];
+  return [target.path, depth + 1, true];
+}
+
+/**
+ * Compile a declaration's door globs: which targets the walk goes THROUGH.
+ *
+ * ⛔ Globs, not parser kinds. The packager traverses REGISTRY members and its
+ * registry is a glob; `parserKindForPath` also calls `.txt`, `.markdown` and
+ * `README` markdown, so a kind-keyed rule walked through files the build ships
+ * unopened and admitted documents it never ships. `dot: true`, as the crawl
+ * that builds the registry uses.
+ *
+ * @param globs - The declared door globs, or null for "every target"
+ * @returns A matcher over root-relative paths
+ */
+function doorMatcher(globs: ExtentDeclaration['traverseGlobs']): (path: string) => boolean {
+  if (globs === null) return () => true;
+  return picomatch([...globs], { dot: true });
 }
 
 /**

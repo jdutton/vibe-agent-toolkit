@@ -1,0 +1,122 @@
+{
+  "$ref": "#/definitions/projection-claude-context-loads",
+  "definitions": {
+    "projection-claude-context-loads": {
+      "type": "object",
+      "properties": {
+        "chainId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foreign key to claude_context_chains.chainId"
+        },
+        "resourceId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Foreign key to resources.resourceId — the identity this chain loads"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Root-relative path of the loaded file"
+        },
+        "loadClass": {
+          "type": "string",
+          "minLength": 1,
+          "description": "\"always\" (loaded at session start) or \"on-demand\" (loaded when the agent touches a matching file)"
+        },
+        "admissionKind": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Kind of the DECIDING admission, or null when nothing admitted this row: \"ancestry\", \"root-rule\", \"nested-rule\", \"glob-rule\", \"glob-rule-covers-dir\", \"glob-rule-may-fire\", \"import\""
+        },
+        "pattern": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The deciding admission's distinguishing string — a glob, a directory, or a closure root; null where its kind has none"
+        },
+        "depth": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Import hops from the closure root, for an `import` admission VAT could attribute; null otherwise"
+        },
+        "admissionCount": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many admissions this row carries — the deciding one is a summary of them, not the whole list"
+        },
+        "sizeCliff": {
+          "type": "string",
+          "enum": [
+            "loaded",
+            "oversize-skipped",
+            "pruned-by-oversize",
+            "unmeasured"
+          ],
+          "description": "The 4 MiB CLAUDE.md cliff's verdict on this file — NOT whether it is paid at launch; that is launchCharge. \"unmeasured\" means no blob, so no size"
+        },
+        "launchCharge": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Whether this row's bytes are paid when a session starts — sum tokens or bytes WHERE this is \"charged\". Open vocabulary: \"charged\", \"unknown-size\", \"oversize\", \"not-always\""
+        },
+        "tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "blobs.tokenEstimate, or null when this realization has no blob. Null is UNKNOWN, never zero"
+        },
+        "bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "blobs.bytes, or null when this realization has no blob"
+        }
+      },
+      "required": [
+        "chainId",
+        "resourceId",
+        "path",
+        "loadClass",
+        "admissionKind",
+        "pattern",
+        "depth",
+        "admissionCount",
+        "sizeCliff",
+        "launchCharge",
+        "tokens",
+        "bytes"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the derived `claude_context_loads` relation"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

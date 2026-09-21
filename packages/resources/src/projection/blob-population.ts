@@ -83,7 +83,7 @@
  * {@link emitPreparedBlob} then records only its condition — and copying that
  * shape here would break accounting on the majority of files in a repository.
  * With no row there is no `tokenEstimate`; `whatLoadsAt` then reports
- * `tokens: null` and `chargeOf` answers `unknown-size`. That is a live state,
+ * `tokens: null` and `sizeCliffOf` answers `unmeasured`. That is a live state,
  * reached the moment a CLAUDE.md imports a `.ts` file.
  *
  * ### Why it still runs the LEXER — the constraint that decides correctness
@@ -124,6 +124,7 @@ import { blobSectionsFor, flattenHeadings } from './blob-sections.js';
 import { readKeyedContent } from './content-cache.js';
 import { errorLabel } from './error-label.js';
 import type { ProjectionBase, ProjectionBuilder } from './projection.js';
+import type { BlobScopedRows } from './store.js';
 
 /** A blob whose bytes could not be read at derivation time. */
 export const BLOB_UNREADABLE = 'BLOB_UNREADABLE';
@@ -815,9 +816,9 @@ async function prepareBlob(
     return refused('blobsNotText', condition(
       target.contentKey,
       BLOB_NOT_TEXT,
-      `"${target.path}" contains a NUL within the first ${BINARY_SNIFF_CHARS} characters of its`
-      + ' decoded content, so it is not text; no parser was run over it. This blob has no sections'
-      + ' or references because it cannot have any, not because it was skipped silently',
+      `This blob contains a NUL within the first ${BINARY_SNIFF_CHARS} characters of its decoded`
+      + ' content, so it is not text; no parser was run over it. It has no sections or references'
+      + ' because it cannot have any, not because it was skipped silently',
     ));
   }
 
@@ -1019,7 +1020,7 @@ async function readTarget(
  * arrives by `import()` from inside `parseKeyed`, so a module that cannot be
  * loaded — a half-extracted tarball, a quarantined or `chmod 000` file — lands in
  * this very catch, and unguarded was reported as
- * `The markdown parser threw on the bytes at "<path>" (EACCES)`, once per
+ * `The markdown parser threw on these bytes (EACCES)`, once per
  * document, blaming every innocent file in the corpus while the exit code stayed
  * 0.
  *
@@ -1062,7 +1063,7 @@ async function parseTarget(
     return refused('blobsParseFailed', condition(
       target.contentKey,
       BLOB_PARSE_FAILED,
-      `The ${keyed.parserKind} parser threw on the bytes at "${target.path}" (${errorLabel(error)})`,
+      `The ${keyed.parserKind} parser threw on these bytes (${errorLabel(error)})`,
     ));
   }
 }
@@ -1151,12 +1152,41 @@ export function parserKindOf(contentKey: string): ParserKind {
 }
 
 /**
+ * The blob facts a run may file in the SHARED, content-addressed tier.
+ *
+ * ⛔ A row there must be a pure function of the bytes: every root on the machine
+ * holding those bytes is served it. {@link BLOB_UNREADABLE} and
+ * {@link BLOB_CONTENT_CHANGED} are not — each records that one read, at one path,
+ * in one run, never observed the bytes at all. Filed, either one marked its key
+ * "held" (a `blobs` row OR a `blob_conditions` row holds a key), so a single
+ * transient failure stopped those bytes being parsed again, in every repository,
+ * until the store was cleared. Dropped here, the key is held by nothing and the
+ * next run re-derives it. The run's own answer still carries both rows.
+ *
+ * @param blobs - What the run derived
+ * @returns The same facts without the per-read observations
+ */
+export function storableBlobFacts(blobs: BlobScopedRows): BlobScopedRows {
+  return {
+    ...blobs,
+    blobConditions: blobs.blobConditions.filter((row) => !READ_OBSERVATIONS.has(row.code)),
+  };
+}
+
+/** Conditions about one read attempt rather than about the bytes it was after. */
+const READ_OBSERVATIONS: ReadonlySet<string> = new Set([BLOB_UNREADABLE, BLOB_CONTENT_CHANGED]);
+
+/**
  * A `blob_conditions` row with no line, since none of this module's conditions
  * are about a position in the document.
  *
+ * ⛔ A message that describes the BYTES names no path. The row is keyed on
+ * content and shared by every repository holding that content, so a path in it
+ * is another repository's path the moment a second one derives the same key.
+ *
  * @param blob - The content key the condition is about
  * @param code - The condition code
- * @param message - What happened, in terms of the root-relative path
+ * @param message - What happened
  * @returns The condition row
  */
 function condition(blob: string, code: string, message: string): BlobConditionRow {

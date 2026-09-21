@@ -91,7 +91,7 @@ export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
  * Extent-scoped rows for one tree, exercising every column kind.
  *
  * @param rootId - The root these rows belong to
- * @returns The eight extent-scoped tables
+ * @returns The nine extent-scoped tables
  */
 /**
  * One `resourceRealizations` row, varying only the three fields a caller cares
@@ -167,6 +167,14 @@ export function sampleExtentRows(rootId = 'root-1'): ExtentScopedRows {
       targetExists: null,
       matchedPattern: null,
       matchedPayload: null,
+    }],
+    claudeRulePatterns: [{
+      resourceId: 'res-1',
+      ordinal: 0,
+      pattern: 'docs/**',
+      literalPrefix: 'docs',
+      witnessPath: 'docs/a.md',
+      status: 'matched',
     }],
     resolutionContexts: [{
       contextId: 'ext-1',

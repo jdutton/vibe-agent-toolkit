@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 import type { PluginInventory, PluginRef } from '@vibe-agent-toolkit/agent-skills';
 import { MarketplaceManifestSchema } from '@vibe-agent-toolkit/agent-skills';
-import { hasParentTraversalSegment, isPathAbsentError, isVatError, normalizePath, PathEscapesRootError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { hasParentTraversalSegment, isPathAbsentError, isVatError, normalizePath, PathEscapesRootError, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import { extractClaudePluginInventory } from './extract-plugin.js';
 import type { GitTrackerSource } from './extract-skill.js';
@@ -210,7 +210,7 @@ function containedSourceDir(
 	root: MarketplaceRoot,
 	source: string,
 ): { resolved: string; exists: boolean } | SourceRefusal {
-	const forward = toForwardSlash(source);
+	const forward = toForwardSlashAnyPlatform(source);
 	if (forward === '') return shapeRefusal('is empty');
 	if (hasParentTraversalSegment(forward)) return shapeRefusal('carries a ".." segment');
 	let resolved: string;

@@ -45,6 +45,14 @@ There is a second, narrower class that also ships at `error`, and it is worth na
 
 A new smell-style rule — "this description seems short," "this skill uses a binary not guaranteed on the target" — defaults to `warning` or `info` no matter how confident the author of the rule is. Confidence without corpus evidence is the most common mistake in linter design; the severity floor enforces humility.
 
+### Worked case: `CLAUDE_RULE_GLOB_INERT` ships at `info`
+
+A path-scoped `.claude/rules/` file whose `paths:` glob matches nothing can never load, so the arithmetic is not in doubt — a glob either matches a realized path or it does not, and there is no threshold to argue about. What is missing is the other half of the evidence bar: an observed population. The only corpus measured so far is one adopter carrying 245 rules across 673 `paths:` globs, and **zero** of those globs are inert. That is a real measurement and it is worth exactly what it says — the pattern has not been observed firing anywhere yet, and a code with an empty observed population is the last one entitled to fail a build.
+
+The run-integrity exemption above does not rescue it: VAT enumerated the tree successfully and disliked what it found, which is precisely the class that exemption excludes.
+
+`info` is also the honest severity for this code's false-positive shape. A glob can be inert on purpose — a rule staged ahead of the tree it will govern, or one whose subject is excluded from the crawl — and VAT cannot tell that apart from a typo by looking. The graduation path below is how it earns a louder default, once a corpus shows inert globs are dominantly dead rather than deliberate.
+
 ## Graduation Path
 
 Defaults can change, but the evidence requirement is symmetric. A severity promotion (`info` → `warning`, `warning` → `error`) and a demotion both require corpus data showing the change is warranted: a promotion when false-positive rates drop below an acceptable threshold across observed skills; a demotion when the rule fires on too many legitimate patterns to justify its current severity.

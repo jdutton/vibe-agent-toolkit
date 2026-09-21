@@ -35,7 +35,7 @@
  * ## Why the promoting consumer is not a registered contributor here
  *
  * Because it cannot be one yet. `ProjectionBase` — the view `populate()` hands
- * every contributor, see `projection.ts` — is the twelve tables plus `root`,
+ * every contributor, see `projection.ts` — is the thirteen tables plus `root`,
  * `identities`, `gitTracker` and `contentCache`, and **exposes no mutator**;
  * `ensureContentKey` lives on `ProjectionBuilder`, which no contributor ever
  * receives. So no contributor, registered in any stratum, can promote anything

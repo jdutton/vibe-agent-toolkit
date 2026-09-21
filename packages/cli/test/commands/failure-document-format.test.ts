@@ -6,7 +6,7 @@
  * `handleCommandError` grew a `format` parameter whose docstring says *"a caller
  * that has a `--format` option MUST pass it"*, and the change that added it
  * threaded the argument into six call sites while missing two commands the same
- * change created — `vat claude budget` and `vat claude context`. A third lane,
+ * change created — `vat claude context`. A third lane,
  * `finishCommand`, hardcoded `writeYamlOutput` for its failed arm, which is
  * `vat resources validate`'s only error exit. So on the one path a scripted
  * consumer most needs to parse, `--format json` silently produced YAML.
@@ -28,7 +28,6 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { direntKindFollowingSync, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { claudeBudgetCommand } from '../../src/commands/claude/budget.js';
 import { claudeContextCommand } from '../../src/commands/claude/context.js';
 import { finishCommand } from '../../src/commands/phase-utils.js';
 
@@ -77,18 +76,6 @@ describe('a failing command honours the --format it was given', () => {
   /** Everything the command wrote to stdout, joined. */
   const publishedDocument = (): string =>
     stdoutSpy.mock.calls.map((call) => String(call[0])).join('');
-
-  it('publishes `vat claude budget --format json` failures as JSON', async () => {
-    await expect(
-      claudeBudgetCommand([OUTSIDE_ROOT], { format: 'json' }),
-    ).rejects.toThrow(PROCESS_EXIT_ERROR_MESSAGE);
-
-    // Parses as JSON, which is the claim — not merely "contains a brace".
-    const parsed = JSON.parse(publishedDocument()) as { status: string; error: string };
-    expect(parsed.status).toBe('error');
-    expect(parsed.error).toContain('outside the corpus root');
-    expect(exitSpy).toHaveBeenCalledWith(2);
-  });
 
   it('publishes `vat claude context --format json` failures as JSON', async () => {
     await expect(

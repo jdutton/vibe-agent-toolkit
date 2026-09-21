@@ -423,6 +423,9 @@ export class FilesystemExtentContributor implements ExtentContributor {
       conditions: source.unlistable.map((refusal) =>
         unlistableDirectoryCondition(refusal, base.root, extentId, base.identities.idFor(refusal.directory)),
       ),
+      // Classification tables, and this is an enumerator: it says where files
+      // are, never what a `.claude/rules` file's `paths:` list reaches.
+      claudeRulePatterns: [],
     };
   }
 }

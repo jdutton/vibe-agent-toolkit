@@ -21,6 +21,7 @@
  *   instance, not a member.
  */
 
+import type { ClaudeRulePatternRow } from '../schemas/projection-claude-rules.js';
 import type {
   RealizationConditionRow,
   ResourceExtentRow,
@@ -70,6 +71,22 @@ export interface ExtentContribution {
   tags: ResourceTagRow[];
   /** `realization_conditions` rows — population-time conditions, e.g. a path collision. */
   conditions: RealizationConditionRow[];
+  /**
+   * `claude_rule_patterns` rows — one declared `paths:` glob of one
+   * `.claude/rules` file, and what it scopes in this tree.
+   *
+   * **Required, and empty for every contributor but one**, like the other six
+   * tables: a contributor that could omit a table would shrink
+   * {@link extentDigest}'s coverage silently. `claudeRulePatterns: []` says "I
+   * have nothing to declare"; an absent key would be nobody having asked.
+   *
+   * ⚠️ The one table here that is NOT about extent membership. Keyed on
+   * `(resourceId, ordinal)` and merged by primary key rather than partitioned
+   * per context, so a second producer emitting a row for an identity this one
+   * already covered would silently win or lose by ordering. Exactly one producer
+   * ships: `ClaudeRulesScopeContributor`.
+   */
+  claudeRulePatterns: ClaudeRulePatternRow[];
 }
 
 /**

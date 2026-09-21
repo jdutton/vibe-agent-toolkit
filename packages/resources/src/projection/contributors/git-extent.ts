@@ -200,6 +200,8 @@ export class GitExtentContributor implements ExtentContributor {
       // unique root-relative paths cannot produce.
       tags: [],
       conditions: [],
+      // Classification, like `tags` — and this contributor enumerates.
+      claudeRulePatterns: [],
     };
   }
 }

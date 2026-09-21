@@ -48,6 +48,7 @@
  * what the mode does, so both are exercised here now.
  */
 
+import { BUILTIN_CHECK_NAMES } from '@vibe-agent-toolkit/resources';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
@@ -250,7 +251,10 @@ describe('vat resources check --budget', () => {
 
     expect(status).toBe(0);
     expect(doc['status']).toBe('ok');
-    expect(data(doc)['checksRun']).toBe(1);
+    // 🪤 The RELATIONSHIP, not a literal: one declared check plus every
+    // built-in. A literal here re-types a number that lives in `BUILTIN_CHECKS`
+    // and goes red the day a built-in ships — which is exactly what it did.
+    expect(data(doc)['checksRun']).toBe(1 + BUILTIN_CHECK_NAMES.length);
     expect(doc['examined']).toBeGreaterThan(0);
   });
 
@@ -289,10 +293,13 @@ describe('vat resources check --budget', () => {
 
     expect(status).toBe(1);
     const checks = data(doc)['checks'] as PublishedCheck[];
-    expect(checks.map((entry) => entry.name)).toStrictEqual(['quick']);
+    // Every built-in plus the cheap declared rule, and NOT the runaway: the
+    // built-ins are part of the default set, so they complete and are priced
+    // before the statement that hangs is ever entered.
+    expect(checks.map((entry) => entry.name)).toStrictEqual([...BUILTIN_CHECK_NAMES, 'quick']);
     // Two markdown files in the fixture, so a truthful count is above zero — a
     // `rows: 0` here would mean the list was reconstructed rather than recovered.
-    expect(checks[0]?.rows).toBeGreaterThan(0);
+    expect(checks.find((entry) => entry.name === 'quick')?.rows).toBeGreaterThan(0);
     // And the population the child actually reported, never a fabricated one.
     expect(doc['examined']).toBeGreaterThan(0);
   });
@@ -350,7 +357,17 @@ describe('vat resources check --budget', () => {
     // document, and it used to emit nothing at all during that phase — so a
     // budget that expired there SIGKILLed a run which already had its answer.
     // This line gives serialisation a fresh window, for one `appendFileSync`.
-    expect(kinds).toStrictEqual(['population', 'start', 'check', 'checks-complete']);
+    //
+    // 🪤 One `start`/`check` pair per UNIT, and a unit is a built-in as much as
+    // a declared rule — so the pair count is derived from `BUILTIN_CHECK_NAMES`
+    // rather than written out. A literal list re-types that number and reds the
+    // day a built-in ships.
+    const units = 1 + BUILTIN_CHECK_NAMES.length;
+    expect(kinds).toStrictEqual([
+      'population',
+      ...Array.from({ length: units }, () => ['start', 'check']).flat(),
+      'checks-complete',
+    ]);
   });
 
   it('refuses --budget alongside --cost-log rather than silently ignoring the bound', () => {

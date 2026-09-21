@@ -1,3 +1,5 @@
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+
 /**
  * Provenance metadata for a `vat audit <git-url>` invocation. Captured
  * after the shallow clone resolves, used to render the header that
@@ -45,7 +47,7 @@ export function rewritePathsInResults<T>(value: T, tempRoot: string): T {
   // Windows-style separators must be handled because audit outputs may
   // include either depending on the host.
   const root = tempRoot.endsWith('/') ? tempRoot.slice(0, -1) : tempRoot;
-  const rootForward = root.replaceAll('\\', '/');
+  const rootForward = toForwardSlash(root);
   return rewrite(value, root, rootForward);
 }
 
@@ -69,11 +71,11 @@ function rewrite<T>(value: T, root: string, rootForward: string): T {
 function rewriteString(s: string, root: string, rootForward: string): string {
   if (s.startsWith(root)) {
     const tail = s.slice(root.length).replace(/^[/\\]/, '');
-    return tail.replaceAll('\\', '/');
+    return toForwardSlash(tail);
   }
   if (s.startsWith(rootForward)) {
     const tail = s.slice(rootForward.length).replace(/^[/\\]/, '');
-    return tail.replaceAll('\\', '/');
+    return toForwardSlash(tail);
   }
   return s;
 }

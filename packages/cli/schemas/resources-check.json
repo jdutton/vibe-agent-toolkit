@@ -123,6 +123,44 @@
                   "type": "number",
                   "minimum": 0
                 },
+                "lensesEvaluated": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "boundsStatement": {
+                  "type": "string"
+                },
+                "limits": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "direction": {
+                        "type": "string",
+                        "enum": [
+                          "over-report",
+                          "under-report",
+                          "scope",
+                          "assumption"
+                        ]
+                      },
+                      "statement": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "direction",
+                      "statement"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
                 "checksRun": {
                   "type": "integer",
                   "minimum": 0
@@ -146,6 +184,10 @@
                       "broken": {
                         "type": "boolean",
                         "const": true
+                      },
+                      "builtin": {
+                        "type": "boolean",
+                        "const": true
                       }
                     },
                     "required": [
@@ -161,6 +203,7 @@
                 "population",
                 "populationSecs",
                 "lensSecs",
+                "lensesEvaluated",
                 "checksRun",
                 "checks"
               ],

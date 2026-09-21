@@ -205,7 +205,11 @@ const FIXTURE_FILES: Readonly<Record<string, string>> = {
   'skills/demo/CLAUDE.md': '# claude\n\n[behind claude](./behind-claude.md)\n',
   'skills/demo/behind-claude.md': '# behind claude\n',
   'skills/demo/nested/inner.md': '# inner\n',
-  'skills/demo/asset.txt': 'asset\n',
+  // Parses as markdown, but no `**/*.md` registry includes it: the walker ships
+  // it and never opens it, so the document behind it must stay OUT of the
+  // closure too. Without this line the lane's leaf rule had no behavioural test.
+  'skills/demo/asset.txt': 'asset\n\n[behind the asset](./behind-asset.md)\n',
+  'skills/demo/behind-asset.md': '# behind asset\n',
   'ignored/secret.md': '# secret\n\n[behind the ignored hub](./behind-secret.md)\n',
   'ignored/behind-secret.md': '# behind secret\n',
 };

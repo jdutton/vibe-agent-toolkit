@@ -27,6 +27,7 @@ import { openSqliteProjectionStore } from '../src/store.js';
 import {
   FIRST_BLOB,
   SECOND_BLOB,
+  contentKey,
   declinedBlobRows,
   realizationRow,
   sampleBlobRows,
@@ -307,7 +308,8 @@ describe('extents', () => {
     expect(read).toBeDefined();
     expectSchemaValid(read, [
       'roots', 'resources', 'resourceRealizations', 'resourceExtents',
-      'resourceTags', 'realizationConditions', 'resolutionContexts', 'zoneProvenance',
+      'resourceTags', 'realizationConditions', 'claudeRulePatterns', 'resolutionContexts',
+      'zoneProvenance',
     ]);
     expect(read).toEqual(written);
   });
@@ -332,7 +334,8 @@ describe('extents', () => {
     await store.writeExtent(KEY, {
       ...empty,
       roots: [], resources: [], resourceRealizations: [], resourceExtents: [],
-      resourceTags: [], realizationConditions: [], resolutionContexts: [], zoneProvenance: [],
+      resourceTags: [], realizationConditions: [], claudeRulePatterns: [],
+      resolutionContexts: [], zoneProvenance: [],
     });
 
     const read = await store.readExtent(KEY);
@@ -560,6 +563,41 @@ function treeKey(hash: string, rootId: string = KEY.rootId): ExtentKey {
 }
 
 describe('eviction', () => {
+  it('bounds how many ROOTS it holds, dropping the least recently written root whole', async () => {
+    // ⛔ Retention is per root, so every distinct root path — a worktree, a CI
+    // job directory, a subdirectory a command ran from — kept its trees forever.
+    // Six copies of one repository measured six roots and six stored trees, none
+    // ever reclaimed, in a store that is on by default.
+    const evicting = openSqliteProjectionStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2 });
+    const first = treeKey('tree-1', 'root-first');
+    await evicting.writeExtent(first, extentBundle(BROAD));
+    await evicting.writeExtent(treeKey('tree-1', 'root-second'), extentBundle(BROAD));
+    expect(await store.readExtent(first)).toBeDefined();
+
+    await evicting.writeExtent(treeKey('tree-1', 'root-third'), extentBundle(BROAD));
+    await evicting.close();
+
+    expect(await store.readExtent(first)).toBeUndefined();
+    expect(storedRowTotal(first)).toBe(0);
+    expect(await store.readExtent(treeKey('tree-1', 'root-second'))).toBeDefined();
+    expect(await store.readExtent(treeKey('tree-1', 'root-third'))).toBeDefined();
+  });
+
+  it('counts a root as recent when ANY of its trees was written recently', async () => {
+    // A busy root rewriting its newest tree must not be aged out behind a quiet
+    // one, which is the reason retention was per root in the first place.
+    const evicting = openSqliteProjectionStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2 });
+    await evicting.writeExtent(treeKey('tree-1', 'root-busy'), extentBundle(BROAD));
+    await evicting.writeExtent(treeKey('tree-1', 'root-quiet'), extentBundle(BROAD));
+    await evicting.writeExtent(treeKey('tree-2', 'root-busy'), extentBundle(BROAD));
+    await evicting.writeExtent(treeKey('tree-1', 'root-new'), extentBundle(BROAD));
+    await evicting.close();
+
+    expect(await store.readExtent(treeKey('tree-1', 'root-quiet'))).toBeUndefined();
+    expect(await store.readExtent(treeKey('tree-2', 'root-busy'))).toBeDefined();
+    expect(await store.readExtent(treeKey('tree-1', 'root-new'))).toBeDefined();
+  });
+
   it('keeps every tree while the root is under its retention limit', async () => {
     // The negative control. Without it, an eviction that deleted everything it
     // touched would satisfy every other case in this block.
@@ -695,6 +733,210 @@ describe('eviction', () => {
     expect(filePages().autoVacuum).toBe(2);
   });
 });
+
+/**
+ * A store whose blob window is small enough to cross in a handful of writes.
+ *
+ * The production window is 50,000 content keys, sized from a measured ~5.3 KB
+ * per key; writing that many here would take minutes and prove the same thing.
+ */
+function openWithBlobWindow(retainedBlobKeys: number): ProjectionStore {
+  return openSqliteProjectionStore({ directory, retainedBlobKeys });
+}
+
+/**
+ * Rows held for one content key across every blob-scoped table, read from the
+ * file rather than through the store.
+ *
+ * 🪤 All four tables, and never `blobs` alone. A blob the derivation stage
+ * declined to parse has a `blob_conditions` row and no `blobs` row at all, so an
+ * eviction that reclaimed only `blobs` would leave the declined tier growing
+ * behind a green count — which is exactly the tier a binary-heavy corpus fills.
+ *
+ * @param key - The content key to count
+ * @returns Table name to row count
+ */
+function blobRowCounts(key: string): Record<string, number> {
+  const database = openStoreFile();
+  try {
+    const counts: Record<string, number> = {};
+    for (const spec of Object.values(PROJECTION_TABLES)) {
+      if (spec.scope !== 'blob') continue;
+      const [keyColumn] = spec.primaryKey;
+      counts[spec.name] = (database
+        .prepare(`SELECT COUNT(*) AS total FROM "${spec.name}" WHERE "${String(keyColumn)}" = ?`)
+        .get(key) as { total: number }).total;
+    }
+    return counts;
+  } finally {
+    database.close();
+  }
+}
+
+/** Total rows one content key occupies across every blob-scoped table. */
+function blobRowTotal(key: string): number {
+  return Object.values(blobRowCounts(key)).reduce((total, count) => total + count, 0);
+}
+
+/** How many content keys the blob manifest is tracking. */
+function trackedBlobKeys(): number {
+  const database = openStoreFile();
+  try {
+    return (database.prepare('SELECT COUNT(*) AS total FROM "blob_keys"').get() as { total: number }).total;
+  } finally {
+    database.close();
+  }
+}
+
+describe('the blob tier is bounded', () => {
+  it('keeps every content key while the store is under its window', async () => {
+    // The negative control, and the reason every assertion below means
+    // something: an eviction that reclaimed whatever it touched would satisfy
+    // all of them.
+    const evicting = openWithBlobWindow(3);
+    await evicting.writeBlobFacts(sampleBlobRows(contentKey('a')));
+    await evicting.writeBlobFacts(sampleBlobRows(contentKey('b')));
+    await evicting.close();
+
+    expect(blobRowTotal(contentKey('a'))).toBeGreaterThan(0);
+    expect(blobRowTotal(contentKey('b'))).toBeGreaterThan(0);
+    expect(trackedBlobKeys()).toBe(2);
+  });
+
+  it('reclaims the ROWS of the least recently written key once the window is passed', async () => {
+    // The defect this closes: blob rows carry no tree and no root, so extent
+    // eviction could never attribute them, and the tier grew with nothing but
+    // the release namespace rotating to bound it. Measured on a 12,602-file
+    // adopter tree it is 153,245 of the store's 193,605 rows.
+    const evicting = openWithBlobWindow(2);
+    const oldest = contentKey('a');
+    await evicting.writeBlobFacts(sampleBlobRows(oldest));
+    await evicting.writeBlobFacts(sampleBlobRows(contentKey('b')));
+    const beforeEviction = blobRowTotal(oldest);
+
+    await evicting.writeBlobFacts(sampleBlobRows(contentKey('c')));
+    await evicting.close();
+
+    expect(beforeEviction).toBeGreaterThan(0);
+    // Every table, not the total: a prune that cleared three of the four would
+    // leave a growing tier behind a green sum.
+    expect(blobRowCounts(oldest)).toEqual({ blobs: 0, blob_references: 0, blob_sections: 0, blob_conditions: 0 });
+    expect(trackedBlobKeys()).toBe(2);
+    // And the survivors really did survive — an eviction that emptied the tier
+    // would pass the line above and be a cache that cannot hit.
+    expect(blobRowTotal(contentKey('c'))).toBe(beforeEviction);
+    expect(blobRowTotal(contentKey('b'))).toBeGreaterThan(0);
+  });
+
+  it('reclaims a DECLINED blob, which has no blobs row to be found through', async () => {
+    // `blob_conditions` is the tier a binary-heavy corpus fills, and it is the
+    // one an eviction keyed on `blobs` would never see.
+    const evicting = openWithBlobWindow(1);
+    const declined = contentKey('d');
+    await evicting.writeBlobFacts(declinedBlobRows(declined));
+    expect(blobRowCounts(declined)['blobs']).toBe(0);
+    expect(blobRowTotal(declined)).toBeGreaterThan(0);
+
+    await evicting.writeBlobFacts(sampleBlobRows(contentKey('e')));
+    await evicting.close();
+
+    expect(blobRowTotal(declined)).toBe(0);
+  });
+
+  it('never evicts the keys it is writing, at a window of one', async () => {
+    // Structural rather than a special case, exactly as for extents: the keys a
+    // write records are by construction the most recently written, so recency
+    // ordering cannot select them. `INSERT OR REPLACE` re-inserts, which is why
+    // the `rowid` tie-break holds for a REFRESHED key too.
+    const evicting = openWithBlobWindow(1);
+    for (const seed of ['a', 'b', 'c']) {
+      await evicting.writeBlobFacts(sampleBlobRows(contentKey(seed)));
+      const held = await evicting.readBlobFacts([contentKey(seed)]);
+      expect(held.blobs).toHaveLength(1);
+    }
+    await evicting.close();
+  });
+
+  it('never evicts the keys it is writing when ONE write names more keys than the window', async () => {
+    // ⛔ The case the one-key-per-write test above cannot see. Every key of a
+    // single write shares its timestamp and holds the newest rowids, but an
+    // OFFSET of the window still cut the write's own oldest keys — and the
+    // coverage check is all-or-nothing, so one missing key made every run of a
+    // tree larger than the window a full re-derivation that could never hit.
+    const evicting = openWithBlobWindow(3);
+    const keys = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'].map((seed) => contentKey(seed));
+    await evicting.writeBlobFacts({
+      blobs: [], blobReferences: [], blobSections: [],
+      blobConditions: keys.flatMap((key) => declinedBlobRows(key).blobConditions),
+    });
+    const held = await evicting.readBlobFacts(keys);
+    await evicting.close();
+
+    expect(new Set(held.blobConditions.map((row) => row.blob))).toEqual(new Set(keys));
+  });
+
+  it('trims back to the window on the next write, and only then', async () => {
+    // The oversized write above holds more than the window until a later write
+    // reclaims the surplus — so the bound is still a bound.
+    const evicting = openWithBlobWindow(2);
+    await evicting.writeBlobFacts({
+      blobs: [], blobReferences: [], blobSections: [],
+      blobConditions: ['a', 'b', 'c', 'd'].flatMap((seed) => declinedBlobRows(contentKey(seed)).blobConditions),
+    });
+    expect(trackedBlobKeys()).toBe(4);
+
+    await evicting.writeBlobFacts(sampleBlobRows(contentKey('e')));
+    await evicting.close();
+
+    expect(trackedBlobKeys()).toBe(2);
+  });
+
+  it('holds at least one key however low the caller sets the window', async () => {
+    // Clamped rather than rejected, for the reason the extent retention is:
+    // nothing in the CLI surfaces this option, and a window of zero would delete
+    // the rows it just wrote — a store that pays every write cost and can never
+    // hit.
+    const evicting = openWithBlobWindow(0);
+    await evicting.writeBlobFacts(sampleBlobRows(contentKey('a')));
+    await evicting.close();
+
+    expect(blobRowTotal(contentKey('a'))).toBeGreaterThan(0);
+  });
+
+  it('adopts the keys of a store written before the manifest existed, as the oldest there are', async () => {
+    // 🪤 Without adoption the bound holds only for stores created after it
+    // shipped: the cache namespace is per RELEASE, so a store an earlier build
+    // of the same release wrote keeps blob rows the manifest never names — rows
+    // no eviction can see, under code that claims a ceiling.
+    await store.writeBlobFacts(sampleBlobRows(contentKey('a')));
+    await store.writeBlobFacts(sampleBlobRows(contentKey('b')));
+    await store.close();
+    dropBlobManifest();
+    expect(blobRowTotal(contentKey('a'))).toBeGreaterThan(0);
+
+    // Reopening is what adopts; the write that follows is what evicts.
+    const evicting = openWithBlobWindow(1);
+    expect(trackedBlobKeys()).toBe(2);
+    await evicting.writeBlobFacts(sampleBlobRows(contentKey('c')));
+    await evicting.close();
+    // Reassigned so the suite's own `afterEach` closes a live store.
+    store = openSqliteProjectionStore({ directory });
+
+    expect(blobRowTotal(contentKey('a'))).toBe(0);
+    expect(blobRowTotal(contentKey('b'))).toBe(0);
+    expect(blobRowTotal(contentKey('c'))).toBeGreaterThan(0);
+  });
+});
+
+/** Turn the store on disk back into a pre-manifest one. */
+function dropBlobManifest(): void {
+  const database = new DatabaseSync(safePath.join(directory, 'projection.db'));
+  try {
+    database.exec('DROP TABLE "blob_keys"');
+  } finally {
+    database.close();
+  }
+}
 
 /** The database file's page accounting, read outside the store. */
 function filePages(): { pageCount: number; freelist: number; autoVacuum: number } {

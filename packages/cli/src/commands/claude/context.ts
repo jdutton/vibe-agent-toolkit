@@ -1123,8 +1123,8 @@ function rowSection(
  * What one row costs, or why it costs nothing.
  *
  * ⛔ A null token count renders as "size unknown", never as `0`. The `charged`
- * branch cannot be reached with a null — `chargeOf` classifies those
- * `unknown-size` first — but the check is written as a value test rather than a
+ * branch cannot be reached with a null — `sizeCliffOf` classifies those
+ * `unmeasured` first — but the check is written as a value test rather than a
  * `?? 0`, so if that ever changed the output would say what it knows instead of
  * asserting a measurement it does not have.
  *
@@ -1140,10 +1140,10 @@ function rowSection(
  * @returns The cost phrase
  */
 export function chargeText(row: AccountedRow): string {
-  if (row.charge === 'oversize-skipped') {
+  if (row.sizeCliff === 'oversize-skipped') {
     return 'skipped: past the 4 MiB CLAUDE.md cliff, so none of it loads';
   }
-  if (row.charge === 'pruned-by-oversize') {
+  if (row.sizeCliff === 'pruned-by-oversize') {
     return 'not reached: every import route into it passes through a skipped file';
   }
   if (row.tokens === null) return 'size unknown: no measured blob, so it is counted, not summed';

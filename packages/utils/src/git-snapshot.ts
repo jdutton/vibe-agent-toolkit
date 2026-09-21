@@ -214,6 +214,25 @@ export function gitTreeSnapshot(options: { cwd: string }): GitTreeSnapshot | nul
 }
 
 /**
+ * A snapshot taken NOW, whatever bracket is open — never read from or written to
+ * its memo.
+ *
+ * ⛔ The bracket makes two consumers agree with EACH OTHER; it cannot make them
+ * agree with files read later. A population keyed inside a bracket reads the
+ * working tree afterwards, so an edit landing in between is read and then filed
+ * under the pre-edit key. This is how a caller checks, before filing, that the
+ * bracket's answer still describes the tree. It costs a full snapshot, so it
+ * belongs on the write path, never on a hit.
+ *
+ * @param options - Where to look
+ * @param options.cwd - Any directory inside the repository of interest
+ * @returns The snapshot, or `null` when git could not answer
+ */
+export function freshGitTreeSnapshot(options: { cwd: string }): GitTreeSnapshot | null {
+  return snapshotsInBracket.exit(() => gitTreeSnapshot(options));
+}
+
+/**
  * The snapshot this bracket ALREADY holds for a repository — never a new one.
  *
  * The difference from {@link gitTreeSnapshot} is the whole reason this exists:

@@ -26,7 +26,6 @@
 import type { ZodTypeAny } from 'zod';
 
 import { ARD_EMIT_REPORT_SCHEMA } from './commands/ard/emit.js';
-import { BUDGET_REPORT_SCHEMA } from './commands/claude/budget.js';
 import { OKF_VALIDATE_REPORT_SCHEMA } from './commands/okf/validate.js';
 import { CHECK_REPORT_SCHEMA } from './commands/resources/check.js';
 import { SKILL_REVIEW_REPORT_SCHEMA } from './commands/skill/review.js';
@@ -54,7 +53,6 @@ export type ReportSchemaEntry = ReportEntry | UnmigratedEntry;
 
 export const REPORT_SCHEMAS: readonly ReportSchemaEntry[] = [
   { kind: 'report', command: 'okf validate', name: 'okf-validate', schema: OKF_VALIDATE_REPORT_SCHEMA },
-  { kind: 'report', command: 'claude budget', name: 'claude-budget', schema: BUDGET_REPORT_SCHEMA },
   { kind: 'report', command: 'skill review', name: 'skill-review', schema: SKILL_REVIEW_REPORT_SCHEMA },
   { kind: 'report', command: 'resources check', name: 'resources-check', schema: CHECK_REPORT_SCHEMA },
   { kind: 'report', command: 'ard emit', name: 'ard-emit', schema: ARD_EMIT_REPORT_SCHEMA },

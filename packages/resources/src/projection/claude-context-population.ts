@@ -56,8 +56,8 @@
  *
  * Measured on VAT's own repository, through `vat resources
  * validate`, which then ran this lane for a default-on always-loaded budget
- * check. ⚠️ It no longer does — that check is now `vat claude budget`, and
- * validate has no knowledge of the budget at all — so the harness below is
+ * check. ⚠️ It no longer does — that check has since been removed from VAT
+ * entirely, and validate never runs this lane — so the harness below is
  * HISTORICAL and cannot be re-run as written. The saving is a property of this
  * lane, not of the command that happened to invoke it, and it moved with the
  * check. Interleaved A/B over two builds, n=9 each, medians: **2,365 ms →

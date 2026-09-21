@@ -76,8 +76,8 @@ export interface ProjectionColumnSource<Row extends object> {
  *
  * Every {@link ProjectionColumnSource} is one of these, and so is every entry of
  * `PROJECTION_TABLES`. Classification needs no row type — it reads the schema,
- * not the values — and demanding one would force a backend iterating all twelve
- * registry entries to reconcile twelve different `Row`s into a union whose
+ * not the values — and demanding one would force a backend iterating all thirteen
+ * registry entries to reconcile thirteen different `Row`s into a union whose
  * common keys are `never`.
  */
 export interface ProjectionColumnTypeSource {
@@ -145,10 +145,10 @@ function kindOf(column: string, inner: z.ZodTypeAny): ProjectionColumnKind {
 /**
  * The object shape a row schema ultimately validates.
  *
- * Two of the twelve row schemas are wrapped in `.superRefine()`, so their shape
+ * Two of the thirteen row schemas are wrapped in `.superRefine()`, so their shape
  * lives one `ZodEffects` deep and they have no `.shape` of their own.
  * Unwrapping here rather than at each call site is the difference between a
- * caller that covers all twelve tables and one that silently reports no columns
+ * caller that covers all thirteen tables and one that silently reports no columns
  * for those two.
  *
  * @param schema - A row schema, possibly wrapped in refinements

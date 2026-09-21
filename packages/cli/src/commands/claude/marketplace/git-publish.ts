@@ -71,10 +71,11 @@ export function createCommitMessage(
  */
 function git(
   args: string[],
-  options: { cwd: string; allowFailure?: boolean; timeout?: number; input?: string }
+  options: { cwd: string; allowFailure?: boolean; timeout?: number; input?: string; trim?: boolean }
 ): { stdout: string; stderr: string; status: number } {
   const result = runGit(args, {
     cwd: options.cwd,
+    ...(options.trim === undefined ? {} : { trim: options.trim }),
     ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
     ...(options.input === undefined ? {} : { input: options.input }),
   });
@@ -98,6 +99,18 @@ function git(
   }
 
   return { stdout: result.stdout, stderr: result.stderr, status };
+}
+
+/**
+ * `git ls-files -z <args>` as real paths.
+ *
+ * `-z` because without it git QUOTES any name holding a backslash, a quote or a
+ * non-ASCII byte (`"caf\303\251.md"`), so the log named files that do not
+ * exist. Untrimmed, because a leading space is a filename character.
+ */
+function listedPaths(cwd: string, args: string[], allowFailure = false): string[] {
+  const result = git(['ls-files', '-z', ...args], { cwd, allowFailure, trim: false });
+  return result.stdout.split('\0').filter((entry) => entry.length > 0);
 }
 
 /**
@@ -223,23 +236,20 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<vo
     git(['add', '-A'], { cwd: tmpRepo });
 
     // Log what git is tracking vs what's on disk but untracked/ignored
-    const tracked = git(['ls-files'], { cwd: tmpRepo });
-    logger.debug(`   Git tracked files:\n${tracked.stdout}`);
+    const tracked = listedPaths(tmpRepo, []);
+    logger.debug(`   Git tracked files:\n${tracked.join('\n')}`);
 
-    const ignored = git(['ls-files', '--others', '--ignored', '--exclude-standard'], {
-      cwd: tmpRepo,
-      allowFailure: true,
-    });
-    if (ignored.stdout) {
-      logger.info(`   ⚠ Git IGNORED files (on disk but not tracked):\n${ignored.stdout}`);
+    const ignored = listedPaths(tmpRepo, ['--others', '--ignored', '--exclude-standard'], true);
+    if (ignored.length > 0) {
+      logger.info(`   ⚠ Git IGNORED files (on disk but not tracked):\n${ignored.join('\n')}`);
     }
 
     // Check if there are changes to commit
     const diffResult = git(['diff', '--cached', '--quiet'], { cwd: tmpRepo, allowFailure: true });
     if (diffResult.status === 0) {
       logger.info('   No changes to publish (tree is identical to current branch)');
-      const currentTree = git(['ls-files'], { cwd: tmpRepo });
-      logger.debug(`   Current tree (${currentTree.stdout.split('\n').filter(Boolean).length} files):\n${currentTree.stdout}`);
+      const currentTree = listedPaths(tmpRepo, []);
+      logger.debug(`   Current tree (${currentTree.length} files):\n${currentTree.join('\n')}`);
       return;
     }
 

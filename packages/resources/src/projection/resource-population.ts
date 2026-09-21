@@ -96,6 +96,7 @@ import type { JsonValue } from '../schemas/projection-shared.js';
 
 import { ContributorRegistry } from './contributor.js';
 import { AgenticConventionContributor } from './contributors/agentic-convention.js';
+import { ClaudeRulesScopeContributor } from './contributors/claude-rules-scope.js';
 import {
   DECLINE_IGNORED,
   DEFAULT_CONTENT_DEMAND,
@@ -230,14 +231,24 @@ export interface ResourcePopulation extends ResourceEnumeration {
  * two lanes are ONE question to the store, and the deriving one is served the
  * other's content-less extent.
  *
+ * ⚠️ **The THIRD axis is a parameter rather than a constant, and the asymmetry
+ * is forced.** `ClaudeRulesScopeContributor` declares `readsBlobs: true` (a
+ * rule's `paths:` list lives in frontmatter), and {@link populate} **throws**
+ * when a run asking for `CONTENT_PARSING_SKIP` has a blob reader registered. So
+ * registering it unconditionally would not degrade the population lane — it
+ * would take `vat resources scan`/`validate` out entirely, by design.
+ *
  * @param source - The run's single enumerator, already selected by its caller
  *   so the instance stays nameable
  * @param contentDemand - What this lane needs keyed
+ * @param classifyClaudeRules - Register the `.claude/rules` classifier, which
+ *   reads blobs. Only a lane that derives them may say true
  * @returns The registry and the parameter sets to hand {@link populate}
  */
 function resourceContributors(
   source: CrawlSource,
   contentDemand: ContentDemand,
+  classifyClaudeRules: boolean,
 ): { registry: ContributorRegistry; parameters: Record<string, JsonValue> } {
   const registry = new ContributorRegistry();
   const filesystem = new FilesystemExtentContributor(() => source, contentDemand);
@@ -253,6 +264,16 @@ function resourceContributors(
   // `readsBlobs: false`: the skip is checked against that, and a blob reader
   // registered here would be a loud error rather than a degraded extent.
   registry.register(new AgenticConventionContributor());
+
+  // `closure` stratum, so registration order relative to the base contributors
+  // does not decide when it runs; it is here beside the other classifier because
+  // the two answer the same kind of question about the same rows.
+  //
+  // ⛔ What it buys is the only reason it is here: with the producer registered
+  // in ONE lane, and not the one `vat resources query`/`check` populate through,
+  // a SQL question about dead rule globs returned zero rows over a corpus full
+  // of them — an empty table and a clean corpus are the same answer.
+  if (classifyClaudeRules) registry.register(new ClaudeRulesScopeContributor());
 
   return {
     registry,
@@ -361,7 +382,10 @@ export async function buildResourcePopulation(options: {
   // registers the same class and DOES run the blob stage over what it keys, and
   // {@link buildResourceProjection} is a THIRD lane over this same registry that
   // keys everything.
-  const { registry, parameters } = resourceContributors(source, 'deferred');
+  // `false`: this lane skips the blob stage, and `populate()` refuses a blob
+  // reader under that skip rather than handing it empty tables — see
+  // {@link resourceContributors}.
+  const { registry, parameters } = resourceContributors(source, 'deferred', false);
 
   const projection = await populate({
     root,
@@ -476,7 +500,7 @@ export async function buildResourceProjection(options: {
   // The DEFAULT demand, stated rather than defaulted, because it is the half of
   // this lane that differs from its sibling and a reader comparing the two
   // should find the difference at the call rather than in an argument list.
-  const { registry, parameters } = resourceContributors(source, DEFAULT_CONTENT_DEMAND);
+  const { registry, parameters } = resourceContributors(source, DEFAULT_CONTENT_DEMAND, true);
 
   return populate({
     root,

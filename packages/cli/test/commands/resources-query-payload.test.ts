@@ -8,7 +8,7 @@
  * shown. These are pure: no file system, no clock, no exit.
  */
 
-import { PROJECTION_TABLES } from '@vibe-agent-toolkit/resources';
+import { PROJECTION_TABLES, allDerivedSpecs } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -41,6 +41,11 @@ function payloadFor(
     durationMs: 1060,
     populationMs: 190,
     lensMs: 27,
+    // Required on the input, and stated here rather than left to a test that
+    // happens to override it: a document built without it took the bounds
+    // helper's `includes` on `undefined`, which typecheck cannot catch because
+    // test files are not typechecked.
+    lensesEvaluated: [],
     ...overrides,
   });
 }
@@ -198,7 +203,7 @@ describe('the failure message', () => {
     expect(message).toContain('no such column: contentHash');
     expect(message).toContain(PROJECTION_TABLES.blobs.name);
     expect(message).toContain('contentKey');
-    // Only the table that was named — a listing of all twelve would bury it.
+    // Only the table that was named — a listing of all thirteen would bury it.
     expect(message).not.toContain(PROJECTION_TABLES.blobSections.name);
   });
 
@@ -209,6 +214,34 @@ describe('the failure message', () => {
     for (const spec of Object.values(PROJECTION_TABLES)) {
       expect(message).toContain(spec.name);
     }
+  });
+
+  it.each([
+    ['edges', 'SELECT COUNT(*) FROM edges', 'no such table: edges'],
+    ['a schema-qualified spelling', 'SELECT COUNT(*) FROM main.edges', 'no such table: main.edges'],
+    ['another case', 'SELECT COUNT(*) FROM EDGES', 'no such table: EDGES'],
+  ])('explains a DERIVED relation missing as "not evaluated for this run": %s', (_what, sql, engine) => {
+    // 🚨 The query store has no table for a relation no lens filled, so this
+    // engine message is the refusal of an unevaluated relation — not a typo. A
+    // listing of "what you could have named" would include the very relation
+    // SQLite just said is missing, and read as a contradiction.
+    const message = describeQueryFailure(sql, engine);
+
+    expect(message).toContain(engine);
+    expect(message).toMatch(/edges.*not evaluated for this run/s);
+    expect(message).toContain('Declare this statement');
+  });
+
+  it('names EVERY derived relation from the registry, not a hand-kept list', () => {
+    for (const spec of allDerivedSpecs()) {
+      expect(describeQueryFailure(`SELECT * FROM ${spec.name}`, `no such table: ${spec.name}`))
+        .toContain('not evaluated for this run');
+    }
+  });
+
+  it('does not call a missing PROJECTION table unevaluated', () => {
+    expect(describeQueryFailure('SELECT * FROM edgesx', 'no such table: edgesx'))
+      .not.toContain('not evaluated');
   });
 
   it('leaves a refusal that is not about a name exactly as the engine phrased it', () => {
